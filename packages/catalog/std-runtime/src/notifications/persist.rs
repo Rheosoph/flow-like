@@ -1,7 +1,12 @@
-use flow_like::flow::execution::LOCAL_USER_SUB;
 use flow_like::flow::execution::context::ExecutionContext;
+use flow_like::flow::execution::{ExecutionEnvironment, LOCAL_USER_SUB};
+use flow_like_catalog_data_support::remote_util::{
+    api_shadow_refusal, log_shadow_refusal, refuse_in_shadow,
+};
 use flow_like_types::reqwest;
 use serde::{Deserialize, Serialize};
+
+const SEND_NOTIFICATIONS: &str = "send notifications";
 
 #[derive(Deserialize)]
 struct NotificationApiResponse {
@@ -210,14 +215,21 @@ pub fn build_notification_link(app_id: &str, user_link: Option<&str>) -> String 
 ///
 /// 1. If the app is online (event_id or board_id available), tries the app-scoped
 ///    `POST /api/v1/apps/{app_id}/notifications/create` endpoint.
-/// 2. If that returns 403/404 or no app context exists, falls back to the user-scoped
-///    `POST /api/v1/user/notifications/create` endpoint.
+/// 2. On local runs, if that returns 403/404 or no app context exists, falls back to
+///    the user-scoped `POST /api/v1/user/notifications/create` endpoint. Server runs
+///    authenticate with their executor token, which only the app-scoped route accepts.
 /// 3. Returns `Ok(false)` for a local notification to the executing user when no
 ///    hub/token is available. API or reported push failures return an error.
+///
+/// Shadow and regression runs are refused before any request, and the refusal is
+/// logged at Error whatever the calling node does with the error.
 pub async fn persist_notification(
-    context: &ExecutionContext,
+    context: &mut ExecutionContext,
     params: PersistNotificationParams,
 ) -> flow_like_types::Result<bool> {
+    if let Err(refusal) = refuse_in_shadow(context, SEND_NOTIFICATIONS) {
+        return Err(log_shadow_refusal(context, refusal));
+    }
     let hub_url = match notification_api_origin(&context.profile.hub, context.profile.secure) {
         Some(url) => url,
         None => {
@@ -227,7 +239,7 @@ pub async fn persist_notification(
             );
         }
     };
-    let token = match &context.token {
+    let token = match context.token.clone() {
         Some(t) if !t.is_empty() => t,
         _ => {
             return local_notification_result(
@@ -246,15 +258,10 @@ pub async fn persist_notification(
     let run_id = Some(context.run_id().to_string());
     let node_id = Some(context.id.to_string());
     let client = reqwest::Client::new();
+    let server = context.execution_environment() == ExecutionEnvironment::Server;
 
     // Try app-scoped endpoint first (online projects with board context)
     if let Some(ref aid) = app_id {
-        if params.target_user_sub.is_none() || params.target_user_sub.as_deref() == Some("local") {
-            // self-notifications can fall back to user-scoped; try app-scoped first
-        } else {
-            // other-user targeting requires app scope — no fallback
-        }
-
         let event_id = context.event_id().await;
         let board_id = context
             .execution_cache
@@ -277,34 +284,20 @@ pub async fn persist_notification(
 
         let response = client
             .post(&url)
-            .bearer_auth(token)
+            .bearer_auth(&token)
             .json(&body)
             .send()
             .await;
-
-        match response {
-            Ok(resp) if resp.status().is_success() => {
-                return notification_response_result(resp.json().await?);
-            }
-            Ok(resp) if resp.status().as_u16() == 403 || resp.status().as_u16() == 404 => {
-                // Fall through to user-scoped endpoint
-            }
-            Ok(resp) => {
-                let status = resp.status();
-                let text = resp.text().await.unwrap_or_default();
-                return Err(flow_like_types::anyhow!(
-                    "App notification API returned {}: {}",
-                    status,
-                    text
-                ));
-            }
-            Err(e) => {
-                return Err(flow_like_types::anyhow!(
-                    "App notification API request failed: {}",
-                    e
-                ));
-            }
+        if let Some(persisted) = app_scoped_answer(context, response, server).await? {
+            return Ok(persisted);
         }
+    }
+
+    if server {
+        return Err(flow_like_types::anyhow!(
+            "Server runs send notifications through the app API, but run {} has no app context",
+            context.run_id()
+        ));
     }
 
     // Another user's notification requires app scope to verify membership.
@@ -333,7 +326,7 @@ pub async fn persist_notification(
 
     let response = client
         .post(&url)
-        .bearer_auth(token)
+        .bearer_auth(&token)
         .json(&body)
         .send()
         .await?;
@@ -349,6 +342,33 @@ pub async fn persist_notification(
     }
 
     notification_response_result(response.json().await?)
+}
+
+/// The app-scoped endpoint's answer; `None` lets a local run fall back to the user-scoped
+/// endpoint. The API's refusal of a shadow side effect is logged and never falls back.
+async fn app_scoped_answer(
+    context: &mut ExecutionContext,
+    response: reqwest::Result<reqwest::Response>,
+    server: bool,
+) -> flow_like_types::Result<Option<bool>> {
+    let response = response
+        .map_err(|e| flow_like_types::anyhow!("App notification API request failed: {}", e))?;
+    let status = response.status();
+    if status.is_success() {
+        return notification_response_result(response.json().await?).map(Some);
+    }
+    let text = response.text().await.unwrap_or_default();
+    if let Some(refusal) = api_shadow_refusal(status, &text) {
+        return Err(log_shadow_refusal(context, refusal));
+    }
+    if !server && matches!(status.as_u16(), 403 | 404) {
+        return Ok(None);
+    }
+    Err(flow_like_types::anyhow!(
+        "App notification API returned {}: {}",
+        status,
+        text
+    ))
 }
 
 #[cfg(test)]
@@ -496,5 +516,172 @@ mod tests {
             notification_api_origin("http://localhost:8080", true).as_deref(),
             Some("http://localhost:8080")
         );
+    }
+
+    mod shadow {
+        use super::super::{PersistNotificationParams, persist_notification};
+        use flow_like::{
+            flow::{
+                board::ExecutionStage,
+                execution::{
+                    LogLevel,
+                    context::{ExecutionContext, ExecutionContextCache},
+                    internal_node::InternalNode,
+                },
+                node::{Node, NodeLogic},
+            },
+            profile::Profile,
+            state::{FlowLikeConfig, FlowLikeState},
+            utils::http::HTTPClient,
+        };
+        use flow_like_types::sync::{Mutex, RwLock};
+        use std::sync::{Arc, Weak};
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpListener;
+
+        const REFUSAL: &str =
+            "SHADOW_SIDE_EFFECT_REFUSED: Shadow and regression runs cannot send notifications";
+
+        struct Noop;
+        #[flow_like_types::async_trait]
+        impl NodeLogic for Noop {
+            fn get_node(&self) -> Node {
+                Node::new("notify_test", "Notify test", "Notification test", "Tests")
+            }
+            async fn run(&self, _: &mut ExecutionContext) -> flow_like_types::Result<()> {
+                Ok(())
+            }
+        }
+
+        async fn context(hub: &str, shadow: bool) -> ExecutionContext {
+            let state = Arc::new(FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+            let node = Arc::new(InternalNode::new(
+                Noop.get_node(),
+                Default::default(),
+                Arc::new(Noop),
+                Default::default(),
+            ));
+            let profile = Profile {
+                hub: hub.into(),
+                secure: false,
+                ..Profile::default()
+            };
+            let mut context = ExecutionContext::new(
+                Arc::new(Default::default()),
+                &Weak::new(),
+                &state,
+                &node,
+                &Arc::new(Mutex::new(Default::default())),
+                &Arc::new(RwLock::new(Default::default())),
+                LogLevel::Debug,
+                ExecutionStage::Dev,
+                Arc::new(profile),
+                None,
+                Arc::new(RwLock::new(Vec::new())),
+                None,
+                Some("executor-jwt".into()),
+                Arc::new(Default::default()),
+                None,
+            )
+            .await;
+            context.execution_cache = Some(ExecutionContextCache {
+                stores: state.config.read().await.stores.clone(),
+                app_id: "project".into(),
+                model_usage_app_id: Some("project".into()),
+                board_dir: flow_like::flow_like_storage::Path::from("apps/project"),
+                board_id: "board".into(),
+                node_id: "node".into(),
+                sub: "alice".into(),
+                shadow,
+            });
+            context
+        }
+
+        fn params() -> PersistNotificationParams {
+            PersistNotificationParams {
+                title: "Report ready".into(),
+                description: None,
+                icon: None,
+                link: None,
+                target_user_sub: None,
+            }
+        }
+
+        fn error_logs(context: &ExecutionContext) -> Vec<&str> {
+            context
+                .trace
+                .logs
+                .iter()
+                .filter(|log| log.log_level == LogLevel::Error)
+                .map(|log| log.message.as_str())
+                .collect()
+        }
+
+        async fn no_request(listener: &TcpListener) -> bool {
+            tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                .await
+                .is_err()
+        }
+
+        /// Reads one whole request and answers it with the API's coded refusal.
+        async fn refuse_once(listener: &TcpListener) -> String {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 4096];
+            loop {
+                let count = socket.read(&mut buffer).await.unwrap();
+                assert!(count > 0);
+                request.extend_from_slice(&buffer[..count]);
+                if let Some(end) = request.windows(4).position(|part| part == b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&request[..end]).to_ascii_lowercase();
+                    let length = head
+                        .lines()
+                        .find_map(|line| line.strip_prefix("content-length:"))
+                        .map_or(0, |length| length.trim().parse::<usize>().unwrap());
+                    if request.len() >= end + 4 + length {
+                        break;
+                    }
+                }
+            }
+            let body = r#"{"error":{"code":"SHADOW_SIDE_EFFECT_REFUSED","message":"Shadow and regression runs cannot send notifications"}}"#;
+            let answer = format!(
+                "HTTP/1.1 403 Forbidden\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(answer.as_bytes()).await.unwrap();
+            String::from_utf8(request).unwrap()
+        }
+
+        #[tokio::test]
+        async fn shadow_runs_refuse_notifications_before_any_request_and_log_it() {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let hub = format!("http://{}", listener.local_addr().unwrap());
+            let mut context = context(&hub, true).await;
+            let error = persist_notification(&mut context, params())
+                .await
+                .unwrap_err();
+            assert_eq!(error.to_string(), REFUSAL);
+            assert_eq!(error_logs(&context), [REFUSAL]);
+            assert!(no_request(&listener).await);
+        }
+
+        #[tokio::test]
+        async fn the_apis_shadow_refusal_is_logged_and_never_falls_back() {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let hub = format!("http://{}", listener.local_addr().unwrap());
+            let mut context = context(&hub, false).await;
+            let (result, request) = tokio::join!(
+                persist_notification(&mut context, params()),
+                refuse_once(&listener)
+            );
+            assert!(request.starts_with("POST /api/v1/apps/project/notifications/create "));
+            assert_eq!(result.unwrap_err().to_string(), REFUSAL);
+            assert_eq!(error_logs(&context), [REFUSAL]);
+            assert!(no_request(&listener).await);
+        }
     }
 }

@@ -514,8 +514,8 @@ eventsSimple triageInbox() {
     const listed = inbox.listMails()
     const smtp = smtp::connect({ host: "", port: 587, username: "", password: "" })
     const db = db::open({ name: "Mail Drafts", userScoped: false, batchSize: 1000 })
-    for (const mail of listed) {
-        const reference = mail.toReference()
+    // `listMails` yields EmailRefs (connection/inbox/uid); fetch each to read its content.
+    for (const reference of listed) {
         const full = reference.fetchMail()
         const { subject, plain } = full.getContent()
         const { from } = full.getHeaders()

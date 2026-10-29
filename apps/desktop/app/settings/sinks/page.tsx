@@ -18,6 +18,7 @@ import {
 	EmptyState,
 	type IEvent,
 	type IEventRegistration,
+	type LocalTriggerState,
 	Skeleton,
 	Table,
 	TableBody,
@@ -34,12 +35,15 @@ import {
 	parseTemporalValue,
 	useBackend,
 } from "@flow-like/flow-like-ui";
+import { useRepairLocalTrigger } from "@flow-like/flow-like-ui/components/settings/events/local-trigger-token";
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import {
 	Clock,
 	ExternalLink,
 	Globe,
+	KeyRound,
 	Link2,
+	Loader2,
 	Mail,
 	MessageSquare,
 	Radio,
@@ -324,6 +328,7 @@ export default function Page() {
 							sinks={sinks}
 							appNames={appNames}
 							onDelete={(sink) => setDeleteDialog({ open: true, sink })}
+							onRepaired={fetchSinks}
 						/>
 					)}
 				</div>
@@ -363,6 +368,8 @@ export default function Page() {
 	);
 }
 
+const SKELETON_ROWS = ["first", "second", "third"] as const;
+
 function SinksLoadingSkeleton() {
 	return (
 		<Card>
@@ -371,8 +378,8 @@ function SinksLoadingSkeleton() {
 			</CardHeader>
 			<CardContent>
 				<div className="space-y-3">
-					{Array.from({ length: 3 }).map((_, i) => (
-						<Skeleton key={i} className="h-12 w-full" />
+					{SKELETON_ROWS.map((row) => (
+						<Skeleton key={row} className="h-12 w-full" />
 					))}
 				</div>
 			</CardContent>
@@ -384,10 +391,12 @@ function SinksTable({
 	sinks,
 	appNames,
 	onDelete,
+	onRepaired,
 }: Readonly<{
 	sinks: SinkWithEvent[];
 	appNames: Record<string, string>;
 	onDelete: (sink: SinkWithEvent) => void;
+	onRepaired: () => void;
 }>) {
 	const { t } = useTranslation("common");
 	return (
@@ -431,6 +440,7 @@ function SinksTable({
 								sink={sink}
 								appName={appNames[sink.app_id] ?? sink.app_id}
 								onDelete={() => onDelete(sink)}
+								onRepaired={onRepaired}
 							/>
 						))}
 					</TableBody>
@@ -440,14 +450,70 @@ function SinksTable({
 	);
 }
 
+function TriggerStateBadge({ state }: Readonly<{ state?: LocalTriggerState }>) {
+	const { t } = useTranslation("settings");
+	if (state === "needs_token") {
+		return (
+			<Badge variant="secondary" className="bg-warning-bg text-warning">
+				{t("needsAToken", "Needs a token")}
+			</Badge>
+		);
+	}
+	if (typeof state !== "object") return null;
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Badge variant="destructive">{t("failed", "Failed")}</Badge>
+			</TooltipTrigger>
+			<TooltipContent className="max-w-sm">
+				{state.failed.reason}
+			</TooltipContent>
+		</Tooltip>
+	);
+}
+
+/** "Add token" for a trigger whose event this page could load. */
+function AddTokenButton({
+	sink,
+	onRepaired,
+}: Readonly<{ sink: SinkWithEvent; onRepaired: () => void }>) {
+	const { t } = useTranslation("settings");
+	const { available, pendingId, repair } = useRepairLocalTrigger(sink.app_id);
+	const event = sink.event;
+	if (!available || !event || sink.state !== "needs_token") return null;
+	const busy = pendingId === event.id;
+	const Icon = busy ? Loader2 : KeyRound;
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<Button
+					variant="ghost"
+					size="icon"
+					className="h-9 w-9 md:h-8 md:w-8"
+					disabled={busy}
+					onClick={async () => {
+						await repair(event);
+						onRepaired();
+					}}
+				>
+					<Icon className={cn("h-4 w-4", busy && "animate-spin")} />
+				</Button>
+			</TooltipTrigger>
+			<TooltipContent>{t("addToken", "Add token")}</TooltipContent>
+		</Tooltip>
+	);
+}
+
 function SinkRow({
 	sink,
 	appName,
 	onDelete,
+	onRepaired,
 }: Readonly<{
 	sink: SinkWithEvent;
 	appName: string;
 	onDelete: () => void;
+	onRepaired: () => void;
 }>) {
 	const { t } = useTranslation("common");
 	const config = getSinkTypeConfig(sink.type);
@@ -465,7 +531,10 @@ function SinkRow({
 		<TableRow className="group">
 			<TableCell>
 				<div className="flex flex-col gap-0.5">
-					<span className="font-medium">{sink.name}</span>
+					<div className="flex flex-wrap items-center gap-2">
+						<span className="font-medium">{sink.name}</span>
+						<TriggerStateBadge state={sink.state} />
+					</div>
 					<Link
 						href={eventHref}
 						className="text-xs text-muted-foreground truncate max-w-[200px] hover:text-primary hover:underline"
@@ -500,6 +569,7 @@ function SinkRow({
 			</TableCell>
 			<TableCell className="text-right">
 				<div className="flex items-center justify-end gap-1">
+					<AddTokenButton sink={sink} onRepaired={onRepaired} />
 					{boardHref && (
 						<Tooltip>
 							<TooltipTrigger asChild>

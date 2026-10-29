@@ -4,7 +4,8 @@ use std::time::{Duration, Instant};
 
 use crate::entity::{bit, embedding_usage_tracking};
 use crate::error::ApiError;
-use crate::middleware::jwt::AppUser;
+use crate::execution::subject::account_user_id;
+use crate::middleware::jwt::{AppUser, ExecutorUse};
 use crate::state::AppState;
 use crate::usage_accounting::{
     HostedRateSnapshot, UsageInvocationSettlement, UsageInvocationStart,
@@ -59,7 +60,7 @@ async fn resolve_usage_context(
     }
 
     if let AppUser::APIKey(api_key) = user {
-        user.execution_app_permission(&api_key.app_id, state)
+        user.execution_app_permission(&api_key.app_id, state, ExecutorUse::Read)
             .await?;
         return Ok(UsageRequestContext {
             app_id: Some(api_key.app_id.clone()),
@@ -70,7 +71,8 @@ async fn resolve_usage_context(
 
     let app_id = header_string(headers, APP_ID_HEADER);
     if let Some(app_id) = app_id.as_deref() {
-        user.execution_app_permission(app_id, state).await?;
+        user.execution_app_permission(app_id, state, ExecutorUse::Read)
+            .await?;
     }
 
     Ok(UsageRequestContext {
@@ -769,6 +771,22 @@ mod byte_meter_tests {
             assert_eq!(meter.usage_estimated, tokens.is_none());
         }
     }
+
+    #[test]
+    fn embedding_usage_names_only_account_users() {
+        let source = include_str!("embed.rs");
+        let tracked = source
+            .split_once("\nasync fn track_embedding_usage(")
+            .expect("embedding usage is tracked here")
+            .1;
+        let tracked = tracked
+            .split_once("\n}\n")
+            .map_or(tracked, |(body, _)| body);
+        assert!(
+            tracked.contains("user_id: Set(account_user_id(user_sub).map(ToOwned::to_owned)),")
+        );
+        assert!(!tracked.contains("Set(Some(user_sub"));
+    }
 }
 
 pub(crate) async fn execute_hosted_embedding(
@@ -804,7 +822,7 @@ pub(crate) async fn execute_hosted_embedding(
         Ok(result) => result,
         Err(error) => {
             let _ = settle_hosted_usage_invocation(
-                &state,
+                state,
                 invocation_id.as_deref(),
                 UsageInvocationSettlement {
                     status: crate::usage_accounting::STATUS_UNKNOWN_USAGE,
@@ -838,7 +856,7 @@ pub(crate) async fn execute_hosted_embedding(
 
     // Best-effort usage tracking
     if let Err(e) = track_embedding_usage(
-        &state,
+        state,
         &user_id,
         result.model.as_deref().unwrap_or(&payload.model),
         token_count,
@@ -912,7 +930,7 @@ async fn track_embedding_usage(
         raw_usage: Set(raw_usage.clone()),
         token_count: Set(token_count),
         latency: Set(Some(latency_ms)),
-        user_id: Set(Some(user_sub.to_string())),
+        user_id: Set(account_user_id(user_sub).map(ToOwned::to_owned)),
         technical_user_id: Set(technical_user_id.map(ToOwned::to_owned)),
         app_id: Set(app_id.map(ToOwned::to_owned)),
         price: Set(price),

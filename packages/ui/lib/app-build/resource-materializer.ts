@@ -1,6 +1,10 @@
 import type { SurfaceComponent } from "../../components/a2ui/types";
 import { validateComponents } from "../../components/flowpilot/validateComponents";
 import type { IBackendState } from "../../state/backend-state";
+import {
+	declareWidgetActions,
+	findUndeclaredWidgetActions,
+} from "../widget-actions";
 import type { CompiledAppResource, CompiledAppSpec } from "./compiler";
 import { provisionAppBuildEvents } from "./resource-events";
 import { resolveBuildEntry, resourceId } from "./resource-links";
@@ -176,7 +180,14 @@ export async function materializeAppBuildResource(
 				components: validated.components,
 				dataModel: [],
 				customizationOptions: [],
-				actions: [],
+				// The specialist wires widget events but returns no declarations; without them no
+				// page could bind the widget's events.
+				actions: declareWidgetActions(
+					[],
+					findUndeclaredWidgetActions(validated.components, []).map(
+						({ actionId }) => actionId,
+					),
+				),
 				tags: [],
 				createdAt: now,
 				updatedAt: now,

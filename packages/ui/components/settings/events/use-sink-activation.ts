@@ -4,9 +4,9 @@ import { useCallback, useEffect, useState } from "react";
 import type { IOAuthConsentStore } from "../../../db/oauth-db";
 import {
 	checkOAuthTokens,
+	checkOAuthTokensFromPrerun,
 	hasRequiredScopes,
 	storedTokenToBackendFormat,
-	checkOAuthTokensFromPrerun,
 } from "../../../lib/oauth/helpers";
 import type {
 	IOAuthProvider,
@@ -52,12 +52,11 @@ export interface RequestToggleOptions {
 }
 
 /**
- * Switching an event on or off is four flows wearing one button: a plain event
- * writes straight through, a sink on an offline project activates locally, and
- * a sink on an online project needs a PAT — preceded, when switching on, by
- * OAuth tokens and per-app consent. Turning a sink off skips the OAuth leg
- * (there is nothing left to authorize) but still needs the PAT, because the
- * server is being asked to tear a registration down.
+ * Switching an event on or off: a plain event and a sink on an offline project
+ * write straight through. Switching a sink on for an online project first
+ * collects OAuth tokens and per-app consent. A hub trigger runs as whoever last
+ * saved the event; for a trigger this computer registers, the desktop asks for
+ * the personal access token itself.
  */
 export function useSinkActivation({
 	appId,
@@ -71,7 +70,6 @@ export function useSinkActivation({
 	const backend = useBackend();
 	const [target, setTarget] = useState<ToggleTarget | null>(null);
 	const [pendingId, setPendingId] = useState<string | null>(null);
-	const [showPatDialog, setShowPatDialog] = useState(false);
 	const [showConsentDialog, setShowConsentDialog] = useState(false);
 	const [missingProviders, setMissingProviders] = useState<IOAuthProvider[]>(
 		[],
@@ -87,7 +85,6 @@ export function useSinkActivation({
 	>({});
 
 	const reset = useCallback(() => {
-		setShowPatDialog(false);
 		setShowConsentDialog(false);
 		setMissingProviders([]);
 		setAuthorizedProviders(new Set());
@@ -98,19 +95,14 @@ export function useSinkActivation({
 	}, []);
 
 	const write = useCallback(
-		async (
-			next: ToggleTarget,
-			patOrTokens?: string | Record<string, IOAuthToken>,
-		) => {
-			const pat = typeof patOrTokens === "string" ? patOrTokens : undefined;
-			const tokens = typeof patOrTokens === "object" ? patOrTokens : undefined;
+		async (next: ToggleTarget, tokens?: Record<string, IOAuthToken>) => {
 			setPendingId(next.event.id);
 			try {
 				const saved = await backend.eventState.upsertEvent(
 					appId,
 					{ ...next.event, active: next.active },
 					undefined,
-					pat,
+					undefined,
 					tokens,
 					next.upsertOptions,
 				);
@@ -213,7 +205,7 @@ export function useSinkActivation({
 				}
 			}
 
-			setShowPatDialog(true);
+			await write(next);
 		},
 		[appId, backend, consentStore, hub, onRefreshToken, tokenStore, write],
 	);
@@ -255,11 +247,7 @@ export function useSinkActivation({
 				}
 			}
 
-			if (Object.keys(tokens).length > 0) {
-				await write(target, tokens);
-				return;
-			}
-			setShowPatDialog(true);
+			await write(target, Object.keys(tokens).length > 0 ? tokens : undefined);
 		},
 		[
 			appId,
@@ -271,14 +259,6 @@ export function useSinkActivation({
 			tokenStore,
 			write,
 		],
-	);
-
-	const selectPat = useCallback(
-		async (pat: string) => {
-			if (!target) return;
-			await write(target, pat);
-		},
-		[target, write],
 	);
 
 	// The authorization happens in a browser window, so the only way to learn it
@@ -333,13 +313,6 @@ export function useSinkActivation({
 		/** Id of the event currently being written, for a per-row spinner. */
 		pendingId,
 		dialogProps: {
-			pat: {
-				open: showPatDialog,
-				onOpenChange: (open: boolean) => {
-					if (!open) reset();
-				},
-				onPatSelected: selectPat,
-			},
 			consent: {
 				open: showConsentDialog,
 				onOpenChange: (open: boolean) => {

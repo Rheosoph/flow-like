@@ -1,7 +1,6 @@
 "use client";
 
 import { i18n as i18next } from "@flow-like/locales";
-import { useTheme } from "next-themes";
 import {
 	forwardRef,
 	memo,
@@ -13,18 +12,29 @@ import {
 	useRef,
 	useState,
 } from "react";
-import PuffLoader from "react-spinners/PuffLoader";
-import { type IEventPayloadChat, resolveChatColorScheme } from "../../../lib";
+import type { IEventPayloadChat } from "../../../lib";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import type { IMessage } from "./chat-db";
 import { ChatFollowUpProvider } from "./chat-follow-up";
 import { ChatRunControls } from "./chat-run-controls";
-import { ChatBox, type ChatBoxRef, type ISendMessageFunction } from "./chatbox";
+import {
+	ChatBox,
+	type ChatBoxRef,
+	type ChatBoxThinking,
+	type ISendMessageFunction,
+} from "./chatbox";
 import { Interaction, InteractionGroup } from "./interaction";
 import { MessageComponent, type MessageInlineContent } from "./message";
 import { MessageShell } from "./message-shell";
+import {
+	type ChatSend,
+	type PendingAsk,
+	askRuleColor,
+	resolvePendingAsks,
+} from "./pending-ask";
+import { PendingAskStatus } from "./pending-ask-status";
 import { useAnswerPlayback } from "./use-answer-playback";
 import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
@@ -148,7 +158,7 @@ export interface IChatProps {
 	sessionId?: string;
 	isStreamActive?: boolean;
 	activeInteractions?: IInteractionRequest[];
-	onRespondToInteraction?: (interactionId: string, value: any) => void;
+	onRespondToInteraction?: (interactionId: string, value: unknown) => void;
 	/** Rendered pinned between the message feed and the input — e.g. tool approval prompts. */
 	inlinePrompt?: React.ReactNode;
 	/**
@@ -176,6 +186,8 @@ export interface IChatProps {
 	 * stable reference and keep the handler free of React state updates.
 	 */
 	onDraftChange?: (content: string) => void;
+	/** Thinking level picker in the composer; omitted when the chat does not offer one. */
+	thinking?: ChatBoxThinking;
 }
 
 export interface IChatRef {
@@ -209,10 +221,10 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			eventId,
 			showAiDisclosure = false,
 			onDraftChange,
+			thinking,
 		},
 		ref,
 	) => {
-		const { resolvedTheme } = useTheme();
 		const scrollContainerRef = useRef<HTMLDivElement>(null);
 		const [shouldAutoScroll, setShouldAutoScroll] = useState(true);
 		// Several turns can generate at once (global chat); app chats keep exactly one.
@@ -225,18 +237,14 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const [isSending, setIsSending] = useState(false);
 		const isSendingRef = useRef(false);
 		const [sendingContent, setSendingContent] = useState("");
+		const [lastSend, setLastSend] = useState<ChatSend | null>(null);
 		const pendingMessagesRef = useRef<IMessage[] | null>(null);
 		const rafIdRef = useRef<number | null>(null);
 		const [voiceModeOpen, setVoiceModeOpen] = useState(false);
 
 		const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
 		const voiceEnabled = isVoiceEnabled(voiceConfig);
-		const configuredColorScheme = resolveChatColorScheme(config.color_scheme);
 		const widgetSnapshots = config.attach_widget_snapshots !== false;
-		const chatTheme =
-			configuredColorScheme === "system"
-				? resolvedTheme
-				: configuredColorScheme;
 
 		const latestAudioUrl = useMemo(() => {
 			let assistant: IMessage | null = null;
@@ -349,6 +357,39 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			return { interactionItems: items, settledByMessageId: anchored };
 		}, [activeInteractions, chatItems, currentMessages]);
 
+		// Until an answer shows its first block, the question carries the wait and the empty
+		// answer stays out of the transcript.
+		const pendingAsks = useMemo(() => {
+			const interactionShown = interactionItems.length > 0;
+			const hasHostContent = (messageId: string) =>
+				interactionShown ||
+				settledByMessageId.has(messageId) ||
+				Boolean(messageInlineContent?.get(messageId)?.length);
+			return resolvePendingAsks(
+				chatItems.map((item) => item.data),
+				currentMessages,
+				lastSend,
+				hasHostContent,
+			);
+		}, [
+			chatItems,
+			currentMessages,
+			lastSend,
+			interactionItems,
+			settledByMessageId,
+			messageInlineContent,
+		]);
+		const visibleLiveMessages = useMemo(
+			() =>
+				currentMessages.filter(
+					(message) => !pendingAsks.hidden.has(message.id),
+				),
+			[currentMessages, pendingAsks],
+		);
+		const optimisticPending: PendingAsk | undefined = lastSend
+			? { phase: "sending", since: lastSend.startedAt }
+			: undefined;
+
 		useEffect(() => {
 			isSendingRef.current = isSending;
 		}, [isSending]);
@@ -370,6 +411,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			setHasInitiallyScrolled(false);
 			setIsSending(false);
 			setSendingContent("");
+			setLastSend(null);
 		}, [sessionId]);
 
 		// Sync external messages with local state (no useTransition to avoid flash gap)
@@ -484,9 +526,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				activeTools?: string[],
 				audioFile?: File,
 			) => {
+				const startedAt = Date.now();
 				setShouldAutoScroll(true);
 				setIsSending(true);
 				setSendingContent(content);
+				setLastSend({ content, startedAt, inFlight: true });
 
 				// Scroll immediately to show the optimistic message
 				setTimeout(() => {
@@ -498,6 +542,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				} finally {
 					setIsSending(false);
 					setSendingContent("");
+					setLastSend((send) =>
+						send?.startedAt === startedAt ? { ...send, inFlight: false } : send,
+					);
 				}
 				// Scroll after a brief delay to ensure the message is rendered
 				setTimeout(() => {
@@ -568,7 +615,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				capture: true,
 			} as AddEventListenerOptions);
 			return () =>
-				document.removeEventListener("touchstart", onTouchStart, true as any);
+				document.removeEventListener("touchstart", onTouchStart, true);
 		}, []);
 
 		// Expose methods via ref
@@ -612,7 +659,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					chatBox.current?.focusInput?.();
 				},
 			}),
-			[handleSendMessage, scrollToBottom, shouldAutoScroll],
+			[handleSendMessage, scrollToBottom],
 		);
 
 		return (
@@ -659,6 +706,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 											eventId={eventId}
 											widgetSnapshots={widgetSnapshots}
 											anchoredContent={messageInlineContent?.get(item.data.id)}
+											pending={pendingAsks.byAsk.get(item.data.id)}
 										/>
 									</MessageShell>
 									<SettledInteractions
@@ -686,8 +734,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 											style={{
 												backgroundColor:
 													"var(--fl-chat-ask-background, transparent)",
-												borderLeftColor:
-													"var(--fl-chat-ask-rule, var(--primary))",
+												borderLeftColor: askRuleColor(optimisticPending),
 												borderRadius:
 													"0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0",
 												color:
@@ -695,27 +742,21 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 												maxWidth: "var(--fl-chat-measure, 38rem)",
 											}}
 										>
-											<span className="mb-1.5 block text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+											<span className="mb-1.5 flex items-baseline gap-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
 												{i18next.t("asked", "Asked")}
+												{optimisticPending && (
+													<PendingAskStatus pending={optimisticPending} />
+												)}
 											</span>
 											<p className="line-clamp-6 whitespace-pre-wrap text-sm leading-relaxed">
 												{sendingContent}
 											</p>
 										</div>
-										<div className="flex items-center gap-2 pl-1">
-											<PuffLoader
-												size={16}
-												color={chatTheme === "dark" ? "white" : "black"}
-											/>
-											<span className="text-xs text-muted-foreground">
-												Processing...
-											</span>
-										</div>
 									</div>
 								)}
-							{currentMessages.map((liveMessage) => (
+							{visibleLiveMessages.map((liveMessage) => (
 								<div
-									className="w-full px-4"
+									className="w-full px-4 animate-in fade-in slide-in-from-top-1 duration-300"
 									key={`msg-${liveMessage.id}`}
 									style={{
 										maxWidth:
@@ -813,6 +854,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 									defaultActiveTools={defaultActiveTools}
 									onSendMessage={handleSendMessage}
 									onContentChange={onDraftChange}
+									thinking={thinking}
 									fileUpload={config?.allow_file_upload ?? false}
 									audioInput={voiceEnabled}
 									voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}

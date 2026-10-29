@@ -1,16 +1,24 @@
 use crate::{
-    audit_branch, ensure_permission, entity::role, error::ApiError, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    audit_branch, ensure_permission,
+    entity::{membership, role},
+    error::ApiError,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    routes::sink::service::{loses_execute_events, release_demoted_members},
+    state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, State},
 };
 use flow_like_types::create_id;
-use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, QuerySelect};
 
 enum RoleWrite {
-    Updated,
+    Updated {
+        /// The edit took triggering events away from the role's members.
+        demotes: bool,
+    },
     Created,
 }
 
@@ -80,9 +88,11 @@ pub async fn upsert_role(
                         return Err(ApiError::FORBIDDEN);
                     }
 
+                    let demotes = RolePermissions::from_bits(payload.permissions)
+                        .is_some_and(|after| loses_execute_events(permission, after));
                     let payload: role::ActiveModel = payload.into();
                     payload.reset_all().update(txn).await?;
-                    return Ok(RoleWrite::Updated);
+                    return Ok(RoleWrite::Updated { demotes });
                 }
 
                 if is_owner {
@@ -103,7 +113,7 @@ pub async fn upsert_role(
         .await?;
 
     let (action, resource_id) = match written {
-        RoleWrite::Updated => ("role.update", role_id.clone()),
+        RoleWrite::Updated { .. } => ("role.update", role_id.clone()),
         RoleWrite::Created => ("role.create", new_role_id),
     };
 
@@ -111,7 +121,29 @@ pub async fn upsert_role(
         tracing::warn!(error = %e, "Failed to invalidate permission cache after {}", action);
     }
     crate::package_license::refresh_app(&state, &app_id).await;
+    if let RoleWrite::Updated { demotes: true } = written {
+        release_role_members(&state, &app_id, &role_id).await;
+    }
 
     audit_branch!(state, user, app_id, action, "Role", resource_id);
     Ok(Json(()))
+}
+
+/// Releases the event sinks of the role's members once an edit took triggering events
+/// away from the role. The edit has committed, so a failure is only logged.
+async fn release_role_members(state: &AppState, app_id: &str, role_id: &str) {
+    let members = membership::Entity::find()
+        .filter(membership::Column::AppId.eq(app_id))
+        .filter(membership::Column::RoleId.eq(role_id))
+        .select_only()
+        .column(membership::Column::UserId)
+        .into_tuple::<String>()
+        .all(&state.db)
+        .await;
+    match members {
+        Ok(members) => release_demoted_members(state, app_id, &members).await,
+        Err(error) => {
+            tracing::error!(%app_id, %role_id, %error, "Failed to list the members of a role that no longer allows triggering events");
+        }
+    }
 }

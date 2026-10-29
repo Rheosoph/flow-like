@@ -112,7 +112,7 @@ pub fn complete(conn: &Connection, id: &str) -> Result<()> {
 }
 
 pub fn retry(conn: &Connection, id: &str, now: i64) -> Result<()> {
-    // Failed acceptance is retried for at most one hour. The stable transition ID lets Events deduplicate side effects.
+    // Failed acceptance is retried for at most one hour; a forwarded crossing only within REMOTE_DELIVERY_MS, while the hub still deduplicates its stable transition ID.
     conn.execute("UPDATE geofence_inbox SET attempts=attempts+1,next_attempt=?2+MIN(300000,5000*(1 << MIN(attempts,6))) WHERE id=?1 AND completed=0", params![id,now])?;
     Ok(())
 }

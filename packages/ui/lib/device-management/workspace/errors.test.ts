@@ -77,7 +77,7 @@ describe("transport error filing", () => {
 			["open_timeout", "timeout"],
 			["expired", "expired"],
 			["cancelled", "cancelled"],
-		]) {
+		] as const) {
 			expect(
 				classifyDeviceError(new DeviceTunnelError(cause, "detail")),
 			).toEqual({

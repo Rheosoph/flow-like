@@ -6,6 +6,8 @@ import sys
 import tomllib
 from urllib.parse import parse_qs, urlsplit
 
+LANCE_VERSION = "13.0.0"
+
 
 def is_patched_lance_source(source: str) -> bool:
     if source == "path":
@@ -74,40 +76,30 @@ def check_alignment(lockfile: Path) -> list[str]:
     lance_sources = {
         package.get("source", "path")
         for package in packages
-        if package["name"] == "lance" and package["version"] == "8.0.0"
+        if package["name"] == "lance" and package["version"] == LANCE_VERSION
     }
     for package in packages:
         name = package["name"]
         if (
-            ((name == "fsst" or name.startswith("lance-")) and package["version"] == "8.0.0")
+            (
+                (name == "fsst" or name.startswith("lance-"))
+                and package["version"] == LANCE_VERSION
+            )
             or name in ("lance-arrow-scalar", "lance-arrow-stats")
         ) and package.get("source", "path") not in lance_sources:
             errors.append(f"{name} must share the patched Lance source")
 
-    # Lance 8 needs the fork's create-only fix. LanceDB 0.31 declares futures = "0"
-    # but uses 0.3 APIs; Cargo can otherwise reuse the unrelated legacy 0.1 runtime.
+    # Lance needs the fork's create-only fix.
     for package in packages:
         if (
             package["name"] == "lance"
-            and package["version"] == "8.0.0"
+            and package["version"] == LANCE_VERSION
             and not is_patched_lance_source(package.get("source", "path"))
         ):
             errors.append(
-                "Lance 8.0.0 requires a local checkout or a commit-pinned Rheosoph fork "
-                "preserving create-only commits"
+                f"Lance {LANCE_VERSION} requires a local checkout or a commit-pinned "
+                "Rheosoph fork preserving create-only commits"
             )
-        if package["name"] != "lancedb":
-            continue
-        futures_versions = set()
-        for dependency in package.get("dependencies", []):
-            parts = dependency.split()
-            if parts[0] == "futures":
-                selected = [parts[1]] if len(parts) > 1 else versions.get("futures", set())
-                futures_versions.update(selected)
-        if len(futures_versions) != 1 or not all(
-            version.startswith("0.3.") for version in futures_versions
-        ):
-            errors.append(f"lancedb requires futures 0.3 APIs; resolved {sorted(futures_versions)}")
     return errors
 
 

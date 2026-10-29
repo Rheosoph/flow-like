@@ -15,7 +15,7 @@ use datafusion::{
     prelude::SessionContext,
 };
 use flow_like_types::Value;
-use std::{any::Any, sync::Arc};
+use std::sync::Arc;
 
 pub(super) fn register_text_functions(context: &SessionContext) {
     context.register_udf(ScalarUDF::from(AsGeoJson::default()));
@@ -33,9 +33,6 @@ struct PlainText {
 }
 
 impl ScalarUDFImpl for PlainText {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         self.inner.name()
     }
@@ -82,9 +79,6 @@ impl Default for AsGeoJson {
 }
 
 impl ScalarUDFImpl for AsGeoJson {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "st_asgeojson"
     }
@@ -145,9 +139,6 @@ impl Default for GeomFromGeoJson {
 }
 
 impl ScalarUDFImpl for GeomFromGeoJson {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         "st_geomfromgeojson"
     }

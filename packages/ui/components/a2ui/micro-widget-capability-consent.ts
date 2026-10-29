@@ -122,11 +122,19 @@ const STORAGE_PREFIX = "widget-consent:v2:";
 const GRANT_PREFIX = `${STORAGE_PREFIX}[`;
 const REVOKED_PREFIX = `${STORAGE_PREFIX}revoked:`;
 const REVOKED_ALL = `${REVOKED_PREFIX}*`;
+const DECLINED_PREFIX = `${STORAGE_PREFIX}declined:`;
 const LEGACY_PREFIX = "widget-capability-consent-app";
 
 interface SessionGrant {
 	target: MicroWidgetConsentTarget;
 	record: MicroWidgetConsentRecord;
+}
+
+/** "Don't allow" kept for a project: the declared policy the viewer refused. */
+interface MicroWidgetConsentDecline {
+	v: 2;
+	policy: WidgetPolicy;
+	at: number;
 }
 
 interface RuntimeBlocks {
@@ -227,6 +235,12 @@ export function microWidgetConsentRevokedKey(
 	target: MicroWidgetConsentTarget,
 ): string {
 	return `${REVOKED_PREFIX}${microWidgetConsentKey(target)}`;
+}
+
+export function microWidgetConsentDeclinedKey(
+	target: MicroWidgetConsentTarget,
+): string {
+	return `${DECLINED_PREFIX}${microWidgetConsentKey(target)}`;
 }
 
 function appRevokedKey(appId: string | null | undefined): string {
@@ -450,6 +464,44 @@ function parseGrantKey(key: string): MicroWidgetConsentTarget | null {
 	} catch {
 		return null;
 	}
+}
+
+function parseDeclinedKey(key: string) {
+	return key.startsWith(DECLINED_PREFIX)
+		? parseGrantKey(key.slice(DECLINED_PREFIX.length))
+		: null;
+}
+
+function readDecline(
+	storage: ConsentStorage | null,
+	target: MicroWidgetConsentTarget,
+) {
+	const raw = safeGet(storage, microWidgetConsentDeclinedKey(target));
+	if (!raw) return null;
+	try {
+		const parsed: unknown = JSON.parse(raw);
+		if (!isRecord(parsed) || parsed.v !== 2 || typeof parsed.at !== "number")
+			return null;
+		const policy = readWidgetPolicy(parsed.policy);
+		return policy ? { policy, at: parsed.at } : null;
+	} catch {
+		return null;
+	}
+}
+
+/** The stored decline still applies: given after the latest revocation and the widget asks for nothing new. */
+function declinedFor(
+	target: MicroWidgetConsentTarget,
+	policy: WidgetPolicy,
+	storage: ConsentStorage | null,
+) {
+	const decline = readDecline(storage, target);
+	return (
+		decline !== null &&
+		!isEmptyPolicy(policy) &&
+		decline.at > revokedAt(target, storage) &&
+		policyCovers(decline.policy, policy)
+	);
 }
 
 /**
@@ -690,13 +742,11 @@ export function evaluateMicroWidgetConsent(
 		...policyCapabilities(live.legacy),
 	]);
 	const granted = declaredCovered && uncoveredRuntime.length === 0;
-	const key = microWidgetConsentKey(target);
+	const blocked =
+		sessionBlocks.has(microWidgetConsentKey(target)) ||
+		declinedFor(target, request.policy, storage);
 	return {
-		status: granted
-			? "granted"
-			: sessionBlocks.has(key)
-				? "blocked"
-				: "pending",
+		status: granted ? "granted" : blocked ? "blocked" : "pending",
 		declaredCovered,
 		coveredRuntime,
 		uncoveredRuntime,
@@ -790,6 +840,7 @@ export function grantMicroWidgetConsent(
 		);
 	};
 	sessionBlocks.delete(key);
+	safeRemove(storage, microWidgetConsentDeclinedKey(target));
 	const blocks = sessionRuntimeBlocks.get(key);
 	for (const entry of request.runtime) blocks?.sources.delete(entry.source);
 	sessionGrants.set(key, {
@@ -857,6 +908,7 @@ function forget(
 	sessionGrants.delete(key);
 	sessionRuntimeBlocks.delete(key);
 	safeRemove(storage, key);
+	safeRemove(storage, microWidgetConsentDeclinedKey(target));
 	const legacy = legacyKey(target);
 	if (legacy) safeRemove(storage, legacy);
 	safeSet(
@@ -866,13 +918,30 @@ function forget(
 	);
 }
 
-/** Clears every grant for the target, in every tab, and keeps it blocked for this session. */
+/**
+ * Clears every grant for the target, in every tab, and keeps it blocked for
+ * this session. In a project the decline is also kept on this device, so the
+ * next mount does not ask again unless the widget asks for more than `policy`.
+ */
 export function blockMicroWidgetConsent(
 	target: MicroWidgetConsentTarget,
+	policy: WidgetPolicy,
 	storage: ConsentStorage | null = defaultStorage(),
 ): void {
 	forget(target, storage);
 	sessionBlocks.set(microWidgetConsentKey(target), target);
+	if (target.appId) {
+		const decline: MicroWidgetConsentDecline = {
+			v: 2,
+			policy: normalizeWidgetPolicy(policy),
+			at: Math.max(Date.now(), revokedAt(target, storage) + 1),
+		};
+		safeSet(
+			storage,
+			microWidgetConsentDeclinedKey(target),
+			JSON.stringify(decline),
+		);
+	}
 	notify();
 }
 
@@ -986,12 +1055,15 @@ export function revokeMicroWidgetConsent(
 	notify();
 }
 
+/** Asks again: drops this session's blocks and the stored decline. */
 export function reopenMicroWidgetConsent(
 	target: MicroWidgetConsentTarget,
+	storage: ConsentStorage | null = defaultStorage(),
 ): void {
 	const key = microWidgetConsentKey(target);
 	sessionBlocks.delete(key);
 	sessionRuntimeBlocks.delete(key);
+	safeRemove(storage, microWidgetConsentDeclinedKey(target));
 	notify();
 }
 
@@ -1128,7 +1200,7 @@ export function clearMicroWidgetConsents(
 			? `${LEGACY_PREFIX}-`
 			: `${LEGACY_PREFIX}-${filter.appId}-`;
 	for (const key of keys) {
-		const stored = parseGrantKey(key);
+		const stored = parseGrantKey(key) ?? parseDeclinedKey(key);
 		if (
 			(stored && matchesFilter(stored, filter)) ||
 			key.startsWith(legacyOwner)
@@ -1163,7 +1235,8 @@ export function clearPackageMicroWidgetConsents(
 		nextRevocationEpoch(storage, keys),
 	);
 	for (const key of keys) {
-		const owner = parseGrantKey(key) ?? parseLegacyKey(key);
+		const owner =
+			parseGrantKey(key) ?? parseDeclinedKey(key) ?? parseLegacyKey(key);
 		if (owner?.packageId === packageId) safeRemove(storage, key);
 	}
 	for (const [key, grant] of sessionGrants) {

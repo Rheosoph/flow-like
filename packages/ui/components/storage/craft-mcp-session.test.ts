@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+	type Mock,
+	afterEach,
+	beforeEach,
+	describe,
+	expect,
+	it,
+	vi,
+} from "vitest";
 import { executeDeviceCommand } from "../../lib/device-bridge";
 import { CraftMcpSession, executeCraftCommand } from "./craft-mcp-session";
 
@@ -8,7 +16,7 @@ const elementRef = "page/document";
 const message = { jsonrpc: "2.0", id: 1, method: "tools/list", params: {} };
 let session: CraftMcpSession;
 let frame: Window;
-let post: ReturnType<typeof vi.fn>;
+let post: Mock<(message: Record<string, unknown>) => void>;
 let state: {
 	ready: boolean;
 	editable: boolean;
@@ -59,7 +67,7 @@ function receive(
 }
 
 beforeEach(() => {
-	post = vi.fn();
+	post = vi.fn<(message: Record<string, unknown>) => void>();
 	frame = {} as Window;
 	state = { ready: true, editable: true, editing: true, busy: false };
 	session = createSession();

@@ -91,8 +91,7 @@ impl NodeLogic for FilterLocalDatabaseNode {
         let limit: i64 = context.evaluate_pin("limit").await?;
         let offset: i64 = context.evaluate_pin("offset").await?;
         let cached_db = database.load(context).await?;
-        cached_db.ensure_flushed().await?;
-        let database = cached_db.db.read().await;
+        let database = cached_db.flushed_read().await?;
         let results = database
             .filter(&filter, None, limit as usize, offset as usize)
             .await?;

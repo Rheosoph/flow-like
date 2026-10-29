@@ -27,7 +27,7 @@ use flow_like::flow_like_storage::{
         ObjectStore as LanceObjectStore, ObjectStoreParams, ObjectStoreProvider,
         ObjectStoreRegistry,
     },
-    lancedb::{self, Connection},
+    lance_object_store, lancedb::{self, Connection},
     object_store::{ObjectStore, local::LocalFileSystem},
 };
 use flow_like_device_protocol::{
@@ -114,12 +114,13 @@ pub(crate) struct DirectoryCloud {
     /// Held for writing by a test to pause every database connection.
     pub(crate) gate: tokio::sync::RwLock<()>,
     files: Arc<LocalFileSystem>,
+    lance_files: Arc<lance_object_store::local::LocalFileSystem>,
     session: Arc<Session>,
 }
 
 /// Lance's view of the test bucket: `cloudsim://bucket/{key}` reads `{root}/{key}`.
 #[derive(Debug)]
-struct CloudProvider(Arc<LocalFileSystem>);
+struct CloudProvider(Arc<lance_object_store::local::LocalFileSystem>);
 
 #[async_trait::async_trait]
 impl ObjectStoreProvider for CloudProvider {
@@ -145,14 +146,19 @@ impl ObjectStoreProvider for CloudProvider {
 impl DirectoryCloud {
     pub(crate) fn new(root: &Path) -> Arc<Self> {
         let files = Arc::new(LocalFileSystem::new_with_prefix(root).expect("a test bucket"));
+        let lance_files = Arc::new(
+            lance_object_store::local::LocalFileSystem::new_with_prefix(root)
+                .expect("a test bucket"),
+        );
         let registry = Arc::new(ObjectStoreRegistry::default());
-        registry.insert("cloudsim", Arc::new(CloudProvider(files.clone())));
+        registry.insert("cloudsim", Arc::new(CloudProvider(lance_files.clone())));
         Arc::new(Self {
             root: root.to_path_buf(),
             online: AtomicBool::new(true),
             delay: Mutex::new(Duration::ZERO),
             gate: tokio::sync::RwLock::new(()),
             files,
+            lance_files,
             session: Arc::new(Session::new(16 << 20, 16 << 20, registry)),
         })
     }
@@ -199,6 +205,14 @@ impl CloudAccess for DirectoryCloud {
     async fn objects(&self, _host: &DesktopHost) -> Result<Option<Arc<dyn ObjectStore>>> {
         self.reachable()?;
         Ok(Some(self.files.clone()))
+    }
+
+    async fn lance_objects(
+        &self,
+        _host: &DesktopHost,
+    ) -> Result<Option<Arc<dyn lance_object_store::ObjectStore>>> {
+        self.reachable()?;
+        Ok(Some(self.lance_files.clone()))
     }
 }
 

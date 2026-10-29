@@ -50,6 +50,10 @@ pub struct Model {
         unique_key = "EventSink_appId_path_method_key"
     )]
     pub method: Option<String>,
+    #[sea_orm(column_name = "runAsUserId", column_type = "Text", nullable)]
+    pub run_as_user_id: Option<String>,
+    #[sea_orm(column_name = "runAsReleasedAt", nullable)]
+    pub run_as_released_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(
         belongs_to,
         from = "app_id",
@@ -66,6 +70,14 @@ pub struct Model {
         on_delete = "Cascade"
     )]
     pub event: BelongsTo<super::event::Entity>,
+    #[sea_orm(
+        belongs_to,
+        from = "run_as_user_id",
+        to = "id",
+        on_update = "Cascade",
+        on_delete = "SetNull"
+    )]
+    pub run_as_user: BelongsTo<Option<super::user::Entity>>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

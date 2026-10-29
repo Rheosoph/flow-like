@@ -14,7 +14,7 @@ use crate::{
         embedding_usage_tracking, llm_usage_tracking, meta, sea_orm_active_enums::AiGpaiPosture,
     },
     error::ApiError,
-    middleware::jwt::AppUser,
+    middleware::jwt::{AppUser, ExecutorUse},
     permission::global_permission::GlobalPermission,
     state::AppState,
 };
@@ -1363,7 +1363,8 @@ pub async fn assist(
     // App-scoped hosted usage must never silently fall back to user-only
     // accounting. Global publishing access alone does not authorize charging
     // an app, so require app execution membership as well.
-    user.execution_app_permission(&app_id, &state).await?;
+    user.execution_app_permission(&app_id, &state, ExecutorUse::Read)
+        .await?;
     let usage_context = Some(flow_like::models::llm::ModelUsageContext {
         app_id: Some(app_id.clone()),
         run_id: None,

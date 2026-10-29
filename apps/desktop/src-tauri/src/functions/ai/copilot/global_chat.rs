@@ -5,7 +5,7 @@ use super::backend_types::{
     FlowPilotAgentBackendKind, FlowPilotChatBackend, FlowPilotModelSelection,
 };
 use super::backends::agent_backend;
-use super::chat::{build_global_agent_context, copilot_profile};
+use super::chat::{build_global_agent_context, copilot_profile, with_reasoning_effort_fallback};
 use super::external_chat::external_code_agent_chat_internal;
 use super::platform_bridge::{DesktopPlatformBridge, FrontendPlatformToolSet};
 use super::runtime::{
@@ -21,7 +21,9 @@ use crate::{
 };
 use dashmap::DashMap;
 use flow_like::{
-    copilot::{ChatImage, CopilotScope, UnifiedChatMessage, UnifiedCopilotResponse},
+    copilot::{
+        ChatImage, CopilotScope, UnifiedChatMessage, UnifiedCopilotResponse, flowpilot_thinking,
+    },
     flow::copilot::{
         AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext,
         memory::{AssistantMemory, MemoryEntry, MemoryStatus},
@@ -467,32 +469,35 @@ pub async fn global_chat(
                     &app_handle,
                     FlowPilotAgentBackendKind::GithubCopilot,
                     AGENT_STAGE_RUN,
-                    copilot_sdk_chat_internal(
-                        app_handle.clone(),
-                        model_id,
-                        reasoning_effort.as_deref(),
-                        scope,
-                        None,
-                        None,
-                        &[],
-                        None,
-                        None,
-                        user_prompt,
-                        source_user_prompt.clone(),
-                        source_user_prompt.clone(),
-                        None,
-                        current_images,
-                        history,
-                        sink,
-                        Some(context),
-                        memory,
-                        Some(global_tool_context.clone()),
-                        // Register under the frontend run id so cancel_copilot_chat can stop this
-                        // run (the e2e runner and the UI stop button both cancel by that id).
-                        run_id.clone(),
-                        false,
-                        false,
-                    ),
+                    with_reasoning_effort_fallback(reasoning_effort.as_deref(), |effort| {
+                        copilot_sdk_chat_internal(
+                            app_handle.clone(),
+                            model_id,
+                            effort,
+                            scope,
+                            None,
+                            None,
+                            &[],
+                            None,
+                            None,
+                            user_prompt.clone(),
+                            source_user_prompt.clone(),
+                            source_user_prompt.clone(),
+                            None,
+                            current_images.clone(),
+                            history.clone(),
+                            sink.clone(),
+                            Some(context.clone()),
+                            memory.clone(),
+                            Some(global_tool_context.clone()),
+                            // Register under the frontend run id so cancel_copilot_chat can stop
+                            // this run (the e2e runner and the UI stop button both cancel by that
+                            // id).
+                            run_id.clone(),
+                            false,
+                            false,
+                        )
+                    }),
                 )
                 .await
             }
@@ -507,33 +512,36 @@ pub async fn global_chat(
                     &app_handle,
                     agent_backend,
                     AGENT_STAGE_RUN,
-                    external_code_agent_chat_internal(
-                        app_handle.clone(),
-                        agent_backend,
-                        &model_id,
-                        reasoning_effort.as_deref(),
-                        scope,
-                        None,
-                        None,
-                        &[],
-                        None,
-                        None,
-                        user_prompt,
-                        source_user_prompt.clone(),
-                        source_user_prompt,
-                        None,
-                        current_images,
-                        history,
-                        sink,
-                        Some(context),
-                        memory,
-                        Some(global_tool_context.clone()),
-                        // Register under the frontend run id so cancel_copilot_chat can stop this
-                        // run (the e2e runner and the UI stop button both cancel by that id).
-                        run_id.clone(),
-                        false,
-                        false,
-                    ),
+                    with_reasoning_effort_fallback(reasoning_effort.as_deref(), |effort| {
+                        external_code_agent_chat_internal(
+                            app_handle.clone(),
+                            agent_backend,
+                            &model_id,
+                            effort,
+                            scope,
+                            None,
+                            None,
+                            &[],
+                            None,
+                            None,
+                            user_prompt.clone(),
+                            source_user_prompt.clone(),
+                            source_user_prompt.clone(),
+                            None,
+                            current_images.clone(),
+                            history.clone(),
+                            sink.clone(),
+                            Some(context.clone()),
+                            memory.clone(),
+                            Some(global_tool_context.clone()),
+                            // Register under the frontend run id so cancel_copilot_chat can stop
+                            // this run (the e2e runner and the UI stop button both cancel by that
+                            // id).
+                            run_id.clone(),
+                            false,
+                            false,
+                        )
+                    }),
                 )
                 .await
             }
@@ -578,6 +586,7 @@ pub async fn global_chat(
                     current_images,
                     board_history,
                     model_selection.model_id,
+                    Some(flowpilot_thinking(reasoning_effort.as_deref())),
                     token,
                     bridge,
                     memory,

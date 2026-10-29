@@ -8,6 +8,7 @@ import {
 } from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
 import { getApiOrigin, getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import type { IAppLegalLinks } from "@flow-like/flow-like-ui/lib/legal-links";
+import type { IOAuthToken } from "@flow-like/flow-like-ui/lib/oauth/types";
 import {
 	HUB_REFRESH_TIMEOUT_MS,
 	requestTimeoutMs,
@@ -45,6 +46,7 @@ import type {
 } from "@flow-like/flow-like-ui/state/backend-state/page-state";
 import type { IRegistryState } from "@flow-like/flow-like-ui/state/backend-state/registry-state";
 import type {
+	IOAuthRequirement,
 	IPrerunEventResponse,
 	IStorageItemActionResult,
 } from "@flow-like/flow-like-ui/state/backend-state/types";
@@ -162,6 +164,11 @@ function scopedState<T extends object>(methods: Partial<T>): T {
 
 export type HostedAccessToken = () => string | undefined;
 
+/** A signed-in visitor's own OAuth tokens for a run; undefined runs on the Event's saved sign-ins. */
+export type HostedOAuthTokens = (
+	requirements: IOAuthRequirement[],
+) => Promise<Record<string, IOAuthToken> | undefined>;
+
 const anonymous: HostedAccessToken = () => undefined;
 
 /** A sign-in interface sends its viewer's token, so project members reach the private packages the project pins. */
@@ -265,8 +272,31 @@ class HostedEventState extends EmptyEventState {
 	constructor(
 		private readonly data: HostedBootstrap,
 		private readonly request: HostedRequest,
+		private readonly accessToken: HostedAccessToken,
+		private readonly oauthTokens?: HostedOAuthTokens,
 	) {
 		super();
+	}
+	/** Only a sign-in interface knows its visitor; an anonymous visit never brings its own sign-ins. */
+	private visitorOAuth(): HostedOAuthTokens | undefined {
+		return this.data.auth_proxy && this.accessToken()
+			? this.oauthTokens
+			: undefined;
+	}
+	/** A chat or form asks the prerun only for its OAuth needs; without an answer the saved sign-ins serve. */
+	private async oauthRequirements(
+		appId: string,
+		eventId: string,
+	): Promise<IOAuthRequirement[]> {
+		try {
+			return (await this.prerunEvent(appId, eventId)).oauth_requirements ?? [];
+		} catch (error) {
+			console.warn(
+				`[Hosted OAuth] The prerun of event ${eventId} failed, so this run uses the app's saved sign-ins.`,
+				error,
+			);
+			return [];
+		}
 	}
 	private assertTarget(appId: string, eventId?: string) {
 		if (
@@ -318,14 +348,21 @@ class HostedEventState extends EmptyEventState {
 		beforeDispatch,
 	) => {
 		this.assertTarget(appId, eventId);
+		const oauth = this.visitorOAuth();
 		let activeTrigger = trigger;
+		let requirements: IOAuthRequirement[] = [];
 		if (trigger) {
 			const prerun = await this.prerunEvent(appId, eventId, undefined, trigger);
 			activeTrigger = withCurrentManifestRevision(
 				trigger,
 				prerun.manifest_revision,
 			);
+			requirements = prerun.oauth_requirements ?? [];
+		} else if (oauth) {
+			requirements = await this.oauthRequirements(appId, eventId);
 		}
+		const oauthTokens =
+			oauth && requirements.length > 0 ? await oauth(requirements) : undefined;
 		beforeDispatch?.();
 		const controller = new AbortController();
 		let runId: string | undefined;
@@ -337,6 +374,7 @@ class HostedEventState extends EmptyEventState {
 					page_trigger: activeTrigger
 						? serializePageTrigger(activeTrigger)
 						: undefined,
+					oauth_tokens: oauthTokens,
 				}),
 				signal: controller.signal,
 			});
@@ -440,6 +478,7 @@ export function createHostedBackend(
 	request: HostedRequest,
 	accessToken: HostedAccessToken = anonymous,
 	auth?: () => AuthContextProps,
+	oauthTokens?: HostedOAuthTokens,
 ): IBackendState {
 	return {
 		appState: new EmptyAppState(),
@@ -457,7 +496,7 @@ export function createHostedBackend(
 		graphState: new EmptyGraphState(),
 		queryState: new EmptyQueryState(),
 		pageState: scopedState<IPageState>({}),
-		eventState: new HostedEventState(data, request),
+		eventState: new HostedEventState(data, request, accessToken, oauthTokens),
 		helperState: new HostedHelperState(),
 		routeState: new HostedRouteState(request),
 		userState: new HostedUserState(),

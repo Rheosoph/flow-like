@@ -35,6 +35,8 @@ use crate::flow::node::Node;
 use crate::flow::node::NodeLogic;
 
 #[cfg(feature = "model")]
+use crate::models::custom_bit_relay::CustomBitRelay;
+#[cfg(feature = "model")]
 use crate::models::device::{
     DeviceModelConnector, DeviceModelProbe, Interaction, LocalModelRouter,
 };
@@ -47,6 +49,8 @@ use crate::utils::download_manager::DownloadManager;
 #[cfg(feature = "model")]
 use crate::utils::execute::RuntimeLocator;
 use crate::utils::http::HTTPClient;
+#[cfg(feature = "model")]
+use flow_like_model_provider::egress::ProviderEgress;
 #[cfg(feature = "model")]
 use flow_like_model_provider::provider::ModelProviderConfiguration;
 
@@ -317,9 +321,15 @@ impl FlowNodeRegistryInner {
 
     #[inline]
     pub fn get_node(&self, node_id: &str) -> flow_like_types::Result<Node> {
+        self.get_node_ref(node_id).cloned()
+    }
+
+    /// Read trusted catalog metadata without copying the node's pin definitions.
+    #[inline]
+    pub(crate) fn get_node_ref(&self, node_id: &str) -> flow_like_types::Result<&Node> {
         let node = self.registry.get(node_id);
         match node {
-            Some(node) => Ok(node.0.clone()),
+            Some(node) => Ok(&node.0),
             None => Err(flow_like_types::anyhow!(
                 "Node not found - Get Node: '{}'",
                 node_id
@@ -608,6 +618,15 @@ pub struct FlowLikeState {
     #[cfg(feature = "model")]
     pub hosted_model_token: Option<String>,
 
+    /// Where a run calls the private Bits of its dispatched profile, which carry no key. Only
+    /// server executors set it, from a verified run token that names the Bits' owner.
+    #[cfg(feature = "model")]
+    pub custom_bit_relay: Option<Arc<CustomBitRelay>>,
+    /// Where clients built from a private Bit's own endpoint may connect. A host that calls
+    /// those endpoints for its users (the API) confines them; desktops and executors stay open.
+    #[cfg(feature = "model")]
+    pub model_egress: ProviderEgress,
+
     #[cfg(feature = "flow-metadata")]
     pub node_registry: Arc<RwLock<FlowNodeRegistry>>,
     #[cfg(feature = "flow-metadata")]
@@ -686,6 +705,10 @@ impl FlowLikeState {
 
             #[cfg(feature = "model")]
             hosted_model_token: None,
+            #[cfg(feature = "model")]
+            custom_bit_relay: None,
+            #[cfg(feature = "model")]
+            model_egress: ProviderEgress::Open,
 
             #[cfg(feature = "flow-metadata")]
             node_registry: Arc::new(RwLock::new(FlowNodeRegistry::new())),
@@ -730,6 +753,8 @@ impl FlowLikeState {
             local_model_router: None,
             runtime_locator: Arc::new(RuntimeLocator::beside_current_exe()),
             hosted_model_token: None,
+            custom_bit_relay: None,
+            model_egress: ProviderEgress::Open,
 
             #[cfg(feature = "flow-metadata")]
             node_registry: Arc::new(RwLock::new(FlowNodeRegistry::new())),
@@ -894,6 +919,10 @@ impl FlowLikeState {
             runtime_locator: self.runtime_locator.clone(),
             #[cfg(feature = "model")]
             hosted_model_token: self.hosted_model_token.clone(),
+            #[cfg(feature = "model")]
+            custom_bit_relay: self.custom_bit_relay.clone(),
+            #[cfg(feature = "model")]
+            model_egress: self.model_egress,
 
             #[cfg(feature = "flow-metadata")]
             node_registry: self.node_registry.clone(),

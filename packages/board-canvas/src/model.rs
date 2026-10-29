@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub type Rgba = [u8; 4];
@@ -149,7 +149,7 @@ impl Node {
     }
 }
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Endpoint {
     pub node_id: String,
@@ -324,6 +324,47 @@ impl Overlay {
                 .is_some_and(|rect| rect.iter().any(|value| !value.is_finite()))
         {
             return Err("Overlay coordinates must be finite".into());
+        }
+        Ok(())
+    }
+}
+
+/// The wires a pin or a clicked wire reaches, which the host follows through reroutes to the
+/// pins at their ends.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WireTrace {
+    /// The traced pin; none when the trace follows a clicked wire.
+    #[serde(default)]
+    pub origin: Option<Endpoint>,
+    pub edges: Vec<String>,
+    #[serde(default)]
+    pub reroutes: Vec<String>,
+    #[serde(default)]
+    pub ends: Vec<Endpoint>,
+    /// The clicked wire, drawn strongest.
+    #[serde(default)]
+    pub segment: Option<String>,
+}
+
+#[derive(Default, Deserialize)]
+pub struct Trace {
+    pub hover: Option<WireTrace>,
+    /// The clicked pin or wire: drawn strongest, with previews of its ends that are off screen.
+    pub focus: Option<WireTrace>,
+    /// Host chrome over the canvas, `[x, y, width, height]` in canvas points, that previews avoid.
+    #[serde(default)]
+    pub avoid: Vec<[f32; 4]>,
+}
+
+impl Trace {
+    pub fn validate(&self) -> Result<(), String> {
+        if self
+            .avoid
+            .iter()
+            .any(|rect| rect.iter().any(|value| !value.is_finite()))
+        {
+            return Err("Trace avoid rectangles must be finite".into());
         }
         Ok(())
     }

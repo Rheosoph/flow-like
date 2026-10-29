@@ -15,7 +15,10 @@
 			"target/**",
 			"**/out/**",
 			"**/dist/**",
-			"**/*.astro"
+			"**/*.astro",
+			"apps/docs/src/generated/**",
+			"packages/ast/signatures.json",
+			"packages/ast/flow.d/**"
 		]
 	},
 	"formatter": {

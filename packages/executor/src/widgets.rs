@@ -1,19 +1,16 @@
-//! Widgets for a run, fetched from the hub instead of the meta store.
-//!
-//! The `Instantiate Widget` node used to read `apps/{app}/manifest.app` and
-//! every `{widget}.widget` straight from meta storage, which was the one
-//! run-time read that kept a storage credential in the executor. The widgets
-//! of the packages an app pins were never readable that way: the hub keeps the
-//! pins in its database, and the manifest it stores is not kept in step. An
-//! executor has neither a meta store nor a database, so both lists come from
-//! the hub. It already authenticates this executor by its JWT for progress
-//! reporting, so widgets travel the same way: one authenticated GET per list
-//! and app per run, cached for the life of the run so N instantiations of the
-//! same widget cost one call.
+//! Widget definitions bundled with a run's artifact, with authenticated hub
+//! lookups for other selectors and package widgets. Full inventories stay
+//! separate from the bundle and are cached for the life of the run.
 
+use crate::jwt::ExecutorClaims;
 use crate::resolve::{fetch_bounded_with, max_remote_payload_bytes};
-use flow_like::a2ui::micro_widget::{AppWidgetSource, PackageWidgetRef, PackageWidgetSource};
+use flow_like::a2ui::micro_widget::{
+    find_app_widget_by_selector, AppWidgetSource, PackageWidgetRef, PackageWidgetSource,
+};
 use flow_like::a2ui::widget::Widget;
+use flow_like::bit::Bit;
+use flow_like::flow::compiled::ArtifactWidgetSnapshot;
+use flow_like::models::custom_bit_relay::{relayable, CustomBitRelay};
 use flow_like::state::FlowLikeState;
 use flow_like_types::{anyhow, async_trait};
 use serde::de::DeserializeOwned;
@@ -27,20 +24,148 @@ pub(crate) struct HubAccess {
     pub callback_url: String,
     pub jwt: String,
     pub hosted_frontend: bool,
+    pub app_id: String,
+    /// Private Bits of the dispatched profile that the run calls through the
+    /// hub's model relay.
+    pub relay_ids: Vec<String>,
 }
 
 impl HubAccess {
+    /// The hub of a run whose `claims` the executor verified. The run relays
+    /// the private Bits of its dispatched `profile` only when the claims name
+    /// their owner; the profile itself is bound by the signed dispatch hash.
+    pub(crate) fn for_run(
+        claims: &ExecutorClaims,
+        jwt: &str,
+        profile: Option<&serde_json::Value>,
+    ) -> Self {
+        let names_owner = claims
+            .custom_bits_owner
+            .as_deref()
+            .is_some_and(|owner| !owner.trim().is_empty());
+        Self {
+            callback_url: claims.callback_url.clone(),
+            jwt: jwt.to_string(),
+            hosted_frontend: claims.hosted_frontend,
+            app_id: claims.app_id.clone(),
+            relay_ids: if names_owner {
+                relayable_bit_ids(profile)
+            } else {
+                Vec::new()
+            },
+        }
+    }
+
     /// Point `state` at the hub for what the executor has no store or database
     /// for: one source answers for the app's own widgets and for the widgets of
-    /// the packages it pins. For a hosted frontend the JWT is also the run's
-    /// credential for hosted model calls.
+    /// the packages it pins, and the model relay answers for private Bits. For
+    /// a hosted frontend the JWT is also the run's credential for hosted model
+    /// calls.
     pub(crate) async fn register_on(self, state: &mut FlowLikeState) {
         if self.hosted_frontend {
             state.hosted_model_token = Some(self.jwt.clone());
         }
+        if !self.relay_ids.is_empty() {
+            state.custom_bit_relay = Some(Arc::new(CustomBitRelay::new(
+                &self.callback_url,
+                &self.app_id,
+                &self.jwt,
+                self.relay_ids,
+            )));
+        }
         let widgets = Arc::new(HubWidgetSource::new(&self.callback_url, self.jwt));
         state.register_app_widget_source(widgets.clone()).await;
         state.register_package_widget_source(widgets).await;
+    }
+}
+
+fn relayable_bit_ids(profile: Option<&serde_json::Value>) -> Vec<String> {
+    profile
+        .and_then(|profile| profile.get("custom_bits"))
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|bit| serde_json::from_value::<Bit>(bit.clone()).ok())
+        .filter(relayable)
+        .map(|bit| bit.id)
+        .collect()
+}
+
+/// Register only exact selectors that the API resolved for this board revision.
+/// Missing selectors retain the host's full-inventory lookup.
+pub(crate) async fn register_widget_snapshot(
+    state: &FlowLikeState,
+    snapshot: Option<&ArtifactWidgetSnapshot>,
+    app_id: &str,
+    board_id: &str,
+    board_identity: &str,
+) {
+    let Some(snapshot) = snapshot else { return };
+    if snapshot.format_version != 1
+        || snapshot.app_id != app_id
+        || snapshot.board_id != board_id
+        || snapshot.board_identity != board_identity
+        || snapshot.widgets.iter().any(|entry| {
+            entry.widget_id != entry.widget.id
+                || (entry.selector != entry.widget.id && entry.selector != entry.widget.name)
+                || entry.selector.starts_with("pkg:")
+        })
+    {
+        tracing::warn!(
+            app_id,
+            board_id,
+            "Ignoring incompatible artifact widget snapshot"
+        );
+        return;
+    }
+    let Some(fallback) = state.app_widget_source().await else {
+        return;
+    };
+    let widgets: HashMap<_, _> = snapshot
+        .widgets
+        .iter()
+        .map(|entry| (entry.selector.clone(), Arc::new(entry.widget.clone())))
+        .collect();
+    if widgets.len() != snapshot.widgets.len() {
+        tracing::warn!(
+            app_id,
+            board_id,
+            "Ignoring duplicate artifact widget selectors"
+        );
+        return;
+    }
+    state
+        .register_app_widget_source(Arc::new(BundledWidgetSource {
+            app_id: app_id.to_string(),
+            widgets,
+            fallback,
+        }))
+        .await;
+}
+
+struct BundledWidgetSource {
+    app_id: String,
+    widgets: HashMap<String, Arc<Widget>>,
+    fallback: Arc<dyn AppWidgetSource>,
+}
+
+#[async_trait]
+impl AppWidgetSource for BundledWidgetSource {
+    async fn list_app_widgets(&self, app_id: &str) -> flow_like_types::Result<Arc<Vec<Widget>>> {
+        self.fallback.list_app_widgets(app_id).await
+    }
+
+    async fn get_app_widget(
+        &self,
+        app_id: &str,
+        selector: &str,
+    ) -> flow_like_types::Result<Option<Arc<Widget>>> {
+        if app_id == self.app_id {
+            if let Some(widget) = self.widgets.get(selector) {
+                return Ok(Some(widget.clone()));
+            }
+        }
+        self.fallback.get_app_widget(app_id, selector).await
     }
 }
 
@@ -51,6 +176,7 @@ pub struct HubWidgetSource {
     base_url: String,
     jwt: String,
     cache: PerApp<Widget>,
+    resolved: Mutex<HashMap<(String, String), Option<Arc<Widget>>>>,
     package_cache: PerApp<PackageWidgetRef>,
 }
 
@@ -60,6 +186,7 @@ impl HubWidgetSource {
             base_url: callback_url.trim_end_matches('/').to_string(),
             jwt,
             cache: Mutex::new(HashMap::new()),
+            resolved: Mutex::new(HashMap::new()),
             package_cache: Mutex::new(HashMap::new()),
         }
     }
@@ -129,6 +256,24 @@ impl AppWidgetSource for HubWidgetSource {
         self.load(&self.cache, self.widgets_url(app_id), app_id, "widgets")
             .await
     }
+
+    async fn get_app_widget(
+        &self,
+        app_id: &str,
+        selector: &str,
+    ) -> flow_like_types::Result<Option<Arc<Widget>>> {
+        let key = (app_id.to_string(), selector.to_string());
+        if let Some(widget) = self.resolved.lock().await.get(&key) {
+            return Ok(widget.clone());
+        }
+        let widgets = self.list_app_widgets(app_id).await?;
+        let widget = find_app_widget_by_selector(&widgets, selector)
+            .cloned()
+            .map(Arc::new);
+        // Dynamic selectors can instantiate the same large widget in a loop.
+        self.resolved.lock().await.insert(key, widget.clone());
+        Ok(widget)
+    }
 }
 
 #[async_trait]
@@ -155,6 +300,7 @@ mod tests {
     use axum::routing::get;
     use axum::{Json, Router};
     use flow_like::a2ui::micro_widget::load_package_widgets;
+    use flow_like::flow::compiled::ArtifactWidgetEntry;
     use flow_like::state::FlowLikeConfig;
     use flow_like::utils::http::HTTPClient;
 
@@ -187,6 +333,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn repeated_legacy_lookups_share_the_widget_definition() {
+        let source = HubWidgetSource::new("http://127.0.0.1:9", "jwt".into());
+        source
+            .prime("app-1", vec![Widget::new("widget", "Widget", "root")])
+            .await;
+        let first = source
+            .get_app_widget("app-1", "Widget")
+            .await
+            .unwrap()
+            .unwrap();
+        let second = source
+            .get_app_widget("app-1", "Widget")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[tokio::test]
     async fn an_unknown_app_reaches_the_hub_and_reports_the_app_not_the_token() {
         let source = HubWidgetSource::new("http://127.0.0.1:9", "secret-jwt".into());
         let error = source
@@ -205,6 +370,130 @@ mod tests {
     /// A state without any store: the hub source must answer from the hub alone.
     fn state() -> FlowLikeState {
         FlowLikeState::new(FlowLikeConfig::new(), HTTPClient::new_without_refetch())
+    }
+
+    fn snapshot() -> ArtifactWidgetSnapshot {
+        ArtifactWidgetSnapshot {
+            format_version: 1,
+            app_id: "app-1".into(),
+            board_id: "board-1".into(),
+            board_identity: "latest@board-etag".into(),
+            revision: "widgets-revision".into(),
+            widgets: vec![ArtifactWidgetEntry {
+                selector: "Bundled".into(),
+                widget_id: "widget-1".into(),
+                source_etag: "widget-etag".into(),
+                widget: Widget::new("widget-1", "Bundled", "root"),
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn bundled_selectors_skip_http_without_replacing_the_inventory() {
+        let bundled = Widget::new("widget-1", "Bundled", "root");
+        let dynamic = Widget::new("widget-2", "Dynamic", "root");
+        let apps = HashMap::from([("app-1", vec![bundled, dynamic])]);
+        let (base, requests, server) = hub("widgets", apps).await;
+        let state = state();
+        state
+            .register_app_widget_source(Arc::new(HubWidgetSource::new(&base, "jwt".into())))
+            .await;
+        register_widget_snapshot(
+            &state,
+            Some(&snapshot()),
+            "app-1",
+            "board-1",
+            "latest@board-etag",
+        )
+        .await;
+        let source = state.app_widget_source().await.unwrap();
+
+        for _ in 0..2 {
+            assert_eq!(
+                source
+                    .get_app_widget("app-1", "Bundled")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                "widget-1"
+            );
+        }
+        assert!(
+            requests.lock().await.is_empty(),
+            "bundled selectors require no hub request"
+        );
+
+        assert_eq!(
+            source
+                .get_app_widget("app-1", "Dynamic")
+                .await
+                .unwrap()
+                .unwrap()
+                .id,
+            "widget-2"
+        );
+        assert_eq!(source.list_app_widgets("app-1").await.unwrap().len(), 2);
+        assert!(source
+            .get_app_widget("app-1", "missing")
+            .await
+            .unwrap()
+            .is_none());
+        assert!(
+            source.get_app_widget("app-2", "Bundled").await.is_err(),
+            "another app must pass hub authorization"
+        );
+        assert_eq!(
+            *requests.lock().await,
+            [
+                ("app-1".to_string(), "Bearer jwt".to_string()),
+                ("app-2".to_string(), "Bearer jwt".to_string()),
+            ]
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn incompatible_snapshots_keep_the_legacy_source() {
+        for mismatch in 0..7 {
+            let state = state();
+            let hub = Arc::new(HubWidgetSource::new("http://127.0.0.1:9", "jwt".into()));
+            hub.prime("app-1", vec![Widget::new("legacy", "Bundled", "root")])
+                .await;
+            state.register_app_widget_source(hub.clone()).await;
+            let mut bundle = snapshot();
+            match mismatch {
+                0 => bundle.app_id = "other-app".into(),
+                1 => bundle.board_id = "other-board".into(),
+                2 => bundle.board_identity = "latest@other-etag".into(),
+                3 => bundle.format_version = 2,
+                4 => bundle.widgets[0].widget_id = "other-widget".into(),
+                5 => bundle.widgets.push(bundle.widgets[0].clone()),
+                6 => bundle.widgets[0].selector = "other-selector".into(),
+                _ => unreachable!(),
+            }
+            register_widget_snapshot(
+                &state,
+                Some(&bundle),
+                "app-1",
+                "board-1",
+                "latest@board-etag",
+            )
+            .await;
+            assert_eq!(
+                state
+                    .app_widget_source()
+                    .await
+                    .unwrap()
+                    .get_app_widget("app-1", "Bundled")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                "legacy",
+                "mismatch {mismatch}"
+            );
+        }
     }
 
     fn entry(widget_id: &str) -> PackageWidgetRef {
@@ -378,6 +667,91 @@ mod tests {
         assert_eq!(asked, 2, "a refusal is not cached");
     }
 
+    fn claims(custom_bits_owner: Option<&str>) -> ExecutorClaims {
+        let mut claims = serde_json::json!({
+            "sub": "user-1", "run_id": "run-1", "app_id": "app-1", "board_id": "board-1",
+            "callback_url": "http://127.0.0.1:9", "typ": "executor", "iss": "flow-like",
+            "aud": "flow-like-executor", "iat": 0, "nbf": 0, "exp": 0, "jti": "jti-1"
+        });
+        if let Some(owner) = custom_bits_owner {
+            claims["custom_bits_owner"] = owner.into();
+        }
+        serde_json::from_value(claims).expect("executor claims")
+    }
+
+    fn profile_bit(id: &str, provider_name: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "type": "Llm",
+            "parameters": {
+                "context_length": 8192,
+                "provider": {"provider_name": provider_name, "model_id": "upstream", "params": {}}
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn a_run_relays_its_profiles_private_bits_only_when_its_claims_name_their_owner() {
+        let profile = serde_json::json!({"custom_bits": [
+            profile_bit("my-claude", "custom:anthropic"),
+            profile_bit("my-codex", "custom:codex"),
+            profile_bit("catalog", "hosted:openai"),
+        ]});
+        let desktop_only =
+            serde_json::json!({"custom_bits": [profile_bit("my-codex", "custom:codex")]});
+
+        for (owner, profile, relays) in [
+            (Some("owner-1"), Some(&profile), true),
+            (None, Some(&profile), false),
+            (Some(" "), Some(&profile), false),
+            (Some("owner-1"), Some(&desktop_only), false),
+            (Some("owner-1"), None, false),
+        ] {
+            let mut state = state();
+            HubAccess::for_run(&claims(owner), "exec-jwt", profile)
+                .register_on(&mut state)
+                .await;
+
+            assert_eq!(
+                state.custom_bit_relay.is_some(),
+                relays,
+                "owner {owner:?}, profile {profile:?}"
+            );
+        }
+
+        let mut state = state();
+        HubAccess::for_run(&claims(Some("owner-1")), "exec-jwt", Some(&profile))
+            .register_on(&mut state)
+            .await;
+        let relay = state.custom_bit_relay.expect("the relay is registered");
+        assert_eq!(
+            relay.base_url(),
+            "http://127.0.0.1:9/api/v1/execution/apps/app-1/models"
+        );
+        let bits: Vec<Bit> = serde_json::from_value(profile["custom_bits"].clone()).unwrap();
+        let served: Vec<bool> = bits.iter().map(|bit| relay.serves(bit)).collect();
+        assert_eq!(served, [true, false, false]);
+    }
+
+    #[test]
+    fn malformed_profile_bits_are_never_relayed() {
+        let unknown_type = serde_json::json!({"custom_bits": [{
+            "id": "odd", "type": "NoSuchType",
+            "parameters": {"provider": {"provider_name": "custom:openai"}}
+        }]});
+        let no_provider = serde_json::json!({"custom_bits": [
+            {"id": "bare", "type": "Llm", "parameters": {}}
+        ]});
+        for profile in [
+            serde_json::json!({}),
+            serde_json::json!({"custom_bits": "not-a-list"}),
+            unknown_type,
+            no_provider,
+        ] {
+            assert!(relayable_bit_ids(Some(&profile)).is_empty(), "{profile}");
+        }
+    }
+
     #[tokio::test]
     async fn a_hub_registers_the_app_and_the_package_widget_source() {
         let mut state = state();
@@ -385,6 +759,8 @@ mod tests {
             callback_url: "http://127.0.0.1:9".into(),
             jwt: "jwt".into(),
             hosted_frontend: false,
+            app_id: "app-1".into(),
+            relay_ids: Vec::new(),
         };
 
         access.register_on(&mut state).await;
@@ -405,6 +781,8 @@ mod tests {
             callback_url: base,
             jwt: "executor-jwt".into(),
             hosted_frontend: false,
+            app_id: "app-1".into(),
+            relay_ids: Vec::new(),
         };
         access.register_on(&mut state).await;
 
@@ -429,6 +807,8 @@ mod tests {
                 callback_url: "http://127.0.0.1:9".into(),
                 jwt: "jwt".into(),
                 hosted_frontend,
+                app_id: "app-1".into(),
+                relay_ids: Vec::new(),
             };
 
             access.register_on(&mut state).await;

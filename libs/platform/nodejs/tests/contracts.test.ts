@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test";
-import { FlowLikeClient, FlowLikeError } from "../src/index.js";
 import { createHttpClient } from "../src/client.js";
+import { FlowLikeClient, FlowLikeError } from "../src/index.js";
 
 const mocks: ReturnType<typeof spyOn>[] = [];
 afterEach(() => {
@@ -424,6 +424,29 @@ const routeCases: {
 		body: { event: { id: "e" }, register_source: false },
 	},
 	{
+		name: "event save drops the deprecated PAT",
+		invoke: (s) =>
+			s.upsertEvent("a", "e", { id: "e" }, { pat: "pat_x.y", profile_id: "p" }),
+		method: "PUT",
+		path: "/apps/a/events/e",
+		body: { event: { id: "e" }, profile_id: "p" },
+	},
+	{
+		name: "event trigger drops the deprecated token",
+		invoke: (s) => s.triggerEventAsync("a", "e", 7, { token: "pat_x.y" }),
+		method: "POST",
+		path: "/apps/a/events/e/invoke/async",
+		body: { payload: 7 },
+	},
+	{
+		name: "workflow trigger drops the deprecated token",
+		invoke: (s) =>
+			s.triggerWorkflowAsync("a", "b", "n", 7, { token: "pat_x.y" }),
+		method: "POST",
+		path: "/apps/a/board/b/invoke/async",
+		body: { node_id: "n", payload: 7 },
+	},
+	{
 		name: "event validation",
 		invoke: (s) => s.validateEvent("a", "e", "1.2.3"),
 		method: "POST",
@@ -809,8 +832,12 @@ describe("transport behavior", () => {
 			new Response(
 				new ReadableStream({
 					pull(controller) {
-						if (index === bytes.length) controller.close();
-						else controller.enqueue(bytes.slice(index, (index += 1)));
+						if (index === bytes.length) {
+							controller.close();
+							return;
+						}
+						controller.enqueue(bytes.slice(index, index + 1));
+						index += 1;
 					},
 				}),
 				{ headers: { "Content-Type": "text/event-stream; charset=utf-8" } },

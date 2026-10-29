@@ -115,7 +115,7 @@ export function describeMicroWidgetSandbox(
 		},
 		withBase(["'unsafe-inline'", "bundle"], "styleSrc"),
 		withBase(["data:", "blob:", "bundle"], "imgSrc"),
-		withBase(["data:", "bundle"], "fontSrc"),
+		withBase(["data:", "blob:", "bundle"], "fontSrc"),
 		extended("connect-src", local, "connectSrc", "workers"),
 		{
 			directive: "worker-src",

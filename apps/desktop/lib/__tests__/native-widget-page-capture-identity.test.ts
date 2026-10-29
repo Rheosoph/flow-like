@@ -11,7 +11,7 @@ import {
 	type NativeWidgetPageCaptureDetail,
 } from "@flow-like/flow-like-ui/lib/native-widget-page";
 import type { IPage } from "@flow-like/flow-like-ui/state/backend-state/page-state";
-import React, { act, createElement } from "react";
+import React, { act, createElement, useLayoutEffect } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -31,13 +31,22 @@ const mocks = vi.hoisted(() => ({
 		user: { profile: { sub: "viewer-a" } },
 	},
 	value: "Account A content",
+	profileEnabled: [] as boolean[],
 }));
 vi.mock("@flow-like/flow-like-ui/state/backend-state", () => ({
 	useBackend: () => mocks.backend,
 	useBackendReady: () => true,
 }));
 vi.mock("@flow-like/flow-like-ui/hooks/use-invoke", () => ({
-	useInvoke: () => mocks.profile,
+	useInvoke: (
+		_fn: unknown,
+		_context: unknown,
+		_args: unknown,
+		enabled: boolean,
+	) => {
+		mocks.profileEnabled.push(enabled);
+		return mocks.profile;
+	},
 }));
 vi.mock("react-oidc-context", () => ({ useAuth: () => mocks.auth }));
 vi.mock("@flow-like/flow-like-ui/components/a2ui/DataContext", () => ({
@@ -121,6 +130,7 @@ beforeEach(() => {
 	mocks.auth.isLoading = false;
 	mocks.auth.user.profile.sub = "viewer-a";
 	mocks.value = "Account A content";
+	mocks.profileEnabled = [];
 	captures = [];
 	window.addEventListener(NATIVE_WIDGET_PAGE_CAPTURE, onCapture);
 	saveNativeWidgetDefinitions(scope(), [definition]);
@@ -137,6 +147,43 @@ afterEach(async () => {
 });
 
 describe("native page capture identity", () => {
+	it("reconciles a definition configured after render but before passive subscriptions", async () => {
+		saveNativeWidgetDefinitions(scope(), []);
+		mocks.profile.isFetchedAfterMount = false;
+		function ConfigureDuringCommit() {
+			useLayoutEffect(() => {
+				saveNativeWidgetDefinitions(scope(), [definition]);
+			}, []);
+			return createElement(NativeWidgetPageCaptureBridge, {
+				appId: "app",
+				page,
+				surface,
+				path: "/",
+				search: "",
+				pageRevision: "v1",
+				ready: true,
+			});
+		}
+		await act(async () => root.render(createElement(ConfigureDuringCommit)));
+		expect(mocks.profileEnabled.at(-1)).toBe(true);
+		await flush();
+		expect(captures).toEqual([]);
+		mocks.profile.isFetchedAfterMount = true;
+		await act(async () => root.render(createElement(ConfigureDuringCommit)));
+		await flush();
+		expect(captures).toHaveLength(1);
+	});
+
+	it("verifies the profile only when the page has a configured capture", async () => {
+		saveNativeWidgetDefinitions(scope(), []);
+		await render();
+		expect(mocks.profileEnabled).not.toContain(true);
+		await act(async () => saveNativeWidgetDefinitions(scope(), [definition]));
+		expect(mocks.profileEnabled.at(-1)).toBe(true);
+		await flush();
+		expect(captures).toHaveLength(1);
+	});
+
 	it("waits for a freshly observed profile before capturing the page", async () => {
 		mocks.profile.isFetchedAfterMount = false;
 		await render();

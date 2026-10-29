@@ -225,19 +225,32 @@ impl ResponseMessage {
         let idx = dcall.index;
 
         // Index-less deltas (rig streams) identify their call by id — without
-        // this match every argument fragment becomes its own bogus call.
+        // this match every argument fragment becomes its own bogus call. Rig
+        // sends a call's whole name, then argument fragments, then the finished
+        // call, which replaces them. Deltas extend only a call that is still
+        // streaming and a finished call only its own fragments, because Gemini
+        // reuses the function name as the id of every call to it.
         if idx.is_none()
             && let Some(id) = dcall.id.as_deref().filter(|id| !id.is_empty())
-            && let Some(existing) = self.tool_calls.iter_mut().find(|c| c.id == id)
+            && let Some(existing) = self.tool_calls.iter_mut().find(|c| {
+                c.id == id
+                    && match (&dcall.function.name, &dcall.function.arguments) {
+                        (Some(name), Some(arguments)) => {
+                            c.function.name == *name
+                                && completes_fragments(&c.function.arguments, arguments)
+                        }
+                        _ => finished_arguments(&c.function.arguments).is_none(),
+                    }
+            })
         {
             if let Some(t) = dcall.tool_type {
                 existing.tool_type = Some(t);
             }
-            if let Some(name) = dcall.function.name {
-                existing.function.name += &name;
-            }
-            if let Some(args) = dcall.function.arguments {
-                existing.function.arguments += &args;
+            match (dcall.function.name, dcall.function.arguments) {
+                (Some(_), Some(arguments)) => existing.function.arguments = arguments,
+                (Some(name), None) => existing.function.name = name,
+                (None, Some(fragment)) => existing.function.arguments += &fragment,
+                (None, None) => {}
             }
             return;
         }
@@ -275,6 +288,26 @@ impl ResponseMessage {
             function: ResponseFunction { name, arguments },
         });
     }
+}
+
+/// Streamed tool-call arguments are finished once they form a JSON object. Until then they are
+/// fragments, which may open with the `null` placeholder some gateways send. This reads only the
+/// arguments because a response travels between Push Chunk nodes as JSON.
+fn finished_arguments(arguments: &str) -> Option<json::Value> {
+    if !arguments.trim_end().ends_with('}') {
+        return None;
+    }
+    json::from_str::<json::Value>(arguments)
+        .ok()
+        .filter(json::Value::is_object)
+}
+
+/// Whether `finished` arguments complete streamed `fragments`: those are unfinished, or the same
+/// JSON.
+fn completes_fragments(fragments: &str, finished: &str) -> bool {
+    finished_arguments(fragments).is_none_or(|streamed| {
+        json::from_str::<json::Value>(finished).is_ok_and(|finished| finished == streamed)
+    })
 }
 
 impl TryFrom<ResponseMessage> for RigMessage {
@@ -882,6 +915,76 @@ mod tests {
             &message.content_parts[1],
             Content::Text { text, .. } if text == "caption"
         ));
+    }
+
+    #[test]
+    fn a_finished_tool_call_replaces_its_streamed_fragments() {
+        let finished = |id: &str, city: &str| {
+            ResponseChunk::from_tool_call(
+                &RigToolCall {
+                    id: id.to_string(),
+                    call_id: None,
+                    function: RigToolFunction {
+                        name: "get_weather".to_string(),
+                        arguments: json::json!({ "city": city }),
+                    },
+                    signature: None,
+                    additional_params: None,
+                },
+                "model",
+            )
+        };
+        let chunks = [
+            ResponseChunk::from_tool_call_name_delta("call_a", "get_weather", "model"),
+            ResponseChunk::from_tool_call_delta("call_a", r#"{"city": "#, "model"),
+            ResponseChunk::from_tool_call_name_delta("call_a", "get_weather", "model"),
+            ResponseChunk::from_tool_call_delta("call_a", r#""Paris"}"#, "model"),
+            finished("call_a", "Paris"),
+            ResponseChunk::from_tool_call_name_delta("call_b", "get_weather", "model"),
+            ResponseChunk::from_tool_call_delta("call_b", "null", "model"),
+            ResponseChunk::from_tool_call_delta("call_b", r#"{"city": "Ber"#, "model"),
+            ResponseChunk::from_tool_call_delta("call_b", r#"lin"}"#, "model"),
+            finished("call_b", "Berlin"),
+            finished("get_weather", "Rome"),
+            finished("get_weather", "Oslo"),
+            ResponseChunk::from_tool_call_name_delta("get_weather", "get_weather", "model"),
+            ResponseChunk::from_tool_call_delta("get_weather", r#"{"city":"Lima"}"#, "model"),
+            finished("get_weather", "Lima"),
+        ];
+
+        for through_pins in [false, true] {
+            let mut response = Response::new();
+            for chunk in chunks.clone() {
+                response.push_chunk(chunk);
+                if through_pins {
+                    response = json::from_value(json::to_value(&response).unwrap()).unwrap();
+                }
+            }
+
+            let calls: Vec<_> = response.choices[0]
+                .message
+                .tool_calls
+                .iter()
+                .map(|call| {
+                    (
+                        call.id.as_str(),
+                        call.function.name.as_str(),
+                        call.function.arguments.as_str(),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                calls,
+                [
+                    ("call_a", "get_weather", r#"{"city":"Paris"}"#),
+                    ("call_b", "get_weather", r#"{"city":"Berlin"}"#),
+                    ("get_weather", "get_weather", r#"{"city":"Rome"}"#),
+                    ("get_weather", "get_weather", r#"{"city":"Oslo"}"#),
+                    ("get_weather", "get_weather", r#"{"city":"Lima"}"#),
+                ],
+                "through pins: {through_pins}"
+            );
+        }
     }
 
     #[test]

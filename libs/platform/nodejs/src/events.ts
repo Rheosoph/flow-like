@@ -3,8 +3,8 @@ import { appPath, eventPath } from "./paths.js";
 import type {
 	AsyncInvokeResult,
 	EventTriggerOptions,
-	JsonObject,
 	EventUpsertOptions,
+	JsonObject,
 	Version,
 	VersionType,
 } from "./types.js";
@@ -21,7 +21,6 @@ export function createEventMethods(http: HttpClient) {
 				body: {
 					payload,
 					version: options?.version,
-					token: options?.token,
 					oauth_tokens: options?.oauth_tokens,
 					runtime_variables: options?.runtime_variables,
 					profile_id: options?.profile_id,
@@ -51,7 +50,6 @@ export function createEventMethods(http: HttpClient) {
 					body: {
 						payload,
 						version: options?.version,
-						token: options?.token,
 						oauth_tokens: options?.oauth_tokens,
 						runtime_variables: options?.runtime_variables,
 						profile_id: options?.profile_id,
@@ -86,8 +84,9 @@ export function createEventMethods(http: HttpClient) {
 			event: JsonObject,
 			options: EventUpsertOptions = {},
 		): Promise<JsonObject> {
+			const { pat: _pat, ...body } = options;
 			return http.request("PUT", eventPath(appId, eventId), {
-				body: { event, ...options },
+				body: { event, ...body },
 			});
 		},
 		async deleteEvent(appId: string, eventId: string): Promise<void> {

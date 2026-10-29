@@ -28,7 +28,6 @@ runtime-catalog = []
 draft-testing = [
     "package-std",
     "package-data",
-    "dep:flow-like-runtime",
     "flow-like-runtime/flow-runtime",
     "dep:flow-like-types",
     "dep:flow-like-storage",
@@ -277,7 +276,7 @@ all-execute = ["all", "execute"]
 all-server-execute = ["portable-all", "server-execute"]
 
 [dependencies]
-flow-like-runtime = { workspace = true, optional = true }
+flow-like-runtime = { workspace = true, features = ["flow-metadata"] }
 flow-like-types = { workspace = true, optional = true }
 flow-like-storage = { workspace = true, optional = true }
 futures = { workspace = true, optional = true }

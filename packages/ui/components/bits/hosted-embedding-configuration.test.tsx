@@ -327,7 +327,8 @@ test("toggling OpenRouter dimensions preserves the remote configuration and Bit 
 		const toggle = window.document.getElementById(
 			label?.getAttribute("for") ?? "",
 		);
-		if (!toggle) throw new Error("Missing vector dimensions switch");
+		if (!(toggle instanceof window.HTMLElement))
+			throw new Error("Missing vector dimensions switch");
 		expect(toggle.getAttribute("aria-checked")).toBe("true");
 		for (const enabled of [false, true]) {
 			await act(async () => toggle.click());

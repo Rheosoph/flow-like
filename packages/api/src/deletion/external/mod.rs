@@ -50,10 +50,13 @@ pub enum ExternalStep {
     ExecutionEventPayloads,
     AppQuotaPayloads,
     UserQuotaPayloads,
+    /// Remote sinks that run as the user, paused and handed back to their apps'
+    /// admins before the account's memberships go.
+    UserSinkRunAs,
 }
 
 impl ExternalStep {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::AppSinkSchedules,
         Self::AppStoragePrefixes,
         Self::AppCacheBackend,
@@ -64,6 +67,7 @@ impl ExternalStep {
         Self::ExecutionEventPayloads,
         Self::AppQuotaPayloads,
         Self::UserQuotaPayloads,
+        Self::UserSinkRunAs,
     ];
 
     pub fn describe(self) -> &'static str {
@@ -82,6 +86,7 @@ impl ExternalStep {
             Self::UserQuotaPayloads => {
                 "cancel account operations and remove expired private inputs"
             }
+            Self::UserSinkRunAs => "pause the event sinks that run as the account",
         }
     }
 }
@@ -148,6 +153,17 @@ pub async fn run(
             } else {
                 Flow::Suspend
             })
+        }
+        ExternalStep::UserSinkRunAs => {
+            crate::routes::sink::service::release_member_sinks(
+                state,
+                None,
+                &root_id,
+                crate::routes::sink::authority::RunAsDenial::AccountInactive,
+            )
+            .await
+            .map_err(ApiError::internal_error)?;
+            Ok(Flow::Continue)
         }
     }
 }

@@ -26,7 +26,7 @@ const pageAction = {
 	actionId: "private-action",
 	manifestRevision: "revision-1",
 };
-const workflow: Action = { name: "workflow_event", pageAction };
+const workflow: Action = { name: "workflow_event", context: {}, pageAction };
 const widget: Action = { name: "widget_event", context: { actionId: "open" } };
 
 function a2ui(payload: Record<string, unknown>): IIntercomEvent[] {
@@ -288,8 +288,14 @@ describe("action run timings", () => {
 					},
 				),
 			).rejects.toThrow("failure");
-			await harness.controls.page.executeAction({ name: "workflow_event" });
-			await harness.controls.page.executeAction({ name: "external_link" });
+			await harness.controls.page.executeAction({
+				name: "workflow_event",
+				context: {},
+			});
+			await harness.controls.page.executeAction({
+				name: "external_link",
+				context: {},
+			});
 		});
 		expect(harness.reports()).toHaveLength(4);
 		for (const report of harness.reports()) {

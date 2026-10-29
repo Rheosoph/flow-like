@@ -1,11 +1,15 @@
 /** Shared types for the model-eval pipeline */
 
+export function isCatalogEstimateSlug(slug: string): boolean {
+	return slug.startsWith("flow-like-estimate-");
+}
+
 export type AAOpenSourceCategorization =
 	| "Open Weights (License Required for Commercial Use)"
 	| "Open Weights (Permissive License)"
 	| "Proprietary";
 
-export type WritingBenchmarkVersion = "v2" | "v3" | "v4";
+export type WritingBenchmarkVersion = "v2" | "v3" | "v4" | "pairwise";
 
 export type CreativityBenchmarkMatchType = "direct" | "alias" | "similarity";
 
@@ -25,11 +29,16 @@ export interface AAEvaluations {
 	artificial_analysis_coding_index: number | null;
 	artificial_analysis_math_index: number | null;
 	artificial_analysis_multilingual_index_normalized: number | null;
+	artificial_analysis_multilingual_index?: number | null;
 	artificial_analysis_openness_index: number | null;
 	artificial_analysis_omniscience_index_normalized: number | null;
 	artificial_analysis_omniscience_accuracy: number | null;
 	artificial_analysis_omniscience_hallucination_rate: number | null;
 	writing_benchmark_mean_score: number | null;
+	writing_benchmark_comparison_score?: number | null;
+	writing_benchmark_estimated_win_chance?: number | null;
+	writing_benchmark_creativity_estimate?: number | null;
+	writing_benchmark_source_url?: string | null;
 	writing_benchmark_version: WritingBenchmarkVersion | null;
 	writing_benchmark_match_type: CreativityBenchmarkMatchType | null;
 	writing_benchmark_source_model_name: string | null;
@@ -47,7 +56,11 @@ export interface AAEvaluations {
 	ifbench: number | null;
 	lcr: number | null;
 	terminalbench_hard: number | null;
+	terminalbench_v2_1?: number | null;
+	terminalbench_v4_0?: number | null;
 	tau2: number | null;
+	tau_banking?: number | null;
+	automationbench_aa?: number | null;
 }
 
 export interface AAPricing {
@@ -81,6 +94,8 @@ export interface GlobalMaxes {
 	livecodebench: number;
 	scicode: number;
 	terminalbench_hard: number;
+	terminalbench_v2_1: number;
+	terminalbench_v4_0: number;
 	math_index: number;
 	aime: number;
 	aime_25: number;
@@ -91,6 +106,8 @@ export interface GlobalMaxes {
 	mmlu_pro: number;
 	intelligence_index: number;
 	tau2: number;
+	tau_banking: number;
+	automationbench_aa: number;
 	ifbench: number;
 	price_1m_blended_3_to_1: number;
 	median_output_tokens_per_second: number;
@@ -108,6 +125,18 @@ export interface ModelClassification {
 	safety: number;
 	speed: number;
 }
+
+export interface ModelClassificationEstimate {
+	value: number;
+	confidence: "low" | "medium";
+	reasoning: string;
+	sources: string[];
+	updated_at: string;
+}
+
+export type ModelClassificationEstimates = Partial<
+	Record<keyof ModelClassification, ModelClassificationEstimate>
+>;
 
 export interface TodoEntry {
 	modelSlug: string;

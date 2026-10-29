@@ -11,6 +11,7 @@ use crate::{
     routes::app::{
         board::{
             scoring::save_board_and_refresh_summary,
+            sink_rebind::{rebind_latest_sinks, try_rebind_latest_sinks},
             sync_board::{board_sync_tail, seed_board_revision},
         },
         wasm_catalog::{
@@ -234,7 +235,8 @@ fn prune_command_receipts(
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Board not found"),
-        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly."),
+        (status = 503, description = "The event triggers that run this board could not be switched to run as you first (code SINK_REBIND_UNAVAILABLE). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(
@@ -338,6 +340,9 @@ pub async fn execute_commands(
                     "The Idempotency-Key was already used for a different command payload.",
                 ));
             }
+            if !params.commands.is_empty() {
+                rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
+            }
             drop(mutation_guard);
             let sync = match &sync_request {
                 Some(request) => {
@@ -435,10 +440,16 @@ pub async fn execute_commands(
             })?;
     }
 
+    if batch > 0 {
+        try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
+    }
     mutation_guard.ensure_held()?;
     let put = save_board_and_refresh_summary(&state, &app_id, &board)
         .instrument(tracing::debug_span!("execute_commands.save"))
         .await?;
+    if batch > 0 {
+        rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
+    }
     // The board write is committed. Concurrent writers may proceed while the audit entry,
     // snapshot and sync tail are built.
     drop(mutation_guard);

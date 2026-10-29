@@ -764,14 +764,13 @@ fn fallback_desired() -> (Vec<PinSpec>, Vec<PinSpec>) {
     (inputs, outputs)
 }
 
+fn template_param(segment: &str) -> Option<&str> {
+    segment.strip_prefix('{').and_then(|s| s.strip_suffix('}'))
+}
+
 fn template_params(path: &str) -> Vec<String> {
     path.split('/')
-        .filter_map(|segment| {
-            segment
-                .strip_prefix('{')
-                .and_then(|s| s.strip_suffix('}'))
-                .map(|s| s.to_string())
-        })
+        .filter_map(|segment| template_param(segment).map(ToOwned::to_owned))
         .collect()
 }
 
@@ -1035,33 +1034,33 @@ impl CallRemoteEventNode {
         meta: &EventMeta,
     ) -> flow_like_types::Result<()> {
         let selection: String = context.evaluate_pin("route").await.unwrap_or_default();
-        let (method, mut path) = selected_route(meta, &selection)
+        let (method, route) = selected_route(meta, &selection)
             .ok_or_else(|| flow_like_types::anyhow!("No route selected"))?;
-        let is_file = is_file_route(meta, &method, &path);
+        let is_file = is_file_route(meta, &method, &route);
 
-        for param in template_params(&path) {
+        let mut params = HashMap::new();
+        for param in template_params(&route) {
             let value: String = context
                 .evaluate_pin(&format!("param_{}", param))
                 .await
                 .unwrap_or_default();
-            let value = encode_path_parameter(&value)?;
-            path = path.replace(&format!("{{{}}}", param), &value);
+            params.insert(param, value);
         }
+        let (url, path) = rest_route_url(
+            &session.url(&format!("events/{}/rest", event_id)),
+            &route,
+            &params,
+        )?;
 
         let query: Value = context.evaluate_pin("query").await.unwrap_or(Value::Null);
         let body: Value = context.evaluate_pin("body").await.unwrap_or(Value::Null);
         let headers: Value = context.evaluate_pin("headers").await.unwrap_or(Value::Null);
         let timeout = self.timeout_secs(context).await;
 
-        let url = session.url(&format!(
-            "events/{}/rest{}",
-            event_id,
-            ensure_leading_slash(&path)
-        ));
         let http_method = flow_like_types::reqwest::Method::from_bytes(method.as_bytes())
             .unwrap_or(flow_like_types::reqwest::Method::GET);
         let mut request = http_client_no_redirect()
-            .request(http_method, &url)
+            .request(http_method, url)
             .bearer_auth(&session.token);
 
         if let Some(query_obj) = query.as_object() {
@@ -1739,24 +1738,103 @@ fn extract_response_text(response: &Value) -> String {
 // Small utilities
 // ---------------------------------------------------------------------------
 
-fn ensure_leading_slash(path: &str) -> String {
-    if path.starts_with('/') {
-        path.to_string()
-    } else {
-        format!("/{}", path)
+/// The URL of `route` below the event's REST proxy root, with `params` filled
+/// into its `{name}` segments, and the filled-in route. The route comes from
+/// the event-details pin, which a board can set to anything, so every route
+/// segment and parameter value goes in as one encoded path segment: the
+/// connection token cannot be sent to another route of the remote app.
+fn rest_route_url(
+    rest_root: &str,
+    route: &str,
+    params: &HashMap<String, String>,
+) -> flow_like_types::Result<(flow_like_types::reqwest::Url, String)> {
+    let mut segments = Vec::new();
+    for segment in route_segments(route)? {
+        match template_param(segment) {
+            Some(name) => segments.push(path_parameter(
+                name,
+                params.get(name).map(String::as_str).unwrap_or_default(),
+            )?),
+            None => segments.push(segment),
+        }
     }
+
+    let mut url = flow_like_types::reqwest::Url::parse(rest_root).map_err(|err| {
+        flow_like_types::anyhow!("Invalid remote REST URL '{}': {}", rest_root, err)
+    })?;
+    url.path_segments_mut()
+        .map_err(|_| {
+            flow_like_types::anyhow!("Remote REST URL '{}' cannot take a path", rest_root)
+        })?
+        .extend(&segments);
+    Ok((url, segments.join("/")))
 }
 
-fn encode_path_parameter(value: &str) -> flow_like_types::Result<String> {
-    // URL parsers normalize literal and percent-encoded dot-only segments
-    // before sending the request. Reject them explicitly so a dynamic route
-    // value can never escape the trusted event REST proxy path.
-    if value == "." || value == ".." {
-        return Err(flow_like_types::anyhow!(
-            "Remote REST path parameters cannot be '.' or '..'"
+/// URL parsers resolve dot segments, also percent-encoded ones and ones split
+/// by the tabs and newlines they drop, and read backslashes as slashes. Routes
+/// that rely on any of that, or carry a scheme or host, are refused instead of
+/// normalized.
+fn route_segments(route: &str) -> flow_like_types::Result<Vec<&str>> {
+    let refused =
+        |reason: &str| flow_like_types::anyhow!("Remote REST route {:?} {}", route, reason);
+    if route.starts_with("//") || has_url_scheme(route) {
+        return Err(refused("must be a path, not a URL with a scheme or host"));
+    }
+    if route.chars().any(|c| c.is_ascii_control()) {
+        return Err(refused("cannot contain control characters"));
+    }
+    if route.contains('\\') {
+        return Err(refused("cannot contain backslashes"));
+    }
+    let lowercase = route.to_ascii_lowercase();
+    if ["%2e", "%2f", "%5c"]
+        .into_iter()
+        .any(|encoded| lowercase.contains(encoded))
+    {
+        return Err(refused(
+            "cannot contain percent-encoded dots, slashes or backslashes",
         ));
     }
-    Ok(urlencoding::encode(value).into_owned())
+    let segments: Vec<&str> = route
+        .strip_prefix('/')
+        .unwrap_or(route)
+        .split('/')
+        .collect();
+    if segments
+        .iter()
+        .any(|segment| matches!(*segment, "." | ".."))
+    {
+        return Err(refused("cannot contain '.' or '..' segments"));
+    }
+    Ok(segments)
+}
+
+fn has_url_scheme(route: &str) -> bool {
+    route.split_once(':').is_some_and(|(scheme, _)| {
+        scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+            && scheme
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+    })
+}
+
+/// A parameter becomes one segment, so its slashes are encoded, but the URL
+/// builder skips a lone '.' or '..' and drops tabs and newlines, which can
+/// still turn a value into '..'.
+fn path_parameter<'a>(name: &str, value: &'a str) -> flow_like_types::Result<&'a str> {
+    if matches!(value, "." | "..") {
+        return Err(flow_like_types::anyhow!(
+            "Remote REST path parameter '{}' cannot be '.' or '..'",
+            name
+        ));
+    }
+    if value.chars().any(|c| c.is_ascii_control()) {
+        return Err(flow_like_types::anyhow!(
+            "Remote REST path parameter '{}' cannot contain control characters",
+            name
+        ));
+    }
+    Ok(value)
 }
 
 fn value_to_query(value: &Value) -> String {
@@ -1899,9 +1977,19 @@ mod tests {
     use flow_like_types::Value;
 
     use super::{
-        CallRemoteApiNode, CallRemoteChatNode, PIN_REMOTE_EVENT_META, RemoteSseEvent,
-        encode_path_parameter, is_stream_output_event, remote_chat_pin_updates,
+        CallRemoteApiNode, CallRemoteChatNode, PIN_REMOTE_EVENT_META, RemoteSseEvent, file_name,
+        is_stream_output_event, remote_chat_pin_updates, rest_route_url,
     };
+
+    const REST_ROOT: &str = "https://hub.example/api/v1/apps/app-b/events/evt-1/rest";
+
+    fn rest_url(route: &str, params: &[(&str, &str)]) -> flow_like_types::Result<String> {
+        let params = params
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect::<HashMap<_, _>>();
+        rest_route_url(REST_ROOT, route, &params).map(|(url, _)| url.to_string())
+    }
 
     fn detached_board() -> Board {
         Board::new_detached(None, flow_like_storage::Path::from("boards"))
@@ -1937,23 +2025,97 @@ mod tests {
     }
 
     #[test]
-    fn remote_rest_path_parameters_stay_in_one_segment() {
-        assert_eq!(
-            encode_path_parameter("folder/name?x=1%done").unwrap(),
-            "folder%2Fname%3Fx%3D1%25done"
-        );
-        assert_eq!(
-            encode_path_parameter(" already-safe ").unwrap(),
-            "%20already-safe%20"
-        );
+    fn remote_rest_routes_stay_below_the_event_rest_root() {
+        for (route, params, expected) in [
+            ("/", vec![], "/"),
+            ("/items", vec![], "/items"),
+            ("/items/", vec![], "/items/"),
+            ("items", vec![], "/items"),
+            ("/a//b", vec![], "/a//b"),
+            ("/v1/items:batchGet", vec![], "/v1/items:batchGet"),
+            ("/café", vec![], "/caf%C3%A9"),
+            (
+                "/items/{id}/details",
+                vec![("id", "42")],
+                "/items/42/details",
+            ),
+            (
+                "/files/{filename}",
+                vec![("filename", "report.pdf")],
+                "/files/report.pdf",
+            ),
+            (
+                "/items/{id}",
+                vec![("id", "folder/name?x=1%done")],
+                "/items/folder%2Fname%3Fx=1%25done",
+            ),
+            (
+                "/items/{id}",
+                vec![("id", " already-safe ")],
+                "/items/%20already-safe%20",
+            ),
+            ("/items/{id}", vec![("id", "..\\..")], "/items/..%5C.."),
+            ("/items/{id}", vec![("id", "%2e%2e")], "/items/%252e%252e"),
+            ("/items/{id}", vec![("id", " .. ")], "/items/%20..%20"),
+            ("/items/{id}", vec![("id", "...")], "/items/..."),
+        ] {
+            assert_eq!(
+                rest_url(route, &params).unwrap(),
+                format!("{REST_ROOT}{expected}"),
+                "route {route:?} with {params:?}"
+            );
+        }
     }
 
     #[test]
-    fn remote_rest_path_parameters_reject_dot_segments() {
-        assert!(encode_path_parameter(".").is_err());
-        assert_eq!(encode_path_parameter(" .. ").unwrap(), "%20..%20");
-        assert_eq!(encode_path_parameter("...").unwrap(), "...");
-        assert_eq!(encode_path_parameter("%2e%2e").unwrap(), "%252e%252e");
+    fn remote_rest_routes_that_could_leave_the_event_are_refused() {
+        for (route, reason) in [
+            ("/../regression/run", "cannot contain '.' or '..' segments"),
+            ("/items/..", "cannot contain '.' or '..' segments"),
+            ("/./items", "cannot contain '.' or '..' segments"),
+            ("..", "cannot contain '.' or '..' segments"),
+            ("/%2e%2e/regression/run", "percent-encoded"),
+            ("/items/.%2E/run", "percent-encoded"),
+            ("/items%2F..%2Fregression", "percent-encoded"),
+            ("/items/%5c../run", "percent-encoded"),
+            ("/..\\regression\\run", "cannot contain backslashes"),
+            ("/.\t./regression/run", "cannot contain control characters"),
+            ("/..\n/regression/run", "cannot contain control characters"),
+            ("//evil.example/run", "scheme or host"),
+            ("https://evil.example/run", "scheme or host"),
+            ("mailto:ops@example.com", "scheme or host"),
+        ] {
+            let error = rest_url(route, &[]).expect_err(route).to_string();
+            assert!(error.contains(reason), "route {route:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn remote_rest_path_parameters_that_could_resolve_are_refused() {
+        for (value, reason) in [
+            (".", "cannot be '.' or '..'"),
+            ("..", "cannot be '.' or '..'"),
+            (".\t.", "cannot contain control characters"),
+            ("a\r\nb", "cannot contain control characters"),
+        ] {
+            let error = rest_url("/items/{id}", &[("id", value)])
+                .expect_err(value)
+                .to_string();
+            assert!(
+                error.contains(&format!("parameter 'id' {reason}")),
+                "value {value:?}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn remote_rest_downloads_are_named_after_the_filled_in_route() {
+        let params = HashMap::from([("filename".to_string(), "q3 report.pdf".to_string())]);
+        let (_, path) = rest_route_url(REST_ROOT, "/files/{filename}", &params).unwrap();
+        assert_eq!(file_name(&path, "application/pdf"), "q3_report.pdf");
+
+        let (_, root) = rest_route_url(REST_ROOT, "/", &HashMap::new()).unwrap();
+        assert_eq!(file_name(&root, "application/pdf"), "download.pdf");
     }
 
     #[test]

@@ -44,11 +44,16 @@ async function renderInstance(
 		{ A2UIWidgetInstance },
 		{ useBackendStore },
 		{ QueryClient, QueryClientProvider },
+		{ i18n },
 	] = await Promise.all([
 		import("./A2UIWidgetInstance"),
 		import("../../../state/backend-state"),
 		import("@tanstack/react-query"),
+		import("@flow-like/locales"),
 	]);
+	// A namespace that finishes loading after mount re-renders the instance, and the
+	// render-pass assertions below would count those passes.
+	await i18n.loadNamespaces("common");
 
 	const previousBackend = useBackendStore.getState().backend;
 	useBackendStore.getState().setBackend({

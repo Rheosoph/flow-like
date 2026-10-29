@@ -6,6 +6,7 @@ RUN rustup toolchain install
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
+    cmake \
     libssl-dev \
     unixodbc-dev \
     protobuf-compiler \

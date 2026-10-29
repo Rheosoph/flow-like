@@ -266,7 +266,6 @@ export class GraphState implements IGraphState {
 		try {
 			const requestPayload = {
 				...payload,
-				token: this.backend.auth.user?.access_token,
 				profile_id: this.backend.profile.id,
 			};
 			await this.backend.apiState.stream<OntologyActionStreamEvent>(

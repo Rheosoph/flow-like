@@ -12,6 +12,7 @@ use super::client_pool::{
     acquire_nested_copilot_run_permit, nested_copilot_run_gate, nested_copilot_run_gate_key,
 };
 use super::external_chat::external_code_agent_chat_internal;
+use super::external_invocation::explicit_reasoning_effort;
 use super::platform_bridge::{DesktopPlatformBridge, FrontendPlatformToolSet};
 use super::runtime::{claim_run_tool_owner, frontend_tool_channel, register_copilot_run};
 use super::sdk_chat::copilot_sdk_chat_internal;
@@ -36,7 +37,7 @@ use flow_like::{
     app::{App, AppVisibility},
     copilot::{
         ChatImage, CopilotScope, UIActionContext, UnifiedChatMessage, UnifiedContext,
-        UnifiedCopilot, UnifiedCopilotResponse,
+        UnifiedCopilot, UnifiedCopilotResponse, flowpilot_thinking,
     },
     flow::{
         board::Board,
@@ -47,9 +48,12 @@ use flow_like::{
         },
         node::Node,
     },
+    flow_like_model_provider::history::HistoryThinking,
     models::llm::ModelUsageContext,
 };
+use std::future::Future;
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, State, ipc::Channel};
 
 pub(super) fn resolve_copilot_app_id(
@@ -183,6 +187,73 @@ pub(super) fn specialist_host_context(
     sections.join("\n\n")
 }
 
+/// The agent backend failed on the reasoning effort itself, not on a rate limit, outage or
+/// cancellation whose message happens to mention one.
+pub(super) fn rejects_reasoning_effort(error: &str, effort: &str) -> bool {
+    let error = error
+        .to_ascii_lowercase()
+        .replace("best-effort", "")
+        .replace("best effort", "");
+    let transient = [
+        "rate limit",
+        "rate_limit",
+        "429",
+        "quota",
+        "overload",
+        "cancel",
+    ];
+    if transient.iter().any(|needle| error.contains(needle)) {
+        return false;
+    }
+    if ["reasoning", "effort", "think"]
+        .iter()
+        .any(|needle| error.contains(needle))
+    {
+        return true;
+    }
+    let effort = effort.to_ascii_lowercase();
+    ["unsupported", "not supported", "invalid"]
+        .iter()
+        .any(|needle| error.contains(needle))
+        && error
+            .split(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+            .any(|word| word == effort)
+}
+
+/// A rejected effort fails the backend's first model call. A later failure may follow tool calls
+/// that already changed the board, so rerunning the turn would repeat them.
+const EFFORT_REJECTION_WINDOW: Duration = Duration::from_secs(20);
+
+/// Runs an agent backend with the requested reasoning effort and, when the backend rejects that
+/// effort right away, once more with the backend's own default.
+pub(super) async fn with_reasoning_effort_fallback<'a, F, Fut>(
+    reasoning_effort: Option<&'a str>,
+    run: F,
+) -> Result<UnifiedCopilotResponse, String>
+where
+    F: Fn(Option<&'a str>) -> Fut,
+    Fut: Future<Output = Result<UnifiedCopilotResponse, String>>,
+{
+    let Some(effort) = explicit_reasoning_effort(reasoning_effort) else {
+        return run(reasoning_effort).await;
+    };
+    let started = Instant::now();
+    match run(Some(effort)).await {
+        Err(error)
+            if started.elapsed() < EFFORT_REJECTION_WINDOW
+                && rejects_reasoning_effort(&error, effort) =>
+        {
+            tracing::warn!(
+                effort,
+                %error,
+                "The agent backend rejected the reasoning effort; retrying with its default"
+            );
+            run(None).await
+        }
+        result => result,
+    }
+}
+
 /// Run one nested specialist scope on the Bits/rig backend.
 ///
 /// The board and UI specialists are served by the `UnifiedCopilot`; Data Studio, Scout, and Home
@@ -196,6 +267,7 @@ async fn run_bits_specialist_chat(
     specialist: PlatformSpecialist,
     user_prompt: String,
     model_id: Option<String>,
+    thinking: HistoryThinking,
     auth_token: Option<String>,
     tool_context: Option<FrontendToolContext>,
     host_context_guidance: Option<String>,
@@ -281,6 +353,7 @@ async fn run_bits_specialist_chat(
         context,
         user_prompt,
         model_id,
+        Some(thinking),
         auth_token,
         bridge,
         Some(on_token),
@@ -458,30 +531,32 @@ pub async fn copilot_chat(
                     &app_handle,
                     agent_backend,
                     AGENT_STAGE_RUN,
-                    copilot_sdk_chat_internal(
-                        app_handle.clone(),
-                        model_id,
-                        reasoning_effort.as_deref(),
-                        scope,
-                        board.as_ref(),
-                        catalog_nodes,
-                        selected_node_ids.as_deref().unwrap_or(&[]),
-                        current_surface.as_ref(),
-                        current_canvas_settings.as_ref(),
-                        user_prompt,
-                        raw_user_prompt,
-                        request_identity_prompt,
-                        host_context_guidance,
-                        current_images,
-                        history.unwrap_or_default(),
-                        channel,
-                        None,
-                        None,
-                        tool_context,
-                        request_id,
-                        nested,
-                        read_only,
-                    ),
+                    with_reasoning_effort_fallback(reasoning_effort.as_deref(), |effort| {
+                        copilot_sdk_chat_internal(
+                            app_handle.clone(),
+                            model_id,
+                            effort,
+                            scope,
+                            board.as_ref(),
+                            catalog_nodes.clone(),
+                            selected_node_ids.as_deref().unwrap_or(&[]),
+                            current_surface.as_ref(),
+                            current_canvas_settings.as_ref(),
+                            user_prompt.clone(),
+                            raw_user_prompt.clone(),
+                            request_identity_prompt.clone(),
+                            host_context_guidance.clone(),
+                            current_images.clone(),
+                            history.clone().unwrap_or_default(),
+                            channel.clone(),
+                            None,
+                            None,
+                            tool_context.clone(),
+                            request_id.clone(),
+                            nested,
+                            read_only,
+                        )
+                    }),
                 )
                 .await
             }
@@ -495,36 +570,40 @@ pub async fn copilot_chat(
                     &app_handle,
                     agent_backend,
                     AGENT_STAGE_RUN,
-                    external_code_agent_chat_internal(
-                        app_handle.clone(),
-                        agent_backend,
-                        &model_id,
-                        reasoning_effort.as_deref(),
-                        scope,
-                        board.as_ref(),
-                        catalog_nodes,
-                        selected_node_ids.as_deref().unwrap_or(&[]),
-                        current_surface.as_ref(),
-                        current_canvas_settings.as_ref(),
-                        user_prompt,
-                        raw_user_prompt,
-                        request_identity_prompt,
-                        host_context_guidance,
-                        current_images,
-                        history.unwrap_or_default(),
-                        channel,
-                        None,
-                        None,
-                        tool_context,
-                        request_id,
-                        nested,
-                        read_only,
-                    ),
+                    with_reasoning_effort_fallback(reasoning_effort.as_deref(), |effort| {
+                        external_code_agent_chat_internal(
+                            app_handle.clone(),
+                            agent_backend,
+                            &model_id,
+                            effort,
+                            scope,
+                            board.as_ref(),
+                            catalog_nodes.clone(),
+                            selected_node_ids.as_deref().unwrap_or(&[]),
+                            current_surface.as_ref(),
+                            current_canvas_settings.as_ref(),
+                            user_prompt.clone(),
+                            raw_user_prompt.clone(),
+                            request_identity_prompt.clone(),
+                            host_context_guidance.clone(),
+                            current_images.clone(),
+                            history.clone().unwrap_or_default(),
+                            channel.clone(),
+                            None,
+                            None,
+                            tool_context.clone(),
+                            request_id.clone(),
+                            nested,
+                            read_only,
+                        )
+                    }),
                 )
                 .await
             }
         };
     }
+
+    let thinking = flowpilot_thinking(reasoning_effort.as_deref());
 
     // Data Studio, Scout, and Home are tool-loop specialists. The board/UI copilots cannot author
     // their artifacts, so on the Bits backend they run the shared platform loop with their own
@@ -543,6 +622,7 @@ pub async fn copilot_chat(
             specialist,
             user_prompt,
             model_selection.model_id,
+            thinking,
             token,
             tool_context,
             host_context_guidance,
@@ -714,6 +794,7 @@ pub async fn copilot_chat(
     let mut copilot = copilot
         .with_board_context_augmentation(board_context_augmentation)
         .with_read_only(read_only)
+        .with_thinking(Some(thinking))
         .with_workflow_session_snapshot_sink(workflow_session_snapshot);
 
     // Core exposes database/UI/storage inspection in every mode and withholds execute tools when

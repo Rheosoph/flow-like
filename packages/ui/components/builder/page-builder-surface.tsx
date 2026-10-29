@@ -20,6 +20,7 @@ import { trackPageSave } from "../../lib/pending-page-saves";
 import { asArray } from "../../lib/response-shape";
 import { useBackend } from "../../state/backend-state";
 import type {
+	CanvasSettings,
 	IPage,
 	IWidgetRef,
 	PageContent,
@@ -43,7 +44,8 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "../ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import { Textarea } from "../ui/textarea";
 import type { BuilderSnapshot } from "./BuilderContext";
-import { WidgetBuilder } from "./WidgetBuilder";
+import { WidgetBuilder, type WidgetBuilderHandle } from "./WidgetBuilder";
+import { colorInputValue } from "./color-input";
 import { PageNoCacheSetting } from "./page-no-cache-setting";
 import {
 	type CreateWorkflowEventRequest,
@@ -266,6 +268,7 @@ export function PageBuilderSurface({
 	> | null>(null);
 	// Store page in ref for use in callbacks without causing re-renders
 	const pageRef = useRef<IPage | null>(null);
+	const builderHandleRef = useRef<WidgetBuilderHandle | null>(null);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: `t` only names a page that does not exist yet; re-running on a language switch would reload over the working copy.
 	useEffect(() => {
@@ -554,6 +557,21 @@ export function PageBuilderSurface({
 		[performSave],
 	);
 
+	const updateCanvasSettings = useCallback(
+		(settings: Partial<CanvasSettings>) => {
+			const builder = builderHandleRef.current;
+			if (builder) {
+				builder.setCanvasSettings(settings);
+				return;
+			}
+			updatePageProperty("canvasSettings", {
+				...pageRef.current?.canvasSettings,
+				...settings,
+			});
+		},
+		[updatePageProperty],
+	);
+
 	const handleSaveMetadata = useCallback(async () => {
 		const currentPage = pageRef.current;
 		if (!currentPage) return;
@@ -745,6 +763,7 @@ export function PageBuilderSurface({
 						onChange={handleComponentsChange}
 						className="h-full"
 						externalAssistant
+						handleRef={builderHandleRef}
 						actionContext={actionContext}
 						appCustomCss={appStylesheet.data?.frontend?.custom_css ?? undefined}
 						currentPageId={pageId}
@@ -779,6 +798,7 @@ export function PageBuilderSurface({
 							<PageSettingsPanel
 								page={page}
 								onUpdatePage={updatePageProperty}
+								onUpdateCanvasSettings={updateCanvasSettings}
 								onSave={handleSaveMetadata}
 								isSaving={isSaving}
 								workflowEvents={workflowEventsForComponent(
@@ -794,21 +814,26 @@ export function PageBuilderSurface({
 	);
 }
 
-function PageSettingsPanel({
-	page,
-	onUpdatePage,
-	onSave,
-	isSaving,
-	workflowEvents,
-	onRefreshWorkflowEvents,
-}: Readonly<{
+interface PageSettingsPanelProps {
 	page: IPage;
 	onUpdatePage: <K extends keyof IPage>(key: K, value: IPage[K]) => void;
+	onUpdateCanvasSettings: (settings: Partial<CanvasSettings>) => void;
 	onSave: () => void;
 	isSaving: boolean;
 	workflowEvents: { nodeId: string; name: string }[];
 	onRefreshWorkflowEvents: () => void;
-}>) {
+}
+
+function PageSettingsPanel(props: Readonly<PageSettingsPanelProps>) {
+	const {
+		page,
+		onUpdatePage,
+		onUpdateCanvasSettings,
+		onSave,
+		isSaving,
+		workflowEvents,
+		onRefreshWorkflowEvents,
+	} = props;
 	const { t } = useTranslation("common");
 	const refreshEventsOnOpen = (open: boolean) => {
 		if (open) onRefreshWorkflowEvents();
@@ -818,10 +843,10 @@ function PageSettingsPanel({
 		onUpdatePage("meta", { ...currentMeta, [key]: value });
 	};
 
-	const updateCanvasSettings = (key: string, value: string | undefined) => {
-		const currentSettings = page.canvasSettings || {};
-		onUpdatePage("canvasSettings", { ...currentSettings, [key]: value });
-	};
+	const updateCanvasSettings = (
+		key: keyof CanvasSettings,
+		value: string | undefined,
+	) => onUpdateCanvasSettings({ [key]: value });
 
 	return (
 		<Tabs defaultValue="general" className="w-full min-w-0">
@@ -1041,11 +1066,12 @@ function PageSettingsPanel({
 				</div>
 				<Separator />
 				<div className="space-y-2">
-					<Label>{t("backgroundColor", "Background Color")}</Label>
+					<Label>{t("pageBackground", "Page background")}</Label>
 					<div className="flex gap-2">
 						<Input
 							type="color"
-							value={page.canvasSettings?.backgroundColor || "#ffffff"}
+							aria-label={t("pageBackground", "Page background")}
+							value={colorInputValue(page.canvasSettings?.backgroundColor)}
 							onChange={(e) =>
 								updateCanvasSettings("backgroundColor", e.target.value)
 							}
@@ -1066,6 +1092,16 @@ function PageSettingsPanel({
 							className="flex-1"
 						/>
 					</div>
+					<p className="text-xs text-muted-foreground">
+						{t(
+							"showsWhereverNoComponentPaintsItsOwnBackgroundSuchAsBesideAContainerWithAMaxWidth",
+							"Shows wherever no component paints its own background, such as beside a container with a max width.",
+						)}{" "}
+						{t(
+							"setAContainersOwnColorInTheInspectorUnderStyleBackground",
+							"Set a container's own color in the Inspector under Style → Background.",
+						)}
+					</p>
 				</div>
 				<div className="space-y-2">
 					<Label>{t("backgroundImage", "Background Image")}</Label>

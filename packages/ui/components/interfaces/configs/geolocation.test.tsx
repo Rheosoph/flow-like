@@ -1,7 +1,7 @@
 import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Window } from "happy-dom";
-import { type ComponentProps, type ReactNode, act } from "react";
+import { type ComponentProps, act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import type { GeofencePermissionStatus } from "../../../lib/location";
 
@@ -75,7 +75,9 @@ mock.module("../../ui/input", () => ({
 }));
 mock.module("../../ui/label", () => ({
 	...actual.label,
-	Label: ({ children }: { children: ReactNode }) => <label>{children}</label>,
+	Label: ({ children, htmlFor }: ComponentProps<"label">) => (
+		<label htmlFor={htmlFor}>{children}</label>
+	),
 }));
 
 const globals = [
@@ -177,9 +179,11 @@ async function render() {
 	});
 }
 function button(text: string) {
-	return Array.from(browser.document.querySelectorAll("button")).find(
+	const match = Array.from(browser.document.querySelectorAll("button")).find(
 		(element) => element.textContent === text,
-	)!;
+	);
+	if (!match) throw new Error(`No button labelled "${text}" rendered`);
+	return match;
 }
 
 test("reading status never requests permission; background permission needs a deliberate click", async () => {
@@ -190,7 +194,7 @@ test("reading status never requests permission; background permission needs a de
 		),
 	).toBe(true);
 	expect(browser.document.body.textContent).toContain(
-		"This device monitors the region",
+		"This device monitors the region and reports each crossing; the Event runs on the hub as the account signed in on this device.",
 	);
 	expect(browser.document.body.textContent).toContain("2 of 20 region slots");
 	await act(async () => button("Allow background geofencing").click());
@@ -212,7 +216,8 @@ test("Point editing preserves longitude-first Geometry and the geolocation sink 
 		longitude: -73.9,
 		latitude: 40.7,
 	});
-	const monitor = browser.document.querySelectorAll("select")[1]!;
+	const monitor = browser.document.querySelectorAll("select")[1];
+	if (!monitor) throw new Error("The monitoring mode select did not render");
 	await act(async () => {
 		monitor.value = "background";
 		monitor.dispatchEvent(new browser.Event("change", { bubbles: true }));

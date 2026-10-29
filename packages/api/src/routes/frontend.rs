@@ -469,14 +469,17 @@ async fn prerun(
     .map_err(ApiError::bad_request)?;
     let manifest =
         load_prerun_manifest(&state, &app_id, &target.board_id, target.board_version).await?;
-    Ok(prerun_response(build_response(
-        String::new(),
-        PrerunPayload::from(&*manifest),
-        event.execution_mode,
-        false,
-        None,
-        None,
-    )))
+    Ok(prerun_response(
+        build_response(
+            String::new(),
+            PrerunPayload::from(&*manifest),
+            event.execution_mode,
+            false,
+            None,
+            None,
+        ),
+        caller.is_some(),
+    ))
 }
 
 async fn prerun_page(
@@ -505,21 +508,33 @@ async fn prerun_page(
         None,
     )
     .await?;
-    Ok(prerun_response(build_response(
-        String::new(),
-        resolved.prerun,
-        event.execution_mode,
-        false,
-        Some(resolved.page_id),
-        Some(resolved.manifest_revision),
-    )))
+    Ok(prerun_response(
+        build_response(
+            String::new(),
+            resolved.prerun,
+            event.execution_mode,
+            false,
+            Some(resolved.page_id),
+            Some(resolved.manifest_revision),
+        ),
+        caller.is_some(),
+    ))
 }
 
-fn prerun_response(mut response: PrerunEventResponse) -> Response {
-    // Hosted execution uses the publisher's server-side integration settings.
+fn prerun_response(response: PrerunEventResponse, signed_in: bool) -> Response {
+    private_json(hosted_prerun(response, signed_in))
+}
+
+/// What a hosted page learns before it runs the flow. Runtime variables stay the publisher's
+/// server-side settings. A signed-in visitor runs as themselves and may bring their own OAuth
+/// sign-ins, so they learn which providers the flow needs; the Event's saved sign-ins serve
+/// every provider they bring none for. An anonymous visitor's run uses only the saved ones.
+fn hosted_prerun(mut response: PrerunEventResponse, signed_in: bool) -> PrerunEventResponse {
     response.runtime_variables.clear();
-    response.oauth_requirements.clear();
-    private_json(response)
+    if !signed_in {
+        response.oauth_requirements.clear();
+    }
+    response
 }
 
 #[derive(Serialize)]
@@ -1040,5 +1055,70 @@ mod tests {
             "12345678-abcd-1234-abcd-123456789012".parse().unwrap(),
         );
         assert!(session_id(&headers).is_ok());
+    }
+
+    /// A signed-in visitor learns which OAuth providers the flow needs, so the page can ask
+    /// them to connect; an anonymous visitor's run uses only the Event's saved sign-ins and
+    /// learns none. Neither learns the publisher's runtime variables.
+    #[test]
+    fn only_signed_in_visitors_learn_the_flows_oauth_requirements() {
+        use crate::routes::app::prerun_shared::{OAuthRequirement, RuntimeVariable};
+        let prerun = || {
+            build_response(
+                String::new(),
+                PrerunPayload {
+                    runtime_variables: vec![RuntimeVariable {
+                        id: "variable-1".into(),
+                        name: "api_key".into(),
+                        description: None,
+                        data_type: "String".into(),
+                        value_type: "Normal".into(),
+                        secret: true,
+                        schema: None,
+                    }],
+                    oauth_requirements: vec![OAuthRequirement {
+                        provider_id: "google".into(),
+                        scopes: vec!["sheets".into()],
+                    }],
+                    requires_local_execution: false,
+                    execution_mode: Default::default(),
+                    has_wasm_nodes: false,
+                    wasm_package_ids: Vec::new(),
+                    wasm_package_permissions: Default::default(),
+                    signature: "signature".into(),
+                },
+                EventExecutionMode::Remote,
+                false,
+                None,
+                None,
+            )
+        };
+        let signed_in = hosted_prerun(prerun(), true);
+        let providers: Vec<&str> = signed_in
+            .oauth_requirements
+            .iter()
+            .map(|requirement| requirement.provider_id.as_str())
+            .collect();
+        assert_eq!(providers, ["google"]);
+        assert_eq!(signed_in.oauth_requirements[0].scopes, ["sheets"]);
+        assert!(signed_in.runtime_variables.is_empty());
+
+        let anonymous = hosted_prerun(prerun(), false);
+        assert!(anonymous.oauth_requirements.is_empty());
+        assert!(anonymous.runtime_variables.is_empty());
+        assert_eq!(anonymous.signature, "signature");
+
+        let source = include_str!("frontend.rs");
+        for handler in ["\nasync fn prerun(", "\nasync fn prerun_page("] {
+            let body = source
+                .split_once(handler)
+                .and_then(|(_, rest)| rest.split_once("\n}\n"))
+                .map(|(body, _)| body)
+                .unwrap_or_else(|| panic!("{handler} exists"));
+            assert!(
+                body.contains("caller.is_some(),"),
+                "{handler} tells the prerun whether the visitor signed in"
+            );
+        }
     }
 }

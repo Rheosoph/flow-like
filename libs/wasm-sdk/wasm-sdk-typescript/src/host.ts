@@ -1,3 +1,6 @@
+import type { StorageOps } from "./storage-ops";
+import { MockStorageOps } from "./storage-ops-mock";
+
 export type FlowPath = Record<string, string | null> & {
 	path: string;
 	store_ref: string;
@@ -5,6 +8,7 @@ export type FlowPath = Record<string, string | null> & {
 };
 
 export interface HostBridge {
+	storageOps?: StorageOps;
 	log(level: number, message: string): void;
 	stream(eventType: string, data: string): void;
 	streamText(content: string): void;
@@ -48,6 +52,7 @@ export interface HostBridge {
 }
 
 export class MockHostBridge implements HostBridge {
+	storageOps = new MockStorageOps();
 	logs: Array<[number, string]> = [];
 	streams: Array<[string, string]> = [];
 	variables: Record<string, unknown> = {};

@@ -20,7 +20,7 @@ use crate::{
         request::{REQUEST_AUDIT, RequestAuditContext},
     },
     error::ApiError,
-    middleware::jwt::{AppUser, ClientIp},
+    middleware::jwt::{AppUser, ClientIp, ExecutorUse},
     state::AppState,
 };
 
@@ -80,7 +80,12 @@ async fn request_chain(
 ) -> RequestChain {
     match path_app_id {
         // Executors hold no membership; their token names the app they run for.
-        Some(app_id) if user.execution_app_permission(&app_id, state).await.is_ok() => {
+        Some(app_id)
+            if user
+                .execution_app_permission(&app_id, state, ExecutorUse::Read)
+                .await
+                .is_ok() =>
+        {
             RequestChain {
                 scope: Some(app_id),
                 requested_app_id: None,

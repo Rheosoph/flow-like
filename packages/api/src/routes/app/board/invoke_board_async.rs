@@ -19,9 +19,9 @@ use crate::{
     },
     error::ApiError,
     execution::{
-        DispatchRequest, DispatchTrigger, ExecutionJwtParams, TokenType,
-        fetch_profile_for_dispatch, format_run_version, is_jwt_configured, payload_storage,
-        resolve_wasm_packages, sign_execution_jwt,
+        DispatchRequest, DispatchTrigger, ExecutionJwtParams, TokenType, caller_dispatch_profile,
+        format_run_version, is_jwt_configured, payload_storage, resolve_wasm_packages,
+        sign_execution_jwt,
     },
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
@@ -46,8 +46,6 @@ pub struct InvokeBoardAsyncRequest {
     /// Input payload for the execution
     #[schema(value_type = Option<Object>)]
     pub payload: Option<serde_json::Value>,
-    /// User's auth token to pass to the flow
-    pub token: Option<String>,
     /// OAuth tokens keyed by provider name
     #[schema(value_type = Option<Object>)]
     pub oauth_tokens: Option<std::collections::HashMap<String, serde_json::Value>>,
@@ -263,11 +261,11 @@ pub async fn invoke_board_async(
     // credentials, user profile, and WASM package URLs do not depend on each
     // other and are all on the hot invoke path.
     let access = get_credentials_access();
-    let (credentials_result, profile, wasm_packages) = {
+    let (credentials_result, (profile, custom_bit_owner), wasm_packages) = {
         use flow_like_types::tokio;
         tokio::join!(
             state.scoped_credentials(&sub, &app_id, access),
-            fetch_profile_for_dispatch(&state, &sub, params.profile_id.as_deref(), &app_id, true),
+            caller_dispatch_profile(&state, &user, &sub, params.profile_id.as_deref(), &app_id),
             resolve_wasm_packages(&state, &app_id),
         )
     };
@@ -313,13 +311,13 @@ pub async fn invoke_board_async(
         credentials_json,
         jwt: executor_jwt,
         callback_url,
-        token: params.token,
         oauth_tokens: params.oauth_tokens,
         stream_state: true,
         execution_mode: Some(flow_like::flow::execution::ExecutionMode::Async),
         runtime_variables: params.runtime_variables,
         user_context: Some(permission.to_user_context()),
         profile,
+        custom_bit_owner,
         wasm_packages,
         channel: None,
         trigger: DispatchTrigger::User,

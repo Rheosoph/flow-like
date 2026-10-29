@@ -201,6 +201,12 @@ impl BrowserProcess {
         })
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn stderr_reader(&self) -> impl Fn() -> String + Send + Sync + use<> {
+        let stderr = Arc::clone(&self.stderr);
+        move || with_lock(&stderr, |tail| String::from_utf8_lossy(tail).into_owned())
+    }
+
     async fn wait_for_endpoint(
         &self,
         flavor: Flavor,
@@ -769,6 +775,10 @@ fn start_unix_child(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .process_group(0);
+    // SAFETY: the hook runs between fork and exec and only calls getrlimit and setrlimit, which are plain system calls.
+    unsafe {
+        command.pre_exec(skip_core_dumps);
+    }
     if let Some(pipes) = &pipes {
         let chrome_reads = pipes.chrome_reads.as_raw_fd();
         let chrome_writes = pipes.chrome_writes.as_raw_fd();
@@ -789,6 +799,26 @@ fn start_unix_child(
         BrowserProcess::assemble(ProcessHandle::new(child, workspace), lifeline_writer),
         stderr,
     ))
+}
+
+/// A crashed process exits only after the kernel has written its core dump, and Chrome reports
+/// a renderer crash only once the renderer has exited. Where the core pattern pipes to a
+/// handler such as systemd-coredump, which also dumps the non-dumpable sandboxed renderers,
+/// that wait can outlast every command timeout. A soft limit of 1 makes the kernel skip piped
+/// and file dumps alike.
+#[cfg(unix)]
+fn skip_core_dumps() -> std::io::Result<()> {
+    let mut limit = libc::rlimit {
+        rlim_cur: 0,
+        rlim_max: 0,
+    };
+    // SAFETY: getrlimit only writes the current limits into the rlimit it is given.
+    if unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut limit) } == 0 {
+        limit.rlim_cur = limit.rlim_max.min(1);
+        // SAFETY: setrlimit only reads the rlimit it is given; lowering a soft limit always succeeds.
+        unsafe { libc::setrlimit(libc::RLIMIT_CORE, &limit) };
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -944,6 +974,28 @@ mod tests {
             Some(libc::ESRCH)
         );
         assert!(!profile.exists(), "{} survived the drop", profile.display());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn launched_browsers_start_with_core_dumps_disabled() {
+        use tokio::io::AsyncReadExt as _;
+        let profile = tempfile::tempdir().unwrap().keep();
+        let (process, mut stderr) = start_unix_child(
+            &executable(ExecutableSource::Explicit, "/bin/sh"),
+            &[
+                "-c".into(),
+                "grep 'core file size' /proc/self/limits >&2".into(),
+            ],
+            &[],
+            Workspace::new(profile, true),
+        )
+        .expect("spawn");
+        let mut limits = String::new();
+        stderr.read_to_string(&mut limits).await.unwrap();
+        drop(process);
+        let soft = limits.split_whitespace().nth(4);
+        assert_eq!(soft, Some("1"), "{limits}");
     }
 
     #[cfg(windows)]

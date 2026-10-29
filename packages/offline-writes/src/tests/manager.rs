@@ -23,7 +23,7 @@ use flow_like_storage::{
         offline_replay::{self, ReplayMarker, ReplayOutcome},
     },
     lancedb::{self, Connection, Table, query::Select},
-    object_store::{ObjectStore, ObjectStoreExt, path::Path as ObjectPath},
+    object_store::{ObjectStoreExt, path::Path as ObjectPath},
 };
 use flow_like_types::authorization::AuthorizationError;
 use serde_json::{Value, json};
@@ -65,7 +65,7 @@ pub(super) struct TestHost {
     pub(super) queue_changes: AtomicUsize,
     pub(super) discarded: Mutex<Vec<(String, String)>>,
     /// The bucket-relative cloud store of the lazy mirror.
-    pub(super) objects: Mutex<Option<Arc<dyn ObjectStore>>>,
+    pub(super) objects: Mutex<Option<Arc<dyn flow_like_storage::lance_object_store::ObjectStore>>>,
     pub(super) mirror_changes: AtomicUsize,
 }
 
@@ -153,7 +153,9 @@ impl OfflineHost for TestHost {
         );
         optional_table(&self.remote, &table.table).await
     }
-    async fn remote_objects(&self) -> Result<Arc<dyn ObjectStore>> {
+    async fn remote_objects(
+        &self,
+    ) -> Result<Arc<dyn flow_like_storage::lance_object_store::ObjectStore>> {
         self.objects
             .lock()
             .unwrap()

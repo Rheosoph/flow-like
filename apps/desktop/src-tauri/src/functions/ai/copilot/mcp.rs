@@ -1,5 +1,8 @@
 //! MCP server dispatch, tool activity, and HTTP bridge lifetime.
 
+#[path = "mcp_http_security.rs"]
+mod http_security;
+
 use super::delegated_completion::{DelegatedDrainError, DelegatedPhase, is_owned_delegation};
 use super::mcp_progress::{
     FlowPilotMcpTool, McpProgressHeartbeat, McpToolCancellationGuard,
@@ -690,7 +693,12 @@ impl FlowPilotMcpBridge {
                 Default::default(),
                 config,
             );
-        let router = axum::Router::new().nest_service("/mcp", service);
+        let router =
+            axum::Router::new()
+                .nest_service("/mcp", service)
+                .layer(axum::middleware::from_fn(
+                    http_security::validate_session_start,
+                ));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .map_err(|e| format!("Failed to bind FlowPilot MCP server: {e}"))?;

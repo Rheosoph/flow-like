@@ -115,7 +115,8 @@ describe("editor source downloads", () => {
 				url: "blob:http://localhost/verified-source",
 			},
 		]);
-		expect(new Uint8Array(await writtenBlob?.arrayBuffer())).toEqual(bytes);
+		if (!writtenBlob) throw new Error("No source file was written");
+		expect(new Uint8Array(await writtenBlob.arrayBuffer())).toEqual(bytes);
 		expect(URL.revokeObjectURL).toHaveBeenCalledWith(
 			"blob:http://localhost/verified-source",
 		);

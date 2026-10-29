@@ -62,6 +62,12 @@ class PlatformContracts(unittest.IsolatedAsyncioTestCase):
             self.assert_wire("POST", "/apps/app%2Fid/events/event%3Fx/invoke/async",
                              {"payload": {"input": 3}, "version": "1_2_3", "profile_id": "profile"}, {"__variant": "blue"})
 
+    async def test_event_invocation_ignores_a_user_token(self):
+        self.reply = lambda _: httpx.Response(200, json={"run_id": "run", "poll_token": "poll", "status": "pending"})
+        with self.assertWarns(DeprecationWarning):
+            async for _ in self.call_both("trigger_event_async", "app", "event", {"input": 3}, token="pat_secret"):
+                self.assert_wire("POST", "/apps/app/events/event/invoke/async", {"payload": {"input": 3}})
+
     async def test_event_sse_handles_chunks_crlf_multiline_and_eof(self):
         self.reply = lambda _: httpx.Response(200, headers={"Content-Type": "text/event-stream"}, stream=EventStream())
         events = list(self.client.trigger_event("app", "event", {"text": "hello"}, variant="green"))

@@ -1,7 +1,7 @@
-import { appPath, segment } from "./paths.js";
-import type { DatabaseOptions, DatabaseAction, JsonObject } from "./types.js";
-import type { LanceConnection } from "./integrations.js";
 import type { HttpClient } from "./client.js";
+import type { LanceConnection } from "./integrations.js";
+import { appPath, segment } from "./paths.js";
+import type { DatabaseAction, DatabaseOptions, JsonObject } from "./types.js";
 import type {
 	ColumnMetadata,
 	CountResult,

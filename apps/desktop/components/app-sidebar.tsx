@@ -53,6 +53,7 @@ import {
 	SidebarMenuSubItem,
 	SidebarProvider,
 	SidebarRail,
+	clearStoredPat,
 	useBackend,
 	useBackendReady,
 	useDeveloperMode,
@@ -1189,6 +1190,7 @@ export function NavUser({
 			}
 			onSignOut={async () => {
 				await clearPageSurfaceCache();
+				clearStoredPat();
 				await auth?.signoutRedirect();
 			}}
 			onSignIn={async () => {

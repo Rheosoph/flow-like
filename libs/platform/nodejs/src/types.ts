@@ -19,6 +19,7 @@ export interface InvokeBoardRequest {
 	node_id: string;
 	version?: [number, number, number];
 	payload?: unknown;
+	/** @deprecated Ignored: server runs authenticate with their own execution token. */
 	token?: string;
 	oauth_tokens?: Record<string, unknown>;
 	stream_state?: boolean;
@@ -30,6 +31,7 @@ export interface WorkflowTriggerOptions
 	extends TriggerOptions,
 		InvokeBoardQuery {
 	version?: Version;
+	/** @deprecated Ignored: server runs authenticate with their own execution token. */
 	token?: string;
 	oauth_tokens?: JsonObject;
 	runtime_variables?: JsonObject;
@@ -195,6 +197,7 @@ export interface ColumnMetadata {
 }
 export interface EventTriggerOptions extends TriggerOptions {
 	version?: string;
+	/** @deprecated Ignored: server runs authenticate with their own execution token. */
 	token?: string;
 	oauth_tokens?: JsonObject;
 	runtime_variables?: JsonObject;
@@ -311,6 +314,7 @@ export interface CreateAppOptions {
 }
 export interface EventUpsertOptions {
 	version_type?: VersionType;
+	/** @deprecated Ignored: remote events run as the user who saves them. */
 	pat?: string;
 	oauth_tokens?: JsonObject;
 	profile_id?: string;

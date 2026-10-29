@@ -1,7 +1,7 @@
 use crate::{
     entity::{app, role},
     error::ApiError,
-    middleware::jwt::AppUser,
+    middleware::jwt::{AppUser, ExecutorUse},
     permission::role_permission::RolePermissions,
     state::AppState,
 };
@@ -40,7 +40,9 @@ pub async fn get_roles(
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
 ) -> Result<Json<AppRoles>, ApiError> {
-    let permission = user.execution_app_permission(&app_id, &state).await?;
+    let permission = user
+        .execution_app_permission(&app_id, &state, ExecutorUse::Read)
+        .await?;
     if !permission.has_permission(RolePermissions::ReadRoles) {
         if let Ok(user_id) = permission.sub() {
             state.invalidate_permission(&user_id, &app_id);

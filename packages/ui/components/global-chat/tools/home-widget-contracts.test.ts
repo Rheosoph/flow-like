@@ -198,6 +198,24 @@ describe("Home widget config contracts", () => {
 		expect(
 			HOME_WIDGET_CONFIG_CONTRACTS["run-stats"].fields.appId.reference?.when,
 		).toEqual({ field: "metric", in: ["errors", "duration"] });
+		expect(
+			issueCodes("saved-forecast", { appId: "app-a", forecastId: "" }),
+		).toContain("saved_forecast_missing_source");
+		expect(
+			issueCodes("saved-forecast", {
+				appId: "app-a",
+				forecastId: "forecast-1",
+				scope: "personal",
+				view: "evaluation",
+			}),
+		).toEqual([]);
+		expect(
+			issueCodes("saved-forecast", {
+				appId: "app-a",
+				forecastId: "forecast-1",
+				view: "chart",
+			}),
+		).not.toEqual([]);
 	});
 
 	test("accepts URL images and advertises app storage image references", () => {

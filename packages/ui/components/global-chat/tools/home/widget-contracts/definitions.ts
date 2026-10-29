@@ -452,6 +452,32 @@ export const HOME_WIDGET_CONFIG_CONTRACTS = {
 			}),
 		},
 	},
+	"saved-forecast": {
+		description:
+			"A saved prediction and its uncertainty, shown without running the model again.",
+		additional_properties: false,
+		fields: {
+			appId: profileApp("App that holds the saved prediction."),
+			forecastId: text("Saved prediction id in that app."),
+			scope: text("Where the prediction is saved.", {
+				default: "project",
+				enum: ["project", "personal"],
+			}),
+			view: text("What the widget shows.", {
+				default: "forecast",
+				enum: ["forecast", "evaluation"],
+			}),
+			seriesId: text("Optional series of the prediction to show."),
+			target: text("Optional target column to show."),
+		},
+		requirements: [
+			{
+				code: "saved_forecast_missing_source",
+				message: "Choose an app and a saved prediction.",
+				non_empty: ["appId", "forecastId"],
+			},
+		],
+	},
 	schedules: {
 		description: "Upcoming active app schedules.",
 		additional_properties: false,

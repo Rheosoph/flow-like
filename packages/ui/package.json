@@ -126,7 +126,7 @@
 		"dexie": "^4.0.11",
 		"dexie-react-hooks": "^1.1.7",
 		"diff": "8.0.3",
-		"dompurify": "3.4.16",
+		"dompurify": "3.4.17",
 		"dropdown-menu": "^0.1.1",
 		"embla-carousel-react": "^8.5.2",
 		"eventsource-client": "^1.1.4",
@@ -196,11 +196,10 @@
 		"tw-animate-css": "^1.3.6",
 		"unified": "^11.0.5",
 		"use-file-picker": "^2.1.4",
-		"vite": "^7.3.6",
+		"vite": "^7.3.7",
 		"y-webrtc": "^10.3.0",
 		"yjs": "^13.6.27",
-		"zod": "^3.25.76",
-		"zod-validation-error": "^3.4.0",
+		"zod": "^4.6.6",
 		"zustand": "^5.0.3"
 	},
 	"devDependencies": {

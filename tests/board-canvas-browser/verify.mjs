@@ -595,15 +595,17 @@ try {
 			assert.deepEqual(after.history, before.history);
 		},
 	);
-	await scenario("click-to-connect creates one transaction", async (before) => {
+	await scenario("clicking two pins connects nothing", async (before) => {
 		const from = await pin("integer-a", "out");
 		const to = await pin("integer-b", "in");
 		await page.mouse.click(from.x, from.y);
 		await settle();
 		await page.mouse.click(to.x, to.y);
-		await waitCommits(1);
-		assertWire(await snapshot(), "integer-a", "integer-b");
-		await undoTo(before);
+		await settle();
+		const after = await snapshot();
+		assert.deepEqual(graph(after.nodes), graph(before.nodes));
+		assert.deepEqual(after.history, before.history);
+		assert.equal(after.commits, 0);
 	});
 	await scenario(
 		"near-pin snapping remains usable when zoomed out",
@@ -663,7 +665,7 @@ try {
 		},
 	);
 	await scenario(
-		"selected DOM click-to-connect cannot start a legacy gesture",
+		"selected DOM handle clicks start no legacy gesture",
 		async (before) => {
 			const node = await harness("node", "integer-a");
 			await page.mouse.click(node.x, node.y);
@@ -679,13 +681,11 @@ try {
 			);
 			const target = await pin("integer-b", "in");
 			await page.mouse.click(target.x, target.y);
-			await waitCommits(1);
 			await settle();
-			const saved = await snapshot();
-			assertWire(saved, "integer-a", "integer-b");
-			assert.equal(saved.nativeConnections, 1);
-			assert.equal(saved.legacyConnections, 0);
-			await undoTo(before);
+			const after = await snapshot();
+			assert.deepEqual(graph(after.nodes), graph(before.nodes));
+			assert.equal(after.nativeConnections, 0);
+			assert.equal(after.legacyConnections, 0);
 		},
 	);
 	await scenario(

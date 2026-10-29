@@ -50,6 +50,7 @@ pub mod byte_store;
 pub mod context;
 pub mod device;
 pub mod egress;
+mod function_lookup;
 pub mod internal_node;
 pub mod internal_pin;
 pub mod log;
@@ -1074,6 +1075,7 @@ pub struct InternalRun {
     /// Reply conduit to the run's client, shared by every context of this run.
     pub channel: Arc<dyn Channel>,
     resource_owner: Arc<resources::RunResourceOwner>,
+    function_lookup: Arc<function_lookup::RunFunctionLookup>,
 
     stack: Arc<RunStack>,
     /// Fresh Function-local variables for a directly selected layer entry.
@@ -1470,9 +1472,19 @@ impl InternalRun {
                 .insert(REQUEST_FILES_STORE_REF.to_string(), cacheable_store);
         }
 
+        let nodes = Arc::new(nodes);
+        let function_lookup = Arc::new(function_lookup::RunFunctionLookup::new(
+            template.function_topology.clone(),
+            &pins,
+            &nodes,
+        ));
+        resources.get_or_insert_with(function_lookup::FUNCTION_LOOKUP_RESOURCE, || {
+            function_lookup.clone()
+        })?;
+
         Ok(InternalRun {
             run,
-            nodes: Arc::new(nodes),
+            nodes,
             pins,
             variables,
             cache,
@@ -1491,6 +1503,7 @@ impl InternalRun {
             user_context: None,
             channel,
             resource_owner: Arc::new(resources::RunResourceOwner(resources.clone())),
+            function_lookup,
             has_node_errors: Arc::new(AtomicBool::new(false)),
             log_flush_interval: log_flush_policy.interval,
             cancellation_token: None,
@@ -1667,6 +1680,9 @@ impl InternalRun {
         // Fork can reuse compiled topology and a run ID, but never live package state.
         self.meta.resources.shutdown().await;
         let resources = Arc::new(resources::RunResources::default());
+        resources.get_or_insert_with(function_lookup::FUNCTION_LOOKUP_RESOURCE, || {
+            self.function_lookup.clone()
+        })?;
 
         self.cache.write().await.clear();
         self.stack = Arc::new(next_stack);
@@ -2584,6 +2600,304 @@ mod tests {
             Some(false),
         )
         .into_callback()
+    }
+
+    mod compiled_function_lookups {
+        use super::*;
+        use crate::flow::compiled::{
+            CompiledBoard, compile_board_with_catalog, decode_artifact, encode_artifact,
+            peek_header,
+        };
+
+        fn node(id: &str, pin_id: &str, layer: Option<&str>) -> Node {
+            let mut node = NoopLogic.get_node();
+            node.id = id.to_string();
+            node.layer = layer.map(str::to_string);
+            node.set_start(true);
+            let mut pin = node
+                .add_output_pin("value", "Value", "", VariableType::String)
+                .clone();
+            pin.id = pin_id.to_string();
+            node.pins.clear();
+            node.pins.insert(pin.id.clone(), pin);
+            node
+        }
+
+        async fn fixture() -> (Arc<FlowLikeState>, CompiledBoard) {
+            let state = state_with_noop_node().await;
+            let mut board = Board::new_detached(Some("lookup-test".into()), Path::default());
+            let mut layer = Layer::new("function".into(), "Function".into(), LayerType::Function);
+            let local = node("local", "local-value", None);
+            let mut relay = local.pins["local-value"].clone();
+            relay.id = "relay-only".into();
+            layer.pins.insert(relay.id.clone(), relay);
+            layer.nodes.insert(local.id.clone(), local);
+            board.layers.insert(layer.id.clone(), layer);
+            for node in [
+                node("entry", "entry-value", None),
+                node("tagged", "tagged-value", Some("function")),
+                node("outside", "outside-value", None),
+            ] {
+                board.nodes.insert(node.id.clone(), node);
+            }
+            let registry = state.node_registry.read().await.node_registry.clone();
+            let compiled = compile_board_with_catalog(&board, &registry).unwrap();
+            (state, compiled)
+        }
+
+        async fn template(
+            state: &FlowLikeState,
+            compiled: &CompiledBoard,
+        ) -> Arc<CompiledRunTemplate> {
+            let registry = state.node_registry.read().await.node_registry.clone();
+            // The existing version-4 archive contains all information needed by
+            // the new indexes; loading it does not require an artifact migration.
+            let bytes = encode_artifact(compiled, &registry.fingerprint()).unwrap();
+            assert_eq!(peek_header(&bytes).unwrap().format_version, 4);
+            let decoded = decode_artifact(&bytes, Some(&registry.fingerprint())).unwrap();
+            Arc::new(
+                CompiledRunTemplate::from_compiled(&decoded, &registry, Path::default()).unwrap(),
+            )
+        }
+
+        async fn run(
+            state: &Arc<FlowLikeState>,
+            template: Arc<CompiledRunTemplate>,
+        ) -> InternalRun {
+            InternalRun::from_template(
+                "test-app",
+                template,
+                None,
+                state,
+                &Profile::default(),
+                &RunPayload {
+                    id: "entry".into(),
+                    payload: None,
+                    runtime_variables: None,
+                    filter_secrets: None,
+                },
+                false,
+                test_intercom_callback(),
+                None,
+                None,
+                std::collections::HashMap::new(),
+                None,
+                None,
+            )
+            .await
+            .unwrap()
+        }
+
+        async fn context(state: &Arc<FlowLikeState>, run: &InternalRun) -> ExecutionContext {
+            ExecutionContext::with_meta(
+                run.nodes.clone(),
+                &Arc::downgrade(&run.run),
+                &run.meta,
+                state,
+                &run.nodes["entry"],
+                &run.variables,
+                &run.cache,
+                LogLevel::Info,
+                run.board.stage.clone(),
+                run.profile.clone(),
+                run.callback.clone(),
+                run.completion_callbacks.clone(),
+                None,
+                None,
+                run.oauth_tokens.clone(),
+                Some(run.channel.clone()),
+            )
+            .await
+        }
+
+        #[tokio::test]
+        async fn shared_template_indexes_keep_values_local_and_survive_fork() {
+            let (state, compiled) = fixture().await;
+            let template = template(&state, &compiled).await;
+            let mut first = run(&state, template.clone()).await;
+            let second = run(&state, template.clone()).await;
+            assert!(Arc::ptr_eq(
+                &first.function_lookup.topology,
+                &second.function_lookup.topology,
+            ));
+            assert!(Arc::ptr_eq(
+                &first.function_lookup.topology,
+                &template.function_topology,
+            ));
+            assert!(!Arc::ptr_eq(
+                &first.function_lookup.pins,
+                &second.function_lookup.pins
+            ));
+
+            let retained = context(&state, &first).await;
+            let other = context(&state, &second).await;
+            let pin = retained.runtime_pin_by_id("entry-value").unwrap();
+            let other_pin = other.runtime_pin_by_id("entry-value").unwrap();
+            assert!(!Arc::ptr_eq(&pin, &other_pin));
+            pin.set_value(flow_like_types::json::json!("first only"))
+                .await;
+            assert_eq!(other_pin.get_raw_value().await, None);
+            let child = retained.create_sub_context(&first.nodes["tagged"]).await;
+            assert!(Arc::ptr_eq(
+                &pin,
+                &child.runtime_pin_by_id("entry-value").unwrap()
+            ));
+            assert!(retained.runtime_pin_by_id("relay-only").is_none());
+            assert!(retained.runtime_pin_by_id("missing").is_none());
+
+            assert_eq!(
+                retained.function_pin_owner(&first.board, "function", "local-value"),
+                Some("local".into()),
+            );
+            assert_eq!(
+                retained.function_pin_owner(&first.board, "function", "tagged-value"),
+                Some("tagged".into()),
+            );
+            assert_eq!(
+                retained.function_pin_owner(&first.board, "function", "outside-value"),
+                None
+            );
+            assert_eq!(
+                retained.function_pin_owner(&first.board, "missing", "entry-value"),
+                None
+            );
+
+            first.execute(state.clone()).await;
+            assert!(first.meta.resources.is_closed());
+            assert!(Arc::ptr_eq(
+                &pin,
+                &retained.runtime_pin_by_id("entry-value").unwrap()
+            ));
+            let old_resources = first.meta.resources.clone();
+            first.fork().await.unwrap();
+            assert!(!Arc::ptr_eq(&old_resources, &first.meta.resources));
+            let forked = context(&state, &first).await;
+            assert!(Arc::ptr_eq(
+                &pin,
+                &forked.runtime_pin_by_id("entry-value").unwrap()
+            ));
+            assert_eq!(pin.get_raw_value().await, None);
+            assert!(Arc::ptr_eq(
+                &first.function_lookup.topology,
+                &template.function_topology
+            ));
+        }
+
+        #[tokio::test]
+        async fn compiled_lookup_falls_back_for_replaced_nodes_and_board() {
+            let (state, compiled) = fixture().await;
+            let template = template(&state, &compiled).await;
+            let first = run(&state, template.clone()).await;
+            let second = run(&state, template).await;
+            let mut context = context(&state, &first).await;
+            context.nodes = second.nodes.clone();
+            let pin = context.runtime_pin_by_id("entry-value").unwrap();
+            assert!(Arc::ptr_eq(
+                &pin,
+                &second.nodes["entry"].get_pin_by_id("entry-value").unwrap()
+            ));
+            assert!(!Arc::ptr_eq(
+                &pin,
+                &first.nodes["entry"].get_pin_by_id("entry-value").unwrap()
+            ));
+
+            let mut other_board = (*first.board).clone();
+            other_board
+                .layers
+                .get_mut("function")
+                .unwrap()
+                .nodes
+                .clear();
+            let replacement = node("replacement", "local-value", Some("function"));
+            other_board
+                .nodes
+                .insert(replacement.id.clone(), replacement);
+            assert_eq!(
+                context.function_pin_owner(&other_board, "function", "local-value"),
+                Some("replacement".into()),
+            );
+        }
+
+        #[tokio::test]
+        async fn accepted_duplicate_pin_ids_keep_runtime_scan_precedence() {
+            let (state, mut compiled) = fixture().await;
+            for pin in &mut compiled.pins {
+                if pin.id == "tagged-value" || pin.id == "local-value" {
+                    pin.id = "entry-value".into();
+                }
+            }
+            let template = template(&state, &compiled).await;
+            assert_eq!(template.function_topology.runtime_pins["entry-value"], None);
+            let run = run(&state, template).await;
+            let context = context(&state, &run).await;
+            let scanned = context
+                .nodes
+                .values()
+                .find_map(|node| node.get_pin_by_id("entry-value").ok())
+                .unwrap();
+            assert!(Arc::ptr_eq(
+                &scanned,
+                &context.runtime_pin_by_id("entry-value").unwrap()
+            ));
+            assert_eq!(
+                context.function_pin_owner(&run.board, "function", "entry-value"),
+                Some("local".into()),
+            );
+        }
+
+        #[tokio::test]
+        async fn accepted_duplicates_keep_last_local_pin_and_last_node() {
+            let (state, mut compiled) = fixture().await;
+            let entry_index = compiled
+                .nodes
+                .iter()
+                .position(|node| node.id == "entry")
+                .unwrap();
+            let original_pin = compiled.nodes[entry_index].pins[0];
+            let repeated_pin = compiled.pins[original_pin as usize].clone();
+            let repeated_index = compiled.pins.len() as u32;
+            compiled.pins.push(repeated_pin);
+            compiled.nodes[entry_index].pins.push(repeated_index);
+
+            let first_template = template(&state, &compiled).await;
+            assert_eq!(
+                first_template.function_topology.runtime_pins["entry-value"],
+                Some(repeated_index),
+            );
+            let first_run = run(&state, first_template).await;
+            let first_context = context(&state, &first_run).await;
+            assert!(Arc::ptr_eq(
+                &first_context.runtime_pin_by_id("entry-value").unwrap(),
+                &first_run.nodes["entry"]
+                    .get_pin_by_id("entry-value")
+                    .unwrap(),
+            ));
+
+            let mut replacement = compiled
+                .nodes
+                .iter()
+                .find(|node| node.id == "outside")
+                .unwrap()
+                .clone();
+            replacement.id = "entry".into();
+            compiled.nodes.push(replacement);
+            let second_template = template(&state, &compiled).await;
+            assert!(
+                !second_template
+                    .function_topology
+                    .runtime_pins
+                    .contains_key("entry-value")
+            );
+            let second_run = run(&state, second_template).await;
+            let second_context = context(&state, &second_run).await;
+            assert!(second_context.runtime_pin_by_id("entry-value").is_none());
+            assert!(Arc::ptr_eq(
+                &second_context.runtime_pin_by_id("outside-value").unwrap(),
+                &second_run.nodes["entry"]
+                    .get_pin_by_id("outside-value")
+                    .unwrap(),
+            ));
+        }
     }
 
     mod offline_node_execution {

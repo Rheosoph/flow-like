@@ -7,7 +7,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_model_provider::{
-    history::{Content, History, HistoryMessage, ImageUrl, MessageContent},
+    history::{Content, History, HistoryMessage, HistoryThinking, ImageUrl, MessageContent},
     response::Response,
     response_chunk::ResponseChunk,
 };
@@ -51,13 +51,22 @@ impl ChatEventNode {
         ChatEventNode {}
     }
 
-    fn create_chat_history(messages: Vec<HistoryMessage>) -> History {
+    fn create_chat_history(messages: Vec<HistoryMessage>, thinking: HistoryThinking) -> History {
         let mut history = History::new("".to_string(), messages);
         // Rig's streaming response contract has no media event. Chat histories therefore
         // default to a non-stream request so generated images reach the UI; the invoke layer
         // still replays the completed response through the normal chunk callback.
         history.stream = Some(false);
+        history.thinking = Some(thinking);
         history
+    }
+
+    /// Clients that predate the thinking picker, or send a level this build does not know,
+    /// get `Low` rather than a failed run.
+    fn requested_thinking(thinking: Option<&str>) -> HistoryThinking {
+        thinking
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(HistoryThinking::Low)
     }
 
     async fn process_history_messages(
@@ -252,11 +261,12 @@ impl NodeLogic for ChatEventNode {
 
         // Process history messages to convert Tauri URLs in image_url fields to data URLs
         let processed_messages = Self::process_history_messages(chat.messages, Some(context)).await;
+        let thinking = Self::requested_thinking(chat.thinking.as_deref());
 
         context
             .set_pin_value(
                 "history",
-                json!(Self::create_chat_history(processed_messages)),
+                json!(Self::create_chat_history(processed_messages, thinking)),
             )
             .await?;
         context
@@ -339,6 +349,8 @@ pub struct Chat {
     pub tools: Option<Vec<String>>,
     pub user: Option<User>,
     pub attachments: Option<Vec<Attachment>>,
+    /// off, low, mid or high; kept a string so an unknown level falls back instead of failing.
+    pub thinking: Option<String>,
 }
 
 /// An a2ui widget instance embedded inside a chat message. `component` is the
@@ -735,8 +747,34 @@ mod tests {
 
     #[test]
     fn chat_history_defaults_to_media_safe_non_streaming() {
-        let history = ChatEventNode::create_chat_history(Vec::new());
+        let history = ChatEventNode::create_chat_history(Vec::new(), HistoryThinking::Low);
         assert_eq!(history.stream, Some(false));
+    }
+
+    #[test]
+    fn chat_history_carries_the_requested_thinking() {
+        let history = ChatEventNode::create_chat_history(Vec::new(), HistoryThinking::High);
+        assert_eq!(history.thinking, Some(HistoryThinking::High));
+    }
+
+    #[test]
+    fn missing_or_unknown_thinking_falls_back_to_low() {
+        assert_eq!(
+            ChatEventNode::requested_thinking(None),
+            HistoryThinking::Low
+        );
+        assert_eq!(
+            ChatEventNode::requested_thinking(Some("ultra")),
+            HistoryThinking::Low
+        );
+        assert_eq!(
+            ChatEventNode::requested_thinking(Some("medium")),
+            HistoryThinking::Mid
+        );
+        assert_eq!(
+            ChatEventNode::requested_thinking(Some("off")),
+            HistoryThinking::Off
+        );
     }
 
     #[test]

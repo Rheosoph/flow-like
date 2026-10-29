@@ -39,7 +39,7 @@ import {
 	buildFlowRows,
 	buildRouteByPage,
 	groupIntoBands,
-	groupPagesByBoard,
+	indexPages,
 	sortRows,
 } from "./flows-overview-model";
 import {
@@ -232,9 +232,12 @@ export function FlowsOverviewPage({
 	const highlightTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
 	const eventList = useMemo(() => asArray(events.data), [events.data]);
-	const pagesByBoard = useMemo(
-		() => groupPagesByBoard(asArray(pages.data)),
-		[pages.data],
+	const pageIndex = useMemo(
+		() =>
+			pages.data === undefined
+				? undefined
+				: indexPages(appId, asArray(pages.data)),
+		[appId, pages.data],
 	);
 	const routeByPage = useMemo(
 		() => buildRouteByPage(eventList, asArray(routes.data)),
@@ -242,8 +245,8 @@ export function FlowsOverviewPage({
 	);
 
 	const rows = useMemo(
-		() => buildFlowRows(asArray(boards.data), eventList, pagesByBoard),
-		[boards.data, eventList, pagesByBoard],
+		() => buildFlowRows(asArray(boards.data), eventList, pageIndex),
+		[boards.data, eventList, pageIndex],
 	);
 
 	const matchedRows = useSearch(rows, query, {

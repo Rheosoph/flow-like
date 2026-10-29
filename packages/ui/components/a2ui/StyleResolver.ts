@@ -324,11 +324,21 @@ function transformToCss(transform: Transform): React.CSSProperties {
 	return style;
 }
 
+/** Raw JSON edits can store a CSS shorthand string where a Spacing object is expected. */
+export function asSpacing(spacing: unknown): Spacing | undefined {
+	if (typeof spacing === "string") return { value: spacing };
+	if (typeof spacing !== "object" || spacing === null) return undefined;
+	if (Array.isArray(spacing)) return undefined;
+	return spacing as Spacing;
+}
+
 function spacingToCss(
-	spacing: Spacing,
+	raw: unknown,
 	type: "margin" | "padding",
 ): React.CSSProperties {
-	if ("value" in spacing) {
+	const spacing = asSpacing(raw);
+	if (!spacing) return {};
+	if (typeof spacing.value === "string") {
 		return { [type]: spacing.value };
 	}
 
@@ -344,8 +354,10 @@ function styleValueToCss(value: StyleValue): string {
 	return typeof value === "string" ? value : value.value;
 }
 
-function spacingValueToCss(value: Spacing): string | undefined {
-	if ("value" in value) return value.value;
+function spacingValueToCss(raw: unknown): string | undefined {
+	const value = asSpacing(raw);
+	if (!value) return undefined;
+	if (typeof value.value === "string") return value.value;
 	const sides = [value.top, value.right, value.bottom, value.left];
 	return sides.some((side) => side !== undefined)
 		? sides.map((side) => side ?? "0").join(" ")

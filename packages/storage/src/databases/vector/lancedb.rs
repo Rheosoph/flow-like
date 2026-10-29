@@ -42,7 +42,7 @@ use std::{any::Any, collections::HashMap, path::PathBuf, sync::Arc};
 
 use crate::arrow_utils::record_batch_to_value;
 use crate::arrow_utils::{
-    ValueBatchReader, value_to_batch_reader_with_fields,
+    ValueBatchReader, reject_unknown_columns, value_to_batch_reader_with_fields,
     value_to_batch_reader_with_utc_timestamp_inference,
 };
 use crate::databases::column_access::{is_hidden, restrict_provider, without_hidden_columns};
@@ -968,73 +968,34 @@ impl LanceDBVectorStore {
     /// Compact fragments, rebuild indices, and prune unprotected history.
     /// Tagged versions and branch dependencies remain available.
     pub async fn prune_history(&self) -> Result<()> {
-        self.run_optimize_actions(prune_history_actions()).await
-    }
-
-    /// Best effort after a committed write: a failure, such as losing a conflict to a
-    /// concurrent writer, leaves the fragments for the next write or an explicit optimize.
-    async fn compact_after_write(&self) {
-        if let Err(error) = self.compact_small_fragments().await {
-            eprintln!(
-                "[LanceDB] Skipped automatic compaction of table '{}': {error:#}",
-                self.table_name
-            );
-        }
-    }
-
-    async fn compact_small_fragments(&self) -> Result<()> {
-        if self.selector != DatabaseSelector::default() {
-            return Ok(());
-        }
-        let Some(wrapper) = self.table.as_ref().and_then(Table::dataset) else {
-            return Ok(());
-        };
-        let dataset = wrapper.get().await?;
-        let Some(plan) = automatic_compaction_plan(&dataset).await? else {
-            return Ok(());
-        };
-        wrapper.ensure_mutable()?;
-        let mut dataset = dataset.as_ref().clone();
-        lance::dataset::optimize::compact_files_with_planner(
-            &mut dataset,
-            None,
-            &PlannedCompaction(plan),
-        )
-        .await?;
-        wrapper.update(dataset);
-        Ok(())
-    }
-
-    /// Older Lance releases enabled auto cleanup on new tables, which re-reads every retained
-    /// manifest on every 20th commit. Optimize with pruning now governs this table's retention.
-    async fn drop_legacy_auto_cleanup(&self) -> Result<()> {
-        let Some(wrapper) = self.table.as_ref().and_then(Table::dataset) else {
-            return Ok(());
-        };
-        let dataset = wrapper.get().await?;
-        let config = dataset.config();
-        if LEGACY_AUTO_CLEANUP
-            .iter()
-            .any(|(key, value)| config.get(*key).map(String::as_str) != Some(*value))
-        {
-            return Ok(());
-        }
-        wrapper.ensure_mutable()?;
-        let mut dataset = dataset.as_ref().clone();
-        dataset
-            .update_config(LEGACY_AUTO_CLEANUP.map(|(key, _)| (key, None::<&str>)))
-            .await?;
-        wrapper.update(dataset);
-        Ok(())
+        self.run_optimize_actions(prune_history_actions(), false)
+            .await
     }
 
     async fn run_optimize_actions(
         &self,
         actions: Vec<lancedb::table::OptimizeAction>,
+        keep_versions: bool,
     ) -> Result<()> {
         self.ensure_unmanaged("table optimization")?;
         self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
+        if keep_versions && let Some(wrapper) = table.dataset() {
+            wrapper.ensure_mutable()?;
+            wrapper.reload().await?;
+            // Compact and index commits can invoke Lance's configured cleanup. Its
+            // interval key enables the hook; zero means every commit, not disabled.
+            // Reject malformed intervals too rather than guess at a retention policy.
+            // The SDK has no per-maintenance skip flag. A concurrent writer must
+            // not enable cleanup between this check and the maintenance commits.
+            let dataset = wrapper.get().await?;
+            if dataset.config().contains_key("lance.auto_cleanup.interval") {
+                return Err(anyhow!(
+                    "Cannot optimize table '{}' with keep_versions=true while Lance automatic cleanup is configured. Disable that table policy explicitly, or use keep_versions=false only if pruning is intended.",
+                    self.table_name
+                ));
+            }
+        }
         let scalar_indices = scalar_indices_for_compaction(&table).await?;
 
         for action in actions {
@@ -1097,8 +1058,11 @@ impl LanceDBVectorStore {
                 }
             }
         }
-        let result = table.add_columns(transform, read_columns).await?;
-        Ok(result)
+        let mut builder = table.add_columns().transform(transform);
+        if let Some(read_columns) = read_columns {
+            builder = builder.read_columns(read_columns);
+        }
+        Ok(builder.execute().await?)
     }
 
     pub async fn drop_columns(&self, column_names: &[&str]) -> Result<()> {
@@ -1272,7 +1236,6 @@ impl LanceDBVectorStore {
             op = op.column(&column, &value);
         }
         op.execute().await?;
-        self.compact_after_write().await;
         Ok(())
     }
 
@@ -1586,16 +1549,14 @@ impl LanceDBVectorStore {
         if let Some(opts) = &self.write_options {
             add = add.write_options(opts.clone());
         }
-        add.execute()
-            .await
-            .map_err(|err| anyhow!(err.to_string()))?;
-        self.compact_after_write().await;
+        add.execute().await?;
         Ok(())
     }
 
-    async fn write_batch_reader(&self, items: Vec<Value>) -> Result<ValueBatchReader> {
+    async fn write_batch_reader(&self, mut items: Vec<Value>) -> Result<ValueBatchReader> {
         if let Some(table) = &self.table {
             let schema = table.schema().await?;
+            reject_unknown_columns(&mut items, &schema, &self.table_name)?;
             let fields = schema.fields().iter().cloned().collect();
             return value_to_batch_reader_with_fields(items, Some(fields));
         }
@@ -1618,7 +1579,7 @@ pub(crate) fn full_text_table_provider(
     query: FullTextSearchQuery,
 ) -> Option<Arc<dyn TableProvider>> {
     let (inner, mutation_adapter) =
-        if let Some(read_only) = provider.as_any().downcast_ref::<ReadOnlyDatabaseProvider>() {
+        if let Some(read_only) = provider.downcast_ref::<ReadOnlyDatabaseProvider>() {
             (
                 crate::databases::df_provider::with_full_text_query(&read_only.inner, query)?,
                 read_only.mutation_adapter.clone(),
@@ -1647,10 +1608,6 @@ impl std::fmt::Debug for ReadOnlyDatabaseProvider {
 
 #[async_trait]
 impl TableProvider for ReadOnlyDatabaseProvider {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn schema(&self) -> arrow_schema::SchemaRef {
         self.inner.schema()
     }
@@ -1728,6 +1685,46 @@ pub fn is_write_contention(error: &flow_like_types::Error) -> bool {
                 | lance::Error::CommitConflict { .. }
         )
     })
+}
+
+/// Whether every subset of a write batch would fail the same way: storage I/O,
+/// a missing table, an HTTP or timeout failure, or lost commit races. Lance's
+/// generic `IO` variant is not enough on its own, because DataFusion failures
+/// caused by a row can be converted into it.
+pub fn is_batch_wide_failure(error: &flow_like_types::Error) -> bool {
+    is_write_contention(error)
+        || error.chain().any(|cause| {
+            if cause.is::<lance_object_store::Error>()
+                || cause.is::<object_store::Error>()
+                || cause.is::<std::io::Error>()
+            {
+                return true;
+            }
+            if let Some(error) = cause.downcast_ref::<lancedb::Error>() {
+                return matches!(
+                    error,
+                    lancedb::Error::TableNotFound { .. }
+                        | lancedb::Error::DatabaseNotFound { .. }
+                        | lancedb::Error::ObjectStore { .. }
+                        | lancedb::Error::Http { .. }
+                        | lancedb::Error::Retry { .. }
+                        | lancedb::Error::Timeout { .. }
+                        | lancedb::Error::Lance {
+                            source: lance::Error::DatasetNotFound { .. }
+                                | lance::Error::NotFound { .. }
+                                | lance::Error::Timeout { .. }
+                        }
+                );
+            }
+            matches!(
+                cause.downcast_ref::<lance::Error>(),
+                Some(
+                    lance::Error::DatasetNotFound { .. }
+                        | lance::Error::NotFound { .. }
+                        | lance::Error::Timeout { .. }
+                )
+            )
+        })
 }
 
 pub(crate) fn update_sql_literal(
@@ -2031,100 +2028,6 @@ fn optimize_actions(keep_versions: bool) -> Vec<lancedb::table::OptimizeAction> 
     }
 
     actions
-}
-
-const LEGACY_AUTO_CLEANUP: [(&str, &str); 2] = [
-    ("lance.auto_cleanup.interval", "20"),
-    ("lance.auto_cleanup.older_than", "14days"),
-];
-
-/// Each write adds a fragment, and every scan pays requests per fragment and per deletion file.
-const AUTO_COMPACTION_FRAGMENTS: usize = 16;
-/// Bounds the rewrite one write may add to its own latency.
-const AUTO_COMPACTION_MAX_BYTES: u64 = 64 * 1024 * 1024;
-
-struct PlannedCompaction(lance::dataset::optimize::CompactionPlan);
-
-#[async_trait]
-impl lance::dataset::optimize::CompactionPlanner for PlannedCompaction {
-    async fn plan(
-        &self,
-        _: &lance::Dataset,
-    ) -> lance::Result<lance::dataset::optimize::CompactionPlan> {
-        Ok(self.0.clone())
-    }
-}
-
-/// Merge runs of unindexed small fragments, so no index is remapped or dropped and no
-/// version is pruned. A leading fragment at least as large as the rest of its run stays,
-/// so rows are rewritten a logarithmic number of times instead of on every compaction.
-async fn automatic_compaction_plan(
-    dataset: &lance::Dataset,
-) -> Result<Option<lance::dataset::optimize::CompactionPlan>> {
-    let options = CompactionOptions::default();
-    let indices = dataset.load_indices().await?;
-    if indices.iter().any(|index| index.fragment_bitmap.is_none()) {
-        return Ok(None);
-    }
-    let indexed = |fragment: &lance_table::format::Fragment| {
-        u32::try_from(fragment.id).map_or(true, |id| {
-            indices.iter().any(|index| {
-                index
-                    .fragment_bitmap
-                    .as_ref()
-                    .is_some_and(|bitmap| bitmap.contains(id))
-            })
-        })
-    };
-    let small = dataset
-        .manifest()
-        .fragments
-        .iter()
-        .filter(|fragment| {
-            fragment
-                .physical_rows
-                .is_some_and(|rows| rows < options.target_rows_per_fragment)
-                && !indexed(fragment)
-        })
-        .count();
-    if small < AUTO_COMPACTION_FRAGMENTS {
-        return Ok(None);
-    }
-
-    let mut plan = lance::dataset::optimize::plan_compaction(dataset, &options).await?;
-    let mut budget = AUTO_COMPACTION_MAX_BYTES;
-    plan.tasks.retain_mut(|task| {
-        if task.fragments.iter().any(indexed) {
-            return false;
-        }
-        let Some(mut sizes) = task
-            .fragments
-            .iter()
-            .map(fragment_bytes)
-            .collect::<Option<std::collections::VecDeque<_>>>()
-        else {
-            return false;
-        };
-        while sizes.len() > 1 && sizes[0] >= sizes.iter().skip(1).sum::<u64>() {
-            sizes.pop_front();
-            task.fragments.remove(0);
-        }
-        let bytes = sizes.iter().sum::<u64>();
-        if task.fragments.len() < AUTO_COMPACTION_FRAGMENTS || bytes > budget {
-            return false;
-        }
-        budget -= bytes;
-        true
-    });
-    Ok((!plan.tasks.is_empty()).then_some(plan))
-}
-
-fn fragment_bytes(fragment: &lance_table::format::Fragment) -> Option<u64> {
-    fragment
-        .files
-        .iter()
-        .map(|file| file.file_size_bytes.get().map(u64::from))
-        .sum()
 }
 
 /// Compact, rebuild indices, and prune unprotected history before an archive export.
@@ -2541,7 +2444,6 @@ impl VectorStore for LanceDBVectorStore {
             .to_owned()
             .execute(items)
             .await?;
-        self.compact_after_write().await;
         Ok(())
     }
 
@@ -2587,10 +2489,7 @@ impl VectorStore for LanceDBVectorStore {
         if let Some(opts) = &self.write_options {
             add = add.write_options(opts.clone());
         }
-        add.execute()
-            .await
-            .map_err(|err| anyhow!(err.to_string()))?;
-        self.compact_after_write().await;
+        add.execute().await?;
         Ok(())
     }
 
@@ -2612,15 +2511,8 @@ impl VectorStore for LanceDBVectorStore {
     }
 
     async fn optimize(&self, keep_versions: bool) -> Result<()> {
-        self.run_optimize_actions(optimize_actions(keep_versions))
-            .await?;
-        if !keep_versions && let Err(error) = self.drop_legacy_auto_cleanup().await {
-            eprintln!(
-                "[LanceDB] Kept Lance's legacy auto cleanup on table '{}': {error:#}",
-                self.table_name
-            );
-        }
-        Ok(())
+        self.run_optimize_actions(optimize_actions(keep_versions), keep_versions)
+            .await
     }
 
     async fn list(
@@ -2656,6 +2548,14 @@ impl VectorStore for LanceDBVectorStore {
         self.ensure_unmanaged("index changes")?;
         self.ensure_writable()?;
         let table = self.table.clone().ok_or(anyhow!("Table not initialized"))?;
+        // Lance 13 adds an index of another kind next to the column's existing one.
+        // Reusing its name replaces it, so a column keeps one index.
+        let existing = table
+            .list_indices()
+            .await?
+            .into_iter()
+            .find(|index| index.columns == [column])
+            .map(|index| index.name);
         if let Some(kind) = native_scalar_index(index_type) {
             let wrapper = table.dataset().ok_or_else(|| {
                 anyhow!(
@@ -2675,10 +2575,14 @@ impl VectorStore for LanceDBVectorStore {
                 validate_rtree_column(&arrow_schema::Field::from(field))?;
             }
             let params = ScalarIndexParams::for_builtin(kind);
-            dataset
-                .create_index_builder(&[column], lance_index::IndexType::Scalar, &params)
-                .replace(true)
-                .await?;
+            let columns = [column];
+            let mut builder = dataset
+                .create_index_builder(&columns, lance_index::IndexType::Scalar, &params)
+                .replace(true);
+            if let Some(name) = existing {
+                builder = builder.name(name);
+            }
+            builder.await?;
             wrapper.update(dataset);
             return Ok(());
         }
@@ -2693,7 +2597,11 @@ impl VectorStore for LanceDBVectorStore {
         };
         let index = fit_pq_to_row_count(&table, column, index_type, index).await?;
 
-        table.create_index(&[column], index).execute().await?;
+        let mut builder = table.create_index(&[column], index).replace(true);
+        if let Some(name) = existing {
+            builder = builder.name(name);
+        }
+        builder.execute().await?;
         Ok(())
     }
 
@@ -3503,7 +3411,17 @@ mod tests {
             )?)
             .await?;
             db.index("event_date", Some("ZONEMAP")).await?;
-            db.optimize(true).await?;
+            // lancedb 0.27.2 persisted Lance's then-default cleanup policy on every new table.
+            let refused = db
+                .optimize(true)
+                .await
+                .expect_err("retaining optimization must refuse the persisted cleanup policy");
+            assert!(
+                refused
+                    .to_string()
+                    .contains("automatic cleanup is configured")
+            );
+            db.optimize(false).await?;
             let reopened = LanceDBVectorStore::new(path.clone(), "legacy".into()).await?;
             assert_eq!(reopened.schema().await?, *schema);
             assert_eq!(reopened.count(None).await?, 5);
@@ -3513,7 +3431,8 @@ mod tests {
                     .await?,
                 3
             );
-            assert_eq!(reopened.list_indices().await?.len(), 3);
+            let indices = reopened.list_indices().await?;
+            assert_eq!(indices.len(), 3, "{indices:?}");
             std::fs::remove_dir_all(path)?;
         }
         Ok(())
@@ -5155,6 +5074,65 @@ mod tests {
 
         std::fs::remove_dir_all(&test_path)?;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn writes_reject_unknown_columns_but_drop_search_result_columns() -> Result<()> {
+        let test_path = format!("./tmp/{}", create_id());
+        std::fs::create_dir_all(&test_path)?;
+
+        let mut db = LanceDBVectorStore::new(PathBuf::from(&test_path), "t".to_string()).await?;
+        db.insert(vec![json!({"id": 1, "name": "seed"})]).await?;
+
+        let error = db
+            .upsert(
+                vec![json!({"id": 2, "name": "typo", "nmae": "lost"})],
+                "id".to_string(),
+            )
+            .await
+            .expect_err("a key without a column must not be dropped silently");
+        assert!(error.downcast_ref::<TableInputRejected>().is_some());
+        assert!(error.to_string().contains("'nmae'"));
+
+        let mut found = db.list(None, 10, 0).await?;
+        found[0]["_distance"] = json!(0.25);
+        found[0]["_relevance_score"] = json!(0.5);
+        found[0]["name"] = json!("written back");
+        db.upsert(found, "id".to_string()).await?;
+
+        let rows = db.list(None, 10, 0).await?;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["name"], json!("written back"));
+
+        std::fs::remove_dir_all(&test_path)?;
+        Ok(())
+    }
+
+    #[test]
+    fn only_failures_no_subset_can_avoid_are_batch_wide() {
+        let storage: flow_like_types::Error = object_store::Error::Generic {
+            store: "s3",
+            source: "ExpiredToken".into(),
+        }
+        .into();
+        assert!(is_batch_wide_failure(&storage));
+
+        let missing: flow_like_types::Error = lancedb::Error::TableNotFound {
+            name: "t".to_string(),
+            source: "dropped".into(),
+        }
+        .into();
+        assert!(is_batch_wide_failure(&missing));
+
+        let rejected: flow_like_types::Error =
+            TableInputRejected("Missing non-nullable field \"tag\"".to_string()).into();
+        assert!(!is_batch_wide_failure(&rejected));
+
+        let ambiguous: flow_like_types::Error = lancedb::Error::InvalidInput {
+            message: "Ambiguous merge inserts are prohibited".to_string(),
+        }
+        .into();
+        assert!(!is_batch_wide_failure(&ambiguous));
     }
 
     #[tokio::test]

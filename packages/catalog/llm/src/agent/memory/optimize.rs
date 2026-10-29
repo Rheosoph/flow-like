@@ -82,8 +82,7 @@ impl NodeLogic for OptimizeMemoryNode {
         let keep_versions: bool = context.evaluate_pin("keep_versions").await.unwrap_or(true);
 
         let cached_db = config.database.load(context).await?;
-        cached_db.ensure_flushed().await?;
-        let db = cached_db.db.read().await;
+        let db = cached_db.flushed_read().await?;
         db.optimize(keep_versions).await?;
 
         context.activate_exec_pin("exec_out").await?;

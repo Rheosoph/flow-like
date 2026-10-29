@@ -30,6 +30,7 @@ let host: HTMLElement;
 let client: import("@tanstack/react-query").QueryClient | undefined;
 let registryState: Record<string, unknown> | undefined;
 let helperState: Record<string, unknown> | undefined;
+let storageState: Record<string, unknown> | undefined;
 let restoreFrameSrc: () => void;
 let restoreGlobals: () => void;
 let restoreTimers: () => void;
@@ -60,6 +61,7 @@ beforeEach(async () => {
 	client = undefined;
 	registryState = undefined;
 	helperState = undefined;
+	storageState = undefined;
 	restoreBackend = undefined;
 	readyTimeout = undefined;
 	armedTimers.length = 0;
@@ -101,7 +103,10 @@ beforeEach(async () => {
 		timerSpy.mockRestore();
 		clearSpy.mockRestore();
 	};
-	window = new Window({ url: "https://local/use" });
+	window = new Window({
+		url: "https://local/use",
+		settings: { enableIframePageLoading: true },
+	});
 	const globals = {
 		document: window.document,
 		HTMLElement: window.HTMLElement,
@@ -286,6 +291,7 @@ async function renderWidget(
 			boardState: {},
 			registryState,
 			helperState,
+			storageState,
 		} as never);
 	}
 	const list = Array.isArray(widgets) ? widgets : [widgets];
@@ -378,7 +384,7 @@ async function openFrameChannel() {
 		.map(([envelope]) => envelope as FlwEnvelope)
 		.find((envelope) => envelope.type === "init");
 	if (!init) throw new Error("The host did not send init to the iframe");
-	return (type: "event" | "ready" | "file:upload", payload: unknown) =>
+	return (type: FlwEnvelope["type"], payload: unknown) =>
 		fromFrame(
 			createEnvelope(type, payload as never, init.nonce, "sales-chart"),
 		);
@@ -451,6 +457,91 @@ const dialogTitle = () =>
 const activeText = () => window.document.activeElement?.textContent ?? "";
 const isPrimary = (text: string) =>
 	findButton(text)?.className.includes("bg-primary") ?? false;
+
+test("stored resources are granted by host props and host query arguments", async () => {
+	stubRegistry();
+	const reference = (path: string) => ({
+		path,
+		store_ref: "store",
+		cache_store_ref: null,
+	});
+	const initial = reference("apps/a/upload/image.png");
+	const next = reference("apps/a/upload/next.png");
+	const file = (storage: typeof initial) => ({
+		encoding: "reference",
+		content: "",
+		storage,
+		url: "asset://localhost/%2Fetc%2Fpasswd",
+	});
+	const storageCalls: string[] = [];
+	storageState = {
+		downloadStorageItems: async (_app: string, paths: string[]) => {
+			storageCalls.push(...paths);
+			return paths.map((prefix) => ({
+				prefix,
+				url: `https://storage.example/${prefix}`,
+			}));
+		},
+	};
+	const fetcher = spyOn(globalThis, "fetch").mockImplementation(
+		Object.assign(
+			async () =>
+				new Response(new Uint8Array([0, 255, 128]), {
+					headers: { "content-type": "image/png" },
+				}),
+			{ preconnect: globalThis.fetch.preconnect },
+		),
+	);
+	cleanup.push(() => fetcher.mockRestore());
+	const context = { router: {}, appId: "a" };
+	await renderWidget(
+		component({ props: { artifact: { files: { image: file(initial) } } } }),
+		context,
+	);
+	const say = await openFrameChannel();
+	await say("ready", { contractVersion: 1 });
+	await say("resource:request", { requestId: "props", reference: initial });
+	expect(fetcher).toHaveBeenCalledTimes(1);
+	await say("resource:request", {
+		requestId: "invented",
+		reference: reference("apps/a/upload/private.png"),
+	});
+	expect(fetcher).toHaveBeenCalledTimes(1);
+	const { microWidgetQuery } = await import("../micro-widget-host");
+	const pending = microWidgetQuery("sales-chart", "applyBuild", {
+		artifact: { files: { image: file(next) } },
+	});
+	const frameWindow = frame()?.contentWindow;
+	if (!frameWindow) throw new Error("The widget frame is missing");
+	const post = frameWindow.postMessage as unknown as {
+		mock: { calls: [FlwEnvelope][] };
+	};
+	const query = post.mock.calls
+		.map(([value]) => value)
+		.findLast((value) => value.type === "query");
+	if (!query) throw new Error("The host query was not posted");
+	await say("resource:request", { requestId: "query", reference: next });
+	expect(fetcher).toHaveBeenCalledTimes(2);
+	await say("query:result", {
+		queryId: (query.payload as { queryId: string }).queryId,
+		ok: true,
+		value: { applied: true },
+	});
+	expect(await pending).toEqual({ applied: true });
+	await renderWidget(component({ props: {} }), context);
+	await say("resource:request", {
+		requestId: "removed-prop",
+		reference: initial,
+	});
+	expect(fetcher).toHaveBeenCalledTimes(2);
+	expect(storageCalls).toEqual([initial.path, next.path]);
+	const results = post.mock.calls
+		.map(([value]) => value)
+		.filter((value) => value.type === "resource:result");
+	expect(results.map((value) => (value.payload as { ok: boolean }).ok)).toEqual(
+		[true, false, true, false],
+	);
+});
 
 function installLocalStorage(): Map<string, string> {
 	const items = new Map<string, string>();
@@ -1131,7 +1222,7 @@ describe("micro widget consent and grants", () => {
 		expect(findButton("Allow this time")).toBeNull();
 	});
 
-	test("blocking shows the host count and can run the widget at baseline", async () => {
+	test("Don't allow runs the widget without its permissions and offers Allow in place", async () => {
 		const calls = stubRegistry(() => ({
 			policy: {
 				downloads: true,
@@ -1144,22 +1235,50 @@ describe("micro widget consent and grants", () => {
 		await renderWidget(component(), { router: {} });
 
 		await click("Don't allow");
-		expect(frame()).toBeNull();
-		expect(host.textContent).toContain("Blocked network access to 2 sites");
-		expect(host.textContent).toContain("Anyone can receive");
-		expect(activeText()).toBe("Review permissions");
-
-		await click("Run without these permissions");
 		expect(frameSrc()).toEndWith(frameUrl("0"));
 		expect(frame()?.getAttribute("sandbox")).toBe("allow-scripts");
 		expect(host.textContent).toContain(
-			"runs without the permissions you blocked",
+			"Permission declined: File downloads and network access to 2 sites",
 		);
+		expect(activeText()).toBe("Allow…");
 		expect(calls.mint).toEqual([]);
 
-		await click("Review permissions");
+		await click("Allow…");
 		expect(frame()).toBeNull();
-		expect(findButton("Allow this time")).not.toBeNull();
+		await click("Allow this time");
+		expect(calls.mint).toHaveLength(1);
+		expect(frame()?.getAttribute("sandbox")).toBe(
+			"allow-scripts allow-downloads",
+		);
+	});
+
+	test("a declined widget opens without asking again in the same project", async () => {
+		const consent = await import("../micro-widget-capability-consent");
+		const items = installLocalStorage();
+		const calls = stubRegistry(() => ({ policy: { downloads: true } }));
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+
+		await click("Don't allow");
+		expect([...items.keys()].some((key) => key.includes(":declined:"))).toBe(
+			true,
+		);
+
+		consent.resetMicroWidgetConsentForTests();
+		await act(() => root.unmount());
+		root = createRoot(host);
+		await renderWidget(component(), { router: {}, appId: "app-1" });
+		expect(dialogs()).toBe(0);
+		expect(frameSrc()).toEndWith(frameUrl("0"));
+		expect(host.textContent).toContain("Permission declined: File downloads");
+		expect(calls.mint).toEqual([]);
+
+		await click("Allow…");
+		expect(dialogs()).toBe(1);
+		await click("Allow this time");
+		expect(calls.mint).toHaveLength(1);
+		expect([...items.keys()].some((key) => key.includes(":declined:"))).toBe(
+			false,
+		);
 	});
 
 	test("a project grant is remembered on this device", async () => {
@@ -2801,7 +2920,7 @@ describe("micro widget consent dialog", () => {
 		expect(calls.mint).toHaveLength(1);
 	});
 
-	test("Escape means Don't allow and focus returns to Review", async () => {
+	test("Escape means Don't allow and focus returns to Allow", async () => {
 		figures([TILE_SERVER]);
 		await renderWidget(component(), { router: {} });
 		await act(async () => {
@@ -2814,9 +2933,10 @@ describe("micro widget consent dialog", () => {
 
 		await pressEscape();
 		expect(dialogs()).toBe(0);
-		expect(host.textContent).toContain("Blocked network access to 1 site");
-		expect(host.textContent).toContain("External site");
-		expect(activeText()).toBe("Review permissions");
+		expect(host.textContent).toContain(
+			"Permission declined: network access to 1 site",
+		);
+		expect(activeText()).toBe("Allow…");
 	});
 
 	test("a trailing wss address outside the catalog stays visible while Details is closed", async () => {

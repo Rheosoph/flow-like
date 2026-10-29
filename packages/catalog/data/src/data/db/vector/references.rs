@@ -532,7 +532,7 @@ async fn execute(operation: Operation, context: &mut ExecutionContext) -> Result
     } else {
         source.load(context).await?
     };
-    if matches!(
+    let flush_source = matches!(
         operation,
         Operation::Snapshot
             | Operation::CreateBranch
@@ -543,15 +543,12 @@ async fn execute(operation: Operation, context: &mut ExecutionContext) -> Result
             | Operation::Cleanup
             | Operation::Clone
             | Operation::Compare
-    ) {
-        cached.ensure_flushed().await?;
-    }
-    // Flush both handles before locking either store; the same handle is a valid comparison.
+    );
+    // Release the comparison guard before locking the source; both may be the same handle.
     let comparison = if matches!(operation, Operation::Compare) {
         let other: NodeDBConnection = context.evaluate_pin("other").await?;
         let other = other.load(context).await?;
-        other.ensure_flushed().await?;
-        let store = other.db.read().await.inner().clone();
+        let store = other.flushed_read().await?.inner().clone();
         Some(store)
     } else {
         None
@@ -559,7 +556,11 @@ async fn execute(operation: Operation, context: &mut ExecutionContext) -> Result
     let mut output_store = None;
     let reference;
     {
-        let guard = cached.db.read().await;
+        let guard = if flush_source {
+            cached.flushed_read().await?
+        } else {
+            cached.db.read().await
+        };
         let store = guard.inner();
         match operation {
             Operation::Reference => {

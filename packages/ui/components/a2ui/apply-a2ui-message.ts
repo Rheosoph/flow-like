@@ -68,6 +68,26 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Every reader of a surface entry assumes `component` carries at least a `type`. */
+function isComponentData(value: unknown) {
+	return isPlainObject(value) && typeof value.type === "string";
+}
+
+/** Flow nodes send plain booleans; a component prop holds a BoundValue, as the schema types it. */
+function boundBool(value: unknown) {
+	return isBoundValueLike(value) ? value : { literalBool: value === true };
+}
+
+/**
+ * The update kind. A payload with `props` but no `type` (such as a hand-written
+ * `{ mode: "setProps", props }`) is a props patch, so only `props` merges rather
+ * than every stray field landing on the component.
+ */
+function elementUpdateType(updateValue: Record<string, unknown>) {
+	if (typeof updateValue.type === "string") return updateValue.type;
+	return isPlainObject(updateValue.props) ? "setProps" : undefined;
+}
+
 /**
  * Inputs hold what the user typed or picked locally, because a literal binding is never
  * written back. They give that up for a flow's write — which they recognise by this
@@ -129,13 +149,12 @@ export function applyElementUpdate(
 	component: SurfaceComponent,
 	updateValue: Record<string, unknown>,
 ): SurfaceComponent {
-	const updateType = updateValue?.type as string;
 	const data = getComponentData(component);
 
 	const microPatch = applyMicroWidgetPropsPatch(data, updateValue);
 	if (microPatch) return withComponentData(component, microPatch);
 
-	switch (updateType) {
+	switch (elementUpdateType(updateValue)) {
 		case "setText": {
 			const text = updateValue.text as string;
 			return withComponentData(component, {
@@ -188,12 +207,12 @@ export function applyElementUpdate(
 		case "setDisabled":
 			return withComponentData(component, {
 				...data,
-				disabled: updateValue.disabled as boolean,
+				disabled: boundBool(updateValue.disabled),
 			});
 		case "setLoading":
 			return withComponentData(component, {
 				...data,
-				loading: updateValue.loading as boolean,
+				loading: boundBool(updateValue.loading),
 			});
 		case "setAction": {
 			const action = updateValue.action as {
@@ -426,10 +445,9 @@ export function applyElementUpdate(
 				...data,
 				srcdoc: { literalString: updateValue.srcdoc as string },
 			});
-		case "setProps": {
-			const props = updateValue.props as Record<string, unknown>;
-			return withComponentData(component, { ...data, ...props });
-		}
+		case "setProps":
+			if (!isPlainObject(updateValue.props)) return component;
+			return withComponentData(component, { ...data, ...updateValue.props });
 		case "setOverlayBoxes":
 		case "setLabelerBoxes":
 			return withComponentData(component, {
@@ -734,20 +752,56 @@ export function applyA2UIMessage(
 	}
 }
 
+/**
+ * Split an element ref into the scope it names and the component id within it.
+ * `surfaceId/instanceId/childId` keeps the instance as the scope, so the surface
+ * prefix never widens an update to every instance of the same widget.
+ */
+function splitElementId(
+	surface: Surface,
+	elementId: string,
+): { scopeId: string; componentId: string } {
+	const separatorIndex = elementId.indexOf("/");
+	if (separatorIndex < 0)
+		return { scopeId: surface.id, componentId: elementId };
+	const scopeId = elementId.slice(0, separatorIndex);
+	const componentId = elementId.slice(separatorIndex + 1);
+	if (scopeId !== surface.id) return { scopeId, componentId };
+
+	const instanceSeparator = componentId.indexOf("/");
+	const instanceId =
+		instanceSeparator > 0 ? componentId.slice(0, instanceSeparator) : "";
+	if (instanceId && surfaceOwnsScope(surface, instanceId)) {
+		return {
+			scopeId: instanceId,
+			componentId: componentId.slice(instanceSeparator + 1),
+		};
+	}
+	return { scopeId, componentId };
+}
+
 function applyUpsertElement(
 	surface: Surface,
 	message: Extract<A2UIServerMessage, { type: "upsertElement" }>,
 ): Surface {
 	const { element_id, value } = message;
 	if (!element_id) return surface;
-	const separatorIndex = element_id.indexOf("/");
-	const scopeId =
-		separatorIndex >= 0 ? element_id.slice(0, separatorIndex) : surface.id;
-	const componentId =
-		separatorIndex >= 0 ? element_id.slice(separatorIndex + 1) : element_id;
+	const { scopeId, componentId } = splitElementId(surface, element_id);
 	if (!componentId) return surface;
 
-	const updateValue = (value ?? {}) as Record<string, unknown>;
+	// An entry without component data takes down every reader of the surface,
+	// so a malformed update is dropped rather than stored.
+	if (
+		!isPlainObject(value) ||
+		(value.type === "createComponent" && !isComponentData(value.component))
+	) {
+		console.warn(
+			`Ignoring malformed a2ui update for '${element_id}': expected an update object, and createComponent needs a component with a type.`,
+			value,
+		);
+		return surface;
+	}
+	const updateValue = value;
 
 	// A non-surface prefix addresses one declarative widget instance. Its
 	// children stay inside the host's inline definition, so resolve the

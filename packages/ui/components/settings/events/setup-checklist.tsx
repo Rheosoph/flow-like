@@ -228,7 +228,9 @@ export function SetupChecklist({
 			)}
 
 			<p className="border-t px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-				{`Dashed boxes tick themselves from your settings. Solid ones are yours to confirm — they are the steps that happen outside this screen.`}
+				{
+					"Dashed boxes tick themselves from your settings. Solid ones are yours to confirm — they are the steps that happen outside this screen."
+				}
 			</p>
 		</div>
 	);

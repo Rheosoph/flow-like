@@ -1,5 +1,6 @@
 pub use flow_like_types_contracts::authorization;
 pub use flow_like_types_contracts::data_classification;
+pub use flow_like_types_contracts::egress;
 pub use flow_like_types_contracts::storage as storage_paths;
 pub use flow_like_types_contracts::{Cacheable, OAuthTokenInput, PROXY_EVENT_AUTHORIZATION_HEADER};
 pub use flow_like_types_proto::{FromProto, Message, Timestamp, ToProto, proto};

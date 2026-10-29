@@ -78,6 +78,8 @@ pub struct Model {
     #[sea_orm(has_many)]
     pub embedding_usage_trackings: HasMany<super::embedding_usage_tracking::Entity>,
     #[sea_orm(has_many)]
+    pub event_sinks: HasMany<super::event_sink::Entity>,
+    #[sea_orm(has_many)]
     pub execution_runs: HasMany<super::execution_run::Entity>,
     #[sea_orm(has_many)]
     pub execution_usage_dailies: HasMany<super::execution_usage_daily::Entity>,
@@ -107,6 +109,8 @@ pub struct Model {
     pub publication_requests: HasMany<super::publication_request::Entity>,
     #[sea_orm(has_many)]
     pub push_notification_targets: HasMany<super::push_notification_target::Entity>,
+    #[sea_orm(has_many)]
+    pub regression_suite_runs: HasMany<super::regression_suite_run::Entity>,
     #[sea_orm(has_many)]
     pub technical_users: HasMany<super::technical_user::Entity>,
     #[sea_orm(has_many)]

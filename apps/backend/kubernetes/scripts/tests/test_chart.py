@@ -318,7 +318,10 @@ class ChartTest(unittest.TestCase):
         policy = self.resource("CiliumNetworkPolicy", "sandbox-host-deny")
         self.assertEqual(policy["spec"]["endpointSelector"]["matchLabels"]["app.kubernetes.io/component"], "execution-sandbox")
         self.assertEqual(set(policy["spec"]["egressDeny"][0]["toEntities"]), {"host", "remote-node", "kube-apiserver"})
-        self.assertIn("169.254.0.0/16", policy["spec"]["egressDeny"][1]["toCIDR"])
+        self.assertTrue({
+            "169.254.0.0/16", "100.100.100.200/32", "168.63.129.16/32",
+            "fd00:ec2::254/128", "fd00:ec2::23/128", "fd20:ce::254/128",
+        } <= set(policy["spec"]["egressDeny"][1]["toCIDR"]))
         probes = self.resource("CiliumNetworkPolicy", "node-health-probes")["spec"]["ingress"][0]
         ports = {port["port"] for port in probes["toPorts"][0]["ports"]}
         self.assertTrue({"8080", "9001"} <= ports)

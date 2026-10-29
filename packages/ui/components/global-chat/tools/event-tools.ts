@@ -1,5 +1,6 @@
 import { createId } from "@paralleldrive/cuid2";
 import { EVENT_DEFINITIONS } from "../../../lib/event-definitions";
+import { isSavePromptRefusal } from "../../../lib/event-save-prompts";
 import type { IEvent } from "../../../lib/schema/flow/event";
 import { IEventExecutionMode } from "../../../lib/schema/flow/event";
 import { nowSystemTime } from "../../../lib/time/now";
@@ -8,6 +9,7 @@ import {
 	parseUint8ArrayToJson,
 } from "../../../lib/uint8";
 import type { IBackendState } from "../../../state/backend-state";
+import type { IEventUpsertResult } from "../../../state/backend-state/event-state";
 import {
 	pageEventPersistenceReset,
 	resolveAppEventTarget,
@@ -260,25 +262,26 @@ export async function upsertAppEvent(
 		execution_mode: executionMode,
 		...(pageId ? { default_page_id: pageId } : {}),
 	};
-	let savedEvent: IEvent;
+	let savedEvent: IEventUpsertResult;
 	let writeAttempted = false;
 	try {
 		options.assertActive();
 		writeAttempted = true;
 		savedEvent = await backend.eventState.upsertEvent(appId, event);
 	} catch (error) {
+		const outcomeUnknown = writeAttempted && !isSavePromptRefusal(error);
 		return {
-			status: writeAttempted ? "unknown" : "error",
-			code: writeAttempted
+			status: outcomeUnknown ? "unknown" : "error",
+			code: outcomeUnknown
 				? "event_write_outcome_unknown"
 				: "event_write_cancelled",
 			event_id: event.id,
 			provisioning: {
-				event_saved: writeAttempted ? "unknown" : false,
+				event_saved: outcomeUnknown ? "unknown" : false,
 				route_applied: false,
 			},
 			message: `Failed to upsert event: ${error instanceof Error ? error.message : String(error)}`,
-			...(writeAttempted
+			...(outcomeUnknown
 				? {
 						recovery:
 							"Inspect this exact Event ID before retrying. A missing response does not prove the Event was not created; do not create a replacement.",
@@ -300,8 +303,9 @@ export async function upsertAppEvent(
 		}
 	}
 	options.referenceApp(appId);
+	const triggerError = savedEvent.trigger_error;
 	return {
-		status: routeError ? "partial" : "ok",
+		status: routeError ? "partial" : triggerError ? "saved" : "ok",
 		provisioning: {
 			event_saved: true,
 			route_applied: routePath ? !routeError : null,
@@ -309,6 +313,7 @@ export async function upsertAppEvent(
 		...(routeError
 			? { code: "event_route_incomplete", message: routeError }
 			: {}),
+		...(triggerError ? { trigger_error: triggerError } : {}),
 		event_id: savedEvent.id,
 		event_type: savedEvent.event_type,
 		...(entryNodeName ? { entry_node_type: entryNodeName } : {}),

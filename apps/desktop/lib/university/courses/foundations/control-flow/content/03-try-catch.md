@@ -11,4 +11,4 @@ Create **Check label**, using Simple Event, **Try Catch** (`rpa_try_catch`), **A
 
 Set Assert Condition true and rerun. Expect `ASSERT_OK label-present` and `ACCEPTED`.
 
-Try Catch also exposes **Message** (`message`) for inspecting the captured error. Use synthetic inputs here: logging a raw production error can reveal data. Each operation's error contract matters; ordinary For Each logs item failures and continues, so Done alone does not prove every item succeeded.
+Whenever Try Catch routes to Catch, it logs a warning with the caught error. If you wire Error Occurred but leave Error Message empty, the warning says that instead. **Message** (`message`) carries the same error into the Catch branch. Use synthetic inputs here: an error in the logs can reveal production data. Each operation's error contract matters; ordinary For Each logs item failures and continues, so Done alone does not prove every item succeeded.

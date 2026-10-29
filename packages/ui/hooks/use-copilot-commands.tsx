@@ -716,6 +716,19 @@ export function useCopilotCommands({
 				return freshBoard;
 			};
 
+			// Layer edits spread the snapshot layer into a whole-layer UpsertLayer, so a local this
+			// run created must already be on it or the edit erases the variable.
+			const updateLayerVariables = (
+				layerId: string | null | undefined,
+				update: (variables: ILayer["variables"]) => void,
+			) => {
+				const layer = layerId ? latestBoardLayers[layerId] : undefined;
+				if (!layer) return;
+				const variables = { ...(layer.variables ?? {}) };
+				update(variables);
+				latestBoardLayers[layer.id] = { ...layer, variables };
+			};
+
 			const applyExecutedCommandsToSnapshot = (
 				executedCommands: IGenericCommand[],
 			) => {
@@ -831,12 +844,20 @@ export function useCopilotCommands({
 						}
 						case "UpsertVariable":
 							if (command.variable) {
-								latestBoardVariables[command.variable.id] = command.variable;
+								const variable = command.variable;
+								latestBoardVariables[variable.id] = variable;
+								updateLayerVariables(command.layer_id, (variables) => {
+									variables[variable.id] = variable;
+								});
 							}
 							break;
 						case "RemoveVariable":
 							if (command.variable?.id) {
-								delete latestBoardVariables[command.variable.id];
+								const variableId = command.variable.id;
+								delete latestBoardVariables[variableId];
+								updateLayerVariables(command.layer_id, (variables) => {
+									delete variables[variableId];
+								});
 							}
 							break;
 						case "UpsertComment":

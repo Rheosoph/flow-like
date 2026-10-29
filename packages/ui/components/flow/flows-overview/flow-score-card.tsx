@@ -4,7 +4,6 @@ import { useTranslation } from "@flow-like/locales";
 import {
 	ChevronDownIcon,
 	ChevronRightIcon,
-	ExternalLinkIcon,
 	FileTextIcon,
 	InfoIcon,
 	ShieldIcon,
@@ -32,7 +31,6 @@ import { Button } from "../../ui/button";
 import { Card } from "../../ui/card";
 import { Collapsible, CollapsibleContent } from "../../ui/collapsible";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { FlowCardBindings, FlowCardEntryPoints } from "./flow-card-bindings";
 import type { IFlowRow } from "./flows-overview-model";
 import {
@@ -148,7 +146,7 @@ function MetaLine({ row }: Readonly<{ row: IFlowRow }>) {
 						<button
 							type="button"
 							className={cn(
-								"inline-flex items-center gap-1 rounded-sm font-mono tabular-nums underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+								"relative z-20 inline-flex items-center gap-1 rounded-sm font-mono tabular-nums underline decoration-dotted underline-offset-2 hover:decoration-solid focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
 								lowCoverage && "text-amber-600 dark:text-amber-400",
 							)}
 						>
@@ -323,7 +321,7 @@ function PageRow({
 					key={page.pageId}
 					page={page}
 					route={routeByPage.get(page.pageId)}
-					href={pageHref?.(page.pageId, row.board.id)}
+					href={pageHref?.(page.pageId, page.boardId ?? row.board.id)}
 				/>
 			))}
 			{rest > 0 ? (
@@ -517,9 +515,11 @@ export function FlowScoreCard({
 		<Card
 			ref={(element) => registerCard?.(row.board.id, element)}
 			className={cn(
-				"relative gap-0 overflow-hidden border-border/60 bg-card/80 py-0 backdrop-blur-sm transition-colors",
+				"relative gap-0 overflow-hidden border-border/60 bg-card/80 py-0 backdrop-blur-sm transition-colors duration-150 motion-reduce:transition-none",
 				"dark:border-white/10 dark:bg-muted/40",
-				"hover:border-border",
+				"has-[[data-slot=flow-card-open]:hover]:border-primary/50 has-[[data-slot=flow-card-open]:hover:not(:active)]:bg-muted/60",
+				"has-[[data-slot=flow-card-open]:active]:bg-muted",
+				"has-[[data-slot=flow-card-open]:focus-visible]:ring-2 has-[[data-slot=flow-card-open]:focus-visible]:ring-ring has-[[data-slot=flow-card-open]:focus-visible]:ring-offset-2 has-[[data-slot=flow-card-open]:focus-visible]:ring-offset-background",
 				highlighted && "ring-2 ring-primary/60",
 			)}
 		>
@@ -529,7 +529,9 @@ export function FlowScoreCard({
 					<div className="min-w-0 flex-1">
 						<button
 							type="button"
-							className="block w-full truncate rounded-sm text-left text-sm font-semibold leading-tight underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+							data-slot="flow-card-open"
+							className="block w-full cursor-pointer truncate rounded-sm text-left text-sm font-semibold leading-tight underline-offset-4 after:absolute after:inset-0 after:z-10 after:content-[''] hover:underline focus-visible:outline-none"
+							aria-label={openEditorLabel}
 							title={openEditorLabel}
 							data-href={boardHref}
 							data-title={row.board.name}
@@ -556,22 +558,6 @@ export function FlowScoreCard({
 						</p>
 					</div>
 					<div className="flex shrink-0 items-center gap-0.5">
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									variant="ghost"
-									size="icon"
-									className="size-7"
-									aria-label={openEditorLabel}
-									data-href={boardHref}
-									data-title={row.board.name}
-									onClick={() => onOpenBoard(row.board.id)}
-								>
-									<ExternalLinkIcon aria-hidden="true" className="size-3.5" />
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent>{openEditorLabel}</TooltipContent>
-						</Tooltip>
 						<AlertDialog>
 							<AlertDialogTrigger asChild>
 								<Button
@@ -601,7 +587,7 @@ export function FlowScoreCard({
 												"This removes the Flow and the page inside it.",
 											defaultValue_other:
 												"This removes the Flow and the {{count}} pages inside it.",
-											count: row.pages.length,
+											count: row.ownedPageCount,
 										})}{" "}
 										{row.bindings.length > 0
 											? t("countBoundEventsWillStopFiring", {
@@ -658,7 +644,7 @@ export function FlowScoreCard({
 					) : null}
 				</button>
 
-				<CollapsibleContent>
+				<CollapsibleContent className="relative z-20">
 					<div className="flex flex-col gap-3.5 border-t border-border/50 bg-muted/10 px-3 py-3">
 						{row.scores ? (
 							<div className="flex flex-col gap-2">

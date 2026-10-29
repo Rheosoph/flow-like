@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use flow_like::{
     credentials::{SharedCredentials, StoreType, renewable::RenewableSharedCredentials},
     flow_like_storage::{
+        lance_object_store,
         lancedb::{Connection, Table},
         object_store::{ObjectMeta, ObjectStore, path::Path as ObjectPath},
     },
@@ -58,6 +59,11 @@ pub(crate) trait CloudAccess: Send + Sync {
     ) -> Result<Option<Connection>>;
     /// The bucket-relative content store, never decorated; None without a lease and a token.
     async fn objects(&self, host: &DesktopHost) -> Result<Option<Arc<dyn ObjectStore>>>;
+    /// The same content store on Lance's object_store release, for the lazy mirror.
+    async fn lance_objects(
+        &self,
+        host: &DesktopHost,
+    ) -> Result<Option<Arc<dyn lance_object_store::ObjectStore>>>;
 }
 
 /// What a scope needs from the application.
@@ -178,6 +184,16 @@ impl CloudAccess for LeaseCloud {
                 .as_generic(),
         ))
     }
+
+    async fn lance_objects(
+        &self,
+        host: &DesktopHost,
+    ) -> Result<Option<Arc<dyn lance_object_store::ObjectStore>>> {
+        let Some(live) = Self::lease(host).await? else {
+            return Ok(None);
+        };
+        Ok(Some(live.lance_content_store()?))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -197,7 +213,7 @@ pub(crate) struct DesktopHost {
     connectivity: Arc<ScopeConnectivity>,
     client: Result<reqwest::Client, String>,
     transport: Mutex<TransportStatus>,
-    objects: Mutex<Option<(Instant, Arc<dyn ObjectStore>)>>,
+    objects: Mutex<Option<(Instant, Arc<dyn lance_object_store::ObjectStore>)>>,
 }
 
 impl DesktopHost {
@@ -552,7 +568,7 @@ impl OfflineHost for DesktopHost {
         optional_table(&connection, &table.table).await
     }
 
-    async fn remote_objects(&self) -> Result<Arc<dyn ObjectStore>> {
+    async fn remote_objects(&self) -> Result<Arc<dyn lance_object_store::ObjectStore>> {
         if let Some((created, store)) = Self::lock(&self.objects).as_ref()
             && created.elapsed() < OBJECT_STORE_REUSE
         {
@@ -560,7 +576,7 @@ impl OfflineHost for DesktopHost {
         }
         let store = self
             .cloud()?
-            .objects(self)
+            .lance_objects(self)
             .await?
             .context(texts::NO_DATA_ACCESS)?;
         *Self::lock(&self.objects) = Some((Instant::now(), store.clone()));

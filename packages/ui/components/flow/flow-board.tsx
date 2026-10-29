@@ -143,6 +143,7 @@ import {
 	BoardRuntimeForm,
 	executionModeIcon,
 } from "../../components/flow/shell/board-meta-controls";
+import { BoardLoadError } from "../../components/flow/shell/board-load-error";
 import { BoardMobileHost } from "../../components/flow/shell/board-mobile-host";
 import { BoardNavMenu } from "../../components/flow/shell/board-nav-menu";
 import { BoardPane, BoardPanel } from "../../components/flow/shell/board-panes";
@@ -403,7 +404,7 @@ type ReactFlowProps = ComponentProps<typeof ReactFlow>;
 
 export interface FlowCanvasProps {
 	overlay?: ReactFlowProps["children"];
-	loadingStatus?: { content: ReactFlowProps["children"]; busy: boolean };
+	loadingStatus?: { content: ReactFlowProps["children"] };
 	flowRef: ReactFlowProps["ref"];
 	nodes: ReactFlowProps["nodes"];
 	edges: ReactFlowProps["edges"];
@@ -5557,28 +5558,21 @@ function FlowBoardContent({
 			</ul>
 		);
 
-	const boardLoadFailed =
-		!board.data && !board.isFetching && (board.isError || board.isSuccess);
-	const canvasLoadingContent = !board.data ? (
-		boardLoadFailed ? (
-			<span className="flex flex-col items-center gap-2">
-				<span>{t("boardLoadFailed", "The flow could not be loaded.")}</span>
-				<Button
-					size="sm"
-					variant="outline"
-					onClick={() => void board.refetch()}
-				>
-					{t("retry", "Retry")}
-				</Button>
-			</span>
-		) : (
-			t("loadingFlow", "Loading flow…")
-		)
-	) : preparedBoardKey !== boardLoadKey ? (
-		t("preparingFlowNodes", "Preparing {{count}} nodes…", {
-			count: boardNodeCount,
-		})
-	) : undefined;
+	// A refetch without data puts the query back to pending and clears its error,
+	// so "this mount already got an answer" keeps the error view up while Retry
+	// runs; a restored cache entry still shows loading until its first read.
+	const boardLoadFailed = !board.data && board.isFetchedAfterMount;
+	const [lastBoardError, setLastBoardError] = useState<Error | null>(null);
+	useEffect(() => {
+		if (board.error) setLastBoardError(board.error);
+	}, [board.error]);
+	const canvasLoadingContent = !board.data
+		? t("loadingFlow", "Loading flow…")
+		: preparedBoardKey !== boardLoadKey
+			? t("preparingFlowNodes", "Preparing {{count}} nodes…", {
+					count: boardNodeCount,
+				})
+			: undefined;
 
 	const scriptPane =
 		board.data && shell.script ? (
@@ -5677,6 +5671,26 @@ function FlowBoardContent({
 		() => (ownsWindow ? <BoardAccountItem /> : undefined),
 		[ownsWindow],
 	);
+
+	if (boardLoadFailed) {
+		return (
+			<BoardLoadError
+				error={board.error ?? lastBoardError}
+				retrying={board.isFetching}
+				onRetry={() => void board.refetch()}
+				back={
+					canNavigateOut
+						? {
+								href: appHref,
+								label: appId
+									? t("backToFlows", "Back to flows")
+									: t("home", "Home"),
+							}
+						: undefined
+				}
+			/>
+		);
+	}
 
 	return (
 		<>
@@ -6147,10 +6161,7 @@ function FlowBoardContent({
 										overlay={groupOverlay ?? ghostOverlay}
 										loadingStatus={
 											canvasLoadingContent
-												? {
-														content: canvasLoadingContent,
-														busy: !boardLoadFailed,
-													}
+												? { content: canvasLoadingContent }
 												: undefined
 										}
 										flowRef={flowRef}

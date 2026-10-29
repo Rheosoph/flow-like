@@ -55,6 +55,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../ui/tabs";
 import {
 	type ActionContext,
 	BuilderProvider,
+	type CanvasSettings,
 	useBuilder,
 } from "./BuilderContext";
 import { BuilderDndProvider, useBuilderDnd } from "./BuilderDndContext";
@@ -192,22 +193,25 @@ export interface WidgetBuilderProps {
 export interface WidgetBuilderHandle {
 	getComponents: () => SurfaceComponent[];
 	replaceComponents: (components: SurfaceComponent[]) => void;
+	/** Settings edited outside the builder must go through here, or its own copy overwrites them. */
+	setCanvasSettings: (settings: Partial<CanvasSettings>) => void;
 }
 
-function BuilderHandleBridge({
+export function BuilderHandleBridge({
 	handleRef,
 }: Readonly<{ handleRef: RefObject<WidgetBuilderHandle | null> }>) {
-	const { components, replaceComponents } = useBuilder();
+	const { components, replaceComponents, setCanvasSettings } = useBuilder();
 
 	useEffect(() => {
 		handleRef.current = {
 			getComponents: () => Array.from(components.values()),
 			replaceComponents,
+			setCanvasSettings,
 		};
 		return () => {
 			handleRef.current = null;
 		};
-	}, [components, replaceComponents, handleRef]);
+	}, [components, replaceComponents, setCanvasSettings, handleRef]);
 
 	return null;
 }

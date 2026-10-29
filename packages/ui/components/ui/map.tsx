@@ -24,6 +24,7 @@ import { createPortal } from "react-dom";
 
 import { observeResize } from "../../lib/observe-resize";
 import { configureMapLibreWorker } from "../../lib/maplibre-worker";
+import { DEFAULT_MAP_STYLES } from "../../lib/map-styles";
 import type { LocationFix } from "../../lib/location";
 import { cn } from "../../lib/utils";
 import { useMapLocation, type MapLocationError } from "./map-location";
@@ -107,11 +108,6 @@ function useMap() {
 	}
 	return context;
 }
-
-const defaultStyles = {
-	dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
-	light: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-};
 
 type MapStyleOption = string | MapLibreGL.StyleSpecification;
 
@@ -199,8 +195,8 @@ const Map = forwardRef<MapRef, MapProps>(function Map(
 
 	const mapStyles = useMemo(
 		() => ({
-			dark: styles?.dark ?? defaultStyles.dark,
-			light: styles?.light ?? defaultStyles.light,
+			dark: styles?.dark ?? DEFAULT_MAP_STYLES.dark,
+			light: styles?.light ?? DEFAULT_MAP_STYLES.light,
 		}),
 		[styles],
 	);

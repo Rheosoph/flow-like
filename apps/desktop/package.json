@@ -147,9 +147,8 @@
 		"tinycolor2": "^1.6.0",
 		"tw-animate-css": "^1.3.6",
 		"unified": "^11.0.5",
-		"vite": "^7.3.6",
-		"zod": "^3.24.1",
-		"zod-validation-error": "^3.4.0",
+		"vite": "^7.3.7",
+		"zod": "^4.6.6",
 		"zustand": "^5.0.3"
 	},
 	"devDependencies": {
@@ -173,7 +172,7 @@
 		"eslint": "^9.18.0",
 		"eslint-config-next": "16.4.3",
 		"express": "^5.1.0",
-		"happy-dom": "^20.8.9",
+		"happy-dom": "^21.0.4",
 		"internal-ip": "^8.0.0",
 		"license-report": "^6.7.1",
 		"puppeteer": "24.43.1",

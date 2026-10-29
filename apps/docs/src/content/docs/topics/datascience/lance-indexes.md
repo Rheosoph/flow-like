@@ -117,17 +117,21 @@ Full-text search has a different purpose from FM and N-gram indexes. It tokenize
 
 ## Build and maintain the index
 
-:::caution[Version cleanup is explicit]
-**Optimize and Update** now defaults **Keep Versions?** to true. In that mode it compacts fragments and updates indexes without pruning version history.
+:::caution[Check the table's retention policy before maintenance]
+Normal insert, upsert, batch-insert, and update operations do not trigger additional fragment compaction. Run **Optimize and Update** explicitly when measurements justify its extra I/O and commits.
 
-Disabling **Keep Versions?** runs the same maintenance first, then prunes versions older than seven days. Cleanup leaves unverified files untouched, which protects files that may belong to another process's in-progress operation. A tag that references an old version blocks pruning, and a pruned version cannot be checked out or restored. Flow-Like does not currently expose a different retention period.
+**Keep Versions?** defaults to true. This selects compaction and index maintenance without an explicit pruning step. Lance can also run automatic cleanup after a commit when the table has a persisted `lance.auto_cleanup.interval` policy. Flow-Like refuses retaining optimization when that setting is present, including an interval of zero. It leaves the policy unchanged. Coordinate policy changes with other writers: this preflight check cannot prevent another process from enabling cleanup during maintenance.
+
+Disabling **Keep Versions?** permits maintenance followed by pruning versions older than seven days. A separately configured Lance cleanup policy can run during the maintenance commits and use a different retention period. Normal writes also remain subject to that existing SDK policy; removing write-triggered compaction does not disable configured cleanup.
+
+Cleanup leaves unverified files untouched, which protects files that may belong to another process's in-progress operation. Tags and branch dependencies protect referenced history. A pruned version cannot be checked out or restored. Flow-Like does not currently expose a different retention period in this node.
 :::
 
 1. Capture the real filter or search and measure its unindexed latency.
 2. Inspect the column type, cardinality, selectivity, and update pattern.
 3. Pick the narrowest supported index from the decision table. Build it after the bulk load.
 4. Use [List Indices](/nodes/data/database/meta/list-indices-db/) to record the generated index name, type, and column.
-5. After substantial appends, run [Optimize and Update](/nodes/data/database/optimization/optimize-local-db/) with **Keep Versions?** enabled. Disable it only when the seven-day cleanup policy fits the database's retention requirements.
+5. After substantial appends, run [Optimize and Update](/nodes/data/database/optimization/optimize-local-db/) with **Keep Versions?** enabled. If a persisted automatic cleanup policy blocks it, review that policy explicitly. Disable **Keep Versions?** only when pruning fits the database's retention requirements.
 6. Repeat the same workload. Keep the index only when the latency gain justifies its build, write, and storage costs.
 
 LanceDB queries scan rows that are newer than the indexed data and merge them with indexed results. The results remain complete, while latency can rise as uncovered rows accumulate. Upstream APIs expose index statistics for checking coverage. Flow-Like currently bundles index maintenance into **Optimize and Update**.

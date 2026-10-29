@@ -22,6 +22,9 @@ flow-like-storage = { workspace = true, features = ["graph"] }
 flow-like-catalog-core = { workspace = true, features = ["mail"] }
 flow-like-catalog-ml = { workspace = true, default-features = false, features = ["studio"] }
 flow-like-catalog = { workspace = true, default-features = false, features = ["draft-testing", "local-only-metadata"] }
+flow-like-executor = { workspace = true, optional = true }
+flow-like-catalog-std = { workspace = true, optional = true, features = ["execute"] }
+flow-like-catalog-data = { workspace = true, optional = true, features = ["execute"] }
 uuid.workspace = true
 flow-like-sinks.workspace = true
 flow-like-secrets.workspace = true
@@ -92,7 +95,7 @@ azure_core = { version = "0.32.0", optional = true }
 azure_identity = { version = "0.32.0", optional = true }
 azure_storage_common = { version = "0.1.0", optional = true }
 azure_storage_sas = { version = "0.1.0", optional = true }
-quick-xml = { version = "0.39.2", features = ["serialize"], optional = true }
+quick-xml = { version = "0.41.0", features = ["serialize"], optional = true }
 time = { version = "0.3.47", features = ["parsing"], optional = true }
 # -----
 
@@ -125,6 +128,16 @@ aws-sdk-s3 = { workspace = true, optional = true }
 # -----
 
 [features]
+benchmark-stack = [
+    "aws",
+    "redis",
+    "dep:flow-like-executor",
+    "dep:flow-like-catalog-std",
+    "dep:flow-like-catalog-data",
+    "dep:tokio",
+    "tokio/full",
+    "reqwest/rustls-tls-native-roots",
+]
 forecasting = ["flow-like-catalog-ml/forecasting"]
 otel = ["dep:opentelemetry", "dep:tracing-opentelemetry"]
 default = ["aws", "cognito", "ses", "smtp", "sendgrid"]
@@ -209,3 +222,7 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"
 dotenv = { workspace = true }
 flow-like-wasm.workspace = true
 flow-like-aws-data.workspace = true
+
+[[example]]
+name = "widget_action_stack"
+required-features = ["benchmark-stack"]

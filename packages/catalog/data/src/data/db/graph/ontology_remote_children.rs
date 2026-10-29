@@ -7,7 +7,9 @@ use flow_like::flow::{
 use flow_like_types::{async_trait, json::json};
 
 #[cfg(feature = "execute")]
-use crate::remote_util::{ensure_remote_ontology_exposed, open_remote_project_database};
+use crate::remote_util::{
+    ensure_remote_ontology_exposed, log_if_shadow_refusal, open_remote_project_database,
+};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -21,9 +23,9 @@ impl QueryRemoteOntologyChildrenNode {
 
 #[cfg(feature = "execute")]
 async fn fail(context: &mut ExecutionContext, error: impl ToString) -> flow_like_types::Result<()> {
-    context
-        .set_pin_value("error_message", json!(error.to_string()))
-        .await?;
+    let error = error.to_string();
+    log_if_shadow_refusal(context, &error);
+    context.set_pin_value("error_message", json!(error)).await?;
     context.activate_exec_pin("error").await?;
     Ok(())
 }

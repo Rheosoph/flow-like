@@ -15,7 +15,7 @@ export function ScopedCustomCss({
 	scopeSelector,
 	options,
 }: ScopedCustomCssProps) {
-	const sanitizedCss = useScopedCss(css, scopeSelector, options);
+	const { css: sanitizedCss } = useScopedCss(css, scopeSelector, options);
 	if (!sanitizedCss) return null;
 	return <style {...createSanitizedStyleProps(sanitizedCss)} />;
 }

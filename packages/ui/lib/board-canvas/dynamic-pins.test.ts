@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { IBoard, ILayer } from "../schema/flow/board";
+import { type IBoard, type ILayer, ILayerType } from "../schema/flow/board";
 import {
 	ICommandType,
 	type IGenericCommand,
@@ -38,6 +38,19 @@ function node(id: string, pins: IPin[]): INode {
 		category: "test",
 		description: "",
 		coordinates: [10, 20, 3],
+		pins: Object.fromEntries(pins.map((pin) => [pin.id, pin])),
+	};
+}
+
+function layer(id: string, pins: IPin[]): ILayer {
+	return {
+		id,
+		name: id,
+		type: ILayerType.Collapsed,
+		comments: {},
+		coordinates: [0, 0, 0],
+		nodes: {},
+		variables: {},
 		pins: Object.fromEntries(pins.map((pin) => [pin.id, pin])),
 	};
 }
@@ -140,10 +153,7 @@ describe("native dynamic pin removal", () => {
 
 	test("disconnects node and canonical layer peers before deletion and restores the whole batch", () => {
 		const { board, source } = fixture();
-		board.layers.layer = {
-			id: "layer",
-			pins: { boundary: pin("boundary", "boundary", 1, true) },
-		} as ILayer;
+		board.layers.layer = layer("layer", [pin("boundary", "boundary", 1, true)]);
 		source.pins.third.connected_to = ["boundary", "target"];
 		board.nodes.peer.pins.target.depends_on = ["third"];
 		board.layers.layer.pins.boundary.depends_on = ["third"];
@@ -167,10 +177,7 @@ describe("native dynamic pin removal", () => {
 		const { board, source } = fixture();
 		for (const id of ["first", "second", "third"])
 			source.pins[id].pin_type = IPinType.Input;
-		board.layers.layer = {
-			id: "layer",
-			pins: { boundary: pin("boundary", "boundary", 1, true) },
-		} as ILayer;
+		board.layers.layer = layer("layer", [pin("boundary", "boundary", 1, true)]);
 		source.pins.third.depends_on = ["boundary"];
 		board.layers.layer.pins.boundary.connected_to = ["third"];
 		const commands = required(plan(board));

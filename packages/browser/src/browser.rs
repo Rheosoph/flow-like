@@ -168,6 +168,8 @@ async fn construct(
         }
     };
     let browser = Browser::assemble(connection, version, construction);
+    #[cfg(any(test, feature = "test-support"))]
+    crate::test_hooks::assembled(&browser);
     if let Err(error) = browser.inner.targets.start().await {
         browser.discard().await;
         return Err(error);

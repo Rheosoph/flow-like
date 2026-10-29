@@ -231,7 +231,8 @@ export class TauriBackend implements IBackendState {
 
 	get auth(): AuthContextProps | undefined {
 		if (
-			this.executionAuthHub !== getApiOrigin(this.profile) ||
+			(this.executionAuthHub ?? getApiOrigin()) !==
+				getApiOrigin(this.profile) ||
 			!this.storedAuth ||
 			!authForHub(this.profile, this.storedAuth)
 		)
@@ -248,8 +249,9 @@ export class TauriBackend implements IBackendState {
 
 	set auth(auth: AuthContextProps | undefined) {
 		this.storedAuth = auth;
-		this.executionAuthHub = getApiOrigin(this.profile);
-		if (auth) setHubAuthActive(auth, bindHubAuth(auth, this.executionAuthHub));
+		this.executionAuthHub = this.profile && getApiOrigin(this.profile);
+		if (auth && this.executionAuthHub)
+			setHubAuthActive(auth, bindHubAuth(auth, this.executionAuthHub));
 	}
 
 	capabilities(): ICapabilities {
@@ -268,7 +270,9 @@ export class TauriBackend implements IBackendState {
 
 	pushProfile(profile: IProfile) {
 		this.profile = profile;
-		if (this.storedAuth && this.executionAuthHub !== getApiOrigin(profile))
+		// Auth that arrived before any profile belongs to this profile's hub.
+		if (!this.executionAuthHub) this.auth = this.storedAuth;
+		else if (this.storedAuth && this.executionAuthHub !== getApiOrigin(profile))
 			setHubAuthActive(this.storedAuth, false);
 		this.syncHubAuthConsumers();
 		this.packageProfileError = null;
@@ -279,11 +283,16 @@ export class TauriBackend implements IBackendState {
 		this.refreshRemoteCatalogQueries();
 	}
 
-	pushAuthContext(auth: AuthContextProps, hub = getApiOrigin(this.profile)) {
+	pushAuthContext(
+		auth: AuthContextProps,
+		hub = this.profile && getApiOrigin(this.profile),
+	) {
 		this.storedAuth = auth;
 		this.executionAuthHub = hub;
-		const bound = bindHubAuth(auth, hub);
-		setHubAuthActive(auth, bound && hub === getApiOrigin(this.profile));
+		if (hub) {
+			const bound = bindHubAuth(auth, hub);
+			setHubAuthActive(auth, bound && hub === getApiOrigin(this.profile));
+		}
 		this.resolvePackageSessionWaiters();
 		this.syncExecutionAuth().catch(() =>
 			console.warn("[ExecutionAuth] Failed to update native session"),

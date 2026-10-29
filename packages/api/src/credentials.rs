@@ -7,6 +7,7 @@ use aws_credentials::AwsRuntimeCredentials;
 use azure_credentials::AzureRuntimeCredentials;
 use flow_like::credentials::SharedCredentials;
 use flow_like::flow::execution::ExecutionEnvironment;
+use flow_like::flow_like_model_provider::egress::ProviderEgress;
 use flow_like::flow_like_storage::files::store::FlowLikeStore;
 use flow_like::state::FlowLikeState;
 use flow_like_storage::lancedb::connection::ConnectBuilder;
@@ -435,8 +436,10 @@ impl RuntimeCredentials {
         }?;
 
         // The API is a shared server: anything built on this state must not
-        // fall back to the process's own cloud identity.
+        // fall back to the process's own cloud identity, and calls to a private
+        // model's own endpoint must stay out of the network the API runs in.
         flow_state.execution_environment = ExecutionEnvironment::Server;
+        flow_state.model_egress = ProviderEgress::for_server();
 
         if let Some(package_widget_source) = package_widget_source {
             flow_state

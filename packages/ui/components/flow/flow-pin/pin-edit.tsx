@@ -263,7 +263,7 @@ function WithMenuInner({
 				<Button
 					size={"icon"}
 					variant={"ghost"}
-					className="w-fit h-fit text-foreground"
+					className="w-fit h-fit -m-1 p-1 rounded-sm text-foreground"
 					onClick={() => {
 						editPin(nodeId, pin);
 					}}

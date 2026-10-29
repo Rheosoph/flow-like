@@ -19,7 +19,7 @@ use datafusion::{
     },
     prelude::SessionContext,
 };
-use std::{any::Any, collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 pub(super) fn register_extension_preserving_nesting(context: &SessionContext) {
     for (name, named) in [("named_struct", true), ("struct", false)] {
@@ -58,9 +58,6 @@ struct ExtensionStruct {
 }
 
 impl ScalarUDFImpl for ExtensionStruct {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         self.inner.name()
     }
@@ -128,9 +125,6 @@ fn relabel_list(list: &ListArray, item: &FieldRef) -> Result<ListArray> {
 }
 
 impl AggregateUDFImpl for ExtensionArrayAgg {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
     fn name(&self) -> &str {
         self.inner.name()
     }

@@ -16,6 +16,7 @@
 //! filtered: the host is the user's own machine.
 
 use super::ExecutionEnvironment;
+use flow_like_types::egress::{is_host_plane_ip, is_host_plane_name};
 use flow_like_types::reqwest::{
     self, Url,
     dns::{Addrs, Name, Resolve, Resolving},
@@ -24,7 +25,7 @@ use flow_like_types::reqwest::{
 use flow_like_types::tokio::sync::oneshot;
 use flow_like_types::{Result, anyhow, tokio};
 use std::any::Any;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::time::Duration;
 
@@ -70,52 +71,13 @@ struct SharedClient {
 
 /// True for addresses on the host / hypervisor plane.
 pub fn is_blocked_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => is_blocked_ipv4(v4),
-        IpAddr::V6(v6) => is_blocked_ipv6(v6),
-    }
-}
-
-fn is_blocked_ipv4(ip: Ipv4Addr) -> bool {
-    ip.octets()[0] == 0 // 0.0.0.0/8 — "this network", connects to loopback on Linux
-        || ip.is_loopback()
-        || ip.is_link_local() // 169.254.0.0/16: IMDS, ECS/EKS credential endpoints
-        || ip.is_broadcast()
-        || ip.is_multicast()
-        || ip == Ipv4Addr::new(168, 63, 129, 16) // Azure WireServer VIP
-}
-
-fn is_blocked_ipv6(ip: Ipv6Addr) -> bool {
-    if ip.is_loopback() || ip.is_unspecified() {
-        return true;
-    }
-    if let Some(v4) = ip.to_ipv4() {
-        return is_blocked_ipv4(v4);
-    }
-    ip.is_multicast()
-        || ip.is_unicast_link_local()
-        || ip == Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x254) // AWS IMDS over IPv6
+    is_host_plane_ip(ip)
 }
 
 /// True for names that address the host / hypervisor plane by convention,
-/// before any DNS lookup. Subdomains of `localhost` are left to the resolver:
-/// deployments alias them to service containers (Docker Compose serves
-/// signed storage URLs from `s3.localhost`), and one that answers with
-/// loopback per RFC 6761 is refused on its address.
+/// before any DNS lookup; see [`is_host_plane_name`].
 pub fn is_blocked_host(host: &str) -> bool {
-    let host = host.trim_end_matches('.').to_ascii_lowercase();
-    matches!(
-        host.as_str(),
-        "localhost"
-            | "ip6-localhost"
-            | "ip6-loopback"
-            | "metadata"
-            | "metadata.goog"
-            | "metadata.google.internal"
-            | "instance-data"
-            | "host.docker.internal"
-            | "gateway.docker.internal"
-    )
+    is_host_plane_name(host)
 }
 
 /// Refuses a URL whose host is on the host / hypervisor plane when running
@@ -126,8 +88,8 @@ pub fn ensure_url_allowed(environment: ExecutionEnvironment, url: &Url) -> Resul
         return Ok(());
     }
     let blocked = match url.host() {
-        Some(url::Host::Ipv4(ip)) => is_blocked_ipv4(ip),
-        Some(url::Host::Ipv6(ip)) => is_blocked_ipv6(ip),
+        Some(url::Host::Ipv4(ip)) => is_blocked_ip(IpAddr::V4(ip)),
+        Some(url::Host::Ipv6(ip)) => is_blocked_ip(IpAddr::V6(ip)),
         Some(url::Host::Domain(host)) => is_blocked_host(host),
         None => false,
     };
@@ -408,60 +370,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn metadata_and_loopback_addresses_are_blocked() {
-        for ip in [
-            "169.254.169.254",
-            "169.254.170.2",
-            "169.254.170.23",
-            "127.0.0.1",
-            "127.1.2.3",
-            "0.0.0.0",
-            "168.63.129.16",
-            "::1",
-            "::",
-            "::ffff:169.254.169.254",
-            "::ffff:127.0.0.1",
-            "fe80::1",
-            "fd00:ec2::254",
-        ] {
-            assert!(is_blocked_ip(ip.parse().unwrap()), "{ip} must be blocked");
-        }
-    }
-
-    #[test]
-    fn private_and_public_addresses_are_not_blocked() {
-        for ip in [
-            "10.0.0.5",
-            "172.16.3.4",
-            "192.168.1.1",
-            "8.8.8.8",
-            "2001:db8::1",
-            "fd12::1",
-        ] {
-            assert!(
-                !is_blocked_ip(ip.parse().unwrap()),
-                "{ip} must not be blocked"
-            );
-        }
-    }
-
-    #[test]
-    fn metadata_hostnames_are_blocked_by_name() {
-        for host in [
-            "metadata.google.internal",
-            "Metadata.Google.Internal.",
-            "metadata",
-            "localhost",
-            "LocalHost.",
-            "host.docker.internal",
-        ] {
-            assert!(is_blocked_host(host), "{host} must be blocked");
-        }
-        assert!(!is_blocked_host("example.com"));
-        assert!(!is_blocked_host("api.internal.example.com"));
-    }
-
-    #[test]
     fn localhost_subdomains_are_left_to_the_resolver() {
         let signed = Url::parse("http://s3.localhost:9000/bucket/key?X-Amz-Signature=abc").unwrap();
         assert!(
@@ -500,6 +408,13 @@ mod tests {
         assert!(client.get("http://metadata.google.internal/").is_err());
         assert!(client.post("http://127.0.0.1/").is_err());
         assert!(client.put("http://[fd00:ec2::254]/").is_err());
+        for url in [
+            "http://100.100.100.200/latest/meta-data/",
+            "http://[fd20:ce::254]/computeMetadata/v1/",
+            "http://[fd00:ec2::23]/v1/credentials",
+        ] {
+            assert!(client.get(url).is_err(), "{url} must be refused");
+        }
         assert!(client.patch("http://localhost:8080/").is_err());
         assert!(client.delete("http://169.254.170.2/").is_err());
         assert!(client.get("https://example.com/").is_ok());

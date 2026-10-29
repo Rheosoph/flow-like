@@ -20,7 +20,7 @@ use flow_like_types::{async_trait, json};
 use rmcp::{
     ServiceExt,
     model::{ClientCapabilities, ClientInfo, Implementation, PaginatedRequestParams, Tool},
-    transport::StreamableHttpClientTransport,
+    transport::streamable_http_client::StreamableHttpClientTransportConfig,
 };
 use std::collections::HashSet;
 
@@ -291,7 +291,8 @@ async fn list_all_tools(uri: &str, environment: ExecutionEnvironment) -> Result<
     implementation.website_url = Some("https://flow-like.com".to_string());
     let client_info = ClientInfo::new(ClientCapabilities::default(), implementation);
 
-    let transport = StreamableHttpClientTransport::from_uri(uri);
+    let transport = super::mcp_http::transport(StreamableHttpClientTransportConfig::with_uri(uri))
+        .map_err(|error| format!("Failed to configure MCP client: {error}"))?;
     let client = client_info
         .serve(transport)
         .await

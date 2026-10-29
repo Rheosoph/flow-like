@@ -83,6 +83,10 @@ The webhook verifies:
 
 The public key is safe to share with the endpoint configuration; the bot token and any workflow credentials are not.
 
+An event without a stored public key answers every interaction with `401`, in local development too. Restoring an older version keeps the event's current public key, and a key never carries over when an event changes type.
+
+When the person the event runs as can no longer run it, the interaction gets a reply that only its sender sees, no run starts, and the event pauses.
+
 ## Workflow payloads
 
 The payload depends on the delivery style:

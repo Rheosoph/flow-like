@@ -6,6 +6,7 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
+    routes::sink::service::{loses_execute_events, release_demoted_members},
     state::AppState,
 };
 use axum::{
@@ -70,6 +71,13 @@ pub async fn delete_role(
     if permission.contains(RolePermissions::Owner) {
         return Err(ApiError::FORBIDDEN);
     }
+
+    let demotes = role::Entity::find_by_id(default_role_id.clone())
+        .filter(role::Column::AppId.eq(app_id.clone()))
+        .one(&state.db)
+        .await?
+        .and_then(|default_role| RolePermissions::from_bits(default_role.permissions))
+        .is_some_and(|after| loses_execute_events(permission, after));
 
     // Collect cache keys before the reassignment: afterwards no membership or
     // AppConnection references the role, so a lookup by role id would find
@@ -145,6 +153,9 @@ pub async fn delete_role(
         tracing::warn!(error = %e, "Failed to invalidate permission cache after role deletion");
     }
     crate::package_license::refresh_app(&state, &app_id).await;
+    if demotes {
+        release_demoted_members(&state, &app_id, &affected_user_ids).await;
+    }
 
     audit_branch!(state, user, app_id, "role.delete", "Role", role_id);
     Ok(Json(()))

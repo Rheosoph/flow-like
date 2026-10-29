@@ -49,11 +49,36 @@ interface storage {
     cache-dir: func(node-scoped: bool, user-scoped: bool) -> option<string>;
     user-dir: func(node-scoped: bool) -> option<string>;
     read-file: func(flow-path: string) -> option<list<u8>>;
+    copy-file: func(source-json: string, destination-json: string) -> bool;
+    file-url: func(flow-path-json: string) -> option<string>;
     write-file: func(flow-path: string, data: list<u8>) -> bool;
     write-file-start: func(flow-path: string, total-size: u64) -> option<string>;
     write-file-chunk: func(write-id: string, data: list<u8>) -> bool;
     write-file-finish: func(write-id: string) -> bool;
     list-files: func(flow-path: string) -> option<string>;
+}
+
+/// Opt-in operations with structured errors and bounded transfers.
+interface storage-ops {
+    record storage-error {
+        code: string,
+        message: string,
+        retryable: bool,
+    }
+
+    stat-file: func(path: string) -> result<string, storage-error>;
+    read-file-range: func(path: string, offset: u64, length: u64, if-match: option<string>) -> result<list<u8>, storage-error>;
+    list-files-page: func(request: string) -> result<string, storage-error>;
+    close-list: func(cursor: string) -> result<_, storage-error>;
+    write-file: func(path: string, data: list<u8>, options: string) -> result<string, storage-error>;
+    write-file-start: func(path: string, total-size: option<u64>) -> result<string, storage-error>;
+    write-file-chunk: func(id: string, data: list<u8>) -> result<_, storage-error>;
+    write-file-finish: func(id: string) -> result<string, storage-error>;
+    write-file-abort: func(id: string) -> result<_, storage-error>;
+    delete-file: func(path: string) -> result<_, storage-error>;
+    move-file: func(source: string, dest: string, overwrite: bool) -> result<_, storage-error>;
+    copy-file: func(source: string, dest: string, overwrite: bool) -> result<_, storage-error>;
+    file-url: func(path: string) -> result<option<string>, storage-error>;
 }
 
 interface models {
@@ -121,4 +146,9 @@ world flow-like-node {
     export get-nodes: func() -> string;
     export run: func(input: string) -> string;
     export get-abi-version: func() -> u32;
+}
+
+world flow-like-node-storage-ops {
+    include flow-like-node;
+    import storage-ops;
 }

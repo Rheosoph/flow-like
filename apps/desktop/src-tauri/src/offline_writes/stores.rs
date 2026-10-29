@@ -12,6 +12,7 @@ use flow_like::flow_like_storage::{
     lance_io::object_store::{
         ObjectStore as LanceObjectStore, ObjectStoreParams, ObjectStoreProvider,
     },
+    lance_object_store,
     object_store::{
         self, CopyOptions, GetOptions, GetResult, GetResultPayload, ListResult, MultipartUpload,
         ObjectMeta, ObjectStore, ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload,
@@ -1267,8 +1268,8 @@ impl UnavailableStore {
         Self { tables }
     }
 
-    fn error(&self, key: &str) -> object_store::Error {
-        object_store::Error::Generic {
+    fn error(&self, key: &str) -> lance_object_store::Error {
+        lance_object_store::Error::Generic {
             store: UNAVAILABLE_STORE,
             source: self.tables.text(key).into(),
         }
@@ -1281,37 +1282,38 @@ impl fmt::Display for UnavailableStore {
     }
 }
 
+/// Lance-only, so it implements Lance's object_store release.
 #[flow_like_types::async_trait]
-impl ObjectStore for UnavailableStore {
+impl lance_object_store::ObjectStore for UnavailableStore {
     async fn put_opts(
         &self,
-        path: &ObjectPath,
-        _payload: PutPayload,
-        _options: PutOptions,
-    ) -> object_store::Result<PutResult> {
+        path: &lance_object_store::path::Path,
+        _payload: lance_object_store::PutPayload,
+        _options: lance_object_store::PutOptions,
+    ) -> lance_object_store::Result<lance_object_store::PutResult> {
         Err(self.error(path.as_ref()))
     }
 
     async fn put_multipart_opts(
         &self,
-        path: &ObjectPath,
-        _options: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        path: &lance_object_store::path::Path,
+        _options: lance_object_store::PutMultipartOptions,
+    ) -> lance_object_store::Result<Box<dyn lance_object_store::MultipartUpload>> {
         Err(self.error(path.as_ref()))
     }
 
     async fn get_opts(
         &self,
-        path: &ObjectPath,
-        _options: GetOptions,
-    ) -> object_store::Result<GetResult> {
+        path: &lance_object_store::path::Path,
+        _options: lance_object_store::GetOptions,
+    ) -> lance_object_store::Result<lance_object_store::GetResult> {
         Err(self.error(path.as_ref()))
     }
 
     fn delete_stream(
         &self,
-        paths: BoxStream<'static, object_store::Result<ObjectPath>>,
-    ) -> BoxStream<'static, object_store::Result<ObjectPath>> {
+        paths: BoxStream<'static, lance_object_store::Result<lance_object_store::path::Path>>,
+    ) -> BoxStream<'static, lance_object_store::Result<lance_object_store::path::Path>> {
         let this = self.clone();
         paths
             .map(move |path| Err(this.error(path?.as_ref())))
@@ -1320,24 +1322,25 @@ impl ObjectStore for UnavailableStore {
 
     fn list(
         &self,
-        prefix: Option<&ObjectPath>,
-    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
-        failing_stream(self.error(prefix.map(ObjectPath::as_ref).unwrap_or_default()))
+        prefix: Option<&lance_object_store::path::Path>,
+    ) -> BoxStream<'static, lance_object_store::Result<lance_object_store::ObjectMeta>> {
+        let error = self.error(prefix.map(AsRef::as_ref).unwrap_or_default());
+        futures::stream::once(async move { Err(error) }).boxed()
     }
 
     async fn list_with_delimiter(
         &self,
-        prefix: Option<&ObjectPath>,
-    ) -> object_store::Result<ListResult> {
-        Err(self.error(prefix.map(ObjectPath::as_ref).unwrap_or_default()))
+        prefix: Option<&lance_object_store::path::Path>,
+    ) -> lance_object_store::Result<lance_object_store::ListResult> {
+        Err(self.error(prefix.map(AsRef::as_ref).unwrap_or_default()))
     }
 
     async fn copy_opts(
         &self,
-        _from: &ObjectPath,
-        to: &ObjectPath,
-        _options: CopyOptions,
-    ) -> object_store::Result<()> {
+        _from: &lance_object_store::path::Path,
+        to: &lance_object_store::path::Path,
+        _options: lance_object_store::CopyOptions,
+    ) -> lance_object_store::Result<()> {
         Err(self.error(to.as_ref()))
     }
 }

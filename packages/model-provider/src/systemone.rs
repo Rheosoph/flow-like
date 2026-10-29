@@ -2,7 +2,7 @@
 
 use std::{any::Any, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use async_trait::async_trait;
 use flow_like_types_contracts::{
     Cacheable,
@@ -10,7 +10,7 @@ use flow_like_types_contracts::{
 };
 use serde_json::Value;
 
-use crate::authorization::ScopedRequestAuthorizer;
+use crate::{authorization::ScopedRequestAuthorizer, egress::ProviderEgress};
 
 pub use flow_like_model_protocol::systemone::*;
 
@@ -55,6 +55,13 @@ fn endpoint(base_url: &str) -> Result<reqwest::Url> {
     Ok(url)
 }
 
+fn http_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .retry(reqwest::retry::never())
+        .timeout(Duration::from_secs(120))
+}
+
 impl SystemOneClient {
     pub fn new(
         base_url: &str,
@@ -73,12 +80,18 @@ impl SystemOneClient {
             usage_headers: Vec::new(),
             images_in_state: false,
             authorizer: None,
-            client: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .retry(reqwest::retry::never())
-                .timeout(Duration::from_secs(120))
-                .build()?,
+            client: http_client_builder().build()?,
         })
+    }
+
+    /// Confines a client for a Bit's own endpoint to `egress`.
+    pub fn with_egress(mut self, egress: ProviderEgress) -> Result<Self> {
+        if egress == ProviderEgress::Open {
+            return Ok(self);
+        }
+        egress.check_url(&self.endpoint)?;
+        self.client = egress.guard(http_client_builder()).build()?;
+        Ok(self)
     }
 
     pub fn with_usage_headers(mut self, headers: Vec<(String, String)>) -> Self {
@@ -170,11 +183,38 @@ impl SystemOneModelLogic for SystemOneClient {
             "System One endpoint returned HTTP {status}: {}",
             String::from_utf8_lossy(&bytes)
         );
-        let response: SystemOneResponse =
-            serde_json::from_slice(&bytes).context("Invalid System One response")?;
+        let response = decode_response(&bytes)?;
         response.validate_for(request)?;
         Ok(response)
     }
+}
+
+fn decode_response(body: &[u8]) -> Result<SystemOneResponse> {
+    if let Some(message) = in_band_error(body) {
+        bail!("{message}");
+    }
+    serde_json::from_slice(body).context("Invalid System One response")
+}
+
+/// The message of a `{"error":…}` body sent with HTTP 200. The model relay commits its answer
+/// before the provider call ends, so a later failure arrives that way, after whitespace
+/// keepalives.
+fn in_band_error(body: &[u8]) -> Option<String> {
+    let Value::Object(mut body) = serde_json::from_slice(body).ok()? else {
+        return None;
+    };
+    if body.contains_key("answers") {
+        return None;
+    }
+    let error = body.remove("error").filter(|error| !error.is_null())?;
+    let message = error
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| error.as_str())
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+        .unwrap_or("System One endpoint reported an error without a message");
+    Some(message.to_string())
 }
 
 #[cfg(test)]
@@ -414,5 +454,72 @@ mod tests {
             serde_json::to_value(request()).unwrap()["questions"]
         );
         assert!(body.get("messages").is_none() && body.get("max_tokens").is_none());
+    }
+
+    fn after_keepalives(body: &Value) -> String {
+        let body = format!("  \n \n{body}");
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    #[tokio::test]
+    async fn an_error_the_relay_sends_after_keepalives_surfaces_as_its_message() {
+        let message = "Model endpoint 'llm.internal' is not a public address";
+        let (url, server) = crate::llm::test_support::serve_once(after_keepalives(
+            &json!({"error": {"message": message, "type": "egress_refused"}}),
+        ))
+        .await;
+        let error = SystemOneClient::new(&url, "private-bit", "exec-jwt")
+            .unwrap()
+            .invoke(&request())
+            .await
+            .unwrap_err();
+        server.await.unwrap();
+        assert_eq!(error.to_string(), message);
+    }
+
+    #[tokio::test]
+    async fn an_answer_after_keepalives_is_read_as_usual() {
+        let (url, server) =
+            crate::llm::test_support::serve_once(after_keepalives(&response())).await;
+        let answer = SystemOneClient::new(&url, "private-bit", "exec-jwt")
+            .unwrap()
+            .invoke(&request())
+            .await
+            .unwrap();
+        server.await.unwrap();
+        assert_eq!(answer.usage.unwrap().output_tokens, 20);
+    }
+
+    #[test]
+    fn an_answer_is_never_taken_for_an_error() {
+        let mut answer = response();
+        answer["error"] = Value::Null;
+        assert!(in_band_error(answer.to_string().as_bytes()).is_none());
+        answer["error"] = json!({"message": "partial"});
+        assert!(in_band_error(answer.to_string().as_bytes()).is_none());
+        assert_eq!(
+            in_band_error(br#"{"error":"quota exhausted"}"#).as_deref(),
+            Some("quota exhausted")
+        );
+    }
+
+    #[test]
+    fn guarded_clients_refuse_endpoints_outside_their_egress() {
+        let client = |endpoint: &str, egress| {
+            SystemOneClient::new(endpoint, "model", "key")
+                .unwrap()
+                .with_egress(egress)
+        };
+        assert!(client("https://api.typesafe.ai/v1", ProviderEgress::Public).is_ok());
+        assert!(client("http://api.typesafe.ai/v1", ProviderEgress::Public).is_err());
+        assert!(client("https://10.0.0.7/v1", ProviderEgress::Public).is_err());
+        assert!(client("http://10.0.0.7:8080/v1", ProviderEgress::Private).is_ok());
+        assert!(client("http://127.0.0.1:8080/v1", ProviderEgress::Private).is_err());
+        assert!(client("http://localhost:8080/v1", ProviderEgress::Private).is_err());
+        assert!(client("http://169.254.169.254/v1", ProviderEgress::Private).is_err());
+        assert!(client("http://127.0.0.1:8080/v1", ProviderEgress::Open).is_ok());
     }
 }

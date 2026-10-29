@@ -3,6 +3,8 @@ use std::any::Any;
 use super::ModelLogic;
 use crate::provider::random_provider;
 use crate::{
+    authorization::AuthorizedHttpClient,
+    egress::ProviderEgress,
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
@@ -11,7 +13,7 @@ use async_trait::async_trait;
 use flow_like_types_contracts::Cacheable;
 
 pub struct VoyageAIModel {
-    _client: rig::providers::voyageai::Client,
+    _client: rig::providers::voyageai::Client<AuthorizedHttpClient>,
     _provider: ModelProvider,
     default_model: Option<String>,
 }
@@ -25,7 +27,9 @@ impl VoyageAIModel {
         let api_key = voyageai_config.api_key.clone().unwrap_or_default();
         let model_id = provider.model_id.clone();
 
-        let mut builder = rig::providers::voyageai::Client::builder().api_key(&api_key);
+        let mut builder = rig::providers::voyageai::Client::builder()
+            .api_key(&api_key)
+            .http_client(AuthorizedHttpClient::default());
 
         if let Some(endpoint) = voyageai_config.endpoint.as_deref() {
             builder = builder.base_url(endpoint);
@@ -40,7 +44,10 @@ impl VoyageAIModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
+    pub async fn from_provider(
+        provider: &ModelProvider,
+        egress: ProviderEgress,
+    ) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -49,7 +56,9 @@ impl VoyageAIModel {
             .cloned()
             .and_then(|v| v.as_str().map(|s| s.to_string()));
 
-        let mut builder = rig::providers::voyageai::Client::builder().api_key(api_key);
+        let mut builder = rig::providers::voyageai::Client::builder()
+            .api_key(api_key)
+            .http_client(AuthorizedHttpClient::for_egress(egress)?);
         if let Some(endpoint) = params.get("endpoint").and_then(|v| v.as_str()) {
             builder = builder.base_url(endpoint);
         }

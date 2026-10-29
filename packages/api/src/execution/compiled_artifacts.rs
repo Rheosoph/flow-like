@@ -172,7 +172,7 @@ async fn ensure_reserved_version_free(
 /// When the artifact at `path` was written, if it exists and was compiled
 /// against `fingerprint`. One ranged GET of the envelope answers existence,
 /// format version and fingerprint together.
-async fn stored_artifact_written(
+pub(super) async fn stored_artifact_written(
     meta_store: &dyn ObjectStore,
     path: &Path,
     fingerprint: &[u8; 32],
@@ -199,7 +199,10 @@ async fn stored_artifact_written(
 /// instance can trust it again without a per-run GET. The bytes are unchanged:
 /// the path is content-addressed. Returns the new trust deadline; a failed
 /// rewrite only leaves the artifact untrusted, so the next run checks it again.
-async fn refresh_draft_artifact(meta_store: &dyn ObjectStore, path: &Path) -> Option<SystemTime> {
+pub(super) async fn refresh_draft_artifact(
+    meta_store: &dyn ObjectStore,
+    path: &Path,
+) -> Option<SystemTime> {
     let refresh = async {
         let bytes = meta_store.get(path).await?.bytes().await?;
         let written = SystemTime::now();
@@ -340,7 +343,10 @@ pub async fn ensure_compiled_artifact(
         registry_fingerprint: fingerprint,
     };
     if present {
-        return Ok(ensured);
+        return Ok(state
+            .compiled_widget_artifacts
+            .enrich(&meta_store, app_id, board_id, version, ensured)
+            .await);
     }
 
     // Miss: compile from the API's prepared-board cache and persist.
@@ -402,6 +408,9 @@ pub async fn ensure_compiled_artifact(
     ensure_server_runnable(&board, &registry)?;
     let compiled_board = compiled::compile::compile_board_with_catalog(&board, &registry)?;
     let bytes = compiled::encode_artifact(&compiled_board, &fingerprint)?;
+    state
+        .compiled_widget_artifacts
+        .seed_base(&artifact_path, fingerprint, &compiled_board, &bytes);
     let written = SystemTime::now();
     compiled::persist_artifact(&meta_store, &artifact_path, None, bytes)
         .instrument(tracing::info_span!(
@@ -418,7 +427,10 @@ pub async fn ensure_compiled_artifact(
         path = %artifact_path,
         "Compiled artifact ensured before dispatch"
     );
-    Ok(ensured)
+    Ok(state
+        .compiled_widget_artifacts
+        .enrich(&meta_store, app_id, board_id, version, ensured)
+        .await)
 }
 
 /// Load the board's source again and hydrate it against `registry`, for boards

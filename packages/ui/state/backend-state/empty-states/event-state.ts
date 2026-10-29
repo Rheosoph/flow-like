@@ -8,7 +8,11 @@ import type {
 	IVersionType,
 	PageTrigger,
 } from "@flow-like/flow-like-ui";
-import type { IEventUpsertOptions, IUserSchedules } from "../event-state";
+import type {
+	IEventSinkStatus,
+	IEventUpsertOptions,
+	IUserSchedules,
+} from "../event-state";
 
 export class EmptyEventState implements IEventState {
 	getEvent(
@@ -93,5 +97,9 @@ export class EmptyEventState implements IEventState {
 	isEventSinkActive(eventId: string): Promise<boolean> {
 		// Empty state always returns false - no sinks active in non-Tauri environments
 		return Promise.resolve(false);
+	}
+
+	getEventSinkStatus(eventId: string): Promise<IEventSinkStatus> {
+		return Promise.resolve({ active: false });
 	}
 }

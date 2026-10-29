@@ -113,6 +113,7 @@ import type {
 	IBoardRunRequirements,
 	IFlowIrCommitReadback,
 } from "@flow-like/flow-like-ui/state/backend-state/board-state";
+import type { IOAuthRequiredError } from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import { createId } from "@paralleldrive/cuid2";
 import { getVersion } from "@tauri-apps/api/app";
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -160,8 +161,8 @@ import { resolveLocalFirstPrerun } from "./prerun-utils";
 
 interface DiffEntry {
 	path: string;
-	local: any;
-	remote: any;
+	local: unknown;
+	remote: unknown;
 }
 
 /** How many stale boards may hydrate at once from a summaries listing. */
@@ -380,8 +381,8 @@ function handleProgressEvent(event: IIntercomEvent): void {
 }
 
 const getDeepDifferences = (
-	local: any,
-	remote: any,
+	local: unknown,
+	remote: unknown,
 	path = "",
 ): DiffEntry[] => {
 	const differences: DiffEntry[] = [];
@@ -450,12 +451,12 @@ const logBoardDifferences = (localBoard: IBoard, remoteBoard: IBoard) => {
 		})),
 	);
 
-	differences.forEach((diff) => {
+	for (const diff of differences) {
 		console.groupCollapsed(`Path: ${diff.path}`);
 		console.log("Local value:", diff.local);
 		console.log("Remote value:", diff.remote);
 		console.groupEnd();
-	});
+	}
 };
 const getAppPackageCatalogNodes = (
 	catalogNodes: INode[] | undefined,
@@ -642,9 +643,10 @@ export class BoardState implements IBoardState {
 
 	constructor(private readonly backend: TauriBackend) {}
 
-	private requireAuthoritativeHostedRead(): void {
+	private requireAuthoritativeHostedRead(): IProfile {
+		const profile = this.backend.profile;
 		if (
-			!this.backend.profile ||
+			!profile ||
 			!this.backend.auth?.isAuthenticated ||
 			!this.backend.auth.user?.access_token
 		) {
@@ -652,6 +654,7 @@ export class BoardState implements IBoardState {
 				"Hosted Board read requires an authenticated hub session",
 			);
 		}
+		return profile;
 	}
 
 	async getBoardFormat(appId: string): Promise<BoardFormatCapabilities> {
@@ -886,11 +889,8 @@ export class BoardState implements IBoardState {
 			return boards;
 		}
 
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
+		const { profile } = this.backend;
+		if (!profile || !this.backend.auth || !this.backend.queryClient) {
 			console.warn(
 				"Profile, auth or query client not set. Returning local boards only.",
 			);
@@ -901,7 +901,7 @@ export class BoardState implements IBoardState {
 			async () => {
 				const mergedBoards = new Map<string, IBoard>();
 				const remoteData = await fetcher<IBoard[]>(
-					this.backend.profile!,
+					profile,
 					`apps/${appId}/board`,
 					{
 						method: "GET",
@@ -1118,10 +1118,10 @@ export class BoardState implements IBoardState {
 				withMetrics,
 			});
 		}
-		this.requireAuthoritativeHostedRead();
+		const profile = this.requireAuthoritativeHostedRead();
 		const query = include?.length ? `?include=${include.join(",")}` : "";
 		const summaries = await fetcher<IBoardSummary[]>(
-			this.backend.profile!,
+			profile,
 			`apps/${appId}/board/summaries${query}`,
 			{ method: "GET" },
 			this.backend.auth,
@@ -1584,10 +1584,10 @@ export class BoardState implements IBoardState {
 		if (await this.backend.isLocalOnly(appId)) {
 			return invoke<IBoard>("get_board", { appId, boardId, version });
 		}
-		this.requireAuthoritativeHostedRead();
+		const profile = this.requireAuthoritativeHostedRead();
 		const params = version ? `?version=${version.join("_")}` : "";
 		const board = await fetcher<IBoard>(
-			this.backend.profile!,
+			profile,
 			`apps/${appId}/board/${boardId}${params}`,
 			{ method: "GET" },
 			this.backend.auth,
@@ -1732,9 +1732,10 @@ export class BoardState implements IBoardState {
 		);
 
 		const isOffline = await this.backend.isOffline(appId);
+		const { profile } = this.backend;
 		if (
 			isOffline ||
-			!this.backend.profile ||
+			!profile ||
 			!this.backend.auth ||
 			!this.backend.queryClient
 		) {
@@ -1746,7 +1747,7 @@ export class BoardState implements IBoardState {
 				// The route reads version_type from the query string only, so a
 				// body here silently degrades every Major and Minor to a Patch.
 				const remoteData = await fetcher<[number, number, number]>(
-					this.backend.profile!,
+					profile,
 					`apps/${appId}/board/${boardId}?version_type=${encodeURIComponent(
 						versionType,
 					)}`,
@@ -1783,9 +1784,10 @@ export class BoardState implements IBoardState {
 		);
 
 		const isOffline = await this.backend.isOffline(appId);
+		const { profile } = this.backend;
 		if (
 			isOffline ||
-			!this.backend.profile ||
+			!profile ||
 			!this.backend.auth ||
 			!this.backend.queryClient
 		) {
@@ -1795,7 +1797,7 @@ export class BoardState implements IBoardState {
 		const promise = injectDataFunction(
 			async () => {
 				const remoteData = await fetcher<[number, number, number][]>(
-					this.backend.profile!,
+					profile,
 					`apps/${appId}/board/${boardId}/version`,
 					{
 						method: "GET",
@@ -2007,9 +2009,9 @@ export class BoardState implements IBoardState {
 				console.warn("Failed to check RPA permissions:", e);
 				const error = new Error(
 					"Failed to verify RPA permissions. This workflow cannot run without a successful permission check.",
-				);
-				(error as any).isRpaPermissionError = true;
-				(error as any).cause = e;
+				) as Error & { isRpaPermissionError?: boolean };
+				error.isRpaPermissionError = true;
+				error.cause = e;
 				throw error;
 			}
 		}
@@ -2074,21 +2076,29 @@ export class BoardState implements IBoardState {
 
 			if (providersNeedingConsent.length > 0) {
 				// Throw a special error that the UI can catch to show consent dialog
-				const error = new Error(
-					`Missing OAuth authorization for: ${providersNeedingConsent.map((p) => p.name).join(", ")}`,
+				const error: IOAuthRequiredError = Object.assign(
+					new Error(
+						`Missing OAuth authorization for: ${providersNeedingConsent.map((p) => p.name).join(", ")}`,
+					),
+					{
+						missingProviders: providersNeedingConsent,
+						isOAuthError: true as const,
+					},
 				);
-				(error as any).missingProviders = providersNeedingConsent;
-				(error as any).isOAuthError = true;
 				throw error;
 			}
 		} else {
 			// Still need to check for missing tokens even if skipping consent
 			if (oauthResult.missingProviders.length > 0) {
-				const error = new Error(
-					`Missing OAuth tokens for: ${oauthResult.missingProviders.map((p) => p.name).join(", ")}`,
+				const error: IOAuthRequiredError = Object.assign(
+					new Error(
+						`Missing OAuth tokens for: ${oauthResult.missingProviders.map((p) => p.name).join(", ")}`,
+					),
+					{
+						missingProviders: oauthResult.missingProviders,
+						isOAuthError: true as const,
+					},
 				);
-				(error as any).missingProviders = oauthResult.missingProviders;
-				(error as any).isOAuthError = true;
 				throw error;
 			}
 		}
@@ -2201,7 +2211,6 @@ export class BoardState implements IBoardState {
 					node_id: payload.id,
 					version: payload.version,
 					payload: payload.payload,
-					token: this.backend.auth.user?.access_token,
 					stream_state: streamState ?? true,
 					runtime_variables: payload.runtime_variables,
 					profile_id: this.backend.profile?.id,
@@ -3963,12 +3972,12 @@ export class BoardState implements IBoardState {
 				anchors,
 			});
 		}
-		this.requireAuthoritativeHostedRead();
+		const profile = this.requireAuthoritativeHostedRead();
 		const params = new URLSearchParams();
 		if (version) params.set("version", version.join("_"));
 		params.set("anchors", String(anchors));
 		const response = await fetcher<{ flowscript: string }>(
-			this.backend.profile!,
+			profile,
 			`apps/${appId}/board/${boardId}/flowscript?${params}`,
 			{ method: "GET" },
 			this.backend.auth,
@@ -4566,16 +4575,22 @@ export class BoardState implements IBoardState {
 			fetchRemote:
 				this.backend.profile && this.backend.auth
 					? async () => {
+							const profile = this.backend.profile;
+							if (!profile) {
+								throw new Error(
+									`No profile set for remote prerun of board ${boardId}`,
+								);
+							}
 							let url = `apps/${appId}/board/${boardId}/prerun`;
 							if (version) {
 								url += `?version=${version.join("_")}`;
 							}
 
 							const response = await fetcher<IPrerunBoardResponse>(
-								this.backend.profile!,
+								profile,
 								url,
 								{ method: "GET" },
-								this.backend.auth!,
+								this.backend.auth,
 							);
 							return isRecord(response) ? response : undefined;
 						}

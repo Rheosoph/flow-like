@@ -23,7 +23,9 @@ pub use types::*;
 
 use std::sync::Arc;
 
+use flow_like_model_provider::history::HistoryThinking;
 use flow_like_model_provider::llm::CompletionClientDyn;
+use flow_like_model_provider::llm::lenient_settings::{lenient_agent, thinking_params};
 use flow_like_types::Result;
 use futures::StreamExt;
 use rig::{
@@ -48,6 +50,7 @@ pub struct A2UICopilot {
     state: Arc<FlowLikeState>,
     profile: Option<Arc<Profile>>,
     usage_context: Option<ModelUsageContext>,
+    thinking: Option<HistoryThinking>,
 }
 
 impl A2UICopilot {
@@ -61,7 +64,14 @@ impl A2UICopilot {
             state,
             profile,
             usage_context,
+            thinking: None,
         })
+    }
+
+    /// User-chosen thinking level, dropped for the rest of the run if the model rejects it.
+    pub fn with_thinking(mut self, thinking: Option<HistoryThinking>) -> Self {
+        self.thinking = thinking;
+        self
     }
 
     /// Main entry point - generate or modify A2UI surfaces via structured output
@@ -88,13 +98,12 @@ impl A2UICopilot {
         )?;
         let context_json = flow_like_types::json::to_string_pretty(&context)?;
 
-        let (model_name, completion_client) = self.get_model(model_id, token).await?;
+        let (model_name, completion_client, thinking) = self.get_model(model_id, token).await?;
 
         let system_prompt = Self::build_system_prompt(&context_json);
 
         // Only ThinkTool for chain-of-thought reasoning — no UI-generation tools
-        let agent = completion_client
-            .agent(&model_name)
+        let agent = lenient_agent(completion_client.as_ref(), &model_name, thinking)
             .preamble(&system_prompt)
             .tool(ThinkTool)
             .build();
@@ -487,7 +496,11 @@ impl A2UICopilot {
         &self,
         model_id: Option<String>,
         token: Option<String>,
-    ) -> Result<(String, Box<dyn CompletionClientDyn + Send + Sync + 'a>)> {
+    ) -> Result<(
+        String,
+        Box<dyn CompletionClientDyn + Send + Sync + 'a>,
+        Option<serde_json::Value>,
+    )> {
         let bit = if let Some(profile) = &self.profile {
             let preference = BitModelPreference {
                 reasoning_weight: Some(1.0),
@@ -535,10 +548,13 @@ impl A2UICopilot {
             .build(&bit, self.state.clone(), token, self.usage_context.clone())
             .await?;
         let default_model = model.default_model().await.unwrap_or("gpt-4o".to_string());
+        let thinking = self
+            .thinking
+            .and_then(|thinking| thinking_params(model.as_ref(), &default_model, thinking));
         let provider = model.provider().await?;
         let completion = provider.into_client();
 
-        Ok((default_model, completion))
+        Ok((default_model, completion, thinking))
     }
 
     fn build_system_prompt(context_json: &str) -> String {

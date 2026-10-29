@@ -1,5 +1,3 @@
-import { createProjectMethods } from "./projects.js";
-import { createDeviceMethods } from "./devices.js";
 import { createAppMethods } from "./apps.js";
 import { resolveAuth } from "./auth.js";
 import { createBitMethods } from "./bits.js";
@@ -12,15 +10,17 @@ import {
 	normalizeBaseUrl,
 } from "./client.js";
 import { createDatabaseMethods } from "./database.js";
+import { createDeviceMethods } from "./devices.js";
 import { createEmbeddingMethods } from "./embeddings.js";
 import { FlowLikeError } from "./errors.js";
 import { createEventMethods } from "./events.js";
 import { createExecutionMethods } from "./execution.js";
 import { createFileMethods } from "./files.js";
+import type { FlowLikeChat, FlowLikeEmbeddingModel } from "./integrations.js";
+import { createProjectMethods } from "./projects.js";
 import { createSinkMethods } from "./sinks.js";
 import type { FlowLikeClientOptions } from "./types.js";
 import { createWorkflowMethods } from "./workflows.js";
-import type { FlowLikeChat, FlowLikeEmbeddingModel } from "./integrations.js";
 
 export type * from "./integrations.js";
 

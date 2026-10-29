@@ -18,6 +18,7 @@ import {
 	GitBranchIcon,
 	GlobeIcon,
 	HashIcon,
+	KeyRoundIcon,
 	LayersIcon,
 	LayoutIcon,
 	LinkIcon,
@@ -38,7 +39,7 @@ import {
 	ZapIcon,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
-import type { ComponentType } from "react";
+import type { ComponentType, MouseEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { IOAuthConsentStore } from "../../../db/oauth-db";
@@ -63,7 +64,6 @@ import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import type { IEventMapping } from "../../interfaces";
 import { OAuthConsentDialog } from "../../oauth/oauth-consent-dialog";
-import { PatSelectorDialog } from "../../pat-selector-dialog";
 import { Button } from "../../ui/button";
 import {
 	DropdownMenu,
@@ -99,7 +99,19 @@ import { DvButton } from "../devices/primitives/dv-button";
 import { useCopy } from "../devices/primitives/use-copy";
 import { PermissionNotice } from "../permission/permission-notice";
 import { EventDeleteDialog } from "./event-delete-dialog";
+import {
+	type EventRunAs,
+	ReleasedEventsBanner,
+	type RunAsAudience,
+	RunAsChip,
+	eventRunAs,
+	eventRunAsAudience,
+	eventSinkStatusQuery,
+	servesHostedVisitors,
+	useTurnOnAsMe,
+} from "./event-run-as";
 import { type EventStatus, getEventStatus } from "./event-status";
+import { useRepairLocalTrigger } from "./local-trigger-token";
 import { computeEventIssues } from "./use-event-issues";
 import type { IEventIssue } from "./use-event-issues";
 import { useSinkActivation } from "./use-sink-activation";
@@ -147,6 +159,11 @@ interface EventRowModel {
 	requiresSink: boolean;
 	sinkActive?: boolean;
 	sinkStatusLoading: boolean;
+	runAs: EventRunAs | null;
+	runAsAudience: RunAsAudience;
+	/** This computer's trigger has no personal access token, so it never fires. */
+	needsToken: boolean;
+	failedReason?: string;
 	routePath?: string;
 	isRouted: boolean;
 	entry: ReturnType<typeof describeEventEntry>;
@@ -193,6 +210,24 @@ const ROW_GRID = cn(
 );
 const FROM_600 = "hidden @min-[600px]/events:block";
 const FROM_900 = "hidden @min-[900px]/events:block";
+
+const ROW_CONTROL =
+	"a,button,input,select,textarea,label,[role=button],[role=menuitem],[contenteditable=true]";
+
+/**
+ * A click on the row's bare surface, not on one of its controls. Clicks inside a
+ * portaled menu or popover bubble through React to the row as well, so the
+ * target must also sit in the row's own DOM. A drag that selected text is no click.
+ */
+function isRowSurfaceClick(click: MouseEvent<HTMLElement>): boolean {
+	const { target, currentTarget } = click;
+	return (
+		target instanceof Element &&
+		currentTarget.contains(target) &&
+		!target.closest(ROW_CONTROL) &&
+		!window.getSelection()?.toString()
+	);
+}
 
 const eventRowId = (eventId: string) => `event-row-${eventId}`;
 
@@ -301,40 +336,25 @@ export function EventsOverview({
 		};
 	}, [appId, backend.boardState, boardIdsKey, canReadBoards, events]);
 
-	const sinkEvents = useMemo(
+	// A hosted event registers no trigger, but its hub sink names whose access visitors use.
+	const statusEvents = useMemo(
 		() =>
 			events.filter(
 				(event) =>
 					!isDeviceEventSource(event) &&
-					eventRequiresSink(eventMapping, event, nodeNames.get(event.id)),
+					(eventRequiresSink(eventMapping, event, nodeNames.get(event.id)) ||
+						servesHostedVisitors(event)),
 			),
 		[events, eventMapping, nodeNames],
 	);
 
 	const sinkQueries = useQueries({
-		queries: sinkEvents.map((event) => ({
-			queryKey: [
-				"eventSinkStatus",
-				appId,
-				event.id,
-				{
-					active: event.active,
-					event_type: event.event_type,
-					execution_mode: event.execution_mode,
-					config: event.config,
-					event_version: event.event_version,
-				},
-			],
-			queryFn: () =>
-				backend.eventState.isEventSinkActive(event.id, { appId, event }),
-			enabled: !!appId && event.active,
-			retry: false,
-			staleTime: 0,
-			refetchInterval: 30_000,
-		})),
+		queries: statusEvents.map((event) =>
+			eventSinkStatusQuery(backend.eventState, appId, event),
+		),
 	});
 	const sinkStatuses = new Map(
-		sinkEvents.map((event, index) => [event.id, sinkQueries[index]]),
+		statusEvents.map((event, index) => [event.id, sinkQueries[index]]),
 	);
 
 	const { requestToggle, pendingId, dialogProps } = useSinkActivation({
@@ -351,6 +371,8 @@ export function EventsOverview({
 			});
 		},
 	});
+	const turnOnAsMe = useTurnOnAsMe(requestToggle);
+	const repairTrigger = useRepairLocalTrigger(appId);
 
 	const rows = useMemo<EventRowModel[]>(() => {
 		return events.map((event) => {
@@ -366,11 +388,9 @@ export function EventsOverview({
 			const issues = computeEventIssues({ event, config, requiresSink });
 			const blockingIssue = issues.find((i) => i.severity === "blocking");
 			const sinkQuery = sinkStatuses.get(event.id);
-			const sinkActive = !event.active
-				? false
-				: sinkQuery?.isError
-					? undefined
-					: sinkQuery?.data;
+			const sinkStatus = sinkQuery?.isError ? undefined : sinkQuery?.data;
+			const sinkActive = event.active ? sinkStatus?.active : false;
+			const hosted = !deviceOnly && servesHostedVisitors(event);
 			const isRouted =
 				uiEventTypeSet.has(event.event_type) || !!event.default_page_id;
 
@@ -392,6 +412,11 @@ export function EventsOverview({
 				requiresSink,
 				sinkActive,
 				sinkStatusLoading: sinkQuery?.isPending ?? true,
+				runAs: requiresSink || hosted ? eventRunAs(event, sinkStatus) : null,
+				runAsAudience: eventRunAsAudience(event, hosted),
+				needsToken:
+					requiresSink && event.active && sinkStatus?.needs_token === true,
+				failedReason: requiresSink ? sinkStatus?.failed_reason : undefined,
 				routePath: routeByEventId.get(event.id),
 				isRouted,
 				entry: isRouted ? null : describeEventEntry(event, config),
@@ -471,6 +496,13 @@ export function EventsOverview({
 	);
 
 	const blocked = useMemo(() => rows.filter((row) => row.blocking), [rows]);
+	const released = useMemo(
+		() =>
+			rows.flatMap((row) =>
+				row.runAs?.kind === "released" ? [row.event] : [],
+			),
+		[rows],
+	);
 
 	const filtersActive =
 		search.trim() !== "" || status !== "all" || typeFilter.size > 0;
@@ -481,6 +513,10 @@ export function EventsOverview({
 	const handleToggleActive = useCallback(
 		async (row: EventRowModel) => {
 			if (!canEdit) return;
+			if (row.runAs?.kind === "released") {
+				await turnOnAsMe(row.event);
+				return;
+			}
 			const pausing = row.event.active;
 			await requestToggle(row.event, {
 				active: !pausing,
@@ -496,7 +532,7 @@ export function EventsOverview({
 				},
 			});
 		},
-		[canEdit, requestToggle, t],
+		[canEdit, requestToggle, t, turnOnAsMe],
 	);
 
 	const [deleting, setDeleting] = useState<IEvent | null>(null);
@@ -557,6 +593,8 @@ export function EventsOverview({
 		onNavigateToNode,
 		onToggleActive: handleToggleActive,
 		onRouteChange: handleRouteChange,
+		onRepairTrigger: repairTrigger.available ? repairTrigger.repair : undefined,
+		repairingId: repairTrigger.pendingId,
 	};
 
 	return (
@@ -625,6 +663,14 @@ export function EventsOverview({
 					<AttentionBand rows={blocked} onSelect={onEdit} />
 				)}
 
+				<ReleasedEventsBanner
+					events={released}
+					pendingId={pendingId}
+					canWrite={canEdit}
+					writeDeniedMessage={writeDeniedMessage}
+					onTurnOn={(event) => void turnOnAsMe(event)}
+				/>
+
 				<OnDevicesStrip className="shrink-0" />
 
 				<div className="@container/events flex min-h-0 flex-1 flex-col gap-4 overflow-auto">
@@ -675,14 +721,6 @@ export function EventsOverview({
 					)}
 				</div>
 
-				<PatSelectorDialog
-					{...dialogProps.pat}
-					title={t("authorizeThisChange", "Authorize this change")}
-					description={t(
-						"registeringOrRemovingAnEventSinkNeedsAPersonalAccessToken",
-						"Registering or removing an event sink needs a Personal Access Token.",
-					)}
-				/>
 				<OAuthConsentDialog {...dialogProps.consent} />
 				<EventDeleteDialog
 					event={deleting}
@@ -1013,6 +1051,9 @@ interface EventRowHandlers {
 		previous: string | undefined,
 		next: string,
 	) => Promise<void>;
+	/** Gives this computer's trigger a token; only where this computer registers triggers. */
+	onRepairTrigger?: (event: IEvent) => void | Promise<void>;
+	repairingId?: string | null;
 }
 
 interface RowActionProps {
@@ -1173,12 +1214,22 @@ function RowMenuDeviceItems({
 	);
 }
 
-/** The row's own four actions as menu items. */
+/** What the row's toggle does: a trigger the hub paused because of its run-as user turns back on. */
+function useToggleAction(row: EventRowModel) {
+	const { t } = useTranslation("settings");
+	if (row.runAs?.kind === "released")
+		return { label: t("turnOn", "Turn on"), Icon: PlayIcon };
+	return row.event.active
+		? { label: t("pauseEvent", "Pause event"), Icon: PauseIcon }
+		: { label: t("resumeEvent", "Resume event"), Icon: PlayIcon };
+}
+
+/** The row's own actions as menu items. */
 function RowMenuOwnItems({ row, busy, handlers }: Readonly<RowActionProps>) {
 	const { t } = useTranslation("settings");
 	const { event } = row;
-	const { canEdit, onToggleActive } = handlers;
-	const ToggleIcon = event.active ? PauseIcon : PlayIcon;
+	const { canEdit, onToggleActive, onRepairTrigger } = handlers;
+	const toggle = useToggleAction(row);
 	return (
 		<>
 			{onToggleActive ? (
@@ -1186,10 +1237,17 @@ function RowMenuOwnItems({ row, busy, handlers }: Readonly<RowActionProps>) {
 					disabled={busy || !canEdit}
 					onSelect={() => void onToggleActive(row)}
 				>
-					<ToggleIcon className="h-4 w-4" />
-					{event.active
-						? t("pauseEvent", "Pause event")
-						: t("resumeEvent", "Resume event")}
+					<toggle.Icon className="h-4 w-4" />
+					{toggle.label}
+				</DropdownMenuItem>
+			) : null}
+			{row.needsToken && onRepairTrigger ? (
+				<DropdownMenuItem
+					disabled={handlers.repairingId === event.id}
+					onSelect={() => void onRepairTrigger(event)}
+				>
+					<KeyRoundIcon className="h-4 w-4" />
+					{t("addToken", "Add token")}
 				</DropdownMenuItem>
 			) : null}
 			<DropdownMenuItem onSelect={() => handlers.onEdit(event)}>
@@ -1284,10 +1342,9 @@ function RowIconActions({ row, busy, handlers }: Readonly<RowActionProps>) {
 	const { t } = useTranslation("settings");
 	const { event } = row;
 	const { canEdit, writeDeniedMessage, onToggleActive } = handlers;
-	const toggleActiveLabel = event.active
-		? t("pauseEvent", "Pause event")
-		: t("resumeEvent", "Resume event");
-	const ToggleIcon = busy ? Loader2Icon : event.active ? PauseIcon : PlayIcon;
+	const toggle = useToggleAction(row);
+	const toggleActiveLabel = toggle.label;
+	const ToggleIcon = busy ? Loader2Icon : toggle.Icon;
 	return (
 		<div className="hidden gap-0.5 @min-[900px]/events:flex">
 			{onToggleActive && (
@@ -1343,8 +1400,13 @@ function EventNameBlock({
 	row,
 	isOffline,
 	onEdit,
+	onRepairTrigger,
+	repairingId,
 }: Readonly<
-	Pick<EventRowHandlers, "isOffline" | "onEdit"> & { row: EventRowModel }
+	Pick<
+		EventRowHandlers,
+		"isOffline" | "onEdit" | "onRepairTrigger" | "repairingId"
+	> & { row: EventRowModel }
 >) {
 	const { t } = useTranslation("settings");
 	const devices = useOptionalEventsDevices();
@@ -1389,17 +1451,55 @@ function EventNameBlock({
 								: t("assignedToADevice", "Assigned to a device")}
 					</span>
 				)}
-				{row.requiresSink && row.sinkActive === false && !onDevice && (
+				{row.runAs?.kind === "released" && (
+					<RunAsChip
+						runAs={row.runAs}
+						audience={row.runAsAudience}
+						className={chip}
+					/>
+				)}
+				{row.needsToken && (
 					<span
-						data-sink-chip="off"
-						className={cn(
-							chip,
-							"bg-amber-500/15 text-amber-700 dark:text-amber-400",
-						)}
+						data-sink-chip="needs-token"
+						className={cn(chip, "bg-warning-bg text-warning")}
 					>
-						{t("notRunning", "Not running")}
+						{t("needsAToken", "Needs a token")}
 					</span>
 				)}
+				{row.needsToken && onRepairTrigger && (
+					<button
+						type="button"
+						disabled={repairingId === event.id}
+						onClick={() => void onRepairTrigger(event)}
+						className={cn(
+							chip,
+							"inline-flex items-center gap-1 bg-primary/10 text-primary hover:bg-primary/20 disabled:opacity-60",
+						)}
+					>
+						{repairingId === event.id ? (
+							<Loader2Icon className="size-3 animate-spin" aria-hidden />
+						) : (
+							<KeyRoundIcon className="size-3" aria-hidden />
+						)}
+						{t("addToken", "Add token")}
+					</button>
+				)}
+				{row.requiresSink &&
+					row.sinkActive === false &&
+					!onDevice &&
+					!row.needsToken &&
+					row.runAs?.kind !== "released" && (
+						<span
+							data-sink-chip="off"
+							title={row.failedReason}
+							className={cn(
+								chip,
+								"bg-amber-500/15 text-amber-700 dark:text-amber-400",
+							)}
+						>
+							{t("notRunning", "Not running")}
+						</span>
+					)}
 				{row.requiresSink && row.sinkActive === undefined && (
 					<span className={cn(chip, "bg-muted text-muted-foreground")}>
 						{row.sinkStatusLoading
@@ -1416,6 +1516,16 @@ function EventNameBlock({
 					>
 						{isOffline ? "Local" : "Online"}
 					</span>
+				)}
+				{row.runAs && row.runAs.kind !== "released" && (
+					<RunAsChip
+						runAs={row.runAs}
+						audience={row.runAsAudience}
+						className={cn(
+							chip,
+							row.runAs.kind === "bound" && "hidden lg:inline-flex",
+						)}
+					/>
 				)}
 			</div>
 			<div className="mt-0.5 line-clamp-2 text-xs">
@@ -1505,12 +1615,16 @@ function EventRow({ row, busy, handlers }: Readonly<RowActionProps>) {
 	const runsFailed = row.health?.failed ?? 0;
 
 	return (
+		// biome-ignore lint/a11y/useKeyWithClickEvents: the name button inside is the keyboard way in; the row is a pointer shortcut
 		<div
 			id={eventRowId(event.id)}
 			data-event-target={run.targeted || undefined}
+			onClick={(click) => {
+				if (isRowSurfaceClick(click)) handlers.onEdit(event);
+			}}
 			className={cn(
 				ROW_GRID,
-				"group min-h-12.5 items-start gap-y-0.5 border-b py-2.5 last:border-b-0",
+				"group min-h-12.5 cursor-pointer items-start gap-y-0.5 border-b py-2.5 last:border-b-0",
 				"transition-colors hover:bg-muted/50",
 				run.targeted && "bg-row-selected",
 			)}
@@ -1529,6 +1643,8 @@ function EventRow({ row, busy, handlers }: Readonly<RowActionProps>) {
 				row={row}
 				isOffline={handlers.isOffline}
 				onEdit={handlers.onEdit}
+				onRepairTrigger={handlers.onRepairTrigger}
+				repairingId={handlers.repairingId}
 			/>
 
 			<div className={cn(FROM_600, "min-w-0 overflow-hidden pt-0.5")}>

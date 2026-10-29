@@ -1,7 +1,10 @@
 use std::{collections::HashMap, fmt, sync::Arc};
 
 use async_trait::async_trait;
-use flow_like_storage_files::credentials::RenewableCredentials;
+use flow_like_storage_files::credentials::{
+    RenewableCredentials,
+    lance::{self as lance_stores, SharedConnector},
+};
 use flow_like_types::reqwest::Url;
 use lance::{Error, Result};
 use lance_io::object_store::{
@@ -9,10 +12,10 @@ use lance_io::object_store::{
 };
 
 fn unambiguous_object_path(url: &Url) -> bool {
-    let Ok(raw) = object_store::path::Path::parse(url.path()) else {
+    let Ok(raw) = lance_object_store::path::Path::parse(url.path()) else {
         return false;
     };
-    let Ok(decoded) = object_store::path::Path::from_url_path(url.path()) else {
+    let Ok(decoded) = lance_object_store::path::Path::from_url_path(url.path()) else {
         return false;
     };
     // Keep URI delimiters and object-store segments identical. Encoded percent
@@ -22,27 +25,15 @@ fn unambiguous_object_path(url: &Url) -> bool {
         && !decoded.as_ref().contains(['%', '\\'])
 }
 
-#[derive(Clone, Debug)]
-struct SharedConnector(Arc<dyn object_store::client::HttpConnector>);
-
-impl object_store::client::HttpConnector for SharedConnector {
-    fn connect(
-        &self,
-        options: &object_store::ClientOptions,
-    ) -> object_store::Result<object_store::client::HttpClient> {
-        self.0.connect(options)
-    }
-}
-
 /// A database location and its authentication scope cannot change during refresh.
 #[derive(Clone)]
 pub struct LanceStorageBinding {
     root: Url,
     options: HashMap<String, String>,
     credentials: RenewableCredentials,
-    store_override: Option<Arc<dyn object_store::ObjectStore>>,
+    store_override: Option<Arc<dyn lance_object_store::ObjectStore>>,
     connector: Option<SharedConnector>,
-    object_prefix: Option<object_store::path::Path>,
+    object_prefix: Option<lance_object_store::path::Path>,
 }
 
 impl fmt::Debug for LanceStorageBinding {
@@ -126,7 +117,7 @@ impl LanceStorageBinding {
         })
     }
 
-    pub fn with_http_connector<C: object_store::client::HttpConnector>(
+    pub fn with_http_connector<C: lance_object_store::client::HttpConnector>(
         mut self,
         connector: C,
     ) -> Self {
@@ -137,11 +128,11 @@ impl LanceStorageBinding {
     /// Preserve the issuer's object-key spelling for a URL-encoded user directory.
     /// Table suffixes retain Lance's native cloud encoding.
     pub fn with_object_prefix(mut self, prefix: &str) -> Result<Self> {
-        let raw = object_store::path::Path::parse(self.root.path())
+        let raw = lance_object_store::path::Path::parse(self.root.path())
             .map_err(|_| Error::invalid_input("Invalid scoped object prefix"))?;
-        let decoded = object_store::path::Path::from_url_path(self.root.path())
+        let decoded = lance_object_store::path::Path::from_url_path(self.root.path())
             .map_err(|_| Error::invalid_input("Invalid scoped object prefix"))?;
-        let prefix = object_store::path::Path::parse(prefix)
+        let prefix = lance_object_store::path::Path::parse(prefix)
             .map_err(|_| Error::invalid_input("Invalid scoped object prefix"))?;
         // Existing server paths can contain literal percent escapes produced by
         // Path::from. The issuer chooses the exact spelling; never add aliases.
@@ -154,8 +145,8 @@ impl LanceStorageBinding {
         Ok(self)
     }
 
-    /// Use the same scoped, cached store as file access for Lance reads and writes.
-    pub fn with_store(mut self, store: Arc<dyn object_store::ObjectStore>) -> Self {
+    /// Serve Lance reads and writes through `store`, such as one sharing file access's cache.
+    pub fn with_store(mut self, store: Arc<dyn lance_object_store::ObjectStore>) -> Self {
         self.store_override = Some(store);
         self
     }
@@ -170,49 +161,17 @@ impl LanceStorageBinding {
             && (url.path() == prefix || url.path().starts_with(&format!("{prefix}/")))
     }
 
-    pub fn build_store(&self) -> Result<Arc<dyn object_store::ObjectStore>> {
+    pub fn build_store(&self) -> Result<Arc<dyn lance_object_store::ObjectStore>> {
         if let Some(store) = &self.store_override {
             return Ok(store.clone());
         }
-        let invalid = |_| Error::invalid_input("Invalid scoped cloud storage option");
-        let store = match self.root.scheme() {
-            "s3" => {
-                let mut builder =
-                    object_store::aws::AmazonS3Builder::new().with_url(self.root.as_str());
-                for (key, value) in &self.options {
-                    builder = builder.with_config(key.parse().map_err(invalid)?, value);
-                }
-                if let Some(connector) = &self.connector {
-                    builder = builder.with_http_connector(connector.clone());
-                }
-                self.credentials.aws_store(builder)
-            }
-            "az" => {
-                let mut builder =
-                    object_store::azure::MicrosoftAzureBuilder::new().with_url(self.root.as_str());
-                for (key, value) in &self.options {
-                    builder = builder.with_config(key.parse().map_err(invalid)?, value);
-                }
-                if let Some(connector) = &self.connector {
-                    builder = builder.with_http_connector(connector.clone());
-                }
-                self.credentials.azure_store(builder)
-            }
-            "gs" => {
-                let mut builder = object_store::gcp::GoogleCloudStorageBuilder::new()
-                    .with_url(self.root.as_str());
-                for (key, value) in &self.options {
-                    builder = builder.with_config(key.parse().map_err(invalid)?, value);
-                }
-                if let Some(connector) = &self.connector {
-                    builder = builder.with_http_connector(connector.clone());
-                }
-                self.credentials.gcp_store(builder)
-            }
-            _ => return Err(Error::invalid_input("Unsupported scoped cloud provider")),
-        }
-        .map_err(|error| Error::io_source(Box::new(error)))?;
-        Ok(store.as_generic())
+        lance_stores::scoped_store(
+            &self.credentials,
+            self.root.as_str(),
+            &self.options,
+            self.connector.as_ref(),
+        )
+        .map_err(|error| Error::io_source(Box::new(error)))
     }
 
     fn provider_id(&self) -> String {
@@ -274,7 +233,7 @@ impl ObjectStoreProvider for BoundStoreProvider {
         Ok(store)
     }
 
-    fn extract_path(&self, url: &Url) -> Result<object_store::path::Path> {
+    fn extract_path(&self, url: &Url) -> Result<lance_object_store::path::Path> {
         let binding = self.binding(url)?;
         if let Some(prefix) = &binding.object_prefix {
             let suffix = url
@@ -283,12 +242,13 @@ impl ObjectStoreProvider for BoundStoreProvider {
                 .ok_or_else(|| {
                     Error::invalid_input("Object path is outside the database binding")
                 })?;
-            return object_store::path::Path::parse(format!("{prefix}{suffix}"))
+            return lance_object_store::path::Path::parse(format!("{prefix}{suffix}"))
                 .map_err(|_| Error::invalid_input("Invalid scoped object path"));
         }
-        // Match Lance's native cloud providers: percent escapes remain object-key
-        // bytes. Decoding above only checks for ambiguous delimiters and traversal.
-        object_store::path::Path::parse(url.path())
+        // Percent escapes remain object-key bytes, as in the file layer and in every
+        // table Lance 8 wrote. Lance 9.1+ native providers decode them instead.
+        // Decoding above only checks for ambiguous delimiters and traversal.
+        lance_object_store::path::Path::parse(url.path())
             .map_err(|_| Error::invalid_input("Invalid scoped object path"))
     }
 
@@ -342,7 +302,7 @@ mod tests {
         StorageCredentialScope,
     };
     use flow_like_types::authorization::AuthorizationError;
-    use object_store::ObjectStoreExt;
+    use lance_object_store::ObjectStoreExt;
     use std::{
         sync::atomic::{AtomicBool, Ordering},
         time::{Duration, SystemTime},
@@ -409,7 +369,7 @@ mod tests {
         provider.denied.store(true, Ordering::SeqCst);
         let error = retained
             .inner
-            .head(&object_store::path::Path::from(
+            .head(&lance_object_store::path::Path::from(
                 "apps/project/storage/db/table.lance/_latest.manifest",
             ))
             .await
@@ -435,9 +395,10 @@ mod tests {
     #[tokio::test]
     async fn lance_uses_the_supplied_cache_store_without_constructing_another_cloud_client() {
         let (binding, _) = binding();
-        let memory = Arc::new(object_store::memory::InMemory::new());
-        let path =
-            object_store::path::Path::from("apps/project/storage/db/table.lance/data/cached.lance");
+        let memory = Arc::new(lance_object_store::memory::InMemory::new());
+        let path = lance_object_store::path::Path::from(
+            "apps/project/storage/db/table.lance/data/cached.lance",
+        );
         memory.put(&path, "cached".into()).await.unwrap();
         let registry = scoped_registry(vec![binding.with_store(memory)]).unwrap();
         let store = registry
@@ -478,20 +439,27 @@ mod tests {
     }
 
     #[test]
-    fn encoded_space_and_utf8_paths_match_native_lance_cloud_extraction() {
+    fn encoded_space_and_utf8_paths_keep_their_existing_object_keys() {
         let (binding, _) = binding();
         let scoped = BoundStoreProvider {
             bindings: vec![binding],
         };
         let native = ObjectStoreRegistry::default().get_provider("s3").unwrap();
-        for suffix in ["table%20name.lance", "caf%C3%A9.lance"] {
+        for (suffix, decoded) in [
+            ("table%20name.lance", "table name.lance"),
+            ("caf%C3%A9.lance", "café.lance"),
+        ] {
             let url = Url::parse(&format!(
                 "s3://project-bucket/apps/project/storage/db/{suffix}"
             ))
             .unwrap();
             let path = scoped.extract_path(&url).unwrap();
-            assert_eq!(path, native.extract_path(&url).unwrap());
             assert_eq!(path.as_ref(), format!("apps/project/storage/db/{suffix}"));
+            // Native Lance would address a different object than Lance 8 wrote.
+            assert_eq!(
+                native.extract_path(&url).unwrap().as_ref(),
+                format!("apps/project/storage/db/{decoded}")
+            );
         }
     }
 
@@ -537,7 +505,7 @@ mod tests {
     #[test]
     fn scoped_user_prefix_preserves_the_servers_literal_subject_encoding() {
         let (_, provider) = binding();
-        let prefix = object_store::path::Path::from("users/auth0|josé/apps/project");
+        let prefix = lance_object_store::path::Path::from("users/auth0|josé/apps/project");
         let binding = LanceStorageBinding::new(
             &format!("s3://project-bucket/{prefix}/"),
             HashMap::from([("aws_region".into(), "us-east-1".into())]),

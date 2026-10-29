@@ -42,6 +42,7 @@ pub mod channel;
 pub mod compute_attempts;
 pub mod compute_cost;
 pub(crate) mod http_bounds;
+pub(crate) mod media_links;
 pub(crate) mod upload_lifecycle;
 #[cfg(feature = "cosmos")]
 pub(crate) use flow_like_azure_data::cosmos;

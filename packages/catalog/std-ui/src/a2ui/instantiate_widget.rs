@@ -66,13 +66,6 @@ fn infer_variable_type(value: &Value) -> VariableType {
     }
 }
 
-fn find_widget_by_selector<'a>(widgets: &'a [Widget], selector: &str) -> Option<&'a Widget> {
-    widgets
-        .iter()
-        .find(|w| w.id == selector)
-        .or_else(|| widgets.iter().find(|w| w.name == selector))
-}
-
 /// Type evidence gathered for one bound data path.
 ///
 /// A builder-authored widget keeps its `data_model` empty, so the literal the binding was
@@ -660,12 +653,14 @@ impl NodeLogic for InstantiateWidget {
                 .await;
         }
 
-        // Through the host's widget source — on a server executor that is the
-        // hub API, cached for the run, so a board that instantiates the same
-        // widget N times still costs one fetch and never touches the meta store.
-        let widgets = micro_widget::load_app_widgets(&app_id, context.app_state.clone()).await?;
-        let widget = find_widget_by_selector(&widgets, &widget_selector)
-            .ok_or_else(|| flow_like_types::anyhow!("Widget '{}' not found", widget_selector))?;
+        // The host can resolve a bundled definition before fetching its inventory.
+        let widget =
+            micro_widget::load_app_widget(&app_id, &widget_selector, context.app_state.clone())
+                .await?
+                .ok_or_else(|| {
+                    flow_like_types::anyhow!("Widget '{}' not found", widget_selector)
+                })?;
+        let widget = widget.as_ref();
         let widget_id = widget.id.clone();
 
         // Collect bound path values from component path bindings

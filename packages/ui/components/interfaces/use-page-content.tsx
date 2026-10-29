@@ -1048,16 +1048,16 @@ export function UsePageContent({
 		bootstrap.dataUpdatedAt,
 	);
 
-	// --- Pre-sync board for the active event ---
-	// On fresh installs the board file may not exist locally yet.
-	// Calling getBoard with forceFresh ensures it is fetched from remote and
-	// persisted before the user triggers their first execution.
+	// Local Pages synchronize through their readiness gate below. Governed
+	// remote Pages receive their render/execution contract from bootstrap and
+	// do not need a full editor graph in the browser.
 	useEffect(() => {
 		const target = activeEvent;
 		if (
 			!appId ||
 			!target?.board_id ||
-			(target.default_page_id && shouldWaitForPageBoardSync)
+			(target.default_page_id &&
+				(shouldWaitForPageBoardSync || supportsPageBootstrap))
 		)
 			return;
 		const version = normalizeBoardVersion(target.board_version);
@@ -1065,7 +1065,13 @@ export function UsePageContent({
 			boardReadinessKey(appId, target.board_id, version),
 			() => backend.boardState.getBoard(appId, target.board_id, version, true),
 		);
-	}, [appId, activeEvent, shouldWaitForPageBoardSync, backend.boardState]);
+	}, [
+		appId,
+		activeEvent,
+		shouldWaitForPageBoardSync,
+		supportsPageBootstrap,
+		backend.boardState,
+	]);
 
 	// --- Event switching ---
 

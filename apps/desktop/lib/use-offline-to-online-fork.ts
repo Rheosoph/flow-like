@@ -59,9 +59,9 @@ const SYSTEM_ROLE_NAMES = new Set(["Owner", "Admin", "User"]);
 
 /**
  * Local sink registrations for one app, keyed by event id. Sinks are
- * auto-created server-side from the event on upsert, so the only thing
- * that has to travel is the credential the local sink was registered
- * with.
+ * auto-created server-side from the event on upsert and run as the user
+ * who saves it, so the registrations only tell which events had OAuth
+ * grants that the fork has to reconnect.
  */
 async function loadLocalSinks(
 	sinkState: { listEventSinks(): Promise<IEventRegistration[]> } | undefined,
@@ -361,13 +361,12 @@ export function useOfflineToOnlineFork() {
 				for (const event of events) {
 					const preparedEvent = stripForkSecrets(event) as IEvent;
 					// The destination's sink row is derived from the event on
-					// upsert. Carry the local sink's PAT so triggered flows keep
-					// their model/file access; OAuth grants are provider-bound
-					// and always need a fresh consent, so they are reported
-					// instead of copied — same rule the online → online fork
-					// applies.
+					// upsert and runs as the forking user. OAuth grants are
+					// provider-bound and always need a fresh consent, so they
+					// are reported instead of copied — same rule the online →
+					// online fork applies.
 					const sink = sinksByEvent.get(event.id);
-					const oauthProviders = Object.keys(sink?.oauth_tokens ?? {});
+					const oauthProviders = sink?.oauth_providers ?? [];
 					if (oauthProviders.length > 0) {
 						needsReauth.push(event.name ?? event.id);
 					}
@@ -377,9 +376,6 @@ export function useOfflineToOnlineFork() {
 						{
 							event: preparedEvent,
 							profile_id: profile.id,
-							...(sink?.personal_access_token
-								? { pat: sink.personal_access_token }
-								: {}),
 						},
 					);
 				}

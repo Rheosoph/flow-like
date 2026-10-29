@@ -2,7 +2,7 @@ use crate::{
     ensure_permission,
     entity::{membership, sea_orm_active_enums::UserStatus, user},
     error::ApiError,
-    middleware::jwt::AppUser,
+    middleware::jwt::{AppUser, ExecutorUse},
     permission::role_permission::RolePermissions,
     routes::user::{
         contacts::invitation_candidates,
@@ -65,13 +65,19 @@ impl UserLookupResponse {
             _ => None,
         };
 
+        Self::project(user, &lookup_config, avatar_url)
+    }
+
+    /// The directory entry of `user`: only the fields `lookup` shares, never
+    /// account, billing or permission data. `avatar_url` is the signed avatar.
+    pub fn project(user: user::Model, lookup: &Lookup, avatar_url: Option<String>) -> Self {
         // Rows provisioned before display names were derived — and every row
         // `ensure_user_exists` creates — carry no name, and with `lookup.email` off
         // there is then nothing left to render but the raw id. `derive_display_name`
         // already treats the email local part as the last rung of that ladder, so
         // reuse it here instead of showing a uuid where a person belongs. The domain
         // never leaves the server, so this stays inside the `email` opt-out.
-        let name = lookup_config
+        let name = lookup
             .name
             .then(|| {
                 user.name
@@ -83,23 +89,20 @@ impl UserLookupResponse {
 
         UserLookupResponse {
             id: user.id,
-            email: lookup_config.email.then_some(user.email).flatten(),
-            username: lookup_config.username.then_some(user.username).flatten(),
-            preferred_username: lookup_config
+            email: lookup.email.then_some(user.email).flatten(),
+            username: lookup.username.then_some(user.username).flatten(),
+            preferred_username: lookup
                 .preferred_username
                 .then_some(user.preferred_username)
                 .flatten(),
             name,
-            avatar_url,
-            additional_information: lookup_config
+            avatar_url: lookup.avatar.then_some(avatar_url).flatten(),
+            additional_information: lookup
                 .additional_information
                 .then_some(user.additional_information)
                 .flatten(),
-            description: lookup_config
-                .description
-                .then_some(user.description)
-                .flatten(),
-            created_at: lookup_config.created_at.then_some(user.created_at),
+            description: lookup.description.then_some(user.description).flatten(),
+            created_at: lookup.created_at.then_some(user.created_at),
             exact_match: None,
         }
     }
@@ -245,7 +248,9 @@ async fn ensure_executor_lookup_permission(
     user: &AppUser,
     app_id: &str,
 ) -> Result<(), ApiError> {
-    let permission = user.execution_app_permission(app_id, state).await?;
+    let permission = user
+        .execution_app_permission(app_id, state, ExecutorUse::Read)
+        .await?;
     if !permission.has_permission(RolePermissions::ReadTeam) {
         return Err(ApiError::FORBIDDEN);
     }
@@ -655,6 +660,102 @@ mod tests {
         // The membership subquery has to sit inside the query the cap applies to,
         // or the cap decides the pool before scoping ever sees it.
         assert!(sql.find("Membership") < sql.find("LIMIT"));
+    }
+
+    fn account_row() -> user::Model {
+        let created = chrono::DateTime::from_timestamp(1_800_000_000, 0)
+            .unwrap()
+            .fixed_offset();
+        user::Model {
+            id: "user-1".into(),
+            stripe_id: Some("cus_1".into()),
+            subscription_period_start: Some(created),
+            subscription_period_end: Some(created),
+            billing_period_anchor: Some(created),
+            subscription_id: Some("sub_1".into()),
+            subscription_event_created_at: Some(1),
+            subscription_event_id: Some("evt_1".into()),
+            subscription_sync_revision: Some(1),
+            tracking_id: Some("tracking-1".into()),
+            email: Some("person@example.com".into()),
+            username: Some("person".into()),
+            preferred_username: Some("person-handle".into()),
+            name: Some("Person".into()),
+            description: Some("About".into()),
+            avatar: Some("avatar-1".into()),
+            additional_information: Some(serde_json::json!({ "team": "ops" })),
+            permission: 7,
+            accepted_terms_version: Some("v1".into()),
+            tutorial_completed: true,
+            total_size: 1,
+            total_llm_price: 2,
+            total_embedding_price: 3,
+            llm_price_tracking_month: Some("2026-10".into()),
+            created_at: created,
+            updated_at: created,
+            dev_mode: true,
+            status: UserStatus::Active,
+            tier: crate::entity::sea_orm_active_enums::UserTier::Pro,
+        }
+    }
+
+    fn projected(lookup: &Lookup) -> serde_json::Map<String, Value> {
+        let response = UserLookupResponse::project(
+            account_row(),
+            lookup,
+            Some("https://signed.example/avatar".into()),
+        );
+        match serde_json::to_value(response).unwrap() {
+            Value::Object(fields) => fields,
+            other => panic!("a lookup response is an object, got {other}"),
+        }
+    }
+
+    #[test]
+    fn the_directory_projection_carries_no_account_internals() {
+        let profile_fields = [
+            "id",
+            "email",
+            "username",
+            "preferred_username",
+            "name",
+            "avatar_url",
+            "additional_information",
+            "description",
+            "created_at",
+        ];
+        let everything = Lookup {
+            email: true,
+            name: true,
+            username: true,
+            preferred_username: true,
+            avatar: true,
+            additional_information: true,
+            description: true,
+            created_at: true,
+        };
+
+        let hidden = projected(&Lookup::default());
+        let mut keys = hidden.keys().map(String::as_str).collect::<Vec<_>>();
+        keys.sort_unstable();
+        let mut expected = profile_fields.to_vec();
+        expected.sort_unstable();
+        assert_eq!(keys, expected);
+        assert_eq!(hidden["email"], Value::Null);
+        assert_eq!(hidden["username"], Value::Null);
+        assert_eq!(hidden["name"], "Person");
+        assert_eq!(hidden["avatar_url"], "https://signed.example/avatar");
+
+        let shared = projected(&everything);
+        assert_eq!(shared.len(), profile_fields.len());
+        assert_eq!(shared["email"], "person@example.com");
+        assert_eq!(shared["username"], "person");
+
+        let no_avatar = projected(&Lookup {
+            avatar: false,
+            ..everything
+        });
+        assert_eq!(no_avatar["avatar_url"], Value::Null);
     }
 
     #[test]

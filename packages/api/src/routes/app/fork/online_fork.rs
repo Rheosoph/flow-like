@@ -22,9 +22,10 @@ use utoipa::ToSchema;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, ToSchema)]
 pub struct OnlineForkBody {
-    /// Single bearer-style token (PAT) reused at every detected
-    /// HTTP-auth-token / sink-PAT site on the source app. OAuth-bound
-    /// events are *always* cleared and reported regardless. Required
+    /// Single bearer-style token reused at every detected HTTP auth
+    /// token site on the source app. Forked sinks run as the forking
+    /// user. OAuth-bound events are *always* cleared and reported
+    /// regardless. Required
     /// only if the preview endpoint reported a token site that is
     /// `is_token_replaceable() == true`.
     pub remote_event_token: Option<String>,

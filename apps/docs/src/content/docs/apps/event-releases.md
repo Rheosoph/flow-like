@@ -40,16 +40,25 @@ Page Events and ontology actions do not support this regression suite. Page
 payloads belong to a page session; use an interface test for that path.
 
 1. Open **Quality → Suite configuration** and save a suite.
-2. Review and acknowledge the live-side-effect notice. Storage writes and WASM
-   execution are isolated for suite runs, but native outbound calls can still
-   send mail, post webhooks, or change external systems. Use test destinations
-   for such calls before running the suite.
+2. Review and acknowledge the live-side-effect notice. Suite runs cannot write
+   the App's storage, change the App cache, send notifications, call connected
+   Apps, change locked files, send platform mail or Teams messages, take
+   payments or refresh OAuth sign-ins. A cache read with **Get or Write** still
+   returns a value that is already cached. Native outbound calls, such as HTTP
+   requests, still run and can send mail, post webhooks, or change external
+   systems. Use test destinations for such calls before running the suite. On
+   storage without per-prefix access control, such as Cloudflare R2, only the
+   runtime keeps suite runs out of the App's storage.
 3. Under **Recorded inputs**, select representative runs and choose **Add to
    regression set**. Inspect the redacted input and its baseline expectation.
 4. Include passing and failing cases. A stored failing baseline helps identify
    both a new regression and a corrected failure.
 5. Run the suite against the numbered candidate and inspect each case's verdict,
    failed assertions, and logs.
+
+A case whose only failures are refused side effects is recorded as skipped,
+with the reason `side effect refused: <effect>`. A case that also fails for
+another reason, or whose run crashed, is graded as usual.
 
 The comparison uses graded verdicts, not exact output equality. Add
 [Assert](/nodes/utils/testing/flow-assert/) nodes for semantic expectations.
@@ -65,6 +74,18 @@ untested version inherits another version's verdict.
 Automatic schedules and publication-triggered runs are configured in the suite.
 Fixtures originally using caller OAuth tokens cannot supply those tokens to a
 scheduled replay; remove or redesign those fixtures before scheduling.
+
+A suite run you start, or one started by publishing, replays as you, with your
+profile. An App connection cannot start suite runs. Flow-Like checks that you are an active member who may trigger Events
+and read logs when the run is created and again when it starts. A queued run
+that does not record who started it fails and must be started again. A
+scheduled run replays as the person the Event runs as only when the Event's
+trigger runs the replayed version: a target pinned to that version, or one that
+follows the latest version while the trigger is on. It is checked the way a
+trigger is, but a refusal fails only that suite run and does not pause the
+Event. Otherwise, and for an older Event without a person to run as, it replays
+as an anonymous suite identity without private models. Scheduled runs replay
+published versions only, never the draft.
 
 ## Send a share of traffic to the candidate
 

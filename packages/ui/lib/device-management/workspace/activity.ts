@@ -101,11 +101,11 @@ const codes = <T extends string>(record: Record<T, true>) =>
 const id = z.string().min(1).max(256);
 const name = z.string().max(256);
 const time = z.number().finite().nonnegative();
-const copy = <T extends z.ZodTypeAny>(code: T) =>
+const copy = <T extends z.ZodType>(code: T) =>
 	z.object({
 		code,
 		params: z
-			.record(z.union([z.string().max(512), z.number().finite()]))
+			.record(z.string(), z.union([z.string().max(512), z.number().finite()]))
 			.optional(),
 	});
 

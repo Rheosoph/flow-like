@@ -561,3 +561,19 @@ run = "bun tools/widget-sources/update-psl.ts"
 [tasks."widget-sources:generate"]
 description = "Recompute widget source catalog pins, bump catalogVersion on change and write the bundler data module"
 run = "bun tools/widget-sources/generate.ts"
+
+[tasks."bench:widgets:serve"]
+description = "Run the diagnostic widget action server with optimized Rust code"
+run = 'cargo run --locked -p flow-like-executor --no-default-features --features benchmarks --profile release-fast --example widget_action_bench -- {{arg(name="args", var=true, required=false)}}'
+
+[tasks."bench:widgets"]
+description = "Measure diagnostic widget actions, including concurrent bursts"
+run = 'python3 tools/widget-action-benchmark.py {{arg(name="args", var=true, required=false)}}'
+
+[tasks."bench:widgets:stack:build"]
+description = "Build the production API and executor routers for the isolated widget benchmark"
+run = 'cargo build --locked -p flow-like-api --no-default-features --features benchmark-stack --profile release-fast --example widget_action_stack'
+
+[tasks."bench:widgets:app"]
+description = "Measure bootstrap and actual person actions in the local web app"
+run = 'node tests/widget-action-browser/run-app.mjs {{arg(name="args", var=true, required=false)}}'

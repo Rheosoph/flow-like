@@ -76,8 +76,7 @@ impl NodeLogic for SetPrimaryKeyLocalDatabaseNode {
         let column_name: String = context.evaluate_pin("column_name").await?;
 
         let cached_db = database.load(context).await?;
-        cached_db.ensure_flushed().await?;
-        let database = cached_db.db.read().await;
+        let database = cached_db.flushed_read().await?;
 
         database.inner().set_primary_key(&column_name).await?;
 

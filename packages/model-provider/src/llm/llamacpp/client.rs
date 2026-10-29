@@ -12,6 +12,9 @@ use rig::{
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, convert::TryFrom, sync::Arc};
 
+use crate::egress::ProviderEgress;
+use crate::llm::user_media::{self, Kind};
+
 #[derive(Clone, Debug, Default)]
 struct ToolArgumentSpec {
     ordered_parameter_names: Vec<String>,
@@ -162,6 +165,8 @@ pub struct LlamaCppClient {
     base_url: String,
     http_client: reqwest::Client,
     bearer_token: Option<String>,
+    /// The name of a server that never downloads media links, such as LM Studio.
+    inline_media_only: Option<&'static str>,
     // Some in-process transports (notably iOS MLX) own the loopback server
     // behind this client. Keep that runtime alive for every cloned completion
     // client/model until the request using it has actually finished.
@@ -184,6 +189,7 @@ impl LlamaCppClient {
             base_url: base_url.to_string(),
             http_client: reqwest::Client::new(),
             bearer_token: None,
+            inline_media_only: None,
             _keepalive: None,
         }
     }
@@ -193,6 +199,7 @@ impl LlamaCppClient {
             base_url: base_url.to_string(),
             http_client: reqwest::Client::new(),
             bearer_token: Some(bearer_token.into()),
+            inline_media_only: None,
             _keepalive: None,
         }
     }
@@ -200,6 +207,26 @@ impl LlamaCppClient {
     pub fn with_keepalive(mut self, keepalive: Arc<dyn Send + Sync>) -> Self {
         self._keepalive = Some(keepalive);
         self
+    }
+
+    /// For a server, named `server` in errors, that never downloads a media link: a linked part
+    /// fails the call with its kind and host instead of reaching a server that cannot read it.
+    /// llama-server and the MLX bridge download http(s) links themselves.
+    pub fn inline_media_only(mut self, server: &'static str) -> Self {
+        self.inline_media_only = Some(server);
+        self
+    }
+
+    /// Confines a client for a Bit's own endpoint to `egress`.
+    pub fn with_egress(mut self, egress: ProviderEgress) -> anyhow::Result<Self> {
+        if egress == ProviderEgress::Open {
+            return Ok(self);
+        }
+        let base_url = reqwest::Url::parse(&self.base_url)
+            .map_err(|_| anyhow::anyhow!("Model endpoint is not a valid URL"))?;
+        egress.check_url(&base_url)?;
+        self.http_client = egress.guard(reqwest::Client::builder()).build()?;
+        Ok(self)
     }
 
     fn post(&self, path: &str) -> Result<reqwest::RequestBuilder, ClientBuilderError> {
@@ -1469,20 +1496,45 @@ impl CompletionModel {
         )))
     }
 
-    fn image_url_payload(image: &message::Image) -> Result<Value, CompletionError> {
+    /// A server that reads media only inline is never sent a link.
+    fn ensure_downloaded(
+        &self,
+        kind: Kind,
+        mime: Option<&str>,
+        url: &str,
+    ) -> Result<(), CompletionError> {
+        match self.client.inline_media_only {
+            Some(server) if !url.starts_with("data:") => {
+                Err(user_media::inline_only(server, kind, mime, url))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    /// The servers read inline images only as `data:` URLs, so an untyped image is typed by its
+    /// bytes.
+    fn image_data_url(mime: Option<&str>, data: &str) -> Result<String, CompletionError> {
+        let mime = mime.or_else(|| user_media::sniff_image(data)).ok_or_else(|| {
+            Self::invalid_media_source(
+                "The image has no media type, and its bytes are not PNG, JPEG, GIF, WebP, BMP or TIFF; set its MIME type",
+            )
+        })?;
+        Ok(format!("data:{mime};base64,{data}"))
+    }
+
+    fn image_url_payload(&self, image: &message::Image) -> Result<Value, CompletionError> {
         let mime = image
             .media_type
             .as_ref()
             .map(|media_type| media_type.to_mime_type());
         let url = match &image.data {
-            message::DocumentSourceKind::Url(url) => url.clone(),
-            message::DocumentSourceKind::Base64(data) => mime
-                .map(|mime| format!("data:{mime};base64,{data}"))
-                .unwrap_or_else(|| data.clone()),
+            message::DocumentSourceKind::Url(url) => {
+                self.ensure_downloaded(Kind::Image, mime, url)?;
+                url.clone()
+            }
+            message::DocumentSourceKind::Base64(data) => Self::image_data_url(mime, data)?,
             message::DocumentSourceKind::Raw(bytes) => {
-                let data = BASE64_STANDARD.encode(bytes);
-                mime.map(|mime| format!("data:{mime};base64,{data}"))
-                    .unwrap_or(data)
+                Self::image_data_url(mime, &BASE64_STANDARD.encode(bytes))?
             }
             message::DocumentSourceKind::String(_) => {
                 return Err(Self::invalid_media_source(
@@ -1519,12 +1571,19 @@ impl CompletionModel {
         Ok(payload)
     }
 
-    fn audio_input_payload(audio: &message::Audio) -> Result<Value, CompletionError> {
+    fn audio_input_payload(&self, audio: &message::Audio) -> Result<Value, CompletionError> {
         let mut payload = json!({});
         Self::merge_media_additional_params(&mut payload, audio.additional_params.as_ref());
 
         match &audio.data {
-            message::DocumentSourceKind::Url(url) => payload["url"] = json!(url),
+            message::DocumentSourceKind::Url(url) => {
+                let mime = audio
+                    .media_type
+                    .as_ref()
+                    .map(|media_type| media_type.to_mime_type());
+                self.ensure_downloaded(Kind::Audio, mime, url)?;
+                payload["url"] = json!(url);
+            }
             message::DocumentSourceKind::Base64(data) => payload["data"] = json!(data),
             message::DocumentSourceKind::Raw(bytes) => {
                 payload["data"] = json!(BASE64_STANDARD.encode(bytes));
@@ -1563,12 +1622,19 @@ impl CompletionModel {
         Ok(payload)
     }
 
-    fn video_input_payload(video: &message::Video) -> Result<Value, CompletionError> {
+    fn video_input_payload(&self, video: &message::Video) -> Result<Value, CompletionError> {
         let mut payload = json!({});
         Self::merge_media_additional_params(&mut payload, video.additional_params.as_ref());
 
         match &video.data {
-            message::DocumentSourceKind::Url(url) => payload["url"] = json!(url),
+            message::DocumentSourceKind::Url(url) => {
+                let mime = video
+                    .media_type
+                    .as_ref()
+                    .map(|media_type| media_type.to_mime_type());
+                self.ensure_downloaded(Kind::Video, mime, url)?;
+                payload["url"] = json!(url);
+            }
             message::DocumentSourceKind::Base64(data) => payload["data"] = json!(data),
             message::DocumentSourceKind::Raw(bytes) => {
                 payload["data"] = json!(BASE64_STANDARD.encode(bytes));
@@ -1649,21 +1715,21 @@ impl CompletionModel {
                     has_multimodal = true;
                     content_parts.push(json!({
                         "type": "image_url",
-                        "image_url": Self::image_url_payload(img)?,
+                        "image_url": self.image_url_payload(img)?,
                     }));
                 }
                 message::UserContent::Audio(audio) => {
                     has_multimodal = true;
                     content_parts.push(json!({
                         "type": "input_audio",
-                        "input_audio": Self::audio_input_payload(audio)?,
+                        "input_audio": self.audio_input_payload(audio)?,
                     }));
                 }
                 message::UserContent::Video(video) => {
                     has_multimodal = true;
                     content_parts.push(json!({
                         "type": "input_video",
-                        "input_video": Self::video_input_payload(video)?,
+                        "input_video": self.video_input_payload(video)?,
                     }));
                 }
                 message::UserContent::Document(doc) => {
@@ -2314,6 +2380,122 @@ mod tests {
 
         assert!(error.contains("do not accept document files, URLs, bytes, or file IDs"));
         assert!(error.contains("convert the document to literal text"));
+    }
+
+    fn user_parts(model: &CompletionModel, parts: Vec<message::UserContent>) -> Vec<Value> {
+        let converted = model
+            .convert_message(message::Message::User {
+                content: OneOrMany::many(parts).unwrap(),
+            })
+            .unwrap();
+        converted["content"].as_array().unwrap().clone()
+    }
+
+    fn untyped_image(data: message::DocumentSourceKind) -> message::UserContent {
+        message::UserContent::Image(message::Image {
+            data,
+            media_type: None,
+            detail: None,
+            additional_params: None,
+        })
+    }
+
+    #[test]
+    fn untyped_inline_images_are_sent_as_typed_data_urls() {
+        let model = CompletionModel::new(LlamaCppClient::new(DEFAULT_BASE_URL), &test_model());
+        let png = "iVBORw0KGgoAAAANSUhEUg==";
+        let parts = user_parts(
+            &model,
+            vec![
+                untyped_image(message::DocumentSourceKind::Base64(png.to_string())),
+                untyped_image(message::DocumentSourceKind::Raw(
+                    BASE64_STANDARD.decode("/9j/4AAQSkZJRg==").unwrap(),
+                )),
+            ],
+        );
+
+        assert_eq!(
+            parts[0]["image_url"]["url"],
+            format!("data:image/png;base64,{png}")
+        );
+        assert_eq!(
+            parts[1]["image_url"]["url"],
+            "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
+        );
+
+        let error = model
+            .convert_message(message::Message::User {
+                content: OneOrMany::one(untyped_image(message::DocumentSourceKind::Base64(
+                    "SGVsbG8=".to_string(),
+                ))),
+            })
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("set its MIME type"), "{error}");
+    }
+
+    #[test]
+    fn llama_server_and_mlx_still_receive_media_links() {
+        let model = CompletionModel::new(LlamaCppClient::new(DEFAULT_BASE_URL), &test_model());
+        let link = "https://cdn.example.com/scan.png";
+
+        let parts = user_parts(
+            &model,
+            vec![untyped_image(message::DocumentSourceKind::Url(
+                link.to_string(),
+            ))],
+        );
+
+        assert_eq!(parts[0]["image_url"]["url"], link);
+    }
+
+    #[test]
+    fn lm_studio_refuses_media_links_naming_kind_and_host() {
+        let model = CompletionModel::new(
+            LlamaCppClient::new(DEFAULT_BASE_URL).inline_media_only("LM Studio"),
+            &test_model(),
+        );
+        let data_url = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==";
+        assert_eq!(
+            user_parts(
+                &model,
+                vec![untyped_image(message::DocumentSourceKind::Url(
+                    data_url.to_string()
+                ))]
+            )[0]["image_url"]["url"],
+            data_url
+        );
+
+        let links = [
+            untyped_image(message::DocumentSourceKind::Url(
+                "https://cdn.example.com/tmp/scan.png?X-Amz-Signature=secret".to_string(),
+            )),
+            message::UserContent::Audio(message::Audio {
+                data: message::DocumentSourceKind::Url(
+                    "https://cdn.example.com/tmp/voice.wav?X-Amz-Signature=secret".to_string(),
+                ),
+                media_type: Some(message::AudioMediaType::WAV),
+                additional_params: None,
+            }),
+        ];
+        for (part, kind) in links
+            .into_iter()
+            .zip(["The image from", "The audio (audio/wav) from"])
+        {
+            let error = model
+                .convert_message(message::Message::User {
+                    content: OneOrMany::one(part),
+                })
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(kind), "{error}");
+            assert!(error.contains("host 'cdn.example.com'"), "{error}");
+            assert!(error.contains("cannot be sent to LM Studio"), "{error}");
+            assert!(
+                !error.contains("X-Amz") && !error.contains("/tmp/"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

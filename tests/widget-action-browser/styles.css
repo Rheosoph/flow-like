@@ -1,0 +1,67 @@
+@import "../../packages/ui/global.css";
+
+body {
+	margin: 0;
+	background: #f4f5f7;
+	color: #202832;
+	font-family: system-ui, sans-serif;
+}
+main {
+	margin: 32px auto;
+	max-width: 1200px;
+	padding: 0 24px;
+}
+h1 {
+	font-size: 24px;
+	font-weight: 650;
+	margin-bottom: 8px;
+}
+.intro {
+	color: #546171;
+	margin-bottom: 24px;
+}
+.workspace {
+	display: grid;
+	grid-template-columns: 270px minmax(0, 1fr);
+	gap: 24px;
+}
+.person,
+.history {
+	background: white;
+	border: 1px solid #d9dee6;
+	border-radius: 10px;
+	padding: 20px;
+}
+.person {
+	margin-bottom: 16px;
+}
+.person h2,
+.history h2 {
+	font-weight: 600;
+	margin-bottom: 12px;
+}
+.person button {
+	background: #254b83;
+	color: white;
+	border-radius: 6px;
+	padding: 9px 12px;
+	font-size: 14px;
+	cursor: pointer;
+}
+.person button:disabled {
+	opacity: 0.5;
+	cursor: wait;
+}
+.history {
+	min-height: 300px;
+}
+.history h2 {
+	border-bottom: 1px solid #e5e7eb;
+	padding-bottom: 12px;
+}
+#status {
+	margin-top: 18px;
+	font-size: 13px;
+	color: #546171;
+	white-space: pre-wrap;
+}

@@ -3,6 +3,7 @@
 use std::any::Any;
 
 pub mod authorization;
+pub mod egress;
 
 #[cfg(feature = "storage-paths")]
 pub mod storage;

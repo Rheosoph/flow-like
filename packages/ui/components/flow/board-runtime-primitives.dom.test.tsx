@@ -1,5 +1,5 @@
 import { afterAll, afterEach, expect, test } from "bun:test";
-import { Window } from "happy-dom";
+import { type HTMLElement as HappyHTMLElement, Window } from "happy-dom";
 import { type ReactNode, act, useLayoutEffect } from "react";
 import type { BoardRuntime } from "./board-runtime";
 
@@ -107,7 +107,7 @@ async function mount(children: ReactNode) {
 function resizeControl(
 	container: ReturnType<typeof window.document.createElement>,
 ) {
-	const control = container.querySelector<HTMLElement>(
+	const control = container.querySelector<HappyHTMLElement>(
 		".react-flow__resize-control.bottom.right",
 	);
 	if (!control) throw new Error("Missing resize control");
@@ -123,7 +123,7 @@ function resizeControl(
 }
 
 async function pointer(
-	control: HTMLElement,
+	control: HappyHTMLElement,
 	type: string,
 	x: number,
 	y: number,
@@ -136,7 +136,7 @@ async function pointer(
 				button: 0,
 				clientX: x,
 				clientY: y,
-			}) as unknown as PointerEvent,
+			}),
 		);
 	});
 }
@@ -158,7 +158,9 @@ test("native handles and portals render without any React Flow provider", async 
 			</Panel>
 		</>,
 	);
-	const handle = container.querySelector<HTMLElement>('[data-handleid="pin"]');
+	const handle = container.querySelector<HappyHTMLElement>(
+		'[data-handleid="pin"]',
+	);
 	expect(handle?.getAttribute("data-nodeid")).toBe("n");
 	expect(handle?.getAttribute("data-handlepos")).toBe("left");
 	expect(handle?.classList.contains("target")).toBe(true);
@@ -204,7 +206,7 @@ test("native toolbar stays in screen space while following node bounds and zoom"
 			<button type="button">Add branch</button>
 		</NodeToolbar>,
 	);
-	const toolbar = screen.querySelector<HTMLElement>(
+	const toolbar = screen.querySelector<HappyHTMLElement>(
 		".react-flow__node-toolbar",
 	);
 	expect(toolbar?.style.left).toBe("107.5px");

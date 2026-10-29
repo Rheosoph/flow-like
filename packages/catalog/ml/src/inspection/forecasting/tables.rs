@@ -520,8 +520,7 @@ async fn destination_reference(
         return Ok(None);
     };
     let cached = destination.load(context).await?;
-    cached.ensure_flushed().await?;
-    let guard = cached.db.read().await;
+    let guard = cached.flushed_read().await?;
     let store = guard.inner();
     store.ensure_writable()?;
     let reference = store.reference().await?;

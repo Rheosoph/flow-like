@@ -178,6 +178,8 @@ export interface WidgetInstanceContextValue {
 	eventHandlers?: EventHandlers;
 	/** Resolved children included in this instance's workflow callback payload. */
 	components?: readonly WidgetComponentDef[];
+	/** Event ids the widget definition declares; undefined when the definition carries none. */
+	declaredActionIds?: readonly string[];
 }
 
 const WidgetInstanceContext = createContext<WidgetInstanceContextValue | null>(
@@ -227,6 +229,23 @@ export function resolveWidgetInstanceEventRoute(
 	return { kind: "unbound" };
 }
 
+function declaredActionIdsOf(definition: unknown): string[] | undefined {
+	const actions = (definition as { actions?: unknown } | undefined)?.actions;
+	if (!Array.isArray(actions)) return undefined;
+	return actions.flatMap((action) =>
+		typeof action?.id === "string" && action.id ? [action.id] : [],
+	);
+}
+
+/** Only a definition that lists its events can prove an id undeclared. */
+export function isUndeclaredWidgetAction(
+	widgetInstance: WidgetInstanceContextValue | null,
+	actionId: string,
+): boolean {
+	const declared = widgetInstance?.declaredActionIds;
+	return declared !== undefined && !declared.includes(actionId);
+}
+
 /**
  * Provides the widget-instance scope consumed by `useExecuteAction`'s
  * `widget_event` dispatch (action bindings resolved by actionId). Shared by
@@ -240,6 +259,7 @@ export function WidgetInstanceProvider({
 	actions,
 	eventHandlers,
 	components,
+	declaredActionIds,
 	children,
 }: {
 	instanceId: string;
@@ -249,6 +269,7 @@ export function WidgetInstanceProvider({
 	actions?: Action[];
 	eventHandlers?: EventHandlers;
 	components?: readonly WidgetComponentDef[];
+	declaredActionIds?: readonly string[];
 	children: React.ReactNode;
 }) {
 	const value = useMemo(
@@ -260,6 +281,7 @@ export function WidgetInstanceProvider({
 			actions,
 			eventHandlers,
 			components,
+			declaredActionIds,
 		}),
 		[
 			instanceId,
@@ -269,6 +291,7 @@ export function WidgetInstanceProvider({
 			actions,
 			eventHandlers,
 			components,
+			declaredActionIds,
 		],
 	);
 	return (
@@ -404,6 +427,11 @@ export function A2UIWidgetInstance({
 		return { ...base, components: updated } as typeof base;
 	}, [resolvedWidgetDef, widgetDef, runtimeChildUpdates]);
 
+	const declaredActionIds = useMemo(
+		() => declaredActionIdsOf(widgetDef),
+		[widgetDef],
+	);
+
 	// Create a local renderChild for the widget's internal components
 	const renderWidgetChild = useCallback(
 		(childId: string, currentWidgetDef: typeof widgetDef): React.ReactNode => {
@@ -526,6 +554,7 @@ export function A2UIWidgetInstance({
 			actions={props.actions}
 			eventHandlers={props.eventHandlers}
 			components={renderedWidgetDef.components as WidgetComponentDef[]}
+			declaredActionIds={declaredActionIds}
 		>
 			<div
 				data-widget-instance={instanceId}

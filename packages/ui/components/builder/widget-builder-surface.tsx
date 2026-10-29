@@ -11,9 +11,10 @@ import {
 	Settings,
 	TagIcon,
 	Trash2,
+	TriangleAlert,
 	X,
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../hooks/use-invoke";
 import { cn } from "../../lib";
@@ -21,8 +22,11 @@ import { isMissingResourceError } from "../../lib/api-error";
 import { parseDateValue } from "../../lib/date";
 import { asArray } from "../../lib/response-shape";
 import {
+	type UndeclaredWidgetAction,
 	type WidgetActionIdIssue,
 	checkWidgetActionId,
+	declareWidgetActions,
+	findUndeclaredWidgetActions,
 	normalizeWidgetActionId,
 	renameWidgetActionInComponents,
 } from "../../lib/widget-actions";
@@ -78,12 +82,17 @@ export function WidgetBuilderSurface({
 	const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 	const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
 	const [showSettings, setShowSettings] = useState(false);
+	const [settingsTab, setSettingsTab] = useState("general");
 	const [isCreatingVersion, setIsCreatingVersion] = useState(false);
 
 	// Auto-save debounce ref
 	const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 	const pendingComponentsRef = useRef<SurfaceComponent[] | null>(null);
 	const builderHandleRef = useRef<WidgetBuilderHandle | null>(null);
+	// The debounced save outlives the render that scheduled it; it must not write back
+	// widget fields (e.g. events declared from the inspector) changed in the meantime.
+	const widgetRef = useRef(widget);
+	widgetRef.current = widget;
 
 	const versions = useInvoke(
 		backend.widgetState.getWidgetVersions,
@@ -178,12 +187,13 @@ export function WidgetBuilderSurface({
 
 	const performSave = useCallback(
 		async (components: SurfaceComponent[]) => {
-			if (!widget || !appId || readOnly) return;
+			const current = widgetRef.current;
+			if (!current || !appId || readOnly) return;
 
 			setIsSaving(true);
 			try {
 				await backend.widgetState.updateWidget(appId, {
-					...widget,
+					...current,
 					components,
 					updatedAt: new Date().toISOString(),
 				});
@@ -197,7 +207,7 @@ export function WidgetBuilderSurface({
 				setIsSaving(false);
 			}
 		},
-		[widget, appId, backend.widgetState, readOnly, t],
+		[appId, backend.widgetState, readOnly, t],
 	);
 
 	// Manual save handler
@@ -240,6 +250,32 @@ export function WidgetBuilderSurface({
 		},
 		[widget, appId, performSave, readOnly],
 	);
+
+	const undeclaredActions = useMemo(
+		() =>
+			widget
+				? findUndeclaredWidgetActions(widget.components, widget.actions)
+				: [],
+		[widget],
+	);
+
+	const handleDeclareActions = useCallback(
+		(ids: readonly string[]) => {
+			setWidget((prev) =>
+				prev
+					? { ...prev, actions: declareWidgetActions(prev.actions, ids) }
+					: prev,
+			);
+			const components = builderHandleRef.current?.getComponents();
+			if (components) handleChange(components);
+		},
+		[handleChange],
+	);
+
+	const openEventsSettings = useCallback(() => {
+		setSettingsTab("events");
+		setShowSettings(true);
+	}, []);
 
 	const updateWidgetProperty = useCallback(
 		<K extends keyof IWidget>(key: K, value: IWidget[K]) => {
@@ -455,6 +491,23 @@ export function WidgetBuilderSurface({
 							</>
 						) : null}
 					</div>
+					{undeclaredActions.length > 0 && (
+						<Button
+							variant="outline"
+							size="sm"
+							className="border-warning-line text-warning hover:text-warning"
+							onClick={openEventsSettings}
+						>
+							<TriangleAlert className="h-4 w-4 mr-2" />
+							{t("undeclaredEvents", "Undeclared events")}
+							<Badge
+								variant="secondary"
+								className="ml-2 h-4 px-1.5 text-[10px]"
+							>
+								{undeclaredActions.length}
+							</Badge>
+						</Button>
+					)}
 					<Button
 						variant="outline"
 						size="sm"
@@ -503,6 +556,9 @@ export function WidgetBuilderSurface({
 								label: a.label,
 								description: a.description,
 							})),
+							declareWidgetAction: readOnly
+								? undefined
+								: (actionId) => handleDeclareActions([actionId]),
 						}}
 					/>
 				</div>
@@ -524,6 +580,10 @@ export function WidgetBuilderSurface({
 						</div>
 						<WidgetSettingsPanel
 							widget={widget}
+							tab={settingsTab}
+							onTabChange={setSettingsTab}
+							undeclaredActions={undeclaredActions}
+							onDeclareActions={readOnly ? undefined : handleDeclareActions}
 							onUpdateWidget={updateWidgetProperty}
 							onRenameAction={handleRenameAction}
 							onSave={handleSaveMetadata}
@@ -543,6 +603,10 @@ export function WidgetBuilderSurface({
 
 function WidgetSettingsPanel({
 	widget,
+	tab,
+	onTabChange,
+	undeclaredActions,
+	onDeclareActions,
 	onUpdateWidget,
 	onRenameAction,
 	onSave,
@@ -554,6 +618,10 @@ function WidgetSettingsPanel({
 	isCreatingVersion,
 }: Readonly<{
 	widget: IWidget;
+	tab: string;
+	onTabChange: (tab: string) => void;
+	undeclaredActions: UndeclaredWidgetAction[];
+	onDeclareActions?: (ids: readonly string[]) => void;
 	onUpdateWidget: <K extends keyof IWidget>(key: K, value: IWidget[K]) => void;
 	onRenameAction: (oldId: string, newId: string) => void;
 	onSave: () => void;
@@ -586,12 +654,18 @@ function WidgetSettingsPanel({
 
 	return (
 		<Tabs
-			defaultValue="general"
+			value={tab}
+			onValueChange={onTabChange}
 			className="flex min-h-0 min-w-0 w-full flex-1 flex-col gap-0"
 		>
 			<TabsList className="w-full h-auto flex-wrap shrink-0 justify-start px-4 pt-2">
 				<TabsTrigger value="general">{t("general", "General")}</TabsTrigger>
-				<TabsTrigger value="events">{t("events", "Events")}</TabsTrigger>
+				<TabsTrigger value="events">
+					{t("events", "Events")}
+					{undeclaredActions.length > 0 && (
+						<TriangleAlert className="ml-1 h-3 w-3 text-warning" />
+					)}
+				</TabsTrigger>
 				<TabsTrigger value="versions">{t("versions", "Versions")}</TabsTrigger>
 				<TabsTrigger value="advanced">{t("advanced", "Advanced")}</TabsTrigger>
 			</TabsList>
@@ -784,6 +858,8 @@ function WidgetSettingsPanel({
 				<div className="min-h-0 flex-1 overflow-y-auto p-4">
 					<WidgetEventsEditor
 						actions={widget.actions ?? []}
+						undeclaredActions={undeclaredActions}
+						onDeclareActions={onDeclareActions}
 						onChange={(actions) => onUpdateWidget("actions", actions)}
 						onRenameAction={onRenameAction}
 					/>
@@ -863,10 +939,14 @@ function WidgetSettingsPanel({
 
 function WidgetEventsEditor({
 	actions,
+	undeclaredActions,
+	onDeclareActions,
 	onChange,
 	onRenameAction,
 }: Readonly<{
 	actions: WidgetAction[];
+	undeclaredActions: UndeclaredWidgetAction[];
+	onDeclareActions?: (ids: readonly string[]) => void;
 	onChange: (actions: WidgetAction[]) => void;
 	onRenameAction: (oldId: string, newId: string) => void;
 }>) {
@@ -905,6 +985,12 @@ function WidgetEventsEditor({
 					"Define named events that this widget can trigger (e.g. on button press). These can be bound to workflows when the widget is instantiated.",
 				)}
 			</p>
+			{undeclaredActions.length > 0 && (
+				<UndeclaredEventsNotice
+					undeclaredActions={undeclaredActions}
+					onDeclareActions={onDeclareActions}
+				/>
+			)}
 			{actions.length === 0 && (
 				<p className="text-sm text-muted-foreground text-center py-4">
 					{t("noEventsDefined", "No events defined")}
@@ -922,6 +1008,74 @@ function WidgetEventsEditor({
 					onRemove={() => removeAction(index)}
 				/>
 			))}
+		</div>
+	);
+}
+
+function UndeclaredEventsNotice({
+	undeclaredActions,
+	onDeclareActions,
+}: Readonly<{
+	undeclaredActions: UndeclaredWidgetAction[];
+	onDeclareActions?: (ids: readonly string[]) => void;
+}>) {
+	const { t } = useTranslation("common");
+	return (
+		<div
+			role="alert"
+			className="space-y-2 rounded-md border border-warning-line bg-warning-bg p-3 text-xs text-warning"
+		>
+			<p className="flex items-center gap-1.5 text-xs font-medium">
+				<TriangleAlert className="h-3.5 w-3.5 shrink-0" />
+				{t("undeclaredEvents", "Undeclared events")}
+			</p>
+			<p className="text-xs">
+				{t(
+					"componentsInThisWidgetFireTheseIdsButTheyArentDeclaredHerePagesCantBindThemSoTheyNeverReachAFlow",
+					"Components in this widget fire these IDs, but they aren't declared here. Pages can't bind them, so they never reach a flow.",
+				)}
+			</p>
+			<ul className="space-y-1.5">
+				{undeclaredActions.map(({ actionId, componentIds }) => (
+					<li key={actionId} className="flex items-center gap-2">
+						<div className="min-w-0 flex-1">
+							<p className="truncate font-mono text-xs" title={actionId}>
+								{actionId}
+							</p>
+							<p
+								className="truncate text-xs text-muted-foreground"
+								title={componentIds.join(", ")}
+							>
+								{t("firedByComponentids", "Fired by {{componentIds}}", {
+									componentIds: componentIds.join(", "),
+								})}
+							</p>
+						</div>
+						{onDeclareActions && (
+							<Button
+								variant="outline"
+								size="sm"
+								className="h-7 shrink-0 text-xs"
+								onClick={() => onDeclareActions([actionId])}
+							>
+								{t("declare", "Declare")}
+							</Button>
+						)}
+					</li>
+				))}
+			</ul>
+			{onDeclareActions && undeclaredActions.length > 1 && (
+				<Button
+					variant="outline"
+					size="sm"
+					className="h-7 w-full text-xs"
+					onClick={() =>
+						onDeclareActions(undeclaredActions.map(({ actionId }) => actionId))
+					}
+				>
+					{t("declareAll", "Declare all")}
+				</Button>
+			)}
 		</div>
 	);
 }

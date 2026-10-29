@@ -55,6 +55,7 @@ import {
 	SidebarProvider,
 	SidebarRail,
 	Textarea,
+	clearStoredPat,
 	useBackend,
 	useDeveloperMode,
 	useInvalidateInvoke,
@@ -76,6 +77,7 @@ import {
 	ChevronRight,
 	ChevronsUpDown,
 	Edit3Icon,
+	LogInIcon,
 	type LucideIcon,
 	Plus,
 } from "lucide-react";
@@ -92,6 +94,7 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
+import { accountQueryDeps } from "../lib/account-query";
 import { fetcher } from "../lib/api";
 import { getPublicApiUrl } from "../lib/public-config";
 import { currentRelativeUrl } from "../lib/return-url";
@@ -349,16 +352,21 @@ function Profiles() {
 	const [createError, setCreateError] = useState<string | null>(null);
 	const createBusy = useRef(false);
 	const pendingProfileId = useRef<string | null>(null);
+	const authQueryDeps = accountQueryDeps(backend.userState, auth);
 	const currentProfile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
 		[],
+		Boolean(auth.isAuthenticated),
+		authQueryDeps,
 	);
 
 	const allProfiles = useInvoke(
 		backend.userState.getAllSettingsProfiles,
 		backend.userState,
 		[],
+		Boolean(auth.isAuthenticated),
+		authQueryDeps,
 	);
 
 	const profiles = allProfiles.data ?? [];
@@ -829,7 +837,14 @@ function NavMain({
 	const pathname = usePathname();
 	const { open } = useSidebar();
 	const { developerMode } = useDeveloperMode();
-	const info = useInvoke(backend.userState.getInfo, backend.userState, []);
+	const auth = useAuth();
+	const info = useInvoke(
+		backend.userState.getInfo,
+		backend.userState,
+		[],
+		Boolean(auth.isAuthenticated),
+		accountQueryDeps(backend.userState, auth),
+	);
 
 	return (
 		<>
@@ -949,7 +964,8 @@ export function NavUser({
 	const auth = useAuth();
 	const backend = useBackend();
 	const { developerMode } = useDeveloperMode();
-	const authQueryDeps = [auth?.user?.profile?.sub, auth?.isAuthenticated];
+	const [isSigningIn, setIsSigningIn] = useState(false);
+	const authQueryDeps = accountQueryDeps(backend.userState, auth);
 	const profile = useInvoke(
 		backend.userState.getProfile,
 		backend.userState,
@@ -969,7 +985,7 @@ export function NavUser({
 		() =>
 			userDisplayName(
 				auth?.isAuthenticated ? info.data : undefined,
-				t("offline", "Offline"),
+				t("account", "Account"),
 			),
 		[info.data, auth?.isAuthenticated, t],
 	);
@@ -992,6 +1008,49 @@ export function NavUser({
 	const notificationCount =
 		(notifications.data?.unread_count ?? 0) +
 		(notifications.data?.invites_count ?? 0);
+
+	const handleSignIn = async () => {
+		if (!auth || isSigningIn || auth.activeNavigator) return;
+		setIsSigningIn(true);
+		try {
+			await auth.signinRedirect({ url_state: currentRelativeUrl() });
+		} catch (error) {
+			console.error("[Login] signinRedirect failed:", error);
+			toast.error(
+				t("signInFailedTryAgain", "Could not sign in. Please try again."),
+			);
+		} finally {
+			setIsSigningIn(false);
+		}
+	};
+
+	if (!auth || auth.isLoading) return null;
+
+	if (!auth.isAuthenticated) {
+		const label = t("signIn", "Sign In");
+		const disabled = isSigningIn || Boolean(auth.activeNavigator);
+		return compact ? (
+			<Button
+				variant="ghost"
+				size="icon"
+				aria-label={label}
+				title={label}
+				disabled={disabled}
+				onClick={handleSignIn}
+			>
+				<LogInIcon className="size-4" />
+			</Button>
+		) : (
+			<SidebarMenuButton
+				tooltip={label}
+				disabled={disabled}
+				onClick={handleSignIn}
+			>
+				<LogInIcon className="size-4" />
+				<span>{label}</span>
+			</SidebarMenuButton>
+		);
+	}
 
 	return (
 		<AccountMenu
@@ -1021,20 +1080,10 @@ export function NavUser({
 			}
 			onSignOut={async () => {
 				await clearPageSurfaceCache();
+				clearStoredPat();
 				await auth?.signoutRedirect();
 			}}
-			onSignIn={async () => {
-				if (!auth) {
-					toast.error("Authentication is not configured.");
-					return;
-				}
-				try {
-					await auth.signinRedirect({ url_state: currentRelativeUrl() });
-				} catch (error) {
-					console.error("[Login] signinRedirect failed:", error);
-					toast.error(`Login failed: ${error}`);
-				}
-			}}
+			onSignIn={handleSignIn}
 		/>
 	);
 }

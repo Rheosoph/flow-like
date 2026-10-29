@@ -62,10 +62,15 @@ export { oauthDB };
 
 let sessionResolver: () => OAuthSession | undefined = () => undefined;
 const bindings = new Map<string, IOAuthBinding>();
+/** The returned release reinstates the previous resolver unless another replaced this one since. */
 export function configureOAuthSession(
 	resolver: () => OAuthSession | undefined,
-): void {
+): () => void {
+	const previous = sessionResolver;
 	sessionResolver = resolver;
+	return () => {
+		if (sessionResolver === resolver) sessionResolver = previous;
+	};
 }
 function currentSessionKey(): string | undefined {
 	const session = sessionResolver();

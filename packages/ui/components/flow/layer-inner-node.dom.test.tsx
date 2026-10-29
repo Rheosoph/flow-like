@@ -3,6 +3,8 @@ import { Window } from "happy-dom";
 import { act } from "react";
 import type { ComponentProps } from "react";
 import type { ILayer } from "../../lib/schema/flow/board";
+import { IPinType } from "../../lib/schema/flow/pin";
+import { makePin } from "./logs/test-fixtures";
 
 const window = new Window({ url: "https://localhost" });
 Object.assign(window, { SyntaxError, TypeError, Error });
@@ -88,9 +90,9 @@ test("a layer pin update resizes its mounted boundary when the runtime hash is u
 	await render({
 		...layer,
 		pins: {
-			first: { id: "first", pin_type: "Input" },
-			second: { id: "second", pin_type: "Input" },
-		} as ILayer["pins"],
+			first: makePin("first", IPinType.Input),
+			second: makePin("second", IPinType.Input),
+		},
 	});
 	expect(container.querySelector(".react-flow__node-default")).toBe(boundary);
 	expect(boundary.style.height).not.toBe(originalHeight);
@@ -104,6 +106,8 @@ test("node rendering observes execution settings without changing the node's run
 			compare: (previous: Props, next: Props) => boolean;
 		}
 	).compare;
+	const onExecute: Props["data"]["onExecute"] = async () => {};
+	const onRemoteExecute: Props["data"]["onRemoteExecute"] = async () => {};
 	const previous = {
 		id: "event",
 		data: {
@@ -111,8 +115,8 @@ test("node rendering observes execution settings without changing the node's run
 			node: { id: "event", pins: {}, start: true },
 			executionMode: "Hybrid",
 			isOffline: false,
-			onExecute: async () => {},
-			onRemoteExecute: async () => {},
+			onExecute,
+			onRemoteExecute,
 		},
 	} as Props;
 	expect(compare(previous, { ...previous, data: { ...previous.data } })).toBe(

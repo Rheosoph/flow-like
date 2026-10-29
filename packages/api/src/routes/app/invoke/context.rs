@@ -1,4 +1,8 @@
-use crate::{error::ApiError, middleware::jwt::AppUser, state::AppState};
+use crate::{
+    error::ApiError,
+    middleware::jwt::{AppUser, ExecutorUse},
+    state::AppState,
+};
 use axum::{
     Extension, Json,
     extract::{Path, State},
@@ -34,7 +38,9 @@ pub async fn execution_context(
     // already is, so gating it on a specific permission would hide exactly the
     // restricted roles a local run most needs to reproduce. Principals without a
     // role in the app are rejected by the resolver itself.
-    let permission = user.execution_app_permission(&app_id, &state).await?;
+    let permission = user
+        .execution_app_permission(&app_id, &state, ExecutorUse::Read)
+        .await?;
 
     Ok(Json(permission.to_user_context()))
 }

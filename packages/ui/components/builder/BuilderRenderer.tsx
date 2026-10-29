@@ -31,11 +31,13 @@ import {
 	type ComponentProps,
 	getComponentRenderer,
 } from "../a2ui/ComponentRegistry";
-import { DataProvider, DataScopeProvider } from "../a2ui/DataContext";
+import { DataProvider, DataScopeProvider, useData } from "../a2ui/DataContext";
 import { WidgetRefsProvider } from "../a2ui/WidgetRefsContext";
 import { MicroWidgetReloadContext } from "../a2ui/micro-widget-reload";
+import { resolveHidden } from "../a2ui/resolve-hidden";
 import type {
 	A2UIClientMessage,
+	A2UIComponent,
 	Children,
 	DataScope,
 	Surface,
@@ -54,6 +56,7 @@ import {
 	canAcceptComponentChildren,
 	canReorderComponent,
 	findComponentParent,
+	subtreeContainsAny,
 } from "./componentTree";
 import {
 	type ElementRectangle,
@@ -265,6 +268,24 @@ const SelectionToolbar = memo(function SelectionToolbar({
 	);
 });
 
+function useCanvasVisibility(componentId: string, component?: A2UIComponent) {
+	const { isComponentHidden, components, selection } = useBuilder();
+	const { resolve } = useData();
+	const isRuntimeHidden = resolveHidden(component?.hidden, resolve);
+	// Selecting a runtime-hidden element (or anything inside it) in the layer tree keeps it editable.
+	const isRevealed = useMemo(
+		() =>
+			isRuntimeHidden &&
+			subtreeContainsAny(components, componentId, selection.componentIds),
+		[isRuntimeHidden, components, componentId, selection.componentIds],
+	);
+	return {
+		isRuntimeHidden,
+		isHidden:
+			isComponentHidden(componentId) || (isRuntimeHidden && !isRevealed),
+	};
+}
+
 interface BuilderComponentProps {
 	componentId: string;
 	surfaceComponent: SurfaceComponent;
@@ -295,17 +316,19 @@ function BuilderComponent({
 		copy,
 		cut,
 		paste,
-		isComponentHidden,
 		components,
 		actionContext,
 	} = useBuilder();
 	const { activeId } = useBuilderDnd();
+	const { isHidden, isRuntimeHidden } = useCanvasVisibility(
+		componentId,
+		component,
+	);
 	const isContainer = canAcceptComponentChildren(surfaceComponent);
 	const canDrag = canReorderComponent(components, componentId);
 	const isRoot = componentId === ROOT_ID;
 	const isSelected = selection.componentIds.includes(componentId);
 	const isPrimarySelection = selection.componentIds.at(-1) === componentId;
-	const isHidden = component ? isComponentHidden(componentId) : false;
 	const childData = (component as unknown as { children?: Children })?.children;
 	const isEmpty =
 		isContainer &&
@@ -345,12 +368,20 @@ function BuilderComponent({
 				node.setAttribute("data-builder-component", componentId);
 				node.setAttribute("data-component-type", component.type);
 				node.toggleAttribute("data-builder-empty", isEmpty);
+				node.toggleAttribute("data-builder-runtime-hidden", isRuntimeHidden);
 			}
 			setElement(node);
 			setDragRef(node as HTMLElement | null);
 			setDropRef(node as HTMLElement | null);
 		},
-		[componentId, component?.type, isEmpty, setDragRef, setDropRef],
+		[
+			componentId,
+			component?.type,
+			isEmpty,
+			isRuntimeHidden,
+			setDragRef,
+			setDropRef,
+		],
 	);
 
 	// Capture clicks on the real element before its runtime handlers run.
@@ -359,6 +390,7 @@ function BuilderComponent({
 		element.setAttribute("data-builder-component", componentId);
 		element.setAttribute("data-component-type", component.type);
 		element.toggleAttribute("data-builder-empty", isEmpty);
+		element.toggleAttribute("data-builder-runtime-hidden", isRuntimeHidden);
 		const handleClick = (event: MouseEvent) => {
 			const target = event.target as Element | null;
 			if (target?.closest?.("[data-builder-component]") !== element) return;
@@ -386,8 +418,16 @@ function BuilderComponent({
 			element.removeAttribute("data-builder-component");
 			element.removeAttribute("data-component-type");
 			element.removeAttribute("data-builder-empty");
+			element.removeAttribute("data-builder-runtime-hidden");
 		};
-	}, [element, componentId, component.type, isEmpty, selectComponent]);
+	}, [
+		element,
+		componentId,
+		component.type,
+		isEmpty,
+		isRuntimeHidden,
+		selectComponent,
+	]);
 
 	const showChrome = !isHidden && (isSelected || isHovered || isEmpty);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Moving another tree node can reposition an empty hint without resizing its element.
@@ -614,7 +654,7 @@ export function BuilderRenderer({ surface, className }: BuilderRendererProps) {
 							<div
 								ref={canvasRef}
 								className={cn(
-									"isolate min-h-full w-full [&_iframe]:pointer-events-none",
+									"isolate min-h-full w-full [&_iframe]:pointer-events-none **:data-builder-runtime-hidden:opacity-50",
 									className,
 								)}
 							>

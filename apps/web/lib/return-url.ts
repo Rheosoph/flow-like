@@ -22,6 +22,8 @@ export function sanitizeReturnUrl(url: unknown): string | null {
 		// such as /.//example.com. Never return that path to the router.
 		if (parsed.origin !== origin || parsed.pathname.startsWith("//"))
 			return null;
+		// Returning to the login callback would replay an already consumed code.
+		if (/^\/callback\/?$/.test(parsed.pathname)) return null;
 		return url === "/" ? null : url;
 	} catch {
 		return null;

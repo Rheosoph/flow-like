@@ -22,9 +22,13 @@ use lance_io::object_store::{
     ObjectStore as LanceStore, ObjectStoreParams, ObjectStoreProvider, ObjectStoreRegistry,
     uri_to_url,
 };
+use lance_object_store::{
+    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, ObjectStoreExt,
+    path::Path,
+};
 use lance_table::{
     feature_flags::apply_feature_flags,
-    format::{IndexFile, IndexMetadata, Manifest, RowDatasetVersionMeta, RowIdMeta},
+    format::{IndexFile, IndexMetadata, Manifest},
     io::{
         commit::{ManifestNamingScheme, commit_handler_from_url, write_manifest_file_to_path},
         deletion::deletion_file_path,
@@ -33,17 +37,13 @@ use lance_table::{
     system_index::mem_wal::MEM_WAL_INDEX_NAME,
 };
 use lancedb::{Connection, Table};
-use object_store::{
-    GetOptions, GetResult, GetResultPayload, ListResult, ObjectMeta, ObjectStore, ObjectStoreExt,
-    path::Path,
-};
 
 use super::offline_replay::{MaterializedTable, WriteBudget, fingerprint, sync_directory};
 
 /// Stable part of E36. Lance flattens object-store errors into text, so misses are
 /// recognized by this text, never by type.
 pub const MIRROR_MISS: &str = "needs data that is not on this device yet";
-/// Stable part of E37, carried by the NotFound of a listed key that the cloud no longer has.
+/// Stable part of E37, carried by the error for a listed key that the cloud no longer has.
 pub const MIRROR_STALE: &str = "was reorganized in the cloud after this device took its copy";
 /// Stable part of E39.
 pub const MIRROR_FULL: &str = "Offline storage on this device is full";
@@ -246,7 +246,7 @@ pub trait MirrorHost: Send + Sync {
     /// Bucket-relative cloud store with current credentials.
     async fn cloud(&self) -> Result<Arc<dyn ObjectStore>>;
     /// Some for offline-class errors: ConnectFailed, or TimedOut for timeouts.
-    fn classify(&self, error: &object_store::Error) -> Option<MirrorFetch>;
+    fn classify(&self, error: &lance_object_store::Error) -> Option<MirrorFetch>;
     /// Transport outcome of a cloud call, for the connectivity breaker.
     fn observe(&self, outcome: MirrorFetch);
     /// Reserves `bytes` of today's download allowance; false once it is used up. `force`
@@ -367,12 +367,12 @@ enum How<'a> {
 }
 
 enum DownloadError {
-    Store(object_store::Error),
+    Store(lance_object_store::Error),
     Short(MirrorShortage),
 }
 
-impl From<object_store::Error> for DownloadError {
-    fn from(error: object_store::Error) -> Self {
+impl From<lance_object_store::Error> for DownloadError {
+    fn from(error: lance_object_store::Error) -> Self {
         Self::Store(error)
     }
 }
@@ -468,8 +468,8 @@ impl Drop for WriteScope {
     }
 }
 
-fn io_error(error: impl std::error::Error + Send + Sync + 'static) -> object_store::Error {
-    object_store::Error::Generic {
+fn io_error(error: impl std::error::Error + Send + Sync + 'static) -> lance_object_store::Error {
+    lance_object_store::Error::Generic {
         store: STORE,
         source: Box::new(error),
     }
@@ -498,12 +498,13 @@ fn head_result(key: &Path, size: u64) -> GetResult {
         },
         range: 0..0,
         attributes: Default::default(),
+        extensions: Default::default(),
     }
 }
 
 fn read_range(
     file: &std::path::Path,
-    range: Option<object_store::GetRange>,
+    range: Option<lance_object_store::GetRange>,
     size: u64,
 ) -> std::io::Result<(Range<u64>, Bytes, SystemTime)> {
     let mut handle = std::fs::File::open(file)?;
@@ -672,8 +673,8 @@ impl LazyMirror {
             .any(|bound| key.prefix_matches(&bound.key))
     }
 
-    pub(super) fn read_only(&self, key: &Path) -> object_store::Error {
-        object_store::Error::NotSupported {
+    pub(super) fn read_only(&self, key: &Path) -> lance_object_store::Error {
+        lance_object_store::Error::NotSupported {
             source: format!(
                 "Offline copies never write to the cloud; '{key}' is read-only on this device"
             )
@@ -681,8 +682,8 @@ impl LazyMirror {
         }
     }
 
-    fn outside(&self, key: &impl fmt::Display) -> object_store::Error {
-        object_store::Error::Generic {
+    fn outside(&self, key: &impl fmt::Display) -> lance_object_store::Error {
+        lance_object_store::Error::Generic {
             store: STORE,
             source: format!(
                 "Offline copies cannot read '{key}': it is outside this project's databases"
@@ -691,16 +692,17 @@ impl LazyMirror {
         }
     }
 
-    fn miss(&self, key: &Path, cause: &str) -> object_store::Error {
-        object_store::Error::Generic {
+    fn miss(&self, key: &Path, cause: &str) -> lance_object_store::Error {
+        lance_object_store::Error::Generic {
             store: STORE,
             source: format!("{} ({key}: {cause})", missing_data_text(&table_of(key))).into(),
         }
     }
 
-    fn stale(&self, key: &Path) -> object_store::Error {
-        object_store::Error::NotFound {
-            path: key.to_string(),
+    /// Not a NotFound: Lance keeps only the path of one, which would drop E37.
+    fn stale(&self, key: &Path) -> lance_object_store::Error {
+        lance_object_store::Error::Generic {
+            store: STORE,
             source: format!("{} ({key})", reorganized_text(&table_of(key))).into(),
         }
     }
@@ -952,7 +954,7 @@ impl LazyMirror {
         Err((self.budget.used() + charge).saturating_sub(self.budget.maximum()))
     }
 
-    async fn cloud(&self, key: &Path) -> object_store::Result<Arc<dyn ObjectStore>> {
+    async fn cloud(&self, key: &Path) -> lance_object_store::Result<Arc<dyn ObjectStore>> {
         let Some(host) = self.host() else {
             return Err(self.miss(key, "this device keeps no offline changes for it"));
         };
@@ -969,8 +971,8 @@ impl LazyMirror {
     async fn first_byte<T>(
         &self,
         key: &Path,
-        call: impl Future<Output = object_store::Result<T>>,
-    ) -> object_store::Result<T> {
+        call: impl Future<Output = lance_object_store::Result<T>>,
+    ) -> lance_object_store::Result<T> {
         tokio::pin!(call);
         let timeout = Duration::from_millis(self.first_byte_millis.load(Ordering::Acquire));
         tokio::select! {
@@ -992,7 +994,11 @@ impl LazyMirror {
 
     /// Offline-class errors become E36; a listed key that the cloud answers NotFound or 403
     /// for is confirmed by a listing and becomes E37 when it is gone.
-    async fn failed(&self, key: &Path, error: object_store::Error) -> object_store::Error {
+    async fn failed(
+        &self,
+        key: &Path,
+        error: lance_object_store::Error,
+    ) -> lance_object_store::Error {
         if let Some(host) = self.host()
             && let Some(outcome) = host.classify(&error)
         {
@@ -1001,7 +1007,8 @@ impl LazyMirror {
         }
         if matches!(
             error,
-            object_store::Error::NotFound { .. } | object_store::Error::PermissionDenied { .. }
+            lance_object_store::Error::NotFound { .. }
+                | lance_object_store::Error::PermissionDenied { .. }
         ) && self.listed(&cache_name(key.as_ref())).is_some()
             && self.vanished(key).await
         {
@@ -1038,7 +1045,11 @@ impl LazyMirror {
         true
     }
 
-    async fn cloud_get(&self, key: &Path, options: GetOptions) -> object_store::Result<GetResult> {
+    async fn cloud_get(
+        &self,
+        key: &Path,
+        options: GetOptions,
+    ) -> lance_object_store::Result<GetResult> {
         let cloud = self.cloud(key).await?;
         match self.first_byte(key, cloud.get_opts(key, options)).await {
             Ok(result) => {
@@ -1073,7 +1084,7 @@ impl LazyMirror {
         key: &Path,
         name: &str,
         options: &GetOptions,
-    ) -> object_store::Result<Option<GetResult>> {
+    ) -> lance_object_store::Result<Option<GetResult>> {
         let bytes = {
             let mut state = self.state();
             let Some(file) = state.cached.get_mut(name) else {
@@ -1102,6 +1113,7 @@ impl LazyMirror {
                 },
                 range,
                 attributes: Default::default(),
+                extensions: Default::default(),
             })),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                 if let Some(file) = self.state().cached.remove(name) {
@@ -1118,14 +1130,14 @@ impl LazyMirror {
         &self,
         key: &Path,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
+    ) -> lance_object_store::Result<GetResult> {
         if !self.routes(key) {
             return Err(self.outside(key));
         }
         let name = cache_name(key.as_ref());
         let Some(listed) = self.listed(&name) else {
             if self.absent_index_file(key) {
-                return Err(object_store::Error::NotFound {
+                return Err(lance_object_store::Error::NotFound {
                     path: key.to_string(),
                     source: "the offline copy lists no such index file".into(),
                 });
@@ -1171,7 +1183,7 @@ impl LazyMirror {
     pub(super) fn list(
         &self,
         prefix: &Path,
-    ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
         let Some(mirror) = self.this.upgrade() else {
             let error = self.outside(prefix);
             return futures::stream::once(async move { Err(error) }).boxed();
@@ -1195,7 +1207,7 @@ impl LazyMirror {
     pub(super) async fn list_with_delimiter(
         &self,
         prefix: &Path,
-    ) -> object_store::Result<ListResult> {
+    ) -> lance_object_store::Result<ListResult> {
         if !self.routes(prefix) {
             return Err(self.outside(prefix));
         }
@@ -1207,7 +1219,11 @@ impl LazyMirror {
     }
 
     /// Offline-class errors become E36; other errors pass through.
-    fn classified(&self, key: &Path, error: object_store::Error) -> object_store::Error {
+    fn classified(
+        &self,
+        key: &Path,
+        error: lance_object_store::Error,
+    ) -> lance_object_store::Error {
         match self.host() {
             Some(host) => match host.classify(&error) {
                 Some(outcome) => {
@@ -1370,7 +1386,7 @@ impl LazyMirror {
         name: &str,
         bytes: u64,
         transferred: &AtomicU64,
-    ) -> object_store::Result<()> {
+    ) -> lance_object_store::Result<()> {
         let result = match self
             .first_byte(key, cloud.get_opts(key, GetOptions::default()))
             .await
@@ -1774,19 +1790,6 @@ fn refuse_unsupported(
     root: &MirrorRoot,
     table: &str,
 ) -> Result<()> {
-    if manifest.fragments.iter().any(|fragment| {
-        matches!(fragment.row_id_meta, Some(RowIdMeta::External(_)))
-            || matches!(
-                fragment.last_updated_at_version_meta,
-                Some(RowDatasetVersionMeta::External(_))
-            )
-            || matches!(
-                fragment.created_at_version_meta,
-                Some(RowDatasetVersionMeta::External(_))
-            )
-    }) {
-        return Err(unsupported(table, "external row metadata files"));
-    }
     if manifest
         .schema
         .fields_pre_order()
@@ -1908,17 +1911,17 @@ impl ObjectStore for MirrorStore {
     async fn put_opts(
         &self,
         location: &Path,
-        _: object_store::PutPayload,
-        _: object_store::PutOptions,
-    ) -> object_store::Result<object_store::PutResult> {
+        _: lance_object_store::PutPayload,
+        _: lance_object_store::PutOptions,
+    ) -> lance_object_store::Result<lance_object_store::PutResult> {
         Err(self.0.read_only(location))
     }
 
     async fn put_multipart_opts(
         &self,
         location: &Path,
-        _: object_store::PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+        _: lance_object_store::PutMultipartOptions,
+    ) -> lance_object_store::Result<Box<dyn lance_object_store::MultipartUpload>> {
         Err(self.0.read_only(location))
     }
 
@@ -1926,25 +1929,31 @@ impl ObjectStore for MirrorStore {
         &self,
         location: &Path,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
+    ) -> lance_object_store::Result<GetResult> {
         self.0.get(location, options).await
     }
 
     fn delete_stream(
         &self,
-        locations: BoxStream<'static, object_store::Result<Path>>,
-    ) -> BoxStream<'static, object_store::Result<Path>> {
+        locations: BoxStream<'static, lance_object_store::Result<Path>>,
+    ) -> BoxStream<'static, lance_object_store::Result<Path>> {
         let mirror = self.0.clone();
         locations
             .map(move |location| Err(mirror.read_only(&location?)))
             .boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
         self.0.list(&prefix.cloned().unwrap_or_default())
     }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> lance_object_store::Result<ListResult> {
         self.0
             .list_with_delimiter(&prefix.cloned().unwrap_or_default())
             .await
@@ -1954,8 +1963,8 @@ impl ObjectStore for MirrorStore {
         &self,
         _: &Path,
         to: &Path,
-        _: object_store::CopyOptions,
-    ) -> object_store::Result<()> {
+        _: lance_object_store::CopyOptions,
+    ) -> lance_object_store::Result<()> {
         Err(self.0.read_only(to))
     }
 
@@ -1963,8 +1972,8 @@ impl ObjectStore for MirrorStore {
         &self,
         _: &Path,
         to: &Path,
-        _: object_store::RenameOptions,
-    ) -> object_store::Result<()> {
+        _: lance_object_store::RenameOptions,
+    ) -> lance_object_store::Result<()> {
         Err(self.0.read_only(to))
     }
 }
@@ -1981,6 +1990,10 @@ mod tests {
     };
     use arrow_schema::{DataType, Field, Schema};
     use flow_like_types::authorization::AuthorizationError;
+    use lance_object_store::{
+        CopyOptions, MultipartUpload, PutMultipartOptions, PutOptions, PutPayload, PutResult,
+        RenameOptions, local::LocalFileSystem,
+    };
     use lancedb::{
         index::{
             Index,
@@ -1988,10 +2001,6 @@ mod tests {
             vector::IvfFlatIndexBuilder,
         },
         query::{ExecutableQuery, QueryBase, Select},
-    };
-    use object_store::{
-        CopyOptions, MultipartUpload, PutMultipartOptions, PutOptions, PutPayload, PutResult,
-        RenameOptions, local::LocalFileSystem,
     };
     use std::sync::atomic::AtomicUsize;
 
@@ -2027,10 +2036,10 @@ mod tests {
             self.faults.lock().unwrap()
         }
 
-        fn fault(&self) -> object_store::Result<()> {
+        fn fault(&self) -> lance_object_store::Result<()> {
             let faults = self.faults();
             if faults.offline {
-                return Err(object_store::Error::Generic {
+                return Err(lance_object_store::Error::Generic {
                     store: "cloudsim",
                     source: Box::new(std::io::Error::new(
                         std::io::ErrorKind::ConnectionRefused,
@@ -2039,7 +2048,7 @@ mod tests {
                 });
             }
             if faults.lease {
-                return Err(object_store::Error::Generic {
+                return Err(lance_object_store::Error::Generic {
                     store: "cloudsim",
                     source: Box::new(AuthorizationError::Unavailable),
                 });
@@ -2047,7 +2056,7 @@ mod tests {
             Ok(())
         }
 
-        async fn interrupted(&self, result: GetResult) -> object_store::Result<GetResult> {
+        async fn interrupted(&self, result: GetResult) -> lance_object_store::Result<GetResult> {
             let (meta, range, attributes) = (
                 result.meta.clone(),
                 result.range.clone(),
@@ -2059,7 +2068,7 @@ mod tests {
             let faults = self.faults.clone();
             let rest = async move {
                 if faults.lock().unwrap().cut_body {
-                    return Err(object_store::Error::Generic {
+                    return Err(lance_object_store::Error::Generic {
                         store: "cloudsim",
                         source: Box::new(std::io::Error::new(
                             std::io::ErrorKind::ConnectionReset,
@@ -2081,6 +2090,7 @@ mod tests {
                 meta,
                 range,
                 attributes,
+                extensions: Default::default(),
             })
         }
 
@@ -2123,7 +2133,7 @@ mod tests {
             location: &Path,
             payload: PutPayload,
             options: PutOptions,
-        ) -> object_store::Result<PutResult> {
+        ) -> lance_object_store::Result<PutResult> {
             self.fault()?;
             self.inner.put_opts(location, payload, options).await
         }
@@ -2132,7 +2142,7 @@ mod tests {
             &self,
             location: &Path,
             options: PutMultipartOptions,
-        ) -> object_store::Result<Box<dyn MultipartUpload>> {
+        ) -> lance_object_store::Result<Box<dyn MultipartUpload>> {
             self.fault()?;
             self.inner.put_multipart_opts(location, options).await
         }
@@ -2141,7 +2151,7 @@ mod tests {
             &self,
             location: &Path,
             options: GetOptions,
-        ) -> object_store::Result<GetResult> {
+        ) -> lance_object_store::Result<GetResult> {
             self.fault()?;
             while self.faults().stall {
                 tokio::time::sleep(Duration::from_millis(20)).await;
@@ -2152,17 +2162,17 @@ mod tests {
                 options.head,
             ));
             if self.faults().forbidden.contains(location.as_ref()) {
-                return Err(object_store::Error::PermissionDenied {
+                return Err(lance_object_store::Error::PermissionDenied {
                     path: location.to_string(),
                     source: "403 Forbidden".into(),
                 });
             }
             let head = options.head;
             let result = match self.inner.get_opts(location, options).await {
-                Err(object_store::Error::NotFound { path, .. })
+                Err(lance_object_store::Error::NotFound { path, .. })
                     if self.faults().forbidden_missing =>
                 {
-                    return Err(object_store::Error::PermissionDenied {
+                    return Err(lance_object_store::Error::PermissionDenied {
                         path,
                         source: "403 Forbidden".into(),
                     });
@@ -2181,15 +2191,15 @@ mod tests {
 
         fn delete_stream(
             &self,
-            locations: BoxStream<'static, object_store::Result<Path>>,
-        ) -> BoxStream<'static, object_store::Result<Path>> {
+            locations: BoxStream<'static, lance_object_store::Result<Path>>,
+        ) -> BoxStream<'static, lance_object_store::Result<Path>> {
             self.inner.delete_stream(locations)
         }
 
         fn list(
             &self,
             prefix: Option<&Path>,
-        ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
             if let Err(error) = self.fault() {
                 return futures::stream::once(async move { Err(error) }).boxed();
             }
@@ -2203,7 +2213,7 @@ mod tests {
         async fn list_with_delimiter(
             &self,
             prefix: Option<&Path>,
-        ) -> object_store::Result<ListResult> {
+        ) -> lance_object_store::Result<ListResult> {
             self.fault()?;
             self.lists
                 .lock()
@@ -2217,7 +2227,7 @@ mod tests {
             from: &Path,
             to: &Path,
             options: CopyOptions,
-        ) -> object_store::Result<()> {
+        ) -> lance_object_store::Result<()> {
             self.fault()?;
             self.inner.copy_opts(from, to, options).await
         }
@@ -2227,7 +2237,7 @@ mod tests {
             from: &Path,
             to: &Path,
             options: RenameOptions,
-        ) -> object_store::Result<()> {
+        ) -> lance_object_store::Result<()> {
             self.fault()?;
             self.inner.rename_opts(from, to, options).await
         }
@@ -2295,7 +2305,7 @@ mod tests {
             );
             Ok(self.cloud.clone())
         }
-        fn classify(&self, error: &object_store::Error) -> Option<MirrorFetch> {
+        fn classify(&self, error: &lance_object_store::Error) -> Option<MirrorFetch> {
             let mut source: Option<&(dyn std::error::Error + 'static)> = Some(error);
             while let Some(error) = source {
                 if let Some(error) = error.downcast_ref::<std::io::Error>() {
@@ -2785,28 +2795,6 @@ mod tests {
             indices,
             MirrorRoot::of(&dataset)?,
         ))
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-    async fn snapshot_refuses_external_row_metadata_with_e38() -> Result<()> {
-        let fixture = Fixture::new(256 * MIB).await?;
-        fixture.seed(1).await?;
-        let (mut manifest, indices, root) = cloud_manifest(&fixture).await?;
-        refuse_unsupported(&manifest, &indices, &root, "records")?;
-        let mut fragments = manifest.fragments.as_ref().clone();
-        fragments[0].row_id_meta = Some(RowIdMeta::External(lance_table::format::ExternalFile {
-            path: "row_ids.bin".into(),
-            offset: 0,
-            size: 16,
-        }));
-        manifest.fragments = Arc::new(fragments);
-        let error = refuse_unsupported(&manifest, &indices, &root, "records")
-            .expect_err("external row ids are refused");
-        assert_eq!(
-            error.to_string(),
-            "Table 'records' uses a storage layout that offline access does not support yet: external row metadata files."
-        );
-        Ok(())
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -3324,7 +3312,7 @@ mod tests {
         for options in [GetOptions::new().with_head(true), GetOptions::default()] {
             assert!(matches!(
                 fixture.mirror().get(&probe, options).await,
-                Err(object_store::Error::NotFound { .. })
+                Err(lance_object_store::Error::NotFound { .. })
             ));
         }
         fixture.offline(true);
@@ -3333,7 +3321,7 @@ mod tests {
                 .mirror()
                 .get(&probe, GetOptions::new().with_head(true))
                 .await,
-            Err(object_store::Error::NotFound { .. })
+            Err(lance_object_store::Error::NotFound { .. })
         ));
         assert_eq!(fixture.cloud.requests(), requests);
         Ok(())
@@ -3417,7 +3405,7 @@ mod tests {
             .expect_err("a 403 for a present key");
         assert!(matches!(
             error,
-            object_store::Error::PermissionDenied { .. }
+            lance_object_store::Error::PermissionDenied { .. }
         ));
         assert!(fixture.mirror().stale_keys().is_empty());
         Ok(())

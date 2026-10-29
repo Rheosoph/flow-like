@@ -31,48 +31,64 @@ use std::sync::Arc;
 // compiling.
 pub use flow_like::flow::event::{filter_event_secrets, preserve_event_secrets};
 
-/// Splice the LIVE event's HTTP auth token into a restored config for
-/// api/http/webhook events. `sync_sink` mirrors the sink's `auth_token`
-/// column from the config bytes — clearing the token clears the column — so
-/// replaying an archived config would silently rotate every caller onto the
-/// snapshot's stale key, or resurrect a revoked one. As with
-/// `preserve_event_secrets`, the live value wins in both directions.
+/// Splice the LIVE event's door secret into a restored config: the HTTP auth token of
+/// api/http/webhook events, and the Discord public key or Telegram secret token of bot
+/// events. `sync_sink` mirrors the sink's `auth_token` column from the config bytes —
+/// clearing the token clears the column — and copies the bot secret to the sink, so
+/// replaying an archived config would silently rotate every caller onto the snapshot's
+/// stale key, or resurrect a revoked one. As with `preserve_event_secrets`, the live value
+/// wins in both directions. A bot secret is only taken from a live event of the same type:
+/// a Discord public key is no Telegram secret token.
 pub fn preserve_event_config_secrets(incoming: &mut CoreEvent, existing: &CoreEvent) {
-    if !matches!(incoming.event_type.as_str(), "api" | "http" | "webhook") {
-        return;
-    }
-    let live_token = extract_http_auth_token(&existing.config);
-    let incoming_token = extract_http_auth_token(&incoming.config);
-    let tokens_match = match (live_token.as_deref(), incoming_token.as_deref()) {
-        (Some(live), Some(incoming)) => constant_time_eq(live.as_bytes(), incoming.as_bytes()),
+    let (key, live, restored) = match incoming.event_type.as_str() {
+        "api" | "http" | "webhook" => (
+            "auth_token",
+            extract_http_auth_token(&existing.config),
+            extract_http_auth_token(&incoming.config),
+        ),
+        "discord" | "telegram" => (
+            "webhook_secret",
+            (existing.event_type == incoming.event_type)
+                .then(|| extract_webhook_secret(&existing.config))
+                .flatten(),
+            extract_webhook_secret(&incoming.config),
+        ),
+        _ => return,
+    };
+    let unchanged = match (live.as_deref(), restored.as_deref()) {
+        (Some(live), Some(restored)) => constant_time_eq(live.as_bytes(), restored.as_bytes()),
         (None, None) => true,
         _ => false,
     };
-    if tokens_match {
-        return;
+    if !unchanged {
+        set_config_key(&mut incoming.config, key, live);
     }
-    let mut config: serde_json::Value = if incoming.config.is_empty() {
+}
+
+/// Set `key` of a JSON object config to `value`, or remove it for `None`. A config that
+/// is not a JSON object carries no secret to fix.
+fn set_config_key(config: &mut Vec<u8>, key: &str, value: Option<String>) {
+    let mut parsed: serde_json::Value = if config.is_empty() {
         json!({})
     } else {
-        // A config that does not parse as JSON carries no auth_token to fix.
-        match serde_json::from_slice(&incoming.config) {
-            Ok(value) => value,
+        match serde_json::from_slice(config) {
+            Ok(parsed) => parsed,
             Err(_) => return,
         }
     };
-    let Some(object) = config.as_object_mut() else {
+    let Some(object) = parsed.as_object_mut() else {
         return;
     };
-    match live_token {
-        Some(token) => {
-            object.insert("auth_token".to_string(), json!(token));
+    match value {
+        Some(value) => {
+            object.insert(key.to_string(), json!(value));
         }
         None => {
-            object.remove("auth_token");
+            object.remove(key);
         }
     }
-    if let Ok(bytes) = serde_json::to_vec(&config) {
-        incoming.config = bytes;
+    if let Ok(bytes) = serde_json::to_vec(&parsed) {
+        *config = bytes;
     }
 }
 
@@ -391,6 +407,25 @@ pub async fn validate_event_schedule(
     scheduler.validate_schedule(&cron_expression, &config).await
 }
 
+/// Whether saving `event` leaves its hub sink on.
+pub(super) fn arms_hub_trigger(event: &CoreEvent) -> bool {
+    event.active && !event.is_device_source()
+}
+
+/// Whoever saves an event becomes the user its hub sink runs as, so a save that leaves the
+/// sink on is refused for a saver the sink would refuse to run as.
+pub(crate) async fn ensure_saver_may_arm(
+    state: &crate::state::AppState,
+    app_id: &str,
+    saver: &str,
+    event: &CoreEvent,
+) -> Result<(), crate::error::ApiError> {
+    if arms_hub_trigger(event) {
+        crate::routes::sink::service::ensure_actor_may_arm(state, app_id, saver).await?;
+    }
+    Ok(())
+}
+
 /// The (path, method) the sink row is keyed on. A device-only event holds no unique
 /// (app, path, method) slot, so it can neither collide with nor block a hub event.
 /// - HTTP/API events take the path from their config (default method POST)
@@ -431,23 +466,31 @@ where
         .map(|sink| sink.event_id))
 }
 
-/// Sync an event and its sink to the database, with optional PAT and OAuth tokens
+/// Sync an event and its sink to the database, with the saving user and optional OAuth tokens
 ///
-/// This is the main entry point for event creation/updates when tokens are provided.
+/// This is the main entry point for event creation/updates.
 /// It syncs the event to the database and also creates/updates the associated sink,
 /// including any external scheduler for cron events.
 ///
-/// If `pat` or `oauth_tokens` are provided, they will be encrypted and stored with the sink.
-/// This enables triggered flows to access models and personal files.
+/// `saved_by` is the user saving the event; the sink runs as that user from now on.
+/// `None` (system syncs) leaves the sink's run-as user untouched.
+///
+/// If `oauth_tokens` are provided, they will be encrypted and stored with the sink.
 ///
 /// If `profile_json` is provided, it will be stored with the sink so triggered flows
 /// can use the last updater's profile (bits, hubs) for model resolution.
+///
+/// OAuth grants and profile belong to the run-as user: when `saved_by` is someone else
+/// than the sink ran as, the ones not provided here are dropped.
+///
+/// Discord and Telegram events copy the `webhook_secret` of their config to the sink,
+/// where the bot door verifies it.
 pub async fn sync_event_with_sink_tokens(
     db: &DatabaseConnection,
     state: &crate::state::AppState,
     app_id: &str,
     event: &CoreEvent,
-    pat: Option<&str>,
+    saved_by: Option<&str>,
     oauth_tokens: Option<&std::collections::HashMap<String, serde_json::Value>>,
     profile_json: Option<serde_json::Value>,
 ) -> flow_like_types::Result<()> {
@@ -491,9 +534,11 @@ pub async fn sync_event_with_sink_tokens(
     } else {
         None
     };
-
-    // Encrypt PAT if provided
-    let pat_encrypted = pat.map(|p| encrypt_token(p, &state.encryption_key));
+    let webhook_secret = if matches!(event.event_type.as_str(), "discord" | "telegram") {
+        extract_webhook_secret(&event.config)
+    } else {
+        None
+    };
 
     // Encrypt OAuth tokens if provided
     let oauth_tokens_encrypted = oauth_tokens.and_then(|tokens| {
@@ -513,14 +558,14 @@ pub async fn sync_event_with_sink_tokens(
             path: sink_path,
             method: sink_method,
             auth_token: config_auth_token,
-            webhook_secret: None, // Webhook secret is set separately
+            webhook_secret,
             cron_expression,
             cron_timezone,
             cron_scheduled_for,
-            pat_encrypted,
+            run_as_user_id: saved_by.map(ToOwned::to_owned),
             oauth_tokens_encrypted,
             profile_json,
-            active: Some(event.active && !device_only),
+            active: Some(arms_hub_trigger(event)),
             release_route: device_only,
         },
     )
@@ -583,7 +628,7 @@ fn extract_cron_timezone(config: &[u8]) -> Option<String> {
 }
 
 /// Extract scheduled_for from event config bytes (for one-time cron events)
-fn extract_scheduled_for(config: &[u8]) -> Option<flow_like_sinks::ScheduledLocal> {
+pub(crate) fn extract_scheduled_for(config: &[u8]) -> Option<flow_like_sinks::ScheduledLocal> {
     if config.is_empty() {
         return None;
     }
@@ -637,6 +682,17 @@ fn normalize_http_auth_token(value: &str) -> &str {
         return token.trim();
     }
     trimmed
+}
+
+/// The Discord public key or Telegram secret token a bot event's config holds.
+pub(crate) fn extract_webhook_secret(config: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(config).ok()?;
+    value
+        .get("webhook_secret")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// Extract HTTP auth token from event config bytes (for api/http/webhook events)
@@ -718,21 +774,26 @@ pub async fn get_event_from_db(
     db_model_to_event(model)
 }
 
-/// [`get_event_from_db`] plus the row's `setupStatus`, which the core event
-/// does not carry, so a caller needing both reads the row once.
+/// [`get_event_from_db`] plus the row's `setupStatus` and `lastSetupAt`, which
+/// the core event does not carry, so a caller needing both reads the row once.
 pub async fn get_event_with_setup_status_from_db(
     db: &DatabaseConnection,
     event_id: &str,
     app_id: &str,
-) -> flow_like_types::Result<(CoreEvent, Option<String>)> {
+) -> flow_like_types::Result<(
+    CoreEvent,
+    Option<String>,
+    Option<chrono::DateTime<chrono::FixedOffset>>,
+)> {
     let model = event::Entity::find_by_id(event_id)
         .filter(event::Column::AppId.eq(app_id))
         .one(db)
         .await?
         .ok_or_else(|| anyhow!("Event not found: {}", event_id))?;
     let setup_status = model.setup_status.clone();
+    let last_setup_at = model.last_setup_at;
 
-    Ok((db_model_to_event(model)?, setup_status))
+    Ok((db_model_to_event(model)?, setup_status, last_setup_at))
 }
 
 /// Get an event from the database by ID, validating it belongs to the given app.
@@ -1477,5 +1538,161 @@ mod tests {
         assert!(redacted.board_id.is_empty());
         assert!(redacted.board_version.is_none());
         assert!(redacted.node_id.is_empty());
+    }
+
+    fn bot_event(event_type: &str, config: &str) -> CoreEvent {
+        let mut event = event_with(HashMap::new());
+        event.event_type = event_type.to_string();
+        event.config = config.as_bytes().to_vec();
+        event
+    }
+
+    /// Telegram keeps sending the live secret token, and a rotated one must stay revoked.
+    #[test]
+    fn a_restored_bot_config_keeps_the_live_door_secret() {
+        for event_type in ["discord", "telegram"] {
+            let live = bot_event(event_type, r#"{"webhook_secret":"rotated"}"#);
+            let mut restored = bot_event(
+                event_type,
+                r#"{"bot_name":"old","webhook_secret":"leaked"}"#,
+            );
+            preserve_event_config_secrets(&mut restored, &live);
+            assert_eq!(
+                extract_webhook_secret(&restored.config),
+                Some("rotated".to_string())
+            );
+            let value: serde_json::Value = serde_json::from_slice(&restored.config).unwrap();
+            assert_eq!(value["bot_name"], "old");
+
+            let live = bot_event(event_type, "{}");
+            let mut restored = bot_event(event_type, r#"{"webhook_secret":"leaked"}"#);
+            preserve_event_config_secrets(&mut restored, &live);
+            assert_eq!(extract_webhook_secret(&restored.config), None);
+        }
+    }
+
+    /// A Discord public key is public, so it never becomes a Telegram secret token, and an
+    /// archived secret of another type than the live event is dropped.
+    #[test]
+    fn a_bot_secret_never_crosses_event_types_on_restore() {
+        let live = bot_event("discord", r#"{"webhook_secret":"discord-public-key"}"#);
+        for config in ["{}", r#"{"webhook_secret":"old-telegram-secret"}"#] {
+            let mut restored = bot_event("telegram", config);
+            preserve_event_config_secrets(&mut restored, &live);
+            assert_eq!(extract_webhook_secret(&restored.config), None);
+        }
+    }
+
+    #[test]
+    fn bot_events_carry_their_door_secret_from_the_config() {
+        assert_eq!(
+            extract_webhook_secret(br#"{"webhook_secret":" key "}"#),
+            Some("key".to_string())
+        );
+        for config in [&b""[..], br#"{}"#, br#"{"webhook_secret":"  "}"#, b"[1]"] {
+            assert_eq!(extract_webhook_secret(config), None);
+        }
+    }
+
+    #[test]
+    fn only_an_active_hub_event_arms_its_sink() {
+        let mut event = bot_event("discord", "{}");
+        event.active = true;
+        assert!(arms_hub_trigger(&event));
+        event.active = false;
+        assert!(!arms_hub_trigger(&event));
+        let mut device = bot_event("cron", r#"{"expression":"0 9 * * *"}"#);
+        device.active = true;
+        device.set_device_source().unwrap();
+        assert!(!arms_hub_trigger(&device));
+    }
+
+    fn handler<'a>(source: &'a str, name: &'a str) -> &'a str {
+        let body = source
+            .split_once(&format!("\npub async fn {name}("))
+            .unwrap_or_else(|| panic!("handler {name} exists"))
+            .1;
+        body.split_once("\n}\n").map_or(body, |(body, _)| body)
+    }
+
+    fn checks_before(name: &str, body: &str, check: &str, writes: &[&str]) {
+        let checked = body
+            .find(check)
+            .unwrap_or_else(|| panic!("{name} calls {check}"));
+        for write in writes {
+            let written = body
+                .find(write)
+                .unwrap_or_else(|| panic!("{name} calls {write}"));
+            assert!(checked < written, "{name} must call {check} before {write}");
+        }
+    }
+
+    /// Every write that makes the actor the run-as user of a sink that is on checks the
+    /// actor first, so no sink is armed for someone it would refuse to run as.
+    #[test]
+    fn each_arming_write_checks_the_actor_first() {
+        let saves = [
+            ".upsert_event(",
+            "app.save()",
+            "sync_event_with_sink_tokens(",
+        ];
+        for (source, handlers) in [
+            (include_str!("upsert_event.rs"), &["upsert_event"][..]),
+            (include_str!("restore_event.rs"), &["restore_event"][..]),
+            (
+                include_str!("canary.rs"),
+                &[
+                    "patch_canary",
+                    "put_event_variants",
+                    "promote_canary",
+                    "abort_canary",
+                ][..],
+            ),
+        ] {
+            for name in handlers {
+                checks_before(name, handler(source, name), "ensure_saver_may_arm(", &saves);
+            }
+        }
+        let saver = include_str!("db.rs")
+            .split_once("\npub(crate) async fn ensure_saver_may_arm(")
+            .expect("the saver check")
+            .1;
+        assert!(saver[..saver.find("\n}\n").unwrap()].contains("ensure_actor_may_arm("));
+
+        let management = include_str!("../../sink/management.rs");
+        checks_before(
+            "update_sink",
+            handler(management, "update_sink"),
+            "ensure_actor_may_arm(",
+            &[".update(&state.db)"],
+        );
+        let service = include_str!("../../sink/service.rs");
+        checks_before(
+            "toggle_sink_active",
+            handler(service, "toggle_sink_active"),
+            "ensure_may_turn_on(",
+            &["write_toggle("],
+        );
+        let private = |name: &str| {
+            let body = service
+                .split_once(&format!("\nasync fn {name}("))
+                .unwrap_or_else(|| panic!("{name} exists"))
+                .1;
+            &body[..body.find("\n}\n").unwrap()]
+        };
+        assert!(private("ensure_may_turn_on").contains("ensure_actor_may_arm("));
+        let toggle = private("write_toggle");
+        checks_before(
+            "write_toggle",
+            toggle,
+            ".transaction(",
+            &["active: Set(turning_on)", "bind_run_as("],
+        );
+        checks_before(
+            "write_toggle",
+            toggle,
+            "active: Set(turning_on)",
+            &["bind_run_as("],
+        );
     }
 }

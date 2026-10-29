@@ -5,15 +5,24 @@
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::normalize_object_path;
 use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_storage::object_store::{path::Path, PutPayload};
+use flow_like_storage::object_store::{path::Path, ObjectMeta, PutPayload};
 use flow_like_types::Bytes;
-use std::collections::HashMap;
+use futures::stream::{self, BoxStream};
+use futures::StreamExt;
+use std::sync::Arc;
 
 use super::StorageContext;
 
 pub const MAX_STORAGE_FILE_SIZE: usize = 10 * 1024 * 1024;
 pub const MAX_PENDING_WRITES: usize = 8;
-pub const MAX_TOTAL_WRITE_SIZE: usize = 512 * 1024 * 1024;
+#[cfg(test)]
+const COPY_BUFFER_SIZE: usize = 10 * 1024 * 1024;
+
+#[path = "storage_writer.rs"]
+mod writer;
+pub use writer::{
+    abort_write, append_chunk, cleanup_pending_writes, finish_write, start_write, PendingWrite,
+};
 
 /// A host-resolved store and the object paths supplied to this invocation.
 #[derive(Clone)]
@@ -22,18 +31,106 @@ pub struct StorageStore {
     pub roots: Vec<Path>,
 }
 
-#[derive(Debug)]
-pub struct PendingWrite {
-    pub flow_path: StorageFlowPath,
-    pub buffer: Vec<u8>,
-    pub total_size: u64,
-}
-
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct StorageFlowPath {
     pub path: String,
     pub store_ref: String,
     pub cache_store_ref: Option<String>,
+}
+
+/// A listed file's byte length lets guests check their budget before reading it.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct StorageFileEntry {
+    #[serde(flatten)]
+    flow_path: StorageFlowPath,
+    size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    e_tag: Option<String>,
+}
+
+impl StorageFileEntry {
+    pub(crate) fn from_metadata(directory: &StorageFlowPath, metadata: ObjectMeta) -> Self {
+        Self {
+            flow_path: StorageFlowPath {
+                path: metadata.location.as_ref().to_string(),
+                store_ref: directory.store_ref.clone(),
+                cache_store_ref: directory.cache_store_ref.clone(),
+            },
+            size: metadata.size,
+            e_tag: metadata.e_tag,
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub(crate) struct StorageListRequest {
+    #[serde(flatten)]
+    pub flow_path: StorageFlowPath,
+    #[serde(default)]
+    pub exclude_directories: Vec<String>,
+}
+
+pub(crate) fn include_listed_file(path: &Path, prefix: &Path, excluded: &[String]) -> bool {
+    let Some(parts) = path.prefix_match(prefix) else {
+        return false;
+    };
+    let mut parts = parts.peekable();
+    while let Some(part) = parts.next() {
+        if parts.peek().is_some() && excluded.iter().any(|name| name == part.as_ref()) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Prune excluded subtrees before enumeration so dependency folders do not
+/// consume directory handles or remote listing requests.
+pub(crate) fn list_files_excluding(
+    store: Arc<dyn flow_like_storage::object_store::ObjectStore>,
+    prefix: Path,
+    excluded: Vec<String>,
+) -> BoxStream<'static, flow_like_storage::object_store::Result<ObjectMeta>> {
+    if excluded.is_empty() {
+        return store.list(Some(&prefix));
+    }
+
+    let directories = vec![prefix.clone()];
+    let objects = Vec::new().into_iter();
+    stream::try_unfold(
+        (store, prefix, excluded, directories, objects),
+        |(store, prefix, excluded, mut directories, mut objects)| async move {
+            loop {
+                if let Some(metadata) = objects.next() {
+                    return Ok(Some((
+                        metadata,
+                        (store, prefix, excluded, directories, objects),
+                    )));
+                }
+                let Some(directory) = directories.pop() else {
+                    return Ok(None);
+                };
+                let listing = store.list_with_delimiter(Some(&directory)).await?;
+                for child in listing.common_prefixes.into_iter().rev() {
+                    if child == directory || !child.prefix_matches(&directory) {
+                        continue;
+                    }
+                    let included = child.prefix_match(&prefix).is_some_and(|mut parts| {
+                        !parts.any(|part| excluded.iter().any(|name| name == part.as_ref()))
+                    });
+                    if included {
+                        directories.push(child);
+                    }
+                }
+                objects = listing
+                    .objects
+                    .into_iter()
+                    .filter(|meta| include_listed_file(&meta.location, &prefix, &excluded))
+                    .collect::<Vec<_>>()
+                    .into_iter();
+            }
+        },
+    )
+    .boxed()
 }
 
 impl StorageFlowPath {
@@ -46,67 +143,6 @@ impl StorageFlowPath {
 
 pub fn validate_path(path: &str) -> bool {
     !path.contains("..") && !path.starts_with('/') && !path.is_empty()
-}
-
-pub fn start_write(
-    pending: &mut HashMap<String, PendingWrite>,
-    flow_path: StorageFlowPath,
-    total_size: u64,
-) -> Option<String> {
-    if pending.len() >= MAX_PENDING_WRITES {
-        tracing::warn!("[wasm write-start] rejected: too many pending writes");
-        return None;
-    }
-    if total_size as usize > MAX_TOTAL_WRITE_SIZE {
-        tracing::warn!(
-            "[wasm write-start] rejected: total_size {} exceeds max {}",
-            total_size,
-            MAX_TOTAL_WRITE_SIZE
-        );
-        return None;
-    }
-    let id = format!(
-        "cw_{:x}_{:x}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos(),
-        pending.len()
-    );
-    pending.insert(
-        id.clone(),
-        PendingWrite {
-            flow_path,
-            buffer: Vec::with_capacity(total_size as usize),
-            total_size,
-        },
-    );
-    Some(id)
-}
-
-pub fn append_chunk(
-    pending: &mut HashMap<String, PendingWrite>,
-    write_id: &str,
-    data: &[u8],
-) -> bool {
-    if data.len() > MAX_STORAGE_FILE_SIZE {
-        tracing::warn!(
-            "[wasm write-chunk] rejected: chunk size {} exceeds max {}",
-            data.len(),
-            MAX_STORAGE_FILE_SIZE
-        );
-        return false;
-    }
-    let Some(pw) = pending.get_mut(write_id) else {
-        tracing::warn!("[wasm write-chunk] rejected: unknown write_id {write_id}");
-        return false;
-    };
-    if pw.buffer.len() + data.len() > pw.total_size as usize {
-        tracing::warn!("[wasm write-chunk] rejected: would exceed declared total_size");
-        return false;
-    }
-    pw.buffer.extend_from_slice(data);
-    true
 }
 
 pub async fn put_flow_path(
@@ -160,16 +196,93 @@ pub async fn put_flow_path(
     true
 }
 
-pub async fn finish_write(
-    pending: &mut HashMap<String, PendingWrite>,
-    write_id: &str,
-    storage_ctx: &StorageContext,
+async fn copy_between_stores(
+    source: &FlowLikeStore,
+    source_path: &Path,
+    destination: &FlowLikeStore,
+    destination_path: &Path,
+) -> super::storage_ops::StorageResult<()> {
+    super::storage_ops::copy_between_stores(
+        &source.as_generic(),
+        source_path,
+        &destination.as_generic(),
+        destination_path,
+        true,
+    )
+    .await
+}
+
+pub(crate) async fn copy_flow_path(
+    context: &StorageContext,
+    source: &StorageFlowPath,
+    destination: &StorageFlowPath,
 ) -> bool {
-    let Some(pw) = pending.remove(write_id) else {
-        tracing::warn!("[wasm write-finish] rejected: unknown write_id {write_id}");
+    let source_path = source.object_path();
+    let destination_path = destination.object_path();
+    let Some(source_store) = context.resolve_store(&source.store_ref, &source_path) else {
         return false;
     };
-    put_flow_path(storage_ctx, &pw.flow_path, pw.buffer, "wasm write-finish").await
+    let Some(destination_store) = context.resolve_store(&destination.store_ref, &destination_path)
+    else {
+        return false;
+    };
+    // Resolve the cache grant before changing either destination.
+    let cache_store = match destination.cache_store_ref.as_deref() {
+        Some(reference) if reference != destination.store_ref => {
+            let Some(store) = context.resolve_store(reference, &destination_path) else {
+                return false;
+            };
+            Some(store)
+        }
+        _ => None,
+    };
+    if let Err(error) = copy_between_stores(
+        &source_store,
+        &source_path,
+        &destination_store,
+        &destination_path,
+    )
+    .await
+    {
+        tracing::warn!("[wasm copy-file] copy failed: {error}");
+        return false;
+    }
+    if let Some(cache_store) = cache_store {
+        if let Err(error) = copy_between_stores(
+            &destination_store,
+            &destination_path,
+            &cache_store,
+            &destination_path,
+        )
+        .await
+        {
+            tracing::warn!("[wasm copy-file] cache copy failed: {error}");
+        }
+    }
+    true
+}
+
+pub(crate) async fn flow_path_url(
+    context: &StorageContext,
+    flow_path: &StorageFlowPath,
+) -> Option<String> {
+    let path = flow_path.object_path();
+    let store = context.resolve_store(&flow_path.store_ref, &path)?;
+    // An asset URL would reopen an ambient path after authorization. Local
+    // resources must be read through the descriptor-backed storage bridge.
+    if matches!(store, FlowLikeStore::Local(_)) {
+        return None;
+    }
+    match store
+        .sign_reference("GET", &path, std::time::Duration::from_secs(3600))
+        .await
+    {
+        Ok(url) => url.map(|url| url.to_string()),
+        Err(error) => {
+            tracing::warn!("[wasm file-url] signing failed: {error}");
+            None
+        }
+    }
 }
 
 #[cfg(test)]
@@ -179,6 +292,7 @@ mod tests {
     use flow_like_storage::display_file_name;
     use flow_like_storage::object_store::memory::InMemory;
     use parking_lot::RwLock;
+    use std::collections::HashMap;
     use std::sync::Arc;
 
     const NAME: &str = "Übersicht (2)#1.pdf";
@@ -191,7 +305,7 @@ mod tests {
         }
     }
 
-    fn storage_context() -> (StorageContext, FlowLikeStore, FlowLikeStore) {
+    pub(super) fn storage_context() -> (StorageContext, FlowLikeStore, FlowLikeStore) {
         let primary = FlowLikeStore::Memory(Arc::new(InMemory::new()));
         let backing = FlowLikeStore::Memory(Arc::new(InMemory::new()));
         let context = StorageContext {
@@ -212,7 +326,7 @@ mod tests {
         (context, primary, backing)
     }
 
-    async fn stored_bytes(store: &FlowLikeStore, path: &Path) -> Bytes {
+    pub(super) async fn stored_bytes(store: &FlowLikeStore, path: &Path) -> Bytes {
         store
             .as_generic()
             .get(path)
@@ -235,6 +349,142 @@ mod tests {
             display_file_name(&listed.object_path()).as_deref(),
             Some(NAME)
         );
+    }
+
+    #[test]
+    fn listed_files_include_sizes_and_remain_flowpaths() {
+        let directory = StorageFlowPath {
+            path: "apps/a/upload".into(),
+            store_ref: "primary".into(),
+            cache_store_ref: Some("cache".into()),
+        };
+        let location = directory.object_path().join(NAME);
+        for (size, e_tag) in [(0, None), (u64::from(u32::MAX) + 1, Some("version-2"))] {
+            let entry = StorageFileEntry::from_metadata(
+                &directory,
+                ObjectMeta {
+                    location: location.clone(),
+                    last_modified: Default::default(),
+                    size,
+                    e_tag: e_tag.map(str::to_string),
+                    version: None,
+                },
+            );
+            let value = serde_json::to_value(entry).expect("listed file JSON");
+            let mut expected = serde_json::json!({
+                "path": location.as_ref(),
+                "store_ref": "primary",
+                "cache_store_ref": "cache",
+                "size": size,
+            });
+            if let Some(e_tag) = e_tag {
+                expected["e_tag"] = serde_json::json!(e_tag);
+            }
+            assert_eq!(value, expected);
+            let decoded: StorageFlowPath =
+                serde_json::from_value(value).expect("existing FlowPath readers accept file sizes");
+            assert_eq!(decoded.object_path(), location);
+            assert_eq!(decoded.store_ref, directory.store_ref);
+            assert_eq!(decoded.cache_store_ref, directory.cache_store_ref);
+        }
+    }
+
+    #[test]
+    fn listing_exclusions_only_match_nested_directory_names() {
+        let request: StorageListRequest = serde_json::from_value(serde_json::json!({
+            "path": "site",
+            "store_ref": "store",
+            "exclude_directories": ["node_modules", ".git", "dist"],
+        }))
+        .unwrap();
+        let prefix = request.flow_path.object_path();
+        for (path, included) in [
+            ("site/src/pages/index.astro", true),
+            ("site/cms/node_modules/pkg/index.js", false),
+            ("site/.git/config", false),
+            ("site/nested/dist/index.html", false),
+            ("site/src/node_modules", true),
+            ("site/src/distinct/file.txt", true),
+            ("site-other/index.astro", false),
+        ] {
+            assert_eq!(
+                include_listed_file(&Path::from(path), &prefix, &request.exclude_directories),
+                included,
+                "{path}",
+            );
+        }
+        let legacy: StorageListRequest =
+            serde_json::from_value(serde_json::to_value(request.flow_path).unwrap()).unwrap();
+        assert!(legacy.exclude_directories.is_empty());
+    }
+
+    #[tokio::test]
+    async fn storage_copy_preserves_primary_and_cache() {
+        let (context, primary, backing) = storage_context();
+        let root = context
+            .dir_flow_path("storage", context.get_storage_dir(false))
+            .unwrap();
+        let mut source = root.clone();
+        source.path = root.object_path().join("source.bin").to_string();
+        let mut destination = root;
+        destination.path = destination.object_path().join("output.bin").to_string();
+        primary
+            .put(&source.object_path(), Bytes::from_static(b"source bytes"))
+            .await
+            .unwrap();
+        assert!(copy_flow_path(&context, &source, &destination).await);
+        for store in [&primary, &backing] {
+            assert_eq!(
+                stored_bytes(store, &destination.object_path())
+                    .await
+                    .as_ref(),
+                b"source bytes",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn storage_copy_checks_all_grants_before_mutating() {
+        let (context, primary, _) = storage_context();
+        let root = context
+            .dir_flow_path("storage", context.get_storage_dir(false))
+            .unwrap();
+        let mut source = root.clone();
+        source.path = root.object_path().join("source.bin").to_string();
+        let mut destination = root;
+        destination.path = destination.object_path().join("output.bin").to_string();
+        primary
+            .put(&source.object_path(), Bytes::from_static(b"new"))
+            .await
+            .unwrap();
+        primary
+            .put(&destination.object_path(), Bytes::from_static(b"original"))
+            .await
+            .unwrap();
+        let mut denied = source.clone();
+        denied.path = "apps/other/storage/private.bin".into();
+        assert!(!copy_flow_path(&context, &denied, &destination).await);
+        destination.cache_store_ref = Some("unknown cache".into());
+        assert!(!copy_flow_path(&context, &source, &destination).await);
+        assert_eq!(
+            stored_bytes(&primary, &destination.object_path())
+                .await
+                .as_ref(),
+            b"original"
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_copy_streams_large_files_between_stores() {
+        let source = FlowLikeStore::Memory(Arc::new(InMemory::new()));
+        let destination = FlowLikeStore::Memory(Arc::new(InMemory::new()));
+        let path = Path::from("large.bin");
+        let data = Bytes::from(vec![0x8a; COPY_BUFFER_SIZE + 257]);
+        source.put(&path, data.clone()).await.unwrap();
+        copy_between_stores(&source, &path, &destination, &path)
+            .await
+            .unwrap();
+        assert_eq!(stored_bytes(&destination, &path).await, data);
     }
 
     #[test]
@@ -301,7 +551,7 @@ mod tests {
         let directory = context
             .dir_flow_path("storage", context.get_storage_dir(true))
             .expect("node storage directory");
-        let mut pending = HashMap::new();
+        let pending = RwLock::new(HashMap::new());
 
         for (path, allowed) in [
             ("apps/a/storage/other-node/file.txt", false),
@@ -312,13 +562,15 @@ mod tests {
                 path: path.into(),
                 ..directory.clone()
             };
-            let write_id = start_write(&mut pending, flow_path, 7).expect("pending write");
-            assert!(append_chunk(&mut pending, &write_id, b"payload"));
-            assert_eq!(
-                finish_write(&mut pending, &write_id, &context).await,
-                allowed
-            );
-            assert!(pending.is_empty());
+            let result = start_write(&context, &pending, flow_path, Some(7)).await;
+            assert_eq!(result.is_ok(), allowed);
+            if let Ok(write_id) = result {
+                append_chunk(&pending, &write_id, b"payload".to_vec())
+                    .await
+                    .unwrap();
+                finish_write(&context, &pending, &write_id).await.unwrap();
+            }
+            assert!(pending.read().is_empty());
 
             let path = Path::from(path);
             for store in [&primary, &backing] {

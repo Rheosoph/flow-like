@@ -78,17 +78,25 @@ export function canMoveComponent(
 		return false;
 	// A root has no parent to detach from. Keep it in place.
 	if (!canReorderComponent(components, id)) return false;
-	const pending = [id];
+	return !subtreeContainsAny(components, id, [parentId]);
+}
+
+export function subtreeContainsAny(
+	components: Map<string, SurfaceComponent>,
+	rootId: string,
+	ids: readonly string[],
+): boolean {
+	if (ids.length === 0) return false;
+	const pending = [rootId];
 	const visited = new Set<string>();
 	while (pending.length) {
 		const current = pending.pop();
-		if (current === undefined) continue;
-		if (current === parentId) return false;
-		if (visited.has(current)) continue;
+		if (current === undefined || visited.has(current)) continue;
+		if (ids.includes(current)) return true;
 		visited.add(current);
 		pending.push(...getComponentChildren(components.get(current)));
 	}
-	return true;
+	return false;
 }
 
 /** The insertion index refers to the child list before removing the moving item. */

@@ -143,7 +143,7 @@ interface CommandSpec<T> {
 }
 
 /** A schema of an answer; its input is whatever the device sent. */
-type Parser<T> = z.ZodType<T, z.ZodTypeDef, unknown>;
+type Parser<T> = z.ZodType<T, unknown>;
 
 interface Bound {
 	t: DevicesT;

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { resolve } from "path";
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { config } from "dotenv";
-import { readFile, writeFile } from "fs/promises";
 import {
 	computeTier,
 	disconnect,
@@ -10,15 +10,25 @@ import {
 	upsertLlmModel,
 } from "./db";
 import { fetchModelsWithCache } from "./fetch";
-import { buildTodoList, computeClassification } from "./normalize";
-import type { AAModel, ModelClassification, TodoEntry } from "./types";
+import {
+	buildTodoList,
+	catalogBlendedTokenPrice,
+	computeClassification,
+} from "./normalize";
+import {
+	type AAModel,
+	type ModelClassification,
+	type ModelClassificationEstimates,
+	type TodoEntry,
+	isCatalogEstimateSlug,
+} from "./types";
 
 const DRY_RUN = process.argv.includes("--dry-run");
 const ROOT_DIR = resolve(import.meta.dir, "../..");
 
 config({ path: resolve(ROOT_DIR, ".env") });
 
-const apiKey = process.env.ARTIFICIAL_ANALYSIS;
+const apiKey = process.env.ARTIFICIAL_ANALYSIS ?? "";
 if (!apiKey) {
 	console.error("Missing ARTIFICIAL_ANALYSIS in .env");
 	process.exit(1);
@@ -152,8 +162,25 @@ async function main() {
 		console.log("=== Model Evaluation Pipeline ===\n");
 	}
 
-	// Step 1: Fetch models (API with cache fallback)
-	const { models, maxes } = await fetchModelsWithCache(apiKey!, ROOT_DIR);
+	console.log("\n[db] Fetching bits with modelSlug...");
+	const bits = await fetchBitsWithModel();
+	console.log(`[db] Found ${bits.length} bits with modelSlug`);
+	const modelSlugs = [
+		...new Set(
+			bits.flatMap((bit) =>
+				bit.modelSlug && !isCatalogEstimateSlug(bit.modelSlug)
+					? [bit.modelSlug]
+					: [],
+			),
+		),
+	];
+
+	// Fetch current benchmarks for every model referenced by the catalog.
+	const { models, maxes } = await fetchModelsWithCache(
+		apiKey,
+		ROOT_DIR,
+		modelSlugs,
+	);
 
 	const modelBySlug = new Map<string, AAModel>();
 	for (const m of models) {
@@ -181,15 +208,11 @@ async function main() {
 		);
 	}
 
-	// Step 4: Fetch bits and compute classifications
-	console.log("\n[db] Fetching bits with modelSlug...");
-	const bits = await fetchBitsWithModel();
-	console.log(`[db] Found ${bits.length} bits with modelSlug`);
-
 	const todoEntries: { slug: string; name: string; missing: string[] }[] = [];
 	const seenSlugs = new Set<string>();
 	let updatedCount = 0;
 	let skippedCount = 0;
+	let preservedEstimateCount = 0;
 	let unchangedCount = 0;
 
 	const dryRunChanges: {
@@ -198,6 +221,8 @@ async function main() {
 		modelName: string;
 		old: ModelClassification | null;
 		new: ModelClassification;
+		oldEstimates: ModelClassificationEstimates | undefined;
+		newEstimates: ModelClassificationEstimates;
 		tierChange?: { oldTier: string; newTier: string } | null;
 	}[] = [];
 
@@ -206,6 +231,10 @@ async function main() {
 	for (const bit of bits) {
 		const slug = bit.modelSlug;
 		if (!slug) continue;
+		if (isCatalogEstimateSlug(slug)) {
+			preservedEstimateCount++;
+			continue;
+		}
 
 		const aaModel = modelBySlug.get(slug);
 		if (!aaModel) {
@@ -220,15 +249,21 @@ async function main() {
 			(bit.parameters?.model_classification as
 				| ModelClassification
 				| undefined) ?? null;
+		const oldEstimates = bit.parameters?.model_classification_estimates as
+			| ModelClassificationEstimates
+			| undefined;
 
-		const { classification, missingFields } = computeClassification(
-			aaModel,
-			maxes,
-			allPrices,
-			isLocal,
-			oldClassification,
-			overrides,
-		);
+		const { classification, missingFields, classificationEstimates } =
+			computeClassification(
+				aaModel,
+				maxes,
+				allPrices,
+				isLocal,
+				oldClassification,
+				overrides,
+				catalogBlendedTokenPrice(bit.parameters),
+				oldEstimates,
+			);
 
 		const tierResult = computeTier(bit.parameters, classification.cost);
 
@@ -240,8 +275,11 @@ async function main() {
 				);
 			const tierUnchanged =
 				!tierResult || tierResult.oldTier === tierResult.newTier;
+			const estimatesUnchanged =
+				JSON.stringify(oldEstimates ?? {}) ===
+				JSON.stringify(classificationEstimates);
 
-			if (classUnchanged && tierUnchanged) {
+			if (classUnchanged && tierUnchanged && estimatesUnchanged) {
 				unchangedCount++;
 			} else {
 				dryRunChanges.push({
@@ -250,6 +288,8 @@ async function main() {
 					modelName: aaModel.name,
 					old: oldClassification,
 					new: classification,
+					oldEstimates,
+					newEstimates: classificationEstimates,
 					tierChange: tierResult,
 				});
 				console.log(
@@ -263,6 +303,8 @@ async function main() {
 						aaModel.release_date,
 					),
 				);
+				if (!estimatesUnchanged)
+					console.log("  Updated capability estimate attribution");
 				console.log();
 			}
 		} else {
@@ -271,6 +313,7 @@ async function main() {
 				classification,
 				bit.parameters,
 				aaModel.release_date,
+				classificationEstimates,
 			);
 		}
 
@@ -299,6 +342,9 @@ async function main() {
 	} else {
 		console.log(`[db] Updated ${updatedCount} bits, skipped ${skippedCount}`);
 	}
+	console.log(
+		`[db] Preserved ${preservedEstimateCount} catalog estimate records`,
+	);
 
 	// Write todo.json
 	const todos = buildTodoList(todoEntries);

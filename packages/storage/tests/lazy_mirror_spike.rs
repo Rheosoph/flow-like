@@ -31,6 +31,11 @@ use lance_io::object_store::{
     ObjectStore as LanceStore, ObjectStoreParams, ObjectStoreProvider, ObjectStoreRegistry,
     uri_to_url,
 };
+use lance_object_store::{
+    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
+    ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
+    local::LocalFileSystem, path::Path,
+};
 use lance_table::{
     feature_flags::apply_feature_flags,
     io::{
@@ -48,11 +53,6 @@ use lancedb::{
     },
     query::{ExecutableQuery, QueryBase, Select},
     table::{CompactionOptions, Duration, OptimizeAction},
-};
-use object_store::{
-    CopyOptions, GetOptions, GetResult, ListResult, MultipartUpload, ObjectMeta, ObjectStore,
-    ObjectStoreExt, PutMultipartOptions, PutOptions, PutPayload, PutResult, RenameOptions,
-    local::LocalFileSystem, path::Path,
 };
 
 const CLOUD_URI: &str = "cloudsim://cloud/records.lance";
@@ -78,21 +78,25 @@ impl fmt::Display for MirrorCacheMiss {
 
 impl std::error::Error for MirrorCacheMiss {}
 
-fn read_only(operation: &str, path: &Path) -> object_store::Error {
-    object_store::Error::NotSupported {
+fn read_only(operation: &str, path: &Path) -> lance_object_store::Error {
+    lance_object_store::Error::NotSupported {
         source: format!("{operation} of '{path}' reached a read-only cloud base").into(),
     }
 }
 
-fn record_write(log: &Mutex<Vec<String>>, operation: &str, path: &Path) -> object_store::Error {
+fn record_write(
+    log: &Mutex<Vec<String>>,
+    operation: &str,
+    path: &Path,
+) -> lance_object_store::Error {
     log.lock().unwrap().push(format!("{operation} {path}"));
     read_only(operation, path)
 }
 
 fn rejecting_deletes(
     log: Arc<Mutex<Vec<String>>>,
-    locations: BoxStream<'static, object_store::Result<Path>>,
-) -> BoxStream<'static, object_store::Result<Path>> {
+    locations: BoxStream<'static, lance_object_store::Result<Path>>,
+) -> BoxStream<'static, lance_object_store::Result<Path>> {
     locations
         .map(move |location| Err(record_write(&log, "delete", &location?)))
         .boxed()
@@ -108,9 +112,9 @@ struct CloudStore {
 }
 
 impl CloudStore {
-    fn reachable(&self) -> object_store::Result<()> {
+    fn reachable(&self) -> lance_object_store::Result<()> {
         if self.offline.load(Ordering::SeqCst) {
-            return Err(object_store::Error::Generic {
+            return Err(lance_object_store::Error::Generic {
                 store: "cloudsim",
                 source: "connection refused: the hub is unreachable".into(),
             });
@@ -151,7 +155,7 @@ impl ObjectStore for CloudStore {
         location: &Path,
         _: PutPayload,
         _: PutOptions,
-    ) -> object_store::Result<PutResult> {
+    ) -> lance_object_store::Result<PutResult> {
         Err(record_write(&self.writes, "put", location))
     }
 
@@ -159,7 +163,7 @@ impl ObjectStore for CloudStore {
         &self,
         location: &Path,
         _: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+    ) -> lance_object_store::Result<Box<dyn MultipartUpload>> {
         Err(record_write(&self.writes, "multipart put", location))
     }
 
@@ -167,7 +171,7 @@ impl ObjectStore for CloudStore {
         &self,
         location: &Path,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
+    ) -> lance_object_store::Result<GetResult> {
         self.reachable()?;
         *self
             .reads
@@ -180,12 +184,15 @@ impl ObjectStore for CloudStore {
 
     fn delete_stream(
         &self,
-        locations: BoxStream<'static, object_store::Result<Path>>,
-    ) -> BoxStream<'static, object_store::Result<Path>> {
+        locations: BoxStream<'static, lance_object_store::Result<Path>>,
+    ) -> BoxStream<'static, lance_object_store::Result<Path>> {
         rejecting_deletes(self.writes.clone(), locations)
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
         if let Err(error) = self.reachable() {
             return futures::stream::once(async move { Err(error) }).boxed();
         }
@@ -193,17 +200,30 @@ impl ObjectStore for CloudStore {
         self.inner.list(prefix)
     }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> lance_object_store::Result<ListResult> {
         self.reachable()?;
         self.record_list(prefix);
         self.inner.list_with_delimiter(prefix).await
     }
 
-    async fn copy_opts(&self, _: &Path, to: &Path, _: CopyOptions) -> object_store::Result<()> {
+    async fn copy_opts(
+        &self,
+        _: &Path,
+        to: &Path,
+        _: CopyOptions,
+    ) -> lance_object_store::Result<()> {
         Err(record_write(&self.writes, "copy", to))
     }
 
-    async fn rename_opts(&self, _: &Path, to: &Path, _: RenameOptions) -> object_store::Result<()> {
+    async fn rename_opts(
+        &self,
+        _: &Path,
+        to: &Path,
+        _: RenameOptions,
+    ) -> lance_object_store::Result<()> {
         Err(record_write(&self.writes, "rename", to))
     }
 }
@@ -216,11 +236,11 @@ fn immutable(path: &Path) -> bool {
     })
 }
 
-fn unavailable(path: &Path, error: object_store::Error) -> object_store::Error {
-    if matches!(error, object_store::Error::NotFound { .. }) {
+fn unavailable(path: &Path, error: lance_object_store::Error) -> lance_object_store::Error {
+    if matches!(error, lance_object_store::Error::NotFound { .. }) {
         return error;
     }
-    object_store::Error::Generic {
+    lance_object_store::Error::Generic {
         store: "lazy-mirror",
         source: Box::new(MirrorCacheMiss {
             path: path.to_string(),
@@ -239,7 +259,7 @@ struct MirrorStore {
 }
 
 impl MirrorStore {
-    async fn ensure_cached(&self, path: &Path) -> object_store::Result<()> {
+    async fn ensure_cached(&self, path: &Path) -> lance_object_store::Result<()> {
         let lock = self
             .locks
             .lock()
@@ -250,7 +270,7 @@ impl MirrorStore {
         let _guard = lock.lock().await;
         match self.cache.head(path).await {
             Ok(_) => return Ok(()),
-            Err(object_store::Error::NotFound { .. }) => {}
+            Err(lance_object_store::Error::NotFound { .. }) => {}
             Err(error) => return Err(error),
         }
         let bytes = match self.cloud.get(path).await {
@@ -290,7 +310,7 @@ impl ObjectStore for MirrorStore {
         location: &Path,
         _: PutPayload,
         _: PutOptions,
-    ) -> object_store::Result<PutResult> {
+    ) -> lance_object_store::Result<PutResult> {
         Err(record_write(&self.rejected, "put", location))
     }
 
@@ -298,7 +318,7 @@ impl ObjectStore for MirrorStore {
         &self,
         location: &Path,
         _: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+    ) -> lance_object_store::Result<Box<dyn MultipartUpload>> {
         Err(record_write(&self.rejected, "multipart put", location))
     }
 
@@ -306,7 +326,7 @@ impl ObjectStore for MirrorStore {
         &self,
         location: &Path,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
+    ) -> lance_object_store::Result<GetResult> {
         if !immutable(location) {
             return self.cloud.get_opts(location, options).await;
         }
@@ -316,24 +336,40 @@ impl ObjectStore for MirrorStore {
 
     fn delete_stream(
         &self,
-        locations: BoxStream<'static, object_store::Result<Path>>,
-    ) -> BoxStream<'static, object_store::Result<Path>> {
+        locations: BoxStream<'static, lance_object_store::Result<Path>>,
+    ) -> BoxStream<'static, lance_object_store::Result<Path>> {
         rejecting_deletes(self.rejected.clone(), locations)
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
         self.cloud.list(prefix)
     }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> lance_object_store::Result<ListResult> {
         self.cloud.list_with_delimiter(prefix).await
     }
 
-    async fn copy_opts(&self, _: &Path, to: &Path, _: CopyOptions) -> object_store::Result<()> {
+    async fn copy_opts(
+        &self,
+        _: &Path,
+        to: &Path,
+        _: CopyOptions,
+    ) -> lance_object_store::Result<()> {
         Err(record_write(&self.rejected, "copy", to))
     }
 
-    async fn rename_opts(&self, _: &Path, to: &Path, _: RenameOptions) -> object_store::Result<()> {
+    async fn rename_opts(
+        &self,
+        _: &Path,
+        to: &Path,
+        _: RenameOptions,
+    ) -> lance_object_store::Result<()> {
         Err(record_write(&self.rejected, "rename", to))
     }
 }
@@ -386,7 +422,7 @@ impl ObjectStore for DeviceStore {
         location: &Path,
         payload: PutPayload,
         options: PutOptions,
-    ) -> object_store::Result<PutResult> {
+    ) -> lance_object_store::Result<PutResult> {
         if self.is_cloud(location) {
             return Err(record_write(&self.mirror.rejected, "put", location));
         }
@@ -397,7 +433,7 @@ impl ObjectStore for DeviceStore {
         &self,
         location: &Path,
         options: PutMultipartOptions,
-    ) -> object_store::Result<Box<dyn MultipartUpload>> {
+    ) -> lance_object_store::Result<Box<dyn MultipartUpload>> {
         if self.is_cloud(location) {
             return Err(record_write(
                 &self.mirror.rejected,
@@ -412,7 +448,7 @@ impl ObjectStore for DeviceStore {
         &self,
         location: &Path,
         options: GetOptions,
-    ) -> object_store::Result<GetResult> {
+    ) -> lance_object_store::Result<GetResult> {
         if self.is_cloud(location) {
             return self.mirror.get_opts(location, options).await;
         }
@@ -421,8 +457,8 @@ impl ObjectStore for DeviceStore {
 
     fn delete_stream(
         &self,
-        locations: BoxStream<'static, object_store::Result<Path>>,
-    ) -> BoxStream<'static, object_store::Result<Path>> {
+        locations: BoxStream<'static, lance_object_store::Result<Path>>,
+    ) -> BoxStream<'static, lance_object_store::Result<Path>> {
         let local = self.local.clone();
         let cloud_root = self.cloud_root.clone();
         let rejected = self.mirror.rejected.clone();
@@ -443,14 +479,20 @@ impl ObjectStore for DeviceStore {
             .boxed()
     }
 
-    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+    fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> BoxStream<'static, lance_object_store::Result<ObjectMeta>> {
         match prefix {
             Some(prefix) if self.is_cloud(prefix) => self.mirror.list(Some(prefix)),
             _ => self.local.list(prefix),
         }
     }
 
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> object_store::Result<ListResult> {
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&Path>,
+    ) -> lance_object_store::Result<ListResult> {
         match prefix {
             Some(prefix) if self.is_cloud(prefix) => {
                 self.mirror.list_with_delimiter(Some(prefix)).await
@@ -464,7 +506,7 @@ impl ObjectStore for DeviceStore {
         from: &Path,
         to: &Path,
         options: CopyOptions,
-    ) -> object_store::Result<()> {
+    ) -> lance_object_store::Result<()> {
         if self.is_cloud(from) || self.is_cloud(to) {
             return Err(record_write(&self.mirror.rejected, "copy", to));
         }
@@ -476,7 +518,7 @@ impl ObjectStore for DeviceStore {
         from: &Path,
         to: &Path,
         options: RenameOptions,
-    ) -> object_store::Result<()> {
+    ) -> lance_object_store::Result<()> {
         if self.is_cloud(from) || self.is_cloud(to) {
             return Err(record_write(&self.mirror.rejected, "rename", to));
         }
@@ -1190,21 +1232,17 @@ async fn indexed_cloud(fixture: &Fixture) -> Result<Table> {
     Ok(hub_table)
 }
 
+/// Lance 8 read v3 vector index files through the primary store, so vector
+/// search failed without routing. Lance 13 reads them from the index's base.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn unrouted_primary_store_breaks_cross_store_vector_indices() -> Result<()> {
+async fn unrouted_primary_store_serves_cross_store_vector_indices() -> Result<()> {
     let fixture = Fixture::new(false).await?;
     let hub_table = indexed_cloud(&fixture).await?;
     let snapshot = fixture.snapshot("unrouted").await?;
     fixture.prefetch(&snapshot).await?;
     ensure!(scan_ids(&snapshot.table, Some("id = 150")).await? == vec![150]);
     ensure!(fts_ids(&snapshot.table, "needle").await? == fts_ids(&hub_table, "needle").await?);
-    let error = nearest_ids(&snapshot.table, 150, 3)
-        .await
-        .expect_err("Lance reads v3 vector index files through the primary store");
-    eprintln!("unrouted vector search: {error:#}");
-    ensure!(
-        format!("{error:#}").contains("index.idx") && format!("{error:#}").contains("not found")
-    );
+    ensure!(nearest_ids(&snapshot.table, 150, 3).await? == nearest_ids(&hub_table, 150, 3).await?);
     Ok(())
 }
 
@@ -1395,7 +1433,8 @@ async fn cloud_compaction_and_prune_strand_uncached_files_until_refresh() -> Res
         .await
         .expect_err("a pruned, never cached base file cannot be read");
     eprintln!("stale snapshot after cloud prune: {gone:#}");
-    ensure!(!format!("{gone:#}").contains(MISS) && format!("{gone:#}").contains("not found"));
+    let gone = format!("{gone:#}");
+    ensure!(!gone.contains(MISS) && gone.to_lowercase().contains("not found"));
 
     let fresh = fixture.snapshot("fresh").await?;
     ensure!(scan_ids(&fresh.table, Some("id = 20")).await? == vec![20]);
@@ -1455,9 +1494,11 @@ async fn stock_shallow_clone_cannot_target_another_store() -> Result<()> {
         result.is_err(),
         "a cross-store shallow clone unexpectedly succeeded"
     );
+    // Lance 8 routed the clone's target files through the source store. lancedb
+    // 0.40 opens the source outside the session's registry and fails first.
     ensure!(
-        rejected.iter().any(|write| write.contains("copy.lance")),
-        "the clone's target files were routed through the source store"
+        rejected.is_empty(),
+        "the clone's target files were routed through the source store: {rejected:?}"
     );
     ensure!(!fixture.mirror_dir.join("copy.lance").exists());
     Ok(())

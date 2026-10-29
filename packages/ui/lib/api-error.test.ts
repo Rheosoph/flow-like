@@ -5,6 +5,7 @@ import {
 	UPSTREAM_UNAVAILABLE_CODE,
 	apiResponseError,
 	isMissingResourceError,
+	isMissingRouteError,
 	isTransportFailure,
 	isUpgradeRequiredError,
 	quietPlanLimit,
@@ -68,6 +69,30 @@ describe("isMissingResourceError", () => {
 			),
 		).toBe(false);
 		expect(isMissingResourceError({ status: 404 })).toBe(false);
+	});
+});
+
+describe("isMissingRouteError", () => {
+	test("an uncoded 404 or a 405 means the hub has no such route", () => {
+		expect(
+			isMissingRouteError(
+				new ApiResponseError({ status: 404, message: "Not Found" }),
+			),
+		).toBe(true);
+		expect(
+			isMissingRouteError(
+				new ApiResponseError({ status: 405, message: "Method Not Allowed" }),
+			),
+		).toBe(true);
+	});
+
+	test("a coded 404 is the route refusing a missing resource", () => {
+		expect(
+			isMissingRouteError(
+				new ApiResponseError({ status: 404, code: "NOT_FOUND", message: "x" }),
+			),
+		).toBe(false);
+		expect(isMissingRouteError(new Error("Failed to fetch"))).toBe(false);
 	});
 });
 

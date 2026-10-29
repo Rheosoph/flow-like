@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    online::cache::{CacheControl, ReadCache},
+    online::cache::{CacheControl, file_cache::ReadCache},
     outbox::{BufferingConfig, Outbox},
 };
 use async_trait::async_trait;

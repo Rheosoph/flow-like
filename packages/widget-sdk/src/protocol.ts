@@ -8,6 +8,7 @@ import type {
 	MicrophoneResultPayload,
 	RequestIdPayload,
 } from "./microphone";
+import type { ResourceRequestPayload, ResourceResultPayload } from "./resource";
 import type { FileResultPayload, FileUploadPayload } from "./upload";
 
 export const FLW_PROTOCOL = "flw/1";
@@ -25,6 +26,7 @@ export interface InitCapabilities {
 	media?: boolean;
 	mediaIds?: string[];
 	uploads?: boolean;
+	resources?: boolean;
 }
 
 export interface InitPayload {
@@ -84,6 +86,9 @@ export interface FlwPayloadMap {
 	"file:upload": FileUploadPayload;
 	"file:result": FileResultPayload;
 	"file:cancel": RequestIdPayload;
+	"resource:request": ResourceRequestPayload;
+	"resource:result": ResourceResultPayload;
+	"resource:cancel": RequestIdPayload;
 	"capabilities:update": InitCapabilities;
 	init: InitPayload;
 	"props:update": PropsUpdatePayload;
@@ -102,6 +107,7 @@ export type HostToWidgetMessageType =
 	| "media:state"
 	| "microphone:result"
 	| "file:result"
+	| "resource:result"
 	| "capabilities:update"
 	| "init"
 	| "props:update"
@@ -117,6 +123,8 @@ export type WidgetToHostMessageType =
 	| "microphone:cancel"
 	| "file:upload"
 	| "file:cancel"
+	| "resource:request"
+	| "resource:cancel"
 	| "hello"
 	| "ready"
 	| "event"
@@ -147,6 +155,9 @@ const FLW_MESSAGE_TYPES: ReadonlySet<string> = new Set([
 	"file:upload",
 	"file:result",
 	"file:cancel",
+	"resource:request",
+	"resource:result",
+	"resource:cancel",
 	"capabilities:update",
 	"init",
 	"props:update",

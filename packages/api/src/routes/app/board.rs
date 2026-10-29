@@ -24,6 +24,7 @@ pub mod report_run;
 pub mod run_logs;
 pub mod scoring;
 pub mod secrets;
+pub mod sink_rebind;
 pub mod summaries;
 pub mod sync_board;
 pub mod undo_redo_board;
@@ -176,11 +177,13 @@ mod tests {
     use crate::middleware::jwt::{AppUser, ConnectedAppUser};
     use std::path::{Path, PathBuf};
 
+    /// The save every graph-changing board route persists through.
+    const GRAPH_SAVE: &str = "save_board_and_refresh_summary(";
     /// Canonical writes: every one of these replaces the whole board (or app manifest) object, so
     /// a stale writer overwrites, never merges.
     const CANONICAL_WRITES: [&str; 5] = [
         ".save(None).await",
-        "save_board_and_refresh_summary(",
+        GRAPH_SAVE,
         "app.save().await",
         ".create_version_returning_published(",
         ".publish_if_changed(",
@@ -235,6 +238,24 @@ mod tests {
         sources
     }
 
+    fn starts_item(line: &str) -> bool {
+        line.starts_with("async fn ") || line.starts_with("pub") || line.starts_with("fn ")
+    }
+
+    /// The top-level items of a source body, each starting at its declaration line.
+    fn items(body: &str) -> Vec<String> {
+        let mut items = vec![String::new()];
+        for line in body.lines() {
+            if starts_item(line) {
+                items.push(String::new());
+            }
+            let item = items.last_mut().expect("an item");
+            item.push_str(line);
+            item.push('\n');
+        }
+        items
+    }
+
     /// H6: the heartbeat detected a lapsed lease and only logged it. Without an `ensure_held()`
     /// immediately before each canonical write, two replicas both complete their full-object PUT
     /// and the later one silently erases the earlier one's edits.
@@ -244,10 +265,7 @@ mod tests {
             let lines = body.lines().collect::<Vec<_>>();
             let mut current_fn_is_unguarded = false;
             for (index, line) in lines.iter().enumerate() {
-                if line.starts_with("async fn ")
-                    || line.starts_with("pub")
-                    || line.starts_with("fn ")
-                {
+                if starts_item(line) {
                     current_fn_is_unguarded =
                         UNGUARDED_WRITERS.iter().any(|marker| line.contains(marker));
                 }
@@ -290,6 +308,32 @@ mod tests {
                 path.display()
             );
         }
+    }
+
+    /// D2: a person's graph edit changes what every sink that runs the board at latest runs, so
+    /// each graph save is preceded and followed by `rebind_latest_sinks` in the same function.
+    #[test]
+    fn every_graph_save_rebinds_the_sinks_that_run_the_board_at_latest() {
+        let mut saves = 0;
+        for (path, body) in guarded_sources() {
+            for item in items(&body) {
+                for (save, _) in item.match_indices(GRAPH_SAVE) {
+                    saves += 1;
+                    for (side, rebinds) in [
+                        ("before", item[..save].contains("rebind_latest_sinks(")),
+                        ("after", item[save..].contains("rebind_latest_sinks(")),
+                    ] {
+                        assert!(
+                            rebinds,
+                            "{}: `{}` saves a graph edit without rebinding the sinks that run the board at latest {side} it",
+                            path.display(),
+                            item.lines().next().unwrap_or_default()
+                        );
+                    }
+                }
+            }
+        }
+        assert!(saves >= 5, "graph save discovery found only {saves} saves");
     }
 
     #[test]

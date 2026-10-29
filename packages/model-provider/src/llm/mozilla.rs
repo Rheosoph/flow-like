@@ -1,8 +1,15 @@
 use std::any::Any;
 
-use super::{ModelLogic, responses_tools::NonStrictToolsClient};
+use super::{
+    ModelLogic,
+    media::{self, MediaDialect},
+    responses_tools::NonStrictToolsClient,
+    user_media,
+};
 use crate::provider::random_provider;
 use crate::{
+    authorization::AuthorizedHttpClient,
+    egress::ProviderEgress,
     llm::ModelConstructor,
     provider::{ModelProvider, ModelProviderConfiguration},
 };
@@ -11,7 +18,7 @@ use async_trait::async_trait;
 use flow_like_types_contracts::Cacheable;
 
 pub struct MozillaModel {
-    client: rig::providers::openai::Client,
+    client: rig::providers::openai::Client<AuthorizedHttpClient>,
     _provider: ModelProvider,
     default_model: Option<String>,
 }
@@ -33,6 +40,7 @@ impl MozillaModel {
         let client = rig::providers::openai::Client::builder()
             .api_key(&api_key)
             .base_url(endpoint)
+            .http_client(AuthorizedHttpClient::default())
             .build()?;
 
         Ok(MozillaModel {
@@ -42,7 +50,10 @@ impl MozillaModel {
         })
     }
 
-    pub async fn from_provider(provider: &ModelProvider) -> anyhow::Result<Self> {
+    pub async fn from_provider(
+        provider: &ModelProvider,
+        egress: ProviderEgress,
+    ) -> anyhow::Result<Self> {
         let params = provider.params.clone().unwrap_or_default();
         let api_key = params.get("api_key").cloned().unwrap_or_default();
         let api_key = api_key.as_str().unwrap_or_default();
@@ -59,6 +70,7 @@ impl MozillaModel {
         let client = rig::providers::openai::Client::builder()
             .api_key(api_key)
             .base_url(endpoint)
+            .http_client(AuthorizedHttpClient::for_egress(egress)?)
             .build()?;
 
         Ok(MozillaModel {
@@ -82,10 +94,12 @@ impl Cacheable for MozillaModel {
 #[async_trait]
 impl ModelLogic for MozillaModel {
     #[allow(deprecated)]
+    /// llamafile 0.10+ serves `/v1/responses` by converting the request to Chat Completions.
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor {
-            inner: Box::new(NonStrictToolsClient(self.client.clone())),
-        })
+        Ok(user_media::constructor(
+            NonStrictToolsClient(self.client.clone()),
+            |model, request| media::retain_supported(MediaDialect::Llamafile, model, request),
+        ))
     }
 
     async fn default_model(&self) -> Option<String> {
@@ -107,17 +121,20 @@ mod tests {
     #[tokio::test]
     async fn sends_tool_schemas_as_written() {
         let (endpoint, server) = serve_once(json_response(responses_completion("llamafile"))).await;
-        let model = MozillaModel::from_provider(&ModelProvider {
-            provider_name: "custom:mozilla".to_string(),
-            model_id: None,
-            version: None,
-            api_surface: None,
-            params: Some(HashMap::from([
-                ("api_key".to_string(), json!("test-key")),
-                ("model_id".to_string(), json!("llamafile")),
-                ("endpoint".to_string(), json!(endpoint)),
-            ])),
-        })
+        let model = MozillaModel::from_provider(
+            &ModelProvider {
+                provider_name: "custom:mozilla".to_string(),
+                model_id: None,
+                version: None,
+                api_surface: None,
+                params: Some(HashMap::from([
+                    ("api_key".to_string(), json!("test-key")),
+                    ("model_id".to_string(), json!("llamafile")),
+                    ("endpoint".to_string(), json!(endpoint)),
+                ])),
+            },
+            ProviderEgress::Open,
+        )
         .await
         .unwrap();
         let agent = model

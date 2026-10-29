@@ -21,6 +21,7 @@ export const KNOWN_HOME_WIDGET_TYPES = [
 	"recent-runs",
 	"run-activity",
 	"run-stats",
+	"saved-forecast",
 	"schedules",
 	"section-heading",
 	"workspace-pulse",

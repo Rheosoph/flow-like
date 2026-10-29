@@ -152,7 +152,10 @@ jobs:
         run: |
           sudo apt-get update
           # librdkafka 2.12.1 includes curl headers even when curl support is disabled.
-          sudo apt-get install -y binutils clang lld libcurl4-openssl-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev ocl-icd-libopencl1 ocl-icd-opencl-dev libudev-dev unixodbc-dev
+          sudo apt-get install -y binutils clang lld libcurl4-openssl-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf xdg-utils libclang-dev libxcb1-dev libxrandr-dev libdbus-1-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev ocl-icd-libopencl1 ocl-icd-opencl-dev libudev-dev unixodbc-dev
+          # Tauri appends the detected tray library to .deb dependencies.
+          # Require Ayatana so Debian 13 can satisfy that dependency.
+          echo "TAURI_LINUX_AYATANA_APPINDICATOR=true" >> "$GITHUB_ENV"
           # Ubuntu 22.04 defaults to GCC 11, but Lance's fp16 kernels require
           # Clang 6 or newer, or GCC 12 or newer.
           clang --version
@@ -444,6 +447,28 @@ jobs:
           MAX_GLIBC_VERSION: ${{ inputs.max_glibc_version }}
           RELEASE_BUNDLE_DIR: ${{ inputs.release_bundle_dir }}
         run: bash .github/scripts/verify-linux-glibc.sh
+
+      - name: Verify Debian tray dependency (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          RELEASE_BUNDLE_DIR: ${{ inputs.release_bundle_dir }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          packages=("$RELEASE_BUNDLE_DIR"/deb/*.deb)
+          if [ "${#packages[@]}" -eq 0 ]; then
+            echo "::error::No .deb package found under $RELEASE_BUNDLE_DIR/deb."
+            exit 1
+          fi
+          for package in "${packages[@]}"; do
+            depends="$(dpkg-deb --field "$package" Depends)"
+            printf '%s: %s\n' "$package" "$depends"
+            if [[ "$depends" != *libayatana-appindicator3-1* || "$depends" == *libappindicator3-1* ]]; then
+              echo "::error::$package must depend on libayatana-appindicator3-1 without requiring libappindicator3-1."
+              exit 1
+            fi
+          done
 
       - name: Verify AppImage bundle (Linux)
         if: runner.os == 'Linux'

@@ -10,7 +10,7 @@ use crate::entity::sea_orm_active_enums::{
 };
 use crate::entity::{locked_item, locked_item_version};
 use crate::error::ApiError;
-use crate::middleware::jwt::{AppPermissionResponse, AppUser};
+use crate::middleware::jwt::{AppPermissionResponse, AppUser, ExecutorUse};
 use crate::permission::role_permission::RolePermissions;
 use crate::state::AppState;
 use axum::http::StatusCode;
@@ -152,6 +152,7 @@ impl Caller {
         state: &AppState,
         user: &AppUser,
         app_id: &str,
+        executor_use: ExecutorUse,
     ) -> Result<Self, ApiError> {
         if !matches!(user, AppUser::Executor(_)) {
             return Err(ApiError::forbidden(
@@ -159,7 +160,9 @@ impl Caller {
             ));
         }
         Ok(Self {
-            permission: user.execution_app_permission(app_id, state).await?,
+            permission: user
+                .execution_app_permission(app_id, state, executor_use)
+                .await?,
             user: user.clone(),
         })
     }
@@ -1633,6 +1636,17 @@ mod tests {
         )
         .unwrap();
         assert!(LockedStorage::load(&store(dir.path())).await.is_err());
+    }
+
+    #[test]
+    fn executor_callers_keep_the_use_their_route_declared() {
+        let source = include_str!("service.rs");
+        let body = source
+            .split_once("\n    pub async fn for_executor(")
+            .expect("executor callers are built here")
+            .1;
+        let body = body.split_once("\n    }\n").map_or(body, |(body, _)| body);
+        assert!(body.contains(".execution_app_permission(app_id, state, executor_use)"));
     }
 
     #[test]

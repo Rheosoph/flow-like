@@ -31,6 +31,7 @@ use sea_orm::{
 use serde::de::{self, Unexpected};
 use serde::{Deserialize, Deserializer};
 
+use crate::routes::sink::authority::{RunAsVerdict, SinkAuthority, sink_authority};
 use crate::state::{AppState, CachedAuth, cached_openid_is_current};
 
 /// Client IP address extracted from the request for audit trail purposes.
@@ -233,7 +234,7 @@ impl ApiKey {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExecutorUser {
     pub sub: String,
     pub app_id: String,
@@ -246,15 +247,75 @@ pub struct ExecutorUser {
     /// Process-mining correlation carried by the run, threaded into outgoing
     /// app-connection tokens so downstream runs inherit the case.
     pub correlation: Option<crate::correlation::CorrelationContext>,
+    /// Signed replay flag: a shadow or regression run may read live state but
+    /// never change it.
+    pub shadow: bool,
+    /// The run serves a hosted frontend visitor; `sub` is the visitor.
+    pub hosted_frontend: bool,
+    pub event_id: Option<String>,
+    /// User whose private custom Bits the run may call through the API.
+    pub custom_bits_owner: Option<String>,
+    /// No person triggered the run; `sub` is the user the event runs as or a placeholder,
+    /// never someone app connections may pass on as a person.
+    pub unattended: bool,
+}
+
+impl From<crate::execution::ExecutionClaims> for ExecutorUser {
+    fn from(claims: crate::execution::ExecutionClaims) -> Self {
+        Self {
+            sub: claims.sub,
+            app_id: claims.app_id,
+            run_id: claims.run_id,
+            technical_user_id: claims.technical_user_id,
+            app_chain: claims.app_chain,
+            correlation: claims.correlation,
+            shadow: claims.shadow.unwrap_or(false),
+            hosted_frontend: claims.hosted_frontend,
+            event_id: claims.event_id,
+            custom_bits_owner: claims.custom_bits_owner,
+            unattended: claims.unattended,
+        }
+    }
+}
+
+/// What a route does with an executor's app authority. Shadow and regression
+/// replays may read, but every `Write` is refused for them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutorUse {
+    Read,
+    /// The action completes "Shadow and regression runs cannot …".
+    Write(&'static str),
+}
+
+impl ExecutorUse {
+    fn admit(self, user: &AppUser) -> Result<(), ApiError> {
+        match self {
+            ExecutorUse::Read => Ok(()),
+            ExecutorUse::Write(action) => user.deny_shadow_execution(action),
+        }
+    }
+}
+
+/// Error code of a side effect refused to a shadow or regression run.
+pub const SHADOW_SIDE_EFFECT_REFUSED: &str = "SHADOW_SIDE_EFFECT_REFUSED";
+
+pub fn shadow_side_effect_refused(action: &str) -> ApiError {
+    ApiError::coded(
+        axum::http::StatusCode::FORBIDDEN,
+        SHADOW_SIDE_EFFECT_REFUSED,
+        format!("Shadow and regression runs cannot {action}"),
+    )
 }
 
 /// Principal for app-to-app calls: a flow in `origin_app_id` acting on
 /// `target_app_id` through an accepted app connection. The token pins both
-/// app ids; permissions come from the role assigned to the connection.
+/// app ids; permissions come from the role assigned to the connection, bounded
+/// by the person it passed through.
 #[derive(Debug, Clone)]
 pub struct ConnectedAppUser {
-    /// The user that originally initiated the call chain, passed through
-    /// end-to-end even if they are not a member of the target app.
+    /// The subject the calling run passed through end-to-end: the person who started the
+    /// call chain, even if they are not a member of the target app, or a placeholder or
+    /// pseudonym when no person did (see [`ConnectedAppUser::person`]).
     pub sub: Option<String>,
     pub origin_app_id: String,
     pub target_app_id: String,
@@ -265,6 +326,20 @@ pub struct ConnectedAppUser {
     /// Process-mining correlation inherited from the calling run (trace root +
     /// business keys), so this run joins the same case.
     pub correlation: Option<crate::correlation::CorrelationContext>,
+}
+
+impl ConnectedAppUser {
+    /// The person who started the call chain: the account the connection passed
+    /// through, unless an API key started it. An anonymous visitor's pseudonym and the
+    /// placeholders of a run without a user or that no person triggered name nobody.
+    pub fn person(&self) -> Option<&str> {
+        if self.technical_user_id.is_some() {
+            return None;
+        }
+        self.sub
+            .as_deref()
+            .and_then(crate::execution::subject::account_user_id)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -344,8 +419,8 @@ impl AppPermissionResponse {
 /// The three principals stay distinguishable inside the flow: a human keeps
 /// their subject, an API key reports its key id, and a connected app reports
 /// the calling app. The subject an API key or app connection passed through
-/// lands in `on_behalf_of` — it is attribution, not an identity the run may act
-/// as, which is why `effective_user_id` never becomes `sub`.
+/// lands in `on_behalf_of`, never in `sub`: the context names the principal that
+/// called. Whether the run acts as that person is settled where it is dispatched.
 fn user_context_from_parts(
     principal: ExecutionPrincipal,
     sub: Option<&str>,
@@ -389,6 +464,19 @@ impl AppUser {
     /// be handled here.
     pub fn is_connected_app(&self) -> bool {
         matches!(self, AppUser::ConnectedApp(_))
+    }
+
+    pub fn is_shadow_execution(&self) -> bool {
+        matches!(self, AppUser::Executor(executor) if executor.shadow)
+    }
+
+    /// Refuses `action` with 403 `SHADOW_SIDE_EFFECT_REFUSED` when the caller is
+    /// a shadow or regression run.
+    pub fn deny_shadow_execution(&self, action: &str) -> Result<(), ApiError> {
+        if self.is_shadow_execution() {
+            return Err(shadow_side_effect_refused(action));
+        }
+        Ok(())
     }
 
     pub fn sub(&self) -> Result<String, AuthorizationError> {
@@ -640,23 +728,14 @@ impl AppUser {
                 return Err(ApiError::FORBIDDEN);
             }
 
-            let role_model = role::Entity::find()
-                .join(JoinType::InnerJoin, role::Relation::TechnicalUser.def())
-                .filter(
-                    technical_user::Column::AppId
-                        .eq(&api_key.app_id)
-                        .and(technical_user::Column::Id.eq(&api_key.key_id)),
-                )
-                .one(&state.db)
-                .instrument(role_query_span())
-                .await?;
-            let Some(role_model) = role_model else {
+            let Some(role_model) =
+                api_key_role(&state.db, &api_key.app_id, &api_key.key_id).await?
+            else {
                 state.auth_cache.invalidate(&hash_token(&api_key.api_key));
                 return Err(ApiError::unauthorized("API key is no longer valid"));
             };
 
-            let permissions = RolePermissions::from_bits(role_model.permissions)
-                .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
+            let permissions = role_permissions(&role_model)?;
             let effective_user_id = match api_key.creator_user_id.clone() {
                 Some(creator_user_id) => Some(creator_user_id),
                 None => resolve_legacy_api_key_creator_user_id(state, &api_key.app_id).await?,
@@ -706,10 +785,14 @@ impl AppUser {
         }
     }
 
+    /// App authority for runtime callbacks. Every caller declares whether it
+    /// only reads or changes state, so a replay can never reach a new write
+    /// route by default.
     pub async fn execution_app_permission(
         &self,
         app_id: &str,
         state: &AppState,
+        executor_use: ExecutorUse,
     ) -> Result<AppPermissionResponse, ApiError> {
         if let AppUser::Executor(executor) = self {
             if executor.app_id != app_id {
@@ -721,14 +804,15 @@ impl AppUser {
                 );
                 return Err(ApiError::FORBIDDEN);
             }
+            executor_use.admit(self)?;
 
             // Runs initiated through an app connection are bounded by the
-            // connection role, not by the passed-through user's membership in
-            // this app: the user may not be a member at all, and even if they
-            // are, the calling app must not exceed the role it was granted.
-            // This also keeps multi-hop chains (A -> B -> C) working, since
-            // B's callbacks and token minting resolve against the A -> B
-            // connection instead of the original user's membership in B.
+            // connection role and, when the run acts as a person, by what that
+            // person holds in this app: their role, or only running events when
+            // they are not a member. The calling app never exceeds the role it
+            // was granted. This also keeps multi-hop chains (A -> B -> C)
+            // working, since B's callbacks and token minting resolve against
+            // the A -> B connection.
             if let Some(app_chain) = &executor.app_chain
                 && let Some(calling_app_id) = app_chain.last()
             {
@@ -743,45 +827,321 @@ impl AppUser {
                 };
                 return connected_app_permission(&connected, app_id, state).await;
             }
-
-            let role_model = role::Entity::find()
-                .join(JoinType::InnerJoin, role::Relation::Membership.def())
-                .filter(
-                    membership::Column::UserId
-                        .eq(&executor.sub)
-                        .and(membership::Column::AppId.eq(app_id)),
-                )
-                .one(&state.db)
-                .instrument(role_query_span())
-                .await?
-                .ok_or_else(|| {
-                    tracing::debug!(
-                        user_id = %executor.sub,
-                        app_id = %app_id,
-                        run_id = %executor.run_id,
-                        "Role not found for executor user in app"
-                    );
-                    ApiError::FORBIDDEN
-                })?;
-
-            let permissions = RolePermissions::from_bits(role_model.permissions)
-                .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
-
-            return Ok(AppPermissionResponse {
-                state: state.clone(),
-                permissions,
-                role: Arc::new(role_model),
-                sub: Some(executor.sub.clone()),
-                effective_user_id: Some(executor.sub.clone()),
-                technical_user_id: executor.technical_user_id.clone(),
-                identifier: executor.sub.clone(),
-                principal: ExecutionPrincipal::User,
-                origin_app_id: None,
-            });
+            if let Some(key_id) = executor.technical_user_id.as_deref() {
+                return api_key_executor_permission(executor, key_id, app_id, state).await;
+            }
+            if executor.hosted_frontend {
+                return hosted_executor_permission(executor, app_id, state).await;
+            }
+            return member_executor_permission(executor, app_id, state).await;
         }
 
         self.app_permission(app_id, state).await
     }
+}
+
+/// Who an app permission is granted to; the role is resolved separately.
+#[derive(Debug, PartialEq, Eq)]
+struct Grantee {
+    sub: Option<String>,
+    effective_user_id: Option<String>,
+    technical_user_id: Option<String>,
+    identifier: String,
+    principal: ExecutionPrincipal,
+}
+
+impl Grantee {
+    fn user(sub: &str) -> Self {
+        Self {
+            sub: Some(sub.to_owned()),
+            effective_user_id: Some(sub.to_owned()),
+            technical_user_id: None,
+            identifier: sub.to_owned(),
+            principal: ExecutionPrincipal::User,
+        }
+    }
+
+    /// A run started with an API key acts as that key, like the key itself. The user the
+    /// run is attributed to never becomes its subject, so user-scoped routes refuse it.
+    fn api_key_run(attributed_to: &str, key_id: &str) -> Self {
+        Self {
+            sub: None,
+            effective_user_id: Some(attributed_to.to_owned()),
+            technical_user_id: Some(key_id.to_owned()),
+            identifier: key_id.to_owned(),
+            principal: ExecutionPrincipal::ApiKey,
+        }
+    }
+
+    fn grant(
+        self,
+        state: &AppState,
+        role: role::Model,
+        permissions: RolePermissions,
+    ) -> AppPermissionResponse {
+        AppPermissionResponse {
+            state: state.clone(),
+            permissions,
+            role: Arc::new(role),
+            sub: self.sub,
+            effective_user_id: self.effective_user_id,
+            technical_user_id: self.technical_user_id,
+            identifier: self.identifier,
+            principal: self.principal,
+            origin_app_id: None,
+        }
+    }
+}
+
+fn role_permissions(role: &role::Model) -> Result<RolePermissions, ApiError> {
+    Ok(RolePermissions::from_bits(role.permissions)
+        .ok_or_else(|| anyhow!("Invalid role permission bits"))?)
+}
+
+/// The role `user_id` holds in `app_id` through a membership.
+async fn member_role<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    user_id: &str,
+    app_id: &str,
+) -> Result<Option<role::Model>, ApiError> {
+    Ok(role::Entity::find()
+        .join(JoinType::InnerJoin, role::Relation::Membership.def())
+        .filter(
+            membership::Column::UserId
+                .eq(user_id)
+                .and(membership::Column::AppId.eq(app_id)),
+        )
+        .one(db)
+        .instrument(role_query_span())
+        .await?)
+}
+
+/// The role of the app's API key `key_id`; `None` once the key is deleted, loses its role
+/// or expires.
+async fn api_key_role<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    app_id: &str,
+    key_id: &str,
+) -> Result<Option<role::Model>, ApiError> {
+    let now = chrono::Utc::now().fixed_offset();
+    Ok(role::Entity::find()
+        .join(JoinType::InnerJoin, role::Relation::TechnicalUser.def())
+        .filter(
+            technical_user::Column::AppId
+                .eq(app_id)
+                .and(technical_user::Column::Id.eq(key_id))
+                .and(
+                    technical_user::Column::ValidUntil
+                        .is_null()
+                        .or(technical_user::Column::ValidUntil.gte(now)),
+                ),
+        )
+        .one(db)
+        .instrument(role_query_span())
+        .await?)
+}
+
+const API_KEY_RUN_REFUSED: &str =
+    "The API key that started this run was deleted, has expired or has no role";
+
+/// The role of the API key that started the executor run `run_id`. A deleted, expired or
+/// roleless key refuses every callback of the run alike.
+pub(crate) async fn api_key_run_role<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    app_id: &str,
+    key_id: &str,
+    run_id: &str,
+) -> Result<role::Model, ApiError> {
+    api_key_role(db, app_id, key_id).await?.ok_or_else(|| {
+        tracing::debug!(
+            key_id,
+            app_id,
+            run_id,
+            "API key of an executor run has no current role in the app"
+        );
+        ApiError::forbidden(API_KEY_RUN_REFUSED)
+    })
+}
+
+async fn member_executor_permission(
+    executor: &ExecutorUser,
+    app_id: &str,
+    state: &AppState,
+) -> Result<AppPermissionResponse, ApiError> {
+    let role_model = member_role(&state.db, &executor.sub, app_id)
+        .await?
+        .ok_or_else(|| {
+            tracing::debug!(
+                user_id = %executor.sub,
+                app_id = %app_id,
+                run_id = %executor.run_id,
+                "Role not found for executor user in app"
+            );
+            ApiError::FORBIDDEN
+        })?;
+    let permissions = role_permissions(&role_model)?;
+    Ok(Grantee::user(&executor.sub).grant(state, role_model, permissions))
+}
+
+async fn api_key_executor_permission(
+    executor: &ExecutorUser,
+    key_id: &str,
+    app_id: &str,
+    state: &AppState,
+) -> Result<AppPermissionResponse, ApiError> {
+    let role_model = api_key_run_role(&state.db, app_id, key_id, &executor.run_id).await?;
+    let permissions = role_permissions(&role_model)?;
+    Ok(Grantee::api_key_run(&executor.sub, key_id).grant(state, role_model, permissions))
+}
+
+/// The most a hosted-frontend run grants beyond what its visitor already holds: running
+/// the app's events.
+const HOSTED_FRONTEND_PERMISSIONS: RolePermissions = RolePermissions::ExecuteEvents;
+const HOSTED_VISITOR_ROLE_ID: &str = "hosted-visitor";
+const HOSTED_VISITOR_ROLE_NAME: &str = "Visitor";
+
+/// Owner and Admin stand for every permission; a hosted run and a connection call on
+/// behalf of a person get the permissions, never the roles.
+fn expanded_permissions(role: RolePermissions) -> RolePermissions {
+    let privileged = RolePermissions::Owner | RolePermissions::Admin;
+    if role.intersects(privileged) {
+        RolePermissions::all().difference(privileged)
+    } else {
+        role
+    }
+}
+
+/// A person's standing in an app a run reaches on their behalf: a member stands on their
+/// role, anyone else may only run the app's events.
+fn person_standing(member: Option<RolePermissions>) -> RolePermissions {
+    member.map_or(RolePermissions::ExecuteEvents, expanded_permissions)
+}
+
+/// Whose authority a hosted-frontend run holds on its callbacks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HostedAuthority {
+    /// A signed-in visitor's run acts as the visitor: their role in the app, `None` when
+    /// they are not a member. The user the event runs as neither caps nor lends anything.
+    Visitor(Option<RolePermissions>),
+    /// An anonymous visitor's run borrows what the user the event runs as lends, see
+    /// [`lent_authority`].
+    Lent(Option<RolePermissions>),
+}
+
+/// What a hosted-frontend run may do. A signed-in visitor keeps their own standing in the
+/// app; an anonymous visitor may only run events, and only while the user the event runs
+/// as may. Nothing at all is refused with 403.
+fn hosted_permissions(authority: HostedAuthority) -> Result<RolePermissions, ApiError> {
+    let permissions = match authority {
+        HostedAuthority::Visitor(member) => person_standing(member),
+        HostedAuthority::Lent(lent) => {
+            lent.map_or(RolePermissions::empty(), expanded_permissions)
+                & HOSTED_FRONTEND_PERMISSIONS
+        }
+    };
+    if permissions.is_empty() {
+        return Err(ApiError::forbidden(
+            "This hosted frontend run has no access to this app",
+        ));
+    }
+    Ok(permissions)
+}
+
+/// The role bits the user an event's active sink runs as lends the event's anonymous hosted
+/// runs, while that user may still trigger it. That user is the sink's run-as user or, for a
+/// legacy sink, the owner its stored PAT still names; any other sink lends nothing.
+fn lent_authority(authority: Option<SinkAuthority>) -> Result<Option<RolePermissions>, ApiError> {
+    match authority {
+        Some(SinkAuthority {
+            run_as_user_id: Some(_),
+            verdict: RunAsVerdict::Allowed(role),
+        }) => Ok(Some(role)),
+        Some(SinkAuthority {
+            verdict: RunAsVerdict::Transient(reason),
+            ..
+        }) => Err(ApiError::service_unavailable(reason)),
+        _ => Ok(None),
+    }
+}
+
+async fn visitor_permissions<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    user_id: &str,
+    app_id: &str,
+) -> Result<Option<RolePermissions>, ApiError> {
+    member_role(db, user_id, app_id)
+        .await?
+        .as_ref()
+        .map(role_permissions)
+        .transpose()
+}
+
+async fn event_authority<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    encryption_key: &[u8; 32],
+    executor: &ExecutorUser,
+    app_id: &str,
+) -> Result<Option<RolePermissions>, ApiError> {
+    let Some(event_id) = executor.event_id.as_deref() else {
+        return Ok(None);
+    };
+    lent_authority(sink_authority(db, encryption_key, app_id, event_id).await?)
+}
+
+/// Read on every callback. A signed-in visitor's run follows the visitor's current role and
+/// never reads the event's sink. An anonymous visitor's run reads the user the sink runs as,
+/// so a paused sink or a run-as user who lost access stops runs already in flight.
+async fn hosted_executor_permissions<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    encryption_key: &[u8; 32],
+    executor: &ExecutorUser,
+    app_id: &str,
+) -> Result<RolePermissions, ApiError> {
+    let authority = match crate::execution::subject::account_user_id(&executor.sub) {
+        Some(visitor) => HostedAuthority::Visitor(visitor_permissions(db, visitor, app_id).await?),
+        None => HostedAuthority::Lent(event_authority(db, encryption_key, executor, app_id).await?),
+    };
+    hosted_permissions(authority)
+}
+
+fn hosted_visitor_role(app_id: &str, permissions: RolePermissions) -> role::Model {
+    role::Model {
+        id: HOSTED_VISITOR_ROLE_ID.to_owned(),
+        name: HOSTED_VISITOR_ROLE_NAME.to_owned(),
+        description: None,
+        permissions: permissions.bits(),
+        app_id: Some(app_id.to_owned()),
+        created_at: Default::default(),
+        updated_at: Default::default(),
+        attributes: None,
+    }
+}
+
+/// A hosted-frontend run acts as its visitor, with the permissions of [`hosted_permissions`]
+/// in a synthetic visitor role.
+async fn hosted_executor_permission(
+    executor: &ExecutorUser,
+    app_id: &str,
+    state: &AppState,
+) -> Result<AppPermissionResponse, ApiError> {
+    let permissions =
+        hosted_executor_permissions(&state.db, &state.encryption_key, executor, app_id)
+            .await
+            .inspect_err(|error| {
+                tracing::debug!(
+                    user_id = %executor.sub,
+                    app_id = %app_id,
+                    run_id = %executor.run_id,
+                    event_id = ?executor.event_id,
+                    status = %error.status(),
+                    "Hosted frontend run has no authority in the app"
+                );
+            })?;
+    Ok(Grantee::user(&executor.sub).grant(
+        state,
+        hosted_visitor_role(app_id, permissions),
+        permissions,
+    ))
 }
 
 pub(crate) async fn validate_pat_fresh(user: &PATUser, state: &AppState) -> Result<(), ApiError> {
@@ -950,35 +1310,12 @@ async fn user_app_permission_uncached(
     app_id: &str,
     state: &AppState,
 ) -> Result<AppPermissionResponse, ApiError> {
-    let role_model = role::Entity::find()
-        .join(JoinType::InnerJoin, role::Relation::Membership.def())
-        .filter(
-            membership::Column::UserId
-                .eq(sub)
-                .and(membership::Column::AppId.eq(app_id)),
-        )
-        .one(&state.db)
-        .instrument(role_query_span())
-        .await?
-        .ok_or_else(|| {
-            tracing::debug!(sub, app_id, "Current app membership role was not found");
-            ApiError::FORBIDDEN
-        })?;
-    let permissions = RolePermissions::from_bits(role_model.permissions)
-        .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
-    let role_model = Arc::new(role_model);
-
-    Ok(AppPermissionResponse {
-        state: state.clone(),
-        permissions,
-        role: role_model,
-        sub: Some(sub.to_string()),
-        effective_user_id: Some(sub.to_string()),
-        technical_user_id: None,
-        identifier: sub.to_string(),
-        principal: ExecutionPrincipal::User,
-        origin_app_id: None,
-    })
+    let role_model = member_role(&state.db, sub, app_id).await?.ok_or_else(|| {
+        tracing::debug!(sub, app_id, "Current app membership role was not found");
+        ApiError::FORBIDDEN
+    })?;
+    let permissions = role_permissions(&role_model)?;
+    Ok(Grantee::user(sub).grant(state, role_model, permissions))
 }
 
 async fn connected_app_permission(
@@ -1004,10 +1341,162 @@ async fn connected_app_permission_uncached(
         return Err(ApiError::FORBIDDEN);
     }
 
+    let role_model = connected_app_role(&state.db, connected_app, app_id).await?;
+    let permissions = role_permissions(&role_model)?;
+
+    Ok(AppPermissionResponse {
+        state: state.clone(),
+        permissions,
+        role: Arc::new(role_model),
+        sub: None,
+        effective_user_id: connected_app.sub.clone(),
+        technical_user_id: connected_app.technical_user_id.clone(),
+        identifier: app_connection_cache_sub(&connected_app.origin_app_id),
+        principal: ExecutionPrincipal::ConnectedApp,
+        origin_app_id: Some(connected_app.origin_app_id.clone()),
+    })
+}
+
+/// The role a call through `connected_app` holds in `app_id`: the connection's role,
+/// keeping only the permissions and column attributes the person it passed through also
+/// holds when there is one.
+async fn connected_app_role<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    connected_app: &ConnectedAppUser,
+    app_id: &str,
+) -> Result<role::Model, ApiError> {
+    let origin_app_id = connected_app.origin_app_id.as_str();
+    let Some(person) = connected_app.person() else {
+        return connection_role(db, origin_app_id, app_id).await;
+    };
+    let (connection, membership) = flow_like_types::tokio::try_join!(
+        connection_role(db, origin_app_id, app_id),
+        member_role(db, person, app_id),
+    )?;
+    let member = membership.as_ref().map(role_permissions).transpose()?;
+    let granted = role_permissions(&connection)?;
+    let permissions = connected_person_permissions(granted, member).inspect_err(|_| {
+        tracing::debug!(
+            user_id = %person,
+            origin_app_id = %origin_app_id,
+            target_app_id = %app_id,
+            member = member.is_some(),
+            "App connection and the person it passed through share no permission"
+        );
+    })?;
+    let member_columns = membership
+        .as_ref()
+        .zip(member)
+        .map(|(role, permissions)| ColumnAccess::new(role, permissions));
+    let attributes = connected_person_attributes(
+        &ColumnAccess::new(&connection, granted),
+        member_columns.as_ref(),
+    );
+    Ok(role::Model {
+        permissions: permissions.bits(),
+        attributes: attributes.map(Into::into),
+        ..connection
+    })
+}
+
+/// Whether the active connection from `origin_app_id` still grants `person` some standing in
+/// `app_id`: what a call through it on their behalf would hold (see [`connected_app_role`]).
+/// A connection that is gone, pending or roleless, or shares no permission with the person,
+/// grants none.
+pub(crate) async fn connection_holds_person<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    origin_app_id: &str,
+    app_id: &str,
+    person: &str,
+) -> Result<bool, ApiError> {
+    let call = ConnectedAppUser {
+        sub: Some(person.to_owned()),
+        origin_app_id: origin_app_id.to_owned(),
+        target_app_id: app_id.to_owned(),
+        app_chain: vec![origin_app_id.to_owned()],
+        technical_user_id: None,
+        run_id: None,
+        correlation: None,
+    };
+    match connected_app_role(db, &call, app_id).await {
+        Ok(_) => Ok(true),
+        Err(error) if error.status() == axum::http::StatusCode::FORBIDDEN => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+/// The column attributes a role holds. Owner and Admin read every column, so they hold
+/// every attribute.
+#[derive(Debug)]
+struct ColumnAccess {
+    every: bool,
+    listed: std::collections::BTreeSet<String>,
+}
+
+impl ColumnAccess {
+    fn new(role: &role::Model, permissions: RolePermissions) -> Self {
+        Self {
+            every: permissions.intersects(RolePermissions::Owner | RolePermissions::Admin),
+            listed: role
+                .attributes
+                .iter()
+                .flatten()
+                .map(|attribute| attribute.trim())
+                .filter(|attribute| !attribute.is_empty())
+                .map(str::to_owned)
+                .collect(),
+        }
+    }
+
+    fn holds(&self, attribute: &str) -> bool {
+        self.every || self.listed.contains(attribute)
+    }
+}
+
+/// The column attributes a call through an app connection on behalf of a person holds:
+/// each attribute either role lists that both hold. A person who is not a member holds
+/// none. Such a call never reads every column, because Owner and Admin are never handed
+/// out (see [`expanded_permissions`]).
+fn connected_person_attributes(
+    connection: &ColumnAccess,
+    member: Option<&ColumnAccess>,
+) -> Option<Vec<String>> {
+    let member = member?;
+    let shared: Vec<String> = connection
+        .listed
+        .union(&member.listed)
+        .filter(|attribute| connection.holds(attribute) && member.holds(attribute))
+        .cloned()
+        .collect();
+    (!shared.is_empty()).then_some(shared)
+}
+
+/// What a call through an app connection on behalf of a person may do: what both the
+/// connection's role and the person's standing in the app grant (see [`person_standing`]).
+/// Nothing shared is refused with 403.
+fn connected_person_permissions(
+    connection: RolePermissions,
+    member: Option<RolePermissions>,
+) -> Result<RolePermissions, ApiError> {
+    let permissions = expanded_permissions(connection) & person_standing(member);
+    if permissions.is_empty() {
+        return Err(ApiError::forbidden(
+            "This app connection grants the person it passed through no access to this app",
+        ));
+    }
+    Ok(permissions)
+}
+
+/// The role of the active connection from `origin_app_id` to `app_id`.
+async fn connection_role<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    origin_app_id: &str,
+    app_id: &str,
+) -> Result<role::Model, ApiError> {
     let (connection, role) = app_connection::Entity::find()
         .filter(
             app_connection::Column::SourceAppId
-                .eq(&connected_app.origin_app_id)
+                .eq(origin_app_id)
                 .and(app_connection::Column::TargetAppId.eq(app_id))
                 .and(
                     app_connection::Column::Status
@@ -1015,7 +1504,7 @@ async fn connected_app_permission_uncached(
                 ),
         )
         .find_also_related(role::Entity)
-        .one(&state.db)
+        .one(db)
         .instrument(tracing::info_span!(
             target: "flow_like::observability",
             "db.query",
@@ -1025,39 +1514,21 @@ async fn connected_app_permission_uncached(
         .await?
         .ok_or_else(|| {
             tracing::debug!(
-                origin_app_id = %connected_app.origin_app_id,
-                target_app_id = %app_id,
+                origin_app_id,
+                target_app_id = app_id,
                 "No active app connection found"
             );
             ApiError::FORBIDDEN
         })?;
 
-    let role_model = role
-        .filter(|role| role.app_id.as_deref() == Some(app_id))
+    role.filter(|role| role.app_id.as_deref() == Some(app_id))
         .ok_or_else(|| {
             tracing::warn!(
                 connection_id = %connection.id,
                 "App connection is active but has no valid role for this app"
             );
             ApiError::FORBIDDEN
-        })?;
-
-    let role_model = Arc::new(role_model);
-
-    let permissions = RolePermissions::from_bits(role_model.permissions)
-        .ok_or_else(|| anyhow!("Invalid role permission bits"))?;
-
-    Ok(AppPermissionResponse {
-        state: state.clone(),
-        permissions,
-        role: role_model,
-        sub: None,
-        effective_user_id: connected_app.sub.clone(),
-        technical_user_id: connected_app.technical_user_id.clone(),
-        identifier: app_connection_cache_sub(&connected_app.origin_app_id),
-        principal: ExecutionPrincipal::ConnectedApp,
-        origin_app_id: Some(connected_app.origin_app_id.clone()),
-    })
+        })
 }
 
 async fn resolve_legacy_api_key_creator_user_id(
@@ -1141,6 +1612,13 @@ fn reserved_credential_principal(token: &str) -> Option<AppUser> {
     crate::devices::jwt::is_device_credential(token).then_some(AppUser::Unauthorized)
 }
 
+/// The principal a current executor token stands for, with the token's expiry.
+fn executor_principal(token: &str, now: i64) -> Option<(ExecutorUser, i64)> {
+    let claims = crate::execution::verify_execution_jwt(token).ok()?;
+    let exp = claims.exp;
+    crate::backend_jwt::cached_token_is_current(exp, now).then(|| (ExecutorUser::from(claims), exp))
+}
+
 #[tracing::instrument(
     target = "flow_like::observability",
     name = "auth.authenticate",
@@ -1189,15 +1667,7 @@ async fn authenticate_request(
                     // success.
                     state.auth_cache.invalidate(&cache_key);
                 }
-                CachedAuth::Executor {
-                    sub,
-                    app_id,
-                    run_id,
-                    technical_user_id,
-                    app_chain,
-                    correlation,
-                    exp,
-                } => {
+                CachedAuth::Executor { executor, exp } => {
                     if !crate::backend_jwt::cached_token_is_current(
                         exp,
                         chrono::Utc::now().timestamp(),
@@ -1208,15 +1678,9 @@ async fn authenticate_request(
                             .insert::<AppUser>(AppUser::Unauthorized);
                         return Ok(request);
                     }
-                    let user = AppUser::Executor(ExecutorUser {
-                        sub,
-                        app_id,
-                        run_id,
-                        technical_user_id,
-                        app_chain,
-                        correlation,
-                    });
-                    request.extensions_mut().insert::<AppUser>(user);
+                    request
+                        .extensions_mut()
+                        .insert::<AppUser>(AppUser::Executor(executor));
                     return Ok(request);
                 }
                 CachedAuth::AppConnection {
@@ -1281,33 +1745,17 @@ async fn authenticate_request(
         }
 
         // OpenID failed — try executor JWT
-        if let Ok(claims) = crate::execution::verify_execution_jwt(token)
-            && crate::backend_jwt::cached_token_is_current(
-                claims.exp,
-                chrono::Utc::now().timestamp(),
-            )
-        {
+        if let Some((executor, exp)) = executor_principal(token, chrono::Utc::now().timestamp()) {
             state.auth_cache.insert(
                 cache_key,
                 CachedAuth::Executor {
-                    sub: claims.sub.clone(),
-                    app_id: claims.app_id.clone(),
-                    run_id: claims.run_id.clone(),
-                    technical_user_id: claims.technical_user_id.clone(),
-                    app_chain: claims.app_chain.clone(),
-                    correlation: claims.correlation.clone(),
-                    exp: claims.exp,
+                    executor: executor.clone(),
+                    exp,
                 },
             );
-            let user = AppUser::Executor(ExecutorUser {
-                sub: claims.sub,
-                app_id: claims.app_id,
-                run_id: claims.run_id,
-                technical_user_id: claims.technical_user_id,
-                app_chain: claims.app_chain,
-                correlation: claims.correlation,
-            });
-            request.extensions_mut().insert::<AppUser>(user);
+            request
+                .extensions_mut()
+                .insert::<AppUser>(AppUser::Executor(executor));
             return Ok(request);
         }
 
@@ -1493,7 +1941,7 @@ async fn authenticate_request(
 
             let creator_user_id = match app.creator_user_id.clone() {
                 Some(creator_user_id) => Some(creator_user_id),
-                None => resolve_legacy_api_key_creator_user_id(&state, &app.app_id).await?,
+                None => resolve_legacy_api_key_creator_user_id(state, &app.app_id).await?,
             };
 
             // Cache valid API key
@@ -1524,8 +1972,87 @@ async fn authenticate_request(
 }
 
 #[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use sea_orm::{
+        ActiveValue::Set, ConnectOptions, ConnectionTrait, Database, DatabaseConnection, Schema,
+        sea_query::Table,
+    };
+
+    async fn role_and_key_tables() -> DatabaseConnection {
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1);
+        let db = Database::connect(options).await.unwrap();
+        db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+            .await
+            .unwrap();
+        let schema = Schema::new(db.get_database_backend());
+        for source in [
+            schema.create_table_from_entity(role::Entity),
+            schema.create_table_from_entity(technical_user::Entity),
+        ] {
+            let mut table = Table::create();
+            table.table(source.get_table_name().unwrap().clone());
+            for column in source.get_columns() {
+                table.col(column.clone());
+            }
+            db.execute(&table).await.unwrap();
+        }
+        db
+    }
+
+    /// API keys of `app-1`: `current` and `unexpired` hold `role-1`; `expired`, `roleless`
+    /// and the deleted `deleted` hold none.
+    pub(crate) async fn api_keys() -> DatabaseConnection {
+        let db = role_and_key_tables().await;
+        let now = chrono::Utc::now().fixed_offset();
+        role::Entity::insert(role::ActiveModel {
+            id: Set("role-1".into()),
+            name: Set("Runner".into()),
+            permissions: Set(RolePermissions::ExecuteEvents.bits()),
+            app_id: Set(Some("app-1".into())),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        })
+        .exec(&db)
+        .await
+        .unwrap();
+        let hour = chrono::Duration::hours(1);
+        for (id, role_id, valid_until) in [
+            ("current", Some("role-1"), None),
+            ("unexpired", Some("role-1"), Some(now + hour)),
+            ("expired", Some("role-1"), Some(now - hour)),
+            ("roleless", None, None),
+            ("deleted", Some("role-1"), None),
+        ] {
+            technical_user::Entity::insert(technical_user::ActiveModel {
+                id: Set(id.into()),
+                name: Set(id.into()),
+                key: Set(format!("{id}-hash")),
+                role_id: Set(role_id.map(str::to_owned)),
+                app_id: Set("app-1".into()),
+                valid_until: Set(valid_until),
+                created_at: Set(now),
+                updated_at: Set(now),
+                ..Default::default()
+            })
+            .exec(&db)
+            .await
+            .unwrap();
+        }
+        technical_user::Entity::delete_by_id("deleted")
+            .exec(&db)
+            .await
+            .unwrap();
+        db
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routes::sink::authority::RunAsDenial;
 
     #[test]
     fn device_tokens_never_expose_their_attributed_subject_to_ordinary_routes() {
@@ -1709,20 +2236,761 @@ mod tests {
         assert!(response.headers().get("x-error-id").is_none());
     }
 
-    #[test]
-    fn authenticated_app_permission_denial_is_forbidden() {
-        let user = AppUser::Executor(ExecutorUser {
+    fn executor_user(shadow: bool) -> AppUser {
+        AppUser::Executor(ExecutorUser {
             sub: "user-id".to_string(),
             app_id: "app-id".to_string(),
             run_id: "run-id".to_string(),
             technical_user_id: None,
             app_chain: None,
             correlation: None,
-        });
-        let response = user.app_permission_denial().into_response();
+            shadow,
+            hosted_frontend: false,
+            event_id: None,
+            custom_bits_owner: None,
+            unattended: false,
+        })
+    }
+
+    #[test]
+    fn authenticated_app_permission_denial_is_forbidden() {
+        let response = executor_user(false).app_permission_denial().into_response();
 
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
         assert!(response.headers().get("x-error-id").is_none());
+    }
+
+    fn signed_params() -> crate::execution::ExecutionJwtParams {
+        crate::execution::ExecutionJwtParams {
+            user_id: "user-1".into(),
+            technical_user_id: Some("key-1".into()),
+            run_id: "run-1".into(),
+            app_id: "app-1".into(),
+            board_id: "board-1".into(),
+            event_id: Some("event-1".into()),
+            app_chain: Some(vec!["calling-app".into()]),
+            correlation: Some(crate::correlation::CorrelationContext::root("root-run")),
+            callback_url: "https://api.example".into(),
+            token_type: crate::execution::TokenType::Executor,
+            ttl_seconds: Some(60),
+            shadow: Some(true),
+        }
+    }
+
+    #[test]
+    fn signed_claims_reach_the_executor_principal() {
+        crate::backend_jwt::init_for_tests();
+        let now = chrono::Utc::now().timestamp();
+        let token = crate::execution::sign_execution_jwt(signed_params()).unwrap();
+        let mut claims = crate::execution::verify_execution_jwt(&token).unwrap();
+        claims.custom_bits_owner = Some("owner-1".into());
+        let token = crate::backend_jwt::sign(&claims).unwrap();
+
+        let (executor, exp) = executor_principal(&token, now).expect("a current executor token");
+        assert_eq!(exp, claims.exp);
+        assert_eq!(
+            executor,
+            ExecutorUser {
+                sub: "user-1".into(),
+                app_id: "app-1".into(),
+                run_id: "run-1".into(),
+                technical_user_id: Some("key-1".into()),
+                app_chain: Some(vec!["calling-app".into()]),
+                correlation: Some(crate::correlation::CorrelationContext::root("root-run")),
+                shadow: true,
+                hosted_frontend: false,
+                event_id: Some("event-1".into()),
+                custom_bits_owner: Some("owner-1".into()),
+                unattended: false,
+            }
+        );
+        assert!(AppUser::Executor(executor).is_shadow_execution());
+        assert!(executor_principal(&token, exp + 3_600).is_none());
+
+        let mut visitor = signed_params();
+        visitor.user_id = "visitor-1".into();
+        visitor.technical_user_id = None;
+        visitor.app_chain = None;
+        visitor.correlation = None;
+        visitor.shadow = None;
+        let visitor = crate::execution::sign_execution_jwt(visitor).unwrap();
+        let (live, _) = executor_principal(&visitor, now).unwrap();
+        assert!(!live.shadow && !live.hosted_frontend && !live.unattended);
+        let hosted = crate::execution::bind_hosted_frontend(&visitor).unwrap();
+        let (hosted, _) = executor_principal(&hosted, now).unwrap();
+        assert!(hosted.hosted_frontend && !hosted.shadow && !hosted.unattended);
+        assert_eq!(hosted.sub, "visitor-1");
+        assert_eq!(hosted.event_id.as_deref(), Some("event-1"));
+        assert!(hosted.custom_bits_owner.is_none());
+
+        let mut fire = signed_params();
+        fire.technical_user_id = None;
+        fire.shadow = None;
+        let fire = crate::execution::sign_unattended_execution_jwt(fire).unwrap();
+        let (fire, _) = executor_principal(&fire, now).unwrap();
+        assert!(fire.unattended && !fire.hosted_frontend && !fire.shadow);
+        assert_eq!(fire.sub, "user-1");
+        assert_eq!(fire.app_chain, Some(vec!["calling-app".into()]));
+
+        let mut user_token = signed_params();
+        user_token.token_type = crate::execution::TokenType::User;
+        let user_token = crate::execution::sign_execution_jwt(user_token).unwrap();
+        assert!(executor_principal(&user_token, now).is_none());
+        assert!(executor_principal("not-a-token", now).is_none());
+    }
+
+    #[test]
+    fn only_shadow_writes_are_refused() {
+        let write = ExecutorUse::Write("change the app cache");
+        let refusal = write.admit(&executor_user(true)).unwrap_err();
+        assert_eq!(refusal.status(), StatusCode::FORBIDDEN);
+        assert_eq!(refusal.public_code(), SHADOW_SIDE_EFFECT_REFUSED);
+        assert_eq!(
+            refusal.public_message(),
+            Some("Shadow and regression runs cannot change the app cache")
+        );
+        assert!(ExecutorUse::Read.admit(&executor_user(true)).is_ok());
+
+        let others = [
+            executor_user(false),
+            AppUser::OpenID(OpenIDUser {
+                sub: "user-id".into(),
+                access_token: "token".into(),
+            }),
+            AppUser::PAT(PATUser {
+                pat: "pat_pat-1.secret".into(),
+                sub: "user-id".into(),
+            }),
+            AppUser::APIKey(ApiKey {
+                key_id: "key-1".into(),
+                api_key: "secret".into(),
+                app_id: "app-id".into(),
+                creator_user_id: Some("user-id".into()),
+            }),
+            AppUser::ConnectedApp(ConnectedAppUser {
+                sub: Some("user-id".into()),
+                origin_app_id: "origin-app".into(),
+                target_app_id: "app-id".into(),
+                app_chain: vec!["origin-app".into()],
+                technical_user_id: None,
+                run_id: Some("origin-run".into()),
+                correlation: None,
+            }),
+        ];
+        for user in &others {
+            assert!(!user.is_shadow_execution());
+            assert!(write.admit(user).is_ok());
+            assert!(ExecutorUse::Read.admit(user).is_ok());
+            assert!(user.deny_shadow_execution("change the app cache").is_ok());
+        }
+    }
+
+    #[test]
+    fn executor_use_is_admitted_before_any_authority_lookup() {
+        let source = include_str!("jwt.rs");
+        let body = source
+            .split_once("\n    pub async fn execution_app_permission(")
+            .expect("executor authority is resolved here")
+            .1;
+        let body = body.split_once("\n    }\n").map_or(body, |(body, _)| body);
+        let position = |step: &str| {
+            body.find(step)
+                .unwrap_or_else(|| panic!("execution_app_permission calls {step}"))
+        };
+        let admit = position("executor_use.admit(self)?;");
+        assert!(position("executor.app_id != app_id") < admit);
+        assert!(position("return Err(ApiError::FORBIDDEN);") < admit);
+        assert!(!body[..admit].contains(".await"));
+        let lookups = [
+            "connected_app_permission(",
+            "api_key_executor_permission(",
+            "hosted_executor_permission(",
+            "member_executor_permission(",
+        ]
+        .map(position);
+        assert!(admit < lookups[0]);
+        assert!(lookups.is_sorted(), "chain, API key, hosted, then member");
+    }
+
+    #[test]
+    fn api_key_runs_act_as_their_key() {
+        let grantee = Grantee::api_key_run("creator-1", "key-1");
+        assert_eq!(
+            grantee,
+            Grantee {
+                sub: None,
+                effective_user_id: Some("creator-1".into()),
+                technical_user_id: Some("key-1".into()),
+                identifier: "key-1".into(),
+                principal: ExecutionPrincipal::ApiKey,
+            }
+        );
+        let context = user_context_from_parts(
+            grantee.principal,
+            grantee.sub.as_deref(),
+            grantee.effective_user_id.as_deref(),
+            grantee.technical_user_id.as_deref().unwrap(),
+            "",
+            role(),
+        );
+        assert!(context.is_technical());
+        assert_eq!(context.sub, "");
+        assert_eq!(context.get_key_id(), Some("key-1"));
+        assert_eq!(context.on_behalf_of(), Some("creator-1"));
+
+        let member = Grantee::user("user-1");
+        assert_eq!(member.sub.as_deref(), Some("user-1"));
+        assert_eq!(member.principal, ExecutionPrincipal::User);
+        assert_eq!(member.technical_user_id, None);
+    }
+
+    /// The callback column of the hosted identity table (the dispatch columns are in
+    /// `invoke_event`): a signed-in visitor's run acts as the visitor, on their role when they
+    /// are a member and only to run events when they are not, whatever the event's run-as user
+    /// may do. An anonymous visitor's run may only run events, and only while that user may.
+    /// Owner and Admin are never handed out.
+    #[test]
+    fn hosted_callbacks_act_as_the_signed_in_visitor_or_borrow_the_events_run_as_user() {
+        use HostedAuthority::{Lent, Visitor};
+        use RolePermissions as P;
+        let (execute, read) = (P::ExecuteEvents, P::ReadTeam);
+        let member = P::ReadTemplates | P::ExecuteEvents | P::ListEvents;
+        let all = P::all().difference(P::Owner | P::Admin);
+        let denied = Err(StatusCode::FORBIDDEN);
+        for (case, authority, expected) in [
+            ("owner", Visitor(Some(P::Owner)), Ok(all)),
+            ("admin", Visitor(Some(P::Admin)), Ok(all)),
+            ("member", Visitor(Some(member)), Ok(member)),
+            ("reader", Visitor(Some(read)), Ok(read)),
+            ("member, no rights", Visitor(Some(P::empty())), denied),
+            ("non-member", Visitor(None), Ok(execute)),
+            ("lent by owner", Lent(Some(P::Owner)), Ok(execute)),
+            ("lent by admin", Lent(Some(P::Admin)), Ok(execute)),
+            ("lent by member", Lent(Some(member)), Ok(execute)),
+            ("lent by reader", Lent(Some(read)), denied),
+            ("lent nothing", Lent(None), denied),
+        ] {
+            let granted = hosted_permissions(authority).map_err(|error| error.status());
+            assert_eq!(granted, expected, "{case}");
+            if let Ok(granted) = granted {
+                assert!(!granted.intersects(P::Owner | P::Admin), "{case}");
+                assert!(!has_role_permission(&granted, P::Admin), "{case}");
+            }
+        }
+    }
+
+    #[test]
+    fn only_a_run_as_user_who_may_trigger_lends_authority() {
+        let authority = |run_as: Option<&str>, verdict| {
+            Some(SinkAuthority {
+                run_as_user_id: run_as.map(str::to_owned),
+                verdict,
+            })
+        };
+        let owner = RunAsVerdict::Allowed(RolePermissions::Owner);
+        assert_eq!(
+            lent_authority(authority(Some("owner"), owner)).unwrap(),
+            Some(RolePermissions::Owner)
+        );
+        for lent in [
+            None,
+            authority(None, RunAsVerdict::Allowed(RolePermissions::empty())),
+            authority(None, RunAsVerdict::Denied(RunAsDenial::AppInactive)),
+            authority(Some("left"), RunAsVerdict::Denied(RunAsDenial::NotMember)),
+            authority(
+                Some("viewer"),
+                RunAsVerdict::Denied(RunAsDenial::CannotTrigger),
+            ),
+            authority(
+                Some("banned"),
+                RunAsVerdict::Denied(RunAsDenial::AccountInactive),
+            ),
+        ] {
+            assert_eq!(lent_authority(lent.clone()).unwrap(), None, "{lent:?}");
+        }
+        let fault = lent_authority(authority(
+            Some("corrupt"),
+            RunAsVerdict::Transient("Invalid role permission bits"),
+        ))
+        .unwrap_err();
+        assert_eq!(fault.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// A sink saved before run-as identities lends its anonymous hosted runs what the owner of
+    /// its stored PAT holds, as the door ran them, and nothing once the PAT names nobody.
+    #[test]
+    fn legacy_sinks_lend_what_the_owner_of_their_token_holds() {
+        use crate::routes::sink::{
+            authority::{RunAsFacts, legacy_authority},
+            trigger::PatRefusal,
+        };
+        use RolePermissions as P;
+        let publisher = RunAsFacts {
+            app_active: true,
+            account_active: true,
+            member: true,
+            permissions: Some(P::Owner.bits()),
+        };
+        let lend = |owner| lent_authority(Some(legacy_authority(owner)));
+        let lent = lend(Ok(("publisher".to_owned(), publisher))).unwrap();
+        assert_eq!(lent, Some(P::Owner));
+        assert_eq!(
+            hosted_permissions(HostedAuthority::Lent(lent)).unwrap(),
+            P::ExecuteEvents
+        );
+
+        let departed = RunAsFacts {
+            member: false,
+            permissions: None,
+            ..publisher
+        };
+        for refused in [
+            Ok(("departed".to_owned(), departed)),
+            Err(PatRefusal::Invalid),
+        ] {
+            let lent = lend(refused.clone()).unwrap();
+            assert_eq!(lent, None, "{refused:?}");
+            assert_eq!(
+                hosted_permissions(HostedAuthority::Lent(lent))
+                    .unwrap_err()
+                    .status(),
+                StatusCode::FORBIDDEN,
+                "{refused:?}"
+            );
+        }
+        let fault = lend(Err(PatRefusal::Unreadable)).unwrap_err();
+        assert_eq!(fault.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    /// An API-key run keeps its key's role only while the key exists, holds a role and is
+    /// unexpired; an expired key is refused exactly like a deleted one.
+    #[flow_like_types::tokio::test]
+    async fn api_key_runs_lose_their_role_once_the_key_is_deleted_or_expires() {
+        let db = test_support::api_keys().await;
+        for key in ["current", "unexpired"] {
+            let role = api_key_run_role(&db, "app-1", key, "run-1").await.unwrap();
+            assert_eq!(role.id, "role-1", "{key}");
+        }
+        let deleted = api_key_run_role(&db, "app-1", "deleted", "run-1")
+            .await
+            .unwrap_err();
+        assert_eq!(deleted.status(), StatusCode::FORBIDDEN);
+        assert_eq!(deleted.public_message(), Some(API_KEY_RUN_REFUSED));
+        for (app, key) in [
+            ("app-1", "expired"),
+            ("app-1", "roleless"),
+            ("app-2", "current"),
+        ] {
+            assert!(
+                api_key_role(&db, app, key).await.unwrap().is_none(),
+                "{key} in {app}"
+            );
+            let refusal = api_key_run_role(&db, app, key, "run-1").await.unwrap_err();
+            assert_eq!(refusal.status(), deleted.status(), "{key} in {app}");
+            assert_eq!(
+                refusal.public_message(),
+                deleted.public_message(),
+                "{key} in {app}"
+            );
+        }
+    }
+
+    #[test]
+    fn hosted_visitors_get_a_synthetic_role_without_attributes() {
+        let role = hosted_visitor_role("app-1", RolePermissions::ExecuteEvents);
+        assert_eq!(role.id, HOSTED_VISITOR_ROLE_ID);
+        assert_eq!(role.name, HOSTED_VISITOR_ROLE_NAME);
+        assert_eq!(role.app_id.as_deref(), Some("app-1"));
+        assert_eq!(role.permissions, RolePermissions::ExecuteEvents.bits());
+        assert!(role.attributes.is_none());
+    }
+
+    fn connected_app(sub: Option<&str>, technical_user_id: Option<&str>) -> ConnectedAppUser {
+        ConnectedAppUser {
+            sub: sub.map(str::to_owned),
+            origin_app_id: "app-a".into(),
+            target_app_id: "app-b".into(),
+            app_chain: vec!["app-a".into()],
+            technical_user_id: technical_user_id.map(str::to_owned),
+            run_id: Some("run-a".into()),
+            correlation: None,
+        }
+    }
+
+    #[test]
+    fn a_connection_acts_for_the_account_it_passed_through_unless_a_key_started_the_chain() {
+        for (sub, technical_user_id, person) in [
+            (Some("user-1"), None, Some("user-1")),
+            (Some(" user-1 "), None, Some("user-1")),
+            (Some("user-1"), Some("key-1"), None),
+            (Some("frontend:event-1:run-run-1"), None, None),
+            (Some("run:run-1"), None, None),
+            (Some("sink:sink-1"), None, None),
+            (Some("inbound:event-1"), None, None),
+            (Some("regression:suite-1"), None, None),
+            (Some("local"), None, None),
+            (None, None, None),
+        ] {
+            assert_eq!(
+                connected_app(sub, technical_user_id).person(),
+                person,
+                "{sub:?} started by {technical_user_id:?}"
+            );
+        }
+    }
+
+    fn column_access(permissions: RolePermissions, attributes: &[&str]) -> ColumnAccess {
+        let role = role::Model {
+            attributes: Some(
+                attributes
+                    .iter()
+                    .map(|attribute| attribute.to_string())
+                    .collect(),
+            ),
+            ..hosted_visitor_role("app-b", permissions)
+        };
+        ColumnAccess::new(&role, permissions)
+    }
+
+    /// A call on behalf of a person reads a restricted column only when both the connection's
+    /// role and the person's member role may: through an attribute both hold, an Owner or
+    /// Admin role holding every attribute. A person who is not a member holds none.
+    #[test]
+    fn connection_calls_for_a_person_keep_only_the_attributes_both_roles_hold() {
+        use RolePermissions as P;
+        let reader = P::ReadFiles;
+        let pii_finance = column_access(reader, &["pii", " finance ", ""]);
+        let finance_hr = column_access(reader, &["finance", "hr"]);
+        let bare = column_access(reader, &[]);
+        let admin = column_access(P::Admin, &[]);
+        let owner_ops = column_access(P::Owner, &["ops"]);
+        for (case, connection, member, expected) in [
+            (
+                "shared",
+                &pii_finance,
+                Some(&finance_hr),
+                Some(vec!["finance"]),
+            ),
+            ("member holds none", &pii_finance, Some(&bare), None),
+            ("connection holds none", &bare, Some(&finance_hr), None),
+            (
+                "admin connection",
+                &admin,
+                Some(&finance_hr),
+                Some(vec!["finance", "hr"]),
+            ),
+            (
+                "owner member",
+                &pii_finance,
+                Some(&owner_ops),
+                Some(vec!["finance", "pii"]),
+            ),
+            (
+                "both privileged",
+                &admin,
+                Some(&owner_ops),
+                Some(vec!["ops"]),
+            ),
+            ("not a member", &pii_finance, None, None),
+            ("not a member, admin connection", &admin, None, None),
+        ] {
+            let expected: Option<Vec<String>> =
+                expected.map(|list| list.into_iter().map(str::to_owned).collect());
+            assert_eq!(
+                connected_person_attributes(connection, member),
+                expected,
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn connection_calls_for_a_person_never_exceed_either_role() {
+        use RolePermissions as P;
+        let execute = P::ExecuteEvents;
+        let run_and_read = execute | P::ReadFiles;
+        let default_member = P::ReadTemplates | execute | P::ListEvents;
+        let editor = run_and_read | P::WriteFiles | P::ReadBoards;
+        let everything = P::all().difference(P::Owner | P::Admin);
+        for (connection, member, expected) in [
+            (run_and_read, Some(editor), run_and_read),
+            (run_and_read, Some(P::Owner), run_and_read),
+            (editor, Some(default_member), execute),
+            (P::Admin, Some(default_member), default_member),
+            (P::Owner, Some(P::Admin), everything),
+            (editor, None, execute),
+            (P::Admin, None, execute),
+        ] {
+            let granted = connected_person_permissions(connection, member).unwrap();
+            assert_eq!(granted, expected, "{member:?} through {connection:?}");
+            assert!(!granted.intersects(P::Owner | P::Admin), "{member:?}");
+        }
+        for (connection, member) in [
+            (P::ReadFiles, None),
+            (P::ReadFiles | P::ReadBoards, Some(execute | P::WriteFiles)),
+            (editor, Some(P::empty())),
+        ] {
+            let refusal = connected_person_permissions(connection, member).unwrap_err();
+            assert_eq!(
+                refusal.status(),
+                StatusCode::FORBIDDEN,
+                "{member:?} through {connection:?}"
+            );
+        }
+    }
+
+    async fn connection_tables() -> sea_orm::DatabaseConnection {
+        use sea_orm::{ConnectOptions, ConnectionTrait, Database, Schema, sea_query::Table};
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1);
+        let db = Database::connect(options).await.unwrap();
+        db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+            .await
+            .unwrap();
+        let schema = Schema::new(db.get_database_backend());
+        for source in [
+            schema.create_table_from_entity(role::Entity),
+            schema.create_table_from_entity(membership::Entity),
+            schema.create_table_from_entity(app_connection::Entity),
+        ] {
+            let mut table = Table::create();
+            table.table(source.get_table_name().unwrap().clone());
+            for column in source.get_columns() {
+                table.col(column.clone());
+            }
+            db.execute(&table).await.unwrap();
+        }
+        db
+    }
+
+    async fn add_role(
+        db: &sea_orm::DatabaseConnection,
+        id: &str,
+        app_id: &str,
+        permissions: RolePermissions,
+        attributes: &[&str],
+    ) {
+        use sea_orm::ActiveValue::Set;
+        let now = chrono::Utc::now().fixed_offset();
+        role::Entity::insert(role::ActiveModel {
+            id: Set(id.into()),
+            name: Set(id.into()),
+            permissions: Set(permissions.bits()),
+            app_id: Set(Some(app_id.into())),
+            created_at: Set(now),
+            updated_at: Set(now),
+            attributes: Set((!attributes.is_empty()).then(|| {
+                attributes
+                    .iter()
+                    .map(|attribute| attribute.to_string())
+                    .collect()
+            })),
+            ..Default::default()
+        })
+        .exec(db)
+        .await
+        .unwrap();
+    }
+
+    async fn add_member(db: &sea_orm::DatabaseConnection, user_id: &str, role_id: &str) {
+        use sea_orm::ActiveValue::Set;
+        let now = chrono::Utc::now().fixed_offset();
+        membership::Entity::insert(membership::ActiveModel {
+            id: Set(format!("{user_id}-in-app-b")),
+            user_id: Set(user_id.into()),
+            app_id: Set("app-b".into()),
+            role_id: Set(role_id.into()),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        })
+        .exec(db)
+        .await
+        .unwrap();
+    }
+
+    async fn add_connection(
+        db: &sea_orm::DatabaseConnection,
+        source: &str,
+        role_id: Option<&str>,
+        status: sea_orm_active_enums::AppConnectionStatus,
+    ) {
+        use sea_orm::ActiveValue::Set;
+        let now = chrono::Utc::now().fixed_offset();
+        app_connection::Entity::insert(app_connection::ActiveModel {
+            id: Set(format!("{source}-to-app-b")),
+            source_app_id: Set(source.into()),
+            target_app_id: Set("app-b".into()),
+            role_id: Set(role_id.map(str::to_owned)),
+            status: Set(status),
+            created_at: Set(now),
+            updated_at: Set(now),
+            ..Default::default()
+        })
+        .exec(db)
+        .await
+        .unwrap();
+    }
+
+    /// `app-b` accepts connections from `app-a` (role `runner`), `app-f` (role `reader`),
+    /// `app-p` (pending), `app-n` (no role) and `app-x` (a role of another app). Its members
+    /// are `editor-1`, `owner-1` and `auditor-1`, each with the role of that name.
+    async fn connected_apps() -> sea_orm::DatabaseConnection {
+        use RolePermissions as P;
+        use sea_orm_active_enums::AppConnectionStatus::{Active, Pending};
+        let db = connection_tables().await;
+        let run_and_read = P::ExecuteEvents | P::ReadFiles;
+        let roles: [(&str, &str, RolePermissions, &[&str]); 6] = [
+            (
+                "runner",
+                "app-b",
+                run_and_read | P::ReadBoards,
+                &["pii", "finance"],
+            ),
+            ("reader", "app-b", P::ReadFiles, &[]),
+            (
+                "editor",
+                "app-b",
+                run_and_read | P::WriteFiles,
+                &["finance", "hr"],
+            ),
+            ("owner", "app-b", P::Owner, &["ops"]),
+            ("auditor", "app-b", P::ReadLogs, &[]),
+            ("foreign", "app-x", P::Owner, &[]),
+        ];
+        for (id, app_id, permissions, attributes) in roles {
+            add_role(&db, id, app_id, permissions, attributes).await;
+        }
+        for (user_id, role_id) in [
+            ("editor-1", "editor"),
+            ("owner-1", "owner"),
+            ("auditor-1", "auditor"),
+        ] {
+            add_member(&db, user_id, role_id).await;
+        }
+        for (source, role_id, status) in [
+            ("app-a", Some("runner"), Active),
+            ("app-f", Some("reader"), Active),
+            ("app-p", Some("runner"), Pending),
+            ("app-n", None, Active),
+            ("app-x", Some("foreign"), Active),
+        ] {
+            add_connection(&db, source, role_id, status).await;
+        }
+        db
+    }
+
+    /// A caller from `origin` through its connection to `app-b`.
+    fn caller_from(origin: &str, sub: Option<&str>, key: Option<&str>) -> ConnectedAppUser {
+        ConnectedAppUser {
+            origin_app_id: origin.into(),
+            app_chain: vec![origin.into()],
+            ..connected_app(sub, key)
+        }
+    }
+
+    /// A call through a connection holds the connection's role. On behalf of a person it
+    /// keeps only the permissions and column attributes that person also holds in the app,
+    /// or only running events and no attribute when they are not a member. A chain an API
+    /// key started, an anonymous visitor's run and a run nobody triggered act for nobody.
+    #[flow_like_types::tokio::test]
+    async fn connection_calls_hold_what_the_connection_and_the_person_share() {
+        use RolePermissions as P;
+        let db = connected_apps().await;
+        let execute = P::ExecuteEvents;
+        let run_and_read = execute | P::ReadFiles;
+        let runner = run_and_read | P::ReadBoards;
+        let visitor = Some("frontend:event-1:run-run-1");
+        let unattended = Some("run:run-1");
+        let connection: &[&str] = &["pii", "finance"];
+        let from_a = |sub, key| caller_from("app-a", sub, key);
+        for (caller, role_id, expected, attributes) in [
+            (
+                from_a(Some("editor-1"), None),
+                "runner",
+                run_and_read,
+                &["finance"][..],
+            ),
+            (
+                from_a(Some("owner-1"), None),
+                "runner",
+                runner,
+                &["finance", "pii"],
+            ),
+            (from_a(Some("stranger-1"), None), "runner", execute, &[]),
+            (
+                from_a(Some("editor-1"), Some("key-1")),
+                "runner",
+                runner,
+                connection,
+            ),
+            (from_a(visitor, None), "runner", runner, connection),
+            (from_a(unattended, None), "runner", runner, connection),
+            (from_a(None, None), "runner", runner, connection),
+            (
+                caller_from("app-f", None, None),
+                "reader",
+                P::ReadFiles,
+                &[],
+            ),
+        ] {
+            let role = connected_app_role(&db, &caller, "app-b").await.unwrap();
+            assert_eq!(role.id, role_id, "{caller:?}");
+            assert_eq!(role.permissions, expected.bits(), "{caller:?}");
+            let held: Vec<&str> = role
+                .attributes
+                .iter()
+                .flatten()
+                .map(String::as_str)
+                .collect();
+            assert_eq!(held, attributes, "{caller:?}");
+        }
+    }
+
+    /// A connection that is pending, has no role of the app or does not exist grants
+    /// nothing, and neither does one that shares no permission with the person it acts for.
+    #[flow_like_types::tokio::test]
+    async fn connection_calls_without_a_current_role_or_a_shared_permission_are_refused() {
+        let db = connected_apps().await;
+        for caller in [
+            caller_from("app-a", Some("auditor-1"), None),
+            caller_from("app-f", Some("stranger-1"), None),
+            caller_from("app-p", None, None),
+            caller_from("app-n", None, None),
+            caller_from("app-x", None, None),
+            caller_from("app-z", Some("owner-1"), None),
+        ] {
+            let refusal = connected_app_role(&db, &caller, "app-b").await.unwrap_err();
+            assert_eq!(refusal.status(), StatusCode::FORBIDDEN, "{caller:?}");
+        }
+    }
+
+    /// A person a connection passed through stands in the target app while the connection
+    /// grants them something: a stranger through a connection that may run events, a member
+    /// through one that shares a permission with their role. A connection that only reads,
+    /// that is pending, roleless or gone, or that shares nothing with the member, does not.
+    #[flow_like_types::tokio::test]
+    async fn a_connection_holds_a_person_only_while_it_grants_them_standing() {
+        let db = connected_apps().await;
+        for (origin, person, holds) in [
+            ("app-a", "stranger-1", true),
+            ("app-a", "editor-1", true),
+            ("app-a", "owner-1", true),
+            ("app-a", "auditor-1", false),
+            ("app-f", "stranger-1", false),
+            ("app-p", "stranger-1", false),
+            ("app-n", "stranger-1", false),
+            ("app-x", "stranger-1", false),
+            ("app-z", "owner-1", false),
+        ] {
+            assert_eq!(
+                connection_holds_person(&db, origin, "app-b", person)
+                    .await
+                    .unwrap(),
+                holds,
+                "{person} through {origin}"
+            );
+        }
     }
 
     #[test]
@@ -1823,5 +3091,187 @@ mod tests {
             Some("creator-1"),
             now
         ));
+    }
+
+    mod postgres {
+        use super::*;
+        use sea_orm::{
+            ConnectionTrait, Database, DatabaseConnection, DatabaseTransaction, DbBackend,
+            Statement, TransactionTrait,
+        };
+
+        const SCHEMA: &str = r#"
+            CREATE TABLE public."App" (id text PRIMARY KEY, status text NOT NULL);
+            CREATE TABLE public."User" (id text PRIMARY KEY, status text NOT NULL);
+            CREATE TABLE public."Role" (
+                id text PRIMARY KEY, name text NOT NULL, description text,
+                permissions bigint NOT NULL, "appId" text,
+                "createdAt" timestamptz(3) NOT NULL DEFAULT now(),
+                "updatedAt" timestamptz(3) NOT NULL DEFAULT now(), attributes jsonb
+            );
+            CREATE TABLE public."Membership" (
+                id text PRIMARY KEY, "userId" text NOT NULL, "appId" text NOT NULL, "roleId" text NOT NULL
+            );
+            CREATE TABLE public."EventSink" (
+                id text PRIMARY KEY, "eventId" text NOT NULL UNIQUE, "appId" text NOT NULL,
+                active boolean NOT NULL, "runAsUserId" text, "patEncrypted" text
+            );
+            CREATE TABLE public."PAT" (
+                id text PRIMARY KEY, key text NOT NULL UNIQUE, permissions bigint NOT NULL,
+                "userId" text NOT NULL, "validUntil" timestamptz(3)
+            );
+            INSERT INTO public."App" VALUES ('app', 'ACTIVE');
+            INSERT INTO public."User" VALUES
+                ('publisher', 'ACTIVE'), ('member', 'ACTIVE'), ('reader', 'ACTIVE'),
+                ('outsider', 'ACTIVE'), ('departed', 'ACTIVE');
+            INSERT INTO public."Membership" VALUES
+                ('m-publisher', 'publisher', 'app', 'role-owner'),
+                ('m-member', 'member', 'app', 'role-member'),
+                ('m-reader', 'reader', 'app', 'role-reader');
+            INSERT INTO public."EventSink" VALUES
+                ('s-live', 'live', 'app', TRUE, 'publisher'),
+                ('s-paused', 'paused', 'app', FALSE, 'publisher'),
+                ('s-departed', 'departed', 'app', TRUE, 'departed'),
+                ('s-legacy', 'legacy', 'app', TRUE, NULL);
+        "#;
+
+        const MEMBER: RolePermissions = RolePermissions::ReadTemplates
+            .union(RolePermissions::ExecuteEvents)
+            .union(RolePermissions::ListEvents);
+        const KEY: [u8; 32] = [7; 32];
+
+        async fn seeded() -> (DatabaseConnection, DatabaseTransaction) {
+            let url = std::env::var("FLOW_LIKE_SINK_TEST_DATABASE_URL").unwrap();
+            let db = Database::connect(url).await.unwrap();
+            let txn = db.begin().await.unwrap();
+            txn.execute_unprepared(SCHEMA).await.unwrap();
+            for (id, permissions) in [
+                ("role-owner", RolePermissions::Owner),
+                ("role-member", MEMBER),
+                ("role-reader", RolePermissions::ReadTeam),
+            ] {
+                txn.execute_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    r#"INSERT INTO public."Role" (id, name, permissions, "appId") VALUES ($1, $1, $2, 'app')"#,
+                    [id.into(), permissions.bits().into()],
+                ))
+                .await
+                .unwrap();
+            }
+            (db, txn)
+        }
+
+        fn hosted_run(visitor: &str, event_id: &str) -> ExecutorUser {
+            ExecutorUser {
+                sub: visitor.into(),
+                app_id: "app".into(),
+                run_id: "run".into(),
+                technical_user_id: None,
+                app_chain: None,
+                correlation: None,
+                shadow: false,
+                hosted_frontend: true,
+                event_id: Some(event_id.into()),
+                custom_bits_owner: None,
+                unattended: false,
+            }
+        }
+
+        /// A signed-in visitor's callbacks read the visitor's role and never the event's sink,
+        /// whether it is on, paused, runs as someone who left or is missing. An anonymous
+        /// visitor's callbacks read the user the sink runs as on every callback.
+        #[flow_like_types::tokio::test]
+        #[ignore = "requires FLOW_LIKE_SINK_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+        async fn hosted_runs_act_as_signed_in_visitors_and_borrow_the_run_as_user_otherwise() {
+            let (_db, txn) = seeded().await;
+            let execute = Ok(RolePermissions::ExecuteEvents);
+            let reader = Ok(RolePermissions::ReadTeam);
+            let forbidden = Err(StatusCode::FORBIDDEN);
+            let anonymous = "frontend:live:anonymous-session-1";
+            for (visitor, event, expected) in [
+                (anonymous, "live", execute),
+                (anonymous, "paused", forbidden),
+                (anonymous, "departed", forbidden),
+                (anonymous, "legacy", forbidden),
+                (anonymous, "unknown", forbidden),
+                ("member", "live", Ok(MEMBER)),
+                ("reader", "live", reader),
+                ("outsider", "live", execute),
+                ("member", "paused", Ok(MEMBER)),
+                ("outsider", "paused", execute),
+                ("member", "departed", Ok(MEMBER)),
+                ("reader", "unknown", reader),
+            ] {
+                let granted =
+                    hosted_executor_permissions(&txn, &KEY, &hosted_run(visitor, event), "app")
+                        .await
+                        .map_err(|error| error.status());
+                assert_eq!(granted, expected, "{visitor} on {event}");
+            }
+            txn.rollback().await.unwrap();
+        }
+
+        /// The door runs a legacy sink's anonymous hosted visit as the owner of its stored PAT,
+        /// so its callbacks get the same lent authority, and none once the PAT names nobody. A
+        /// signed-in visitor's callbacks never read the PAT.
+        #[flow_like_types::tokio::test]
+        #[ignore = "requires FLOW_LIKE_SINK_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
+        async fn hosted_runs_on_legacy_sinks_act_for_the_owner_of_their_token() {
+            let (_db, txn) = seeded().await;
+            seed_legacy_sinks(&txn).await;
+            let anonymous = "frontend:legacy-pat:anonymous-session-1";
+            for (visitor, event, expected) in [
+                (anonymous, "legacy-pat", Ok(RolePermissions::ExecuteEvents)),
+                (anonymous, "legacy-revoked", Err(StatusCode::FORBIDDEN)),
+                (
+                    anonymous,
+                    "legacy-unreadable",
+                    Err(StatusCode::SERVICE_UNAVAILABLE),
+                ),
+                ("member", "legacy-pat", Ok(MEMBER)),
+                ("reader", "legacy-pat", Ok(RolePermissions::ReadTeam)),
+                ("member", "legacy-revoked", Ok(MEMBER)),
+                ("member", "legacy-unreadable", Ok(MEMBER)),
+            ] {
+                let granted =
+                    hosted_executor_permissions(&txn, &KEY, &hosted_run(visitor, event), "app")
+                        .await
+                        .map_err(|error| error.status());
+                assert_eq!(granted, expected, "{visitor} on {event}");
+            }
+            txn.rollback().await.unwrap();
+        }
+
+        /// Legacy sinks whose PAT names the publisher, names a deleted PAT, or cannot be
+        /// decrypted.
+        async fn seed_legacy_sinks(txn: &DatabaseTransaction) {
+            txn.execute_raw(Statement::from_sql_and_values(
+                DbBackend::Postgres,
+                r#"INSERT INTO public."PAT" (id, key, permissions, "userId") VALUES ('pat-1', $1, $2, 'publisher')"#,
+                [
+                    blake3::hash(b"secret").to_hex().to_string().into(),
+                    crate::permission::pat_permission::PatPermission::ReadWrite
+                        .bits()
+                        .into(),
+                ],
+            ))
+            .await
+            .unwrap();
+            let stored = |token: &str| crate::routes::app::events::db::encrypt_token(token, &KEY);
+            for (event, ciphertext) in [
+                ("legacy-pat", stored("pat_pat-1.secret")),
+                ("legacy-revoked", stored("pat_pat-2.secret")),
+                ("legacy-unreadable", "not-a-ciphertext".to_owned()),
+            ] {
+                txn.execute_raw(Statement::from_sql_and_values(
+                    DbBackend::Postgres,
+                    r#"INSERT INTO public."EventSink" (id, "eventId", "appId", active, "patEncrypted")
+                       VALUES ($1, $1, 'app', TRUE, $2)"#,
+                    [event.into(), ciphertext.into()],
+                ))
+                .await
+                .unwrap();
+            }
+        }
     }
 }

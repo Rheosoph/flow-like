@@ -19,8 +19,8 @@ const GLOBAL_REGION: &str = "Global";
 const CHINA_REGION: &str = "China";
 const GLOBAL_ENDPOINT: &str = "https://api.minimax.io/v1";
 const CHINA_ENDPOINT: &str = "https://api.minimaxi.com/v1";
-const DEFAULT_MODEL_ID: &str = "MiniMax-M3";
-const SUPPORTED_MODEL_IDS: [&str; 2] = [DEFAULT_MODEL_ID, "MiniMax-M2.7"];
+const DEFAULT_MODEL_ID: &str = "MiniMax-M3.1-Flash";
+const SUPPORTED_MODEL_IDS: [&str; 2] = [DEFAULT_MODEL_ID, "MiniMax-M3"];
 
 fn endpoint_for_region(region: &str) -> &'static str {
     match region {
@@ -37,7 +37,7 @@ fn context_length_for_model(model_id: &str) -> u32 {
 }
 
 fn is_multimodal_model(model_id: &str) -> bool {
-    model_id == DEFAULT_MODEL_ID
+    model_id == "MiniMax-M3"
 }
 
 #[crate::register_node]
@@ -61,7 +61,7 @@ impl NodeLogic for BuildMiniMaxNode {
         );
         node.set_flowscript_name("ai.provider", "minimax");
         node.add_icon("/flow/icons/find_model.svg");
-        node.set_version(3);
+        node.set_version(4);
 
         node.set_scores(
             NodeScores::new()
@@ -181,7 +181,9 @@ impl NodeLogic for BuildMiniMaxNode {
             context_length: context_length_for_model(&model_id),
             model_classification: BitModelClassification::default(),
             provider: flow_like_model_provider::provider::ModelProvider {
-                api_surface: None,
+                api_surface: Some(
+                    flow_like_model_provider::provider::ModelApiSurface::ChatCompletions,
+                ),
                 provider_name: "custom:openai".into(),
                 model_id: Some(model_id.clone()),
                 version: None,
@@ -220,7 +222,12 @@ mod tests {
         let endpoint = node.get_pin_by_name("endpoint").expect("endpoint pin");
         let model = node.get_pin_by_name("model_id").expect("model pin");
 
-        assert_eq!(node.version, Some(3));
+        assert_eq!(node.version, Some(4));
+        assert_eq!(SUPPORTED_MODEL_IDS, ["MiniMax-M3.1-Flash", "MiniMax-M3"]);
+        assert_eq!(
+            model.default_value,
+            Some(flow_like_types::json::to_vec(&json!("MiniMax-M3.1-Flash")).unwrap())
+        );
         assert_eq!(
             region
                 .options
@@ -247,7 +254,9 @@ mod tests {
         assert_eq!(endpoint_for_region(CHINA_REGION), CHINA_ENDPOINT);
         assert_eq!(context_length_for_model(DEFAULT_MODEL_ID), 1_000_000);
         assert_eq!(context_length_for_model("MiniMax-M2.7"), 204_800);
-        assert!(is_multimodal_model(DEFAULT_MODEL_ID));
+        assert!(!is_multimodal_model(DEFAULT_MODEL_ID));
+        assert!(is_multimodal_model("MiniMax-M3"));
+        assert_eq!(context_length_for_model("MiniMax-M3"), 1_000_000);
         assert!(!is_multimodal_model("MiniMax-M2.7"));
     }
 }

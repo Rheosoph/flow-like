@@ -176,8 +176,7 @@ impl NodeLogic for SetColumnMetadataLocalDatabaseNode {
         let metadata = requested_metadata(context).await?;
 
         let cached_db = database.load(context).await?;
-        cached_db.ensure_flushed().await?;
-        let database = cached_db.db.read().await;
+        let database = cached_db.flushed_read().await?;
 
         let metadata = database
             .inner()

@@ -26,6 +26,7 @@ afterEach(async () => {
 
 const workflowAction = (actionId: string): Action => ({
 	name: "workflow_event",
+	context: {},
 	pageAction: { actionId, manifestRevision: "revision-1" },
 });
 
@@ -114,12 +115,17 @@ async function setup(
 		},
 	} as never);
 
-	const component: ButtonComponent | LinkComponent = {
-		id: "details",
-		type: kind,
-		label: { literalString: "Details" },
-		eventHandlers: { [kind === "button" ? "click" : "navigate"]: actions },
-	};
+	const label = { literalString: "Details" };
+	const component: ButtonComponent | LinkComponent =
+		kind === "button"
+			? { id: "details", type: kind, label, eventHandlers: { click: actions } }
+			: {
+					id: "details",
+					type: kind,
+					label,
+					href: { literalString: "" },
+					eventHandlers: { navigate: actions },
+				};
 	const host = window.document.createElement("div");
 	window.document.body.appendChild(host);
 	root = createRoot(host as unknown as HTMLElement);

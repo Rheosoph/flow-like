@@ -9,13 +9,15 @@ use crate::locked_storage::{
     LockedStorageStatus, LockedUploadTicket, LockedVersionRef, PurgeLockedItemRequest,
     SetLockedAutoDeleteRequest, SetLockedLegalHoldRequest,
 };
-use crate::middleware::jwt::AppUser;
+use crate::middleware::jwt::{AppUser, ExecutorUse};
 use crate::state::AppState;
 use axum::{
     Extension, Json, Router,
     extract::{Path, State},
     routing::{get, post},
 };
+
+const CHANGE_LOCKED_FILES: ExecutorUse = ExecutorUse::Write("change locked files");
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -287,7 +289,7 @@ pub async fn executor_status(
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
 ) -> Result<Json<LockedStorageStatus>, ApiError> {
-    Caller::for_executor(&state, &user, &app_id).await?;
+    Caller::for_executor(&state, &user, &app_id, ExecutorUse::Read).await?;
     Ok(Json(locked::status(&state)))
 }
 
@@ -305,7 +307,7 @@ pub async fn executor_list(
     Path(app_id): Path<String>,
     Json(request): Json<ListLockedItemsRequest>,
 ) -> Result<Json<ListLockedItemsResponse>, ApiError> {
-    let caller = Caller::for_executor(&state, &user, &app_id).await?;
+    let caller = Caller::for_executor(&state, &user, &app_id, ExecutorUse::Read).await?;
     Ok(Json(locked::list(&state, &caller, &app_id, request).await?))
 }
 
@@ -323,7 +325,7 @@ pub async fn executor_get_item(
     Path(app_id): Path<String>,
     Json(request): Json<GetLockedItemRequest>,
 ) -> Result<Json<LockedItemDetail>, ApiError> {
-    let caller = Caller::for_executor(&state, &user, &app_id).await?;
+    let caller = Caller::for_executor(&state, &user, &app_id, ExecutorUse::Read).await?;
     Ok(Json(locked::get(&state, &caller, &app_id, request).await?))
 }
 
@@ -332,7 +334,8 @@ pub async fn executor_get_item(
     description = "Start a locked upload from a running flow. Executor only.",
     params(("app_id" = String, Path, description = "Application ID")),
     request_body = CreateLockedUploadRequest,
-    responses((status = 200, description = "Upload ticket", body = LockedUploadTicket)),
+    responses((status = 200, description = "Upload ticket", body = LockedUploadTicket),
+        (status = 403, description = "Forbidden: the run's role lacks the permission, or the run is a regression replay")),
     security(("executor_jwt" = []))
 )]
 pub async fn executor_upload(
@@ -341,7 +344,7 @@ pub async fn executor_upload(
     Path(app_id): Path<String>,
     Json(request): Json<CreateLockedUploadRequest>,
 ) -> Result<Json<LockedUploadTicket>, ApiError> {
-    let caller = Caller::for_executor(&state, &user, &app_id).await?;
+    let caller = Caller::for_executor(&state, &user, &app_id, CHANGE_LOCKED_FILES).await?;
     Ok(Json(
         locked::upload(&state, &caller, &app_id, request).await?,
     ))
@@ -352,7 +355,8 @@ pub async fn executor_upload(
     description = "Finish a locked upload from a running flow. Executor only.",
     params(("app_id" = String, Path, description = "Application ID")),
     request_body = LockedVersionRef,
-    responses((status = 200, description = "The locked file with the new version", body = LockedItemDetail)),
+    responses((status = 200, description = "The locked file with the new version", body = LockedItemDetail),
+        (status = 403, description = "Forbidden: the run's role lacks the permission, or the run is a regression replay")),
     security(("executor_jwt" = []))
 )]
 pub async fn executor_commit(
@@ -361,7 +365,7 @@ pub async fn executor_commit(
     Path(app_id): Path<String>,
     Json(request): Json<LockedVersionRef>,
 ) -> Result<Json<LockedItemDetail>, ApiError> {
-    let caller = Caller::for_executor(&state, &user, &app_id).await?;
+    let caller = Caller::for_executor(&state, &user, &app_id, CHANGE_LOCKED_FILES).await?;
     Ok(Json(
         locked::commit(&state, &caller, &app_id, request).await?,
     ))
@@ -372,7 +376,8 @@ pub async fn executor_commit(
     description = "Cancel an uncommitted locked upload. Executor only.",
     params(("app_id" = String, Path, description = "Application ID")),
     request_body = LockedVersionRef,
-    responses((status = 200, description = "Upload discarded", body = LockedEmpty)),
+    responses((status = 200, description = "Upload discarded", body = LockedEmpty),
+        (status = 403, description = "Forbidden: the run's role lacks the permission, or the run is a regression replay")),
     security(("executor_jwt" = []))
 )]
 pub async fn executor_abort(
@@ -381,7 +386,7 @@ pub async fn executor_abort(
     Path(app_id): Path<String>,
     Json(request): Json<LockedVersionRef>,
 ) -> Result<Json<LockedEmpty>, ApiError> {
-    let caller = Caller::for_executor(&state, &user, &app_id).await?;
+    let caller = Caller::for_executor(&state, &user, &app_id, CHANGE_LOCKED_FILES).await?;
     Ok(Json(
         locked::abort(&state, &caller, &app_id, request).await?,
     ))
@@ -401,7 +406,7 @@ pub async fn executor_download(
     Path(app_id): Path<String>,
     Json(request): Json<DownloadLockedItemRequest>,
 ) -> Result<Json<LockedDownload>, ApiError> {
-    let caller = Caller::for_executor(&state, &user, &app_id).await?;
+    let caller = Caller::for_executor(&state, &user, &app_id, ExecutorUse::Read).await?;
     Ok(Json(
         locked::download(&state, &caller, &app_id, request).await?,
     ))
@@ -412,7 +417,8 @@ pub async fn executor_download(
     description = "Extend a version's retention when the run's user is an admin. Executor only.",
     params(("app_id" = String, Path, description = "Application ID")),
     request_body = ExtendLockedRetentionRequest,
-    responses((status = 200, description = "The updated version", body = LockedItemVersion)),
+    responses((status = 200, description = "The updated version", body = LockedItemVersion),
+        (status = 403, description = "Forbidden: the run's role lacks the permission, or the run is a regression replay")),
     security(("executor_jwt" = []))
 )]
 pub async fn executor_extend_retention(
@@ -421,7 +427,7 @@ pub async fn executor_extend_retention(
     Path(app_id): Path<String>,
     Json(request): Json<ExtendLockedRetentionRequest>,
 ) -> Result<Json<LockedItemVersion>, ApiError> {
-    let caller = Caller::for_executor(&state, &user, &app_id).await?;
+    let caller = Caller::for_executor(&state, &user, &app_id, CHANGE_LOCKED_FILES).await?;
     Ok(Json(
         locked::extend_retention(&state, &caller, &app_id, request).await?,
     ))
@@ -432,7 +438,8 @@ pub async fn executor_extend_retention(
     description = "Place or lift a legal hold when the run's user is an admin. Executor only.",
     params(("app_id" = String, Path, description = "Application ID")),
     request_body = SetLockedLegalHoldRequest,
-    responses((status = 200, description = "The updated version", body = LockedItemVersion)),
+    responses((status = 200, description = "The updated version", body = LockedItemVersion),
+        (status = 403, description = "Forbidden: the run's role lacks the permission, or the run is a regression replay")),
     security(("executor_jwt" = []))
 )]
 pub async fn executor_set_legal_hold(
@@ -441,7 +448,7 @@ pub async fn executor_set_legal_hold(
     Path(app_id): Path<String>,
     Json(request): Json<SetLockedLegalHoldRequest>,
 ) -> Result<Json<LockedItemVersion>, ApiError> {
-    let caller = Caller::for_executor(&state, &user, &app_id).await?;
+    let caller = Caller::for_executor(&state, &user, &app_id, CHANGE_LOCKED_FILES).await?;
     Ok(Json(
         locked::set_legal_hold(&state, &caller, &app_id, request).await?,
     ))
@@ -452,7 +459,8 @@ pub async fn executor_set_legal_hold(
     description = "Choose whether a version is deleted automatically once its retention ends, when the run's user may delete the file. Executor only.",
     params(("app_id" = String, Path, description = "Application ID")),
     request_body = SetLockedAutoDeleteRequest,
-    responses((status = 200, description = "The updated version", body = LockedItemVersion)),
+    responses((status = 200, description = "The updated version", body = LockedItemVersion),
+        (status = 403, description = "Forbidden: the run's role lacks the permission, or the run is a regression replay")),
     security(("executor_jwt" = []))
 )]
 pub async fn executor_set_auto_delete(
@@ -461,7 +469,7 @@ pub async fn executor_set_auto_delete(
     Path(app_id): Path<String>,
     Json(request): Json<SetLockedAutoDeleteRequest>,
 ) -> Result<Json<LockedItemVersion>, ApiError> {
-    let caller = Caller::for_executor(&state, &user, &app_id).await?;
+    let caller = Caller::for_executor(&state, &user, &app_id, CHANGE_LOCKED_FILES).await?;
     Ok(Json(
         locked::set_auto_delete(&state, &caller, &app_id, request).await?,
     ))
@@ -472,7 +480,8 @@ pub async fn executor_set_auto_delete(
     description = "Delete versions whose retention has ended. Executor only.",
     params(("app_id" = String, Path, description = "Application ID")),
     request_body = PurgeLockedItemRequest,
-    responses((status = 200, description = "The locked file after purging", body = LockedItemDetail)),
+    responses((status = 200, description = "The locked file after purging", body = LockedItemDetail),
+        (status = 403, description = "Forbidden: the run's role lacks the permission, or the run is a regression replay")),
     security(("executor_jwt" = []))
 )]
 pub async fn executor_purge(
@@ -481,8 +490,63 @@ pub async fn executor_purge(
     Path(app_id): Path<String>,
     Json(request): Json<PurgeLockedItemRequest>,
 ) -> Result<Json<LockedItemDetail>, ApiError> {
-    let caller = Caller::for_executor(&state, &user, &app_id).await?;
+    let caller = Caller::for_executor(&state, &user, &app_id, CHANGE_LOCKED_FILES).await?;
     Ok(Json(
         locked::purge(&state, &caller, &app_id, request).await?,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn handler_body<'a>(source: &'a str, handler: &str) -> &'a str {
+        let body = source
+            .split_once(&format!("\npub async fn {handler}("))
+            .unwrap_or_else(|| panic!("{handler} exists"))
+            .1;
+        body.split_once("\n}\n").map_or(body, |(body, _)| body)
+    }
+
+    #[test]
+    fn each_executor_handler_declares_whether_it_changes_locked_files() {
+        let source = include_str!("locked.rs");
+        let read = "Caller::for_executor(&state, &user, &app_id, ExecutorUse::Read)";
+        let write = "Caller::for_executor(&state, &user, &app_id, CHANGE_LOCKED_FILES)";
+        for handler in [
+            "executor_status",
+            "executor_list",
+            "executor_get_item",
+            "executor_download",
+        ] {
+            let body = handler_body(source, handler);
+            assert!(body.contains(read), "{handler} only reads");
+            assert!(!body.contains(write), "{handler} only reads");
+        }
+        for handler in [
+            "executor_upload",
+            "executor_commit",
+            "executor_abort",
+            "executor_extend_retention",
+            "executor_set_legal_hold",
+            "executor_set_auto_delete",
+            "executor_purge",
+        ] {
+            let body = handler_body(source, handler);
+            assert!(body.contains(write), "{handler} changes locked files");
+            assert!(!body.contains(read), "{handler} changes locked files");
+        }
+        assert_eq!(
+            CHANGE_LOCKED_FILES,
+            ExecutorUse::Write("change locked files")
+        );
+        let handlers = source
+            .split_once("#[cfg(test)]")
+            .map_or(source, |(handlers, _)| handlers);
+        assert_eq!(
+            handlers.matches("Caller::for_executor(").count(),
+            11,
+            "every executor handler is classified above"
+        );
+    }
 }

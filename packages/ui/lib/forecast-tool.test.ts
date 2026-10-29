@@ -1,6 +1,7 @@
 import { describe, expect, mock, test } from "bun:test";
 import type {
 	CreateStudioForecastPayload,
+	IQueryState,
 	SavedStudioForecast,
 	StudioForecastResult,
 } from "../state/backend-state/query-state";
@@ -88,8 +89,8 @@ function fixture(now?: () => number) {
 	} as unknown as IBit;
 	let settingsId = "profile";
 	const query = {
-		forecast: mock(async () => output),
-		createForecast: mock(
+		forecast: mock<IQueryState["forecast"]>(async () => output),
+		createForecast: mock<IQueryState["createForecast"]>(
 			async (
 				appId: string,
 				payload: CreateStudioForecastPayload,
@@ -101,7 +102,7 @@ function fixture(now?: () => number) {
 				created_at: "2026-10-19T12:00:00Z",
 			}),
 		),
-		getForecast: mock(
+		getForecast: mock<IQueryState["getForecast"]>(
 			async (): Promise<SavedStudioForecast> => ({
 				id: "saved",
 				app_id: "app",
@@ -112,7 +113,7 @@ function fixture(now?: () => number) {
 				result: output,
 			}),
 		),
-		listForecasts: mock(async () => []),
+		listForecasts: mock<IQueryState["listForecasts"]>(async () => []),
 	};
 	const host: ForecastToolHost = {
 		identity: "hub/profile/viewer",

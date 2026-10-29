@@ -54,18 +54,22 @@ pub fn parse_path(path: &str) -> Vec<PathSegment> {
 }
 
 pub fn get_value_by_path(value: &Value, path: &str) -> Option<Value> {
+    value_by_path(value, path).cloned()
+}
+
+fn value_by_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     let segments = parse_path(path);
-    let mut current = value.clone();
+    let mut current = value;
 
     for segment in segments {
         match segment {
             PathSegment::Field(field_name) => {
                 let obj = current.as_object()?;
-                current = obj.get(&field_name)?.clone();
+                current = obj.get(&field_name)?;
             }
             PathSegment::ArrayIndex(index) => {
                 let arr = current.as_array()?;
-                current = arr.get(index)?.clone();
+                current = arr.get(index)?;
             }
         }
     }
@@ -74,7 +78,7 @@ pub fn get_value_by_path(value: &Value, path: &str) -> Option<Value> {
 }
 
 pub fn has_value_by_path(value: &Value, path: &str) -> bool {
-    get_value_by_path(value, path).is_some()
+    value_by_path(value, path).is_some()
 }
 
 pub fn set_value_by_path(value: &mut Value, path: &str, new_value: Value) -> Result<()> {
@@ -268,6 +272,23 @@ mod tests {
             Some(json!("Alice"))
         );
         assert_eq!(get_value_by_path(&data, "users[1].age"), Some(json!(25)));
+    }
+
+    #[test]
+    fn selected_values_remain_owned_and_null_is_present() {
+        let data = json!({"users": [{"name": "Alice", "phone": null}]});
+        let mut selected = get_value_by_path(&data, "users[0]").unwrap();
+        selected["name"] = json!("Bob");
+
+        assert_eq!(data["users"][0]["name"], "Alice");
+        assert_eq!(get_value_by_path(&data, ""), Some(data.clone()));
+        assert_eq!(
+            get_value_by_path(&data, "users[0].phone"),
+            Some(Value::Null)
+        );
+        assert!(has_value_by_path(&data, "users[0].phone"));
+        assert!(!has_value_by_path(&data, "users[0].missing"));
+        assert!(!has_value_by_path(&data, "users[1].name"));
     }
 
     #[test]

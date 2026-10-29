@@ -8,14 +8,37 @@ import {
 	DollarSignIcon,
 	ExternalLinkIcon,
 	TimerIcon,
+	WrenchIcon,
 	ZapIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { Badge } from "./badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip";
 
+interface IntelligenceEstimate {
+	score: number;
+	low: number;
+	high: number;
+	confidence: "low" | "medium";
+	reasoning: string;
+	sources: string[];
+	updated_at: string;
+}
+
+interface ReportedBenchmark {
+	name: string;
+	score: number;
+	unit: string;
+	source: string;
+	scope: string;
+	notes: string;
+	direction: "higher" | "lower";
+}
+
 interface AAEvaluations {
 	artificial_analysis_intelligence_index?: number | null;
+	intelligence_estimate?: IntelligenceEstimate | null;
+	reported_benchmarks?: ReportedBenchmark[] | null;
 	artificial_analysis_coding_index?: number | null;
 	artificial_analysis_math_index?: number | null;
 	mmlu_pro?: number | null;
@@ -29,7 +52,19 @@ interface AAEvaluations {
 	ifbench?: number | null;
 	lcr?: number | null;
 	terminalbench_hard?: number | null;
+	terminalbench_v2_1?: number | null;
+	terminalbench_v4_0?: number | null;
 	tau2?: number | null;
+	tau_banking?: number | null;
+	automationbench_aa?: number | null;
+	artificial_analysis_omniscience_accuracy?: number | null;
+	artificial_analysis_omniscience_hallucination_rate?: number | null;
+	writing_benchmark_estimated_win_chance?: number | null;
+	writing_benchmark_creativity_estimate?: number | null;
+	writing_benchmark_match_type?: "direct" | "alias" | "similarity" | null;
+	writing_benchmark_source_url?: string | null;
+	writing_benchmark_source_model_name?: string | null;
+	writing_benchmark_version?: string | null;
 }
 
 interface AAPricing {
@@ -136,7 +171,8 @@ interface BenchmarkDef {
 	key: keyof AAEvaluations;
 	label: string;
 	description: string;
-	category: "reasoning" | "coding" | "knowledge";
+	category: "reasoning" | "coding" | "knowledge" | "tools";
+	invert?: boolean;
 }
 
 const BENCHMARKS: BenchmarkDef[] = [
@@ -183,6 +219,18 @@ const BENCHMARKS: BenchmarkDef[] = [
 		category: "coding",
 	},
 	{
+		key: "terminalbench_v4_0",
+		label: "Terminal-Bench 4.0",
+		description: "Agentic coding and terminal use",
+		category: "coding",
+	},
+	{
+		key: "terminalbench_v2_1",
+		label: "Terminal-Bench 2.1",
+		description: "Agentic coding and terminal use",
+		category: "coding",
+	},
+	{
 		key: "terminalbench_hard",
 		label: "Terminal-Bench Hard",
 		description: "Agentic coding & terminal use",
@@ -198,7 +246,19 @@ const BENCHMARKS: BenchmarkDef[] = [
 		key: "tau2",
 		label: "TAU-2",
 		description: "Tool use & agentic behavior",
-		category: "coding",
+		category: "tools",
+	},
+	{
+		key: "tau_banking",
+		label: "TAU-Banking",
+		description: "Tool use in banking customer-service tasks",
+		category: "tools",
+	},
+	{
+		key: "automationbench_aa",
+		label: "AutomationBench-AA",
+		description: "Multi-step workflows using business software APIs",
+		category: "tools",
 	},
 	{
 		key: "mmlu_pro",
@@ -208,9 +268,23 @@ const BENCHMARKS: BenchmarkDef[] = [
 	},
 	{
 		key: "lcr",
-		label: "LCR",
-		description: "Long context recall",
+		label: "AA-LCR",
+		description: "Long-context reasoning",
 		category: "knowledge",
+	},
+	{
+		key: "artificial_analysis_omniscience_accuracy",
+		label: "AA-Omniscience Accuracy",
+		description: "Accuracy on factual knowledge questions",
+		category: "knowledge",
+	},
+	{
+		key: "artificial_analysis_omniscience_hallucination_rate",
+		label: "AA-Omniscience Non-Hallucination Rate",
+		description:
+			"One minus the hallucination rate on factual knowledge questions",
+		category: "knowledge",
+		invert: true,
 	},
 ];
 
@@ -227,6 +301,11 @@ const CATEGORY_META: Record<
 		icon: <CodeIcon className="h-3.5 w-3.5" />,
 		color: "text-blue-600 dark:text-blue-400",
 		bgColor: "bg-blue-500/5",
+	},
+	"Tool use": {
+		icon: <WrenchIcon className="h-3.5 w-3.5" />,
+		color: "text-cyan-600 dark:text-cyan-400",
+		bgColor: "bg-cyan-500/5",
 	},
 	Knowledge: {
 		icon: <BookOpenIcon className="h-3.5 w-3.5" />,
@@ -280,24 +359,24 @@ function intelligenceBadgeStyle(idx: number): {
 	if (idx >= 30)
 		return {
 			bg: "bg-emerald-500/10",
-			text: `text-emerald-700 dark:text-emerald-400`,
+			text: "text-emerald-700 dark:text-emerald-400",
 			border: "border-emerald-500/30",
 		};
 	if (idx >= 18)
 		return {
 			bg: "bg-blue-500/10",
-			text: `text-blue-700 dark:text-blue-400`,
+			text: "text-blue-700 dark:text-blue-400",
 			border: "border-blue-500/30",
 		};
 	if (idx >= 10)
 		return {
 			bg: "bg-amber-500/10",
-			text: `text-amber-700 dark:text-amber-400`,
+			text: "text-amber-700 dark:text-amber-400",
 			border: "border-amber-500/30",
 		};
 	return {
 		bg: "bg-zinc-500/10",
-		text: `text-zinc-600 dark:text-zinc-400`,
+		text: "text-zinc-600 dark:text-zinc-400",
 		border: "border-zinc-500/30",
 	};
 }
@@ -320,6 +399,176 @@ function formatLatency(val: number | null | undefined): string {
 	return `${val.toFixed(2)}s`;
 }
 
+function isScore(value: unknown): value is number {
+	return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function intelligenceEstimate(value: unknown): IntelligenceEstimate | null {
+	if (!value || typeof value !== "object") return null;
+	const estimate = value as Partial<IntelligenceEstimate>;
+	if (
+		!isScore(estimate.score) ||
+		!isScore(estimate.low) ||
+		!isScore(estimate.high) ||
+		estimate.high > 100 ||
+		estimate.low > estimate.score ||
+		estimate.score > estimate.high ||
+		!["low", "medium"].includes(estimate.confidence ?? "") ||
+		typeof estimate.reasoning !== "string" ||
+		!estimate.reasoning.trim() ||
+		!Array.isArray(estimate.sources) ||
+		!estimate.sources.every((source) => typeof source === "string") ||
+		typeof estimate.updated_at !== "string" ||
+		!Number.isFinite(Date.parse(estimate.updated_at))
+	) {
+		return null;
+	}
+	return estimate as IntelligenceEstimate;
+}
+
+function benchmarkSourceUrl(value: string | null | undefined): string | null {
+	if (!value) return null;
+	try {
+		const url = new URL(value);
+		return ["https:", "http:"].includes(url.protocol) ? url.href : null;
+	} catch {
+		return null;
+	}
+}
+
+function estimateSourceUrls(sources: string[]): string[] {
+	return [
+		...new Set(
+			sources.flatMap((source) => {
+				const url = httpsSourceUrl(source);
+				return url ? [url] : [];
+			}),
+		),
+	];
+}
+
+function httpsSourceUrl(value: unknown): string | null {
+	if (typeof value !== "string") return null;
+	const source = benchmarkSourceUrl(value);
+	if (!source) return null;
+	const url = new URL(source);
+	return url.protocol === "https:" && !url.username && !url.password
+		? url.href
+		: null;
+}
+
+function reportedBenchmarks(value: unknown): ReportedBenchmark[] {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((entry) => {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
+		const benchmark = entry as Partial<ReportedBenchmark>;
+		const source = httpsSourceUrl(benchmark.source);
+		if (
+			typeof benchmark.score !== "number" ||
+			!Number.isFinite(benchmark.score) ||
+			!source ||
+			![benchmark.name, benchmark.unit, benchmark.scope, benchmark.notes].every(
+				(field) => typeof field === "string" && field.trim(),
+			) ||
+			!["higher", "lower"].includes(benchmark.direction ?? "")
+		) {
+			return [];
+		}
+		return [{ ...(benchmark as ReportedBenchmark), source }];
+	});
+}
+
+function PublisherBenchmarks({
+	benchmarks,
+}: Readonly<{ benchmarks: ReportedBenchmark[] }>) {
+	const { t } = useTranslation("common");
+	return (
+		<div className="rounded-lg border p-3 space-y-3">
+			<h5 className="text-xs font-medium">
+				{t("publisherBenchmarks", "Publisher benchmarks")}
+			</h5>
+			{benchmarks.map((benchmark) => (
+				<div
+					key={`${benchmark.source}:${benchmark.name}:${benchmark.unit}`}
+					className="space-y-1.5 border-t pt-3 text-xs"
+				>
+					<div className="flex items-start justify-between gap-3">
+						<span className="font-medium">{benchmark.name}</span>
+						<span className="font-semibold tabular-nums text-right">
+							{Number(benchmark.score.toFixed(4)).toString()} {benchmark.unit}
+						</span>
+					</div>
+					<p className="text-[10px] text-muted-foreground">
+						{benchmark.direction === "lower"
+							? t("lowerIsBetter", "Lower is better")
+							: t("higherIsBetter", "Higher is better")}
+						{" · "}
+						{t("benchmarkScope", "Scope:")} {benchmark.scope}
+					</p>
+					<p className="text-muted-foreground">{benchmark.notes}</p>
+					<a
+						href={benchmark.source}
+						target="_blank"
+						rel="noopener noreferrer"
+						className="text-[10px] underline hover:text-foreground transition-colors"
+					>
+						{t("benchmarkSource", "Source:")}{" "}
+						{new URL(benchmark.source).hostname}
+					</a>
+				</div>
+			))}
+		</div>
+	);
+}
+
+function EstimateDetails({
+	estimate,
+	showSources = false,
+}: Readonly<{ estimate: IntelligenceEstimate; showSources?: boolean }>) {
+	const { t } = useTranslation("common");
+	const sources = showSources ? estimateSourceUrls(estimate.sources) : [];
+	return (
+		<div className="space-y-1.5 text-xs">
+			<p>
+				{t("estimatedIntelligenceRange", "Range: {{low}} to {{high}}", {
+					low: estimate.low.toFixed(1),
+					high: estimate.high.toFixed(1),
+				})}
+				{" · "}
+				{estimate.confidence === "medium"
+					? t("mediumConfidence", "Medium confidence")
+					: t("lowConfidence", "Low confidence")}
+			</p>
+			<p>{estimate.reasoning}</p>
+			{showSources && (
+				<p className="text-[10px] text-muted-foreground">
+					{t("intelligenceEstimateDate", "Estimated {{date}}", {
+						date: new Date(estimate.updated_at).toISOString().slice(0, 10),
+					})}
+				</p>
+			)}
+			{sources.length > 0 && (
+				<div className="flex flex-wrap gap-x-2 gap-y-1 text-[10px]">
+					<span className="text-muted-foreground">
+						{t("estimateSources", "Estimate sources:")}
+					</span>
+					{sources.map((url) => (
+						<a
+							key={url}
+							href={url}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="underline hover:text-foreground transition-colors"
+						>
+							{new URL(url).hostname}
+						</a>
+					))}
+				</div>
+			)}
+		</div>
+	);
+}
+
 export function ModelBenchmarks({
 	evaluation,
 }: Readonly<{ evaluation: IModelEvaluation }>) {
@@ -331,14 +580,18 @@ export function ModelBenchmarks({
 	const intelligenceIndex = evals.artificial_analysis_intelligence_index;
 	const codingIndex = evals.artificial_analysis_coding_index;
 	const mathIndex = evals.artificial_analysis_math_index;
+	const estimate = isScore(intelligenceIndex)
+		? null
+		: intelligenceEstimate(evals.intelligence_estimate);
 
-	const hasIndices = [intelligenceIndex, codingIndex, mathIndex].some(
-		(v) => v != null && v > 0,
+	const hasAAIndices = [intelligenceIndex, codingIndex, mathIndex].some(
+		isScore,
 	);
+	const hasIndices = hasAAIndices || estimate !== null;
 
 	const availableBenchmarks = BENCHMARKS.filter((b) => {
 		const val = evals[b.key];
-		return val != null && (val as number) > 0;
+		return isScore(val) && val <= 1;
 	});
 
 	const reasoningBenchmarks = availableBenchmarks.filter(
@@ -350,27 +603,50 @@ export function ModelBenchmarks({
 	const knowledgeBenchmarks = availableBenchmarks.filter(
 		(b) => b.category === "knowledge",
 	);
+	const toolBenchmarks = availableBenchmarks.filter(
+		(b) => b.category === "tools",
+	);
+	const writingWinChance = evals.writing_benchmark_estimated_win_chance;
+	const hasWritingBenchmark =
+		evals.writing_benchmark_match_type === "direct" &&
+		isScore(writingWinChance) &&
+		writingWinChance <= 1;
+	const writingSource = hasWritingBenchmark
+		? benchmarkSourceUrl(evals.writing_benchmark_source_url)
+		: null;
+	const hasAABenchmarks = hasAAIndices || availableBenchmarks.length > 0;
+	const publisherBenchmarks = reportedBenchmarks(evals.reported_benchmarks);
 
-	if (!hasIndices && availableBenchmarks.length === 0) return null;
+	if (
+		!hasAABenchmarks &&
+		!hasWritingBenchmark &&
+		!estimate &&
+		publisherBenchmarks.length === 0
+	) {
+		return null;
+	}
 
 	return (
 		<div className="space-y-4">
 			<div className="flex items-center justify-between">
 				<h4 className="text-sm font-medium">{t("benchmarks", "Benchmarks")}</h4>
-				<a
-					href={`https://artificialanalysis.ai/leaderboards/models?model=${evaluation.slug}`}
-					target="_blank"
-					rel="noopener noreferrer"
-					className="text-[10px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
-				>
-					{t("artificialAnalysis", "Artificial Analysis")}
-					<ExternalLinkIcon className="h-2.5 w-2.5" />
-				</a>
+				{hasAABenchmarks &&
+					!evaluation.slug.startsWith("flow-like-estimate-") && (
+						<a
+							href={`https://artificialanalysis.ai/models/${encodeURIComponent(evaluation.slug)}`}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="text-[10px] text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"
+						>
+							{t("artificialAnalysis", "Artificial Analysis")}
+							<ExternalLinkIcon className="h-2.5 w-2.5" />
+						</a>
+					)}
 			</div>
 
 			{hasIndices && (
 				<div className="grid grid-cols-3 gap-2">
-					{intelligenceIndex != null && intelligenceIndex > 0 && (
+					{isScore(intelligenceIndex) && (
 						<IndexCard
 							label="Intelligence"
 							value={intelligenceIndex}
@@ -379,7 +655,16 @@ export function ModelBenchmarks({
 							bgColor="bg-emerald-500/5 border-emerald-500/20"
 						/>
 					)}
-					{codingIndex != null && codingIndex > 0 && (
+					{estimate && (
+						<IndexCard
+							label={t("estimatedIntelligence", "Estimated intelligence")}
+							value={estimate.score}
+							icon={<BrainIcon className="h-4 w-4" />}
+							color="text-amber-600 dark:text-amber-400"
+							bgColor="bg-amber-500/5 border-amber-500/20 border-dashed"
+						/>
+					)}
+					{isScore(codingIndex) && (
 						<IndexCard
 							label="Coding"
 							value={codingIndex}
@@ -388,7 +673,7 @@ export function ModelBenchmarks({
 							bgColor="bg-blue-500/5 border-blue-500/20"
 						/>
 					)}
-					{mathIndex != null && mathIndex > 0 && (
+					{isScore(mathIndex) && (
 						<IndexCard
 							label="Math"
 							value={mathIndex}
@@ -397,6 +682,11 @@ export function ModelBenchmarks({
 							bgColor="bg-violet-500/5 border-violet-500/20"
 						/>
 					)}
+				</div>
+			)}
+			{estimate && (
+				<div className="rounded-lg border border-dashed p-3 bg-amber-500/5">
+					<EstimateDetails estimate={estimate} showSources />
 				</div>
 			)}
 
@@ -420,6 +710,37 @@ export function ModelBenchmarks({
 					benchmarks={knowledgeBenchmarks}
 					evals={evals}
 				/>
+			)}
+			{toolBenchmarks.length > 0 && (
+				<BenchmarkCategory
+					label="Tool use"
+					benchmarks={toolBenchmarks}
+					evals={evals}
+				/>
+			)}
+			{hasWritingBenchmark && (
+				<div className="rounded-lg border p-3 space-y-3 bg-rose-500/5">
+					<BenchmarkBar
+						label="Creative writing win chance"
+						description="Estimated chance of winning a comparison against another model in the tested writing leaderboard. Results depend on the models included."
+						value={writingWinChance}
+					/>
+					<p className="text-[10px] text-muted-foreground">
+						{t(
+							"writingLeaderboardComparison",
+							"Relative to the models in the tested writing leaderboard.",
+						)}
+					</p>
+					{evals.writing_benchmark_source_model_name && (
+						<p className="text-[10px] text-muted-foreground">
+							{t("evaluatedWritingModel", "Evaluated model:")}{" "}
+							{evals.writing_benchmark_source_model_name}
+						</p>
+					)}
+				</div>
+			)}
+			{publisherBenchmarks.length > 0 && (
+				<PublisherBenchmarks benchmarks={publisherBenchmarks} />
 			)}
 
 			{(pricing || evaluation.median_output_tokens_per_second) && (
@@ -482,17 +803,32 @@ export function ModelBenchmarks({
 				</div>
 			)}
 
-			<p className="text-[10px] text-muted-foreground text-center leading-relaxed">
-				{t("benchmarkDataProvidedBy", "Benchmark data provided by")}{" "}
-				<a
-					href="https://artificialanalysis.ai/"
-					target="_blank"
-					rel="noopener noreferrer"
-					className="underline hover:text-foreground transition-colors"
-				>
-					{t("artificialAnalysis", "Artificial Analysis")}
-				</a>
-			</p>
+			{(hasAABenchmarks || writingSource) && (
+				<p className="text-[10px] text-muted-foreground text-center leading-relaxed">
+					{t("benchmarkSources", "Benchmark sources:")}{" "}
+					{hasAABenchmarks && (
+						<a
+							href="https://artificialanalysis.ai/"
+							target="_blank"
+							rel="noopener noreferrer"
+							className="underline hover:text-foreground transition-colors"
+						>
+							{t("artificialAnalysis", "Artificial Analysis")}
+						</a>
+					)}
+					{hasAABenchmarks && writingSource && " · "}
+					{writingSource && (
+						<a
+							href={writingSource}
+							target="_blank"
+							rel="noopener noreferrer"
+							className="underline hover:text-foreground transition-colors"
+						>
+							{t("creativeWritingBenchmark", "Creative writing benchmark")}
+						</a>
+					)}
+				</p>
+			)}
 		</div>
 	);
 }
@@ -523,7 +859,7 @@ function BenchmarkCategory({
 						key={b.key}
 						label={b.label}
 						description={b.description}
-						value={val}
+						value={b.invert ? 1 - val : val}
 					/>
 				);
 			})}
@@ -537,29 +873,41 @@ export function IntelligenceIndexBadge({
 	const { t } = useTranslation("common");
 	if (!evaluation?.evaluations) return null;
 	const evals = evaluation.evaluations as AAEvaluations;
-	const idx = evals.artificial_analysis_intelligence_index;
-	if (idx == null || idx <= 0) return null;
+	const measuredIndex = evals.artificial_analysis_intelligence_index;
+	const estimate = isScore(measuredIndex)
+		? null
+		: intelligenceEstimate(evals.intelligence_estimate);
+	const idx = isScore(measuredIndex) ? measuredIndex : estimate?.score;
+	if (idx === undefined) return null;
 
 	const style = intelligenceBadgeStyle(idx);
+	const label = estimate
+		? t("estimatedIntelligence", "Estimated intelligence")
+		: t(
+				"artificialAnalysisIntelligenceIndex",
+				"Artificial Analysis Intelligence Index",
+			);
 
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<Badge
 					variant="outline"
+					aria-label={`${label}: ${idx.toFixed(1)}`}
 					className={`text-[10px] px-1.5 py-0 h-5 tabular-nums gap-0.5 ${style.bg} ${style.text} ${style.border}`}
 				>
 					<BrainIcon className="h-2.5 w-2.5" />
+					{estimate && t("estimatedScorePrefix", "Est.")}
+					{estimate && " "}
 					{idx.toFixed(1)}
 				</Badge>
 			</TooltipTrigger>
-			<TooltipContent side="top">
-				<p className="text-xs">
-					{t(
-						"artificialAnalysisIntelligenceIndex",
-						"Artificial Analysis Intelligence Index",
-					)}
-				</p>
+			<TooltipContent
+				side="top"
+				className={estimate ? "max-w-80 space-y-1.5" : undefined}
+			>
+				<p className="text-xs">{label}</p>
+				{estimate && <EstimateDetails estimate={estimate} />}
 			</TooltipContent>
 		</Tooltip>
 	);

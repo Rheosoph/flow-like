@@ -2,9 +2,12 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { type ReactNode, useMemo } from "react";
 import { withDeviceEventSource } from "../../../lib/event-source";
 import type { IEvent } from "../../../lib/schema/flow/event";
+import type { IEventSinkStatus } from "../../../state/backend-state/event-state";
 import {
+	advance,
 	byRole,
 	click,
+	fire,
 	inPortal,
 	installDom,
 	queryByRole,
@@ -34,6 +37,7 @@ afterEach(async () => {
 afterAll(dom.restore);
 
 const APP = "app_invoice_ai";
+const NAMELESS = "user_nameless";
 const HUB_ON = { standalone: { enabled: true } } as never;
 const at = { secs_since_epoch: 0, nanos_since_epoch: 0 };
 
@@ -66,6 +70,9 @@ const EVENTS = [
 const MAPPING = {
 	events_cron: { withSink: ["cron"], eventTypes: ["cron"] },
 } as never;
+const CALLABLE_MAPPING = {
+	events_cron: { withSink: ["rest", "mcp"], eventTypes: ["rest", "mcp"] },
+} as never;
 
 function RouterFrame({ children }: Readonly<{ children: ReactNode }>) {
 	const router = useMemo(
@@ -88,21 +95,26 @@ function RouterFrame({ children }: Readonly<{ children: ReactNode }>) {
 	);
 }
 
-async function mountList() {
+async function mountList(
+	events: IEvent[] = EVENTS,
+	sinkStatus: (eventId: string) => IEventSinkStatus = () => ({ active: false }),
+	eventMapping: never = MAPPING,
+) {
 	const upserts: Array<{ event: IEvent; pat?: string }> = [];
+	const repairs: Array<{ appId: string; eventId: string }> = [];
 	const deleted: string[] = [];
 	const nodes = Object.fromEntries(
-		EVENTS.map((event) => [event.node_id, { name: "events_cron" }]),
+		events.map((event) => [event.node_id, { name: "events_cron" }]),
 	);
 	const fake = await createFakeWorkspace();
 	const view = await mountDevices(
 		({ overrides }) => (
 			<RouterFrame>
 				<EventsOverview
-					events={EVENTS}
+					events={events}
 					boardsMap={new Map([["board_0", "Digest flow"]])}
 					appId={APP}
-					eventMapping={MAPPING}
+					eventMapping={eventMapping}
 					onEdit={() => undefined}
 					onDelete={(eventId) => deleted.push(eventId)}
 					onNavigateToNode={() => undefined}
@@ -122,6 +134,12 @@ async function mountList() {
 					getInfo: async () => ({ id: fake.hub.me, dev_mode: false }),
 					updateUser: async () => undefined,
 					getPATs: async () => [],
+					lookupUsers: async (ids: string[]) =>
+						ids.map((id) =>
+							id === NAMELESS
+								? { id, username: "google_110293847561" }
+								: { id, name: `Person ${id}` },
+						),
 				},
 				boardState: {
 					getBoardSummaries: async () => [],
@@ -129,10 +147,16 @@ async function mountList() {
 					listRuns: async () => [],
 				},
 				eventState: {
-					getEvents: async () => EVENTS,
+					getEvents: async () => events,
 					getEventAuthoritative: async (_app: string, eventId: string) =>
-						EVENTS.find((event) => event.id === eventId),
-					isEventSinkActive: async () => false,
+						events.find((event) => event.id === eventId),
+					isEventSinkActive: async (eventId: string) =>
+						sinkStatus(eventId).active,
+					getEventSinkStatus: async (eventId: string) => sinkStatus(eventId),
+					repairLocalTrigger: async (appId: string, event: IEvent) => {
+						repairs.push({ appId, eventId: event.id });
+						return { active: true };
+					},
 					upsertEvent: async (
 						_app: string,
 						event: IEvent,
@@ -153,7 +177,7 @@ async function mountList() {
 		if (!found) throw new Error(`no row for ${eventId}`);
 		return found;
 	};
-	return { ...view, row, upserts, deleted };
+	return { ...view, row, upserts, repairs, deleted };
 }
 
 const chips = (row: HTMLElement) => ({
@@ -202,12 +226,14 @@ describe("a device-only event in the Events list", () => {
 		]);
 	});
 
-	test("an ordinary sink event still asks for a token", async () => {
+	test("pausing an ordinary sink event asks for no token either", async () => {
 		const view = await mountList();
 		await click(byRole("button", "Pause event", view.row("evt_hub")));
 		await view.settle();
-		expect(inPortal("dialog").textContent).toContain("Authorize this change");
-		expect(view.upserts).toEqual([]);
+		expect(queryByRole("dialog")).toBeNull();
+		expect(view.upserts).toHaveLength(1);
+		expect(view.upserts[0].event.active).toBe(false);
+		expect(view.upserts[0].pat).toBeUndefined();
 	});
 
 	test("deleting asks first and deletes only after confirmation", async () => {
@@ -219,5 +245,265 @@ describe("a device-only event in the Events list", () => {
 		expect(view.deleted).toEqual([]);
 		await click(byRole("button", "Delete event", inPortal("alertdialog")));
 		expect(view.deleted).toEqual(["evt_dev"]);
+	});
+});
+
+const toastTitles = (from: number) =>
+	toast
+		.getHistory()
+		.slice(from)
+		.flatMap((entry) => ("title" in entry ? [entry.title] : []));
+
+describe("whom a hub trigger runs as in the Events list", () => {
+	const remote = (id: string, name: string) =>
+		({ ...cron(id, name, false), execution_mode: "Remote" }) as IEvent;
+	const callable = (id: string, eventType: string, exposure: string) =>
+		({ ...remote(id, id), event_type: eventType, exposure }) as IEvent;
+	const STATUSES: Record<string, IEventSinkStatus> = {
+		evt_paused: { active: false, run_as_user_id: null },
+		evt_unbound: { active: true, run_as_user_id: null },
+		evt_legacy: { active: true, run_as_user_id: null, legacy_token: true },
+		evt_bound: { active: true, run_as_user_id: "user_ada" },
+	};
+	const mountRunAs = async () => {
+		const view = await mountList(
+			[
+				remote("evt_paused", "Weekly report"),
+				remote("evt_unbound", "Daily sync"),
+				remote("evt_legacy", "Monthly close"),
+				remote("evt_bound", "Hourly import"),
+			],
+			(eventId) => STATUSES[eventId] ?? { active: false },
+		);
+		await advance(30);
+		await view.settle();
+		return view;
+	};
+	const runAs = (row: HTMLElement) =>
+		row.querySelector<HTMLElement>("[data-run-as]");
+	/** The chip's words; a bound chip's avatar initials are not part of them. */
+	const runAsText = (row: HTMLElement) => {
+		const chip = runAs(row);
+		return (chip?.querySelector("[data-run-as-label]") ?? chip)?.textContent;
+	};
+	const avatar = (row: HTMLElement) =>
+		runAs(row)?.querySelector("[data-slot='avatar']") ?? null;
+	const tooltip = async (row: HTMLElement) => {
+		const chip = runAs(row);
+		if (!chip) throw new Error("no run-as chip");
+		const view = chip.ownerDocument.defaultView as unknown as typeof globalThis;
+		await fire(chip, new view.FocusEvent("focusin", { bubbles: true }));
+		const id = chip.getAttribute("aria-describedby");
+		return id ? chip.ownerDocument.getElementById(id)?.textContent : undefined;
+	};
+
+	test("names the user, a trigger without one, a legacy token and the paused one", async () => {
+		const view = await mountRunAs();
+		expect(runAsText(view.row("evt_bound"))).toBe("Runs as Person user_ada");
+		expect(avatar(view.row("evt_bound"))?.textContent).toBe("PA");
+		expect(runAsText(view.row("evt_unbound"))).toBe("Runs without a user");
+		expect(runAsText(view.row("evt_legacy"))).toBe(
+			"Runs with a saved token until someone saves or turns it on",
+		);
+		expect(runAsText(view.row("evt_paused"))).toBe(
+			"Paused: the person it ran as can no longer run it",
+		);
+		expect(view.container.textContent).not.toContain("left");
+		expect(
+			view.row("evt_paused").querySelector("[data-sink-chip='off']"),
+		).toBeNull();
+	});
+
+	test("warns about the paused one and turns it on as you without a token", async () => {
+		const before = toast.getHistory().length;
+		const view = await mountRunAs();
+		expect(view.container.textContent).toContain("1 event paused");
+		expect(view.container.textContent).toContain(
+			"The person each one ran as can no longer run it. Turning one on runs it as you.",
+		);
+		await click(byRole("button", "Turn on Weekly report"));
+		await view.settle();
+		expect(queryByRole("dialog")).toBeNull();
+		expect(view.upserts).toHaveLength(1);
+		expect(view.upserts[0].event.id).toBe("evt_paused");
+		expect(view.upserts[0].event.active).toBe(true);
+		expect(view.upserts[0].pat).toBeUndefined();
+		expect(toastTitles(before)).toEqual(["Weekly report now runs as you."]);
+	});
+
+	test("the paused row's toggle reads Turn on and turns it on as you, never pauses it", async () => {
+		const before = toast.getHistory().length;
+		const view = await mountRunAs();
+		const paused = view.row("evt_paused");
+		expect(queryByRole("button", "Pause event", paused)).toBeNull();
+		await click(byRole("button", "Turn on", paused));
+		await view.settle();
+		expect(view.upserts).toHaveLength(1);
+		expect(view.upserts[0].event.id).toBe("evt_paused");
+		expect(view.upserts[0].event.active).toBe(true);
+		expect(toastTitles(before)).toEqual(["Weekly report now runs as you."]);
+		expect(byRole("button", "Pause event", view.row("evt_bound"))).toBeTruthy();
+	});
+
+	test("a Local trigger whose sink is on the hub names whom it runs as", async () => {
+		const view = await mountList(
+			[cron("evt_local_hub", "Nightly export", false)],
+			() => ({ active: true, run_as_user_id: "user_ada" }),
+		);
+		await advance(30);
+		await view.settle();
+		expect(runAsText(view.row("evt_local_hub"))).toBe(
+			"Runs as Person user_ada",
+		);
+	});
+
+	test("a hosted page names whose access its visitors use", async () => {
+		const hosted = {
+			...cron("evt_hosted", "Support chat", false),
+			event_type: "simple_chat",
+			execution_mode: "Remote",
+			config: [
+				...new TextEncoder().encode(
+					JSON.stringify({ frontend_hosting: { enabled: true } }),
+				),
+			],
+		} as IEvent;
+		const view = await mountList([hosted], () => ({
+			active: true,
+			run_as_user_id: "user_ada",
+		}));
+		await advance(30);
+		await view.settle();
+		expect(runAsText(view.row("evt_hosted"))).toBe(
+			"Visitors use Person user_ada's access to run events",
+		);
+		expect(avatar(view.row("evt_hosted"))).not.toBeNull();
+	});
+
+	test("an Internal page or an ontology action has no visitors, even with hosting switched on", async () => {
+		const hosting = [
+			...new TextEncoder().encode(
+				JSON.stringify({
+					expression: "0 * * * *",
+					frontend_hosting: { enabled: true },
+				}),
+			),
+		];
+		const internalPage = {
+			...cron("evt_internal", "Team intake", false),
+			default_page_id: "page_intake",
+			execution_mode: "Remote",
+			exposure: "INTERNAL",
+			config: hosting,
+		} as IEvent;
+		const ontologyAction = {
+			...cron("evt_action", "Approve order", false),
+			event_type: "ontology_action",
+			default_page_id: "page_approve",
+			execution_mode: "Remote",
+			config: hosting,
+		} as IEvent;
+		const asked: string[] = [];
+		const view = await mountList([internalPage, ontologyAction], (eventId) => {
+			asked.push(eventId);
+			return { active: true, run_as_user_id: "user_ada" };
+		});
+		await advance(30);
+		await view.settle();
+		expect(runAsText(view.row("evt_internal"))).toBe("Runs as Person user_ada");
+		expect(runAs(view.row("evt_action"))).toBeNull();
+		expect(asked).not.toContain("evt_action");
+	});
+
+	test("a REST or MCP Event says whom its public and internal calls run as", async () => {
+		const view = await mountList(
+			[
+				callable("evt_public_rest", "rest", "PUBLIC"),
+				callable("evt_internal_mcp", "mcp", "INTERNAL"),
+			],
+			() => ({ active: true, run_as_user_id: "user_ada" }),
+			CALLABLE_MAPPING,
+		);
+		await advance(30);
+		await view.settle();
+		const publicRest = view.row("evt_public_rest");
+		expect(runAsText(publicRest)).toBe("Public calls run as Person user_ada");
+		expect(avatar(publicRest)).not.toBeNull();
+		expect(await tooltip(publicRest)).toContain(
+			"Callers signed in to Flow-Like run as themselves.",
+		);
+		const internalMcp = view.row("evt_internal_mcp");
+		expect(runAsText(internalMcp)).toBe("Runs as the calling person");
+		expect(avatar(internalMcp)).toBeNull();
+		expect(await tooltip(internalMcp)).toContain(
+			"Calls from other apps that pass no person run as Person user_ada.",
+		);
+	});
+
+	test("a run-as user without a name reads as a member, never as an account id", async () => {
+		const view = await mountList(
+			[
+				callable("evt_public_rest", "rest", "PUBLIC"),
+				callable("evt_internal_mcp", "mcp", "INTERNAL"),
+			],
+			() => ({ active: true, run_as_user_id: NAMELESS }),
+			CALLABLE_MAPPING,
+		);
+		await advance(30);
+		await view.settle();
+		const publicRest = view.row("evt_public_rest");
+		expect(runAsText(publicRest)).toBe("Runs as a member of this app");
+		expect(avatar(publicRest)).toBeNull();
+		expect(await tooltip(publicRest)).toContain(
+			"Callers signed in to Flow-Like run as themselves.",
+		);
+		expect(await tooltip(view.row("evt_internal_mcp"))).toContain(
+			"Calls from other apps that pass no person run as a member of this app.",
+		);
+		expect(document.body.textContent).not.toContain(NAMELESS);
+		expect(document.body.textContent).not.toContain("google_");
+	});
+});
+
+describe("a trigger on this computer without a token in the Events list", () => {
+	const STATUS: IEventSinkStatus = { active: false, needs_token: true };
+
+	test("reads Needs a token instead of Not running, and Add token repairs only this computer", async () => {
+		const before = toast.getHistory().length;
+		const view = await mountList(
+			[cron("evt_local", "Hourly sync", false)],
+			() => STATUS,
+		);
+		const row = view.row("evt_local");
+		expect(
+			row.querySelector("[data-sink-chip='needs-token']")?.textContent,
+		).toBe("Needs a token");
+		expect(row.querySelector("[data-sink-chip='off']")).toBeNull();
+		await click(byRole("button", "Add token", row));
+		await view.settle();
+		expect(view.repairs).toEqual([{ appId: APP, eventId: "evt_local" }]);
+		expect(view.upserts).toEqual([]);
+		expect(queryByRole("dialog")).toBeNull();
+		expect(toastTitles(before)).toEqual([
+			"Hourly sync now runs on this computer.",
+		]);
+	});
+
+	test("a trigger that failed to start shows why on Not running", async () => {
+		const view = await mountList(
+			[cron("evt_local", "Hourly sync", false)],
+			() => ({
+				active: false,
+				failed_reason: "The port is already in use",
+			}),
+		);
+		const off = view
+			.row("evt_local")
+			.querySelector<HTMLElement>("[data-sink-chip='off']");
+		expect(off?.textContent).toBe("Not running");
+		expect(off?.title).toBe("The port is already in use");
+		expect(
+			queryByRole("button", "Add token", view.row("evt_local")),
+		).toBeNull();
 	});
 });

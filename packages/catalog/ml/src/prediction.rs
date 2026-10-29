@@ -220,12 +220,10 @@ impl NodeLogic for MLPredictNode {
                 // fetch database
                 let (cached_db, mut source_generation) =
                     node_database.load_with_generation(context).await?;
-                cached_db.ensure_flushed().await?;
                 let output_db = output_database.load(context).await?;
-                output_db.ensure_flushed().await?;
-                output_db.db.read().await.inner().ensure_writable()?;
+                output_db.flushed_read().await?.inner().ensure_writable()?;
                 let mut database = {
-                    let input = cached_db.db.read().await;
+                    let input = cached_db.flushed_read().await?;
                     snapshot_prediction_source(
                         input.inner(),
                         explicit_key.then_some(id_field.as_str()),
@@ -234,7 +232,7 @@ impl NodeLogic for MLPredictNode {
                     .await?
                 };
                 if explicit_key && output_database.cache_key != node_database.cache_key {
-                    let output = output_db.db.read().await;
+                    let output = output_db.flushed_read().await?;
                     if output.inner().raw().await.is_ok() {
                         snapshot_prediction_source(
                             output.inner(),
@@ -265,7 +263,7 @@ impl NodeLogic for MLPredictNode {
 
                 // add prediction column if missing (before batch loop)
                 let mut column_added = {
-                    let output = output_db.db.read().await;
+                    let output = output_db.flushed_read().await?;
                     match output.inner().raw().await {
                         Ok(table) => table
                             .schema()

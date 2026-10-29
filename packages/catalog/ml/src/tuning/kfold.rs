@@ -48,8 +48,7 @@ pub struct KFoldInfo {
 /// would fail on the missing table — which is the normal state on the very first fold.
 #[cfg(feature = "execute")]
 async fn clear_destination(db: &CachedDB) -> Result<()> {
-    db.ensure_flushed().await?;
-    let guard = db.db.read().await;
+    let guard = db.flushed_read().await?;
     if guard.inner().raw().await.is_err() {
         return Ok(());
     }
@@ -213,9 +212,8 @@ impl NodeLogic for KFoldGeneratorNode {
         // otherwise a fold body writing to a database would contend with this read guard.
         let mut all_items = {
             let source = source_ref.load(context).await?;
-            source.ensure_flushed().await?;
             let source_table = {
-                let source_guard = source.db.read().await;
+                let source_guard = source.flushed_read().await?;
                 source_guard.inner().raw().await?
             };
             let query = source_table.query();

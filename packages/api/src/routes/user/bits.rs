@@ -16,10 +16,13 @@ use axum::{
     http::StatusCode,
 };
 use flow_like::bit::{Bit, BitTypes, MLX_PROVIDER_NAME, Metadata};
+use flow_like::flow_like_model_provider::llm::external::ExternalProvider;
 use flow_like::models::device::DeviceModelTarget;
 use flow_like_device_protocol::validate_management_id;
 use flow_like_types::Value;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter,
+};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -375,17 +378,30 @@ pub async fn load_custom_bits_for_user(
         .collect())
 }
 
-/// Loads the custom bits a specific profile has activated, hydrated for
-/// execution. Membership rides on `Profile.bit_ids` exactly like public bits,
+/// Loads the custom bits a specific profile has activated, without their
+/// credentials. Membership rides on `Profile.bit_ids` exactly like public bits,
 /// so one library can back several profiles with different model line-ups.
-/// Secrets are decrypted only when `include_secrets` is set — call that
-/// variant only where the result stays inside the trust boundary (copilot
-/// request handling, execution dispatch).
 pub async fn load_custom_bits_for_profile(
     state: &AppState,
     sub: &str,
     profile_bit_ids: &[String],
-    include_secrets: bool,
+) -> Result<Vec<Bit>, ApiError> {
+    profile_custom_bits(
+        &state.db,
+        &state.platform_config.domain,
+        sub,
+        profile_bit_ids,
+    )
+    .await
+}
+
+/// [`load_custom_bits_for_profile`] on a connection: only Bits `sub` owns,
+/// never their credentials.
+pub(crate) async fn profile_custom_bits(
+    db: &DatabaseConnection,
+    hub: &str,
+    sub: &str,
+    profile_bit_ids: &[String],
 ) -> Result<Vec<Bit>, ApiError> {
     let wanted: std::collections::HashSet<&str> = profile_bit_ids
         .iter()
@@ -403,13 +419,58 @@ pub async fn load_custom_bits_for_profile(
     let models = user_bit::Entity::find()
         .filter(user_bit::Column::UserId.eq(sub))
         .filter(user_bit::Column::Id.is_in(wanted))
-        .all(&state.db)
+        .all(db)
         .await?;
 
     Ok(models
         .into_iter()
-        .map(|model| user_bit_to_core(model, state, include_secrets))
+        .map(|model| user_bit_from_row(model, hub, None))
         .collect())
+}
+
+fn is_custom_provider(provider_name: &str) -> bool {
+    provider_name
+        .trim()
+        .to_ascii_lowercase()
+        .starts_with("custom:")
+}
+
+/// A private `custom:*` backend that server runs reach through the API relay.
+/// Personal agent accounts (Claude Code, Codex, GitHub and Microsoft 365
+/// Copilot) run on desktop only.
+pub(crate) fn relayable_provider(provider_name: &str) -> bool {
+    is_custom_provider(provider_name)
+        && ExternalProvider::from_provider_name(provider_name).is_none()
+}
+
+/// The copy of a private Bit that leaves the API with a run: what model
+/// selection reads, without credentials or the provider endpoint. A `custom:*`
+/// Bit keeps only `provider.params.model_id`; Local, MLX, device and
+/// forecasting Bits carry neither and pass unchanged.
+pub(crate) fn dispatch_view(mut bit: Bit) -> Bit {
+    let Some(provider) = bit
+        .parameters
+        .get_mut("provider")
+        .and_then(Value::as_object_mut)
+    else {
+        return bit;
+    };
+    if !provider
+        .get("provider_name")
+        .and_then(Value::as_str)
+        .is_some_and(is_custom_provider)
+    {
+        return bit;
+    }
+    let mut params = flow_like_types::json::Map::new();
+    if let Some(model_id) = provider
+        .get("params")
+        .and_then(|params| params.get("model_id"))
+    {
+        params.insert("model_id".to_owned(), model_id.clone());
+    }
+    provider.insert("params".to_owned(), Value::Object(params));
+    bit
 }
 
 fn validate_bit_id(bit_id: &str) -> Result<(), ApiError> {
@@ -487,7 +548,7 @@ fn validate_user_bit(bit: &Bit) -> Result<BitType, ApiError> {
     })?;
 
     let name = provider.provider_name.trim();
-    let is_custom = name.to_ascii_lowercase().starts_with("custom:");
+    let is_custom = is_custom_provider(name);
     let is_local = name == LOCAL_PROVIDER;
     let is_mlx = name.eq_ignore_ascii_case(MLX_PROVIDER_NAME);
 
@@ -915,14 +976,27 @@ pub(crate) fn user_bit_to_core(
     state: &AppState,
     include_secrets: bool,
 ) -> Bit {
-    let mut parameters = model.parameters.unwrap_or_default();
+    let secrets = include_secrets
+        .then(|| stored_secrets(&model, &state.encryption_key))
+        .flatten();
+    user_bit_from_row(model, &state.platform_config.domain, secrets)
+}
 
-    if include_secrets
-        && model.r#type != BitType::Forecasting
-        && let Some(encrypted) = model.secrets_encrypted.as_deref()
-        && let Some(decrypted) = decrypt_secret(encrypted, &state.encryption_key)
-        && let Ok(secrets) = flow_like_types::json::from_str::<HashMap<String, Value>>(&decrypted)
-    {
+fn stored_secrets(model: &user_bit::Model, key: &[u8; 32]) -> Option<HashMap<String, Value>> {
+    if model.r#type == BitType::Forecasting {
+        return None;
+    }
+    let decrypted = decrypt_secret(model.secrets_encrypted.as_deref()?, key)?;
+    flow_like_types::json::from_str(&decrypted).ok()
+}
+
+fn user_bit_from_row(
+    model: user_bit::Model,
+    hub: &str,
+    secrets: Option<HashMap<String, Value>>,
+) -> Bit {
+    let mut parameters = model.parameters.unwrap_or_default();
+    if let Some(secrets) = secrets {
         merge_secret_params(&mut parameters, secrets);
     }
 
@@ -941,7 +1015,7 @@ pub(crate) fn user_bit_to_core(
         file_name: model.file_name,
         hash: model.hash.unwrap_or_else(|| model.id.clone()),
         size: model.size.map(|s| s as u64),
-        hub: state.platform_config.domain.clone(),
+        hub: hub.to_owned(),
         parameters,
         version: model.version,
         license: model.license,
@@ -1491,5 +1565,104 @@ mod tests {
             DEVICE_ID,
         );
         assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[test]
+    fn dispatch_view_never_carries_credentials_or_endpoints() {
+        for (bit_type, provider_name) in [
+            (BitTypes::Llm, "custom:openai"),
+            (BitTypes::Vlm, " Custom:Anthropic "),
+            (BitTypes::SystemOne, "custom:systemone"),
+            (BitTypes::Llm, "custom:codex"),
+        ] {
+            let mut bit = user_model(bit_type, provider_name);
+            let params = bit.parameters["provider"]["params"]
+                .as_object_mut()
+                .unwrap();
+            for key in SECRET_PARAM_KEYS {
+                params.insert(key.into(), Value::String(format!("leaked-{key}")));
+            }
+            params.insert(
+                "endpoint".into(),
+                Value::String("https://models.internal.example/v1".into()),
+            );
+            params.insert("location".into(), Value::String("leaked-region".into()));
+            params.insert("model_id".into(), Value::String("owner/model".into()));
+
+            let view = dispatch_view(bit);
+            let provider = &view.parameters["provider"];
+            assert_eq!(
+                provider["params"],
+                flow_like_types::json::json!({"model_id": "owner/model"}),
+                "{provider_name}"
+            );
+            assert_eq!(provider["provider_name"], provider_name);
+            assert_eq!(provider["model_id"], "owner/model");
+            let serialized = flow_like_types::json::to_string(&view).unwrap();
+            for leaked in SECRET_PARAM_KEYS.into_iter().chain([
+                "endpoint",
+                "leaked-",
+                "models.internal.example",
+            ]) {
+                assert!(
+                    !serialized.contains(leaked),
+                    "{provider_name} kept {leaked}"
+                );
+            }
+        }
+
+        let without_model = dispatch_view(user_model(BitTypes::Llm, "custom:groq"));
+        assert_eq!(
+            without_model.parameters["provider"]["params"],
+            flow_like_types::json::json!({})
+        );
+    }
+
+    #[test]
+    fn dispatch_view_keeps_local_mlx_device_and_forecasting_bits() {
+        let mut local = user_model(BitTypes::Vlm, LOCAL_PROVIDER);
+        local.parameters["provider"]["params"]["projection"] = flow_like_types::json::json!({
+            "download_link": pinned_gguf_url("mmproj.gguf"),
+            "file_name": "mmproj.gguf",
+            "size": 500,
+        });
+        let mut mlx = user_model(BitTypes::Llm, MLX_PROVIDER_NAME);
+        add_huggingface_manifest(&mut mlx, false);
+        let device = device_bit(BitTypes::Llm, device_params("chat"));
+        let mut forecasting = forecasting_bit();
+        restore_forecasting_dependencies(&mut forecasting);
+
+        for bit in [local, mlx, device, forecasting] {
+            let before = flow_like_types::json::to_value(&bit).unwrap();
+            let after = flow_like_types::json::to_value(dispatch_view(bit)).unwrap();
+            assert_eq!(after, before);
+        }
+    }
+
+    #[test]
+    fn only_private_backends_are_relayable() {
+        for name in [
+            "custom:openai",
+            " Custom:Anthropic ",
+            "custom:vertex",
+            "custom:systemone",
+            "custom:typesafe",
+            "custom:openrouter",
+        ] {
+            assert!(relayable_provider(name), "{name}");
+        }
+        for name in [
+            "custom:claude-code",
+            "custom:codex",
+            "Custom:GitHub-Copilot",
+            "custom:microsoft-copilot",
+            LOCAL_PROVIDER,
+            MLX_PROVIDER_NAME,
+            "device",
+            "hosted:openai",
+            "openai",
+        ] {
+            assert!(!relayable_provider(name), "{name}");
+        }
     }
 }

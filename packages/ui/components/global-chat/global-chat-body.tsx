@@ -155,10 +155,21 @@ import {
 	type IChatRef,
 } from "../interfaces/chat-default/chat";
 import { ChatWidgetExecutionProvider } from "../interfaces/chat-default/chat-widget-execution";
-import type { ISendMessageFunction } from "../interfaces/chat-default/chatbox";
+import type {
+	ChatBoxThinking,
+	ISendMessageFunction,
+} from "../interfaces/chat-default/chatbox";
 import type { MessageInlineContent } from "../interfaces/chat-default/message";
 import { submitInteractionResponse } from "../interfaces/chat-default/respond-interaction";
 import { DeviceModelBadge } from "../settings/devices/models/use/device-model-badge";
+import {
+	agentThinkingOptions,
+	chatThinkingLevel,
+	chatThinkingOptions,
+	isValidReasoningEffort,
+	turnThinking,
+} from "../thinking/thinking-options";
+import { useThinkingLabels } from "../thinking/thinking-picker";
 import {
 	FlowPilotEmptyState,
 	type IEmptyStateSuggestion,
@@ -647,32 +658,41 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const selectedAgentModel = isAgent
 		? copilotSDK.models.find((model) => model.id === selectedModelId)
 		: undefined;
-	const reasoningEffortOptions =
-		selectedAgentModel?.supportedReasoningEfforts ?? [];
 
 	// Do not validate against the hook's metadata-free static fallback. Once the
 	// backend has returned a real catalog (`[]` or populated), stale persisted
-	// values are reset to Auto instead of being sent to an incompatible model.
+	// values are reset to the default instead of being sent to an incompatible model.
 	useEffect(() => {
 		if (!reasoningEffort) return;
-		if (!isAgent) {
-			setReasoningEffort("");
-			return;
-		}
 		if (
-			!selectedAgentModel ||
-			selectedAgentModel.supportedReasoningEfforts === undefined
+			isAgent &&
+			selectedAgentModel?.supportedReasoningEfforts === undefined
 		) {
 			return;
 		}
-		if (
-			!selectedAgentModel.supportedReasoningEfforts.some(
-				(option) => option.id === reasoningEffort,
-			)
-		) {
+		if (!isValidReasoningEffort(isAgent, reasoningEffort, selectedAgentModel)) {
 			setReasoningEffort("");
 		}
 	}, [isAgent, reasoningEffort, selectedAgentModel, setReasoningEffort]);
+
+	const thinkingLabels = useThinkingLabels();
+	const thinkingPicker = useMemo<ChatBoxThinking | undefined>(() => {
+		const options = isAgent
+			? agentThinkingOptions(selectedAgentModel, thinkingLabels)
+			: chatThinkingOptions(thinkingLabels);
+		if (options.length === 0) return undefined;
+		return {
+			value: isAgent ? reasoningEffort : chatThinkingLevel(reasoningEffort),
+			options,
+			onChange: selectReasoningEffort,
+		};
+	}, [
+		isAgent,
+		selectedAgentModel,
+		thinkingLabels,
+		reasoningEffort,
+		selectReasoningEffort,
+	]);
 
 	const sendMessage = useCallback(
 		async (
@@ -798,6 +818,10 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 
 			const userMessage = makeGlobalChatMessage(IRole.User, trimmed, sessionId);
 			userMessage.files = attachments;
+			userMessage.thinking = turnThinking(
+				isAgentBackendProvider(normalizeAIProvider(agentSelection.provider)),
+				agentSelection.reasoningEffort,
+			);
 			if (!nativeRequest) {
 				appendMessage(userMessage);
 				void persistGlobalChatMessage(userMessage);
@@ -1407,7 +1431,6 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		[hasInlineArtifacts, inlineCards],
 	);
 
-	// Provider, model, and dynamic reasoning effort share one popover so the toolbar stays compact.
 	const modelOptions = useMemo<ProviderModelPickerModel[]>(
 		() =>
 			isAgent
@@ -1522,21 +1545,6 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			) : null,
 		[memoryModels, embeddingModelId, handleEmbeddingChange, t],
 	);
-	const defaultReasoningEffortName = reasoningEffortOptions.find(
-		(option) => option.id === selectedAgentModel?.defaultReasoningEffort,
-	)?.name;
-	const autoReasoningEffortName = defaultReasoningEffortName
-		? t(
-				"autoDefaultreasoningeffortnameDefault",
-				"Auto ({{defaultReasoningEffortName}} default)",
-				{ defaultReasoningEffortName },
-			)
-		: t("autoProviderDefault", "Auto (provider default)");
-	const currentReasoningEffortName = reasoningEffort
-		? (reasoningEffortOptions.find((option) => option.id === reasoningEffort)
-				?.name ?? reasoningEffort)
-		: autoReasoningEffortName;
-
 	const showEmptyState =
 		messages.length === 0 &&
 		inlineAppChats.length === 0 &&
@@ -1578,33 +1586,20 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		modelOptions.find((option) => option.id === selectedModelId)?.isFree ===
 			true;
 
-	// Provider, model, and model-specific reasoning effort live in one compact picker. A model with
-	// configurable reasoning keeps the popover open so the next section can be selected immediately;
-	// models without that capability close it as before.
+	// Provider and model share one compact picker; the thinking level sits in the composer.
 	const providerModelPicker = (
 		<Popover open={pickerOpen} onOpenChange={setPickerOpen}>
 			<PopoverTrigger asChild>
 				<Button
 					variant="ghost"
 					size="sm"
-					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}${reasoningEffortOptions.length > 0 ? ` · ${currentReasoningEffortName}` : ""}${selectedModelIsFree ? " · Free model may be too limited for complete app creation" : ""}`}
+					title={`${currentProvider.label} · ${currentModelLabel ?? "Select a model"}${selectedModelIsFree ? " · Free model may be too limited for complete app creation" : ""}`}
 					className="h-9 md:h-7 shrink-0 gap-1.5 rounded-lg px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
 				>
 					<CurrentProviderIcon className="size-3.5 shrink-0 text-primary" />
 					<span className="max-w-28 truncate">
 						{currentModelLabel ?? "Model"}
 					</span>
-					{reasoningEffortOptions.length > 0 && (
-						<>
-							<span className="text-border" aria-hidden="true">
-								·
-							</span>
-							<BrainIcon className="size-3.5 shrink-0 text-muted-foreground" />
-							<span className="max-w-32 truncate text-muted-foreground">
-								{currentReasoningEffortName}
-							</span>
-						</>
-					)}
 					{selectedModelIsFree && (
 						<TriangleAlertIcon
 							aria-hidden="true"
@@ -1653,15 +1648,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 									type="button"
 									onClick={() => {
 										selectModel(option.id);
-										const nextModel = copilotSDK.models.find(
-											(model) => model.id === option.id,
-										);
-										if (
-											!isAgent ||
-											(nextModel?.supportedReasoningEfforts?.length ?? 0) === 0
-										) {
-											setPickerOpen(false);
-										}
+										setPickerOpen(false);
 									}}
 									className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
 								>
@@ -1681,49 +1668,6 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 							isAgentBackendProvider(option.id),
 						)}
 					/>
-				)}
-				{reasoningEffortOptions.length > 0 && (
-					<>
-						<p className="px-1 pb-1.5 pt-2.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-							{t("reasoning", "Reasoning")}
-						</p>
-						<div className="grid grid-cols-2 gap-1">
-							<button
-								type="button"
-								onClick={() => {
-									selectReasoningEffort("");
-									setPickerOpen(false);
-								}}
-								className={`col-span-2 flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${!reasoningEffort ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
-							>
-								<BrainIcon className="size-3.5 shrink-0" />
-								<span className="flex-1 truncate">
-									{autoReasoningEffortName}
-								</span>
-								{!reasoningEffort && (
-									<CheckIcon className="size-3.5 shrink-0" />
-								)}
-							</button>
-							{reasoningEffortOptions.map((option) => {
-								const active = option.id === reasoningEffort;
-								return (
-									<button
-										key={option.id}
-										type="button"
-										title={option.description}
-										onClick={() => {
-											selectReasoningEffort(option.id);
-											setPickerOpen(false);
-										}}
-										className={`flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs outline-none transition-colors focus-visible:ring-2 focus-visible:ring-primary/40 ${active ? "bg-primary/10 text-primary" : "hover:bg-muted"}`}
-									>
-										<span className="flex-1 truncate">{option.name}</span>
-										{active && <CheckIcon className="size-3.5 shrink-0" />}
-									</button>
-								);
-							})}
-						</div>
-					</>
 				)}
 			</PopoverContent>
 		</Popover>
@@ -1880,6 +1824,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								// blocked; they start another turn, queue, or steer the running one.
 								concurrency={chatConcurrency}
 								config={GLOBAL_CHAT_CONFIG}
+								thinking={thinkingPicker}
 								activeInteractions={activeInteractions}
 								onRespondToInteraction={handleRespondToInteraction}
 								onMessageUpdate={handleMessageUpdate}

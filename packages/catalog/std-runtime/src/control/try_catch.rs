@@ -1,5 +1,6 @@
 use flow_like::flow::{
     execution::{
+        LogLevel,
         branch::{BranchResult, run_branch},
         context::ExecutionContext,
     },
@@ -104,11 +105,20 @@ impl NodeLogic for TryCatchNode {
             .await?;
 
         if error_occurred {
+            context.log_message(&caught_error_log(&error_message), LogLevel::Warn);
             context.activate_exec_pin("exec_catch").await?;
         } else {
             context.activate_exec_pin("exec_success").await?;
         }
 
         Ok(())
+    }
+}
+
+fn caught_error_log(error_message: &str) -> String {
+    if error_message.trim().is_empty() {
+        "Try Catch routed to Catch without an error message; wire the action's error message into Error Message".to_string()
+    } else {
+        format!("Try Catch caught an error: {error_message}")
     }
 }

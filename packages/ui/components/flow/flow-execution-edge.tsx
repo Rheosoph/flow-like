@@ -7,6 +7,12 @@ import {
 } from "@xyflow/react";
 import { memo, useMemo } from "react";
 import { isWebkitLite } from "../../lib/platform";
+import {
+	WireTraceFlow,
+	WireTraceGlow,
+	isLit,
+	useWireEmphasis,
+} from "./wire-trace";
 
 export const FlowExecutionEdge = memo(function FlowExecutionEdge(
 	props: EdgeProps,
@@ -65,10 +71,17 @@ export const FlowExecutionEdge = memo(function FlowExecutionEdge(
 	]);
 
 	const baseColor = style.stroke || "var(--foreground)";
-	const isSelected = selected ?? false;
+	const emphasis = useWireEmphasis(id);
+	const isSelected = (selected ?? false) || isLit(emphasis);
 
 	return (
-		<>
+		<g opacity={emphasis === "dim" ? 0.25 : undefined}>
+			<WireTraceGlow
+				id={id}
+				path={edgePath}
+				color="var(--primary)"
+				emphasis={emphasis}
+			/>
 			{/* Core solid line */}
 			<BaseEdge
 				id={`${id}-core`}
@@ -102,6 +115,12 @@ export const FlowExecutionEdge = memo(function FlowExecutionEdge(
 					}}
 				/>
 			)}
-		</>
+			<WireTraceFlow
+				id={id}
+				path={edgePath}
+				color="var(--primary)"
+				emphasis={emphasis}
+			/>
+		</g>
 	);
 });

@@ -14,8 +14,9 @@ use flow_like::flow::execution::{InternalRun, LogLevel, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
 use flow_like::profile::Profile;
 use flow_like_types::intercom::{BufferedInterComHandler, InterComEvent};
-use futures_util::Stream;
+use futures_util::{FutureExt, Stream};
 use std::collections::{BTreeSet, HashMap};
+use std::panic::AssertUnwindSafe;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -242,19 +243,22 @@ async fn run_execution(
     tx: mpsc::Sender<StreamEvent>,
 ) {
     let start = Instant::now();
-    if let Ok(claims) = verify_jwt_async(&request.executor_jwt).await {
-        crate::quota::record_compute(&claims, &request.executor_jwt, "started").await;
-    }
-
-    let result = execute_inner(
+    let mut compute_start = match verify_jwt_async(&request.executor_jwt).await {
+        Ok(claims) => crate::quota::start_compute(&claims, &request.executor_jwt).await,
+        Err(_) => crate::quota::ComputeStart::default(),
+    };
+    let result = AssertUnwindSafe(execute_inner(
         &request,
         &config,
         &run_id,
         &callback_url,
         &executor_subject,
         &tx,
-    )
+        &mut compute_start,
+    ))
+    .catch_unwind()
     .await;
+    let result = compute_start.complete(result).await;
 
     let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -294,6 +298,7 @@ async fn execute_inner(
     callback_url: &str,
     executor_subject: &str,
     tx: &mpsc::Sender<StreamEvent>,
+    compute_start: &mut crate::quota::ComputeStart,
 ) -> Result<
     (
         ExecutionStatus,
@@ -303,15 +308,14 @@ async fn execute_inner(
     ),
     StreamFailure,
 > {
+    let claims = verify_jwt_async(&request.executor_jwt).await?;
     let state = crate::execute::build_flow_state(
         &request.credentials,
-        Some(crate::widgets::HubAccess {
-            callback_url: callback_url.to_string(),
-            jwt: request.executor_jwt.clone(),
-            hosted_frontend: verify_jwt_async(&request.executor_jwt)
-                .await?
-                .hosted_frontend,
-        }),
+        Some(crate::widgets::HubAccess::for_run(
+            &claims,
+            &request.executor_jwt,
+            request.profile.as_ref(),
+        )),
     )
     .await?;
     let execution_environment = state.execution_environment;
@@ -490,10 +494,7 @@ async fn execute_inner(
         "Creating InternalRun with predetermined run_id"
     );
 
-    let context_token = request
-        .token
-        .clone()
-        .or_else(|| Some(request.executor_jwt.clone()));
+    let context_token = Some(request.executor_jwt.clone());
 
     let channel = crate::channel::build_run_channel(
         request.channel.as_ref(),
@@ -552,6 +553,11 @@ async fn execute_inner(
     }
 
     let quota_claims = verify_jwt_async(&request.executor_jwt).await?;
+    compute_start.wait().await;
+    if let Err(error) = crate::execute::check_execution_deadline(config) {
+        channel.close().await;
+        return Err(error.into());
+    }
     let mut quota_lease = crate::quota::begin(&quota_claims, &request.executor_jwt).await?;
     let cancellation = config.cancellation().unwrap_or_default();
     run.set_cancellation_token(cancellation.clone());

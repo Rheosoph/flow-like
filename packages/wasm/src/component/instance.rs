@@ -4,7 +4,7 @@ use crate::component::linker::{
 };
 use crate::component::WasmComponent;
 use crate::engine::WasmEngine;
-use crate::error::{WasmError, WasmResult};
+use crate::error::{component_run_error, WasmError, WasmResult};
 use crate::host_functions::HostState;
 use crate::limits::{WasmCapabilities, WasmSecurityConfig};
 use crate::wasi::isolated_wasi_ctx_builder;
@@ -176,6 +176,7 @@ impl WasmComponentInstance {
 
         let mut linker: Linker<ComponentStoreData> = Linker::new(component_engine);
         register_component_host_functions(&mut linker, &security)?;
+        let prepared = super::compatibility::prepare(&linker, component.component())?;
 
         let mut data = ComponentStoreData::new(&security);
         data.host_state = host_state;
@@ -209,12 +210,9 @@ impl WasmComponentInstance {
             }
         }
 
-        let instance = linker
-            .instantiate_async(&mut store, component.component())
-            .await
-            .map_err(|e| {
-                WasmError::instantiation(format!("Failed to instantiate component: {}", e))
-            })?;
+        let instance = prepared.instantiate_async(&mut store).await.map_err(|e| {
+            WasmError::instantiation(format!("Failed to instantiate component: {e:#}"))
+        })?;
 
         Ok(Self {
             engine: component_engine.clone(),
@@ -233,6 +231,7 @@ impl WasmComponentInstance {
     ) -> WasmResult<String> {
         let mut linker: Linker<ComponentStoreData> = Linker::new(&self.engine);
         register_component_host_functions(&mut linker, &self.security)?;
+        super::compatibility::prepare(&linker, self.component.component())?;
 
         const MAX_OUTPUT_SIZE: usize = 10 << 20;
         let stdout = MemoryOutputPipe::new(MAX_OUTPUT_SIZE);
@@ -282,21 +281,23 @@ impl WasmComponentInstance {
         .await
         .map_err(|e| WasmError::instantiation(format!("Failed to instantiate command: {}", e)))?;
 
-        let run_result = command
-            .wasi_cli_run()
-            .call_run(&mut store)
-            .await
-            .map_err(|e| {
-                let stderr_text = String::from_utf8_lossy(&stderr.contents()).to_string();
-                let stdout_text = String::from_utf8_lossy(&stdout.contents()).to_string();
-                WasmError::execution(
-                    "wasi:cli/run",
-                    format!(
-                        "Call failed: {}. stdout='{}' stderr='{}'",
-                        e, stdout_text, stderr_text
-                    ),
-                )
-            })?;
+        let run_result = command.wasi_cli_run().call_run(&mut store).await;
+        crate::host_functions::storage::cleanup_pending_writes(
+            &store.data().host_state.pending_writes,
+        )
+        .await;
+        store.data().host_state.storage_listings.clear();
+        let run_result = run_result.map_err(|e| {
+            let stderr_text = String::from_utf8_lossy(&stderr.contents()).to_string();
+            let stdout_text = String::from_utf8_lossy(&stdout.contents()).to_string();
+            WasmError::execution(
+                "wasi:cli/run",
+                format!(
+                    "Call failed: {}. stdout='{}' stderr='{}'",
+                    e, stdout_text, stderr_text
+                ),
+            )
+        })?;
 
         if run_result.is_err() {
             let stderr_bytes = stderr.contents();
@@ -474,18 +475,15 @@ impl WasmComponentInstance {
         };
 
         let call = func.call_async(&mut self.store, (input_json,)).await;
-        self.store.data().drain_guest_output();
-        let (result_json,) = call.map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("all fuel consumed") {
-                return WasmError::OutOfFuel {
-                    limit: self.fuel_limit,
-                };
-            }
-            if msg.contains("epoch deadline") || msg.contains("interrupt") {
-                return WasmError::Timeout { duration_ms: 0 };
-            }
-            WasmError::execution("run", format!("Call failed: {}", e))
+        crate::host_functions::storage::cleanup_pending_writes(
+            &self.store.data().host_state.pending_writes,
+        )
+        .await;
+        self.store.data().host_state.storage_listings.clear();
+        let guest_output = self.store.data().drain_guest_output();
+        let (result_json,) = call.map_err(|error| {
+            component_run_error(error, self.fuel_limit, self.security.limits.timeout)
+                .with_guest_output(&guest_output)
         })?;
 
         serde_json::from_str(&result_json)

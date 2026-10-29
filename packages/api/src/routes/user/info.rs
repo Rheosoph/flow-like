@@ -3,14 +3,19 @@ use std::collections::HashMap;
 use crate::{
     entity::user,
     error::ApiError,
-    middleware::jwt::AppUser,
+    execution::subject::account_user_id,
+    middleware::jwt::{AppUser, ExecutorUse},
     routes::profile::create_default::create_default_profile,
     routes::user::identity::{derive_display_name, derive_public_handle, sanitize_display_name},
+    routes::user::lookup::UserLookupResponse,
     routes::user::sign_avatar,
     state::AppState,
     user_management::UserManagement,
 };
-use axum::{Extension, Json, extract::State};
+use axum::{
+    Extension, Json,
+    extract::{Path, State},
+};
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{ActiveModelTrait, EntityTrait};
 
@@ -182,6 +187,77 @@ pub async fn user_info(
     Ok(Json(new_user))
 }
 
+/// The account a human token belongs to. `/user/info` switches to it once
+/// executors read their user through [`executor_user_info`].
+#[allow(dead_code)]
+pub(crate) fn account_subject(user: &AppUser) -> Result<String, ApiError> {
+    if matches!(user, AppUser::Executor(_)) {
+        return Err(ApiError::forbidden(
+            "Runs read the user they act as from /execution/apps/{app_id}/user",
+        ));
+    }
+    user.sub()
+}
+
+/// The account a run acts as. Only the run's own executor token may ask, and
+/// runs for an API key or a connected app have no account to show.
+fn run_subject<'a>(user: &'a AppUser, app_id: &'a str) -> Result<&'a str, ApiError> {
+    let AppUser::Executor(executor) = user else {
+        return Err(ApiError::forbidden(
+            "This route only accepts executor tokens",
+        ));
+    };
+    if executor.app_id != app_id {
+        return Err(ApiError::forbidden(
+            "Executor token is bound to a different app",
+        ));
+    }
+    let chained = executor
+        .app_chain
+        .as_ref()
+        .is_some_and(|chain| !chain.is_empty());
+    if chained || executor.technical_user_id.is_some() {
+        return Err(ApiError::not_found(
+            "This run acts for an API key or a connected app, not a user account",
+        ));
+    }
+    account_user_id(&executor.sub)
+        .ok_or_else(|| ApiError::not_found("This run does not act as a user account"))
+}
+
+/// Profile of the user a run acts as, limited to what this hub shows in user lookups.
+#[utoipa::path(
+    get,
+    path = "/execution/apps/{app_id}/user",
+    tag = "execution",
+    description = "Profile of the user a run acts as, limited to what this hub shows in user lookups.",
+    params(("app_id" = String, Path, description = "Application ID")),
+    responses(
+        (status = 200, description = "The run's user, as user lookups show them", body = UserLookupResponse),
+        (status = 403, description = "Not an executor token, or the run belongs to another app or lost access to it"),
+        (status = 404, description = "The run acts for an API key, a connected app or a visitor without an account")
+    ),
+    security(("executor_jwt" = []))
+)]
+#[tracing::instrument(name = "GET /execution/apps/{app_id}/user", skip(state, user))]
+pub async fn executor_user_info(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(app_id): Path<String>,
+) -> Result<Json<UserLookupResponse>, ApiError> {
+    let sub = run_subject(&user, &app_id)?;
+    user.execution_app_permission(&app_id, &state, ExecutorUse::Read)
+        .await?;
+    let account = user::Entity::find_by_id(sub)
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::not_found("The account this run acts as no longer exists"))?;
+    let lookup = state.platform_config.lookup.clone();
+    Ok(Json(
+        UserLookupResponse::parse(account, lookup, &state).await,
+    ))
+}
+
 /// `username` and `preferredUsername` are unique, so an identity sync can collide
 /// with another row. `/user/info` gates app startup, so a collision must degrade to
 /// "keep the row we have" rather than fail the request.
@@ -263,4 +339,175 @@ async fn generate_stripe_user(
     .await?;
 
     Ok(customer)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::middleware::jwt::{ApiKey, ConnectedAppUser, ExecutorUser, OpenIDUser, PATUser};
+    use axum::http::StatusCode;
+
+    fn executor(app_id: &str, sub: &str) -> ExecutorUser {
+        ExecutorUser {
+            sub: sub.into(),
+            app_id: app_id.into(),
+            run_id: "run-1".into(),
+            technical_user_id: None,
+            app_chain: None,
+            correlation: None,
+            shadow: false,
+            hosted_frontend: false,
+            event_id: None,
+            custom_bits_owner: None,
+            unattended: false,
+        }
+    }
+
+    fn people() -> [AppUser; 2] {
+        [
+            AppUser::OpenID(OpenIDUser {
+                sub: "user-1".into(),
+                access_token: "token".into(),
+            }),
+            AppUser::PAT(PATUser {
+                pat: "pat".into(),
+                sub: "user-1".into(),
+            }),
+        ]
+    }
+
+    fn machines() -> [AppUser; 2] {
+        [
+            AppUser::APIKey(ApiKey {
+                key_id: "key-1".into(),
+                api_key: "secret".into(),
+                app_id: "app-1".into(),
+                creator_user_id: Some("user-1".into()),
+            }),
+            AppUser::ConnectedApp(ConnectedAppUser {
+                sub: Some("user-1".into()),
+                origin_app_id: "app-0".into(),
+                target_app_id: "app-1".into(),
+                app_chain: vec!["app-0".into()],
+                technical_user_id: None,
+                run_id: Some("run-0".into()),
+                correlation: None,
+            }),
+        ]
+    }
+
+    fn status<T>(result: Result<T, ApiError>) -> Option<StatusCode> {
+        result.err().map(|error| error.status())
+    }
+
+    #[test]
+    fn run_subject_accepts_only_executor_tokens_of_the_path_app() {
+        let run = AppUser::Executor(executor("app-1", "user-1"));
+        assert_eq!(run_subject(&run, "app-1").unwrap(), "user-1");
+        assert_eq!(
+            status(run_subject(&run, "app-2")),
+            Some(StatusCode::FORBIDDEN)
+        );
+
+        for account_run in [
+            ExecutorUser {
+                shadow: true,
+                ..executor("app-1", "user-1")
+            },
+            ExecutorUser {
+                hosted_frontend: true,
+                ..executor("app-1", "user-1")
+            },
+            ExecutorUser {
+                app_chain: Some(Vec::new()),
+                ..executor("app-1", "user-1")
+            },
+        ] {
+            let run = AppUser::Executor(account_run);
+            assert_eq!(run_subject(&run, "app-1").ok(), Some("user-1"), "{run:?}");
+        }
+
+        for principal in people()
+            .into_iter()
+            .chain(machines())
+            .chain([AppUser::Unauthorized])
+        {
+            assert_eq!(
+                status(run_subject(&principal, "app-1")),
+                Some(StatusCode::FORBIDDEN),
+                "{principal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn run_subject_finds_no_account_for_keys_connections_or_placeholders() {
+        for no_account in [
+            ExecutorUser {
+                app_chain: Some(vec!["app-0".into()]),
+                ..executor("app-1", "user-1")
+            },
+            ExecutorUser {
+                technical_user_id: Some("key-1".into()),
+                ..executor("app-1", "user-1")
+            },
+            executor("app-1", ""),
+            executor("app-1", "local"),
+            executor("app-1", "sink:sink-1"),
+            executor("app-1", "inbound:event-1"),
+            executor("app-1", "regression:suite-1"),
+            executor("app-1", "frontend:event-1:anonymous-1"),
+        ] {
+            let run = AppUser::Executor(no_account);
+            assert_eq!(
+                status(run_subject(&run, "app-1")),
+                Some(StatusCode::NOT_FOUND),
+                "{run:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn account_subject_accepts_only_people() {
+        for person in people() {
+            assert_eq!(account_subject(&person).unwrap(), "user-1");
+        }
+        for principal in machines()
+            .into_iter()
+            .chain([AppUser::Executor(executor("app-1", "user-1"))])
+        {
+            assert_eq!(
+                status(account_subject(&principal)),
+                Some(StatusCode::FORBIDDEN),
+                "{principal:?}"
+            );
+        }
+        assert_eq!(
+            status(account_subject(&AppUser::Unauthorized)),
+            Some(StatusCode::UNAUTHORIZED)
+        );
+    }
+
+    #[test]
+    fn the_run_route_reads_after_the_subject_and_app_checks() {
+        let source = include_str!("info.rs");
+        let handler = source
+            .split_once("\npub async fn executor_user_info(")
+            .expect("executor_user_info exists")
+            .1;
+        let handler = handler
+            .split_once("\n}\n")
+            .map_or(handler, |(body, _)| body);
+        let position = |needle: &str| {
+            handler
+                .find(needle)
+                .unwrap_or_else(|| panic!("executor_user_info calls {needle}"))
+        };
+        assert!(position("run_subject(&user, &app_id)?") < position(".execution_app_permission("));
+        assert!(
+            position(".execution_app_permission(&app_id, &state, ExecutorUse::Read)")
+                < position("find_by_id(sub)")
+        );
+        assert!(position("find_by_id(sub)") < position("UserLookupResponse::parse("));
+    }
 }

@@ -259,13 +259,12 @@ impl NodeLogic for MLApplyTransformNode {
                 let mut total_processed: usize = 0;
                 loop {
                     let t0 = std::time::Instant::now();
-                    cached_db.ensure_flushed().await?;
                     // Full rows, not just the input column. The upsert below merges with
                     // `when_matched_update_all`, which REPLACES the matched row wholesale — so a
                     // partial row either fails to write (non-nullable column missing) or silently
                     // nulls every column that was not fetched.
                     let mut records = {
-                        let database = database.read().await;
+                        let database = cached_db.flushed_read().await?;
                         database.filter("true", None, batch_size, offset).await?
                     };
                     let batch_count = records.len();

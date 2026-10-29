@@ -29,6 +29,8 @@ use flow_like::{
     state::{FlowLikeConfig, FlowLikeState},
     utils::http::HTTPClient,
 };
+use flow_like_browser::connection::{Connection, EventHook};
+use flow_like_browser::event_log::Event;
 use flow_like_browser::launch::{
     self, BrowserKind, Executable, ExecutableSource, Flavor,
     cft::{self, CftVersion},
@@ -99,7 +101,7 @@ use flow_like_types::{
 };
 use serde::de::DeserializeOwned;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeSet, VecDeque},
     future::Future,
     io::{ErrorKind, Read, Write},
     net::{TcpListener, TcpStream},
@@ -116,6 +118,8 @@ const CLEANUP_BUDGET: Duration = Duration::from_secs(20);
 const DIALOG_BUDGET: Duration = Duration::from_secs(5);
 const POLL: Duration = Duration::from_millis(200);
 const SLOW_TAIL_CAP: Duration = Duration::from_secs(30);
+const TRANSCRIPT_LINES: usize = 4000;
+const TRANSCRIPT_PARAMS: usize = 300;
 const PROFILE_PREFIX: &str = "flow-like-browser-";
 const STAGING_PREFIX: &str = "flow-like-downloads-";
 const BIDI_ERROR: &str = "Firefox and Safari are not supported by the new browser engine yet (WebDriver BiDi support is planned); use Chrome or Edge";
@@ -140,6 +144,7 @@ static BROWSERS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static DISCOVERY: tokio::sync::OnceCell<Discovery> = tokio::sync::OnceCell::const_new();
 static WORKSPACES: AtomicU64 = AtomicU64::new(0);
 static RAN: std::sync::Mutex<BTreeSet<String>> = std::sync::Mutex::new(BTreeSet::new());
+static TRANSCRIPT: std::sync::Mutex<Transcript> = std::sync::Mutex::new(Transcript::new());
 
 const BASIC_FLOW: &str = "basic flow";
 const FRAMES_FLOW: &str = "frames flow";
@@ -1868,6 +1873,9 @@ where
 {
     discovery().await;
     let _turn = BROWSERS.lock().await;
+    flow_like_browser::test_hooks::observe_browsers(watch_browser);
+    *transcript() = Transcript::new();
+    let _log = FailureLog::new(name);
     with_ran_nodes(BTreeSet::clear);
     if tokio::time::timeout(TEST_BUDGET, flow(Site::start()))
         .await
@@ -1876,6 +1884,114 @@ where
         panic!("{name} did not finish within {TEST_BUDGET:?}");
     }
     assert_flow_ran_its_nodes(name);
+}
+
+/// What the browsers of the running test reported, in the crate e2e log format.
+struct Transcript {
+    events: VecDeque<String>,
+    stderr: Vec<Box<dyn Fn() -> String + Send + Sync>>,
+}
+
+impl Transcript {
+    const fn new() -> Self {
+        Self {
+            events: VecDeque::new(),
+            stderr: Vec::new(),
+        }
+    }
+}
+
+fn transcript() -> std::sync::MutexGuard<'static, Transcript> {
+    TRANSCRIPT.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Runs before the browser attaches its first tab, so a launch that fails inside Open Browser is
+/// recorded too.
+fn watch_browser(browser: &flow_like_browser::Browser) {
+    browser.connection().add_hook(Arc::new(EventLines));
+    if let Some(read) = flow_like_browser::test_hooks::stderr_reader(browser) {
+        transcript().stderr.push(Box::new(read));
+    }
+}
+
+struct EventLines;
+
+impl EventHook for EventLines {
+    fn on_event(&self, _connection: &Connection, event: &Event) {
+        let session = event
+            .session
+            .as_ref()
+            .map_or("-", |session| session.as_str());
+        let params: String = event
+            .params
+            .to_string()
+            .chars()
+            .take(TRANSCRIPT_PARAMS)
+            .collect();
+        let line = format!("{:>7} {session} {} {params}", event.seq, event.method);
+        let mut transcript = transcript();
+        if transcript.events.len() == TRANSCRIPT_LINES {
+            transcript.events.pop_front();
+        }
+        transcript.events.push_back(line);
+    }
+}
+
+/// Writes target/browser-e2e-logs/<test>.log when the test panics, as the crate e2e tests do.
+struct FailureLog {
+    name: String,
+}
+
+impl FailureLog {
+    fn new(flow: &str) -> Self {
+        let name = std::thread::current()
+            .name()
+            .map_or_else(|| flow.replace(' ', "_"), str::to_owned);
+        let _ = std::fs::remove_file(logs_dir().join(format!("{name}.log")));
+        Self { name }
+    }
+}
+
+impl Drop for FailureLog {
+    fn drop(&mut self) {
+        use std::fmt::Write as _;
+        if !std::thread::panicking() {
+            return;
+        }
+        let transcript = transcript();
+        let mut text = format!(
+            "test: {}\nreason: panicked; the panic message is in the test output\n",
+            self.name
+        );
+        for (index, read) in transcript.stderr.iter().enumerate() {
+            let _ = writeln!(
+                text,
+                "\n== Chrome stderr tail of launched browser {index}\n{}",
+                read()
+            );
+        }
+        let _ = writeln!(
+            text,
+            "\n== CDP events seen by the test connections (last {TRANSCRIPT_LINES})"
+        );
+        for line in &transcript.events {
+            let _ = writeln!(text, "{line}");
+        }
+        let path = logs_dir().join(format!("{}.log", self.name));
+        let written =
+            std::fs::create_dir_all(logs_dir()).and_then(|()| std::fs::write(&path, text));
+        match written {
+            Ok(()) => eprintln!("browser e2e log: {}", path.display()),
+            Err(error) => eprintln!("could not write {}: {error}", path.display()),
+        }
+    }
+}
+
+fn logs_dir() -> PathBuf {
+    std::env::var_os("CARGO_TARGET_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../target"))
+        .join("browser-e2e-logs")
 }
 
 fn with_ran_nodes<T>(use_nodes: impl FnOnce(&mut BTreeSet<String>) -> T) -> T {

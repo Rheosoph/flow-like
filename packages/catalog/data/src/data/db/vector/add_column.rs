@@ -144,8 +144,7 @@ impl NodeLogic for AddColumnLocalDatabaseNode {
         let definition = read_column_definition(context).await?;
 
         let cached_db = database.load(context).await?;
-        cached_db.ensure_flushed().await?;
-        let database = cached_db.db.read().await;
+        let database = cached_db.flushed_read().await?;
 
         match definition {
             ColumnDefinition::SqlExpression(expression) => {

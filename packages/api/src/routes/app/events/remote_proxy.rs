@@ -11,7 +11,8 @@
 //! `_client.proxy`, separately from registration auth in `_client.auth`, and
 //! into the dispatched run's user context — so `Get Executing User` and
 //! `Has Permission` see the connection's role and the passed-through subject
-//! instead of nothing at all.
+//! instead of nothing at all. A person the connection passed through runs the
+//! event as themselves, bounded by what both they and the connection hold.
 
 use crate::{
     ensure_permission,
@@ -35,20 +36,16 @@ use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 /// Caller identity for proxied calls: ties the dispatched run into the calling
 /// run's case (parent run, app chain, correlation) and hands it the connected
 /// app's execution identity — the role the connection grants, plus the subject
-/// it passed through as `on_behalf_of`.
+/// it passed through as `on_behalf_of` — and the person that subject names.
 ///
 /// `permission` is the same object the route guard just used to authorize this
 /// call, so the run is told exactly what the proxy decided rather than a
 /// reconstruction of it.
 fn proxy_caller(user: &AppUser, permission: &AppPermissionResponse) -> ProxyCallerContext {
     match user {
-        AppUser::ConnectedApp(app) => ProxyCallerContext {
-            app_chain: Some(app.app_chain.clone()),
-            parent_run_id: app.run_id.clone(),
-            correlation: app.correlation.clone(),
-            user_context: Some(permission.to_user_context()),
-            ..Default::default()
-        },
+        AppUser::ConnectedApp(app) => {
+            ProxyCallerContext::through_connection(app, permission.to_user_context())
+        }
         _ => ProxyCallerContext::default(),
     }
 }
@@ -254,4 +251,32 @@ pub async fn proxy_mcp_path(
         state, user, app_id, event_id, path, raw_query, method, headers, body,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    /// The proxy hands the run the person the connection passed through, so a REST or MCP
+    /// call on their behalf runs as them rather than as the event's run-as user.
+    #[test]
+    fn proxied_calls_carry_the_person_the_connection_passed_through() {
+        let source = include_str!("remote_proxy.rs");
+        let body = source
+            .split_once("\nfn proxy_caller(")
+            .expect("proxy_caller exists")
+            .1;
+        let body = body.split_once("\n}\n").map_or(body, |(body, _)| body);
+        let wiring = "ProxyCallerContext::through_connection(app, permission.to_user_context())";
+        assert!(body.contains(wiring));
+        for caller in ["proxy_rest_inner", "proxy_mcp_inner"] {
+            let inner = source
+                .split_once(&format!("\nasync fn {caller}("))
+                .unwrap_or_else(|| panic!("{caller} exists"))
+                .1;
+            let inner = inner.split_once("\n}\n").map_or(inner, |(body, _)| body);
+            assert!(
+                inner.contains("let caller = proxy_caller(&user, &permission);"),
+                "{caller}"
+            );
+        }
+    }
 }

@@ -1,14 +1,15 @@
-import type { IBit } from "../bit/bit";
 import type { IHomeLayout } from "../../../components/home/types";
+import type { IBit } from "../bit/bit";
 
 export interface IProfile {
 	apps?: IProfileApp[] | null;
 	bits: string[];
 	created: string;
 	/**
-	 * User-owned private bits (custom providers / local HF models). Hydrated
-	 * with provider secrets only server-side and on the owner's desktop —
-	 * never in the browser client.
+	 * User-owned private bits (custom providers / local HF models). Only the
+	 * owner's desktop and the hub hold their provider secrets. Server runs carry
+	 * secret-free views and call them through the hub's model relay; the browser
+	 * client never sees a secret.
 	 */
 	custom_bits?: IBit[];
 	description?: null | string;
@@ -24,10 +25,11 @@ export interface IProfile {
 	home_layout?: IHomeLayout | null;
 	home_default_id?: string | null;
 	tags?: string[];
+	// biome-ignore lint/suspicious/noExplicitAny: the hub stores any JSON here (`Option<Value>`), and the settings page and theme loaders read it as an ITheme without narrowing; typing it means narrowing at those call sites.
 	theme?: any;
 	thumbnail?: null | string;
 	updated: string;
-	[property: string]: any;
+	[property: string]: unknown;
 }
 
 export interface IProfileShortcut {
@@ -39,7 +41,6 @@ export interface IProfileShortcut {
 	icon?: string | null;
 	order: number;
 	createdAt: string;
-	[property: string]: any;
 }
 
 export interface IProfileApp {
@@ -48,12 +49,12 @@ export interface IProfileApp {
 	favorite_order?: number | null;
 	pinned: boolean;
 	pinned_order?: number | null;
-	[property: string]: any;
+	[property: string]: unknown;
 }
 
 export interface ISettings {
 	connection_mode: IConnectionMode;
-	[property: string]: any;
+	[property: string]: unknown;
 }
 
 export enum IConnectionMode {

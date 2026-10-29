@@ -10,6 +10,7 @@ const messageRenders: Array<{
 	id: string;
 	loading?: boolean;
 	anchoredContent?: unknown;
+	pending?: unknown;
 }> = [];
 
 /** The test body pays the first import of `./chat`, which pulls in the whole `lib` barrel. */
@@ -32,8 +33,6 @@ const globalDescriptors = [
 );
 Object.assign(globalThis, { document: new Window().document });
 const actual = {
-	nextThemes: { ...(await import("next-themes")) },
-	puffLoader: { ...(await import("react-spinners/PuffLoader")) },
 	voiceMode: { ...(await import("./VoiceMode")) },
 	interaction: { ...(await import("./interaction")) },
 	message: { ...(await import("./message")) },
@@ -42,15 +41,6 @@ const actual = {
 	chatbox: { ...(await import("./chatbox")) },
 };
 
-mock.module("next-themes", () => ({
-	...actual.nextThemes,
-	useTheme: () => ({ resolvedTheme: "dark" }),
-}));
-
-mock.module("react-spinners/PuffLoader", () => ({
-	...actual.puffLoader,
-	default: () => null,
-}));
 mock.module("./VoiceMode", () => ({
 	...actual.voiceMode,
 	VoiceMode: () => null,
@@ -66,11 +56,13 @@ mock.module("./message", () => ({
 		message: IMessage;
 		loading?: boolean;
 		anchoredContent?: unknown;
+		pending?: unknown;
 	}) => {
 		messageRenders.push({
 			id: props.message.id,
 			loading: props.loading,
 			anchoredContent: props.anchoredContent,
+			pending: props.pending,
 		});
 		return null;
 	},
@@ -102,8 +94,6 @@ mock.module("./chatbox", () => ({
 
 afterAll(() => {
 	mock.restore();
-	mock.module("next-themes", () => actual.nextThemes);
-	mock.module("react-spinners/PuffLoader", () => actual.puffLoader);
 	mock.module("./VoiceMode", () => actual.voiceMode);
 	mock.module("./interaction", () => actual.interaction);
 	mock.module("./message", () => actual.message);
@@ -230,6 +220,75 @@ describe("Chat message inline content", () => {
 			expect(last("other")?.anchoredContent).toBeUndefined();
 			expect(last("live")).toMatchObject({ loading: true });
 			expect(last("live")?.anchoredContent).toBe(liveContent);
+
+			await act(async () => root.unmount());
+			window.close();
+		},
+		TIMEOUT_MS,
+	);
+});
+
+describe("Chat wait before the first answer event", () => {
+	test(
+		"the question carries the wait until the answer shows something",
+		async () => {
+			const window = new Window();
+			Object.assign(globalThis, {
+				document: window.document,
+				HTMLElement: window.HTMLElement,
+				Node: window.Node,
+				navigator: window.navigator,
+				requestAnimationFrame: window.requestAnimationFrame.bind(window),
+				cancelAnimationFrame: window.cancelAnimationFrame.bind(window),
+				window,
+			});
+			Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+
+			const { Chat } = await import("./chat");
+			const message = (id: string, role: string, content: string) =>
+				({
+					id,
+					appId: "app",
+					sessionId: "s1",
+					files: [],
+					timestamp: role === "user" ? 10 : 11,
+					inner: { role, content },
+				}) as IMessage;
+			const ref = { current: null as IChatRef | null };
+			const container = document.createElement("div");
+			document.body.append(container);
+			const root = createRoot(container);
+			const push = async (answer: IMessage) => {
+				await act(async () => {
+					ref.current?.pushCurrentMessageUpdate(answer);
+					await new Promise((resolve) => setTimeout(resolve, 50));
+				});
+			};
+			const rendersOf = (id: string) =>
+				messageRenders.filter((render) => render.id === id);
+
+			messageRenders.length = 0;
+			await act(async () => {
+				root.render(
+					<Chat
+						ref={ref}
+						sessionId="s1"
+						messages={[message("q", "user", "Hi")]}
+						onSendMessage={async () => {}}
+					/>,
+				);
+			});
+
+			await push(message("a", "assistant", ""));
+			expect(rendersOf("a")).toHaveLength(0);
+			expect(rendersOf("q").at(-1)?.pending).toEqual({
+				phase: "waiting",
+				since: 10,
+			});
+
+			await push(message("a", "assistant", "Hallo"));
+			expect(rendersOf("a").at(-1)).toMatchObject({ loading: true });
+			expect(rendersOf("q").at(-1)?.pending).toBeUndefined();
 
 			await act(async () => root.unmount());
 			window.close();

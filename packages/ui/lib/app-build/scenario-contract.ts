@@ -182,11 +182,11 @@ export const scenarioJsonValueSchema: z.ZodType<ScenarioJsonValue> = z.lazy(
 			z.null(),
 			appScenarioReferenceSchema,
 			z.array(scenarioJsonValueSchema),
-			z.record(scenarioJsonValueSchema),
+			z.record(z.string(), scenarioJsonValueSchema),
 		]),
 );
 
-export const scenarioJsonObjectSchema = z.record(scenarioJsonValueSchema);
+export const scenarioJsonObjectSchema = z.record(z.string(), scenarioJsonValueSchema);
 
 function valueAssertionSchema<K extends "json" | "state">(kind: K) {
 	return z

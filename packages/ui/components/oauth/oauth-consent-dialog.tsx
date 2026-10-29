@@ -35,6 +35,8 @@ interface OAuthConsentDialogProps {
 	/** Providers that already have valid tokens but need consent for this specific app */
 	preAuthorizedProviders?: Set<string>;
 	missingScopesByProvider?: Record<string, string[]>;
+	/** Lets the person go on without connecting: Cancel reads `label`, and `description` says what that does. */
+	skip?: { label: string; description: string };
 }
 
 function formatScope(scope: string): string {
@@ -55,6 +57,7 @@ export function OAuthConsentDialog({
 	authorizedProviders: externalAuthorized,
 	preAuthorizedProviders = new Set(),
 	missingScopesByProvider = {},
+	skip,
 }: OAuthConsentDialogProps) {
 	const [authorizing, setAuthorizing] = useState<string | null>(null);
 	const [acknowledged, setAcknowledged] = useState(false);
@@ -117,6 +120,9 @@ export function OAuthConsentDialog({
 						This workflow requires access to external services. Please review
 						and authorize the required connections below.
 					</DialogDescription>
+					{skip && (
+						<p className="text-sm text-muted-foreground">{skip.description}</p>
+					)}
 				</DialogHeader>
 
 				<ScrollArea className="max-h-[300px] pr-4">
@@ -242,7 +248,7 @@ export function OAuthConsentDialog({
 
 				<DialogFooter className="flex-col sm:flex-row gap-2">
 					<Button variant="outline" onClick={handleCancel}>
-						Cancel
+						{skip?.label ?? "Cancel"}
 					</Button>
 					<Button onClick={handleConfirm} disabled={!acknowledged || !allReady}>
 						<PlayCircle className="h-4 w-4 mr-1" />

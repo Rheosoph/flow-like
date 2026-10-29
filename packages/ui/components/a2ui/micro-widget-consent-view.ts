@@ -515,21 +515,3 @@ export function partitionWidgetChips(
 		hidden: chips.filter((chip) => !keep.has(chip)),
 	};
 }
-
-/** What the blocked card says about a refused prompt (§14.5.5). */
-export interface WidgetConsentSummary {
-	level: WidgetSourceLevel | null;
-	hostCount: number;
-	includesRuntime: boolean;
-}
-
-export function summarizeWidgetConsent(
-	prompt: MicroWidgetConsentPrompt,
-	view: WidgetConsentView = buildWidgetConsentView(prompt),
-): WidgetConsentSummary {
-	return {
-		level: view.networkLevel,
-		hostCount: view.hostCount,
-		includesRuntime: prompt.includeRuntime && prompt.runtime.pending.length > 0,
-	};
-}

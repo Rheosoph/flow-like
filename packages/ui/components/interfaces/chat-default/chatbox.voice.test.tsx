@@ -235,36 +235,39 @@ function installVoiceBrowser({
 	};
 }
 
-async function renderChatBox(
-	window: Window,
-	overrides: Partial<
-		React.ComponentProps<typeof import("./chatbox")["ChatBox"]>
-	> = {},
-) {
+type ChatBoxOverrides = Partial<
+	React.ComponentProps<typeof import("./chatbox")["ChatBox"]>
+>;
+
+async function renderChatBox(window: Window, overrides: ChatBoxOverrides = {}) {
 	const { ChatBox } = await import(chatBoxTestModule);
 	const host = window.document.createElement("div");
 	window.document.body.append(host);
 	const container = host as unknown as HTMLElement;
 	const root = createRoot(container);
 	const chatBoxRef = createRef<import("./chatbox").ChatBoxRef>();
+	const render = (props: ChatBoxOverrides) =>
+		act(async () => {
+			root.render(
+				<ChatBox
+					ref={chatBoxRef}
+					onSendMessage={async () => {}}
+					fileUpload={false}
+					audioInput
+					availableTools={[]}
+					defaultActiveTools={[]}
+					{...props}
+				/>,
+			);
+		});
 
-	await act(async () => {
-		root.render(
-			<ChatBox
-				ref={chatBoxRef}
-				onSendMessage={async () => {}}
-				fileUpload={false}
-				audioInput
-				availableTools={[]}
-				defaultActiveTools={[]}
-				{...overrides}
-			/>,
-		);
-	});
+	await render(overrides);
 
 	return {
 		container,
 		ref: chatBoxRef,
+		rerender: (changes: ChatBoxOverrides) =>
+			render({ ...overrides, ...changes }),
 		close: async () => {
 			await act(async () => root.unmount());
 			window.close();
@@ -286,7 +289,15 @@ function hasButton(container: HTMLElement, label: string): boolean {
 	);
 }
 
-async function click(element: HTMLButtonElement) {
+function toolRow(container: HTMLElement, tool: string): HTMLElement {
+	const label = Array.from(container.querySelectorAll("span")).find(
+		(candidate) => candidate.textContent === tool,
+	);
+	expect(label?.parentElement).toBeInstanceOf(HTMLElement);
+	return label?.parentElement as HTMLElement;
+}
+
+async function click(element: HTMLElement) {
 	await act(async () => {
 		element.click();
 		await Promise.resolve();
@@ -481,6 +492,54 @@ describe("ChatBox voice regressions", () => {
 				);
 			});
 			expect(textarea?.value).toBe("hello world");
+		} finally {
+			await view.close();
+		}
+	});
+});
+
+describe("ChatBox imperative handle", () => {
+	test("getInput returns text set after mount", async () => {
+		const browser = installVoiceBrowser();
+		const view = await renderChatBox(browser.window);
+
+		try {
+			await act(async () => view.ref.current?.setInput("typed after mount"));
+			expect(view.ref.current?.getInput()).toBe("typed after mount");
+		} finally {
+			await view.close();
+		}
+	});
+
+	test("getActiveTools returns tools toggled in the composer after mount", async () => {
+		const browser = installVoiceBrowser();
+		const view = await renderChatBox(browser.window, {
+			availableTools: ["Reason", "Search"],
+			defaultActiveTools: ["Reason"],
+		});
+
+		try {
+			await click(toolRow(view.container, "Search"));
+			expect(view.ref.current?.getActiveTools()).toEqual(["Reason", "Search"]);
+		} finally {
+			await view.close();
+		}
+	});
+
+	test("addFiles follows the current fileUpload prop and getAttachedFiles returns the files", async () => {
+		const browser = installVoiceBrowser();
+		const view = await renderChatBox(browser.window, { fileUpload: false });
+		const notes = new File(["notes"], "notes.txt", { type: "text/plain" });
+
+		try {
+			await act(async () => view.ref.current?.addFiles?.([notes]));
+			expect(view.ref.current?.getAttachedFiles()).toHaveLength(0);
+
+			await view.rerender({ fileUpload: true });
+			await act(async () => view.ref.current?.addFiles?.([notes]));
+			const attached = view.ref.current?.getAttachedFiles() ?? [];
+			expect(attached).toHaveLength(1);
+			expect(attached[0]).toBe(notes);
 		} finally {
 			await view.close();
 		}

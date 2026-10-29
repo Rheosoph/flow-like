@@ -2,6 +2,10 @@ use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
 pub const RETENTION_MS: i64 = 60 * 60 * 1000;
+/// How long after a crossing it may still be forwarded to the hub. The hub's
+/// geofence door remembers a crossing for 15 minutes, so a later delivery
+/// could start its event a second time.
+pub const REMOTE_DELIVERY_MS: i64 = 14 * 60 * 1000;
 pub const MAX_PENDING: usize = 128;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -132,6 +136,18 @@ impl Transition {
                         && coordinates[1].as_f64() == Some(registration.latitude)
                 })
     }
+
+    /// Whether this crossing may still be delivered `now`: one a `remote`
+    /// event forwards to the hub only within [`REMOTE_DELIVERY_MS`], every
+    /// other one within [`RETENTION_MS`].
+    pub fn deliverable(&self, remote: bool, now: i64) -> bool {
+        let window = if remote {
+            REMOTE_DELIVERY_MS
+        } else {
+            RETENTION_MS
+        };
+        now.saturating_sub(self.occurred_at) <= window
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -219,22 +235,25 @@ mod tests {
         changed.radius += 1.0;
         assert_ne!(original, changed.registration("scope", "app", "event").id);
     }
+    fn crossing(registration: &NativeRegistration, occurred_at: i64) -> Transition {
+        Transition {
+            id: "transition".into(),
+            registration_id: registration.id.clone(),
+            scope: "scope".into(),
+            app_id: "app".into(),
+            event_id: "event".into(),
+            transition: "enter".into(),
+            occurred_at,
+            geometry: serde_json::json!({"type":"Point","coordinates":[13.4,52.5]}),
+            radius_meters: 200.0,
+        }
+    }
     #[test]
     fn transition_matching_rejects_stale_and_misbound_payloads() {
         let c = config();
         let r = c.registration("scope", "app", "event");
         let now = 10_000_000;
-        let event = Transition {
-            id: "transition".into(),
-            registration_id: r.id.clone(),
-            scope: "scope".into(),
-            app_id: "app".into(),
-            event_id: "event".into(),
-            transition: "enter".into(),
-            occurred_at: now,
-            geometry: serde_json::json!({"type":"Point","coordinates":[13.4,52.5]}),
-            radius_meters: 200.0,
-        };
+        let event = crossing(&r, now);
         assert!(event.matches("scope", &r, now));
         for field in [
             "scope",
@@ -263,6 +282,27 @@ mod tests {
         let mut enter = r;
         enter.transition = "exit".into();
         assert!(!event.matches("scope", &enter, now));
+    }
+    #[test]
+    fn a_forwarded_crossing_is_delivered_only_while_the_hub_deduplicates_it() {
+        let occurred_at = 10_000_000;
+        let event = crossing(&config().registration("scope", "app", "event"), occurred_at);
+        let cases = [
+            (true, 0, true),
+            (true, REMOTE_DELIVERY_MS, true),
+            (true, REMOTE_DELIVERY_MS + 1, false),
+            (true, RETENTION_MS, false),
+            (false, REMOTE_DELIVERY_MS + 1, true),
+            (false, RETENTION_MS, true),
+            (false, RETENTION_MS + 1, false),
+        ];
+        for (remote, age, deliverable) in cases {
+            assert_eq!(
+                event.deliverable(remote, occurred_at + age),
+                deliverable,
+                "remote={remote} age={age}"
+            );
+        }
     }
     #[test]
     fn native_integer_coordinate_encoding_matches_a_double_region() {

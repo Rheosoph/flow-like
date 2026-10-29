@@ -141,7 +141,9 @@ use std::{
     time::Instant,
 };
 
+use flow_like_model_provider::history::HistoryThinking;
 use flow_like_model_provider::llm::CompletionClientDyn;
+use flow_like_model_provider::llm::lenient_settings::{lenient_agent, thinking_params};
 use flow_like_types::Result;
 use futures::StreamExt;
 use rig::{
@@ -225,6 +227,8 @@ pub struct Copilot {
     workflow_session_snapshot_sink: Option<WorkflowSessionSnapshotSink>,
     /// Optional host callback for scheduling retained FlowScript crash snapshots.
     flow_ir_draft_mutation_hook: Option<FlowIrDraftMutationHook>,
+    /// User-chosen thinking level, dropped for the rest of the run if the model rejects it.
+    thinking: Option<HistoryThinking>,
 }
 
 /// A typed batch is not durable outside the model loop until its exact token is attached to the
@@ -545,7 +549,13 @@ impl Copilot {
             read_only: false,
             workflow_session_snapshot_sink: None,
             flow_ir_draft_mutation_hook: None,
+            thinking: None,
         })
+    }
+
+    pub fn with_thinking(mut self, thinking: Option<HistoryThinking>) -> Self {
+        self.thinking = thinking;
+        self
     }
 
     pub fn with_runtime_bridge(mut self, bridge: Arc<dyn platform::PlatformToolBridge>) -> Self {
@@ -878,7 +888,7 @@ impl Copilot {
             publisher.publish();
         }
 
-        let (model_name, completion_client) = self.get_model(model_id, token).await?;
+        let (model_name, completion_client, thinking) = self.get_model(model_id, token).await?;
 
         // Build a compact system prompt
         let tool_surface = CopilotToolSurface::for_mode(self.read_only);
@@ -924,8 +934,7 @@ impl Copilot {
         let graph_context = Arc::new(context.clone());
         let board_for_tools = Arc::new(board.clone());
 
-        let mut agent_builder = completion_client
-            .agent(&model_name)
+        let mut agent_builder = lenient_agent(completion_client.as_ref(), &model_name, thinking)
             .preamble(&system_prompt)
             .tool(ThinkTool)
             .tool(GetCurrentFlowScriptTool {
@@ -2857,12 +2866,16 @@ impl Copilot {
         }
     }
 
-    /// Get the model for the agent
+    /// Get the model for the agent, with the provider body for the thinking level
     async fn get_model<'a>(
         &self,
         model_id: Option<String>,
         token: Option<String>,
-    ) -> Result<(String, Box<dyn CompletionClientDyn + Send + Sync + 'a>)> {
+    ) -> Result<(
+        String,
+        Box<dyn CompletionClientDyn + Send + Sync + 'a>,
+        Option<serde_json::Value>,
+    )> {
         let bit = if let Some(profile) = &self.profile {
             let preference = BitModelPreference {
                 reasoning_weight: Some(1.0),
@@ -2910,10 +2923,13 @@ impl Copilot {
             .build(&bit, self.state.clone(), token, self.usage_context.clone())
             .await?;
         let default_model = model.default_model().await.unwrap_or("gpt-4o".to_string());
+        let thinking = self
+            .thinking
+            .and_then(|thinking| thinking_params(model.as_ref(), &default_model, thinking));
         let provider = model.provider().await?;
         let completion = provider.into_client();
 
-        Ok((default_model, completion))
+        Ok((default_model, completion, thinking))
     }
 }
 

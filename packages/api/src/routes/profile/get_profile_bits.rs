@@ -80,7 +80,7 @@ pub async fn get_profile_bits(
     // Custom bits this profile activated (without provider secrets — this
     // response feeds UI lists). The full library lives at GET /user/bits.
     let mut custom_bits =
-        crate::routes::user::bits::load_custom_bits_for_profile(&state, &sub, &bit_ids, false)
+        crate::routes::user::bits::load_custom_bits_for_profile(&state, &sub, &bit_ids)
             .await
             .unwrap_or_default();
     custom_bits.retain(|bit| served_to_client(bit, query.device_models));

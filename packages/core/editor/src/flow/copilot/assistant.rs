@@ -9,6 +9,7 @@
 
 use std::sync::Arc;
 
+use flow_like_model_provider::history::HistoryThinking;
 use serde::Deserialize;
 
 use super::memory::AssistantMemory;
@@ -589,6 +590,7 @@ pub async fn run_platform_chat<F>(
     current_images: Option<Vec<ChatImage>>,
     history: Vec<ChatMessage>,
     model_id: Option<String>,
+    thinking: Option<HistoryThinking>,
     token: Option<String>,
     bridge: Arc<dyn PlatformToolBridge>,
     memory: Option<Arc<AssistantMemory>>,
@@ -606,7 +608,7 @@ where
         format!("{base_prompt}\n\n{context}")
     };
 
-    let assistant = PlatformCopilot::new(state, profile);
+    let assistant = PlatformCopilot::new(state, profile).with_thinking(thinking);
     assistant
         .chat(
             PlatformSurface::Orchestrator,
@@ -675,6 +677,7 @@ pub async fn run_specialist_chat<F>(
     context: String,
     user_prompt: String,
     model_id: Option<String>,
+    thinking: Option<HistoryThinking>,
     token: Option<String>,
     bridge: Arc<dyn PlatformToolBridge>,
     on_token: Option<F>,
@@ -690,6 +693,7 @@ where
         context,
         user_prompt,
         model_id,
+        thinking,
         token,
         bridge,
         on_token,
@@ -707,6 +711,7 @@ pub async fn run_specialist_chat_with_access<F>(
     context: String,
     user_prompt: String,
     model_id: Option<String>,
+    thinking: Option<HistoryThinking>,
     token: Option<String>,
     bridge: Arc<dyn PlatformToolBridge>,
     on_token: Option<F>,
@@ -714,7 +719,7 @@ pub async fn run_specialist_chat_with_access<F>(
 where
     F: Fn(String) + Send + Sync + 'static,
 {
-    let assistant = PlatformCopilot::new(state, profile);
+    let assistant = PlatformCopilot::new(state, profile).with_thinking(thinking);
     assistant
         .chat(
             specialist.surface(read_only),
@@ -738,6 +743,7 @@ pub async fn run_ontology_query_chat<F>(
     profile: Option<Arc<Profile>>,
     user_prompt: String,
     model_id: Option<String>,
+    thinking: Option<HistoryThinking>,
     token: Option<String>,
     bridge: Arc<dyn PlatformToolBridge>,
     on_token: Option<F>,
@@ -745,7 +751,7 @@ pub async fn run_ontology_query_chat<F>(
 where
     F: Fn(String) + Send + Sync + 'static,
 {
-    let assistant = PlatformCopilot::new(state, profile);
+    let assistant = PlatformCopilot::new(state, profile).with_thinking(thinking);
     assistant
         .chat(
             PlatformSurface::OntologyQuery,

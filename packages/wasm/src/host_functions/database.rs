@@ -246,8 +246,7 @@ impl DatabaseContext {
                     .get(&request.database.cache_key)
                     .cloned()
                     .ok_or_else(|| flow_like_types::anyhow!("Database not granted"))?;
-                database.ensure_flushed().await?;
-                let guard = database.db.read().await;
+                let guard = database.flushed_read().await?;
                 let provider = guard.inner().to_datafusion().await?;
                 // Duplicate names fail instead of replacing a host-configured table.
                 session
@@ -316,11 +315,10 @@ impl DatabaseContext {
             guard.flush().await?;
             return Ok(json!(true));
         }
-        database.ensure_flushed().await?;
         let request: Query = serde_json::from_str(payload)?;
         let limit = row_limit(request.limit)?;
         let offset = usize::try_from(request.offset.unwrap_or(0))?;
-        let guard = database.db.read().await;
+        let guard = database.flushed_read().await?;
         Ok(match op {
             1 => serde_json::to_value(
                 guard

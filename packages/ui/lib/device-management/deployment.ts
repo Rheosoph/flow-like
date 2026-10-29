@@ -134,7 +134,7 @@ export const DEVICE_INELIGIBLE_CODES = [
 	"bot_invalid",
 ] as const;
 /** A fact newer agents add: a value this client does not know is dropped, never fatal. */
-const optionalFact = <T extends z.ZodTypeAny>(schema: T) =>
+const optionalFact = <T extends z.ZodType>(schema: T) =>
 	schema.nullish().catch(undefined);
 const discoveredEventSchema = z.object({
 	id: identifier,
@@ -193,7 +193,7 @@ const variableSchema = z.object({
 });
 const hostingSchema = z
 	.object({
-		host: z.string().ip(),
+		host: z.union([z.ipv4(), z.ipv6()]),
 		port: z.number().int().min(1).max(65535),
 		max_in_flight: z.number().int().min(1).max(1024),
 		request_timeout_secs: z.number().int().min(1).max(3600),
@@ -1700,7 +1700,7 @@ export function createDeploymentPlan(input: PlanInput): DeploymentPlan {
 		(!previousHosting?.auth_secret || input.serviceToken !== "");
 	if (
 		hosted &&
-		(!z.string().ip().safeParse(input.host).success ||
+		(!z.union([z.ipv4(), z.ipv6()]).safeParse(input.host).success ||
 			!Number.isInteger(input.port) ||
 			input.port < 1 ||
 			input.port > 65535)

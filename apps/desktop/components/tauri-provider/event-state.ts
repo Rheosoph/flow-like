@@ -15,6 +15,7 @@ import {
 	type IProfile,
 	type IRunPayload,
 	type IVersionType,
+	type LocalTriggerState,
 	type PageTrigger,
 	type ProgressToastData,
 	checkOAuthTokensFromPrerun,
@@ -33,6 +34,7 @@ import {
 	cancelDeviceCommands,
 	withDeviceCommandBridge,
 } from "@flow-like/flow-like-ui/lib/device-bridge";
+import { getErrorMessage } from "@flow-like/flow-like-ui/lib/error-message";
 import {
 	isDeviceEventSource,
 	resolveEventSourceIntent,
@@ -57,10 +59,12 @@ import type {
 	IEventAlias,
 	IEventCorpusResult,
 	IEventRunsResult,
+	IEventSinkStatus,
 	IEventSinkStatusContext,
 	IEventTimeline,
 	IEventTimelineRun,
 	IEventUpsertOptions,
+	IEventUpsertResult,
 	IInboundEmailAddress,
 	IListRegistrationsResponse,
 	IPutRegressionSuiteRequest,
@@ -75,6 +79,7 @@ import type {
 	IUserSchedule,
 	IUserSchedules,
 } from "@flow-like/flow-like-ui/state/backend-state/event-state";
+import { i18n } from "@flow-like/locales";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { fetcher, streamFetcher } from "../../lib/api";
@@ -93,7 +98,10 @@ import {
 	HUB_REFRESH_TIMEOUT_MS,
 	withRequestDeadline,
 } from "../../lib/request-deadline";
-import { requestLocalSinkConsent } from "../local-sink/local-sink-consent";
+import {
+	isWrongAccountRefusal,
+	requestLocalSinkConsent,
+} from "../local-sink/local-sink-consent";
 import { requestRpaAutomationConsent } from "../rpa";
 import type { TauriBackend } from "../tauri-provider";
 import { resolveLocalFirstPrerun } from "./prerun-utils";
@@ -101,8 +109,113 @@ import { startRegressionSuiteRun } from "./regression-runner";
 
 /** Mirrors `SinkRegistration` in the Tauri `upsert_event` and `restore_event` commands. */
 type SinkRegistrationMode = "register" | "skip" | "keep";
-/** Mirrors `LocalSinkPlan` returned by the Tauri `local_sink_registration_plan` command. */
-type LocalSinkPlan = "none" | "existing" | "new";
+
+/** Mirrors `LocalTriggerPlan` returned by the Tauri `local_trigger_plan` command. */
+interface LocalTriggerPlan {
+	readonly registration: "none" | "existing" | "new";
+	readonly needs_token: boolean;
+	readonly moves_from_app?: string;
+}
+
+/** How a save treats the event's trigger on this device, and the token it signs in with. */
+interface LocalTriggerDecision {
+	readonly registerSink: SinkRegistrationMode;
+	readonly pat?: string;
+}
+
+/** A stored event as `upsert_event` and `restore_event` return it: with what the save did to its trigger here. */
+type LocalTriggerOutcome = IEvent & {
+	trigger_state?: LocalTriggerState;
+	trigger_error?: string;
+};
+
+type LocalRestoreResult = Omit<IRestorePlanResult, "event"> & {
+	event?: LocalTriggerOutcome;
+};
+
+const KEEP_TRIGGER: LocalTriggerDecision = { registerSink: "keep" };
+const SKIP_TRIGGER: LocalTriggerDecision = { registerSink: "skip" };
+
+function withoutTriggerReport({
+	trigger_state: _state,
+	trigger_error: _error,
+	...event
+}: LocalTriggerOutcome): IEvent {
+	return event;
+}
+
+/** The save itself is committed; only this device's trigger did not follow it, as `triggerError` says. */
+function notifyTriggerError(event: Pick<IEvent, "name">, triggerError: string) {
+	toast.warning(event.name, { description: triggerError });
+}
+
+/** The event a save resolves with, carrying `trigger_error` once the user was told. */
+function reportTriggerOutcome(
+	event: IEvent,
+	outcome: LocalTriggerOutcome,
+): IEventUpsertResult {
+	if (!outcome.trigger_error) return event;
+	notifyTriggerError(event, outcome.trigger_error);
+	return { ...event, trigger_error: outcome.trigger_error };
+}
+
+/** On desktop a restore's `setup_status` only repeats `trigger_error`, so it is dropped once shown. */
+function reportRestoreOutcome(result: LocalRestoreResult): IRestorePlanResult {
+	if (!result.event) return result;
+	const event = withoutTriggerReport(result.event);
+	if (!result.event.trigger_error) return { ...result, event };
+	notifyTriggerError(event, result.event.trigger_error);
+	return { plan: result.plan, event };
+}
+
+function localTriggerSinkStatus(state: LocalTriggerState): IEventSinkStatus {
+	if (state === "ready") return { active: true };
+	if (state === "needs_token") return { active: false, needs_token: true };
+	if (typeof state === "object" && "failed" in state) {
+		return { active: false, failed_reason: state.failed.reason };
+	}
+	return { active: false };
+}
+
+/**
+ * A HYBRID trigger is active when this device's or the hub's is. This device
+ * tells why it does not run here; the hub names whom its runs act as, unless
+ * that would describe a paused hub sink behind an active local trigger. A
+ * failed read fails the status only when neither side proves it active.
+ */
+function mergeHybridSinkStatus(
+	local: PromiseSettledResult<IEventSinkStatus>,
+	hub: PromiseSettledResult<IEventSinkStatus>,
+): IEventSinkStatus {
+	const onDevice = local.status === "fulfilled" ? local.value : undefined;
+	const onHub = hub.status === "fulfilled" ? hub.value : undefined;
+	const active = Boolean(onDevice?.active || onHub?.active);
+	if (!active) {
+		for (const result of [local, hub]) {
+			if (result.status === "rejected") throw result.reason;
+		}
+	}
+	return {
+		active,
+		...(onDevice?.needs_token ? { needs_token: true } : {}),
+		...(onDevice?.failed_reason
+			? { failed_reason: onDevice.failed_reason }
+			: {}),
+		...(onHub && (onHub.active || !onDevice?.active)
+			? {
+					run_as_user_id: onHub.run_as_user_id,
+					legacy_token: onHub.legacy_token,
+				}
+			: {}),
+	};
+}
+
+function localTriggerDismissed(): Error {
+	return Object.assign(
+		new Error("Saving was cancelled before the local trigger was approved."),
+		{ isLocalSinkConsentDismissed: true },
+	);
+}
 
 // Hub configuration cache (shared with board-state)
 let hubCache: IHub | undefined;
@@ -485,7 +598,6 @@ export class EventState implements IEventState {
 						appId: appId,
 						event: remoteData,
 						enforceId: true,
-						offline: isOffline,
 						// A cache mirror never starts a trigger on this device.
 						registerSink: "keep",
 					}).catch(() => {}),
@@ -623,7 +735,6 @@ export class EventState implements IEventState {
 								appId: appId,
 								event: event,
 								enforceId: true,
-								offline: isOffline,
 								// A cache mirror never starts a trigger on this device.
 								registerSink: "keep",
 							}).catch((error) => {
@@ -928,7 +1039,6 @@ export class EventState implements IEventState {
 			restoreRoute: options?.restoreRoute,
 			dropCanary: options?.dropCanary,
 			acceptBlankSecrets: options?.acceptBlankSecrets,
-			offline: await this.backend.isOffline(appId),
 		};
 		if (options?.dryRun ?? true) {
 			return await invoke<IRestorePlanResult>("restore_event", {
@@ -942,24 +1052,18 @@ export class EventState implements IEventState {
 			...args,
 			dryRun: true,
 		});
-		const restored = preview.plan.restored;
-		if (restored.board_id && restored.execution_mode !== "Remote") {
-			await this.ensureRpaApprovalForEvent(
-				appId,
-				restored,
-				await this.eventBoardRequirements(appId, restored),
-				"event_registration",
-			);
-		}
-		const registerSink = await this.confirmLocalSinkRegistration(
+		const trigger = await this.authorizeLocalTrigger(
 			appId,
 			preview.plan.restored,
 		);
-		return await invoke<IRestorePlanResult>("restore_event", {
-			...args,
-			dryRun: false,
-			registerSink,
-		});
+		return reportRestoreOutcome(
+			await invoke<LocalRestoreResult>("restore_event", {
+				...args,
+				dryRun: false,
+				registerSink: trigger.registerSink,
+				pat: trigger.pat,
+			}),
+		);
 	}
 
 	async upsertEvent(
@@ -969,7 +1073,7 @@ export class EventState implements IEventState {
 		personalAccessToken?: string,
 		oauthTokens?: Record<string, IOAuthToken>,
 		options?: IEventUpsertOptions,
-	): Promise<IEvent> {
+	): Promise<IEventUpsertResult> {
 		const resolved = resolveEventSourceIntent(inputEvent, options?.source);
 		let { event } = resolved;
 		let { intent } = resolved;
@@ -981,45 +1085,30 @@ export class EventState implements IEventState {
 			intent = "device";
 		}
 		const deviceSource = intent === "device";
-		if (!deviceSource && event.board_id && event.execution_mode !== "Remote") {
-			await this.ensureRpaApprovalForEvent(
-				appId,
-				event,
-				await this.eventBoardRequirements(appId, event),
-				"event_registration",
-			);
-		}
-
-		const registerSink = deviceSource
-			? "skip"
-			: await this.confirmLocalSinkRegistration(appId, event);
-
 		const isOffline = await this.backend.isOffline(appId);
-		if (isOffline) {
-			return await invoke("upsert_event", {
+		// A signed-out save fails before anyone is asked anything.
+		if (!isOffline) this.eventWriteSession();
+		const trigger = deviceSource
+			? SKIP_TRIGGER
+			: await this.authorizeLocalTrigger(appId, event, personalAccessToken);
+		const saveOnDevice = (stored: IEvent) =>
+			invoke<LocalTriggerOutcome>("upsert_event", {
 				appId: appId,
-				event: event,
+				event: stored,
 				versionType: versionType,
 				// Keep caller-reserved identities stable across first writes and retries.
 				enforceId: true,
-				offline: isOffline,
-				pat: personalAccessToken,
+				pat: trigger.pat,
 				oauthTokens: oauthTokens,
-				registerSink,
+				registerSink: trigger.registerSink,
 			});
+
+		if (isOffline) {
+			const outcome = await saveOnDevice(event);
+			return reportTriggerOutcome(withoutTriggerReport(outcome), outcome);
 		}
-		if (
-			!this.backend.profile ||
-			!this.backend.auth ||
-			!this.backend.queryClient
-		) {
-			throw new Error(
-				"Profile, auth or query client not set. Cannot upsert event.",
-			);
-		}
+		const { profile, auth } = this.eventWriteSession();
 		if (options?.source === "device") {
-			const profile = this.backend.profile;
-			const auth = this.backend.auth;
 			await ensureDeviceEventCreation(`${profile.hub}|${appId}`, () =>
 				fetcher<{ device_event_creation?: boolean }>(
 					profile,
@@ -1030,38 +1119,38 @@ export class EventState implements IEventState {
 			);
 		}
 		const response = await fetcher<IEvent>(
-			this.backend.profile,
+			profile,
 			`apps/${appId}/events/${event.id}`,
 			{
 				method: "PUT",
 				body: JSON.stringify({
 					event: event,
 					version_type: versionType,
-					profile_id: this.backend.profile.id,
-					pat: personalAccessToken,
+					profile_id: profile.id,
 					oauth_tokens: oauthTokens,
 					...(deviceSource ? { register_source: false } : {}),
 					...(intent === "clear" ? { register_source: true } : {}),
 				}),
 			},
-			this.backend.auth,
+			auth,
 		);
 		if (!isEventRecord(response)) {
 			throw new Error(
 				`Saving event ${event.id} returned an unexpected response; the local copy was not updated`,
 			);
 		}
-		await invoke("upsert_event", {
-			appId: appId,
-			event: response,
-			versionType: versionType,
-			enforceId: true,
-			offline: isOffline,
-			pat: personalAccessToken,
-			oauthTokens: oauthTokens,
-			registerSink,
-		});
-		return response;
+		return reportTriggerOutcome(response, await saveOnDevice(response));
+	}
+
+	/** The hub session an online event write needs. */
+	private eventWriteSession() {
+		const { profile, auth, queryClient } = this.backend;
+		if (!profile || !auth || !queryClient) {
+			throw new Error(
+				"Profile, auth or query client not set. Cannot upsert event.",
+			);
+		}
+		return { profile, auth };
 	}
 
 	/**
@@ -1084,35 +1173,165 @@ export class EventState implements IEventState {
 	}
 
 	/**
-	 * Decides how the backend treats `event`'s trigger on this device. A trigger
-	 * that would start here anew needs the user's approval; an approved one is
-	 * refreshed silently. "skip" saves the event without a trigger and removes
-	 * an earlier one. Dismissing the dialog abandons the save.
+	 * Decides, before anything is written, how the backend treats `event`'s
+	 * trigger on this device, once the computer automation its board runs here
+	 * is approved. A trigger that would start here anew needs the user's
+	 * approval, and one that signs in to the hub without a token of the
+	 * signed-in account asks for one. "skip" saves the event without a trigger
+	 * and removes an earlier one. Dismissing a dialog abandons the save.
 	 */
-	private async confirmLocalSinkRegistration(
+	private async authorizeLocalTrigger(
 		appId: string,
 		event: IEvent,
-	): Promise<SinkRegistrationMode> {
-		if (!event.active) return "keep";
-		const plan = await invoke<LocalSinkPlan>("local_sink_registration_plan", {
+		pat?: string,
+	): Promise<LocalTriggerDecision> {
+		const plan = await this.localTriggerPlan(appId, event);
+		await this.approveEventAutomation(appId, event);
+		return plan
+			? await this.askForLocalTrigger(appId, event, plan, pat)
+			: KEEP_TRIGGER;
+	}
+
+	/**
+	 * What saving `event` does to this device's trigger; `null` when it
+	 * registers none. Only a signed-in session lists and checks the tokens a
+	 * trigger can use, so one that needs a token fails before anyone is asked.
+	 */
+	private async localTriggerPlan(
+		appId: string,
+		event: IEvent,
+	): Promise<LocalTriggerPlan | null> {
+		if (!event.active) return null;
+		const plan = await invoke<LocalTriggerPlan>("local_trigger_plan", {
 			appId,
 			event,
 		});
-		if (plan === "none") return "keep";
-		if (plan === "existing") return "register";
-		const answer = await requestLocalSinkConsent({
+		if (plan.registration === "none") return null;
+		if (
+			plan.needs_token &&
+			!(this.backend.profile && this.backend.auth?.user?.access_token)
+		) {
+			throw new Error(
+				`Sign in to the hub before choosing a token for the trigger of ${event.name}`,
+			);
+		}
+		return plan;
+	}
+
+	/** Computer automation an event runs on this device is approved with its trigger. */
+	private async approveEventAutomation(
+		appId: string,
+		event: IEvent,
+	): Promise<void> {
+		if (!event.board_id || event.execution_mode === IEventExecutionMode.Remote)
+			return;
+		await this.ensureRpaApprovalForEvent(
+			appId,
+			event,
+			await this.eventBoardRequirements(appId, event),
+			"event_registration",
+		);
+	}
+
+	private async askForLocalTrigger(
+		appId: string,
+		event: IEvent,
+		plan: LocalTriggerPlan,
+		pat?: string,
+	): Promise<LocalTriggerDecision> {
+		const callerPat = pat?.trim() ? pat : undefined;
+		const approve = plan.registration === "new";
+		const needsToken = plan.needs_token && !callerPat;
+		if (approve || needsToken) {
+			const outcome = await requestLocalSinkConsent({
+				appId,
+				eventId: event.id,
+				eventName: event.name,
+				eventType: event.event_type,
+				approve,
+				needsToken,
+				movesFromApp: plan.moves_from_app
+					? await this.appName(plan.moves_from_app)
+					: undefined,
+			});
+			if (outcome.answer === "dismiss") throw localTriggerDismissed();
+			if (outcome.answer !== "allow") return SKIP_TRIGGER;
+			if (outcome.pat) return { registerSink: "register", pat: outcome.pat };
+		}
+		if (callerPat) await this.verifyTriggerToken(appId, callerPat);
+		return { registerSink: "register", pat: callerPat };
+	}
+
+	/** A token the caller chose is checked against the signed-in account before the hub save. */
+	private async verifyTriggerToken(appId: string, pat: string): Promise<void> {
+		try {
+			await invoke("verify_trigger_token", { appId, pat });
+		} catch (error) {
+			const reason = getErrorMessage(error);
+			throw new Error(
+				isWrongAccountRefusal(reason)
+					? i18n.t("triggerTokenWrongAccount")
+					: reason,
+			);
+		}
+	}
+
+	private async appName(appId: string): Promise<string> {
+		try {
+			return (await this.backend.appState.getAppMeta(appId)).name || appId;
+		} catch {
+			return appId;
+		}
+	}
+
+	private async localTriggerState(
+		appId: string,
+		event: IEvent,
+	): Promise<LocalTriggerState> {
+		return await invoke<LocalTriggerState>("local_trigger_status", {
+			appId,
+			event,
+		});
+	}
+
+	/**
+	 * "Add token": signs this device's existing trigger of the stored `event` in
+	 * with a token the user chooses. Without one it rejects as a dismissal and
+	 * the trigger stays as it is. Nothing is written to the hub and no event
+	 * version is saved.
+	 */
+	async repairLocalTrigger(
+		appId: string,
+		event: IEvent,
+	): Promise<IEventSinkStatus> {
+		const plan = await this.localTriggerPlan(appId, event);
+		if (plan?.registration === "new") {
+			throw new Error(
+				`Event ${event.id} has no trigger on this computer to repair; save the event to register one`,
+			);
+		}
+		if (!plan?.needs_token) {
+			return localTriggerSinkStatus(await this.localTriggerState(appId, event));
+		}
+		await this.approveEventAutomation(appId, event);
+		const outcome = await requestLocalSinkConsent({
 			appId,
 			eventId: event.id,
 			eventName: event.name,
 			eventType: event.event_type,
+			approve: false,
+			needsToken: true,
+			repair: true,
 		});
-		if (answer === "allow") return "register";
-		if (answer === "decline") return "skip";
-		const error = new Error(
-			"Saving was cancelled before the local trigger was approved.",
-		) as Error & { isLocalSinkConsentDismissed?: boolean };
-		error.isLocalSinkConsentDismissed = true;
-		throw error;
+		if (outcome.answer !== "allow") throw localTriggerDismissed();
+		return localTriggerSinkStatus(
+			await invoke<LocalTriggerState>("sync_local_trigger", {
+				appId,
+				eventId: event.id,
+				registerSink: "register",
+				pat: outcome.pat,
+			}),
+		);
 	}
 
 	async deleteEvent(appId: string, eventId: string): Promise<void> {
@@ -1698,7 +1917,6 @@ export class EventState implements IEventState {
 					method: "POST",
 					body: JSON.stringify({
 						payload: payload.payload,
-						token: this.backend.auth.user?.access_token,
 						stream_state: streamState ?? false,
 						oauth_tokens: undefined,
 						runtime_variables: payload.runtime_variables,
@@ -1849,40 +2067,65 @@ export class EventState implements IEventState {
 		eventId: string,
 		context?: IEventSinkStatusContext,
 	): Promise<boolean> {
-		const readLocal = () =>
-			invoke<boolean>("is_event_sink_active", { eventId });
-		if (!context) return readLocal();
+		return (await this.getEventSinkStatus(eventId, context)).active;
+	}
+
+	async getEventSinkStatus(
+		eventId: string,
+		context?: IEventSinkStatusContext,
+	): Promise<IEventSinkStatus> {
+		if (!context) {
+			return {
+				active: await invoke<boolean>("is_event_sink_active", { eventId }),
+			};
+		}
 
 		const { event, appId } = context;
-		if (isDeviceEventSource(event)) return false;
-		if (!event.active) return false;
+		if (isDeviceEventSource(event)) return { active: false };
+		if (!event.active) return { active: false };
 		// REST/MCP endpoints use the event's enabled flag and separate setup
 		// registrations. They do not register a local worker sink.
-		if (["rest", "mcp"].includes(event.event_type)) return event.active;
+		if (["rest", "mcp"].includes(event.event_type)) {
+			return { active: event.active };
+		}
 
-		const readRemote = async (): Promise<boolean> => {
+		const readLocal = async () =>
+			localTriggerSinkStatus(await this.localTriggerState(appId, event));
+		const readRemote = async (): Promise<IEventSinkStatus> => {
 			if (!this.backend.profile || !this.backend.auth) {
 				throw new Error("Remote sink status requires an online profile");
 			}
 			try {
-				const result = await fetcher<{ active: boolean }>(
+				const result = await fetcher<{
+					active: boolean;
+					run_as_user_id?: string | null;
+					legacy_token?: boolean;
+				}>(
 					this.backend.profile,
 					`sink/${eventId}`,
 					{ method: "GET" },
 					this.backend.auth,
 				);
-				return result.active;
+				return {
+					active: result.active,
+					run_as_user_id: result.run_as_user_id,
+					legacy_token: result.legacy_token,
+				};
 			} catch (error) {
-				if (isMissingResourceError(error)) return false;
+				if (isMissingResourceError(error)) return { active: false };
 				throw error;
 			}
 		};
 
-		// The native sink manager refuses every event that runs remotely, so
-		// only the hosted sink can report it.
+		// A Remote location region is still watched on this device, which
+		// forwards each crossing to the hub; every other Remote trigger lives
+		// only in the hosted sink.
 		if (event.execution_mode === IEventExecutionMode.Remote) {
-			if (await this.backend.isLocalOnly(appId)) return false;
-			return readRemote();
+			if (await this.backend.isLocalOnly(appId)) return { active: false };
+			const onDevice = await this.localTriggerState(appId, event);
+			return onDevice === "none"
+				? readRemote()
+				: localTriggerSinkStatus(onDevice);
 		}
 
 		let target: string | undefined;
@@ -1903,16 +2146,8 @@ export class EventState implements IEventState {
 		}
 		if (target === "REMOTE") return readRemote();
 
-		const results = await Promise.allSettled([readLocal(), readRemote()]);
-		if (
-			results.some((result) => result.status === "fulfilled" && result.value)
-		) {
-			return true;
-		}
-		for (const result of results) {
-			if (result.status === "rejected") throw result.reason;
-		}
-		return false;
+		const [local, hub] = await Promise.allSettled([readLocal(), readRemote()]);
+		return mergeHybridSinkStatus(local, hub);
 	}
 
 	async listEventRegistrations(

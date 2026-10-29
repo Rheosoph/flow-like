@@ -46,10 +46,11 @@ import {
 import { captureTelemetryError } from "../../lib/telemetry/errors";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
-import { useBackend } from "../../state/backend-state";
+import { type IBackendState, useBackend } from "../../state/backend-state";
 import { useExecutionEngine } from "../../state/execution-engine-context";
 import { getFrontendStateStore } from "../a2ui/frontend-state";
 import { buildWorkflowFrontendContext } from "../a2ui/workflow-payload";
+import type { ChatThinkingLevel } from "../thinking/thinking-options";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -73,6 +74,8 @@ import { fileToAttachment } from "./chat-default/attachment";
 import { Chat, type IChatRef } from "./chat-default/chat";
 import {
 	type IAttachment,
+	type IGlobalState,
+	type ILocalChatState,
 	type IMessage,
 	chatDb,
 	decodeMessageRow,
@@ -83,15 +86,15 @@ import {
 	putChatMessage,
 } from "./chat-default/chat-db";
 import {
-	ChatWidgetExecutionProvider,
-	type RunWidgetAction,
-} from "./chat-default/chat-widget-execution";
-import type { ISendMessageFunction } from "./chat-default/chatbox";
-import {
 	type IChatTurn,
 	type IStreamLiveState,
 	createChatTurn,
 } from "./chat-default/chat-turn";
+import {
+	ChatWidgetExecutionProvider,
+	type RunWidgetAction,
+} from "./chat-default/chat-widget-execution";
+import type { ISendMessageFunction } from "./chat-default/chatbox";
 import { processChatEvents } from "./chat-default/event-processor";
 import { ChatHistory } from "./chat-default/history";
 import { submitInteractionResponse } from "./chat-default/respond-interaction";
@@ -100,6 +103,7 @@ import {
 	updateSessionInteractions,
 	useSessionInteractions,
 } from "./chat-default/session-interactions";
+import { useChatThinking } from "./chat-default/use-chat-thinking";
 import { ChatWelcome } from "./chat-default/welcome";
 import type { IUseInterfaceProps } from "./interfaces";
 
@@ -133,7 +137,7 @@ function runFailureCard(
 async function prepareAttachments(
 	filesAttached: File[] | undefined,
 	audioFile: File | undefined,
-	backend: any,
+	backend: IBackendState,
 	isOffline: boolean,
 ) {
 	const imageFiles =
@@ -381,6 +385,7 @@ function createUserMessage(
 	otherAttachments: IAttachment[],
 	historyMessage: IHistoryMessage,
 	activeTools: string[],
+	thinking: ChatThinkingLevel | undefined,
 ): IMessage {
 	return {
 		id: createId(),
@@ -391,6 +396,7 @@ function createUserMessage(
 		timestamp: Date.now(),
 		tools: activeTools ?? [],
 		actions: [],
+		thinking,
 	};
 }
 
@@ -398,10 +404,11 @@ function createPayload(
 	userMessage: IMessage,
 	lastMessages: IMessage[],
 	historyMessage: IHistoryMessage,
-	localState: any,
-	globalState: any,
+	localState: ILocalChatState | undefined,
+	globalState: IGlobalState | undefined,
 	activeTools: string[],
 	otherAttachments: IAttachment[],
+	thinking: ChatThinkingLevel,
 ) {
 	return {
 		chat_id: userMessage.sessionId,
@@ -429,6 +436,7 @@ function createPayload(
 		actions: [],
 		tools: activeTools ?? [],
 		attachments: otherAttachments,
+		thinking,
 	};
 }
 
@@ -567,6 +575,18 @@ async function handleStreamCompletion({
 	}
 }
 
+function ConversationLoading() {
+	const { t } = useTranslation("interfaces");
+	return (
+		<div className="flex h-full flex-col items-center justify-center gap-3">
+			<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
+			<p className="text-sm text-muted-foreground">
+				{t("loadingConversation", "Loading conversation...")}
+			</p>
+		</div>
+	);
+}
+
 /**
  * Periodic checkpoint of the streaming message, written to `drafts` so the session's message query
  * stays quiet until the turn settles. Recovery only: the live bubble renders from React state, and
@@ -626,6 +646,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const [showPrefilledConfirm, setShowPrefilledConfirm] = useState(false);
 	const prefilledConsumed = useRef(false);
 	const lastNavigateToRef = useRef<string | null>(null);
+	const thinking = useChatThinking(appId, event.id, config);
+	const thinkingRef = useRef(thinking);
+	thinkingRef.current = thinking;
 	const activeInteractions = useSessionInteractions(sessionIdParameter);
 	const activeInteractionsRef =
 		useRef<IInteractionRequest[]>(activeInteractions);
@@ -634,7 +657,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	}, [activeInteractions]);
 
 	const handleRespondToInteraction = useCallback(
-		async (interactionId: string, value: any) => {
+		async (interactionId: string, value: unknown) => {
 			const interaction = activeInteractionsRef.current.find(
 				(i) => i.id === interactionId,
 			);
@@ -725,7 +748,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	);
 
 	const handleNavigationEvents = useCallback(
-		(events: any[]) => {
+		(events: IIntercomEvent[]) => {
 			for (const ev of events) {
 				if (ev?.event_type !== "a2ui") continue;
 				const message = ev?.payload;
@@ -784,9 +807,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	useEffect(() => {
 		processedCompletedStreams.current.clear();
 		return () => {
-			activeSubscriptions.current.forEach((subId) => {
+			for (const subId of activeSubscriptions.current) {
 				executionEngine.unsubscribeFromEventStream(sessionIdParameter, subId);
-			});
+			}
 			activeSubscriptions.current = [];
 		};
 	}, [sessionIdParameter, executionEngine]);
@@ -876,6 +899,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		[updateSessionId],
 	);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `t` only labels the hover cards; a language switch must not rebuild the elements and re-push them into the toolbar.
 	const toolbarElements = useMemo(() => {
 		return [
 			<HoverCard key="chat-history" openDelay={200} closeDelay={100}>
@@ -934,6 +958,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		];
 	}, [handleSidebarToggle, handleNewChat]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `t` only labels the Navigate trigger; a language switch must not rebuild the elements and re-push them into the nav bar.
 	const navElements = useMemo(() => {
 		const normalizeRoute = (value: string): string => {
 			const trimmed = value.trim();
@@ -942,7 +967,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		};
 
 		const configuredRoutes = (() => {
-			const rawArray = (config as any)?.navigate_to_routes;
+			const rawArray = config?.navigate_to_routes;
 			const raw: string[] = Array.isArray(rawArray) ? rawArray : [];
 			const normalized = raw
 				.map((r) => normalizeRoute(String(r)))
@@ -1287,6 +1312,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					otherAttachments,
 					historyMessage,
 					activeTools ?? [],
+					thinkingRef.current.stamp,
 				);
 
 				await updateSession(sessionIdParameter, appId, content);
@@ -1340,6 +1366,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					globalState,
 					activeTools ?? [],
 					otherAttachments,
+					thinkingRef.current.level,
 				);
 
 				const responseMessage = createResponseMessage(
@@ -1465,6 +1492,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			sessionIdParameter,
 			appId,
 			event,
+			config?.attach_widget_snapshots,
 			localState,
 			globalState,
 			handleNavigationEvents,
@@ -1562,9 +1590,14 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				);
 			} catch (error) {
 				// Active stream errors and OAuth errors are handled separately
-				if ((error as any)?.isActiveStreamError) {
+				if (
+					(error as { isActiveStreamError?: unknown } | null)
+						?.isActiveStreamError
+				) {
 					// Already shown a toast in executeChatMessage guard
-				} else if (!(error as any)?.isOAuthError) {
+				} else if (
+					!(error as { isOAuthError?: unknown } | null)?.isOAuthError
+				) {
 					console.error("Error sending message:", error);
 					captureTelemetryError(error, {
 						culprit: "chat.send_message",
@@ -1589,17 +1622,16 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				throw new Error(`Message ${messageId} not found`);
 			}
 
-			const nextMessage: IMessage = {
+			const merged: IMessage = {
 				...existingMessage,
 				...updates,
 			};
-
-			if (
+			const { ratingSettings: _cleared, ...withoutSettings } = merged;
+			const nextMessage: IMessage =
 				Object.prototype.hasOwnProperty.call(updates, "ratingSettings") &&
 				updates.ratingSettings === undefined
-			) {
-				delete nextMessage.ratingSettings;
-			}
+					? withoutSettings
+					: merged;
 
 			await putChatMessage(nextMessage);
 
@@ -1690,6 +1722,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	// elsewhere). Its a2ui events (forwarded via onA2UIEvents) update the
 	// widget in place; toasts surface via the executeBoard transport; and any
 	// chat pushes from the triggered workflow become a new assistant message.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `t` only words the failure toast; a language switch must not hand every embedded widget a new action handler.
 	const runWidgetAction = useCallback<RunWidgetAction>(
 		async (actionAppId, actionBoardId, runPayload, onA2UIEvents) => {
 			const responseMessage = createResponseMessage(
@@ -1792,14 +1825,14 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	return (
 		<>
-			<ChatAppearance appId={appId} eventId={event.id} config={config}>
+			<ChatAppearance
+				appId={appId}
+				eventId={event.id}
+				config={config}
+				fallback={<ConversationLoading />}
+			>
 				{!messagesLoaded ? (
-					<div className="flex h-full flex-col items-center justify-center gap-3">
-						<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
-						<p className="text-sm text-muted-foreground">
-							{t("loadingConversation", "Loading conversation...")}
-						</p>
-					</div>
+					<ConversationLoading />
 				) : showWelcome ? (
 					<ChatWelcome
 						onSendMessage={handleSendMessage}
@@ -1807,6 +1840,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						config={config}
 						isSending={isSendingFromWelcome}
 						appId={appId}
+						thinking={thinking.picker}
 					/>
 				) : (
 					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
@@ -1824,6 +1858,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 							boardId={event.board_id}
 							eventId={event.id}
 							showAiDisclosure
+							thinking={thinking.picker}
 						/>
 					</ChatWidgetExecutionProvider>
 				)}

@@ -7,6 +7,14 @@
 
 pub mod flow_like {
     pub mod node {
+        #[cfg(feature = "storage-ops")]
+        pub mod storage_ops {
+            pub use crate::storage_ops::mock::{
+                close_list, copy_file, delete_file, file_url, list_files_page, move_file,
+                read_file_range, stat_file, write_file, write_file_abort, write_file_chunk,
+                write_file_finish, write_file_start, StorageError,
+            };
+        }
         pub mod logging {
             pub fn log(_level: u8, _message: &str) {}
         }

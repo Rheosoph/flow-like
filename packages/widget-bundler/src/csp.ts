@@ -41,7 +41,7 @@ export function buildCsp(
 		`script-src 'unsafe-inline' ${capabilities.wasm ? "'wasm-unsafe-eval' " : ""}${assetSources}`,
 		`style-src 'unsafe-inline' ${assetSources}`,
 		`img-src ${local} ${assetSources}`,
-		`font-src data: ${assetSources}`,
+		`font-src ${local} ${assetSources}`,
 		`connect-src ${localAnd(capabilities.workers)}`,
 		`worker-src ${capabilities.workers ? `blob: ${assetSources}` : "'none'"}`,
 		`media-src ${localAnd(capabilities.media)}`,

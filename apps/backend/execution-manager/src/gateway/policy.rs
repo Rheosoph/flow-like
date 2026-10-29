@@ -235,7 +235,10 @@ impl Policy {
                 ))
                 || (method == Method::GET
                     && app_route.is_some_and(|route| {
-                        matches!(route, "widgets" | "package-widgets" | "locked/status")
+                        matches!(
+                            route,
+                            "widgets" | "package-widgets" | "locked/status" | "user"
+                        )
                     }))
                 || (method == Method::POST
                     && app_route.is_some_and(|route| {
@@ -256,6 +259,8 @@ impl Policy {
                                 | "locked/legal-hold"
                                 | "locked/auto-delete"
                                 | "locked/purge"
+                                | "models/chat/completions"
+                                | "models/systemone"
                         )
                     }))
                 || (method == Method::DELETE && path == base)
@@ -767,6 +772,94 @@ mod tests {
                 true,
                 false,
             ),
+            (Method::GET, "/api/v1/execution/apps/app-1/user", true, true),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-1/user",
+                false,
+                false,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-2/user",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/user",
+                true,
+                false,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-1/user/extra",
+                true,
+                false,
+            ),
+            (Method::GET, "/api/v1/user/info", true, false),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/models/chat/completions",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/models/systemone",
+                true,
+                true,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/models/chat/completions",
+                false,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/models/systemone",
+                false,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-2/models/chat/completions",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-2/models/systemone",
+                true,
+                false,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-1/models/chat/completions",
+                true,
+                false,
+            ),
+            (
+                Method::GET,
+                "/api/v1/execution/apps/app-1/models/systemone",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/models/responses",
+                true,
+                false,
+            ),
+            (
+                Method::POST,
+                "/api/v1/execution/apps/app-1/models",
+                true,
+                false,
+            ),
+            (Method::POST, "/api/v1/chat/completions", true, false),
+            (Method::POST, "/api/v1/systemone", true, false),
             (Method::POST, "/api/v1/execution/%2570rogress", true, false),
             (
                 Method::GET,
@@ -807,6 +900,9 @@ mod tests {
             (Method::POST, "locked/legal-hold"),
             (Method::POST, "locked/auto-delete"),
             (Method::POST, "locked/purge"),
+            (Method::GET, "user"),
+            (Method::POST, "models/chat/completions"),
+            (Method::POST, "models/systemone"),
         ] {
             let target = format!("http://callback:8080/api/v1/execution/apps/app-1/{route}");
             let mut headers = auth(&target, true);

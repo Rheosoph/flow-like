@@ -579,7 +579,7 @@ mod tests {
         prepare_user_data_dir(root.path(), None).expect("prepared");
         let template: Value = serde_json::from_str(PREFERENCES_TEMPLATE).expect("template");
         assert_eq!(
-            read_json(&root.path().join("Default/Preferences")),
+            read_json(&root.path().join("Default").join("Preferences")),
             template
         );
         let local_state: Value = serde_json::from_str(LOCAL_STATE_TEMPLATE).expect("template");
@@ -593,7 +593,7 @@ mod tests {
     #[test]
     fn locale_is_merged_by_dotted_path_and_unrelated_keys_survive() {
         let root = tempfile::tempdir().expect("tempdir");
-        let preferences = root.path().join("Default/Preferences");
+        let preferences = root.path().join("Default").join("Preferences");
         std::fs::create_dir_all(preferences.parent().expect("parent")).expect("mkdir");
         std::fs::write(
             &preferences,
@@ -633,7 +633,7 @@ mod tests {
     #[test]
     fn corrupt_preferences_are_reported_and_left_untouched() {
         let root = tempfile::tempdir().expect("tempdir");
-        let preferences = root.path().join("Default/Preferences");
+        let preferences = root.path().join("Default").join("Preferences");
         std::fs::create_dir_all(preferences.parent().expect("parent")).expect("mkdir");
         std::fs::write(&preferences, "{not json").expect("write");
         let error = prepare_user_data_dir(root.path(), Some("de-DE"))

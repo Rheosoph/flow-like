@@ -469,6 +469,7 @@ test("copy details includes every validation diagnostic", async () => {
 	];
 	apply.mockResolvedValueOnce({
 		commands: [],
+		board_commands: [],
 		diagnostics,
 	});
 	const writeText = vi

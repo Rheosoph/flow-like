@@ -13,6 +13,9 @@ const BASE_SWITCHES: &[&str] = &[
     "--disable-default-apps",
     "--disable-features=IgnoreDuplicateNavs,Prewarm",
     "--disable-hang-monitor",
+    // Chrome for Testing's crash-time stack dumper calls alarm(), which the Linux renderer
+    // sandbox forbids, so a renderer crash turns into a second crash instead of an exit.
+    "--disable-in-process-stack-traces",
     "--disable-popup-blocking",
     "--disable-prompt-on-repost",
     "--disable-search-engine-choice-screen",

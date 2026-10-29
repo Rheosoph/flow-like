@@ -1,9 +1,9 @@
-import { segment } from "./paths.js";
 import type { HttpClient, SSEChunk } from "./client.js";
+import { segment } from "./paths.js";
 import type {
 	AsyncInvokeResult,
-	WorkflowTriggerOptions,
 	InvokeBoardRequest,
+	WorkflowTriggerOptions,
 } from "./types.js";
 
 export function createWorkflowMethods(http: HttpClient) {
@@ -20,7 +20,6 @@ export function createWorkflowMethods(http: HttpClient) {
 				payload,
 				stream_state: options?.stream_state ?? true,
 				version: options?.version,
-				token: options?.token,
 				oauth_tokens: options?.oauth_tokens,
 				runtime_variables: options?.runtime_variables,
 				profile_id: options?.profile_id,
@@ -52,7 +51,6 @@ export function createWorkflowMethods(http: HttpClient) {
 				payload,
 				stream_state: options?.stream_state,
 				version: options?.version,
-				token: options?.token,
 				oauth_tokens: options?.oauth_tokens,
 				runtime_variables: options?.runtime_variables,
 				profile_id: options?.profile_id,

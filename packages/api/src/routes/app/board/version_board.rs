@@ -68,6 +68,7 @@ pub async fn version_board(
         .create_version_returning_published(params.version_type.unwrap_or(VersionType::Patch), None)
         .await?;
     after_publication(&state, &user, &sub, &app_id, &board, published).await;
+    super::sink_rebind::rebind_published_sinks(&state, &app_id, &board_id, published, &user).await;
     Ok(Json(version))
 }
 

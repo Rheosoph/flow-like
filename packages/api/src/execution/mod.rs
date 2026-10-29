@@ -10,6 +10,7 @@ mod dispatch;
 pub mod dispatch_intent;
 mod jwt;
 pub(crate) use jwt::{bind_attended_payer, bind_hosted_frontend};
+pub mod live_run;
 mod page_action_jwt;
 mod page_action_sealer;
 pub mod payload_storage;
@@ -20,9 +21,11 @@ pub mod run_summary;
 pub mod run_sweeper;
 mod sse_proxy;
 pub mod state;
+pub mod subject;
 pub mod variant;
 pub mod wasm_node_stubs;
 pub mod wasm_resolve;
+pub(crate) mod widget_artifacts;
 
 pub use crate::backend_jwt::TokenType;
 pub use channel_jwt::{
@@ -31,14 +34,15 @@ pub use channel_jwt::{
 };
 pub use dispatch::{
     ArtifactEnsurer, ByteStream, DispatchConfig, DispatchError, DispatchRequest, DispatchResponse,
-    DispatchTrigger, Dispatcher, ExecutionBackend, StreamChunk, fetch_profile_for_dispatch,
-    hydrate_profile_custom_bit_secrets,
+    DispatchTrigger, Dispatcher, ExecutionBackend, StreamChunk, caller_dispatch_profile,
+    fetch_profile_for_dispatch, sink_dispatch_profile,
 };
 pub use jwt::{
     ExecutionClaims, ExecutionJwk, ExecutionJwks, ExecutionJwtError, ExecutionJwtParams,
     PageExecutionJwtContext, get_jwks as get_execution_jwks, is_configured as is_jwt_configured,
-    sign as sign_execution_jwt, sign_with_page_context as sign_execution_jwt_with_page_context,
-    verify as verify_execution_jwt, verify_user as verify_user_jwt,
+    sign as sign_execution_jwt, sign_unattended as sign_unattended_execution_jwt,
+    sign_with_page_context as sign_execution_jwt_with_page_context, verify as verify_execution_jwt,
+    verify_user as verify_user_jwt,
 };
 pub use page_action_jwt::{
     MAX_PAGE_ACTION_TTL_SECONDS, PAGE_ACTION_CAPABILITY_VERSION, PageActionClaims,

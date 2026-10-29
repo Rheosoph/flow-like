@@ -75,8 +75,14 @@ function scopeCssDeferred(
 	scopeSelector: string,
 	options: SafeScopedCssOptions,
 ): Promise<SanitizedCSS> {
-	return new Promise((resolve) => {
-		setTimeout(() => resolve(safeScopedCss(css, scopeSelector, options)), 0);
+	return new Promise((resolve, reject) => {
+		setTimeout(() => {
+			try {
+				resolve(safeScopedCss(css, scopeSelector, options));
+			} catch (error) {
+				reject(error);
+			}
+		}, 0);
 	});
 }
 

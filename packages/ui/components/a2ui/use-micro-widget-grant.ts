@@ -115,7 +115,7 @@ export interface MicroWidgetGrantInput {
 
 /**
  * `invalid`: the backend could not verify the declared policy.
- * `baseline`: the user blocked the policy and chose to run without it.
+ * `baseline`: the viewer declined the policy, so the widget runs without it.
  * `unavailable`: the backend cannot issue grants.
  */
 export type MicroWidgetFrameNotice = "invalid" | "baseline" | "unavailable";
@@ -145,11 +145,8 @@ export type MicroWidgetGrantState =
 	| { status: "describing" }
 	| { status: "unsupported"; detail: string | null }
 	| { status: "pending"; subject: MicroWidgetPolicySubject }
-	| {
-			status: "blocked";
-			subject: MicroWidgetPolicySubject;
-			canRunBaseline: boolean;
-	  }
+	/** Declined, and the server cannot run the widget at baseline (legacy frames). */
+	| { status: "blocked"; subject: MicroWidgetPolicySubject }
 	| { status: "minting"; subject: MicroWidgetPolicySubject }
 	| { status: "ready"; frame: MicroWidgetFrameMount }
 	| ({ status: "error" } & MicroWidgetGrantError);
@@ -203,7 +200,7 @@ export interface MicroWidgetRuntimeRequest {
 
 export type MicroWidgetGrantNotice =
 	| { kind: "invalid"; reason: string | null }
-	| { kind: "baseline" }
+	| { kind: "baseline"; declined: WidgetPolicy }
 	| { kind: "unavailable" }
 	| { kind: "runtime-unavailable" }
 	| {
@@ -219,14 +216,12 @@ export type MicroWidgetGrantNoticeKind = MicroWidgetGrantNotice["kind"];
 export interface MicroWidgetGrantActions {
 	allowOnce: (promptKey?: string) => void;
 	allowForProject: (promptKey?: string) => void;
-	/** Runtime-only requests session-block their new sources; anything else blocks the widget. */
+	/** Runtime-only requests session-block their new sources; anything else declines the widget's policy, and it runs at baseline. */
 	dontAllow: (promptKey?: string) => void;
 	/** Don't allow, and never ask about runtime sources again (project, else session). */
 	stopAsking: (promptKey?: string) => void;
-	/** Blocked card: prompt again. Runtime banner: open the runtime dialog. */
+	/** Declined widget: prompt again. Runtime banner: open the runtime dialog. */
 	review: () => void;
-	/** Blocked card: run the baseline frame. */
-	runRestricted: () => void;
 	setIncludeRuntime: (include: boolean) => void;
 	showNewerPrompt: () => void;
 	dismissRuntimeRequest: () => void;
@@ -984,7 +979,6 @@ export class MicroWidgetGrantController {
 	private lastSwapAt = Number.NEGATIVE_INFINITY;
 	/** Both clocks' readings at the last re-mint on a frame load. */
 	private lastRemint: { wall: number; monotonic: number } | null = null;
-	private baselineRequested = false;
 	private dismissedNotices = new Set<MicroWidgetGrantNoticeKind>();
 	/** `over` once its timer fired; the delay stays to double the next dismissal. */
 	private bannerDismissal: {
@@ -1008,10 +1002,6 @@ export class MicroWidgetGrantController {
 			dontAllow: (promptKey) => this.dontAllow(false, promptKey),
 			stopAsking: (promptKey) => this.dontAllow(true, promptKey),
 			review: () => this.review(),
-			runRestricted: () => {
-				this.baselineRequested = true;
-				this.reconcile();
-			},
 			setIncludeRuntime: (include) => {
 				this.includeRuntime = include;
 				this.emit();
@@ -1137,7 +1127,6 @@ export class MicroWidgetGrantController {
 		this.helloSeen = false;
 		this.lastSwapAt = Number.NEGATIVE_INFINITY;
 		this.lastRemint = null;
-		this.baselineRequested = false;
 		this.dismissedNotices = new Set();
 		this.bannerDismissal = null;
 	}
@@ -2031,7 +2020,9 @@ export class MicroWidgetGrantController {
 		if (this.d0?.kind === "fallback") {
 			if (!this.legacyPromptMatches(promptKey)) return;
 			const target = this.legacyTarget();
-			if (target) blockMicroWidgetConsent(target);
+			if (target && this.inputs) {
+				blockMicroWidgetConsent(target, this.inputs.legacyPolicy);
+			}
 			this.reconcile();
 			return;
 		}
@@ -2057,8 +2048,7 @@ export class MicroWidgetGrantController {
 				distinctSources(prompt.runtime.pending),
 			);
 		} else {
-			this.baselineRequested = false;
-			blockMicroWidgetConsent(target);
+			blockMicroWidgetConsent(target, pendingCandidate.split.declared.policy);
 		}
 		this.reconcile();
 	}
@@ -2069,7 +2059,6 @@ export class MicroWidgetGrantController {
 			state.status === "blocked" ||
 			(state.status === "ready" && state.frame.notice === "baseline")
 		) {
-			this.baselineRequested = false;
 			const declared = this.declared();
 			const target = declared ? this.targetFor(declared) : this.legacyTarget();
 			if (target) reopenMicroWidgetConsent(target);
@@ -2284,11 +2273,7 @@ export class MicroWidgetGrantController {
 			return { state: frame(inputs.legacyPolicy), consent, prompt: null };
 		}
 		if (consent === "blocked") {
-			return {
-				state: { status: "blocked", subject, canRunBaseline: false },
-				consent,
-				prompt: null,
-			};
+			return { state: { status: "blocked", subject }, consent, prompt: null };
 		}
 		return {
 			state: { status: "pending", subject },
@@ -2395,9 +2380,7 @@ export class MicroWidgetGrantController {
 		}
 		if (evaluation.status === "blocked") {
 			return {
-				state: this.baselineRequested
-					? this.baselineFrame(descriptor, "baseline")
-					: { status: "blocked", subject, canRunBaseline: true },
+				state: this.baselineFrame(descriptor, "baseline"),
 				consent: "blocked",
 				...idle,
 			};
@@ -2418,11 +2401,13 @@ export class MicroWidgetGrantController {
 		const frame = state.status === "ready" ? state.frame : null;
 		if (frame?.notice === "invalid") {
 			notices.push({ kind: "invalid", reason: frame.invalidReason });
-		} else if (
-			frame?.notice === "baseline" ||
-			frame?.notice === "unavailable"
-		) {
-			notices.push({ kind: frame.notice });
+		} else if (frame?.notice === "baseline") {
+			notices.push({
+				kind: "baseline",
+				declined: this.declared()?.policy ?? BASELINE_POLICY,
+			});
+		} else if (frame?.notice === "unavailable") {
+			notices.push({ kind: "unavailable" });
 		}
 		if (this.runtimeUnavailable) notices.push({ kind: "runtime-unavailable" });
 		if (

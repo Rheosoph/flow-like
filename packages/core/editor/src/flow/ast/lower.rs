@@ -384,10 +384,41 @@ fn board_pins_mut(board: &mut Board) -> impl Iterator<Item = &mut Pin> {
 /// Names lower mints must not collide with the namespace roots and members the text opens, so
 /// when a minted name does, the board is lowered once more with those names reserved.
 pub fn lower_board(board: &Board) -> BoardAst {
+    lower_board_passes(board, None)
+}
+
+/// Every name a render of `board` can give each anchored node's value, keyed by (node id,
+/// `Node.code_names` key).
+pub(crate) type RenderableCodeNames = HashMap<(String, String), HashSet<String>>;
+
+/// [`lower_board`] together with its [`renderable_code_names`], from the same lowering passes.
+/// On a large board each pass is the dominant cost of a reconcile, so callers that need both
+/// must not lower twice.
+pub(crate) fn lower_board_with_code_names(board: &Board) -> (BoardAst, RenderableCodeNames) {
+    let mut names = RenderableCodeNames::new();
+    let ast = lower_board_passes(board, Some(&mut names));
+    record_renderable_code_names(&mut names, &ast);
+    (ast, names)
+}
+
+/// A whole-board document and a scoped or per-file one can differ: a name that collides only
+/// with a namespace the whole document opens is minted again with a suffix, so both the first
+/// pass and the final document's names count.
+pub(crate) fn renderable_code_names(board: &Board) -> RenderableCodeNames {
+    lower_board_with_code_names(board).1
+}
+
+fn lower_board_passes(
+    board: &Board,
+    first_pass_names: Option<&mut RenderableCodeNames>,
+) -> BoardAst {
     let board = &*without_reroutes(board);
     let reserved = declared_names(board);
     let mut lowering = Lowering::new(board, reserved.clone());
     let ast = lowering.run();
+    if let Some(names) = first_pass_names {
+        record_renderable_code_names(names, &ast);
+    }
     let opened = derive_uses(&ast, board);
     let minted = lowering.minted_names();
     if opened.reserved.is_disjoint(&minted) {
@@ -401,21 +432,10 @@ pub fn lower_board(board: &Board) -> BoardAst {
     lowering.finish(ast, opened)
 }
 
-/// Every name a render of `board` can give each anchored node's value, keyed by (node id,
-/// `Node.code_names` key). A whole-board document and a scoped or per-file one can differ: a name
-/// that collides only with a namespace the whole document opens is minted again with a suffix.
-pub(crate) fn renderable_code_names(board: &Board) -> HashMap<(String, String), HashSet<String>> {
-    let first_pass = {
-        let board = &*without_reroutes(board);
-        Lowering::new(board, declared_names(board)).run()
-    };
-    let mut names: HashMap<(String, String), HashSet<String>> = HashMap::new();
-    for ast in [first_pass, lower_board(board)] {
-        for (key, name) in rendered_code_names(&ast) {
-            names.entry(key).or_default().insert(name);
-        }
+fn record_renderable_code_names(names: &mut RenderableCodeNames, ast: &BoardAst) {
+    for (key, name) in rendered_code_names(ast) {
+        names.entry(key).or_default().insert(name);
     }
-    names
 }
 
 /// The names a lowered document gives each anchored node's values, keyed by (node id,
@@ -1056,7 +1076,7 @@ fn collect_ref_names(expr: &Expr, out: &mut HashSet<String>) {
 
 /// Whether `block` reads or writes the variable `name`: a bare reference, an assignment or
 /// struct-field-write target, or a `varRef` literal spelling it.
-fn block_mentions_name(block: &Block, name: &str) -> bool {
+pub(super) fn block_mentions_name(block: &Block, name: &str) -> bool {
     block.stmts.iter().any(|stmt| match stmt {
         Stmt::Let { call, .. } | Stmt::Destructure { call, .. } | Stmt::Call { call, .. } => {
             call_mentions_name(call, name)
@@ -1663,6 +1683,8 @@ struct Lowering<'a> {
     pin_owner: HashMap<&'a str, &'a Node>,
     /// pin id -> pin (across the whole board).
     pins: HashMap<&'a str, &'a Pin>,
+    /// pin id -> the pins of `pins` whose `depends_on` names it.
+    dependents: HashMap<&'a str, Vec<&'a Pin>>,
     /// node id -> node (across the whole board, all scopes).
     nodes_by_id: HashMap<&'a str, &'a Node>,
     /// function-layer boundary input pin id -> camelCase parameter name.
@@ -1810,12 +1832,20 @@ impl<'a> Lowering<'a> {
             }
         }
 
+        let mut dependents: HashMap<&'a str, Vec<&'a Pin>> = HashMap::new();
+        for pin in pins.values().copied() {
+            for source in &pin.depends_on {
+                dependents.entry(source.as_str()).or_default().push(pin);
+            }
+        }
+
         let reserved: HashSet<String> = reserved.iter().map(|name| name.to_lowercase()).collect();
         Self {
             board,
             interfaces,
             pin_owner,
             pins,
+            dependents,
             nodes_by_id,
             boundary_params,
             function_boundary_pins,
@@ -2533,8 +2563,14 @@ impl<'a> Lowering<'a> {
             }
         }
 
-        for pin in self.pins.values().copied() {
-            if pin.depends_on.contains(source.id.as_str()) && seen.insert(pin.id.as_str()) {
+        for pin in self
+            .dependents
+            .get(source.id.as_str())
+            .into_iter()
+            .flatten()
+            .copied()
+        {
+            if seen.insert(pin.id.as_str()) {
                 pins.push(pin);
             }
         }

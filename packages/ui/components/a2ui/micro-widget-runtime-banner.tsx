@@ -3,16 +3,18 @@
 import { useTranslation } from "@flow-like/locales";
 import {
 	GlobeIcon,
+	ShieldOffIcon,
 	ShieldQuestionIcon,
 	TriangleAlertIcon,
 	XIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ReactNode, Ref } from "react";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 import {
 	type Translate,
+	widgetDeclinedPermissions,
 	widgetRuntimeIssueReason,
 } from "./micro-widget-network-copy";
 import type {
@@ -49,6 +51,7 @@ function LinkButton({
 	children: ReactNode;
 	onClick?: () => void;
 	"aria-disabled"?: boolean;
+	ref?: Ref<HTMLButtonElement>;
 }) {
 	return (
 		<Button
@@ -199,7 +202,11 @@ function SkippedDetails({
 	);
 }
 
-function noticeMessage(notice: MicroWidgetGrantNotice, t: Translate): string {
+function noticeMessage(
+	notice: MicroWidgetGrantNotice,
+	t: Translate,
+	locale: string,
+): string {
 	switch (notice.kind) {
 		case "invalid":
 			return t(
@@ -207,10 +214,7 @@ function noticeMessage(notice: MicroWidgetGrantNotice, t: Translate): string {
 				"This widget's permissions could not be verified, so it runs without them.",
 			);
 		case "baseline":
-			return t(
-				"widgetPolicyBaselineNotice",
-				"This widget runs without the permissions you blocked.",
-			);
+			return widgetDeclinedPermissions(notice.declined, t, locale);
 		case "unavailable":
 			return t(
 				"widgetGrantUnavailableNotice",
@@ -237,31 +241,48 @@ function noticeMessage(notice: MicroWidgetGrantNotice, t: Translate): string {
 	}
 }
 
-/** A mounted widget that runs with less than it asked for. */
+function noticeIcon(notice: MicroWidgetGrantNotice) {
+	switch (notice.kind) {
+		case "baseline":
+			return ShieldOffIcon;
+		case "runtime-unavailable":
+		case "runtime-skipped":
+			return GlobeIcon;
+		default:
+			return ShieldQuestionIcon;
+	}
+}
+
+/**
+ * A mounted widget that runs with less than it asked for. A declined widget
+ * offers Allow in place; it opens the consent dialog again.
+ */
 export function MicroWidgetNotice({
 	notice,
 	onReview,
+	reviewRef,
 	onDismiss,
 }: {
 	notice: MicroWidgetGrantNotice;
 	onReview?: () => void;
+	reviewRef?: Ref<HTMLButtonElement>;
 	onDismiss: () => void;
 }) {
-	const { t } = useTranslation("common");
-	const runtime =
-		notice.kind === "runtime-unavailable" || notice.kind === "runtime-skipped";
-	const Icon = runtime ? GlobeIcon : ShieldQuestionIcon;
+	const { t, i18n } = useTranslation("common");
+	const Icon = noticeIcon(notice);
 	return (
 		<output className={BAR} data-widget-notice={notice.kind}>
 			<Icon
 				aria-hidden="true"
 				className="size-3.5 shrink-0 text-muted-foreground"
 			/>
-			<span className="min-w-0 flex-1">{noticeMessage(notice, t)}</span>
+			<span className="min-w-0 flex-1">
+				{noticeMessage(notice, t, i18n.language)}
+			</span>
 			{notice.kind === "runtime-skipped" && <SkippedDetails notice={notice} />}
 			{onReview && (
-				<LinkButton onClick={onReview}>
-					{t("widgetPermissionsReview", "Review permissions")}
+				<LinkButton ref={reviewRef} onClick={onReview}>
+					{t("widgetPermissionAllow", "Allow…")}
 				</LinkButton>
 			)}
 			<DismissButton onDismiss={onDismiss} />
@@ -276,12 +297,15 @@ export function MicroWidgetNotice({
 export function MicroWidgetNoticeSlot({
 	grant,
 	onReview,
+	reviewRef,
 }: {
 	grant: Pick<
 		MicroWidgetGrant,
 		"runtimeRequest" | "notices" | "dismissRuntimeRequest" | "dismissNotice"
 	>;
 	onReview: () => void;
+	/** Focus lands here once the consent dialog closes on a declined widget. */
+	reviewRef?: Ref<HTMLButtonElement>;
 }) {
 	if (grant.runtimeRequest) {
 		return (
@@ -298,6 +322,7 @@ export function MicroWidgetNoticeSlot({
 		<MicroWidgetNotice
 			notice={notice}
 			onReview={notice.kind === "baseline" ? onReview : undefined}
+			reviewRef={reviewRef}
 			onDismiss={() => grant.dismissNotice(notice.kind)}
 		/>
 	);

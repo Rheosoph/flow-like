@@ -41,8 +41,16 @@
 // Re-export the key items (Guest, export!, flow_like module) at crate root.
 #[cfg(target_arch = "wasm32")]
 pub mod _bindings {
+    #[cfg(not(feature = "storage-ops"))]
     wit_bindgen::generate!({
         world: "flow-like-node",
+        path: "wit",
+        pub_export_macro: true,
+        default_bindings_module: "flow_like_wasm_sdk::_bindings",
+    });
+    #[cfg(feature = "storage-ops")]
+    wit_bindgen::generate!({
+        world: "flow-like-node-storage-ops",
         path: "wit",
         pub_export_macro: true,
         default_bindings_module: "flow_like_wasm_sdk::_bindings",
@@ -70,6 +78,8 @@ pub mod host;
 pub mod interop;
 pub mod mock;
 pub mod resources;
+#[cfg(feature = "storage-ops")]
+pub mod storage_ops;
 
 #[cfg(all(feature = "rig", not(target_arch = "wasm32")))]
 pub mod rig_provider;

@@ -1,5 +1,3 @@
-import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
-import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import {
 	type FlowIrCommitDisposition,
 	type FlowIrCommitDispositionResult,
@@ -40,9 +38,11 @@ import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
+import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
 import {
 	apiResponseError,
 	isMissingResourceError,
+	isMissingRouteError,
 } from "@flow-like/flow-like-ui/lib/api-error";
 import {
 	BOARD_FORMAT_HEADER,
@@ -59,8 +59,10 @@ import {
 	cancelChannel,
 	isChannelHandle,
 } from "@flow-like/flow-like-ui/lib/channel";
+import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
 import type { FlowScriptApplyOrigin } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import {
+	applyFlowScriptFromResponse,
 	flowScriptFromResponse,
 	scopedFlowScriptFromResponse,
 } from "@flow-like/flow-like-ui/lib/flowscript/response";
@@ -79,6 +81,7 @@ import {
 	normalizeBoardVersion,
 } from "@flow-like/flow-like-ui/lib/schema/flow/board-version";
 import type { IElementDemand } from "@flow-like/flow-like-ui/lib/schema/flow/element-demand";
+import type { IOAuthRequiredError } from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import type { IPrerunBoardResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { globalChatTransportRunId } from "@flow-like/flow-like-ui/state/global-chat/global-chat-run-control";
 import { runGlobalChatTool } from "@flow-like/flow-like-ui/state/global-chat/global-chat-tool-registry";
@@ -223,6 +226,8 @@ export class WebBoardState implements IBoardState {
 	>();
 	private readonly appIdByBoardId = new Map<string, string>();
 	private readonly boardSync = new BoardSyncClient();
+	/** The hub answered `/sync` as an unknown route; boards load whole from then on. */
+	private boardSyncUnsupported = false;
 	private readonly mediaProjector = new BoardMediaProjector();
 
 	constructor(private readonly backend: WebBackendRef) {}
@@ -344,21 +349,39 @@ export class WebBoardState implements IBoardState {
 		version?: [number, number, number],
 		_forceFresh?: boolean,
 	): Promise<IBoard> {
-		const params = version ? `?version=${version.join("_")}` : "";
-		const board = await this.boardSync.sync(
-			appId,
-			boardId,
-			version,
-			(request: IBoardSyncRequest) =>
-				apiPost<IBoardSyncResponse>(
-					`apps/${appId}/board/${boardId}/sync${params}`,
-					request,
-					this.backend.auth,
-				),
-		);
+		const board = await this.fetchBoard(appId, boardId, version);
 		this.appIdByBoardId.set(boardId, appId);
 
 		return this.currentDisplayBoard(appId, boardId, version, board);
+	}
+
+	private async fetchBoard(
+		appId: string,
+		boardId: string,
+		version?: [number, number, number],
+	): Promise<IBoard> {
+		if (this.boardSyncUnsupported) {
+			return this.getBoardAuthoritative(appId, boardId, version);
+		}
+		const params = version ? `?version=${version.join("_")}` : "";
+		try {
+			return await this.boardSync.sync(
+				appId,
+				boardId,
+				version,
+				(request: IBoardSyncRequest) =>
+					apiPost<IBoardSyncResponse>(
+						`apps/${appId}/board/${boardId}/sync${params}`,
+						request,
+						this.backend.auth,
+					),
+			);
+		} catch (error) {
+			// A hub that predates `/sync` has no such route; a coded 404 is a missing board.
+			if (!isMissingRouteError(error)) throw error;
+			this.boardSyncUnsupported = true;
+			return this.getBoardAuthoritative(appId, boardId, version);
+		}
 	}
 
 	async getBoardAuthoritative(
@@ -420,9 +443,9 @@ export class WebBoardState implements IBoardState {
 				this.backend.auth,
 			);
 			const byPrefix = new Map(
-				results
-					.filter((result) => result.url)
-					.map((result) => [result.prefix, result.url!]),
+				results.flatMap((result) =>
+					result.url ? [[result.prefix, result.url] as const] : [],
+				),
 			);
 			const urls = new Map<string, string>();
 			for (const file of files) {
@@ -585,21 +608,29 @@ export class WebBoardState implements IBoardState {
 			}
 
 			if (providersNeedingConsent.length > 0) {
-				const error = new Error(
-					`Missing OAuth authorization for: ${providersNeedingConsent.map((p) => p.name).join(", ")}`,
+				const error: IOAuthRequiredError = Object.assign(
+					new Error(
+						`Missing OAuth authorization for: ${providersNeedingConsent.map((p) => p.name).join(", ")}`,
+					),
+					{
+						missingProviders: providersNeedingConsent,
+						isOAuthError: true as const,
+					},
 				);
-				(error as any).missingProviders = providersNeedingConsent;
-				(error as any).isOAuthError = true;
 				throw error;
 			}
 		} else {
 			// Still need to check for missing tokens even if skipping consent
 			if (oauthResult.missingProviders.length > 0) {
-				const error = new Error(
-					`Missing OAuth tokens for: ${oauthResult.missingProviders.map((p) => p.name).join(", ")}`,
+				const error: IOAuthRequiredError = Object.assign(
+					new Error(
+						`Missing OAuth tokens for: ${oauthResult.missingProviders.map((p) => p.name).join(", ")}`,
+					),
+					{
+						missingProviders: oauthResult.missingProviders,
+						isOAuthError: true as const,
+					},
 				);
-				(error as any).missingProviders = oauthResult.missingProviders;
-				(error as any).isOAuthError = true;
 				throw error;
 			}
 		}
@@ -680,8 +711,7 @@ export class WebBoardState implements IBoardState {
 			[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
 		};
 		if (this.backend.auth?.user?.access_token) {
-			headers["Authorization"] =
-				`Bearer ${this.backend.auth.user.access_token}`;
+			headers.Authorization = `Bearer ${this.backend.auth.user.access_token}`;
 		}
 
 		console.log("[OAuth] Sending execution with tokens:", {
@@ -699,7 +729,6 @@ export class WebBoardState implements IBoardState {
 					version: payload.version,
 					payload: payload.payload,
 					stream_state: streamState ?? true,
-					token: this.backend.auth?.user?.access_token,
 					oauth_tokens: oauthTokens,
 					runtime_variables: payload.runtime_variables,
 					profile_id: this.backend.profile?.id,
@@ -740,8 +769,6 @@ export class WebBoardState implements IBoardState {
 								eventName = line.slice(6).trim();
 							} else if (line.startsWith("data:")) {
 								dataLines.push(line.slice(5).trim());
-							} else if (line.startsWith(":")) {
-								continue;
 							}
 						}
 
@@ -1038,7 +1065,7 @@ export class WebBoardState implements IBoardState {
 		scopeAnchors?: string[],
 		module?: string,
 	): Promise<IApplyFlowScriptResponse> {
-		return apiPost<IApplyFlowScriptResponse>(
+		const response = await apiPost<unknown>(
 			`apps/${appId}/board/${boardId}/flowscript/apply`,
 			{
 				flowscript,
@@ -1052,6 +1079,7 @@ export class WebBoardState implements IBoardState {
 			},
 			this.backend.auth,
 		);
+		return applyFlowScriptFromResponse(response, boardId);
 	}
 
 	async flowIrCommitDisposition(
@@ -1289,8 +1317,7 @@ export class WebBoardState implements IBoardState {
 			headers.Accept = "text/event-stream";
 		}
 		if (this.backend.auth?.user?.access_token) {
-			headers["Authorization"] =
-				`Bearer ${this.backend.auth.user.access_token}`;
+			headers.Authorization = `Bearer ${this.backend.auth.user.access_token}`;
 		}
 
 		const wantsStream = Boolean(onToken);
