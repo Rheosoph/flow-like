@@ -5,10 +5,10 @@
 use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::normalize_object_path;
 use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_storage::object_store::{ObjectMeta, PutPayload, path::Path};
+use flow_like_storage::object_store::{path::Path, ObjectMeta, PutPayload};
 use flow_like_types::Bytes;
-use futures::StreamExt;
 use futures::stream::{self, BoxStream};
+use futures::StreamExt;
 use std::sync::Arc;
 
 use super::StorageContext;
@@ -21,7 +21,7 @@ const COPY_BUFFER_SIZE: usize = 10 * 1024 * 1024;
 #[path = "storage_writer.rs"]
 mod writer;
 pub use writer::{
-    PendingWrite, abort_write, append_chunk, cleanup_pending_writes, finish_write, start_write,
+    abort_write, append_chunk, cleanup_pending_writes, finish_write, start_write, PendingWrite,
 };
 
 /// A host-resolved store and the object paths supplied to this invocation.
@@ -622,11 +622,9 @@ mod tests {
                 "{path}"
             );
         }
-        assert!(
-            context
-                .resolve_store("unknown", &Path::from("shared/file.txt"))
-                .is_none()
-        );
+        assert!(context
+            .resolve_store("unknown", &Path::from("shared/file.txt"))
+            .is_none());
 
         context.store_cache.write().insert(
             "explicit_root".into(),
@@ -645,11 +643,9 @@ mod tests {
                 roots: vec![],
             },
         );
-        assert!(
-            context
-                .resolve_store("no_roots", &Path::default())
-                .is_none()
-        );
+        assert!(context
+            .resolve_store("no_roots", &Path::default())
+            .is_none());
     }
 
     #[test]

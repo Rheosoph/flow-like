@@ -1138,7 +1138,10 @@ mod tests {
             document.contains("else if(e.source===child)parent.postMessage(e.data,'*',transfer);")
         );
         assert!(document.contains("const data=e.data&&e.data.payload&&e.data.payload.data;"));
-        assert!(document.contains("[...new Set([bytes,data].filter(value=>value instanceof ArrayBuffer))]"));
+        assert!(
+            document
+                .contains("[...new Set([bytes,data].filter(value=>value instanceof ArrayBuffer))]")
+        );
         assert!(!document.contains("fetch("));
         assert!(!document.contains("frames"));
 

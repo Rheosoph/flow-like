@@ -16,12 +16,12 @@ use std::{
 };
 use urlencoding::encode;
 mod helper;
+#[cfg(test)]
+mod local_security_tests;
 pub mod local_store;
 mod path_info;
 pub mod read_only_store;
 mod secure_local;
-#[cfg(test)]
-mod local_security_tests;
 #[cfg(feature = "smb")]
 pub mod smb_store;
 

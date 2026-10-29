@@ -3,7 +3,7 @@ use crate::error::{WasmError, WasmResult};
 use crate::host_functions::HostState;
 use crate::limits::{WasmCapabilities, WasmSecurityConfig};
 use crate::llm_message::sdk_message_content;
-use crate::wasi::{IsolatedWasiCtxBuilder, isolated_wasi_ctx_builder};
+use crate::wasi::{isolated_wasi_ctx_builder, IsolatedWasiCtxBuilder};
 use flow_like_storage::object_store::ObjectStoreExt;
 use serde_json::Value;
 use std::future::Future;

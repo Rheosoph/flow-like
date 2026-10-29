@@ -7,8 +7,8 @@ use crate::host_functions::HostState;
 use crate::limits::WasmCapabilities;
 use crate::llm_message::sdk_message_content;
 use crate::memory::WasmAllocator;
-use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_storage::object_store::path::Path;
+use flow_like_storage::object_store::ObjectStoreExt;
 use std::sync::Arc;
 use wasmtime::{Caller, Linker, Memory, Ref, Val};
 
@@ -1089,7 +1089,11 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                     if let Err(error) = &result {
                         tracing::warn!(%error, "[wasm write-chunk-request] failed");
                     }
-                    if result.is_ok() { 0 } else { -1 }
+                    if result.is_ok() {
+                        0
+                    } else {
+                        -1
+                    }
                 })
             },
         )
@@ -1126,7 +1130,11 @@ fn register_storage_functions(linker: &mut Linker<StoreData>) -> WasmResult<()> 
                     if let Err(error) = &result {
                         tracing::warn!(%error, "[wasm write-finish-request] failed");
                     }
-                    if result.is_ok() { 0 } else { -1 }
+                    if result.is_ok() {
+                        0
+                    } else {
+                        -1
+                    }
                 })
             },
         )
@@ -3572,13 +3580,11 @@ mod websocket_tests {
             .await
             .unwrap();
         assert!(offset >= 0);
-        assert!(
-            String::from_utf8(
-                store.data().host_state.result_buffer.read()[offset as usize..].to_vec()
-            )
-            .unwrap()
-            .contains("reply")
-        );
+        assert!(String::from_utf8(
+            store.data().host_state.result_buffer.read()[offset as usize..].to_vec()
+        )
+        .unwrap()
+        .contains("reply"));
         assert_eq!(close.call_async(&mut store, handle).await.unwrap(), 0);
         assert_eq!(
             send.call_async(&mut store, (handle, 256, 6, 0))
