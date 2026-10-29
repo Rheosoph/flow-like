@@ -25,6 +25,9 @@ const file = (ref = reference()) => ({
 	url: "asset://localhost/%2Fetc%2Fpasswd",
 });
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
+const stubFetch = (
+	respond: (...args: Parameters<typeof fetch>) => Promise<Response>,
+): typeof fetch => Object.assign(respond, { preconnect: fetch.preconnect });
 const request = (id: string, ref = reference()) =>
 	createEnvelope(
 		"resource:request",
@@ -165,10 +168,10 @@ test("desktop resource requests never fetch local asset URLs", async () => {
 			...options((value) => results.push(value)),
 			desktop: true,
 			resolve: async () => localUrl,
-			fetch: (async () => {
+			fetch: stubFetch(async () => {
 				fetched = true;
 				return new Response("secret");
-			}) as typeof fetch,
+			}),
 		});
 		host.setProps(file());
 		host.handle(request("asset"));
@@ -197,10 +200,10 @@ test("direct bytes preserve grants, transfer ownership, and enforce the resource
 			nativeCalls++;
 			return bytes;
 		},
-		fetch: (async () => {
+		fetch: stubFetch(async () => {
 			fetchCalls++;
 			return new Response("unsafe");
-		}) as typeof fetch,
+		}),
 		maxBytes: 3,
 		result: (value, transfer = []) => {
 			results.push(value);
@@ -322,7 +325,7 @@ test("fetch uses a trusted fresh URL, omits credentials, and transfers bytes", a
 	expect(new Uint8Array(results[0].data ?? new ArrayBuffer(0))).toEqual(
 		new Uint8Array([0, 255, 128]),
 	);
-	expect(transfers[0]).toEqual([results[0].data]);
+	expect(transfers[0]).toEqual([results[0].data ?? new ArrayBuffer(0)]);
 	host.dispose();
 });
 
@@ -331,10 +334,10 @@ test("query grants remain transactional until the replacement build is accepted"
 	let calls = 0;
 	const host = createMicroWidgetResources({
 		...options((value) => results.push(value)),
-		fetch: (async () => {
+		fetch: stubFetch(async () => {
 			calls++;
 			return new Response("image");
-		}) as typeof fetch,
+		}),
 	});
 	const next = reference("apps/a/upload/new.png");
 	host.beginQuery("q1", "applyBuild", {
@@ -374,15 +377,17 @@ test("resource requests queue with only two fetches in flight", async () => {
 	const results: ResourceResultPayload[] = [];
 	const host = createMicroWidgetResources({
 		...options((value) => results.push(value)),
-		fetch: (() =>
-			new Promise<Response>((resolve) => {
-				active++;
-				peak = Math.max(peak, active);
-				finish.push(() => {
-					active--;
-					resolve(new Response("image"));
-				});
-			})) as typeof fetch,
+		fetch: stubFetch(
+			() =>
+				new Promise<Response>((resolve) => {
+					active++;
+					peak = Math.max(peak, active);
+					finish.push(() => {
+						active--;
+						resolve(new Response("image"));
+					});
+				}),
+		),
 	});
 	host.setProps(file());
 	for (let i = 0; i < 5; i++) host.handle(request(String(i)));
@@ -403,17 +408,19 @@ test("streaming enforces the per-file limit before buffering the whole response"
 	const host = createMicroWidgetResources({
 		...options((value) => results.push(value)),
 		maxBytes: 6,
-		fetch: (async () =>
-			new Response(
-				new ReadableStream({
-					pull(controller) {
-						controller.enqueue(new Uint8Array(4));
-					},
-					cancel() {
-						cancelled = true;
-					},
-				}),
-			)) as typeof fetch,
+		fetch: stubFetch(
+			async () =>
+				new Response(
+					new ReadableStream({
+						pull(controller) {
+							controller.enqueue(new Uint8Array(4));
+						},
+						cancel() {
+							cancelled = true;
+						},
+					}),
+				),
+		),
 	});
 	host.setProps(file());
 	host.handle(request("large"));

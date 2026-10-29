@@ -1,36 +1,62 @@
 //! What a person writes into a board runs as that person. An edit changes what every sink that
-//! runs the board at its latest version runs, so the editor becomes the user those sinks run as.
-//! A publication changes what the sinks pinned to the new version run. That is normally none,
-//! since a published version is never rewritten, but a board deleted and created again publishes
-//! its old numbers once more, so the publisher becomes the user those sinks run as.
+//! runs the board at its latest version runs, so the editor becomes the user those sinks run as,
+//! whether they are on or off: a sink switched back on would otherwise run the edit as whoever it
+//! ran as before, with their OAuth grants. A publication changes what the sinks pinned to the new
+//! version run. That is normally none, since a published version is never rewritten, but a board
+//! deleted and created again publishes its old numbers once more, so the publisher becomes the
+//! user those sinks run as.
 
 use crate::{
+    db::{DbDialect, RetryPolicy, retry_transaction},
     entity::{event, event_sink},
+    error::ApiError,
     middleware::jwt::AppUser,
     routes::{app::events::db::db_model_to_event, sink::authority::bind_run_as},
     state::AppState,
 };
+use axum::http::StatusCode;
 use flow_like::flow::event::Event;
-use sea_orm::{ColumnTrait, Condition, ConnectionTrait, DbErr, EntityTrait, QueryFilter, Select};
+use sea_orm::{
+    ColumnTrait, Condition, ConnectionTrait, DatabaseConnection, DbErr, EntityTrait, QueryFilter,
+    Select,
+};
 
 type Version = (u32, u32, u32);
 
-/// Makes the editor of a board write the run-as user of the app's active sinks that run
-/// `board_id` at its latest version, with the credential rules of `bind_run_as`. A write calls it
-/// before its save, so a fire that pins the saved draft reads the editor as its run-as user, and
-/// again after it, for an event pointed at the board in between. Only OpenID and PAT principals
-/// edit as a person. A failure is logged and never fails the write.
+/// A board write refused because the sinks that run the board could not be rebound to its
+/// author before the save.
+pub(crate) const SINK_REBIND_UNAVAILABLE: &str = "SINK_REBIND_UNAVAILABLE";
+
+/// Makes the editor of a board write the run-as user of the app's sinks that run `board_id` at
+/// its latest version, with the credential rules of `bind_run_as`. A write calls it before its
+/// save and fails when it fails, so no sink runs what it saves as someone else, with their
+/// grants; a fire that pins the saved draft then reads the editor as its run-as user. Only
+/// OpenID and PAT principals edit as a person.
+pub(crate) async fn try_rebind_latest_sinks(
+    state: &AppState,
+    app_id: &str,
+    board_id: &str,
+    editor: &AppUser,
+) -> Result<(), ApiError> {
+    rebind(&state.db, state.db_dialect, app_id, board_id, None, editor).await
+}
+
+/// [`try_rebind_latest_sinks`] once the write is saved, for an event pointed at the board in
+/// between. The write already happened, so a failure is only logged.
 pub(crate) async fn rebind_latest_sinks(
     state: &AppState,
     app_id: &str,
     board_id: &str,
     editor: &AppUser,
 ) {
-    rebind(state, app_id, board_id, None, editor).await;
+    rebind(&state.db, state.db_dialect, app_id, board_id, None, editor)
+        .await
+        .ok();
 }
 
-/// Makes the publisher of `version` the run-as user of the app's active sinks pinned to exactly
-/// that version of `board_id`, by the rules of [`rebind_latest_sinks`].
+/// Makes the publisher of `version` the run-as user of the app's sinks pinned to exactly that
+/// version of `board_id`, by the rules of [`try_rebind_latest_sinks`]. The version is published
+/// by then, so a failure is only logged.
 pub(crate) async fn rebind_published_sinks(
     state: &AppState,
     app_id: &str,
@@ -38,64 +64,85 @@ pub(crate) async fn rebind_published_sinks(
     version: Version,
     publisher: &AppUser,
 ) {
-    rebind(state, app_id, board_id, Some(version), publisher).await;
+    rebind(
+        &state.db,
+        state.db_dialect,
+        app_id,
+        board_id,
+        Some(version),
+        publisher,
+    )
+    .await
+    .ok();
 }
 
-#[tracing::instrument(level = "debug", skip(state, author))]
+#[tracing::instrument(level = "debug", skip(db, author))]
 async fn rebind(
-    state: &AppState,
+    db: &DatabaseConnection,
+    dialect: DbDialect,
     app_id: &str,
     board_id: &str,
     version: Option<Version>,
     author: &AppUser,
-) {
+) -> Result<(), ApiError> {
     let Some(actor) = human_editor(author) else {
-        return;
+        return Ok(());
     };
-    match rebind_board_sinks(state, app_id, board_id, version, actor).await {
-        Ok(0) => {}
-        Ok(sinks) => tracing::info!(
-            app_id,
-            board_id,
-            ?version,
-            actor,
-            sinks,
-            "A board write made its author the run-as user of the sinks that run what it wrote"
-        ),
-        Err(error) => tracing::warn!(
-            app_id,
-            board_id,
-            ?version,
-            actor,
-            error = %error,
-            "The sinks that run this board write could not be rebound to its author"
-        ),
+    match rebind_board_sinks(db, dialect, app_id, board_id, version, actor).await {
+        Ok(0) => Ok(()),
+        Ok(sinks) => {
+            tracing::info!(
+                app_id,
+                board_id,
+                ?version,
+                actor,
+                sinks,
+                "A board write made its author the run-as user of the sinks that run what it wrote"
+            );
+            Ok(())
+        }
+        Err(error) => {
+            tracing::warn!(
+                app_id,
+                board_id,
+                ?version,
+                actor,
+                error = %error,
+                "The sinks that run this board write could not be rebound to its author"
+            );
+            Err(ApiError::coded(
+                StatusCode::SERVICE_UNAVAILABLE,
+                SINK_REBIND_UNAVAILABLE,
+                format!(
+                    "Your change to board {board_id} was not saved: the event triggers that run it could not be switched to run as you first. Try again shortly."
+                ),
+            ))
+        }
     }
 }
 
 /// The bind is retried on a lost commit race, so a concurrent sink write cannot drop it.
 async fn rebind_board_sinks(
-    state: &AppState,
+    db: &DatabaseConnection,
+    dialect: DbDialect,
     app_id: &str,
     board_id: &str,
     version: Option<Version>,
     actor: &str,
 ) -> Result<u64, DbErr> {
-    let event_ids = sink_events(&state.db, app_id, board_id, version, actor).await?;
+    let event_ids = sink_events(db, app_id, board_id, version, actor).await?;
     if event_ids.is_empty() {
         return Ok(0);
     }
-    state
-        .transaction(|txn| {
-            let (app_id, event_ids, actor) =
-                (app_id.to_owned(), event_ids.clone(), actor.to_owned());
-            Box::pin(async move { bind_run_as(txn, &app_id, &event_ids, &actor).await })
-        })
-        .await
+    retry_transaction(db, dialect, None, &RetryPolicy::default(), |txn| {
+        let (app_id, event_ids, actor) = (app_id.to_owned(), event_ids.clone(), actor.to_owned());
+        Box::pin(async move { bind_run_as(txn, &app_id, &event_ids, &actor).await })
+    })
+    .await
 }
 
-/// The events whose active sink runs `version` of `board_id` (`None`: latest) and needs `actor`
-/// bound.
+/// The events whose sink, on or off, runs `version` of `board_id` (`None`: latest) and needs
+/// `actor` bound.
 async fn sink_events<C: ConnectionTrait>(
     db: &C,
     app_id: &str,
@@ -124,8 +171,9 @@ fn human_editor(user: &AppUser) -> Option<&str> {
     }
 }
 
-/// The app's events that point at `board_id` or carry variants and whose active sink does not
-/// already run as `actor` without a legacy token, so a steady edit session writes nothing.
+/// The app's events that point at `board_id` or carry variants and whose sink does not already
+/// run as `actor` without a legacy token, so a steady edit session writes nothing. A sink that
+/// is off counts too: switched back on, it runs what was written meanwhile.
 fn rebind_candidates(app_id: &str, board_id: &str, actor: &str) -> Select<event::Entity> {
     event::Entity::find()
         .inner_join(event_sink::Entity)
@@ -137,7 +185,6 @@ fn rebind_candidates(app_id: &str, board_id: &str, actor: &str) -> Select<event:
                 .add(event::Column::Variants.is_not_null()),
         )
         .filter(event_sink::Column::AppId.eq(app_id))
-        .filter(event_sink::Column::Active.eq(true))
         .filter(
             Condition::any()
                 .add(event_sink::Column::RunAsUserId.is_null())
@@ -370,8 +417,9 @@ mod tests {
         }
     }
 
+    /// A sink that is off is a candidate too: switched back on, it runs what was written.
     #[test]
-    fn candidates_are_board_and_variant_events_whose_active_sink_needs_the_editor() {
+    fn candidates_are_board_and_variant_events_whose_sink_needs_the_editor() {
         let sql = rebind_candidates("app", BOARD, "editor")
             .build(DbBackend::Postgres)
             .to_string();
@@ -380,14 +428,15 @@ mod tests {
             r#""Event"."appId" = 'app'"#,
             r#""Event"."boardId" = 'board' OR "Event"."canary" IS NOT NULL OR "Event"."variants" IS NOT NULL"#,
             r#""EventSink"."appId" = 'app'"#,
-            r#""EventSink"."active" = TRUE"#,
             r#""EventSink"."runAsUserId" IS NULL OR "EventSink"."runAsUserId" <> 'editor' OR "EventSink"."patEncrypted" IS NOT NULL"#,
         ] {
             assert!(sql.contains(fragment), "{fragment} missing from {sql}");
         }
+        assert!(!sql.contains(r#""EventSink"."active""#), "{sql}");
     }
 
     const REBIND: &str = "rebind_latest_sinks(";
+    const TRY_REBIND: &str = "try_rebind_latest_sinks(";
     const LEASE_CHECK: &str = "mutation_guard.ensure_held()?;";
     const GRAPH_SAVE: &str = "save_board_and_refresh_summary(";
 
@@ -456,6 +505,8 @@ mod tests {
     /// Each human write rebinds as the request's principal right before it starts writing and
     /// again after its save, both while it holds the board's lease. A fire that pins the saved
     /// draft then reads the editor as its run-as user, and the sinks run as whoever wrote last.
+    /// The rebind before the write fails it when it fails, so nothing is saved that a sink would
+    /// run as someone else.
     #[test]
     fn every_human_write_rebinds_before_and_after_its_save() {
         for (source, declaration, write, save) in HUMAN_WRITES {
@@ -467,8 +518,14 @@ mod tests {
                 .rfind(write)
                 .unwrap_or_else(|| panic!("{declaration} starts its write with {write}"));
             let before = body[..starts]
-                .rfind(REBIND)
+                .rfind(TRY_REBIND)
                 .unwrap_or_else(|| panic!("{declaration} writes before it rebinds"));
+            assert!(
+                body[before..].starts_with(&format!(
+                    "{TRY_REBIND}&state, &app_id, &board_id, &user).await?;"
+                )),
+                "{declaration} writes even when its rebind fails"
+            );
             assert!(
                 !body[before..starts].contains("return "),
                 "{declaration} rebinds only on a path that returns before it writes"
@@ -709,7 +766,7 @@ mod tests {
 
         #[tokio::test]
         #[ignore = "requires FLOW_LIKE_SINK_TEST_DATABASE_URL pointing to disposable PostgreSQL"]
-        async fn an_edit_rebinds_the_active_sinks_that_run_the_board_at_latest() {
+        async fn an_edit_rebinds_the_sinks_that_run_the_board_at_latest() {
             let (_db, txn) = seeded().await;
             assert_eq!(
                 sink_events(&txn, "app", BOARD, PINNED, "editor")
@@ -726,6 +783,7 @@ mod tests {
                 events,
                 [
                     "canary-latest",
+                    "paused",
                     "primary-latest",
                     "same-editor",
                     "variant-latest"
@@ -733,7 +791,7 @@ mod tests {
             );
             assert_eq!(
                 bind_run_as(&txn, "app", &events, "editor").await.unwrap(),
-                4
+                5
             );
 
             let row = |id: &str, run_as: &str, pat, oauth, touched| SinkRow {
@@ -748,7 +806,7 @@ mod tests {
                 row("canary-latest", "editor", false, false, true),
                 row("foreign", "previous", false, true, false),
                 row("other-board", "previous", false, true, false),
-                row("paused", "previous", false, true, false),
+                row("paused", "editor", false, false, true),
                 row("primary-latest", "editor", false, false, true),
                 row("primary-pinned", "previous", false, true, false),
                 row("same-editor", "editor", false, true, true),
@@ -765,6 +823,204 @@ mod tests {
                 "an unchanged binding is not written again"
             );
             txn.rollback().await.unwrap();
+        }
+    }
+
+    mod sqlite {
+        use super::*;
+        use crate::routes::app::events::db::event_to_db_model;
+        use sea_orm::{
+            ActiveModelTrait, ActiveValue::Set, ConnectOptions, Database, IntoActiveModel, Schema,
+            sea_query::Table,
+        };
+
+        const EDITOR: &str = "editor";
+        const OWNER: &str = "owner";
+
+        /// A SQLite stand-in for the Event table and, `with_sinks`, the EventSink table.
+        async fn database(with_sinks: bool) -> DatabaseConnection {
+            let mut options = ConnectOptions::new("sqlite::memory:");
+            options.max_connections(1);
+            let db = Database::connect(options).await.unwrap();
+            db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+                .await
+                .unwrap();
+            let schema = Schema::new(db.get_database_backend());
+            let mut sources = vec![schema.create_table_from_entity(event::Entity)];
+            if with_sinks {
+                sources.push(schema.create_table_from_entity(event_sink::Entity));
+            }
+            for source in sources {
+                let mut table = Table::create();
+                table.table(source.get_table_name().unwrap().clone());
+                for column in source.get_columns() {
+                    table.col(column.clone());
+                }
+                db.execute(&table).await.unwrap();
+            }
+            db
+        }
+
+        /// The sink of `event_id`, run as `run_as` with that person's grants and profile.
+        fn sink(
+            event_id: &str,
+            active: bool,
+            run_as: Option<&str>,
+            released: bool,
+        ) -> event_sink::Model {
+            let now = chrono::Utc::now().fixed_offset();
+            event_sink::Model {
+                id: event_id.to_owned(),
+                event_id: event_id.to_owned(),
+                app_id: "app".to_owned(),
+                sink_type: "telegram".to_owned(),
+                active,
+                path: None,
+                auth_token: None,
+                webhook_secret: None,
+                cron_expression: None,
+                cron_timezone: None,
+                pat_encrypted: None,
+                oauth_tokens_encrypted: run_as.map(|person| format!("{person}-grants")),
+                profile_json: run_as.map(|person| serde_json::json!({ "id": person })),
+                created_at: now,
+                updated_at: now,
+                method: None,
+                run_as_user_id: run_as.map(str::to_owned),
+                run_as_released_at: released.then_some(now),
+            }
+        }
+
+        async fn seeded() -> DatabaseConnection {
+            let db = database(true).await;
+            for (event, sink) in [
+                (
+                    event("armed", BOARD, None),
+                    sink("armed", true, Some(OWNER), false),
+                ),
+                (
+                    event("paused", BOARD, None),
+                    sink("paused", false, Some(OWNER), false),
+                ),
+                (
+                    event("released", BOARD, None),
+                    sink("released", false, None, true),
+                ),
+                (
+                    event("other-board", "other", None),
+                    sink("other-board", false, Some(OWNER), false),
+                ),
+            ] {
+                event_to_db_model("app", &event).insert(&db).await.unwrap();
+                event_sink::Entity::insert(sink.into_active_model().reset_all())
+                    .exec(&db)
+                    .await
+                    .unwrap();
+            }
+            db
+        }
+
+        async fn stored(db: &DatabaseConnection, id: &str) -> event_sink::Model {
+            event_sink::Entity::find_by_id(id)
+                .one(db)
+                .await
+                .unwrap()
+                .unwrap()
+        }
+
+        fn editor() -> AppUser {
+            AppUser::OpenID(OpenIDUser {
+                sub: EDITOR.to_owned(),
+                access_token: "token".to_owned(),
+            })
+        }
+
+        /// An edit made while a sink is off binds the editor in place of the person it ran as,
+        /// drops their grants and leaves the sink off; a released sink keeps its release's mark.
+        /// When that person turns the sink back on, the way the toggle does, the edit runs as
+        /// them without the grants they saved before it, until they save theirs again.
+        #[tokio::test]
+        async fn an_edit_rebinds_the_sinks_that_are_off_and_leaves_them_off() {
+            let db = seeded().await;
+            rebind(&db, DbDialect::Postgres, "app", BOARD, None, &editor())
+                .await
+                .unwrap();
+
+            for id in ["armed", "paused", "released"] {
+                let sink = stored(&db, id).await;
+                assert_eq!(sink.run_as_user_id.as_deref(), Some(EDITOR), "{id}");
+                assert_eq!(sink.oauth_tokens_encrypted, None, "{id}");
+                assert_eq!(sink.profile_json, None, "{id}");
+            }
+            assert!(stored(&db, "armed").await.active);
+            let paused = stored(&db, "paused").await;
+            assert!(!paused.active && paused.run_as_released_at.is_none());
+            let released = stored(&db, "released").await;
+            assert!(!released.active && released.run_as_released_at.is_some());
+            let other = stored(&db, "other-board").await;
+            assert_eq!(other.run_as_user_id.as_deref(), Some(OWNER));
+            assert_eq!(
+                other.oauth_tokens_encrypted.as_deref(),
+                Some("owner-grants")
+            );
+            assert!(
+                sink_events(&db, "app", BOARD, None, EDITOR)
+                    .await
+                    .unwrap()
+                    .is_empty(),
+                "an unchanged binding is not written again"
+            );
+
+            event_sink::Entity::update_many()
+                .set(event_sink::ActiveModel {
+                    active: Set(true),
+                    run_as_released_at: Set(None),
+                    ..Default::default()
+                })
+                .filter(event_sink::Column::Id.eq("paused"))
+                .exec(&db)
+                .await
+                .unwrap();
+            assert_eq!(
+                bind_run_as(&db, "app", &["paused".to_owned()], OWNER)
+                    .await
+                    .unwrap(),
+                1
+            );
+            let turned_on = stored(&db, "paused").await;
+            assert_eq!(turned_on.run_as_user_id.as_deref(), Some(OWNER));
+            assert_eq!(turned_on.oauth_tokens_encrypted, None);
+            assert!(turned_on.active);
+        }
+
+        /// A rebind the database refuses fails the write that asked for it with a 503, before
+        /// anything is saved. A principal that edits as nobody binds nobody and never fails.
+        #[tokio::test]
+        async fn a_rebind_that_fails_refuses_the_write() {
+            let db = database(false).await;
+            let refused = rebind(&db, DbDialect::Postgres, "app", BOARD, None, &editor())
+                .await
+                .unwrap_err();
+            assert_eq!(refused.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(refused.public_code(), SINK_REBIND_UNAVAILABLE);
+            assert!(
+                refused
+                    .public_message()
+                    .is_some_and(|message| message.contains("board board was not saved")),
+                "{refused:?}"
+            );
+
+            let key = AppUser::APIKey(ApiKey {
+                key_id: "key".to_owned(),
+                api_key: "secret".to_owned(),
+                app_id: "app".to_owned(),
+                creator_user_id: Some(EDITOR.to_owned()),
+            });
+            assert!(
+                rebind(&db, DbDialect::Postgres, "app", BOARD, None, &key)
+                    .await
+                    .is_ok()
+            );
         }
     }
 }

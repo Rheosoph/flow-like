@@ -1,5 +1,5 @@
-import type { IBit } from "../bit/bit";
 import type { IHomeLayout } from "../../../components/home/types";
+import type { IBit } from "../bit/bit";
 
 export interface IProfile {
 	apps?: IProfileApp[] | null;
@@ -25,10 +25,11 @@ export interface IProfile {
 	home_layout?: IHomeLayout | null;
 	home_default_id?: string | null;
 	tags?: string[];
+	// biome-ignore lint/suspicious/noExplicitAny: the hub stores any JSON here (`Option<Value>`), and the settings page and theme loaders read it as an ITheme without narrowing; typing it means narrowing at those call sites.
 	theme?: any;
 	thumbnail?: null | string;
 	updated: string;
-	[property: string]: any;
+	[property: string]: unknown;
 }
 
 export interface IProfileShortcut {
@@ -40,7 +41,6 @@ export interface IProfileShortcut {
 	icon?: string | null;
 	order: number;
 	createdAt: string;
-	[property: string]: any;
 }
 
 export interface IProfileApp {
@@ -49,12 +49,12 @@ export interface IProfileApp {
 	favorite_order?: number | null;
 	pinned: boolean;
 	pinned_order?: number | null;
-	[property: string]: any;
+	[property: string]: unknown;
 }
 
 export interface ISettings {
 	connection_mode: IConnectionMode;
-	[property: string]: any;
+	[property: string]: unknown;
 }
 
 export enum IConnectionMode {

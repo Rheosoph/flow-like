@@ -181,10 +181,21 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		const isRecording = recorder.isRecording || recorder.isArming;
 		const isTranscribing = speech.isListening;
 
+		// biome-ignore lint/correctness/useExhaustiveDependencies: `voiceMode` is the trigger; a newly configured mode clears the previous mode's speech failure and error.
 		useEffect(() => {
 			setSpeechFailed(false);
 			setVoiceError(null);
 		}, [voiceMode]);
+
+		// The handle is built once and keeps its identity; these refs give it the current render's values.
+		const inputRef = useRef(input);
+		inputRef.current = input;
+		const attachedFilesRef = useRef(attachedFiles);
+		attachedFilesRef.current = attachedFiles;
+		const activeToolsRef = useRef(activeTools);
+		activeToolsRef.current = activeTools;
+		const fileUploadRef = useRef(fileUpload);
+		fileUploadRef.current = fileUpload;
 
 		useImperativeHandle(
 			ref,
@@ -193,11 +204,11 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					setInput(text);
 				},
 				addFile: (file: File) => {
-					if (!fileUpload) return;
+					if (!fileUploadRef.current) return;
 					setAttachedFiles((prev) => [...prev, file]);
 				},
 				addFiles: (files: File[]) => {
-					if (!fileUpload) return;
+					if (!fileUploadRef.current) return;
 					setAttachedFiles((prev) => [...prev, ...files]);
 				},
 				removeFile: (index: number) => {
@@ -221,9 +232,9 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					setRecordedAudio(null);
 					setRecordedDuration(0);
 				},
-				getInput: () => input,
-				getAttachedFiles: () => attachedFiles,
-				getActiveTools: () => activeTools,
+				getInput: () => inputRef.current,
+				getAttachedFiles: () => attachedFilesRef.current,
+				getActiveTools: () => activeToolsRef.current,
 				setActiveTools: (tools: string[]) => {
 					setActiveTools(tools);
 				},
@@ -409,7 +420,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 								resolve();
 							});
 						});
-					} else if (entry.isDirectory) {
+					}
+					if (entry.isDirectory) {
 						const dirEntry = entry as FileSystemDirectoryEntry;
 						const reader = dirEntry.createReader();
 						return new Promise<void>((resolve) => {
@@ -700,6 +712,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 														{i18next.t("tools", "Tools")}
 													</div>
 													{availableTools.map((tool) => (
+														// biome-ignore lint/a11y/useKeyWithClickEvents: pointer-only tool rows, kept as-is; keyboard support needs focusable buttons, which would change the popover's initial focus and tab order.
 														<div
 															key={tool}
 															className="flex items-center gap-2 p-2 hover:bg-accent rounded cursor-pointer transition-colors"

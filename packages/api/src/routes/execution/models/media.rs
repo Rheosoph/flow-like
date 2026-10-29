@@ -3,14 +3,17 @@
 //! Bit's provider, API surface and endpoint, which media the provider fetches from links itself,
 //! which it reads only inline and which not at all.
 //!
-//! A link the provider fetches itself reaches it only when its host is HTTPS on public addresses.
-//! A link into the platform's own store is first read with the run's own link, so the store
-//! checks the run's access, and then signed again for [`RESIGNED_TTL`]: the provider gets a fresh
-//! link to the same object that expires soon, also after the call waited in the hosted worker's
-//! queue. Gemini and Vertex get public links like every other provider; their clients decide
-//! which ones the provider fetches. Every other link to media the provider reads is resolved
-//! here and sent inline, a link into the store as it is and any other under the server egress
-//! guard. A link that cannot be resolved fails the call and the error names its host only.
+//! A run sends the media of a host that is neither public nor the platform's storage inline
+//! itself, so the links that arrive here are public or into the store. A link the provider
+//! fetches itself reaches it as the run sent it, unfetched; so does a private link an older run
+//! still sends, which no provider reaches either. A link into the platform's own store is first
+//! read with the run's own link, so the store checks the run's access, and then signed again for
+//! [`RESIGNED_TTL`]: the provider gets a fresh link to the same object that expires soon, also
+//! after the call waited in the hosted worker's queue. Gemini's and Vertex's clients decide which
+//! links the provider fetches. Media the provider reads only inline is resolved here and sent
+//! inline, a link into the store as it is and any other only when it is public HTTPS, whatever
+//! network the Bit's endpoint may reach. A link that cannot be resolved fails the call and the
+//! error names its host only.
 
 use std::{
     sync::{Arc, OnceLock},
@@ -35,6 +38,12 @@ use crate::{
     state::AppState,
 };
 
+/// Where the relay fetches a link outside the platform's store. The server's egress mode is for
+/// a Bit's own endpoint: `CUSTOM_MODEL_EGRESS=private` lets users reach a self-hosted model on
+/// the server's private network, but the media links any relayed Bit sends never go there.
+const MEDIA_EGRESS: ProviderEgress = ProviderEgress::Public;
+const MEDIA_REFUSAL: &str =
+    "this server fetches only public HTTPS links and links into the platform's storage";
 /// How long a re-signed link lets the provider fetch its object.
 const RESIGNED_TTL: Duration = Duration::from_secs(5 * 60);
 /// For the store to answer the run's link.
@@ -118,7 +127,6 @@ struct RelayMedia {
     /// Probes the own store on first use, unless `own` already holds it.
     state: Option<AppState>,
     own: OnceCell<Option<OwnStore>>,
-    egress: ProviderEgress,
     own_client: OnceLock<reqwest::Result<Client>>,
     guarded_client: OnceLock<reqwest::Result<Client>>,
 }
@@ -128,7 +136,6 @@ impl RelayMedia {
         Self {
             state,
             own,
-            egress: ProviderEgress::for_server(),
             own_client: OnceLock::new(),
             guarded_client: OnceLock::new(),
         }
@@ -162,17 +169,6 @@ impl RelayMedia {
             .as_ref()
             .map_err(|error| anyhow!("building the HTTP client for media failed: {error}"))
     }
-
-    fn refusal(&self) -> &'static str {
-        match self.egress {
-            ProviderEgress::Private => {
-                "this server fetches no link to its own network plane (loopback, link-local or metadata)"
-            }
-            ProviderEgress::Public | ProviderEgress::Open => {
-                "this server fetches only public HTTPS links and links into the platform's storage"
-            }
-        }
-    }
 }
 
 #[flow_like_types::async_trait]
@@ -184,13 +180,13 @@ impl MediaSource for RelayMedia {
     async fn prepare(&self) -> Result<()> {
         self.own().await;
         self.client(Route::OwnStorage)?;
-        self.client(Route::Guarded(self.egress)).map(|_| ())
+        self.client(Route::Guarded(MEDIA_EGRESS)).map(|_| ())
     }
 
     async fn send(&self, url: &str) -> Result<reqwest::Response> {
         let url = Url::parse(url).map_err(|_| anyhow!("the link is not a valid URL"))?;
         let own = self.own().await.map(|own| &own.scope);
-        let route = route(&url, own, self.egress).map_err(|_| anyhow!(self.refusal()))?;
+        let route = route(&url, own, MEDIA_EGRESS).map_err(|_| anyhow!(MEDIA_REFUSAL))?;
         self.client(route)?
             .get(url)
             .send()
@@ -213,11 +209,7 @@ impl MediaSource for RelayMedia {
                 .await?
                 .map_or(Link::Inline, Link::Replace));
         }
-        Ok(if publicly_reachable(url).await {
-            Link::Keep
-        } else {
-            Link::Inline
-        })
+        Ok(Link::Keep)
     }
 }
 
@@ -232,6 +224,7 @@ mod tests {
         provider::ModelApiSurface,
         response::Response,
     };
+    use flow_like::models::media::OwnStorage;
     use flow_like_types::tokio::{
         self,
         io::{AsyncReadExt, AsyncWriteExt},
@@ -458,17 +451,63 @@ mod tests {
         sent_by(model, &recorder, parts).await
     }
 
-    /// The media values the provider of `provider` receives for `parts` from a direct call on
-    /// the machine that holds the links.
+    /// The store at `addr` as a run whose storage credentials name it finds it.
+    async fn runs_storage(addr: SocketAddr) -> OwnStorage {
+        OwnStorage::signed_by([s3_store(&format!("http://{addr}"))]).await
+    }
+
+    /// The media values the provider of `provider` receives for `parts` from a direct call of a
+    /// run whose storage is the store at `addr`.
     async fn direct_call_sends(
+        addr: SocketAddr,
         provider: &ModelProvider,
         parts: Vec<Content>,
     ) -> Result<Vec<String>> {
         let recorder = Arc::new(Recorder::default());
-        let model = RemoteMediaModel::new(
+        let model = RemoteMediaModel::direct(
             recorder.clone(),
             ExecutionEnvironment::Local,
             MediaReader::for_provider(provider),
+            Vec::new(),
+            runs_storage(addr).await,
+        );
+        sent_by(model, &recorder, parts).await
+    }
+
+    /// Each part made from its link.
+    fn contents(parts: &[(Part, String)]) -> Vec<Content> {
+        parts.iter().map(|(part, link)| (*part)(link)).collect()
+    }
+
+    /// The media values the provider of `provider` receives for `parts` from a relayed call: the
+    /// run, whose storage is the store at `addr`, sends them, and `own` is the relay's store.
+    async fn relayed_call_sends(
+        own: OwnStore,
+        addr: SocketAddr,
+        provider: &ModelProvider,
+        parts: &[(Part, String)],
+    ) -> Result<Vec<String>> {
+        let hop = run_sends_the_relay(addr, provider, contents(parts)).await?;
+        let to_relay = parts
+            .iter()
+            .zip(hop)
+            .map(|((part, _), value)| (*part)(&value))
+            .collect();
+        provider_receives(own, provider, to_relay).await
+    }
+
+    /// The media values a run whose storage is the store at `addr` sends the relay for `parts`.
+    async fn run_sends_the_relay(
+        addr: SocketAddr,
+        provider: &ModelProvider,
+        parts: Vec<Content>,
+    ) -> Result<Vec<String>> {
+        let recorder = Arc::new(Recorder::default());
+        let model = RemoteMediaModel::relayed(
+            recorder.clone(),
+            ExecutionEnvironment::Local,
+            MediaReader::for_provider(provider),
+            runs_storage(addr).await,
         );
         sent_by(model, &recorder, parts).await
     }
@@ -585,9 +624,13 @@ mod tests {
         }
     }
 
+    /// A relayed call passes the run's side and then the relay; a direct call is resolved in one
+    /// step. Both reach the provider with the same media, for links into the store and links to
+    /// a private host alike.
     #[flow_like_types::tokio::test]
     async fn relayed_and_direct_calls_send_the_same_media() {
         let (addr, _) = store_host().await;
+        let (intranet, _) = store_host().await;
         let providers = [
             bit("custom:anthropic"),
             bit("custom:openai"),
@@ -617,33 +660,74 @@ mod tests {
             let mut parts = Vec::new();
             for (key, part) in held {
                 let link = run_link(&own, &format!("apps/app-1/storage/{key}")).await;
-                parts.push(part(&link));
+                parts.push((part, link));
+                parts.push((part, format!("http://{intranet}/files/{key}")));
             }
 
-            let relayed = provider_receives(own, &provider, parts.clone())
+            let relayed = relayed_call_sends(own, addr, &provider, &parts)
                 .await
                 .unwrap();
-            let direct = direct_call_sends(&provider, parts.clone()).await.unwrap();
+            let direct = direct_call_sends(addr, &provider, contents(&parts))
+                .await
+                .unwrap();
 
             assert_eq!(relayed, direct, "{provider:?}");
-            assert!(
-                relayed[5].starts_with("data:text/csv;flow-like-source=string;"),
-                "{provider:?}: text documents always travel as their text"
-            );
+            for csv in &relayed[10..12] {
+                assert!(
+                    csv.starts_with("data:text/csv;flow-like-source=string;"),
+                    "{provider:?}: text documents always travel as their text"
+                );
+            }
         }
     }
 
+    /// No provider reaches a private host, so the run sends its media inline whatever the
+    /// provider fetches itself, and the relay passes the data on.
     #[flow_like_types::tokio::test]
-    async fn links_outside_the_store_must_be_public_https() {
+    async fn the_run_inlines_private_media_and_the_relay_fetches_none() {
+        let (addr, _) = store_host().await;
+        let (intranet, hits) = store_host().await;
+        let report = format!("http://{intranet}/scans/report.pdf");
+        let photo = format!("http://{intranet}/scans/cat.png");
+        for provider in [
+            bit("custom:anthropic"),
+            bit("custom:openai"),
+            bit("custom:gemini"),
+        ] {
+            let hop = run_sends_the_relay(addr, &provider, vec![pdf(&report), image(&photo)])
+                .await
+                .unwrap();
+            assert_inline(&hop[0], "application/pdf", PDF);
+            assert_inline(&hop[1], "image/png", PNG);
+
+            let received = provider_receives(
+                own_store(addr, false).await,
+                &provider,
+                vec![pdf(&hop[0]), image(&hop[1])],
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(received, hop, "{provider:?}");
+        }
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            2,
+            "the run fetches each part once and the relay none"
+        );
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn the_relay_fetches_no_link_outside_the_store_but_public_https() {
         let (addr, hits) = store_host().await;
         for (part, host) in [
             (pdf("https://10.0.0.5/private/report.pdf"), "10.0.0.5"),
             (
-                image(&format!("http://{addr}/other-bucket/secret.png")),
+                pdf(&format!("http://{addr}/other-bucket/secret.pdf")),
                 "127.0.0.1",
             ),
             (
-                image("https://169.254.169.254/latest/meta-data/cat.png"),
+                pdf("https://169.254.169.254/latest/meta-data/report.pdf"),
                 "169.254.169.254",
             ),
         ] {
@@ -663,6 +747,78 @@ mod tests {
             }
         }
         assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// An older run sends links to private hosts as it holds them. A provider that fetches such
+    /// links itself gets them unfetched, though it cannot reach them either.
+    #[flow_like_types::tokio::test]
+    async fn the_relay_passes_private_links_of_an_older_run_on_unfetched() {
+        let (addr, hits) = store_host().await;
+        let private = [
+            format!("http://{addr}/other-bucket/secret.png"),
+            "https://10.0.0.5/scans/cat.png".to_string(),
+            "https://169.254.169.254/latest/meta-data/cat.png".to_string(),
+        ];
+        for provider in [
+            bit("custom:anthropic"),
+            bit("custom:openai"),
+            bit("custom:gemini"),
+        ] {
+            let received = provider_receives(
+                own_store(addr, false).await,
+                &provider,
+                private.iter().map(|link| image(link)).collect(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(received, private, "{provider:?}");
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// `CUSTOM_MODEL_EGRESS=private` lets a Bit's endpoint reach the server's private network,
+    /// never the media links a relayed Bit sends: a text document, which is always read here and
+    /// sent inline, on a private address is refused unread although the endpoint's guard in that
+    /// mode would connect to it.
+    #[flow_like_types::tokio::test]
+    async fn media_links_stay_public_when_the_server_lets_endpoints_go_private() {
+        let (addr, hits) = store_host().await;
+        for (link, host) in [
+            ("http://10.0.0.5:8000/notes/plan.txt", "10.0.0.5"),
+            ("https://192.168.1.20/notes/plan.txt", "192.168.1.20"),
+        ] {
+            assert!(
+                ProviderEgress::Private
+                    .check_url(&Url::parse(link).unwrap())
+                    .is_ok(),
+                "{link}"
+            );
+            for provider in [bit("custom:openai"), bit("custom:ollama")] {
+                let error = provider_receives(
+                    own_store(addr, false).await,
+                    &provider,
+                    vec![document(link, "text/plain")],
+                )
+                .await
+                .unwrap_err()
+                .to_string();
+
+                assert!(error.contains(&format!("host '{host}'")), "{error}");
+                assert!(error.contains("public HTTPS"), "{error}");
+                assert!(!error.contains("notes"), "{error}");
+            }
+        }
+        assert_eq!(hits.load(Ordering::SeqCst), 0);
+
+        let relay = include_str!("media.rs")
+            .split_once("#[cfg(test)]")
+            .unwrap()
+            .0;
+        assert!(
+            !relay.contains("ProviderEgress::for_server"),
+            "relay media must not take the egress of the Bit's endpoint"
+        );
     }
 
     #[flow_like_types::tokio::test]

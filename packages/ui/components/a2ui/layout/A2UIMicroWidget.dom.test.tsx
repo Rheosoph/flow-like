@@ -484,10 +484,13 @@ test("stored resources are granted by host props and host query arguments", asyn
 		},
 	};
 	const fetcher = spyOn(globalThis, "fetch").mockImplementation(
-		async () =>
-			new Response(new Uint8Array([0, 255, 128]), {
-				headers: { "content-type": "image/png" },
-			}),
+		Object.assign(
+			async () =>
+				new Response(new Uint8Array([0, 255, 128]), {
+					headers: { "content-type": "image/png" },
+				}),
+			{ preconnect: globalThis.fetch.preconnect },
+		),
 	);
 	cleanup.push(() => fetcher.mockRestore());
 	const context = { router: {}, appId: "a" };

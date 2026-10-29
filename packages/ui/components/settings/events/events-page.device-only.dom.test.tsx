@@ -66,6 +66,16 @@ const MAPPING = {
 		configInterfaces: {},
 	},
 } as never;
+const CALLABLE_MAPPING = {
+	events_cron: {
+		withSink: ["rest", "mcp"],
+		eventTypes: ["rest", "mcp"],
+		defaultEventType: "rest",
+		configs: {},
+		useInterfaces: {},
+		configInterfaces: {},
+	},
+} as never;
 
 function RouterFrame({
 	pushes,
@@ -98,6 +108,7 @@ async function mountEditor(
 	stored: IEvent,
 	relist?: (saved: IEvent) => IEvent,
 	sinkStatus: IEventSinkStatus = { active: false },
+	eventMapping: never = MAPPING,
 ) {
 	let listed = stored;
 	const upserts: Array<{ event: IEvent; pat?: string; source?: string }> = [];
@@ -108,7 +119,7 @@ async function mountEditor(
 		() => (
 			<RouterFrame pushes={pushes}>
 				<EventsPage
-					eventMapping={MAPPING}
+					eventMapping={eventMapping}
 					appId={APP}
 					eventId="evt_dev"
 					basePath="/library/config/events"
@@ -298,6 +309,13 @@ describe("the editor of a device-only event", () => {
 describe("the editor of a hub trigger and the user it runs as", () => {
 	const hubEvent = { ...baseEvent, execution_mode: "Remote" } as IEvent;
 	const PAUSED = "Paused: the person it ran as can no longer run it";
+	const boundChip = (root: ParentNode) => {
+		const chip = root.querySelector("[data-run-as='bound']");
+		return {
+			label: chip?.querySelector("[data-run-as-label]")?.textContent,
+			avatar: chip?.querySelector("[data-slot='avatar']")?.textContent ?? null,
+		};
+	};
 
 	test("says it is paused and turns it on as you from the warning", async () => {
 		const view = await mountEditor(hubEvent, undefined, {
@@ -347,9 +365,10 @@ describe("the editor of a hub trigger and the user it runs as", () => {
 		});
 		await advance(30);
 		await view.settle();
-		expect(
-			view.container.querySelector("[data-run-as='bound']")?.textContent,
-		).toBe("Runs as Person user_ada");
+		expect(boundChip(view.container)).toEqual({
+			label: "Runs as Person user_ada",
+			avatar: "PA",
+		});
 	});
 
 	test("a Local trigger whose sink is on the hub names whom it runs as too", async () => {
@@ -359,9 +378,37 @@ describe("the editor of a hub trigger and the user it runs as", () => {
 		});
 		await advance(30);
 		await view.settle();
-		expect(
-			view.container.querySelector("[data-run-as='bound']")?.textContent,
-		).toBe("Runs as Person user_ada");
+		expect(boundChip(view.container).label).toBe("Runs as Person user_ada");
+	});
+
+	test("a saved INTERNAL REST Event runs as the calling person, without the run-as avatar", async () => {
+		const view = await mountEditor(
+			{ ...hubEvent, event_type: "rest", exposure: "INTERNAL" } as IEvent,
+			undefined,
+			{ active: true, run_as_user_id: "user_ada" },
+			CALLABLE_MAPPING,
+		);
+		await advance(30);
+		await view.settle();
+		expect(boundChip(view.container)).toEqual({
+			label: "Runs as the calling person",
+			avatar: null,
+		});
+	});
+
+	test("a saved PUBLIC MCP Event names whom its public calls run as", async () => {
+		const view = await mountEditor(
+			{ ...hubEvent, event_type: "mcp", exposure: "PUBLIC" } as IEvent,
+			undefined,
+			{ active: true, run_as_user_id: "user_ada" },
+			CALLABLE_MAPPING,
+		);
+		await advance(30);
+		await view.settle();
+		expect(boundChip(view.container)).toEqual({
+			label: "Public calls run as Person user_ada",
+			avatar: "PA",
+		});
 	});
 });
 

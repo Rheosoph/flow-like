@@ -828,7 +828,7 @@ pub async fn ensure_event_may_use_hub_trigger(
 /// Turning a sink on checks the event after the sink row was read. An upsert writes the
 /// event row before its sink, so a conversion to device-only racing this call is seen here.
 /// Turning it on makes `toggled_by` its run-as user, in the same transaction; turning it
-/// off keeps who it runs as.
+/// off keeps who it runs as, until someone edits what it runs and becomes its run-as user.
 pub async fn toggle_sink_active(
     db: &DatabaseConnection,
     state: &AppState,
@@ -872,9 +872,10 @@ async fn ensure_may_turn_on(
     ensure_actor_may_arm(state, &sink.app_id, actor).await
 }
 
-/// `bind_run_as` touches active sinks only, so the sink is on before the actor is bound,
-/// in the same transaction. Either way the sink is no longer paused by a release: turned
-/// off by a person, it stops every run.
+/// The sink is on before the actor is bound, in the same transaction. The bind keeps OAuth
+/// grants only for the person the sink already runs as, so after an edit made while it was
+/// off the actor saves theirs again with the event. Either way the sink is no longer paused
+/// by a release: turned off by a person, it stops every run.
 async fn write_toggle(
     state: &AppState,
     sink: &event_sink::Model,
@@ -1234,6 +1235,49 @@ mod tests {
         let active = toggle.find("active: Set(turning_on),").unwrap();
         let mark_cleared = toggle.find("run_as_released_at: Set(None),").unwrap();
         assert!(active < mark_cleared);
+    }
+
+    /// An edit made while a sink was off left it bound to the editor without grants. Whoever
+    /// turns it back on with a save runs it from then on with the grants and profile they
+    /// supply, the way any save that arms a sink collects them.
+    #[test]
+    fn turning_on_a_sink_an_edit_rebound_collects_the_grants_of_who_turns_it_on() {
+        let now = chrono::Utc::now().fixed_offset();
+        let rebound = event_sink::Model {
+            active: false,
+            pat_encrypted: None,
+            oauth_tokens_encrypted: None,
+            profile_json: None,
+            ..stored_sink(Some("editor"))
+        };
+        let profile = serde_json::json!({"id": "owner-profile"});
+        let turned_on = synced_sink(
+            rebound.clone(),
+            &SinkConfig {
+                active: Some(true),
+                oauth_tokens_encrypted: Some("owner-grants".into()),
+                profile_json: Some(profile.clone()),
+                ..telegram_sync(Some("owner"))
+            },
+            now,
+        );
+        assert_eq!(turned_on.active, Set(true));
+        assert_eq!(turned_on.run_as_user_id, Set(Some("owner".into())));
+        assert_eq!(
+            turned_on.oauth_tokens_encrypted,
+            Set(Some("owner-grants".into()))
+        );
+        assert_eq!(turned_on.profile_json, Set(Some(profile)));
+
+        let without_grants = synced_sink(
+            rebound,
+            &SinkConfig {
+                active: Some(true),
+                ..telegram_sync(Some("owner"))
+            },
+            now,
+        );
+        assert_eq!(without_grants.oauth_tokens_encrypted, Set(None));
     }
 
     fn stored_sink(run_as: Option<&str>) -> event_sink::Model {

@@ -272,7 +272,8 @@ export interface Size {
 
 // Component definitions
 export interface ComponentBase {
-	id: string;
+	/** Components travel as `{ id, component }`; the id that identifies them is the wrapper's. */
+	id?: string;
 	style?: Style;
 	children?: Children;
 	actions?: Action[];

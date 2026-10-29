@@ -159,27 +159,55 @@ impl ProviderEgress {
         if is_host_plane_name(host) {
             return Err(self.refusal(host));
         }
-        // The resolver error is not passed on: it would describe how this network
-        // resolves names the endpoint's owner should not learn about.
-        let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host, 0))
-            .await
-            .map_err(|_| EgressRefused(format!("Model endpoint '{host}' could not be resolved")))?
-            .collect();
-        if addrs.is_empty() || addrs.iter().any(|addr| !self.allows_ip(addr.ip())) {
-            return Err(self.refusal(host));
+        let resolved = tokio::net::lookup_host((host, 0)).await;
+        self.vet(host, resolved.map(Iterator::collect))
+    }
+
+    /// The addresses `host` resolved to, when this mode allows every one. A name that does not
+    /// resolve gets the refusal of one that resolves to a refused address, so the error does not
+    /// tell which names this network knows; only the log tells them apart.
+    fn vet(
+        self,
+        host: &str,
+        resolved: std::io::Result<Vec<SocketAddr>>,
+    ) -> Result<Vec<SocketAddr>, EgressRefused> {
+        match resolved {
+            Ok(addrs)
+                if !addrs.is_empty() && addrs.iter().all(|addr| self.allows_ip(addr.ip())) =>
+            {
+                Ok(addrs)
+            }
+            Ok(addrs) => {
+                tracing::debug!(
+                    host,
+                    ?addrs,
+                    egress = ?self,
+                    "Refused a model endpoint by its addresses"
+                );
+                Err(self.refusal(host))
+            }
+            Err(error) => {
+                tracing::debug!(
+                    host,
+                    %error,
+                    egress = ?self,
+                    "Refused a model endpoint whose name did not resolve"
+                );
+                Err(self.refusal(host))
+            }
         }
-        Ok(addrs)
     }
 
     fn refusal(self, host: &str) -> EgressRefused {
         EgressRefused(match self {
             Self::Private => format!(
-                "Model endpoint '{host}' is on this server's own network plane (loopback, \
-                 link-local or metadata), which private models may not reach"
+                "Model endpoint '{host}' does not resolve to an address private models may \
+                 reach: this server's own network plane (loopback, link-local or metadata) is \
+                 refused"
             ),
             Self::Open | Self::Public => format!(
-                "Model endpoint '{host}' is not a public address; private models called from \
-                 this server must use public HTTPS endpoints"
+                "Model endpoint '{host}' does not resolve to a public address; private models \
+                 called from this server must use public HTTPS endpoints"
             ),
         })
     }
@@ -421,6 +449,29 @@ pub(crate) mod tests {
             ProviderEgress::Open
                 .ensure_endpoint_allowed("not a url")
                 .await
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_name_that_does_not_resolve_is_refused_like_one_on_a_refused_address() {
+        let host = "db.svc.cluster.local";
+        let at = |raw: &str| SocketAddr::new(ip(raw), 0);
+        for egress in [ProviderEgress::Public, ProviderEgress::Private] {
+            let refused = egress
+                .vet(host, Ok(vec![at("10.0.0.1"), at("169.254.169.254")]))
+                .unwrap_err();
+            let unknown = egress
+                .vet(host, Err(std::io::ErrorKind::NotFound.into()))
+                .unwrap_err();
+            let empty = egress.vet(host, Ok(Vec::new())).unwrap_err();
+            assert_eq!(unknown, refused, "{egress:?}");
+            assert_eq!(empty, refused, "{egress:?}");
+            assert!(refused.to_string().contains(host), "{refused}");
+        }
+        assert!(
+            ProviderEgress::Private
+                .vet(host, Ok(vec![at("10.0.0.1")]))
                 .is_ok()
         );
     }

@@ -72,12 +72,12 @@ pub struct GeofenceTriggerRequest {
     request_body = GeofenceTriggerRequest,
     responses(
         (status = 200, description = "The crossing started a run", body = TriggerResponse),
-        (status = 400, description = "Missing or invalid Idempotency-Key, a transition that is not a JSON object, or an OAuth sign-in that must be connected again (oauth_reauthorization_required)"),
+        (status = 400, description = "Missing or invalid Idempotency-Key, a transition that is not a JSON object, or an OAuth sign-in the request sends that must be connected again"),
         (status = 401, description = "Missing, invalid, expired or revoked credential"),
         (status = 402, description = "The billing account cannot start this run now; retry later"),
         (status = 403, description = "The caller is not a person or lacks ExecuteEvents in the event's app"),
         (status = 404, description = "No Remote location event has this id"),
-        (status = 409, description = "EVENT_PAUSED: the event or its trigger is switched off. PROJECT_INACTIVE: the event's project is not active; send the crossing again later. IDEMPOTENCY_KEY_IN_USE: another request with this key is still starting the run; retry shortly"),
+        (status = 409, description = "EVENT_PAUSED: the event or its trigger is switched off. PROJECT_INACTIVE: the event's project is not active; send the crossing again later. IDEMPOTENCY_KEY_IN_USE: another request with this key is still starting the run; retry shortly. OAUTH_RECONNECT_REQUIRED: a sign-in saved with the event must be connected again by the person it belongs to, and the message names its provider; send the crossing again later"),
         (status = 500, description = "Internal server error"),
         (status = 503, description = "SINK_RUN_AS_UNAVAILABLE: the event or its trigger changed while the crossing started its run. Also when the run could not be dispatched; retry later")
     ),
@@ -221,11 +221,14 @@ fn geofence_idempotency_key(caller: &str, app_id: &str, event_id: &str, crossing
     )
 }
 
-/// The run id of a crossing that started a run. A billing refusal keeps its answer, so the device
-/// backs off. An inactive project, the one refusal a crossing run as its person meets, answers
-/// 409 `PROJECT_INACTIVE`, and the device keeps the region. A change of the event while the run
-/// started keeps its retryable answer, and any other failure asks the device to deliver the
-/// crossing again.
+/// The run id of a crossing that started a run. An inactive project, the one refusal a crossing
+/// run as its person meets, answers 409 `PROJECT_INACTIVE`, and the device keeps the region. Any
+/// other client error keeps its answer for the caller's own account: a billing refusal, so the
+/// device backs off, or a sign-in saved with the event to connect again, 409
+/// `OAUTH_RECONNECT_REQUIRED` naming its provider, so the device keeps the region. A 401 from
+/// inside the run never reaches the device, which would drop its own token. A change of the
+/// event while the run started keeps its retryable answer, and any other failure asks the device
+/// to deliver the crossing again.
 fn started(outcome: flow_like_types::Result<TriggerResponse>) -> Result<String, ApiError> {
     match outcome {
         Ok(TriggerResponse {
@@ -235,14 +238,17 @@ fn started(outcome: flow_like_types::Result<TriggerResponse>) -> Result<String, 
         }) => Ok(run_id),
         Ok(response) => Err(ApiError::service_unavailable(response.message)),
         Err(error) => match error.downcast_ref::<ApiError>() {
-            Some(billing) if billing.status() == StatusCode::PAYMENT_REQUIRED => {
-                Err(billing.clone())
-            }
             Some(refusal) if is_inactive_project_refusal(refusal) => Err(ApiError::coded(
                 StatusCode::CONFLICT,
                 PROJECT_INACTIVE,
                 "This event's project is not active; send the crossing again later",
             )),
+            Some(answer)
+                if answer.status().is_client_error()
+                    && answer.status() != StatusCode::UNAUTHORIZED =>
+            {
+                Err(answer.clone())
+            }
             _ => Err(sink_dispatch_error(error)),
         },
     }
@@ -294,7 +300,9 @@ async fn remember(state: &AppState, claim: &IdempotencyClaim, key: &str, run_id:
 mod tests {
     use super::*;
     use crate::routes::sink::authority::RunAsDenial;
-    use crate::routes::sink::trigger::{SINK_RUN_AS_UNAVAILABLE, run_as_refused};
+    use crate::routes::sink::trigger::{
+        OAUTH_RECONNECT_REQUIRED, SINK_RUN_AS_UNAVAILABLE, run_as_refused, saved_grant_failure,
+    };
     use axum::http::HeaderValue;
 
     fn event(event_type: &str, execution_mode: EventExecutionMode, active: bool) -> Event {
@@ -435,6 +443,10 @@ mod tests {
         }
     }
 
+    /// A crossing that started no run keeps a client error's answer, with its message, since the
+    /// caller's own account sees it: a billing refusal or any other refusal but a 401. A
+    /// retryable change of the event keeps its answer, and every other server fault becomes a
+    /// 500 the device retries.
     #[test]
     fn a_crossing_without_a_run_keeps_its_answer_or_asks_for_a_retry() {
         let started_run = started(Ok(TriggerResponse {
@@ -459,22 +471,64 @@ mod tests {
             SINK_RUN_AS_UNAVAILABLE,
             "Try again later",
         );
-        let billing = ApiError::payment_required("No runs left this month");
-        for kept in [overtaken, billing] {
-            let outcome = started(Err(flow_like_types::Error::from(kept.clone())));
-            assert_eq!(outcome.err().as_ref().map(answer), Some(answer(&kept)));
+        for kept in [
+            overtaken,
+            ApiError::payment_required("No runs left this month"),
+            ApiError::bad_request("not a run-as answer"),
+            ApiError::forbidden("not a run-as answer"),
+            ApiError::not_found("Board 'board-1' was not found"),
+        ] {
+            let outcome = started(Err(flow_like_types::Error::from(kept.clone())))
+                .expect_err("a crossing without a run fails");
+            assert_eq!(answer(&outcome), answer(&kept));
+            assert_eq!(outcome.public_message(), kept.public_message());
         }
 
         for internal in [
             flow_like_types::anyhow!("database is gone"),
-            flow_like_types::Error::from(ApiError::forbidden("not a run-as answer")),
-            flow_like_types::Error::from(ApiError::bad_request("not a run-as answer")),
+            flow_like_types::Error::from(ApiError::service_unavailable("storage is down")),
+            flow_like_types::Error::from(ApiError::internal("not a run-as answer")),
         ] {
             assert_eq!(
                 started(Err(internal)).err().map(|error| error.status()),
                 Some(StatusCode::INTERNAL_SERVER_ERROR)
             );
         }
+    }
+
+    /// The provider refusing a sign-in saved with the event, even with a 401, reaches the device
+    /// as 409 `OAUTH_RECONNECT_REQUIRED` naming the provider, so the device keeps the region and
+    /// delivers the crossing again instead of dropping its own token.
+    #[test]
+    fn a_saved_sign_in_to_reconnect_keeps_the_region() {
+        for refused in [
+            ApiError::unauthorized(
+                "Reconnect OAuth provider 'google' before running this workflow",
+            ),
+            ApiError::bad_request("Reconnect OAuth provider 'google' before running this workflow"),
+        ] {
+            let saved = saved_grant_failure(refused);
+            let outcome = started(Err(flow_like_types::Error::from(saved)))
+                .expect_err("a crossing without a run fails");
+            assert_eq!(
+                answer(&outcome),
+                (StatusCode::CONFLICT, OAUTH_RECONNECT_REQUIRED)
+            );
+            assert!(outcome.public_message().unwrap().contains("'google'"));
+        }
+    }
+
+    /// A 401 from inside the run, which never judged the caller's own token, is a server fault
+    /// to the device, which would otherwise drop its token.
+    #[test]
+    fn a_401_from_inside_the_run_never_reaches_the_device() {
+        let outcome = started(Err(flow_like_types::Error::from(ApiError::unauthorized(
+            "JWT error: InvalidSignature",
+        ))));
+        assert_eq!(
+            outcome.err().map(|error| error.status()),
+            Some(StatusCode::INTERNAL_SERVER_ERROR)
+        );
     }
 
     /// A crossing runs as its person, so nothing about the event's run-as user refuses it. The

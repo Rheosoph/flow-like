@@ -194,6 +194,10 @@ pub(super) fn parse_pat_token(value: &str) -> Option<(&str, &str)> {
 pub(crate) const SINK_RUN_AS_REFUSED: &str = "SINK_RUN_AS_REFUSED";
 /// A sink fire whose run-as user could not be checked; a retry may succeed.
 pub(crate) const SINK_RUN_AS_UNAVAILABLE: &str = "SINK_RUN_AS_UNAVAILABLE";
+/// A sign-in saved with the event that the user it belongs to must connect again. It answers
+/// 409, never the provider's 400, 401 or 403, so no caller reads it as its own credential
+/// refused or its own request at fault, and a device keeps the event and delivers again.
+pub(crate) const OAUTH_RECONNECT_REQUIRED: &str = "OAUTH_RECONNECT_REQUIRED";
 pub(super) const UNREADABLE_PAT: &str =
     "The access token this event runs with cannot be read on this server";
 
@@ -359,21 +363,7 @@ async fn refuse_sink_run(
         reason = denial.reason(),
         "Refusing a sink fire: the user it runs as may no longer run it"
     );
-    if denial.pauses() {
-        let released = match sink.run_as_user_id.as_deref() {
-            Some(run_as) => {
-                super::service::release_member_sinks(state, Some(&sink.app_id), run_as, denial)
-                    .await
-                    .map(|released| released > 0)
-            }
-            None => {
-                super::service::release_legacy_sink(state, sink, user_id.as_deref(), denial).await
-            }
-        };
-        if let Err(error) = released {
-            tracing::error!(sink_id = %sink.id, event_id = %sink.event_id, %error, "Failed to pause a sink whose run-as user may no longer run it");
-        }
-    }
+    pause_for_refusal(state, sink, user_id.as_deref(), denial).await;
     let run_id = rejection::undispatched_run(state, run_id).await;
     record_trigger_rejection(
         state,
@@ -386,6 +376,31 @@ async fn refuse_sink_run(
     )
     .await;
     run_as_refused(denial)
+}
+
+/// Releases the user `sink` runs as, `user_id`, refused for `denial`: every sink that runs as
+/// them in the app is paused, or a legacy sink alone while it holds the PAT that was read. An
+/// inactive project pauses nothing. A failure is only logged: every fire as that user refuses it.
+async fn pause_for_refusal(
+    state: &AppState,
+    sink: &event_sink::Model,
+    user_id: Option<&str>,
+    denial: RunAsDenial,
+) {
+    if !denial.pauses() {
+        return;
+    }
+    let released = match sink.run_as_user_id.as_deref() {
+        Some(run_as) => {
+            super::service::release_member_sinks(state, Some(&sink.app_id), run_as, denial)
+                .await
+                .map(|released| released > 0)
+        }
+        None => super::service::release_legacy_sink(state, sink, user_id, denial).await,
+    };
+    if let Err(error) = released {
+        tracing::error!(sink_id = %sink.id, event_id = %sink.event_id, %error, "Failed to pause a sink whose run-as user may no longer run it");
+    }
 }
 
 /// A server-side fault, so nothing is paused, and the transport's run id is left for its
@@ -447,8 +462,9 @@ impl SinkUse {
     }
 
     /// Whether the run takes the OAuth grants saved on `sink`, the event's saved sign-ins. A
-    /// person's run takes them only while the sink runs as someone, whose grants they are; the
-    /// grants of a legacy sink belong to nobody the hub can resolve them for.
+    /// person's run takes them only while the sink runs as someone, whose grants they are, and
+    /// [`run_oauth_tokens`] lends them only while that user may still run the event; the grants
+    /// of a legacy sink belong to nobody the hub can resolve them for.
     pub(crate) fn takes_saved_grants(self, sink: &event_sink::Model) -> bool {
         sink.oauth_tokens_encrypted.is_some()
             && (self == Self::RunAs || sink.run_as_user_id.is_some())
@@ -1115,11 +1131,13 @@ fn saved_grants(state: &AppState, sink: &event_sink::Model) -> Option<OAuthToken
 /// sink's run-as user, merged with the sign-ins the person who triggered the run `supplied`,
 /// already resolved as theirs. A person's sign-in wins for its provider, and only the saved
 /// grants of the other providers are resolved, so a saved grant the person replaced cannot
-/// fail their run. A run nobody triggered supplies none and takes every saved grant. Which
-/// saved grants a run may take at all follows [`SinkUse::takes_saved_grants`].
+/// fail their run. A run nobody triggered supplies none and takes every saved grant; its fire
+/// already checked the run-as user. A person's run borrows them only while that user may
+/// still run the event, see [`run_as_lends_to_person`], which reads `sink` again when it pauses
+/// the sink. Which saved grants a run may take at all follows [`SinkUse::takes_saved_grants`].
 pub(crate) async fn run_oauth_tokens(
     state: &AppState,
-    sink: Option<&event_sink::Model>,
+    sink: Option<&mut event_sink::Model>,
     sink_use: SinkUse,
     supplied: Option<OAuthTokens>,
 ) -> Result<Option<OAuthTokens>, ApiError> {
@@ -1129,12 +1147,92 @@ pub(crate) async fn run_oauth_tokens(
     else {
         return Ok(supplied);
     };
+    if sink_use == SinkUse::Person && !run_as_lends_to_person(state, sink).await? {
+        return Ok(supplied);
+    }
     let supplied = supplied.unwrap_or_default();
     let saved = refresh_sink_grants(state, sink, saved, |provider| {
         !supplied.contains_key(provider)
     })
     .await?;
     Ok(Some(person_over_event(saved, supplied)))
+}
+
+/// What a caller is told when a sign-in saved with the event must be connected again. An
+/// anonymous caller, a hosted visitor or a public call without a login, learns only that the
+/// event's owner must reconnect a service, never which provider or why; the full answer stays in
+/// the log. Anyone else gets it unchanged.
+pub(crate) fn sign_in_failure(anonymous: bool, error: ApiError) -> ApiError {
+    if anonymous && error.public_code() == OAUTH_RECONNECT_REQUIRED {
+        reconnect_required(
+            "This event cannot sign in to a service it uses until its owner reconnects it",
+        )
+    } else {
+        error
+    }
+}
+
+/// A saved grant the provider refused while it was resolved, with 400, 401 or 403, answered as
+/// [`OAUTH_RECONNECT_REQUIRED`] with its message, which names the provider. A server fault keeps
+/// its answer.
+pub(crate) fn saved_grant_failure(error: ApiError) -> ApiError {
+    if matches!(
+        error.status(),
+        StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ) {
+        reconnect_required(
+            error
+                .public_message()
+                .unwrap_or("Reconnect an OAuth sign-in saved with this event"),
+        )
+    } else {
+        error
+    }
+}
+
+fn reconnect_required(message: &str) -> ApiError {
+    ApiError::coded(StatusCode::CONFLICT, OAUTH_RECONNECT_REQUIRED, message)
+}
+
+/// Whether the user `sink` runs as may still lend their saved grants to a person's run: the
+/// check every fire as that user passes. A refusal pauses the sink as a refused fire does and
+/// reads `sink` again as the pause left it, so the person's run goes on with their own sign-ins
+/// and is checked against that sink before it starts. A check that failed on the server stops
+/// the run as retryable.
+async fn run_as_lends_to_person(
+    state: &AppState,
+    sink: &mut event_sink::Model,
+) -> Result<bool, ApiError> {
+    match sink_run_as_authority(state, sink).await? {
+        SinkRunAs::Allowed(_) => Ok(true),
+        SinkRunAs::Denied { user_id, denial } => {
+            tracing::warn!(
+                sink_id = %sink.id,
+                event_id = %sink.event_id,
+                app_id = %sink.app_id,
+                user_id = ?user_id,
+                reason = denial.reason(),
+                "A person's run borrows no saved sign-ins: the user the sink runs as may no longer run it"
+            );
+            pause_for_refusal(state, sink, user_id.as_deref(), denial).await;
+            *sink = event_sink::Entity::find_by_id(sink.id.clone())
+                .one(&state.db)
+                .await?
+                .ok_or_else(|| fire_overtaken(sink))?;
+            Ok(false)
+        }
+        SinkRunAs::Transient { user_id, reason } => {
+            tracing::error!(
+                sink_id = %sink.id,
+                event_id = %sink.event_id,
+                app_id = %sink.app_id,
+                user_id = ?user_id,
+                reason,
+                "Cannot check the user whose saved sign-ins a person's run would borrow; the run can be retried"
+            );
+            Err(retry_later())
+        }
+    }
 }
 
 /// A person's sign-in for each provider they supplied one for, else the event's saved grant.
@@ -1156,7 +1254,8 @@ pub(crate) async fn maybe_refresh_oauth_tokens(
 }
 
 /// [`maybe_refresh_oauth_tokens`] for the providers `wanted` keeps. The others stay saved as
-/// they are, and only the wanted grants are returned.
+/// they are, and only the wanted grants are returned. A grant the provider refused answers
+/// [`OAUTH_RECONNECT_REQUIRED`], see [`saved_grant_failure`].
 async fn refresh_sink_grants(
     state: &AppState,
     sink: &event_sink::Model,
@@ -1174,7 +1273,8 @@ async fn refresh_sink_grants(
             value,
             sink.run_as_user_id.as_deref(),
         )
-        .await?;
+        .await
+        .map_err(saved_grant_failure)?;
         changed |= current != *value;
         *value = current;
     }
@@ -1291,9 +1391,14 @@ async fn record_trigger_rejection(
 ///
 /// A run with an [`TriggerEventInput::actor`] executes as that person instead: a JWT for
 /// them, their own profile and private Bits, and the OAuth sign-ins they supplied, with the
-/// sink's saved grants for every other provider. The run-as user is neither checked nor
-/// paused for it, and a sink a release paused still takes it; only an inactive project
-/// refuses it, with the same `SINK_RUN_AS_REFUSED` answer.
+/// sink's saved grants for every other provider. The run-as user is checked only before the
+/// run borrows those grants: a refusal pauses the sink as it pauses any fire as that user, and
+/// the person's run goes on with their own sign-ins. A sink a release paused still takes the
+/// run; only an inactive project refuses it, with the same `SINK_RUN_AS_REFUSED` answer.
+///
+/// The sink is read once more after the run took its grants and profile, right before the run
+/// is recorded and dispatched, so a sink switched off or rebound meanwhile stops the fire as
+/// retryable, for a pinned version too.
 ///
 /// # Example
 /// ```ignore
@@ -1384,8 +1489,9 @@ impl FireActor {
 }
 
 /// The user a fire runs as. A person's fire needs only an active project: the caller checked
-/// that the person may trigger the event, and the sink's run-as user plays no part, so it is
-/// neither checked nor paused. Any other fire runs as the run-as user that
+/// that the person may trigger the event, and the sink's run-as user plays no part in who it
+/// runs as, so it is not checked here; [`run_oauth_tokens`] checks it only before the fire
+/// borrows that user's saved grants. Any other fire runs as the run-as user that
 /// [`resolve_sink_run_as_for_run`] checks.
 async fn fire_actor(
     state: &AppState,
@@ -1469,8 +1575,10 @@ async fn trigger_event_dispatch(
     // The idempotency key is the only sticky identity a sink fire can offer;
     // without one each fire is an independent weighted draw on the run id.
     let target = variant::resolve_sink_target(&event, input.idempotency_key.as_deref(), &run_id);
-    let PinnedFire { sink, board_etag } =
-        pin_fire_for(state, sink, &target, actor.sink_use()).await?;
+    let PinnedFire {
+        mut sink,
+        board_etag,
+    } = pin_fire_for(state, sink, &target, actor.sink_use()).await?;
 
     let input_payload_len = input
         .payload
@@ -1516,7 +1624,7 @@ async fn trigger_event_dispatch(
     // The sink's saved grants, refreshed and written back, under a person's own sign-ins.
     let oauth_tokens = run_oauth_tokens(
         state,
-        Some(&sink),
+        Some(&mut sink),
         actor.sink_use(),
         actor.supplied_oauth_tokens(input.oauth_tokens),
     )
@@ -1553,6 +1661,10 @@ async fn trigger_event_dispatch(
         shadow: false,
         artifact: None,
     };
+
+    // Read again right before the run is recorded: refreshing the grants can take a while, and
+    // a pinned version's sink was not read since the fire started.
+    recheck_fire_for(state, &sink, actor.sink_use()).await?;
 
     // Create run record
     let run = execution_run::ActiveModel {
@@ -1665,6 +1777,7 @@ async fn trigger_event_dispatch(
         (status = 401, description = "Invalid or missing auth token"),
         (status = 403, description = "SINK_RUN_AS_REFUSED: the event is paused because the user it runs as may no longer run it, or its project is not active"),
         (status = 404, description = "Route not found"),
+        (status = 409, description = "OAUTH_RECONNECT_REQUIRED: a sign-in saved with the event must be connected again before it can run"),
         (status = 500, description = "Internal server error"),
         (status = 503, description = "SINK_RUN_AS_UNAVAILABLE: the user the event runs as cannot be checked right now, or changed while the request was handled; retry later")
     )
@@ -2097,6 +2210,7 @@ pub struct TelegramQueryParams {
         (status = 401, description = "Invalid or missing secret token, or the trigger has no secret token configured"),
         (status = 403, description = "Request not from Telegram servers"),
         (status = 404, description = "Webhook not found or inactive"),
+        (status = 409, description = "OAUTH_RECONNECT_REQUIRED: a sign-in saved with the event must be connected again before it can run"),
         (status = 503, description = "The user the event runs as cannot be checked right now, or changed while the update was handled; Telegram retries")
     )
 )]
@@ -2475,6 +2589,7 @@ fn verify_discord_signature(
         (status = 200, description = "Interaction processed. While a device runs this bot, or when the user the event runs as may no longer run it (the event is paused) or its project is not active, a command gets a notice only its sender sees and starts no run."),
         (status = 401, description = "Invalid signature, or the trigger has no Discord public key configured"),
         (status = 404, description = "Webhook not found or inactive"),
+        (status = 409, description = "OAUTH_RECONNECT_REQUIRED: a sign-in saved with the event must be connected again before it can run"),
         (status = 503, description = "The user the event runs as cannot be checked right now, or changed while the interaction was handled")
     )
 )]
@@ -4457,7 +4572,9 @@ mod tests {
             "\npub(crate) async fn sink_run_as_authority(",
             "\nasync fn legacy_pat_owner(",
             "\nasync fn refuse_sink_run(",
+            "\nasync fn pause_for_refusal(",
             "\nasync fn sink_run_as_unavailable(",
+            "\nasync fn run_as_lends_to_person(",
         ] {
             let body = function(source, signature);
             for write in ["update_many()", ".update(", ".insert(", "Expr::value("] {
@@ -4474,11 +4591,19 @@ mod tests {
             refused,
             "refuse_sink_run",
             &[
-                "if denial.pauses() {",
-                "release_member_sinks(",
-                "release_legacy_sink(",
+                "pause_for_refusal(state, sink, user_id.as_deref(), denial)",
                 "record_trigger_rejection(",
                 "run_as_refused(denial)",
+            ],
+        );
+        in_order(
+            function(source, "\nasync fn pause_for_refusal("),
+            "pause_for_refusal",
+            &[
+                "if !denial.pauses() {",
+                "return;",
+                "release_member_sinks(",
+                "release_legacy_sink(",
             ],
         );
     }
@@ -4764,6 +4889,17 @@ mod tests {
             needle => needle,
         });
         in_order(programmatic, "trigger_event_dispatch", &as_actor);
+        in_order(
+            programmatic,
+            "trigger_event_dispatch",
+            &[
+                "run_oauth_tokens(",
+                "actor.profile(state, &sink",
+                "recheck_fire_for(state, &sink, actor.sink_use()).await?;",
+                "run.insert(&state.db)",
+                "dispatch_async(request)",
+            ],
+        );
         for (name, body) in [
             ("trigger_http", http),
             ("trigger_telegram", telegram),
@@ -4897,6 +5033,7 @@ mod tests {
                 ".filter(|sink| sink_use.takes_saved_grants(sink))",
                 "saved_grants(state, sink)",
                 "return Ok(supplied);",
+                "run_as_lends_to_person(state, sink)",
                 "!supplied.contains_key(provider)",
                 "Ok(Some(person_over_event(saved, supplied)))",
             ],
@@ -4908,6 +5045,7 @@ mod tests {
             &[
                 ".filter(|(provider_id, _)| wanted(provider_id))",
                 "resolve_sink_oauth_token(",
+                ".map_err(saved_grant_failure)?;",
                 "serde_json::to_string(&tokens)?",
                 "tokens.retain(|provider_id, _| wanted(provider_id));",
             ],
@@ -4961,11 +5099,12 @@ mod tests {
         assert!(!dispatch.contains("sign_execution_jwt("));
     }
 
-    /// A person's fire is judged by the project alone: the sink's run-as user is neither checked
-    /// nor paused for it, and a refusal is recorded as the person's. A fire nobody triggered keeps
-    /// the run-as check. The run then carries the person's own profile; the sink's saved profile
-    /// only serves the run-as user, and its saved grants serve a person only once the draft is
-    /// pinned and only for providers the person supplied no sign-in for.
+    /// Who a person's fire runs as is judged by the project alone: the sink's run-as user is
+    /// checked only before the fire borrows that user's saved grants, and a refusal is recorded
+    /// as the person's. A fire nobody triggered keeps the run-as check. The run then carries the
+    /// person's own profile; the sink's saved profile only serves the run-as user, and its saved
+    /// grants serve a person only once the draft is pinned and only for providers the person
+    /// supplied no sign-in for.
     #[test]
     fn a_person_fire_runs_as_them_and_leaves_the_run_as_user_alone() {
         let source = include_str!("trigger.rs");
@@ -5031,8 +5170,177 @@ mod tests {
                 "user_id: executor_subject,",
                 "profile: actor.profile(state, &sink, actor_user_id.as_deref()).await,",
                 "custom_bit_owner: actor_user_id.clone(),",
+                "recheck_fire_for(state, &sink, actor.sink_use())",
                 "user_id: Set(actor_user_id),",
             ],
+        );
+    }
+
+    /// A person's run borrows the saved grants of the user the sink runs as only while that user
+    /// passes the check every fire as them passes. A refusal pauses the sink exactly as a refused
+    /// fire does, without refusing the person's run: it goes on with the person's own sign-ins,
+    /// against the sink as the pause left it. A check that failed on the server is retried. A run
+    /// as the sink's user was checked when it fired and is not checked again.
+    #[test]
+    fn a_person_borrows_saved_grants_only_while_the_run_as_user_may_run_the_event() {
+        let source = include_str!("trigger.rs");
+        let run = function(source, "\npub(crate) async fn run_oauth_tokens(");
+        assert!(run.contains(
+            "if sink_use == SinkUse::Person && !run_as_lends_to_person(state, sink).await? {"
+        ));
+        assert_eq!(run.matches("return Ok(supplied);").count(), 2);
+        let lends = function(source, "\nasync fn run_as_lends_to_person(");
+        in_order(
+            lends,
+            "run_as_lends_to_person",
+            &[
+                "sink_run_as_authority(state, sink).await?",
+                "SinkRunAs::Allowed(_) => Ok(true),",
+                "SinkRunAs::Denied { user_id, denial } => {",
+                "pause_for_refusal(state, sink, user_id.as_deref(), denial).await;",
+                "*sink = event_sink::Entity::find_by_id(sink.id.clone())",
+                "Ok(false)",
+                "SinkRunAs::Transient { user_id, reason } => {",
+                "Err(retry_later())",
+            ],
+        );
+        for refusal in [
+            "record_trigger_rejection(",
+            "run_as_refused(",
+            "refuse_sink_run(",
+        ] {
+            assert!(
+                !lends.contains(refusal),
+                "a person's run is not refused with {refusal}"
+            );
+        }
+        let refused = function(source, "\nasync fn refuse_sink_run(");
+        assert!(refused.contains("pause_for_refusal(state, sink, user_id.as_deref(), denial)"));
+    }
+
+    /// A person's run goes on after it paused the sink of a refused run-as user: checked against
+    /// the sink as the pause left it, the run starts unless the sink changed again since, while
+    /// the sink as the run first read it would refuse it.
+    #[test]
+    fn a_person_run_that_paused_the_sink_starts_against_the_paused_sink() {
+        let now = chrono::Utc::now().fixed_offset();
+        let pinned = event_sink::Model {
+            run_as_user_id: Some("departed".into()),
+            oauth_tokens_encrypted: Some("grants".into()),
+            ..sink(None)
+        };
+        let paused = event_sink::Model {
+            active: false,
+            run_as_user_id: None,
+            run_as_released_at: Some(now),
+            oauth_tokens_encrypted: None,
+            ..pinned.clone()
+        };
+        assert!(runs_as_read(&paused, &paused, SinkUse::Person));
+        assert!(!runs_as_read(&pinned, &paused, SinkUse::Person));
+        assert!(!SinkUse::Person.takes_saved_grants(&paused));
+        for (case, current) in [
+            (
+                "switched off",
+                event_sink::Model {
+                    run_as_released_at: None,
+                    ..paused.clone()
+                },
+            ),
+            (
+                "turned back on by someone else",
+                event_sink::Model {
+                    active: true,
+                    run_as_user_id: Some("editor".into()),
+                    run_as_released_at: None,
+                    ..paused.clone()
+                },
+            ),
+        ] {
+            assert!(!runs_as_read(&paused, &current, SinkUse::Person), "{case}");
+        }
+    }
+
+    /// A saved grant the provider refused while it was resolved, with 400, 401 or 403, answers
+    /// 409 `OAUTH_RECONNECT_REQUIRED` with its message, so no caller reads it as its own
+    /// credential refused or its own request at fault. A server fault keeps its answer.
+    #[test]
+    fn a_saved_grant_to_reconnect_is_a_conflict_never_a_refused_credential() {
+        for refused in [
+            ApiError::bad_request("Reconnect OAuth provider 'google' before running this workflow"),
+            ApiError::unauthorized("The OAuth connection for 'google' belongs to another account"),
+            ApiError::forbidden("The OAuth connection for 'google' is not available"),
+        ] {
+            let message = refused.public_message().map(str::to_owned);
+            let answer = saved_grant_failure(refused);
+            assert_eq!(
+                (answer.status(), answer.public_code()),
+                (StatusCode::CONFLICT, OAUTH_RECONNECT_REQUIRED)
+            );
+            assert_eq!(answer.public_message(), message.as_deref());
+        }
+        let fault = saved_grant_failure(ApiError::service_unavailable(
+            "OAuth credentials for 'google' are unavailable",
+        ));
+        assert_eq!(
+            (fault.status(), fault.public_code()),
+            (StatusCode::SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE")
+        );
+    }
+
+    /// An anonymous caller whose run cannot use a sign-in saved with the event learns only that
+    /// its owner must reconnect a service, never which provider, with the same 409 answer. Anyone
+    /// else still learns which, and any other answer reaches every caller as it is.
+    #[test]
+    fn only_an_anonymous_caller_is_kept_from_which_saved_sign_in_failed() {
+        let reconnect = || {
+            saved_grant_failure(ApiError::unauthorized(
+                "Reconnect OAuth provider 'google' before running this workflow",
+            ))
+        };
+        let told = sign_in_failure(true, reconnect());
+        assert_eq!(
+            (told.status(), told.public_code()),
+            (StatusCode::CONFLICT, OAUTH_RECONNECT_REQUIRED)
+        );
+        let message = told.public_message().unwrap();
+        assert!(!message.contains("google"), "{message}");
+        assert!(message.contains("its owner reconnects it"), "{message}");
+        let known = sign_in_failure(false, reconnect());
+        assert_eq!(known.public_code(), OAUTH_RECONNECT_REQUIRED);
+        assert_eq!(known.public_message(), reconnect().public_message());
+        for unnamed in [
+            ApiError::service_unavailable("OAuth credentials for 'google' are unavailable"),
+            retry_later(),
+            run_as_refused(RunAsDenial::NotMember),
+            ApiError::conflict("The run lost a write race; retry it"),
+            ApiError::bad_request("The run's payload is not valid JSON"),
+        ] {
+            let (code, message) = (
+                unnamed.public_code().to_owned(),
+                unnamed.public_message().map(str::to_owned),
+            );
+            let told = sign_in_failure(true, unnamed);
+            assert_eq!(told.public_code(), code);
+            assert_eq!(told.public_message(), message.as_deref());
+        }
+    }
+
+    /// Every fire reads the sink once more after it took the grants and profile, right before
+    /// the run is recorded and dispatched, so a sink switched off or rebound while the grants
+    /// were refreshed stops it. A pinned version, whose draft needs no pin, is read again too.
+    #[test]
+    fn every_fire_reads_the_sink_once_more_before_it_starts() {
+        let dispatch = function(
+            include_str!("trigger.rs"),
+            "\nasync fn trigger_event_dispatch(",
+        );
+        assert_eq!(
+            dispatch
+                .matches("\n    recheck_fire_for(state, &sink, actor.sink_use()).await?;\n")
+                .count(),
+            1,
+            "read once more in the fire's own block, whatever its target"
         );
     }
 }

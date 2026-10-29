@@ -68,7 +68,10 @@ use crate::{
             parse_version_tuple,
             setup_event::find_event_setup,
         },
-        sink::trigger::{PinnedFire, SinkUse, pin_fire_for, resolve_sink_run_as, run_oauth_tokens},
+        sink::trigger::{
+            PinnedFire, SinkUse, pin_fire_for, recheck_fire_for, resolve_sink_run_as,
+            run_oauth_tokens, sign_in_failure,
+        },
     },
     state::AppState,
     utils::event_alias as alias_util,
@@ -149,6 +152,13 @@ impl ProxyCallerContext {
 
     fn uses_sink_credentials(&self) -> bool {
         self.member.is_none()
+    }
+
+    /// A public call that neither signed in nor came through an app connection. A sign-in saved
+    /// with the event that must be connected again answers it 409 `OAUTH_RECONNECT_REQUIRED`
+    /// without naming the provider.
+    fn anonymous(&self) -> bool {
+        self.member.is_none() && self.app_chain.is_none()
     }
 
     /// A person's run is stopped only by a sink a person switched off, not by a release's
@@ -2858,14 +2868,15 @@ async fn dispatch_event_stream(
             .unwrap_or_else(|| format!("inbound:{}", event_row.id)),
     );
     // A run that borrows from the sink fixes what it runs first: a run as the sink's user takes
-    // its grants and profile, a person's run only the sign-ins saved with the event.
-    let (sink, board_etag) = match sink {
+    // its grants and profile, a person's run only the sign-ins saved with the event. A person's
+    // run that borrows nothing keeps no sink.
+    let (mut sink, board_etag) = match sink {
         Some(sink) if caller.sink_use().borrows_from(&sink) => {
             let PinnedFire { sink, board_etag } =
                 pin_fire_for(state, sink, target, caller.sink_use()).await?;
             (Some(sink), board_etag)
         }
-        sink => (sink, None),
+        _ => (None, None),
     };
 
     let credentials = state
@@ -2879,8 +2890,10 @@ async fn dispatch_event_stream(
     let credentials_json = serde_json::to_string(&shared_credentials).map_err(ApiError::from)?;
 
     // No caller of this door supplies sign-ins of its own, so a person's run takes the
-    // event's saved sign-ins like any other run.
-    let oauth_tokens = run_oauth_tokens(state, sink.as_ref(), caller.sink_use(), None).await?;
+    // event's saved sign-ins like any other run, while the user they belong to may run it.
+    let oauth_tokens = run_oauth_tokens(state, sink.as_mut(), caller.sink_use(), None)
+        .await
+        .map_err(|error| sign_in_failure(caller.anonymous(), error))?;
 
     let run_id = flow_like_types::create_id();
     // Tie the run into the caller's process case: proxied calls inherit the
@@ -2976,6 +2989,12 @@ async fn dispatch_event_stream(
         shadow: false,
         artifact: None,
     };
+
+    // Read again right before the run is recorded: refreshing the grants can take a while, and
+    // a pinned version's sink was not read since the run started.
+    if let Some(sink) = &sink {
+        recheck_fire_for(state, sink, caller.sink_use()).await?;
+    }
 
     let now = chrono::Utc::now().fixed_offset();
     let run = execution_run::ActiveModel {
@@ -5391,31 +5410,108 @@ mod tests {
     /// never takes the sink's saved profile.
     #[test]
     fn a_run_as_the_sink_pins_its_draft_before_it_uses_the_sink() {
-        let source = include_str!("inbound.rs");
-        let body = source
-            .split_once("\nasync fn dispatch_event_stream(")
-            .expect("dispatch_event_stream exists")
-            .1;
-        let body = body.split_once("\n}\n").map_or(body, |(body, _)| body);
-        let mut from = 0;
-        for step in [
+        dispatches_in_order(&[
             "!caller.sink_use().admits(sink)",
             "resolve_sink_run_as(state, sink)",
             "Some(sink) if caller.sink_use().borrows_from(&sink) => {",
             "pin_fire_for(state, sink, target, caller.sink_use()).await?",
-            "run_oauth_tokens(state, sink.as_ref(), caller.sink_use(), None)",
+            "_ => (None, None),",
+            "run_oauth_tokens(state, sink.as_mut(), caller.sink_use(), None)",
             "(Some(member), _) => {",
             "(None, Some(sink)) => {",
             "sink_dispatch_profile(",
             "insert_run_with_caller_apps(",
+        ]);
+        let body = dispatch_event_stream_body();
+        assert!(body.contains("        board_etag,\n"));
+        assert!(!body.contains("board_etag: None"));
+    }
+
+    /// A run that borrowed from the sink reads it once more after it took the grants and
+    /// profile, right before the run is recorded and dispatched, so a sink switched off or
+    /// rebound while the grants were refreshed stops it, for a pinned version too. A person's
+    /// run whose saved sign-ins were withheld is checked against the sink as the pause left it.
+    #[test]
+    fn a_run_that_borrowed_from_the_sink_reads_it_once_more_before_it_starts() {
+        dispatches_in_order(&[
+            "run_oauth_tokens(state, sink.as_mut(), caller.sink_use(), None)",
+            "sink_dispatch_profile(",
+            "if let Some(sink) = &sink {",
+            "recheck_fire_for(state, sink, caller.sink_use()).await?;",
+            "insert_run_with_caller_apps(",
+            "dispatch_streaming(request)",
+            "dispatch_http_sse(request)",
+        ]);
+        assert_eq!(
+            dispatch_event_stream_body()
+                .matches("recheck_fire_for(")
+                .count(),
+            1
+        );
+    }
+
+    /// A sign-in saved with the event that must be connected again answers every caller 409
+    /// `OAUTH_RECONNECT_REQUIRED`. A public call without a login learns only that the event's
+    /// owner must reconnect a service, never which provider. A Flow-Like login, a member
+    /// operation and every call through an app connection still learn which.
+    #[test]
+    fn only_an_anonymous_public_call_is_kept_from_which_saved_sign_in_failed() {
+        use crate::routes::sink::trigger::{OAUTH_RECONNECT_REQUIRED, saved_grant_failure};
+        let member = ProxyCallerContext {
+            member: Some(super::MemberExecutionIdentity {
+                user_id: "member".to_string(),
+                technical_user_id: Some("api-key".to_string()),
+                profile_id: None,
+            }),
+            ..Default::default()
+        };
+        let login = ProxyCallerContext::signed_in("ada", super::UserExecutionContext::new("ada"));
+        let person = connection(Some("person"), None);
+        let key = connection(Some("creator"), Some("key-a"));
+        for (case, caller, anonymous) in [
+            ("anonymous public call", ProxyCallerContext::default(), true),
+            ("Flow-Like login", login, false),
+            ("member operation", member, false),
+            ("person via connection", person, false),
+            ("key via connection", key, false),
+            ("nobody via connection", connection(None, None), false),
         ] {
+            assert_eq!(caller.anonymous(), anonymous, "{case}");
+            let reconnect = "Reconnect OAuth provider 'google' before running this workflow";
+            let refused = saved_grant_failure(super::ApiError::unauthorized(reconnect));
+            let told = super::sign_in_failure(caller.anonymous(), refused);
+            assert_eq!(told.public_code(), OAUTH_RECONNECT_REQUIRED, "{case}");
+            assert_eq!(told.status(), axum::http::StatusCode::CONFLICT, "{case}");
+            let message = told.public_message().unwrap_or_default();
+            assert_eq!(message.contains("google"), !anonymous, "{case}: {message}");
+        }
+        let body = dispatch_event_stream_body();
+        let tokens = &body[body.find("let oauth_tokens = run_oauth_tokens(").unwrap()..];
+        let tokens = &tokens[..tokens.find(';').unwrap()];
+        assert!(
+            tokens.contains(".map_err(|error| sign_in_failure(caller.anonymous(), error))"),
+            "{tokens}"
+        );
+    }
+
+    /// The body of `dispatch_event_stream` in this file.
+    fn dispatch_event_stream_body() -> &'static str {
+        let body = include_str!("inbound.rs")
+            .split_once("\nasync fn dispatch_event_stream(")
+            .expect("dispatch_event_stream exists")
+            .1;
+        body.split_once("\n}\n").map_or(body, |(body, _)| body)
+    }
+
+    fn dispatches_in_order(steps: &[&str]) {
+        let body = dispatch_event_stream_body();
+        let mut from = 0;
+        for step in steps {
             let found = body[from..].find(step).unwrap_or_else(|| {
                 panic!("dispatch_event_stream calls {step} after the steps before it")
             });
             from += found + step.len();
         }
-        assert!(body.contains("        board_etag,\n"));
-        assert!(!body.contains("board_etag: None"));
     }
 
     #[test]

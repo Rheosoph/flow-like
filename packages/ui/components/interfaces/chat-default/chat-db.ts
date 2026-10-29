@@ -379,14 +379,14 @@ export interface ILocalChatState {
 	appId: string;
 	eventId: string;
 	sessionId: string;
-	localState: Record<string, any>;
+	localState: Record<string, unknown>;
 }
 
 export interface IGlobalState {
 	id: string;
 	appId: string;
 	eventId: string;
-	globalState: Record<string, any>;
+	globalState: Record<string, unknown>;
 }
 
 const chatDb = new Dexie("Chat-History") as Dexie & {

@@ -485,8 +485,9 @@ impl ModelFactory {
     /// the caller's execution environment and `invoke` and agents alike send media the way the
     /// provider's client, API surface and endpoint read it. A server run also fetches the links
     /// into the object store of its storage credentials.
-    /// A private Bit behind the relay downloads nothing here: its hop carries links as the run
-    /// holds them, and the API resolves them for the provider.
+    /// A private Bit behind the relay carries links as the run holds them, and the API resolves
+    /// them for the provider; only the media of a host that is neither public nor the run's
+    /// storage is sent inline from here.
     /// MLX hands out its cached runtime itself, whose identity `mlx_e2e` asserts.
     pub async fn build(
         &self,
@@ -511,16 +512,25 @@ impl ModelFactory {
         let model = self
             .build_inner(bit, app_state.clone(), access_token, usage_context)
             .await?;
-        if relayed || bit.is_mlx_model() {
+        if bit.is_mlx_model() {
             return Ok(model);
         }
         let Some(provider) = bit.try_to_provider() else {
             return Ok(model);
         };
+        let reader = MediaReader::for_provider(&provider);
+        if relayed {
+            return Ok(Arc::new(RemoteMediaModel::relayed(
+                model,
+                app_state.execution_environment,
+                reader,
+                own_storage(&app_state).await,
+            )));
+        }
         Ok(Arc::new(RemoteMediaModel::direct(
             model,
             app_state.execution_environment,
-            MediaReader::for_provider(&provider),
+            reader,
             local_storage_roots(&app_state).await,
             own_storage(&app_state).await,
         )))
@@ -1810,55 +1820,93 @@ mod tests {
             )
         }
 
+        /// The relay fetches no host that is neither public nor the platform's storage, and no
+        /// provider reaches one, so the run sends the media there as data and every other link
+        /// as it holds it.
         #[tokio::test]
-        async fn a_relayed_bit_sends_links_unchanged_and_the_run_downloads_nothing() {
-            let (media, hits) = media_host().await;
-            let question = question_with_links(&media);
+        async fn a_relayed_bit_sends_its_private_media_as_data() {
+            use crate::models::media::tests::{PNG, Reply, serve};
+            use flow_like_model_provider::history::ImageUrl;
+            use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
+            const PDF: &[u8] = b"%PDF-1.7 relayed report";
+            const PUBLIC_PDF: &str = "https://93.184.216.34/brief.pdf";
 
+            let intranet = serve(vec![
+                ("/report.pdf", Reply::ok(PDF)),
+                ("/photo.png", Reply::ok(PNG)),
+                ("/clip.mp4", Reply::ok(b"mp4")),
+            ])
+            .await;
+            let document = |url: String| Content::Document {
+                content_type: ContentType::DocumentUrl,
+                document_url: url,
+                media_type: Some("application/pdf".to_string()),
+                additional_params: None,
+            };
+            let question = question(
+                "Summarise these.",
+                vec![
+                    document(intranet.url("/report.pdf?X-Amz-Signature=secret")),
+                    Content::Image {
+                        content_type: ContentType::ImageUrl,
+                        image_url: ImageUrl {
+                            url: intranet.url("/photo.png"),
+                            detail: None,
+                            media_type: None,
+                            additional_params: None,
+                        },
+                    },
+                    document(PUBLIC_PDF.to_string()),
+                    Content::Video {
+                        content_type: ContentType::VideoUrl,
+                        video_url: intranet.url("/clip.mp4"),
+                        media_type: Some("video/mp4".to_string()),
+                        additional_params: None,
+                    },
+                ],
+            );
             let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
             let callback = format!("http://{}", listener.local_addr().unwrap());
             let mut state = memory_state();
             state.custom_bit_relay = relay(&callback, &["my-claude"]);
-            let bit = private_bit("my-claude", "custom:anthropic", "https://llm.owner.example");
+            let mut bit = private_bit("my-claude", "custom:anthropic", "https://llm.owner.example");
+            bit.parameters["provider"]["params"] = json!({"model_id": "upstream-model"});
 
             let request = captured_call_with(state, &bit, listener, &question).await;
 
-            assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+            assert_eq!(
+                intranet.hits(),
+                2,
+                "the private PDF and photo are fetched; Anthropic reads no video"
+            );
             let parts = sent_parts(&request);
-            assert!(
-                parts.iter().any(|part| part["document_url"]
-                    == format!("{media}/report.pdf?X-Amz-Signature=secret")),
-                "{parts:?}"
+            let documents: Vec<_> = parts
+                .iter()
+                .filter_map(|part| part["document_url"].as_str())
+                .collect();
+            assert_eq!(
+                documents,
+                [
+                    format!("data:application/pdf;base64,{}", STANDARD.encode(PDF)).as_str(),
+                    PUBLIC_PDF,
+                ]
             );
-            assert!(
-                parts
-                    .iter()
-                    .any(|part| part["video_url"] == format!("{media}/clip.mp4")),
-                "{parts:?}"
-            );
+            for (key, link) in [
+                (
+                    "/image_url/url",
+                    format!("data:image/png;base64,{}", STANDARD.encode(PNG)),
+                ),
+                ("/video_url", intranet.url("/clip.mp4")),
+            ] {
+                assert!(
+                    parts.iter().any(|part| part.pointer(key)
+                        == Some(&flow_like_types::Value::String(link.clone()))),
+                    "{key}: {parts:?}"
+                );
+            }
             let body = request.body.to_string();
+            assert!(!body.contains("X-Amz-Signature"), "{body}");
             assert!(!body.contains("attachment omitted"), "{body}");
-            assert!(!body.contains("data:"), "{body}");
-
-            let direct = private_bit("my-claude", "custom:anthropic", "https://llm.owner.example");
-            let model = ModelFactory::new()
-                .build(&direct, Arc::new(memory_state()), None, None)
-                .await
-                .expect("the model builds without reaching the network");
-            let error = model
-                .invoke(&question, None)
-                .await
-                .expect_err("the PDF its provider needs inline cannot be fetched")
-                .to_string();
-            assert!(
-                hits.load(std::sync::atomic::Ordering::SeqCst) > 0,
-                "a direct call fetches the PDF its provider needs inline"
-            );
-            assert!(
-                error.contains("document (application/pdf) at host '127.0.0.1'"),
-                "{error}"
-            );
-            assert!(!error.contains("X-Amz-Signature"), "{error}");
         }
 
         #[tokio::test]

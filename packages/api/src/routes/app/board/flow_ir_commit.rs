@@ -790,7 +790,8 @@ pub async fn flow_ir_commit_disposition(
         (status = 200, description = "Exact retained FlowScript command batch apply result", body = Object),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly."),
+        (status = 503, description = "The event triggers that run this board could not be switched to run as you first (code SINK_REBIND_UNAVAILABLE). Nothing was written and the claim remains retryable; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(
@@ -1157,7 +1158,7 @@ pub async fn apply_flow_ir_commit(
     // therefore observe either neither or both, including after this process exits immediately
     // after persistence.
 
-    super::sink_rebind::rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
+    super::sink_rebind::try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
     mutation_guard.ensure_held()?;
     let saved = super::scoring::save_board_and_refresh_summary(&state, &app_id, &board).await;
     let put = match saved {

@@ -6,7 +6,10 @@ use crate::{
     error::ApiError,
     middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::board::{secrets::filter_board_secrets, sink_rebind::rebind_latest_sinks},
+    routes::app::board::{
+        secrets::filter_board_secrets,
+        sink_rebind::{rebind_latest_sinks, try_rebind_latest_sinks},
+    },
     state::{AppState, BoardMutationGuard},
 };
 use axum::{
@@ -202,7 +205,8 @@ async fn record_board_score(state: &AppState, app_id: &str, board: &Board) {
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 409, description = "The board already exists and the request carried a `template` (code BOARD_EXISTS). Nothing was written; edit an existing board's graph with board commands instead."),
-        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly."),
+        (status = 503, description = "The event triggers that run this board could not be switched to run as you first (code SINK_REBIND_UNAVAILABLE). Nothing was written; retry shortly.")
     )
 )]
 #[tracing::instrument(
@@ -221,7 +225,7 @@ pub async fn upsert_board(
 
     let mut app = state.master_app(&sub, &app_id, &state).await?;
     let template = params.template.take();
-    rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
+    try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
     let instantiated = create_missing_board(
         &state,
         &mut app,
@@ -239,16 +243,20 @@ pub async fn upsert_board(
     rebind_latest_sinks(&state, &app_id, &board.id, &user).await;
 
     audit_branch!(state, user, app_id, "board.update", "Board", board.id);
-    let response_board = instantiated.then(|| {
-        let mut response_board = (*board).clone();
-        filter_board_secrets(&mut response_board);
-        response_board
-    });
     Ok(Json(UpsertBoardResponse {
         id: board.id.clone(),
         updated_at: board.updated_at,
-        board: response_board,
+        board: instantiated_board(instantiated, &board),
     }))
+}
+
+/// The graph of a board just instantiated from a template, without its secrets.
+fn instantiated_board(instantiated: bool, board: &Board) -> Option<Board> {
+    instantiated.then(|| {
+        let mut response_board = board.clone();
+        filter_board_secrets(&mut response_board);
+        response_board
+    })
 }
 
 #[cfg(test)]

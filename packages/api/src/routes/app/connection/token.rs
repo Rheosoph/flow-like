@@ -2,7 +2,7 @@ use crate::{
     app_connection_jwt::{
         self, AppConnectionJwtParams, MAX_APP_CONNECTION_CHAIN, MAX_APP_CONNECTION_TTL_SECONDS,
     },
-    entity::{app_connection, sea_orm_active_enums::AppConnectionStatus},
+    entity::{app_connection, execution_run, sea_orm_active_enums::AppConnectionStatus},
     error::ApiError,
     execution::subject::{
         account_user_id, hosted_connection_subject, unattended_connection_subject,
@@ -16,7 +16,7 @@ use axum::{
     extract::{Path, State},
 };
 use sea_orm::sea_query::ExprTrait;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -26,16 +26,11 @@ pub struct CreateAppConnectionTokenRequest {
     pub ttl_seconds: Option<i64>,
     /// Run the token is minted for. Used when the caller authenticates with a
     /// user token (local/desktop executions) instead of an executor JWT: the
-    /// run row — verified to belong to this app — supplies the app chain and
-    /// process correlation so cross-app cases stay connected.
+    /// run row — verified to be a run of this app the caller started — supplies
+    /// the app chain and process correlation so cross-app cases stay connected.
+    /// Any other run id is ignored. It never changes who the token names.
     #[serde(default)]
     pub run_id: Option<String>,
-    /// No person started the run, such as a schedule on a desktop that mints with its user's
-    /// own token: the token then names no person, only a placeholder of the run, and the
-    /// connected app treats the call like one from a run nobody triggered. It can only take
-    /// away the person the token would pass on.
-    #[serde(default)]
-    pub unattended: bool,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -52,7 +47,7 @@ pub struct CreateAppConnectionTokenResponse {
     post,
     path = "/apps/{app_id}/connections/{target_app_id}/token",
     tag = "team",
-    description = "Mint a short-lived app-to-app token to call a connected app. The token pins both the origin and the target app and expires quickly. When a signed-in person started the run, the connected app acts on their behalf. For a run nobody started, such as a scheduled or webhook run, and for an anonymous visitor of a hosted page, the token names no person. A run on a device that mints with its user's own sign-in says it was not started by a person with `unattended: true`.",
+    description = "Mint a short-lived app-to-app token to call a connected app. The token pins both the origin and the target app and expires quickly. When a signed-in person started the run, the connected app acts on their behalf: with their own role there, limited by the connection's role, or only running its events when they are not a member. For a run on the hub that nobody started, such as a scheduled or webhook run, and for an anonymous visitor of a hosted page, the token names no person. A token minted with a person's own sign-in or personal access token, as runs on a device are, always names that person, whatever their role in the origin app; to act for the app without a person, run the flow on the hub. A claimed `run_id` counts only for a run of the origin app the caller started.",
     params(
         ("app_id" = String, Path, description = "Application ID (the origin app)"),
         ("target_app_id" = String, Path, description = "The connected app to call")
@@ -128,14 +123,9 @@ pub async fn create_app_connection_token(
     } else if let Some(claimed_run_id) = payload.as_ref().and_then(|p| p.run_id.clone()) {
         // Local/desktop executions authenticate with the user's token, so the
         // run context can't come from an executor JWT. The claimed run id is
-        // only honored after verifying the run belongs to this app; the run
+        // only honored for a run of this app the caller started; the run
         // row is then the source of truth for chain and correlation.
-        use crate::entity::execution_run;
-        match execution_run::Entity::find_by_id(&claimed_run_id)
-            .filter(execution_run::Column::AppId.eq(&app_id))
-            .one(&state.db)
-            .await?
-        {
+        match claimed_run(&state.db, &app_id, &user, &claimed_run_id).await? {
             Some(run) => {
                 let keys = run
                     .correlation_keys
@@ -160,7 +150,7 @@ pub async fn create_app_connection_token(
                 tracing::warn!(
                     run_id = %claimed_run_id,
                     app_id = %app_id,
-                    "Claimed run id not found for this app — minting connection token without run correlation"
+                    "Claimed run id is not a run of this app the caller started — minting connection token without run correlation"
                 );
                 (None, Vec::new(), None)
             }
@@ -170,8 +160,7 @@ pub async fn create_app_connection_token(
     };
     // The person who started the run is passed through the whole chain (A -> B -> C),
     // so downstream apps act for them even if they are not a member.
-    let unattended = unattended_run(payload.as_deref(), run_id.as_deref());
-    let sub = connection_subject(&user, permission.effective_user_id().ok(), unattended);
+    let sub = connection_subject(&user, permission.effective_user_id().ok());
     // Reject cycles (A -> B -> A) before extending the chain: revisiting an app
     // already in the chain would let calls loop indefinitely across apps.
     if app_chain.contains(&app_id) {
@@ -212,33 +201,40 @@ pub async fn create_app_connection_token(
     }))
 }
 
-/// The run a caller declared that nobody started, named by the id the server holds for it,
-/// `run_id`, or else a fresh one; never by an id the caller claimed without proof. `None`
-/// when the caller declared nothing.
-fn unattended_run(
-    request: Option<&CreateAppConnectionTokenRequest>,
-    run_id: Option<&str>,
-) -> Option<String> {
-    request
-        .filter(|request| request.unattended)
-        .map(|_| run_id.map_or_else(flow_like_types::create_id, str::to_owned))
+/// The run `run_id` the caller claimed, when it is a run of `app_id` the caller started: a
+/// person's own run, or one their API key started. Any other run lends a token neither its id
+/// nor its chain or case. A run on the hub claims nothing; its executor token names its run.
+async fn claimed_run<C: ConnectionTrait>(
+    db: &C,
+    app_id: &str,
+    user: &AppUser,
+    run_id: &str,
+) -> Result<Option<execution_run::Model>, DbErr> {
+    let started_by_caller = match user {
+        AppUser::OpenID(person) => execution_run::Column::UserId.eq(person.sub.as_str()),
+        AppUser::PAT(person) => execution_run::Column::UserId.eq(person.sub.as_str()),
+        AppUser::APIKey(key) => execution_run::Column::TechnicalUserId.eq(key.key_id.as_str()),
+        AppUser::Executor(_) | AppUser::ConnectedApp(_) | AppUser::Unauthorized => {
+            return Ok(None);
+        }
+    };
+    execution_run::Entity::find_by_id(run_id)
+        .filter(execution_run::Column::AppId.eq(app_id))
+        .filter(started_by_caller)
+        .one(db)
+        .await
 }
 
 /// The subject a connection token passes on, which the connected app acts for when it
 /// names an account. A run a person started passes that person, a signed-in visitor of a
-/// hosted page included. A run nobody started passes a placeholder of the run, so the
-/// connected app never takes the user the event runs as for a person: its executor token
-/// says so, or the caller does with `declared_unattended`, the run it mints for, which can
-/// only take a person away. An anonymous visitor's run passes a pseudonym of the run, so the
-/// connected app never learns who the visitor is.
-fn connection_subject(
-    user: &AppUser,
-    effective_user_id: Option<String>,
-    declared_unattended: Option<String>,
-) -> Option<String> {
-    if let Some(run_id) = declared_unattended {
-        return Some(unattended_connection_subject(&run_id));
-    }
+/// hosted page included, and a person minting with their own sign-in or personal access
+/// token is always named, whatever their role in the origin app: the connected app then
+/// holds the call to their own standing there. Only a run on the hub that nobody started
+/// passes a placeholder of the run, so the connected app never takes the user the event
+/// runs as for a person; its signed executor token alone says so, never a request. An
+/// anonymous visitor's run passes a pseudonym of the run, so the connected app never learns
+/// who the visitor is.
+fn connection_subject(user: &AppUser, effective_user_id: Option<String>) -> Option<String> {
     let AppUser::Executor(executor) = user else {
         return effective_user_id;
     };
@@ -257,7 +253,8 @@ fn connection_subject(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::middleware::jwt::{ConnectedAppUser, ExecutorUser};
+    use crate::middleware::jwt::{ApiKey, ConnectedAppUser, ExecutorUser, OpenIDUser, PATUser};
+    use crate::permission::role_permission::has_role_permission;
 
     fn run(sub: &str) -> ExecutorUser {
         ExecutorUser {
@@ -331,81 +328,101 @@ mod tests {
             ),
         ] {
             let effective_user_id = Some(executor.sub.clone());
-            let minted = connection_subject(&AppUser::Executor(executor), effective_user_id, None);
+            let minted = connection_subject(&AppUser::Executor(executor), effective_user_id);
             assert_eq!(minted.as_deref(), Some(subject), "{case}");
             assert_eq!(person_in_target(minted).as_deref(), person, "{case}");
         }
-        let minted = connection_subject(&AppUser::Executor(hosted(anonymous)), None, None).unwrap();
+        let minted = connection_subject(&AppUser::Executor(hosted(anonymous)), None).unwrap();
         assert_eq!(account_user_id(&minted), None);
         assert_eq!(
-            connection_subject(&AppUser::Executor(run("user-1")), None, None),
+            connection_subject(&AppUser::Executor(run("user-1")), None),
             None
         );
         assert_eq!(
-            connection_subject(&AppUser::Unauthorized, Some("user-1".into()), None).as_deref(),
+            connection_subject(&AppUser::Unauthorized, Some("user-1".into())).as_deref(),
             Some("user-1")
         );
     }
 
-    /// A run that says nobody started it, such as a desktop schedule minting with its user's
-    /// own token, passes no person whoever the caller is; the flag can only take a person
-    /// away, never name one.
-    #[test]
-    fn a_run_declared_unattended_passes_no_person() {
-        let desktop_user = AppUser::OpenID(crate::middleware::jwt::OpenIDUser {
-            sub: "user-1".into(),
+    fn desktop_user(sub: &str) -> AppUser {
+        AppUser::OpenID(OpenIDUser {
+            sub: sub.into(),
             access_token: "token".into(),
-        });
-        let pat_user = AppUser::PAT(crate::middleware::jwt::PATUser {
-            pat: "pat_1.secret".into(),
-            sub: "user-1".into(),
-        });
-        for (case, user) in [
-            ("desktop session", desktop_user),
-            ("trigger token", pat_user),
-            ("person's executor", AppUser::Executor(run("user-1"))),
-            (
-                "unattended executor",
-                AppUser::Executor(ExecutorUser {
-                    unattended: true,
-                    ..run("run-as-1")
-                }),
-            ),
-        ] {
-            let minted = connection_subject(&user, Some("user-1".into()), Some("local-run".into()));
-            assert_eq!(minted.as_deref(), Some("run:local-run"), "{case}");
-            assert_eq!(person_in_target(minted), None, "{case}");
-        }
-
-        let request: CreateAppConnectionTokenRequest =
-            serde_json::from_value(serde_json::json!({"run_id": "local-run"})).unwrap();
-        assert!(!request.unattended, "a person's run by default");
-        let request: CreateAppConnectionTokenRequest =
-            serde_json::from_value(serde_json::json!({"unattended": true})).unwrap();
-        assert!(request.unattended);
+        })
     }
 
-    /// The placeholder names only a run the server knows, or a fresh id: never an unverified
-    /// run id the caller claimed.
+    fn pat_user(sub: &str) -> AppUser {
+        AppUser::PAT(PATUser {
+            pat: "pat_1.secret".into(),
+            sub: sub.into(),
+        })
+    }
+
+    fn api_key(key_id: &str) -> AppUser {
+        AppUser::APIKey(ApiKey {
+            key_id: key_id.into(),
+            api_key: "secret".into(),
+            app_id: "app-1".into(),
+            creator_user_id: Some("user-1".into()),
+        })
+    }
+
+    /// A request from a desktop that still says nobody started its run.
+    fn still_declaring_unattended() -> CreateAppConnectionTokenRequest {
+        serde_json::from_value(serde_json::json!({
+            "run_id": "local-run",
+            "ttl_seconds": 600,
+            "unattended": true,
+        }))
+        .unwrap()
+    }
+
+    /// A desktop that still sends `unattended` is not refused, and the field is dropped as the
+    /// request is read, so nothing of it is left for the handler to act on.
     #[test]
-    fn the_placeholder_never_carries_an_unverified_run_id() {
-        let declared = CreateAppConnectionTokenRequest {
-            unattended: true,
-            run_id: Some("claimed-run".into()),
-            ..Default::default()
-        };
+    fn a_request_still_declaring_a_run_unattended_is_read_without_it() {
+        let plain: CreateAppConnectionTokenRequest =
+            serde_json::from_value(serde_json::json!({"run_id": "local-run", "ttl_seconds": 600}))
+                .unwrap();
         assert_eq!(
-            unattended_run(Some(&declared), Some("verified-run")).as_deref(),
-            Some("verified-run")
+            format!("{:?}", still_declaring_unattended()),
+            format!("{plain:?}")
         );
-        let fresh = unattended_run(Some(&declared), None).unwrap();
-        assert!(!fresh.is_empty() && fresh != "claimed-run");
-        let person = CreateAppConnectionTokenRequest {
-            run_id: Some("verified-run".into()),
-            ..Default::default()
-        };
-        assert_eq!(unattended_run(Some(&person), Some("verified-run")), None);
-        assert_eq!(unattended_run(None, Some("verified-run")), None);
+    }
+
+    /// A person minting with their own sign-in or personal access token, as a run on a device
+    /// does, is always named, so the connected app holds the call to their own standing there.
+    /// Neither their role in the origin app, Owner included, nor a request that still says
+    /// nobody started the run takes them off the token: the handler names the subject from
+    /// the caller alone. Only a run on the hub acts for the app without a person.
+    #[test]
+    fn a_person_is_named_whatever_their_role_or_request() {
+        let request = still_declaring_unattended();
+        assert_eq!(request.run_id.as_deref(), Some("local-run"));
+        let writer = RolePermissions::ExecuteEvents
+            | RolePermissions::ExecuteBoards
+            | RolePermissions::WriteEvents
+            | RolePermissions::WriteBoards;
+        for (case, role) in [
+            ("runs events only", RolePermissions::ExecuteEvents),
+            ("writes events and boards", writer),
+            ("admin", RolePermissions::Admin),
+            ("owner", RolePermissions::Owner),
+        ] {
+            assert!(
+                has_role_permission(&role, RolePermissions::ExecuteEvents),
+                "{case} may mint"
+            );
+            for user in [desktop_user("user-1"), pat_user("user-1")] {
+                let subject = connection_subject(&user, user.effective_user_id().ok());
+                assert_eq!(subject.as_deref(), Some("user-1"), "{case}");
+                assert_eq!(
+                    person_in_target(subject).as_deref(),
+                    Some("user-1"),
+                    "{case}"
+                );
+            }
+        }
 
         let source = include_str!("token.rs");
         let handler = source
@@ -413,12 +430,131 @@ mod tests {
             .and_then(|(_, rest)| rest.split_once("\n}\n"))
             .map(|(body, _)| body)
             .unwrap();
-        let chain = handler
-            .find("let (run_id, mut app_chain, correlation)")
+        assert!(
+            handler.contains(
+                "let sub = connection_subject(&user, permission.effective_user_id().ok());"
+            ),
+            "the subject comes from the caller alone, never from its role or its request"
+        );
+    }
+
+    /// A run on the hub says whether a person started it only in its signed executor token:
+    /// that claim alone takes the person off the token, and the placeholder names the signed
+    /// run, never the run a request names or says nobody started.
+    #[test]
+    fn an_executor_claim_wins_over_its_request() {
+        let request = still_declaring_unattended();
+        assert_eq!(request.run_id.as_deref(), Some("local-run"));
+        for (claimed, subject, person) in
+            [(false, "user-1", Some("user-1")), (true, "run:run-1", None)]
+        {
+            let user = AppUser::Executor(ExecutorUser {
+                unattended: claimed,
+                ..run("user-1")
+            });
+            let minted = connection_subject(&user, user.effective_user_id().ok());
+            assert_eq!(minted.as_deref(), Some(subject), "claimed {claimed}");
+            assert_eq!(
+                person_in_target(minted).as_deref(),
+                person,
+                "claimed {claimed}"
+            );
+        }
+    }
+
+    /// A SQLite stand-in for the runs a caller may claim.
+    async fn runs() -> sea_orm::DatabaseConnection {
+        use sea_orm::{
+            ConnectOptions, Database, DatabaseBackend, Schema, Statement, sea_query::Table,
+        };
+        let mut options = ConnectOptions::new("sqlite::memory:");
+        options.max_connections(1);
+        let db = Database::connect(options).await.unwrap();
+        db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+            .await
             .unwrap();
-        let minted = handler
-            .find("unattended_run(payload.as_deref(), run_id.as_deref())")
+        let source =
+            Schema::new(db.get_database_backend()).create_table_from_entity(execution_run::Entity);
+        let mut table = Table::create();
+        table.table(source.get_table_name().unwrap().clone());
+        for column in source.get_columns() {
+            table.col(column.clone());
+        }
+        db.execute(&table).await.unwrap();
+        let now = chrono::Utc::now().fixed_offset();
+        for (id, app_id, user_id, key_id) in [
+            ("person-run", "app-1", Some("user-1"), None),
+            ("key-run", "app-1", Some("user-2"), Some("key-1")),
+            ("other-app-run", "app-2", Some("user-1"), None),
+        ] {
+            db.execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                r#"INSERT INTO public."ExecutionRun" (id,"boardId","logLevel","inputPayloadLen","outputPayloadLen",progress,"appId","userId","technicalUserId","createdAt","updatedAt",status,mode,"runVariant") VALUES (?,'board-1',0,0,0,0,?,?,?,?,?,'RUNNING','LOCAL','PRIMARY')"#,
+                [
+                    id.into(),
+                    app_id.into(),
+                    user_id.map(str::to_owned).into(),
+                    key_id.map(str::to_owned).into(),
+                    now.into(),
+                    now.into(),
+                ],
+            ))
+            .await
             .unwrap();
-        assert!(chain < minted);
+        }
+        db
+    }
+
+    /// A claimed run lends a token its id, chain and case only when the caller started it in
+    /// the origin app: a person their own runs, an API key the runs it started. Another
+    /// person's or key's run, or a run of another app, is not found, and a run on the hub
+    /// claims none.
+    #[flow_like_types::tokio::test]
+    async fn a_claimed_run_must_be_one_the_caller_started() {
+        let db = runs().await;
+        for (case, user, claimed, found) in [
+            ("own run", desktop_user("user-1"), "person-run", true),
+            ("own run with a PAT", pat_user("user-1"), "person-run", true),
+            (
+                "another person's run",
+                desktop_user("user-3"),
+                "person-run",
+                false,
+            ),
+            (
+                "another person's run with a PAT",
+                pat_user("user-3"),
+                "person-run",
+                false,
+            ),
+            (
+                "own run of another app",
+                desktop_user("user-1"),
+                "other-app-run",
+                false,
+            ),
+            ("missing run", desktop_user("user-1"), "missing-run", false),
+            ("the key's run", api_key("key-1"), "key-run", true),
+            ("another key's run", api_key("key-2"), "key-run", false),
+            (
+                "a person's run with a key",
+                api_key("key-1"),
+                "person-run",
+                false,
+            ),
+            (
+                "a hub run",
+                AppUser::Executor(run("user-1")),
+                "person-run",
+                false,
+            ),
+        ] {
+            let honoured = claimed_run(&db, "app-1", &user, claimed).await.unwrap();
+            assert_eq!(
+                honoured.map(|row| row.id).as_deref(),
+                found.then_some(claimed),
+                "{case}"
+            );
+        }
     }
 }

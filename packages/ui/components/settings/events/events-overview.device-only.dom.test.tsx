@@ -7,6 +7,7 @@ import {
 	advance,
 	byRole,
 	click,
+	fire,
 	inPortal,
 	installDom,
 	queryByRole,
@@ -36,6 +37,7 @@ afterEach(async () => {
 afterAll(dom.restore);
 
 const APP = "app_invoice_ai";
+const NAMELESS = "user_nameless";
 const HUB_ON = { standalone: { enabled: true } } as never;
 const at = { secs_since_epoch: 0, nanos_since_epoch: 0 };
 
@@ -68,6 +70,9 @@ const EVENTS = [
 const MAPPING = {
 	events_cron: { withSink: ["cron"], eventTypes: ["cron"] },
 } as never;
+const CALLABLE_MAPPING = {
+	events_cron: { withSink: ["rest", "mcp"], eventTypes: ["rest", "mcp"] },
+} as never;
 
 function RouterFrame({ children }: Readonly<{ children: ReactNode }>) {
 	const router = useMemo(
@@ -93,6 +98,7 @@ function RouterFrame({ children }: Readonly<{ children: ReactNode }>) {
 async function mountList(
 	events: IEvent[] = EVENTS,
 	sinkStatus: (eventId: string) => IEventSinkStatus = () => ({ active: false }),
+	eventMapping: never = MAPPING,
 ) {
 	const upserts: Array<{ event: IEvent; pat?: string }> = [];
 	const repairs: Array<{ appId: string; eventId: string }> = [];
@@ -108,7 +114,7 @@ async function mountList(
 					events={events}
 					boardsMap={new Map([["board_0", "Digest flow"]])}
 					appId={APP}
-					eventMapping={MAPPING}
+					eventMapping={eventMapping}
 					onEdit={() => undefined}
 					onDelete={(eventId) => deleted.push(eventId)}
 					onNavigateToNode={() => undefined}
@@ -129,7 +135,11 @@ async function mountList(
 					updateUser: async () => undefined,
 					getPATs: async () => [],
 					lookupUsers: async (ids: string[]) =>
-						ids.map((id) => ({ id, name: `Person ${id}` })),
+						ids.map((id) =>
+							id === NAMELESS
+								? { id, username: "google_110293847561" }
+								: { id, name: `Person ${id}` },
+						),
 				},
 				boardState: {
 					getBoardSummaries: async () => [],
@@ -247,6 +257,8 @@ const toastTitles = (from: number) =>
 describe("whom a hub trigger runs as in the Events list", () => {
 	const remote = (id: string, name: string) =>
 		({ ...cron(id, name, false), execution_mode: "Remote" }) as IEvent;
+	const callable = (id: string, eventType: string, exposure: string) =>
+		({ ...remote(id, id), event_type: eventType, exposure }) as IEvent;
 	const STATUSES: Record<string, IEventSinkStatus> = {
 		evt_paused: { active: false, run_as_user_id: null },
 		evt_unbound: { active: true, run_as_user_id: null },
@@ -269,19 +281,31 @@ describe("whom a hub trigger runs as in the Events list", () => {
 	};
 	const runAs = (row: HTMLElement) =>
 		row.querySelector<HTMLElement>("[data-run-as]");
+	/** The chip's words; a bound chip's avatar initials are not part of them. */
+	const runAsText = (row: HTMLElement) => {
+		const chip = runAs(row);
+		return (chip?.querySelector("[data-run-as-label]") ?? chip)?.textContent;
+	};
+	const avatar = (row: HTMLElement) =>
+		runAs(row)?.querySelector("[data-slot='avatar']") ?? null;
+	const tooltip = async (row: HTMLElement) => {
+		const chip = runAs(row);
+		if (!chip) throw new Error("no run-as chip");
+		const view = chip.ownerDocument.defaultView as unknown as typeof globalThis;
+		await fire(chip, new view.FocusEvent("focusin", { bubbles: true }));
+		const id = chip.getAttribute("aria-describedby");
+		return id ? chip.ownerDocument.getElementById(id)?.textContent : undefined;
+	};
 
 	test("names the user, a trigger without one, a legacy token and the paused one", async () => {
 		const view = await mountRunAs();
-		expect(runAs(view.row("evt_bound"))?.textContent).toBe(
-			"Runs as Person user_ada",
-		);
-		expect(runAs(view.row("evt_unbound"))?.textContent).toBe(
-			"Runs without a user",
-		);
-		expect(runAs(view.row("evt_legacy"))?.textContent).toBe(
+		expect(runAsText(view.row("evt_bound"))).toBe("Runs as Person user_ada");
+		expect(avatar(view.row("evt_bound"))?.textContent).toBe("PA");
+		expect(runAsText(view.row("evt_unbound"))).toBe("Runs without a user");
+		expect(runAsText(view.row("evt_legacy"))).toBe(
 			"Runs with a saved token until someone saves or turns it on",
 		);
-		expect(runAs(view.row("evt_paused"))?.textContent).toBe(
+		expect(runAsText(view.row("evt_paused"))).toBe(
 			"Paused: the person it ran as can no longer run it",
 		);
 		expect(view.container.textContent).not.toContain("left");
@@ -328,7 +352,7 @@ describe("whom a hub trigger runs as in the Events list", () => {
 		);
 		await advance(30);
 		await view.settle();
-		expect(runAs(view.row("evt_local_hub"))?.textContent).toBe(
+		expect(runAsText(view.row("evt_local_hub"))).toBe(
 			"Runs as Person user_ada",
 		);
 	});
@@ -350,9 +374,10 @@ describe("whom a hub trigger runs as in the Events list", () => {
 		}));
 		await advance(30);
 		await view.settle();
-		expect(runAs(view.row("evt_hosted"))?.textContent).toBe(
+		expect(runAsText(view.row("evt_hosted"))).toBe(
 			"Visitors use Person user_ada's access to run events",
 		);
+		expect(avatar(view.row("evt_hosted"))).not.toBeNull();
 	});
 
 	test("an Internal page or an ontology action has no visitors, even with hosting switched on", async () => {
@@ -385,11 +410,58 @@ describe("whom a hub trigger runs as in the Events list", () => {
 		});
 		await advance(30);
 		await view.settle();
-		expect(runAs(view.row("evt_internal"))?.textContent).toBe(
-			"Runs as Person user_ada",
-		);
+		expect(runAsText(view.row("evt_internal"))).toBe("Runs as Person user_ada");
 		expect(runAs(view.row("evt_action"))).toBeNull();
 		expect(asked).not.toContain("evt_action");
+	});
+
+	test("a REST or MCP Event says whom its public and internal calls run as", async () => {
+		const view = await mountList(
+			[
+				callable("evt_public_rest", "rest", "PUBLIC"),
+				callable("evt_internal_mcp", "mcp", "INTERNAL"),
+			],
+			() => ({ active: true, run_as_user_id: "user_ada" }),
+			CALLABLE_MAPPING,
+		);
+		await advance(30);
+		await view.settle();
+		const publicRest = view.row("evt_public_rest");
+		expect(runAsText(publicRest)).toBe("Public calls run as Person user_ada");
+		expect(avatar(publicRest)).not.toBeNull();
+		expect(await tooltip(publicRest)).toContain(
+			"Callers signed in to Flow-Like run as themselves.",
+		);
+		const internalMcp = view.row("evt_internal_mcp");
+		expect(runAsText(internalMcp)).toBe("Runs as the calling person");
+		expect(avatar(internalMcp)).toBeNull();
+		expect(await tooltip(internalMcp)).toContain(
+			"Calls from other apps that pass no person run as Person user_ada.",
+		);
+	});
+
+	test("a run-as user without a name reads as a member, never as an account id", async () => {
+		const view = await mountList(
+			[
+				callable("evt_public_rest", "rest", "PUBLIC"),
+				callable("evt_internal_mcp", "mcp", "INTERNAL"),
+			],
+			() => ({ active: true, run_as_user_id: NAMELESS }),
+			CALLABLE_MAPPING,
+		);
+		await advance(30);
+		await view.settle();
+		const publicRest = view.row("evt_public_rest");
+		expect(runAsText(publicRest)).toBe("Runs as a member of this app");
+		expect(avatar(publicRest)).toBeNull();
+		expect(await tooltip(publicRest)).toContain(
+			"Callers signed in to Flow-Like run as themselves.",
+		);
+		expect(await tooltip(view.row("evt_internal_mcp"))).toContain(
+			"Calls from other apps that pass no person run as a member of this app.",
+		);
+		expect(document.body.textContent).not.toContain(NAMELESS);
+		expect(document.body.textContent).not.toContain("google_");
 	});
 });
 

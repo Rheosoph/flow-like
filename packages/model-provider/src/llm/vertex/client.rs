@@ -94,23 +94,20 @@ fn error_message(body: &[u8]) -> String {
 }
 
 impl VertexClient {
-    /// Calls Vertex AI under `egress` and downloads media links under the public policy, or the
-    /// private one when the caller allows private ranges.
+    /// Calls Vertex AI under `egress` and downloads media links under the public policy in every
+    /// mode, as the Gemini client does: `egress` admits the endpoint the Bit's owner configured,
+    /// while a media link comes from the call.
     pub fn new(
         target: Target,
         credentials: Credentials,
         egress: ProviderEgress,
     ) -> anyhow::Result<Self> {
-        let media_egress = match egress {
-            ProviderEgress::Private => ProviderEgress::Private,
-            ProviderEgress::Open | ProviderEgress::Public => ProviderEgress::Public,
-        };
         Ok(Self::with_parts(
             target.base_url(),
             target,
             credentials,
             egress.guard(reqwest::Client::builder()).build()?,
-            MediaResolver::new(media_egress)?,
+            MediaResolver::new(ProviderEgress::Public)?,
         ))
     }
 
@@ -334,13 +331,13 @@ impl CompletionModel for VertexCompletionModel {
 mod tests {
     use super::super::StaticAccessTokenCredentials;
     use super::super::media::fake::{FakeNetwork, public_probe};
-    use super::super::media::{Download, MediaNetwork};
+    use super::super::media::{Download, Kind, MediaItem, MediaNetwork};
     use super::*;
     use crate::llm::CompletionClientDyn;
     use futures::StreamExt;
     use rig::OneOrMany;
     use rig::completion::{AssistantContent, GetTokenUsage, Message};
-    use rig::message::{ImageMediaType, UserContent};
+    use rig::message::{DocumentSourceKind, ImageMediaType, UserContent};
     use rig::streaming::StreamedAssistantContent;
     use serde_json::json;
     use std::collections::HashMap;
@@ -471,6 +468,42 @@ mod tests {
             "{escaped}"
         );
         assert!(client.endpoint(" ", false).is_err());
+    }
+
+    #[tokio::test]
+    async fn media_links_are_downloaded_under_the_public_policy_in_every_mode() {
+        let target = Target {
+            project: "my-project".into(),
+            location: GLOBAL_LOCATION.into(),
+            universe: "googleapis.com".into(),
+        };
+        let scan = MediaItem {
+            kind: Kind::Image,
+            declared: Some("image/png".into()),
+            source: DocumentSourceKind::Url("https://10.0.0.5/scans/cat.png".into()),
+            may_link: false,
+        };
+        for egress in [
+            ProviderEgress::Open,
+            ProviderEgress::Public,
+            ProviderEgress::Private,
+        ] {
+            let credentials = Credentials::from(StaticAccessTokenCredentials {
+                token: TOKEN.into(),
+            });
+            let client = VertexClient::new(target.clone(), credentials, egress).unwrap();
+            let error = client
+                .inner
+                .media
+                .resolve(&scan)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(
+                error.contains("'10.0.0.5' does not resolve to a public address"),
+                "{egress:?}: {error}"
+            );
+        }
     }
 
     #[tokio::test]

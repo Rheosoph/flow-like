@@ -40,6 +40,7 @@ use crate::{
     routes::execution::progress::get_state_store,
     routes::sink::trigger::{
         OAuthTokens, PinnedFire, SinkUse, pin_fire_for, recheck_fire_for, run_oauth_tokens,
+        sign_in_failure,
     },
     state::AppState,
 };
@@ -371,13 +372,16 @@ pub(crate) async fn invoke_resolved_event(
 /// signed-in visitor runs as themselves, like a member who invokes the Event in
 /// the app: their profile and private Bits serve the run, it signs in with the
 /// OAuth tokens the visitor sends and, for any other provider, with the Event's
-/// saved sign-ins, and its callbacks hold the visitor's own standing in the app.
-/// A pause because the Event's run-as user lost their standing does not stop
-/// them. An anonymous visitor runs as the Event's run-as user, checked on every
-/// visit as on every sink fire: that user's profile, private Bits and OAuth
-/// grants serve the run, and its callbacks never exceed that user's role. A
-/// run-as refused on an anonymous visit pauses the Event for every anonymous
-/// visitor and answers 403, never 401.
+/// saved sign-ins while the user they belong to may still run the Event, and its
+/// callbacks hold the visitor's own standing in the app. A pause because the
+/// Event's run-as user lost their standing does not stop them, it only leaves
+/// them without the saved sign-ins. An anonymous visitor runs as the Event's
+/// run-as user, checked on every visit as on every sink fire: that user's
+/// profile, private Bits and OAuth grants serve the run, and its callbacks never
+/// exceed that user's role. A run-as refused on an anonymous visit pauses the
+/// Event for every anonymous visitor and answers 403, never 401. A sign-in saved
+/// with the Event that must be connected again answers 409
+/// `OAUTH_RECONNECT_REQUIRED`, naming its provider only to a signed-in visitor.
 pub(crate) async fn invoke_hosted_event(
     state: AppState,
     app_id: String,
@@ -439,8 +443,9 @@ fn hosted_sink_use(subject: &str) -> SinkUse {
 /// What the Event lends a hosted visit. An anonymous visit runs as the checked run-as user of
 /// the Event's sink: that user's profile and private Bits and the sink's OAuth grants, which
 /// belong to the same user, serve the run once [`HostedInvocation::pin`] fixed what it runs. A
-/// signed-in visit checks no run-as user and may only borrow the sink's saved OAuth sign-ins.
-/// An anonymous visit needs the Event's sink, if it has one, to be on; a signed-in visit is
+/// signed-in visit runs as the visitor and may only borrow the sink's saved OAuth sign-ins,
+/// which [`run_oauth_tokens`] lends only while their user may still run the Event. An
+/// anonymous visit needs the Event's sink, if it has one, to be on; a signed-in visit is
 /// stopped only by a sink a person switched off, not by a release's pause.
 async fn hosted_invocation(
     state: &AppState,
@@ -471,21 +476,25 @@ async fn hosted_invocation(
 }
 
 /// A visit once what it runs is fixed: the draft a Latest target runs, the OAuth sign-ins it
-/// takes, and for an anonymous visit the profile of the user it runs as.
+/// takes, for an anonymous visit the profile of the user it runs as, and the sink as the visit
+/// borrowed from it, read once more right before the run starts.
 struct PinnedVisit {
     board_etag: Option<String>,
     oauth_tokens: Option<OAuthTokens>,
     profile: Option<serde_json::Value>,
+    sink: event_sink::Model,
 }
 
 impl HostedInvocation {
     /// Fixes what the visit runs before it borrows anything from the Event's sink, as a sink
-    /// fire does: a Latest target pins its draft, and a Page trigger fixed its board's ETag when
-    /// it resolved. The sink read again must still run as the user the visit read, else the
-    /// visit is refused as retryable. An anonymous visit then takes the sink's OAuth grants and
-    /// the profile of the user it runs as. A signed-in visit takes the visitor's own sign-ins,
-    /// `supplied`, and the saved grants of every other provider. `None` when the visit borrows
-    /// nothing: an Event without a sink, or a signed-in visit of a sink without saved sign-ins.
+    /// fire does: a Latest target pins its draft, and a Page trigger bound to a draft runs only
+    /// while that is the draft pinned now. The sink read again must still run as the user the
+    /// visit read, else the visit is refused as retryable. An anonymous visit then takes the
+    /// sink's OAuth grants and the profile of the user it runs as, and learns only that a saved
+    /// sign-in must be connected again, not which. A signed-in visit takes the visitor's own
+    /// sign-ins, `supplied`, and the saved grants of every other provider. `None` when the visit
+    /// borrows nothing: an Event without a sink, or a signed-in visit of a sink without saved
+    /// sign-ins.
     async fn pin(
         &self,
         state: &AppState,
@@ -497,10 +506,15 @@ impl HostedInvocation {
         let Some(sink) = self.sink.clone().filter(|sink| sink_use.borrows_from(sink)) else {
             return Ok(None);
         };
-        let PinnedFire { sink, board_etag } = self.fix(state, sink, page_trigger, target).await?;
+        let PinnedFire {
+            mut sink,
+            board_etag,
+        } = self.fix(state, sink, page_trigger, target).await?;
         let anonymous = uses_sink_credentials(&self.subject);
         let supplied = supplied.filter(|_| !anonymous).cloned();
-        let oauth_tokens = run_oauth_tokens(state, Some(&sink), sink_use, supplied).await?;
+        let oauth_tokens = run_oauth_tokens(state, Some(&mut sink), sink_use, supplied)
+            .await
+            .map_err(|error| sign_in_failure(anonymous, error))?;
         let profile = if anonymous {
             sink_dispatch_profile(state, &sink, self.profile_owner.as_deref()).await
         } else {
@@ -510,10 +524,14 @@ impl HostedInvocation {
             board_etag,
             oauth_tokens,
             profile,
+            sink,
         }))
     }
 
-    /// The sink once the draft the visit runs is fixed, read again as the visit uses it.
+    /// The sink once the draft the visit runs is fixed, read again as the visit uses it. A Page
+    /// trigger bound to a draft, as a dynamic Page action is for its capability's lifetime, pins
+    /// the current draft like any Latest target and runs only if that is its own draft, so an
+    /// older draft never runs with what the sink lends now. A pinned version is immutable.
     async fn fix(
         &self,
         state: &AppState,
@@ -522,17 +540,30 @@ impl HostedInvocation {
         target: &variant::ResolvedTarget,
     ) -> Result<PinnedFire, ApiError> {
         let sink_use = hosted_sink_use(&self.subject);
-        Ok(match page_trigger {
-            None => pin_fire_for(state, sink, target, sink_use).await?,
-            Some(resolved) => PinnedFire {
-                sink: match resolved.board_etag {
-                    Some(_) => recheck_fire_for(state, &sink, sink_use).await?,
-                    None => sink,
-                },
-                board_etag: resolved.board_etag.clone(),
-            },
-        })
+        match page_trigger.map(|resolved| resolved.board_etag.as_deref()) {
+            None => pin_fire_for(state, sink, target, sink_use).await,
+            Some(None) => Ok(PinnedFire {
+                sink,
+                board_etag: None,
+            }),
+            Some(Some(bound)) => {
+                let pinned = pin_fire_for(state, sink, target, sink_use).await?;
+                ensure_page_draft_pinned(bound, pinned.board_etag.as_deref())?;
+                Ok(pinned)
+            }
+        }
     }
+}
+
+/// A Page trigger bound to the draft `bound` runs only while that is the draft the visit
+/// `pinned`: the current one, saved while the sink ran as the user the visit read.
+fn ensure_page_draft_pinned(bound: &str, pinned: Option<&str>) -> Result<(), ApiError> {
+    if pinned == Some(bound.trim()) {
+        return Ok(());
+    }
+    Err(ApiError::bad_request(
+        "The Page changed since it was loaded; reload the Page",
+    ))
 }
 
 pub(crate) fn hosted_subject(
@@ -825,15 +856,16 @@ async fn invoke_event_impl(
         }
         _ => None,
     };
-    let (board_etag, hosted_profile) = match pinned_visit {
+    let (board_etag, hosted_profile, borrowed_sink) = match pinned_visit {
         Some(visit) => {
             params.oauth_tokens = visit.oauth_tokens;
-            (visit.board_etag, visit.profile)
+            (visit.board_etag, visit.profile, Some(visit.sink))
         }
         None => (
             resolved_page_trigger
                 .as_ref()
                 .and_then(|resolved| resolved.board_etag.clone()),
+            None,
             None,
         ),
     };
@@ -1201,6 +1233,12 @@ async fn invoke_event_impl(
         shadow: false,
         artifact: None,
     };
+
+    // A visit that borrowed from the sink reads it again right before the run is recorded:
+    // refreshing the grants can take a while, and a pinned version's sink was not read since.
+    if let (Some(hosted), Some(sink)) = (&hosted_invocation, &borrowed_sink) {
+        recheck_fire_for(&state, sink, hosted_sink_use(&hosted.subject)).await?;
+    }
 
     // For isolated K8s jobs, insert run record and dispatch async
     if query.isolated {
@@ -1805,9 +1843,9 @@ mod tests {
     }
 
     /// A visit fixes what it runs before it takes anything from the sink, as a sink fire does:
-    /// a Latest target pins its draft, a Latest Page trigger fixed its ETag when it resolved and
-    /// reads the sink again, and the run carries that ETag. An anonymous visit then takes the
-    /// sink's OAuth grants and run-as profile; a signed-in visit takes its own sign-ins and the
+    /// a Latest target pins its draft, a Page trigger bound to a draft pins the current one and
+    /// runs only if that is its own, and the run carries that ETag. An anonymous visit then takes
+    /// the sink's OAuth grants and run-as profile; a signed-in visit takes its own sign-ins and the
     /// saved grants of every other provider, and pins nothing when the sink saved none.
     #[test]
     fn a_visit_pins_what_it_runs_before_it_uses_the_sink() {
@@ -1822,12 +1860,23 @@ mod tests {
                 "return Ok(None);",
                 "self.fix(state, sink, page_trigger, target).await?",
                 "let supplied = supplied.filter(|_| !anonymous).cloned();",
-                "run_oauth_tokens(state, Some(&sink), sink_use, supplied).await?",
+                "run_oauth_tokens(state, Some(&mut sink), sink_use, supplied)",
+                ".map_err(|error| sign_in_failure(anonymous, error))?",
                 "sink_dispatch_profile(state, &sink, self.profile_owner.as_deref())",
+                "sink,",
                 "let sink_use = hosted_sink_use(&self.subject);",
-                "None => pin_fire_for(state, sink, target, sink_use).await?,",
-                "Some(_) => recheck_fire_for(state, &sink, sink_use).await?,",
+                "None => pin_fire_for(state, sink, target, sink_use).await,",
+                "Some(None) => Ok(PinnedFire {",
+                "board_etag: None,",
+                "Some(Some(bound)) => {",
+                "let pinned = pin_fire_for(state, sink, target, sink_use).await?;",
+                "ensure_page_draft_pinned(bound, pinned.board_etag.as_deref())?;",
+                "Ok(pinned)",
             ],
+        );
+        assert!(
+            !pin.contains("recheck_fire_for("),
+            "a Page trigger bound to a draft pins the current one instead of trusting its own"
         );
         let invoke = function_body(source, "\nasync fn invoke_event_impl(");
         in_order(
@@ -1846,6 +1895,91 @@ mod tests {
         );
         assert!(invoke.contains("        board_etag,\n"));
         assert!(!invoke.contains("board_etag: None"));
+    }
+
+    /// A Page trigger bound to a draft runs only when that draft is the one the visit pinned, the
+    /// current one, so a Page action sealed for an older draft must be reloaded instead of running
+    /// it with what the sink lends now. A trigger resolved against the current draft runs.
+    #[test]
+    fn a_page_trigger_runs_only_the_draft_the_visit_pinned() {
+        for bound in ["etag-current", " etag-current\n"] {
+            assert!(ensure_page_draft_pinned(bound, Some("etag-current")).is_ok());
+        }
+        for (case, pinned) in [
+            ("an older draft", Some("etag-current")),
+            ("a pinned version", None),
+        ] {
+            let refusal = ensure_page_draft_pinned("etag-sealed", pinned).unwrap_err();
+            assert_eq!(
+                refusal.status(),
+                axum::http::StatusCode::BAD_REQUEST,
+                "{case}"
+            );
+            assert_eq!(
+                refusal.public_message(),
+                Some("The Page changed since it was loaded; reload the Page"),
+                "{case}"
+            );
+        }
+    }
+
+    /// A visit that borrowed from the sink reads it once more after everything else it needs,
+    /// right before the run is recorded and dispatched, so a sink switched off or rebound while
+    /// the visit refreshed the grants stops it, for a pinned version too.
+    #[test]
+    fn a_visit_reads_the_sink_once_more_before_the_run_starts() {
+        let invoke = function_body(production_source(), "\nasync fn invoke_event_impl(");
+        in_order(
+            invoke,
+            "invoke_event_impl",
+            &[
+                "(visit.board_etag, visit.profile, Some(visit.sink))",
+                "sign_execution_jwt_with_page_context(",
+                "let request = DispatchRequest {",
+                "if let (Some(hosted), Some(sink)) = (&hosted_invocation, &borrowed_sink) {",
+                "recheck_fire_for(&state, sink, hosted_sink_use(&hosted.subject)).await?;",
+                "if query.isolated {",
+                "record_invocation_start(&state, &user, execution_audit, hosted_subject).await;",
+                "dispatch_streaming_with_run(",
+                "dispatch_http_sse_with_run(",
+            ],
+        );
+        assert_eq!(invoke.matches("recheck_fire_for(").count(), 1);
+    }
+
+    /// A sign-in saved with the Event that must be connected again answers every visitor 409
+    /// `OAUTH_RECONNECT_REQUIRED`, never a 401 a browser reads as its own session ending. An
+    /// anonymous visitor learns only that its owner must reconnect a service, never which
+    /// provider; a signed-in visitor still learns which.
+    #[test]
+    fn only_a_signed_in_visitor_learns_which_saved_sign_in_failed() {
+        use crate::routes::sink::trigger::{OAUTH_RECONNECT_REQUIRED, saved_grant_failure};
+        let signed_in = AppUser::OpenID(OpenIDUser {
+            sub: "visitor-1".into(),
+            access_token: "verified-platform-token".into(),
+        });
+        for (visitor, caller, learns) in [
+            ("signed in", signed_in, true),
+            ("anonymous", AppUser::Unauthorized, false),
+        ] {
+            let subject = hosted_subject("event-1", &caller, "anonymous-session-1").unwrap();
+            let told = sign_in_failure(
+                uses_sink_credentials(&subject),
+                saved_grant_failure(ApiError::unauthorized(
+                    "Reconnect OAuth provider 'google' before running this workflow",
+                )),
+            );
+            assert_eq!(
+                (told.status(), told.public_code()),
+                (axum::http::StatusCode::CONFLICT, OAUTH_RECONNECT_REQUIRED),
+                "{visitor}"
+            );
+            assert_eq!(
+                told.public_message().unwrap().contains("google"),
+                learns,
+                "{visitor}"
+            );
+        }
     }
 
     #[test]

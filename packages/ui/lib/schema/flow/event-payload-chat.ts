@@ -52,5 +52,5 @@ export interface IEventPayloadChat {
 	example_messages?: string[] | null;
 	history_elements?: number | null;
 	tools?: string[] | null;
-	[property: string]: any;
+	[property: string]: unknown;
 }

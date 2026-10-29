@@ -8,7 +8,8 @@ use crate::{
     routes::{
         app::{
             board::{
-                scoring::save_board_and_refresh_summary, sink_rebind::rebind_latest_sinks,
+                scoring::save_board_and_refresh_summary,
+                sink_rebind::{rebind_latest_sinks, try_rebind_latest_sinks},
                 sync_board::seed_board_revision,
             },
             wasm_catalog::{app_wasm_nodes_cached, hydrate_board_wasm_metadata},
@@ -72,7 +73,8 @@ pub struct ApplyFlowScriptBody {
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Board not found"),
-        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly."),
+        (status = 503, description = "The event triggers that run this board could not be switched to run as you first (code SINK_REBIND_UNAVAILABLE). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(
@@ -226,7 +228,7 @@ pub async fn apply_flowscript(
     }
 
     if !result.commands.is_empty() {
-        rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
+        try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
         mutation_guard.ensure_held()?;
         let put = save_board_and_refresh_summary(&state, &app_id, &board).await?;
         rebind_latest_sinks(&state, &app_id, &board_id, &user).await;

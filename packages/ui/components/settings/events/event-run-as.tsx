@@ -3,7 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import { queryOptions, useQuery } from "@tanstack/react-query";
 import { Loader2Icon, PlayIcon, UserRoundIcon } from "lucide-react";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { toast } from "sonner";
 import { userLookupQueryOptions } from "../../../hooks/use-user-lookup";
 import {
@@ -16,7 +16,11 @@ import {
 	IEventExposure,
 } from "../../../lib/schema/flow/event";
 import { parseUint8ArrayToJson } from "../../../lib/uint8";
-import { userDisplayName } from "../../../lib/user-display";
+import {
+	userAvatarUrl,
+	userDisplayName,
+	userInitials,
+} from "../../../lib/user-display";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import type {
@@ -24,6 +28,8 @@ import type {
 	IEventState,
 } from "../../../state/backend-state/event-state";
 import { Button } from "../../ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
+import { UserAvatar } from "../../ui/user-identity";
 import { Banner } from "../devices/primitives/banner";
 import { isLocalTriggerDismissal } from "./local-trigger-token";
 import type { useSinkActivation } from "./use-sink-activation";
@@ -38,6 +44,19 @@ export type EventRunAs =
 	| { kind: "released" }
 	| { kind: "legacy" }
 	| { kind: "unbound" };
+
+/**
+ * Whom a run of a bound hub sink acts for. `public_calls`: anonymous calls to a PUBLIC REST or
+ * MCP Event run as its run-as user, callers signed in to Flow-Like as themselves.
+ * `calling_person`: an INTERNAL one runs as the person the calling app passes along, and as the
+ * run-as user only when it passes none. `visitors`: anonymous visitors of a hosted page use the
+ * run-as user's access. `run_as_user`: every run is the run-as user's.
+ */
+export type RunAsAudience =
+	| "public_calls"
+	| "calling_person"
+	| "visitors"
+	| "run_as_user";
 
 type RequestToggle = ReturnType<typeof useSinkActivation>["requestToggle"];
 
@@ -87,6 +106,21 @@ export function servesHostedVisitors(
 	);
 }
 
+/**
+ * REST and MCP calls pick their identity per caller (packages/api/src/routes/inbound.rs), which a
+ * hosted page on the same Event does not change. `hostedVisitors` is `servesHostedVisitors(event)`.
+ */
+export function eventRunAsAudience(
+	event: Pick<IEvent, "event_type" | "exposure">,
+	hostedVisitors: boolean,
+): RunAsAudience {
+	if (event.event_type === "rest" || event.event_type === "mcp")
+		return event.exposure === IEventExposure.Internal
+			? "calling_person"
+			: "public_calls";
+	return hostedVisitors ? "visitors" : "run_as_user";
+}
+
 /** Whom the hub's sink runs the event as; null when no hub sink answered. */
 export function eventRunAs(
 	event: Pick<IEvent, "active">,
@@ -129,34 +163,139 @@ export function useTurnOnAsMe(requestToggle: RequestToggle) {
 	);
 }
 
-/** "Runs as {name}", or the hosted wording; undefined while the name is looked up, never an account id. */
-function useRunsAsLabel(userId?: string, hosted = false): string | undefined {
-	const { t } = useTranslation("settings");
+interface RunAsUser {
+	name: string;
+	avatarUrl?: string;
+	initials: string;
+}
+
+/** The run-as user's name and avatar: undefined while looked up, null when no name resolves. Never an account id. */
+function useRunAsUser(userId?: string): RunAsUser | null | undefined {
 	const backend = useBackend();
 	const lookup = useQuery({
 		...userLookupQueryOptions(backend.userState, userId),
 		retry: false,
 	});
-	if (!userId || lookup.isPending) return undefined;
-	const name = lookup.data ? userDisplayName(lookup.data, "") : "";
-	if (!name) return t("runsAsAMember", "Runs as a member of this app");
-	return hosted
-		? t("visitorsUseAccess", "Visitors use {{name}}'s access to run events", {
-				name,
-			})
-		: t("runsAsName", "Runs as {{name}}", { name });
+	return useMemo(() => {
+		if (!userId || lookup.isPending) return undefined;
+		const name = lookup.data ? userDisplayName(lookup.data, "") : "";
+		if (!name) return null;
+		return {
+			name,
+			avatarUrl: userAvatarUrl(lookup.data),
+			initials: userInitials(name),
+		};
+	}, [userId, lookup.isPending, lookup.data]);
+}
+
+/** The bound chip's label and its tooltip hint; `name` is undefined when it does not resolve. */
+function useRunAsWording(
+	audience: RunAsAudience,
+	name?: string,
+): { label: string; hint?: string } {
+	const { t } = useTranslation("settings");
+	const member = t("runsAsAMember", "Runs as a member of this app");
+	switch (audience) {
+		case "public_calls":
+			return {
+				label: name
+					? t("publicCallsRunAsName", "Public calls run as {{name}}", { name })
+					: member,
+				hint: t(
+					"signedInCallersRunAsThemselves",
+					"Callers signed in to Flow-Like run as themselves.",
+				),
+			};
+		case "calling_person":
+			return {
+				label: t("runsAsTheCallingPerson", "Runs as the calling person"),
+				hint: name
+					? t(
+							"callsWithoutAPersonRunAsName",
+							"Calls from other apps that pass no person run as {{name}}.",
+							{ name },
+						)
+					: t(
+							"callsWithoutAPersonRunAsAMember",
+							"Calls from other apps that pass no person run as a member of this app.",
+						),
+			};
+		case "visitors":
+			return {
+				label: name
+					? t(
+							"visitorsUseAccess",
+							"Visitors use {{name}}'s access to run events",
+							{ name },
+						)
+					: member,
+			};
+		case "run_as_user":
+			return {
+				label: name ? t("runsAsName", "Runs as {{name}}", { name }) : member,
+			};
+	}
+}
+
+/** An INTERNAL REST/MCP chip shows no avatar: its run-as user only covers calls that pass no person. */
+function BoundRunAsChip({
+	user,
+	audience,
+	className,
+}: Readonly<{
+	user: RunAsUser | null;
+	audience: RunAsAudience;
+	className?: string;
+}>) {
+	const { label, hint } = useRunAsWording(audience, user?.name);
+	const avatar = audience === "calling_person" ? null : user;
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<span
+					data-run-as="bound"
+					className={cn(
+						"inline-flex max-w-56 items-center gap-1 bg-muted text-muted-foreground",
+						className,
+					)}
+				>
+					{avatar ? (
+						<span aria-hidden className="inline-flex shrink-0">
+							<UserAvatar
+								avatarUrl={avatar.avatarUrl}
+								initials={avatar.initials}
+								label={avatar.name}
+								size="xs"
+								className="size-4 ring-1 ring-background"
+							/>
+						</span>
+					) : (
+						<UserRoundIcon className="size-3 shrink-0" aria-hidden />
+					)}
+					<span data-run-as-label className="truncate">
+						{label}
+					</span>
+				</span>
+			</TooltipTrigger>
+			<TooltipContent side="bottom" className="max-w-64">
+				<p className="font-medium">{label}</p>
+				{hint && <p className="text-primary-foreground/80">{hint}</p>}
+			</TooltipContent>
+		</Tooltip>
+	);
 }
 
 export function RunAsChip({
 	runAs,
-	hosted = false,
+	audience,
 	className,
-}: Readonly<{ runAs: EventRunAs; hosted?: boolean; className?: string }>) {
+}: Readonly<{
+	runAs: EventRunAs;
+	audience: RunAsAudience;
+	className?: string;
+}>) {
 	const { t } = useTranslation("settings");
-	const label = useRunsAsLabel(
-		runAs.kind === "bound" ? runAs.userId : undefined,
-		hosted,
-	);
+	const user = useRunAsUser(runAs.kind === "bound" ? runAs.userId : undefined);
 	if (runAs.kind === "released") {
 		const paused = t(
 			"pausedRunAsCannotRun",
@@ -206,19 +345,9 @@ export function RunAsChip({
 				{t("runsWithoutAUser", "Runs without a user")}
 			</span>
 		);
-	if (!label) return null;
+	if (user === undefined) return null;
 	return (
-		<span
-			data-run-as="bound"
-			title={label}
-			className={cn(
-				"inline-flex max-w-56 items-center gap-1 bg-muted text-muted-foreground",
-				className,
-			)}
-		>
-			<UserRoundIcon className="size-3 shrink-0" aria-hidden />
-			<span className="truncate">{label}</span>
-		</span>
+		<BoundRunAsChip user={user} audience={audience} className={className} />
 	);
 }
 

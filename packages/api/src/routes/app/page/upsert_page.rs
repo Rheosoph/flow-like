@@ -1,7 +1,11 @@
 use crate::{
-    audit_branch, ensure_permission, entity::page, error::ApiError, middleware::jwt::AppUser,
+    audit_branch, ensure_permission,
+    entity::page,
+    error::ApiError,
+    middleware::jwt::AppUser,
     permission::role_permission::RolePermissions,
-    routes::app::board::sink_rebind::rebind_latest_sinks, state::AppState,
+    routes::app::board::sink_rebind::{rebind_latest_sinks, try_rebind_latest_sinks},
+    state::AppState,
 };
 use axum::{
     Extension, Json,
@@ -46,7 +50,8 @@ fn payload_revision(page: &Page) -> chrono::DateTime<chrono::FixedOffset> {
         (status = 400, description = "Page payload is missing board_id, or names a board that does not belong to this app"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly.")
+        (status = 423, description = "Another writer holds this board's mutation lease (code BOARD_LOCKED). Nothing was written; retry the identical request shortly."),
+        (status = 503, description = "The event triggers that run the page's board could not be switched to run as you first (code SINK_REBIND_UNAVAILABLE). Nothing was written; retry the identical request shortly.")
     )
 )]
 #[tracing::instrument(
@@ -155,7 +160,7 @@ pub async fn upsert_page(
         })?;
 
     // A page is part of its board's draft, so its editor is a board editor.
-    rebind_latest_sinks(&state, &app_id, &board_id, &user).await;
+    try_rebind_latest_sinks(&state, &app_id, &board_id, &user).await?;
     {
         let mut board_guard = board.write().await;
         page_id_guard.ensure_held()?;

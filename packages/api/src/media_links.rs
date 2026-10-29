@@ -335,13 +335,14 @@ pub(crate) mod tests {
                 "{raw}"
             );
         }
-        assert_eq!(
+        assert!(
             route(
                 &url("http://10.0.0.5:8000/cat.png"),
                 None,
-                ProviderEgress::Private
-            ),
-            Ok(Route::Guarded(ProviderEgress::Private))
+                ProviderEgress::Public
+            )
+            .is_err(),
+            "media links never reach a self-hosted model's private network"
         );
     }
 

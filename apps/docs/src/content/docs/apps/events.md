@@ -102,16 +102,20 @@ profile and their private models. That covers chats, forms, quick actions and
 pages in the App, API and MCP calls with their login, hosted pages they open
 while signed in, calls another App passes them through, and location crossings
 on their device. Their own OAuth sign-ins are used when they provide them;
-otherwise the Event's saved sign-ins are used.
+otherwise the Event's saved sign-ins are used, as long as the run-as person may
+still run the Event. If they may not, the Event pauses for runs nobody triggers
+and the person's run continues with only the sign-ins they provided.
 
 A run that nobody triggers, such as a schedule, a webhook, a bot message, an
 inbound email, an anonymous visit to a hosted page or a public API call, runs
 as the Event's run-as person, with that person's role in the App, and needs no
 personal access token. Whoever saves, restores, edits or switches the Event on
 or off becomes its run-as person. Editing the Flow an Event runs at its latest
-version, or publishing the exact version an Event is pinned to, does the same.
-When the person changes, the Event's OAuth sign-ins and saved profile are
-cleared, so the new person grants their own. Only someone whose role may
+version, or publishing the exact version an Event is pinned to, does the same,
+also while the Event is switched off. If the new run-as person cannot be
+recorded, the edit is not saved and asks you to try again. When the person
+changes, the Event's OAuth sign-ins and saved profile are cleared, so the new
+person grants their own. Only someone whose role may
 trigger Events can switch an Event on, or save or restore it while it is on.
 
 Such runs use the current settings of the profile that the run-as person used
@@ -191,15 +195,19 @@ Admin rights); a visitor who is not a member gets only what triggering Events
 allows: the App cache, notifications to the App's members and connected Apps.
 When the flow needs OAuth sign-ins, the page asks the visitor to connect their
 own accounts; a visitor who skips uses the Event's saved sign-ins. Calls the run
-makes to connected Apps pass the visitor through as themselves.
+makes to connected Apps pass the visitor through as themselves. An action a
+page loaded for an earlier draft of the Flow stops working once the Flow
+changes; reloading the page picks up the new draft.
 
 An anonymous visitor's run uses the Event's run-as person instead: their profile
 and models, and never more access than that person, limited to what triggering
 Events allows. Before each anonymous visit, Flow-Like checks that the run-as
 person can still run the Event; if not, the visitor sees an error, no run starts
-and the Event pauses for runs nobody triggers. A connected App treats an
-anonymous visitor's run as anonymous: it records no user for it, loads no
-profile and keeps each run's files apart.
+and the Event pauses for runs nobody triggers. When a saved sign-in has
+expired, an anonymous visitor learns only that the Event's owner must reconnect
+it, not which service it is. A connected App treats an anonymous visitor's run
+as anonymous: it records no user for it, loads no profile and keeps each run's
+files apart.
 
 Flow-Like checks these rights on every request a run makes, so a change also
 applies to runs in progress. A hosted run can notify only members of the App.
@@ -271,7 +279,8 @@ in with a personal access token of that account; the token needs
 crossing sent again, for example after a lost answer, gets the run of its first
 delivery instead of starting another one; this device retries a crossing for at
 most 14 minutes, within the hub's 15-minute window. While the App is not
-active, the hub asks the device to retry and the region stays registered. When
+active, or while one of the Event's saved sign-ins needs to be reconnected, the
+hub asks the device to retry and the region stays registered. When
 the Event is paused or switched off, or the hub refuses a crossing for another
 reason, this device stops watching the region. When the hub no longer accepts
 the token, the Event shows **Needs a token**.

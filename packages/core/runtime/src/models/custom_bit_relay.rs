@@ -1,7 +1,8 @@
 //! Private Bits on server runs. A run holds no provider key for them: it calls the API's model
 //! relay under its executor JWT, and the API calls the provider with the owner's key. Media
-//! travels as the run holds it, links unchanged and bytes inline, so the run downloads nothing
-//! for such a call; the API resolves each link the way a direct call with the Bit would.
+//! travels as the run holds it, links unchanged and bytes inline, and the API resolves each link
+//! the way a direct call with the Bit would. The API fetches no host that is neither public nor
+//! its storage, so the run itself sends the media of such a host inline.
 
 use std::{collections::HashSet, sync::Arc};
 

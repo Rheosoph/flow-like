@@ -1,7 +1,7 @@
 "use client";
 
 import { Trans, useTranslation } from "@flow-like/locales";
-import { useMemo } from "react";
+import { useId, useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
 import {
 	CHAT_PLACEHOLDER_BUBBLE_STATES,
@@ -18,6 +18,8 @@ import {
 	resolveChatThemePreset,
 } from "../../../lib/chat-theme-presets";
 import { asArray } from "../../../lib/response-shape";
+import type { IEventPayload } from "../../../lib/schema/flow/event-payload";
+import type { IVoiceConfig } from "../../../lib/schema/flow/event-payload-chat";
 import { useBackend } from "../../../state/backend-state";
 import type { IRouteMapping } from "../../../state/backend-state/route-state";
 import { AssetPicker } from "../../builder/AssetPicker";
@@ -61,6 +63,12 @@ function ThemeSwatch({
 	);
 }
 
+function normalizeRoute(value: string): string {
+	const trimmed = value.trim();
+	if (!trimmed) return "";
+	return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
 export function SimpleChatConfig({
 	isEditing,
 	appId,
@@ -73,6 +81,7 @@ export function SimpleChatConfig({
 }: IConfigInterfaceProps) {
 	const { t } = useTranslation("interfaces");
 	const backend = useBackend();
+	const routeCheckboxId = useId();
 	const routesQuery = useInvoke<IRouteMapping[], [appId: string]>(
 		backend.routeState.getRoutes,
 		backend.routeState,
@@ -87,9 +96,9 @@ export function SimpleChatConfig({
 			.sort((a, b) => a.path.localeCompare(b.path));
 	}, [routesQuery.data]);
 
-	const setValue = (key: string, value: any, deleteKeys: string[] = []) => {
+	const setValue = (key: string, value: unknown, deleteKeys: string[] = []) => {
 		if (!onConfigUpdate) return;
-		const next = { ...(config as any) };
+		const next = { ...(config as IEventPayload) };
 		for (const k of deleteKeys) {
 			delete next[k];
 		}
@@ -97,14 +106,8 @@ export function SimpleChatConfig({
 		onConfigUpdate(next);
 	};
 
-	const normalizeRoute = (value: string): string => {
-		const trimmed = value.trim();
-		if (!trimmed) return "";
-		return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-	};
-
 	const selectedRoutes = useMemo(() => {
-		const rawArray = (config as any)?.navigate_to_routes;
+		const rawArray = config?.navigate_to_routes;
 		const raw: string[] = Array.isArray(rawArray) ? rawArray : [];
 		const normalized = raw
 			.map((r) => normalizeRoute(String(r)))
@@ -112,12 +115,12 @@ export function SimpleChatConfig({
 		return Array.from(new Set(normalized));
 	}, [config]);
 
-	const voice = ((config as any)?.voice ?? {}) as Record<string, any>;
-	const setVoice = (key: string, value: any) => {
+	const voice: IVoiceConfig = config?.voice ?? {};
+	const setVoice = (key: string, value: unknown) => {
 		setValue("voice", { ...voice, [key]: value });
 	};
 	const voiceMode: string =
-		voice.mode ?? ((config as any)?.allow_voice_input ? "record" : "disabled");
+		voice.mode ?? (config?.allow_voice_input ? "record" : "disabled");
 	const selectedThemeValue = resolveChatThemePreset(config?.custom_css);
 	const selectedTheme = CHAT_THEME_PRESETS.find(
 		(theme) => theme.value === selectedThemeValue,
@@ -258,7 +261,7 @@ export function SimpleChatConfig({
 								accept="image"
 								appId={appId}
 								disabled={!isEditing}
-								placeholder={`Select from storage or enter an image URL...`}
+								placeholder="Select from storage or enter an image URL..."
 								value={config?.background_image ?? ""}
 								onChange={(value) => setValue("background_image", value)}
 							/>
@@ -360,7 +363,7 @@ export function SimpleChatConfig({
 									accept="image"
 									appId={appId}
 									disabled={!isEditing}
-									placeholder={`Select from storage or enter an image URL...`}
+									placeholder="Select from storage or enter an image URL..."
 									value={config?.placeholder_image ?? ""}
 									onChange={(value) => setValue("placeholder_image", value)}
 								/>
@@ -465,15 +468,18 @@ export function SimpleChatConfig({
 													(r) =>
 														typeof r.path === "string" && r.path.length > 0,
 												)
-												.map((route) => {
+												.map((route, index) => {
 													const checked = selectedRoutes.includes(route.path);
 													const label = route.path;
+													const checkboxId = `${routeCheckboxId}-${index}`;
 													return (
 														<label
 															key={route.path}
+															htmlFor={checkboxId}
 															className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-muted cursor-pointer"
 														>
 															<Checkbox
+																id={checkboxId}
 																checked={checked}
 																onCheckedChange={(nextChecked) => {
 																	const normalized = normalizeRoute(route.path);
@@ -897,7 +903,7 @@ export function SimpleChatConfig({
 							</div>
 						)}
 						<p className="text-sm text-muted-foreground">
-							{`Tools available for this chat. Press Enter to add a new tool.`}
+							{"Tools available for this chat. Press Enter to add a new tool."}
 						</p>
 					</div>
 
@@ -967,7 +973,7 @@ export function SimpleChatConfig({
 							</div>
 						)}
 						<p className="text-sm text-muted-foreground">
-							{`Tools enabled by default. Press Enter to add a new tool.`}
+							{"Tools enabled by default. Press Enter to add a new tool."}
 						</p>
 					</div>
 

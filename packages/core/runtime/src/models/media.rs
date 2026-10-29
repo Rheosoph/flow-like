@@ -7,13 +7,17 @@
 //! caps, fails the call with an error naming its kind, MIME type and host, never its link.
 //!
 //! A [`MediaSource`] downloads the media and decides links. A direct call fetches through the
-//! egress guard of its execution environment; only on the user's own machine does it fetch plain
-//! HTTP and read desktop asset links, to files in the app's storage alone. A server also fetches
-//! the links into [`OwnStorage`], the object store its storage credentials name, even when that
-//! store is internal or serves plain HTTP: as they are, without redirects, and never on the host
-//! plane unless the store runs on loopback.
+//! egress guard of its execution environment, plain HTTP too except in a browser sandbox, and
+//! only on the user's own machine does it read desktop asset links, to files in the app's storage
+//! alone. A server also fetches the links into [`OwnStorage`], the object store its storage
+//! credentials name, even when that store is internal or serves plain HTTP: as they are, without
+//! redirects, and never on the host plane unless the store runs on loopback. A provider that
+//! fetches such a link itself receives it signed again to expire within minutes, or its media
+//! inline when the store does not serve the fresh link.
 //! The API's model relay fetches through its own guard and signs links into the platform's
-//! storage again, so a relayed call reaches the provider with the media a direct call sends.
+//! storage again, so a relayed call reaches the provider with the media a direct call sends. It
+//! fetches no host that is neither public nor its storage, so a run sends the media of such a
+//! host inline itself.
 //! `invoke` readies the History; an agent's requests are readied the same way on the Rig request.
 
 use crate::flow::execution::{ExecutionEnvironment, egress::GuardedHttpClient};
@@ -23,7 +27,7 @@ use flow_like_model_provider::{
     llm::{
         AgentSettings, CompletionClientDyn, CompletionModelDyn, CompletionModelHandle,
         DynamicResponse, DynamicStreamingResponse, LLMCallback, ModelConstructor, ModelLogic,
-        UsageReportingMode,
+        UsageReportingMode, relay::MAX_REQUEST_BYTES,
     },
     provider::{ModelApiSurface, ModelProvider, is_hosted_provider_name},
     response::Response,
@@ -34,11 +38,15 @@ use flow_like_types::{
     base64::{Engine as _, engine::general_purpose::STANDARD},
     egress::{is_host_plane_ip, is_host_plane_name},
     reqwest::{
-        self,
+        self, StatusCode,
         dns::{Addrs, Name, Resolve, Resolving},
+        header::RANGE,
         redirect,
     },
-    tokio::time::{Instant, timeout, timeout_at},
+    tokio::{
+        sync::OnceCell,
+        time::{Instant, timeout, timeout_at},
+    },
 };
 use futures::{StreamExt, stream};
 use rig::{
@@ -76,6 +84,10 @@ const LINK_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 /// Object a store signs a link for to show where its links point. The link is never fetched.
 const PROBE_OBJECT: &str = "link-scope-probe";
 const PROBE_TTL: Duration = Duration::from_secs(60);
+/// How long a link into the own store that a provider fetches itself lets it read the object.
+const RESIGNED_TTL: Duration = Duration::from_secs(5 * 60);
+/// For the own store to answer a one-byte read of a link signed again.
+const RESIGNED_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 /// Cache key of an image that only its response names the type of.
 const IMAGE_TYPED_BY_RESPONSE: &str = "image/*";
 const PDF_TYPE: &str = "application/pdf";
@@ -116,7 +128,7 @@ struct InlinePolicy {
     allow_http: bool,
 }
 
-/// A direct call's, over HTTPS only. On the user's own machine plain HTTP is fetched too.
+/// A direct call's, over HTTPS only. Where HTTP nodes fetch plain HTTP, so does a direct call.
 const DIRECT_POLICY: InlinePolicy = InlinePolicy {
     text_bytes: 256 * KIB,
     max_parts: 32,
@@ -141,9 +153,10 @@ pub fn runs_on_users_machine(environment: ExecutionEnvironment) -> bool {
 }
 
 impl InlinePolicy {
+    /// What HTTP nodes in `environment` reach: on a server, every host off the host plane.
     fn direct(environment: ExecutionEnvironment) -> Self {
         Self {
-            allow_http: runs_on_users_machine(environment),
+            allow_http: environment != ExecutionEnvironment::BrowserSandbox,
             ..DIRECT_POLICY
         }
     }
@@ -333,6 +346,16 @@ impl InlineCaps {
         };
         part.min(self.call)
     }
+
+    /// Each cap, at most `limit`'s.
+    fn within(self, limit: Self) -> Self {
+        Self {
+            call: self.call.min(limit.call),
+            image: self.image.min(limit.image),
+            document: self.document.min(limit.document),
+            media: self.media.min(limit.media),
+        }
+    }
 }
 
 /// For providers that document no limit; sized for a 32 MB request.
@@ -384,6 +407,13 @@ const _: () = assert!(base64_len(DEEPSEEK_CAPS.call) < 48 * MIB);
 const _: () = assert!(base64_len(COHERE_CAPS.call) <= 20 * MB);
 const _: () = assert!(base64_len(PERPLEXITY_CAPS.call) < 72 * MIB);
 const _: () = assert!(base64_len(TGI_CAPS.call) < 2 * MB);
+
+/// What a run sends the API's model relay inline in one call, beside the call's text documents
+/// and messages within the relay's request limit.
+const RELAY_CAPS: InlineCaps = InlineCaps::total(4 * MB);
+const _: () = assert!(
+    base64_len(RELAY_CAPS.call) + base64_len(DIRECT_POLICY.text_bytes) < MAX_REQUEST_BYTES as u64
+);
 
 /// What a provider's client does with each kind of media in a user message. Text documents are
 /// always inlined as their text.
@@ -821,6 +851,32 @@ impl RemoteMediaModel {
         Self::with(inner, source, reader, RESOLVING_POLICY)
     }
 
+    /// A call a run in `environment` makes through the API's model relay. Links travel as the
+    /// run holds them, except a link to a host that is neither public nor in `own_storage`: the
+    /// relay fetches no such host, so the run sends its media inline, within the relay's request
+    /// limit.
+    pub fn relayed(
+        inner: Arc<dyn ModelLogic>,
+        environment: ExecutionEnvironment,
+        reader: MediaReader,
+        own_storage: OwnStorage,
+    ) -> Self {
+        let source = RelayedSource {
+            downloads: EnvironmentSource::new(environment),
+            own_storage,
+        };
+        let reader = MediaReader {
+            caps: reader.caps.within(RELAY_CAPS),
+            ..reader
+        };
+        Self::with(
+            inner,
+            Arc::new(source),
+            reader,
+            InlinePolicy::direct(environment),
+        )
+    }
+
     fn with(
         inner: Arc<dyn ModelLogic>,
         source: Arc<dyn MediaSource>,
@@ -1011,6 +1067,12 @@ pub trait MediaSource: Send + Sync {
     /// What the provider receives for a link it fetches itself.
     async fn link(&self, url: &str) -> Result<Link>;
 
+    /// What the provider receives for a link to media it reads only inline: the media, inline,
+    /// unless the source leaves the link to the next hop.
+    async fn inline_only(&self, _url: &str) -> Result<Link> {
+        Ok(Link::Inline)
+    }
+
     /// Whether `url` links into this source's own object store, which it fetches without
     /// redirects even when the store is internal or serves plain HTTP.
     fn owns(&self, _url: &str) -> bool {
@@ -1051,13 +1113,108 @@ pub async fn publicly_reachable(url: &str) -> bool {
     .is_ok_and(|checked| checked.is_ok())
 }
 
-/// The object store a server reaches through its storage credentials, by the origins (scheme,
-/// host and port) of the links its stores sign. Self-hosted deployments run it on their own
-/// network, often over plain HTTP, and the links a run holds, such as uploads, chat attachments
-/// and the files of its app, point there.
+/// Where a store points the links it signs: their origin (scheme, host and port) and the path in
+/// front of the object key, the bucket's for a path-style store.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StorageScope {
+    origin: url::Origin,
+    path_prefix: String,
+}
+
+impl StorageScope {
+    /// `None` unless the probe link is HTTP or HTTPS and its path ends in the probe's key.
+    fn from_probe(probe: &Url) -> Option<Self> {
+        if !matches!(probe.scheme(), "http" | "https") {
+            return None;
+        }
+        let path_prefix = probe
+            .path()
+            .strip_suffix(PROBE_OBJECT)
+            .filter(|prefix| prefix.ends_with('/'))?;
+        Some(Self {
+            origin: probe.origin(),
+            path_prefix: path_prefix.to_owned(),
+        })
+    }
+
+    /// The object key a link into this scope names, as the link encodes it.
+    fn key<'a>(&self, url: &'a Url) -> Option<&'a str> {
+        if url.origin() != self.origin || !url.username().is_empty() || url.password().is_some() {
+            return None;
+        }
+        url.path()
+            .strip_prefix(self.path_prefix.as_str())
+            .filter(|key| is_object_key(key))
+    }
+}
+
+/// Non-empty segments of URL path characters and percent escapes. An escaped separator or NUL,
+/// or a dot segment, could make the store read another key, so none counts.
+fn is_object_key(key: &str) -> bool {
+    key.split('/').all(|segment| {
+        let decoded: Cow<'_, [u8]> = percent_encoding::percent_decode_str(segment).into();
+        !segment.is_empty()
+            && !matches!(decoded.as_ref(), b"." | b"..")
+            && !decoded.iter().any(|byte| matches!(byte, b'/' | b'\\' | 0))
+            && segment
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || "-._~!$&'()*+,;=:@%".contains(ch))
+    })
+}
+
+#[derive(Clone, Debug)]
+struct OwnStore {
+    scope: StorageScope,
+    store: FlowLikeStore,
+    /// Whether a provider can fetch the store's links itself, asked on first use.
+    reachable: OnceCell<bool>,
+}
+
+impl OwnStore {
+    fn new(scope: StorageScope, store: FlowLikeStore) -> Self {
+        Self {
+            scope,
+            store,
+            reachable: OnceCell::new(),
+        }
+    }
+
+    /// HTTPS, and every address the store's host resolves to public.
+    async fn reachable(&self) -> bool {
+        let origin = self.scope.origin.ascii_serialization();
+        *self
+            .reachable
+            .get_or_init(|| async move { publicly_reachable(&origin).await })
+            .await
+    }
+
+    /// A link to the object `key` names that expires after [`RESIGNED_TTL`], or `None` when the
+    /// store cannot sign or would sign a link to another object than `url`.
+    async fn resign(&self, url: &Url, key: &str) -> Option<String> {
+        let path = flow_like_storage::Path::from_url_path(key).ok()?;
+        let fresh = self
+            .store
+            .sign("GET", &path, RESIGNED_TTL)
+            .await
+            .inspect_err(|_| {
+                tracing::warn!(
+                    host = url.host_str().unwrap_or_default(),
+                    "Signing a link into the own storage again failed; its media is sent inline"
+                );
+            })
+            .ok()?;
+        let same_object = fresh.origin() == url.origin() && fresh.path() == url.path();
+        same_object.then(|| fresh.into())
+    }
+}
+
+/// The object store a server reaches through its storage credentials, by where the links its
+/// stores sign point. Self-hosted deployments run it on their own network, often over plain
+/// HTTP, and the links a run holds, such as uploads, chat attachments and the files of its app,
+/// point there.
 #[derive(Clone, Debug, Default)]
 pub struct OwnStorage {
-    origins: Vec<url::Origin>,
+    stores: Vec<OwnStore>,
 }
 
 impl OwnStorage {
@@ -1067,39 +1224,53 @@ impl OwnStorage {
     /// fetches already.
     pub async fn signed_by(stores: impl IntoIterator<Item = FlowLikeStore>) -> Self {
         let probe = flow_like_storage::Path::from(PROBE_OBJECT);
-        let mut origins = Vec::new();
+        let mut own: Vec<OwnStore> = Vec::new();
         for store in stores {
             if !matches!(store, FlowLikeStore::AWS(_)) {
                 continue;
             }
-            let Ok(signed) = store.sign("GET", &probe, PROBE_TTL).await else {
+            let Some(scope) = store
+                .sign("GET", &probe, PROBE_TTL)
+                .await
+                .ok()
+                .and_then(|signed| StorageScope::from_probe(&signed))
+            else {
                 continue;
             };
-            let origin = signed.origin();
-            if matches!(signed.scheme(), "http" | "https") && !origins.contains(&origin) {
-                origins.push(origin);
+            if !own.iter().any(|known| known.scope == scope) {
+                own.push(OwnStore::new(scope, store));
             }
         }
-        Self { origins }
+        Self { stores: own }
     }
 
     fn is_empty(&self) -> bool {
-        self.origins.is_empty()
+        self.stores.is_empty()
     }
 
-    /// Whether `url` links into the store: its origin, and no credentials of the link's own.
+    /// The store `url` links into and the object key it names there, as the link encodes it.
+    fn store_of<'a>(&self, url: &'a Url) -> Option<(&OwnStore, &'a str)> {
+        self.stores
+            .iter()
+            .find_map(|own| Some((own, own.scope.key(url)?)))
+    }
+
+    /// Whether `url` links into the store: its origin, an object key under its path, and no
+    /// credentials of the link's own.
     fn contains(&self, url: &Url) -> bool {
-        url.username().is_empty()
-            && url.password().is_none()
-            && self.origins.contains(&url.origin())
+        self.store_of(url).is_some()
     }
 
     /// Downloads that may come from the store are cached apart from those that may not.
     fn cache_scope(&self, environment: ExecutionEnvironment) -> String {
-        self.origins
+        self.stores
             .iter()
-            .fold(environment.as_str().to_owned(), |scope, origin| {
-                format!("{scope} {}", origin.ascii_serialization())
+            .fold(environment.as_str().to_owned(), |scope, own| {
+                format!(
+                    "{scope} {}{}",
+                    own.scope.origin.ascii_serialization(),
+                    own.scope.path_prefix
+                )
             })
     }
 }
@@ -1185,7 +1356,8 @@ fn transport_error(error: reqwest::Error) -> String {
 
 /// A direct call's downloads, through the egress guard of its environment, and from the own store
 /// of a server as they are. A link the provider fetches itself stays a link when the provider can
-/// reach it.
+/// reach it; a link into the own store is signed again to expire after [`RESIGNED_TTL`] first, or
+/// sent inline when the store does not serve the fresh link.
 struct EnvironmentSource {
     environment: ExecutionEnvironment,
     client: OnceLock<std::result::Result<GuardedHttpClient, String>>,
@@ -1238,16 +1410,56 @@ impl EnvironmentSource {
             .map_err(|error| anyhow!("building the HTTP client for the storage failed: {error}"))
     }
 
-    /// The GET of a link into the own store, whose answer is taken as it is: a redirect fails
-    /// the download.
-    async fn send_to_storage(&self, url: &str) -> Result<reqwest::Response> {
+    /// A GET of a link into the own store, whose answer is taken as it is: no redirect is
+    /// followed.
+    fn storage_get(&self, url: &str) -> Result<reqwest::RequestBuilder> {
         let url = Url::parse(url).map_err(|_| anyhow!("the link is not a valid URL"))?;
         ensure_storage_host(&url)?;
-        self.storage_client()?
-            .get(url)
+        Ok(self.storage_client()?.get(url))
+    }
+
+    /// The GET of a link into the own store: a redirect fails the download.
+    async fn send_to_storage(&self, url: &str) -> Result<reqwest::Response> {
+        self.storage_get(url)?
             .send()
             .await
             .map_err(|error| anyhow!("GET failed: {}", transport_error(error)))
+    }
+
+    /// How the own store answers a one-byte read of `url`, or `None` when it does not in time.
+    async fn storage_status(&self, url: &str) -> Option<StatusCode> {
+        let request = self
+            .storage_get(url)
+            .ok()?
+            .header(RANGE, "bytes=0-0")
+            .send();
+        Some(
+            timeout(RESIGNED_CHECK_TIMEOUT, request)
+                .await
+                .ok()?
+                .ok()?
+                .status(),
+        )
+    }
+
+    /// What a provider that reaches the own store gets for `link` into it: the object signed
+    /// again for [`RESIGNED_TTL`] when the store serves that link, else the media inline, read
+    /// with the link the run holds. The run's credentials may not read every object of the
+    /// store, such as one a connected app signed a link for.
+    async fn fresh_link(&self, own: &OwnStore, link: &Url, key: &str) -> Link {
+        let Some(fresh) = own.resign(link, key).await else {
+            return Link::Inline;
+        };
+        let status = self.storage_status(&fresh).await;
+        if matches!(status, Some(StatusCode::OK | StatusCode::PARTIAL_CONTENT)) {
+            return Link::Replace(fresh);
+        }
+        tracing::debug!(
+            host = link.host_str().unwrap_or_default(),
+            status = ?status,
+            "The own storage does not serve a link signed again; its media is sent inline"
+        );
+        Link::Inline
     }
 
     /// The file `path` resolves to, after links and `..`, when it lies in the app's storage.
@@ -1292,6 +1504,15 @@ impl MediaSource for EnvironmentSource {
     }
 
     async fn link(&self, url: &str) -> Result<Link> {
+        if let Ok(link) = Url::parse(url)
+            && let Some((own, key)) = self.own_storage.store_of(&link)
+        {
+            return Ok(if own.reachable().await {
+                self.fresh_link(own, &link, key).await
+            } else {
+                Link::Inline
+            });
+        }
         Ok(if publicly_reachable(url).await {
             Link::Keep
         } else {
@@ -1310,6 +1531,50 @@ impl MediaSource for EnvironmentSource {
     async fn read_file(&self, url: &str, limit: u64) -> Result<Vec<u8>> {
         let path = asset_path(url).ok_or_else(|| anyhow!("the link names no file"))?;
         read_capped_file(&self.stored_file(&path).await?, limit).await
+    }
+}
+
+/// A run's side of a call through the API's model relay, which resolves public links and links
+/// into the platform's storage the way a direct call does and fetches no other host. A link to
+/// any other host the run downloads itself, through the egress guard of its environment, and
+/// sends inline: no provider reaches it either. Every other link travels as the run holds it.
+struct RelayedSource {
+    downloads: EnvironmentSource,
+    /// The store the relay reads with the run's own links.
+    own_storage: OwnStorage,
+}
+
+impl RelayedSource {
+    async fn resolved_by_relay(&self, url: &str) -> Link {
+        let own = Url::parse(url).is_ok_and(|link| self.own_storage.contains(&link));
+        if own || publicly_reachable(url).await {
+            Link::Keep
+        } else {
+            Link::Inline
+        }
+    }
+}
+
+#[flow_like_types::async_trait]
+impl MediaSource for RelayedSource {
+    fn cache_scope(&self) -> &str {
+        self.downloads.cache_scope()
+    }
+
+    async fn prepare(&self) -> Result<()> {
+        self.downloads.prepare().await
+    }
+
+    async fn send(&self, url: &str) -> Result<reqwest::Response> {
+        self.downloads.send(url).await
+    }
+
+    async fn link(&self, url: &str) -> Result<Link> {
+        Ok(self.resolved_by_relay(url).await)
+    }
+
+    async fn inline_only(&self, url: &str) -> Result<Link> {
+        Ok(self.resolved_by_relay(url).await)
     }
 }
 
@@ -1668,7 +1933,7 @@ async fn resolve(
             if candidate.link {
                 source.link(&candidate.url).await
             } else {
-                Ok(Link::Inline)
+                source.inline_only(&candidate.url).await
             }
         })
         .collect();
@@ -1694,8 +1959,10 @@ async fn resolve(
     Ok(resolved)
 }
 
-/// Downloads the candidates' media concurrently, the budget going to the newest message first.
-/// A part that cannot be fetched or is beyond the call's budgets fails the call.
+/// Downloads the candidates' media concurrently, newest message first. Each part holds its bytes
+/// of the call's budget once its length is declared or its bytes arrive, so the downloads together
+/// never hold more than the budget. A part that cannot be fetched or is beyond the call's budgets
+/// fails the call.
 async fn fetch_media(
     candidates: Vec<Candidate>,
     source: &dyn MediaSource,
@@ -1728,10 +1995,7 @@ async fn fetch_media(
             let Some(fetched) = fetches.next().await else {
                 break;
             };
-            let media = fetched
-                .and_then(|media| fetcher.spend(candidate, &media).map(|()| media))
-                .map_err(|error| candidate.failed(error))?;
-            inlined.push(media);
+            inlined.push(fetched.map_err(|error| candidate.failed(error))?);
         }
     }
     Ok(candidates.into_iter().zip(inlined).collect())
@@ -1791,9 +2055,20 @@ impl<'a> MediaFetcher<'a> {
         Ok(())
     }
 
-    /// Counts a part against the call's budget. A part from the cache is checked against this
+    /// Nothing held yet of the call's budget for `class`.
+    fn charge(&self, class: MediaClass) -> Charge<'_> {
+        Charge {
+            left: self.left(class),
+            call: self.call_limit(class),
+            class,
+            held: 0,
+            refused: false,
+        }
+    }
+
+    /// Keeps a part's bytes of the call's budget. A part from the cache is checked against this
     /// provider's limit for one part as well.
-    fn spend(&self, candidate: &Candidate, media: &InlinedMedia) -> Result<()> {
+    fn spend(&self, candidate: &Candidate, media: &InlinedMedia, charge: Charge<'_>) -> Result<()> {
         let limit = self.part_limit(candidate);
         if media.bytes > limit {
             return Err(BeyondBudget(format!(
@@ -1803,26 +2078,12 @@ impl<'a> MediaFetcher<'a> {
             ))
             .into());
         }
-        self.left(candidate.class)
-            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
-                left.checked_sub(media.bytes)
-            })
-            .map(|_| ())
-            .map_err(|left| {
-                BeyondBudget(format!(
-                    "its {} bytes exceed the {left} bytes left of this call's {}-byte inline \
-                     limit for {}",
-                    media.bytes,
-                    self.call_limit(candidate.class),
-                    candidate.class.label()
-                ))
-                .into()
-            })
+        charge.settle(media.bytes)
     }
 
-    /// Downloads a part, or takes it from the caches. A failure is cached unless the call's
-    /// deadline or budget caused it. Files on this machine are read again each call, so every
-    /// read passes the storage check.
+    /// Downloads a part, or takes it from the caches, and keeps its bytes of the call's budget.
+    /// A failure is cached unless the call's deadline or budget caused it. Files on this machine
+    /// are read again each call, so every read passes the storage check.
     async fn fetch(&self, candidate: &Candidate) -> Result<Arc<InlinedMedia>> {
         let cached = !self.source.reads_file(&candidate.url);
         let key = (
@@ -1833,7 +2094,9 @@ impl<'a> MediaFetcher<'a> {
                 .unwrap_or_else(|| IMAGE_TYPED_BY_RESPONSE.to_owned()),
             candidate.url.clone(),
         );
+        let mut charge = self.charge(candidate.class);
         if cached && let Some(media) = MEDIA_CACHE.get(&key) {
+            self.spend(candidate, &media, charge)?;
             return Ok(media);
         }
         let limit = self.part_limit(candidate);
@@ -1844,7 +2107,8 @@ impl<'a> MediaFetcher<'a> {
         self.ensure_budget_left(candidate.class)?;
         let own_deadline = Instant::now() + self.policy.fetch_timeout;
         let until = own_deadline.min(self.deadline);
-        let downloaded = match timeout_at(until, self.download(candidate, limit)).await {
+        let downloaded = match timeout_at(until, self.download(candidate, limit, &mut charge)).await
+        {
             Ok(downloaded) => downloaded,
             Err(_) if until < own_deadline => {
                 return Err(BeyondBudget(format!(
@@ -1859,19 +2123,26 @@ impl<'a> MediaFetcher<'a> {
             )),
         };
         let media = Arc::new(downloaded.inspect_err(|error| {
-            if cached {
+            if cached && !charge.refused {
                 FAILED_FETCHES.insert(failure_key, FailedFetch::of(error));
             }
         })?);
         if cached {
             MEDIA_CACHE.insert(key, media.clone());
         }
+        self.spend(candidate, &media, charge)?;
         Ok(media)
     }
 
-    async fn download(&self, candidate: &Candidate, limit: u64) -> Result<InlinedMedia> {
+    async fn download(
+        &self,
+        candidate: &Candidate,
+        limit: u64,
+        charge: &mut Charge<'_>,
+    ) -> Result<InlinedMedia> {
         let (mime, body) = if self.source.reads_file(&candidate.url) {
             let body = self.source.read_file(&candidate.url, limit).await?;
+            charge.hold(body.len() as u64, true)?;
             let mime = match &candidate.mime {
                 Some(mime) => mime.clone(),
                 None => file_image_type(&candidate.url)?.to_mime_type().to_owned(),
@@ -1886,7 +2157,7 @@ impl<'a> MediaFetcher<'a> {
             };
             (
                 mime,
-                read_within(response, limit, &candidate.part_label()).await?,
+                read_within(response, limit, &candidate.part_label(), charge).await?,
             )
         };
         match candidate.class {
@@ -1934,15 +2205,22 @@ fn file_image_type(url: &str) -> Result<ImageMediaType> {
         .ok_or_else(|| anyhow!("the file names no image type a model accepts"))
 }
 
-/// The response body, refused as beyond the budget once it exceeds `limit` bytes.
-async fn read_within(mut response: reqwest::Response, limit: u64, label: &str) -> Result<Vec<u8>> {
-    if let Some(length) = response.content_length()
-        && length > limit
-    {
-        return Err(BeyondBudget(format!(
-            "it is {length} bytes, over the {limit}-byte limit for {label}"
-        ))
-        .into());
+/// The response body, refused as beyond the budget once it exceeds `limit` bytes or what `charge`
+/// can hold. A declared length is held before the body is read.
+async fn read_within(
+    mut response: reqwest::Response,
+    limit: u64,
+    label: &str,
+    charge: &mut Charge<'_>,
+) -> Result<Vec<u8>> {
+    if let Some(length) = response.content_length() {
+        if length > limit {
+            return Err(BeyondBudget(format!(
+                "it is {length} bytes, over the {limit}-byte limit for {label}"
+            ))
+            .into());
+        }
+        charge.hold(length, true)?;
     }
     let mut body = Vec::new();
     while let Some(chunk) = response
@@ -1950,14 +2228,76 @@ async fn read_within(mut response: reqwest::Response, limit: u64, label: &str) -
         .await
         .map_err(|error| anyhow!("reading the response body failed: {}", error.without_url()))?
     {
-        if (body.len() + chunk.len()) as u64 > limit {
+        let read = (body.len() + chunk.len()) as u64;
+        if read > limit {
             return Err(
                 BeyondBudget(format!("it is over the {limit}-byte limit for {label}")).into(),
             );
         }
+        charge.hold(read, false)?;
         body.extend_from_slice(&chunk);
     }
     Ok(body)
+}
+
+/// The bytes of a call's budget that one part holds while it is read: its declared length, or
+/// what arrived of it. Given back when the part fails, kept once it is spent.
+struct Charge<'a> {
+    left: &'a AtomicU64,
+    call: u64,
+    class: MediaClass,
+    held: u64,
+    /// The call's budget refused the part, which a call with other parts may not.
+    refused: bool,
+}
+
+impl Charge<'_> {
+    /// Holds `bytes` in all, `whole` when they are the part's size rather than what arrived of it.
+    fn hold(&mut self, bytes: u64, whole: bool) -> Result<()> {
+        let more = bytes.saturating_sub(self.held);
+        if more == 0 {
+            return Ok(());
+        }
+        match self
+            .left
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |left| {
+                left.checked_sub(more)
+            }) {
+            Ok(_) => {
+                self.held = bytes;
+                Ok(())
+            }
+            Err(left) => {
+                self.refused = true;
+                let size = if whole {
+                    format!("its {bytes} bytes exceed")
+                } else {
+                    "it exceeds".to_owned()
+                };
+                Err(BeyondBudget(format!(
+                    "{size} the {} bytes left of this call's {}-byte inline limit for {}",
+                    left + self.held,
+                    self.call,
+                    self.class.label()
+                ))
+                .into())
+            }
+        }
+    }
+
+    /// Keeps exactly `bytes` for a part that is sent and gives back the rest.
+    fn settle(mut self, bytes: u64) -> Result<()> {
+        self.hold(bytes, true)?;
+        self.left.fetch_add(self.held - bytes, Ordering::Relaxed);
+        self.held = 0;
+        Ok(())
+    }
+}
+
+impl Drop for Charge<'_> {
+    fn drop(&mut self) {
+        self.left.fetch_add(self.held, Ordering::Relaxed);
+    }
 }
 
 #[cfg(test)]
@@ -1992,6 +2332,11 @@ pub(crate) mod tests {
         body: b"missing",
         content_length: true,
     };
+    const DENIED: Reply = Reply::Body {
+        status: 403,
+        body: b"denied",
+        content_length: true,
+    };
 
     pub(crate) enum Reply {
         Body {
@@ -2002,6 +2347,10 @@ pub(crate) mod tests {
         Typed(&'static str, &'static [u8]),
         /// Declares a body of this many bytes and sends none.
         Declared(u64),
+        /// Declares a body of this many bytes and stalls before sending it.
+        Withheld(u64),
+        /// 403 for a request whose query holds the text, the body for any other.
+        Refusing(&'static str, &'static [u8]),
         Redirect(&'static str),
         Stall,
     }
@@ -2029,9 +2378,13 @@ pub(crate) mod tests {
                     ),
                     *body,
                 ),
-                Self::Declared(length) => (
+                Self::Declared(length) | Self::Withheld(length) => (
                     format!("HTTP/1.1 200 Test\r\nContent-Length: {length}\r\n"),
                     b"",
+                ),
+                Self::Refusing(_, body) => (
+                    format!("HTTP/1.1 200 Test\r\nContent-Length: {}\r\n", body.len()),
+                    *body,
                 ),
                 Self::Body {
                     status,
@@ -2100,14 +2453,20 @@ pub(crate) mod tests {
         hits.fetch_add(1, Ordering::SeqCst);
         let head = String::from_utf8_lossy(&request);
         let target = head.split_whitespace().nth(1).unwrap_or_default();
-        let path = target.split('?').next().unwrap_or_default();
-        let reply = routes.get(path).unwrap_or(&MISSING);
+        let (path, query) = target.split_once('?').unwrap_or((target, ""));
+        let reply = match routes.get(path).unwrap_or(&MISSING) {
+            Reply::Refusing(refused, _) if query.contains(refused) => &DENIED,
+            reply => reply,
+        };
         if matches!(reply, Reply::Stall) {
             return std::future::pending::<()>().await;
         }
         let (head, body) = reply.response();
         let head = format!("{head}Connection: close\r\n\r\n");
         let _ = socket.write_all(head.as_bytes()).await;
+        if matches!(reply, Reply::Withheld(_)) {
+            return std::future::pending::<()>().await;
+        }
         let _ = socket.write_all(body).await;
         let _ = socket.shutdown().await;
     }
@@ -3120,20 +3479,22 @@ pub(crate) mod tests {
             link: false,
         };
         let source = EnvironmentSource::new(ExecutionEnvironment::Local);
+        let local = MediaFetcher::new(&source, TEST_POLICY, DEFAULT_CAPS);
+        let remote = MediaFetcher::new(
+            &source,
+            InlinePolicy::direct(ExecutionEnvironment::BrowserSandbox),
+            DEFAULT_CAPS,
+        );
 
-        let followed = MediaFetcher::new(&source, TEST_POLICY, DEFAULT_CAPS)
-            .download(&candidate, 1024)
+        let followed = local
+            .download(&candidate, 1024, &mut local.charge(MediaClass::Binary))
             .await
             .expect("the redirect is followed");
-        let refused = MediaFetcher::new(
-            &source,
-            InlinePolicy::direct(ExecutionEnvironment::Server),
-            DEFAULT_CAPS,
-        )
-        .download(&candidate, 1024)
-        .await
-        .err()
-        .expect("an http response is not inlined");
+        let refused = remote
+            .download(&candidate, 1024, &mut remote.charge(MediaClass::Binary))
+            .await
+            .err()
+            .expect("an http response is not inlined");
 
         assert_eq!(followed.bytes, PDF.len() as u64);
         assert!(refused.to_string().contains("only https"), "{refused}");
@@ -3161,12 +3522,12 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn plain_http_is_fetched_only_on_the_users_machine() {
+    async fn plain_http_is_fetched_where_http_nodes_fetch_it() {
         for (environment, fetched) in [
             (ExecutionEnvironment::Local, true),
             (ExecutionEnvironment::Desktop, true),
             (ExecutionEnvironment::Mobile, true),
-            (ExecutionEnvironment::Server, false),
+            (ExecutionEnvironment::Server, true),
             (ExecutionEnvironment::BrowserSandbox, false),
         ] {
             assert_eq!(
@@ -3189,7 +3550,11 @@ pub(crate) mod tests {
             reader: reader("custom:anthropic"),
             policy: InlinePolicy::direct(ExecutionEnvironment::Server),
         };
-        assert!(on_server.history(&original).await.unwrap().is_none());
+        let error = failure(&original, on_server).await;
+        assert!(
+            error.contains("refused"),
+            "the server's egress guard refuses loopback: {error}"
+        );
         assert_eq!(server.hits(), 0);
         let on_desktop = direct(
             reader("custom:anthropic"),
@@ -3275,14 +3640,13 @@ pub(crate) mod tests {
             format!("data:image/png;base64,{}", STANDARD.encode(PNG))
         );
         assert_eq!(store.hits(), 2);
+        let error = failure(&call, on_server(OwnStorage::default())).await;
         assert!(
-            on_server(OwnStorage::default())
-                .history(&call)
-                .await
-                .expect("nothing is fetched")
-                .is_none(),
-            "a server whose credentials name another store leaves the links alone"
+            error.contains("refused"),
+            "a server whose credentials name another store fetches through its egress guard, \
+             which refuses loopback: {error}"
         );
+        assert_eq!(store.hits(), 2);
         assert_ne!(
             EnvironmentSource::reading(ExecutionEnvironment::Server, Vec::new(), own).cache_scope(),
             EnvironmentSource::new(ExecutionEnvironment::Server).cache_scope(),
@@ -3291,25 +3655,33 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn a_server_fetches_no_other_private_host() {
+    async fn a_server_reads_only_its_own_store_past_its_egress_guard() {
         let store = serve(vec![("/content/report.pdf", Reply::ok(PDF))]).await;
         let other = serve(vec![("/content/report.pdf", Reply::ok(PDF))]).await;
         let own = own_store(&store.base).await;
         let authority = store.base.trim_start_matches("http://");
         let port = authority.rsplit(':').next().expect("a port");
-
-        for link in [
+        let source =
+            EnvironmentSource::reading(ExecutionEnvironment::Server, Vec::new(), own.clone());
+        let on_loopback = [
             other.url("/content/report.pdf"),
+            store.url("/other-bucket/report.pdf"),
+            store.url("/minio/v2/metrics/cluster"),
+            store.url("/content/a%2F..%2F..%2Fother-bucket/report.pdf"),
             format!("http://localhost:{port}/content/report.pdf"),
             format!("http://key:secret@{authority}/content/report.pdf"),
+        ];
+
+        for link in on_loopback.iter().cloned().chain([
             "http://minio:9000/content/report.pdf".to_string(),
             "http://10.0.0.5:9000/content/report.pdf".to_string(),
-        ] {
-            let fetched = on_server(own.clone())
-                .history(&pdf_at(link.clone()))
-                .await
-                .expect("the link is left alone");
-            assert!(fetched.is_none(), "{link}");
+        ]) {
+            assert!(!source.owns(&link), "{link}");
+        }
+        for link in on_loopback {
+            let error = failure(&pdf_at(link.clone()), on_server(own.clone())).await;
+            assert!(error.contains("refused"), "{link}: {error}");
+            assert!(!error.contains("secret"), "{error}");
         }
         assert_eq!(store.hits() + other.hits(), 0);
     }
@@ -3437,6 +3809,342 @@ pub(crate) mod tests {
             !error.contains("content/") && !error.contains("secret"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn a_store_scope_is_read_from_its_probe_link() {
+        let url = |raw: &str| Url::parse(raw).expect("a URL");
+        assert_eq!(
+            StorageScope::from_probe(&url(&format!(
+                "http://rustfs:9000/content/{PROBE_OBJECT}?X-Amz-Signature=secret"
+            ))),
+            Some(StorageScope {
+                origin: url("http://rustfs:9000").origin(),
+                path_prefix: "/content/".to_owned(),
+            })
+        );
+        assert_eq!(
+            StorageScope::from_probe(&url(&format!(
+                "https://content.s3.us-east-1.amazonaws.com/{PROBE_OBJECT}"
+            ))),
+            Some(StorageScope {
+                origin: url("https://content.s3.us-east-1.amazonaws.com").origin(),
+                path_prefix: "/".to_owned(),
+            })
+        );
+        for probe in [
+            "http://rustfs:9000/content/other-object".to_owned(),
+            format!("http://rustfs:9000/content/x{PROBE_OBJECT}"),
+            format!("asset://localhost/content/{PROBE_OBJECT}"),
+        ] {
+            assert_eq!(StorageScope::from_probe(&url(&probe)), None, "{probe}");
+        }
+    }
+
+    #[tokio::test]
+    async fn only_object_keys_under_the_stores_bucket_link_into_it() {
+        let endpoint = "http://rustfs:9000";
+        let own = own_store(endpoint).await;
+        let fixture = signed_link(
+            &s3_store(endpoint),
+            "tmp/user/me/Übersicht (2)#1.pdf",
+            Duration::from_secs(600),
+        )
+        .await;
+        assert!(own.contains(&fixture), "{fixture}");
+        for owned in [
+            "http://rustfs:9000/content/tmp/user/me/report.pdf?X-Amz-Signature=secret",
+            "http://rustfs:9000/content/apps/app-1/storage/a%20b%23c.pdf",
+        ] {
+            assert!(own.contains(&Url::parse(owned).unwrap()), "{owned}");
+        }
+        for foreign in [
+            "http://rustfs:9000/other-bucket/x.txt",
+            "http://rustfs:9000/minio/v2/metrics/cluster",
+            "http://rustfs:9000/contents/x.txt",
+            "http://rustfs:9000/content",
+            "http://rustfs:9000/content/",
+            "http://rustfs:9000/content//x.txt",
+            "http://rustfs:9000/content/x.txt/",
+            "http://rustfs:9000/content/a%2F..%2F..%2Fother-bucket/x.txt",
+            "http://rustfs:9000/content/a%5C..%5Cx.txt",
+            "http://rustfs:9000/content/a%00.txt",
+            "http://rustfs:9000/content/a/%2E%2E%2Fx.txt",
+            "http://key:secret@rustfs:9000/content/x.txt",
+            "https://rustfs:9000/content/x.txt",
+            "http://rustfs:9001/content/x.txt",
+        ] {
+            assert!(!own.contains(&Url::parse(foreign).unwrap()), "{foreign}");
+        }
+        for dotted in ["a/./b", "a/../b", "%2e/b", "a/%2E%2e"] {
+            assert!(!is_object_key(dotted), "{dotted}");
+        }
+    }
+
+    async fn signed_link(store: &FlowLikeStore, key: &str, ttl: Duration) -> Url {
+        store
+            .sign("GET", &flow_like_storage::Path::from(key), ttl)
+            .await
+            .expect("a signed link")
+    }
+
+    fn expiry(link: &Url) -> Option<String> {
+        link.query_pairs()
+            .find(|(name, _)| name == "X-Amz-Expires")
+            .map(|(_, value)| value.into_owned())
+    }
+
+    const WEEK: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+    /// The own store at `endpoint`, taken to be one a provider reaches, as it reaches public
+    /// HTTPS.
+    async fn reachable_store(endpoint: &str) -> OwnStorage {
+        let mut own = own_store(endpoint).await;
+        for store in &mut own.stores {
+            store.reachable = OnceCell::new_with(Some(true));
+        }
+        own
+    }
+
+    /// A server call through `own_storage` to a provider that fetches image and PDF links.
+    fn linking_on_server(own_storage: OwnStorage) -> MediaPreparation {
+        MediaPreparation {
+            source: Arc::new(EnvironmentSource::reading(
+                ExecutionEnvironment::Server,
+                Vec::new(),
+                own_storage,
+            )),
+            reader: reader("custom:openai"),
+            policy: InlinePolicy::direct(ExecutionEnvironment::Server),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_provider_fetches_links_into_the_own_store_signed_again_to_expire_soon() {
+        let photo_key = "tmp/user/me/Übersicht (2)#1.png";
+        let photo_path = signed_link(&s3_store("http://127.0.0.1"), photo_key, PROBE_TTL)
+            .await
+            .path()
+            .to_owned();
+        let store = serve(vec![
+            (photo_path.as_str(), Reply::ok(PNG)),
+            ("/content/apps/app-1/storage/report.pdf", Reply::ok(PDF)),
+        ])
+        .await;
+        let signer = s3_store(&store.base);
+        let photo = signed_link(&signer, photo_key, WEEK).await;
+        let report = signed_link(&signer, "apps/app-1/storage/report.pdf", WEEK).await;
+        let foreign = format!("{PUBLIC}/other-bucket/cat.png");
+        let call = history(vec![user(vec![
+            text("look"),
+            image(photo.to_string(), None),
+            document(report.to_string(), Some(PDF_TYPE)),
+            image(foreign.clone(), None),
+        ])]);
+
+        let resolved = linking_on_server(reachable_store(&store.base).await)
+            .history(&call)
+            .await
+            .expect("nothing is downloaded")
+            .expect("parts changed");
+
+        for (part, held) in [(1, &photo), (2, &report)] {
+            let sent = Url::parse(url_at(&resolved, 0, part)).expect("a link");
+            assert_eq!(
+                (sent.origin(), sent.path()),
+                (held.origin(), held.path()),
+                "part {part} names the same object"
+            );
+            assert_eq!(expiry(held).as_deref(), Some("604800"));
+            assert_eq!(expiry(&sent).as_deref(), Some("300"), "part {part}");
+        }
+        assert_eq!(
+            url_at(&resolved, 0, 3),
+            foreign,
+            "a public link into another bucket stays as it is"
+        );
+        assert_eq!(
+            store.hits(),
+            2,
+            "one byte is read of each link signed again"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_link_signed_again_that_the_store_refuses_is_read_inline_with_the_runs_link() {
+        let key = "apps/other-app/storage/photo.png";
+        let store = serve(vec![(
+            "/content/apps/other-app/storage/photo.png",
+            Reply::Refusing("X-Amz-Expires=300", PNG),
+        )])
+        .await;
+        let held = signed_link(&s3_store(&store.base), key, WEEK).await;
+        let call = history(vec![user(vec![
+            text("look"),
+            image(held.to_string(), None),
+        ])]);
+
+        let resolved = linking_on_server(reachable_store(&store.base).await)
+            .history(&call)
+            .await
+            .expect("the media is read with the run's link")
+            .expect("parts changed");
+
+        assert_eq!(
+            url_at(&resolved, 0, 1),
+            format!("data:image/png;base64,{}", STANDARD.encode(PNG))
+        );
+        assert_eq!(
+            store.hits(),
+            2,
+            "the store refused the link signed again and served the run's own"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_link_into_the_own_store_that_cannot_be_signed_again_is_sent_inline() {
+        let own = OwnStorage::signed_by([s3_store(PUBLIC)]).await;
+        let unsigned = OwnStorage {
+            stores: own
+                .stores
+                .iter()
+                .map(|known| {
+                    OwnStore::new(
+                        known.scope.clone(),
+                        FlowLikeStore::Memory(Arc::new(
+                            flow_like_storage::object_store::memory::InMemory::new(),
+                        )),
+                    )
+                })
+                .collect(),
+        };
+        let photo = format!("{PUBLIC}/content/tmp/user/me/photo.png?X-Amz-Expires=604800");
+
+        for (own, link, why) in [
+            (
+                own,
+                format!("{PUBLIC}/content/a(1).png"),
+                "it signs another form",
+            ),
+            (unsigned, photo, "it cannot sign"),
+        ] {
+            let source = EnvironmentSource::reading(ExecutionEnvironment::Server, Vec::new(), own);
+            assert_eq!(source.link(&link).await.unwrap(), Link::Inline, "{why}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_relayed_call_sends_private_media_inline_and_every_other_link_as_held() {
+        let intranet = serve(vec![
+            ("/scans/cat.png", Reply::ok(PNG)),
+            ("/reports/q3.pdf", Reply::ok(PDF)),
+            ("/reports/big.pdf", Reply::Declared(5_000_000)),
+        ])
+        .await;
+        let store = serve(vec![]).await;
+        let call = history(vec![user(vec![
+            text("read"),
+            image(intranet.url("/scans/cat.png"), None),
+            document(intranet.url("/reports/q3.pdf"), Some(PDF_TYPE)),
+            image(format!("{PUBLIC}/cat.png"), None),
+            document(format!("{PUBLIC}/report.pdf"), Some(PDF_TYPE)),
+            document(
+                store.url("/content/tmp/user/me/report.pdf?X-Amz-Signature=secret"),
+                Some(PDF_TYPE),
+            ),
+        ])]);
+        let model = RemoteMediaModel::relayed(
+            Arc::new(RecordingModel::default()),
+            ExecutionEnvironment::Local,
+            reader("custom:anthropic"),
+            own_store(&store.base).await,
+        );
+
+        let resolved = model
+            .media
+            .history(&call)
+            .await
+            .expect("the private media is fetched")
+            .expect("parts changed");
+
+        for (part, inline) in [
+            (1, format!("data:image/png;base64,{}", STANDARD.encode(PNG))),
+            (
+                2,
+                format!("data:application/pdf;base64,{}", STANDARD.encode(PDF)),
+            ),
+        ] {
+            assert_eq!(
+                url_at(&resolved, 0, part),
+                inline,
+                "no provider and not the relay reaches a private host"
+            );
+        }
+        for part in 3..=5 {
+            assert_eq!(
+                url_at(&resolved, 0, part),
+                url_at(&call, 0, part),
+                "the relay resolves public links and links into its storage"
+            );
+        }
+        assert_eq!((intranet.hits(), store.hits()), (2, 0));
+        assert_eq!(model.media.reader.caps.call, RELAY_CAPS.call);
+
+        let error = model
+            .media
+            .history(&pdf_at(intranet.url("/reports/big.pdf")))
+            .await
+            .expect_err("the PDF is over the relay's inline limit")
+            .to_string();
+        assert!(
+            error.contains("document (application/pdf) at host '127.0.0.1'"),
+            "{error}"
+        );
+        assert!(error.contains("over the 4000000-byte limit"), "{error}");
+        assert!(!error.contains("big.pdf"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn downloads_hold_their_declared_length_of_the_call_budget_before_the_body_arrives() {
+        let server = serve(vec![
+            ("/first.pdf", Reply::ok(LARGE)),
+            ("/second.pdf", Reply::ok(LARGE)),
+            ("/withheld.pdf", Reply::Withheld(LARGE.len() as u64)),
+        ])
+        .await;
+        let part = LARGE.len() as u64;
+        let budget = |call: u64| MediaReader {
+            caps: InlineCaps::total(call),
+            ..reader("custom:anthropic")
+        };
+        let held_back = history(vec![user(vec![
+            text("read"),
+            document(server.url("/first.pdf"), Some(PDF_TYPE)),
+            document(server.url("/withheld.pdf"), Some(PDF_TYPE)),
+        ])]);
+
+        let started = std::time::Instant::now();
+        let error = failure(&held_back, direct(budget(part + 952), TEST_POLICY)).await;
+
+        assert!(started.elapsed() < Duration::from_secs(3), "{error}");
+        assert!(
+            error.contains(&format!(
+                "its {part} bytes exceed the 952 bytes left of this call's {}-byte inline limit",
+                part + 952
+            )),
+            "{error}"
+        );
+        let fitting = history(vec![user(vec![
+            text("read"),
+            document(server.url("/first.pdf"), Some(PDF_TYPE)),
+            document(server.url("/second.pdf"), Some(PDF_TYPE)),
+        ])]);
+        let resolved = direct(budget(2 * part), TEST_POLICY)
+            .history(&fitting)
+            .await
+            .expect("parts that fill the budget exactly are sent")
+            .expect("parts changed");
+        assert!(url_at(&resolved, 0, 2).starts_with("data:application/pdf;base64,"));
     }
 
     fn asset_link(base: &str, path: &std::path::Path) -> String {

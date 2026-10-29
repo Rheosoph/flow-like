@@ -328,10 +328,11 @@ pub(crate) fn legacy_authority(owner: Result<(String, RunAsFacts), PatRefusal>) 
     }
 }
 
-/// Makes `actor` the run-as user of the app's active sinks for `event_ids` and drops
-/// their legacy PAT. Sinks that ran as someone else, or as no one, also lose the
-/// OAuth grants and profile snapshot of that identity. Returns how many sinks now
-/// run as `actor`.
+/// Makes `actor` the run-as user of the app's sinks for `event_ids`, on or off, and drops
+/// their legacy PAT. Sinks that ran as someone else, or as no one, also lose the OAuth
+/// grants and profile snapshot of that identity, so a sink switched off keeps none of them
+/// for whoever turns it back on. Whether a sink is on, and a release's mark, stay as they
+/// are. Returns how many sinks now run as `actor`.
 pub(crate) async fn bind_run_as<C: ConnectionTrait>(
     db: &C,
     app_id: &str,
@@ -353,11 +354,10 @@ pub(crate) async fn bind_run_as<C: ConnectionTrait>(
     Ok(kept + rebound)
 }
 
-fn active_sinks(app_id: &str, event_ids: &[String]) -> UpdateMany<event_sink::Entity> {
+fn listed_sinks(app_id: &str, event_ids: &[String]) -> UpdateMany<event_sink::Entity> {
     event_sink::Entity::update_many()
         .filter(event_sink::Column::AppId.eq(app_id))
         .filter(event_sink::Column::EventId.is_in(event_ids.iter().map(String::as_str)))
-        .filter(event_sink::Column::Active.eq(true))
 }
 
 fn rebind_same_person(
@@ -366,7 +366,7 @@ fn rebind_same_person(
     actor: &str,
     now: DateTimeWithTimeZone,
 ) -> UpdateMany<event_sink::Entity> {
-    active_sinks(app_id, event_ids)
+    listed_sinks(app_id, event_ids)
         .set(event_sink::ActiveModel {
             pat_encrypted: Set(None),
             updated_at: Set(now),
@@ -381,7 +381,7 @@ fn rebind_other_person(
     actor: &str,
     now: DateTimeWithTimeZone,
 ) -> UpdateMany<event_sink::Entity> {
-    active_sinks(app_id, event_ids)
+    listed_sinks(app_id, event_ids)
         .set(event_sink::ActiveModel {
             run_as_user_id: Set(Some(actor.to_owned())),
             pat_encrypted: Set(None),
@@ -664,6 +664,9 @@ mod tests {
         }
     }
 
+    /// A sink switched off is bound like one that is on, so it keeps no grants of a person
+    /// for whoever turns it back on; the bind leaves whether it is on, and a release's mark,
+    /// as they are.
     #[test]
     fn rebinding_keeps_credentials_only_for_the_same_person() {
         let events = ["event-1".to_string(), "event-2".to_string()];
@@ -682,9 +685,11 @@ mod tests {
             for fragment in [
                 r#""appId" = 'app-1'"#,
                 r#""eventId" IN ('event-1', 'event-2')"#,
-                r#""active" = TRUE"#,
             ] {
                 assert!(filter.contains(fragment), "{fragment} missing from {sql}");
+            }
+            for column in [r#""active""#, r#""runAsReleasedAt""#] {
+                assert!(!sql.contains(column), "{column} in {sql}");
             }
             assert!(set.contains(r#""patEncrypted" = NULL"#), "{sql}");
             (set.to_owned(), filter.to_owned())
@@ -1045,27 +1050,28 @@ mod tests {
                 .map(str::to_owned)
                 .into();
 
-            assert_eq!(bind_run_as(&txn, "app", &listed, "actor").await.unwrap(), 3);
+            assert_eq!(bind_run_as(&txn, "app", &listed, "actor").await.unwrap(), 4);
             assert_eq!(bind_run_as(&txn, "app", &[], "actor").await.unwrap(), 0);
 
-            let row = |id: &str, run_as: &str, pat: bool, oauth: bool, profile: bool| SinkRow {
+            let row = |id: &str, active: bool, run_as: &str, pat, oauth, profile| SinkRow {
                 id: id.to_owned(),
+                active,
                 run_as: run_as.to_owned(),
                 pat,
                 oauth,
                 profile,
             };
             let expected = [
-                row("foreign", "previous", true, true, true),
-                row("legacy", "actor", false, false, false),
-                row("other", "actor", false, false, false),
-                row("paused", "previous", true, true, true),
-                row("same", "actor", false, true, true),
-                row("unlisted", "previous", true, true, true),
+                row("foreign", true, "previous", true, true, true),
+                row("legacy", true, "actor", false, false, false),
+                row("other", true, "actor", false, false, false),
+                row("paused", false, "actor", false, false, false),
+                row("same", true, "actor", false, true, true),
+                row("unlisted", true, "previous", true, true, true),
             ];
             assert_eq!(sink_rows(&txn).await, expected);
 
-            assert_eq!(bind_run_as(&txn, "app", &listed, "actor").await.unwrap(), 3);
+            assert_eq!(bind_run_as(&txn, "app", &listed, "actor").await.unwrap(), 4);
             assert_eq!(sink_rows(&txn).await, expected);
             txn.rollback().await.unwrap();
         }
@@ -1133,6 +1139,7 @@ mod tests {
         #[derive(Debug, PartialEq)]
         struct SinkRow {
             id: String,
+            active: bool,
             run_as: String,
             pat: bool,
             oauth: bool,
@@ -1142,7 +1149,7 @@ mod tests {
         async fn sink_rows(txn: &DatabaseTransaction) -> Vec<SinkRow> {
             txn.query_all_raw(Statement::from_string(
                 DbBackend::Postgres,
-                r#"SELECT id, "runAsUserId", "patEncrypted" IS NOT NULL AS pat,
+                r#"SELECT id, active, "runAsUserId", "patEncrypted" IS NOT NULL AS pat,
                           "oauthTokensEncrypted" IS NOT NULL AS oauth, "profileJson" IS NOT NULL AS profile
                    FROM public."EventSink" ORDER BY id"#,
             ))
@@ -1153,6 +1160,7 @@ mod tests {
                 let flag = |name: &str| row.try_get::<bool>("", name).unwrap();
                 SinkRow {
                     id: row.try_get("", "id").unwrap(),
+                    active: flag("active"),
                     run_as: row.try_get("", "runAsUserId").unwrap(),
                     pat: flag("pat"),
                     oauth: flag("oauth"),

@@ -144,6 +144,7 @@ import {
 	EventRunAsNotice,
 	RunAsChip,
 	eventRunAs,
+	eventRunAsAudience,
 	eventSinkStatusQuery,
 	servesHostedVisitors,
 	useTurnOnAsMe,
@@ -1734,7 +1735,7 @@ function EventConfiguration({
 					{(runAs?.kind === "bound" || runAs?.kind === "unbound") && (
 						<RunAsChip
 							runAs={runAs}
-							hosted={hostedVisitors}
+							audience={eventRunAsAudience(savedEvent, hostedVisitors)}
 							className="shrink-0 rounded-md px-2 py-0.5 text-xs font-medium"
 						/>
 					)}

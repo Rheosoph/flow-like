@@ -46,7 +46,7 @@ import {
 import { captureTelemetryError } from "../../lib/telemetry/errors";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
-import { useBackend } from "../../state/backend-state";
+import { type IBackendState, useBackend } from "../../state/backend-state";
 import { useExecutionEngine } from "../../state/execution-engine-context";
 import { getFrontendStateStore } from "../a2ui/frontend-state";
 import { buildWorkflowFrontendContext } from "../a2ui/workflow-payload";
@@ -74,6 +74,8 @@ import { fileToAttachment } from "./chat-default/attachment";
 import { Chat, type IChatRef } from "./chat-default/chat";
 import {
 	type IAttachment,
+	type IGlobalState,
+	type ILocalChatState,
 	type IMessage,
 	chatDb,
 	decodeMessageRow,
@@ -135,7 +137,7 @@ function runFailureCard(
 async function prepareAttachments(
 	filesAttached: File[] | undefined,
 	audioFile: File | undefined,
-	backend: any,
+	backend: IBackendState,
 	isOffline: boolean,
 ) {
 	const imageFiles =
@@ -402,8 +404,8 @@ function createPayload(
 	userMessage: IMessage,
 	lastMessages: IMessage[],
 	historyMessage: IHistoryMessage,
-	localState: any,
-	globalState: any,
+	localState: ILocalChatState | undefined,
+	globalState: IGlobalState | undefined,
 	activeTools: string[],
 	otherAttachments: IAttachment[],
 	thinking: ChatThinkingLevel,
@@ -655,7 +657,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	}, [activeInteractions]);
 
 	const handleRespondToInteraction = useCallback(
-		async (interactionId: string, value: any) => {
+		async (interactionId: string, value: unknown) => {
 			const interaction = activeInteractionsRef.current.find(
 				(i) => i.id === interactionId,
 			);
@@ -746,7 +748,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	);
 
 	const handleNavigationEvents = useCallback(
-		(events: any[]) => {
+		(events: IIntercomEvent[]) => {
 			for (const ev of events) {
 				if (ev?.event_type !== "a2ui") continue;
 				const message = ev?.payload;
@@ -805,9 +807,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	useEffect(() => {
 		processedCompletedStreams.current.clear();
 		return () => {
-			activeSubscriptions.current.forEach((subId) => {
+			for (const subId of activeSubscriptions.current) {
 				executionEngine.unsubscribeFromEventStream(sessionIdParameter, subId);
-			});
+			}
 			activeSubscriptions.current = [];
 		};
 	}, [sessionIdParameter, executionEngine]);
@@ -897,6 +899,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		[updateSessionId],
 	);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `t` only labels the hover cards; a language switch must not rebuild the elements and re-push them into the toolbar.
 	const toolbarElements = useMemo(() => {
 		return [
 			<HoverCard key="chat-history" openDelay={200} closeDelay={100}>
@@ -955,6 +958,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		];
 	}, [handleSidebarToggle, handleNewChat]);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `t` only labels the Navigate trigger; a language switch must not rebuild the elements and re-push them into the nav bar.
 	const navElements = useMemo(() => {
 		const normalizeRoute = (value: string): string => {
 			const trimmed = value.trim();
@@ -963,7 +967,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		};
 
 		const configuredRoutes = (() => {
-			const rawArray = (config as any)?.navigate_to_routes;
+			const rawArray = config?.navigate_to_routes;
 			const raw: string[] = Array.isArray(rawArray) ? rawArray : [];
 			const normalized = raw
 				.map((r) => normalizeRoute(String(r)))
@@ -1488,6 +1492,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			sessionIdParameter,
 			appId,
 			event,
+			config?.attach_widget_snapshots,
 			localState,
 			globalState,
 			handleNavigationEvents,
@@ -1585,9 +1590,14 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				);
 			} catch (error) {
 				// Active stream errors and OAuth errors are handled separately
-				if ((error as any)?.isActiveStreamError) {
+				if (
+					(error as { isActiveStreamError?: unknown } | null)
+						?.isActiveStreamError
+				) {
 					// Already shown a toast in executeChatMessage guard
-				} else if (!(error as any)?.isOAuthError) {
+				} else if (
+					!(error as { isOAuthError?: unknown } | null)?.isOAuthError
+				) {
 					console.error("Error sending message:", error);
 					captureTelemetryError(error, {
 						culprit: "chat.send_message",
@@ -1612,17 +1622,16 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				throw new Error(`Message ${messageId} not found`);
 			}
 
-			const nextMessage: IMessage = {
+			const merged: IMessage = {
 				...existingMessage,
 				...updates,
 			};
-
-			if (
+			const { ratingSettings: _cleared, ...withoutSettings } = merged;
+			const nextMessage: IMessage =
 				Object.prototype.hasOwnProperty.call(updates, "ratingSettings") &&
 				updates.ratingSettings === undefined
-			) {
-				delete nextMessage.ratingSettings;
-			}
+					? withoutSettings
+					: merged;
 
 			await putChatMessage(nextMessage);
 
@@ -1713,6 +1722,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	// elsewhere). Its a2ui events (forwarded via onA2UIEvents) update the
 	// widget in place; toasts surface via the executeBoard transport; and any
 	// chat pushes from the triggered workflow become a new assistant message.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: `t` only words the failure toast; a language switch must not hand every embedded widget a new action handler.
 	const runWidgetAction = useCallback<RunWidgetAction>(
 		async (actionAppId, actionBoardId, runPayload, onA2UIEvents) => {
 			const responseMessage = createResponseMessage(

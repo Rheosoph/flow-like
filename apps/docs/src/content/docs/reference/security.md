@@ -288,16 +288,29 @@ Vertex Bit needs a service-account key or an access token; application-default
 credentials, which would resolve the server's own identity, are refused.
 Gemini's own media download accepts only public HTTPS URLs.
 
-Media for a private model travels as links wherever possible. The executor
-sends links as the run holds them and inlines only media that exists only as
-bytes, up to 6 MB per call. The relay then hands a link to providers that fetch
-public HTTPS links themselves; links into the installation's own storage are
-checked with the run's own link and re-signed for five minutes first. Media a
-provider needs inline is fetched by the relay: from its own storage even when
-that is internal, otherwise only over the guarded egress above, with a timeout
-and a size cap per provider. A file type a model cannot take at all reaches it
-as the note `[attachment omitted: unsupported file type <type>]`; any other
-media that cannot be delivered fails the call, naming the host, never the URL.
+Media for a private model travels as links wherever a provider can fetch them.
+The executor sends links to public hosts and into the installation's own
+storage as the run holds them, and media that exists only as bytes inline. No
+provider reaches a private or internal host, so the executor fetches media
+there itself, with the reach of its HTTP nodes (host-plane addresses refused),
+and sends it inline, up to 4 MB per call within the relay's 6 MB request limit.
+The relay then hands a link to providers that fetch public HTTPS links
+themselves; links into the installation's own storage are checked with the
+run's own link and re-signed for five minutes first. Media a provider needs
+inline is fetched by the relay: from its own storage even when that is
+internal, otherwise only over public HTTPS, also when
+`CUSTOM_MODEL_EGRESS=private` lets the model endpoint itself be private, with a
+timeout and a size cap per provider that downloads reserve before their bytes
+arrive. The relay never fetches any other host. Runs that call a provider
+directly follow the same rule: a provider that fetches links itself gets public
+ones, and the run sends any other media inline. Links into the installation's
+own storage are re-signed for five minutes with the run's own credentials, or
+sent inline when the run cannot read them that way; only object keys inside the
+storage's own bucket count as its storage.
+A file type a model cannot take at all reaches it as the note
+`[attachment omitted: unsupported file type <type>]`; any other media that
+cannot be delivered fails the call, naming the host, never the URL. A host that
+does not resolve is refused with the same message as one on a refused address.
 
 Global chat fetches attachment links the same way: from the installation's own
 storage, or over public HTTPS with a timeout and a size cap enforced while
@@ -351,6 +364,14 @@ records:
   an App connection their rights are their own role in that App limited by the
   connection's role, column attributes included; a person who is not a member
   may only trigger Events. Owner and Admin rights are never handed out this way.
+  Such a run uses the Event's saved OAuth sign-ins only for providers the person
+  did not sign in to themselves, only while the run-as person may still run the
+  Event, and only to run the Event's current Flow draft or pinned version: a
+  hosted page action loaded for an earlier draft is refused once the Flow
+  changes.
+  Every run re-reads the Event just before it starts, so switching an Event off
+  also stops runs that were about to start. Anonymous callers never learn which
+  saved sign-in failed.
 - A run that nobody triggers (schedules, webhooks, bots, inbound mail,
   anonymous hosted visitors, public API calls, scheduled replays) runs as the
   Event's run-as person: whoever last saved, restored, edited or switched it on,
@@ -362,7 +383,15 @@ records:
   pauses for such runs and the App's owners and admins are notified; runs a
   person triggers continue. Events of an inactive App do not fire. Such runs
   never pass a person on to other Apps: their connection tokens name the run
-  (`run:{id}`), not the run-as person.
+  (`run:{id}`), not the run-as person. An edit rebinds the Event even while it
+  is switched off, so switching it back on never runs someone else's edit with
+  the previous person's sign-ins; if the rebind cannot be written, the edit is
+  refused with `503 SINK_REBIND_UNAVAILABLE` and nothing is saved.
+- A run on a device mints its connection tokens with its user's own sign-in, so
+  it always passes that user to connected Apps, with the user's own role there,
+  also when nobody started it, such as a schedule. Only a run on the hub can act
+  for the App without a person. A run id it names must be a run the same user
+  or API key started.
 - A run started with an API key acts as the key, with the key's role. It has
   no user cache and no personal locked files, and it must name a member to
   notify. Its requests, model calls included, are refused once the key is

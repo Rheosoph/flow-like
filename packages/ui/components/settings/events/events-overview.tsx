@@ -102,8 +102,10 @@ import { EventDeleteDialog } from "./event-delete-dialog";
 import {
 	type EventRunAs,
 	ReleasedEventsBanner,
+	type RunAsAudience,
 	RunAsChip,
 	eventRunAs,
+	eventRunAsAudience,
 	eventSinkStatusQuery,
 	servesHostedVisitors,
 	useTurnOnAsMe,
@@ -157,9 +159,8 @@ interface EventRowModel {
 	requiresSink: boolean;
 	sinkActive?: boolean;
 	sinkStatusLoading: boolean;
-	/** Visitors of the hosted link run it with its run-as user's access. */
-	hosted: boolean;
 	runAs: EventRunAs | null;
+	runAsAudience: RunAsAudience;
 	/** This computer's trigger has no personal access token, so it never fires. */
 	needsToken: boolean;
 	failedReason?: string;
@@ -411,8 +412,8 @@ export function EventsOverview({
 				requiresSink,
 				sinkActive,
 				sinkStatusLoading: sinkQuery?.isPending ?? true,
-				hosted,
 				runAs: requiresSink || hosted ? eventRunAs(event, sinkStatus) : null,
+				runAsAudience: eventRunAsAudience(event, hosted),
 				needsToken:
 					requiresSink && event.active && sinkStatus?.needs_token === true,
 				failedReason: requiresSink ? sinkStatus?.failed_reason : undefined,
@@ -1451,7 +1452,11 @@ function EventNameBlock({
 					</span>
 				)}
 				{row.runAs?.kind === "released" && (
-					<RunAsChip runAs={row.runAs} className={chip} />
+					<RunAsChip
+						runAs={row.runAs}
+						audience={row.runAsAudience}
+						className={chip}
+					/>
 				)}
 				{row.needsToken && (
 					<span
@@ -1515,7 +1520,7 @@ function EventNameBlock({
 				{row.runAs && row.runAs.kind !== "released" && (
 					<RunAsChip
 						runAs={row.runAs}
-						hosted={row.hosted}
+						audience={row.runAsAudience}
 						className={cn(
 							chip,
 							row.runAs.kind === "bound" && "hidden lg:inline-flex",

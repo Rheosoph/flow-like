@@ -2,9 +2,7 @@
 //! runtime token for a short-lived app-to-app token and call the hub API on
 //! behalf of the current app.
 
-use flow_like::flow::execution::{
-    ExecutionEnvironment, ExecutionMode, LogLevel, context::ExecutionContext,
-};
+use flow_like::flow::execution::{LogLevel, context::ExecutionContext};
 use flow_like_types::{PROXY_EVENT_AUTHORIZATION_HEADER, Value, async_trait, json::json, reqwest};
 use std::sync::{Arc, OnceLock};
 
@@ -542,23 +540,14 @@ pub async fn ensure_remote_ontology_exposed(
     Ok(())
 }
 
-/// Whether a run on this device says nobody started it. Of the runs nobody starts, only a
-/// schedule's can tell, by its execution mode; a webhook or another device trigger looks like a
-/// person's run to the runtime. A run on the hub needs no say: its executor token tells the API.
-fn started_by_nobody(environment: ExecutionEnvironment, mode: ExecutionMode) -> bool {
-    environment.is_local() && mode == ExecutionMode::Scheduled
-}
-
-/// The body of a connection-token request for the run `run_id`. An `unattended` run asks for a
-/// token that names no person, so a device run minting with its user's own token never passes
-/// that user on as the person behind a schedule.
-fn connection_token_request(run_id: &str, ttl_seconds: Option<u64>, unattended: bool) -> Value {
+/// The body of a connection-token request for the run `run_id`, named only to tie the token
+/// into the run's process case. A run on a device mints with its user's own sign-in, so the
+/// token always names that user, a schedule's included; only a run on the hub acts for the app
+/// without a person.
+fn connection_token_request(run_id: &str, ttl_seconds: Option<u64>) -> Value {
     let mut request = json!({ "run_id": run_id });
     if let Some(ttl_seconds) = ttl_seconds {
         request["ttl_seconds"] = json!(ttl_seconds);
-    }
-    if unattended {
-        request["unattended"] = json!(true);
     }
     request
 }
@@ -606,7 +595,6 @@ impl RemoteAppSession {
         let request_body = connection_token_request(
             context.run_id(),
             requested_ttl_seconds.map(|ttl_seconds| ttl_seconds.clamp(60, MAX_TTL_SECONDS)),
-            started_by_nobody(context.execution_environment(), context.execution_mode()),
         );
         let client = if context.request_authorizer().is_some() {
             live_control_plane_http_client()
@@ -1401,9 +1389,8 @@ mod tests {
         find_sse_frame_boundary, finish_sse_outcome, follow_get_redirect_without_credentials,
         http_client, http_client_no_redirect, parse_mcp_response_body,
         remote_connection_refresh_at, remote_ontology_authorization_cache_key,
-        remote_session_deadlines, started_by_nobody, with_event_registration_headers,
+        remote_session_deadlines, with_event_registration_headers,
     };
-    use flow_like::flow::execution::{ExecutionEnvironment, ExecutionMode};
     use flow_like_types::tokio::io::{AsyncReadExt, AsyncWriteExt};
     use flow_like_types::tokio::net::TcpListener;
     use flow_like_types::{json::json, reqwest, tokio};
@@ -1412,33 +1399,17 @@ mod tests {
         SseOutcome::default()
     }
 
-    /// A schedule's run on a device asks for a connection token that names no person, so its
-    /// user's own token never passes them on as the person behind it. Any other device run is
-    /// taken for a person's, and a run on the hub leaves it to its executor token.
+    /// A run on a device, a schedule's included, never asks for a connection token that names
+    /// no person: the request names only its run, so the token names the user it mints with.
     #[test]
-    fn only_a_device_schedule_asks_for_a_token_that_names_no_person() {
-        use ExecutionEnvironment::{BrowserSandbox, Desktop, Local, Mobile, Server};
-        use ExecutionMode::{Async, Event, Scheduled, Sync};
-        for environment in [Local, Desktop, Mobile, BrowserSandbox, Server] {
-            for mode in [Sync, Async, Event, Scheduled] {
-                assert_eq!(
-                    started_by_nobody(environment, mode),
-                    environment != Server && mode == Scheduled,
-                    "{environment:?} {mode:?}"
-                );
-            }
-        }
+    fn a_connection_token_request_names_only_its_run() {
         assert_eq!(
-            connection_token_request("run-1", None, false),
+            connection_token_request("run-1", None),
             json!({"run_id": "run-1"})
         );
         assert_eq!(
-            connection_token_request("run-1", Some(900), true),
-            json!({"run_id": "run-1", "ttl_seconds": 900, "unattended": true})
-        );
-        assert_eq!(
-            connection_token_request("run-1", None, true),
-            json!({"run_id": "run-1", "unattended": true})
+            connection_token_request("run-1", Some(900)),
+            json!({"run_id": "run-1", "ttl_seconds": 900})
         );
     }
 

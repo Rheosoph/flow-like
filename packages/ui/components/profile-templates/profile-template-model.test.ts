@@ -105,8 +105,8 @@ describe("profile template model", () => {
 		if (!copy.apps || !copy.settings)
 			throw new Error("Missing copied configuration");
 		copy.apps[0].favorite_order = 9;
-		copy.apps[0].saved_setting.view = "table";
-		copy.settings.editor.snap = true;
+		(copy.apps[0].saved_setting as { view: string }).view = "table";
+		(copy.settings.editor as { snap: boolean }).snap = true;
 		copy.bits.push("new-hub:model");
 		expect(source).toEqual(original);
 	});

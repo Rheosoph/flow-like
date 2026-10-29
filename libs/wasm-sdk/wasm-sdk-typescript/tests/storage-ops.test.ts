@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { Context } from "../src/context";
-import { MockHostBridge, type FlowPath, type HostBridge } from "../src/host";
-import { MockStorageOps } from "../src/storage-ops-mock";
+import { type FlowPath, type HostBridge, MockHostBridge } from "../src/host";
 import {
-	createStorageOpsBridge,
 	StorageError,
-	writeStorageChunks,
 	type StorageOpsImports,
+	createStorageOpsBridge,
+	writeStorageChunks,
 } from "../src/storage-ops";
+import { MockStorageOps } from "../src/storage-ops-mock";
 
 const path = (name: string, store = "mock"): FlowPath => ({
 	path: name,
@@ -15,6 +15,12 @@ const path = (name: string, store = "mock"): FlowPath => ({
 	cache_store_ref: null,
 });
 const bytes = (text: string) => new TextEncoder().encode(text);
+const present = <T>(value: T | null | undefined, name: string): T => {
+	if (value === null || value === undefined) {
+		throw new Error(`Expected ${name} to be present`);
+	}
+	return value;
+};
 
 describe("typed storage", () => {
 	it("does not require storageOps on an existing bridge", () => {
@@ -30,12 +36,13 @@ describe("typed storage", () => {
 		const storage = new MockStorageOps();
 		const file = path("project/a");
 		const stat = storage.write(file, bytes("abcdef"), { create_only: true });
-		expect(storage.readRange(file, 1n, 3n, stat.e_tag!)).toEqual(bytes("bcd"));
+		const eTag = present(stat.e_tag, "e_tag of the created file");
+		expect(storage.readRange(file, 1n, 3n, eTag)).toEqual(bytes("bcd"));
 		expect(() =>
 			storage.write(file, bytes("x"), { create_only: true }),
 		).toThrowError(expect.objectContaining({ code: "conflict" }));
-		storage.write(file, bytes("new"), { if_match: stat.e_tag! });
-		expect(() => storage.readRange(file, 0, 1, stat.e_tag!)).toThrowError(
+		storage.write(file, bytes("new"), { if_match: eTag });
+		expect(() => storage.readRange(file, 0, 1, eTag)).toThrowError(
 			expect.objectContaining({ code: "conflict" }),
 		);
 		expect(() => storage.stat(path("project/a", "other"))).toThrowError(
@@ -83,21 +90,24 @@ describe("typed storage", () => {
 		};
 		const first = storage.listPage(request);
 		expect(first.entries.map((file) => file.path)).toEqual(["project/a"]);
+		const firstCursor = present(first.cursor, "cursor of the first page");
 		expect(() =>
 			storage.listPage({
 				...request,
 				path: path("other"),
-				cursor: first.cursor!,
+				cursor: firstCursor,
 			}),
 		).toThrowError(expect.objectContaining({ code: "invalid_cursor" }));
-		const second = storage.listPage({ ...request, cursor: first.cursor! });
+		const second = storage.listPage({ ...request, cursor: firstCursor });
 		expect(second.entries.map((file) => file.path)).toEqual(["project/b"]);
 		expect(second.cursor).toBeNull();
 		expect(() =>
-			storage.listPage({ ...request, cursor: first.cursor! }),
+			storage.listPage({ ...request, cursor: firstCursor }),
 		).toThrowError(expect.objectContaining({ code: "invalid_cursor" }));
 		const reopened = storage.listPage(request);
-		storage.closeList(reopened.cursor!);
+		storage.closeList(
+			present(reopened.cursor, "cursor of the reopened listing"),
+		);
 		expect(storage.openListings).toBe(0);
 	});
 
