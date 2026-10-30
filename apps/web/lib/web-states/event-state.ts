@@ -664,7 +664,8 @@ export class WebEventState implements IEventState {
 		let runId: string | undefined;
 		try {
 			beforeDispatch?.();
-			dispatchStart = runTimingNow();
+			const startedAt = runTimingNow();
+			dispatchStart = startedAt;
 			return await runtime.execute(
 				metadata,
 				{
@@ -675,14 +676,14 @@ export class WebEventState implements IEventState {
 					timeoutMs: requestTimeoutMs(invokePath, "POST", body.length),
 				},
 				{
-					onResponse: () => recordRunStep("invoke.response", dispatchStart),
+					onResponse: () => recordRunStep("invoke.response", startedAt),
 					onUnauthorized: session.onUnauthorized,
 					onExecutionStart: (id) => {
 						if (foundRunId) return;
 						foundRunId = true;
 						runId = id;
 						this.runScopes.set(id, metadata.scope);
-						recordRunStep("invoke.until_run_initiated", dispatchStart);
+						recordRunStep("invoke.until_run_initiated", startedAt);
 						onEventId?.(id);
 					},
 					onEvents: cb,
