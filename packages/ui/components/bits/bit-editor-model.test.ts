@@ -45,6 +45,23 @@ function fixture(): IBit {
 	};
 }
 const profile = { id: "profile" } as IProfile;
+
+test("custom model request parameters require an object and cannot change streaming mode", () => {
+	const draft = fixture();
+	draft.parameters.provider.provider_name = "custom:anthropic";
+	for (const invalid of [null, [], "text", 12, { stream: false }]) {
+		draft.parameters.provider.params.request_params = invalid;
+		expect(validateBitDraft(draft, "custom")).toMatch(/request parameters/i);
+	}
+	draft.parameters.provider.params.request_params = {
+		max_tokens: 8192,
+		thinking: { type: "adaptive", option: null },
+		stops: ["END"],
+		feature: false,
+	};
+	expect(validateBitDraft(draft, "custom")).toBeNull();
+});
+
 function apiFixture(source: IBit) {
 	const calls: string[] = [];
 	const state = { failLanguage: "", noResult: false, newId: "" };

@@ -6,6 +6,36 @@ description: Run app-generation benchmarks and inspect the staged app-build prev
 This guide covers the desktop evaluation harness and the opt-in staged-build
 preview. For everyday authoring, see [FlowPilot](/studio/flowpilot/).
 
+## Desktop tool execution and authentication
+
+Desktop runs FlowPilot's platform, runtime, specialist, and app-build tools in
+Rust. The web app keeps its frontend tool adapters. Desktop's frontend receives
+progress, presents approvals, and captures unsaved editor state. Navigation and
+rendered-page interaction still need a UI surface or a native host callback.
+
+Rust hosts can call `global_chat_native` without a webview and supply
+`NativeRunOptions.profile_id` to select a Profile without switching the active
+window. The run captures its Profile, hub, account, and session generation.
+Delegated tools inherit that identity. A `NativeInteractionHandler` can answer
+questions and approvals over the host's transport; Desktop also supports native
+consent dialogs. The host selects Auto mode, and foreground changes propagate
+to existing delegated runs.
+
+Native hosts default to `NativeInteractionMode::Unavailable`. Without an
+interaction callback, questions, UI actions, and fresh approval requests return
+`status: "unavailable"` immediately. This supplies neither consent nor fabricated
+user input. For an app workflow that requests input, FlowPilot requests cancellation
+of that workflow and reports whether the request was delivered. The parent run
+can continue. Foreground commands opt into `Interactive`; a native
+host can also select that mode when it wants to present dialogs.
+
+Native authentication owns token refresh and browser login callbacks per Profile.
+Refreshes are serialized, rotated credentials are persisted before use, and
+logout invalidates captured sessions. Background work must obtain credentials
+through its captured `SessionBinding`; it must never use another window's token.
+This execution API does not schedule iOS background tasks or keep an app process
+alive after the operating system suspends it.
+
 ## Run app-generation evaluations
 
 Use the repository-root CLI to evaluate app generation through the real
@@ -61,8 +91,9 @@ selection and artifact order and recomputes the final summary instead of trustin
 pass bit. It also recomputes behavioral run totals across every case and repeat and checks each
 report against the requested evaluation cohort.
 
-The benchmark uses the shared desktop global-chat and `GlobalToolBridge` path,
-with the selected Codex model at `high` reasoning. A nonce-protected loopback
+The benchmark uses desktop global chat and native tool execution, with
+`GlobalToolBridge` presenting frontend interactions and the selected Codex model
+at `high` reasoning. A nonce-protected loopback
 callback returns the webview result to the controller.
 
 The live benchmark is available in a **development** desktop build at

@@ -2,6 +2,8 @@ import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
+import { deliverExecutionSurfaceEvent } from "../../lib/execution/surfaces";
+import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
 import {
 	openRuntimeNamespace,
 	runtimeDomEventName,
@@ -97,8 +99,10 @@ describe("workflow state round trip", () => {
 							},
 						]);
 					} else if (run.id === "write") {
-						onEvents([
+						const output: IIntercomEvent[] = [
 							{
+								event_id: crypto.randomUUID(),
+								timestamp: { secs_since_epoch: 0, nanos_since_epoch: 0 },
 								event_type: "a2ui",
 								payload: {
 									type: "setPageState",
@@ -108,6 +112,8 @@ describe("workflow state round trip", () => {
 								},
 							},
 							{
+								event_id: crypto.randomUUID(),
+								timestamp: { secs_since_epoch: 0, nanos_since_epoch: 0 },
 								event_type: "a2ui",
 								payload: {
 									type: "setGlobalState",
@@ -115,7 +121,14 @@ describe("workflow state round trip", () => {
 									value: "dark",
 								},
 							},
-						]);
+						];
+						for (const event of output) {
+							deliverExecutionSurfaceEvent(
+								{ appId: _appId, pageId: "page-a" },
+								event,
+							);
+						}
+						onEvents(output);
 					} else if (run.id === "clear") {
 						onEvents([
 							{
@@ -190,6 +203,9 @@ describe("workflow state round trip", () => {
 		expect(payloads[2]._global_state).toEqual({ theme: "dark" });
 		expect(payloads[4]._page_state).toEqual({});
 		expect(contexts["page-b"].globalState).toEqual({ theme: "dark" });
+		// The shared snapshot and original callback persist each state write once.
+		expect(spies[2]).toHaveBeenCalledTimes(1);
+		expect(spies[3]).toHaveBeenCalledTimes(1);
 
 		let hostClears = 0;
 		let runtimeClears = 0;

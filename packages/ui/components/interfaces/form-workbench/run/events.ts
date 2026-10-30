@@ -71,8 +71,9 @@ interface ReaderState {
 
 interface ChatState {
 	response: ChatResponse;
-	readonly message: IMessage;
-	readonly attachments: Map<string, IAttachment>;
+	message: IMessage;
+	messages: IMessage[];
+	attachments: Map<string, IAttachment>;
 	done: boolean;
 }
 
@@ -253,6 +254,7 @@ function readChat(
 		const result = processChatEvents([...events], {
 			intermediateResponse: chat.response,
 			responseMessage: chat.message,
+			responseMessages: chat.messages,
 			attachments: chat.attachments,
 			tmpLocalState: null,
 			tmpGlobalState: null,
@@ -262,6 +264,9 @@ function readChat(
 			sessionId: CHAT_SESSION_ID,
 		});
 		chat.response = result.intermediateResponse;
+		chat.message = result.responseMessage;
+		chat.messages = result.responseMessages;
+		chat.attachments = result.attachments;
 		chat.done = result.done;
 	} catch (error) {
 		console.warn(
@@ -302,12 +307,17 @@ function mediaOf(content: IHistoryMessage["content"]) {
 
 function attachmentsOf(chat: ChatState, state: ReaderState) {
 	const byUrl = new Map<string, IAttachment>();
+	for (const message of chat.messages) {
+		for (const attachment of message.files) addAttachment(byUrl, attachment);
+	}
 	for (const attachment of chat.attachments.values())
 		addAttachment(byUrl, attachment);
 	for (const attachment of state.streamAttachments.values())
 		addAttachment(byUrl, attachment);
-	for (const attachment of mediaOf(chat.message.inner.content))
-		addAttachment(byUrl, attachment);
+	for (const message of chat.messages) {
+		for (const attachment of mediaOf(message.inner.content))
+			addAttachment(byUrl, attachment);
+	}
 	return Array.from(byUrl.values());
 }
 
@@ -324,9 +334,23 @@ function reasoningOf(chat: ChatState, sawPlan: boolean) {
 const outputOf = (chat: ChatState, state: ReaderState): RunOutput => ({
 	eventCount: state.eventCount,
 	steps: state.sawPlan
-		? toRunSteps(chat.message.plan_steps ?? [], chat.message.current_step_id)
+		? chat.messages
+				.flatMap((message) =>
+					toRunSteps(message.plan_steps ?? [], message.current_step_id).map(
+						(step) => ({
+							...step,
+							id:
+								chat.messages.length > 1 ? `${message.id}:${step.id}` : step.id,
+						}),
+					),
+				)
+				.map((step, index) => ({ ...step, number: index + 1 }))
 		: [],
-	answer: joinContentText(chat.message.inner.content) + state.directText,
+	answer:
+		chat.messages
+			.map((message) => joinContentText(message.inner.content))
+			.filter(Boolean)
+			.join("\n\n") + state.directText,
 	reasoning: reasoningOf(chat, state.sawPlan),
 	attachments: attachmentsOf(chat, state),
 	result: state.result,
@@ -365,8 +389,10 @@ class RunEventReader implements RunAccumulator {
 				timestamp: 0,
 			},
 			attachments: new Map(),
+			messages: [],
 			done: false,
 		};
+		this.chat.messages = [this.chat.message];
 	}
 
 	push(events: readonly IIntercomEvent[]): void {

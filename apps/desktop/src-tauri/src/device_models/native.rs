@@ -52,6 +52,7 @@ fn hold(keys: &Arc<ControllerKeys>) {
 /// The account whose hub session reaches the device, and the vault fields its identity is
 /// checked against.
 struct Authority {
+    auth: crate::native_auth::SessionBinding,
     device_id: String,
     api_origin: String,
     account: String,
@@ -162,30 +163,30 @@ impl Refusal {
     }
 }
 
-/// The hub session of the account signed in to the main window; read for every admission, so
-/// refreshed tokens apply.
+/// The captured profile session renews credentials without a webview.
 struct SessionToken {
-    hub: String,
-    account: String,
+    auth: crate::native_auth::SessionBinding,
     device_id: String,
 }
 
 #[async_trait]
 impl AccessToken for SessionToken {
     async fn access_token(&self) -> flow_like_device_client::Result<String> {
-        crate::execution_credentials::session_token(&self.hub, &self.account).ok_or_else(|| {
-            LinkError::Unreachable {
+        self.auth
+            .access_token(None)
+            .await
+            .map_err(|_| LinkError::Unreachable {
                 device_id: self.device_id.clone(),
                 message: format!(
-                    "no window is signed in to {} as account {}; sign in again",
-                    self.hub, self.account
+                    "profile {} requires sign-in to reach this device",
+                    self.auth.profile_id
                 ),
-            }
-        })
+            })
     }
 }
 
 pub(crate) struct NativeLink {
+    owners: Mutex<HashMap<Holder, crate::native_auth::SessionBinding>>,
     hub: reqwest::Client,
     local: reqwest::Client,
     /// One loopback port per device while the app runs. A closed gateway keeps its port, so a
@@ -196,8 +197,10 @@ pub(crate) struct NativeLink {
 impl NativeLink {
     pub(crate) fn new() -> Self {
         Self {
+            owners: Mutex::default(),
             hub: reqwest::Client::builder()
                 .connect_timeout(HUB_TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap_or_default(),
             local: reqwest::Client::builder()
@@ -233,27 +236,44 @@ impl NativeLink {
 
     async fn receipt(&self, keys: &NativeKeys) -> Result<DeviceReceipt, Refusal> {
         let authority = &keys.authority;
-        let token =
-            crate::execution_credentials::session_token(&authority.api_origin, &authority.account)
-                .ok_or_else(|| {
-                    Refusal::SignedOut(format!(
-                        "no window is signed in to {} as account {}",
-                        authority.api_origin, authority.account
-                    ))
-                })?;
+        let token = authority
+            .auth
+            .access_token(None)
+            .await
+            .map_err(Refusal::SignedOut)?;
         let url = format!(
             "{}/devices/{}/identity",
             authority.api_base(),
             authority.device_id
         );
-        let response = self
+        let mut response = self
             .hub
             .get(&url)
-            .bearer_auth(token)
+            .bearer_auth(&token)
             .timeout(HUB_TIMEOUT)
             .send()
             .await
             .map_err(|error| Refusal::Unreachable(format!("GET {url} failed: {error}")))?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            let refreshed = authority
+                .auth
+                .access_token(Some(&token))
+                .await
+                .map_err(Refusal::SignedOut)?;
+            response = self
+                .hub
+                .get(&url)
+                .bearer_auth(refreshed)
+                .timeout(HUB_TIMEOUT)
+                .send()
+                .await
+                .map_err(|_| Refusal::Unreachable("Device identity request failed".into()))?;
+        }
+        if !authority.auth.is_current() {
+            return Err(Refusal::SignedOut(
+                "The device's profile session changed".into(),
+            ));
+        }
         let status = response.status();
         match status.as_u16() {
             401 => {
@@ -320,6 +340,12 @@ impl NativeLink {
     /// The device's session, connected on first use. It lives as long as the keys: a lost tunnel
     /// is replaced on the next open, and locking closes it.
     pub(crate) async fn session(&self, keys: &NativeKeys) -> Result<DeviceSession, Failure> {
+        if !keys.authority.auth.is_current() {
+            keys.keys.lock();
+            return Err(
+                Refusal::SignedOut("The device's profile session changed".into()).failure(),
+            );
+        }
         let mut slot = keys.session.lock().await;
         if let Some(session) = slot.as_ref() {
             return Ok(session.clone());
@@ -327,8 +353,7 @@ impl NativeLink {
         let receipt = self.receipt(keys).await.map_err(Refusal::failure)?;
         let authority = &keys.authority;
         let token = SessionToken {
-            hub: authority.api_origin.clone(),
-            account: authority.account.clone(),
+            auth: authority.auth.clone(),
             device_id: authority.device_id.clone(),
         };
         let hub =
@@ -359,7 +384,10 @@ impl DeviceLink for NativeLink {
     type Gateway = NativeGateway;
 
     async fn unlock(&self, vault: VaultUnlock) -> Result<Unlocked<NativeKeys>, UnlockError> {
+        let holder = Holder::of(&vault);
         let VaultUnlock {
+            profile_id,
+            session_generation,
             device_id,
             password,
             controller_vault,
@@ -370,7 +398,20 @@ impl DeviceLink for NativeLink {
             account,
             keep_unlocked: _,
         } = vault;
+        let auth = crate::native_auth::SessionBinding::capture(&profile_id, &api_origin)
+            .await
+            .map_err(|e| UnlockError::new("signed_out", e))?
+            .filter(|binding| {
+                binding.subject == account && binding.generation == session_generation
+            })
+            .ok_or_else(|| {
+                UnlockError::new(
+                    "signed_out",
+                    "The profile session changed while unlocking the device",
+                )
+            })?;
         let authority = Authority {
+            auth,
             device_id,
             api_origin,
             account,
@@ -393,6 +434,9 @@ impl DeviceLink for NativeLink {
             session: tokio::sync::Mutex::default(),
         };
         let receipt = self.receipt(&keys).await.map_err(Refusal::unlock_error)?;
+        let mut owners = self.owners.lock().unwrap_or_else(PoisonError::into_inner);
+        owners.retain(|_, auth| auth.is_current());
+        owners.insert(holder, keys.authority.auth.clone());
         Ok(Unlocked {
             keys,
             device_name: receipt.name,
@@ -437,7 +481,11 @@ impl DeviceLink for NativeLink {
     }
 
     fn signed_in(&self, holder: &Holder) -> bool {
-        crate::execution_credentials::session_token(&holder.api_origin, &holder.account).is_some()
+        self.owners
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(holder)
+            .is_some_and(crate::native_auth::SessionBinding::is_current)
     }
 }
 

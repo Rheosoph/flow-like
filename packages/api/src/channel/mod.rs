@@ -9,6 +9,7 @@
 //! | `aws_mqtt` | `channel-aws` | IoT Core `SendDirectMessage` |
 //! | `azure_web_pubsub` | `channel-azure` | Web PubSub `sendToGroup` |
 //! | `gcp_firebase_rtdb` | `channel-gcp` | Realtime Database write |
+//! | `nats` | `channel-nats` | WebSocket publish with executor acknowledgement |
 //!
 //! Every non-HTTP handle carries the HTTP push endpoint as its fallback; a push arriving there
 //! for a cloud-transport channel is forwarded onto that transport.
@@ -33,17 +34,19 @@ pub mod forward;
 #[cfg(feature = "channel-gcp")]
 pub mod gcp;
 pub mod issuer;
+#[cfg(feature = "channel-nats")]
+pub mod nats;
 pub mod store;
 pub mod sweep;
 
-pub use forward::{ForwardOutcome, forward_push};
+pub use forward::{ForwardOutcome, forward_push, forward_push_with_id};
 pub use issuer::ChannelIssuer;
 pub use store::DbChannelStore;
 pub use sweep::{ChannelSweeperConfig, spawn_channel_sweeper, sweep_expired};
 
 use flow_like_types::channel::{
     CHANNEL_TRANSPORT_AWS_MQTT, CHANNEL_TRANSPORT_AZURE_WEB_PUBSUB,
-    CHANNEL_TRANSPORT_GCP_FIREBASE_RTDB, CHANNEL_TRANSPORT_HTTP,
+    CHANNEL_TRANSPORT_GCP_FIREBASE_RTDB, CHANNEL_TRANSPORT_HTTP, CHANNEL_TRANSPORT_NATS,
 };
 
 pub const CHANNEL_TRANSPORT_ENV: &str = "CHANNEL_TRANSPORT";
@@ -59,6 +62,8 @@ pub enum ChannelBackend {
     AzureWebPubSub,
     #[cfg(feature = "channel-gcp")]
     GcpFirebaseRtdb,
+    #[cfg(feature = "channel-nats")]
+    Nats,
 }
 
 impl ChannelBackend {
@@ -87,11 +92,13 @@ impl ChannelBackend {
             "azure_web_pubsub" | "azure" | "webpubsub" => Ok(Self::AzureWebPubSub),
             #[cfg(feature = "channel-gcp")]
             "gcp_firebase_rtdb" | "gcp" | "firebase" => Ok(Self::GcpFirebaseRtdb),
+            #[cfg(feature = "channel-nats")]
+            "nats" => Ok(Self::Nats),
             other if CLOUD_TRANSPORT_ALIASES.contains(&other) => Err(format!(
                 "{CHANNEL_TRANSPORT_ENV}={other} names a channel transport that is not compiled into this binary"
             )),
             other => Err(format!(
-                "{CHANNEL_TRANSPORT_ENV}={other} is not a channel transport (expected http, aws_mqtt, azure_web_pubsub or gcp_firebase_rtdb)"
+                "{CHANNEL_TRANSPORT_ENV}={other} is not a channel transport (expected http, aws_mqtt, azure_web_pubsub, gcp_firebase_rtdb or nats)"
             )),
         }
     }
@@ -105,6 +112,8 @@ impl ChannelBackend {
             Self::AzureWebPubSub => CHANNEL_TRANSPORT_AZURE_WEB_PUBSUB,
             #[cfg(feature = "channel-gcp")]
             Self::GcpFirebaseRtdb => CHANNEL_TRANSPORT_GCP_FIREBASE_RTDB,
+            #[cfg(feature = "channel-nats")]
+            Self::Nats => CHANNEL_TRANSPORT_NATS,
         }
     }
 
@@ -125,6 +134,7 @@ const CLOUD_TRANSPORT_ALIASES: &[&str] = &[
     "gcp_firebase_rtdb",
     "gcp",
     "firebase",
+    "nats",
 ];
 
 /// The name every known transport is spelled with on the wire, whether or not this build
@@ -134,6 +144,7 @@ pub const KNOWN_TRANSPORTS: &[&str] = &[
     CHANNEL_TRANSPORT_AWS_MQTT,
     CHANNEL_TRANSPORT_AZURE_WEB_PUBSUB,
     CHANNEL_TRANSPORT_GCP_FIREBASE_RTDB,
+    CHANNEL_TRANSPORT_NATS,
 ];
 
 pub(crate) fn api_base_url() -> String {
@@ -196,6 +207,9 @@ mod tests {
                 }
                 CHANNEL_TRANSPORT_GCP_FIREBASE_RTDB => {
                     assert_eq!(parsed.is_ok(), cfg!(feature = "channel-gcp"), "{name}")
+                }
+                CHANNEL_TRANSPORT_NATS => {
+                    assert_eq!(parsed.is_ok(), cfg!(feature = "channel-nats"), "{name}")
                 }
                 _ => unreachable!(),
             }

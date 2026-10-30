@@ -29,6 +29,7 @@ import { Textarea } from "../../ui/textarea";
 import type { VoiceInvokeMode, VoiceMode } from "../../voice/types";
 import { useSpeechRecognition } from "../../voice/use-speech-recognition";
 import { useVoiceRecorder } from "../../voice/use-voice-recorder";
+import type { IChatMessageInteraction } from "./chat-message-interaction";
 import { FileManagerDialog } from "./chatbox/file-dialog";
 import { isImageFile, useImagePreviewUrls } from "./chatbox/image-previews";
 
@@ -37,6 +38,7 @@ export type ISendMessageFunction = (
 	filesAttached?: File[],
 	activeTools?: string[],
 	audioFile?: File,
+	interaction?: IChatMessageInteraction,
 ) => Promise<void>;
 
 interface ChatBoxProps {

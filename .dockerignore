@@ -20,6 +20,8 @@ node_modules/
 .env.*
 **/.env
 **/.env.*
+# Bundled identity configuration, certificates and CA private keys.
+**/*.oidc/**
 # Credentials from developer tooling must not enter COPY . . or build caches.
 **/.git-credentials
 **/.netrc

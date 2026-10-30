@@ -12,6 +12,7 @@ fn common() -> Arc<CommonConfig> {
             "flow-logs".into(),
         ],
         object_store_tls_gateway: false,
+        channel_nats_url: None,
         backend_pub: "public-key".into(),
         capacity: 1,
         timeout: 3600,

@@ -86,6 +86,74 @@ same web deployment. Setup derives it from `PUBLIC_WEB_URL`, defaulting to
 `/frontend` to API. See [Hosted frontends](/self-hosting/containers/#host-chat-form-and-page-frontends)
 for the static rewrites and existing login callback.
 
+## Run reply channels
+
+The generated deployment uses NATS for interactive run replies. The API issues
+short-lived credentials scoped to each run. Browser clients publish over
+WebSockets, and the executor acknowledges delivery after accepting the reply.
+Per-run executors connect through their execution gateway, so they retain their
+network isolation.
+
+Setup requires OpenSSL with Ed25519 support and generates two Secrets:
+`<release>-nats-issuer` contains the account signing
+seed for the API, and `<release>-nats-server` contains `nats.conf` with public
+operator/account tokens and the allowed HTTP(S) browser origins. The broker
+never receives the signing seed.
+
+```yaml
+channels:
+  transport: nats
+  nats:
+    enabled: true
+    publicWebsocketUrl: wss://api.example.com/nats
+    issuerSecret: flow-like-nats-issuer
+    serverSecret: flow-like-nats-server
+```
+
+When the chart's ingress is enabled, it adds `/nats` on each configured host and
+routes it to the broker's WebSocket Service port. Use TLS at the ingress. With
+an external ingress, route the same path to `<release>-nats:8080`. The native
+port 4222 is available only inside the cluster. For local port forwarding, use
+the broker Service and set `publicWebsocketUrl` to that forwarded address.
+
+The broker's origin list comes from `PUBLIC_WEB_URL` at setup time. Update the
+`nats.conf` Secret and restart NATS when changing it. Desktop clients using a
+`tauri://` origin use the API's HTTP forwarding fallback because NATS accepts
+only HTTP(S) browser origins. Collaboration signaling remains independent.
+
+The bundled broker deliberately runs one replica with a recreate strategy.
+Increasing `replicaCount` without NATS cluster routes would split subscriptions
+between independent brokers, so the chart rejects it. For broker high
+availability, use an existing NATS cluster:
+
+```yaml
+channels:
+  nats:
+    enabled: false
+    url: nats://nats.internal.example.com:4222
+    publicWebsocketUrl: wss://nats.example.com
+    issuerSecret: existing-nats-account
+```
+
+That Secret must contain `CHANNEL_NATS_ACCOUNT_SEED` for an account trusted by
+the external cluster. Use a stable Service or load-balancer DNS name; channel
+clients reconnect through the configured endpoint instead of broker-discovered
+addresses. The isolated execution gateway currently accepts `nats://` inside
+the trusted private network. Native `tls://` endpoints are supported in
+`trusted_shared` mode, where executors connect directly. Permit the native endpoint in
+`networkPolicy.controlPlaneExtraEgress` and
+`networkPolicy.executionGatewayExtraEgress`; the bundled broker's automatic
+rules do not authorize arbitrary private endpoints.
+
+Core NATS does not persist replies while the receiver is disconnected.
+Acknowledgements and retries detect failed delivery; HTTP forwarding also
+depends on the broker. Use `channels.transport: http` to select the
+database-backed polling transport. No NATS workload is rendered in that mode.
+
+The [channel end-to-end suite](/self-hosting/docker-compose/configuration/#test-the-channel-transport)
+can also target a forwarded Kubernetes NATS Service. It runs the browser sender
+against the Rust executor adapter with real broker authentication.
+
 ## Execution capacity
 
 The default mode prepares clean, single-use Pod pairs:

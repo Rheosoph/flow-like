@@ -12,13 +12,14 @@
 [package]
 edition = "2021"
 name = "swift-rs"
-version = "1.0.7"
+version = "1.0.9"
 authors = ["The swift-rs contributors"]
 build = "src-rs/test-build.rs"
 exclude = [
     "/src-swift",
     "*.swift",
 ]
+autolib = false
 autobins = false
 autoexamples = false
 autotests = false
@@ -34,6 +35,13 @@ rustdoc-args = [
     "--cfg",
     "docsrs",
 ]
+
+[features]
+build = [
+    "serde",
+    "serde_json",
+]
+default = []
 
 [lib]
 name = "swift_rs"
@@ -64,10 +72,3 @@ features = ["derive"]
 
 [build-dependencies.serde_json]
 version = "1.0"
-
-[features]
-build = [
-    "serde",
-    "serde_json",
-]
-default = []

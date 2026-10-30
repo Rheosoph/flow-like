@@ -1,6 +1,7 @@
 "use client";
 
 import { cn, useSidebar } from "@flow-like/flow-like-ui";
+import { ChatActivityBadge } from "@flow-like/flow-like-ui/components/global-chat/chat-activity";
 import { useTranslation } from "@flow-like/locales";
 import {
 	CompassIcon,
@@ -88,13 +89,14 @@ export function MobileBottomNav() {
 				>
 					<span
 						className={cn(
-							"-mt-1 grid size-9 place-items-center rounded-full text-white shadow-md shadow-primary/30",
+							"relative -mt-1 grid size-9 place-items-center rounded-full text-white shadow-md shadow-primary/30",
 							"bg-linear-to-br from-primary via-primary to-purple-600",
 							flowpilotActive &&
 								"ring-2 ring-primary/40 ring-offset-1 ring-offset-background",
 						)}
 					>
 						<SparklesIcon className="size-5" strokeWidth={2.2} aria-hidden />
+						<ChatActivityBadge className="absolute -right-1 -top-1" />
 					</span>
 					<span
 						className={cn(

@@ -99,16 +99,14 @@ impl RSSSink {
         if due.is_empty() {
             return Ok(());
         }
-        let account = TriggerAccount::current(app_handle).await;
         for event_id in due {
             tracing::info!("Checking RSS feed for event {}", event_id);
 
             // TODO: Fetch and parse RSS feed
             // TODO: Compare with last_item_guid
             // For now, we'll trigger an event on each check
-            let registration = EventSinkManager::read_registration(db.clone(), &event_id);
             if let Some(registration) =
-                Self::firing_registration(&event_id, registration, account.as_ref())
+                Self::firing_saved_registration(db, app_handle, &event_id).await
             {
                 Self::push(app_handle, registration);
             }
@@ -116,6 +114,28 @@ impl RSSSink {
         }
 
         Ok(())
+    }
+
+    async fn firing_saved_registration(
+        db: &DbConnection,
+        app_handle: &AppHandle,
+        event_id: &str,
+    ) -> Option<EventRegistration> {
+        let registration = EventSinkManager::read_registration(db.clone(), event_id);
+        let account = if let Ok(Some(row)) = &registration {
+            if let Some(binding) = row.profile_binding.as_ref() {
+                if let Err(error) = binding.resolve(app_handle).await {
+                    tracing::warn!(event_id, error = %error, "RSS trigger's saved profile is unavailable");
+                    return None;
+                }
+                binding.account()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        Self::firing_registration(event_id, registration, account.as_ref())
     }
 
     /// The event ids of the feeds due for a check at `now`.
@@ -145,7 +165,7 @@ impl RSSSink {
             Ok(Some(_)) => {
                 tracing::warn!(
                     event_id = %event_id,
-                    "Skipping an RSS feed whose online trigger holds no personal access token verified for the account signed in on the current profile's hub; add one in the event's settings"
+                    "Skipping an RSS feed without a valid saved profile and trigger token; enable its trigger again"
                 );
                 None
             }
@@ -278,6 +298,12 @@ mod tests {
             personal_access_token: pat.map(str::to_string),
             pat_owner_sub: owner.map(str::to_string),
             hub_origin: owner.map(|_| "https://hub.example".to_string()),
+            profile_binding: Some(crate::event_sink::trigger_token::TriggerProfile {
+                profile_id: "profile-1".into(),
+                hub_origin: "https://hub.example".into(),
+                issuer: owner.map(|_| "https://issuer.example".into()),
+                subject: owner.map(str::to_owned),
+            }),
             remote: false,
             oauth_tokens: HashMap::new(),
         }
@@ -285,6 +311,8 @@ mod tests {
 
     fn signed_in(sub: &str, hub_origin: &str) -> TriggerAccount {
         TriggerAccount {
+            profile_id: "profile-1".into(),
+            issuer: "https://issuer.example".into(),
             sub: sub.to_string(),
             hub_origin: hub_origin.to_string(),
         }

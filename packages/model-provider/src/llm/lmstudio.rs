@@ -32,6 +32,7 @@ impl LMStudioModel {
 
         let client = LlamaCppClient::new(endpoint)
             .with_egress(egress)?
+            .with_request_params(provider)?
             .inline_media_only("LM Studio");
 
         Ok(LMStudioModel {

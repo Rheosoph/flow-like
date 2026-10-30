@@ -65,6 +65,7 @@ import {
 } from "@flow-like/flow-like-ui";
 import { AccountMenu } from "@flow-like/flow-like-ui/components/account/account-menu";
 import { AccountMenuProvider } from "@flow-like/flow-like-ui/components/account/account-menu-context";
+import { ChatActivityBadge } from "@flow-like/flow-like-ui/components/global-chat/chat-activity";
 import { ProfileAvatar } from "@flow-like/flow-like-ui/components/profile/profile-avatar";
 import { ownsWindowChrome } from "@flow-like/flow-like-ui/lib/chrome-route";
 import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
@@ -710,7 +711,12 @@ function NavFlatItem({
 	const active = isItemActive(item, pathname);
 	return (
 		<SidebarMenuItem>
-			<SidebarMenuButton asChild isActive={active} tooltip={item.title}>
+			<SidebarMenuButton
+				asChild
+				isActive={active}
+				tooltip={item.title}
+				className={item.url === "/chat" ? "pr-9" : undefined}
+			>
 				<MotionLink
 					href={item.url}
 					aria-current={active ? "page" : undefined}
@@ -725,6 +731,9 @@ function NavFlatItem({
 					<span>{item.title}</span>
 				</MotionLink>
 			</SidebarMenuButton>
+			{item.url === "/chat" && (
+				<ChatActivityBadge className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 group-data-[collapsible=icon]:right-0 group-data-[collapsible=icon]:top-0 group-data-[collapsible=icon]:translate-y-0" />
+			)}
 		</SidebarMenuItem>
 	);
 }

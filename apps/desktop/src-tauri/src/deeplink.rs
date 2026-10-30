@@ -264,7 +264,23 @@ fn handle_import_file(app_handle: &AppHandle, url: &Url) {
 
 fn handle_auth(app_handle: &AppHandle, url: &str) {
     tracing::info!("Handling authentication deep link");
-    emit(app_handle, "oidc/url", json::json!({ "url": url }));
+    let app_handle = app_handle.clone();
+    let url = url.to_owned();
+    tauri::async_runtime::spawn(async move {
+        match crate::native_auth::handle_callback(&app_handle, &url).await {
+            Ok(true) => {}
+            Ok(false) => emit(&app_handle, "oidc/url", json::json!({ "url": url })),
+            Err(_) => {
+                // Never include a callback URL, code, or provider error body in diagnostics.
+                tracing::warn!("Native sign-in callback was refused");
+                emit(
+                    &app_handle,
+                    "native-auth-error",
+                    json::json!({"message":"Sign-in could not be completed. Start a new sign-in request."}),
+                );
+            }
+        }
+    });
 }
 
 fn handle_thirdparty_callback(app_handle: &AppHandle, url: &Url) {

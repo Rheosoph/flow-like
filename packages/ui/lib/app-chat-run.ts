@@ -5,10 +5,10 @@ import type {
 	IAttachment,
 	IMessage,
 } from "../components/interfaces/chat-default/chat-db";
-import { processChatEvents } from "../components/interfaces/chat-default/event-processor";
+import { createChatTurn } from "../components/interfaces/chat-default/chat-turn";
+import { joinContentText } from "../components/interfaces/chat-default/inline-segments";
 import type { IEventState } from "../state/backend-state/event-state";
 import { isChatEventType } from "./event-config";
-import { Response } from "./llm/response";
 import { IRole } from "./schema/llm/history";
 
 /**
@@ -69,8 +69,14 @@ export async function runAppChatMessage(
 		actions: [],
 		timestamp: Date.now(),
 	};
-	let intermediate = Response.default();
-	const attachments = new Map<string, IAttachment>();
+	const turn = createChatTurn({
+		responseMessage,
+		tmpLocalState: null,
+		tmpGlobalState: null,
+		appId,
+		eventId: chatEvent.id,
+		sessionId: chatId,
+	});
 	let pushedSurfaces = new Map<string, Surface>();
 	let interactionRequests = 0;
 
@@ -81,18 +87,7 @@ export async function runAppChatMessage(
 		false,
 		undefined,
 		(batch) => {
-			const result = processChatEvents(batch, {
-				intermediateResponse: intermediate,
-				responseMessage,
-				attachments,
-				tmpLocalState: null,
-				tmpGlobalState: null,
-				done: false,
-				appId,
-				eventId: chatEvent.id,
-				sessionId: chatId,
-			});
-			intermediate = result.intermediateResponse;
+			const result = turn.fold(batch);
 			interactionRequests += result.interactions?.length ?? 0;
 			for (const event of batch) {
 				if (event?.event_type === "a2ui" && event.payload) {
@@ -105,11 +100,15 @@ export async function runAppChatMessage(
 		},
 	);
 
-	const text =
-		typeof responseMessage.inner.content === "string"
-			? responseMessage.inner.content
-			: "";
-	const files = responseMessage.files ?? [];
+	const text = turn.responseMessages
+		.map((item) => joinContentText(item.inner.content))
+		.filter(Boolean)
+		.join("\n\n");
+	const files = turn.responseMessages.flatMap((item) => item.files ?? []);
+	const widgetCount = turn.responseMessages.reduce(
+		(count, item) => count + (item.widgets?.length ?? 0),
+		0,
+	);
 	const attachmentSummaries = files.map((file) =>
 		typeof file === "string"
 			? { url: file }
@@ -126,9 +125,7 @@ export async function runAppChatMessage(
 		...(attachmentSummaries.length > 0
 			? { attachments: attachmentSummaries }
 			: {}),
-		...(responseMessage.widgets?.length
-			? { pushed_widget_count: responseMessage.widgets.length }
-			: {}),
+		...(widgetCount ? { pushed_widget_count: widgetCount } : {}),
 		...(pushedSurfaces.size > 0
 			? { pushed_surface_count: pushedSurfaces.size }
 			: {}),

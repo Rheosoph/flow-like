@@ -64,6 +64,37 @@ const request = () => ({
 });
 
 describe("native Event output protocol", () => {
+	test("returns every backend message without duplicating final snapshots", () => {
+		const output = createNativeEventOutput("app", event(), "session");
+		output.add([
+			stream("chat_stream", { ...response("First"), message_id: "one" }),
+		]);
+		output.add([
+			stream("chat_stream", { ...response("Second"), message_id: "two" }),
+		]);
+		output.add([
+			stream("chat_out", { ...response("Second"), message_id: "two" }),
+		]);
+		expect(output.result()).toEqual({ text: "First\n\nSecond" });
+	});
+
+	test("applies the output limit to all backend messages together", () => {
+		const output = createNativeEventOutput("app", event(), "session");
+		output.add([
+			stream("chat_stream", {
+				...response("a".repeat(100_000)),
+				message_id: "one",
+			}),
+		]);
+		output.add([
+			stream("chat_stream", {
+				...response("b".repeat(100_000)),
+				message_id: "two",
+			}),
+		]);
+		expect(() => output.result()).toThrow("too large");
+	});
+
 	test("chat returns the final visible answer without reasoning or duplicate streaming text", () => {
 		const output = createNativeEventOutput("app", event(), "session");
 		const partial = stream("chat_stream", response("Draft"));
@@ -128,6 +159,7 @@ describe("direct native Event execution", () => {
 				stream("chat_out", response("Ready for Notes")),
 				stream("completed", { status: "completed" }),
 			]);
+			return undefined;
 		});
 		const nativeRequest = request();
 		const result = await executeNativeEventWithResult({
@@ -241,6 +273,7 @@ test.each(["failed", "cancelled", "unknown", undefined])(
 test("a disconnected remote stream cannot return a partial answer as success", async () => {
 	const executeEvent = vi.fn(async (_id, options) => {
 		options.onLiveEvents([stream("chat_stream", response("Partial"))]);
+		return undefined;
 	});
 	await expect(
 		executeNativeEventWithResult({

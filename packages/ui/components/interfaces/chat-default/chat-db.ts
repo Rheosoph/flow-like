@@ -1,10 +1,11 @@
 import Dexie, { type EntityTable } from "dexie";
-import type { IHistoryMessage } from "../../../lib";
+import type { IHistoryMessage } from "../../../lib/schema/llm/history";
 import type { IChatMessageError } from "../../../lib/flowpilot/chat-error";
 import { installRuntimeHistoryGuard } from "../../../lib/service-runtime/history-guard";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
 import type { FlowScriptWorkspaceCandidate } from "../../flowpilot/flowscript-workspace-candidates";
-import { finalizePlanSteps } from "./event-processor";
+import type { IChatMessageInteraction } from "./chat-message-interaction";
+import { finalizePlanSteps } from "./chat-event-fold";
 
 export type IAttachment =
 	| string // Simple URL variant
@@ -54,6 +55,19 @@ export interface IChatWidget {
 	 * widgets without one render after the text.
 	 */
 	content_offset?: number;
+}
+
+/** The conversation's main widget. A null widget explicitly clears the pane. */
+export interface IChatMainWidget {
+	widget: IChatWidget | null;
+	/** Identifies an explicit node command separately from element updates and retransmits. */
+	command_id?: string;
+	title?: string;
+	display?: "open" | "collapsed" | "maximized" | null;
+	/** Frontend revision time; inherited copies retain it across concurrent turns. */
+	updated_at?: number;
+	/** Time of the explicit command, so late updates cannot revive an exchanged widget. */
+	command_at?: number;
 }
 
 export type PlanStepStatus = "planned" | "progress" | "done" | "failed";
@@ -213,13 +227,22 @@ export interface IChatRunContext {
 
 export interface IMessage {
 	id: string;
+	/** Original response slot, shared by every message emitted in one run. */
+	stream_root_id?: string;
+	stream_root_timestamp?: number;
+	/** Backend message identity used to route pushes and replay the run. */
+	stream_message_id?: string;
 	appId: string;
 	sessionId: string;
 	inner: IHistoryMessage;
+	/** Reply or reaction context, kept separately from the user's visible text. */
+	interaction?: IChatMessageInteraction;
 	files: IAttachment[];
 	actions?: string[];
 	tools?: string[];
 	explicit_name?: string;
+	/** Emoji reactions selected by the user in this chat. */
+	reactions?: string[];
 	rating?: number;
 	ratingSettings?: {
 		includeChatHistory?: boolean;
@@ -245,6 +268,8 @@ export interface IMessage {
 	thinking?: string;
 	/** a2ui widgets embedded in this message (from the Push Widget node). */
 	widgets?: IChatWidget[];
+	/** Latest main widget state at this turn; absent means this turn did not change it. */
+	main_widget?: IChatMainWidget;
 	/**
 	 * Why this turn failed, classified. Set instead of writing an error sentence into the content so
 	 * the failure renders as a card with its own recovery action — and so history never carries the
@@ -274,6 +299,8 @@ export interface IMessageRow {
 	timestamp: number;
 	rev?: number;
 	payload: string;
+	/** A visible pushed response whose execution has not settled yet. */
+	streaming?: boolean;
 }
 
 export function encodeMessageRow(message: IMessage): IMessageRow {
@@ -298,8 +325,14 @@ function bumpRev(message: IMessage): IMessageRow {
 }
 
 /** Writes a settled message. Every writer here bumps {@link IMessage.rev} so identity caching stays truthful. */
-export async function putChatMessage(message: IMessage): Promise<void> {
-	await chatDb.messages.put(bumpRev(message));
+export async function putChatMessage(
+	message: IMessage,
+	options?: { streaming?: boolean },
+): Promise<void> {
+	await chatDb.messages.put({
+		...bumpRev(message),
+		...(options?.streaming ? { streaming: true } : {}),
+	});
 }
 
 /**
@@ -310,16 +343,33 @@ export async function putChatDraft(message: IMessage): Promise<void> {
 	await chatDb.drafts.put(bumpRev(message));
 }
 
+/** Saves one complete checkpoint so recovery keeps every message emitted so far. */
+export async function putChatDrafts(
+	messages: readonly IMessage[],
+): Promise<void> {
+	await chatDb.drafts.bulkPut(messages.map(bumpRev));
+}
+
 /**
  * Settles a streamed message: it lands in `messages` and every draft of the session goes in the
  * same transaction. A session runs at most one stream, so any draft left at this point — including
  * one written under an id a resumed subscriber never learned — is stale.
  */
 export async function finalizeChatMessage(message: IMessage): Promise<void> {
-	const row = bumpRev(message);
+	await finalizeChatMessages([message]);
+}
+
+/** Settles all messages in a run and removes its session's checkpoints atomically. */
+export async function finalizeChatMessages(
+	messages: readonly IMessage[],
+): Promise<void> {
+	const rows = messages.map(bumpRev);
+	if (rows.length === 0) return;
 	await chatDb.transaction("rw", chatDb.messages, chatDb.drafts, async () => {
-		await chatDb.messages.put(row);
-		await chatDb.drafts.where("sessionId").equals(row.sessionId).delete();
+		await chatDb.messages.bulkPut(rows);
+		for (const sessionId of new Set(rows.map((row) => row.sessionId))) {
+			await chatDb.drafts.where("sessionId").equals(sessionId).delete();
+		}
 	});
 }
 
@@ -349,8 +399,8 @@ export async function promoteChatDrafts(sessionId: string): Promise<number> {
 	if (drafts.length === 0) return 0;
 	await chatDb.transaction("rw", chatDb.messages, chatDb.drafts, async () => {
 		for (const row of drafts) {
-			const settled = await chatDb.messages.where("id").equals(row.id).count();
-			if (settled === 0) {
+			const saved = await chatDb.messages.get(row.id);
+			if (!saved || saved.streaming) {
 				const message = decodeMessageRow(row);
 				finalizePlanSteps(message);
 				await chatDb.messages.put(bumpRev(message));

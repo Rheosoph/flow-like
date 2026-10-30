@@ -5,9 +5,10 @@
  */
 import { describe, expect, test } from "bun:test";
 import { Response } from "../../../lib/llm/response";
-import type { IChatWidget, IMessage } from "./chat-db";
+import type { IChatMainWidget, IChatWidget, IMessage } from "./chat-db";
 import { mergeChatWidgets, processChatEvents } from "./event-processor";
 import { joinContentText } from "./inline-segments";
+import { refreshMainChatWidget, resolveMainChatWidget } from "./main-widget-state";
 
 const baseMessage = (): IMessage => ({
 	id: "m1",
@@ -126,6 +127,235 @@ const upsertEvent = (elementId: string) => ({
 const a2uiEvent = (payload: Record<string, unknown>) => ({
 	event_type: "a2ui",
 	payload,
+});
+
+describe("main chat widget", () => {
+	const main = (instanceId: string): IChatMainWidget => ({
+		widget: widgetPushEvent(instanceId).payload.widgets[0],
+		title: "Browser",
+		display: "open",
+	});
+	const command = (
+		value: IChatMainWidget | null,
+		event_type = "chat_stream_partial",
+	) => ({ event_type, payload: { main_widget: value } });
+
+	test("sets and replaces one main widget without adding a message widget", () => {
+		const message = baseMessage();
+		const result = processChatEvents(
+			[command(main("first")), command(main("second"))],
+			baseState(message),
+		);
+		expect(result.shouldUpdate).toBe(true);
+		expect(message.main_widget?.widget?.instance_id).toBe("second");
+		expect(message.widgets).toBeUndefined();
+	});
+
+	test("keeps streamed element updates when the final response repeats the snapshot", () => {
+		const message = baseMessage();
+		const initial = main("browser");
+		processChatEvents(
+			[
+				command(initial),
+				upsertEvent("browser/map-1"),
+				command(initial, "chat_out"),
+			],
+			baseState(message),
+		);
+		expect(message.main_widget?.widget?.updates).toEqual([
+			upsertEvent("browser/map-1").payload,
+		]);
+		expect(initial.widget?.updates).toEqual([]);
+	});
+
+	test("a clear command survives later responses that omit the main widget", () => {
+		const message = baseMessage();
+		processChatEvents(
+			[
+				command(main("browser")),
+				command({ widget: null }),
+				command(null, "chat_out"),
+			],
+			baseState(message),
+		);
+		expect(message.main_widget).toMatchObject({ widget: null });
+	});
+
+	test("handles a main widget received only in a complete response", () => {
+		for (const eventType of ["chat_stream", "chat_out"]) {
+			const message = baseMessage();
+			processChatEvents(
+				[command(main("browser"), eventType)],
+				baseState(message),
+			);
+			expect(message.main_widget).toMatchObject(main("browser"));
+		}
+	});
+
+	test("a later turn updates inherited state without mutating stored history", () => {
+		const previous = { ...baseMessage(), main_widget: main("browser") };
+		const message = {
+			...baseMessage(),
+			id: "m2",
+			main_widget: previous.main_widget,
+		};
+		processChatEvents(
+			[upsertEvent("browser/map-1"), upsertEvent("unrelated/map-1")],
+			baseState(message),
+		);
+		expect(message.main_widget.widget?.updates).toHaveLength(1);
+		expect(previous.main_widget.widget?.updates).toEqual([]);
+		expect(message.main_widget).not.toBe(previous.main_widget);
+	});
+
+	test("a new message keeps live main widget updates over the backend snapshot", () => {
+		const initial = main("browser");
+		const response = chatStreamEvent("Second answer");
+		const result = processChatEvents(
+			[
+				{
+					event_type: "chat_stream_partial",
+					payload: { message_id: "first", main_widget: initial },
+				},
+				upsertEvent("browser/map-1"),
+				{
+					...response,
+					payload: {
+						...response.payload,
+						message_id: "second",
+						main_widget: initial,
+					},
+				},
+			],
+			baseState(baseMessage()),
+		);
+		expect(result.responseMessages).toHaveLength(2);
+		expect(result.responseMessage.main_widget?.widget?.updates).toEqual([
+			upsertEvent("browser/map-1").payload,
+		]);
+	});
+
+	test("an explicit set can replace the component of the same instance", () => {
+		const message = baseMessage();
+		const initial = main("browser");
+		const updated = main("browser");
+		if (updated.widget)
+			updated.widget.component = { type: "text", text: "New" };
+		processChatEvents(
+			[command(initial), upsertEvent("browser/map-1"), command(updated)],
+			baseState(message),
+		);
+		expect(message.main_widget).toMatchObject(updated);
+	});
+
+	test("does not revive a replaced widget when its old elements update", () => {
+		const message = baseMessage();
+		processChatEvents(
+			[
+				command(main("browser")),
+				command(main("library")),
+				upsertEvent("browser/map-1"),
+			],
+			baseState(message),
+		);
+		expect(message.main_widget?.widget?.instance_id).toBe("library");
+		expect(message.main_widget?.widget?.updates).toEqual([]);
+	});
+
+	test("revises repeated explicit commands but retains the revision on final replay", () => {
+		const message = baseMessage();
+		const first = { ...main("browser"), command_id: "first" };
+		const second = { ...main("browser"), command_id: "second" };
+		processChatEvents([command(first)], baseState(message));
+		const firstRevision = message.main_widget?.updated_at ?? 0;
+		processChatEvents([command(second)], baseState(message));
+		const secondRevision = message.main_widget?.updated_at ?? 0;
+		expect(secondRevision).toBeGreaterThan(firstRevision);
+		expect(message.main_widget?.command_id).toBe("second");
+		processChatEvents([command(second, "chat_out")], baseState(message));
+		expect(message.main_widget?.updated_at).toBe(secondRevision);
+	});
+
+	test("replaying a clear does not make it newer than subsequent pane activity", () => {
+		const message = baseMessage();
+		const cleared = { widget: null, command_id: "clear" };
+		processChatEvents([command(cleared)], baseState(message));
+		const revision = message.main_widget?.updated_at;
+		processChatEvents([command(cleared, "chat_out")], baseState(message));
+		expect(message.main_widget?.updated_at).toBe(revision);
+	});
+
+	test("main widget updates continue across separate assistant bubbles in one run", () => {
+		const message = baseMessage();
+		const initial = { ...main("browser"), command_id: "open" };
+		const first = command(initial);
+		const result = processChatEvents(
+			[
+				{ ...first, payload: { ...first.payload, message_id: "first" } },
+				upsertEvent("browser/map-1"),
+				{
+					event_type: "chat_stream",
+					payload: { message_id: "second" },
+				},
+				upsertEvent("browser/map-1"),
+				command(initial, "chat_out"),
+			],
+			baseState(message),
+		);
+		expect(result.responseMessages).toHaveLength(2);
+		expect(result.responseMessage.main_widget?.widget?.updates).toHaveLength(2);
+		expect(message.main_widget?.widget?.updates).toHaveLength(1);
+	});
+
+	test("a clear stays current when another run receives a late update to the old widget", () => {
+		const first = baseMessage();
+		processChatEvents(
+			[command({ ...main("browser"), command_id: "open" })],
+			baseState(first),
+		);
+		const second = { ...baseMessage(), id: "m2" };
+		processChatEvents(
+			[command({ widget: null, command_id: "clear" })],
+			baseState(second),
+		);
+		const commandRevision = first.main_widget?.command_at;
+		processChatEvents([upsertEvent("browser/map-1")], baseState(first));
+		expect(first.main_widget?.command_at).toBe(commandRevision);
+		expect(first.main_widget?.updated_at ?? 0).toBeGreaterThan(
+			second.main_widget?.updated_at ?? 0,
+		);
+		expect(resolveMainChatWidget([second], "s1", first)).toBe(
+			second.main_widget,
+		);
+	});
+
+	test("a continuing stream retains an action update made from its shared pane", () => {
+		const original = baseMessage();
+		const initial = { ...main("browser"), command_id: "open" };
+		processChatEvents([command(initial)], baseState(original));
+		const action = {
+			...baseMessage(),
+			id: "action",
+			main_widget: original.main_widget,
+		};
+		const actionUpdate = upsertEvent("browser/map-1");
+		processChatEvents([actionUpdate], baseState(action));
+		refreshMainChatWidget(original, action.main_widget);
+		const nextUpdate = a2uiEvent({
+			...actionUpdate.payload,
+			value: { type: "setGeoMapViewport", viewport: { latitude: 2 } },
+		});
+		processChatEvents(
+			[nextUpdate, command(initial, "chat_out")],
+			baseState(original),
+		);
+		expect(original.main_widget?.widget?.updates).toEqual([
+			actionUpdate.payload,
+			nextUpdate.payload,
+		]);
+		expect(action.main_widget?.widget?.updates).toEqual([actionUpdate.payload]);
+		expect(original.main_widget?.command_at).toBe(action.main_widget?.command_at);
+	});
 });
 
 /** Widget B pushed into a container of widget A, then addressed by bare id and bound path. */

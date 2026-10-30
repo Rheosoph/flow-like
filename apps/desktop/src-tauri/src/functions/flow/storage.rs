@@ -19,21 +19,22 @@ use tauri::AppHandle;
 
 use crate::{
     functions::TauriFunctionError,
-    state::{TauriFlowLikeState, TauriRegistryState},
+    state::{TauriFlowLikeState, TauriSettingsState},
 };
 
 mod native_rename;
 
 pub(crate) async fn current_user_sub(app_handle: &AppHandle) -> Result<String, TauriFunctionError> {
-    if let Ok(state) = TauriRegistryState::construct(app_handle).await {
-        let guard = state.lock().await;
-        if let Some(token) = guard.as_ref().and_then(|c| c.auth_token().cloned())
-            && let Ok(sub) = flow_like::flow::execution::extract_sub_from_jwt(&token)
-        {
-            return Ok(sub);
-        }
-    }
-    Ok("local".to_string())
+    let profile = TauriSettingsState::current_profile(app_handle)
+        .await?
+        .hub_profile;
+    let Some(hub) = flow_like::hub::hub_origin(&profile.hub, profile.secure) else {
+        return Ok("local".to_string());
+    };
+    crate::native_auth::current_subject(&profile.id, &hub)
+        .await
+        .map(|subject| subject.unwrap_or_else(|| "local".to_string()))
+        .map_err(|error| TauriFunctionError::new(&error))
 }
 
 /// Online projects keep their files in the hub; only Offline apps write device storage here.

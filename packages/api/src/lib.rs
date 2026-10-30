@@ -30,6 +30,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 pub use flow_like_api_entity as entity;
 mod middleware;
+mod oidc_http;
 pub mod openapi;
 mod routes;
 

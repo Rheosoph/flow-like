@@ -18,6 +18,11 @@ import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import type { IMessage } from "./chat-db";
 import { ChatFollowUpProvider } from "./chat-follow-up";
+import {
+	type IChatMessageInteraction,
+	type IChatMessageReference,
+	createMessageReference,
+} from "./chat-message-interaction";
 import { ChatRunControls } from "./chat-run-controls";
 import {
 	ChatBox,
@@ -26,12 +31,16 @@ import {
 	type ISendMessageFunction,
 } from "./chatbox";
 import { Interaction, InteractionGroup } from "./interaction";
+import { MainWidgetPane } from "./main-widget-pane";
+import { resolveMainChatWidget } from "./main-widget-state";
 import { MessageComponent, type MessageInlineContent } from "./message";
+import { MessageReference } from "./message-reference";
 import { MessageShell } from "./message-shell";
 import {
 	type ChatSend,
 	type PendingAsk,
 	askRuleColor,
+	isAwaitingFirstEvent,
 	resolvePendingAsks,
 } from "./pending-ask";
 import { PendingAskStatus } from "./pending-ask-status";
@@ -154,6 +163,11 @@ export interface IChatProps {
 		messageId: string,
 		updates: Partial<IMessage>,
 	) => void | Promise<void>;
+	onMessageReaction?: (
+		message: IMessage,
+		emoji: string,
+		operation: "add" | "remove",
+	) => Promise<void>;
 	config?: Partial<IEventPayloadChat>;
 	sessionId?: string;
 	isStreamActive?: boolean;
@@ -208,6 +222,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			onSendMessage,
 			concurrency,
 			onMessageUpdate,
+			onMessageReaction,
 			config = {},
 			sessionId,
 			isStreamActive = false,
@@ -235,6 +250,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const isScrollingProgrammatically = useRef(false);
 		const [defaultActiveTools, setDefaultActiveTools] = useState<string[]>();
 		const [isSending, setIsSending] = useState(false);
+		const [replyTarget, setReplyTarget] =
+			useState<IChatMessageReference | null>(null);
+		const currentSession = useRef(sessionId);
+		currentSession.current = sessionId;
+		const interactionDisabled = !concurrency && (isSending || isStreamActive);
 		const isSendingRef = useRef(false);
 		const [sendingContent, setSendingContent] = useState("");
 		const [lastSend, setLastSend] = useState<ChatSend | null>(null);
@@ -294,6 +314,15 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				}
 			};
 		}, []);
+
+		const mainWidget = useMemo(() => {
+			const liveIds = new Set(currentMessages.map((message) => message.id));
+			const candidates = [
+				...localMessages.filter((message) => !liveIds.has(message.id)),
+				...currentMessages,
+			].sort((a, b) => a.timestamp - b.timestamp);
+			return resolveMainChatWidget(candidates, sessionId ?? "");
+		}, [localMessages, currentMessages, sessionId]);
 
 		const chatItems = useMemo(() => {
 			const liveIds = new Set(currentMessages.map((message) => message.id));
@@ -382,9 +411,16 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const visibleLiveMessages = useMemo(
 			() =>
 				currentMessages.filter(
-					(message) => !pendingAsks.hidden.has(message.id),
+					(message) =>
+						!pendingAsks.hidden.has(message.id) &&
+						(!message.main_widget ||
+							!isAwaitingFirstEvent(
+								message,
+								settledByMessageId.has(message.id) ||
+									Boolean(messageInlineContent?.get(message.id)?.length),
+							)),
 				),
-			[currentMessages, pendingAsks],
+			[currentMessages, pendingAsks, messageInlineContent, settledByMessageId],
 		);
 		const optimisticPending: PendingAsk | undefined = lastSend
 			? { phase: "sending", since: lastSend.startedAt }
@@ -412,6 +448,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			setIsSending(false);
 			setSendingContent("");
 			setLastSend(null);
+			setReplyTarget(null);
 		}, [sessionId]);
 
 		// Sync external messages with local state (no useTransition to avoid flash gap)
@@ -525,6 +562,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				filesAttached?: File[],
 				activeTools?: string[],
 				audioFile?: File,
+				interaction?: IChatMessageInteraction,
 			) => {
 				const startedAt = Date.now();
 				setShouldAutoScroll(true);
@@ -538,7 +576,13 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				}, 50);
 
 				try {
-					await onSendMessage(content, filesAttached, activeTools, audioFile);
+					await onSendMessage(
+						content,
+						filesAttached,
+						activeTools,
+						audioFile,
+						interaction,
+					);
 				} finally {
 					setIsSending(false);
 					setSendingContent("");
@@ -554,13 +598,45 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			[onSendMessage, scrollToBottom],
 		);
 
+		const handleReply = useCallback(
+			(message: IMessage, selectedText?: string) => {
+				if (interactionDisabled || message.inner.role !== "assistant") return;
+				setReplyTarget(createMessageReference(message, selectedText));
+				chatBox.current?.focusInput?.();
+			},
+			[interactionDisabled],
+		);
+
+		const handleComposerSend: ISendMessageFunction = useCallback(
+			async (content, filesAttached, activeTools, audioFile) => {
+				const target = replyTarget;
+				const sendSession = sessionId;
+				setReplyTarget(null);
+				try {
+					await handleSendMessage(
+						content,
+						filesAttached,
+						activeTools,
+						audioFile,
+						target ? { type: "reply", target } : undefined,
+					);
+				} catch (error) {
+					if (currentSession.current === sendSession) {
+						setReplyTarget((current) => current ?? target);
+					}
+					throw error;
+				}
+			},
+			[handleSendMessage, replyTarget, sessionId],
+		);
+
 		const handleVoiceModeSend = useCallback(
 			async (content: string, audioFile?: File) => {
 				// keep voice mode open so the orb can react to the spoken answer;
 				// VoiceMode closes itself once the answer has been delivered.
-				await handleSendMessage(content, undefined, undefined, audioFile);
+				await handleComposerSend(content, undefined, undefined, audioFile);
 			},
-			[handleSendMessage],
+			[handleComposerSend],
 		);
 
 		// A reply's `send_message` takes the composer's send path: it starts a turn or queues
@@ -652,6 +728,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				scrollToBottom,
 				clearMessages: () => {
 					setLocalMessages([]);
+					setReplyTarget(null);
 					setHasInitiallyScrolled(false);
 					setShouldAutoScroll(true);
 				},
@@ -664,251 +741,288 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 		return (
 			<ChatFollowUpProvider send={followUpBlocked ? null : sendFollowUp}>
-				<main
-					className="fl-chat-surface flex min-h-0 w-full flex-1 flex-col items-center overflow-hidden bg-transparent"
-					data-fl-chat-surface
-					style={{
-						backgroundColor:
-							"var(--fl-chat-surface-background, var(--background))",
-						WebkitOverflowScrolling: "touch",
-						touchAction: "manipulation",
-					}}
+				<MainWidgetPane
+					mainWidget={mainWidget}
+					sessionId={sessionId ?? ""}
+					appId={appId}
+					boardId={boardId}
+					eventId={eventId}
+					snapshots={widgetSnapshots}
 				>
-					<div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-transparent">
-						{/* Messages Container */}
-						<div
-							ref={scrollContainerRef}
-							onScroll={handleScroll}
-							className="flex-1 overflow-y-auto overscroll-contain p-4 pb-2 space-y-8 flex flex-col items-center grow max-h-full"
-							data-fl-chat-messages
-							style={{ WebkitOverflowScrolling: "touch" }}
-						>
-							{chatItems.map((item, index) => (
-								<div
-									className="w-full px-1 sm:px-4"
-									key={`msg-${item.data.id}`}
-									style={{
-										maxWidth:
-											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
-									}}
-								>
-									<MessageShell
-										immediate={
-											index >= chatItems.length - IMMEDIATE_MESSAGE_TAIL
-										}
-										root={scrollContainerRef}
+					<main
+						className="fl-chat-surface flex min-h-0 w-full flex-1 flex-col items-center overflow-hidden bg-transparent"
+						data-fl-chat-surface
+						style={{
+							backgroundColor:
+								"var(--fl-chat-surface-background, var(--background))",
+							WebkitOverflowScrolling: "touch",
+							touchAction: "manipulation",
+						}}
+					>
+						<div className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-transparent">
+							{/* Messages Container */}
+							<div
+								ref={scrollContainerRef}
+								onScroll={handleScroll}
+								className="flex-1 overflow-y-auto overscroll-contain p-4 pb-2 space-y-8 flex flex-col items-center grow max-h-full"
+								data-fl-chat-messages
+								style={{ WebkitOverflowScrolling: "touch" }}
+							>
+								{chatItems
+									.filter(
+										(item) =>
+											!item.data.main_widget ||
+											!isAwaitingFirstEvent(
+												item.data,
+												settledByMessageId.has(item.data.id) ||
+													Boolean(
+														messageInlineContent?.get(item.data.id)?.length,
+													),
+											),
+									)
+									.map((item, index) => (
+										<div
+											className="w-full px-1 sm:px-4"
+											key={`msg-${item.data.id}`}
+											style={{
+												maxWidth:
+													"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+											}}
+										>
+											<MessageShell
+												immediate={
+													index >= chatItems.length - IMMEDIATE_MESSAGE_TAIL
+												}
+												root={scrollContainerRef}
+											>
+												<MessageComponent
+													message={item.data as IMessage}
+													onMessageUpdate={onMessageUpdate}
+													onReply={handleReply}
+													onReaction={onMessageReaction}
+													interactionDisabled={interactionDisabled}
+													appId={appId}
+													boardId={boardId}
+													eventId={eventId}
+													widgetSnapshots={widgetSnapshots}
+													anchoredContent={messageInlineContent?.get(
+														item.data.id,
+													)}
+													pending={pendingAsks.byAsk.get(item.data.id)}
+												/>
+											</MessageShell>
+											<SettledInteractions
+												interactions={settledByMessageId.get(item.data.id)}
+												onRespond={onRespondToInteraction}
+											/>
+										</div>
+									))}
+								{isSending &&
+									!localMessages.some(
+										(m) =>
+											m.inner.role === "user" &&
+											getMessageTextContent(m) === sendingContent,
+									) && (
+										<div
+											className="flex w-full animate-in flex-col items-start space-y-1 px-4 fade-in slide-in-from-bottom-2 duration-200"
+											style={{
+												maxWidth:
+													"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+											}}
+										>
+											<div
+												className="w-full border-l-2 py-2 pr-4 pl-3.5"
+												data-fl-chat-message="user"
+												style={{
+													backgroundColor:
+														"var(--fl-chat-ask-background, transparent)",
+													borderLeftColor: askRuleColor(optimisticPending),
+													borderRadius:
+														"0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0",
+													color:
+														"var(--fl-chat-user-message-foreground, var(--foreground))",
+													maxWidth: "var(--fl-chat-measure, 38rem)",
+												}}
+											>
+												<span className="mb-1.5 flex items-baseline gap-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
+													{i18next.t("asked", "Asked")}
+													{optimisticPending && (
+														<PendingAskStatus pending={optimisticPending} />
+													)}
+												</span>
+												<p className="line-clamp-6 whitespace-pre-wrap text-sm leading-relaxed">
+													{sendingContent}
+												</p>
+											</div>
+										</div>
+									)}
+								{visibleLiveMessages.map((liveMessage) => (
+									<div
+										className="w-full px-4 animate-in fade-in slide-in-from-top-1 duration-300"
+										key={`msg-${liveMessage.id}`}
+										style={{
+											maxWidth:
+												"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+										}}
 									>
 										<MessageComponent
-											message={item.data as IMessage}
-											onMessageUpdate={onMessageUpdate}
+											loading={
+												!liveMessage.stream_root_id ||
+												liveMessage.id === currentMessages.at(-1)?.id
+											}
+											message={liveMessage}
 											appId={appId}
 											boardId={boardId}
 											eventId={eventId}
 											widgetSnapshots={widgetSnapshots}
-											anchoredContent={messageInlineContent?.get(item.data.id)}
-											pending={pendingAsks.byAsk.get(item.data.id)}
+											anchoredContent={messageInlineContent?.get(
+												liveMessage.id,
+											)}
 										/>
-									</MessageShell>
-									<SettledInteractions
-										interactions={settledByMessageId.get(item.data.id)}
-										onRespond={onRespondToInteraction}
-									/>
-								</div>
-							))}
-							{isSending &&
-								!localMessages.some(
-									(m) =>
-										m.inner.role === "user" &&
-										getMessageTextContent(m) === sendingContent,
-								) && (
+										<SettledInteractions
+											interactions={settledByMessageId.get(liveMessage.id)}
+											onRespond={onRespondToInteraction}
+										/>
+									</div>
+								))}
+								{inlineContent && (
 									<div
-										className="flex w-full animate-in flex-col items-start space-y-1 px-4 fade-in slide-in-from-bottom-2 duration-200"
+										className="w-full px-1 sm:px-4"
+										data-fl-chat-inline-content
 										style={{
-											maxWidth:
-												"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+											maxWidth: "var(--fl-chat-content-width, 64rem)",
 										}}
 									>
-										<div
-											className="w-full border-l-2 py-2 pr-4 pl-3.5"
-											data-fl-chat-message="user"
-											style={{
-												backgroundColor:
-													"var(--fl-chat-ask-background, transparent)",
-												borderLeftColor: askRuleColor(optimisticPending),
-												borderRadius:
-													"0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0",
-												color:
-													"var(--fl-chat-user-message-foreground, var(--foreground))",
-												maxWidth: "var(--fl-chat-measure, 38rem)",
-											}}
-										>
-											<span className="mb-1.5 flex items-baseline gap-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
-												{i18next.t("asked", "Asked")}
-												{optimisticPending && (
-													<PendingAskStatus pending={optimisticPending} />
-												)}
-											</span>
-											<p className="line-clamp-6 whitespace-pre-wrap text-sm leading-relaxed">
-												{sendingContent}
-											</p>
-										</div>
+										{inlineContent}
 									</div>
 								)}
-							{visibleLiveMessages.map((liveMessage) => (
+								{interactionItems.map((item) =>
+									item.type === "interaction-group" ? (
+										<div
+											className="flex w-full flex-col items-start px-4"
+											key={`grp-${(item.data as IInteractionRequest[]).map((i) => i.id).join("-")}`}
+											style={{
+												maxWidth:
+													"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+											}}
+										>
+											<InteractionGroup
+												interactions={item.data as IInteractionRequest[]}
+												onRespond={onRespondToInteraction ?? (() => {})}
+											/>
+										</div>
+									) : (
+										<div
+											className="flex w-full flex-col items-start px-4"
+											key={`int-${(item.data as IInteractionRequest).id}`}
+											style={{
+												maxWidth:
+													"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+											}}
+										>
+											<Interaction
+												interaction={item.data as IInteractionRequest}
+												onRespond={onRespondToInteraction ?? (() => {})}
+											/>
+										</div>
+									),
+								)}
+								<div aria-hidden="true" />
+							</div>
+
+							{inlinePrompt && (
 								<div
-									className="w-full px-4 animate-in fade-in slide-in-from-top-1 duration-300"
-									key={`msg-${liveMessage.id}`}
+									className="mx-auto w-full shrink-0 px-2 pt-1"
 									style={{
 										maxWidth:
 											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
 									}}
 								>
-									<MessageComponent
-										loading
-										message={liveMessage}
-										appId={appId}
-										boardId={boardId}
-										eventId={eventId}
-										widgetSnapshots={widgetSnapshots}
-										anchoredContent={messageInlineContent?.get(liveMessage.id)}
-									/>
-									<SettledInteractions
-										interactions={settledByMessageId.get(liveMessage.id)}
-										onRespond={onRespondToInteraction}
-									/>
-								</div>
-							))}
-							{inlineContent && (
-								<div
-									className="w-full px-1 sm:px-4"
-									data-fl-chat-inline-content
-									style={{
-										maxWidth: "var(--fl-chat-content-width, 64rem)",
-									}}
-								>
-									{inlineContent}
+									{inlinePrompt}
 								</div>
 							)}
-							{interactionItems.map((item) =>
-								item.type === "interaction-group" ? (
-									<div
-										className="flex w-full flex-col items-start px-4"
-										key={`grp-${(item.data as IInteractionRequest[]).map((i) => i.id).join("-")}`}
-										style={{
-											maxWidth:
-												"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
-										}}
-									>
-										<InteractionGroup
-											interactions={item.data as IInteractionRequest[]}
-											onRespond={onRespondToInteraction ?? (() => {})}
-										/>
-									</div>
-								) : (
-									<div
-										className="flex w-full flex-col items-start px-4"
-										key={`int-${(item.data as IInteractionRequest).id}`}
-										style={{
-											maxWidth:
-												"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
-										}}
-									>
-										<Interaction
-											interaction={item.data as IInteractionRequest}
-											onRespond={onRespondToInteraction ?? (() => {})}
-										/>
-									</div>
-								),
-							)}
-							<div aria-hidden="true" />
-						</div>
 
-						{inlinePrompt && (
+							{/* ChatBox */}
 							<div
-								className="mx-auto w-full shrink-0 px-2 pt-1"
+								className="mx-auto w-full space-y-2 px-3"
+								data-fl-chat-composer-dock
 								style={{
 									maxWidth:
 										"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+									paddingBottom:
+										"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
 								}}
 							>
-								{inlinePrompt}
-							</div>
-						)}
-
-						{/* ChatBox */}
-						<div
-							className="mx-auto w-full space-y-2 px-3"
-							data-fl-chat-composer-dock
-							style={{
-								maxWidth:
-									"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
-								paddingBottom:
-									"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
-							}}
-						>
-							{concurrency && <ChatRunControls concurrency={concurrency} />}
-							{defaultActiveTools && (
-								<ChatBox
-									ref={chatBox}
-									availableTools={config?.tools ?? []}
-									defaultActiveTools={defaultActiveTools}
-									onSendMessage={handleSendMessage}
-									onContentChange={onDraftChange}
-									thinking={thinking}
-									fileUpload={config?.allow_file_upload ?? false}
-									audioInput={voiceEnabled}
-									voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
-									voiceInvoke={voiceConfig.invoke}
-									voiceMaxDuration={voiceConfig.maxDuration}
-									// With concurrency the composer never locks: a send starts another
-									// turn or queues. Without it, a live stream still blocks as before.
-									sendDisabled={
-										concurrency ? false : isSending || isStreamActive
-									}
-									sendHint={
-										concurrency?.atCapacity
-											? i18next.t("queueThisMessage", "Queue this message")
-											: concurrency && concurrency.runs.length > 0
-												? i18next.t(
-														"startAnotherResponse",
-														"Start another response",
-													)
+								{concurrency && <ChatRunControls concurrency={concurrency} />}
+								{replyTarget && (
+									<MessageReference
+										reference={replyTarget}
+										onCancel={() => setReplyTarget(null)}
+									/>
+								)}
+								{defaultActiveTools && (
+									<ChatBox
+										ref={chatBox}
+										availableTools={config?.tools ?? []}
+										defaultActiveTools={defaultActiveTools}
+										onSendMessage={handleComposerSend}
+										onContentChange={onDraftChange}
+										thinking={thinking}
+										fileUpload={config?.allow_file_upload ?? false}
+										audioInput={voiceEnabled}
+										voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}
+										voiceInvoke={voiceConfig.invoke}
+										voiceMaxDuration={voiceConfig.maxDuration}
+										// With concurrency the composer never locks: a send starts another
+										// turn or queues. Without it, a live stream still blocks as before.
+										sendDisabled={
+											concurrency ? false : isSending || isStreamActive
+										}
+										sendHint={
+											concurrency?.atCapacity
+												? i18next.t("queueThisMessage", "Queue this message")
+												: concurrency && concurrency.runs.length > 0
+													? i18next.t(
+															"startAnotherResponse",
+															"Start another response",
+														)
+													: undefined
+										}
+										onSteer={
+											!replyTarget && concurrency && concurrency.runs.length > 0
+												? concurrency.onSteer
 												: undefined
-									}
-									onSteer={
-										concurrency && concurrency.runs.length > 0
-											? concurrency.onSteer
-											: undefined
-									}
-									onInterrupt={playback.stop}
-									onVoiceModeToggle={
-										voiceEnabled && voiceConfig.invoke === "auto"
-											? () => {
-													playback.stop();
-													setVoiceModeOpen(true);
-												}
-											: undefined
-									}
-								/>
-							)}
-							{showAiDisclosure && (
-								<ChatAiDisclosure text={config.ai_disclosure} />
-							)}
+										}
+										onInterrupt={playback.stop}
+										onVoiceModeToggle={
+											voiceEnabled && voiceConfig.invoke === "auto"
+												? () => {
+														playback.stop();
+														setVoiceModeOpen(true);
+													}
+												: undefined
+										}
+									/>
+								)}
+								{showAiDisclosure && (
+									<ChatAiDisclosure text={config.ai_disclosure} />
+								)}
+							</div>
 						</div>
-					</div>
 
-					{/* Voice Mode Overlay */}
-					<VoiceMode
-						open={voiceModeOpen}
-						onClose={() => setVoiceModeOpen(false)}
-						onSend={handleVoiceModeSend}
-						voice={voiceConfig}
-						busy={isStreamActive || playback.isPlaying}
-						speaking={playback.isPlaying}
-						speakingAnalyser={playback.analyser}
-						onInterrupt={() => playback.stop()}
-					/>
-				</main>
+						{/* Voice Mode Overlay */}
+						<VoiceMode
+							open={voiceModeOpen}
+							onClose={() => setVoiceModeOpen(false)}
+							onSend={handleVoiceModeSend}
+							voice={voiceConfig}
+							busy={isStreamActive || playback.isPlaying}
+							speaking={playback.isPlaying}
+							speakingAnalyser={playback.analyser}
+							onInterrupt={() => playback.stop()}
+						/>
+					</main>
+				</MainWidgetPane>
 			</ChatFollowUpProvider>
 		);
 	},

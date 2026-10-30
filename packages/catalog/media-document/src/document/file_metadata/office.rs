@@ -34,6 +34,7 @@ pub struct OfficeDetails {
 /// `docProps/app.xml` are inflated; every other part stays compressed.
 pub fn office_details(package: &[u8]) -> flow_like_types::Result<OfficeDetails> {
     let mut archive = ZipArchive::new(Cursor::new(package))?;
+    archive.validate_header_consistency()?;
     let mut details = OfficeDetails::default();
 
     if let Some(core) = read_part(&mut archive, "docProps/core.xml")? {
@@ -172,6 +173,29 @@ mod tests {
             .map(|(name, xml)| (name.to_string(), xml.as_bytes().to_vec()))
             .collect();
         write_zip(&files).unwrap()
+    }
+
+    #[test]
+    fn document_readers_reject_inconsistent_zip_headers() {
+        let mut bytes = package(&[("docProps/core.xml", CORE_XML)]);
+        assert!(office_details(&bytes).is_ok());
+        assert!(crate::document::openxml::read_zip(&bytes).is_ok());
+
+        // Leave the central directory intact and change only the local filename.
+        assert_eq!(&bytes[..4], b"PK\x03\x04");
+        bytes[30] = b'x';
+        let mut archive = ZipArchive::new(Cursor::new(&bytes)).unwrap();
+        assert!(archive.by_name("docProps/core.xml").is_ok());
+
+        for error in [
+            office_details(&bytes).unwrap_err(),
+            crate::document::openxml::read_zip(&bytes).unwrap_err(),
+        ] {
+            assert!(
+                error.to_string().contains("header inconsistency"),
+                "{error}"
+            );
+        }
     }
 
     #[test]

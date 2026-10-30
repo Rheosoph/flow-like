@@ -1,3 +1,7 @@
+import {
+	getExecutionRuntime,
+	resetExecutionRuntimes,
+} from "@flow-like/flow-like-ui/lib/execution/runtime-client";
 import type { IEvent } from "@flow-like/flow-like-ui/lib/schema/flow/event";
 import type { PageTrigger } from "@flow-like/flow-like-ui/lib/schema/flow/page-trigger";
 import {
@@ -121,7 +125,9 @@ function invocationBody() {
 	return JSON.parse(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.body as string);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+	await resetExecutionRuntimes();
+	await getExecutionRuntime("prerun-test-warmup");
 	vi.clearAllMocks();
 	now = 1_000;
 	vi.spyOn(performance, "now").mockImplementation(() => now);
@@ -133,12 +139,17 @@ beforeEach(() => {
 	vi.stubGlobal(
 		"fetch",
 		vi.fn(async (url: string) =>
-			url.endsWith("/api/v1") ? Response.json({}) : new Response(null),
+			url.endsWith("/api/v1")
+				? Response.json({})
+				: new Response(
+						'data: {"event_type":"completed","payload":{"status":"completed"}}\n\n',
+					),
 		),
 	);
 });
 
-afterEach(() => {
+afterEach(async () => {
+	await resetExecutionRuntimes();
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 });
@@ -158,7 +169,11 @@ describe("event dispatch Hub configuration", () => {
 			vi.mocked(fetch).mockImplementation((url) =>
 				String(url).endsWith("/api/v1")
 					? new Promise<Response>(() => {})
-					: Promise.resolve(new Response(null)),
+					: Promise.resolve(
+							new Response(
+								'data: {"event_type":"completed","payload":{"status":"completed"}}\n\n',
+							),
+						),
 			);
 
 			if (kind === "page action") {
@@ -188,7 +203,11 @@ describe("event dispatch Hub configuration", () => {
 			oauth_requirements: requirements,
 		});
 		vi.mocked(fetch).mockImplementation(async (url) =>
-			String(url).endsWith("/api/v1") ? Response.json(hub) : new Response(null),
+			String(url).endsWith("/api/v1")
+				? Response.json(hub)
+				: new Response(
+						'data: {"event_type":"completed","payload":{"status":"completed"}}\n\n',
+					),
 		);
 
 		await execute(state);
@@ -477,7 +496,9 @@ describe("direct event OAuth for members without ReadBoards", () => {
 	} as unknown as IEvent;
 	const requirements = [{ provider_id: "google", scopes: ["mail"] }];
 
-	beforeEach(() => {
+	beforeEach(async () => {
+		await resetExecutionRuntimes();
+		await getExecutionRuntime("prerun-test-warmup");
 		mocks.apiGet.mockImplementation(async (path: string) => {
 			if (path === "apps/app-1/events/event-1") return event;
 			if (path === "apps/app-1/events/event-1/prerun?version=1_2_3") {

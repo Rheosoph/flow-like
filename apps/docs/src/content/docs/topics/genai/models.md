@@ -119,6 +119,12 @@ Before using a local model:
 
 Hardware requirements depend on model architecture, quantization, context size, and runtime. Use the model and runtime documentation instead of a universal RAM estimate.
 
+### Temporary endpoint failures
+
+Requests through the shared Rig HTTP client, including OpenAI-compatible and Ollama providers, get up to five attempts when a connection fails before the HTTP response opens, or the endpoint returns HTTP 408, 429, 500, 502, 503, or 504. Retries wait 1, 2, 4, then 8 seconds, each with up to 250 milliseconds of random delay. These waits are additional to the time spent on each request. Logs show the failed attempt and the next delay.
+
+Authentication and request-validation errors fail immediately. Once a response opens, a failure while reading its body or stream is returned to the workflow without replaying the request. Multipart uploads and providers with separate transports, such as LM Studio and the built-in llama.cpp client, do not use this retry policy.
+
 ## Embedding models
 
 RAG requires an embedding model for documents and queries. Use [Load Embedding Model](/nodes/ai/embedding/load-model/), [Embed Document](/nodes/ai/embedding/embed-document/), and [Embed Query](/nodes/ai/embedding/embed-query/).

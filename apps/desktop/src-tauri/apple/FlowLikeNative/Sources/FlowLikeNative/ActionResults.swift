@@ -21,6 +21,7 @@ public struct NativeActionResult: Codable, Sendable, Equatable {
 public struct NativeActionFailure: LocalizedError {
     public let message: String
     public var errorDescription: String? { message }
+    public init(message: String) { self.message = message }
 }
 
 // Access only while NativeStore holds the shared process lock. Delivery ACKs
@@ -83,6 +84,12 @@ struct NativeActionResults {
 
     func result(id: String, scope: String) throws -> NativeActionResult? {
         try read(scope: scope).first(where: { $0.request.id == id })?.result
+    }
+
+    func backgroundActionActive(id: String, scope: String) throws -> Bool {
+        try read(scope: scope).contains {
+            $0.request.id == id && $0.request.isBackground && $0.result == nil
+        }
     }
 
     func remove(id: String, scope: String) throws {

@@ -1,4 +1,11 @@
-import { externalModelProviders } from "../../lib/bit/external-model-providers";
+import {
+	supportsCustomRequestParams,
+	validateCustomRequestParams,
+} from "../../lib/bit/custom-request-params";
+import {
+	SECRET_PROVIDER_PARAM_KEYS,
+	externalModelProviders,
+} from "../../lib/bit/external-model-providers";
 import { validateForecastingBit } from "../../lib/bit/forecasting-model";
 import { validateSystemOneParameters } from "../../lib/bit/systemone-model";
 import type { IBit, IMetadata } from "../../lib/schema/bit/bit";
@@ -6,12 +13,7 @@ import { IBitTypes } from "../../lib/schema/bit/bit";
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
 
-export const SECRET_KEYS = [
-	"api_key",
-	"service_account_json",
-	"access_token",
-	"headers",
-];
+export const SECRET_KEYS = SECRET_PROVIDER_PARAM_KEYS;
 export function record(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" && !Array.isArray(value)
 		? (value as Record<string, unknown>)
@@ -266,6 +268,15 @@ export function validateBitDraft(
 	if (scope === "custom" && !bit.meta.en?.name.trim())
 		return "Add an English display name before saving.";
 	const params = record(bit.parameters);
+	if (
+		[IBitTypes.Llm, IBitTypes.Vlm, IBitTypes.SystemOne].includes(bit.type) &&
+		supportsCustomRequestParams(record(params.provider).provider_name)
+	) {
+		const requestError = validateCustomRequestParams(
+			record(record(params.provider).params).request_params,
+		);
+		if (requestError) return requestError;
+	}
 	if (bit.type === IBitTypes.Forecasting) {
 		const error = validateForecastingBit(bit, scope);
 		if (error) return error;

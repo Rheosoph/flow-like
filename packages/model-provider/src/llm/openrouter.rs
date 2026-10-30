@@ -59,7 +59,10 @@ impl OpenRouterModel {
         provider: &ModelProvider,
         egress: ProviderEgress,
     ) -> anyhow::Result<Self> {
-        Self::with_http_client(provider, AuthorizedHttpClient::for_egress(egress)?)
+        Self::with_http_client(
+            provider,
+            AuthorizedHttpClient::for_provider(provider, egress)?,
+        )
     }
 
     pub async fn from_provider_with_authorizer(

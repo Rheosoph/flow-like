@@ -397,7 +397,7 @@ impl OpenAIModel {
             let auth = rig::providers::azure::AzureOpenAIAuth::ApiKey(api_key.to_string());
             let mut builder = rig::providers::azure::Client::builder()
                 .api_key(auth)
-                .http_client(AuthorizedHttpClient::for_egress(egress)?)
+                .http_client(AuthorizedHttpClient::for_provider(provider, egress)?)
                 .azure_endpoint(endpoint);
             if let Some(version_str) = params.get("version").and_then(|v| v.as_str()) {
                 builder = builder.api_version(version_str);
@@ -418,7 +418,7 @@ impl OpenAIModel {
                             anyhow::anyhow!("Hosted authorization requires an explicit endpoint")
                         })?,
                 )?,
-                None => AuthorizedHttpClient::for_egress(egress)?,
+                None => AuthorizedHttpClient::for_provider(provider, egress)?,
             };
             let endpoint = endpoint.as_ref().and_then(Value::as_str);
             let mut builder = rig::providers::openai::Client::builder()

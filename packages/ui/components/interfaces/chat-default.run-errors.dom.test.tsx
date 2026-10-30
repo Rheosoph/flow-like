@@ -14,8 +14,14 @@ import {
 	type IMessage,
 	chatDb,
 	decodeMessageRow,
+	putChatMessage,
 } from "./chat-default/chat-db";
+import {
+	type IChatMessageInteraction,
+	createMessageReference,
+} from "./chat-default/chat-message-interaction";
 import type { ISendMessageFunction } from "./chat-default/chatbox";
+import { joinContentText } from "./chat-default/inline-segments";
 import type { IUseInterfaceProps } from "./interfaces";
 
 const state = vi.hoisted(() => ({
@@ -25,6 +31,13 @@ const state = vi.hoisted(() => ({
 	params: new URLSearchParams({ sessionId: "session" }),
 	setQueryParams: vi.fn(),
 	send: undefined as ISendMessageFunction | undefined,
+	react: undefined as
+		| ((
+				message: IMessage,
+				emoji: string,
+				operation: "add" | "remove",
+		  ) => Promise<void>)
+		| undefined,
 }));
 
 vi.mock("@flow-like/locales", () => ({
@@ -100,11 +113,14 @@ vi.mock("./chat-default/chat", async () => {
 		Chat: ({
 			messages,
 			onSendMessage,
+			onMessageReaction,
 		}: {
 			messages: IMessage[];
 			onSendMessage: ISendMessageFunction;
+			onMessageReaction: typeof state.react;
 		}) => {
 			state.send = onSendMessage;
+			state.react = onMessageReaction;
 			return (
 				<div>
 					{messages.map((message) => (
@@ -147,10 +163,20 @@ let container: HTMLDivElement;
 let emit: (events: IIntercomEvent[]) => void;
 let finish: (metadata?: ILogMetadata) => void;
 let reject: (failure: unknown) => void;
+let requests: Parameters<ExecuteEventFn>[2][];
+let oauthRequests: Record<string, unknown>[];
+const recordOAuth = (event: Event) => {
+	oauthRequests.push((event as CustomEvent<Record<string, unknown>>).detail);
+};
 
 beforeEach(async () => {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 	state.send = undefined;
+	state.react = undefined;
+	state.params = new URLSearchParams({ sessionId: "session" });
+	requests = [];
+	oauthRequests = [];
+	window.addEventListener("flow:oauth-required", recordOAuth);
 	state.engine = new ExecutionEngineProvider();
 	const executeEvent: ExecuteEventFn = (
 		_app,
@@ -161,6 +187,7 @@ beforeEach(async () => {
 		callback,
 	) => {
 		if (!callback) throw new Error("Missing event callback");
+		requests.push(_payload);
 		emit = callback;
 		return new Promise((resolve, fail) => {
 			finish = resolve;
@@ -184,6 +211,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+	window.removeEventListener("flow:oauth-required", recordOAuth);
 	await act(async () => root.unmount());
 	container.remove();
 	vi.restoreAllMocks();
@@ -337,5 +365,302 @@ describe("chat run error reporting", () => {
 			expect(replies[0].error).toBeUndefined();
 		});
 		expect(container.querySelector('[role="alert"]')).toBeNull();
+	});
+});
+
+describe("quoted replies and reactions", () => {
+	function required<T>(value: T | undefined): T {
+		if (value === undefined) throw new Error("Expected a value");
+		return value;
+	}
+	const target: IMessage = {
+		id: "older-model-message",
+		appId: "app",
+		sessionId: "session",
+		timestamp: 1,
+		files: [],
+		inner: {
+			role: "assistant",
+			content: "The first proposal uses a blue background.",
+		} as IMessage["inner"],
+	};
+
+	const payload = (index: number) =>
+		requests[index].payload as {
+			messages: { role: string; content: IMessage["inner"]["content"] }[];
+		};
+
+	async function finishRun(sending?: Promise<void>) {
+		await act(async () => {
+			finish();
+			await sending;
+		});
+		await waitForChat(() =>
+			expect(state.engine.isStreamActive("session")).toBe(false),
+		);
+	}
+
+	test("a reply outside the history window starts a run and keeps its context in later history", async () => {
+		await putChatMessage(target);
+		for (let index = 0; index < 6; index++) {
+			await putChatMessage({
+				...target,
+				id: `later-${index}`,
+				timestamp: index + 2,
+				inner: { ...target.inner, content: `Later answer ${index}` },
+			});
+		}
+		await mount();
+		const interaction: IChatMessageInteraction = {
+			type: "reply",
+			target: createMessageReference(target),
+		};
+		let sending!: Promise<void>;
+		await act(async () => {
+			sending = required(state.send)(
+				"Please use green instead.",
+				undefined,
+				undefined,
+				undefined,
+				interaction,
+			);
+		});
+		await waitForChat(() => expect(requests).toHaveLength(1));
+		const outgoing = payload(0).messages;
+		expect(outgoing).toHaveLength(6);
+		expect(outgoing.at(-1)?.role).toBe("user");
+		const text = joinContentText(required(outgoing.at(-1)).content);
+		expect(text).toContain(target.id);
+		expect(text).toContain("The first proposal uses a blue background.");
+		expect(text).toContain("Please use green instead.");
+		expect(
+			outgoing
+				.slice(0, -1)
+				.every(
+					(message) =>
+						!joinContentText(message.content).includes("first proposal"),
+				),
+		).toBe(true);
+		const user = required(
+			(await chatDb.messages.toArray())
+				.map(decodeMessageRow)
+				.find((message) => message.inner.role === "user"),
+		);
+		expect(joinContentText(user.inner.content)).toBe(
+			"Please use green instead.",
+		);
+		expect(user.interaction).toEqual(interaction);
+		await finishRun(sending);
+
+		await act(async () => {
+			sending = required(state.send)("Continue.");
+		});
+		await waitForChat(() => expect(requests).toHaveLength(2));
+		expect(
+			payload(1).messages.some(
+				(message) =>
+					message.role === "user" &&
+					joinContentText(message.content).includes(target.id),
+			),
+		).toBe(true);
+		await finishRun(sending);
+	});
+
+	test("adding and removing a reaction each starts one run and saves the literal action", async () => {
+		await putChatMessage(target);
+		await mount();
+		for (const [index, operation] of ["add", "remove"].entries()) {
+			let sending!: Promise<void>;
+			await act(async () => {
+				sending = required(state.react)(
+					target,
+					"👍",
+					operation as "add" | "remove",
+				);
+			});
+			await waitForChat(() => expect(requests).toHaveLength(index + 1));
+			const outgoing = required(payload(index).messages.at(-1));
+			expect(outgoing.role).toBe("user");
+			expect(joinContentText(outgoing.content)).toContain("👍");
+			expect(joinContentText(outgoing.content)).toContain(target.id);
+			const stored = decodeMessageRow(
+				required(await chatDb.messages.get(target.id)),
+			);
+			expect(stored.reactions).toEqual(operation === "add" ? ["👍"] : []);
+			const users = (await chatDb.messages.toArray())
+				.map(decodeMessageRow)
+				.filter((message) => message.inner.role === "user");
+			expect(users).toHaveLength(index + 1);
+			const action = required(
+				users.find(
+					(message) =>
+						message.interaction?.type === "reaction" &&
+						message.interaction.operation === operation,
+				),
+			);
+			expect(action.interaction).toMatchObject({
+				type: "reaction",
+				operation,
+				emoji: "👍",
+				target: { messageId: target.id },
+			});
+			expect(joinContentText(action.inner.content)).toBe("👍");
+			await finishRun(sending);
+		}
+	});
+
+	test("a busy chat rejects reactions without persisting or silently dropping them", async () => {
+		await putChatMessage(target);
+		const { sending } = await send();
+		await act(async () => {
+			await expect(required(state.react)(target, "❤️", "add")).rejects.toThrow(
+				"Please wait",
+			);
+		});
+		expect(requests).toHaveLength(1);
+		expect(
+			decodeMessageRow(required(await chatDb.messages.get(target.id)))
+				.reactions,
+		).toBeUndefined();
+		await finishRun(sending);
+	});
+
+	test("preflight failures reject a quoted reply instead of reporting a successful send", async () => {
+		await putChatMessage(target);
+		await mount();
+		state.backend.isOffline = vi
+			.fn()
+			.mockRejectedValue(new Error("Offline lookup failed"));
+		await act(async () => {
+			await expect(
+				required(state.send)(
+					"Please clarify",
+					undefined,
+					undefined,
+					undefined,
+					{
+						type: "reply",
+						target: createMessageReference(target),
+					},
+				),
+			).rejects.toThrow("Offline lookup failed");
+		});
+		expect(requests).toHaveLength(0);
+		expect(await chatDb.messages.count()).toBe(1);
+	});
+
+	test("a missing reaction target rejects without saving an action or starting a run", async () => {
+		await putChatMessage(target);
+		await mount();
+		await chatDb.messages.delete(target.id);
+		await act(async () => {
+			await expect(required(state.react)(target, "👍", "add")).rejects.toThrow(
+				"no longer available",
+			);
+		});
+		expect(requests).toHaveLength(0);
+		expect(await chatDb.messages.count()).toBe(0);
+	});
+
+	test("OAuth retry retains reaction context and saves it only when the run is accepted", async () => {
+		await putChatMessage(target);
+		state.backend.eventState.checkEventOAuth = vi
+			.fn()
+			.mockResolvedValue({ missingProviders: [{ provider: "example" }] });
+		await mount();
+		await act(async () => {
+			await required(state.react)(target, "🎉", "add");
+		});
+		expect(requests).toHaveLength(0);
+		await act(async () => {
+			await expect(required(state.react)(target, "❤️", "add")).rejects.toThrow(
+				"authorization request",
+			);
+		});
+		expect(
+			decodeMessageRow(required(await chatDb.messages.get(target.id)))
+				.reactions,
+		).toBeUndefined();
+		await act(async () => {
+			window.dispatchEvent(
+				new CustomEvent("flow:oauth-retry", {
+					detail: { ...oauthRequests[0], skipConsentCheck: true },
+				}),
+			);
+		});
+		await waitForChat(() => expect(requests).toHaveLength(1));
+		expect(
+			joinContentText(required(payload(0).messages.at(-1)).content),
+		).toContain(target.id);
+		expect(
+			decodeMessageRow(required(await chatDb.messages.get(target.id)))
+				.reactions,
+		).toEqual(["🎉"]);
+		await finishRun();
+	});
+
+	test("OAuth retry drops a pending quote when the user switched conversations", async () => {
+		await putChatMessage(target);
+		state.backend.eventState.checkEventOAuth = vi
+			.fn()
+			.mockResolvedValue({ missingProviders: [{ provider: "example" }] });
+		await mount();
+		await act(async () => {
+			await required(state.send)(
+				"Please clarify",
+				undefined,
+				undefined,
+				undefined,
+				{ type: "reply", target: createMessageReference(target) },
+			);
+		});
+		state.params = new URLSearchParams({ sessionId: "another-session" });
+		await mount();
+		await act(async () => {
+			window.dispatchEvent(
+				new CustomEvent("flow:oauth-retry", {
+					detail: { ...oauthRequests[0], skipConsentCheck: true },
+				}),
+			);
+		});
+		expect(requests).toHaveLength(0);
+		expect(await chatDb.messages.count()).toBe(1);
+	});
+
+	test("cancelling the matching OAuth request allows a new interaction", async () => {
+		await putChatMessage(target);
+		state.backend.eventState.checkEventOAuth = vi
+			.fn()
+			.mockResolvedValue({ missingProviders: [{ provider: "example" }] });
+		await mount();
+		await act(async () => {
+			await required(state.react)(target, "🎉", "add");
+		});
+		await act(async () => {
+			window.dispatchEvent(
+				new CustomEvent("flow:oauth-cancelled", {
+					detail: { ...oauthRequests[0], requestId: "another-request" },
+				}),
+			);
+			await expect(required(state.react)(target, "❤️", "add")).rejects.toThrow(
+				"authorization request",
+			);
+			window.dispatchEvent(
+				new CustomEvent("flow:oauth-cancelled", { detail: oauthRequests[0] }),
+			);
+		});
+		state.backend.eventState.checkEventOAuth = vi
+			.fn()
+			.mockResolvedValue({ missingProviders: [] });
+		let sending!: Promise<void>;
+		await act(async () => {
+			sending = required(state.react)(target, "❤️", "add");
+		});
+		await waitForChat(() => expect(requests).toHaveLength(1));
+		expect(
+			decodeMessageRow(required(await chatDb.messages.get(target.id)))
+				.reactions,
+		).toEqual(["❤️"]);
+		await finishRun(sending);
 	});
 });

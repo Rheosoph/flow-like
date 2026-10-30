@@ -6,6 +6,7 @@ import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
 import ChevronUp from "lucide-react/dist/esm/icons/chevron-up.js";
 import CopyIcon from "lucide-react/dist/esm/icons/copy.js";
 import MessageSquareIcon from "lucide-react/dist/esm/icons/message-square.js";
+import ReplyIcon from "lucide-react/dist/esm/icons/reply.js";
 import EditIcon from "lucide-react/dist/esm/icons/square-pen.js";
 import ThumbsDownIcon from "lucide-react/dist/esm/icons/thumbs-down.js";
 import ThumbsUpIcon from "lucide-react/dist/esm/icons/thumbs-up.js";
@@ -62,6 +63,8 @@ import {
 	joinContentText,
 	unanchoredWidgets,
 } from "./inline-segments";
+import { MessageReactionPicker, MessageReactions } from "./message-reactions";
+import { MessageReference } from "./message-reference";
 import { MessageWidgets } from "./message-widgets";
 import {
 	type PendingAsk,
@@ -100,6 +103,13 @@ interface MessageProps {
 		messageId: string,
 		updates: Partial<IMessage>,
 	) => void | Promise<void>;
+	onReply?: (message: IMessage, selectedText?: string) => void;
+	onReaction?: (
+		message: IMessage,
+		emoji: string,
+		operation: "add" | "remove",
+	) => Promise<void>;
+	interactionDisabled?: boolean;
 	/** App id owning the chat — needed to render + trigger embedded widgets. */
 	appId?: string;
 	/** Board id of the chat event — target for widget action workflows. */
@@ -404,6 +414,8 @@ const MessageActions = ({
 	onFeedbackClick,
 	onEdit,
 	onCopy,
+	reactionPicker,
+	replyButton,
 }: {
 	isUser: boolean;
 	feedbackEnabled: boolean;
@@ -416,6 +428,8 @@ const MessageActions = ({
 	onFeedbackClick: () => void;
 	onEdit: () => void;
 	onCopy: () => void;
+	reactionPicker?: ReactNode;
+	replyButton?: ReactNode;
 }) => (
 	<div
 		className={cn(
@@ -434,6 +448,8 @@ const MessageActions = ({
 					),
 		)}
 	>
+		{replyButton}
+		{reactionPicker}
 		{!isUser && feedbackEnabled && (
 			<>
 				<FeedbackButton
@@ -490,6 +506,9 @@ export const MessageComponent = memo(
 		message,
 		loading,
 		onMessageUpdate,
+		onReply,
+		onReaction,
+		interactionDisabled = false,
 		appId,
 		boardId,
 		eventId,
@@ -507,6 +526,8 @@ export const MessageComponent = memo(
 		const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);
 		const [showEditDialog, setShowEditDialog] = useState(false);
 		const [showFileDialog, setShowFileDialog] = useState(false);
+		const [savingReaction, setSavingReaction] = useState(false);
+		const reactionUpdatePending = useRef(false);
 		const [dialogSelectedFile, setDialogSelectedFile] =
 			useState<ProcessedAttachment | null>(null);
 		const contentRef = useRef<HTMLDivElement>(null);
@@ -653,6 +674,41 @@ export const MessageComponent = memo(
 			[message.id, message.rating, message.ratingSettings, onMessageUpdate],
 		);
 
+		const toggleReaction = useCallback(
+			async (emoji: string) => {
+				if (!onReaction || interactionDisabled || reactionUpdatePending.current)
+					return;
+				reactionUpdatePending.current = true;
+				setSavingReaction(true);
+				try {
+					await onReaction(
+						message,
+						emoji,
+						message.reactions?.includes(emoji) ? "remove" : "add",
+					);
+				} catch (error) {
+					console.error("[Chat] Failed to update reaction:", error);
+					toast.error(t("reactionSendFailed", "Failed to send reaction"));
+				} finally {
+					reactionUpdatePending.current = false;
+					setSavingReaction(false);
+				}
+			},
+			[message, onReaction, interactionDisabled, t],
+		);
+
+		const replyToMessage = useCallback(() => {
+			if (!onReply || interactionDisabled) return;
+			const selection = window.getSelection();
+			const selectedText =
+				selection &&
+				contentRef.current?.contains(selection.anchorNode) &&
+				contentRef.current?.contains(selection.focusNode)
+					? selection.toString().trim() || undefined
+					: undefined;
+			onReply(message, selectedText);
+		}, [message, onReply, interactionDisabled]);
+
 		const handleFeedbackSubmit = useCallback(
 			async (data: {
 				comment: string;
@@ -788,6 +844,8 @@ export const MessageComponent = memo(
 		const hasUsageStats = usageStats.length > 0;
 		const hasFooterContent =
 			hasUsageStats ||
+			Boolean(message.interaction) ||
+			(message.reactions?.length ?? 0) > 0 ||
 			processedAttachments.length > 0 ||
 			Boolean(FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report);
 		const compactUserActions = isUser && !hasFooterContent;
@@ -825,6 +883,26 @@ export const MessageComponent = memo(
 						}}
 					>
 						{isUser && pending?.phase === "waiting" && <PendingAskRule />}
+						{message.interaction && (
+							<MessageReference
+								reference={message.interaction.target}
+								label={
+									message.interaction.type === "reaction"
+										? message.interaction.operation === "add"
+											? t(
+													"addedReactionToMessage",
+													"Added {{emoji}} to this message",
+													{ emoji: message.interaction.emoji },
+												)
+											: t(
+													"removedReactionFromMessage",
+													"Removed {{emoji}} from this message",
+													{ emoji: message.interaction.emoji },
+												)
+										: undefined
+								}
+							/>
+						)}
 						{isUser && (
 							<span className="mb-1.5 flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
 								<span className="flex min-w-0 items-baseline gap-2">
@@ -851,7 +929,7 @@ export const MessageComponent = memo(
 							ref={contentRef}
 							className={cn(
 								"w-full max-w-full whitespace-break-spaces text-wrap text-sm leading-relaxed",
-								compactUserActions && "pr-10",
+								compactUserActions && (onReaction ? "pr-16" : "pr-10"),
 								isUser && showToggle && !isExpanded && "overflow-hidden",
 							)}
 							style={
@@ -1016,6 +1094,12 @@ export const MessageComponent = memo(
 						{FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report && (
 							<AgentDebugReport report={message.debug_report} />
 						)}
+						<MessageReactions
+							reactions={message.reactions}
+							onToggle={onReaction ? toggleReaction : undefined}
+							disabled={loading || savingReaction || interactionDisabled}
+							alignEnd={isUser}
+						/>
 						{!loading && (
 							<MessageActions
 								isUser={isUser}
@@ -1029,6 +1113,29 @@ export const MessageComponent = memo(
 								onFeedbackClick={() => setShowFeedbackDialog(true)}
 								onEdit={() => setShowEditDialog(true)}
 								onCopy={copyToClipboard}
+								replyButton={
+									message.inner.role === IRole.Assistant && onReply ? (
+										<button
+											type="button"
+											title={t("replyToMessage", "Reply to message")}
+											aria-label={t("replyToMessage", "Reply to message")}
+											disabled={interactionDisabled}
+											onClick={replyToMessage}
+											className="text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+										>
+											<ReplyIcon className="size-4" />
+										</button>
+									) : undefined
+								}
+								reactionPicker={
+									onReaction ? (
+										<MessageReactionPicker
+											reactions={message.reactions}
+											onToggle={toggleReaction}
+											disabled={savingReaction || interactionDisabled}
+										/>
+									) : undefined
+								}
 							/>
 						)}
 					</div>
@@ -1112,6 +1219,8 @@ export const MessageComponent = memo(
 			prev.message.inner.content === next.message.inner.content &&
 			prev.message.files === next.message.files &&
 			prev.message.rating === next.message.rating &&
+			prev.message.reactions === next.message.reactions &&
+			prev.message.interaction === next.message.interaction &&
 			prev.message.ratingSettings === next.message.ratingSettings &&
 			prev.message.plan_steps === next.message.plan_steps &&
 			prev.message.current_step_id === next.message.current_step_id &&
@@ -1128,7 +1237,10 @@ export const MessageComponent = memo(
 			prev.anchoredContent === next.anchoredContent &&
 			prev.pending?.phase === next.pending?.phase &&
 			prev.pending?.since === next.pending?.since &&
-			prev.onMessageUpdate === next.onMessageUpdate
+			prev.onMessageUpdate === next.onMessageUpdate &&
+			prev.onReply === next.onReply &&
+			prev.onReaction === next.onReaction &&
+			prev.interactionDisabled === next.interactionDisabled
 		);
 	},
 );

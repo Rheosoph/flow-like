@@ -41,6 +41,87 @@ API CORS origins cannot contain wildcards, credentials, paths or query strings.
 Add desktop origins to both origin lists when required:
 `tauri://localhost,http://tauri.localhost,https://tauri.localhost`.
 
+## Run reply channels
+
+Interactive runs receive replies over NATS. The executor subscribes before it
+asks the client for input, and the client waits for an executor acknowledgement.
+The API signs credentials limited to that run's inbox and acknowledgement
+subjects. The signing seed stays in the API; the broker receives only public
+operator and account tokens.
+
+`setup-env.py` uses OpenSSL with Ed25519 support to create the trust
+configuration and sets these values:
+
+| Variable | Purpose |
+| --- | --- |
+| `CHANNEL_TRANSPORT=nats` | Select NATS for interactive channel grants |
+| `CHANNEL_NATS_URL=nats://nats:4222` | Private broker endpoint used by the API and execution gateways |
+| `CHANNEL_NATS_WS_URL` | Browser endpoint, derived from the public API origin with `/nats` |
+| `CHANNEL_NATS_ACCOUNT_SEED` | API signing seed; keep it private |
+| `NATS_SERVER_CONFIG` | Base64-encoded broker configuration with public trust and exact browser origins |
+| `CHANNEL_TTL_SECONDS=7200` | Upper bound for channel lifetime |
+
+The edge proxy routes `/nats` to the broker's WebSocket listener. Keep that
+route when adding an external reverse proxy and use `wss://` with HTTPS hosting.
+The native broker and monitoring ports are not published. Isolated executors
+reach the configured broker through their per-run gateway.
+
+The broker accepts HTTP(S) browser origins. Desktop clients using
+`tauri://localhost` send replies through the authenticated HTTP fallback, which
+forwards them to NATS. Collaboration signaling remains a separate service.
+
+For an existing installation, generate only the new NATS settings:
+
+```bash
+python3 ../scripts/nats_bootstrap.py --output .nats.env \
+  --web-origin https://app.example.com \
+  --websocket-url wss://api.example.com/nats
+```
+
+Merge those assignments into the existing private `.env`, then recreate the
+API, execution manager, edge proxy and NATS services. The helper refuses to
+overwrite its output. Changing the web origin also requires updating
+`websocket.allowed_origins` in the decoded broker configuration and recreating
+NATS; changing an API CORS value alone does not update broker origins.
+
+The bundled broker runs as one instance. Core NATS does not retain replies
+during an outage; acknowledgements and bounded retries detect failed delivery.
+The HTTP fallback still needs the broker. Use an externally managed NATS
+cluster when broker availability must survive a node failure, and set the API
+signer to an account trusted by that cluster. Use a stable internal Service or
+load-balancer endpoint. Isolated gateways support `nats://` on the trusted
+private network; use `trusted_shared` mode for direct native `tls://` connections.
+Setting `CHANNEL_TRANSPORT=http`
+selects the database-backed polling transport instead.
+
+### Test the channel transport
+
+From the repository root, install the workspace JavaScript dependencies and
+make `nats-server` available on `PATH`. The browser suite uses Puppeteer's
+Chromium; `CHROME_PATH` selects an existing Chrome executable.
+
+```bash
+cargo build -p flow-like-channels --features nats --example nats-channel-worker
+python3 tests/nats-channels-browser/run.py
+NATS_SERVER_BIN="$(command -v nats-server)" cargo test -p flow-like-channels \
+  --features nats real_broker_reply_steer_cancel_forwarder_permissions_and_expiry \
+  -- --include-ignored
+```
+
+The browser runner starts a fresh authenticated broker and exercises replies,
+steering, cancellation, duplicate delivery, HTTP forwarding, channel isolation
+and expiry. `NATS_SERVER_BIN` and `NATS_WORKER_BIN` can select custom binaries.
+To exercise the actual execution gateway too, build
+`cargo build -p flow-like-execution-manager --bin execution-gateway` and run
+with `NATS_GATEWAY_BIN=target/debug/execution-gateway`.
+
+To test an already running Compose or Kubernetes broker, run
+`bun tests/nats-channels-browser/verify.ts --config /private/path/fixture.json`.
+The private JSON file must contain `url`, `ws_url`, `account_seed` and
+`channel_id`. Set `NATS_E2E_BROWSER_PORT` to a free local port and include
+`http://127.0.0.1:<port>` in that test broker's origin list. Use an isolated test
+deployment and remove its credentials after testing.
+
 ## Images
 
 | Variable | Default | Meaning |
@@ -80,10 +161,17 @@ empty `*_IMAGE` tags the local build under the published name, and later
 
 ## Hub configuration and identity
 
+External OIDC is the default (`OIDC_MODE=external`), with no bundled identity
+services. `setup-env.py --oidc bundled` adds Keycloak and its dedicated PostgreSQL
+database using `docker-compose.oidc.yml`. Both modes use the same Flow-Like OIDC
+authentication path.
+
 `FLOW_LIKE_RUNTIME_CONFIG_FILE` selects the host-side JSON file mounted into the
 API and sink services at `/app/flow-like.config.json`. The API selects that mount
 through `FLOW_LIKE_CONFIG_FILE`. Replace the example's OIDC authority, client
-settings, public domains, legal links and signaling URL. The API reads the whole
+settings, public domains, legal links and signaling URL when using an external
+provider. Set `user_info_url` explicitly as well as `jwks_url` and
+`discovery_url`. The API reads the whole
 document once at startup. Recreate the affected services after changing the file.
 
 Alternatively, supply `FLOW_LIKE_CONFIG_JSON` or
@@ -104,6 +192,86 @@ If all three runtime sources are empty, the API uses its compiled public
 fallback. `FLOW_LIKE_CONFIG` is the repository-relative file that local builds
 compile into the API and audit-worker images. Never put deployment credentials
 in it or publish them in an image.
+
+### Bundled identity provider
+
+Generate a new environment with `--oidc bundled`. Setup generates a `flow-like`
+realm for Keycloak to import, with a public `flow-like` client, authorization-code login and PKCE S256.
+The client adds the expected audience to access tokens so the API can validate
+them. Password grants and public account registration are disabled. The
+Keycloak administrator manages users; the generated `owner` account can sign
+in to Flow-Like and must change its temporary password on first use.
+
+| Setting | Purpose |
+| --- | --- |
+| `OIDC_MODE` | `external` by default; `bundled` requires the OIDC overlay |
+| `OIDC_PUBLIC_URL` | Stable HTTPS origin, default `https://auth.localhost:8443` |
+| `OIDC_HOSTNAME`, `OIDC_PORT` | Hostname and TLS listener port derived from that origin |
+| `OIDC_BIND_ADDRESS` | Published listener address, default `127.0.0.1` |
+| `OIDC_IMAGE` | Keycloak image reference |
+| `OIDC_DB_PASSWORD` | Password for the separate identity database |
+| `OIDC_ADMIN_USERNAME`, `OIDC_ADMIN_PASSWORD` | Initial Keycloak administrator credentials |
+| `OIDC_BOOTSTRAP_USERNAME`, `OIDC_BOOTSTRAP_PASSWORD` | Initial Flow-Like sign-in account and temporary password |
+| `OIDC_BOOTSTRAP_EMAIL` | Initial account email selected with `--oidc-bootstrap-email` |
+| `OIDC_REALM_FILE` | Generated realm import file |
+| `OIDC_TLS_CERT_FILE`, `OIDC_TLS_KEY_FILE` | Host-side server certificate chain and private key |
+| `OIDC_CA_CERT_FILE` | Host-side CA bundle mounted for the API's OIDC requests |
+
+For `--output .env.local`, setup creates `.env.local.oidc/` with mode `0700`.
+Its CA private key has mode `0600`; mounted files have mode `0644` so the
+container users can read them. Keep the directory private. Setup refuses to
+replace the environment file or artifact directory. Passwords remain in the
+private environment file and are not written into the public hub configuration.
+
+The local certificate files are `ca.crt`, `tls.crt` and `tls.key`. Trust `ca.crt`
+in the host operating system and browser before signing in. The API trusts the
+mounted CA only for OIDC requests and still verifies certificates and hostnames.
+The desktop client uses host trust. Setup never installs a CA into a workstation
+trust store.
+
+To use a public hostname, supply its certificate chain, matching private key
+and CA bundle when generating the installation:
+
+```bash
+python3 scripts/setup-env.py --oidc bundled \
+  --web-origin https://app.example.com \
+  --api-url https://api.example.com \
+  --s3-endpoint https://storage.example.com \
+  --oidc-url https://auth.example.com:8443 \
+  --oidc-tls-cert /private/certs/auth-fullchain.pem \
+  --oidc-tls-key /private/certs/auth-key.pem \
+  --oidc-ca-cert /private/certs/ca-bundle.pem \
+  --oidc-bootstrap-email owner@example.com
+```
+
+Provide all three certificate arguments together, using an unencrypted private
+key. Setup copies these files into the generated artifact directory; renewing
+the original source files alone does not update the deployment. Review `OIDC_BIND_ADDRESS`
+before exposing the listener beyond loopback. Browsers and containers use the
+same HTTPS origin; the Compose network alias resolves its hostname to Keycloak
+inside the stack. Keep this issuer origin stable because tokens identify their
+issuer by that exact URL. Changing providers or issuers does not migrate
+existing Flow-Like accounts.
+
+Review the generated hub's signaling address and legal links for public hosting.
+Local certificates expire after one year. Replace the server certificate and key
+before expiry, preserving the CA trusted by clients, then recreate `oidc`. For a
+CA change, update client trust and recreate the API with the new CA bundle too.
+
+The generated hub uses `flow-like://auth` for native sign-in. Web runtime
+configuration overrides this with the web origin's `/callback` path. Both exact
+callbacks are registered in Keycloak. A desktop build with a different
+`NEXT_PUBLIC_REDIRECT_URL` needs that exact callback registered too; repeat
+`--oidc-redirect-uri <uri>` during setup for each additional callback. Logout
+returns to the web origin. No wildcard callback is generated.
+
+Keycloak imports the realm on its first startup and skips it when that realm
+already exists. Later edits to the import file or bootstrap passwords do not
+change existing accounts or clients. Use the Keycloak administration console
+for those changes; do not delete the database volume to update settings.
+Back up the identity database, environment file and artifact directory together.
+See [Keycloak realm import](https://www.keycloak.org/server/importExport) for
+the import lifecycle.
 
 ### Audit worker policy
 

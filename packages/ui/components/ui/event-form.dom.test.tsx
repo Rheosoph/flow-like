@@ -749,9 +749,38 @@ describe("Trigger types by destination", () => {
 });
 
 describe("Automatic destination", () => {
+	test.each([
+		[true, IExecutionMode.Hybrid, "This computer", IEventExecutionMode.Local],
+		[false, IExecutionMode.Hybrid, "Hub", IEventExecutionMode.Remote],
+		[true, IExecutionMode.Remote, "Hub", IEventExecutionMode.Remote],
+	] as const)(
+		"local execution %s and a %s flow default to %s even when devices are available",
+		async (canExecuteLocally, mode, expectedDestination, executionMode) => {
+			const view = await mount({
+				canExecuteLocally,
+				mode,
+				props: {
+					onCreateDevice: async () => {
+						throw new Error("Unexpected device creation");
+					},
+				},
+			});
+			await pick();
+			expect(destination("Device").disabled).toBe(false);
+			expect(destination("Device").getAttribute("aria-checked")).toBe("false");
+			expect(
+				destination(expectedDestination).getAttribute("aria-checked"),
+			).toBe("true");
+			await click(create());
+			expect(view.submissions).toHaveLength(1);
+			expect(view.submissions[0][0].execution_mode).toBe(executionMode);
+		},
+	);
+
 	test("a trigger devices cannot run falls back from the device and says so", async () => {
 		const { view, submissions } = await mountDeviceForm();
 		await pick();
+		await click(destination("Device"));
 		expect(destination("Device").getAttribute("aria-checked")).toBe("true");
 		await click(trigger("Deep link"));
 		await view.settle();
@@ -779,6 +808,7 @@ describe("Automatic destination", () => {
 	test("clicking the fallen-back destination pins it against a later device-capable trigger", async () => {
 		const { view } = await mountDeviceForm();
 		await pick();
+		await click(destination("Device"));
 		await click(trigger("Deep link"));
 		await view.settle();
 		expect(destination("This computer").getAttribute("aria-checked")).toBe(
@@ -851,6 +881,7 @@ describe("Event name", () => {
 	test("the device destination states a missing name in the footer too", async () => {
 		const { view } = await mountDeviceForm();
 		await pick();
+		await click(destination("Device"));
 		expect(view.container.textContent).not.toContain("Give the event a name");
 		await typeInto(name(), "");
 		expect(view.container.textContent).toContain("Give the event a name");
@@ -986,6 +1017,7 @@ describe("Deployment panel renders", () => {
 	test("typing the name does not re-render the panel", async () => {
 		const { view } = await mountDeviceForm();
 		await pick();
+		await click(destination("Device"));
 		const name = byRole("textbox", /event name/i) as HTMLInputElement;
 		await typeInto(name, "Mine");
 		await view.settle();
@@ -999,6 +1031,7 @@ describe("Deployment panel renders", () => {
 	test("changing the start still reaches the panel", async () => {
 		const { view } = await mountDeviceForm();
 		await pick();
+		await click(destination("Device"));
 		await view.settle();
 		const before = panelRenders.count;
 		await pick("Refund approved");

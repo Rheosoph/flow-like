@@ -1,6 +1,7 @@
 import type { IOAuthBinding, IOAuthProvider } from "./types";
 
 export interface OAuthSession {
+	profileId?: string;
 	hub: string;
 	subject: string;
 	issuer?: string;
@@ -18,6 +19,7 @@ export function oauthSessionKey(session: OAuthSession): string {
 		normalizeOAuthHub(session.hub),
 		session.issuer ?? "",
 		session.subject,
+		...(session.profileId ? [session.profileId] : []),
 	]);
 }
 

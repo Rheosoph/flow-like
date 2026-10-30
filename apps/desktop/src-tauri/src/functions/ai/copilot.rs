@@ -103,6 +103,7 @@ pub use backend_types::{
     CopilotAuthStatus, CopilotModelInfo, FlowPilotAgentBackendKind, FlowPilotAgentCapabilitySet,
     FlowPilotAgentTransportKind, FlowPilotBackendStatus, ReasoningEffortOption,
 };
+pub(crate) use board_commits::persisted_board_graph_fingerprint;
 pub use board_commits::{
     __cmd__flowpilot_apply_flow_ir_commit, __cmd__flowpilot_flow_ir_commit_disposition,
     __cmd__flowpilot_read_flow_ir_commit_board,
@@ -128,6 +129,7 @@ pub use board_jobs::{
     flowpilot_create_board_edit_job, flowpilot_get_board_edit_job, flowpilot_list_board_edit_jobs,
     flowpilot_resolve_board_edit_job,
 };
+pub(crate) use chat::copilot_chat_native;
 pub use chat::{__cmd__copilot_chat, __tauri_command_name_copilot_chat, copilot_chat};
 pub use global_chat::{
     __cmd__global_chat, __cmd__global_chat_clear_memory, __cmd__global_chat_delete_memory,
@@ -139,8 +141,8 @@ pub use global_chat::{
     __tauri_command_name_global_chat_steer,
     __tauri_command_name_global_chat_take_unconsumed_steering, GLOBAL_CHAT_CHANNEL_EVENT,
     GlobalChatResumeResult, global_chat, global_chat_clear_memory, global_chat_delete_memory,
-    global_chat_list_memories, global_chat_memory_status, global_chat_resume, global_chat_steer,
-    global_chat_take_unconsumed_steering,
+    global_chat_list_memories, global_chat_memory_status, global_chat_native, global_chat_resume,
+    global_chat_steer, global_chat_take_unconsumed_steering,
 };
 pub use runtime::{
     __cmd__cancel_copilot_chat, __tauri_command_name_cancel_copilot_chat, cancel_copilot_chat,

@@ -59,6 +59,8 @@ impl NodeLogic for PushReasoningNode {
         let reasoning: String = context.evaluate_pin("reasoning").await?;
 
         let cached_response = CachedChatResponse::load(context).await?;
+        let _message_guard = cached_response.emission.lock().await;
+        let message_id = cached_response.message_id().await;
         {
             // Raw append: callers stream token fragments through this node, so
             // an injected separator breaks words. Discrete entries must bring
@@ -69,11 +71,13 @@ impl NodeLogic for PushReasoningNode {
 
         let reasoning_ref = cached_response.reasoning.lock().await;
         let streaming_response = ChatStreamingResponse {
+            message_id,
             actions: vec![],
             attachments: vec![],
             chunk: None,
             plan: Some(reasoning_ref.clone()),
             widgets: vec![],
+            main_widget: None,
         };
         drop(reasoning_ref);
 

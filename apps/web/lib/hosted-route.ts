@@ -142,18 +142,40 @@ export function hostedNavigationPath(
 }
 
 let sessionId: string | undefined;
+const HOSTED_SESSION_KEY = "flow-like-hosted-session";
+const VALID_HOSTED_SESSION = /^[a-zA-Z0-9_-]{16,128}$/;
+
+export function subscribeHostedSession(listener: () => void): () => void {
+	const onStorage = (event: StorageEvent) => {
+		if (event.key === null || event.key === HOSTED_SESSION_KEY) listener();
+	};
+	window.addEventListener("storage", onStorage);
+	return () => window.removeEventListener("storage", onStorage);
+}
+
+/** Anonymous visits share one identity across this browser profile's tabs. */
 export function hostedSessionId(): string {
-	if (sessionId) return sessionId;
 	try {
-		const stored = sessionStorage.getItem("flow-like-hosted-session");
-		if (stored && /^[a-zA-Z0-9_-]{16,128}$/.test(stored)) {
+		const stored = localStorage.getItem(HOSTED_SESSION_KEY);
+		if (stored && VALID_HOSTED_SESSION.test(stored)) {
 			sessionId = stored;
 			return stored;
 		}
 	} catch {}
-	sessionId = crypto.randomUUID();
+	if (!sessionId) {
+		try {
+			const legacy = sessionStorage.getItem(HOSTED_SESSION_KEY);
+			if (legacy && VALID_HOSTED_SESSION.test(legacy)) sessionId = legacy;
+		} catch {}
+		sessionId ??= crypto.randomUUID();
+	}
 	try {
-		sessionStorage.setItem("flow-like-hosted-session", sessionId);
+		localStorage.setItem(HOSTED_SESSION_KEY, sessionId);
+		const shared = localStorage.getItem(HOSTED_SESSION_KEY);
+		if (shared && VALID_HOSTED_SESSION.test(shared)) sessionId = shared;
+	} catch {}
+	try {
+		sessionStorage.setItem(HOSTED_SESSION_KEY, sessionId);
 	} catch {}
 	return sessionId;
 }

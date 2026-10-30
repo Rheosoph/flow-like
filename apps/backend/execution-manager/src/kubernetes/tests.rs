@@ -144,6 +144,7 @@ fn config() -> Config {
                 "flow-like-logs".into(),
             ],
             object_store_tls_gateway: false,
+            channel_nats_url: None,
             backend_pub: "public-key".into(),
             capacity: 10,
             timeout: 3600,

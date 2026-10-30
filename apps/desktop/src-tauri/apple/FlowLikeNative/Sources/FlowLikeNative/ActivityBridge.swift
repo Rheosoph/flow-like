@@ -119,6 +119,20 @@ enum NativeActivityBridge {
         #endif
     }
 
+    @MainActor static func connectScene<URLContext: Hashable>(
+        activities: Set<NSUserActivity>, urlContexts: Set<URLContext>,
+        handle: (NSUserActivity) -> Bool = { handle($0) },
+        connect: () -> Void, continueActivity: (NSUserActivity) -> Void,
+        openURLs: (Set<URLContext>) -> Void
+    ) {
+        let pending = activities.filter { !handle($0) }
+        connect()
+        // Tao receives warm opens directly, but omits the first scene's launch payload.
+        // Its event loop and plugins must be ready before forwarding cold opens.
+        pending.forEach(continueActivity)
+        if !urlContexts.isEmpty { openURLs(urlContexts) }
+    }
+
     #if os(iOS)
     @MainActor private static func installSceneConfiguration(delegate: AnyClass) {
         let selector = NSSelectorFromString("application:configurationForConnectingSceneSession:options:")
@@ -127,7 +141,6 @@ enum NativeActivityBridge {
         let original = unsafeBitCast(method_getImplementation(method), to: Configuration.self)
         let block: @convention(block) (AnyObject, AnyObject, UISceneSession, UIScene.ConnectionOptions) -> UISceneConfiguration = { receiver, application, session, options in
             let configuration = original(receiver, selector, application, session, options)
-            // Tao registers this class lazily while creating the configuration.
             // Install before UIKit delivers the first scene's launch activities.
             if let scene = configuration.delegateClass { install(scene: scene) }
             return configuration
@@ -148,10 +161,16 @@ enum NativeActivityBridge {
         let connectSelector = NSSelectorFromString("scene:willConnectToSession:options:")
         typealias Connect = @convention(c) (AnyObject, Selector, AnyObject, AnyObject, UIScene.ConnectionOptions) -> Void
         let originalConnect = class_getInstanceMethod(scene, connectSelector).map { unsafeBitCast(method_getImplementation($0), to: Connect.self) }
+        let openSelector = NSSelectorFromString("scene:openURLContexts:")
+        typealias OpenURLs = @convention(c) (AnyObject, Selector, AnyObject, NSSet) -> Void
+        let originalOpen = class_getInstanceMethod(scene, openSelector).map { unsafeBitCast(method_getImplementation($0), to: OpenURLs.self) }
         let connect: @convention(block) (AnyObject, AnyObject, AnyObject, UIScene.ConnectionOptions) -> Void = { receiver, scene, session, options in
-            // A cold scene receives its launch activity here, before continueUserActivity.
-            options.userActivities.forEach { _ = handle($0) }
-            originalConnect?(receiver, connectSelector, scene, session, options)
+            connectScene(
+                activities: options.userActivities, urlContexts: options.urlContexts,
+                connect: { originalConnect?(receiver, connectSelector, scene, session, options) },
+                continueActivity: { original?(receiver, selector, scene, $0) },
+                openURLs: { originalOpen?(receiver, openSelector, scene, $0 as NSSet) }
+            )
         }
         class_replaceMethod(scene, connectSelector, imp_implementationWithBlock(connect), "v@:@@@")
     }

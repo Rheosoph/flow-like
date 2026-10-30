@@ -63,6 +63,8 @@ import { useCallback, useEffect, useRef, useTransition } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { type IShortcut, appsDB } from "../lib/apps-db";
 import { installNativeDeviceAdapter } from "../lib/device-adapter";
+import { installNativeHomeAdapter, syncNativeHomeSnapshot } from "./native-home-adapter";
+import { installNativeWidgetAdapter, syncNativeWidgetSnapshot } from "./native-widget-adapter";
 import { ExecutionAuthBridge } from "../lib/execution-auth";
 import {
 	authForHub,
@@ -150,6 +152,9 @@ declare global {
 const PACKAGE_SESSION_BOOTSTRAP_TIMEOUT_MS = 30_000;
 
 export class TauriBackend implements IBackendState {
+	prepareFlowpilotRun = async () => {
+		await Promise.all([syncNativeHomeSnapshot(), syncNativeWidgetSnapshot()]);
+	};
 	appState: IAppState;
 	apiState: IApiState;
 	apiKeyState: IApiKeyState;
@@ -945,6 +950,8 @@ export function TauriProvider({
 	const { setDownloadBackend, download } = useDownloadManager();
 	const [isPending, startTransition] = useTransition();
 	useEffect(installNativeDeviceAdapter, []);
+	useEffect(installNativeHomeAdapter, []);
+	useEffect(installNativeWidgetAdapter, []);
 
 	// Safety to avoid state updates after unmount during resume
 	const mountedRef = useRef(true);

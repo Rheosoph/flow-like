@@ -1,4 +1,9 @@
-import { isChannelHandle, replyToChannel } from "./channel";
+import {
+	claimChannelRequest,
+	isChannelHandle,
+	isSharedChannel,
+	replyToChannel,
+} from "./channel";
 import { getFrontendAudioEpoch } from "./frontend-audio";
 import type { IChannelHandle } from "./schema/channel";
 import type { IIntercomEvent } from "./schema/events/intercom-event";
@@ -402,6 +407,20 @@ export function createDeviceCommandSession(
 				void (async () => {
 					let response: DeviceReply;
 					let onAbort: (() => void) | undefined;
+					if (isSharedChannel(request.channel)) {
+						let claimed = false;
+						try {
+							claimed = await claimChannelRequest(request.channel);
+						} catch (error) {
+							console.warn("Device request could not be claimed", error);
+						}
+						if (!claimed) {
+							clearTimeout(timeout);
+							pending.delete(job);
+							controller.signal.removeEventListener("abort", abort);
+							return;
+						}
+					}
 					try {
 						if (deadline <= now())
 							throw new DeviceError("expired", "Device request has expired");

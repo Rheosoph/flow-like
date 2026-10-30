@@ -23,6 +23,7 @@ use serde::{Deserialize, Serialize};
 pub mod attachment_from_path;
 pub mod attachment_from_url;
 pub mod attachment_to_url;
+pub mod clear_main_widget;
 pub mod push_attachment;
 pub mod push_attachments;
 pub mod push_chunk;
@@ -37,6 +38,7 @@ pub mod push_text_to_step;
 pub mod push_widget;
 pub mod push_widgets;
 pub mod remove_step;
+pub mod set_main_widget;
 
 pub use flow_like_catalog_data_support::events::chat_event::{
     Attachment, ComplexAttachment, url_processing,
@@ -576,8 +578,58 @@ impl ChatWidget {
     }
 }
 
+/// Requested presentation of the conversation's main widget pane.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatMainWidgetDisplay {
+    Open,
+    Collapsed,
+    Maximized,
+}
+
+/// A replacement for the conversation's main widget. `widget: None` clears it;
+/// omitting `main_widget` from a response leaves the current pane unchanged.
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
+pub struct ChatMainWidget {
+    /// Identifies an explicit pane command, including repeated commands for one widget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<String>,
+    pub widget: Option<ChatWidget>,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<ChatMainWidgetDisplay>,
+}
+
+impl ChatMainWidget {
+    async fn push(mut self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        self.command_id = Some(uuid::Uuid::new_v4().to_string());
+        let cached_response = CachedChatResponse::load(context).await?;
+        let _message_guard = cached_response.emission.lock().await;
+        let message_id = cached_response.message_id().await;
+        cached_response.response.lock().await.main_widget = Some(self.clone());
+
+        context
+            .stream_response(
+                "chat_stream_partial",
+                ChatStreamingResponse {
+                    message_id,
+                    chunk: None,
+                    actions: vec![],
+                    attachments: vec![],
+                    plan: None,
+                    widgets: vec![],
+                    main_widget: Some(self),
+                },
+            )
+            .await
+    }
+}
+
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct ChatResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
     pub response: Response,
     pub local_session: Option<Value>,
     pub global_session: Option<Value>,
@@ -586,48 +638,66 @@ pub struct ChatResponse {
     pub model_id: Option<String>,
     #[serde(default)]
     pub widgets: Vec<ChatWidget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_widget: Option<ChatMainWidget>,
 }
 
 #[derive(Clone)]
 pub struct CachedChatResponse {
     response: Arc<Mutex<ChatResponse>>,
     reasoning: Arc<Mutex<Reasoning>>,
+    /// Keep message changes and their events ordered across concurrent branches.
+    emission: Arc<Mutex<()>>,
 }
 
 impl CachedChatResponse {
-    pub async fn load(context: &mut ExecutionContext) -> flow_like_types::Result<Self> {
-        if let Some(cached_response) = context.get_cache("chat_response").await {
-            let response = cached_response
-                .as_any()
-                .downcast_ref::<CachedChatResponse>()
-                .ok_or(anyhow!("Failed to downcast cached response"))?;
-            return Ok(response.clone());
+    fn new() -> Self {
+        Self {
+            response: Arc::new(Mutex::new(ChatResponse {
+                message_id: Some(uuid::Uuid::new_v4().to_string()),
+                response: Response::new(),
+                actions: vec![],
+                attachments: vec![],
+                widgets: vec![],
+                main_widget: None,
+                global_session: Some(json!({})),
+                local_session: Some(json!({})),
+                model_id: None,
+            })),
+            reasoning: Arc::new(Mutex::new(Reasoning::default())),
+            emission: Arc::new(Mutex::new(())),
         }
+    }
 
-        let response = ChatResponse {
-            response: Response::new(),
-            actions: vec![],
-            attachments: vec![],
-            widgets: vec![],
-            global_session: flow_like_types::json::from_str("{}")?,
-            local_session: flow_like_types::json::from_str("{}")?,
-            model_id: None,
-        };
+    async fn message_id(&self) -> Option<String> {
+        self.response.lock().await.message_id.clone()
+    }
 
-        let reasoning = Reasoning {
-            current_message: "".to_string(),
-            current_step: 0,
-            plan: vec![],
-        };
+    /// The caller holds `emission` until this snapshot has been streamed.
+    async fn replace_response(&self, response: Response, new_message: bool) -> ChatResponse {
+        let mut current = self.response.lock().await;
+        if new_message {
+            current.message_id = Some(uuid::Uuid::new_v4().to_string());
+            current.actions.clear();
+            current.attachments.clear();
+            current.widgets.clear();
+            current.model_id = None;
+            *self.reasoning.lock().await = Reasoning::default();
+        }
+        current.response = response;
+        current.clone()
+    }
 
-        let cached_response = CachedChatResponse {
-            response: Arc::new(Mutex::new(response)),
-            reasoning: Arc::new(Mutex::new(reasoning)),
-        };
-
-        let cacheable = Arc::new(cached_response.clone()) as Arc<dyn Cacheable>;
-        context.set_cache("chat_response", cacheable).await;
-        Ok(cached_response)
+    pub async fn load(context: &mut ExecutionContext) -> flow_like_types::Result<Self> {
+        let mut cache = context.cache.write().await;
+        let cached = cache
+            .entry("chat_response".to_string())
+            .or_insert_with(|| Arc::new(Self::new()) as Arc<dyn Cacheable>);
+        cached
+            .as_any()
+            .downcast_ref::<Self>()
+            .cloned()
+            .ok_or_else(|| anyhow!("Failed to downcast cached response"))
     }
 }
 
@@ -641,7 +711,7 @@ impl Cacheable for CachedChatResponse {
     }
 }
 
-#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
+#[derive(Serialize, Deserialize, JsonSchema, Debug, Clone, Default)]
 pub struct Reasoning {
     pub plan: Vec<(u32, String)>,
     pub current_step: u32,
@@ -650,16 +720,22 @@ pub struct Reasoning {
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct ChatStreamingResponse {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
     pub chunk: Option<ResponseChunk>,
     pub actions: Vec<ChatAction>,
     pub attachments: Vec<Attachment>,
     pub plan: Option<Reasoning>,
     #[serde(default)]
     pub widgets: Vec<ChatWidget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub main_widget: Option<ChatMainWidget>,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema, Debug, Clone)]
 pub struct ChatUsageStat {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message_id: Option<String>,
     pub step_name: String,
     pub stats: flow_like_model_provider::response::LLMUsageStats,
 }
@@ -668,6 +744,168 @@ pub struct ChatUsageStat {
 mod tests {
     use super::url_processing::*;
     use super::*;
+
+    #[tokio::test]
+    async fn new_message_resets_message_state_and_preserves_sessions() {
+        let cached = CachedChatResponse::new();
+        let first_id = cached.message_id().await;
+        let widget = ChatWidget::from_element_ref(&json!({
+            "instanceId": "message-widget",
+            "component": { "type": "widgetInstance" }
+        }))
+        .unwrap();
+        {
+            let mut current = cached.response.lock().await;
+            current.local_session = Some(json!({ "thread": 42 }));
+            current.global_session = Some(json!({ "language": "en" }));
+            current
+                .actions
+                .push(ChatAction::Form("Old form".into(), json!({})));
+            current
+                .attachments
+                .push(Attachment::Url("https://example.com/old.txt".into()));
+            current.widgets.push(widget.clone());
+            current.model_id = Some("old-model".into());
+            current.main_widget = Some(ChatMainWidget {
+                command_id: None,
+                widget: Some(widget),
+                title: "Workspace".into(),
+                display: None,
+            });
+        }
+        *cached.reasoning.lock().await = Reasoning {
+            plan: vec![(1, "Old step".into())],
+            current_step: 1,
+            current_message: "Old reasoning".into(),
+        };
+
+        let updated = cached
+            .replace_response(Response::from_text("First", "model"), false)
+            .await;
+        assert_eq!(updated.message_id, first_id);
+        assert_eq!(updated.attachments.len(), 1);
+        assert_eq!(cached.reasoning.lock().await.current_step, 1);
+
+        let next = cached
+            .replace_response(Response::from_text("Second", "model"), true)
+            .await;
+        assert!(next.message_id.is_some());
+        assert_ne!(next.message_id, first_id);
+        assert!(next.actions.is_empty());
+        assert!(next.attachments.is_empty());
+        assert!(next.widgets.is_empty());
+        assert!(next.model_id.is_none());
+        assert_eq!(next.local_session, Some(json!({ "thread": 42 })));
+        assert_eq!(next.global_session, Some(json!({ "language": "en" })));
+        assert_eq!(next.main_widget.unwrap().title, "Workspace");
+        let reasoning = cached.reasoning.lock().await;
+        assert_eq!(reasoning.current_step, 0);
+        assert!(reasoning.plan.is_empty());
+        assert!(reasoning.current_message.is_empty());
+        drop(reasoning);
+
+        cached
+            .response
+            .lock()
+            .await
+            .attachments
+            .push(Attachment::Url("https://example.com/new.txt".into()));
+        let final_response = cached
+            .replace_response(Response::from_text("Second, updated", "model"), false)
+            .await;
+        assert_eq!(final_response.message_id, next.message_id);
+        assert_eq!(final_response.attachments.len(), 1);
+        assert!(
+            matches!(&final_response.attachments[0], Attachment::Url(url) if url.ends_with("new.txt"))
+        );
+    }
+
+    #[tokio::test]
+    async fn legacy_chat_payloads_do_not_require_message_ids() {
+        let cached = CachedChatResponse::new();
+        let mut full = flow_like_types::json::to_value(&*cached.response.lock().await).unwrap();
+        full.as_object_mut().unwrap().remove("message_id");
+        let decoded: ChatResponse = flow_like_types::json::from_value(full).unwrap();
+        assert!(decoded.message_id.is_none());
+
+        let partial: ChatStreamingResponse = flow_like_types::json::from_value(json!({
+            "chunk": null,
+            "actions": [],
+            "attachments": [],
+            "plan": null,
+        }))
+        .unwrap();
+        assert!(partial.message_id.is_none());
+
+        let stat: ChatUsageStat = flow_like_types::json::from_value(json!({
+            "step_name": "Legacy",
+            "stats": flow_like_model_provider::response::LLMUsageStats::default(),
+        }))
+        .unwrap();
+        assert!(stat.message_id.is_none());
+    }
+
+    #[test]
+    fn main_widget_protocol_distinguishes_unchanged_clear_and_replace() {
+        let legacy = json!({
+            "chunk": null,
+            "actions": [],
+            "attachments": [],
+            "plan": null,
+            "widgets": []
+        });
+        let mut response: ChatStreamingResponse =
+            flow_like_types::json::from_value(legacy.clone()).unwrap();
+        assert!(response.main_widget.is_none());
+        assert_eq!(flow_like_types::json::to_value(&response).unwrap(), legacy);
+
+        response.main_widget = Some(ChatMainWidget::default());
+        let cleared = flow_like_types::json::to_value(&response).unwrap();
+        assert!(cleared["main_widget"]["widget"].is_null());
+        assert!(cleared["main_widget"].get("display").is_none());
+        let decoded: ChatStreamingResponse = flow_like_types::json::from_value(cleared).unwrap();
+        assert!(decoded.main_widget.unwrap().widget.is_none());
+
+        let widget = ChatWidget::from_element_ref(&json!({
+            "instanceId": "browser-instance",
+            "widgetId": "browser",
+            "surfaceId": "browser-surface",
+            "component": { "type": "widgetInstance", "widgetId": "browser" }
+        }))
+        .unwrap();
+        response.main_widget = Some(ChatMainWidget {
+            command_id: Some("show-browser".to_string()),
+            widget: Some(widget),
+            title: "Browser".to_string(),
+            display: Some(ChatMainWidgetDisplay::Maximized),
+        });
+        let encoded = flow_like_types::json::to_value(&response).unwrap();
+        assert_eq!(encoded["main_widget"]["display"], "maximized");
+        let decoded: ChatStreamingResponse = flow_like_types::json::from_value(encoded).unwrap();
+        let main = decoded.main_widget.unwrap();
+        assert_eq!(main.command_id.as_deref(), Some("show-browser"));
+        assert_eq!(main.title, "Browser");
+        assert_eq!(main.display, Some(ChatMainWidgetDisplay::Maximized));
+        assert_eq!(main.widget.unwrap().instance_id, "browser-instance");
+    }
+
+    #[test]
+    fn main_widget_survives_final_response_serialization() {
+        let response = ChatResponse {
+            message_id: None,
+            response: Response::new(),
+            local_session: None,
+            global_session: None,
+            actions: vec![],
+            attachments: vec![],
+            model_id: None,
+            widgets: vec![],
+            main_widget: Some(ChatMainWidget::default()),
+        };
+        let encoded = flow_like_types::json::to_value(&response).unwrap();
+        let decoded: ChatResponse = flow_like_types::json::from_value(encoded).unwrap();
+        assert!(decoded.main_widget.unwrap().widget.is_none());
+    }
 
     #[test]
     fn test_is_remote_url() {

@@ -37,6 +37,7 @@ struct ClearedTrigger {
     personal_access_token: Option<String>,
     pat_owner_sub: Option<String>,
     hub_origin: Option<String>,
+    profile_binding: Option<super::trigger_token::TriggerProfile>,
 }
 
 impl ClearedTrigger {
@@ -49,6 +50,7 @@ impl ClearedTrigger {
             personal_access_token: registration.personal_access_token.clone(),
             pat_owner_sub: registration.pat_owner_sub.clone(),
             hub_origin: registration.hub_origin.clone(),
+            profile_binding: registration.profile_binding.clone(),
         }
     }
 }
@@ -155,6 +157,9 @@ fn registrations(db: &DbConnection, scope: &Scope) -> Result<Vec<NativeRegistrat
     let conn = db.lock().unwrap();
     let mut current = Vec::new();
     for row in rows {
+        if !dispatch::registration_matches_scope(&row, scope) {
+            continue;
+        }
         let EventConfig::GeoLocation(config) = &row.config else {
             continue;
         };
@@ -188,6 +193,9 @@ fn still_registered(db: &DbConnection, scope: &Scope, transition: &model::Transi
     else {
         return false;
     };
+    if !dispatch::registration_matches_scope(&row, scope) {
+        return false;
+    }
     let EventConfig::GeoLocation(config) = row.config else {
         return false;
     };
@@ -528,6 +536,12 @@ mod tests {
             personal_access_token: Some(pat.to_string()),
             pat_owner_sub: Some("user-1".to_string()),
             hub_origin: Some("https://hub.example".to_string()),
+            profile_binding: Some(crate::event_sink::trigger_token::TriggerProfile {
+                profile_id: "profile-1".into(),
+                hub_origin: "https://hub.example".into(),
+                issuer: Some("https://issuer.example".into()),
+                subject: Some("user-1".into()),
+            }),
             remote: true,
             oauth_tokens: HashMap::new(),
         }
@@ -571,6 +585,13 @@ mod tests {
 
         let other_token = trigger(&config, "pat_2");
         assert!(changed(clearance.admit(&config, &other_token, SCOPE)));
+        let mut other_profile = registration.clone();
+        other_profile.profile_binding.as_mut().unwrap().profile_id = "profile-2".into();
+        assert!(changed(clearance.admit(&config, &other_profile, SCOPE)));
+        let mut other_issuer = registration.clone();
+        other_issuer.profile_binding.as_mut().unwrap().issuer =
+            Some("https://other.example".into());
+        assert!(changed(clearance.admit(&config, &other_issuer, SCOPE)));
         let unverified = EventRegistration {
             pat_owner_sub: None,
             ..registration.clone()
@@ -592,6 +613,27 @@ mod tests {
             &registration,
             "scope-of-user-2"
         )));
+    }
+
+    #[test]
+    fn geofence_scope_matches_the_saved_profile_account_and_hub() {
+        let scope = Scope::parse(r#"["https://hub.example","profile-1","user-1"]"#.into()).unwrap();
+        let registration = trigger(&region(200.0), "pat_1");
+        assert!(dispatch::registration_matches_scope(&registration, &scope));
+        let mut legacy = registration.clone();
+        legacy.profile_binding = None;
+        assert!(!dispatch::registration_matches_scope(&legacy, &scope));
+        for raw in [
+            r#"["https://hub.example","profile-2","user-1"]"#,
+            r#"["https://other.example","profile-1","user-1"]"#,
+            r#"["https://hub.example","profile-1","user-2"]"#,
+            r#"["https://hub.example","profile-1","local"]"#,
+        ] {
+            assert!(!dispatch::registration_matches_scope(
+                &registration,
+                &Scope::parse(raw.into()).unwrap()
+            ));
+        }
     }
 
     #[test]

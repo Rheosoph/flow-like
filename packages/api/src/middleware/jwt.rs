@@ -649,7 +649,8 @@ impl AppUser {
             .and_then(|o| o.user_info_url.as_deref())
             .ok_or_else(|| anyhow!("User info URL not configured"))?;
 
-        let res = match user_info_http_client()
+        let res = match state
+            .oidc_user_info_client
             .get(endpoint)
             .bearer_auth(&user.access_token)
             .send()
@@ -1260,12 +1261,6 @@ pub async fn tier_for_sub(state: &AppState, sub: &str) -> Result<UserTier, Autho
         .get(db_tier)
         .cloned()
         .ok_or_else(|| AuthorizationError::from(anyhow!("Tier not found")))
-}
-
-fn user_info_http_client() -> &'static flow_like_types::reqwest::Client {
-    static CLIENT: std::sync::OnceLock<flow_like_types::reqwest::Client> =
-        std::sync::OnceLock::new();
-    CLIENT.get_or_init(flow_like_types::reqwest::Client::new)
 }
 
 fn hash_token(token: &str) -> String {

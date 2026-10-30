@@ -22,7 +22,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 
 [build-dependencies]
 blake3.workspace = true
-tauri-build = { version = "2.5.3", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 serde_json = "1"
 plist = "1.8.0"
 
@@ -46,6 +46,8 @@ local-stt-cuda = ["flow-like/local-stt-cuda", "flow-like-catalog/local-stt-cuda"
 local-stt-metal = ["flow-like/local-stt-metal", "flow-like-catalog/local-stt-metal"]
 
 [dependencies]
+icu_collator = "=2.2.1"
+jsonschema.workspace = true
 flow-like = { workspace = true, features = ["app-runtime", "tauri", "local-ml", "local-tts", "local-stt"] }
 flow-like-types.workspace = true
 flow-like-catalog-ml = { workspace = true, default-features = false, features = ["studio"] }
@@ -53,7 +55,8 @@ flow-like-wasm = { workspace = true, features = ["model"] }
 flow-like-offline-writes = { workspace = true, features = ["runtime"] }
 flow-like-device-protocol.workspace = true
 
-tauri = { version = "2.11.1", features = [
+# Tauri 2.12 uses Tao's corrected iOS scene lifecycle and configuration ownership.
+tauri = { version = "2.12.5", features = [
     "protocol-asset",
     "macos-private-api",
     "tray-icon",
@@ -70,21 +73,26 @@ serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true
 image.workspace = true
 webp.workspace = true
-reqwest = { workspace = true, features = ["blocking"] }
+reqwest = { workspace = true, features = ["blocking", "multipart"] }
+unicode-normalization = "0.1"
+chacha20poly1305.workspace = true
+zeroize.workspace = true
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+jsonwebtoken.workspace = true
 
-tauri-plugin-shell = "2.3.4"
-tauri-plugin-log = "2.8.0"
-tauri-plugin-notification = "2.3.3"
-tauri-plugin-dialog = "2.7.2"
-tauri-plugin-deep-link = "2.4.6"
-tauri-plugin-clipboard-manager = "2.3.2"
-tauri-plugin-http = "2.5.6"
-tauri-plugin-devtools = "2.0.1"
-tauri-plugin-fs = "2.4.5"
+tauri-plugin-shell = "2.5.0"
+tauri-plugin-log = "2.10.1"
+tauri-plugin-notification = "2.7.0"
+tauri-plugin-dialog = "2.8.3"
+tauri-plugin-deep-link = "2.6.2"
+tauri-plugin-clipboard-manager = "2.5.0"
+tauri-plugin-http = "2.8.3"
+tauri-plugin-devtools = "2.2.2"
+tauri-plugin-fs = "2.7.1"
 urlencoding.workspace = true
 toml.workspace = true
 toml_edit.workspace = true
-tauri-plugin-opener = "2.5.3"
+tauri-plugin-opener = "2.7.2"
 
 rusqlite = { version = "0.32.0", features = ["bundled-full", "serde_json"] }
 serenity = { version = "0.12.4", default-features = false, features = ["client", "gateway", "model", "rustls_backend", "cache"] }
@@ -117,10 +125,9 @@ tauri-plugin-remote-push = { git = "https://github.com/Rheosoph/tauri-plugin-rem
 flow-like-browser.workspace = true
 flow-like-device-client.workspace = true
 flow-like-device-crypto.workspace = true
-zeroize.workspace = true
-tauri-plugin-single-instance = { version = "2.4.3", features = ["deep-link"] }
-tauri-plugin-window-state = "2.4.1"
-tauri-plugin-updater = "2.10.1"
+tauri-plugin-single-instance = { version = "2.5.4", features = ["deep-link"] }
+tauri-plugin-window-state = "2.5.0"
+tauri-plugin-updater = "2.14.0"
 xcap = "0.8.1"
 arboard = "3.6.1"
 enigo = "0.6.1"
@@ -154,7 +161,7 @@ objc2 = "0.6.3"
 
 [target."cfg(windows)".dependencies]
 flow-like-catalog = { workspace = true, default-features = false, features = ["desktop", "draft-testing"] }
-windows = { version = "0.61", features = [
+windows = { version = "0.62", features = [
     "Win32_UI_Accessibility",
     "Win32_Foundation",
     "Win32_System_Com",
@@ -162,7 +169,7 @@ windows = { version = "0.61", features = [
     "Win32_System_Variant",
     "Win32_Storage_FileSystem",
 ] }
-webview2-com = "0.38"
+webview2-com = "0.39.1"
 
 [target."cfg(target_os = \"ios\")".dependencies]
 # libc 0.2.190 removed Apple APIs still used by sysinfo on iOS.
@@ -171,4 +178,5 @@ libc = "=0.2.189"
 flow-like-catalog = { workspace = true, default-features = false, features = ["mobile-apple", "draft-testing"] }
 objc2 = "0.6.3"
 security-framework = "3.7"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSObject", "NSString", "NSDictionary", "NSError", "NSFileManager"] }
 tracing-oslog = "0.3.0"

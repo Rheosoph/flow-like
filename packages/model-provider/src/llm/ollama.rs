@@ -161,7 +161,7 @@ impl OllamaModel {
 
         let mut builder = rig::providers::ollama::Client::builder()
             .api_key(rig::client::Nothing)
-            .http_client(AuthorizedHttpClient::for_egress(egress)?);
+            .http_client(AuthorizedHttpClient::for_provider(provider, egress)?);
         builder = builder.base_url(endpoint);
         if !custom_headers.is_empty() {
             builder = builder.http_headers(custom_headers);

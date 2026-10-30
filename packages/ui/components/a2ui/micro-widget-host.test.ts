@@ -26,6 +26,7 @@ import {
 	readThemeTokens,
 	registerMicroWidgetBridge,
 	shouldUseHttpSchemeBridge,
+	subscribeMicroWidgetBridges,
 } from "./micro-widget-host";
 
 const NONCE = "abc123";
@@ -632,6 +633,32 @@ describe("query correlation", () => {
 });
 
 describe("live bridge registry", () => {
+	test("mount and replacement notifications expose the current bridge", async () => {
+		const states: boolean[] = [];
+		const stop = subscribeMicroWidgetBridges(() => {
+			states.push(microWidgetHasInstance("notify-reg"));
+		});
+		const first = registerMicroWidgetBridge("notify-reg", {
+			query: async () => "first",
+		});
+		const replacement = registerMicroWidgetBridge("notify-reg", {
+			query: async () => "replacement",
+		});
+		first();
+		expect(states).toEqual([true, true]);
+		await expect(microWidgetQuery("notify-reg", "read", {})).resolves.toBe(
+			"replacement",
+		);
+		replacement();
+		expect(states).toEqual([true, true, false]);
+		stop();
+		const last = registerMicroWidgetBridge("notify-reg", {
+			query: async () => "last",
+		});
+		last();
+		expect(states).toEqual([true, true, false]);
+	});
+
 	test("register / query / unregister round-trip", async () => {
 		const unregister = registerMicroWidgetBridge("reg-1", {
 			query: async (name, args) => ({ name, args }),

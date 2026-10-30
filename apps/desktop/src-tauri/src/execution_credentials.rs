@@ -372,13 +372,28 @@ pub(crate) fn revoke_window(window: &str) {
 #[derive(Clone)]
 enum Authority {
     Session(Arc<Session>),
+    Native(crate::native_auth::SessionBinding),
     PersonalToken(String),
 }
 
 impl Authority {
+    async fn fresh_token(&self) -> Result<String, AuthorizationError> {
+        match self {
+            Self::Native(binding) => binding.access_token(None).await.map_err(|_| {
+                if binding.is_current() {
+                    AuthorizationError::Unavailable
+                } else {
+                    AuthorizationError::Denied
+                }
+            }),
+            _ => self.token(),
+        }
+    }
+
     fn token(&self) -> Result<String, AuthorizationError> {
         match self {
             Self::PersonalToken(token) => Ok(token.clone()),
+            Self::Native(_) => Err(AuthorizationError::Unavailable),
             Self::Session(session) => {
                 let token = session
                     .token
@@ -439,7 +454,8 @@ impl DesktopAuthorizer {
         request: &AuthorizationRequest<'_>,
     ) -> Result<(), AuthorizationError> {
         if self.hub.is_empty()
-            || !valid_project_id(&self.project)
+            || (!valid_project_id(&self.project)
+                && !(self.project.is_empty() && request.audience == ResourceAudience::HostedModels))
             || request.url.len() > 4096
             || request.url.contains('\\')
         {
@@ -497,9 +513,8 @@ impl RequestAuthorizer for DesktopAuthorizer {
         (!self.hub.is_empty())
             .then(|| match audience {
                 ResourceAudience::HostedModels => Some(self.api_base()),
-                ResourceAudience::ProjectApi => {
-                    Some(format!("{}/apps/{}", self.api_base(), self.project))
-                }
+                ResourceAudience::ProjectApi => (!self.project.is_empty())
+                    .then(|| format!("{}/apps/{}", self.api_base(), self.project)),
                 ResourceAudience::DeviceModels => None,
             })
             .flatten()
@@ -509,7 +524,7 @@ impl RequestAuthorizer for DesktopAuthorizer {
         Box::pin(async move {
             self.validate_request(&request)?;
             let authority = self.authority.as_ref().map_err(|error| *error)?;
-            let token = authority.token()?;
+            let token = authority.fresh_token().await?;
             let expiry = match authority {
                 Authority::Session(session) => {
                     let payload = token
@@ -536,6 +551,25 @@ impl RequestAuthorizer for DesktopAuthorizer {
                     // Local expiry checks only prevent dispatching a stale snapshot.
                     SystemTime::UNIX_EPOCH
                         .checked_add(Duration::from_secs(expires_at))
+                        .ok_or(AuthorizationError::InvalidResponse)?
+                }
+                Authority::Native(_) => {
+                    let payload = token
+                        .split('.')
+                        .nth(1)
+                        .ok_or(AuthorizationError::InvalidResponse)?;
+                    let claims: serde_json::Value = serde_json::from_slice(
+                        &URL_SAFE_NO_PAD
+                            .decode(payload)
+                            .map_err(|_| AuthorizationError::InvalidResponse)?,
+                    )
+                    .map_err(|_| AuthorizationError::InvalidResponse)?;
+                    claims
+                        .get("exp")
+                        .and_then(serde_json::Value::as_u64)
+                        .and_then(|seconds| {
+                            SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
+                        })
                         .ok_or(AuthorizationError::InvalidResponse)?
                 }
                 // PAT expiry and revocation are checked by the hub on every call.
@@ -568,6 +602,70 @@ pub(crate) fn request_authorizer(
     })
 }
 
+struct NativeAuthorizer {
+    binding: crate::native_auth::SessionBinding,
+    policy: DesktopAuthorizer,
+}
+
+impl RequestAuthorizer for NativeAuthorizer {
+    fn attribution(&self) -> AuthorizationAttribution {
+        AuthorizationAttribution::User
+    }
+
+    fn resource_base_url(&self, audience: ResourceAudience) -> Option<String> {
+        self.policy.resource_base_url(audience)
+    }
+
+    fn authorize<'a>(&'a self, request: AuthorizationRequest<'a>) -> AuthorizationFuture<'a> {
+        Box::pin(async move {
+            self.policy.validate_request(&request)?;
+            let token = self.binding.access_token(None).await.map_err(|_| {
+                if self.binding.is_current() {
+                    AuthorizationError::Unavailable
+                } else {
+                    AuthorizationError::Denied
+                }
+            })?;
+            let payload = token
+                .split('.')
+                .nth(1)
+                .ok_or(AuthorizationError::InvalidResponse)?;
+            let claims: serde_json::Value = serde_json::from_slice(
+                &URL_SAFE_NO_PAD
+                    .decode(payload)
+                    .map_err(|_| AuthorizationError::InvalidResponse)?,
+            )
+            .map_err(|_| AuthorizationError::InvalidResponse)?;
+            let expiry = claims
+                .get("exp")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|seconds| {
+                    SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
+                })
+                .ok_or(AuthorizationError::InvalidResponse)?;
+            if !self.binding.is_current() {
+                return Err(AuthorizationError::Denied);
+            }
+            RequestAuthorization::new(format!("Bearer {token}"), None, expiry)
+        })
+    }
+}
+
+/// Hosted model and project requests refresh through the run's native login generation.
+pub(crate) fn native_request_authorizer(
+    binding: crate::native_auth::SessionBinding,
+    project: &str,
+) -> Arc<dyn RequestAuthorizer> {
+    Arc::new(NativeAuthorizer {
+        policy: DesktopAuthorizer {
+            hub: binding.hub.clone(),
+            project: project.to_owned(),
+            authority: Err(AuthorizationError::Denied),
+        },
+        binding,
+    })
+}
+
 struct Source {
     hub: String,
     project: String,
@@ -581,30 +679,50 @@ impl Source {
         self.authorization_current()?;
         self.authority.token()
     }
-}
 
-#[async_trait::async_trait]
-impl SharedCredentialRefresh for Source {
-    async fn refresh(&self) -> Result<SharedCredentials, AuthorizationError> {
-        let token = self.token()?;
+    async fn presign(&self, token: &str) -> Result<reqwest::Response, AuthorizationError> {
         let auth = if token.starts_with("pat_") {
-            token
+            token.to_owned()
         } else {
             format!("Bearer {token}")
         };
         let mut header = reqwest::header::HeaderValue::from_str(&auth)
             .map_err(|_| AuthorizationError::InvalidResponse)?;
         header.set_sensitive(true);
-        let mut response = self
-            .client
-            .get(format!(
-                "{}/api/v1/apps/{}/invoke/presign",
-                self.hub, self.project
-            ))
+        let base = if self.hub.ends_with("/api/v1") {
+            self.hub.clone()
+        } else {
+            format!("{}/api/v1", self.hub)
+        };
+        self.client
+            .get(format!("{base}/apps/{}/invoke/presign", self.project))
             .header(reqwest::header::AUTHORIZATION, header)
             .send()
             .await
-            .map_err(|_| AuthorizationError::Unavailable)?;
+            .map_err(|_| AuthorizationError::Unavailable)
+    }
+}
+
+#[async_trait::async_trait]
+impl SharedCredentialRefresh for Source {
+    async fn refresh(&self) -> Result<SharedCredentials, AuthorizationError> {
+        self.authorization_current()?;
+        let token = self.authority.fresh_token().await?;
+        self.authorization_current()?;
+        let mut response = self.presign(&token).await?;
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED
+            && let Authority::Native(binding) = &self.authority
+        {
+            let renewed = binding.access_token(Some(&token)).await.map_err(|_| {
+                if binding.is_current() {
+                    AuthorizationError::Unavailable
+                } else {
+                    AuthorizationError::Denied
+                }
+            })?;
+            self.authorization_current()?;
+            response = self.presign(&renewed).await?;
+        }
         match response.status().as_u16() {
             200 => {}
             401 => return Err(AuthorizationError::Expired),
@@ -639,6 +757,7 @@ impl SharedCredentialRefresh for Source {
     fn authorization_current(&self) -> Result<(), AuthorizationError> {
         if self.denied.load(Ordering::Acquire)
             || matches!(&self.authority, Authority::Session(session) if session.revoked.load(Ordering::Acquire))
+            || matches!(&self.authority, Authority::Native(binding) if !binding.is_current())
         {
             return Err(AuthorizationError::Denied);
         }
@@ -658,9 +777,28 @@ pub(crate) async fn prepare(
         return Err(AuthorizationError::InvalidRequest.into());
     }
     let authority = resolve_authority(&hub, token, session_id, webview)?;
+    prepare_authority(hub, project, authority).await
+}
+
+pub(crate) async fn prepare_native(
+    binding: crate::native_auth::SessionBinding,
+    project: &str,
+) -> flow_like_types::Result<SharedCredentials> {
+    if !valid_project_id(project) || !binding.is_current() {
+        return Err(AuthorizationError::Denied.into());
+    }
+    prepare_authority(binding.hub.clone(), project, Authority::Native(binding)).await
+}
+
+async fn prepare_authority(
+    hub: String,
+    project: &str,
+    authority: Authority,
+) -> flow_like_types::Result<SharedCredentials> {
     let authority_key = match &authority {
         Authority::PersonalToken(token) => blake3::hash(token.as_bytes()).to_hex().to_string(),
         Authority::Session(session) => session.epoch.clone(),
+        Authority::Native(binding) => binding.generation.clone(),
     };
     let key = blake3::hash(&serde_json::to_vec(&(&hub, project, authority_key))?)
         .to_hex()

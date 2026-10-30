@@ -186,14 +186,14 @@ function instantiateCrud(
 						operator: "equals",
 						expected: probeId,
 					},
-					...Object.entries(parameters.sample_update).map(
-						([field, expected]) => ({
+					...Object.entries(parameters.sample_update)
+						.sort(([left], [right]) => left.localeCompare(right))
+						.map(([field, expected]) => ({
 							id: `record_${field.replace(/[^a-z0-9_-]/gi, "_").toLowerCase()}_updated`,
 							path: `/record/${escapeJsonPointerSegment(field)}`,
 							operator: "equals" as const,
 							expected,
-						}),
-					),
+						})),
 				]),
 				...runtimeScenarioAssertions("delete", [
 					{

@@ -73,8 +73,12 @@ pub(crate) async fn resolve(
     let Route::Account { subject, table } = route(&visibility, table, token)? else {
         return Ok(DataStudioTarget::Device);
     };
+    let hub = current_hub(app_handle).await?;
+    let (profile_id, issuer) = super::scope_owner(app_handle, &hub, &subject).await?;
     let key = ScopeKey {
-        hub: current_hub(app_handle).await?,
+        profile_id,
+        issuer,
+        hub,
         subject,
         app_id: app_id.to_owned(),
     };
@@ -89,7 +93,7 @@ pub(crate) async fn managed(
     user_scoped: bool,
     selector: Option<DatabaseSelector>,
 ) -> flow_like_types::Result<DataStudioTarget> {
-    if !scope.signed_in() {
+    if !scope.signed_in().await {
         return Err(anyhow!(texts::SIGN_IN_DATA));
     }
     let purpose = OfflineTablePurpose::scoped(user_scoped);

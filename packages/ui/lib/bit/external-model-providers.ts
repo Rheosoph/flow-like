@@ -200,16 +200,31 @@ export function externalModelProviders(
 	].filter((provider) => nativeAvailable || !provider.nativeOnly);
 }
 
+export const SECRET_PROVIDER_PARAM_KEYS = [
+	"api_key",
+	"service_account_json",
+	"access_token",
+	"headers",
+];
+
 /** Keep credentials out of the serialized Bit sent to the API. */
 export function providerFieldValues(
 	provider: IProviderDef,
 	values: Record<string, string>,
+	existingParams: Record<string, unknown> = {},
 ) {
-	const params: Record<string, unknown> = {};
+	const params: Record<string, unknown> = { ...existingParams };
 	const secrets: Record<string, unknown> = {};
+	for (const key of SECRET_PROVIDER_PARAM_KEYS) {
+		if (Object.hasOwn(params, key)) {
+			secrets[key] = params[key];
+			delete params[key];
+		}
+	}
 	let modelId: string | null = provider.fixedModelId ?? null;
 	let version: string | null = null;
 	for (const field of provider.fields) {
+		delete params[field.key];
 		const value = values[field.key]?.trim();
 		if (!value) continue;
 		if (field.secret) {

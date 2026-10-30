@@ -72,7 +72,92 @@ static CONNECTOR: LazyLock<Arc<DeviceModels<NativeLink, WindowPrompts>>> =
 
 /// The connector runs reach device models through.
 pub(crate) fn connector() -> Arc<dyn DeviceModelConnector> {
-    CONNECTOR.clone()
+    Arc::new(SessionConnector { auth: None })
+}
+
+/// Pin device model resolution to the same native session as the owning execution.
+pub(crate) fn connector_for_session(
+    auth: crate::native_auth::SessionBinding,
+) -> Arc<dyn DeviceModelConnector> {
+    Arc::new(SessionConnector { auth: Some(auth) })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SessionOwner {
+    profile_id: String,
+    generation: String,
+    hub: String,
+    subject: String,
+}
+impl SessionOwner {
+    fn of(auth: &crate::native_auth::SessionBinding) -> Self {
+        Self {
+            profile_id: auth.profile_id.clone(),
+            generation: auth.generation.clone(),
+            hub: auth.hub.trim_end_matches('/').into(),
+            subject: auth.subject.clone(),
+        }
+    }
+    fn matches(&self, holder: &Holder) -> bool {
+        self.profile_id == holder.profile_id
+            && self.generation == holder.session_generation
+            && self.hub == holder.api_origin.trim_end_matches('/')
+            && self.subject == holder.account
+    }
+}
+struct SessionConnector {
+    auth: Option<crate::native_auth::SessionBinding>,
+}
+async fn active_session() -> Result<crate::native_auth::SessionBinding, String> {
+    let app = CONNECTOR
+        .prompts
+        .host()
+        .app
+        .get()
+        .ok_or("The native device host is unavailable")?;
+    let profile = crate::state::TauriSettingsState::current_profile(app)
+        .await
+        .map_err(|e| e.to_string())?
+        .hub_profile;
+    let hub = flow_like::hub::hub_origin(&profile.hub, profile.secure)
+        .ok_or("The device profile has an invalid hub")?;
+    crate::native_auth::SessionBinding::capture(&profile.id, &hub)
+        .await?
+        .ok_or("Sign in to this profile before accessing its devices".into())
+}
+#[async_trait]
+impl DeviceModelConnector for SessionConnector {
+    async fn connect(
+        &self,
+        target: &DeviceModelTarget,
+        interaction: Interaction,
+    ) -> Result<ModelEndpoint, ModelUnavailable> {
+        let auth = match &self.auth {
+            Some(auth) => auth.clone(),
+            None => active_session().await.map_err(|message| {
+                ModelUnavailable::new(ModelUnavailableReason::DeviceLockedDeclined, message)
+            })?,
+        };
+        if !auth.is_current() {
+            return Err(ModelUnavailable::for_target(
+                ModelUnavailableReason::DeviceLockedDeclined,
+                target,
+                None,
+            ));
+        }
+        let owner = SessionOwner::of(&auth);
+        let result = CONNECTOR
+            .connect_for(target, interaction, Some(&owner))
+            .await;
+        if !auth.is_current() {
+            return Err(ModelUnavailable::for_target(
+                ModelUnavailableReason::DeviceLockedDeclined,
+                target,
+                None,
+            ));
+        }
+        result
+    }
 }
 
 /// Until the app is attached, every prompt is an immediate decline.
@@ -91,8 +176,7 @@ pub(crate) async fn lock_every_device() {
     native::lock_all();
 }
 
-/// Keys of accounts no window is signed in to any more lock; called after a sign-out or an
-/// account switch.
+/// Revoked native profile sessions lose their device keys after sign-out or account replacement.
 pub(crate) async fn drop_signed_out() {
     CONNECTOR.drop_signed_out().await;
 }
@@ -102,7 +186,8 @@ pub(crate) async fn drop_signed_out() {
 pub(crate) async fn session(device_id: &str) -> Result<DeviceSession, String> {
     flow_like_device_protocol::validate_management_id(device_id)
         .map_err(|error| format!("Device id {device_id:?} is invalid: {error}"))?;
-    match CONNECTOR.session(device_id).await {
+    let owner = SessionOwner::of(&active_session().await?);
+    match CONNECTOR.session(device_id, &owner).await {
         Some(Ok(session)) => Ok(session),
         Some(Err(failure)) => Err(format!(
             "Could not connect to device {device_id}: {}",
@@ -117,6 +202,7 @@ pub(crate) async fn session(device_id: &str) -> Result<DeviceSession, String> {
 /// Unlocks a device for the device area of the main window. The keys stay while the area holds
 /// them; true when they are also kept for model access.
 pub(crate) async fn unlock_for_area(unlock: VaultUnlock) -> Result<bool, String> {
+    let unlock = bind_unlock_profile(unlock).await?;
     CONNECTOR
         .unlock(unlock, Unlocker::Area)
         .await
@@ -383,7 +469,7 @@ impl<L: DeviceLink, H: PromptHost> DeviceModels<L, H> {
         )
     }
 
-    /// Refuses keys of a device locked since `since`, or of an account no window is signed in to.
+    /// Refuses keys locked since `since`, or owned by a revoked profile session.
     fn admit(
         &self,
         device: &Device<L>,
@@ -403,7 +489,7 @@ impl<L: DeviceLink, H: PromptHost> DeviceModels<L, H> {
             return Err(UnlockError::new(
                 "signed_out",
                 format!(
-                    "no window is signed in to {} as account {}",
+                    "the native profile session for {} as account {} is no longer valid",
                     holder.api_origin, holder.account
                 ),
             ));
@@ -575,8 +661,9 @@ impl<L: DeviceLink, H: PromptHost> DeviceModels<L, H> {
         &self,
         device: &Device<L>,
         target: &DeviceModelTarget,
+        owner: Option<&SessionOwner>,
     ) -> Option<Result<ModelEndpoint, Failure>> {
-        let gateway = match self.gateway(device).await? {
+        let gateway = match self.gateway(device, owner).await? {
             Ok(gateway) => gateway,
             Err(failure) => return Some(Err(failure)),
         };
@@ -594,24 +681,57 @@ impl<L: DeviceLink, H: PromptHost> DeviceModels<L, H> {
                     ))
                 }
             });
+        let mut slot = device.slot.lock().await;
+        if slot
+            .as_ref()
+            .is_some_and(|held| !self.link.signed_in(&held.holder))
+        {
+            self.clear(&mut slot);
+            self.publish(device, None);
+            return None;
+        }
+        let held = slot
+            .as_ref()
+            .filter(|held| owner.is_none_or(|owner| owner.matches(&held.holder)))?;
+        if held
+            .gateway
+            .as_ref()
+            .is_none_or(|current| !Arc::ptr_eq(current, &gateway))
+        {
+            return None;
+        }
         Some(served)
     }
 
     /// The gateway of the device, opened on first use; `None` while the device is locked. A
     /// device found offline is answered as offline for `retry_offline` without connecting
     /// again. The open runs outside `slot`, and keys locked meanwhile get no gateway.
-    async fn gateway(&self, device: &Device<L>) -> Option<Result<Arc<L::Gateway>, Failure>> {
-        if let Ready::Served(served) = self.ready(device).await? {
+    async fn gateway(
+        &self,
+        device: &Device<L>,
+        owner: Option<&SessionOwner>,
+    ) -> Option<Result<Arc<L::Gateway>, Failure>> {
+        if let Ready::Served(served) = self.ready(device, owner).await? {
             return Some(served);
         }
         let _opening = device.opening.lock().await;
-        let (keys, generation) = match self.ready(device).await? {
+        let (keys, generation) = match self.ready(device, owner).await? {
             Ready::Served(served) => return Some(served),
             Ready::Open(keys, generation) => (keys, generation),
         };
         let opened = self.link.open(&keys).await;
         let mut slot = device.slot.lock().await;
-        let held = slot.as_mut().filter(|held| held.generation == generation)?;
+        if slot
+            .as_ref()
+            .is_some_and(|held| !self.link.signed_in(&held.holder))
+        {
+            self.clear(&mut slot);
+            self.publish(device, None);
+            return None;
+        }
+        let held = slot.as_mut().filter(|held| {
+            held.generation == generation && owner.is_none_or(|owner| owner.matches(&held.holder))
+        })?;
         Some(match opened {
             Ok(gateway) => {
                 let gateway = Arc::new(gateway);
@@ -629,9 +749,19 @@ impl<L: DeviceLink, H: PromptHost> DeviceModels<L, H> {
     }
 
     /// What the held keys offer now; each call counts as a use. `None` while locked.
-    async fn ready(&self, device: &Device<L>) -> Option<Ready<L>> {
+    async fn ready(&self, device: &Device<L>, owner: Option<&SessionOwner>) -> Option<Ready<L>> {
         let mut slot = device.slot.lock().await;
-        let held = slot.as_mut()?;
+        if slot
+            .as_ref()
+            .is_some_and(|held| !self.link.signed_in(&held.holder))
+        {
+            self.clear(&mut slot);
+            self.publish(device, None);
+            return None;
+        }
+        let held = slot
+            .as_mut()
+            .filter(|held| owner.is_none_or(|owner| owner.matches(&held.holder)))?;
         let now = Instant::now();
         held.last_used = now;
         held.used = Some(now);
@@ -664,11 +794,23 @@ impl<L: DeviceLink, H: PromptHost> DeviceModels<L, H> {
 impl<H: PromptHost> DeviceModels<NativeLink, H> {
     /// `None` while the device is locked here, also when it locked during the connect; a use
     /// counts against the idle lock. The connect runs outside `slot`.
-    async fn session(&self, device_id: &str) -> Option<Result<DeviceSession, Failure>> {
+    async fn session(
+        &self,
+        device_id: &str,
+        owner: &SessionOwner,
+    ) -> Option<Result<DeviceSession, Failure>> {
         let device = self.device(device_id);
         let (keys, generation) = {
             let mut slot = device.slot.lock().await;
-            let held = slot.as_mut()?;
+            if slot
+                .as_ref()
+                .is_some_and(|held| !self.link.signed_in(&held.holder))
+            {
+                self.clear(&mut slot);
+                self.publish(&device, None);
+                return None;
+            }
+            let held = slot.as_mut().filter(|held| owner.matches(&held.holder))?;
             held.last_used = Instant::now();
             (held.keys.clone(), held.generation)
         };
@@ -678,6 +820,7 @@ impl<H: PromptHost> DeviceModels<NativeLink, H> {
             .lock()
             .await
             .as_ref()
+            .filter(|held| owner.matches(&held.holder) && self.link.signed_in(&held.holder))
             .map(|held| held.generation);
         (current == Some(generation)).then_some(session)
     }
@@ -690,10 +833,20 @@ impl<L: DeviceLink, H: PromptHost> DeviceModelConnector for DeviceModels<L, H> {
         target: &DeviceModelTarget,
         interaction: Interaction,
     ) -> Result<ModelEndpoint, ModelUnavailable> {
+        self.connect_for(target, interaction, None).await
+    }
+}
+impl<L: DeviceLink, H: PromptHost> DeviceModels<L, H> {
+    async fn connect_for(
+        &self,
+        target: &DeviceModelTarget,
+        interaction: Interaction,
+        owner: Option<&SessionOwner>,
+    ) -> Result<ModelEndpoint, ModelUnavailable> {
         let device = self.device(&target.device_id);
         let mut asked = false;
         loop {
-            if let Some(served) = self.serve(&device, target).await {
+            if let Some(served) = self.serve(&device, target, owner).await {
                 return served.map_err(|failure| device.unavailable(target, failure));
             }
             let run_label = match &interaction {
@@ -801,11 +954,39 @@ pub(crate) async fn device_models_unlock(
     unlock: VaultUnlock,
 ) -> Result<(), String> {
     from_main_window(&webview)?;
+    let unlock = bind_unlock_profile(unlock).await?;
     CONNECTOR
         .unlock(unlock, Unlocker::Prompt)
         .await
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+async fn bind_unlock_profile(mut unlock: VaultUnlock) -> Result<VaultUnlock, String> {
+    let app = CONNECTOR
+        .prompts
+        .host()
+        .app
+        .get()
+        .ok_or("The native device host is unavailable")?;
+    let profile = crate::state::TauriSettingsState::current_profile(app)
+        .await
+        .map_err(|e| e.to_string())?
+        .hub_profile;
+    let hub = flow_like::hub::hub_origin(&profile.hub, profile.secure)
+        .ok_or("The device profile has an invalid hub")?;
+    if unlock.api_origin.trim_end_matches('/') != hub.trim_end_matches('/') {
+        return Err("authority_mismatch: the device belongs to another profile hub".into());
+    }
+    let binding = crate::native_auth::SessionBinding::capture(&profile.id, &hub)
+        .await?
+        .ok_or("signed_out: sign in to this profile before unlocking the device")?;
+    if binding.subject != unlock.account {
+        return Err("authority_mismatch: the device belongs to another account".into());
+    }
+    unlock.profile_id = profile.id;
+    unlock.session_generation = binding.generation;
+    Ok(unlock)
 }
 
 #[tauri::command]

@@ -5,7 +5,8 @@ mod fixture;
 use super::{
     OfflineWrites, api_base, commands,
     data_studio::{self, DataStudioTarget, Route},
-    engine_dir, hub_key, installation_id, pending_count, scope_id, texts, valid_scope,
+    engine_dir, hub_key, installation_id, owned_scope_id, pending_count, scope_id, texts,
+    valid_scope,
 };
 use super::{
     host::{CloudAccess, LeaseCloud, Services, TransportStatus, map_answer, sidecar},
@@ -106,6 +107,7 @@ fn opened(connection: &Connection, table: &str) -> LanceDBVectorStore {
 
 fn request<'a>(token: &'a str, hub: &'a str) -> RunStorageRequest<'a> {
     RunStorageRequest {
+        profile_id: None,
         visibility: &AppVisibility::Private,
         app_id: APP,
         hub,
@@ -113,6 +115,7 @@ fn request<'a>(token: &'a str, hub: &'a str) -> RunStorageRequest<'a> {
         token: Some(token),
         session_id: None,
         webview: None,
+        native_auth: None,
         event_id: None,
         device_credentials: None,
     }
@@ -428,6 +431,148 @@ fn scope_id_is_stable_and_binds_hub_subject_app_and_installation() {
 }
 
 #[test]
+fn native_offline_scopes_bind_the_profile_and_issuer_without_adopting_legacy_data() {
+    let mut key = ScopeKey {
+        profile_id: Some("profile-a".into()),
+        issuer: Some("issuer-a".into()),
+        hub: "https://hub.test".into(),
+        subject: ALICE.into(),
+        app_id: APP.into(),
+    };
+    let first = owned_scope_id(&key, INSTALLATION);
+    assert_ne!(
+        first,
+        scope_id(&key.hub, &key.subject, &key.app_id, INSTALLATION)
+    );
+    let descriptor = ScopeDescriptor::new(&first, &key);
+    let persisted: ScopeDescriptor =
+        serde_json::from_slice(&serde_json::to_vec(&descriptor).unwrap()).unwrap();
+    assert_eq!(persisted.key(), key);
+    key.profile_id = Some("profile-b".into());
+    assert_ne!(first, owned_scope_id(&key, INSTALLATION));
+    key.profile_id = Some("profile-a".into());
+    key.issuer = Some("issuer-b".into());
+    assert_ne!(first, owned_scope_id(&key, INSTALLATION));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_legacy_assignment_reopens_the_same_tables_bytes_and_journal_after_restart() {
+    let fixture = Fixture::new().await;
+    fixture
+        .seed(ALICE, StoragePurpose::Storage, "orders", rows(0..3))
+        .await;
+    let scope = fixture.supported(ALICE).await;
+    fixture.enable(&scope, "orders", true).await;
+    *fixture.tokens.session.lock().unwrap() = None;
+    fixture.cloud.set_online(false);
+    let path = format!("apps/{APP}/upload/pending-recovery.txt");
+    let store = scope.disconnected_store().unwrap();
+    let operation = offline_id(
+        &store
+            .put(&key(&path), "preserved bytes".into())
+            .await
+            .unwrap(),
+    );
+    let request = serde_json::to_value(queued_request(&scope, &operation)).unwrap();
+    let old_id = scope.id().to_owned();
+    let old_engine = scope.engine_root();
+    let binding = crate::native_auth::SessionBinding::for_test(
+        "profile-a",
+        &fixture.hub_key(),
+        "issuer-a",
+        ALICE,
+    );
+    let ticket = scope.hosted_run_started();
+    let (blocked, _) = fixture
+        .registry
+        .recover_legacy_in_place(&binding)
+        .await
+        .unwrap();
+    assert_eq!(
+        blocked.scopes, 0,
+        "an active run must keep its original scope"
+    );
+    assert_eq!(blocked.conflicts, vec![APP.to_owned()]);
+    drop(ticket);
+    let (recovered, keys) = fixture
+        .registry
+        .recover_legacy_in_place(&binding)
+        .await
+        .unwrap();
+    assert_eq!(recovered.scopes, 1);
+    assert_eq!(recovered.pending_changes, 1);
+    assert!(
+        scope.manager().await.is_err(),
+        "the previous replay manager stays closed"
+    );
+    let owner = keys.into_iter().next().unwrap();
+    assert_ne!(
+        owned_scope_id(&owner, &fixture.registry.installation_id().unwrap()),
+        old_id
+    );
+    let restarted = fixture.new_registry();
+    let reopened = restarted.obtain(None, fixture.dirs(), owner).unwrap();
+    assert_eq!(reopened.id(), old_id);
+    assert_eq!(reopened.engine_root(), old_engine);
+    let manager = reopened.manager().await.unwrap();
+    assert!(
+        manager
+            .managed_table_names(&reopened.database_path(OfflineTablePurpose::Storage))
+            .contains(&"orders".to_owned())
+    );
+    assert!(table_state_of(&manager, "orders").await.cached_bytes > 0);
+    assert_eq!(
+        serde_json::to_value(queued_request(&reopened, &operation)).unwrap(),
+        request
+    );
+    assert_eq!(
+        read(&reopened.disconnected_store().unwrap(), &path)
+            .await
+            .unwrap(),
+        b"preserved bytes"
+    );
+}
+
+#[tokio::test]
+async fn legacy_assignment_conflicts_preserve_both_existing_scope_directories() {
+    let fixture = Fixture::new().await;
+    let legacy = fixture.supported(ALICE).await;
+    let binding = crate::native_auth::SessionBinding::for_test(
+        "profile-a",
+        &fixture.hub_key(),
+        "issuer-a",
+        ALICE,
+    );
+    let mut owner = fixture.key(ALICE);
+    owner.profile_id = Some(binding.profile_id.clone());
+    owner.issuer = Some(binding.issuer.clone());
+    let target = fixture
+        .registry
+        .obtain(None, fixture.dirs(), owner)
+        .unwrap();
+    // An object-only cache has no configured tables or pending replay entries.
+    assert!(target.descriptor().tables.is_empty());
+    for scope in [&legacy, &target] {
+        std::fs::create_dir_all(scope.engine_root()).unwrap();
+        std::fs::write(scope.engine_root().join("preserved-marker"), scope.id()).unwrap();
+    }
+    let (result, _) = fixture
+        .registry
+        .recover_legacy_in_place(&binding)
+        .await
+        .unwrap();
+    assert_eq!(result.scopes, 0);
+    assert_eq!(result.conflicts, vec![APP.to_owned()]);
+    for scope in [&legacy, &target] {
+        assert_eq!(
+            std::fs::read_to_string(scope.engine_root().join("preserved-marker")).unwrap(),
+            scope.id()
+        );
+    }
+    assert!(legacy.descriptor().profile_id.is_none());
+}
+
+#[test]
 fn hub_key_keeps_path_prefixes_and_lowercases_scheme_and_host() {
     for (hub, secure, expected) in [
         (
@@ -501,6 +646,8 @@ fn descriptor_roundtrip_and_atomic_write() {
     let dir = TempDir::new("descriptor");
     let root = dir.path().join("offline-writes");
     let key = ScopeKey {
+        profile_id: None,
+        issuer: None,
         hub: "https://hub.test".into(),
         subject: "auth0|123".into(),
         app_id: APP.into(),
@@ -1602,7 +1749,10 @@ async fn unavailable_store_names_the_table_in_its_error() {
         "{error}"
     );
     let error = store
-        .put(&LancePath::from(format!("{project}/orders.lance/x")), "x".into())
+        .put(
+            &LancePath::from(format!("{project}/orders.lance/x")),
+            "x".into(),
+        )
         .await
         .unwrap_err();
     assert!(
@@ -1952,6 +2102,8 @@ async fn http_status_mapping_matches_contract() {
             None,
             fixture.dirs(),
             ScopeKey {
+                profile_id: None,
+                issuer: None,
                 hub: "http://127.0.0.1:9".into(),
                 subject: ALICE.into(),
                 app_id: APP.into(),
@@ -1969,7 +2121,7 @@ async fn token_resolution_prefers_session_then_bound_sink_pat_with_matching_dige
     *fixture.tokens.session.lock().unwrap() = None;
     let scope = fixture.scope(ALICE);
     let host = scope.host().unwrap();
-    assert_eq!(host.token(), None);
+    assert_eq!(host.token().await, None);
     fixture
         .tokens
         .sinks
@@ -1977,12 +2129,12 @@ async fn token_resolution_prefers_session_then_bound_sink_pat_with_matching_dige
         .unwrap()
         .insert("evt-1".into(), "pat_one".into());
     assert_eq!(
-        host.token(),
+        host.token().await,
         None,
         "a sink must be bound to the scope first"
     );
     scope.record_sink("evt-1", "pat_one").unwrap();
-    assert_eq!(host.token().as_deref(), Some("pat_one"));
+    assert_eq!(host.token().await.as_deref(), Some("pat_one"));
     fixture
         .tokens
         .sinks
@@ -1990,12 +2142,12 @@ async fn token_resolution_prefers_session_then_bound_sink_pat_with_matching_dige
         .unwrap()
         .insert("evt-1".into(), "pat_rotated".into());
     assert_eq!(
-        host.token(),
+        host.token().await,
         None,
         "a sink token whose digest changed is not used"
     );
     *fixture.tokens.session.lock().unwrap() = Some(jwt(ALICE));
-    assert_eq!(host.token(), Some(jwt(ALICE)));
+    assert_eq!(host.token().await, Some(jwt(ALICE)));
 
     for event in 0..40 {
         scope
@@ -3018,6 +3170,8 @@ async fn mirror_events_are_coalesced_per_scope_with_a_trailing_edge() {
             None,
             fixture.dirs(),
             ScopeKey {
+                profile_id: None,
+                issuer: None,
                 app_id: "app2".into(),
                 ..fixture.key(ALICE)
             },
@@ -3407,6 +3561,8 @@ async fn hosted_run_config_decorates_every_online_app() {
             None,
             fixture.dirs(),
             ScopeKey {
+                profile_id: None,
+                issuer: None,
                 app_id: "app2".into(),
                 ..fixture.key(ALICE)
             },
@@ -3597,6 +3753,8 @@ async fn subjects_and_hubs_get_separate_scopes_and_queues() {
             None,
             fixture.dirs(),
             ScopeKey {
+                profile_id: None,
+                issuer: None,
                 hub: "https://other.example.test".into(),
                 ..fixture.key(ALICE)
             },
@@ -4268,11 +4426,11 @@ async fn state_changing_commands_and_data_studio_need_a_signed_in_session() {
         .await;
     let scope = fixture.supported(ALICE).await;
     fixture.enable(&scope, "orders", false).await;
-    assert!(commands::signed_in(scope.clone()).is_ok());
+    assert!(commands::signed_in(scope.clone()).await.is_ok());
 
     *fixture.tokens.session.lock().unwrap() = None;
-    assert!(!scope.signed_in());
-    let Err(error) = commands::signed_in(scope.clone()) else {
+    assert!(!scope.signed_in().await);
+    let Err(error) = commands::signed_in(scope.clone()).await else {
         panic!("a JWT without a signed-in session manages nothing");
     };
     assert_eq!(text(error), texts::SIGN_IN_MANAGE);

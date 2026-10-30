@@ -1,4 +1,9 @@
-import { isChannelHandle, replyToChannel } from "../../lib/channel";
+import {
+	claimChannelRequest,
+	isChannelHandle,
+	isSharedChannel,
+	replyToChannel,
+} from "../../lib/channel";
 import { errorMessage } from "../../lib/channel/util";
 import type { IChannelHandle } from "../../lib/schema/channel";
 import {
@@ -107,6 +112,13 @@ export function handleElementsRequestMessage(
 		let response: ElementsRequestReply;
 		try {
 			const live = source();
+			if (isSharedChannel(channel)) {
+				// Another tab may own the requested page. A tab without it stays silent.
+				if (!live || !(await claimChannelRequest(channel))) {
+					inFlight.delete(request.requestId);
+					return;
+				}
+			}
 			if (live) {
 				const elements = materialize(live, request.selectors, live.widgetScope);
 				const bytes = JSON.stringify(elements).length;

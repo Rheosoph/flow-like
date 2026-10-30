@@ -33,6 +33,9 @@ spec:
         - {protocol: TCP, port: 53}
 {{- $root := . }}
 {{- $targets := dict "api" (dict "port" 8080 "from" (list "execution-egress" "executor-pool" "queue-bridge" "compiler" "sink-trigger" "sink-services")) "web" (dict "port" 3001 "from" list) "signaling" (dict "port" (int .Values.signaling.service.port) "from" list) "redis" (dict "port" 6379 "from" (list "api" "execution-manager" "queue-bridge" "executor-pool" "signaling" "sink-services" "redis-exporter")) "cockroachdb" (dict "port" 26257 "from" (list "api" "audit-worker" "db-migration" "cockroachdb-init")) "rustfs" (dict "port" 9000 "from" (list "api" "audit-worker" "object-store-init" "object-gateway")) "object-gateway" (dict "port" 9000 "from" (list "api" "compiler" "execution-egress" "executor-pool" "object-store-init")) "compiler" (dict "port" (int .Values.compiler.service.port) "from" (list "api")) "execution-manager" (dict "port" 9000 "from" (list "api" "queue-bridge")) "executor-pool" (dict "port" (int .Values.executorPool.service.port) "from" (list "api")) }}
+{{- if and .Values.channels.nats.enabled (eq .Values.channels.transport "nats") }}
+{{- $_ := set $targets "nats" (dict "port" 4222 "from" (list "api" "execution-egress" "executor-pool")) }}
+{{- end }}
 {{- range $component, $target := $targets }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -171,6 +174,14 @@ spec:
               {{- include "flow-like.selectorLabels" . | nindent 14 }}
               app.kubernetes.io/component: object-gateway
       ports: [{protocol: TCP, port: 9000}]
+    {{- if and .Values.channels.nats.enabled (eq .Values.channels.transport "nats") }}
+    - to:
+        - podSelector:
+            matchLabels:
+              {{- include "flow-like.selectorLabels" . | nindent 14 }}
+              app.kubernetes.io/component: nats
+      ports: [{protocol: TCP, port: 4222}]
+    {{- end }}
     - to:
         - ipBlock:
             cidr: 0.0.0.0/0
@@ -286,4 +297,23 @@ spec:
     {{- with .Values.audit.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+{{- end }}
+
+{{- if and .Values.networkPolicy.enabled .Values.channels.nats.enabled (eq .Values.channels.transport "nats") }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flow-like.fullname" . }}-nats-websocket
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nats
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            {{- toYaml .Values.networkPolicy.ingressNamespaceSelector | nindent 12 }}
+      ports: [{protocol: TCP, port: 8080}]
 {{- end }}

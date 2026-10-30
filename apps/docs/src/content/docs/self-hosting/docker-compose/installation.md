@@ -6,8 +6,10 @@ sidebar:
 ---
 
 This procedure creates a new installation from
-`apps/backend/docker-compose/docker-compose.yml`. Complete the Linux and gVisor
-[prerequisites](/self-hosting/docker-compose/prerequisites/) first. Existing
+`apps/backend/docker-compose/docker-compose.yml`. Isolated execution needs the
+Linux and gVisor [prerequisites](/self-hosting/docker-compose/prerequisites/).
+For local development with trusted workflows, the setup command below can select
+shared execution instead. Existing
 installations should follow the upgrade section below instead of replacing
 their environment file.
 
@@ -19,6 +21,12 @@ cd flow-like/apps/backend/docker-compose
 ```
 
 ## 2. Generate private configuration
+
+Choose an existing OpenID Connect (OIDC) identity provider or let Compose run
+Keycloak for this installation. OIDC supplies the sign-in service used by the
+web and desktop clients.
+
+### Use an existing identity provider
 
 ```bash
 python3 scripts/setup-env.py
@@ -47,7 +55,9 @@ Review capacity, allowed integrations and URLs in `.env`. Keep
 execution.
 
 Create a maintained hub configuration from the example and replace its OIDC,
-domain, signaling and legal-link placeholders. Select the host-side file:
+domain, signaling and legal-link placeholders. Include the provider's user-info
+endpoint in `authentication.openid.user_info_url`; user bootstrap needs it even
+when a discovery URL is configured. Select the host-side file:
 
 ```dotenv
 FLOW_LIKE_RUNTIME_CONFIG_FILE=./flow-like.config.json
@@ -62,6 +72,49 @@ URLs at startup, so recreate `web` after changing `NEXT_PUBLIC_*`. These changes
 do not require rebuilding images. See
 [Configuration](/self-hosting/docker-compose/configuration/#hub-configuration-and-identity)
 for alternate config sources.
+
+### Run the bundled identity provider
+
+For a new local installation, generate a separate environment file:
+
+```bash
+python3 scripts/setup-env.py --mode trusted --oidc bundled --output .env.local
+```
+
+Setup selects `docker-compose.oidc.yml` in `COMPOSE_FILE` and generates the hub
+configuration, Keycloak realm and TLS files in `.env.local.oidc/`. It also creates
+separate database, Keycloak administrator and initial-user passwords in
+`.env.local`. Existing files are never overwritten, and secrets are not printed.
+For isolated execution, omit `--mode trusted` and complete the gVisor setup.
+
+Before opening the sign-in page, trust `.env.local.oidc/ca.crt` in the operating
+system and browser that will access this installation. Setup does not modify
+your trust stores. The desktop client needs the same trust. The API receives
+this CA through its OIDC-specific certificate mount. Ensure `auth.localhost`
+resolves to `127.0.0.1` on the workstation; add a local hosts entry if your
+resolver does not handle `.localhost` names.
+
+The generated sign-in service is `https://auth.localhost:8443`. Sign in to
+Flow-Like as `owner` with `OIDC_BOOTSTRAP_PASSWORD` from the private environment
+file, then change the temporary password. The initial email is
+`owner@localhost.invalid`; supply `--oidc-bootstrap-email` to use your own.
+To manage accounts, open `https://auth.localhost:8443/admin/` as `admin` with
+`OIDC_ADMIN_PASSWORD`. These are separate accounts. A Keycloak administrator
+does not automatically become a Flow-Like administrator.
+
+Pass `--env-file .env.local` to every deployment helper and Docker Compose
+command for this installation. For example, after selecting compatible images:
+
+```bash
+python3 scripts/preflight.py --env-file .env.local
+python3 scripts/up.py --env-file .env.local
+```
+
+The API image must include `OIDC_CA_CERT_FILE` support. To test this source
+checkout with freshly generated, unpinned image settings, use
+`python3 scripts/up.py --env-file .env.local --build`. See
+[Bundled identity configuration](/self-hosting/docker-compose/configuration/#bundled-identity-provider)
+for public HTTPS certificates, desktop callbacks and account persistence.
 
 ## 3. Select images
 
@@ -175,6 +228,8 @@ to `http://localhost:3002`. See
 Back up PostgreSQL, object data and storage IAM state, Redis, hub configuration,
 signing keys and the `execution_manager_state` volume. Preserve existing bucket
 names and credentials. Enabling bundled RustFS does not migrate external data.
+If Keycloak is enabled, also back up its dedicated database volume and the
+generated OIDC artifact directory alongside the private environment file.
 
 Stop new event production and execution requests, then let queued and active
 runs settle. Inspect quarantined attempts before replaying anything that may

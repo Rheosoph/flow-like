@@ -31,7 +31,7 @@ pub trait SwiftObject {
     /// The inner pointer is private,
     /// and the returned [`SwiftRef`] is bound to the lifetime of the original [`SRObject`],
     /// so if you use `swift-rs` as normal this function should be safe.
-    unsafe fn swift_ref(&self) -> SwiftRef<Self>
+    unsafe fn swift_ref(&self) -> SwiftRef<'_, Self>
     where
         Self: Sized,
     {

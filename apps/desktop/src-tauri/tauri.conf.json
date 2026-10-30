@@ -146,6 +146,8 @@
 			}
 		},
 		"updater": {
+			"requireSignedVersion": true,
+			"allowDowngrades": false,
 			"endpoints": [
 				"https://cdn.flow-like.com/latest.json"
 			],

@@ -1,4 +1,12 @@
 import type { IBackendState } from "../state/backend-state";
+import type { ExecutionChatSeed } from "./execution/chat-persistence";
+import { registerExecutionTransportOwner } from "./execution/owners";
+import type { ExecutionRuntimeClient } from "./execution/runtime-client";
+import {
+	EXECUTION_METADATA,
+	type ExecutionTask,
+	isExecutionFinished,
+} from "./execution/types";
 import type { ILogMetadata, PageTrigger } from "./schema";
 import type { IRunPayload } from "./schema";
 import type { IIntercomEvent } from "./schema/events/intercom-event";
@@ -26,16 +34,25 @@ export interface ActiveEventExecution {
 }
 
 interface IEventStream {
+	taskId?: string;
+	chat?: ExecutionChatSeed;
+	persistenceManaged?: boolean;
+	initiatedHere?: boolean;
+	settlementPromise?: Promise<void>;
+	saveQueue?: Promise<void>;
+	onLiveEvents?: (events: IIntercomEvent[]) => void;
 	subscribers: Map<string, ISubscriber>;
 	accumulatedEvents: IIntercomEvent[];
 	lastSentIndex: Map<string, number>;
 	seenEventIds: Set<string>;
-	executionPromise?: Promise<any>;
+	executionPromise?: Promise<unknown>;
 	isComplete: boolean;
 	/** The run ended, its final save landed and its watchers finished their completion. */
 	settled?: boolean;
 	failure?: unknown;
 	completedAt?: number;
+	completionObserved?: boolean;
+	finalizingUnobserved?: boolean;
 	activeExecution?: Omit<ActiveEventExecution, "streamId">;
 	owner?: IBackendState;
 	path?: string;
@@ -55,6 +72,7 @@ export type OnIncrementalSaveFn = (
 ) => void | Promise<void>;
 
 interface IExecuteEventOptions {
+	chat?: ExecutionChatSeed;
 	appId: string;
 	eventId: string;
 	payload: IRunPayload;
@@ -62,6 +80,8 @@ interface IExecuteEventOptions {
 	onExecutionStart?: (executionId: string) => void;
 	/** Receives each new event once, even with no subscribers. Excludes replay. */
 	onLiveEvents?: (events: IIntercomEvent[]) => void;
+	/** Finalize detached chat replies when no mounted subscriber handles completion. */
+	onUnobservedComplete?: OnCompleteFn;
 	path?: string;
 	title?: string;
 	interfaceType?: string;
@@ -180,15 +200,204 @@ export class ExecutionEngineProvider {
 	private globalListeners: Set<() => void> = new Set();
 	private executeEventFn: ExecuteEventFn | null = null;
 	private executionScope?: string;
-
-	constructor() {}
+	private runtimeClient?: ExecutionRuntimeClient;
+	private unsubscribeRuntime?: () => void;
+	private localTasks = new Map<string, ExecutionTask>();
 
 	setBackend(backend: IBackendState): void {
 		this.backend = backend;
+		this.notifyGlobalListeners();
+	}
+
+	isRuntimeReady(): boolean {
+		return (
+			!!this.backend &&
+			(!this.backend.eventState.alwaysRemote || !!this.runtimeClient)
+		);
 	}
 
 	setExecutionScope(scope: string): void {
+		if (this.executionScope !== undefined && this.executionScope !== scope) {
+			this.unsubscribeRuntime?.();
+			this.runtimeClient = undefined;
+			this.eventStreams.clear();
+		}
 		this.executionScope = scope;
+		this.notifyGlobalListeners();
+	}
+
+	/** Restore remote executions and their ordered event history from the session worker. */
+	setRuntimeClient(client: ExecutionRuntimeClient | undefined): void {
+		this.unsubscribeRuntime?.();
+		this.runtimeClient = client;
+		if (!client) {
+			this.notifyGlobalListeners();
+			return;
+		}
+		const update = () => {
+			if (client.scope !== (this.executionScope ?? "")) return;
+			const latest = new Map<string, ExecutionTask>();
+			for (const task of client.getTasks()) {
+				this.localTasks.delete(task.taskId);
+				const previous = latest.get(task.streamId);
+				if (!previous || previous.startedAt <= task.startedAt)
+					latest.set(task.streamId, task);
+			}
+			for (const task of latest.values()) {
+				let stream = this.eventStreams.get(task.streamId);
+				if (stream?.taskId && stream.taskId !== task.taskId && !stream.settled)
+					continue;
+				if (!stream || (stream.taskId && stream.taskId !== task.taskId)) {
+					const subscribers = stream?.subscribers ?? new Map();
+					stream = {
+						subscribers,
+						accumulatedEvents: [],
+						lastSentIndex: new Map(),
+						seenEventIds: new Set(),
+						isComplete: false,
+					};
+					this.eventStreams.set(task.streamId, stream);
+				}
+				stream.taskId = task.taskId;
+				if (!isExecutionFinished(task) && stream.settled) {
+					stream.isComplete = false;
+					stream.settled = false;
+					stream.settlementPromise = undefined;
+					stream.failure = undefined;
+					stream.initiatedHere = false;
+				}
+				stream.chat = task.chat;
+				stream.persistenceManaged = true;
+				stream.owner = this.backend ?? undefined;
+				stream.path = task.path;
+				stream.title = task.title;
+				stream.interfaceType = task.interfaceType;
+				stream.activeExecution = {
+					scope: task.scope,
+					appId: task.appId,
+					eventId: task.eventId,
+					title: task.title,
+					startedAt: task.startedAt,
+					runId: task.runId,
+				};
+				stream.executionPromise ??= Promise.resolve();
+				this.publishEvents(stream, task.events);
+				if (
+					isExecutionFinished(task) &&
+					!stream.initiatedHere &&
+					!stream.settlementPromise
+				) {
+					stream.failure = task.error
+						? Object.assign(new Error(task.error), {
+								name: task.status === "cancelled" ? "AbortError" : "Error",
+							})
+						: undefined;
+					void this.settleRun(stream, undefined, Boolean(task.error));
+				}
+			}
+			this.notifyGlobalListeners();
+		};
+		this.unsubscribeRuntime = client.subscribe(update);
+		update();
+	}
+
+	isPersistenceManaged(streamId: string): boolean {
+		return this.eventStreams.get(streamId)?.persistenceManaged ?? false;
+	}
+	getChatSeed(streamId: string): ExecutionChatSeed | undefined {
+		return this.eventStreams.get(streamId)?.chat;
+	}
+	getTasks(): ExecutionTask[] {
+		return [
+			...(this.runtimeClient?.getTasks() ?? []),
+			...this.localTasks.values(),
+		]
+			.filter((task) => task.scope === (this.executionScope ?? ""))
+			.sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+	}
+	async cancelTask(taskId: string): Promise<void> {
+		const remote = this.runtimeClient?.getTask(taskId);
+		if (remote) {
+			if (remote.runId && this.backend)
+				return this.backend.eventState.cancelExecution(remote.runId);
+			return this.runtimeClient?.cancel(taskId);
+		}
+		const task = this.localTasks.get(taskId);
+		if (
+			!task ||
+			task.scope !== (this.executionScope ?? "") ||
+			isExecutionFinished(task)
+		)
+			return;
+		task.cancellationRequested = true;
+		this.notifyGlobalListeners();
+		if (task.runId) {
+			try {
+				await this.backend?.eventState.cancelExecution(task.runId);
+			} catch (error) {
+				task.cancellationRequested = false;
+				task.error = error instanceof Error ? error.message : String(error);
+				this.notifyGlobalListeners();
+				throw error;
+			}
+		}
+	}
+	dismissTask(taskId: string): void {
+		if (this.runtimeClient?.getTask(taskId)) {
+			void this.runtimeClient
+				.dismiss(taskId)
+				.catch((error) => console.error("Could not dismiss execution", error));
+			return;
+		}
+		const task = this.localTasks.get(taskId);
+		if (task && isExecutionFinished(task)) {
+			this.localTasks.delete(taskId);
+			this.notifyGlobalListeners();
+		}
+	}
+	async replyToTask(
+		taskId: string,
+		requestId: string,
+		value: unknown,
+	): Promise<void> {
+		const task = this.getTasks().find(
+			(candidate) => candidate.taskId === taskId,
+		);
+		const request = task?.pendingInteractions.find(
+			(candidate) => candidate.requestId === requestId,
+		);
+		if (!request?.channel)
+			throw new Error("The request does not have a reply channel");
+		if (this.runtimeClient?.getTask(taskId))
+			return this.runtimeClient.submitReply(request.channel, value);
+		const { replyToChannel } = await import("./channel");
+		await replyToChannel(request.channel, value);
+		request.status = "submitted";
+		request.response_value = value;
+		this.notifyGlobalListeners();
+	}
+
+	private publishEvents(
+		stream: IEventStream,
+		events: IIntercomEvent[],
+	): IIntercomEvent[] {
+		const unique = events.filter((event) => {
+			if (stream.seenEventIds.has(event.event_id)) return false;
+			stream.seenEventIds.add(event.event_id);
+			return true;
+		});
+		if (!unique.length) return unique;
+		stream.accumulatedEvents.push(...unique);
+		if (stream.onLiveEvents)
+			void this.deliver("live-events", () => stream.onLiveEvents?.(unique));
+		for (const [subscriberId, subscriber] of stream.subscribers) {
+			const start = stream.lastSentIndex.get(subscriberId) ?? 0;
+			const pending = stream.accumulatedEvents.slice(start);
+			stream.lastSentIndex.set(subscriberId, stream.accumulatedEvents.length);
+			if (pending.length)
+				void this.deliver(subscriberId, () => subscriber.onEvents(pending));
+		}
+		return unique;
 	}
 
 	setExecuteEventFn(fn: ExecuteEventFn): void {
@@ -203,7 +412,13 @@ export class ExecutionEngineProvider {
 	}
 
 	private notifyGlobalListeners() {
-		this.globalListeners.forEach((listener) => listener());
+		for (const listener of this.globalListeners) {
+			try {
+				listener();
+			} catch (error) {
+				console.error("Execution listener failed", error);
+			}
+		}
 	}
 
 	// Subscribers run inside the transport's read loop: one that throws must not end the run for
@@ -232,27 +447,70 @@ export class ExecutionEngineProvider {
 	 * finished the stream stays active, so the session's next run can neither reset the events under
 	 * them nor feed them its own.
 	 */
-	private async settleRun(
+	private settleRun(
 		stream: IEventStream,
 		onFinalSave: OnIncrementalSaveFn | undefined,
 		failed: boolean,
+		onUnobservedComplete?: OnCompleteFn,
+	): Promise<void> {
+		if (stream.settlementPromise) return stream.settlementPromise;
+		stream.settlementPromise = this.finishRun(
+			stream,
+			onFinalSave,
+			failed,
+			onUnobservedComplete,
+		);
+		return stream.settlementPromise;
+	}
+
+	private async bounded(work: Promise<unknown>): Promise<void> {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				work,
+				new Promise<void>((_, reject) => {
+					timer = setTimeout(
+						() => reject(new Error("Execution completion timed out")),
+						COMPLETION_GRACE_MS,
+					);
+				}),
+			]);
+		} finally {
+			clearTimeout(timer);
+		}
+	}
+
+	private async finishRun(
+		stream: IEventStream,
+		onFinalSave: OnIncrementalSaveFn | undefined,
+		failed: boolean,
+		onUnobservedComplete?: OnCompleteFn,
 	) {
 		const events = stream.accumulatedEvents;
-		const watchers = [...stream.subscribers];
-		stream.isComplete = true;
 		stream.completedAt = Date.now();
-		if (onFinalSave && (!failed || events.length > 0)) {
+		if (
+			!stream.persistenceManaged &&
+			onFinalSave &&
+			(!failed || events.length > 0)
+		) {
 			try {
-				await onFinalSave(events, true);
+				await this.bounded(
+					(stream.saveQueue ?? Promise.resolve()).then(() =>
+						onFinalSave([...events], true),
+					),
+				);
 			} catch (error) {
 				console.error("[ExecutionEngine] Final save error:", error);
 			}
 		}
+		stream.isComplete = true;
+		const watchers = [...stream.subscribers];
 		const completions = watchers.map(([subscriberId, subscriber]) => {
 			const onComplete = subscriber.onComplete;
 			// One that left meanwhile settles itself when it returns; one that joined got it on joining.
 			if (!onComplete || stream.subscribers.get(subscriberId) !== subscriber)
 				return undefined;
+			stream.completionObserved = true;
 			return this.deliver(subscriberId, () =>
 				onComplete(events, stream.failure),
 			);
@@ -265,7 +523,62 @@ export class ExecutionEngineProvider {
 			}),
 		]);
 		clearTimeout(grace);
+		if (
+			!stream.persistenceManaged &&
+			!stream.completionObserved &&
+			onUnobservedComplete
+		) {
+			stream.finalizingUnobserved = true;
+			let finalized = false;
+			await this.deliver("unobserved-completion", async () => {
+				await this.bounded(
+					Promise.resolve().then(() =>
+						onUnobservedComplete(events, stream.failure),
+					),
+				);
+				finalized = true;
+			});
+			stream.finalizingUnobserved = false;
+			// The detached reply is durable now. Replaying it on return would assign a new
+			// message id after its checkpoint was removed and duplicate the saved answer.
+			if (finalized) {
+				for (const [streamId, candidate] of this.eventStreams) {
+					if (candidate === stream) this.eventStreams.delete(streamId);
+				}
+			} else {
+				for (const [streamId, candidate] of this.eventStreams) {
+					if (candidate !== stream) continue;
+					for (const [subscriberId, subscriber] of stream.subscribers) {
+						this.subscribeToEventStream(
+							streamId,
+							subscriberId,
+							subscriber.onEvents,
+							subscriber.onComplete,
+						);
+					}
+				}
+			}
+		}
 		stream.settled = true;
+		if (stream.completionObserved && stream.subscribers.size === 0) {
+			for (const [streamId, candidate] of this.eventStreams)
+				if (candidate === stream) this.eventStreams.delete(streamId);
+		}
+		const task = stream.taskId ? this.localTasks.get(stream.taskId) : undefined;
+		if (task) {
+			task.status = stream.failure
+				? (stream.failure as Error)?.name === "AbortError"
+					? "cancelled"
+					: "failed"
+				: "completed";
+			task.error =
+				stream.failure instanceof Error
+					? stream.failure.message
+					: stream.failure
+						? String(stream.failure)
+						: undefined;
+			task.completedAt = stream.completedAt;
+		}
 		this.dropUnclaimedStreams();
 		this.notifyGlobalListeners();
 	}
@@ -303,9 +616,13 @@ export class ExecutionEngineProvider {
 			return stream;
 		}
 		if (existing.settled) {
+			existing.settlementPromise = undefined;
+			existing.persistenceManaged = false;
+			existing.saveQueue = undefined;
 			existing.isComplete = false;
 			existing.settled = false;
 			existing.failure = undefined;
+			existing.completionObserved = false;
 			existing.accumulatedEvents = [];
 			existing.lastSentIndex.clear();
 			existing.seenEventIds.clear();
@@ -341,6 +658,9 @@ export class ExecutionEngineProvider {
 
 		// Register subscriber
 		stream.subscribers.set(subscriberId, { onEvents, onComplete });
+		// A detached finalizer owns these messages. Returning chat surfaces read the saved
+		// transcript; replay here would create another response while that save is pending.
+		if (stream.finalizingUnobserved) return;
 
 		// Send accumulated events immediately
 		const replay = stream.accumulatedEvents;
@@ -349,6 +669,7 @@ export class ExecutionEngineProvider {
 
 		// If already complete, notify immediately
 		if (stream.isComplete && onComplete) {
+			stream.completionObserved = true;
 			this.deliver(subscriberId, () => onComplete(replay, stream.failure));
 		}
 
@@ -364,7 +685,7 @@ export class ExecutionEngineProvider {
 			// Nobody left and nothing running: a finished run, or one that never started.
 			if (
 				stream.subscribers.size === 0 &&
-				(stream.isComplete || !stream.executionPromise)
+				(stream.settled || !stream.executionPromise)
 			) {
 				this.eventStreams.delete(streamId);
 			}
@@ -375,7 +696,7 @@ export class ExecutionEngineProvider {
 	async executeEvent(
 		streamId: string,
 		options: IExecuteEventOptions,
-	): Promise<any> {
+	): Promise<ILogMetadata | undefined> {
 		options.beforeDispatch?.();
 		if (!this.backend) {
 			throw new Error("Backend not initialized in ExecutionEngineProvider");
@@ -399,12 +720,53 @@ export class ExecutionEngineProvider {
 			this.backend.eventState.executeEvent.bind(this.backend.eventState);
 
 		stream.owner = this.backend;
+		stream.taskId = crypto.randomUUID();
+		stream.initiatedHere = true;
+		stream.chat = options.chat;
+		stream.onLiveEvents = options.onLiveEvents;
 		stream.activeExecution = {
 			...(this.executionScope ? { scope: this.executionScope } : {}),
 			appId: options.appId,
 			eventId: options.eventId,
 			title: options.title || "Workflow run",
 			startedAt: new Date().toISOString(),
+		};
+		const task: ExecutionTask = {
+			...stream.activeExecution,
+			scope: this.executionScope ?? "",
+			taskId: stream.taskId,
+			streamId,
+			path: options.path,
+			interfaceType: options.interfaceType,
+			chat: options.chat,
+			status: "starting",
+			events: stream.accumulatedEvents,
+			pendingInteractions: [],
+		};
+		this.localTasks.set(task.taskId, task);
+		const releaseOwner = registerExecutionTransportOwner(
+			task.taskId,
+			(client) => {
+				if ((this.executionScope ?? "") !== task.scope)
+					throw new Error("Execution session changed before dispatch");
+				stream.persistenceManaged = true;
+				if (this.runtimeClient !== client) this.setRuntimeClient(client);
+			},
+		);
+		const payload = {
+			...options.payload,
+			[EXECUTION_METADATA]: {
+				taskId: task.taskId,
+				streamId,
+				scope: task.scope,
+				appId: task.appId,
+				eventId: task.eventId,
+				title: task.title,
+				startedAt: task.startedAt,
+				path: task.path,
+				interfaceType: task.interfaceType,
+				chat: task.chat,
+			},
 		};
 
 		// Track event count for incremental saves
@@ -413,80 +775,112 @@ export class ExecutionEngineProvider {
 		let eventsSinceLastSave = 0;
 		let lastSaveAt = 0;
 
-		const executionPromise = executeEventCall(
-			options.appId,
-			options.eventId,
-			options.payload,
-			options.streamState ?? false,
-			(executionId: string) => {
-				if (stream.activeExecution) stream.activeExecution.runId = executionId;
-				this.notifyGlobalListeners();
-				options.onExecutionStart?.(executionId);
-			},
-			(events: IIntercomEvent[]) => {
-				// Deduplicate by event_id
-				const unique = events.filter((e) => {
-					if (stream.seenEventIds.has(e.event_id)) return false;
-					stream.seenEventIds.add(e.event_id);
-					return true;
-				});
+		// Reserve ownership before a transport can synchronously emit events or throw.
+		stream.executionPromise = Promise.resolve();
+		let executionPromise: Promise<ILogMetadata | undefined>;
+		try {
+			executionPromise = Promise.resolve(
+				executeEventCall(
+					options.appId,
+					options.eventId,
+					payload,
+					options.streamState ?? false,
+					(executionId: string) => {
+						if (stream.activeExecution)
+							stream.activeExecution.runId = executionId;
+						task.runId = executionId;
+						task.status = "running";
+						if (task.cancellationRequested)
+							void stream.owner?.eventState
+								.cancelExecution(executionId)
+								.catch((error) => {
+									task.cancellationRequested = false;
+									task.error =
+										error instanceof Error ? error.message : String(error);
+									this.notifyGlobalListeners();
+								});
+						this.notifyGlobalListeners();
+						void this.deliver("execution-start", () =>
+							options.onExecutionStart?.(executionId),
+						);
+					},
+					(events: IIntercomEvent[]) => {
+						const unique = this.publishEvents(stream, events);
 
-				if (unique.length > 0) {
-					stream.accumulatedEvents.push(...unique);
-					options.onLiveEvents?.(unique);
+						if (unique.length > 0) {
+							for (const event of unique) {
+								if (
+									event.event_type === "interaction_request" &&
+									event.payload?.channel
+								) {
+									task.pendingInteractions.push({
+										requestId:
+											event.payload.channel.request_id ?? event.payload.id,
+										event,
+										channel: event.payload.channel,
+										status: "pending",
+									});
+									task.status = "waiting";
+								}
+							}
 
-					// Publish to all subscribers
-					for (const [subscriberId, subscriber] of stream.subscribers) {
-						const lastSent = stream.lastSentIndex.get(subscriberId) ?? 0;
-						const newEvents = stream.accumulatedEvents.slice(lastSent);
+							// Incremental save logic
+							if (options.onIncrementalSave && !stream.persistenceManaged) {
+								eventsSinceLastSave += unique.length;
+								if (
+									eventsSinceLastSave >= saveInterval &&
+									Date.now() - lastSaveAt >= saveMinIntervalMs
+								) {
+									eventsSinceLastSave = 0;
+									lastSaveAt = Date.now();
+									const snapshot = [...stream.accumulatedEvents];
+									stream.saveQueue = (stream.saveQueue ?? Promise.resolve())
+										.then(() =>
+											this.bounded(
+												Promise.resolve().then(() =>
+													options.onIncrementalSave?.(snapshot, false),
+												),
+											),
+										)
+										.catch((error) =>
+											console.error(
+												"[ExecutionEngine] Incremental save error:",
+												error,
+											),
+										);
+								}
+							}
 
-						if (newEvents.length > 0) {
-							stream.lastSentIndex.set(
-								subscriberId,
-								stream.accumulatedEvents.length,
-							);
-							this.deliver(subscriberId, () => subscriber.onEvents(newEvents));
+							this.notifyGlobalListeners();
 						}
-					}
-
-					// Incremental save logic
-					if (options.onIncrementalSave) {
-						eventsSinceLastSave += unique.length;
-						if (
-							eventsSinceLastSave >= saveInterval &&
-							Date.now() - lastSaveAt >= saveMinIntervalMs
-						) {
-							eventsSinceLastSave = 0;
-							lastSaveAt = Date.now();
-							// Fire and forget - don't block event processing
-							Promise.resolve(
-								options.onIncrementalSave(stream.accumulatedEvents, false),
-							).catch((err) =>
-								console.error("[ExecutionEngine] Incremental save error:", err),
-							);
-						}
-					}
-
-					this.notifyGlobalListeners();
-				}
-			},
-			options.skipConsentCheck,
-			options.pageTrigger,
-			options.beforeDispatch,
-		);
+					},
+					options.skipConsentCheck,
+					options.pageTrigger,
+					options.beforeDispatch,
+				),
+			);
+		} catch (error) {
+			executionPromise = Promise.reject(error);
+		}
 
 		stream.settled = false;
 		stream.executionPromise = executionPromise;
+		void executionPromise.then(releaseOwner, releaseOwner);
 		this.notifyGlobalListeners();
 
 		// Separate handlers: a failure while settling a successful run must not settle it twice.
 		executionPromise.then(
 			(metadata) => {
-				stream.failure = completedRunFailure(
+				stream.failure ??= completedRunFailure(
 					stream.accumulatedEvents,
 					metadata,
 				);
-				return this.settleRun(stream, options.onIncrementalSave, false);
+				return this.settleRun(
+					stream,
+					options.onIncrementalSave,
+					false,
+					options.onUnobservedComplete,
+				);
 			},
 			(error) => {
 				console.error("Execution error:", error);
@@ -498,7 +892,12 @@ export class ExecutionEngineProvider {
 				});
 				stream.failure = error;
 				// Still save what arrived, to preserve partial state
-				return this.settleRun(stream, options.onIncrementalSave, true);
+				return this.settleRun(
+					stream,
+					options.onIncrementalSave,
+					true,
+					options.onUnobservedComplete,
+				);
 			},
 		);
 
