@@ -14,8 +14,13 @@ import {
 	decodeMessageRow,
 	latestChatDraft,
 	putChatDraft,
+	putChatMessage,
 } from "./chat-db";
 import { createChatTurn } from "./chat-turn";
+import {
+	persistWorkflowReactions,
+	putChatDraftsWithReactions,
+} from "./workflow-reactions";
 
 const target = { appId: "app", eventId: "event", sessionId: "session" };
 let record = vi.spyOn(activity, "recordChatActivity");
@@ -37,6 +42,12 @@ beforeEach(async () => {
 });
 
 afterEach(() => record.mockRestore());
+
+async function savedMessage(id: string): Promise<IMessage> {
+	const row = await chatDb.messages.get(id);
+	if (!row) throw new Error("Message was not saved");
+	return decodeMessageRow(row);
+}
 
 function reply(id: string, content: string): IMessage {
 	return {
@@ -183,4 +194,57 @@ test("later live content advances the saved revision after a cloned push snapsho
 	}
 	expect(finalized.rev).toBeGreaterThan(pushed.rev);
 	expect(decodeMessageRow(finalized).inner.content).toBe(live.inner.content);
+});
+
+test("a workflow reaction updates its user message before the workflow ends", async () => {
+	const question = {
+		...reply("question", "Please check"),
+		inner: { role: IRole.User, content: "Please check" },
+	};
+	await putChatMessage(question);
+	const responseMessage = {
+		...reply("response", ""),
+		trigger_message_id: question.id,
+		main_widget: { widget: null },
+	};
+	const turn = createChatTurn({
+		responseMessage,
+		...target,
+		tmpLocalState: null,
+		tmpGlobalState: null,
+	});
+	const events = [
+		{
+			event_id: "reaction",
+			event_type: "chat_reaction",
+			payload: { emoji: "👍", operation: "add" },
+		},
+	] as IIntercomEvent[];
+	const writer = createAppChatActivityWriter(turn, target, () => events);
+	writer.onEvents(events);
+	await writer.settled();
+	expect((await savedMessage(question.id)).workflowReactions).toEqual(["👍"]);
+	expect(record).not.toHaveBeenCalled();
+	await completeAppChatTurn(turn.responseMessages, target, { events });
+	expect(await chatDb.messages.count()).toBe(1);
+});
+
+test("legacy finalization keeps reactions written to a draft-only reply", async () => {
+	const message = reply("answer", "Partial");
+	await putChatDraft(message);
+	const events = [
+		{
+			event_id: "draft-reaction",
+			event_type: "chat_reaction",
+			payload: { message_id: message.id, emoji: "👍", operation: "add" },
+		},
+	] as IIntercomEvent[];
+	await persistWorkflowReactions(events, target);
+	message.inner.content = "Finished";
+	await putChatDraftsWithReactions([message]);
+	await completeAppChatTurn([message], target);
+	const saved = await savedMessage(message.id);
+	expect(saved.workflowReactions).toEqual(["👍"]);
+	expect(saved.workflowReactionEventIds).toEqual(["draft-reaction"]);
+	expect(saved.inner.content).toBe("Finished");
 });

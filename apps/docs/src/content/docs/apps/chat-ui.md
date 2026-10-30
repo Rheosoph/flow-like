@@ -25,14 +25,18 @@ no configured messages also hide suggestions.
 
 ## Reply to a message or react with an emoji
 
-Choose **Reply** on an older model message to quote it above the composer. Write
+Choose **Reply** beside an older model message to quote it above the composer. Write
 your answer and send it to start a new run. Remove the quote from the composer
 if you want to send an ordinary message instead.
 
-Choose **Add reaction** on a message to select an emoji. Selecting one of your
-existing reactions removes it. Adding or removing a reaction sends a new user
-turn and starts a run, so the model can respond to the action. The conversation
-keeps the referenced message beside the reply or reaction.
+Hover over a message to reveal **Reply** and **Add reaction**. These controls also
+appear with keyboard focus and stay available on touch devices. The emoji control
+sits on the lower-right corner. A selected reaction replaces the add button and
+stays visible. Click your reaction to remove it, or hover over it to choose a
+replacement. With the keyboard, press Arrow Down on the reaction to open the picker.
+Changing a reaction starts one run with the referenced message as context. The
+reaction itself adds no chat bubble, while any answer from the workflow appears
+in the conversation.
 
 The model receives the referenced message's ID, role, and visible text together
 with the new reply, or the literal emoji and whether it was added or removed.
@@ -41,6 +45,16 @@ to an older message keeps its context even when that message is outside the
 configured history limit. References contain up to 16,000 characters of visible
 text and mark any truncation. They describe attachments without resending their
 contents.
+
+Flows can also react to user messages. Add **React to Message** under
+**Events/Chat**, set an emoji, and leave **Message ID** empty to target the user
+message that started the run. For a run started by a reaction, this targets the
+original reacted message. Use `remove` to remove the workflow's reaction,
+or supply an earlier message's ID to target it. Workflow reactions appear
+beside the message and do not start another run.
+
+In FlowScript, call `chat::react({ emoji: "👍" })`. User reactions and workflow
+reactions are saved separately, so removing one leaves the other's feedback intact.
 
 ## Follow a run while browsing
 

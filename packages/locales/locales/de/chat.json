@@ -116,6 +116,8 @@
 	"memoriesEmbeddedWithADifferentModelTheyCanapostBeReadByTheNewModelSoSwitchingWillPermanentlyDeleteThemContinue_other": "Erinnerungen wurden mit einem anderen Modell eingebettet. Das neue Modell kann sie nicht lesen; beim Wechsel werden sie daher dauerhaft gelöscht. Fortfahren?",
 	"memoryOff": "Erinnerungen: aus",
 	"messageReactions": "Nachrichtenreaktionen",
+	"changeReaction": "Reaktion ändern",
+	"editReactionHint": "Klicken zum Entfernen. Zum Ändern darüberfahren oder Pfeil nach unten drücken.",
 	"messageWithoutText": "Nachricht ohne Text",
 	"model": "Modell",
 	"modelsUsed": "Verwendete Modelle",
@@ -243,6 +245,7 @@
 	"whatDoYouWantToLongest_rotating_word": "Was möchtest du {{LONGEST_ROTATING_WORD}}?",
 	"widget": "Widget",
 	"willAutosendWhenYouStopTalking": "Wird automatisch gesendet, wenn du aufhörst zu sprechen",
+	"workflowReactedWith": "Workflow hat mit {{emoji}} reagiert",
 	"worksThroughTheStepsBeforeItAnswers": "Geht die Schritte durch, bevor es antwortet.",
 	"youMayContactMeAboutThisFeedback": "Du darfst mich wegen dieses Feedbacks kontaktieren",
 	"yourFeedback": "Dein Feedback"

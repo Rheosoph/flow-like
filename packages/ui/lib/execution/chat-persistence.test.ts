@@ -7,7 +7,9 @@ import {
 	decodeMessageRow,
 	promoteChatDrafts,
 	putChatDraft,
+	putChatMessage,
 } from "../../components/interfaces/chat-default/chat-db";
+import { persistWorkflowReactions } from "../../components/interfaces/chat-default/workflow-reactions";
 import { persistExecutionChat } from "./chat-persistence";
 import type { ExecutionTask } from "./types";
 
@@ -20,8 +22,8 @@ const message = (id = "answer", content = ""): IMessage => ({
 	inner: { role: "assistant", content } as IMessage["inner"],
 });
 
-async function savedRow() {
-	const row = await chatDb.messages.get("answer");
+async function savedRow(id = "answer", draft = false) {
+	const row = await (draft ? chatDb.drafts : chatDb.messages).get(id);
 	if (!row) throw new Error("The assistant reply was not persisted");
 	return row;
 }
@@ -141,4 +143,127 @@ test("cancellation preserves partial text with a stopped state", async () => {
 	const saved = decodeMessageRow(await savedRow());
 	expect(saved.inner.content).toBe("First update");
 	expect(saved.error?.kind).toBe("cancelled");
+});
+
+const reactionEvent = (emoji: string, operation = "add", messageId?: string) =>
+	({
+		event_id: crypto.randomUUID(),
+		event_type: "chat_reaction",
+		payload: { emoji, operation, message_id: messageId },
+	}) as ExecutionTask["events"][number];
+
+test("workflow reactions persist on the triggering user message without a live view or empty reply", async () => {
+	const user = {
+		...message("question", "Please review this"),
+		inner: { role: "user", content: "Please review this" } as IMessage["inner"],
+		reactions: ["❤️"],
+	};
+	await putChatMessage(user);
+	const run = task();
+	if (!run.chat) throw new Error("Chat seed missing");
+	run.chat.responseMessage.trigger_message_id = user.id;
+	run.events = [reactionEvent("👍")];
+	await persistExecutionChat(run, false);
+	expect(decodeMessageRow(await savedRow(user.id)).workflowReactions).toEqual([
+		"👍",
+	]);
+	run.events.push(reactionEvent("👍", "remove"), reactionEvent("🎉"));
+	await persistExecutionChat(run, false);
+	run.status = "completed";
+	await persistExecutionChat(run, true);
+	const saved = decodeMessageRow(await savedRow(user.id));
+	expect(saved.workflowReactions).toEqual(["🎉"]);
+	expect(saved.reactions).toEqual(["❤️"]);
+	expect(await chatDb.messages.count()).toBe(1);
+	expect(await chatDb.drafts.count()).toBe(0);
+});
+
+test("replayed reactions preserve ownership and draft recovery, and cannot cross conversation boundaries", async () => {
+	const old = { ...message("old", "Earlier reply"), reactions: ["👍"] };
+	await putChatMessage(old);
+	await putChatDraft(old);
+	await putChatMessage({
+		...message("other", "Other conversation"),
+		sessionId: "other-session",
+	});
+	await putChatMessage({
+		...message("other-app", "Other app"),
+		appId: "other-app",
+	});
+	const target = { appId: "app", sessionId: "session" };
+	const events = [
+		reactionEvent("👍", "add", old.id),
+		reactionEvent("❤️", "add", "other"),
+		reactionEvent("❤️", "add", "other-app"),
+		reactionEvent("🎉", "toggle", old.id),
+	];
+	await persistWorkflowReactions(events, target);
+	const row = await savedRow(old.id);
+	await persistWorkflowReactions(events, target);
+	expect((await chatDb.messages.get(old.id))?.rev).toBe(row.rev);
+	expect(
+		decodeMessageRow(await savedRow(old.id, true)).workflowReactions,
+	).toEqual(["👍"]);
+	expect(
+		decodeMessageRow(await savedRow("other")).workflowReactions,
+	).toBeUndefined();
+	expect(
+		decodeMessageRow(await savedRow("other-app")).workflowReactions,
+	).toBeUndefined();
+	await persistWorkflowReactions(
+		[reactionEvent("👍", "remove", old.id)],
+		target,
+	);
+	const saved = decodeMessageRow(await savedRow(old.id));
+	expect(saved.workflowReactions).toEqual([]);
+	expect(saved.reactions).toEqual(["👍"]);
+	await promoteChatDrafts("session");
+	expect(decodeMessageRow(await savedRow(old.id)).workflowReactions).toEqual(
+		[],
+	);
+});
+
+test("late workflow reactions cannot change a removed conversation", async () => {
+	await putChatMessage(message("old", "Earlier reply"));
+	await chatDb.sessions.delete("session");
+	await persistWorkflowReactions([reactionEvent("👍", "add", "old")], {
+		appId: "app",
+		sessionId: "session",
+	});
+	expect(
+		decodeMessageRow(await savedRow("old")).workflowReactions,
+	).toBeUndefined();
+});
+
+test("an older run checkpoint cannot restore a reaction that a later run removed", async () => {
+	await putChatMessage(message("question", "Earlier message"));
+	const first = task("first-run");
+	first.events = [reactionEvent("👍", "add", "question")];
+	await persistExecutionChat(first, false);
+	const second = task("second-run");
+	second.events = [reactionEvent("👍", "remove", "question")];
+	await persistExecutionChat(second, true);
+	await persistExecutionChat(first, true);
+	const saved = decodeMessageRow(await savedRow("question"));
+	expect(saved.workflowReactions).toEqual([]);
+	expect(saved.workflowReactionEventIds).toEqual([
+		first.events[0].event_id,
+		second.events[0].event_id,
+	]);
+});
+
+test("finalization preserves reaction state on a draft-only target even after its body advances", async () => {
+	const reply = message("answer", "Still streaming");
+	await putChatDraft(reply);
+	const events = [reactionEvent("👍", "add", reply.id)];
+	await persistWorkflowReactions(events, {
+		appId: "app",
+		sessionId: "session",
+	});
+	const run = task();
+	await persistExecutionChat(run, true);
+	const saved = decodeMessageRow(await savedRow(reply.id));
+	expect(saved.workflowReactions).toEqual(["👍"]);
+	expect(saved.workflowReactionEventIds).toEqual([events[0].event_id]);
+	expect(saved.inner.content).toBe("First update");
 });

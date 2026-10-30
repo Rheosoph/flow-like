@@ -120,6 +120,8 @@
 	"memoriesEmbeddedWithADifferentModelTheyCanapostBeReadByTheNewModelSoSwitchingWillPermanentlyDeleteThemContinue_other": "memories embedded with a different model. They can't be read by the new model, so switching will permanently delete them. Continue?",
 	"memoryOff": "Memory: off",
 	"messageReactions": "Message reactions",
+	"changeReaction": "Change reaction",
+	"editReactionHint": "Click to remove. Hover or press Arrow Down to change.",
 	"messageWithoutText": "Message without text",
 	"model": "Model",
 	"modelsUsed": "Models Used",
@@ -252,6 +254,7 @@
 	"whatDoYouWantToLongest_rotating_word": "What do you want to {{LONGEST_ROTATING_WORD}}?",
 	"widget": "Widget",
 	"willAutosendWhenYouStopTalking": "Will auto-send when you stop talking",
+	"workflowReactedWith": "Workflow reacted with {{emoji}}",
 	"worksThroughTheStepsBeforeItAnswers": "Works through the steps before it answers.",
 	"youMayContactMeAboutThisFeedback": "You may contact me about this feedback",
 	"yourFeedback": "Your feedback"

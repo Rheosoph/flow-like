@@ -1111,7 +1111,12 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		[sendMessage],
 	);
 	const handleMessageReaction = useCallback(
-		async (message: IMessage, emoji: string, operation: "add" | "remove") => {
+		async (
+			message: IMessage,
+			emoji: string,
+			operation: "add" | "remove",
+			replacesEmoji?: string,
+		) => {
 			if (
 				message.sessionId !== useGlobalChatStore.getState().activeConversationId
 			) {
@@ -1122,6 +1127,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				target: createMessageReference(message),
 				emoji,
 				operation,
+				...(operation === "add" && replacesEmoji ? { replacesEmoji } : {}),
 			});
 		},
 		[sendMessage],

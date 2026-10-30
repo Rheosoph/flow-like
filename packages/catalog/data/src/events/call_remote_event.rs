@@ -1572,6 +1572,7 @@ fn is_stream_output_event(event_type: &str) -> bool {
             | "chat_local_session"
             | "chat_global_session"
             | "chat_usage_stat"
+            | "chat_reaction"
             | "a2ui"
             | "interaction_request"
     )
@@ -2354,9 +2355,26 @@ mod tests {
         assert_eq!(updates["local_session_out"]["turn"], 3);
 
         assert!(is_stream_output_event("chat_stream_partial"));
+        assert!(is_stream_output_event("chat_reaction"));
         assert!(is_stream_output_event("a2ui"));
         assert!(is_stream_output_event("interaction_request"));
         assert!(!is_stream_output_event("progress"));
         assert!(!is_stream_output_event("completed"));
+    }
+
+    #[test]
+    fn reaction_events_reach_the_remote_chat_stream_with_their_target() {
+        let reaction = RemoteSseEvent {
+            event_type: "chat_reaction".to_string(),
+            payload: json!({"message_id": "user-message", "emoji": "👍", "operation": "add"}),
+            run_id: None,
+        };
+        assert!(is_stream_output_event(&reaction.event_type));
+        let updates = remote_chat_pin_updates(&reaction)
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        assert_eq!(updates["event_type"], "chat_reaction");
+        assert_eq!(updates["event_payload"], reaction.payload);
+        assert!(!updates.contains_key("response"));
     }
 }

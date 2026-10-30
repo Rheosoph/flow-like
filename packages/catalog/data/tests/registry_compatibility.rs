@@ -30,11 +30,12 @@ macro_rules! assert_legacy_registry {
 include!("fixtures/legacy_node_paths.rs");
 
 #[test]
-fn main_widget_nodes_are_registered_once_with_chat_aliases() {
+fn chat_controls_are_registered_once_with_chat_aliases() {
     let nodes = catalog::collect_nodes();
     for (name, alias) in [
         ("events_chat_set_main_widget", "setMainWidget"),
         ("events_chat_clear_main_widget", "clearMainWidget"),
+        ("events_chat_react", "react"),
     ] {
         let matches: Vec<_> = nodes
             .iter()

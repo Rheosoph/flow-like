@@ -81,6 +81,33 @@ describe("isAwaitingFirstEvent", () => {
 });
 
 describe("resolvePendingAsks", () => {
+	test("a reaction run hides its empty reply without making an older question wait", () => {
+		const reaction = ask("reaction", 20, "👍");
+		reaction.interaction = {
+			type: "reaction",
+			target: { messageId: "a1", role: IRole.Assistant, text: "Done" },
+			emoji: "👍",
+			operation: "add",
+		};
+		const transcript = [ask("q1", 10), answer("a1", 11, "Done"), reaction];
+		const pending = resolvePendingAsks(
+			transcript,
+			[answer("a2", 21)],
+			{ content: "👍", startedAt: 19, inFlight: true },
+			noHostContent,
+		);
+		expect(pending.hidden).toEqual(new Set(["a2"]));
+		expect(pending.byAsk.size).toBe(0);
+		const responded = resolvePendingAsks(
+			transcript,
+			[answer("a2", 21, "Happy to help")],
+			null,
+			noHostContent,
+		);
+		expect(responded.hidden.size).toBe(0);
+		expect(responded.byAsk.size).toBe(0);
+	});
+
 	test("an empty live answer is hidden and its question waits", () => {
 		const result = resolvePendingAsks(
 			[ask("q1", 10), answer("a1", 11, "done"), ask("q2", 20)],

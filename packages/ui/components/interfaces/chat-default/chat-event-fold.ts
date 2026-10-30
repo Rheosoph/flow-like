@@ -592,6 +592,7 @@ export function processChatEvents(
 			stream_root_id: rootId,
 			stream_root_timestamp: rootTimestamp,
 			stream_message_id: messageId,
+			trigger_message_id: root.trigger_message_id,
 			appId,
 			sessionId,
 			explicit_name: root.explicit_name,

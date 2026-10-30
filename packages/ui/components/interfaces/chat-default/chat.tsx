@@ -22,6 +22,7 @@ import {
 	type IChatMessageInteraction,
 	type IChatMessageReference,
 	createMessageReference,
+	isVisibleChatMessage,
 } from "./chat-message-interaction";
 import { ChatRunControls } from "./chat-run-controls";
 import {
@@ -168,6 +169,7 @@ export interface IChatProps {
 		message: IMessage,
 		emoji: string,
 		operation: "add" | "remove",
+		replacesEmoji?: string,
 	) => Promise<void>;
 	config?: Partial<IEventPayloadChat>;
 	sessionId?: string;
@@ -260,6 +262,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const interactionDisabled = !concurrency && (isSending || isStreamActive);
 		const isSendingRef = useRef(false);
 		const [sendingContent, setSendingContent] = useState("");
+		const [sendingReaction, setSendingReaction] = useState(false);
 		const [lastSend, setLastSend] = useState<ChatSend | null>(null);
 		const pendingMessagesRef = useRef<IMessage[] | null>(null);
 		const rafIdRef = useRef<number | null>(null);
@@ -334,6 +337,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 					? localMessages.filter((msg) => !liveIds.has(msg.id))
 					: localMessages;
 			return filtered
+				.filter(isVisibleChatMessage)
 				.map((msg) => ({
 					type: "message" as const,
 					data: msg,
@@ -353,7 +357,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 			const anchors = [
 				...chatItems.map((item) => item.data),
-				...currentMessages,
+				...currentMessages.filter(isVisibleChatMessage),
 			].sort((a, b) => a.timestamp - b.timestamp);
 			const unanchored: IInteractionRequest[] = [];
 
@@ -398,13 +402,13 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				settledByMessageId.has(messageId) ||
 				Boolean(messageInlineContent?.get(messageId)?.length);
 			return resolvePendingAsks(
-				chatItems.map((item) => item.data),
+				[...localMessages].sort((a, b) => a.timestamp - b.timestamp),
 				currentMessages,
 				lastSend,
 				hasHostContent,
 			);
 		}, [
-			chatItems,
+			localMessages,
 			currentMessages,
 			lastSend,
 			interactionItems,
@@ -415,6 +419,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			() =>
 				currentMessages.filter(
 					(message) =>
+						isVisibleChatMessage(message) &&
 						!pendingAsks.hidden.has(message.id) &&
 						(!message.main_widget ||
 							!isAwaitingFirstEvent(
@@ -450,6 +455,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			setHasInitiallyScrolled(false);
 			setIsSending(false);
 			setSendingContent("");
+			setSendingReaction(false);
 			setLastSend(null);
 			setReplyTarget(null);
 		}, [sessionId]);
@@ -473,7 +479,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			const lastUserMessage = messages
 				.slice()
 				.reverse()
-				.find((msg) => msg.inner.role === "user");
+				.find((msg) => msg.inner.role === "user" && isVisibleChatMessage(msg));
 
 			let nextActiveTools: string[];
 			if (lastUserMessage) {
@@ -571,6 +577,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				setShouldAutoScroll(true);
 				setIsSending(true);
 				setSendingContent(content);
+				setSendingReaction(interaction?.type === "reaction");
 				setLastSend({ content, startedAt, inFlight: true });
 
 				// Scroll immediately to show the optimistic message
@@ -589,6 +596,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 				} finally {
 					setIsSending(false);
 					setSendingContent("");
+					setSendingReaction(false);
 					setLastSend((send) =>
 						send?.startedAt === startedAt ? { ...send, inFlight: false } : send,
 					);
@@ -821,9 +829,11 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										</div>
 									))}
 								{isSending &&
+									!sendingReaction &&
 									!localMessages.some(
 										(m) =>
 											m.inner.role === "user" &&
+											isVisibleChatMessage(m) &&
 											getMessageTextContent(m) === sendingContent,
 									) && (
 										<div

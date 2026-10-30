@@ -4,6 +4,7 @@ import { useDebounce } from "@uidotdev/usehooks";
 import { useMemo } from "react";
 import { useSearch } from "../../hooks/use-search-index";
 import type { IMessage } from "../interfaces/chat-default/chat-db";
+import { isVisibleChatMessage } from "../interfaces/chat-default/chat-message-interaction";
 import type { IHistoryEntry } from "./chat-history-types";
 
 /** Below this the query is treated as empty — one or two characters match nearly everything. */
@@ -43,6 +44,7 @@ export function buildSearchCorpus(
 
 	const bySession = new Map<string, IMessage[]>();
 	for (const message of messages) {
+		if (!isVisibleChatMessage(message)) continue;
 		const bucket = bySession.get(message.sessionId);
 		if (bucket) bucket.push(message);
 		else bySession.set(message.sessionId, [message]);

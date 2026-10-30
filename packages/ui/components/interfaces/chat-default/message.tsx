@@ -108,6 +108,7 @@ interface MessageProps {
 		message: IMessage,
 		emoji: string,
 		operation: "add" | "remove",
+		replacesEmoji?: string,
 	) => Promise<void>;
 	interactionDisabled?: boolean;
 	/** App id owning the chat — needed to render + trigger embedded widgets. */
@@ -414,8 +415,6 @@ const MessageActions = ({
 	onFeedbackClick,
 	onEdit,
 	onCopy,
-	reactionPicker,
-	replyButton,
 }: {
 	isUser: boolean;
 	feedbackEnabled: boolean;
@@ -428,14 +427,12 @@ const MessageActions = ({
 	onFeedbackClick: () => void;
 	onEdit: () => void;
 	onCopy: () => void;
-	reactionPicker?: ReactNode;
-	replyButton?: ReactNode;
 }) => (
 	<div
 		className={cn(
 			"flex flex-row items-center gap-3",
 			compact
-				? "absolute bottom-3 right-4 z-10 h-auto w-auto gap-2"
+				? "absolute bottom-5 right-8 z-10 h-auto w-auto gap-2"
 				: cn(
 						"h-6 w-full",
 						isUser
@@ -448,8 +445,6 @@ const MessageActions = ({
 					),
 		)}
 	>
-		{replyButton}
-		{reactionPicker}
 		{!isUser && feedbackEnabled && (
 			<>
 				<FeedbackButton
@@ -674,18 +669,22 @@ export const MessageComponent = memo(
 			[message.id, message.rating, message.ratingSettings, onMessageUpdate],
 		);
 
-		const toggleReaction = useCallback(
-			async (emoji: string) => {
+		const updateReaction = useCallback(
+			async (
+				emoji: string,
+				operation: "add" | "remove",
+				replacesEmoji?: string,
+			) => {
 				if (!onReaction || interactionDisabled || reactionUpdatePending.current)
 					return;
 				reactionUpdatePending.current = true;
 				setSavingReaction(true);
 				try {
-					await onReaction(
-						message,
-						emoji,
-						message.reactions?.includes(emoji) ? "remove" : "add",
-					);
+					if (replacesEmoji) {
+						await onReaction(message, emoji, operation, replacesEmoji);
+					} else {
+						await onReaction(message, emoji, operation);
+					}
 				} catch (error) {
 					console.error("[Chat] Failed to update reaction:", error);
 					toast.error(t("reactionSendFailed", "Failed to send reaction"));
@@ -695,6 +694,21 @@ export const MessageComponent = memo(
 				}
 			},
 			[message, onReaction, interactionDisabled, t],
+		);
+		const toggleReaction = useCallback(
+			(emoji: string) =>
+				updateReaction(
+					emoji,
+					message.reactions?.includes(emoji) ? "remove" : "add",
+				),
+			[message.reactions, updateReaction],
+		);
+		const replaceReaction = useCallback(
+			(previousEmoji: string, emoji: string) => {
+				if (previousEmoji !== emoji)
+					return updateReaction(emoji, "add", previousEmoji);
+			},
+			[updateReaction],
 		);
 
 		const replyToMessage = useCallback(() => {
@@ -845,15 +859,23 @@ export const MessageComponent = memo(
 		const hasFooterContent =
 			hasUsageStats ||
 			Boolean(message.interaction) ||
-			(message.reactions?.length ?? 0) > 0 ||
 			processedAttachments.length > 0 ||
 			Boolean(FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report);
 		const compactUserActions = isUser && !hasFooterContent;
+		const hasReplyAction = !isUser && Boolean(onReply);
+		const hasSelectedReactions = Boolean(
+			message.reactions?.length || message.workflowReactions?.length,
+		);
+		const hasCornerReactions = Boolean(onReaction || hasSelectedReactions);
 
 		return (
 			<>
 				<div
-					className="flex w-full flex-col items-start gap-1 transition-all duration-300 ease-in-out"
+					data-fl-chat-message-row
+					className={cn(
+						"flex w-full items-start gap-1.5 sm:gap-2",
+						hasCornerReactions && !hasReplyAction && "pr-4",
+					)}
 					style={{
 						maxWidth:
 							"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
@@ -861,8 +883,7 @@ export const MessageComponent = memo(
 				>
 					<div
 						className={cn(
-							"whitespace-break-spaces transition-all duration-300 ease-in-out",
-							(compactUserActions || pending) && "relative",
+							"relative min-w-0 flex-1 whitespace-break-spaces transition-all duration-300 ease-in-out",
 							isUser
 								? "w-full border-l-2 py-2 pr-4 pl-3.5"
 								: "w-full max-w-full p-4 pt-2 pb-0",
@@ -929,7 +950,7 @@ export const MessageComponent = memo(
 							ref={contentRef}
 							className={cn(
 								"w-full max-w-full whitespace-break-spaces text-wrap text-sm leading-relaxed",
-								compactUserActions && (onReaction ? "pr-16" : "pr-10"),
+								compactUserActions && "pr-10",
 								isUser && showToggle && !isExpanded && "overflow-hidden",
 							)}
 							style={
@@ -1094,12 +1115,6 @@ export const MessageComponent = memo(
 						{FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report && (
 							<AgentDebugReport report={message.debug_report} />
 						)}
-						<MessageReactions
-							reactions={message.reactions}
-							onToggle={onReaction ? toggleReaction : undefined}
-							disabled={loading || savingReaction || interactionDisabled}
-							alignEnd={isUser}
-						/>
 						{!loading && (
 							<MessageActions
 								isUser={isUser}
@@ -1113,32 +1128,57 @@ export const MessageComponent = memo(
 								onFeedbackClick={() => setShowFeedbackDialog(true)}
 								onEdit={() => setShowEditDialog(true)}
 								onCopy={copyToClipboard}
-								replyButton={
-									message.inner.role === IRole.Assistant && onReply ? (
-										<button
-											type="button"
-											title={t("replyToMessage", "Reply to message")}
-											aria-label={t("replyToMessage", "Reply to message")}
-											disabled={interactionDisabled}
-											onClick={replyToMessage}
-											className="text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
-										>
-											<ReplyIcon className="size-4" />
-										</button>
-									) : undefined
-								}
-								reactionPicker={
-									onReaction ? (
+							/>
+						)}
+						{hasCornerReactions && (
+							<div
+								data-fl-chat-reaction-corner
+								className="absolute -bottom-4 -right-4 z-10 flex items-center justify-end gap-1.5"
+							>
+								<MessageReactions
+									reactions={message.reactions}
+									workflowReactions={message.workflowReactions}
+									onToggle={onReaction ? toggleReaction : undefined}
+									onReplace={onReaction ? replaceReaction : undefined}
+									disabled={loading || savingReaction || interactionDisabled}
+									alignEnd
+									className="m-0 flex-nowrap"
+								/>
+								{onReaction && !hasSelectedReactions && (
+									<div data-fl-chat-hover-action className="flex shrink-0">
 										<MessageReactionPicker
 											reactions={message.reactions}
 											onToggle={toggleReaction}
-											disabled={savingReaction || interactionDisabled}
+											disabled={
+												loading || savingReaction || interactionDisabled
+											}
+											triggerClassName="rounded-full border border-border bg-popover shadow-sm"
 										/>
-									) : undefined
-								}
-							/>
+									</div>
+								)}
+							</div>
 						)}
 					</div>
+					{hasReplyAction && (
+						<div
+							data-fl-chat-message-actions
+							data-fl-chat-hover-action
+							className="flex shrink-0 flex-col gap-0.5 pt-1 text-muted-foreground"
+						>
+							{!isUser && onReply && (
+								<button
+									type="button"
+									title={t("replyToMessage", "Reply to message")}
+									aria-label={t("replyToMessage", "Reply to message")}
+									disabled={loading || interactionDisabled}
+									onClick={replyToMessage}
+									className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+								>
+									<ReplyIcon className="size-4" />
+								</button>
+							)}
+						</div>
+					)}
 				</div>
 				{fullscreenFile && (
 					<Dialog
@@ -1220,6 +1260,7 @@ export const MessageComponent = memo(
 			prev.message.files === next.message.files &&
 			prev.message.rating === next.message.rating &&
 			prev.message.reactions === next.message.reactions &&
+			prev.message.workflowReactions === next.message.workflowReactions &&
 			prev.message.interaction === next.message.interaction &&
 			prev.message.ratingSettings === next.message.ratingSettings &&
 			prev.message.plan_steps === next.message.plan_steps &&

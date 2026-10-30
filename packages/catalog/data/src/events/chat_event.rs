@@ -37,6 +37,7 @@ pub mod push_step;
 pub mod push_text_to_step;
 pub mod push_widget;
 pub mod push_widgets;
+pub mod react;
 pub mod remove_step;
 pub mod set_main_widget;
 

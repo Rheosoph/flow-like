@@ -8963,6 +8963,15 @@
     "class": null,
     "category": "Events/Chat"
   },
+  "events_chat_react": {
+    "qualified": "chat::react",
+    "namespace": "chat",
+    "alias": "react",
+    "flat": "eventsChatReact",
+    "receiver": null,
+    "class": null,
+    "category": "Events/Chat"
+  },
   "events_chat_remove_step": {
     "qualified": "chat::removeStep",
     "namespace": "chat",

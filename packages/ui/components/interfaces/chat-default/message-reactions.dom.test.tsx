@@ -138,6 +138,52 @@ describe("message reactions", () => {
 		expect(container.querySelector("fieldset")).toBeNull();
 	});
 
+	test("keeps workflow reactions visible while users add and remove their own", async () => {
+		const { root, container } = await setup();
+		const { MessageComponent } = await import("./message");
+		let message: IMessage = {
+			id: "workflow-reaction",
+			appId: "app",
+			sessionId: "session",
+			timestamp: 1,
+			inner: { role: IRole.User, content: "Finished the review" },
+			files: [],
+			workflowReactions: ["👍"],
+		};
+		const onReaction = vi.fn(async () => {});
+		const render = () =>
+			root.render(
+				<MessageComponent message={message} onReaction={onReaction} />,
+			);
+		const thumb = () =>
+			container.querySelector<HTMLButtonElement>(
+				'fieldset button[aria-label="React with 👍"]',
+			);
+		await act(async () => render());
+		expect(thumb()?.getAttribute("aria-pressed")).toBe("false");
+		expect(thumb()?.title).toBe("Workflow reacted with 👍");
+		await act(async () => thumb()?.click());
+		expect(onReaction).toHaveBeenLastCalledWith(message, "👍", "add");
+
+		message = { ...message, reactions: ["👍"] };
+		await act(async () => render());
+		expect(thumb()?.getAttribute("aria-pressed")).toBe("true");
+		await act(async () => thumb()?.click());
+		expect(onReaction).toHaveBeenLastCalledWith(message, "👍", "remove");
+
+		message = { ...message, reactions: [] };
+		await act(async () => render());
+		expect(thumb()?.getAttribute("aria-pressed")).toBe("false");
+		expect(thumb()?.title).toBe("Workflow reacted with 👍");
+
+		message = { ...message, workflowReactions: ["❤️"] };
+		await act(async () => render());
+		expect(thumb()).toBeNull();
+		expect(
+			container.querySelector<HTMLButtonElement>("fieldset button")?.title,
+		).toBe("Workflow reacted with ❤️");
+	});
+
 	test("shows saved reactions without offering edits in a read-only chat", async () => {
 		const { root, container } = await setup();
 		const { MessageComponent, ChatFeedbackEnabledContext } = await import(
@@ -258,7 +304,7 @@ describe("message reactions", () => {
 				/>,
 			),
 		);
-		for (const label of ["Reply to message", "Add reaction", "React with ❤️"]) {
+		for (const label of ["Reply to message", "React with ❤️"]) {
 			const button = container.querySelector<HTMLButtonElement>(
 				`button[aria-label="${label}"]`,
 			);
@@ -269,7 +315,90 @@ describe("message reactions", () => {
 		expect(reaction).not.toHaveBeenCalled();
 	});
 
-	test("finds emojis outside the quick choices", async () => {
+	test("click removes directly while hover replaces the selected emoji in one action", async () => {
+		const { root, container } = await setup();
+		const { MessageComponent } = await import("./message");
+		const message: IMessage = {
+			id: "change-reaction",
+			appId: "app",
+			sessionId: "session",
+			timestamp: 1,
+			inner: { role: IRole.Assistant, content: "Ready" },
+			files: [],
+			reactions: ["❤️"],
+		};
+		const onReaction = vi.fn(async () => {});
+		await act(async () =>
+			root.render(
+				<MessageComponent message={message} onReaction={onReaction} />,
+			),
+		);
+		const badge = container.querySelector<HTMLButtonElement>(
+			'fieldset button[aria-label="React with ❤️"]',
+		);
+		expect(badge).not.toBeNull();
+		expect(
+			container.querySelector('button[aria-label="Add reaction"]'),
+		).toBeNull();
+		await act(async () => badge?.click());
+		expect(onReaction).toHaveBeenLastCalledWith(message, "❤️", "remove");
+		expect(document.querySelector('[data-slot="popover-content"]')).toBeNull();
+		await act(async () => {
+			badge?.dispatchEvent(
+				new PointerEvent("pointerover", {
+					bubbles: true,
+					pointerType: "mouse",
+				}),
+			);
+			await new Promise((resolve) => setTimeout(resolve, 250));
+		});
+		const picker = document.querySelector('[data-slot="popover-content"]');
+		expect(picker).not.toBeNull();
+		await act(async () =>
+			picker
+				?.querySelector<HTMLButtonElement>('button[aria-label="React with 👍"]')
+				?.click(),
+		);
+		expect(onReaction).toHaveBeenLastCalledWith(message, "👍", "add", "❤️");
+		expect(onReaction).toHaveBeenCalledTimes(2);
+	});
+
+	test("keyboard opens the replacement picker and choosing the existing emoji does nothing", async () => {
+		const { root, container } = await setup();
+		const { MessageReactions } = await import("./message-reactions");
+		const onToggle = vi.fn();
+		const onReplace = vi.fn();
+		await act(async () =>
+			root.render(
+				<MessageReactions
+					reactions={["👍"]}
+					onToggle={onToggle}
+					onReplace={onReplace}
+				/>,
+			),
+		);
+		const badge = container.querySelector<HTMLButtonElement>(
+			'button[aria-label="React with 👍"]',
+		);
+		await act(async () => {
+			badge?.focus();
+			badge?.dispatchEvent(
+				new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+			);
+		});
+		const picker = document.querySelector('[data-slot="popover-content"]');
+		expect(picker).not.toBeNull();
+		await act(async () =>
+			picker
+				?.querySelector<HTMLButtonElement>('button[aria-label="React with 👍"]')
+				?.click(),
+		);
+		expect(onToggle).not.toHaveBeenCalled();
+		expect(onReplace).not.toHaveBeenCalled();
+		expect(document.querySelector('[data-slot="popover-content"]')).toBeNull();
+	});
+
+	test("offers more quick choices and searches the full emoji set with skin tones", async () => {
 		const { root, container } = await setup();
 		const { MessageReactionPicker } = await import("./message-reactions");
 		const selected: string[] = [];
@@ -284,6 +413,11 @@ describe("message reactions", () => {
 		await act(async () => {
 			await import("@emoji-mart/data");
 		});
+		expect(
+			document.querySelector(
+				'[data-slot="popover-content"] button[aria-label="React with 🤝"]',
+			),
+		).not.toBeNull();
 		const search = document.querySelector<HTMLInputElement>(
 			'input[aria-label="Search emojis"]',
 		);
@@ -292,14 +426,34 @@ describe("message reactions", () => {
 			Object.getOwnPropertyDescriptor(
 				HTMLInputElement.prototype,
 				"value",
-			)?.set?.call(search, "rocket");
+			)?.set?.call(search, "unicorn");
 			search?.dispatchEvent(new Event("input", { bubbles: true }));
 		});
-		const rocket = document.querySelector<HTMLButtonElement>(
-			'[data-slot="popover-content"] button[aria-label="React with 🚀"]',
+		const unicorn = document.querySelector<HTMLButtonElement>(
+			'[data-slot="popover-content"] button[aria-label="React with 🦄"]',
 		);
-		expect(rocket).not.toBeNull();
-		await act(async () => rocket?.click());
-		expect(selected).toEqual(["🚀"]);
+		expect(unicorn).not.toBeNull();
+		await act(async () => unicorn?.click());
+		expect(selected).toEqual(["🦄"]);
+		await act(async () => {
+			container.querySelector<HTMLButtonElement>("button")?.click();
+		});
+		const reopenedSearch = document.querySelector<HTMLInputElement>(
+			'input[aria-label="Search emojis"]',
+		);
+		expect(reopenedSearch?.value).toBe("");
+		await act(async () => {
+			Object.getOwnPropertyDescriptor(
+				HTMLInputElement.prototype,
+				"value",
+			)?.set?.call(reopenedSearch, "thumbsup");
+			reopenedSearch?.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+		const tonedThumb = document.querySelector<HTMLButtonElement>(
+			'[data-slot="popover-content"] button[aria-label="React with 👍🏽"]',
+		);
+		expect(tonedThumb).not.toBeNull();
+		await act(async () => tonedThumb?.click());
+		expect(selected).toEqual(["🦄", "👍🏽"]);
 	});
 });

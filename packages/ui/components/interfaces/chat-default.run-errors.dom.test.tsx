@@ -37,6 +37,7 @@ const state = vi.hoisted(() => ({
 				message: IMessage,
 				emoji: string,
 				operation: "add" | "remove",
+				replacesEmoji?: string,
 		  ) => Promise<void>)
 		| undefined,
 }));
@@ -298,6 +299,38 @@ describe("chat model requests", () => {
 	);
 });
 
+describe("workflow message reactions", () => {
+	test("reacts to the triggering user message live and finishes without an empty reply", async () => {
+		const { sending } = await send();
+		await act(async () => {
+			emit([
+				{
+					event_id: "workflow-reaction",
+					event_type: "chat_reaction",
+					payload: { emoji: "👍", operation: "add" },
+				} as IIntercomEvent,
+			]);
+		});
+		await waitForChat(async () => {
+			const user = (await chatDb.messages.toArray())
+				.map(decodeMessageRow)
+				.find((message) => message.inner.role === "user");
+			expect(user?.workflowReactions).toEqual(["👍"]);
+			expect(user?.reactions).toBeUndefined();
+		});
+		await act(async () => {
+			finish();
+			await sending;
+		});
+		await waitForChat(async () => {
+			const messages = (await chatDb.messages.toArray()).map(decodeMessageRow);
+			expect(messages).toHaveLength(1);
+			expect(messages[0].workflowReactions).toEqual(["👍"]);
+			expect(await chatDb.drafts.count()).toBe(0);
+		});
+	});
+});
+
 describe("chat run error reporting", () => {
 	test.each([
 		[
@@ -535,6 +568,74 @@ describe("quoted replies and reactions", () => {
 			expect(joinContentText(action.inner.content)).toBe("👍");
 			await finishRun(sending);
 		}
+	});
+
+	test("changing a reaction saves one action and starts one run with replacement context", async () => {
+		const reactedTarget = {
+			...target,
+			reactions: ["👍", "🎉"],
+			workflowReactions: ["👍"],
+		};
+		await putChatMessage(reactedTarget);
+		await mount();
+		let sending!: Promise<void>;
+		await act(async () => {
+			sending = required(state.react)(reactedTarget, "❤️", "add", "👍");
+		});
+		await waitForChat(() => expect(requests).toHaveLength(1));
+		const stored = decodeMessageRow(
+			required(await chatDb.messages.get(target.id)),
+		);
+		expect(stored.reactions).toEqual(["🎉", "❤️"]);
+		expect(stored.workflowReactions).toEqual(["👍"]);
+		const actions = (await chatDb.messages.toArray())
+			.map(decodeMessageRow)
+			.filter((message) => message.interaction?.type === "reaction");
+		expect(actions).toHaveLength(1);
+		expect(actions[0].interaction).toMatchObject({
+			type: "reaction",
+			operation: "add",
+			emoji: "❤️",
+			replacesEmoji: "👍",
+			target: { messageId: target.id },
+		});
+		expect(joinContentText(actions[0].inner.content)).toBe("❤️");
+		const prompt = joinContentText(
+			required(payload(0).messages.at(-1)).content,
+		);
+		expect(prompt).toContain('"replaces_emoji": "👍"');
+		expect(prompt).toContain('"emoji": "❤️"');
+		await finishRun(sending);
+		expect(requests).toHaveLength(1);
+	});
+
+	test("a workflow reacting back targets the original message instead of the hidden reaction turn", async () => {
+		await putChatMessage(target);
+		await mount();
+		let sending!: Promise<void>;
+		await act(async () => {
+			sending = required(state.react)(target, "👍", "add");
+		});
+		await waitForChat(() => expect(requests).toHaveLength(1));
+		await act(async () => {
+			emit([
+				{
+					event_id: "react-back",
+					event_type: "chat_reaction",
+					payload: { emoji: "🎉", operation: "add" },
+				} as IIntercomEvent,
+			]);
+		});
+		await finishRun(sending);
+		const messages = (await chatDb.messages.toArray()).map(decodeMessageRow);
+		expect(messages.find((message) => message.id === target.id)).toMatchObject({
+			reactions: ["👍"],
+			workflowReactions: ["🎉"],
+		});
+		expect(
+			messages.find((message) => message.interaction?.type === "reaction")
+				?.workflowReactions,
+		).toBeUndefined();
 	});
 
 	test("a busy chat rejects reactions without persisting or silently dropping them", async () => {

@@ -98,12 +98,78 @@ test("accepted reactions persist independently of ratings and apply operations i
 	);
 });
 
+test("changing an accepted reaction updates user emojis together and retains workflow reactions", async () => {
+	useGlobalChatStore.setState({
+		messages: [
+			{ ...assistant(), reactions: ["👍", "🎉"], workflowReactions: ["👍"] },
+		],
+	});
+	const interaction: IChatMessageInteraction = {
+		type: "reaction",
+		emoji: "❤️",
+		operation: "add",
+		replacesEmoji: "👍",
+		target: createMessageReference(assistant()),
+	};
+	await persistGlobalChatReaction(interaction, "conversation");
+	await persistGlobalChatReaction(interaction, "conversation");
+	const expected = {
+		reactions: ["🎉", "❤️"],
+		workflowReactions: ["👍"],
+		rating: 1,
+	};
+	expect(useGlobalChatStore.getState().messages[0]).toMatchObject(expected);
+	expect(await globalChatDb.messages.get("old-answer")).toMatchObject(expected);
+	const input = globalChatModelInput(
+		{
+			...assistant(),
+			id: "changed-reaction",
+			inner: { role: IRole.User, content: "❤️" },
+			interaction,
+		},
+		[],
+	);
+	expect(input.prompt).toContain('"replaces_emoji": "👍"');
+	expect(input.prompt).toContain('"emoji": "❤️"');
+});
+
 test("a reaction cannot update a message in another conversation", async () => {
 	await expect(persistGlobalChatReaction(reaction(), "other")).rejects.toThrow(
 		"no longer available",
 	);
 	expect(useGlobalChatStore.getState().messages[0].reactions).toBeUndefined();
 	expect(await globalChatDb.messages.get("old-answer")).toBeUndefined();
+});
+
+test("a queued replacement retains its accepted state after a later removal", async () => {
+	await persistGlobalChatReaction(reaction(), "conversation");
+	const interaction: IChatMessageInteraction = {
+		type: "reaction",
+		emoji: "❤️",
+		operation: "add",
+		replacesEmoji: "👍",
+		target: createMessageReference(assistant()),
+	};
+	await persistGlobalChatReaction(interaction, "conversation");
+	const store = useGlobalChatStore.getState();
+	store.enqueueMessage({
+		conversationId: "conversation",
+		content: "❤️",
+		interaction,
+		reactionAccepted: true,
+	});
+	await persistGlobalChatReaction(
+		{ ...interaction, operation: "remove", replacesEmoji: undefined },
+		"conversation",
+	);
+	const queued = store.takeNextQueuedMessage("conversation");
+	expect(queued?.interaction).toEqual(interaction);
+	expect(queued?.reactionAccepted).toBe(true);
+	expect(queued?.content).toBe("❤️");
+	expect(useGlobalChatStore.getState().messages[0].reactions).toEqual([]);
+	expect((await globalChatDb.messages.get("old-answer"))?.reactions).toEqual(
+		[],
+	);
 });
 
 test("capacity queues preserve target snapshots and accepted state in order", async () => {

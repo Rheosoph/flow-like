@@ -49,6 +49,7 @@ export async function persistGlobalChatReaction(
 			target.reactions,
 			interaction.emoji,
 			interaction.operation,
+			interaction.replacesEmoji,
 		),
 	};
 	if (!(await persistGlobalChatMessage(next))) {

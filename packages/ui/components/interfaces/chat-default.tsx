@@ -87,7 +87,6 @@ import {
 	decodeMessageRow,
 	latestChatDraft,
 	promoteChatDrafts,
-	putChatDrafts,
 	putChatMessage,
 } from "./chat-default/chat-db";
 import {
@@ -118,6 +117,10 @@ import {
 	updateSessionInteractions,
 	useSessionInteractions,
 } from "./chat-default/session-interactions";
+import {
+	persistWorkflowReactions,
+	putChatDraftsWithReactions,
+} from "./chat-default/workflow-reactions";
 import { useChatModel } from "./chat-default/use-chat-model";
 import { useChatThinking } from "./chat-default/use-chat-thinking";
 import { ChatWelcome } from "./chat-default/welcome";
@@ -479,12 +482,14 @@ function createResponseMessage(
 	appId: string,
 	eventName: string,
 	mainWidget?: IChatMainWidget,
+	triggerMessageId?: string,
 ): IMessage {
 	return seedMainWidget(
 		{
 			id: createId(),
 			sessionId: sessionId,
 			appId,
+			trigger_message_id: triggerMessageId,
 			files: [],
 			inner: {
 				role: IRole.Assistant,
@@ -614,7 +619,16 @@ async function handleStreamCompletion({
 		}
 
 		// Persist before clearing the streaming bubble so the message never blinks out in between.
-		await completeAppChatTurn(messages, { appId, eventId, sessionId });
+		await completeAppChatTurn(
+			messages,
+			{ appId, eventId, sessionId },
+			{ events },
+		);
+		await persistWorkflowReactions(events, {
+			appId,
+			sessionId,
+			triggerMessageId: responseMessage.trigger_message_id,
+		});
 
 		chatRef.current?.clearCurrentMessageUpdate();
 		chatRef.current?.scrollToBottom();
@@ -647,7 +661,12 @@ function createChatIncrementalSaver(
 ): (events: IIntercomEvent[]) => Promise<void> {
 	return async (events) => {
 		turn.catchUp(events);
-		await putChatDrafts(turn.responseMessages);
+		await putChatDraftsWithReactions(turn.responseMessages);
+		await persistWorkflowReactions(events, {
+			appId: turn.responseMessage.appId,
+			sessionId: turn.responseMessage.sessionId,
+			triggerMessageId: turn.responseMessage.trigger_message_id,
+		});
 		const { tmpLocalState, tmpGlobalState } = turn.live();
 		if (tmpLocalState) {
 			await chatDb.localStage.put(tmpLocalState);
@@ -1505,6 +1524,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 								target.reactions,
 								interaction.emoji,
 								interaction.operation,
+								interaction.replacesEmoji,
 							),
 						});
 					}
@@ -1577,6 +1597,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					appId,
 					event.name,
 					readMainWidget(sessionIdParameter),
+					interaction?.type === "reaction"
+						? interaction.target.messageId
+						: userMessage.id,
 				);
 
 				chatRef.current?.pushCurrentMessageUpdate({ ...responseMessage });
@@ -1657,10 +1680,15 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						if (error && messages.length > 0) {
 							messages[messages.length - 1].error = error;
 						}
-						await completeAppChatTurn(messages, {
+						await completeAppChatTurn(
+							messages,
+							{ appId, eventId: event.id, sessionId: sessionIdParameter },
+							{ events },
+						);
+						await persistWorkflowReactions(events, {
 							appId,
-							eventId: event.id,
 							sessionId: sessionIdParameter,
+							triggerMessageId: responseMessage.trigger_message_id,
 						});
 					},
 					saveIntervalEvents: 10,
@@ -1908,12 +1936,18 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	);
 
 	const handleMessageReaction = useCallback(
-		async (message: IMessage, emoji: string, operation: "add" | "remove") => {
+		async (
+			message: IMessage,
+			emoji: string,
+			operation: "add" | "remove",
+			replacesEmoji?: string,
+		) => {
 			await handleSendMessage(emoji, undefined, undefined, undefined, {
 				type: "reaction",
 				target: createMessageReference(message),
 				emoji,
 				operation,
+				...(operation === "add" && replacesEmoji ? { replacesEmoji } : {}),
 			});
 		},
 		[handleSendMessage],

@@ -1,11 +1,11 @@
 import Dexie, { type EntityTable } from "dexie";
-import type { IHistoryMessage } from "../../../lib/schema/llm/history";
 import type { IChatMessageError } from "../../../lib/flowpilot/chat-error";
+import type { IHistoryMessage } from "../../../lib/schema/llm/history";
 import { installRuntimeHistoryGuard } from "../../../lib/service-runtime/history-guard";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
 import type { FlowScriptWorkspaceCandidate } from "../../flowpilot/flowscript-workspace-candidates";
-import type { IChatMessageInteraction } from "./chat-message-interaction";
 import { finalizePlanSteps } from "./chat-event-fold";
+import type { IChatMessageInteraction } from "./chat-message-interaction";
 
 export type IAttachment =
 	| string // Simple URL variant
@@ -230,6 +230,8 @@ export interface IMessage {
 	/** Original response slot, shared by every message emitted in one run. */
 	stream_root_id?: string;
 	stream_root_timestamp?: number;
+	/** Default reaction target: the sent message, or the original message for a reaction turn. */
+	trigger_message_id?: string;
 	/** Backend message identity used to route pushes and replay the run. */
 	stream_message_id?: string;
 	appId: string;
@@ -243,6 +245,10 @@ export interface IMessage {
 	explicit_name?: string;
 	/** Emoji reactions selected by the user in this chat. */
 	reactions?: string[];
+	/** Emoji reactions added by the workflow, independent of the user's choices. */
+	workflowReactions?: string[];
+	/** Applied workflow events, retained so replay cannot undo later reactions. */
+	workflowReactionEventIds?: string[];
 	rating?: number;
 	ratingSettings?: {
 		includeChatHistory?: boolean;

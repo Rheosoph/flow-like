@@ -63092,6 +63092,46 @@
       "alias": "pushWidgets"
     },
     {
+      "node_type": "events_chat_react",
+      "display": "eventsChatReact",
+      "friendly": "React to Message",
+      "category": "Events/Chat",
+      "inputs": [
+        {
+          "name": "emoji",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Emoji to add or remove"
+        },
+        {
+          "name": "message_id",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Leave empty to react to the user message that started this run"
+        },
+        {
+          "name": "operation",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Add or remove the workflow's reaction"
+        }
+      ],
+      "outputs": [],
+      "impure": true,
+      "doc": "Adds or removes a workflow emoji reaction on a chat message without starting another turn.",
+      "namespace": "chat",
+      "alias": "react"
+    },
+    {
       "node_type": "events_chat_remove_step",
       "display": "eventsChatRemoveStep",
       "friendly": "Remove Step",

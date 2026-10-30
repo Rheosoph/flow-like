@@ -5,6 +5,7 @@ import {
 	applyMessageReaction,
 	createMessageReference,
 	historyMessageForModel,
+	isVisibleChatMessage,
 } from "./chat-message-interaction";
 import { joinContentText } from "./inline-segments";
 
@@ -88,6 +89,7 @@ describe("chat message interaction model context", () => {
 				operation,
 			};
 			const { context, content } = contextOf(reaction);
+			expect(isVisibleChatMessage(reaction)).toBe(false);
 			expect(context).toMatchObject({
 				type: "reaction",
 				emoji: "👍",
@@ -99,6 +101,37 @@ describe("chat message interaction model context", () => {
 				"Removing a reaction does not imply its opposite",
 			);
 		}
+	});
+
+	test("keeps ordinary emoji messages and quoted replies visible", () => {
+		expect(isVisibleChatMessage(message("👍", IRole.User))).toBe(true);
+		const reply = message("👍", IRole.User);
+		reply.interaction = {
+			type: "reply",
+			target: createMessageReference(message("First answer")),
+		};
+		expect(isVisibleChatMessage(reply)).toBe(true);
+	});
+
+	test("preserves a changed reaction as one action with both emojis in model context", () => {
+		const reaction = message("❤️", IRole.User);
+		reaction.interaction = {
+			type: "reaction",
+			target: createMessageReference(message("First answer")),
+			emoji: "❤️",
+			operation: "add",
+			replacesEmoji: "👍",
+		};
+		const saved = decodeMessageRow(encodeMessageRow(reaction));
+		expect(contextOf(saved).context).toMatchObject({
+			type: "reaction",
+			emoji: "❤️",
+			operation: "add",
+			replaces_emoji: "👍",
+			referenced_message: { message_id: "older-answer" },
+		});
+		expect(saved.inner.content).toBe("❤️");
+		expect(isVisibleChatMessage(saved)).toBe(false);
 	});
 
 	test("preserves media attached to the new reply and does not change ordinary messages", () => {
@@ -165,5 +198,18 @@ describe("chat message interaction model context", () => {
 		expect(applyMessageReaction(["👍", "👍"], "👍", "add")).toEqual(["👍"]);
 		expect(applyMessageReaction(["👍", "❤️"], "👍", "remove")).toEqual(["❤️"]);
 		expect(applyMessageReaction(["❤️"], "👍", "remove")).toEqual(["❤️"]);
+	});
+
+	test("replacing a reaction preserves other emojis and remains idempotent", () => {
+		const original = ["👍", "🎉"];
+		const replaced = applyMessageReaction(original, "❤️", "add", "👍");
+		expect(replaced).toEqual(["🎉", "❤️"]);
+		expect(original).toEqual(["👍", "🎉"]);
+		expect(applyMessageReaction(replaced, "❤️", "add", "👍")).toEqual(replaced);
+		expect(applyMessageReaction(original, "🎉", "add", "👍")).toEqual(["🎉"]);
+		expect(applyMessageReaction(original, "👍", "add", "👍")).toEqual(original);
+		expect(applyMessageReaction(original, "🎉", "remove", "👍")).toEqual([
+			"👍",
+		]);
 	});
 });

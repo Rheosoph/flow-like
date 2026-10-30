@@ -579,7 +579,10 @@ export class ExecutionRuntime {
 		this.broadcast(run, offset);
 		if (event.event_type === "run_initiated" && run.task.cancellationRequested)
 			void this.cancel(run).catch(() => undefined);
-		if (Date.now() - run.lastSave >= 1_000) {
+		if (
+			event.event_type === "chat_reaction" ||
+			Date.now() - run.lastSave >= 1_000
+		) {
 			run.lastSave = Date.now();
 			void this.save(run, false).catch(() => undefined);
 		}

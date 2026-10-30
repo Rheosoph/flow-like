@@ -28,7 +28,17 @@ export type IChatMessageInteraction =
 			target: IChatMessageReference;
 			emoji: string;
 			operation: "add" | "remove";
+			/** Adding this emoji replaces a previous user reaction in one turn. */
+			replacesEmoji?: string;
 	  };
+
+/** Reaction turns retain model context; their visible state belongs on the target message. */
+export function isVisibleChatMessage(message: IMessage): boolean {
+	return !(
+		message.inner.role === IRole.User &&
+		message.interaction?.type === "reaction"
+	);
+}
 
 export function createMessageReference(
 	message: IMessage,
@@ -77,10 +87,15 @@ export function applyMessageReaction(
 	reactions: readonly string[] | undefined,
 	emoji: string,
 	operation: "add" | "remove",
+	replacesEmoji?: string,
 ): string[] {
 	const unique = [...new Set(reactions)];
 	if (operation === "remove") return unique.filter((value) => value !== emoji);
-	return unique.includes(emoji) ? unique : [...unique, emoji];
+	const remaining =
+		replacesEmoji && replacesEmoji !== emoji
+			? unique.filter((value) => value !== replacesEmoji)
+			: unique;
+	return remaining.includes(emoji) ? remaining : [...remaining, emoji];
 }
 
 function interactionContext(interaction: IChatMessageInteraction): string {
@@ -88,7 +103,13 @@ function interactionContext(interaction: IChatMessageInteraction): string {
 	const data = {
 		type: interaction.type,
 		...(interaction.type === "reaction"
-			? { operation: interaction.operation, emoji: interaction.emoji }
+			? {
+					operation: interaction.operation,
+					emoji: interaction.emoji,
+					...(interaction.operation === "add" && interaction.replacesEmoji
+						? { replaces_emoji: interaction.replacesEmoji }
+						: {}),
+				}
 			: {}),
 		referenced_message: {
 			message_id: target.messageId,

@@ -76,7 +76,7 @@ export function canPreview(file: string, filename?: string) {
 
 /**
  * PDF open parameters for the built-in viewers. Chrome cuts the fragment at the
- * second `#`, so every parameter has to sit behind a single one — `#page=2&#view=FitH`
+ * second `#`, so every parameter has to sit behind a single one. `#page=2&#view=FitH`
  * silently drops the view.
  */
 export function pdfViewerFragment(page?: number) {
@@ -85,15 +85,18 @@ export function pdfViewerFragment(page?: number) {
 	return `#${params.join("&")}`;
 }
 
-type PreviewSource = { src: string; state: "loading" | "blob" | "direct" };
+type PreviewSource = {
+	src: string;
+	state: "loading" | "blob" | "direct" | "error";
+};
 
 /**
  * Re-types bytes locally before handing them to the browser's native viewer.
  *
  * Storage URLs can return `binary/octet-stream` instead of the file's MIME type.
- * PDFs can download instead of rendering, and SVGs fail
- * to display as images. A failed fetch (CORS, custom asset protocols) falls back
- * to the raw URL, so sources that render today keep rendering.
+ * PDFs can download instead of rendering, and SVGs fail to display as images.
+ * SVGs can fall back to their original URL. PDFs must not navigate to an
+ * unverified response, since its headers can trigger a download.
  */
 function useTypedPreviewSource(url: string, mimeType: string): PreviewSource {
 	const [source, setSource] = useState<PreviewSource>({
@@ -103,12 +106,16 @@ function useTypedPreviewSource(url: string, mimeType: string): PreviewSource {
 
 	useEffect(() => {
 		let cancelled = false;
+		const controller = new AbortController();
 		let objectUrl: string | null = null;
 		setSource({ src: "", state: "loading" });
 
 		const load = async () => {
 			try {
-				const response = await fetch(url, { cache: "no-store" });
+				const response = await fetch(url, {
+					cache: "no-store",
+					signal: controller.signal,
+				});
 				if (!response.ok) {
 					throw new Error(`Failed to fetch preview (${response.status})`);
 				}
@@ -121,6 +128,17 @@ function useTypedPreviewSource(url: string, mimeType: string): PreviewSource {
 				setSource({ src: objectUrl, state: "blob" });
 			} catch (error) {
 				if (cancelled) return;
+				if (mimeType === "application/pdf") {
+					let source = "invalid URL";
+					try {
+						const parsed = new URL(url, window.location.href);
+						source = `${parsed.protocol} ${parsed.origin}`;
+					} catch {}
+					// Signed query strings can grant access to the attachment.
+					console.warn("Failed to load PDF preview:", source, error);
+					setSource({ src: "", state: "error" });
+					return;
+				}
 				console.warn("File preview fell back to the direct URL:", error);
 				setSource({ src: url, state: "direct" });
 			}
@@ -130,6 +148,7 @@ function useTypedPreviewSource(url: string, mimeType: string): PreviewSource {
 
 		return () => {
 			cancelled = true;
+			controller.abort();
 			if (objectUrl) URL.revokeObjectURL(objectUrl);
 		};
 	}, [url, mimeType]);
@@ -173,8 +192,60 @@ export function PdfFrame({
 	className?: string;
 	loading?: "lazy" | "eager";
 }>) {
+	const [attempt, setAttempt] = useState(0);
+
+	return (
+		<NativePdfFrame
+			key={`${url}\n${attempt}`}
+			url={url}
+			page={page}
+			filename={filename}
+			className={className}
+			loading={loading}
+			onRetry={() => setAttempt((value) => value + 1)}
+		/>
+	);
+}
+
+function NativePdfFrame({
+	url,
+	page,
+	filename,
+	className,
+	loading,
+	onRetry,
+}: {
+	url: string;
+	page?: number;
+	filename?: string;
+	className?: string;
+	loading?: "lazy" | "eager";
+	onRetry: () => void;
+}) {
 	const { t } = useTranslation("common");
 	const { src, state } = usePdfSource(url);
+
+	if (state === "error") {
+		return (
+			<div className="flex h-full w-full flex-col items-center justify-center gap-3 p-4 text-sm">
+				<p role="alert">
+					{t("failedToLoadPdfPreview", "Could not load the PDF preview.")}
+				</p>
+				<button type="button" className="underline" onClick={onRetry}>
+					{t("retry", "Retry")}
+				</button>
+				<a
+					href={url}
+					download={filename || "document.pdf"}
+					target="_blank"
+					rel="noopener noreferrer"
+					className="underline"
+				>
+					{t("downloadThePdf", "Download the PDF")}
+				</a>
+			</div>
+		);
+	}
 
 	if (state === "loading") {
 		return (

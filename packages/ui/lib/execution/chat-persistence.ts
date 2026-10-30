@@ -11,6 +11,11 @@ import {
 	type IChatTurn,
 	createChatTurn,
 } from "../../components/interfaces/chat-default/chat-turn-state";
+import {
+	isReactionOnlyResponse,
+	persistWorkflowReactions,
+	preserveWorkflowReactionState,
+} from "../../components/interfaces/chat-default/workflow-reactions";
 import type { ExecutionTask } from "./types";
 
 export interface ExecutionChatSeed {
@@ -75,6 +80,11 @@ export async function persistExecutionChat(
 			const session = await chatDb.sessions.get(sessionId);
 			if (!session || session.appId !== task.appId) return;
 			for (const message of messages) {
+				if (final && isReactionOnlyResponse(message, task.events)) {
+					await chatDb.messages.delete(message.id);
+					await chatDb.drafts.delete(message.id);
+					continue;
+				}
 				const existing = await chatDb.messages.get(message.id);
 				const draft = await chatDb.drafts.get(message.id);
 				message.rev =
@@ -86,6 +96,11 @@ export async function persistExecutionChat(
 					message.rating = saved.rating;
 					message.ratingSettings = saved.ratingSettings;
 				}
+				preserveWorkflowReactionState(
+					message,
+					existing && decodeMessageRow(existing),
+					draft && decodeMessageRow(draft),
+				);
 				const row = encodeMessageRow(message);
 				await chatDb.messages.put({
 					...row,
@@ -93,6 +108,11 @@ export async function persistExecutionChat(
 				});
 				if (!final) await chatDb.drafts.put(row);
 			}
+			await persistWorkflowReactions(task.events, {
+				appId: task.appId,
+				sessionId,
+				triggerMessageId: seed.responseMessage.trigger_message_id,
+			});
 			if (live.tmpLocalState) await chatDb.localStage.put(live.tmpLocalState);
 			if (live.tmpGlobalState)
 				await chatDb.globalState.put(live.tmpGlobalState);

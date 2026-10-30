@@ -1,16 +1,23 @@
 // @vitest-environment happy-dom
 
-import { type ReactNode, act, forwardRef, useImperativeHandle } from "react";
+import {
+	type ReactNode,
+	act,
+	createRef,
+	forwardRef,
+	useImperativeHandle,
+} from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { IRole } from "../../../lib/schema/llm/history";
-import { Chat, type IChatProps } from "./chat";
+import { Chat, type IChatProps, type IChatRef } from "./chat";
 import type { IMessage } from "./chat-db";
 import type { ISendMessageFunction } from "./chatbox";
 
 const state = vi.hoisted(() => ({
 	send: undefined as unknown as ISendMessageFunction,
 	focus: vi.fn(),
+	defaultTools: [] as string[],
 }));
 
 vi.mock("@flow-like/locales", () => ({
@@ -47,8 +54,15 @@ vi.mock("./voice-config", () => ({
 }));
 vi.mock("./chatbox", () => ({
 	ChatBox: forwardRef(
-		({ onSendMessage }: { onSendMessage: ISendMessageFunction }, ref) => {
+		(
+			{
+				onSendMessage,
+				defaultActiveTools,
+			}: { onSendMessage: ISendMessageFunction; defaultActiveTools: string[] },
+			ref,
+		) => {
 			state.send = onSendMessage;
+			state.defaultTools = defaultActiveTools;
 			useImperativeHandle(ref, () => ({ focusInput: state.focus }));
 			return <div data-test-composer />;
 		},
@@ -60,6 +74,7 @@ vi.mock("./message", () => ({
 		onReply,
 		onReaction,
 		interactionDisabled,
+		pending,
 	}: {
 		message: IMessage;
 		onReply?: (message: IMessage) => void;
@@ -69,8 +84,9 @@ vi.mock("./message", () => ({
 			operation: "add" | "remove",
 		) => Promise<void>;
 		interactionDisabled?: boolean;
+		pending?: { phase: string };
 	}) => (
-		<div>
+		<div data-message-id={message.id} data-pending={pending?.phase}>
 			<button
 				type="button"
 				disabled={interactionDisabled}
@@ -93,6 +109,7 @@ vi.mock("./message", () => ({
 
 let root: Root;
 let container: HTMLDivElement;
+let chatRef = createRef<IChatRef>();
 const answer: IMessage = {
 	id: "older-answer",
 	appId: "app",
@@ -110,6 +127,7 @@ const render = async (props: Partial<IChatProps> = {}) => {
 	await act(async () =>
 		root.render(
 			<Chat
+				ref={chatRef}
 				messages={[answer]}
 				sessionId="session"
 				onSendMessage={send}
@@ -133,6 +151,7 @@ beforeEach(() => {
 	send.mockReset().mockResolvedValue(undefined);
 	reaction.mockClear();
 	state.focus.mockClear();
+	chatRef = createRef<IChatRef>();
 	container = document.createElement("div");
 	document.body.append(container);
 	root = createRoot(container);
@@ -143,6 +162,123 @@ afterEach(async () => {
 });
 
 describe("quoted chat replies", () => {
+	test("hides saved reaction turns while keeping emoji messages and reaction replies visible", async () => {
+		const question: IMessage = {
+			...answer,
+			id: "question",
+			timestamp: 0,
+			inner: { role: IRole.User, content: "Which database?" },
+			tools: ["search"],
+		};
+		const reactionTurn: IMessage = {
+			...question,
+			id: "reaction-turn",
+			timestamp: 2,
+			inner: { role: IRole.User, content: "❤️" },
+			tools: [],
+			interaction: {
+				type: "reaction",
+				target: {
+					messageId: answer.id,
+					role: IRole.Assistant,
+					text: String(answer.inner.content),
+				},
+				emoji: "❤️",
+				operation: "add",
+			},
+		};
+		await render({
+			messages: [question, answer, reactionTurn],
+			config: { tools: ["search"] },
+		});
+		expect(
+			container.querySelector('[data-message-id="reaction-turn"]'),
+		).toBeNull();
+		expect(state.defaultTools).toEqual(["search"]);
+		await act(async () => {
+			chatRef.current?.pushMessage({ ...reactionTurn, id: "local-reaction" });
+			chatRef.current?.pushCurrentMessageUpdate({
+				...answer,
+				id: "response",
+				timestamp: 3,
+				inner: { role: IRole.Assistant, content: "" },
+			});
+			await new Promise(requestAnimationFrame);
+		});
+		expect(
+			container.querySelector('[data-message-id="local-reaction"]'),
+		).toBeNull();
+		expect(container.querySelector('[data-message-id="response"]')).toBeNull();
+		expect(container.querySelector("[data-pending]")).toBeNull();
+		await act(async () => {
+			chatRef.current?.pushCurrentMessageUpdate({
+				...answer,
+				id: "response",
+				timestamp: 3,
+			});
+			await new Promise(requestAnimationFrame);
+		});
+		expect(
+			container.querySelector('[data-message-id="response"]'),
+		).not.toBeNull();
+		await render({
+			messages: [
+				question,
+				answer,
+				reactionTurn,
+				{
+					...reactionTurn,
+					id: "typed-emoji",
+					timestamp: 4,
+					interaction: undefined,
+				},
+			],
+		});
+		expect(
+			container.querySelector('[data-message-id="typed-emoji"]'),
+		).not.toBeNull();
+		expect(
+			container.querySelector('[data-message-id="reaction-turn"]'),
+		).toBeNull();
+	});
+
+	test("does not flash an optimistic message for an imperative reaction send", async () => {
+		await render();
+		let finish = () => {};
+		send.mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					finish = resolve;
+				}),
+		);
+		let sending: Promise<void> | undefined;
+		const interaction = {
+			type: "reaction" as const,
+			target: {
+				messageId: answer.id,
+				role: IRole.Assistant,
+				text: String(answer.inner.content),
+			},
+			emoji: "❤️",
+			operation: "add" as const,
+		};
+		await act(async () => {
+			sending = chatRef.current?.sendMessage(
+				"❤️",
+				undefined,
+				undefined,
+				undefined,
+				interaction,
+			);
+		});
+		expect(send.mock.calls[0]?.[4]).toEqual(interaction);
+		expect(container.querySelector('[data-fl-chat-message="user"]')).toBeNull();
+		await act(async () => {
+			finish();
+			await sending;
+		});
+	});
+
 	test("selects an older message without running and sends its snapshot with the reply", async () => {
 		await render();
 		await click("Reply older-answer");
