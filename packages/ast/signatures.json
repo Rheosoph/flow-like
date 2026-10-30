@@ -102065,7 +102065,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Is this node in the node scope?"
+          "doc": "Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory."
         },
         {
           "name": "user_scope",
@@ -102107,7 +102107,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Is this node in the node scope?"
+          "doc": "Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory."
         }
       ],
       "outputs": [
@@ -102163,7 +102163,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Is this node in the node scope?"
+          "doc": "Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory."
         }
       ],
       "outputs": [

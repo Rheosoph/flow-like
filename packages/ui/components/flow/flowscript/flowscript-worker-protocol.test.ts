@@ -153,6 +153,60 @@ describe("FlowScript worker protocol", () => {
 		).toBe(true);
 	});
 
+	test("reports repeated node-scoped directory calls as editor warnings", () => {
+		const state = createFlowScriptWorkerState();
+		handleFlowScriptWorkerMessage(state, {
+			kind: "init-catalog",
+			catalogId: 1,
+			nodes: [
+				{
+					id: "path_from_cache_dir",
+					name: "path_from_cache_dir",
+					friendly_name: "Cache Dir",
+					description: "",
+					category: "Data/Files/Directories",
+					pins: {
+						scope: pin("node_scope", IPinType.Input, IVariableType.Boolean, 0),
+						path: pin("path", IPinType.Output, IVariableType.Struct, 1),
+					},
+				},
+			],
+			names: {
+				path_from_cache_dir: {
+					qualified: "files::cacheDir",
+					namespace: "files",
+					alias: "cacheDir",
+					flat: "pathFromCacheDir",
+					receiver: null,
+					class: null,
+					category: "Data/Files/Directories",
+				},
+			},
+		});
+		const result = okResult(
+			handleFlowScriptWorkerMessage(state, {
+				kind: "diagnostics",
+				id: 1,
+				catalogId: 1,
+				doc: {
+					uri: "directories.flow",
+					version: 1,
+					text: `function processFile() {
+	const output = files::cacheDir({ nodeScope: true })
+	const input = files::cacheDir({ nodeScope: true })
+}`,
+				},
+			}),
+		);
+		if (result.kind !== "diagnostics") throw new Error("wrong result kind");
+		expect(result.markers).toHaveLength(1);
+		expect(result.markers[0]).toMatchObject({
+			severity: "warning",
+			startLineNumber: 3,
+		});
+		expect(result.markers[0].message).toContain("unique to its node");
+	});
+
 	test("semantic tokens over the worker match the in-thread encoding", () => {
 		const state = initState();
 		const result = okResult(

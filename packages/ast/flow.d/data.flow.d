@@ -2206,7 +2206,7 @@ declare namespace files {
     /**
      * Converts the cache directory to a Path
      * @node path_from_cache_dir @alias pathFromCacheDir
-     * @param nodeScope (optional) — Is this node in the node scope?
+     * @param nodeScope (optional) — Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory.
      * @param userScope (optional) — Store in user context?
      * @returns path — Output Path
      */
@@ -2215,7 +2215,7 @@ declare namespace files {
     /**
      * Converts the storage directory to a Path
      * @node path_from_storage_dir @alias pathFromStorageDir
-     * @param nodeScope (optional) — Is this node in the node scope?
+     * @param nodeScope (optional) — Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory.
      * @returns path — Output Path
      */
     function storageDir({ nodeScope?: bool }): Struct;
@@ -2230,7 +2230,7 @@ declare namespace files {
     /**
      * Converts the user directory to a Path
      * @node path_from_user_dir @alias pathFromUserDir
-     * @param nodeScope (optional) — Is this node in the node scope?
+     * @param nodeScope (optional) — Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory.
      * @returns path — Output Path
      */
     function userDir({ nodeScope?: bool }): Struct;

@@ -7,16 +7,26 @@ import {
 	CheckCircle2Icon,
 	HelpCircleIcon,
 	Loader2Icon,
+	RefreshCwIcon,
 	SaveIcon,
 	SendIcon,
 	ShieldCheckIcon,
 	SparklesIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import {
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useRef,
+	useState,
+} from "react";
 import { toast } from "sonner";
 import { useAppPermissions } from "../../../hooks/use-app-permissions";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { apiErrorMessage } from "../../../lib/api-error";
+import { requestGovernanceAssist } from "../../../lib/governance-assist";
 import { RolePermissions } from "../../../lib/permission/role-permission";
 import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
@@ -201,7 +211,11 @@ export interface AppAiActWizardProps {
 	className?: string;
 }
 
-export function AppAiActWizard({
+export function AppAiActWizard(props: Readonly<AppAiActWizardProps>) {
+	return <AppAiActWizardContent key={props.appId} {...props} />;
+}
+
+function AppAiActWizardContent({
 	appId,
 	onSubmitted,
 	className,
@@ -219,6 +233,7 @@ export function AppAiActWizard({
 	);
 
 	const [answers, setAnswers] = useState<Answers>({});
+	const [previewAnswers, setPreviewAnswers] = useState<Answers | null>(null);
 	const [livePreview, setLivePreview] = useState<Classification | null>(null);
 	const [liveRecommendations, setLiveRecommendations] = useState<
 		Recommendation[] | null
@@ -227,6 +242,13 @@ export function AppAiActWizard({
 		{},
 	);
 	const initialised = useRef(false);
+	const questionRefs = useRef(new Map<string, HTMLDivElement>());
+	const guidanceRef = useRef<HTMLDivElement>(null);
+	const [selectedRecommendation, setSelectedRecommendation] =
+		useState<Recommendation | null>(null);
+	const [previewRefresh, setPreviewRefresh] = useState(0);
+	const [previewPending, setPreviewPending] = useState(false);
+	const [previewError, setPreviewError] = useState(false);
 
 	const questionnaire = useQuery<QuestionnaireResponse>({
 		queryKey: ["ai-act", "questionnaire", appId],
@@ -244,16 +266,22 @@ export function AppAiActWizard({
 	useEffect(() => {
 		if (questionnaire.data && !initialised.current) {
 			initialised.current = true;
-			setAnswers((questionnaire.data.answers as Answers) ?? {});
+			const loadedAnswers = questionnaire.data.answers ?? {};
+			setAnswers(loadedAnswers);
+			setPreviewAnswers(loadedAnswers);
 			setLivePreview(questionnaire.data.classification);
 			setLiveRecommendations(questionnaire.data.recommendations ?? []);
 		}
 	}, [questionnaire.data]);
 
 	// Debounced live classification preview (authoritative, server-side).
+	// biome-ignore lint/correctness/useExhaustiveDependencies: A manual refresh reruns classification with unchanged answers.
 	useEffect(() => {
 		if (!profile.data || !initialised.current || !canAssess) return;
 		const hubProfile = profile.data.hub_profile;
+		let active = true;
+		setPreviewPending(true);
+		setPreviewError(false);
 		const handle = setTimeout(async () => {
 			try {
 				const res = await backend.apiState.post<{
@@ -262,27 +290,72 @@ export function AppAiActWizard({
 				}>(hubProfile, `apps/${appId}/ai-act/classify`, {
 					answers,
 				});
+				if (!active) return;
 				setLivePreview(res.classification);
+				setPreviewAnswers(answers);
 				setLiveRecommendations(res.recommendations ?? []);
 			} catch {
-				// Preview failures are non-fatal; the authoritative result is
-				// recomputed on submit.
+				if (active) setPreviewError(true);
+			} finally {
+				if (active) setPreviewPending(false);
 			}
 		}, 400);
-		return () => clearTimeout(handle);
-	}, [answers, appId, backend.apiState, profile.data, canAssess]);
+		return () => {
+			active = false;
+			clearTimeout(handle);
+		};
+	}, [
+		answers,
+		appId,
+		backend.apiState,
+		profile.data,
+		canAssess,
+		previewRefresh,
+	]);
+
+	useEffect(() => {
+		if (!selectedRecommendation) return;
+		guidanceRef.current?.scrollIntoView({
+			behavior: "smooth",
+			block: "center",
+		});
+		guidanceRef.current?.focus({ preventScroll: true });
+	}, [selectedRecommendation]);
+
+	const resolveRecommendation = useCallback(
+		(recommendation: Recommendation) => {
+			const question = recommendation.answerKey
+				? questionRefs.current.get(recommendation.answerKey)
+				: undefined;
+			if (question) {
+				setSelectedRecommendation(null);
+				question.scrollIntoView({ behavior: "smooth", block: "center" });
+				const field = question.querySelector<HTMLElement>(
+					'input, textarea, button, [tabindex="0"]',
+				);
+				(field ?? question).focus({ preventScroll: true });
+				return;
+			}
+			setSelectedRecommendation(recommendation);
+		},
+		[],
+	);
 
 	const suggestMutation = useMutation({
 		mutationFn: async () => {
 			if (!profile.data) throw new Error("Profile not loaded");
-			return backend.apiState.post<SuggestResponse>(
+			return requestGovernanceAssist<SuggestResponse>(
+				backend.apiState,
 				profile.data.hub_profile,
 				`apps/${appId}/ai-act/assessment/suggest`,
 				{ profile: profile.data.hub_profile },
 			);
 		},
 		onSuccess: (res) => {
-			const suggested = res.suggestion?.suggestedAnswers ?? [];
+			// The owner must confirm implemented duties; code inspection cannot attest to them.
+			const suggested = (res.suggestion?.suggestedAnswers ?? []).filter(
+				(answer) => answer.key !== "ack_transparency",
+			);
 			const model = res.model;
 			const purpose = res.suggestion?.purpose?.trim();
 			const hasPurposeAnswer = suggested.some((s) => s.key === PURPOSE_KEY);
@@ -354,6 +427,7 @@ export function AppAiActWizard({
 			);
 		},
 		onSuccess: async (_data, submit) => {
+			setPreviewRefresh((value) => value + 1);
 			await queryClient.invalidateQueries({
 				queryKey: ["ai-act", "questionnaire", appId],
 			});
@@ -478,7 +552,12 @@ export function AppAiActWizard({
 	const riskMeta = preview ? RISK_META[preview.riskCategory] : null;
 	const obligations = asArray(preview?.transparencyObligations);
 	const canSubmit =
-		!!preview && !preview.blocked && missingRequired.length === 0;
+		!!preview &&
+		!preview.blocked &&
+		!previewPending &&
+		!previewError &&
+		previewAnswers === answers &&
+		missingRequired.length === 0;
 
 	return (
 		<div className={className}>
@@ -529,7 +608,28 @@ export function AppAiActWizard({
 									)}
 								</span>
 							)}
+							<Button
+								variant="outline"
+								size="sm"
+								onClick={() => setPreviewRefresh((value) => value + 1)}
+								disabled={previewPending}
+							>
+								<RefreshCwIcon
+									className={`h-3.5 w-3.5 ${previewPending ? "animate-spin" : ""}`}
+								/>
+								{previewPending
+									? t("updatingScore", "Updating score…")
+									: t("refreshScore", "Refresh score")}
+							</Button>
 						</div>
+						{previewError && (
+							<p role="alert" className="mt-2 text-sm text-destructive">
+								{t(
+									"couldNotUpdateConformityScore",
+									"Could not update the score. Your answers are still here. Refresh the score to try again.",
+								)}
+							</p>
+						)}
 						<p className="text-sm text-muted-foreground mt-2">
 							{riskMeta.description}
 						</p>
@@ -600,7 +700,15 @@ export function AppAiActWizard({
 						</CardHeader>
 						<CardContent className="space-y-5">
 							{asArray(screen.questions).map((q, idx) => (
-								<div key={q.key}>
+								<div
+									key={q.key}
+									ref={(element) => {
+										if (element) questionRefs.current.set(q.key, element);
+										else questionRefs.current.delete(q.key);
+									}}
+									data-ai-act-question={q.key}
+									tabIndex={-1}
+								>
 									{idx > 0 && <Separator className="mb-5" />}
 									<QuestionField
 										question={q}
@@ -643,7 +751,45 @@ export function AppAiActWizard({
 					className="mt-4"
 					recommendations={recommendations}
 					score={preview?.conformityScore ?? null}
+					onResolve={resolveRecommendation}
 				/>
+			)}
+			{selectedRecommendation && (
+				<div ref={guidanceRef} tabIndex={-1} className="mt-4">
+					<Card>
+						<CardHeader>
+							<CardTitle className="text-sm">
+								{selectedRecommendation.title}
+							</CardTitle>
+						</CardHeader>
+						<CardContent className="space-y-3 text-sm">
+							<p className="text-muted-foreground">
+								{selectedRecommendation.category === "Posture"
+									? t(
+											"resolveModelPostureAsOwner",
+											"Choose fixed models in your app's flows wherever a dynamic selector is used. Ask a platform administrator to review each model's provider and posture in the EU AI Act model registry. Refresh the score and save the assessment after those changes.",
+										)
+									: selectedRecommendation.category === "Board"
+										? t(
+												"resolveBoardScoresAsOwner",
+												"Open your app's flows and review their security and governance findings. Save the corrected boards, then refresh the score.",
+											)
+										: selectedRecommendation.detail}
+							</p>
+							{["Posture", "Board"].includes(
+								selectedRecommendation.category,
+							) && (
+								<Button asChild variant="outline" size="sm">
+									<Link
+										href={`/library/config/flows?id=${encodeURIComponent(appId)}`}
+									>
+										{t("openAppFlows", "Open app flows")}
+									</Link>
+								</Button>
+							)}
+						</CardContent>
+					</Card>
+				</div>
 			)}
 
 			{/* Footer actions */}
@@ -756,9 +902,11 @@ function QuestionField({
 	reasoning,
 }: Readonly<QuestionFieldProps>) {
 	const { t } = useTranslation("settings");
+	const labelId = useId();
+	const fieldId = useId();
 	const label = (
 		<div className="mb-2">
-			<Label className="text-sm font-medium">
+			<Label id={labelId} htmlFor={fieldId} className="text-sm font-medium">
 				{question.label}
 				{question.required && <span className="text-destructive"> *</span>}
 			</Label>
@@ -770,7 +918,14 @@ function QuestionField({
 	);
 
 	if (question.kind === "yesno") {
-		const current = typeof value === "string" ? value : "";
+		const current =
+			typeof value === "boolean"
+				? value
+					? "yes"
+					: "no"
+				: typeof value === "string"
+					? value
+					: "";
 		const options = question.options?.length
 			? question.options
 			: [
@@ -781,6 +936,7 @@ function QuestionField({
 			<div>
 				{label}
 				<RadioGroup
+					aria-labelledby={labelId}
 					value={current}
 					onValueChange={onChange}
 					className="flex flex-col gap-2"
@@ -810,6 +966,7 @@ function QuestionField({
 			<div>
 				{label}
 				<RadioGroup
+					aria-labelledby={labelId}
 					value={current}
 					onValueChange={onChange}
 					className="flex flex-col gap-2"
@@ -883,6 +1040,7 @@ function QuestionField({
 		<div>
 			{label}
 			<Textarea
+				id={fieldId}
 				value={current}
 				onChange={(e) => onChange(e.target.value)}
 				rows={3}

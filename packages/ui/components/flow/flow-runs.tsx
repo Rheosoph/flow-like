@@ -17,9 +17,10 @@ import {
 	ScrollIcon,
 	TriangleAlertIcon,
 } from "lucide-react";
-import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
+import { useInvoke } from "../../hooks/use-invoke";
 import {
 	type ILog,
 	ILogLevel,
@@ -82,6 +83,11 @@ function toMicros(time: ILog["start"]) {
 		time.secs_since_epoch * 1_000_000 +
 		Math.floor(time.nanos_since_epoch / 1_000)
 	);
+}
+
+function hasLegacyEventId(run: ILogMetadata) {
+	// Older sink runs stored the Event ID in the start-node column.
+	return Boolean(run.event_id && run.node_id === run.event_id);
 }
 
 function hydrateMetadataFromLogs(
@@ -165,6 +171,29 @@ const FlowRunsComponent = ({
 	const [selectedRunId, setSelectedRunId] = useState<string>();
 	const listRef = useRef<HTMLDivElement>(null);
 	const loadMoreRef = useRef<HTMLDivElement>(null);
+	const needsEventNames = currentLogs.some(
+		(run) => !nodes[run.node_id] && hasLegacyEventId(run),
+	);
+	const events = useInvoke(
+		backend.eventState.getEvents,
+		backend.eventState,
+		[appId, true],
+		needsEventNames,
+	);
+	const eventNames = useMemo(
+		() => new Map(events.data?.map((event) => [event.id, event.name])),
+		[events.data],
+	);
+	const runName = (run: ILogMetadata) => {
+		const nodeName = nodes[run.node_id]?.friendly_name;
+		if (nodeName !== undefined) return nodeName;
+		if (hasLegacyEventId(run)) {
+			const eventName = eventNames.get(run.event_id);
+			if (eventName !== undefined) return eventName;
+			if (!events.isSuccess) return t("event", "Event");
+		}
+		return t("deletedEvent", "Deleted Event");
+	};
 
 	useEffect(() => {
 		const root = listRef.current;
@@ -607,10 +636,7 @@ const FlowRunsComponent = ({
 											<HardDriveIcon className="w-3 h-3 text-muted-foreground" />
 										</span>
 									)}
-									<small className="leading-none">
-										{nodes[run.node_id]?.friendly_name ??
-											t("deletedEvent", "Deleted Event")}
-									</small>
+									<small className="leading-none">{runName(run)}</small>
 									<small className="text-muted-foreground">
 										{isCurrentBoardVersion(run.version, version)
 											? "Latest"

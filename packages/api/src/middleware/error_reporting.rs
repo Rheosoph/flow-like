@@ -1,7 +1,82 @@
-use axum::{extract::Request, extract::State as AxumState, middleware::Next, response::Response};
+use std::convert::Infallible;
+
+use axum::{
+    extract::{FromRequestParts, OriginalUri, Request, State as AxumState},
+    http::{Extensions, request::Parts},
+    middleware::Next,
+    response::{IntoResponse, Response},
+};
 use sea_orm::{ActiveModelTrait, Set};
 
-use crate::{entity::error_report, middleware::jwt::AppUser, state::AppState};
+use crate::{
+    entity::error_report,
+    error::{ApiError, ErrorReport},
+    middleware::jwt::AppUser,
+    state::AppState,
+    telemetry::request_metrics::ResponseFault,
+};
+
+/// Records errors that occur after a streamed response has sent its headers.
+pub struct StreamErrorReporter {
+    state: AppState,
+    method: String,
+    path: String,
+    user_id: Option<String>,
+    fault: Option<ResponseFault>,
+}
+
+impl FromRequestParts<AppState> for StreamErrorReporter {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Infallible> {
+        Ok(Self {
+            state: state.clone(),
+            method: parts.method.to_string(),
+            path: parts
+                .extensions
+                .get::<OriginalUri>()
+                .map(|uri| uri.0.path())
+                .unwrap_or_else(|| parts.uri.path())
+                .to_string(),
+            user_id: caller_id(&parts.extensions),
+            fault: parts.extensions.get::<ResponseFault>().cloned(),
+        })
+    }
+}
+
+impl StreamErrorReporter {
+    pub async fn report(&self, error: &ApiError) {
+        if let Some(fault) = &self.fault {
+            fault.mark();
+        }
+        let Some(report) = error
+            .clone()
+            .into_response()
+            .extensions_mut()
+            .remove::<ErrorReport>()
+        else {
+            return;
+        };
+        persist_error_report(
+            &self.state,
+            &self.method,
+            &self.path,
+            self.user_id.as_deref(),
+            report,
+        )
+        .await;
+    }
+}
+
+fn caller_id(extensions: &Extensions) -> Option<String> {
+    extensions.get::<AppUser>().and_then(|user| match user {
+        AppUser::OpenID(user) => Some(user.sub.clone()),
+        AppUser::PAT(user) => Some(user.sub.clone()),
+        AppUser::Executor(user) => Some(user.sub.clone()),
+        AppUser::ConnectedApp(user) => user.sub.clone(),
+        AppUser::APIKey(_) | AppUser::Unauthorized => None,
+    })
+}
 
 fn redact_connection_url(input: &str) -> String {
     // Redact userinfo in URLs like scheme://user:pass@host/...
@@ -100,27 +175,28 @@ pub async fn error_reporting_middleware(
     let path = req.uri().path().to_string();
 
     // If JWT middleware ran before us, AppUser will be available as an extension.
-    let user_id = req.extensions().get::<AppUser>().and_then(|u| match u {
-        AppUser::OpenID(u) => Some(u.sub.clone()),
-        AppUser::PAT(u) => Some(u.sub.clone()),
-        AppUser::Executor(u) => Some(u.sub.clone()),
-        AppUser::ConnectedApp(u) => u.sub.clone(),
-        AppUser::APIKey(_) => None,
-        AppUser::Unauthorized => None,
-    });
+    let user_id = caller_id(req.extensions());
 
     let mut response = next.run(req).await;
 
-    let Some(report) = response
-        .extensions_mut()
-        .remove::<crate::error::ErrorReport>()
-    else {
+    let Some(report) = response.extensions_mut().remove::<ErrorReport>() else {
         return response;
     };
 
+    persist_error_report(&state, &method, &path, user_id.as_deref(), report).await;
+    response
+}
+
+pub(crate) async fn persist_error_report(
+    state: &AppState,
+    method: &str,
+    path: &str,
+    user_id: Option<&str>,
+    report: ErrorReport,
+) {
     let sink = sink_from_env();
     if sink == "none" {
-        return response;
+        return;
     }
 
     let summary = sanitize_text(report.summary);
@@ -136,13 +212,13 @@ pub async fn error_reporting_middleware(
             public_code = %report.public_code,
             method = %method,
             path = %path,
-            user_id = user_id.as_deref().unwrap_or(""),
+            user_id = user_id.unwrap_or(""),
             "{}", summary
         );
         if !details.is_empty() {
             tracing::error!(error_id = %report.id, "details: {}", details);
         }
-        return response;
+        return;
     }
 
     // Default: DB sink (best-effort)
@@ -156,9 +232,9 @@ pub async fn error_reporting_middleware(
 
     let model = error_report::ActiveModel {
         id: Set(report.id),
-        user_id: Set(user_id),
-        method: Set(method),
-        path: Set(path),
+        user_id: Set(user_id.map(str::to_owned)),
+        method: Set(method.to_owned()),
+        path: Set(path.to_owned()),
         status_code: Set(report.status_code as i32),
         public_code: Set(report.public_code),
         summary: Set(summary),
@@ -170,8 +246,6 @@ pub async fn error_reporting_middleware(
     if let Err(e) = model.insert(&state.db).await {
         tracing::error!("Failed to persist error report: {}", e);
     }
-
-    response
 }
 
 #[cfg(test)]

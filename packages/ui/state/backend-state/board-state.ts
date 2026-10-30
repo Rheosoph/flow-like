@@ -56,6 +56,8 @@ export interface IApplyFlowScriptResponse {
 	board_commands: BoardCommand[];
 	/** Non-blocking source repairs; reload canonical FlowScript when present. */
 	corrections?: string[];
+	/** Non-blocking lint findings for the submitted source. */
+	warnings?: string[];
 	diagnostics: string[];
 	/** Positioned diagnostics for the exact submitted source, when supported by the host. */
 	structured_diagnostics?: IFlowScriptStructuredDiagnostic[];
@@ -145,6 +147,8 @@ export interface ICheckFlowScriptReconcileResponse {
 	/** The reconciled command plan (apply-preview UI); empty when parse/compile failed. */
 	board_commands?: BoardCommand[];
 	corrections: string[];
+	/** Non-blocking lint findings; they do not affect reconcile_valid. */
+	warnings?: string[];
 	diagnostics: string[];
 	/** Positioned diagnostics for the exact submitted source, when supported by the host. */
 	structured_diagnostics?: IFlowScriptStructuredDiagnostic[];

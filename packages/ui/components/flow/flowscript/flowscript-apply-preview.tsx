@@ -252,6 +252,7 @@ export interface FlowScriptApplyPreviewState {
 	/** Undefined until a reconcile check for the current text finished. */
 	counts?: ApplyPreviewCounts;
 	errorCount: number;
+	warningCount?: number;
 	destructiveCount: number;
 	checking: boolean;
 	/**
@@ -273,6 +274,7 @@ export function FlowScriptApplyPreviewChip({
 	const { t } = useTranslation("flow");
 	const { counts, errorCount, destructiveCount, checking } = state;
 	const remoteOverlapCount = state.remoteOverlapCount ?? 0;
+	const warningCount = state.warningCount ?? 0;
 
 	const segments = useMemo(() => {
 		if (!counts) return [];
@@ -344,10 +346,20 @@ export function FlowScriptApplyPreviewChip({
 		return parts;
 	}, [counts, t]);
 
-	if (!counts && !checking && errorCount === 0) return null;
+	if (!counts && !checking && errorCount === 0 && warningCount === 0)
+		return null;
 
 	const hasErrors = errorCount > 0;
-	const noChanges = !hasErrors && (counts?.total ?? 0) === 0;
+	const noChanges =
+		!hasErrors && warningCount === 0 && (counts?.total ?? 0) === 0;
+	const warningSegment =
+		warningCount > 0
+			? t("countWarnings", {
+					defaultValue_one: "{{count}} warning",
+					defaultValue_other: "{{count}} warnings",
+					count: warningCount,
+				})
+			: undefined;
 	const remoteOverlapSegment =
 		remoteOverlapCount > 0
 			? `⚠ ${t("flowscriptPreviewRemoteOverlap", {
@@ -364,7 +376,7 @@ export function FlowScriptApplyPreviewChip({
 			className={`flex h-6 max-w-full items-center gap-1 truncate rounded-full border px-2 text-[10px] font-medium transition-colors ${
 				hasErrors
 					? "border-destructive/40 text-destructive"
-					: destructiveCount > 0 || remoteOverlapCount > 0
+					: destructiveCount > 0 || remoteOverlapCount > 0 || warningCount > 0
 						? "border-yellow-500/50 text-yellow-600 dark:text-yellow-400"
 						: "border-border text-muted-foreground hover:text-foreground"
 			}`}
@@ -379,7 +391,7 @@ export function FlowScriptApplyPreviewChip({
 		>
 			{checking ? (
 				<Loader2Icon className="h-3 w-3 shrink-0 animate-spin" />
-			) : hasErrors ? (
+			) : hasErrors || warningCount > 0 ? (
 				<AlertTriangleIcon className="h-3 w-3 shrink-0" />
 			) : (
 				<CheckCircle2Icon className="h-3 w-3 shrink-0" />
@@ -395,6 +407,7 @@ export function FlowScriptApplyPreviewChip({
 						? t("flowscriptPreviewNoChanges", "No changes")
 						: [
 								...segments,
+								...(warningSegment ? [warningSegment] : []),
 								...(remoteOverlapSegment ? [remoteOverlapSegment] : []),
 							].join(" · ")}
 			</span>
@@ -410,6 +423,7 @@ export function FlowScriptApplyPreviewChip({
 export function FlowScriptApplyPreviewList({
 	commands,
 	diagnostics,
+	warnings = [],
 	diagnosticEntries,
 	source,
 	onRevealDiagnostic,
@@ -417,6 +431,7 @@ export function FlowScriptApplyPreviewList({
 }: Readonly<{
 	commands: readonly BoardCommand[];
 	diagnostics: readonly string[];
+	warnings?: readonly string[];
 	diagnosticEntries?: readonly FlowScriptDiagnosticEntry[];
 	source?: string;
 	onRevealDiagnostic?: (span: IFlowScriptSourceSpan) => void;
@@ -436,6 +451,13 @@ export function FlowScriptApplyPreviewList({
 						}
 						source={source}
 						onReveal={onRevealDiagnostic}
+					/>
+				</div>
+			)}
+			{warnings.length > 0 && (
+				<div className="mb-2 text-yellow-600 dark:text-yellow-400">
+					<FlowScriptDiagnosticList
+						entries={flowScriptDiagnosticEntries(warnings)}
 					/>
 				</div>
 			)}

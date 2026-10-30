@@ -751,7 +751,7 @@ function computeAnalysis(
 	};
 
 	const fnRe = new RegExp(
-		`(^|[\\n;])[ \\t]*(function|event)\\s+(${IDENT})\\s*\\(`,
+		`(^|[\\n;{}])[ \\t]*(function|event)\\s+(${IDENT})\\s*\\(`,
 		"g",
 	);
 	for (let m = fnRe.exec(masked); m; m = fnRe.exec(masked)) {
@@ -797,7 +797,7 @@ function computeAnalysis(
 	}
 
 	const eventRe = new RegExp(
-		`(^|\\n)([\\t ]*)(${IDENT})(?:[\\t ]+(${IDENT}))?[\\t ]*\\(`,
+		`(^|[\\n;{}])([\\t ]*)(${IDENT})(?:[\\t ]+(${IDENT}))?[\\t ]*\\(`,
 		"g",
 	);
 	for (let m = eventRe.exec(masked); m; m = eventRe.exec(masked)) {

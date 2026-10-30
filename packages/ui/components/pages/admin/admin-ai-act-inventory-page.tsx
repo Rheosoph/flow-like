@@ -37,6 +37,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 import { useInvoke } from "../../../hooks/use-invoke";
+import { requestGovernanceAssist } from "../../../lib/governance-assist";
 import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import {
@@ -72,6 +73,8 @@ import {
 	Input,
 	Label,
 	Progress,
+	RadioGroup,
+	RadioGroupItem,
 	RelativeTime,
 	Select,
 	SelectContent,
@@ -1288,11 +1291,14 @@ function InventoryDetail({
 	const assist = useMutation({
 		mutationFn: async () => {
 			if (!profile.data) throw new Error("Profile not loaded");
-			return backend.apiState.post<{
+			return requestGovernanceAssist<{
 				suggestion?: { purpose?: string; notes?: string };
-			}>(profile.data, `admin/ai-act/assist/${encodeURIComponent(appId)}`, {
-				profile: profile.data,
-			});
+			}>(
+				backend.apiState,
+				profile.data,
+				`admin/ai-act/assist/${encodeURIComponent(appId)}`,
+				{ profile: profile.data },
+			);
 		},
 		onSuccess: (res) => {
 			toast.success(
@@ -1308,6 +1314,36 @@ function InventoryDetail({
 
 	const data = detail.data;
 	const [editOpen, setEditOpen] = useState(false);
+	const [answerKey, setAnswerKey] = useState<string | null>(null);
+	const [registryModel, setRegistryModel] = useState<{
+		provider: string;
+		modelId: string;
+	} | null>(null);
+	const modelsRef = useRef<HTMLDivElement>(null);
+	const scoresRef = useRef<HTMLDivElement>(null);
+
+	const editAssessment = (key: string | null = null) => {
+		setAnswerKey(key);
+		setEditOpen(true);
+	};
+	const resolveRecommendation = (recommendation: Recommendation) => {
+		if (recommendation.answerKey) {
+			editAssessment(recommendation.answerKey);
+			return;
+		}
+		const target =
+			recommendation.category === "Posture"
+				? modelsRef.current
+				: recommendation.category === "Board"
+					? scoresRef.current
+					: null;
+		if (target) {
+			target.scrollIntoView({ behavior: "smooth", block: "start" });
+			target.focus({ preventScroll: true });
+		} else {
+			editAssessment();
+		}
+	};
 
 	return (
 		<div className="space-y-4">
@@ -1331,7 +1367,7 @@ function InventoryDetail({
 						variant="default"
 						size="sm"
 						disabled={!data || !profile.data}
-						onClick={() => setEditOpen(true)}
+						onClick={() => editAssessment()}
 					>
 						<Pencil className="mr-2 h-4 w-4" />
 						{t("editAssessment", "Edit assessment")}
@@ -1369,19 +1405,56 @@ function InventoryDetail({
 					<ConformityRecommendations
 						recommendations={data.recommendations}
 						score={data.classification.conformityScore}
-						onEdit={() => setEditOpen(true)}
+						onEdit={() => editAssessment()}
+						onResolve={resolveRecommendation}
 					/>
-					<SecurityScores appId={appId} />
+					<div ref={scoresRef} tabIndex={-1} className="scroll-mt-4">
+						<SecurityScores appId={appId} />
+						<Button asChild variant="outline" size="sm" className="mt-2">
+							<a href={`/library/config/flows?id=${encodeURIComponent(appId)}`}>
+								Open app flows
+							</a>
+						</Button>
+					</div>
 					<TransparencyObligations classification={data.classification} />
 					<ClassificationRationale rationale={data.classification.rationale} />
 					<QuestionnaireSummary data={data} />
-					<AttachedModels
-						models={data.models}
-						onAcknowledge={(id) => acknowledge.mutate(id)}
-						onRegistryModelOpen={onRegistryModelOpen}
-						acknowledging={acknowledge.isPending}
-					/>
+					<div ref={modelsRef} tabIndex={-1} className="scroll-mt-4">
+						<AttachedModels
+							appId={appId}
+							models={data.models}
+							onAcknowledge={(id) => acknowledge.mutate(id)}
+							onRegistryModelOpen={(provider, modelId) => {
+								if (onRegistryModelOpen) onRegistryModelOpen(provider, modelId);
+								else setRegistryModel({ provider, modelId });
+							}}
+							acknowledging={acknowledge.isPending}
+						/>
+					</div>
+					<Dialog
+						open={!!registryModel}
+						onOpenChange={(open) => {
+							if (!open) setRegistryModel(null);
+						}}
+					>
+						<DialogContent className="sm:max-w-4xl">
+							<DialogHeader>
+								<DialogTitle>Review attached model</DialogTitle>
+								<DialogDescription>
+									Record the model's posture and review status. Saving updates
+									the app's model evidence.
+								</DialogDescription>
+							</DialogHeader>
+							<DialogBody>
+								<RegistryTab
+									initialProvider={registryModel?.provider}
+									initialModelId={registryModel?.modelId}
+								/>
+							</DialogBody>
+						</DialogContent>
+					</Dialog>
 					<EditAssessmentDialog
+						answerKey={answerKey}
 						open={editOpen}
 						onOpenChange={setEditOpen}
 						appId={appId}
@@ -1407,11 +1480,13 @@ interface AdminAssessmentPayload {
 }
 
 function EditAssessmentDialog({
+	answerKey,
 	open,
 	onOpenChange,
 	appId,
 	data,
 }: {
+	answerKey?: string | null;
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
 	appId: string;
@@ -1448,9 +1523,6 @@ function EditAssessmentDialog({
 		setAnswers((prev) => ({ ...prev, [key]: value }));
 	}, []);
 
-	const hasObligations =
-		(data.classification.transparencyObligations?.length ?? 0) > 0;
-
 	const save = useMutation({
 		mutationFn: async () => {
 			if (!profile.data) throw new Error("Profile not loaded");
@@ -1478,16 +1550,21 @@ function EditAssessmentDialog({
 		onError: (err: Error) => toast.error(err.message ?? "Update failed"),
 	});
 
-	const visibleScreens = data.schema.screens.filter(
-		(screen) =>
-			!screen.highRiskOnly ||
-			data.classification.riskCategory === "HIGH" ||
-			data.classification.riskCategory === "UNDETERMINED",
-	);
-
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="max-w-3xl">
+			<DialogContent
+				className="sm:max-w-3xl"
+				onOpenAutoFocus={(event) => {
+					if (!answerKey) return;
+					const target = document.getElementById(
+						`assessment-question-${answerKey}`,
+					);
+					if (!target) return;
+					event.preventDefault();
+					target.scrollIntoView({ block: "center" });
+					target.focus({ preventScroll: true });
+				}}
+			>
 				<DialogHeader>
 					<DialogTitle>
 						{t("editConformityAssessment", "Edit conformity assessment")}
@@ -1501,10 +1578,15 @@ function EditAssessmentDialog({
 				</DialogHeader>
 
 				<DialogBody className="max-h-[60vh] space-y-5 overflow-y-auto pr-1">
-					{visibleScreens.map((screen) => (
+					{data.schema.screens.map((screen) => (
 						<div key={screen.id} className="space-y-3">
 							<div>
 								<h4 className="text-sm font-semibold">{screen.title}</h4>
+								{screen.highRiskOnly && (
+									<p className="text-xs text-muted-foreground">
+										Applies to high-risk systems.
+									</p>
+								)}
 								{screen.description && (
 									<p className="text-xs text-muted-foreground">
 										{screen.description}
@@ -1514,40 +1596,20 @@ function EditAssessmentDialog({
 							{screen.questions
 								.filter((q) => q.kind !== "contact")
 								.map((question) => (
-									<QuestionField
+									<div
 										key={question.key}
-										question={question}
-										value={answers[question.key]}
-										onChange={(value) => setAnswer(question.key, value)}
-									/>
+										id={`assessment-question-${question.key}`}
+										tabIndex={-1}
+									>
+										<QuestionField
+											question={question}
+											value={answers[question.key]}
+											onChange={(value) => setAnswer(question.key, value)}
+										/>
+									</div>
 								))}
 						</div>
 					))}
-
-					{hasObligations && (
-						<div className="flex items-center justify-between gap-3 rounded-lg border p-3">
-							<div className="min-w-0">
-								<Label className="text-sm">
-									{t(
-										"transparencyObligationsImplemented",
-										"Transparency obligations implemented",
-									)}
-								</Label>
-								<p className="text-xs text-muted-foreground">
-									{t(
-										"confirmTheTriggeredArt50DutiesAreInPlaceRaisesTheTransparencyScore",
-										"Confirm the triggered Art. 50 duties are in place (raises the transparency score).",
-									)}
-								</p>
-							</div>
-							<Switch
-								checked={answers.ack_transparency === "yes"}
-								onCheckedChange={(checked) =>
-									setAnswer("ack_transparency", checked ? "yes" : "no")
-								}
-							/>
-						</div>
-					)}
 
 					<Separator />
 
@@ -1666,18 +1728,50 @@ function QuestionField({
 	onChange: (value: unknown) => void;
 }) {
 	if (question.kind === "yesno") {
+		const selected =
+			value === true
+				? "yes"
+				: value === false
+					? "no"
+					: typeof value === "string"
+						? value
+						: "";
 		return (
-			<div className="flex items-center justify-between gap-3 rounded-lg border p-3">
-				<div className="min-w-0">
-					<Label className="text-sm">{question.label}</Label>
-					{question.help && (
-						<p className="text-xs text-muted-foreground">{question.help}</p>
-					)}
-				</div>
-				<Switch
-					checked={value === "yes"}
-					onCheckedChange={(checked) => onChange(checked ? "yes" : "no")}
-				/>
+			<div className="space-y-2 rounded-lg border p-3">
+				<p id={`q-${question.key}-label`} className="text-sm font-medium">
+					{question.label}
+				</p>
+				{question.help && (
+					<p className="text-xs text-muted-foreground">{question.help}</p>
+				)}
+				<RadioGroup
+					value={selected}
+					onValueChange={onChange}
+					aria-labelledby={`q-${question.key}-label`}
+					className="flex flex-wrap gap-4"
+				>
+					{(question.options?.length
+						? question.options
+						: [
+								{ value: "yes", label: "Yes" },
+								{ value: "no", label: "No" },
+								{ value: "unsure", label: "Not sure" },
+							]
+					).map((option) => (
+						<div key={option.value} className="flex items-center gap-2">
+							<RadioGroupItem
+								id={`q-${question.key}-${option.value}`}
+								value={option.value}
+							/>
+							<Label
+								htmlFor={`q-${question.key}-${option.value}`}
+								className="cursor-pointer font-normal"
+							>
+								{option.label}
+							</Label>
+						</div>
+					))}
+				</RadioGroup>
 			</div>
 		);
 	}
@@ -2388,11 +2482,13 @@ function QuestionnaireSummary({ data }: { data: InventoryDetailResponse }) {
 }
 
 function AttachedModels({
+	appId,
 	models,
 	onAcknowledge,
 	onRegistryModelOpen,
 	acknowledging,
 }: {
+	appId: string;
 	models: ModelObservationItem[];
 	onAcknowledge: (id: string) => void;
 	onRegistryModelOpen?: (provider: string, modelId: string) => void;
@@ -2426,6 +2522,17 @@ function AttachedModels({
 						)}
 					</div>
 				</div>
+				<CardDescription>
+					Review each model in the registry and mark it vetted with a known
+					posture. For dynamic selectors, open the app's flows and select a
+					specific model on the affected nodes. Reconcile models here, then save
+					the assessment to record the updated evidence.
+				</CardDescription>
+				<Button asChild variant="outline" size="sm" className="w-fit">
+					<a href={`/library/config/flows?id=${encodeURIComponent(appId)}`}>
+						Open app flows to pin models
+					</a>
+				</Button>
 			</CardHeader>
 			<CardContent className="p-0">
 				<Table>
@@ -2676,8 +2783,11 @@ function RegistryTab({
 			await queryClient.invalidateQueries({
 				queryKey: ["admin", "ai-act", "inventory"],
 			});
+			await queryClient.invalidateQueries({
+				queryKey: ["ai-act", "questionnaire"],
+			});
 			setForm({ ...EMPTY_REGISTRY_FORM });
-			toast.success("Registry entry saved.");
+			toast.success("Registry entry saved. Model evidence updated.");
 		},
 		onError: (err: Error) => toast.error(err.message ?? "Save failed"),
 	});
@@ -2786,6 +2896,7 @@ function RegistryTab({
 									<p className="text-xs text-muted-foreground">{hint}</p>
 								</div>
 								<Switch
+									aria-label={label}
 									checked={form[key] as boolean}
 									onCheckedChange={(checked) =>
 										updateRegistryForm({ [key]: checked })

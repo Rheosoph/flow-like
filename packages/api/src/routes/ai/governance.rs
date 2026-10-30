@@ -4,22 +4,83 @@
 //! (`/apps/{app_id}/ai-act/assessment/suggest`) and admin
 //! (`/admin/ai-act/assist`) surfaces.
 
-use std::sync::Arc;
+use std::{convert::Infallible, future::Future, sync::Arc, time::Duration};
+
+use axum::{
+    Json,
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
+};
 
 use flow_like::bit::Bit;
-use flow_like::copilot::governance::{GovernanceCopilot, GovernanceSuggestion};
+use flow_like::copilot::governance::GovernanceCopilot;
 use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::{Profile, ProfileCustomBit};
 use flow_like::state::FlowLikeState;
 
 use crate::{
     error::ApiError,
+    middleware::error_reporting::StreamErrorReporter,
     routes::{
-        app::ai_act::{board_scan, questionnaire::questionnaire_schema, signals::Signals},
+        app::ai_act::{SuggestResponse, board_scan, questionnaire::questionnaire_schema},
         execution::models::{provider_of, scrub, secret_values},
     },
     state::AppState,
 };
+
+/// Send headers and heartbeats while the agent runs so a gateway's idle timeout
+/// does not cut off slow model responses. Callers authorize before opening the stream.
+pub async fn governance_response<F>(
+    streaming: bool,
+    reporter: Option<StreamErrorReporter>,
+    run: F,
+) -> Result<Response, ApiError>
+where
+    F: Future<Output = Result<SuggestResponse, ApiError>> + Send + 'static,
+{
+    if !streaming {
+        return Ok(Json(run.await?).into_response());
+    }
+
+    let stream = async_stream::stream! {
+        yield Ok::<Event, Infallible>(Event::default().comment("connected"));
+        // Keep the work in the body future so disconnects and the route deadline cancel it.
+        let result = run.await.and_then(|response| {
+            Event::default()
+                .event("completed")
+                .json_data(response)
+                .map_err(|error| ApiError::internal(error.to_string()))
+        });
+        let event = match result {
+            Ok(event) => event,
+            Err(error) => {
+                if let Some(reporter) = &reporter {
+                    reporter.report(&error).await;
+                }
+                let message = error.public_message().unwrap_or_else(|| {
+                    error.status().canonical_reason().unwrap_or("Governance suggestion failed")
+                });
+                Event::default().event("error").data(serde_json::json!({
+                    "error": message,
+                    "code": error.public_code(),
+                }).to_string())
+            }
+        };
+        yield Ok(event);
+    };
+
+    Ok((
+        [("x-accel-buffering", "no")],
+        Sse::new(stream).keep_alive(
+            KeepAlive::new()
+                .text("keep-alive")
+                .interval(Duration::from_secs(15)),
+        ),
+    )
+        .into_response())
+}
 
 /// Resolve (or build and cache) the master `FlowLikeState`.
 async fn master_flow_like_state(state: &AppState) -> Result<Arc<FlowLikeState>, ApiError> {
@@ -51,7 +112,7 @@ pub async fn run_governance_agent(
     profile: Option<Profile>,
     token: Option<String>,
     usage_context: Option<ModelUsageContext>,
-) -> Result<(GovernanceSuggestion, Signals, String), ApiError> {
+) -> Result<SuggestResponse, ApiError> {
     let app = state.master_app(sub, app_id, state).await?;
 
     // Auto-derived signals for grounding/context.
@@ -99,7 +160,11 @@ pub async fn run_governance_agent(
 
     let (suggestion, model) = suggestion;
 
-    Ok((suggestion, signals, model))
+    Ok(SuggestResponse {
+        suggestion: serde_json::to_value(suggestion)?,
+        signals: serde_json::to_value(signals)?,
+        model,
+    })
 }
 
 /// The caller's private Bits, with their keys, from the database, as global chat loads them.
@@ -150,7 +215,127 @@ fn agent_failure(error: &flow_like_types::Error, secrets: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use axum::body::to_bytes;
+    use flow_like_types::tokio::{sync::oneshot, time::timeout};
+    use futures::StreamExt;
     use serde_json::json;
+
+    fn suggestion() -> SuggestResponse {
+        SuggestResponse {
+            suggestion: json!({"purpose": "Review invoices", "suggestedAnswers": []}),
+            signals: json!({"models": []}),
+            model: "test-model".to_owned(),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn slow_suggestions_send_headers_and_heartbeats_before_the_result() {
+        let (finish, result) = oneshot::channel();
+        let response = governance_response(true, None, async { result.await.unwrap() })
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        assert_eq!(response.headers()["x-accel-buffering"], "no");
+        let mut body = response.into_body().into_data_stream();
+        let first = timeout(Duration::from_secs(1), body.next())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.as_ref(), b": connected\n\n");
+
+        // The model stays pending beyond the common 60 s gateway idle timeout.
+        for _ in 0..5 {
+            let heartbeat = timeout(Duration::from_secs(16), body.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            assert_eq!(heartbeat.as_ref(), b": keep-alive\n\n");
+        }
+
+        finish.send(Ok(suggestion())).unwrap();
+        let completed = body.next().await.unwrap().unwrap();
+        let completed = std::str::from_utf8(&completed).unwrap();
+        assert!(completed.starts_with("event: completed\n"));
+        let payload = completed.split_once("data: ").unwrap().1.trim();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(payload).unwrap(),
+            serde_json::to_value(suggestion()).unwrap(),
+        );
+        assert!(body.next().await.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropping_the_response_cancels_the_pending_agent() {
+        let (finish, result) = oneshot::channel::<Result<SuggestResponse, ApiError>>();
+        let response = governance_response(true, None, async { result.await.unwrap() })
+            .await
+            .unwrap();
+        let mut body = response.into_body().into_data_stream();
+        assert!(body.next().await.is_some());
+        // Receiving a heartbeat means the agent future has been polled and is pending.
+        let heartbeat = body.next().await.unwrap().unwrap();
+        assert_eq!(heartbeat.as_ref(), b": keep-alive\n\n");
+        drop(body);
+        assert!(finish.is_closed());
+    }
+
+    #[tokio::test]
+    async fn streaming_errors_expose_only_the_public_message() {
+        for (error, expected) in [
+            (
+                ApiError::internal("private provider details"),
+                json!({"error": "Internal Server Error", "code": "INTERNAL_ERROR"}),
+            ),
+            (
+                ApiError::bad_request("Model unavailable"),
+                json!({"error": "Model unavailable", "code": "BAD_REQUEST"}),
+            ),
+        ] {
+            let response = governance_response(true, None, async { Err(error) })
+                .await
+                .unwrap();
+            let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            let body = std::str::from_utf8(&bytes).unwrap();
+            assert!(body.contains("event: error\n"));
+            assert!(!body.contains("private provider details"));
+            assert!(!body.contains("event: completed"));
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(
+                    body.split_once("data: ").unwrap().1.trim()
+                )
+                .unwrap(),
+                expected,
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn json_clients_keep_the_existing_response_and_error_status() {
+        let owner: crate::routes::app::ai_act::SuggestBody =
+            serde_json::from_value(json!({})).unwrap();
+        let admin: crate::routes::admin::ai_act::AssistBody =
+            serde_json::from_value(json!({})).unwrap();
+        assert!(!owner.stream);
+        assert!(!admin.stream);
+
+        let response = governance_response(false, None, async { Ok(suggestion()) })
+            .await
+            .unwrap();
+        assert_eq!(response.headers()["content-type"], "application/json");
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            serde_json::to_value(suggestion()).unwrap(),
+        );
+
+        let response = governance_response(false, None, async { Err(ApiError::FORBIDDEN) })
+            .await
+            .unwrap_err()
+            .into_response();
+        assert_eq!(response.status(), axum::http::StatusCode::FORBIDDEN);
+    }
 
     fn private_bit(id: &str, endpoint: &str) -> Bit {
         Bit {
