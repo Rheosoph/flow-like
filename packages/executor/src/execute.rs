@@ -157,8 +157,8 @@ pub(crate) async fn resolve_run_template(
 
 /// The content identity half of the template cache key. Pinned versions are
 /// immutable; a floating board is pinned to the source ETag the API compiled
-/// from — the Page-claim ETag when the run carries one, otherwise the one the
-/// API resolved for an ordinary run and sent with the artifact reference.
+/// from: the explicit ETag of a Page or sink run, otherwise the one the API
+/// resolved for an ordinary run and sent with the artifact reference.
 fn artifact_version_key(request: &ExecutionRequest) -> Result<String, ExecutorError> {
     match (
         request.board_version,
@@ -314,9 +314,8 @@ pub(crate) fn validate_executor_request_claims(
                 request.wasm_packages.as_ref(),
             )
         }
-        None if request.board_etag.is_some() => Err(ExecutorError::InvalidRequest(
-            "ETag-bound Latest execution requires signed Page context".to_string(),
-        )),
+        // Cron and other sink runs also pin Latest to an ETag. The signed
+        // dispatch hash above binds their selector and artifact without Page claims.
         None => Ok(()),
     }
 }
@@ -2356,6 +2355,121 @@ mod shadow_claim_binding_tests {
         let mut unsigned = signed;
         unsigned.dispatch_hash = None;
         assert!(validate_executor_request_claims(&unsigned, &request).is_err());
+    }
+
+    fn latest_cron_payload() -> crate::types::DispatchPayload {
+        let mut wire = serde_json::to_value(request(false)).unwrap();
+        wire["job_id"] = serde_json::json!("job-1");
+        wire["run_id"] = serde_json::json!("run-1");
+        wire["user_id"] = serde_json::json!("user-1");
+        wire["callback_url"] = serde_json::json!("https://api.example");
+        wire["board_version"] =
+            serde_json::json!(flow_like_types::dispatch::ETAG_BOUND_LATEST_VERSION_SENTINEL);
+        wire["board_etag"] = serde_json::json!("etag-a");
+        wire["execution_mode"] = serde_json::json!("scheduled");
+        wire["artifact"]["source_etag"] = serde_json::json!("etag-a");
+        serde_json::from_value(wire).unwrap()
+    }
+
+    fn cron_claims(payload: &crate::types::DispatchPayload) -> ExecutorClaims {
+        let mut signed = claims(Some(false));
+        signed.event_id = Some("cron-event-1".into());
+        signed.dispatch_hash =
+            Some(flow_like_types::dispatch::dispatch_payload_hash(payload).unwrap());
+        signed
+    }
+
+    #[test]
+    fn latest_cron_dispatch_does_not_require_page_context() {
+        let payload = latest_cron_payload();
+        let signed = cron_claims(&payload);
+        let request = ExecutionRequest::try_from(payload).unwrap();
+
+        assert!(signed.page_execution.is_none());
+        assert_eq!(request.board_version, None);
+        assert_eq!(request.board_etag.as_deref(), Some("etag-a"));
+        assert_eq!(artifact_version_key(&request).unwrap(), "latest@etag-a");
+        validate_executor_request_claims(&signed, &request)
+            .expect("a signed Latest Cron dispatch is authorized without Page claims");
+    }
+
+    #[test]
+    fn latest_cron_dispatch_rejects_tampering_and_missing_signature_binding() {
+        let payload = latest_cron_payload();
+        let signed = cron_claims(&payload);
+        let original = serde_json::to_value(&payload).unwrap();
+        for (field, replacement) in [
+            ("board_etag", serde_json::json!("etag-b")),
+            ("node_id", serde_json::json!("another-entry")),
+            ("artifact", {
+                let mut artifact = original["artifact"].clone();
+                artifact["url"] = serde_json::json!("https://example.invalid/substituted.flcb");
+                artifact
+            }),
+        ] {
+            let mut wire = original.clone();
+            wire[field] = replacement;
+            let changed: crate::types::DispatchPayload = serde_json::from_value(wire).unwrap();
+            let request = ExecutionRequest::try_from(changed).unwrap();
+            let error = validate_executor_request_claims(&signed, &request).unwrap_err();
+            assert!(
+                error.to_string().contains("complete dispatch payload"),
+                "{field}: {error}"
+            );
+        }
+
+        let request = ExecutionRequest::try_from(payload).unwrap();
+        let mut unsigned = signed;
+        unsigned.dispatch_hash = None;
+        let error = validate_executor_request_claims(&unsigned, &request).unwrap_err();
+        assert!(
+            error.to_string().contains("complete dispatch payload"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn pinned_cron_dispatch_remains_authorized_without_page_context() {
+        let mut payload = latest_cron_payload();
+        payload.board_version = Some((1, 2, 3));
+        payload.board_etag = None;
+        payload.artifact.as_mut().unwrap().source_etag = None;
+        let signed = cron_claims(&payload);
+        let request = ExecutionRequest::try_from(payload).unwrap();
+
+        assert_eq!(artifact_version_key(&request).unwrap(), "1_2_3");
+        validate_executor_request_claims(&signed, &request)
+            .expect("a pinned Cron dispatch remains authorized without Page claims");
+    }
+
+    #[test]
+    fn latest_dispatch_with_page_claims_still_enforces_page_authority() {
+        let payload = latest_cron_payload();
+        let mut signed = cron_claims(&payload);
+        signed.page_execution = Some(ExecutorPageExecutionClaims {
+            page_id: "page-1".into(),
+            manifest_revision: "revision-1".into(),
+            board_version: None,
+            board_etag: Some("etag-a".into()),
+            target_node_id: Some("node-1".into()),
+            entry_authority_revision: None,
+            wasm_authority_revision: None,
+            allowed_entry_node_ids: vec!["node-1".into()],
+        });
+        let request = ExecutionRequest::try_from(payload).unwrap();
+        validate_executor_request_claims(&signed, &request).unwrap();
+
+        let mut changed = signed.clone();
+        changed.event_id = None;
+        assert!(validate_executor_request_claims(&changed, &request).is_err());
+
+        let mut changed = signed.clone();
+        changed.page_execution.as_mut().unwrap().board_etag = Some("etag-b".into());
+        assert!(validate_executor_request_claims(&changed, &request).is_err());
+
+        let mut changed = signed;
+        changed.page_execution.as_mut().unwrap().target_node_id = Some("another-entry".into());
+        assert!(validate_executor_request_claims(&changed, &request).is_err());
     }
 
     /// Bytes the API would have persisted: a board holding one real catalog
