@@ -351,6 +351,8 @@ pub struct Chat {
     pub tools: Option<Vec<String>>,
     pub user: Option<User>,
     pub attachments: Option<Vec<Attachment>>,
+    /// Profile model Bit selected by the user for nodes using default model preferences.
+    pub selected_model: Option<String>,
     /// off, low, mid or high; kept a string so an unknown level falls back instead of failing.
     pub thinking: Option<String>,
 }
@@ -993,6 +995,18 @@ mod tests {
     fn chat_history_carries_the_requested_thinking() {
         let history = ChatEventNode::create_chat_history(Vec::new(), HistoryThinking::High);
         assert_eq!(history.thinking, Some(HistoryThinking::High));
+    }
+
+    #[test]
+    fn chat_payload_accepts_optional_model_selection() {
+        let older: Chat = flow_like_types::json::from_value(json!({ "messages": [] })).unwrap();
+        assert!(older.selected_model.is_none());
+        let selected: Chat = flow_like_types::json::from_value(json!({
+            "messages": [],
+            "selected_model": "my-model",
+        }))
+        .unwrap();
+        assert_eq!(selected.selected_model.as_deref(), Some("my-model"));
     }
 
     #[test]

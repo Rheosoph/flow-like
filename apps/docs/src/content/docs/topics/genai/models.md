@@ -78,6 +78,8 @@ Keep the model identifier configurable rather than scattering it across several 
 
 [Find Model](/nodes/ai/generative/ai-generative-find-model/) selects a model from the active profile using a `BitModelPreference`.
 
+In an app chat, Find Model first uses the user's [chat model selection](/topics/genai/chat/#chat-event-contract) when its weights are unchanged and no model hint is set. The selected model must be active, available to the execution host, and satisfy any multimodal requirement. Without an eligible selection, Find Model uses its usual profile-based selection.
+
 Build the preference with:
 
 | Node | Purpose |

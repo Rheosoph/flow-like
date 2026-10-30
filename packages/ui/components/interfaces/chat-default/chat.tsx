@@ -26,6 +26,7 @@ import {
 import { ChatRunControls } from "./chat-run-controls";
 import {
 	ChatBox,
+	type ChatBoxModel,
 	type ChatBoxRef,
 	type ChatBoxThinking,
 	type ISendMessageFunction,
@@ -202,6 +203,7 @@ export interface IChatProps {
 	onDraftChange?: (content: string) => void;
 	/** Thinking level picker in the composer; omitted when the chat does not offer one. */
 	thinking?: ChatBoxThinking;
+	model?: ChatBoxModel;
 }
 
 export interface IChatRef {
@@ -237,6 +239,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			showAiDisclosure = false,
 			onDraftChange,
 			thinking,
+			model,
 		},
 		ref,
 	) => {
@@ -968,6 +971,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										onSendMessage={handleComposerSend}
 										onContentChange={onDraftChange}
 										thinking={thinking}
+										model={model}
 										fileUpload={config?.allow_file_upload ?? false}
 										audioInput={voiceEnabled}
 										voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}

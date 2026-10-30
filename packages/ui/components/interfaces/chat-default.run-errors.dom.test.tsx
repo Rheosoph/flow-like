@@ -31,6 +31,7 @@ const state = vi.hoisted(() => ({
 	params: new URLSearchParams({ sessionId: "session" }),
 	setQueryParams: vi.fn(),
 	send: undefined as ISendMessageFunction | undefined,
+	selectedModel: undefined as string | undefined,
 	react: undefined as
 		| ((
 				message: IMessage,
@@ -150,6 +151,9 @@ vi.mock("sonner", () => ({ toast: { error: vi.fn() } }));
 vi.mock("./chat-default/respond-interaction", () => ({
 	submitInteractionResponse: vi.fn(),
 }));
+vi.mock("./chat-default/use-chat-model", () => ({
+	useChatModel: () => ({ selectedModel: state.selectedModel }),
+}));
 
 const event = {
 	id: "chat",
@@ -172,6 +176,7 @@ const recordOAuth = (event: Event) => {
 beforeEach(async () => {
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 	state.send = undefined;
+	state.selectedModel = undefined;
 	state.react = undefined;
 	state.params = new URLSearchParams({ sessionId: "session" });
 	requests = [];
@@ -269,6 +274,29 @@ async function expectSavedError(message: string) {
 		);
 	});
 }
+
+describe("chat model requests", () => {
+	test.each([undefined, "chosen-model"])(
+		"sends the selected model only when present: %s",
+		async (selectedModel) => {
+			state.selectedModel = selectedModel;
+			const { sending } = await send();
+			await waitForChat(() => expect(requests).toHaveLength(1));
+			if (selectedModel) {
+				expect(requests[0].payload).toHaveProperty(
+					"selected_model",
+					selectedModel,
+				);
+			} else {
+				expect(requests[0].payload).not.toHaveProperty("selected_model");
+			}
+			await act(async () => {
+				finish();
+				await sending;
+			});
+		},
+	);
+});
 
 describe("chat run error reporting", () => {
 	test.each([
@@ -563,6 +591,7 @@ describe("quoted replies and reactions", () => {
 	});
 
 	test("OAuth retry retains reaction context and saves it only when the run is accepted", async () => {
+		state.selectedModel = "original-model";
 		await putChatMessage(target);
 		state.backend.eventState.checkEventOAuth = vi
 			.fn()
@@ -581,6 +610,8 @@ describe("quoted replies and reactions", () => {
 			decodeMessageRow(required(await chatDb.messages.get(target.id)))
 				.reactions,
 		).toBeUndefined();
+		state.selectedModel = "next-model";
+		await mount();
 		await act(async () => {
 			window.dispatchEvent(
 				new CustomEvent("flow:oauth-retry", {
@@ -589,6 +620,10 @@ describe("quoted replies and reactions", () => {
 			);
 		});
 		await waitForChat(() => expect(requests).toHaveLength(1));
+		expect(requests[0].payload).toHaveProperty(
+			"selected_model",
+			"original-model",
+		);
 		expect(
 			joinContentText(required(payload(0).messages.at(-1)).content),
 		).toContain(target.id);

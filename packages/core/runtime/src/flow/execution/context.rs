@@ -599,6 +599,12 @@ impl ExecutionContext {
         run.event_id.clone()
     }
 
+    pub async fn chat_model_selection(&self) -> Option<super::ChatModelSelection> {
+        let run = self.run.upgrade()?;
+        let run = run.lock().await;
+        run.chat_model_selection.clone()
+    }
+
     /// Create ExecutionContext using cached RunMeta to avoid locking Run
     #[allow(clippy::too_many_arguments)]
     pub async fn with_meta(

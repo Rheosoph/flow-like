@@ -118,6 +118,7 @@ import {
 	updateSessionInteractions,
 	useSessionInteractions,
 } from "./chat-default/session-interactions";
+import { useChatModel } from "./chat-default/use-chat-model";
 import { useChatThinking } from "./chat-default/use-chat-thinking";
 import { ChatWelcome } from "./chat-default/welcome";
 import type { IUseInterfaceProps } from "./interfaces";
@@ -426,6 +427,7 @@ function createPayload(
 	activeTools: string[],
 	otherAttachments: IAttachment[],
 	thinking: ChatThinkingLevel,
+	selectedModel?: string,
 ) {
 	return {
 		chat_id: userMessage.sessionId,
@@ -457,6 +459,7 @@ function createPayload(
 		tools: activeTools ?? [],
 		attachments: otherAttachments,
 		thinking,
+		...(selectedModel ? { selected_model: selectedModel } : {}),
 	};
 }
 
@@ -708,6 +711,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const thinking = useChatThinking(appId, event.id, config);
 	const thinkingRef = useRef(thinking);
 	thinkingRef.current = thinking;
+	const model = useChatModel(appId, config, event.execution_mode);
+	const modelRef = useRef(model);
+	modelRef.current = model;
 	const activeInteractions = useSessionInteractions(sessionIdParameter);
 	const activeInteractionsRef =
 		useRef<IInteractionRequest[]>(activeInteractions);
@@ -847,6 +853,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		activeTools?: string[];
 		audioFile?: File;
 		interaction?: IChatMessageInteraction;
+		selectedModel?: string;
 	} | null>(null);
 
 	useEffect(() => {
@@ -1389,6 +1396,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 			pendingSendSessions.current.add(streamId);
 			setIsStreamActive(true);
+			const selectedModel = skipConsentCheck
+				? pendingMessageRef.current?.selectedModel
+				: modelRef.current.selectedModel;
 			let userMessageCommitted = false;
 
 			try {
@@ -1426,6 +1436,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 							activeTools,
 							audioFile,
 							interaction,
+							selectedModel,
 						};
 						// Emit OAuth required event
 						window.dispatchEvent(
@@ -1558,6 +1569,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					activeTools ?? [],
 					otherAttachments,
 					thinkingRef.current.level,
+					selectedModel,
 				);
 
 				const responseMessage = createResponseMessage(
@@ -2147,6 +2159,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						isSending={isSendingFromWelcome}
 						appId={appId}
 						thinking={thinking.picker}
+						model={model.picker}
 					/>
 				) : (
 					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
@@ -2166,6 +2179,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 							eventId={event.id}
 							showAiDisclosure
 							thinking={thinking.picker}
+							model={model.picker}
 						/>
 					</ChatWidgetExecutionProvider>
 				)}

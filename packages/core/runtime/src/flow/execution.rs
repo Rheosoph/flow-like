@@ -450,6 +450,47 @@ impl std::fmt::Debug for ExecutorApiAuth {
     }
 }
 
+/// A chat's model choice, captured with the event settings used to start this run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChatModelSelection {
+    pub model_id: String,
+    pub require_vlm: bool,
+}
+
+impl ChatModelSelection {
+    fn from_payload(
+        entry_node_name: Option<&str>,
+        event_config: Option<&[u8]>,
+        payload: Option<&Value>,
+    ) -> Option<Self> {
+        if entry_node_name != Some("events_chat") {
+            return None;
+        }
+        let model_id = payload?.get("selected_model")?.as_str()?.trim();
+        if model_id.is_empty() {
+            return None;
+        }
+        let config =
+            event_config.and_then(|config| flow_like_types::json::from_slice::<Value>(config).ok());
+        if config
+            .as_ref()
+            .and_then(|config| config.get("allow_model_selection"))
+            .and_then(Value::as_bool)
+            == Some(false)
+        {
+            return None;
+        }
+        Some(Self {
+            model_id: model_id.to_string(),
+            require_vlm: config
+                .as_ref()
+                .and_then(|config| config.get("require_vlm"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        })
+    }
+}
+
 #[derive(Clone)]
 pub struct Run {
     pub executor_payment_auth: Option<ExecutorPaymentAuth>,
@@ -466,6 +507,7 @@ pub struct Run {
     pub board: Arc<Board>,
     pub log_level: LogLevel,
     pub payload: Arc<RunPayload>,
+    pub chat_model_selection: Option<ChatModelSelection>,
     /// `payload._elements`, shared by every node of the run instead of cloned per read.
     pub elements: Arc<RwLock<ElementCache>>,
     /// Live package state and host resources, closed when this execution ends.
@@ -1297,6 +1339,11 @@ impl InternalRun {
             log_level: board.log_level,
             board: board.clone(),
             payload: Arc::new(payload.clone()),
+            chat_model_selection: ChatModelSelection::from_payload(
+                board.nodes.get(&payload.id).map(|node| node.name.as_str()),
+                event.as_ref().map(|event| event.config.as_slice()),
+                payload.payload.as_ref(),
+            ),
             elements: elements.clone(),
             resources: resources.clone(),
             sub: sub_value.clone(),
@@ -2450,6 +2497,55 @@ mod tests {
     use crate::utils::http::HTTPClient;
     use flow_like_storage::Path;
     use flow_like_types::{async_trait, intercom::BufferedInterComHandler, tokio};
+
+    #[test]
+    fn chat_model_selection_uses_the_run_event_settings_and_accepts_older_clients() {
+        let selected = flow_like_types::json::json!({ "selected_model": "my-model" });
+        assert_eq!(
+            ChatModelSelection::from_payload(Some("events_chat"), None, Some(&selected)),
+            Some(ChatModelSelection {
+                model_id: "my-model".into(),
+                require_vlm: false,
+            })
+        );
+        assert_eq!(
+            ChatModelSelection::from_payload(
+                Some("events_chat"),
+                Some(br#"{"require_vlm":true}"#),
+                Some(&selected),
+            ),
+            Some(ChatModelSelection {
+                model_id: "my-model".into(),
+                require_vlm: true,
+            })
+        );
+        assert!(
+            ChatModelSelection::from_payload(
+                Some("events_chat"),
+                Some(br#"{"allow_model_selection":false}"#),
+                Some(&selected),
+            )
+            .is_none()
+        );
+        assert!(
+            ChatModelSelection::from_payload(Some("events_generic"), None, Some(&selected))
+                .is_none()
+        );
+        for payload in [
+            flow_like_types::json::json!({ "messages": [] }),
+            flow_like_types::json::json!({ "selected_model": null }),
+            flow_like_types::json::json!({ "selected_model": " " }),
+        ] {
+            assert!(
+                ChatModelSelection::from_payload(
+                    Some("events_chat"),
+                    Some(br#"{"require_vlm":true}"#),
+                    Some(&payload),
+                )
+                .is_none()
+            );
+        }
+    }
 
     #[test]
     fn executor_api_auth_debug_redacts_the_token() {

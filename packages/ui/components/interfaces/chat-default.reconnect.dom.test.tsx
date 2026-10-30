@@ -109,6 +109,9 @@ vi.mock("./chat-default/welcome", () => ({ ChatWelcome: () => null }));
 vi.mock("./chat-default/respond-interaction", () => ({
 	submitInteractionResponse: vi.fn(),
 }));
+vi.mock("./chat-default/use-chat-model", () => ({
+	useChatModel: () => ({ selectedModel: undefined }),
+}));
 
 const failureMessage =
 	"The active profile changed before automation could start. Run the workflow again.";

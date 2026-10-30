@@ -443,6 +443,45 @@ impl Profile {
             .await
     }
 
+    /// Honor a chat choice only while it remains an active, executable completion model.
+    /// Stale browser selections use the same profile fallback as automatic selection.
+    pub async fn resolve_chat_completion_model(
+        &self,
+        model_id: &str,
+        preference: &BitModelPreference,
+        require_vlm: bool,
+        capabilities: CompletionModelCapabilities,
+        devices: Option<&DeviceModelProbe>,
+        http_client: Arc<HTTPClient>,
+    ) -> Result<Bit> {
+        let multimodal = require_vlm || preference.multimodal == Some(true);
+        let mut selection = ModelSelection {
+            only_hosted: false,
+            capabilities: Some(capabilities),
+            devices: devices.map(DeviceModelProbe::for_selection),
+            unavailable_model: None,
+        };
+        let reference = self.bits.iter().find(|reference| {
+            split_profile_bit_reference(reference).map_or(reference.as_str(), |(_, id)| id)
+                == model_id
+        });
+        if let Some(reference) = reference
+            && let Ok(bit) = self.get_profile_bit(reference, http_client.clone()).await
+            && matches!(bit.bit_type, BitTypes::Llm | BitTypes::Vlm)
+            && bit.score(preference).is_ok()
+            && (!multimodal || bit.is_multimodal())
+            && selection.admits(&bit)
+        {
+            if selection.is_available(&bit).await {
+                return Ok(bit);
+            }
+            selection.unavailable_model = Some(bit.id);
+        }
+
+        self.get_best_model_filtered_inner(preference, multimodal, false, &selection, http_client)
+            .await
+    }
+
     /// Select the first available SystemOne Bit in this profile's activated model order.
     pub async fn find_decision_model(
         &self,
@@ -933,6 +972,108 @@ mod tests {
             bits: models.iter().map(|bit| bit.id.clone()).collect(),
             custom_bits: models.into_iter().map(ProfileCustomBit).collect(),
             ..Profile::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_model_selection_prefers_the_users_active_model() {
+        let profile = profile_with_models(vec![
+            completion_bit("automatic", "hosted:openai"),
+            completion_bit("chosen", "hosted:openai"),
+        ]);
+        let client = Arc::new(HTTPClient::new_without_refetch());
+        let preference = BitModelPreference::default();
+        let automatic = profile
+            .resolve_completion_model(
+                None,
+                &preference,
+                false,
+                CompletionModelCapabilities::default(),
+                None,
+                client.clone(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(automatic.id, "automatic");
+        let selected = profile
+            .resolve_chat_completion_model(
+                "chosen",
+                &preference,
+                false,
+                CompletionModelCapabilities::default(),
+                None,
+                client,
+            )
+            .await
+            .unwrap();
+        assert_eq!(selected.id, "chosen");
+    }
+
+    #[tokio::test]
+    async fn chat_model_selection_falls_back_from_stale_inactive_and_ineligible_models() {
+        let mut not_a_completion = completion_bit("embedding", "hosted:openai");
+        not_a_completion.bit_type = BitTypes::Embedding;
+        let mut malformed = completion_bit("malformed", "hosted:openai");
+        malformed.parameters = flow_like_types::json::json!({});
+        let mut profile = profile_with_models(vec![
+            completion_bit("automatic", "hosted:openai"),
+            completion_bit("inactive", "hosted:openai"),
+            completion_bit("unsupported-local", "Local"),
+            completion_bit("unavailable-provider", "custom:claude-code"),
+            not_a_completion,
+            malformed,
+        ]);
+        profile.bits.retain(|id| id != "inactive");
+        for id in [
+            "removed",
+            "inactive",
+            "unsupported-local",
+            "unavailable-provider",
+            "embedding",
+            "malformed",
+        ] {
+            let selected = profile
+                .resolve_chat_completion_model(
+                    id,
+                    &BitModelPreference::default(),
+                    false,
+                    CompletionModelCapabilities::default(),
+                    None,
+                    Arc::new(HTTPClient::new_without_refetch()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(selected.id, "automatic", "{id}");
+        }
+    }
+
+    #[tokio::test]
+    async fn chat_model_selection_preserves_vision_requirements() {
+        let mut vision = completion_bit("vision", "hosted:openai");
+        vision.bit_type = BitTypes::Vlm;
+        let profile = profile_with_models(vec![completion_bit("text", "hosted:openai"), vision]);
+        for (require_vlm, preference) in [
+            (true, BitModelPreference::default()),
+            (
+                false,
+                BitModelPreference {
+                    multimodal: Some(true),
+                    ..Default::default()
+                },
+            ),
+        ] {
+            let selected = profile
+                .resolve_chat_completion_model(
+                    "text",
+                    &preference,
+                    require_vlm,
+                    CompletionModelCapabilities::default(),
+                    None,
+                    Arc::new(HTTPClient::new_without_refetch()),
+                )
+                .await
+                .unwrap();
+            assert_eq!(selected.id, "vision");
         }
     }
 
