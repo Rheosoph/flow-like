@@ -2,12 +2,14 @@ import { I18nProvider } from "@flow-like/locales";
 import { ThemeProvider } from "next-themes";
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { PlanSteps } from "../../packages/ui/components/interfaces/chat-default/plan-steps";
 import { StreamingTextEditor } from "../../packages/ui/components/ui/streaming-text-editor";
 import { TextEditor } from "../../packages/ui/components/ui/text-editor";
 import { TooltipProvider } from "../../packages/ui/components/ui/tooltip";
 import "../../packages/ui/global.css";
 import "./styles.css";
 import { comparisonMarkdown, wideMarkdown } from "./fixtures";
+import { researchSteps } from "./research-fixtures";
 import { chartsMarkdown, richMediaMarkdown } from "./rich-fixtures";
 
 const params = new URLSearchParams(location.search);
@@ -18,6 +20,7 @@ const FIXTURES = {
 	wide: wideMarkdown,
 	media: richMediaMarkdown,
 	charts: chartsMarkdown,
+	research: "",
 };
 
 type Fixture = keyof typeof FIXTURES;
@@ -41,6 +44,7 @@ function ChatPreview() {
 	);
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState<string | null>(null);
+	const [researchSettled, setResearchSettled] = useState(params.has("settled"));
 	const content = draft ?? FIXTURES[fixture];
 	const presentation = compact ? "chat-compact" : "chat";
 
@@ -100,7 +104,16 @@ function ChatPreview() {
 							<option value="wide">Wide table</option>
 							<option value="media">Rich media</option>
 							<option value="charts">Charts</option>
+							<option value="research">Live research</option>
 						</select>
+						{fixture === "research" && (
+							<button
+								type="button"
+								onClick={() => setResearchSettled(!researchSettled)}
+							>
+								{researchSettled ? "Restart research" : "Finish research"}
+							</button>
+						)}
 						<button
 							type="button"
 							aria-pressed={dark}
@@ -185,10 +198,18 @@ function ChatPreview() {
 				)}
 				<main className={`preview-canvas${narrow ? " is-narrow" : ""}`}>
 					<div className="preview-question">
-						Welche Modelle passen zu Diesel, Allrad und mehr als 350 PS?
+						{fixture === "research"
+							? "Welcher Porsche ist mit einem 5er oder 7er vergleichbar? Komfort auch auf längeren Strecken."
+							: "Welche Modelle passen zu Diesel, Allrad und mehr als 350 PS?"}
 					</div>
 					<article aria-label="Assistant response" className="preview-answer">
-						{streaming ? (
+						{fixture === "research" ? (
+							<PlanSteps
+								steps={researchSteps(researchSettled)}
+								currentStepId={researchSettled ? undefined : "read-5"}
+								loading={!researchSettled}
+							/>
+						) : streaming ? (
 							<StreamingTextEditor
 								content={content.slice(0, cursor)}
 								presentation={presentation}
@@ -203,9 +224,11 @@ function ChatPreview() {
 						)}
 					</article>
 					<footer className="preview-status" aria-live="polite">
-						{streaming
-							? "Antwort wird geschrieben…"
-							: "Ende der Beispielantwort"}
+						{fixture === "research"
+							? "Research preview with fixed example activity"
+							: streaming
+								? "Antwort wird geschrieben…"
+								: "Ende der Beispielantwort"}
 					</footer>
 				</main>
 			</div>

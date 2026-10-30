@@ -91,6 +91,71 @@ describe("toolEndPlanStepStatus", () => {
 });
 
 describe("tool activity lifecycle", () => {
+	test("keeps native research delivered only as a completed item", () => {
+		const acc = createStreamAccumulator();
+		applyStreamEvent(acc, { type: "text", text: "Checking sources. " });
+		applyStreamEvent(acc, {
+			type: "tool_end",
+			data: {
+				tool_call_id: "native-search",
+				tool: "web_search",
+				status: "done",
+				arguments_preview: JSON.stringify({
+					queries: ["Panamera comfort", "BMW 7 Series comfort"],
+				}),
+			},
+		});
+		expect(acc.stepOrder).toEqual(["native-search"]);
+		expect(acc.steps.get("native-search")).toMatchObject({
+			toolName: "web_search",
+			status: "done",
+			content_offset: "Checking sources. ".length,
+			detail: {
+				category: "search",
+				queries: ["Panamera comfort", "BMW 7 Series comfort"],
+			},
+		});
+		expect(acc.steps.get("native-search")?.startTime).toBeUndefined();
+	});
+
+	test("uses a native page action's final tool name without duplicating its initial search item", () => {
+		const acc = createStreamAccumulator();
+		applyStreamEvent(acc, {
+			type: "tool_start",
+			data: { tool_call_id: "native-page", tool: "web_search" },
+		});
+		applyStreamEvent(acc, {
+			type: "tool_progress",
+			data: {
+				tool_call_id: "native-page",
+				tool: "open_url",
+				arguments_preview: JSON.stringify({
+					url: "https://reviews.example/panamera",
+				}),
+			},
+		});
+		expect(acc.steps.get("native-page")).toMatchObject({
+			toolName: "open_url",
+			status: "progress",
+			detail: { label: "Reading a webpage", category: "web" },
+		});
+		applyStreamEvent(acc, {
+			type: "tool_end",
+			data: { tool_call_id: "native-page", status: "done" },
+		});
+		expect(acc.stepOrder).toEqual(["native-page"]);
+		expect(acc.steps.get("native-page")).toMatchObject({
+			title: "Using open_url",
+			toolName: "open_url",
+			status: "done",
+			detail: {
+				category: "web",
+				label: "Reading a webpage",
+				sources: [{ url: "https://reviews.example/panamera" }],
+			},
+		});
+	});
+
 	test("keeps thinking steps in the reasoning viewer", () => {
 		const acc = createStreamAccumulator();
 		applyStreamEvent(acc, {

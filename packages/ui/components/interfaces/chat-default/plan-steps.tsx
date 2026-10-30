@@ -22,6 +22,7 @@ import {
 } from "../../ui/collapsible";
 import type { IBuildLaneDetail, IPlanStep, PlanStepStatus } from "./chat-db";
 import { ReasoningBody } from "./reasoning-viewer";
+import { ResearchActivity, getResearchSteps } from "./research-activity";
 import {
 	ActivitySources,
 	ToolActivityRow,
@@ -432,6 +433,37 @@ function BuildLaneRow({
 	);
 }
 
+function ActivityRows({
+	steps,
+	currentStepId,
+	expandedSteps,
+	onToggle,
+}: {
+	steps: IPlanStep[];
+	currentStepId?: string;
+	expandedSteps: Set<string>;
+	onToggle: (id: string) => void;
+}) {
+	const research = getResearchSteps(steps);
+	const researchIds = new Set(research.map((step) => step.id));
+	return steps.map((step) => {
+		if (researchIds.has(step.id)) {
+			return step.id === research[0].id ? (
+				<ResearchActivity key={step.id} steps={research} />
+			) : null;
+		}
+		return (
+			<StepRow
+				key={step.id}
+				step={step}
+				isActive={currentStepId === step.id}
+				isExpanded={expandedSteps.has(step.id)}
+				onToggle={onToggle}
+			/>
+		);
+	});
+}
+
 function StepRow({
 	step,
 	isActive,
@@ -615,15 +647,12 @@ export function InlineStepGroup({
 					<SoloStepBody step={solo} />
 				) : (
 					<div className="space-y-0.5 pt-2 pb-1">
-						{steps.map((step) => (
-							<StepRow
-								key={step.id}
-								step={step}
-								isActive={currentStepId === step.id}
-								isExpanded={expandedSteps.has(step.id)}
-								onToggle={toggleStep}
-							/>
-						))}
+						<ActivityRows
+							steps={steps}
+							currentStepId={currentStepId}
+							expandedSteps={expandedSteps}
+							onToggle={toggleStep}
+						/>
 					</div>
 				)}
 			</CollapsibleContent>
@@ -690,12 +719,12 @@ export function PlanSteps({
 		if (steps.length <= VISIBLE_STEPS_COUNT) {
 			return { visibleSteps: steps, olderSteps: [] as IPlanStep[] };
 		}
-		// Build lanes are the summary of the whole run and are published as soon as each lane
-		// starts, so a plain "last N steps" window would push them into the collapsed older
-		// section exactly as the build gets interesting. Pin them, and window only the rest.
-		const lanes = steps.filter((step) => step.detail?.kind === "build_lane");
-		const rest = steps.filter((step) => step.detail?.kind !== "build_lane");
-		if (lanes.length === 0) {
+		// Keep the build lanes and complete research trail visible as more tool calls arrive.
+		const researchIds = new Set(getResearchSteps(steps).map((step) => step.id));
+		const pinned = (step: IPlanStep) =>
+			step.detail?.kind === "build_lane" || researchIds.has(step.id);
+		const rest = steps.filter((step) => !pinned(step));
+		if (rest.length === steps.length) {
 			const cutoff = steps.length - VISIBLE_STEPS_COUNT;
 			return {
 				visibleSteps: steps.slice(cutoff),
@@ -703,8 +732,11 @@ export function PlanSteps({
 			};
 		}
 		const restCutoff = Math.max(0, rest.length - VISIBLE_STEPS_COUNT);
+		const recentIds = new Set(rest.slice(restCutoff).map((step) => step.id));
 		return {
-			visibleSteps: [...lanes, ...rest.slice(restCutoff)],
+			visibleSteps: steps.filter(
+				(step) => pinned(step) || recentIds.has(step.id),
+			),
 			olderSteps: rest.slice(0, restCutoff),
 		};
 	}, [steps]);
@@ -778,15 +810,12 @@ export function PlanSteps({
 									onToggle={toggleStep}
 								/>
 							))}
-						{visibleSteps.map((step) => (
-							<StepRow
-								key={step.id}
-								step={step}
-								isActive={currentStepId === step.id}
-								isExpanded={expandedSteps.has(step.id)}
-								onToggle={toggleStep}
-							/>
-						))}
+						<ActivityRows
+							steps={visibleSteps}
+							currentStepId={currentStepId}
+							expandedSteps={expandedSteps}
+							onToggle={toggleStep}
+						/>
 					</div>
 				)}
 			</CollapsibleContent>

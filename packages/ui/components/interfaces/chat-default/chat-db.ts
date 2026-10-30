@@ -116,11 +116,14 @@ export interface IToolActivityDetail {
 	label: string;
 	target?: string;
 	query?: string;
+	/** All queries issued by this tool call, retained across progress updates. */
+	queries?: string[];
 	method?: string;
 	sources?: Array<{
 		url: string;
 		hostname: string;
 		path?: string;
+		title?: string;
 		/** Removing query parameters can change the resource, so display it without a link. */
 		linkable?: boolean;
 	}>;

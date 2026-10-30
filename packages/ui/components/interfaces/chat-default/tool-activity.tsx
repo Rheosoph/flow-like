@@ -15,7 +15,9 @@ import { getToolActivityLabel } from "../../../state/global-chat/tool-step-activ
 import type { IPlanStep, IToolActivityDetail } from "./chat-db";
 import { ReasoningBody } from "./reasoning-viewer";
 
-type ActivitySource = NonNullable<IToolActivityDetail["sources"]>[number];
+export type ActivitySource = NonNullable<
+	IToolActivityDetail["sources"]
+>[number];
 
 const ACTIVITY_ICONS = {
 	web: Globe,
@@ -28,13 +30,14 @@ const ACTIVITY_ICONS = {
 };
 
 export function stepActivityTitle(step: IPlanStep): string {
+	const title = step.title.replace(/^(?:↳\s*)+/, "");
 	const isToolLabel =
-		step.title === `Using ${step.toolName}` ||
+		title === `Using ${step.toolName}` ||
 		(step.detail?.kind === "tool_activity" &&
-			/^Using [\w./:-]+$/.test(step.title)) ||
-		step.title === step.toolName ||
-		step.title === "Step" ||
-		step.title === "Working";
+			/^Using [\w./:-]+$/.test(title)) ||
+		title === step.toolName ||
+		title === "Step" ||
+		title === "Working";
 	if (step.title && !isToolLabel) return step.title;
 	if (step.detail?.kind === "tool_activity") return step.detail.label;
 	if (step.toolName) {
@@ -59,7 +62,7 @@ function faviconUrl(hostname: string): string | undefined {
 	return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=32`;
 }
 
-function WebsiteIcon({ source }: { source: ActivitySource }) {
+export function WebsiteIcon({ source }: { source: ActivitySource }) {
 	const url = faviconUrl(source.hostname);
 	const [failedUrl, setFailedUrl] = useState<string>();
 	return url && failedUrl !== url ? (
@@ -149,21 +152,21 @@ export function ActivitySources({ steps }: { steps: IPlanStep[] }) {
 		}
 	}
 	if (!sources.size) return null;
-	const shown = [...sources.values()].slice(0, 3);
 	return (
-		<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] font-normal text-muted-foreground">
-			{shown.map((source) => (
+		<span className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] font-normal text-muted-foreground">
+			{[...sources.values()].map((source) => (
 				<span
 					key={source.hostname}
-					className="inline-flex min-w-0 max-w-full items-center gap-1.5"
+					title={source.hostname}
+					className="inline-flex size-6 items-center justify-center rounded-full border border-border/60 bg-background"
 				>
 					<WebsiteIcon source={source} />
-					<span className="truncate">{source.hostname}</span>
+					<span className="sr-only">{source.hostname}</span>
 				</span>
 			))}
-			{sources.size > shown.length && (
-				<span>+{sources.size - shown.length}</span>
-			)}
+			<span className="ml-1 tabular-nums">
+				{sources.size} {sources.size === 1 ? "website" : "websites"}
+			</span>
 		</span>
 	);
 }
