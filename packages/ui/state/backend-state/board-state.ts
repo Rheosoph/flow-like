@@ -21,6 +21,7 @@ import type {
 } from "../../lib";
 import type { IJwks, IRealtimeAccess } from "../../lib";
 import type { BoardFormatCapabilities } from "../../lib/board-format";
+import type { FlowVersionState } from "../../lib/device-management/hub/endpoints";
 import type { FlowScriptApplyOrigin } from "../../lib/flowscript-apply-failure";
 import type { IFlowScriptChanges } from "../../lib/flowscript/changes";
 import type {
@@ -285,6 +286,11 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 	): Promise<[number, number, number][]>;
+	/** The published snapshot equal to the saved draft, and the newest published snapshot. */
+	getBoardVersionCurrent?(
+		appId: string,
+		boardId: string,
+	): Promise<FlowVersionState>;
 	/**
 	 * Published versions with when and by whom each was published, newest first. Publisher
 	 * and timestamp are best effort: older versions may only carry the storage timestamp.

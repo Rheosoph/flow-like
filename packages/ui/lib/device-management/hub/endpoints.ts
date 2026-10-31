@@ -1030,8 +1030,8 @@ export interface FlowVersionState {
 export const parseFlowVersionState = (value: unknown): FlowVersionState =>
 	z
 		.object({
-			current: nullable(versionTriple),
-			newest: nullable(versionTriple),
+			current: versionTriple.nullable(),
+			newest: versionTriple.nullable(),
 		})
 		.parse(value);
 

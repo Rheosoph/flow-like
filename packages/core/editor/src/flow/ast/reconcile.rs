@@ -14295,30 +14295,14 @@ impl<'a> StructuralPlanner<'a> {
             }
             "struct_make" if fields.is_empty() => Some(SymbolValue::Source(source)),
             "struct_make_from_schema" => {
-                let meta = node_to_metadata(node);
-                for field in fields {
-                    let pin_name = format!("{}{}", super::lower::MAKE_STRUCT_PREFIX, field.key);
-                    // A wired field (including a nested struct_make chain rendered as a literal
-                    // object) keeps its source; only unwired literal fields become pin writes.
-                    if let Some(sub_source) =
-                        self.board_index.data_source_for_input(node, &pin_name)
-                        && self
-                            .resolve_expr_using_existing_source(
-                                &field.value,
-                                sub_source,
-                                target_layer.clone(),
-                            )
-                            .is_some()
-                    {
-                        continue;
-                    }
-                    if let Some(value) = literal_expr_to_value(&field.value)
-                        && let Some(pin) = metadata_input_pin(&meta, &pin_name)
-                    {
-                        let entity = NodeEntity::Existing(node_id.clone());
-                        self.queue_update_input(&entity, pin, value, &meta);
-                    }
-                }
+                let args = fields
+                    .iter()
+                    .map(|field| Arg {
+                        name: format!("{}{}", super::lower::MAKE_STRUCT_PREFIX, field.key),
+                        value: field.value.clone(),
+                    })
+                    .collect();
+                self.plan_reused_node_inputs(node, args, target_layer);
                 Some(SymbolValue::Source(source))
             }
             _ => None,
@@ -14349,8 +14333,8 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     /// Reuse the existing struct/container accessor node a `base.field` member access lowered
-    /// from (`struct_get`, `struct_break`, `map_get`, or a container-size node). The base is
-    /// recursed so literal edits deeper in the chain still apply.
+    /// from (`struct_get`, `struct_break`, `map_get`, or a container-size node). Replan the base
+    /// input so a rebuilt producer or missing edge is repaired before returning the accessor.
     fn reuse_existing_member_source(
         &mut self,
         base: &Expr,
@@ -14402,14 +14386,22 @@ impl<'a> StructuralPlanner<'a> {
                 return None;
             }
         }
-        if let Some(base_source) = self.board_index.data_source_for_input(node, base_input) {
-            let _ = self.resolve_expr_using_existing_source(base, base_source, target_layer);
+        let mut args = vec![Arg {
+            name: base_input.to_string(),
+            value: base.clone(),
+        }];
+        if node.name == "struct_get" {
+            args.push(Arg {
+                name: "field".to_string(),
+                value: Expr::Literal(Literal::String(field.to_string())),
+            });
         }
+        self.plan_reused_node_inputs(node, args, target_layer);
         Some(SymbolValue::Source(source))
     }
 
-    /// Reuse the existing `array_get` node a `base[index]` access lowered from. A changed
-    /// literal index becomes a pin update on the same node.
+    /// Reuse the existing `array_get` node a `base[index]` access lowered from, replanning both
+    /// inputs so changed producers, computed indices, and literal edits reach the live node.
     fn reuse_existing_index_source(
         &mut self,
         base: &Expr,
@@ -14424,16 +14416,20 @@ impl<'a> StructuralPlanner<'a> {
         if node.name != "array_get" || source.output_pin.as_deref() != Some("element") {
             return None;
         }
-        if let Some(base_source) = self.board_index.data_source_for_input(node, "array_in") {
-            let _ = self.resolve_expr_using_existing_source(base, base_source, target_layer);
-        }
-        if let Some(value) = literal_expr_to_value(index) {
-            let meta = node_to_metadata(node);
-            if let Some(pin) = metadata_input_pin(&meta, "index") {
-                let entity = NodeEntity::Existing(node_id.clone());
-                self.queue_update_input(&entity, pin, value, &meta);
-            }
-        }
+        self.plan_reused_node_inputs(
+            node,
+            vec![
+                Arg {
+                    name: "array_in".to_string(),
+                    value: base.clone(),
+                },
+                Arg {
+                    name: "index".to_string(),
+                    value: index.clone(),
+                },
+            ],
+            target_layer,
+        );
         Some(SymbolValue::Source(source))
     }
 
@@ -14454,20 +14450,31 @@ impl<'a> StructuralPlanner<'a> {
         if node.name != TYPES_SELECT_NODE_TYPE {
             return None;
         }
-        let meta = node_to_metadata(node);
-        for (pin_name, expr) in [("condition", cond), ("a", then), ("b", otherwise)] {
-            if let Some(value) = literal_expr_to_value(expr) {
-                if let Some(pin) = metadata_input_pin(&meta, pin_name) {
-                    let entity = NodeEntity::Existing(node_id.clone());
-                    self.queue_update_input(&entity, pin, value, &meta);
-                }
-            } else if let Some(sub_source) = self.board_index.data_source_for_input(node, pin_name)
-            {
-                let _ =
-                    self.resolve_expr_using_existing_source(expr, sub_source, target_layer.clone());
-            }
-        }
+        let args = [("condition", cond), ("a", then), ("b", otherwise)]
+            .into_iter()
+            .map(|(name, value)| Arg {
+                name: name.to_string(),
+                value: value.clone(),
+            })
+            .collect();
+        self.plan_reused_node_inputs(node, args, target_layer);
         Some(SymbolValue::Source(source))
+    }
+
+    /// Reusing a value node also reconciles its inputs against the current bindings. Matching
+    /// an old input recursively is insufficient when its producer is replaced or disconnected.
+    fn plan_reused_node_inputs(
+        &mut self,
+        node: &Node,
+        args: Vec<Arg>,
+        target_layer: Option<String>,
+    ) {
+        let mut call = Call::placeholder();
+        call.node_type = node.name.clone();
+        call.display = to_camel_case(&node.name);
+        call.args = args;
+        let entity = NodeEntity::Existing(node.id.clone());
+        self.plan_call_arguments(&call, &entity, &node_to_metadata(node), target_layer, true);
     }
 
     /// Reuse the existing `string_format` node a template literal lowered from, diffing its
@@ -20726,6 +20733,10 @@ mod tests {
 
     mod orphan_expression_tests {
         include!("reconcile/orphan_expression_tests.rs");
+    }
+
+    mod return_source_reuse_tests {
+        include!("reconcile/return_source_reuse_tests.rs");
     }
 
     use super::*;

@@ -31,8 +31,8 @@ export interface LatestFlows {
 
 /**
  * Online apps: the hub publishes. Never the desktop's local-first
- * `createBoardVersion`: it publishes in the background and returns the next
- * draft number, not the published one.
+ * `createBoardVersion`: it returns the next draft number rather than the
+ * published one.
  */
 export function hubLatestFlows(api: IApiState, profile: IProfile): LatestFlows {
 	return {

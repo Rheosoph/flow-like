@@ -69,3 +69,31 @@ describe("web board sync fallback", () => {
 		expect(mocks.apiGet).not.toHaveBeenCalled();
 	});
 });
+
+describe("web board version status", () => {
+	test("keeps the saved draft match separate from the newest published version", async () => {
+		const result = { current: null, newest: [0, 0, 4] };
+		mocks.apiGet.mockResolvedValue(result);
+		const state = new WebBoardState({ auth: {} } as never);
+
+		expect(await state.getBoardVersionCurrent("app#1", "board/1")).toEqual(
+			result,
+		);
+		expect(mocks.apiGet.mock.calls[0][0]).toBe(
+			"apps/app%231/board/board%2F1/version/current",
+		);
+	});
+
+	test("rejects unavailable or malformed state instead of claiming no publication", async () => {
+		const state = new WebBoardState({ auth: {} } as never);
+		const failure = routeMissing();
+		mocks.apiGet.mockRejectedValueOnce(failure).mockResolvedValueOnce({});
+
+		await expect(state.getBoardVersionCurrent("app", "board")).rejects.toBe(
+			failure,
+		);
+		await expect(
+			state.getBoardVersionCurrent("app", "board"),
+		).rejects.toThrow();
+	});
+});
