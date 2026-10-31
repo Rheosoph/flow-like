@@ -1,7 +1,6 @@
 use crate::{
     event_sink::{EventRegistration, ensure_signed_in_owner, trigger_token::TriggerAccount},
     offline_writes::run_storage::{RunStorage, RunStorageRequest},
-    state::TauriSettingsState,
     utils::{UiEmitTarget, local_execution_environment},
 };
 use flow_like::app::{App, AppVisibility};
@@ -75,6 +74,7 @@ pub struct EventBusEvent {
     /// Whom the trigger's PAT was verified for. An online app's run starts
     /// only while that account is signed in on the current profile's hub.
     pub token_owner: Option<TriggerAccount>,
+    pub profile_binding: Option<crate::event_sink::trigger_token::TriggerProfile>,
 
     pub callback: Option<Arc<BufferedInterComHandler>>,
     pub(crate) request_control: Option<Arc<EventRequestControl>>,
@@ -112,15 +112,26 @@ impl EventBusEvent {
         authority: Option<(Event, UserExecutionContext)>,
     ) -> flow_like_types::Result<Option<LogMeta>> {
         let started = Arc::new(AtomicBool::new(false));
-        match self
-            .execute_inner(
-                app_handle,
-                flow_like_state.clone(),
-                started.clone(),
-                authority,
-            )
-            .await
-        {
+        let execution =
+            async {
+                let binding = self.profile_binding.as_ref().ok_or_else(|| anyhow::anyhow!(
+                "Enable this trigger again to bind it to a profile before background execution"
+            ))?;
+                let (profile, auth) = binding.resolve(app_handle).await?;
+                crate::functions::ai::native_tool_bridge::with_execution_profile(
+                    profile.hub_profile.id.clone(),
+                    self.execute_inner(
+                        app_handle,
+                        flow_like_state.clone(),
+                        started.clone(),
+                        authority,
+                        profile,
+                        auth,
+                    ),
+                )
+                .await
+            };
+        match execution.await {
             Ok(meta) => Ok(meta),
             Err(error) => {
                 if !started.load(Ordering::Relaxed) {
@@ -183,6 +194,8 @@ impl EventBusEvent {
         flow_like_state: Arc<FlowLikeState>,
         started: Arc<AtomicBool>,
         authority: Option<(Event, UserExecutionContext)>,
+        profile: crate::profile::UserProfile,
+        captured_auth: Option<crate::native_auth::SessionBinding>,
     ) -> flow_like_types::Result<Option<LogMeta>> {
         if let Some(request) = &self.request_control {
             anyhow::ensure!(
@@ -217,7 +230,6 @@ impl EventBusEvent {
             board_version,
         )
         .await?;
-        let profile = TauriSettingsState::current_profile(app_handle).await?;
         // A location trigger's dispatch already bound the run to the account
         // its region is registered for.
         if resolved_identity.is_none() && !matches!(app.visibility, AppVisibility::Offline) {
@@ -229,6 +241,25 @@ impl EventBusEvent {
                 account.as_ref(),
             )?;
         }
+        let native_auth = crate::event_sink::trigger_token::execution_authority(
+            captured_auth,
+            self.token.as_deref(),
+        )?;
+        let execution_token = match native_auth.as_ref() {
+            Some(binding) if matches!(app.visibility, AppVisibility::Offline) => Some(
+                binding
+                    .cached_access_token()
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error))?,
+            ),
+            Some(binding) => Some(
+                binding
+                    .access_token(None)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error))?,
+            ),
+            None => self.token.clone(),
+        };
 
         crate::functions::automation_approval::ensure_automation_approved(
             app_handle,
@@ -275,15 +306,19 @@ impl EventBusEvent {
             )
         };
 
-        let request_authorizer = crate::execution_credentials::request_authorizer(
-            &profile.hub_profile.hub,
-            &self.app_id,
-            self.token.as_deref(),
-            None,
-            None,
-        );
+        let request_authorizer = if let Some(binding) = native_auth.as_ref() {
+            crate::execution_credentials::native_request_authorizer(binding.clone(), &self.app_id)
+        } else {
+            crate::execution_credentials::request_authorizer(
+                &profile.hub_profile.hub,
+                &self.app_id,
+                execution_token.as_deref(),
+                None,
+                None,
+            )
+        };
         if !matches!(app.visibility, AppVisibility::Offline) {
-            if self.token.is_none() {
+            if execution_token.is_none() {
                 return Err(flow_like_types::anyhow!(
                     "No token registered, cannot run online event"
                 ));
@@ -297,13 +332,15 @@ impl EventBusEvent {
         let storage = RunStorage::resolve(
             app_handle,
             RunStorageRequest {
+                profile_id: Some(&profile.hub_profile.id),
                 visibility: &app.visibility,
                 app_id: &self.app_id,
                 hub: &profile.hub_profile.hub,
                 secure: profile.hub_profile.secure,
-                token: self.token.as_deref(),
+                token: execution_token.as_deref(),
                 session_id: None,
                 webview: None,
+                native_auth: native_auth.as_ref(),
                 event_id: Some(&self.event_id),
                 device_credentials: None,
             },
@@ -312,6 +349,12 @@ impl EventBusEvent {
 
         let mut renewable_state = (*execution_state).clone();
         renewable_state.request_authorizer = Some(request_authorizer);
+        #[cfg(desktop)]
+        {
+            renewable_state.device_model_connector = native_auth
+                .as_ref()
+                .map(|binding| crate::device_models::connector_for_session(binding.clone()));
+        }
         let credentials = storage.install(&mut renewable_state).await?;
         let execution_state = Arc::new(renewable_state);
 
@@ -320,7 +363,8 @@ impl EventBusEvent {
         let (oauth_tokens, oauth_authorization) = crate::event_sink::oauth::resolve_tokens(
             &profile.hub_profile.hub,
             profile.hub_profile.secure,
-            self.token.as_deref(),
+            execution_token.as_deref(),
+            native_auth.as_ref(),
             &self.oauth_tokens,
         )
         .await?;
@@ -335,7 +379,7 @@ impl EventBusEvent {
             false,
             buffered_sender.into_callback(),
             credentials,
-            oauth_authorization.or_else(|| self.token.clone()),
+            oauth_authorization.or_else(|| execution_token.clone()),
             oauth_tokens,
             None,
             None,
@@ -358,7 +402,7 @@ impl EventBusEvent {
                 &mut internal_run,
                 &app.visibility,
                 &self.app_id,
-                self.token.as_deref(),
+                execution_token.as_deref(),
                 &profile.hub_profile.hub,
                 &flow_like_state,
             )
@@ -477,7 +521,8 @@ impl EventBusEvent {
                     visibility: &app.visibility,
                     hub: &profile.hub_profile.hub,
                     secure: profile.hub_profile.secure,
-                    token: self.token.as_deref(),
+                    token: execution_token.as_deref(),
+                    native_auth: native_auth.as_ref(),
                 },
             )
             .await;
@@ -524,6 +569,12 @@ impl EventBus {
         if !registration.offline && registration.personal_access_token.is_none() {
             return Err("No token registered, cannot send online events".to_string());
         }
+        if registration.profile_binding.is_none() {
+            return Err(
+                "Enable this trigger again to bind it to a profile before background execution"
+                    .into(),
+            );
+        }
 
         let token_owner = registration.token_owner();
         let event = EventBusEvent {
@@ -532,6 +583,7 @@ impl EventBus {
             event_id: registration.event_id,
             token: registration.personal_access_token,
             token_owner,
+            profile_binding: registration.profile_binding,
             offline: registration.offline,
             callback,
             request_control,

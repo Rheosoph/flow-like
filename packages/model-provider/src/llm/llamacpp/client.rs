@@ -167,6 +167,7 @@ pub struct LlamaCppClient {
     bearer_token: Option<String>,
     /// The name of a server that never downloads media links, such as LM Studio.
     inline_media_only: Option<&'static str>,
+    request_params: crate::request_params::RequestParams,
     // Some in-process transports (notably iOS MLX) own the loopback server
     // behind this client. Keep that runtime alive for every cloned completion
     // client/model until the request using it has actually finished.
@@ -190,6 +191,7 @@ impl LlamaCppClient {
             http_client: reqwest::Client::new(),
             bearer_token: None,
             inline_media_only: None,
+            request_params: crate::request_params::RequestParams::default(),
             _keepalive: None,
         }
     }
@@ -200,6 +202,7 @@ impl LlamaCppClient {
             http_client: reqwest::Client::new(),
             bearer_token: Some(bearer_token.into()),
             inline_media_only: None,
+            request_params: crate::request_params::RequestParams::default(),
             _keepalive: None,
         }
     }
@@ -207,6 +210,14 @@ impl LlamaCppClient {
     pub fn with_keepalive(mut self, keepalive: Arc<dyn Send + Sync>) -> Self {
         self._keepalive = Some(keepalive);
         self
+    }
+
+    pub(crate) fn with_request_params(
+        mut self,
+        provider: &crate::provider::ModelProvider,
+    ) -> anyhow::Result<Self> {
+        self.request_params = crate::request_params::RequestParams::from_provider(provider)?;
+        Ok(self)
     }
 
     /// For a server, named `server` in errors, that never downloads a media link: a linked part
@@ -1908,7 +1919,8 @@ impl completion::CompletionModel for CompletionModel {
         completion_request: CompletionRequest,
     ) -> Result<completion::CompletionResponse<Self::Response>, CompletionError> {
         let tool_argument_specs = Self::tool_argument_specs(&completion_request.tools);
-        let request = self.create_completion_request(completion_request)?;
+        let mut request = self.create_completion_request(completion_request)?;
+        self.client.request_params.apply(&mut request);
 
         let response = self
             .client
@@ -1979,6 +1991,7 @@ impl completion::CompletionModel for CompletionModel {
         let mut request = self.create_completion_request(completion_request)?;
         request["stream"] = json!(true);
         Self::enable_stream_usage(&mut request);
+        self.client.request_params.apply(&mut request);
         let request_summary = Self::summarize_request_messages(&request);
 
         let builder = self

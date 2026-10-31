@@ -9,6 +9,7 @@ import { ChatAiDisclosure } from "./ai-disclosure";
 import { ChatPlaceholder } from "./chat-placeholder";
 import {
 	ChatBox,
+	type ChatBoxModel,
 	type ChatBoxRef,
 	type ChatBoxThinking,
 	type ISendMessageFunction,
@@ -23,6 +24,7 @@ interface ChatWelcomeProps {
 	/** Needed to resolve a storage-backed placeholder image. */
 	appId?: string;
 	thinking?: ChatBoxThinking;
+	model?: ChatBoxModel;
 }
 
 export function ChatWelcome({
@@ -32,6 +34,7 @@ export function ChatWelcome({
 	isSending = false,
 	appId,
 	thinking,
+	model,
 }: Readonly<ChatWelcomeProps>) {
 	const { t } = useTranslation("chat");
 	const [currentMessage, setCurrentMessage] = useState("");
@@ -303,6 +306,7 @@ export function ChatWelcome({
 							defaultActiveTools={config?.default_tools ?? []}
 							onSendMessage={onSendMessage}
 							thinking={thinking}
+							model={model}
 							onContentChange={(content) => {
 								setCurrentMessage(content);
 								activity.report(content);

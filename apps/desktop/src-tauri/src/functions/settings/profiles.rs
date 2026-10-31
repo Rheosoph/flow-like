@@ -447,6 +447,13 @@ pub async fn upsert_profile(
     }
     if let Some(existing) = settings.profiles.get(&profile.hub_profile.id) {
         profile.hub_profile.custom_bits = existing.hub_profile.custom_bits.clone();
+        if existing.hub_profile.hub != profile.hub_profile.hub
+            || existing.hub_profile.secure != profile.hub_profile.secure
+        {
+            crate::native_auth::invalidate_profile(&existing.hub_profile)
+                .await
+                .map_err(|error| TauriFunctionError::new(&error))?;
+        }
     }
 
     settings
@@ -498,7 +505,16 @@ pub async fn merge_synced_profile(
         .profiles
         .get_mut(&profile.hub_profile.id)
         .ok_or_else(|| TauriFunctionError::new("This profile no longer exists."))?;
+    let previous_hub = existing.hub_profile.clone();
     let applied = existing.merge_synced(profile, &expected_updated, &remote_updated);
+    if applied
+        && (previous_hub.hub != existing.hub_profile.hub
+            || previous_hub.secure != existing.hub_profile.secure)
+    {
+        crate::native_auth::invalidate_profile(&previous_hub)
+            .await
+            .map_err(|error| TauriFunctionError::new(&error))?;
+    }
     if recording_identity_before != recording_profile_identity(&settings) {
         recording::stop_for_profile_change(&app_handle, &mut recording_guard).await?;
     }
@@ -586,6 +602,16 @@ pub async fn remap_profile_id(
         &profile.hub_profile.hub,
     )
     .await?;
+    if local_id != server_id {
+        crate::native_auth::invalidate_profile(&profile.hub_profile)
+            .await
+            .map_err(|error| TauriFunctionError::new(&error))?;
+        if let Some(replaced) = settings.profiles.get(&server_id) {
+            crate::native_auth::invalidate_profile(&replaced.hub_profile)
+                .await
+                .map_err(|error| TauriFunctionError::new(&error))?;
+        }
+    }
     settings.profiles.remove(&local_id);
 
     // Update the profile's ID
@@ -627,6 +653,11 @@ pub async fn delete_profile(
             .map(|profile| profile.hub_profile.id == profile_id)
             .unwrap_or(false);
 
+    if let Some(profile) = settings.profiles.get(&profile_id) {
+        crate::native_auth::invalidate_profile(&profile.hub_profile)
+            .await
+            .map_err(|error| TauriFunctionError::new(&error))?;
+    }
     settings.profiles.remove(&profile_id);
 
     if deletes_current_profile || !settings.profiles.contains_key(&settings.current_profile) {

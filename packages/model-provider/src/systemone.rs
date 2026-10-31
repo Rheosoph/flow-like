@@ -30,6 +30,7 @@ pub struct SystemOneClient {
     images_in_state: bool,
     authorizer: Option<ScopedRequestAuthorizer>,
     client: reqwest::Client,
+    request_params: crate::request_params::RequestParams,
 }
 
 fn endpoint(base_url: &str) -> Result<reqwest::Url> {
@@ -81,6 +82,7 @@ impl SystemOneClient {
             images_in_state: false,
             authorizer: None,
             client: http_client_builder().build()?,
+            request_params: crate::request_params::RequestParams::default(),
         })
     }
 
@@ -97,6 +99,14 @@ impl SystemOneClient {
     pub fn with_usage_headers(mut self, headers: Vec<(String, String)>) -> Self {
         self.usage_headers = headers;
         self
+    }
+
+    pub(crate) fn with_request_params(
+        mut self,
+        provider: &crate::provider::ModelProvider,
+    ) -> Result<Self> {
+        self.request_params = crate::request_params::RequestParams::from_provider(provider)?;
+        Ok(self)
     }
 
     /// Encode the Images pin as OpenRouter state content parts.
@@ -128,6 +138,7 @@ impl SystemOneClient {
             serde_json::to_value(request)?
         };
         body["model"] = Value::String(self.model.clone());
+        self.request_params.apply(&mut body);
         let mut builder = self.client.post(self.endpoint.clone()).json(&body);
         if !self.bearer.is_empty() {
             builder = builder.bearer_auth(&self.bearer);
@@ -235,6 +246,41 @@ mod tests {
             "team":{"type":"choice","choice":"billing","probabilities":{"billing":0.8,"support":0.2},"confidence":0.3},
             "urgency":{"type":"score","score":0.7,"legend":{"0":"low","1":"high"},"probabilities":{"0":0.3,"1":0.7},"confidence":0.2}
         },"usage":{"input_tokens":50,"output_tokens":20,"cost":0.00002}})
+    }
+
+    #[tokio::test]
+    async fn custom_decision_bits_apply_native_request_overrides() {
+        let provider = crate::provider::ModelProvider {
+            provider_name: "custom:systemone".into(),
+            model_id: Some("decision-model".into()),
+            version: None,
+            api_surface: None,
+            params: Some(std::collections::HashMap::from([
+                ("endpoint".into(), json!("https://models.test/v1")),
+                ("api_key".into(), json!("private-key")),
+                (
+                    "request_params".into(),
+                    json!({"future_option": {"enabled": true}, "state": {"locale": "de"}}),
+                ),
+            ])),
+        };
+        let client =
+            crate::llm::custom::systemone("custom:systemone", &provider, ProviderEgress::Open)
+                .unwrap();
+        let request = client.build_request(&request()).await.unwrap();
+        let body: Value =
+            serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(body["future_option"], json!({"enabled": true}));
+        assert_eq!(
+            body["state"],
+            json!({"message": "Please refund the duplicate charge", "locale": "de"})
+        );
+        assert_eq!(body["model"], "decision-model");
+        assert!(body.get("api_key").is_none() && body.get("request_params").is_none());
+        assert_eq!(
+            request.headers()[http::header::AUTHORIZATION],
+            "Bearer private-key"
+        );
     }
     #[tokio::test]
     async fn openrouter_image_dialect_is_explicit_and_preserves_text_requests() {

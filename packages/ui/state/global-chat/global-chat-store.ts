@@ -9,10 +9,12 @@ import type { FlowScriptWorkspaceCandidate } from "../../components/flowpilot/fl
 import type { AIProvider } from "../../components/flowpilot/types";
 import type {
 	IAttachment,
+	IChatMainWidget,
 	IChatUsageStat,
 	IChatWidget,
 	IPlanStep,
 } from "../../components/interfaces/chat-default/chat-db";
+import type { IChatMessageInteraction } from "../../components/interfaces/chat-default/chat-message-interaction";
 import { mergeChatWidgets } from "../../components/interfaces/chat-default/event-processor";
 import { joinContentText } from "../../components/interfaces/chat-default/inline-segments";
 import type { AskUserChoice, AskUserForm } from "../../lib/ask-user";
@@ -164,6 +166,8 @@ export interface InlineAppSurface extends InlineCardAnchor {
 }
 
 export interface GlobalChatDraft {
+	interaction?: IChatMessageInteraction;
+	reactionAccepted?: boolean;
 	/** Native input can wait for model readiness; never deliver it under a different account. */
 	nativeScope?: string;
 	nativeRequest?: NativeActionRequest;
@@ -228,6 +232,7 @@ export interface GlobalChatRun {
 	subAttachments: IAttachment[];
 	subUsageStats: IChatUsageStat[];
 	subWidgets: IChatWidget[];
+	subMainWidget?: IChatMainWidget;
 	pendingAppRefs: string[];
 	debugReport: IAgentDebugReport | null;
 	steers: GlobalChatSteer[];
@@ -242,6 +247,9 @@ export interface GlobalChatQueuedMessage {
 	id: string;
 	conversationId: string;
 	content: string;
+	interaction?: IChatMessageInteraction;
+	/** The UI already reflects this operation; draining must not undo later reactions. */
+	reactionAccepted?: boolean;
 	/** Raw browser files, held until the send actually happens (they are uploaded at send time). */
 	files?: File[];
 	nativeRequest?: NativeActionRequest;
@@ -487,6 +495,8 @@ interface GlobalChatState {
 	addSubUsageStats: (runId: string, stats: IChatUsageStat[]) => void;
 	/** Upsert nested-run widgets (by instance id, longer-updates-wins) into the run's bubble. */
 	addSubWidgets: (runId: string, widgets: IChatWidget[]) => void;
+	/** Replace or clear the conversation pane from an app workflow. */
+	setSubMainWidget: (runId: string, mainWidget: IChatMainWidget) => void;
 	setFlowscriptWorkspace: (
 		runId: string | null,
 		workspace: FlowScriptWorkspaceCandidate | null,
@@ -560,6 +570,7 @@ function foldSubBuffers(run: GlobalChatRun): GlobalChatRun {
 			plan_steps: [...ownSteps, ...run.subPlanSteps],
 			files: run.subAttachments.length > 0 ? run.subAttachments : message.files,
 			widgets: run.subWidgets.length > 0 ? run.subWidgets : message.widgets,
+			main_widget: run.subMainWidget ?? message.main_widget,
 			usage_stats: usage.length > 0 ? usage : undefined,
 			app_refs:
 				run.pendingAppRefs.length > 0
@@ -1157,6 +1168,14 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 					? run
 					: foldSubBuffers({ ...run, subWidgets });
 			}),
+		),
+	setSubMainWidget: (runId, subMainWidget) =>
+		set((state) =>
+			patchRun(state, runId, (run) =>
+				run.subMainWidget === subMainWidget
+					? run
+					: foldSubBuffers({ ...run, subMainWidget }),
+			),
 		),
 	setFlowscriptWorkspace: (runId, flowscriptWorkspace) =>
 		set((state) => {

@@ -1172,6 +1172,7 @@ export function FlowScriptPanel({
 						{
 							commandCount: result.commands.length,
 							diagnostics: result.diagnostics,
+							warnings: result.warnings,
 							structuredDiagnostics: result.structured_diagnostics,
 						},
 						draft,
@@ -2452,7 +2453,11 @@ export function FlowScriptPanel({
 	const copyApplyDetails = useCallback(async () => {
 		if (!applyReport) return;
 		try {
-			await navigator.clipboard.writeText(applyReport.diagnostics.join("\n"));
+			await navigator.clipboard.writeText(
+				[...applyReport.diagnostics, ...(applyReport.warnings ?? [])].join(
+					"\n",
+				),
+			);
 			toast.success(
 				t("flowscriptApplyDetailsCopied", "Apply details copied to clipboard"),
 			);
@@ -2515,7 +2520,7 @@ export function FlowScriptPanel({
 	const applyDiagnosticEntries = useMemo(
 		() =>
 			flowScriptDiagnosticEntries(
-				applyReport?.diagnostics ?? [],
+				[...(applyReport?.diagnostics ?? []), ...(applyReport?.warnings ?? [])],
 				applyReport?.structuredDiagnostics,
 			),
 		[applyReport],
@@ -2707,6 +2712,7 @@ export function FlowScriptPanel({
 							state={{
 								counts: previewCounts,
 								errorCount: previewErrorCount,
+								warningCount: previewResponse?.warnings?.length ?? 0,
 								destructiveCount: previewDestructiveCount,
 								checking,
 								remoteOverlapCount,
@@ -2978,6 +2984,7 @@ export function FlowScriptPanel({
 				<FlowScriptApplyPreviewList
 					commands={previewCommands ?? []}
 					diagnostics={previewErrorCount > 0 ? previewResponse.diagnostics : []}
+					warnings={previewResponse.warnings}
 					diagnosticEntries={previewDiagnosticEntries}
 					source={text}
 					onRevealDiagnostic={revealDiagnostic}
@@ -3126,7 +3133,9 @@ export function FlowScriptPanel({
 								{t("countWarnings", {
 									defaultValue_one: "{{count}} warning",
 									defaultValue_other: "{{count}} warnings",
-									count: applyReport.diagnostics.length,
+									count:
+										applyReport.diagnostics.length +
+										(applyReport.warnings?.length ?? 0),
 								})}
 							</span>
 						)}

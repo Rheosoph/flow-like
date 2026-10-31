@@ -330,6 +330,9 @@ impl WidgetBundleReader<std::fs::File> {
 impl<R: Read + Seek> WidgetBundleReader<R> {
     pub fn new(reader: R) -> Result<Self> {
         let mut archive = ZipArchive::new(reader).context("Failed to read widget bundle ZIP")?;
+        archive
+            .validate_header_consistency()
+            .context("Widget bundle ZIP headers are inconsistent")?;
         let manifest = {
             let entry = archive
                 .by_name(BUNDLE_MANIFEST_PATH)
@@ -948,6 +951,13 @@ mod tests {
     }
 
     fn with_claimed_size(mut bytes: Vec<u8>, name: &str, size: u32) -> Vec<u8> {
+        let local_header = ZipArchive::new(Cursor::new(bytes.as_slice()))
+            .unwrap()
+            .by_name(name)
+            .unwrap()
+            .header_start() as usize;
+        // Keep both headers consistent so the test reaches the allocation limit.
+        bytes[local_header + 22..local_header + 26].copy_from_slice(&size.to_le_bytes());
         let signature = 0x0201_4b50u32.to_le_bytes();
         let mut offset = 0;
         while let Some(found) = bytes[offset..].windows(4).position(|w| w == signature) {
@@ -960,6 +970,47 @@ mod tests {
             offset = header + 4;
         }
         panic!("{name} has no central directory entry");
+    }
+
+    #[test]
+    fn conflicting_local_and_central_entry_names_are_rejected_before_reading() {
+        for name in [
+            BUNDLE_MANIFEST_PATH,
+            "widgets/kpi-card/index.html",
+            "assets/extra/source-map.json",
+        ] {
+            let mut bytes = with_extra_entry("assets/extra/source-map.json", b"{}");
+            let local_header = ZipArchive::new(Cursor::new(bytes.as_slice()))
+                .unwrap()
+                .by_name(name)
+                .unwrap()
+                .header_start() as usize;
+            let local_name = local_header + 30;
+            assert_eq!(&bytes[local_name..local_name + name.len()], name.as_bytes());
+            bytes[local_name] = b'x';
+
+            // Ordinary ZIP reads still trust the unchanged central directory name.
+            let mut archive = ZipArchive::new(Cursor::new(bytes.as_slice())).unwrap();
+            let mut data = Vec::new();
+            archive
+                .by_name(name)
+                .unwrap()
+                .read_to_end(&mut data)
+                .unwrap();
+            assert!(!data.is_empty());
+
+            let error = WidgetBundleReader::from_bytes(bytes)
+                .err()
+                .expect("conflicting entry names must be refused before reading the manifest");
+            assert!(
+                error.to_string().contains("ZIP headers are inconsistent"),
+                "{name}: {error:#}"
+            );
+            assert!(
+                format!("{error:#}").contains("filename mismatch"),
+                "{error:#}"
+            );
+        }
     }
 
     #[test]

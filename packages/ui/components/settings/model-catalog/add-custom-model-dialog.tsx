@@ -18,6 +18,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useInvalidateInvoke } from "../../../hooks";
 import {
+	parseCustomRequestParams,
+	supportsCustomRequestParams,
+	withCustomRequestParams,
+} from "../../../lib/bit/custom-request-params";
+import {
 	type ExternalModelCatalog,
 	type IProviderDef,
 	type IProviderField,
@@ -748,6 +753,7 @@ function AddCustomModelWizard({
 	);
 	const [providerKey, setProviderKey] = useState<string | null>(null);
 	const [fieldValues, setFieldValues] = useState<Record<string, string>>({});
+	const [requestParamsText, setRequestParamsText] = useState("");
 	const [contextLength, setContextLength] = useState(DEFAULT_CONTEXT_LENGTH);
 	const [isVision, setIsVision] = useState(false);
 	const [isDecision, setIsDecision] = useState(false);
@@ -785,6 +791,10 @@ function AddCustomModelWizard({
 		() => availableProviders.find((p) => p.key === providerKey) ?? null,
 		[availableProviders, providerKey],
 	);
+	const requestParams = useMemo(
+		() => parseCustomRequestParams(requestParamsText),
+		[requestParamsText],
+	);
 
 	useEffect(() => {
 		if (!open) return;
@@ -797,6 +807,7 @@ function AddCustomModelWizard({
 			setLocalFormat(canHostLlamaCPP ? "gguf" : "mlx");
 			setProviderKey(null);
 			setFieldValues({});
+			setRequestParamsText("");
 			setContextLength(DEFAULT_CONTEXT_LENGTH);
 			setIsVision(false);
 			setIsDecision(false);
@@ -854,6 +865,11 @@ function AddCustomModelWizard({
 			if (raw !== undefined && raw !== null) values[field.key] = String(raw);
 		}
 		setFieldValues(values);
+		setRequestParamsText(
+			providerParams.request_params === undefined
+				? ""
+				: JSON.stringify(providerParams.request_params, null, 2),
+		);
 		setContextLength(String(params?.context_length ?? DEFAULT_CONTEXT_LENGTH));
 		setIsVision(existingBit.type === IBitTypes.Vlm);
 		setIsDecision(existingBit.type === IBitTypes.SystemOne);
@@ -902,6 +918,7 @@ function AddCustomModelWizard({
 				if (field.defaultValue) seeded[field.key] = field.defaultValue;
 			}
 			setFieldValues(seeded);
+			setRequestParamsText("");
 			setIsVision(false);
 			setClassification({
 				...defaultClassification(),
@@ -1323,6 +1340,11 @@ function AddCustomModelWizard({
 			return null;
 		}
 		if (!providerDef) return t("pickAProviderFirst", "Pick a provider first");
+		if (
+			supportsCustomRequestParams(providerDef.providerName) &&
+			requestParams.error
+		)
+			return requestParams.error;
 		for (const field of providerDef.fields) {
 			if (!field.required) continue;
 			if (field.secret && isEdit) continue;
@@ -1352,6 +1374,7 @@ function AddCustomModelWizard({
 		mmprojSize,
 		providerDef,
 		fieldValues,
+		requestParams.error,
 		isEdit,
 		existingBit?.parameters,
 	]);
@@ -1418,8 +1441,19 @@ function AddCustomModelWizard({
 
 			if (!isHf) {
 				if (!providerDef) return;
-				const connection = providerFieldValues(providerDef, fieldValues);
-				Object.assign(params, connection.params);
+				const connection = providerFieldValues(
+					providerDef,
+					fieldValues,
+					existingProvider.provider_name === providerDef.providerName
+						? (existingProvider.params as Record<string, unknown> | undefined)
+						: undefined,
+				);
+				Object.assign(
+					params,
+					supportsCustomRequestParams(providerDef.providerName)
+						? withCustomRequestParams(connection.params, requestParams.value)
+						: connection.params,
+				);
 				Object.assign(secrets, connection.secrets);
 				modelId = connection.modelId;
 				version = connection.version;
@@ -1605,6 +1639,7 @@ function AddCustomModelWizard({
 		hfImport,
 		providerDef,
 		fieldValues,
+		requestParams.value,
 		isVision,
 		contextLength,
 		classification,
@@ -1705,6 +1740,9 @@ function AddCustomModelWizard({
 								def={providerDef}
 								values={fieldValues}
 								onChange={setFieldValue}
+								requestParamsText={requestParamsText}
+								onRequestParamsChange={setRequestParamsText}
+								requestParamsError={requestParams.error}
 								isEdit={isEdit}
 								canDiscover={canUseNativeProviders}
 								onModelSelected={(name) =>
@@ -2397,6 +2435,9 @@ function ProviderConnectionSection({
 	def,
 	values,
 	onChange,
+	requestParamsText,
+	onRequestParamsChange,
+	requestParamsError,
 	isEdit,
 	canDiscover,
 	onModelSelected,
@@ -2404,6 +2445,9 @@ function ProviderConnectionSection({
 	def: IProviderDef;
 	values: Record<string, string>;
 	onChange: (key: string, value: string) => void;
+	requestParamsText: string;
+	onRequestParamsChange: (value: string) => void;
+	requestParamsError: string | null;
 	isEdit: boolean;
 	canDiscover: boolean;
 	onModelSelected: (name: string) => void;
@@ -2411,6 +2455,7 @@ function ProviderConnectionSection({
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const [showAdvanced, setShowAdvanced] = useState(false);
+	const showRequestParams = supportsCustomRequestParams(def.providerName);
 	const [catalog, setCatalog] = useState<ExternalModelCatalog | null>(null);
 	const [loadingModels, setLoadingModels] = useState(false);
 	const [discoveryError, setDiscoveryError] = useState<string | null>(null);
@@ -2556,7 +2601,7 @@ function ProviderConnectionSection({
 					/>
 				))}
 			</div>
-			{advancedFields.length > 0 && (
+			{(advancedFields.length > 0 || showRequestParams) && (
 				<Collapsible open={showAdvanced} onOpenChange={setShowAdvanced}>
 					<CollapsibleTrigger asChild>
 						<button
@@ -2580,6 +2625,38 @@ function ProviderConnectionSection({
 									isEdit={isEdit}
 								/>
 							))}
+							{showRequestParams && (
+								<div className="space-y-1.5">
+									<Label htmlFor="custom-request-params">
+										Request parameters (JSON)
+									</Label>
+									<Textarea
+										id="custom-request-params"
+										value={requestParamsText}
+										onChange={(event) =>
+											onRequestParamsChange(event.target.value)
+										}
+										placeholder="{}"
+										spellCheck={false}
+										className="min-h-32 font-mono text-xs"
+										aria-invalid={!!requestParamsError}
+										aria-describedby="custom-request-params-help"
+									/>
+									<p
+										id="custom-request-params-help"
+										className="text-xs text-muted-foreground"
+									>
+										Use the provider's request body field names. These values
+										override generated parameters. The app controls streaming
+										mode. Leave empty to remove the overrides.
+									</p>
+									{requestParamsError && (
+										<p role="alert" className="text-xs text-destructive">
+											{requestParamsError}
+										</p>
+									)}
+								</div>
+							)}
 						</div>
 					</CollapsibleContent>
 				</Collapsible>

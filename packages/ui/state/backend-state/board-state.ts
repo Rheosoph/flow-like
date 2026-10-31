@@ -21,6 +21,7 @@ import type {
 } from "../../lib";
 import type { IJwks, IRealtimeAccess } from "../../lib";
 import type { BoardFormatCapabilities } from "../../lib/board-format";
+import type { FlowVersionState } from "../../lib/device-management/hub/endpoints";
 import type { FlowScriptApplyOrigin } from "../../lib/flowscript-apply-failure";
 import type { IFlowScriptChanges } from "../../lib/flowscript/changes";
 import type {
@@ -56,6 +57,8 @@ export interface IApplyFlowScriptResponse {
 	board_commands: BoardCommand[];
 	/** Non-blocking source repairs; reload canonical FlowScript when present. */
 	corrections?: string[];
+	/** Non-blocking lint findings for the submitted source. */
+	warnings?: string[];
 	diagnostics: string[];
 	/** Positioned diagnostics for the exact submitted source, when supported by the host. */
 	structured_diagnostics?: IFlowScriptStructuredDiagnostic[];
@@ -145,6 +148,8 @@ export interface ICheckFlowScriptReconcileResponse {
 	/** The reconciled command plan (apply-preview UI); empty when parse/compile failed. */
 	board_commands?: BoardCommand[];
 	corrections: string[];
+	/** Non-blocking lint findings; they do not affect reconcile_valid. */
+	warnings?: string[];
 	diagnostics: string[];
 	/** Positioned diagnostics for the exact submitted source, when supported by the host. */
 	structured_diagnostics?: IFlowScriptStructuredDiagnostic[];
@@ -281,6 +286,11 @@ export interface IBoardState {
 		appId: string,
 		boardId: string,
 	): Promise<[number, number, number][]>;
+	/** The published snapshot equal to the saved draft, and the newest published snapshot. */
+	getBoardVersionCurrent?(
+		appId: string,
+		boardId: string,
+	): Promise<FlowVersionState>;
 	/**
 	 * Published versions with when and by whom each was published, newest first. Publisher
 	 * and timestamp are best effort: older versions may only carry the storage timestamp.

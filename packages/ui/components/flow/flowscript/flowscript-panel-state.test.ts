@@ -85,6 +85,25 @@ describe("FlowScript apply report", () => {
 		).toBeUndefined();
 	});
 
+	test("lint warnings remain visible without rejecting applied or unchanged drafts", () => {
+		for (const commandCount of [0, 2]) {
+			const report = flowScriptApplyReport(
+				{
+					commandCount,
+					diagnostics: [],
+					warnings: ["Each cacheDir node has its own directory"],
+				},
+				draft,
+			);
+			expect(report?.warnings).toEqual([
+				"Each cacheDir node has its own directory",
+			]);
+			expect(report?.diagnostics).toEqual([]);
+			expect(report?.rejected).toBeUndefined();
+			expect(isRejectedFlowScriptDraft(report, draft)).toBe(false);
+		}
+	});
+
 	test("diagnostics with no executed command reject the draft", () => {
 		const report = flowScriptApplyReport(
 			{ commandCount: 0, diagnostics: ["removing `A` leaves `B` unrun"] },

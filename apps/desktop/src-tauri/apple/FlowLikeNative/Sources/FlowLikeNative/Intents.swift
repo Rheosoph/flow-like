@@ -150,11 +150,21 @@ public struct RunFlowEventIntent: AppIntent {
     }
 }
 
+// iOS must execute this intent in the app process, where the Rust runtime is linked.
+#if !os(iOS) || FLOW_LIKE_SHORTCUTS_HOST
 public struct AskFlowPilotIntent: AppIntent {
     public static let title: LocalizedStringResource = "Ask FlowPilot"
+    #if os(iOS)
+    public static let description = IntentDescription("Ask FlowPilot in the background and return its reply as text. Uses the workspace last selected in Flow Like. Actions that need input or approval are unavailable.")
+    public static let openAppWhenRun = false
+    public static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
+    @available(iOS 26.0, *)
+    public static var supportedModes: IntentModes { .background }
+    #else
     public static let description = IntentDescription("Ask FlowPilot and return its reply as text. The app opens while it prepares the answer.")
     public static let openAppWhenRun = true
     public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+    #endif
     @Parameter(title: "Question", requestValueDialog: "What would you like to ask FlowPilot?") public var question: String?
     @Parameter(title: "Start voice", default: false) public var voice: Bool
     public static var parameterSummary: some ParameterSummary {
@@ -164,7 +174,11 @@ public struct AskFlowPilotIntent: AppIntent {
 
     public func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
         let request = try enqueue(in: .shared)
+        #if os(iOS)
+        let result = try await NativeStore.shared.waitForBackgroundActionResult(request)
+        #else
         let result = try await NativeStore.shared.waitForActionResult(request)
+        #endif
         let text = result.text ?? ""
         return .result(value: text, dialog: "\(String(text.prefix(4000)))")
     }
@@ -174,9 +188,18 @@ public struct AskFlowPilotIntent: AppIntent {
         guard prompt?.isEmpty == false else {
             throw $question.needsValueError("What would you like to ask FlowPilot?")
         }
+        #if os(iOS)
+        guard !voice else {
+            throw NativeActionFailure(message: "Voice input is unavailable in a background action. Turn off Start voice to receive a text reply.")
+        }
+        return try store.enqueue(NativeAction(kind: "flowpilot", prompt: prompt), responseMode: "text",
+                                 responseTimeout: 25, executionMode: "background")
+        #else
         return try store.enqueue(NativeAction(kind: "flowpilot", prompt: prompt, voice: voice), responseMode: "text")
+        #endif
     }
 }
+#endif
 
 public struct FlowChatEventEntity: AppEntity {
     public static let typeDisplayRepresentation: TypeDisplayRepresentation = "App chat"

@@ -1551,6 +1551,117 @@ mod tests {
         fixture.drop_schema().await;
     }
 
+    #[tokio::test]
+    async fn postgres_upload_grant_settles_on_recipient_after_ownership_transfer() {
+        use sea_orm::{DatabaseBackend, TransactionTrait};
+        let Some(fixture) = Fixture::create("file_accounting_transfer_grant").await else {
+            return;
+        };
+        let db = fixture.db.clone();
+        for statement in [
+            r#"ALTER TABLE "StorageUploadGrant" ADD COLUMN "payerId" TEXT"#,
+            r#"INSERT INTO "App" VALUES ('app','owner-role',40)"#,
+            r#"INSERT INTO "User" VALUES ('owner',40)"#,
+            r#"INSERT INTO "ProjectCapacity" VALUES ('app','owner')"#,
+            r#"INSERT INTO "AccountCapacity" ("payerId","storageBytes","reservedStorageBytes",initialized) VALUES ('owner',40,60,true),('recipient',10,20,true)"#,
+        ] {
+            sql(&db, statement).await;
+        }
+        let upload = Observation {
+            bucket: "bucket".into(),
+            key: "users/owner/apps/app/file".into(),
+            app_id: "app".into(),
+            user_id: Some("owner".into()),
+            sequencer: "2".into(),
+            legacy_size: 40,
+        };
+        db.execute_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            r#"INSERT INTO "FileAccountingObject" (id,bucket,"objectKey","appId","userId","payerId",size,sequencer) VALUES ($1,'bucket','users/owner/apps/app/file','app','owner','owner',40,'1')"#,
+            [upload.id().into()])).await.unwrap();
+        db.execute_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            r#"INSERT INTO "StorageUploadGrant" (id,"payerId","maxBytes","reservedBytes") VALUES ($1,'owner',100,60)"#,
+            [upload.id().into()])).await.unwrap();
+
+        // HEAD finishes before transfer commits. Settlement must resolve the new
+        // payer under the app lock, even though the grant retains its original payer.
+        let transfer = db.begin().await.unwrap();
+        flow_like_db::coordination::app_capacity(&transfer, "app")
+            .await
+            .unwrap();
+        let sampled = Arc::new(tokio::sync::Notify::new());
+        let observer = {
+            let db = db.clone();
+            let sampled = sampled.clone();
+            let upload = upload.clone();
+            tokio::spawn(async move {
+                apply_current(&db, DbDialect::Postgres, upload, move || {
+                    let sampled = sampled.clone();
+                    async move {
+                        sampled.notify_one();
+                        Ok(70)
+                    }
+                })
+                .await
+                .unwrap();
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(1), sampled.notified())
+            .await
+            .expect("HEAD must finish while transfer holds the app lock");
+        for statement in [
+            r#"UPDATE "ProjectCapacity" SET "payerId"='recipient' WHERE "appId"='app'"#,
+            r#"UPDATE "AccountCapacity" SET "storageBytes"=0,"reservedStorageBytes"=0 WHERE "payerId"='owner'"#,
+            r#"UPDATE "AccountCapacity" SET "storageBytes"=50,"reservedStorageBytes"=80 WHERE "payerId"='recipient'"#,
+        ] {
+            transfer
+                .execute_raw(Statement::from_string(DatabaseBackend::Postgres, statement))
+                .await
+                .unwrap();
+        }
+        transfer.commit().await.unwrap();
+        observer.await.unwrap();
+
+        for (sequencer, actual, expected_stored, expected_reserved) in [
+            ("2", 70, 80, 50),
+            ("3", 0, 10, 120),
+            ("3", 0, 10, 120),
+            ("4", 100, 110, 20),
+        ] {
+            apply(
+                &db,
+                DbDialect::Postgres,
+                Observation {
+                    sequencer: sequencer.into(),
+                    ..upload.clone()
+                },
+                actual,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                value(&db, r#"SELECT "storageBytes" AS n FROM "AccountCapacity" WHERE "payerId"='recipient'"#).await,
+                expected_stored
+            );
+            assert_eq!(
+                value(&db, r#"SELECT "reservedStorageBytes" AS n FROM "AccountCapacity" WHERE "payerId"='recipient'"#).await,
+                expected_reserved
+            );
+            assert_eq!(
+                value(&db, r#"SELECT "storageBytes" + "reservedStorageBytes" AS n FROM "AccountCapacity" WHERE "payerId"='owner'"#).await,
+                0
+            );
+        }
+        assert_eq!(
+            value(
+                &db,
+                r#"SELECT count(*) AS n FROM "StorageUploadGrant" WHERE "payerId"='owner'"#
+            )
+            .await,
+            1
+        );
+        fixture.drop_schema().await;
+    }
+
     /// Two apps, a stale sequencer, an object created and deleted before the batch ran, an
     /// unreadable object and a lost commit race in one batch: one committed transaction per
     /// app, every object counted once, and failures confined to their own objects.

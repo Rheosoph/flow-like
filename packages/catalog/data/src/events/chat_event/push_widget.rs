@@ -70,17 +70,21 @@ impl NodeLogic for PushWidgetNode {
         widget.attach_update_log(&update_log);
 
         let cached_response = CachedChatResponse::load(context).await?;
+        let _message_guard = cached_response.emission.lock().await;
+        let message_id = cached_response.message_id().await;
         {
             let mut mutable_response = cached_response.response.lock().await;
             mutable_response.widgets.push(widget.clone());
         }
 
         let streaming_response = ChatStreamingResponse {
+            message_id,
             actions: vec![],
             attachments: vec![],
             chunk: None,
             plan: None,
             widgets: vec![widget],
+            main_widget: None,
         };
 
         context

@@ -1,6 +1,6 @@
 {
 	"productName": "Flow Like",
-	"version": "0.1.13",
+	"version": "0.1.14",
 	"identifier": "com.flow-like.app",
 	"build": {
 		"beforeDevCommand": "bun run dev",
@@ -146,6 +146,8 @@
 			}
 		},
 		"updater": {
+			"requireSignedVersion": true,
+			"allowDowngrades": false,
 			"endpoints": [
 				"https://cdn.flow-like.com/latest.json"
 			],

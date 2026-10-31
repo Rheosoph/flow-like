@@ -221,7 +221,7 @@ describe("dispatchRun", () => {
 		const harness = send({ engine: spy, form, run });
 		await harness.settled;
 
-		expect(received).toEqual({
+		expect(JSON.parse(JSON.stringify(received))).toEqual({
 			id: "node-return-request",
 			payload: { order: "A-1", quantity: 2, receipt: FLOW_PATH },
 		});
@@ -626,6 +626,30 @@ describe("answerInteraction", () => {
 		expect(last?.interactions).toMatchObject([
 			{ id: "q-1", status: "responded", response_value: "book" },
 		]);
+		gate.resolve();
+		await harness.settled;
+	});
+
+	test("a racing answer uses the response accepted by the shared session", async () => {
+		const gate = deferred<void>();
+		const { spy } = engineWith(async (_a, _e, _p, _s, _onEventId, cb) => {
+			cb?.([event("interaction_request", question)]);
+			await gate.promise;
+			return undefined;
+		});
+		const harness = send({ engine: spy });
+		await flush();
+		await answerInteraction(
+			harness.handle,
+			"q-1",
+			"second",
+			() => {},
+			async () => ({ value: "first" }),
+		);
+		expect(harness.handle.accumulator.output().interactions[0]).toMatchObject({
+			status: "responded",
+			response_value: "first",
+		});
 		gate.resolve();
 		await harness.settled;
 	});

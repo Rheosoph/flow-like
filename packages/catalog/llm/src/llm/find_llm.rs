@@ -85,17 +85,36 @@ impl NodeLogic for FindLLMNode {
         let devices = context.app_state.device_model_probe(Interaction::Allowed {
             run_label: Some(context.run_id().to_string()),
         });
-        let bit = context
-            .profile
-            .resolve_completion_model(
-                None,
-                &preference,
-                false,
-                capabilities,
-                devices.as_ref(),
-                http_client,
-            )
-            .await?;
+        let chat_selection = if preference.uses_default_ranking() {
+            context.chat_model_selection().await
+        } else {
+            None
+        };
+        let bit = if let Some(selection) = chat_selection {
+            context
+                .profile
+                .resolve_chat_completion_model(
+                    &selection.model_id,
+                    &preference,
+                    selection.require_vlm,
+                    capabilities,
+                    devices.as_ref(),
+                    http_client,
+                )
+                .await?
+        } else {
+            context
+                .profile
+                .resolve_completion_model(
+                    None,
+                    &preference,
+                    false,
+                    capabilities,
+                    devices.as_ref(),
+                    http_client,
+                )
+                .await?
+        };
 
         for meta in bit.meta.values() {
             context.log_message(

@@ -21,4 +21,8 @@ head:
 import { NodeReference } from "../../../../../components/node-docs/NodeReference";
 import { nodesBySlug } from "../../../../../generated/catalog-nodes";
 
+Push Response updates the current assistant message by default. Set **New Message** to `true` to send the response as a separate message in the same chat turn. The input defaults to `false`, so existing flows keep updating one message.
+
+After **New Message** starts a message, later response chunks, attachments, widgets, plan steps, reasoning, and usage stats belong to that message. Its plan and attachments start empty. Chat session state stays available across messages.
+
 <NodeReference node={nodesBySlug["nodes/events/chat/events-chat-push-response"]} />

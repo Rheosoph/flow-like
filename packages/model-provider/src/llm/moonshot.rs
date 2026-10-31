@@ -115,7 +115,7 @@ impl MoonshotModel {
 
         let mut builder = rig::providers::moonshot::Client::builder()
             .api_key(api_key)
-            .http_client(AuthorizedHttpClient::for_egress(egress)?);
+            .http_client(AuthorizedHttpClient::for_provider(provider, egress)?);
         if let Some(endpoint) = params.get("endpoint").and_then(|v| v.as_str()) {
             builder = builder.base_url(endpoint);
         }

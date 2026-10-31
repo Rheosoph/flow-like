@@ -129,7 +129,11 @@ impl TauriSettingsState {
     pub async fn current_profile(app_handle: &AppHandle) -> anyhow::Result<UserProfile> {
         let settings = TauriSettingsState::construct(app_handle).await?;
         let settings = settings.lock().await;
-        let current_profile = settings.get_current_profile()?;
+        let current_profile = match crate::functions::ai::native_tool_bridge::execution_profile_id()
+        {
+            Some(id) => settings.profile_by_id(&id)?,
+            None => settings.get_current_profile()?,
+        };
         Ok(current_profile)
     }
 }

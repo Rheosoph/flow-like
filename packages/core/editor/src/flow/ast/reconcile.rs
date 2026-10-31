@@ -37,7 +37,9 @@ use node_moves::{MoveDestination, NodeMovePlan};
 
 mod groups;
 mod node_moves;
+mod node_scope_lint;
 mod orphan_expressions;
+mod placeholder_pins;
 mod signatures;
 use crate::flow::board::{Board, Layer, LayerCache, LayerCacheScope, LayerType};
 use crate::flow::copilot::{
@@ -55,6 +57,8 @@ pub struct ReconcileResult {
     /// Non-blocking, deterministic source migrations used while deriving commands. Callers should
     /// surface these to the author and rewrite retained FlowScript to the canonical spelling.
     pub corrections: Vec<String>,
+    /// Non-blocking source patterns that may produce unexpected runtime behavior.
+    pub warnings: Vec<String>,
     /// Blocking representation issues. Apply/check paths treat any diagnostic as an atomic
     /// rejection, so informational notes must not be placed here.
     pub diagnostics: Vec<String>,
@@ -2017,6 +2021,7 @@ fn reconcile_inner(
     // 4. Structural authoring: catalog-aware FlowPilot calls can add new unanchored calls in the
     //    text. Translate those to the same command format the UI already reviews/applies.
     let mut execution_terminals = HashSet::new();
+    let mut placeholder_calls = Vec::new();
     if let Some(catalog) = catalog {
         let mut planner = StructuralPlanner::new(planning, catalog, enricher);
         if moved_board.is_none() {
@@ -2030,8 +2035,9 @@ fn reconcile_inner(
             !submitted.module_blocks.is_empty() || opts.base_module().is_some();
         planner.groups.authoritative =
             mode == ReconcileMode::Replace && groups::document_has_groups(&submitted.ast);
-        let (structural, execution, remaining_removals) =
+        let (structural, execution, remaining_removals, calls) =
             planner.plan_with_execution(&submitted, &modules);
+        placeholder_calls = calls;
         removed_ids = remaining_removals;
         result.commands.retain(|command| match command {
             BoardCommand::RemoveNode { node_id, .. } => removed_ids.contains(node_id),
@@ -2051,6 +2057,7 @@ fn reconcile_inner(
             result.commands.extend(anchored_edits);
         }
         result.corrections.extend(structural.corrections);
+        result.warnings.extend(structural.warnings);
         result.diagnostics.extend(structural.diagnostics);
     } else {
         for func in &submitted.ast.functions {
@@ -2079,6 +2086,14 @@ fn reconcile_inner(
         }
     }
 
+    placeholder_pins::disconnect_removed_inputs(
+        existing,
+        new_calls
+            .iter()
+            .map(|(id, call)| (id.as_str(), *call))
+            .chain(placeholder_calls.iter().map(|(id, call)| (id.as_str(), call))),
+        &mut result,
+    );
     keep_variables_the_plan_wires(&mut result.commands);
 
     if mode == ReconcileMode::Replace {
@@ -5846,7 +5861,7 @@ fn dynamic_template_placeholders(node_type: &str, template: &str) -> Option<Vec<
                 }
                 _ => flow_like_storage::databases::sql_params::declared_placeholders(template),
             }
-            .unwrap_or_default()
+            .ok()?
             .iter()
             .map(|placeholder| {
                 flow_like_storage::databases::sql_params::param_pin_name(placeholder)
@@ -9049,6 +9064,8 @@ struct StructuralPlanner<'a> {
     /// literal/connection targeting one resolves against a real pin instead of the predicted
     /// `synthesize_dynamic_input_pin` fallback. `None` for the pure static-catalog paths.
     enricher: Option<&'a MetadataEnricher>,
+    /// Existing placeholder calls, including inline projections that have no source anchor.
+    placeholder_calls: Vec<(String, Call)>,
     /// Entry node id -> the event name the LIVE board currently lowers to.
     ///
     /// The rename check cannot re-derive this from `friendly_name`: lowering allocates event names
@@ -9145,6 +9162,7 @@ impl<'a> StructuralPlanner<'a> {
             planned_literal_return_sources: HashMap::new(),
             planned_boundary_passthroughs: HashMap::new(),
             enricher,
+            placeholder_calls: Vec::new(),
         }
     }
 
@@ -9180,7 +9198,12 @@ impl<'a> StructuralPlanner<'a> {
         mut self,
         doc: &FlatDocument,
         modules: &ModuleResolution,
-    ) -> (ReconcileResult, ExecutionPlan, HashSet<String>) {
+    ) -> (
+        ReconcileResult,
+        ExecutionPlan,
+        HashSet<String>,
+        Vec<(String, Call)>,
+    ) {
         let ast = &doc.ast;
         self.interface_schemas = interface_schema_map(ast);
         self.interfaces = ast.interfaces.clone();
@@ -9205,7 +9228,12 @@ impl<'a> StructuralPlanner<'a> {
         // A rejected signature has no callable layer or outputs. Report that failure before
         // planning bodies, where its calls and their bindings would otherwise look undefined.
         if !self.prepare_functions(doc) {
-            return (self.result, self.execution, self.removed_node_ids);
+            return (
+                self.result,
+                self.execution,
+                self.removed_node_ids,
+                self.placeholder_calls,
+            );
         }
         self.resolve_node_moves(doc);
         let module_variable_names = super::lower::variable_names(self.existing);
@@ -9278,7 +9306,12 @@ impl<'a> StructuralPlanner<'a> {
         self.result.commands.extend(self.fn_ref_commands);
         // Regrouping is presentation over the finished graph; apply runs it after every wire.
         self.result.commands.extend(self.groups.commands);
-        (self.result, self.execution, self.removed_node_ids)
+        (
+            self.result,
+            self.execution,
+            self.removed_node_ids,
+            self.placeholder_calls,
+        )
     }
 
     fn prepare_functions(&mut self, doc: &FlatDocument) -> bool {
@@ -10511,6 +10544,13 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     fn plan_event(&mut self, event: &EventBlock, target_layer: Option<String>) {
+        self.warn_repeated_node_scoped_dirs(
+            &event.body,
+            &format!(
+                "event `{}`",
+                event.event_name.as_deref().unwrap_or(&event.name)
+            ),
+        );
         let unavailable_anchor = event
             .anchor
             .as_deref()
@@ -10750,6 +10790,10 @@ impl<'a> StructuralPlanner<'a> {
         let Some(planned) = self.planned_functions.get(key).cloned() else {
             return;
         };
+        self.warn_repeated_node_scoped_dirs(
+            &func.body,
+            &format!("function `{}`", analysis_function_name(self, key)),
+        );
         if matches!(planned.entity, NodeEntity::Layer { .. }) {
             if block_has_no_executable_statements(&func.body) {
                 self.result.diagnostics.push(format!(
@@ -13481,6 +13525,11 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
         include_direct_literals: bool,
     ) -> Vec<ValueSource> {
+        if let NodeEntity::Existing(id) = entity
+            && dynamic_placeholder_config_pin(&meta.name).is_some()
+        {
+            self.placeholder_calls.push((id.clone(), call.clone()));
+        }
         let mut input_sources = Vec::new();
         let mut same_name_seen: HashMap<&str, usize> = HashMap::new();
         for (arg_index, arg) in call.args.iter().enumerate() {
@@ -14246,30 +14295,14 @@ impl<'a> StructuralPlanner<'a> {
             }
             "struct_make" if fields.is_empty() => Some(SymbolValue::Source(source)),
             "struct_make_from_schema" => {
-                let meta = node_to_metadata(node);
-                for field in fields {
-                    let pin_name = format!("{}{}", super::lower::MAKE_STRUCT_PREFIX, field.key);
-                    // A wired field (including a nested struct_make chain rendered as a literal
-                    // object) keeps its source; only unwired literal fields become pin writes.
-                    if let Some(sub_source) =
-                        self.board_index.data_source_for_input(node, &pin_name)
-                        && self
-                            .resolve_expr_using_existing_source(
-                                &field.value,
-                                sub_source,
-                                target_layer.clone(),
-                            )
-                            .is_some()
-                    {
-                        continue;
-                    }
-                    if let Some(value) = literal_expr_to_value(&field.value)
-                        && let Some(pin) = metadata_input_pin(&meta, &pin_name)
-                    {
-                        let entity = NodeEntity::Existing(node_id.clone());
-                        self.queue_update_input(&entity, pin, value, &meta);
-                    }
-                }
+                let args = fields
+                    .iter()
+                    .map(|field| Arg {
+                        name: format!("{}{}", super::lower::MAKE_STRUCT_PREFIX, field.key),
+                        value: field.value.clone(),
+                    })
+                    .collect();
+                self.plan_reused_node_inputs(node, args, target_layer);
                 Some(SymbolValue::Source(source))
             }
             _ => None,
@@ -14300,8 +14333,8 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     /// Reuse the existing struct/container accessor node a `base.field` member access lowered
-    /// from (`struct_get`, `struct_break`, `map_get`, or a container-size node). The base is
-    /// recursed so literal edits deeper in the chain still apply.
+    /// from (`struct_get`, `struct_break`, `map_get`, or a container-size node). Replan the base
+    /// input so a rebuilt producer or missing edge is repaired before returning the accessor.
     fn reuse_existing_member_source(
         &mut self,
         base: &Expr,
@@ -14332,14 +14365,43 @@ impl<'a> StructuralPlanner<'a> {
             "map_get" if node_pin_literal_string(node, "key").as_deref() == Some(field) => "map_in",
             _ => return None,
         };
-        if let Some(base_source) = self.board_index.data_source_for_input(node, base_input) {
-            let _ = self.resolve_expr_using_existing_source(base, base_source, target_layer);
+        if field == "length" && matches!(node.name.as_str(), "struct_get" | "map_get") {
+            let hint = self.expr_receiver_hint(base).or_else(|| {
+                self.board_index
+                    .data_source_for_input(node, base_input)
+                    .and_then(|source| self.source_output_shape(&source))
+                    .map(shape_receiver_hint)
+            });
+            let declared_struct_field = hint.is_some_and(|hint| {
+                hint.data_type == "Struct"
+                    && hint.value_type == "Normal"
+                    && normalized_pin_schema(hint.schema.as_deref(), &self.existing.refs)
+                        .as_deref()
+                        .and_then(|schema| schema_property_hint(schema, field))
+                        .is_some()
+            });
+            // A previous Apply may have read a field named `length` from a collection.
+            // Re-lower that access so the collection gets its size node or a diagnostic.
+            if node.name != "struct_get" || !declared_struct_field {
+                return None;
+            }
         }
+        let mut args = vec![Arg {
+            name: base_input.to_string(),
+            value: base.clone(),
+        }];
+        if node.name == "struct_get" {
+            args.push(Arg {
+                name: "field".to_string(),
+                value: Expr::Literal(Literal::String(field.to_string())),
+            });
+        }
+        self.plan_reused_node_inputs(node, args, target_layer);
         Some(SymbolValue::Source(source))
     }
 
-    /// Reuse the existing `array_get` node a `base[index]` access lowered from. A changed
-    /// literal index becomes a pin update on the same node.
+    /// Reuse the existing `array_get` node a `base[index]` access lowered from, replanning both
+    /// inputs so changed producers, computed indices, and literal edits reach the live node.
     fn reuse_existing_index_source(
         &mut self,
         base: &Expr,
@@ -14354,16 +14416,20 @@ impl<'a> StructuralPlanner<'a> {
         if node.name != "array_get" || source.output_pin.as_deref() != Some("element") {
             return None;
         }
-        if let Some(base_source) = self.board_index.data_source_for_input(node, "array_in") {
-            let _ = self.resolve_expr_using_existing_source(base, base_source, target_layer);
-        }
-        if let Some(value) = literal_expr_to_value(index) {
-            let meta = node_to_metadata(node);
-            if let Some(pin) = metadata_input_pin(&meta, "index") {
-                let entity = NodeEntity::Existing(node_id.clone());
-                self.queue_update_input(&entity, pin, value, &meta);
-            }
-        }
+        self.plan_reused_node_inputs(
+            node,
+            vec![
+                Arg {
+                    name: "array_in".to_string(),
+                    value: base.clone(),
+                },
+                Arg {
+                    name: "index".to_string(),
+                    value: index.clone(),
+                },
+            ],
+            target_layer,
+        );
         Some(SymbolValue::Source(source))
     }
 
@@ -14384,20 +14450,31 @@ impl<'a> StructuralPlanner<'a> {
         if node.name != TYPES_SELECT_NODE_TYPE {
             return None;
         }
-        let meta = node_to_metadata(node);
-        for (pin_name, expr) in [("condition", cond), ("a", then), ("b", otherwise)] {
-            if let Some(value) = literal_expr_to_value(expr) {
-                if let Some(pin) = metadata_input_pin(&meta, pin_name) {
-                    let entity = NodeEntity::Existing(node_id.clone());
-                    self.queue_update_input(&entity, pin, value, &meta);
-                }
-            } else if let Some(sub_source) = self.board_index.data_source_for_input(node, pin_name)
-            {
-                let _ =
-                    self.resolve_expr_using_existing_source(expr, sub_source, target_layer.clone());
-            }
-        }
+        let args = [("condition", cond), ("a", then), ("b", otherwise)]
+            .into_iter()
+            .map(|(name, value)| Arg {
+                name: name.to_string(),
+                value: value.clone(),
+            })
+            .collect();
+        self.plan_reused_node_inputs(node, args, target_layer);
         Some(SymbolValue::Source(source))
+    }
+
+    /// Reusing a value node also reconciles its inputs against the current bindings. Matching
+    /// an old input recursively is insufficient when its producer is replaced or disconnected.
+    fn plan_reused_node_inputs(
+        &mut self,
+        node: &Node,
+        args: Vec<Arg>,
+        target_layer: Option<String>,
+    ) {
+        let mut call = Call::placeholder();
+        call.node_type = node.name.clone();
+        call.display = to_camel_case(&node.name);
+        call.args = args;
+        let entity = NodeEntity::Existing(node.id.clone());
+        self.plan_call_arguments(&call, &entity, &node_to_metadata(node), target_layer, true);
     }
 
     /// Reuse the existing `string_format` node a template literal lowered from, diffing its
@@ -15527,6 +15604,66 @@ impl<'a> StructuralPlanner<'a> {
     }
 
     fn source_output_shape(&self, source: &ValueSource) -> Option<OutputShape> {
+        self.source_output_shape_with_seen(source, &mut HashSet::new())
+    }
+
+    fn source_output_shape_with_seen(
+        &self,
+        source: &ValueSource,
+        seen: &mut HashSet<(String, String)>,
+    ) -> Option<OutputShape> {
+        let mut shape = self.raw_source_output_shape(source)?;
+        let selected = ValueSource {
+            node: source.node.clone(),
+            output_pin: Some(shape.pin_name.clone()),
+        };
+        if seen.len() >= 64 || !seen.insert((source.node.node_ref(), shape.pin_name.clone())) {
+            return None;
+        }
+
+        // An annotation or a variable's contract can be more precise than its generic pin.
+        let mut hint = self
+            .declared_source_type(source)
+            .or_else(|| self.declared_source_type(&selected))
+            .cloned();
+        if hint.is_none()
+            && let NodeEntity::Existing(id) = &source.node
+            && let Some(node) = find_board_node(self.existing, id)
+        {
+            match (node.name.as_str(), shape.pin_name.as_str()) {
+                ("variable_get" | "variable_set", "value_ref") => {
+                    hint = node_pin_literal_string(node, "var_ref")
+                        .and_then(|id| self.variable_value_contract(&id, "value_ref"))
+                        .map(|pin| pin_receiver_hint(&pin));
+                }
+                ("struct_get", "value")
+                    if find_input_pin(node, "field")
+                        .is_some_and(|pin| pin.depends_on.is_empty()) =>
+                {
+                    // A saved accessor can still have a Generic output. Recover the field's
+                    // contract from its input so a later `.length` sees the collection.
+                    hint = node_pin_literal_string(node, "field").and_then(|field| {
+                        let base = self.board_index.data_source_for_input(node, "struct")?;
+                        let base = self.source_output_shape_with_seen(&base, seen)?;
+                        if base.data_type != "Struct" || base.value_type != "Normal" {
+                            return None;
+                        }
+                        schema_property_hint(base.schema.as_deref()?, &field)
+                    });
+                }
+                _ => {}
+            }
+        }
+        if let Some(hint) = hint {
+            shape.data_type = hint.data_type;
+            shape.value_type = hint.value_type;
+            shape.schema = hint.schema;
+        }
+        shape.schema = normalized_pin_schema(shape.schema.as_deref(), &self.existing.refs);
+        Some(shape)
+    }
+
+    fn raw_source_output_shape(&self, source: &ValueSource) -> Option<OutputShape> {
         match &source.node {
             NodeEntity::Existing(id) => {
                 if let Some(node) = find_board_node(self.existing, id) {
@@ -16181,6 +16318,27 @@ impl<'a> StructuralPlanner<'a> {
         target_layer: Option<String>,
     ) -> Option<SymbolValue> {
         let shape = self.source_output_shape(&base);
+        if field == "length"
+            && !shape.as_ref().is_some_and(|shape| {
+                matches!(shape.value_type.as_str(), "Array" | "HashSet" | "HashMap")
+                    || (shape.data_type == "Struct"
+                        && shape.value_type == "Normal"
+                        && shape
+                            .schema
+                            .as_deref()
+                            .and_then(|schema| schema_property_hint(schema, field))
+                            .is_some())
+            })
+        {
+            let source = shape
+                .as_ref()
+                .map(|shape| format!("{}.{}", shape.node_type, shape.pin_name))
+                .unwrap_or_else(|| base.node.node_ref());
+            self.result.diagnostics.push(format!(
+                "cannot resolve `.length` for `{source}`: declare an Array, HashSet, or HashMap type, or a struct schema with a `length` field"
+            ));
+            return None;
+        }
         match shape.as_ref().map(|shape| shape.value_type.as_str()) {
             Some("HashMap") if field == "length" => {
                 self.lower_collection_length_access(base, target_layer)
@@ -19538,7 +19696,8 @@ impl<'a> StructuralPlanner<'a> {
         if base.data_type != "Struct" || base.value_type != "Normal" {
             return None;
         }
-        schema_property_hint(base.schema.as_deref()?, field)
+        let schema = normalized_pin_schema(base.schema.as_deref(), &self.existing.refs)?;
+        schema_property_hint(&schema, field)
     }
 
     /// Whether an anchored call still names the live node it anchors to, in any accepted
@@ -20442,6 +20601,7 @@ pub fn reconcile_text(existing: &Board, text: &str) -> ReconcileResult {
         Err(err) => ReconcileResult {
             commands: Vec::new(),
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: vec![format!(
                 "FlowScript parse error at line {}, col {}: {}",
                 err.line, err.col, err.message
@@ -20545,6 +20705,7 @@ fn parse_error_result(err: &flow_like_ast::ParseError) -> ReconcileResult {
     ReconcileResult {
         commands: Vec::new(),
         corrections: Vec::new(),
+        warnings: Vec::new(),
         diagnostics: vec![format!(
             "FlowScript parse error at line {}, col {}: {}",
             err.line, err.col, err.message
@@ -20554,6 +20715,14 @@ fn parse_error_result(err: &flow_like_ast::ParseError) -> ReconcileResult {
 
 #[cfg(test)]
 mod tests {
+    mod placeholder_pin_tests {
+        include!("reconcile/placeholder_pin_tests.rs");
+    }
+
+    mod node_scope_tests {
+        include!("reconcile/node_scope_tests.rs");
+    }
+
     mod expression_identity_tests {
         include!("reconcile/expression_identity_tests.rs");
     }
@@ -20564,6 +20733,10 @@ mod tests {
 
     mod orphan_expression_tests {
         include!("reconcile/orphan_expression_tests.rs");
+    }
+
+    mod return_source_reuse_tests {
+        include!("reconcile/return_source_reuse_tests.rs");
     }
 
     use super::*;
@@ -24769,6 +24942,174 @@ eventsSimple() {
             command,
             BoardCommand::AddNode { node_type, .. } if node_type == "array_length"
         )));
+    }
+
+    fn struct_field_length_catalog() -> Vec<NodeMetadata> {
+        let mut catalog = schema_member_catalog();
+        catalog.extend([
+            variable_get_meta(),
+            catalog_meta(
+                "int_less_than",
+                "Less Than",
+                vec![
+                    pin_meta("integer1", "Integer", PinType::Input),
+                    pin_meta("integer2", "Integer", PinType::Input),
+                ],
+                vec![pin_meta("less_than", "Boolean", PinType::Output)],
+            ),
+            catalog_meta(
+                "control_branch",
+                "Branch",
+                vec![
+                    pin_meta("exec_in", "Execution", PinType::Input),
+                    pin_meta("condition", "Boolean", PinType::Input),
+                ],
+                vec![
+                    pin_meta("true", "Execution", PinType::Output),
+                    pin_meta("false", "Execution", PinType::Output),
+                ],
+            ),
+        ]);
+        catalog
+    }
+
+    fn assert_array_length_comparison(result: &ReconcileResult) {
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let length = added_node_ref(result, "array_length").expect("array length node");
+        let comparison = added_node_ref(result, "int_less_than").expect("integer comparison");
+        assert!(connected(result, length, "length", comparison, "integer2"));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { pin_id, value, .. }
+                if pin_id == "field" && value.as_str() == Some("length")
+        )));
+    }
+
+    #[test]
+    fn struct_array_field_length_lowers_to_integer_comparison() {
+        for (binding, expression) in [
+            ("", "structVar.arrayField.length"),
+            ("", "structVar.nested.arrayField.length"),
+            ("const rows = structVar.arrayField", "rows.length"),
+        ] {
+            let source = format!(
+                r#"interface Nested {{
+    arrayField: Struct[];
+}}
+interface Container {{
+    arrayField: Struct[];
+    nested: Nested;
+}}
+const structVar: Container = {{ arrayField: [], nested: {{ arrayField: [] }} }}
+const i: int = 0
+
+eventsSimple() {{
+    {binding}
+    if (i < {expression}) {{
+        log({{ text: "in bounds" }})
+    }}
+}}
+"#
+            );
+            let result = reconcile_text_with_catalog(
+                &empty_board(),
+                &source,
+                &struct_field_length_catalog(),
+            );
+            assert_array_length_comparison(&result);
+            assert!(result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                    if command_node_type(&result.commands, from_node).as_deref() == Some("struct_get")
+                        && from_pin == "value"
+                        && command_node_type(&result.commands, to_node).as_deref() == Some("array_length")
+                        && to_pin == "array"
+            )));
+        }
+    }
+
+    #[test]
+    fn annotated_struct_array_field_length_lowers_to_integer_comparison() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"const structVar: Struct = {}
+const i: int = 0
+
+eventsSimple() {
+    const rows: Struct[] = structVar.arrayField
+    if (i < rows.length) {
+        log({ text: "in bounds" })
+    }
+}
+"#,
+            &struct_field_length_catalog(),
+        );
+        assert_array_length_comparison(&result);
+    }
+
+    #[test]
+    fn unresolved_struct_array_field_length_reports_diagnostic() {
+        for (binding, expression) in [
+            ("", "structVar.length"),
+            ("", "structVar.arrayField.length"),
+            ("const rows = structVar.arrayField", "rows.length"),
+        ] {
+            let result = reconcile_text_with_catalog(
+                &empty_board(),
+                &format!(
+                    r#"const structVar: Struct = {{}}
+const i: int = 0
+
+eventsSimple() {{
+    {binding}
+    if (i < {expression}) {{
+        log({{ text: "in bounds" }})
+    }}
+}}
+"#
+                ),
+                &struct_field_length_catalog(),
+            );
+            assert!(
+                result
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.contains("cannot resolve `.length`")),
+                "{expression}: {:?}",
+                result.diagnostics
+            );
+            assert!(!result.commands.iter().any(|command| matches!(
+                command,
+                BoardCommand::UpdateNodePin { pin_id, value, .. }
+                    if pin_id == "field" && value.as_str() == Some("length")
+            )));
+            assert!(added_node_ref(&result, "array_length").is_none());
+        }
+    }
+
+    #[test]
+    fn declared_struct_field_named_length_remains_a_field_read() {
+        let result = reconcile_text_with_catalog(
+            &empty_board(),
+            r#"interface Measurement {
+    length: int;
+}
+const measurement: Measurement = { length: 3 }
+
+eventsSimple() {
+    if (0 < measurement.length) {
+        log({ text: "positive" })
+    }
+}
+"#,
+            &struct_field_length_catalog(),
+        );
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert_eq!(struct_get_field_literal(&result).as_deref(), Some("length"));
+        assert!(added_node_ref(&result, "array_length").is_none());
+        let field = added_node_ref(&result, "struct_get").expect("length field read");
+        let comparison = added_node_ref(&result, "int_less_than").expect("integer comparison");
+        assert!(connected(&result, field, "value", comparison, "integer2"));
     }
 
     #[test]
@@ -40906,5 +41247,207 @@ module beta {   //@l:mod-b
             "{:?}",
             result.corrections
         );
+    }
+
+    fn board_with_legacy_struct_field_length(schema: Option<&str>) -> Board {
+        let mut board = board_with_struct_member_chain();
+        let producer = board.nodes.get_mut("producer").unwrap();
+        producer
+            .pins
+            .values_mut()
+            .find(|pin| pin.name == "data")
+            .unwrap()
+            .schema = schema.map(str::to_string);
+        let getter = board.nodes.get_mut("getter").unwrap();
+        getter
+            .pins
+            .values_mut()
+            .find(|pin| pin.name == "field")
+            .unwrap()
+            .default_value = Some(b"\"arrayField\"".to_vec());
+        let getter_output = getter
+            .pins
+            .values_mut()
+            .find(|pin| pin.name == "value")
+            .unwrap();
+        getter_output.connected_to.clear();
+        let getter_output = getter_output.id.clone();
+        let log_input = board
+            .nodes
+            .get_mut("log")
+            .unwrap()
+            .pins
+            .values_mut()
+            .find(|pin| pin.name == "text")
+            .unwrap();
+        log_input.depends_on.clear();
+        log_input.data_type = VariableType::Generic;
+        let log_input = log_input.id.clone();
+
+        let mut length = Node::new("struct_get", "Get Field", "", "structs");
+        length.id = "legacy-length".to_string();
+        let length_input = length
+            .add_input_pin("struct", "Struct", "", VariableType::Struct)
+            .id
+            .clone();
+        length
+            .add_input_pin("field", "Field", "", VariableType::String)
+            .default_value = Some(b"\"length\"".to_vec());
+        let length_output = length
+            .add_output_pin("value", "Value", "", VariableType::Generic)
+            .id
+            .clone();
+        board.nodes.insert(length.id.clone(), length);
+        connect(
+            &mut board,
+            "getter",
+            &getter_output,
+            "legacy-length",
+            &length_input,
+        );
+        connect(
+            &mut board,
+            "legacy-length",
+            &length_output,
+            "log",
+            &log_input,
+        );
+        board
+    }
+
+    #[test]
+    fn legacy_struct_field_length_relowers_to_array_length() {
+        let board = board_with_legacy_struct_field_length(Some(
+            r#"{"type":"object","properties":{"arrayField":{"type":"array","items":{"type":"object"}}}}"#,
+        ));
+        let mut catalog = member_chain_catalog();
+        catalog.extend(
+            schema_member_catalog()
+                .into_iter()
+                .filter(|meta| meta.name == "array_length"),
+        );
+        let text = anchored_text(&board);
+        assert!(text.contains(".arrayField.length"), "{text}");
+        let result =
+            reconcile_text_with_catalog(&board, &text, &with_board_categories(catalog, &board));
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        let length = added_node_ref(&result, "array_length").expect("array length accessor");
+        assert!(connected(&result, length, "length", "log", "text"));
+        assert!(!result.commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { pin_id, value, .. }
+                if pin_id == "field" && value.as_str() == Some("length")
+        )));
+    }
+
+    #[test]
+    fn legacy_unresolved_struct_field_length_reports_diagnostic() {
+        let board = board_with_legacy_struct_field_length(None);
+        let text = anchored_text(&board);
+        let result = reconcile_text_with_catalog(
+            &board,
+            &text,
+            &with_board_categories(member_chain_catalog(), &board),
+        );
+
+        assert!(
+            result
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("length")),
+            "unresolved length must not silently retain its old struct accessor: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn existing_variable_struct_field_length_resolves_schema_refs() {
+        let mut board = board_with_legacy_struct_field_length(None);
+        board.refs.insert(
+            "container-schema".to_string(),
+            r#"{"type":"object","properties":{"arrayField":{"type":"array","items":{"type":"object"}}}}"#
+                .to_string(),
+        );
+        let mut variable = Variable::new("structVar", VariableType::Struct, ValueType::Normal);
+        variable.id = "struct-var".to_string();
+        variable.schema = Some("container-schema".to_string());
+        board.variables.insert(variable.id.clone(), variable);
+
+        let reader = board.nodes.get_mut("producer").unwrap();
+        reader.name = "variable_get".to_string();
+        reader
+            .add_input_pin("var_ref", "Variable", "", VariableType::String)
+            .default_value = Some(b"\"struct-var\"".to_vec());
+        let output = reader
+            .pins
+            .values_mut()
+            .find(|pin| pin.name == "data")
+            .unwrap();
+        output.name = "value_ref".to_string();
+        output.data_type = VariableType::Generic;
+
+        let mut planner = StructuralPlanner::new(&board, &schema_member_catalog(), None);
+        let Some(SymbolValue::Source(length)) = planner.lower_member_access(
+            ValueSource {
+                node: NodeEntity::Existing("getter".to_string()),
+                output_pin: Some("value".to_string()),
+            },
+            "length",
+            None,
+        ) else {
+            panic!(
+                "array length must resolve: {:?}",
+                planner.result.diagnostics
+            );
+        };
+
+        assert!(
+            planner.result.diagnostics.is_empty(),
+            "{:?}",
+            planner.result.diagnostics
+        );
+        assert!(
+            matches!(&length.node, NodeEntity::New { meta, .. } if meta.name == "array_length")
+        );
+        assert!(planner.connect_commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::ConnectPins { from_node, from_pin, to_node, to_pin, .. }
+                if from_node == "getter" && from_pin == "value"
+                    && to_node == &length.node.node_ref() && to_pin == "array"
+        )));
+    }
+
+    #[test]
+    fn declared_struct_length_field_roundtrip_reuses_accessor() {
+        let mut board = board_with_struct_member_chain();
+        board
+            .nodes
+            .get_mut("producer")
+            .unwrap()
+            .pins
+            .values_mut()
+            .find(|pin| pin.name == "data")
+            .unwrap()
+            .schema =
+            Some(r#"{"type":"object","properties":{"length":{"type":"integer"}}}"#.to_string());
+        board
+            .nodes
+            .get_mut("getter")
+            .unwrap()
+            .pins
+            .values_mut()
+            .find(|pin| pin.name == "field")
+            .unwrap()
+            .default_value = Some(b"\"length\"".to_vec());
+        let text = anchored_text(&board);
+        let result = reconcile_text_with_catalog(
+            &board,
+            &text,
+            &with_board_categories(member_chain_catalog(), &board),
+        );
+
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(result.commands.is_empty(), "{:?}", result.commands);
     }
 }

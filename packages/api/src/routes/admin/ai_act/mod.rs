@@ -21,7 +21,7 @@ use crate::{
 use axum::{
     Extension, Json, Router,
     extract::{Path, Query, State},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post, put},
 };
 use sea_orm::{
@@ -129,8 +129,8 @@ struct ModelCountsRow {
     updated_at: Option<chrono::DateTime<chrono::FixedOffset>>,
 }
 
-/// The scalar columns of an assessment the inventory listing reads; the
-/// questionnaire JSON stays in the database.
+/// Assessment inputs used to refresh the inventory score without changing its
+/// stored review record.
 #[derive(sea_orm::FromQueryResult)]
 struct AssessmentSummary {
     app_id: String,
@@ -138,6 +138,8 @@ struct AssessmentSummary {
     risk_category: crate::entity::sea_orm_active_enums::AiRiskCategory,
     conformity_score: Option<i32>,
     conformity_band: Option<String>,
+    answers: serde_json::Value,
+    signals: Option<serde_json::Value>,
     updated_at: chrono::DateTime<chrono::FixedOffset>,
 }
 
@@ -221,6 +223,8 @@ async fn load_inventory_items(
             "conformity_score",
         )
         .column_as(ai_act_assessment::Column::ConformityBand, "conformity_band")
+        .column_as(ai_act_assessment::Column::Answers, "answers")
+        .column_as(ai_act_assessment::Column::Signals, "signals")
         .column_as(ai_act_assessment::Column::UpdatedAt, "updated_at")
         .order_by_desc(ai_act_assessment::Column::Version)
         .into_model::<AssessmentSummary>()
@@ -268,6 +272,8 @@ async fn load_inventory_items(
         .into_iter()
         .map(|agg| (agg.app_id.clone(), agg))
         .collect();
+
+    refresh_inventory_scores(state, &mut assessments, &scores).await?;
 
     let observation_count_if = |condition: sea_orm::sea_query::SimpleExpr| {
         Expr::expr(Expr::case(
@@ -409,6 +415,113 @@ async fn load_inventory_items(
     Ok(items)
 }
 
+async fn refresh_inventory_scores(
+    state: &AppState,
+    assessments: &mut HashMap<String, AssessmentSummary>,
+    scores: &HashMap<String, AppScoreAgg>,
+) -> Result<(), ApiError> {
+    use crate::routes::app::ai_act::{
+        model_posture::apply_registry_postures,
+        questionnaire,
+        signals::{DetectedModel, Signals},
+    };
+
+    let mut signals_by_app: HashMap<String, Signals> = assessments
+        .iter()
+        .filter_map(|(app_id, assessment)| {
+            let signals = serde_json::from_value(assessment.signals.clone()?).ok()?;
+            Some((app_id.clone(), signals))
+        })
+        .collect();
+    if signals_by_app.is_empty() {
+        return Ok(());
+    }
+    let observations: Vec<(
+        String,
+        String,
+        Option<String>,
+        bool,
+        chrono::DateTime<chrono::FixedOffset>,
+        bool,
+        AiGpaiPosture,
+    )> = ai_act_model_observation::Entity::find()
+        .filter(
+            ai_act_model_observation::Column::AppId
+                .is_in(signals_by_app.keys().cloned().collect::<Vec<_>>()),
+        )
+        .select_only()
+        .column(ai_act_model_observation::Column::AppId)
+        .column(ai_act_model_observation::Column::ModelId)
+        .column(ai_act_model_observation::Column::Provider)
+        .column(ai_act_model_observation::Column::DynamicSelector)
+        .column(ai_act_model_observation::Column::LastSeenAt)
+        .column(ai_act_model_observation::Column::Vetted)
+        .column(ai_act_model_observation::Column::Posture)
+        .into_tuple()
+        .all(&state.db)
+        .await?;
+    let observed_apps: HashSet<_> = observations
+        .iter()
+        .filter(|(app_id, _, _, _, last_seen, _, _)| {
+            assessments
+                .get(app_id)
+                .is_some_and(|assessment| *last_seen >= assessment.updated_at)
+        })
+        .map(|(app_id, _, _, _, _, _, _)| app_id.clone())
+        .collect();
+    for (app_id, signals) in &mut signals_by_app {
+        if observed_apps.contains(app_id) {
+            signals.models.clear();
+        }
+    }
+    for (app_id, model_id, provider, dynamic_selector, _, vetted, posture) in observations {
+        if !observed_apps.contains(&app_id) {
+            continue;
+        }
+        if let Some(signals) = signals_by_app.get_mut(&app_id) {
+            signals.models.push(DetectedModel {
+                model_id,
+                provider,
+                dynamic_selector,
+                vetted,
+                posture_known: posture != AiGpaiPosture::Unknown,
+            });
+        }
+    }
+    let model_ids: HashSet<String> = signals_by_app
+        .values()
+        .flat_map(|signals| signals.models.iter().map(|model| model.model_id.clone()))
+        .collect();
+    let registry = if model_ids.is_empty() {
+        Vec::new()
+    } else {
+        ai_act_model_registry::Entity::find()
+            .filter(ai_act_model_registry::Column::ModelId.is_in(model_ids))
+            .all(&state.db)
+            .await?
+    };
+
+    // Use one registry query for the whole listing. Saved answers remain the
+    // source for classification; current observations and scores supply posture.
+    for (app_id, signals) in &mut signals_by_app {
+        if !observed_apps.contains(app_id) {
+            apply_registry_postures(&mut signals.models, &registry);
+        }
+        if let Some(scores) = scores.get(app_id) {
+            signals.min_security = Some(scores.security);
+            signals.min_governance = Some(scores.governance);
+        }
+        if let Some(assessment) = assessments.get_mut(app_id) {
+            let classification = questionnaire::classify(&assessment.answers, signals);
+            assessment.conformity_score = classification.conformity_score;
+            assessment.conformity_band = classification
+                .conformity_band
+                .map(|band| band.as_str().to_string());
+        }
+    }
+    Ok(())
+}
+
 async fn load_app_names(state: &AppState, app_ids: &[String]) -> HashMap<String, Option<String>> {
     let mut names = HashMap::new();
     if app_ids.is_empty() {
@@ -514,7 +627,7 @@ impl From<ai_act_model_observation::Model> for ModelObservationItem {
             model_id: m.model_id,
             provider: m.provider,
             source: format!("{:?}", m.source).to_uppercase(),
-            posture: format!("{:?}", m.posture).to_uppercase(),
+            posture: posture_label(&m.posture).to_string(),
             hosted: m.hosted,
             open_licence: m.open_licence,
             systemic_risk: m.systemic_risk,
@@ -564,6 +677,12 @@ pub async fn get_inventory_detail(
         let _ = reconcile::reconcile_app_models(&state, &app_id, &scanned).await;
         signals = scanned;
     }
+    crate::routes::app::ai_act::model_posture::enrich_scoring_signals(
+        &state,
+        &app_id,
+        &mut signals,
+    )
+    .await?;
 
     let assessment = ai_act_assessment::Entity::find()
         .filter(ai_act_assessment::Column::AppId.eq(&app_id))
@@ -721,6 +840,12 @@ pub async fn put_inventory_assessment(
     {
         signals = scanned;
     }
+    crate::routes::app::ai_act::model_posture::enrich_scoring_signals(
+        &state,
+        &app_id,
+        &mut signals,
+    )
+    .await?;
 
     let classification =
         crate::routes::app::ai_act::questionnaire::classify(&body.answers, &signals);
@@ -1062,7 +1187,7 @@ impl RegistryItem {
             id: m.id,
             provider: m.provider,
             model_id: m.model_id,
-            posture: format!("{:?}", m.posture).to_uppercase(),
+            posture: posture_label(&m.posture).to_string(),
             hosted: m.hosted,
             open_licence: m.open_licence,
             systemic_risk: m.systemic_risk,
@@ -1218,13 +1343,43 @@ pub struct UpsertModelBody {
     pub note: Option<String>,
 }
 
+fn posture_label(posture: &AiGpaiPosture) -> &'static str {
+    match posture {
+        AiGpaiPosture::Unknown => "UNKNOWN",
+        AiGpaiPosture::Hosted => "HOSTED",
+        AiGpaiPosture::OpenLicence => "OPEN_LICENCE",
+        AiGpaiPosture::Closed => "CLOSED",
+        AiGpaiPosture::Systemic => "SYSTEMIC",
+    }
+}
+
 fn parse_posture(s: &str) -> AiGpaiPosture {
     match s.to_uppercase().as_str() {
         "HOSTED" => AiGpaiPosture::Hosted,
-        "OPEN_LICENCE" => AiGpaiPosture::OpenLicence,
+        "OPEN_LICENCE" | "OPENLICENCE" => AiGpaiPosture::OpenLicence,
         "CLOSED" => AiGpaiPosture::Closed,
         "SYSTEMIC" => AiGpaiPosture::Systemic,
         _ => AiGpaiPosture::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod posture_tests {
+    use super::{AiGpaiPosture, parse_posture, posture_label};
+
+    #[test]
+    fn registry_postures_round_trip_through_the_api() {
+        for posture in [
+            AiGpaiPosture::Unknown,
+            AiGpaiPosture::Hosted,
+            AiGpaiPosture::OpenLicence,
+            AiGpaiPosture::Closed,
+            AiGpaiPosture::Systemic,
+        ] {
+            assert_eq!(parse_posture(posture_label(&posture)), posture);
+        }
+        assert_eq!(posture_label(&AiGpaiPosture::OpenLicence), "OPEN_LICENCE");
+        assert_eq!(parse_posture("OPENLICENCE"), AiGpaiPosture::OpenLicence);
     }
 }
 
@@ -1326,10 +1481,13 @@ pub async fn upsert_model(
 #[derive(Clone, Deserialize, Debug, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistBody {
+    /// Stream the result with keep-alive comments while the model works.
+    #[serde(default)]
+    pub stream: bool,
     #[serde(default)]
     pub model_id: Option<String>,
     /// Optional caller profile used to resolve which model bits to use.
-    /// When omitted the agent falls back to the platform default model.
+    /// When omitted the agent loads the caller's synced profile.
     #[serde(default)]
     #[schema(value_type = Option<Object>)]
     pub profile: Option<flow_like::profile::Profile>,
@@ -1339,23 +1497,30 @@ pub struct AssistBody {
     post,
     path = "/admin/ai-act/assist/{app_id}",
     tag = "admin",
-    description = "Run the governance FlowPilot agent over an app's boards (FlowScript state) for admin review. Read-only. Requires ReadPublishing permission.",
+    description = "Run the governance FlowPilot agent over an app's boards (FlowScript state) for admin review. Read-only. Requires ReadPublishing permission. Set stream to true for SSE keep-alive comments followed by a completed event containing the suggestion, signals and model, or an error event containing error and code strings.",
     params(("app_id" = String, Path, description = "Application ID")),
     request_body = AssistBody,
     responses(
-        (status = 200, description = "Governance suggestion"),
+        (status = 200, description = "Governance suggestion or an SSE result stream", content(
+            (crate::routes::app::ai_act::SuggestResponse = "application/json"),
+            (String = "text/event-stream"),
+        )),
         (status = 400, description = "Feature disabled"),
         (status = 403, description = "Forbidden"),
     ),
     security(("bearer_auth" = []), ("api_key" = []))
 )]
-#[tracing::instrument(name = "POST /admin/ai-act/assist/{app_id}", skip(state, user, body))]
+#[tracing::instrument(
+    name = "POST /admin/ai-act/assist/{app_id}",
+    skip(state, user, reporter, body)
+)]
 pub async fn assist(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
+    reporter: crate::middleware::error_reporting::StreamErrorReporter,
     Json(body): Json<AssistBody>,
-) -> Result<Json<serde_json::Value>, ApiError> {
+) -> Result<Response, ApiError> {
     ensure_feature(&state)?;
     user.check_global_permission(&state, GlobalPermission::ReadPublishing)
         .await?;
@@ -1374,22 +1539,19 @@ pub async fn assist(
     let sub = user.sub()?;
     // Hosted Bit models bill against the caller's token via this server's metered proxy.
     let token = crate::routes::ai::copilot::user_access_token(&user);
-    let (suggestion, signals, model) = crate::routes::ai::governance::run_governance_agent(
-        &state,
-        &sub,
-        &app_id,
-        body.model_id,
-        body.profile,
-        token,
-        usage_context,
-    )
-    .await?;
-
-    Ok(Json(serde_json::json!({
-        "suggestion": suggestion,
-        "signals": signals,
-        "model": model,
-    })))
+    crate::routes::ai::governance::governance_response(body.stream, Some(reporter), async move {
+        crate::routes::ai::governance::run_governance_agent(
+            &state,
+            &sub,
+            &app_id,
+            body.model_id,
+            body.profile,
+            token,
+            usage_context,
+        )
+        .await
+    })
+    .await
 }
 
 // ---------------------------------------------------------------------------

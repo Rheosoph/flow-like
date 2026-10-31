@@ -3002,7 +3002,7 @@ async fn dispatch_event_stream(
         board_id: Set(board_id),
         version: Set(None),
         event_id: Set(Some(event_row.id.clone())),
-        node_id: Set(Some(event_row.id.clone())),
+        node_id: Set(Some(request.node_id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
         run_variant: Set(target.run_variant()),

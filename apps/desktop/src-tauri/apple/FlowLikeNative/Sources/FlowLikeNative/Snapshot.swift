@@ -126,8 +126,12 @@ public struct NativeActionRequest: Codable, Sendable {
     public var createdAt: String?
     public var responseMode: String?
     public var responseDeadline: String?
+    public var executionMode: String? = nil
+
+    public var isBackground: Bool { executionMode == "background" }
 
     public var isCurrent: Bool {
+        guard executionMode == nil || executionMode == "foreground" || isBackground else { return false }
         guard let createdAt, let date = NativeSnapshot.date(createdAt) else { return false }
         guard date <= Date().addingTimeInterval(60) && date > Date().addingTimeInterval(-300) else { return false }
         if let responseMode {

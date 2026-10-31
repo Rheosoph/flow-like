@@ -482,3 +482,125 @@ describe("tool activity context", () => {
 		expect(text.match(/Looking through installed apps/g)).toHaveLength(1);
 	});
 });
+
+describe("research trail", () => {
+	const sources = Array.from({ length: 8 }, (_, index) => ({
+		url: `https://source${index}.com/review`,
+		hostname: `source${index}.com`,
+		path: "/review",
+		title: `Review ${index}`,
+	}));
+	const search: IPlanStep = {
+		id: "search",
+		title: "↳ Using internet_search",
+		toolName: "internet_search",
+		status: "done",
+		detail: {
+			kind: "tool_activity",
+			category: "search",
+			label: "Searching the web",
+			queries: ["Porsche touring comfort", "Panamera rear seat comfort"],
+			sources,
+		},
+	};
+	const visit = (index: number, status: IPlanStep["status"]): IPlanStep => ({
+		id: `visit-${index}`,
+		title: "↳ Using open_url",
+		toolName: "open_url",
+		status,
+		detail: {
+			kind: "tool_activity",
+			category: "web",
+			label: "Reading a webpage",
+			sources: [sources[index]],
+		},
+	});
+
+	test("keeps every query and URL while distinguishing discovery, reads and failures", async () => {
+		const { text } = await renderSteps(
+			[
+				search,
+				visit(0, "done"),
+				visit(1, "progress"),
+				visit(2, "failed"),
+				{ ...visit(3, "done"), toolName: "archive_lookup" },
+				{ ...visit(5, "failed"), toolName: "archive_lookup" },
+				{ ...visit(6, "progress"), toolName: "archive_lookup" },
+				{
+					...search,
+					id: "search-again",
+					detail: {
+						...search.detail,
+						kind: "tool_activity",
+						category: "search",
+						label: "Searching the web",
+						sources: [sources[0]],
+					},
+				},
+			],
+			(container) => {
+				expect(
+					container.querySelectorAll("[data-research-activity]"),
+				).toHaveLength(1);
+				expect(
+					container.querySelectorAll("[data-research-source]"),
+				).toHaveLength(8);
+				const cards = container.querySelectorAll("[data-research-source]");
+				expect(cards[0].textContent).toContain("Read");
+				expect(cards[1].textContent).toContain("Reading");
+				expect(cards[2].textContent).toContain("Unavailable");
+				expect(cards[3].textContent).toContain("Checked");
+				expect(cards[5].textContent).toContain("Unavailable");
+				expect(cards[6].textContent).toContain("Checking");
+				expect(cards[7].textContent).toContain("Review 7");
+				expect(
+					container.querySelectorAll("[data-research-query]"),
+				).toHaveLength(4);
+			},
+		);
+		expect(text).toContain("Porsche touring comfort");
+		expect(text).toContain("Panamera rear seat comfort");
+		expect(text).not.toContain("↳ Using");
+	});
+
+	test("retains the research history beyond the recent step window without absorbing other tools", async () => {
+		const noise = Array.from(
+			{ length: 12 },
+			(_, index): IPlanStep => ({
+				id: `noise-${index}`,
+				title: `Other work ${index}`,
+				status: "done",
+			}),
+		);
+		await renderSteps(
+			[
+				search,
+				...noise,
+				visit(0, "progress"),
+				{
+					...visit(4, "done"),
+					toolName: "http_request",
+					title: "Sending an HTTP request",
+					detail: {
+						kind: "tool_activity",
+						category: "web",
+						label: "Sending an HTTP request",
+						method: "POST",
+					},
+				},
+			],
+			(container) => {
+				expect(
+					container.querySelectorAll("[data-research-source]"),
+				).toHaveLength(8);
+				expect(
+					container.querySelectorAll("[data-research-query]"),
+				).toHaveLength(2);
+				expect(
+					container.querySelector("[data-research-activity]")?.textContent,
+				).not.toContain("Sending an HTTP request");
+				expect(container.textContent).toContain("Sending an HTTP request");
+			},
+		);
+	});
+});

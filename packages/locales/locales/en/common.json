@@ -3727,5 +3727,6 @@
 	"youtubeVideoThumbnail": "YouTube video thumbnail",
 	"youveOutgrownYourPlan": "You've outgrown your plan",
 	"zoomIn": "Zoom in",
-	"zoomOut": "Zoom out"
+	"zoomOut": "Zoom out",
+	"latestSavedDraftOrPinnedFlow": "Latest runs the saved draft, including unpublished changes. A pinned version keeps the same published snapshot."
 }

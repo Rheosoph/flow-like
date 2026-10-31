@@ -13,6 +13,11 @@ use zeroize::{Zeroize, Zeroizing};
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct VaultUnlock {
+    /// Assigned by the native host before unlocking; browser input cannot choose the owner.
+    #[serde(skip)]
+    pub(crate) profile_id: String,
+    #[serde(skip)]
+    pub(crate) session_generation: String,
     pub(crate) device_id: String,
     pub(crate) password: Password,
     pub(crate) controller_vault: Vec<u8>,
@@ -27,8 +32,10 @@ pub(crate) struct VaultUnlock {
 
 /// The hub account and grant whose authority unlocked keys carry. Keys of one holder never
 /// serve another.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct Holder {
+    pub(crate) profile_id: String,
+    pub(crate) session_generation: String,
     pub(crate) api_origin: String,
     pub(crate) account: String,
     pub(crate) grant_id: String,
@@ -37,6 +44,8 @@ pub(crate) struct Holder {
 impl Holder {
     pub(crate) fn of(vault: &VaultUnlock) -> Self {
         Self {
+            profile_id: vault.profile_id.clone(),
+            session_generation: vault.session_generation.clone(),
             api_origin: vault.api_origin.trim_end_matches('/').to_owned(),
             account: vault.account.clone(),
             grant_id: vault.grant_id.clone(),
@@ -147,7 +156,7 @@ pub(crate) trait DeviceLink: Send + Sync + 'static {
     /// its body ends.
     fn activity(&self, gateway: &Self::Gateway) -> ProxyActivity;
 
-    /// A window is still signed in to the hub account of `holder`.
+    /// The captured native profile session of `holder` has not been revoked.
     fn signed_in(&self, holder: &Holder) -> bool;
 }
 

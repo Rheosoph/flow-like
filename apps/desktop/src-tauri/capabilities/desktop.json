@@ -124,7 +124,10 @@
     "fs:write-all",
     "fs:read-all",
     "opener:default",
-    "opener:allow-open-path",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [{ "path": "*" }, { "path": "**/*" }]
+    },
     "updater:default",
     "notification:default",
     "flow-like-dexie-blob-offload:default",

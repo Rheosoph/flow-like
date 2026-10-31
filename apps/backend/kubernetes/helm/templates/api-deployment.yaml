@@ -176,6 +176,19 @@ spec:
               value: {{ .Values.execution.stateTtlSeconds | quote }}
             - name: CHANNEL_TTL_SECONDS
               value: {{ .Values.execution.channelTtlSeconds | quote }}
+            - name: CHANNEL_TRANSPORT
+              value: {{ .Values.channels.transport | quote }}
+            {{- if eq .Values.channels.transport "nats" }}
+            - name: CHANNEL_NATS_URL
+              value: {{ default (printf "nats://%s-nats:4222" (include "flow-like.fullname" .)) .Values.channels.nats.url | quote }}
+            - name: CHANNEL_NATS_WS_URL
+              value: {{ .Values.channels.nats.publicWebsocketUrl | quote }}
+            - name: CHANNEL_NATS_ACCOUNT_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.channels.nats.issuerSecret }}
+                  key: CHANNEL_NATS_ACCOUNT_SEED
+            {{- end }}
             - name: REDIS_EXECUTION_QUEUE
               value: {{ .Values.execution.queueName | quote }}
             - name: EXECUTION_QUEUE_MAX_DEPTH

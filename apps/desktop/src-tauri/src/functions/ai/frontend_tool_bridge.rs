@@ -330,6 +330,9 @@ pub struct FrontendToolRequest {
     pub tool_name: String,
     pub arguments: Value,
     pub approval: FrontendToolApproval,
+    /// Native tools ask the client only for consent; Rust retains and executes the arguments.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub approval_only: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_request_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -416,6 +419,7 @@ struct FrontendToolDebugReport {
 
 #[derive(Debug, Clone)]
 struct FrontendToolTrace {
+    approval_only: bool,
     request_id: String,
     parent_request_id: Option<String>,
     tool_name: String,
@@ -468,6 +472,7 @@ impl FrontendToolTrace {
                 .and_then(safe_debug_identifier),
         };
         let mut trace = Self {
+            approval_only: false,
             request_id,
             parent_request_id,
             tool_name,
@@ -649,6 +654,31 @@ fn parse_http_request_approval(value: Value) -> FrontendToolResponse {
     }
 }
 
+fn parse_native_tool_approval(value: Value) -> FrontendToolResponse {
+    let mut response = match serde_json::from_value::<FrontendToolResponse>(value) {
+        Ok(response) => response,
+        Err(_) => {
+            return FrontendToolResponse {
+                approved: false,
+                result: None,
+                error: Some("The native tool approval response was malformed.".into()),
+            };
+        }
+    };
+    if response.approved
+        && response.error.is_none()
+        && !response.result.as_ref().is_some_and(|value| {
+            value["status"] == "ok"
+                && value["native_approved"] == true
+                && !value.get("error").is_some_and(|error| !error.is_null())
+        })
+    {
+        response.error =
+            Some("The client did not acknowledge approval of this native tool.".into());
+    }
+    response
+}
+
 pub(super) async fn complete_http_request_approval(
     arguments: &Value,
     approval_result: Value,
@@ -691,7 +721,9 @@ fn resolve_wait_outcome(
 ) -> ResolvedOutcome {
     match outcome {
         ChannelOutcome::Responded(value) => {
-            let response = if tool_name == HTTP_REQUEST_TOOL {
+            let response = if trace.approval_only {
+                parse_native_tool_approval(value)
+            } else if tool_name == HTTP_REQUEST_TOOL {
                 parse_http_request_approval(value)
             } else {
                 parse_frontend_tool_response(value)
@@ -881,6 +913,103 @@ impl FrontendToolBridge {
         cancellation: Option<CancellationToken>,
     ) -> Value {
         apply_tool_context(&tool_name, &mut arguments, self.context.as_ref());
+        if super::native_tool_bridge::supports(&tool_name, &arguments) {
+            let approval = match super::native_specialist_tools::approval(&tool_name, &arguments) {
+                Ok(Some(approval)) => approval,
+                Ok(None) => approval,
+                Err(error) => return json!({"status":"error", "tool":tool_name, "error":error}),
+            };
+            let deadline = Instant::now() + timeout;
+            let cancelled = http_request_cancellation(
+                self.channel.clone(),
+                cancellation.clone(),
+                Some(deadline),
+            );
+            let work = async {
+                let cached_schema = tool_name == "database_tool"
+                    && super::native_platform_tools::should_skip_cached_schema_approval(
+                        &self.app_handle,
+                        self.context.as_ref(),
+                        &arguments,
+                    )
+                    .await;
+                if matches!(approval.kind.as_str(), "mutating" | "execute")
+                    && !super::native_tool_bridge::run_options(self.context.as_ref()).auto_approve
+                    && !cached_schema
+                {
+                    let answer = self
+                        .dispatch_to_frontend(
+                            tool_name.clone(),
+                            arguments.clone(),
+                            approval,
+                            timeout,
+                            cancellation.clone(),
+                            true,
+                        )
+                        .await;
+                    if answer.get("native_approved").and_then(Value::as_bool) != Some(true) {
+                        return answer;
+                    }
+                }
+                // Approval may have taken most of the deadline or outlived the owning run.
+                if Instant::now() >= deadline
+                    || cancellation
+                        .as_ref()
+                        .is_some_and(CancellationToken::is_cancelled)
+                    || self.channel.is_cancelled().await
+                {
+                    return json!({"status": "cancelled", "tool": tool_name});
+                }
+                let request_id = new_request_id();
+                match Box::pin(super::native_tool_bridge::execute_on_channel(
+                    self.channel.clone(),
+                    &self.app_handle,
+                    &tool_name,
+                    &arguments,
+                    self.context.as_ref(),
+                    &request_id,
+                ))
+                .await
+                {
+                    Ok(result) => {
+                        // Clients refresh their views after durable native mutations. Delivery is
+                        // best effort and never part of the operation's success boundary.
+                        let _ = self.app_handle.emit("flowpilot://native-tool-completed", json!({
+                            "toolName": tool_name, "runId": self.context.as_ref().and_then(|context| context.run_id.as_deref()),
+                        }));
+                        result
+                    }
+                    Err(error)
+                        if error
+                            == super::native_tool_bridge::BACKGROUND_INTERACTION_UNAVAILABLE =>
+                    {
+                        super::native_tool_bridge::unavailable_result(&tool_name)
+                    }
+                    Err(error) => json!({"status": "error", "tool": tool_name, "error": error}),
+                }
+            };
+            return tokio::select! {
+                biased;
+                _ = cancelled => json!({"status": if Instant::now() >= deadline {"timeout"} else {"cancelled"}, "tool": tool_name}),
+                result = work => result,
+            };
+        }
+        self.dispatch_to_frontend(tool_name, arguments, approval, timeout, cancellation, false)
+            .await
+    }
+
+    async fn dispatch_to_frontend(
+        &self,
+        tool_name: String,
+        arguments: Value,
+        approval: FrontendToolApproval,
+        timeout: Duration,
+        cancellation: Option<CancellationToken>,
+        approval_only: bool,
+    ) -> Value {
+        if super::native_tool_bridge::interaction_unavailable(self.context.as_ref()) {
+            return super::native_tool_bridge::unavailable_result(&tool_name);
+        }
         let owner_webview = frontend_tool_owner(self.channel.channel_id());
 
         let ticket = match self.channel.open(timeout).await {
@@ -915,6 +1044,10 @@ impl FrontendToolBridge {
                 );
             }
         };
+        let mut pending = super::native_tool_bridge::PendingInteraction::new(
+            self.channel.clone(),
+            ticket.clone(),
+        );
         let request_id = ticket.request_id.clone();
         let mut trace = FrontendToolTrace::new(
             request_id.clone(),
@@ -927,6 +1060,7 @@ impl FrontendToolBridge {
         );
         trace.owner_webview = owner_webview;
         trace.cap_deadline_to_channel(ticket.expires_at);
+        trace.approval_only = approval_only;
         trace.record("pending_response_registered");
 
         // The source prompt is request ownership, not debug metadata. Forward it only to the
@@ -938,6 +1072,7 @@ impl FrontendToolBridge {
             tool_name: tool_name.clone(),
             arguments,
             approval,
+            approval_only,
             parent_request_id: trace.parent_request_id.clone(),
             context: request_context,
             dispatched_at_ms: trace.dispatched_at_ms,
@@ -945,6 +1080,74 @@ impl FrontendToolBridge {
             timeout_ms: trace.configured_timeout_ms,
             channel: ticket.handle.clone(),
         };
+
+        if let Some(handler) =
+            super::native_tool_bridge::run_options(self.context.as_ref()).interaction_handler
+        {
+            let cancelled = http_request_cancellation(
+                self.channel.clone(),
+                cancellation.clone(),
+                Instant::now().checked_add(timeout),
+            );
+            let response = tokio::select! {
+                biased;
+                _ = cancelled => None,
+                response = handler(request) => Some(response),
+            };
+            pending.abandon().await;
+            return match response {
+                Some(response) => native_host_response(&tool_name, response, approval_only),
+                None => json!({"status":"cancelled", "tool":tool_name}),
+            };
+        }
+
+        let owner_attached = trace
+            .owner_webview
+            .as_deref()
+            .is_some_and(|label| self.app_handle.get_webview_window(label).is_some());
+        if !owner_attached {
+            pending.abandon().await;
+            if approval_only {
+                use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+                let details = serde_json::to_string_pretty(&request.arguments).unwrap_or_default();
+                if details.len() > 16 * 1024 {
+                    return json!({"status":"interaction_required","tool":tool_name,"code":"approval_required",
+                        "message":"This operation needs a client interaction handler to review its full arguments."});
+                }
+                let (sender, receiver) = oneshot::channel();
+                self.app_handle
+                    .dialog()
+                    .message(format!("{}\n\n{}", request.approval.description, details))
+                    .title(request.approval.title)
+                    .kind(MessageDialogKind::Warning)
+                    .buttons(MessageDialogButtons::OkCancelCustom(
+                        "Allow once".into(),
+                        "Cancel".into(),
+                    ))
+                    .show(move |allowed| {
+                        let _ = sender.send(allowed);
+                    });
+                let cancelled = http_request_cancellation(
+                    self.channel.clone(),
+                    cancellation,
+                    Instant::now().checked_add(trace.remaining()),
+                );
+                return tokio::select! {
+                    biased;
+                    _ = cancelled => json!({"status":"cancelled","tool":tool_name}),
+                    answer = receiver => if answer == Ok(true) {
+                        json!({"status":"ok","native_approved":true})
+                    } else {
+                        json!({"status":"denied","tool":tool_name,"message":"The native tool was not approved."})
+                    },
+                };
+            }
+            return json!({
+                "status": "interaction_required", "tool": tool_name,
+                "code": "client_interaction_required",
+                "message": "This operation needs a client interaction handler or an attached desktop window."
+            });
+        }
 
         let (event_tx, event_rx) = oneshot::channel();
         let emit_handle = self.app_handle.clone();
@@ -961,7 +1164,7 @@ impl FrontendToolBridge {
             .map_err(|error| error.to_string());
             let _ = event_tx.send(result);
         }) {
-            self.channel.abandon(&ticket).await;
+            pending.abandon().await;
             trace.record("main_thread_dispatch_failed");
             return finish_bridge_result(
                 &self.app_handle,
@@ -995,7 +1198,7 @@ impl FrontendToolBridge {
                 );
             }
             DispatchOutcome::EmitFailed(error) => {
-                self.channel.abandon(&ticket).await;
+                pending.abandon().await;
                 trace.record("frontend_event_emit_failed");
                 eprintln!(
                     "[frontend-tool-bridge] '{tool_name}' emit failed (request {request_id}): {error}"
@@ -1022,7 +1225,7 @@ impl FrontendToolBridge {
                 } else {
                     "dispatch_channel_disconnected"
                 };
-                self.channel.abandon(&ticket).await;
+                pending.abandon().await;
                 trace.record(reason);
                 let cancellation_emitted = emit_cancellation(&self.app_handle, &trace, reason);
                 eprintln!(
@@ -1048,7 +1251,7 @@ impl FrontendToolBridge {
             }
             DispatchOutcome::Cancelled => {
                 const REASON: &str = "mcp_request_cancelled_during_dispatch";
-                self.channel.abandon(&ticket).await;
+                pending.abandon().await;
                 trace.record(REASON);
                 let cancellation_emitted = emit_cancellation(&self.app_handle, &trace, REASON);
                 return finish_bridge_result(
@@ -1068,8 +1271,11 @@ impl FrontendToolBridge {
             }
         }
 
-        self.wait_for_response(&ticket, tool_name, cancellation, trace)
-            .await
+        let result = self
+            .wait_for_response(&ticket, tool_name, cancellation, trace)
+            .await;
+        pending.abandon().await;
+        result
     }
 
     async fn wait_for_response(
@@ -1560,6 +1766,26 @@ fn emit_cancellation(app_handle: &AppHandle, trace: &FrontendToolTrace, reason: 
     }
 }
 
+fn native_host_response(tool: &str, response: FrontendToolResponse, approval_only: bool) -> Value {
+    if response
+        .result
+        .as_ref()
+        .and_then(|value| value["status"].as_str())
+        == Some("unavailable")
+    {
+        return super::native_tool_bridge::unavailable_result(tool);
+    }
+    if response.approved && response.error.is_none() {
+        if approval_only {
+            json!({"status":"ok", "native_approved":true})
+        } else {
+            normalize_tool_result(response.result)
+        }
+    } else {
+        json!({"status": if response.approved {"error"} else {"denied"}, "error":response.error})
+    }
+}
+
 fn normalize_tool_result(result: Option<Value>) -> Value {
     match result {
         Some(Value::Object(mut object)) => {
@@ -1579,6 +1805,62 @@ fn normalize_tool_result(result: Option<Value>) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unavailable_host_reply_never_approves_a_native_tool() {
+        for approved in [false, true] {
+            for approval_only in [false, true] {
+                let result = native_host_response(
+                    "upsert_event",
+                    FrontendToolResponse {
+                        approved,
+                        result: Some(json!({"status":"unavailable","native_approved":true})),
+                        error: None,
+                    },
+                    approval_only,
+                );
+                assert_eq!(result["status"], "unavailable");
+                assert_eq!(result["approved"], false);
+                assert!(result.get("native_approved").is_none());
+            }
+        }
+        assert_eq!(
+            native_host_response(
+                "upsert_event",
+                FrontendToolResponse {
+                    approved: true,
+                    result: None,
+                    error: None,
+                },
+                true
+            )["native_approved"],
+            true
+        );
+    }
+
+    #[test]
+    fn native_http_consent_uses_the_native_acknowledgement() {
+        let mut trace = test_trace(HTTP_REQUEST_TOOL);
+        trace.approval_only = true;
+        let result = resolve_wait_outcome(
+            HTTP_REQUEST_TOOL,
+            ChannelOutcome::Responded(json!({
+                "approved":true,"result":{"status":"ok","native_approved":true}
+            })),
+            false,
+            &trace,
+        );
+        assert_eq!(result.result["native_approved"], true);
+        assert_eq!(result.outcome, "ok");
+        for value in [
+            json!({"native_approved":true}),
+            json!({"approved":true}),
+            json!({"approved":true,"result":{"status":"error","native_approved":true}}),
+        ] {
+            let response = parse_native_tool_approval(value);
+            assert!(!response.approved || response.error.is_some());
+        }
+    }
     use flow_like_types::channel::{ChannelClientDescriptor, ChannelPush, ChannelPushKind};
     use std::sync::{
         Arc,
@@ -2457,6 +2739,7 @@ mod tests {
             tool_name: "database_tool".to_string(),
             arguments,
             approval,
+            approval_only: false,
             parent_request_id: trace.parent_request_id.clone(),
             context: safe_request_context(&trace.context),
             dispatched_at_ms: trace.dispatched_at_ms,

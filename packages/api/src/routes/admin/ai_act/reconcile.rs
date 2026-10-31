@@ -5,7 +5,7 @@
 //! `AiActModelRegistry`. Runs inline/awaited so it is safe in serverless
 //! (Lambda) deployments.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use chrono::{DateTime, FixedOffset};
 use sea_orm::{
@@ -28,6 +28,7 @@ use crate::{
 #[derive(Clone, Debug, Default)]
 struct DiscoveredModel {
     provider: Option<String>,
+    provider_conflict: bool,
     from_monitoring: bool,
     from_board: bool,
     dynamic_selector: bool,
@@ -74,6 +75,39 @@ impl ResolvedPosture {
             && existing.vetted == self.vetted
             && existing.dynamic_selector == discovered.dynamic_selector
     }
+}
+
+fn merge_discovered_models(
+    discovered: BTreeMap<String, (String, DiscoveredModel)>,
+    registry: &HashMap<RegistryKey, ai_act_model_registry::Model>,
+) -> BTreeMap<String, DiscoveredModel> {
+    // Observations are unique by app/model id. Provider inference can merge
+    // previously separate unknown/known records, so combine before inserting.
+    let mut by_model_id: BTreeMap<String, DiscoveredModel> = BTreeMap::new();
+    for (_, (model_id, mut disc)) in discovered {
+        if !disc.dynamic_selector
+            && let Some(entry) = crate::routes::app::ai_act::model_posture::resolve_registry_entry(
+                disc.provider.as_deref(),
+                &model_id,
+                registry.values(),
+            )
+        {
+            disc.provider = Some(entry.provider.clone());
+        }
+        by_model_id
+            .entry(model_id)
+            .and_modify(|existing| {
+                if existing.provider != disc.provider {
+                    existing.provider = None;
+                    existing.provider_conflict = true;
+                }
+                existing.from_monitoring |= disc.from_monitoring;
+                existing.from_board |= disc.from_board;
+                existing.dynamic_selector |= disc.dynamic_selector;
+            })
+            .or_insert(disc);
+    }
+    by_model_id
 }
 
 /// Reconcile the models for a single app. Returns the number of observations
@@ -170,13 +204,16 @@ pub async fn reconcile_app_models(
     )
     .await;
 
+    let by_model_id = merge_discovered_models(discovered, &registry);
+    let mut retained_ids = HashSet::new();
+
     // Observations whose resolved fields are unchanged only need `lastSeenAt`
     // bumped, which one statement does for all of them; new ones go in as one
     // insert. Only observations that actually changed are updated row by row.
     let mut written = 0usize;
     let mut unchanged_ids: Vec<String> = Vec::new();
     let mut new_observations: Vec<ai_act_model_observation::ActiveModel> = Vec::new();
-    for (key, (model_id, disc)) in discovered {
+    for (model_id, disc) in by_model_id {
         let source = match (disc.from_monitoring, disc.from_board) {
             (true, true) => AiModelSource::Both,
             (true, false) => AiModelSource::Monitored,
@@ -184,9 +221,19 @@ pub async fn reconcile_app_models(
             (false, false) => continue,
         };
 
-        let posture = resolve_posture(&registry, disc.provider.as_deref(), &model_id);
+        let posture = if disc.provider_conflict || disc.dynamic_selector {
+            ResolvedPosture::unknown()
+        } else {
+            resolve_posture(&registry, disc.provider.as_deref(), &model_id)
+        };
 
-        match existing_by_key.get(&key) {
+        let existing = existing_by_key
+            .values()
+            .find(|existing| existing.model_id == model_id);
+        if let Some(existing) = existing {
+            retained_ids.insert(existing.id.clone());
+        }
+        match existing {
             Some(existing) if posture.matches(existing, &disc, &source) => {
                 unchanged_ids.push(existing.id.clone());
             }
@@ -240,6 +287,23 @@ pub async fn reconcile_app_models(
             .await?;
     }
 
+    // A removed selector or fixed model must stop appearing as attached after
+    // the next scan. Runtime observations retain their usage history.
+    let stale_board_ids: Vec<String> = existing_by_key
+        .values()
+        .filter(|observation| {
+            observation.source == AiModelSource::BoardScan
+                && !retained_ids.contains(&observation.id)
+        })
+        .map(|observation| observation.id.clone())
+        .collect();
+    if signals.board_scan_complete && !stale_board_ids.is_empty() {
+        ai_act_model_observation::Entity::delete_many()
+            .filter(ai_act_model_observation::Column::Id.is_in(stale_board_ids))
+            .exec(&state.db)
+            .await?;
+    }
+
     Ok(written)
 }
 
@@ -272,12 +336,11 @@ fn resolve_posture(
     provider: Option<&str>,
     model_id: &str,
 ) -> ResolvedPosture {
-    let key = (
-        provider.unwrap_or("unknown").to_string(),
-        model_id.to_string(),
-    );
-
-    match registry.get(&key) {
+    match crate::routes::app::ai_act::model_posture::resolve_registry_entry(
+        provider,
+        model_id,
+        registry.values(),
+    ) {
         Some(r) => ResolvedPosture {
             posture: r.posture.clone(),
             hosted: r.hosted,
@@ -293,4 +356,76 @@ fn resolve_posture(
 #[allow(dead_code)]
 pub fn naive_now() -> DateTime<FixedOffset> {
     chrono::Utc::now().fixed_offset()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn observations_merge_by_the_database_model_identity() {
+        let discovered = BTreeMap::from([
+            (
+                "first".into(),
+                (
+                    "model".into(),
+                    DiscoveredModel {
+                        provider: Some("provider".into()),
+                        from_board: true,
+                        ..Default::default()
+                    },
+                ),
+            ),
+            (
+                "second".into(),
+                (
+                    "model".into(),
+                    DiscoveredModel {
+                        provider: Some("provider".into()),
+                        from_monitoring: true,
+                        ..Default::default()
+                    },
+                ),
+            ),
+        ]);
+        let merged = merge_discovered_models(discovered, &HashMap::new());
+        assert_eq!(merged.len(), 1);
+        let model = &merged["model"];
+        assert_eq!(model.provider.as_deref(), Some("provider"));
+        assert!(model.from_board && model.from_monitoring);
+        assert!(!model.provider_conflict);
+    }
+
+    #[test]
+    fn conflicting_providers_remain_unresolved() {
+        let discovered = BTreeMap::from([
+            (
+                "first".into(),
+                (
+                    "model".into(),
+                    DiscoveredModel {
+                        provider: Some("provider-a".into()),
+                        from_board: true,
+                        ..Default::default()
+                    },
+                ),
+            ),
+            (
+                "second".into(),
+                (
+                    "model".into(),
+                    DiscoveredModel {
+                        provider: Some("provider-b".into()),
+                        from_monitoring: true,
+                        ..Default::default()
+                    },
+                ),
+            ),
+        ]);
+        let merged = merge_discovered_models(discovered, &HashMap::new());
+        assert_eq!(merged.len(), 1);
+        let model = &merged["model"];
+        assert!(model.provider.is_none());
+        assert!(model.provider_conflict);
+    }
 }

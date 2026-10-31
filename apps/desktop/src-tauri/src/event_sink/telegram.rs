@@ -1116,6 +1116,7 @@ impl TelegramSink {
             personal_access_token: None,
             pat_owner_sub: None,
             hub_origin: None,
+            profile_binding: None,
             remote: false,
             oauth_tokens: std::collections::HashMap::new(),
         }

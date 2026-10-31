@@ -21,6 +21,19 @@ const ev = (event_type: string, payload: unknown): IIntercomEvent => {
 
 const reader = () => _contract({ appId: "app-1", eventId: "event-1" });
 
+test("keeps answers and files from each message across streamed batches", () => {
+	const run = reader();
+	const first = responseEvent({ content: "First answer" }, ["first.pdf"]);
+	const second = responseEvent({ content: "Second answer" }, ["second.pdf"]);
+	(first.payload as Record<string, unknown>).message_id = "first";
+	(second.payload as Record<string, unknown>).message_id = "second";
+	run.push([first]);
+	run.push([second]);
+	run.push([chunkEvent({ content: " continued" })]);
+	expect(run.output().answer).toBe("First answer\n\nSecond answer continued");
+	expect(run.output().attachments).toEqual(["first.pdf", "second.pdf"]);
+});
+
 /** Push Step (push_step.rs): the whole plan so far, the newest step current. */
 const stepEvent = (titles: readonly string[], message = "") =>
 	ev("chat_stream_partial", {

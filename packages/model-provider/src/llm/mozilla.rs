@@ -70,7 +70,7 @@ impl MozillaModel {
         let client = rig::providers::openai::Client::builder()
             .api_key(api_key)
             .base_url(endpoint)
-            .http_client(AuthorizedHttpClient::for_egress(egress)?)
+            .http_client(AuthorizedHttpClient::for_provider(provider, egress)?)
             .build()?;
 
         Ok(MozillaModel {

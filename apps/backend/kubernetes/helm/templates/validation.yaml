@@ -154,7 +154,7 @@
 {{- end }}
 {{- end }}
 
-{{- $reservedEnv := list "AUDIT_WORKER" "AUDIT_BUCKET" "AUDIT_BUCKET_ENDPOINT" "PORT" "METRICS_PORT" "REDIS_URL" "DATABASE_URL" "EXECUTION_ISOLATION_MODE" "EXECUTION_BACKEND" "ASYNC_EXECUTION_BACKEND" "EXECUTOR_URL" "EXECUTION_MANAGER_TOKEN" "API_BASE_URL" "PUBLIC_API_URL" "FRONTEND_BASE_URL" "EXECUTION_STATE_BACKEND" "REDIS_EXECUTION_QUEUE" "S3_STS_PROVIDER" "STS_ENDPOINT_URL" "S3_PUBLIC_ENDPOINT" "S3_INTERNAL_ENDPOINT" "STORAGE_PROVIDER" "RUNTIME_CREDENTIALS_PROVIDER" "AWS_ENDPOINT" "AWS_REGION" "AWS_USE_PATH_STYLE" "META_BUCKET" "CONTENT_BUCKET" "LOG_BUCKET" "STS_SESSION_TTL_SECONDS" "CORS_ALLOWED_ORIGINS" "EXECUTION_TIMEOUT_SECONDS" "EXECUTION_QUEUE_MAX_WAIT_SECONDS" "EXECUTION_CREDENTIAL_MARGIN_SECONDS" "EXECUTION_STARTUP_GRACE_SECONDS" "EXECUTION_TERMINAL_GRACE_SECONDS" "EXECUTION_CLEANUP_TIMEOUT_SECONDS" "LOCKED_BUCKET" "LOCKED_BUCKET_ENFORCEMENT" "LOCKED_BUCKET_LOCK_MODE" "LOCKED_BUCKET_RETENTION_DAYS" "LOCKED_BUCKET_MIN_RETENTION_DAYS" "LOCKED_BUCKET_MAX_FILE_BYTES" }}
+{{- $reservedEnv := list "CHANNEL_TRANSPORT" "CHANNEL_NATS_URL" "CHANNEL_NATS_WS_URL" "CHANNEL_NATS_ACCOUNT_SEED" "CHANNEL_NATS_ACCOUNT_SEED_FILE" "AUDIT_WORKER" "AUDIT_BUCKET" "AUDIT_BUCKET_ENDPOINT" "PORT" "METRICS_PORT" "REDIS_URL" "DATABASE_URL" "EXECUTION_ISOLATION_MODE" "EXECUTION_BACKEND" "ASYNC_EXECUTION_BACKEND" "EXECUTOR_URL" "EXECUTION_MANAGER_TOKEN" "API_BASE_URL" "PUBLIC_API_URL" "FRONTEND_BASE_URL" "EXECUTION_STATE_BACKEND" "REDIS_EXECUTION_QUEUE" "S3_STS_PROVIDER" "STS_ENDPOINT_URL" "S3_PUBLIC_ENDPOINT" "S3_INTERNAL_ENDPOINT" "STORAGE_PROVIDER" "RUNTIME_CREDENTIALS_PROVIDER" "AWS_ENDPOINT" "AWS_REGION" "AWS_USE_PATH_STYLE" "META_BUCKET" "CONTENT_BUCKET" "LOG_BUCKET" "STS_SESSION_TTL_SECONDS" "CORS_ALLOWED_ORIGINS" "EXECUTION_TIMEOUT_SECONDS" "EXECUTION_QUEUE_MAX_WAIT_SECONDS" "EXECUTION_CREDENTIAL_MARGIN_SECONDS" "EXECUTION_STARTUP_GRACE_SECONDS" "EXECUTION_TERMINAL_GRACE_SECONDS" "EXECUTION_CLEANUP_TIMEOUT_SECONDS" "LOCKED_BUCKET" "LOCKED_BUCKET_ENFORCEMENT" "LOCKED_BUCKET_LOCK_MODE" "LOCKED_BUCKET_RETENTION_DAYS" "LOCKED_BUCKET_MIN_RETENTION_DAYS" "LOCKED_BUCKET_MAX_FILE_BYTES" }}
 {{- range .Values.api.env }}
 {{- if has .name $reservedEnv }}
 {{- fail (printf "api.env cannot override chart-managed %s; configure its values.yaml setting" .name) }}
@@ -167,4 +167,29 @@
 
 {{- if and (eq .Values.execution.isolationMode "per_run") (ne .Values.storage.provider "s3") }}
 {{- fail "per_run currently requires storage.provider=s3 with bundled RustFS or an external S3/STS endpoint" }}
+{{- end }}
+
+{{- if not (has .Values.channels.transport (list "nats" "http")) }}
+{{- fail "channels.transport must be nats or http" }}
+{{- end }}
+{{- if eq .Values.channels.transport "nats" }}
+{{- if and (eq .Values.execution.isolationMode "per_run") (hasPrefix "tls://" .Values.channels.nats.url) }}
+{{- fail "per_run NATS gateways require nats:// on the trusted private network; native tls:// requires trusted_shared mode" }}
+{{- end }}
+{{- $_ := required "channels.nats.issuerSecret is required; run scripts/setup-config.py" .Values.channels.nats.issuerSecret }}
+{{- $_ := required "channels.nats.publicWebsocketUrl is required" .Values.channels.nats.publicWebsocketUrl }}
+{{- if not (regexMatch "^wss?://[^/]+" .Values.channels.nats.publicWebsocketUrl) }}
+{{- fail "channels.nats.publicWebsocketUrl must use ws:// or wss://" }}
+{{- end }}
+{{- if and (hasPrefix "https://" .Values.api.publicUrl) (not (hasPrefix "wss://" .Values.channels.nats.publicWebsocketUrl)) }}
+{{- fail "HTTPS hosting requires a wss:// channels.nats.publicWebsocketUrl" }}
+{{- end }}
+{{- if .Values.channels.nats.enabled }}
+{{- $_ := required "channels.nats.serverSecret containing nats.conf is required; run scripts/setup-config.py" .Values.channels.nats.serverSecret }}
+{{- if ne (int .Values.channels.nats.replicaCount) 1 }}
+{{- fail "bundled NATS supports one replica; use channels.nats.enabled=false and an external NATS cluster for broker HA" }}
+{{- end }}
+{{- else }}
+{{- $_ := required "channels.nats.url is required for an external broker" .Values.channels.nats.url }}
+{{- end }}
 {{- end }}

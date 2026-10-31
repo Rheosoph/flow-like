@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate rendered deployment contracts without printing secret values."""
 import argparse
+import base64
 import ipaddress
 import json
 import os
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 from urllib.parse import urlsplit
+import oidc_preflight
 
 ROOT = Path(__file__).resolve().parents[1]
 IMAGE_WORKLOADS = {"API_IMAGE": "api", "DB_INIT_IMAGE": "db-init", "WEB_IMAGE": "web", "RUNTIME_IMAGE": "runtime",
@@ -78,7 +80,7 @@ def write_env(path, updates):
 
 
 def validate(values, config):
-    errors = []
+    errors = oidc_preflight.validate(values, config)
     services = config["services"]
     mode = values.get("EXECUTION_ISOLATION_MODE", "per_run")
     if mode not in {"per_run", "trusted_shared"}:
@@ -91,6 +93,28 @@ def validate(values, config):
         if re.fullmatch(DIGEST_PIN_PATTERN, pin) and values.get(image_key, "") != pin:
             errors.append(f"{image_key} must equal the {key} digest pin; run scripts/pull-images.py or scripts/prepare-images.py to align them")
     api = services.get("api", {}).get("environment", {})
+    if api.get("CHANNEL_TRANSPORT") == "nats":
+        if not api.get("CHANNEL_NATS_ACCOUNT_SEED", "").startswith("SA"):
+            errors.append("NATS channels require CHANNEL_NATS_ACCOUNT_SEED from setup-env.py")
+        native = urlsplit(api.get("CHANNEL_NATS_URL", ""))
+        websocket = urlsplit(api.get("CHANNEL_NATS_WS_URL", ""))
+        if native.scheme not in {"nats", "tls"} or not native.hostname or native.username or native.password:
+            errors.append("CHANNEL_NATS_URL must be a nats:// or tls:// broker URL without credentials")
+        if mode == "per_run" and native.scheme == "tls":
+            errors.append("per_run NATS gateways require nats:// on the trusted private network; native tls:// requires trusted_shared mode")
+        if websocket.scheme not in {"ws", "wss"} or not websocket.hostname or websocket.username or websocket.password or websocket.query or websocket.fragment:
+            errors.append("CHANNEL_NATS_WS_URL must be a browser-visible ws:// or wss:// URL without credentials")
+        if urlsplit(values.get("PUBLIC_API_URL", "")).scheme == "https" and websocket.scheme != "wss":
+            errors.append("HTTPS hosting requires a wss:// CHANNEL_NATS_WS_URL")
+        try:
+            broker = json.loads(base64.b64decode(values.get("NATS_SERVER_CONFIG", ""), validate=True))
+            if not broker.get("operator") or not broker.get("resolver_preload") or not broker.get("websocket", {}).get("allowed_origins"):
+                raise ValueError()
+        except (ValueError, TypeError, UnicodeError):
+            errors.append("NATS_SERVER_CONFIG must contain generated broker trust and explicit browser origins")
+        for name, service in services.items():
+            if name != "api" and service.get("environment", {}).get("CHANNEL_NATS_ACCOUNT_SEED"):
+                errors.append("Only the API may receive CHANNEL_NATS_ACCOUNT_SEED")
     worker = services.get("audit-worker", {}).get("environment", {})
     if not worker:
         errors.append("A dedicated audit-worker service is required")
@@ -202,7 +226,7 @@ def validate(values, config):
             errors.append(f"{name} has an invalid execution or shutdown duration")
     for name, service in services.items():
         for port in service.get("ports", []):
-            if name not in {"api-gateway", "object-gateway", "grafana", "mail-postfix"}:
+            if name not in {"api-gateway", "object-gateway", "grafana", "mail-postfix"} and not (name == "oidc" and values.get("OIDC_MODE") == "bundled"):
                 errors.append(f"{name} must not publish infrastructure ports in the production stack")
             if name == "grafana" and port.get("host_ip") != "127.0.0.1":
                 errors.append("Grafana must bind to loopback")

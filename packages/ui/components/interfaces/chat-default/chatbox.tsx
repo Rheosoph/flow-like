@@ -29,14 +29,19 @@ import { Textarea } from "../../ui/textarea";
 import type { VoiceInvokeMode, VoiceMode } from "../../voice/types";
 import { useSpeechRecognition } from "../../voice/use-speech-recognition";
 import { useVoiceRecorder } from "../../voice/use-voice-recorder";
+import type { IChatMessageInteraction } from "./chat-message-interaction";
 import { FileManagerDialog } from "./chatbox/file-dialog";
 import { isImageFile, useImagePreviewUrls } from "./chatbox/image-previews";
+import { type ChatBoxModel, ChatModelPicker } from "./model-picker";
+
+export type { ChatBoxModel } from "./model-picker";
 
 export type ISendMessageFunction = (
 	content: string,
 	filesAttached?: File[],
 	activeTools?: string[],
 	audioFile?: File,
+	interaction?: IChatMessageInteraction,
 ) => Promise<void>;
 
 interface ChatBoxProps {
@@ -69,6 +74,7 @@ interface ChatBoxProps {
 	onInterrupt?: () => void;
 	/** Thinking level picker; omitted when the chat does not offer one. */
 	thinking?: ChatBoxThinking;
+	model?: ChatBoxModel;
 }
 
 export interface ChatBoxThinking {
@@ -111,6 +117,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			onVoiceModeToggle,
 			onInterrupt,
 			thinking,
+			model,
 		}: Readonly<ChatBoxProps>,
 		ref,
 	) => {
@@ -681,6 +688,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										</PopoverContent>
 									</Popover>
 								)}
+
+								{model && <ChatModelPicker {...model} />}
 
 								{thinking && thinking.options.length > 0 && (
 									<ThinkingPicker

@@ -42,6 +42,15 @@ web:
     digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     pullPolicy: IfNotPresent
 
+# Run replies use a single bundled NATS broker. Use an external NATS cluster
+# when broker availability must survive a node failure (see configuration docs).
+channels:
+  transport: nats
+  nats:
+    publicWebsocketUrl: wss://api.flow-like.example.com/nats
+    issuerSecret: flow-like-nats-issuer
+    serverSecret: flow-like-nats-server
+
 # Realtime collaboration signaling. The hub config's signaling URL must point
 # at this service (wss://signaling.flow-like.example.com below), not the
 # vendor-hosted default. Tokens are signed with this deployment's BACKEND_KEY.

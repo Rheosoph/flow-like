@@ -819,6 +819,8 @@ fn unlock_requests_follow_the_webview_contract() {
     assert_eq!(
         Holder::of(&request),
         Holder {
+            profile_id: String::new(),
+            session_generation: String::new(),
             api_origin: "https://api.flow-like.test".to_owned(),
             account: ACCOUNT.to_owned(),
             grant_id: "owner".to_owned(),
@@ -838,4 +840,152 @@ fn unlock_requests_follow_the_webview_contract() {
         "controllerSeed": "never sent",
     }));
     assert!(extra.is_err(), "only the password and the vault cross over");
+}
+
+#[tokio::test]
+async fn device_keys_are_scoped_to_profile_and_session_generation() {
+    let harness = Harness::new();
+    let mut unlock = vault(PASSWORD, true);
+    unlock.profile_id = "profile-a".into();
+    unlock.session_generation = "session-a".into();
+    harness
+        .connector
+        .unlock(unlock, Unlocker::Area)
+        .await
+        .unwrap();
+    let owner = SessionOwner {
+        profile_id: "profile-a".into(),
+        generation: "session-a".into(),
+        hub: "https://api.flow-like.test".into(),
+        subject: ACCOUNT.into(),
+    };
+    let endpoint = harness
+        .connector
+        .connect_for(&target(MODEL), Interaction::Forbidden, Some(&owner))
+        .await
+        .unwrap();
+    for invalid in [
+        SessionOwner {
+            profile_id: "profile-b".into(),
+            ..owner.clone()
+        },
+        SessionOwner {
+            generation: "session-b".into(),
+            ..owner.clone()
+        },
+        SessionOwner {
+            subject: OTHER_ACCOUNT.into(),
+            ..owner.clone()
+        },
+        SessionOwner {
+            hub: "https://other.test".into(),
+            ..owner.clone()
+        },
+    ] {
+        assert!(
+            harness
+                .connector
+                .connect_for(&target(MODEL), Interaction::Forbidden, Some(&invalid))
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(
+        harness
+            .connector
+            .connect_for(&target(MODEL), Interaction::Forbidden, Some(&owner))
+            .await
+            .unwrap(),
+        endpoint
+    );
+    assert_eq!(harness.open_attempts(), 1);
+    assert_eq!(
+        harness.dropped(),
+        0,
+        "rejecting another profile must not revoke the original session"
+    );
+    let mut replacement = vault(PASSWORD, true);
+    replacement.profile_id = "profile-b".into();
+    replacement.session_generation = "session-b".into();
+    harness
+        .connector
+        .unlock(replacement, Unlocker::Area)
+        .await
+        .unwrap();
+    assert!(
+        harness
+            .connector
+            .connect_for(&target(MODEL), Interaction::Forbidden, Some(&owner))
+            .await
+            .is_err()
+    );
+    let new_owner = SessionOwner {
+        profile_id: "profile-b".into(),
+        generation: "session-b".into(),
+        ..owner
+    };
+    assert_ne!(
+        harness
+            .connector
+            .connect_for(&target(MODEL), Interaction::Forbidden, Some(&new_owner))
+            .await
+            .unwrap(),
+        endpoint
+    );
+    assert!(harness.connector.link.signed_out.lock().unwrap().is_empty());
+}
+#[tokio::test]
+async fn revoked_keys_fail_before_async_cleanup_delivers() {
+    let harness = Harness::new();
+    harness.unlock(PASSWORD, true).await.unwrap();
+    harness.forbidden().await.unwrap();
+    harness
+        .connector
+        .link
+        .signed_out
+        .lock()
+        .unwrap()
+        .insert(ACCOUNT.into());
+    assert!(harness.forbidden().await.is_err());
+    assert_eq!(harness.dropped(), 1);
+    assert_eq!(harness.gateways_closed(), 1);
+}
+#[tokio::test]
+async fn revocation_during_gateway_open_does_not_publish_endpoint() {
+    let harness = Harness::new();
+    harness.unlock(PASSWORD, true).await.unwrap();
+    *harness.connector.link.open_delay.lock().unwrap() = Some(Duration::from_millis(80));
+    let connector = harness.connector.clone();
+    let opening = tokio::spawn(async move {
+        connector
+            .connect(&target(MODEL), Interaction::Forbidden)
+            .await
+    });
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    harness
+        .connector
+        .link
+        .signed_out
+        .lock()
+        .unwrap()
+        .insert(ACCOUNT.into());
+    assert!(opening.await.unwrap().is_err());
+    assert!(harness.connector.held().is_empty());
+    assert_eq!(harness.gateways_closed(), 1);
+}
+#[test]
+fn browser_cannot_supply_native_profile_or_session_binding() {
+    for key in [
+        "profileId",
+        "sessionGeneration",
+        "profile_id",
+        "session_generation",
+    ] {
+        let mut request = json!({"deviceId":DEVICE,"password":PASSWORD,"controllerVault":[1],"manifestJws":"a.b.c","grantId":"owner","apiOrigin":"https://api.flow-like.test","account":ACCOUNT,"keepUnlocked":false});
+        request[key] = json!("forged");
+        assert!(
+            serde_json::from_value::<VaultUnlock>(request).is_err(),
+            "{key}"
+        );
+    }
 }

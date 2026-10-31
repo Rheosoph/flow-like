@@ -415,6 +415,8 @@ fn main() {
             "_flow_like_native_clear_snapshot",
             "_flow_like_native_take_actions",
             "_flow_like_native_pending_actions",
+            "_flow_like_native_claim_background_actions",
+            "_flow_like_native_background_action_active",
             "_flow_like_native_ack_action",
             "_flow_like_native_publish_app_icons",
             "_flow_like_native_complete_action",

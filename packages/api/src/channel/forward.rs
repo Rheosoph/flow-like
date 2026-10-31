@@ -20,12 +20,24 @@ pub async fn forward_push(
     forwarder: Option<&Arc<dyn ChannelForwarder>>,
     push: &ChannelPush,
 ) -> Result<ForwardOutcome, ApiError> {
+    forward_push_with_id(forwarder, push, None).await
+}
+
+pub async fn forward_push_with_id(
+    forwarder: Option<&Arc<dyn ChannelForwarder>>,
+    push: &ChannelPush,
+    delivery_id: Option<&str>,
+) -> Result<ForwardOutcome, ApiError> {
     let forwarder = forwarder.ok_or_else(|| {
         ApiError::service_unavailable(
             "This channel expects a cloud transport reply but the API has no forwarder configured",
         )
     })?;
-    match forwarder.forward(push).await {
+    let result = match delivery_id {
+        Some(id) => forwarder.forward_with_id(push, id).await,
+        None => forwarder.forward(push).await,
+    };
+    match result {
         Ok(()) => Ok(ForwardOutcome::Delivered),
         Err(error) if is_not_connected(&error.to_string()) => {
             tracing::debug!(%error, channel_id = %push.channel_id, transport = forwarder.transport(), "channel push had no listener");
@@ -47,6 +59,7 @@ pub fn is_not_connected(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
     message.contains("404")
         || message.contains("no waiter connected")
+        || message.contains("no connected waiter")
         || message.contains("not connected")
         || message.contains("not found")
 }

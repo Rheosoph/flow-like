@@ -20,7 +20,6 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 	IAppVisibility,
-	type IEvent,
 	Input,
 	Label,
 	RolePermissions,
@@ -54,6 +53,7 @@ import {
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityUpgradeDialog } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-upgrade-dialog";
+import { useQuickAction } from "@flow-like/flow-like-ui/hooks/use-quick-action";
 import {
 	type INavigationItem,
 	type INavigationItemState,
@@ -73,6 +73,7 @@ import {
 	EyeIcon,
 	EyeOffIcon,
 	LayoutGridIcon,
+	Loader2Icon,
 	LockIcon,
 	Maximize2Icon,
 	MenuIcon,
@@ -433,23 +434,19 @@ export default function Id({
 		});
 	}, []);
 
-	async function executeEventHandler(event: IEvent) {
-		if (!id) return;
-		const runMeta = await executionService.executeEvent(
-			id,
-			event.id,
-			{ id: event.node_id },
-			true,
-			() => {},
-			() => {},
-		);
-		if (!runMeta) {
-			toastError(
-				t("failedToExecuteBoard", "Failed to execute board"),
-				<PlayCircleIcon className="w-4 h-4" />,
-			);
-		}
-	}
+	const { execute: executeEventHandler, isRunning: isQuickActionRunning } =
+		useQuickAction({
+			appId: id,
+			executeEvent: executionService.executeEvent,
+			streamState: true,
+			onError: (error) => {
+				console.warn("Failed to execute quick action", error);
+				toastError(
+					t("failedToExecuteBoard", "Failed to execute board"),
+					<PlayCircleIcon className="w-4 h-4" />,
+				);
+			},
+		});
 
 	// Storage and Data Studio own their vertical space; every other section scrolls.
 	const contentFillsHeight = configRouteFillsHeight(currentRoute);
@@ -905,11 +902,17 @@ export default function Id({
 																	variant="outline"
 																	size="sm"
 																	className="justify-start gap-2 h-auto py-2 px-3"
+																	disabled={isQuickActionRunning(event.id)}
+																	aria-busy={isQuickActionRunning(event.id)}
 																	onClick={async () => {
 																		await executeEventHandler(event);
 																	}}
 																>
-																	<PlayCircleIcon className="w-3 h-3 text-green-600" />
+																	{isQuickActionRunning(event.id) ? (
+																		<Loader2Icon className="w-3 h-3 animate-spin" />
+																	) : (
+																		<PlayCircleIcon className="w-3 h-3 text-green-600" />
+																	)}
 																	<span className="truncate text-xs">
 																		{event.name}
 																	</span>

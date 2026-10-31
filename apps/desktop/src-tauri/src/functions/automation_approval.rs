@@ -346,6 +346,30 @@ pub async fn grant_rpa_automation(
             "Automation can only be approved in the main desktop window",
         ));
     }
+    grant_native_automation(
+        &handler,
+        &app_id,
+        &board_id,
+        version,
+        event_id.as_deref(),
+        &expected_revision,
+        &expected_identity,
+        scope,
+    )
+    .await
+}
+
+/// Called by a native host only after the user accepts the displayed revision and capabilities.
+pub(crate) async fn grant_native_automation(
+    handler: &AppHandle,
+    app_id: &str,
+    board_id: &str,
+    version: Option<(u32, u32, u32)>,
+    event_id: Option<&str>,
+    expected_revision: &str,
+    expected_identity: &str,
+    scope: ApprovalScope,
+) -> Result<(), TauriFunctionError> {
     if identity(&handler).await? != expected_identity {
         return Err(TauriFunctionError::new(
             "The active profile changed while approval was open. Review it again.",
@@ -370,7 +394,7 @@ pub async fn grant_rpa_automation(
     let event = if matches!(scope, ApprovalScope::Board) {
         None
     } else {
-        event_id.as_deref()
+        event_id
     };
     let grant = key(&identity, &app_id, &board_id, &actual_revision, event);
     if matches!(scope, ApprovalScope::Once) {

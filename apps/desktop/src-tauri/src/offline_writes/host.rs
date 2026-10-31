@@ -43,8 +43,15 @@ const ACTIVATION_RETRY: Duration = Duration::from_secs(30);
 pub(crate) type EmitSink = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
 
 /// Replay tokens: the signed-in session first, then sink PATs bound to the scope.
+#[async_trait::async_trait]
 pub(crate) trait TokenSource: Send + Sync {
-    fn session_token(&self, hub: &str, subject: &str) -> Option<String>;
+    async fn scope_current(&self, _key: &ScopeKey) -> bool {
+        true
+    }
+    async fn session_token(&self, key: &ScopeKey) -> Option<String>;
+    async fn native_binding(&self, _key: &ScopeKey) -> Option<crate::native_auth::SessionBinding> {
+        None
+    }
     fn sink_token(&self, app_id: &str, event_id: &str) -> Option<String>;
 }
 
@@ -95,9 +102,52 @@ struct DesktopTokens {
     app_handle: Option<AppHandle>,
 }
 
+#[async_trait::async_trait]
 impl TokenSource for DesktopTokens {
-    fn session_token(&self, hub: &str, subject: &str) -> Option<String> {
-        crate::execution_credentials::session_token(hub, subject)
+    async fn scope_current(&self, key: &ScopeKey) -> bool {
+        let Some(profile_id) = key.profile_id.as_deref() else {
+            return false;
+        };
+        let Some(app) = self.app_handle.as_ref() else {
+            return false;
+        };
+        let Ok(settings) = crate::state::TauriSettingsState::construct(app).await else {
+            return false;
+        };
+        let settings = settings.lock().await;
+        settings.profiles.get(profile_id).is_some_and(|profile| {
+            super::hub_key(&profile.hub_profile.hub, profile.hub_profile.secure).as_deref()
+                == Some(key.hub.as_str())
+        })
+    }
+    async fn session_token(&self, key: &ScopeKey) -> Option<String> {
+        self.native_binding(key)
+            .await?
+            .cached_access_token()
+            .await
+            .ok()
+    }
+
+    async fn native_binding(&self, key: &ScopeKey) -> Option<crate::native_auth::SessionBinding> {
+        let profile_id = key.profile_id.as_deref()?;
+        let app = self.app_handle.as_ref()?;
+        let settings = crate::state::TauriSettingsState::construct(app)
+            .await
+            .ok()?;
+        {
+            let settings = settings.lock().await;
+            let profile = settings.profiles.get(profile_id)?;
+            if super::hub_key(&profile.hub_profile.hub, profile.hub_profile.secure).as_deref()
+                != Some(key.hub.as_str())
+            {
+                return None;
+            }
+        }
+        let binding = crate::native_auth::SessionBinding::capture(profile_id, &key.hub)
+            .await
+            .ok()??;
+        (binding.subject == key.subject && Some(binding.issuer.as_str()) == key.issuer.as_deref())
+            .then_some(binding)
     }
 
     fn sink_token(&self, app_id: &str, event_id: &str) -> Option<String> {
@@ -122,25 +172,31 @@ pub(crate) struct LeaseCloud;
 impl LeaseCloud {
     async fn lease(host: &DesktopHost) -> Result<Option<Arc<RenewableSharedCredentials>>> {
         let scope = host.scope.upgrade().context(texts::FORGOTTEN)?;
-        if let Some(live) = scope.lease() {
+        if !scope.services.tokens.scope_current(&host.key).await {
+            return Ok(None);
+        }
+        if let Some(live) = scope
+            .lease()
+            .filter(|live| live.authorization_current().is_ok())
+        {
             return Ok(Some(live));
         }
-        let (token, session) =
-            match crate::execution_credentials::session_binding(&host.key.hub, &host.key.subject) {
-                Some((session_id, webview, token)) => (token, Some((session_id, webview))),
-                None => match host.token() {
-                    Some(token) => (token, None),
-                    None => return Ok(None),
-                },
+        let prepared = if let Some(binding) = scope.services.tokens.native_binding(&host.key).await
+        {
+            crate::execution_credentials::prepare_native(binding, &host.key.app_id).await?
+        } else {
+            let Some(token) = host.token().await else {
+                return Ok(None);
             };
-        let prepared = crate::execution_credentials::prepare(
-            &host.key.hub,
-            &host.key.app_id,
-            Some(&token),
-            session.as_ref().map(|(session_id, _)| session_id.as_str()),
-            session.as_ref().map(|(_, webview)| webview.as_str()),
-        )
-        .await?;
+            crate::execution_credentials::prepare(
+                &host.key.hub,
+                &host.key.app_id,
+                Some(&token),
+                None,
+                None,
+            )
+            .await?
+        };
         let SharedCredentials::Renewable(live) = prepared else {
             return Ok(None);
         };
@@ -262,10 +318,16 @@ impl DesktopHost {
     }
 
     /// The session token of the scope's account, else a bound sink PAT with a matching digest.
-    pub(crate) fn token(&self) -> Option<String> {
+    pub(crate) async fn token(&self) -> Option<String> {
         let scope = self.scope.upgrade()?;
         let tokens = &scope.services.tokens;
-        if let Some(token) = tokens.session_token(&self.key.hub, &self.key.subject) {
+        if !tokens.scope_current(&self.key).await {
+            return None;
+        }
+        if let Some(binding) = tokens.native_binding(&self.key).await {
+            return binding.access_token(None).await.ok();
+        }
+        if let Some(token) = tokens.session_token(&self.key).await {
             return Some(token);
         }
         scope.descriptor().sinks.iter().rev().find_map(|sink| {
@@ -516,7 +578,15 @@ impl OfflineHost for DesktopHost {
         request: &OfflineReplayRequest,
     ) -> Result<OfflineReplayResponse, ReplayError> {
         let client = self.client()?;
-        let Some(token) = self.token() else {
+        let binding = match self.scope.upgrade() {
+            Some(scope) => scope.services.tokens.native_binding(&self.key).await,
+            None => None,
+        };
+        let token = match binding.as_ref() {
+            Some(binding) => binding.access_token(None).await.ok(),
+            None => self.token().await,
+        };
+        let Some(mut token) = token else {
             self.set_transport(TransportStatus::WaitingForSignIn);
             return Err(failure(
                 ReplayErrorKind::Unavailable,
@@ -524,23 +594,46 @@ impl OfflineHost for DesktopHost {
                 texts::sign_in_to_sync(&self.key.subject),
             ));
         };
-        let response = match self.send(client, request, &token).await {
-            Ok(response) => response,
-            Err(error) => {
-                self.connectivity.observe(if error.is_timeout() {
-                    Observation::TimedOut
-                } else {
-                    Observation::ConnectFailed
-                });
-                self.set_transport(TransportStatus::WaitingForConnection);
-                return Err(failure(
-                    ReplayErrorKind::Unavailable,
-                    None,
-                    format!("The hub could not be reached to sync an offline change: {error}"),
-                ));
+        let mut retried = false;
+        let response = loop {
+            let response = match self.send(client, request, &token).await {
+                Ok(response) => response,
+                Err(error) => {
+                    self.connectivity.observe(if error.is_timeout() {
+                        Observation::TimedOut
+                    } else {
+                        Observation::ConnectFailed
+                    });
+                    self.set_transport(TransportStatus::WaitingForConnection);
+                    return Err(failure(
+                        ReplayErrorKind::Unavailable,
+                        None,
+                        format!("The hub could not be reached to sync an offline change: {error}"),
+                    ));
+                }
+            };
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED
+                && !retried
+                && let Some(binding) = binding.as_ref()
+                && let Ok(renewed) = binding.access_token(Some(&token)).await
+            {
+                token = renewed;
+                retried = true;
+                continue;
             }
+            break response;
         };
         self.connectivity.observe(Observation::Succeeded);
+        if binding
+            .as_ref()
+            .is_some_and(|binding| !binding.is_current())
+        {
+            return Err(failure(
+                ReplayErrorKind::Unavailable,
+                None,
+                "The profile authentication changed while syncing offline changes",
+            ));
+        }
         let status = response.status().as_u16();
         let body = match read_limited(response).await {
             Ok(body) => body,

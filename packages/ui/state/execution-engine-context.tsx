@@ -9,6 +9,11 @@ import {
 	ExecutionEngineProvider,
 	type OnIncrementalSaveFn,
 } from "../lib/execution-engine";
+import {
+	getExecutionRuntime,
+	releaseExecutionRuntime,
+} from "../lib/execution/runtime-client";
+import { attachExecutionEffects } from "../lib/execution/session-effects";
 import type { IIntercomEvent } from "../lib/schema/events/intercom-event";
 import { useBackend } from "./backend-state";
 import { useExecutionServiceOptional } from "./execution-service-context";
@@ -39,6 +44,7 @@ export function ExecutionEngineProviderComponent({
 		]);
 	const executionService = useExecutionServiceOptional();
 	const engineRef = useRef<ExecutionEngineProvider | null>(null);
+	const previousScope = useRef(scope);
 
 	if (!engineRef.current) {
 		engineRef.current = new ExecutionEngineProvider();
@@ -46,10 +52,32 @@ export function ExecutionEngineProviderComponent({
 
 	useEffect(() => {
 		if (engineRef.current && backend) {
-			engineRef.current.setBackend(backend);
 			engineRef.current.setExecutionScope(scope);
+			engineRef.current.setBackend(backend);
 		}
 	}, [backend, scope]);
+
+	useEffect(() => {
+		if (previousScope.current !== scope)
+			releaseExecutionRuntime(previousScope.current);
+		previousScope.current = scope;
+		let disposed = false;
+		let detachEffects: (() => void) | undefined;
+		void getExecutionRuntime(scope)
+			.then((client) => {
+				if (disposed) return;
+				engineRef.current?.setRuntimeClient(client);
+				detachEffects = attachExecutionEffects(client);
+			})
+			.catch((error) =>
+				console.error("Execution runtime could not connect", error),
+			);
+		return () => {
+			disposed = true;
+			detachEffects?.();
+			engineRef.current?.setRuntimeClient(undefined);
+		};
+	}, [scope]);
 
 	useEffect(() => {
 		if (engineRef.current && executionService) {

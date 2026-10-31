@@ -408,6 +408,17 @@ impl Settings {
         Ok(profile)
     }
 
+    /// Resolve one named profile without changing the window's selection or global proxy URL.
+    pub fn profile_by_id(&self, id: &str) -> anyhow::Result<UserProfile> {
+        let mut profile = self
+            .profiles
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("The selected profile no longer exists: {id}"))?;
+        profile.hub_profile.custom_bits = self.profile_custom_bits(&profile);
+        Ok(profile)
+    }
+
     /// The subset of the custom-bit library a profile has activated, matched
     /// against its `bits` references (`hub:id` or bare id).
     pub fn profile_custom_bits(
@@ -584,5 +595,50 @@ mod e2e_isolation_tests {
             root.join("projects").to_str().unwrap()
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod profile_selection_tests {
+    use super::*;
+
+    #[test]
+    fn named_profile_lookup_never_uses_or_changes_the_foreground_profile() {
+        let profile = |id: &str| {
+            UserProfile::new(flow_like::profile::Profile {
+                id: id.into(),
+                ..Default::default()
+            })
+        };
+        // Settings normally persists on drop. This read-only fixture never touches a user's store.
+        let settings = std::mem::ManuallyDrop::new(Settings {
+            loaded: false,
+            default_hub: String::new(),
+            dev_mode: false,
+            current_profile: "foreground".into(),
+            bit_dir: PathBuf::new(),
+            project_dir: PathBuf::new(),
+            logs_dir: PathBuf::new(),
+            temporary_dir: PathBuf::new(),
+            user_dir: PathBuf::new(),
+            log_retention: LogRetentionSettings::default(),
+            telemetry: TelemetrySettings::default(),
+            profiles: HashMap::from([
+                ("foreground".into(), profile("foreground")),
+                ("background".into(), profile("background")),
+            ]),
+            custom_bits: Vec::new(),
+            updated: SystemTime::UNIX_EPOCH,
+            created: SystemTime::UNIX_EPOCH,
+            config: None,
+            persistence_path: None,
+        });
+        assert_eq!(
+            settings.profile_by_id("background").unwrap().hub_profile.id,
+            "background"
+        );
+        assert_eq!(settings.current_profile, "foreground");
+        assert!(settings.profile_by_id("missing").is_err());
+        assert_eq!(settings.current_profile, "foreground");
     }
 }

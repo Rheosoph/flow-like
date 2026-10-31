@@ -10,9 +10,9 @@ export type Destination = "computer" | "hub" | "device";
 
 /** Fallback order: the first destination that fits wins when the preferred one does not. */
 export const DESTINATION_ORDER: readonly Destination[] = [
-	"device",
 	"computer",
 	"hub",
+	"device",
 ];
 
 export type DestinationReason =
@@ -161,11 +161,7 @@ export function initialDestination(
 		execution_mode?: string | null;
 	} | null,
 ): Destination {
-	const standard: Destination = env.deviceCreation
-		? "device"
-		: env.canExecuteLocally
-			? "computer"
-			: "hub";
+	const standard: Destination = env.canExecuteLocally ? "computer" : "hub";
 	if (!template) return standard;
 	if (
 		env.deviceCreation &&

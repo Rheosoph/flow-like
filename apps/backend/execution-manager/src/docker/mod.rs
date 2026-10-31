@@ -194,6 +194,7 @@ impl Manager {
                 "RUST_LOG=warn".into(),
                 "HTTP_PROXY=http://127.0.0.1:3128".into(),
                 "HTTPS_PROXY=http://127.0.0.1:3128".into(),
+                "CHANNEL_NATS_PROXY_URL=http://127.0.0.1:3128".into(),
                 "http_proxy=http://127.0.0.1:3128".into(),
                 "https_proxy=http://127.0.0.1:3128".into(),
                 "NO_PROXY=".into(),
@@ -434,6 +435,10 @@ impl Manager {
                 "deadline": now() + execution_deadline.saturating_duration_since(Instant::now()).as_secs_f64(),
                 "allowed_https_hosts": self.common.allowed_https_hosts, "buckets": self.common.buckets,
                 "object_store_tls_gateway": self.common.object_store_tls_gateway,
+                "channel_nats_url": payload.channel.as_ref().and_then(|grant| match &grant.executor {
+                    flow_like_types_contracts::channel::ChannelExecutorGrant::Nats { .. } => self.common.channel_nats_url.as_ref(),
+                    _ => None,
+                }),
             });
             let mut policy = serde_json::to_vec(&policy)?;
             policy.push(b'\n');

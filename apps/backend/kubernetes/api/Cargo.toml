@@ -7,7 +7,7 @@ description = "Flow-Like Kubernetes API Service"
 [dependencies]
 flow-like = { workspace = true, features = ["app-runtime"] }
 # AWS SDK support is also required for RustFS prefix-scoped STS credentials.
-flow-like-api = { workspace = true, features = ["kubernetes", "redis", "aws", "cosmos", "azure", "gcp", "r2", "smtp", "sendgrid", "forecasting"] }
+flow-like-api = { workspace = true, features = ["channel-nats", "kubernetes", "redis", "aws", "cosmos", "azure", "gcp", "r2", "smtp", "sendgrid", "forecasting"] }
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog = { workspace = true, features = ["executor-local-metadata"] }

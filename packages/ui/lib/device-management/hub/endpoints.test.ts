@@ -777,7 +777,7 @@ describe("the flow as a version (hub)", () => {
 			kind: "ok",
 			data: { current: null, newest: [0, 0, 7] },
 		});
-		const never = fakeApi(() => ({}));
+		const never = fakeApi(() => ({ current: null, newest: null }));
 		expect(await readFlowVersion(never.api, profile, "app", "board")).toEqual({
 			kind: "ok",
 			data: { current: null, newest: null },
@@ -791,6 +791,15 @@ describe("the flow as a version (hub)", () => {
 			(await hubError(readFlowVersion(malformed.api, profile, "app", "board")))
 				.code,
 		).toBe("invalid_response");
+	});
+
+	test("missing publication fields remain unknown", async () => {
+		for (const value of [{}, { current: null }, { newest: null }]) {
+			const { api } = fakeApi(() => value);
+			expect(
+				(await hubError(readFlowVersion(api, profile, "app", "board"))).code,
+			).toBe("invalid_response");
+		}
 	});
 
 	test("publishes a version of the current edits and names each refusal", async () => {

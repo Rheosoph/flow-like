@@ -30,6 +30,52 @@ macro_rules! assert_legacy_registry {
 include!("fixtures/legacy_node_paths.rs");
 
 #[test]
+fn chat_controls_are_registered_once_with_chat_aliases() {
+    let nodes = catalog::collect_nodes();
+    for (name, alias) in [
+        ("events_chat_set_main_widget", "setMainWidget"),
+        ("events_chat_clear_main_widget", "clearMainWidget"),
+        ("events_chat_react", "react"),
+    ] {
+        let matches: Vec<_> = nodes
+            .iter()
+            .map(|logic| logic.get_node())
+            .filter(|node| node.name == name)
+            .collect();
+        assert_eq!(matches.len(), 1, "Expected one registration for {name}");
+        let node = &matches[0];
+        assert_eq!(node.flowscript_namespace(), "chat");
+        assert_eq!(node.flowscript_alias(), alias);
+        for pin_name in ["exec_in", "exec_out"] {
+            assert_eq!(
+                node.get_pin_by_name(pin_name).unwrap().data_type,
+                VariableType::Execution
+            );
+        }
+        if alias == "setMainWidget" {
+            let widget = node.get_pin_by_name("element_ref").unwrap();
+            assert_eq!(widget.data_type, VariableType::Struct);
+            assert!(widget.schema.is_some());
+            let display = node.get_pin_by_name("display").unwrap();
+            assert_eq!(
+                display
+                    .options
+                    .as_ref()
+                    .unwrap()
+                    .valid_values
+                    .as_ref()
+                    .unwrap(),
+                &vec![
+                    "open".to_string(),
+                    "collapsed".to_string(),
+                    "maximized".to_string()
+                ]
+            );
+        }
+    }
+}
+
+#[test]
 fn database_reference_nodes_are_registered_once() {
     let nodes = catalog::collect_nodes();
     for name in [

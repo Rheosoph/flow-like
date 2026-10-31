@@ -651,6 +651,13 @@ fn extract_blocking(archive: &Path, target: &Path) -> crate::Result<()> {
             archive.display()
         ))
     })?;
+    // Check every entry before extraction can write any files.
+    zip.validate_header_consistency().map_err(|error| {
+        install_error(format!(
+            "The Chrome for Testing archive {} has inconsistent headers: {error}",
+            archive.display()
+        ))
+    })?;
     zip.extract(target).map_err(|error| {
         install_error(format!(
             "Could not extract Chrome for Testing into {}: {error}",
@@ -974,6 +981,70 @@ mod tests {
             );
         }
         map
+    }
+
+    fn archive_bytes() -> Vec<u8> {
+        use std::io::Write as _;
+
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for (name, content) in [
+            ("chrome-linux64/resources.pak", "resources"),
+            ("chrome-linux64/chrome", "browser"),
+        ] {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(content.as_bytes()).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn extract_blocking_extracts_consistent_archive() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("chrome.zip");
+        let target = temp.path().join("extracted");
+        std::fs::write(&archive, archive_bytes()).unwrap();
+
+        extract_blocking(&archive, &target).unwrap();
+
+        assert_eq!(
+            std::fs::read(target.join("chrome-linux64/resources.pak")).unwrap(),
+            b"resources"
+        );
+        assert_eq!(
+            std::fs::read(target.join("chrome-linux64/chrome")).unwrap(),
+            b"browser"
+        );
+    }
+
+    #[test]
+    fn extract_blocking_rejects_mismatched_headers_before_writing_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let archive = temp.path().join("chrome.zip");
+        let target = temp.path().join("extracted");
+        let mut bytes = archive_bytes();
+        let second_local_header = bytes
+            .windows(4)
+            .enumerate()
+            .filter(|(_, signature)| *signature == b"PK\x03\x04")
+            .nth(1)
+            .unwrap()
+            .0;
+        // Change only the second local filename; the central directory stays intact.
+        bytes[second_local_header + 30] = b'x';
+        std::fs::write(&archive, bytes).unwrap();
+
+        let error = extract_blocking(&archive, &target).unwrap_err();
+
+        assert!(
+            error.to_string().contains("inconsistent headers"),
+            "{error}"
+        );
+        assert!(
+            !target.exists(),
+            "no entry should be extracted before validation"
+        );
     }
 
     #[test]

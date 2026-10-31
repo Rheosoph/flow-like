@@ -191,6 +191,7 @@ audit-kms-azure = ["dep:azure_core", "dep:azure_identity"]
 channel-aws = ["aws", "flow-like-channels/aws", "dep:aws-sdk-iotdataplane"]
 channel-azure = ["flow-like-channels/azure"]
 channel-gcp = ["flow-like-channels/gcp"]
+channel-nats = ["flow-like-channels/nats"]
 full=[
     "aws",
     "azure",
@@ -211,6 +212,7 @@ full=[
     "channel-aws",
     "channel-azure",
     "channel-gcp",
+    "channel-nats",
 ]
 urlencoding = []
 # Fault injection for retried transactions (`crate::db::testing`); never on in a shipped binary.

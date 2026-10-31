@@ -5,60 +5,27 @@
 
 [advisories]
 ignore = [
-    # rsa 0.9.10 — Marvin Attack timing side-channel (RUSTSEC-2023-0071)
+    # rsa 0.9.10: Marvin Attack timing side-channel (RUSTSEC-2023-0071)
     # Blocked by: no patched rsa release as of 2026-05-16.
     "RUSTSEC-2023-0071",
 
-    # rustls-webpki 0.102.8 — name-constraint and CRL parsing advisories
-    # (RUSTSEC-2026-0104, RUSTSEC-2026-0098, RUSTSEC-2026-0099, RUSTSEC-2026-0049)
-    # Fix requires rustls-webpki >= 0.103.10, but 0.102.8 is pulled in by
-    # rumqttc 0.25.1 (direct dep rustls-webpki ^0.102.8, no newer release) and by
-    # serenity 0.12.5 → tokio-tungstenite 0.21 → rustls 0.22. Both require upstream
-    # crates to update; no action possible in this workspace.
-    # The 0.101.7 copy is gone: the aws-sdk-* crates now opt out of their deprecated
-    # `rustls` default feature and sink-services uses teloxide 0.17 (reqwest 0.12).
-    "RUSTSEC-2026-0104",
-    "RUSTSEC-2026-0098",
-    "RUSTSEC-2026-0099",
-    "RUSTSEC-2026-0049",
-
-    # rustls 0.22.4 / rustls-webpki 0.102.8 — client session `Debug` leaks secrets,
-    # unauthenticated ServerHello downgrades later key shares to classical, distrusted
-    # emSign intermediates (RUSTSEC-2026-0346, RUSTSEC-2026-0349, RUSTSEC-2026-0382).
-    # The rustls 0.23 and rustls-webpki 0.103 copies are on fixed releases (0.23.46,
-    # 0.103.16). The old copies stay for the same reason as above: serenity 0.12.5 →
-    # tokio-tungstenite 0.21 → rustls 0.22, and rumqttc 0.25.1, which names webpki 0.102
-    # only for an error type and verifies through rustls 0.23. Not exposed: 0346 needs a
-    # custom ClientSessionStore that Debug-prints session values (serenity uses the
-    # built-in one), 0349 needs X25519MLKEM768, which rustls 0.22 does not offer, and
-    # serenity's roots come from webpki-roots 0.26.11, which re-exports webpki-roots
-    # 1.0.11 — that release removed the emSign root.
-    "RUSTSEC-2026-0346",
-    "RUSTSEC-2026-0349",
-    "RUSTSEC-2026-0382",
-
-    # quick-xml < 0.41 — quadratic duplicate-attribute check and unbounded NsReader
-    # namespace allocation (RUSTSEC-2026-0194, RUSTSEC-2026-0195). First-party crates use
-    # 0.41. Older copies are pinned by third parties with no compatible release: pprof →
-    # inferno (0.26), xcap → xcb (0.30, build-time protocol XML), umya-spreadsheet 2,
-    # tauri-winrt-notification 0.7 and feed-rs 2 (0.37), lancedb → lance-namespace-impls,
-    # zbus_xml 5 and rbook 0.6 (0.38), object_store 0.13, opendal 0.57, calamine 0.34 and
-    # wayland-scanner (0.39). object_store and opendal parse cloud-provider responses,
-    # wayland-scanner and xcb parse protocol files at build time. The reachable exposure is
-    # CPU time on crafted spreadsheets and e-books: flow-like-catalog-data reads uploads
-    # with calamine 0.34 and umya-spreadsheet 2, and our markitdown fork with calamine,
-    # rbook and feed-rs. Moving those needs calamine 0.37, umya-spreadsheet 3 and rbook 0.7
-    # in catalog-data and the fork.
+    # quick-xml < 0.41 has quadratic duplicate-attribute checks and unbounded
+    # NsReader namespace allocation (RUSTSEC-2026-0194, RUSTSEC-2026-0195).
+    # Older copies remain in xcb (0.30), feed-rs, tauri-winrt-notification and
+    # umya-spreadsheet (0.37), rbook and zbus_xml (0.38), markitdown, object_store
+    # and wayland-scanner (0.39), and lance-namespace-impls (0.40). Crafted
+    # spreadsheets and e-books can reach the affected parsers through
+    # umya-spreadsheet, rbook and markitdown. Calamine now uses a fixed release.
     "RUSTSEC-2026-0194",
     "RUSTSEC-2026-0195",
 
-    # h2 0.3.27 — unbounded empty DATA frames (RUSTSEC-2026-0258). Fixed only in h2 0.4;
+    # h2 0.3.27: unbounded empty DATA frames (RUSTSEC-2026-0258). Fixed only in h2 0.4;
     # 0.3 comes from hyper 0.14, which async-stripe 0.41 (latest stable; 1.0 is still a
     # release candidate) pins. Not exposed: our `runtime-tokio-hyper` client uses
     # hyper-tls without ALPN, so it only speaks HTTP/1.1 to api.stripe.com.
     "RUSTSEC-2026-0258",
 
-    # libcrux-kem 0.0.9 — panics decoding short hybrid KEM keys or seeds
+    # libcrux-kem 0.0.9: panics decoding short hybrid KEM keys or seeds
     # (RUSTSEC-2026-0330, RUSTSEC-2026-0331). Pinned by openmls_rust_crypto 0.6.0 (latest)
     # → hpke-rs 0.7 → hpke-rs-libcrux 0.7. Not exposed: device-crypto uses only
     # MLS_128_DHKEMX25519_CHACHA20POLY1305_SHA256_Ed25519, which never reaches the
@@ -66,41 +33,21 @@ ignore = [
     "RUSTSEC-2026-0330",
     "RUSTSEC-2026-0331",
 
-    # lz4_flex 0.10.0 — block decompression can leak uninitialized memory
-    # (RUSTSEC-2026-0041). Pinned by zenoh-transport 1.10.1 (latest). Not exposed:
-    # zenoh-transport only decompresses behind its `transport_compression` feature, and
-    # flow-like-industrial enables just the tcp/udp/tls transports.
-    "RUSTSEC-2026-0041",
-
-    # crypto-bigint 0.5.5 — timing variability in constant-time operations
+    # crypto-bigint 0.5.5: timing variability in constant-time operations
     # (RUSTSEC-2026-0387). Fixed only in 0.7; 0.5 is required by elliptic-curve 0.13
     # (p256/p384/k256/ecdsa) and by aws-sigv4's SigV4a signer. Moving needs the
     # RustCrypto 0.14 elliptic-curve stack across those crates and the AWS SDK.
     "RUSTSEC-2026-0387",
 
-    # zstd 0.13.3 / zstd-safe 7.2.4 and 5.0.2 — reused-context stream leaks, legacy-frame
-    # streaming decompression and seekable decompression memory exposure
-    # (RUSTSEC-2026-0391, RUSTSEC-2026-0398, RUSTSEC-2026-0403). Fixed only in
-    # zstd 0.14 / zstd-safe 8. Pinned by arrow-ipc/parquet 58, datafusion 53, lance 8,
-    # iceberg, apache-avro, tonic 0.14 and compression-codecs; zstd 0.11 / zstd-safe 5
-    # by tch → zip 0.6. Not exposed in first-party code: it uses `encode_all`,
-    # `decode_all`, the bulk API and a fresh stream `Encoder`, never `with_context`,
-    # the write-side `Decoder` or the `seekable` feature.
+    # zstd 0.13.3 / zstd-safe 7.2.4 have reused-context stream leaks,
+    # legacy-frame streaming decompression and seekable decompression exposure
+    # (RUSTSEC-2026-0391, RUSTSEC-2026-0398, RUSTSEC-2026-0403). Fixes require
+    # zstd 0.14 / zstd-safe 8; older copies remain in Arrow/Parquet, DataFusion,
+    # Lance, Iceberg, apache-avro, tonic and compression-codecs.
+    # First-party code uses encode_all, decode_all, the bulk API and a fresh
+    # stream Encoder, never with_context, the write-side Decoder or seekable.
     "RUSTSEC-2026-0391",
     "RUSTSEC-2026-0398",
     "RUSTSEC-2026-0403",
 
-    # zip < 9.0.0 — `extract()` follows symlink targets, applies permissions through
-    # symlinks and preserves SUID/SGID bits (RUSTSEC-2026-0367, RUSTSEC-2026-0368,
-    # RUSTSEC-2026-0369). First-party crates and our markitdown fork use zip 9. The older
-    # copies are pinned by third parties: tch/torch-sys (0.6), umya-spreadsheet (2),
-    # utoipa-swagger-ui (3), docx-rust and tauri-plugin-updater (4), libduckdb-sys and
-    # rbook (6), calamine, candle-core and any-tts (7). Of those, only calamine 0.37 and
-    # rbook 0.7 have releases on zip 9; neither is adopted yet. Only two of them
-    # call `extract()`: tauri-plugin-updater on a minisign-verified update payload, and
-    # libduckdb-sys in build.rs on the source archive it ships. The rest read archives
-    # in memory, which the advisories do not affect.
-    "RUSTSEC-2026-0367",
-    "RUSTSEC-2026-0368",
-    "RUSTSEC-2026-0369",
 ]

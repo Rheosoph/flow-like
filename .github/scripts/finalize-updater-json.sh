@@ -43,7 +43,7 @@ if ! [[ "$run_attempt" =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-for command_name in gh jq mktemp; do
+for command_name in gh jq mktemp bun; do
   if ! command -v "$command_name" >/dev/null 2>&1; then
     echo "::error::Required command is unavailable: $command_name"
     exit 1
@@ -332,6 +332,10 @@ while IFS= read -r record; do
   signature_file="$work_dir/signature-${record_index}"
   if ! download_signature "$sig_id" "$sig_digest" "$signature_file"; then
     echo "::error::Could not download and verify signature asset $sig_id."
+    exit 1
+  fi
+  if ! bun "$(dirname "$0")/verify-updater-signature.ts" "$config_path" "$signature_file" "$app_version"; then
+    echo "::error::Signature asset $sig_id does not authenticate this release version and updater public key."
     exit 1
   fi
   # --rawfile retains the signature exactly, including trailing newlines.

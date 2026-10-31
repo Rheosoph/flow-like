@@ -31,9 +31,15 @@ const harness = vi.hoisted(() => {
 		bootstrapStatus: 200,
 		runtimeRequest: null as
 			| null
-			| ((suffix?: string, init?: RequestInit) => Promise<Response>),
+			| (((suffix?: string, init?: RequestInit) => Promise<Response>) & {
+					prepareExecution: (body: string) => Promise<{
+						request: { body: string; headers: { authorization: string } };
+					}>;
+					executionScope: () => string;
+			  }),
 		accessToken: null as null | (() => string | undefined),
 		backendBuilds: 0,
+		executionScopes: [] as (string | undefined)[],
 		authProxy: false,
 		oauthTokens: undefined as unknown,
 		oauthApps: [] as string[],
@@ -79,29 +85,41 @@ vi.mock("../lib/hosted-backend", () => {
 	}
 	return {
 		HostedHttpError,
-		createHostedRequest:
-			(target: { variant?: string }, token?: string) =>
-			async (suffix = "") => {
-				if (target.variant) {
-					harness.requestTokens.push(token);
-					return new Response("[]");
-				}
-				harness.bootstrapTokens.push(token);
-				if (harness.bootstrapStatus !== 200)
-					throw new HostedHttpError(harness.bootstrapStatus, "denied");
-				return new Response(
-					JSON.stringify({
-						app_id: "app-1",
-						kind: harness.kind,
-						auth_proxy: harness.authProxy,
-						bootstrap: {
-							event: { id: "event-1", name: "Home", config: [] },
-							page: { id: "page-1" },
-							servedVariant: "stable",
-						},
+		createHostedRequest: (
+			target: { variant?: string },
+			token?: string,
+			auth?: AuthState,
+		) =>
+			Object.assign(
+				async (suffix = "") => {
+					if (target.variant) {
+						harness.requestTokens.push(token);
+						return new Response("[]");
+					}
+					harness.bootstrapTokens.push(token);
+					if (harness.bootstrapStatus !== 200)
+						throw new HostedHttpError(harness.bootstrapStatus, "denied");
+					return new Response(
+						JSON.stringify({
+							app_id: "app-1",
+							kind: harness.kind,
+							auth_proxy: harness.authProxy,
+							bootstrap: {
+								event: { id: "event-1", name: "Home", config: [] },
+								page: { id: "page-1" },
+								servedVariant: "stable",
+							},
+						}),
+					);
+				},
+				{
+					prepareExecution: async (body: string) => ({
+						request: { body, headers: { authorization: `Bearer ${token}` } },
 					}),
-				);
-			},
+					executionScope: () =>
+						`hosted:${auth?.user?.profile.sub ?? localStorage.getItem("flow-like-hosted-session") ?? "anonymous"}`,
+				},
+			),
 		createHostedBackend: (
 			_data: unknown,
 			request: typeof harness.runtimeRequest,
@@ -220,7 +238,13 @@ vi.mock("@flow-like/flow-like-ui/state/backend-state", () => {
 	};
 });
 vi.mock("@flow-like/flow-like-ui/state/execution-engine-context", () => ({
-	ExecutionEngineProviderComponent: passthrough,
+	ExecutionEngineProviderComponent: ({
+		children,
+		executionScope,
+	}: { children: React.ReactNode; executionScope?: string }) => {
+		harness.executionScopes.push(executionScope);
+		return children;
+	},
 }));
 vi.mock("@flow-like/locales", () => ({
 	I18nProvider: passthrough,
@@ -265,6 +289,8 @@ beforeEach(() => {
 	harness.runtimeRequest = null;
 	harness.accessToken = null;
 	harness.backendBuilds = 0;
+	harness.executionScopes = [];
+	localStorage.removeItem("flow-like-hosted-session");
 	harness.authProxy = false;
 	harness.oauthTokens = undefined;
 	harness.oauthApps = [];
@@ -288,6 +314,7 @@ afterEach(async () => {
 
 describe("HostedSession", () => {
 	it("keeps the runtime mounted when the access token is renewed", async () => {
+		harness.authProxy = true;
 		await act(async () => root.render(<HostedSession />));
 		await flush();
 		expect(harness.pageMounts).toBe(1);
@@ -302,6 +329,10 @@ describe("HostedSession", () => {
 
 		await harness.runtimeRequest?.("/routes");
 		expect(harness.requestTokens).toEqual(["token-2"]);
+		expect(await harness.runtimeRequest?.prepareExecution("{}")).toEqual({
+			request: { body: "{}", headers: { authorization: "Bearer token-2" } },
+		});
+		expect(harness.runtimeRequest?.executionScope()).toBe("hosted:user-1");
 	});
 
 	it("lets package widgets ask as the viewer, with the renewed token and the same backend", async () => {
@@ -413,5 +444,29 @@ describe("HostedSession", () => {
 		expect(harness.oauthApps).toEqual([]);
 		expect(harness.promptMounts).toBe(0);
 		expect(harness.oauthOpened).toBe(0);
+	});
+
+	it("shares the anonymous scope when another tab establishes the browser session", async () => {
+		localStorage.setItem("flow-like-hosted-session", "anonymous-first-session");
+		await act(async () => root.render(<HostedSession />));
+		await flush();
+		expect(harness.executionScopes.at(-1)).toBe(
+			"hosted:anonymous-first-session",
+		);
+		await harness.runtimeRequest?.("/routes");
+		expect(harness.requestTokens).toEqual([undefined]);
+		await act(async () => {
+			localStorage.setItem(
+				"flow-like-hosted-session",
+				"anonymous-shared-session",
+			);
+			window.dispatchEvent(
+				new StorageEvent("storage", { key: "flow-like-hosted-session" }),
+			);
+		});
+		expect(harness.executionScopes.at(-1)).toBe(
+			"hosted:anonymous-shared-session",
+		);
+		expect(harness.pageMounts).toBe(1);
 	});
 });

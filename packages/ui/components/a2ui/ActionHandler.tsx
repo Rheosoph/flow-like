@@ -16,6 +16,10 @@ import {
 import { toast } from "sonner";
 import { setAppQueryParam } from "../../lib/app-route-url";
 import { useClientRouter } from "../../lib/client-navigation";
+import {
+	deliverExecutionSurfaceEvent,
+	registerExecutionSurface,
+} from "../../lib/execution/surfaces";
 import { isScriptNavigationUrl } from "../../lib/navigation-url";
 import { getCurrentPageContext } from "../../lib/page-context";
 import { classifyPageContractError } from "../../lib/page-contract-drift";
@@ -360,6 +364,7 @@ export function ActionProvider({
 	const getComponents = useCallback(() => componentsRef.current, []);
 	// Runs keep their callback after a reload unmounts the originating surface.
 	const surfaceMountedRef = useRef(false);
+	const surfaceMessageRef = useRef<A2UIMessageHandler | undefined>(undefined);
 	useLayoutEffect(() => {
 		surfaceMountedRef.current = true;
 		return () => {
@@ -367,6 +372,22 @@ export function ActionProvider({
 		};
 	}, []);
 	const isSurfaceMounted = useCallback(() => surfaceMountedRef.current, []);
+	useEffect(() => {
+		if (!appId || !surfaceId) return;
+		return registerExecutionSurface({
+			appId,
+			pageId: surfaceId,
+			onMessage: (message) => surfaceMessageRef.current?.(message),
+			source: () =>
+				surfaceMountedRef.current
+					? {
+							surfaceId,
+							components: componentsRef.current,
+							storedValues: elementValuesRef.current,
+						}
+					: null,
+		});
+	}, [appId, surfaceId]);
 
 	const putElementValue = useCallback((elementId: unknown, value: unknown) => {
 		if (!isSafeStateKey(elementId)) return false;
@@ -585,6 +606,7 @@ export function ActionProvider({
 		},
 		[onA2UIMessage, frontendState, appId],
 	);
+	surfaceMessageRef.current = handleA2UIMessage;
 
 	// Memoized so a surface update (which re-renders this provider) does not
 	// re-render every consumer; the value only changes with its inputs.
@@ -978,6 +1000,17 @@ export function useExecuteAction() {
 						: undefined,
 				};
 	const elementSource = useCallback(() => elementSourceRef.current(), []);
+	const elementMessageRef = useRef(onA2UIMessage);
+	elementMessageRef.current = onA2UIMessage;
+	useEffect(() => {
+		if (!appId || !surfaceId || !widgetInstance?.instanceId) return;
+		return registerExecutionSurface({
+			appId,
+			pageId: surfaceId,
+			source: elementSource,
+			onMessage: (message) => elementMessageRef.current?.(message),
+		});
+	}, [appId, surfaceId, widgetInstance?.instanceId, elementSource]);
 
 	const handleA2UIEvents = useCallback(
 		(
@@ -1176,7 +1209,18 @@ export function useExecuteAction() {
 						console.log("[A2UI] Forwarding message to handler", {
 							type: message.type,
 						});
-						onA2UIMessage(message);
+						const sharedDelivery =
+							appId &&
+							deliverExecutionSurfaceEvent(
+								{
+									appId,
+									pageId: surfaceId,
+									widgetInstanceId: widgetInstance?.instanceId,
+								},
+								event,
+								onA2UIMessage,
+							);
+						if (!sharedDelivery) onA2UIMessage(message);
 						noteUpdate?.("applied");
 					} else {
 						console.warn("[A2UI] No onA2UIMessage handler available!");
@@ -1193,6 +1237,7 @@ export function useExecuteAction() {
 			openDialog,
 			closeDialog,
 			elementSource,
+			widgetInstance?.instanceId,
 		],
 	);
 

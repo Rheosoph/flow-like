@@ -62,13 +62,15 @@ impl NodeLogic for PushChunkNode {
         context.deactivate_exec_pin("exec_out").await?;
         let chunk: ResponseChunk = context.evaluate_pin("chunk").await?;
         let cached_response = CachedChatResponse::load(context).await?;
+        let _message_guard = cached_response.emission.lock().await;
+        let message_id = cached_response.message_id().await;
         {
             let mut mutable_response = cached_response.response.lock().await;
             mutable_response.response.push_chunk(chunk.clone());
         }
 
         // Reasoning deltas are contiguous token fragments: append raw (any
-        // separator splits words) and keep only the run-scoped cache up to
+        // separator splits words) and keep only the message's cache up to
         // date. The frontend accumulates the delta straight from the chunk, so
         // re-shipping the whole transcript as `plan` on every chunk would grow
         // each event linearly for no gain.
@@ -86,11 +88,13 @@ impl NodeLogic for PushChunkNode {
         }
 
         let streaming_response = ChatStreamingResponse {
+            message_id,
             actions: vec![],
             attachments: vec![],
             chunk: Some(chunk),
             plan: None,
             widgets: vec![],
+            main_widget: None,
         };
 
         context

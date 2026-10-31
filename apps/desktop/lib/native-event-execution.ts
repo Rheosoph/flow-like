@@ -42,12 +42,15 @@ export function createNativeEventOutput(
 		tools: [],
 		actions: [],
 	};
-	let chat = {
+	let chat: Parameters<typeof processChatEvents>[1] & {
+		responseMessages: IMessage[];
+	} = {
 		intermediateResponse: Response.default(),
 		responseMessage: message,
+		responseMessages: [message],
 		attachments: new Map<string, IAttachment>(),
-		tmpLocalState: null as unknown,
-		tmpGlobalState: null as unknown,
+		tmpLocalState: null,
+		tmpGlobalState: null,
 		done: false,
 		appId,
 		eventId: event.id,
@@ -110,7 +113,11 @@ export function createNativeEventOutput(
 			}
 			tooLarge =
 				new TextEncoder().encode(
-					JSON.stringify({ returned, text, content: message.inner.content }),
+					JSON.stringify({
+						returned,
+						text,
+						content: chat.responseMessages.map((item) => item.inner.content),
+					}),
 				).length > 196_608;
 			return interactions;
 		},
@@ -126,7 +133,10 @@ export function createNativeEventOutput(
 				throw new Error(
 					"The Event response is too large for Shortcuts. Return a smaller output.",
 				);
-			const visibleText = joinContentText(message.inner.content);
+			const visibleText = chat.responseMessages
+				.map((item) => joinContentText(item.inner.content))
+				.filter(Boolean)
+				.join("\n\n");
 			if (isChat) return { text: visibleText || text };
 			if (hasReturn)
 				return {

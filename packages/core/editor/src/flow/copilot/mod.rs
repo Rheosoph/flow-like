@@ -1928,10 +1928,8 @@ impl Copilot {
                     if let (Some(callback), Some(frame_id)) = (&on_token, frame_ids.get(i)) {
                         let terminal_status = stream::tool_result_terminal_status(tool_output);
                         let result_summary = stream::tool_result_summary(tool_output);
-                        let result_preview = stream::safe_tool_result_preview(
-                            tool_output,
-                            stream::TOOL_RESULT_PREVIEW_CHARS,
-                        );
+                        let result_preview =
+                            stream::safe_tool_activity_result_preview(tool_output);
                         callback(stream::detailed_tool_end_frame(
                             frame_id,
                             name,

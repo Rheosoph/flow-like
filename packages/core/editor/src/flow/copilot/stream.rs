@@ -17,6 +17,9 @@ use super::types::{PlanStep, PlanStepStatus, StreamEvent};
 /// while the frontend still enforces a per-run byte ceiling and redacts secrets before storage.
 pub const TOOL_ARGUMENT_PREVIEW_CHARS: usize = 8 * 1024;
 pub const TOOL_RESULT_PREVIEW_CHARS: usize = 8 * 1024;
+/// Twenty search results may each contain a 4 KiB URL. Keep that source inventory separate from
+/// the smaller debug budget so long snippets cannot erase the URLs shown in research activity.
+pub const PUBLIC_WEB_ACTIVITY_PREVIEW_CHARS: usize = 128 * 1024;
 
 const MAX_STREAMED_FLOWSCRIPT_ARGUMENT_BYTES: usize = 512 * 1024;
 const FLOWSCRIPT_PREVIEW_EMIT_CHARS: usize = 160;
@@ -1292,6 +1295,75 @@ pub fn safe_tool_result_preview(output: &str, max_chars: usize) -> String {
     }
 }
 
+/// Public research activity needs every source URL and title, but no fetched body or snippets.
+/// Other tool results retain the ordinary bounded diagnostic preview.
+pub fn safe_tool_activity_result_preview(output: &str) -> String {
+    let Ok(value) = serde_json::from_str::<Value>(output) else {
+        return safe_text_preview(output, TOOL_RESULT_PREVIEW_CHARS);
+    };
+    if !matches!(
+        value.get("tool").and_then(Value::as_str),
+        Some("internet_search" | "open_url" | "archive_lookup")
+    ) {
+        return safe_json_preview(&value, TOOL_RESULT_PREVIEW_CHARS);
+    }
+
+    fn fields(value: &Value, names: &[&str]) -> Value {
+        Value::Object(
+            names
+                .iter()
+                .filter_map(|name| {
+                    value
+                        .get(*name)
+                        .filter(|value| !value.is_object() && !value.is_array())
+                        .map(|value| ((*name).to_string(), value.clone()))
+                })
+                .collect(),
+        )
+    }
+
+    let mut activity = fields(
+        &value,
+        &[
+            "tool",
+            "status",
+            "code",
+            "error",
+            "message",
+            "query",
+            "url",
+            "requested_url",
+            "original_url",
+            "title",
+            "http_status",
+            "available",
+            "degraded",
+            "citation_eligible",
+        ],
+    );
+    const SOURCE_FIELDS: &[&str] = &[
+        "url",
+        "title",
+        "original_url",
+        "linkable",
+        "citation_eligible",
+    ];
+    if let Some(source) = value.get("source").filter(|source| source.is_object()) {
+        activity["source"] = fields(source, SOURCE_FIELDS);
+    }
+    if let Some(results) = value.get("results").and_then(Value::as_array) {
+        activity["results"] = Value::Array(
+            results
+                .iter()
+                .take(20)
+                .filter(|source| source.is_object())
+                .map(|source| fields(source, SOURCE_FIELDS))
+                .collect(),
+        );
+    }
+    safe_json_preview(&activity, PUBLIC_WEB_ACTIVITY_PREVIEW_CHARS)
+}
+
 pub fn tool_result_terminal_status(output: &str) -> Option<String> {
     serde_json::from_str::<Value>(output)
         .ok()
@@ -1743,6 +1815,74 @@ function pollSupportInbox() {
         assert!(preview.contains("password=<redacted>"));
         assert!(!preview.contains("must-not-leak"));
         assert!(!preview.contains("sk-proj-"));
+    }
+
+    #[test]
+    fn public_web_activity_keeps_every_search_source_without_snippets() {
+        let results: Vec<Value> = (0..20)
+            .map(|index| {
+                json!({
+                    "url": format!("https://example.com/{index}/{}", "a".repeat(4_000)),
+                    "title": format!("Source {index}: {}", "title ".repeat(45)),
+                    "content": "LONG_SEARCH_SNIPPET ".repeat(1_000),
+                    "citation_eligible": false,
+                })
+            })
+            .collect();
+        let raw = json!({
+            "tool": "internet_search",
+            "status": "ok",
+            "query": "Porsche long distance comfort",
+            "results": results,
+            "citable_urls": ["https://example.com/previously-opened"],
+        })
+        .to_string();
+        let preview = safe_tool_activity_result_preview(&raw);
+        assert!(preview.len() < PUBLIC_WEB_ACTIVITY_PREVIEW_CHARS);
+        assert!(!preview.contains("LONG_SEARCH_SNIPPET"));
+        let activity: Value = serde_json::from_str(&preview).unwrap();
+        assert_eq!(activity["query"], "Porsche long distance comfort");
+        let sources = activity["results"].as_array().unwrap();
+        assert_eq!(sources.len(), results.len());
+        for (source, original) in sources.iter().zip(&results) {
+            assert_eq!(source["url"], original["url"]);
+            assert_eq!(source["title"], original["title"]);
+            assert_eq!(source["citation_eligible"], false);
+            assert!(source.get("content").is_none());
+        }
+        assert!(activity.get("citable_urls").is_none());
+    }
+
+    #[test]
+    fn public_web_activity_keeps_page_and_archive_metadata_without_bodies() {
+        for tool in ["open_url", "archive_lookup"] {
+            let raw = json!({
+                "tool": tool,
+                "status": "ok",
+                "url": "https://example.com/review?token=private-token",
+                "requested_url": "https://example.com/original",
+                "original_url": "https://example.com/original",
+                "available": true,
+                "citation_eligible": tool == "open_url",
+                "source": {
+                    "url": "https://example.com/review?token=private-token",
+                    "title": "Long distance review",
+                    "citation_eligible": tool == "open_url",
+                },
+                "content": "LARGE_PAGE_BODY ".repeat(10_000),
+                "untrusted_content": true,
+            })
+            .to_string();
+            let preview = safe_tool_activity_result_preview(&raw);
+            assert!(!preview.contains("LARGE_PAGE_BODY"));
+            assert!(!preview.contains("private-token"));
+            let activity: Value = serde_json::from_str(&preview).unwrap();
+            assert_eq!(activity["source"]["title"], "Long distance review");
+            assert_eq!(activity["requested_url"], "https://example.com/original");
+            assert_eq!(activity["original_url"], "https://example.com/original");
+            assert_eq!(activity["citation_eligible"], tool == "open_url");
+            assert_eq!(activity["available"], true);
+        }
     }
 
     #[test]

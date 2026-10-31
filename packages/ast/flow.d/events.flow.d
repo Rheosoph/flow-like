@@ -130,6 +130,16 @@ declare namespace chat {
     function pushWidgets({ elementRef: Struct }): void;
 
     /**
+     * Adds or removes a workflow emoji reaction on a chat message without starting another turn.
+     * @node events_chat_react @alias eventsChatReact
+     * @param emoji — Emoji to add or remove
+     * @param messageId (optional) — Leave empty to react to the user message that started this run
+     * @param operation (optional) — Add or remove the workflow's reaction
+     * @impure has side effects / drives control flow
+     */
+    function react({ emoji: string, messageId?: string, operation?: string }): void;
+
+    /**
      * Removes a step from the plan by its ID
      * @node events_chat_remove_step @alias eventsChatRemoveStep
      * @param stepId — ID of the step to remove

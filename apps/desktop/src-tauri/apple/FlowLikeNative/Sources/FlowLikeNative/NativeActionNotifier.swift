@@ -19,6 +19,8 @@ enum NativeActionNotifier {
         CFNotificationCenterAddObserver(center, nil, { _, _, _, _, _ in
             NativeActionNotifier.deliver()
         }, name, nil, .deliverImmediately)
+        // An intent can enqueue while the native runtime is still initializing.
+        deliver()
     }
 
     static func post() {

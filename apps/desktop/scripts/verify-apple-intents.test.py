@@ -30,6 +30,17 @@ def valid_metadata():
 
 
 class IntentMetadataTests(unittest.TestCase):
+    def test_background_flowpilot_belongs_to_app_not_widget(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "extract.actionsdata"
+            metadata = valid_metadata()
+            del metadata["actions"]["AskFlowPilotIntent"]
+            metadata["autoShortcuts"] = []
+            path.write_text(json.dumps(metadata))
+            verifier.verify_metadata(path, shortcuts=False, module="Flow_Like")
+            with self.assertRaisesRegex(ValueError, "Missing app intents: AskFlowPilotIntent"):
+                verifier.verify_metadata(path, module="Flow_Like")
+
     def test_open_app_shortcut_must_be_extracted(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "extract.actionsdata"

@@ -18,12 +18,14 @@ use crate::event_sink::cron::CronSchedule;
 
 use super::cron::CronSink;
 use super::geolocation::GeofenceClearance;
-use super::trigger_token::{TokenRefused, TriggerAccount, verify_token_owner};
+use super::trigger_token::{
+    TokenRefused, TriggerAccount, TriggerProfile, verify_token_for_profile,
+};
 use super::{EventConfig, EventRegistration, EventSink, has_token, token_owned_by};
 
 pub type DbConnection = Arc<Mutex<Connection>>;
 
-const REGISTRATION_COLUMNS: &str = "event_id, name, type, updated_at, created_at, config, offline, app_id, default_payload, personal_access_token, oauth_tokens, pat_owner_sub, hub_origin, remote";
+const REGISTRATION_COLUMNS: &str = "event_id, name, type, updated_at, created_at, config, offline, app_id, default_payload, personal_access_token, oauth_tokens, pat_owner_sub, hub_origin, remote, profile_binding";
 
 /// Trigger types whose sink exists only as a placeholder on this device.
 const UNIMPLEMENTED_TRIGGERS: [&str; 10] = [
@@ -222,6 +224,7 @@ struct TriggerCredentials {
     personal_access_token: Option<String>,
     pat_owner_sub: Option<String>,
     hub_origin: Option<String>,
+    profile_binding: Option<TriggerProfile>,
     oauth_tokens: HashMap<String, OAuthToken>,
 }
 
@@ -231,6 +234,7 @@ impl TriggerCredentials {
             personal_access_token: registration.personal_access_token.clone(),
             pat_owner_sub: registration.pat_owner_sub.clone(),
             hub_origin: registration.hub_origin.clone(),
+            profile_binding: registration.profile_binding.clone(),
             oauth_tokens: registration.oauth_tokens.clone(),
         }
     }
@@ -240,6 +244,7 @@ impl TriggerCredentials {
             self.personal_access_token.as_deref(),
             self.pat_owner_sub.as_deref(),
             self.hub_origin.as_deref(),
+            self.profile_binding.as_ref(),
             account,
         )
     }
@@ -255,10 +260,10 @@ impl TriggerCredentials {
 
     /// Whom the held PAT was verified for, if anyone.
     fn owner(&self) -> Option<TriggerAccount> {
-        Some(TriggerAccount {
-            sub: self.pat_owner_sub.clone()?,
-            hub_origin: self.hub_origin.clone()?,
-        })
+        let owner = self.profile_binding.as_ref()?.account()?;
+        (self.pat_owner_sub.as_deref() == Some(owner.sub.as_str())
+            && self.hub_origin.as_deref() == Some(owner.hub_origin.as_str()))
+        .then_some(owner)
     }
 
     /// The OAuth grants that stay with the trigger once it signs in as
@@ -295,6 +300,7 @@ struct GivenToken {
 #[derive(Clone)]
 pub struct TriggerSignIn {
     offline: bool,
+    profile_binding: TriggerProfile,
     account: Option<TriggerAccount>,
     given: Option<GivenToken>,
     geofence: Option<GeofenceClearance>,
@@ -316,7 +322,9 @@ impl TriggerSignIn {
         update: TriggerUpdate,
     ) -> Result<Self> {
         let offline = app_is_offline(app_handle, app_id).await;
-        let account = TriggerAccount::current(app_handle).await;
+        let profile = crate::state::TauriSettingsState::current_profile(app_handle).await?;
+        let profile_binding = TriggerProfile::capture(&profile.hub_profile).await?;
+        let account = profile_binding.account();
         let pat = pat.map(|pat| pat.trim().to_string()).filter(|pat| {
             !pat.is_empty() && EventSinkManager::local_registration_blocker(event).is_none()
         });
@@ -333,7 +341,14 @@ impl TriggerSignIn {
                     Some(held) => {
                         let owner = match held.verified_for(&pat, account.as_ref()) {
                             Some(owner) => owner,
-                            None => verify_token_owner(app_handle, app_id, &pat).await?,
+                            None => verify_token_for_profile(
+                                &profile.hub_profile,
+                                account.as_ref().ok_or_else(|| anyhow::anyhow!(
+                                    "Sign in to the saved profile before choosing a trigger token"
+                                ))?,
+                                app_id,
+                                &pat,
+                            ).await?,
                         };
                         Some(GivenToken {
                             pat,
@@ -345,6 +360,7 @@ impl TriggerSignIn {
         };
         let mut sign_in = Self {
             offline,
+            profile_binding,
             account,
             given,
             geofence: None,
@@ -485,7 +501,8 @@ impl RegistrationStorage {
                 oauth_tokens TEXT,
                 pat_owner_sub TEXT,
                 hub_origin TEXT,
-                remote INTEGER NOT NULL DEFAULT 0
+                remote INTEGER NOT NULL DEFAULT 0,
+                profile_binding TEXT
             )",
             [],
         )?;
@@ -496,6 +513,7 @@ impl RegistrationStorage {
             ("pat_owner_sub", "pat_owner_sub TEXT"),
             ("hub_origin", "hub_origin TEXT"),
             ("remote", "remote INTEGER NOT NULL DEFAULT 0"),
+            ("profile_binding", "profile_binding TEXT"),
         ] {
             Self::ensure_registration_column(conn, column, definition)?;
         }
@@ -510,11 +528,12 @@ impl RegistrationStorage {
                 oauth_tokens TEXT,
                 app_id TEXT,
                 pat_owner_sub TEXT,
-                hub_origin TEXT
+                hub_origin TEXT,
+                profile_binding TEXT
             )",
             [],
         )?;
-        for column in ["app_id", "pat_owner_sub", "hub_origin"] {
+        for column in ["app_id", "pat_owner_sub", "hub_origin", "profile_binding"] {
             Self::ensure_column(
                 conn,
                 "event_credential_stash",
@@ -599,6 +618,7 @@ impl RegistrationStorage {
             pat_owner_sub: row.get(11)?,
             hub_origin: row.get(12)?,
             remote: row.get::<_, i32>(13)? != 0,
+            profile_binding: Self::json_column(row, 14)?,
             oauth_tokens: Self::json_column(row, 10)?.unwrap_or_default(),
         })
     }
@@ -627,7 +647,7 @@ impl RegistrationStorage {
             conn.execute(
                 &format!(
                     "INSERT OR REPLACE INTO event_registrations ({REGISTRATION_COLUMNS})
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)"
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)"
                 ),
                 params![
                     registration.event_id,
@@ -644,6 +664,11 @@ impl RegistrationStorage {
                     registration.pat_owner_sub,
                     registration.hub_origin,
                     registration.remote as i32,
+                    registration
+                        .profile_binding
+                        .as_ref()
+                        .map(serde_json::to_string)
+                        .transpose()?,
                 ],
             )?;
         }
@@ -707,8 +732,8 @@ impl RegistrationStorage {
         let conn = self.conn.lock().unwrap();
         conn.execute(
             "INSERT OR REPLACE INTO event_credential_stash
-             (event_id, personal_access_token, oauth_tokens, app_id, pat_owner_sub, hub_origin)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+             (event_id, personal_access_token, oauth_tokens, app_id, pat_owner_sub, hub_origin, profile_binding)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
                 registration.event_id,
                 registration.personal_access_token,
@@ -716,6 +741,7 @@ impl RegistrationStorage {
                 registration.app_id,
                 registration.pat_owner_sub,
                 registration.hub_origin,
+                registration.profile_binding.as_ref().map(serde_json::to_string).transpose()?,
             ],
         )?;
         Ok(())
@@ -731,7 +757,7 @@ impl RegistrationStorage {
         let conn = self.conn.lock().unwrap();
         let row = conn
             .query_row(
-                "SELECT personal_access_token, oauth_tokens, pat_owner_sub, hub_origin
+                "SELECT personal_access_token, oauth_tokens, pat_owner_sub, hub_origin, profile_binding
                    FROM event_credential_stash
                   WHERE event_id = ?1 AND app_id = ?2",
                 params![event_id, app_id],
@@ -741,11 +767,18 @@ impl RegistrationStorage {
                         row.get::<_, Option<String>>(1)?,
                         row.get::<_, Option<String>>(2)?,
                         row.get::<_, Option<String>>(3)?,
+                        Self::json_column::<TriggerProfile>(row, 4)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((personal_access_token, oauth_tokens_json, pat_owner_sub, hub_origin)) = row
+        let Some((
+            personal_access_token,
+            oauth_tokens_json,
+            pat_owner_sub,
+            hub_origin,
+            profile_binding,
+        )) = row
         else {
             return Ok(None);
         };
@@ -757,6 +790,7 @@ impl RegistrationStorage {
             personal_access_token,
             pat_owner_sub,
             hub_origin,
+            profile_binding,
             oauth_tokens,
         }))
     }
@@ -959,6 +993,11 @@ impl EventSinkManager {
             .storage
             .get_registration(event_id)?
             .ok_or_else(|| anyhow::anyhow!("Event {event_id} has no trigger on this computer"))?;
+        if registration.profile_binding.is_none() {
+            return Err(anyhow::anyhow!(
+                "Enable the trigger of event {event_id} again to bind it to a profile"
+            ));
+        }
         if !registration.offline && !registration.has_verified_token() {
             return Err(anyhow::anyhow!(
                 "Event {event_id} is registered for online execution without a personal access token verified with the hub; add one to its trigger in the event's settings"
@@ -1390,7 +1429,10 @@ impl EventSinkManager {
             .filter(|row| row.app_id != app_id)
             .map(|row| row.app_id.clone());
         let own = row.filter(|row| row.app_id == app_id);
-        let registration = if own.as_ref().is_some_and(|row| row.is_trigger_of(event)) {
+        let registration = if own
+            .as_ref()
+            .is_some_and(|row| row.is_trigger_of(event) && row.profile_binding.is_some())
+        {
             LocalSinkPlan::Existing
         } else {
             LocalSinkPlan::New
@@ -1423,7 +1465,10 @@ impl EventSinkManager {
             None => failure.map_or(LocalTriggerState::Unregistered, |reason| {
                 LocalTriggerState::Failed { reason }
             }),
-            Some(row) => Self::row_state(offline || row.owns_token(account), failure),
+            Some(row) => Self::row_state(
+                row.profile_binding.is_some() && (offline || row.owns_token(account)),
+                failure,
+            ),
         })
     }
 
@@ -1437,10 +1482,7 @@ impl EventSinkManager {
         let failure = self
             .storage
             .failure(&registration.app_id, &registration.event_id)?;
-        Ok(Self::row_state(
-            registration.offline || registration.owns_token(account),
-            failure,
-        ))
+        Ok(Self::row_state(registration.can_fire(account), failure))
     }
 
     fn row_state(signs_in: bool, failure: Option<String>) -> LocalTriggerState {
@@ -1484,7 +1526,7 @@ impl EventSinkManager {
                 return self.decline(&lifecycle, app_id, &event.id, None).await;
             }
         };
-        let profile = crate::state::TauriSettingsState::current_profile(app_handle).await?;
+        let (profile, _) = sign_in.profile_binding.resolve(app_handle).await?;
         let oauth_tokens = oauth_tokens
             .map(|tokens| hub_bound_oauth_tokens(tokens, &profile.hub_profile))
             .transpose()?;
@@ -1520,12 +1562,32 @@ impl EventSinkManager {
         let held = self.held_credentials(app_id, &event.id, own.as_ref())?;
         let TriggerSignIn {
             offline,
+            profile_binding,
             account,
             given,
             ..
         } = sign_in;
-        let registration =
-            Self::next_registration(event, app_id, config, offline, held, given, oauth_tokens);
+        if update == TriggerUpdate::Keep && held.profile_binding.as_ref() != Some(&profile_binding)
+        {
+            return Err(MissingTriggerToken(event.id.clone()).into());
+        }
+        if !offline
+            && given
+                .as_ref()
+                .is_some_and(|given| given.owner.as_ref() != account.as_ref())
+        {
+            return Err(MissingTriggerToken(event.id.clone()).into());
+        }
+        let registration = Self::next_registration(
+            event,
+            app_id,
+            config,
+            offline,
+            profile_binding,
+            held,
+            given,
+            oauth_tokens,
+        );
         Self::ensure_signs_in(&registration, account.as_ref())?;
         if update == TriggerUpdate::Keep
             && current.is_some_and(|row| row.same_trigger(&registration))
@@ -1540,7 +1602,7 @@ impl EventSinkManager {
         registration: &EventRegistration,
         account: Option<&TriggerAccount>,
     ) -> Result<()> {
-        if registration.offline || registration.owns_token(account) {
+        if registration.can_fire(account) {
             Ok(())
         } else {
             Err(MissingTriggerToken(registration.event_id.clone()).into())
@@ -1620,10 +1682,14 @@ impl EventSinkManager {
         app_id: &str,
         config: EventConfig,
         offline: bool,
-        held: TriggerCredentials,
+        profile_binding: TriggerProfile,
+        mut held: TriggerCredentials,
         given: Option<GivenToken>,
         oauth_tokens: Option<HashMap<String, OAuthToken>>,
     ) -> EventRegistration {
+        if held.profile_binding.as_ref() != Some(&profile_binding) {
+            held = TriggerCredentials::default();
+        }
         let owner = match &given {
             Some(given) => given.owner.clone(),
             None => held.owner(),
@@ -1658,6 +1724,7 @@ impl EventSinkManager {
             personal_access_token,
             pat_owner_sub,
             hub_origin,
+            profile_binding: Some(profile_binding),
             remote: event.execution_mode == EventExecutionMode::Remote,
             oauth_tokens: merged_oauth_tokens,
         }
@@ -2091,9 +2158,13 @@ impl EventSinkManager {
             .await;
 
         for registration in &registrations {
+            if registration.profile_binding.is_none() {
+                tracing::info!(event_id = %registration.event_id,
+                    "Trigger needs to be enabled again with a profile binding");
+                continue;
+            }
             if let EventConfig::Daemon(sink) = &registration.config {
-                // The webview reports who is signed in only after launch, so
-                // each run checks the account when it starts (and restarts).
+                // Each run resolves its saved profile when it starts and restarts.
                 if !registration.offline && !registration.has_verified_token() {
                     tracing::info!(
                         event_id = %registration.event_id,
@@ -2121,6 +2192,9 @@ impl EventSinkManager {
         // Group registrations by sink type to start each sink once
         let mut sink_types = std::collections::HashSet::new();
         for registration in &registrations {
+            if registration.profile_binding.is_none() {
+                continue;
+            }
             // Extract sink type from config
             let sink_type = match &registration.config {
                 EventConfig::Discord(_) => "discord",
@@ -2346,8 +2420,19 @@ mod tests {
 
     fn account() -> TriggerAccount {
         TriggerAccount {
+            profile_id: "profile-1".into(),
+            issuer: "https://issuer.example".into(),
             sub: "user-1".to_string(),
             hub_origin: "https://hub.example".to_string(),
+        }
+    }
+
+    fn profile_binding(subject: Option<&str>) -> TriggerProfile {
+        TriggerProfile {
+            profile_id: "profile-1".into(),
+            hub_origin: "https://hub.example".into(),
+            issuer: subject.map(|_| "https://issuer.example".into()),
+            subject: subject.map(str::to_owned),
         }
     }
 
@@ -2383,6 +2468,7 @@ mod tests {
             personal_access_token: pat.map(str::to_string),
             pat_owner_sub: owner.map(str::to_string),
             hub_origin: owner.map(|_| "https://hub.example".to_string()),
+            profile_binding: Some(profile_binding(owner)),
             remote: false,
             oauth_tokens: HashMap::new(),
         }
@@ -2399,6 +2485,8 @@ mod tests {
 
     fn user(sub: &str) -> TriggerAccount {
         TriggerAccount {
+            profile_id: "profile-1".into(),
+            issuer: "https://issuer.example".into(),
             sub: sub.to_string(),
             hub_origin: "https://hub.example".to_string(),
         }
@@ -2409,6 +2497,7 @@ mod tests {
     fn online_save(given: Option<(&str, &str)>) -> TriggerSignIn {
         TriggerSignIn {
             offline: false,
+            profile_binding: account().profile_binding(),
             account: Some(account()),
             given: given.map(|(pat, owner)| GivenToken {
                 pat: pat.to_string(),
@@ -3246,6 +3335,7 @@ mod tests {
         let legacy = manager.get_registration("event").unwrap().unwrap();
         assert_eq!(legacy.personal_access_token.as_deref(), Some("pat_legacy"));
         assert!(legacy.pat_owner_sub.is_none() && legacy.hub_origin.is_none());
+        assert!(legacy.profile_binding.is_none());
         assert!(!legacy.remote);
         assert!(!legacy.can_fire(Some(&account())));
         assert!(!manager.is_event_active("event", Some(&account())));
@@ -3261,6 +3351,52 @@ mod tests {
             .unwrap();
         assert_eq!(stashed, 0, "stashes that name no app are dropped");
 
+        drop(manager);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn saved_trigger_profile_survives_restart_without_adopting_another_profile() {
+        let path = std::env::temp_dir().join(format!(
+            "flow-like-profile-sinks-{}.sqlite",
+            flow_like_types::create_id()
+        ));
+        let registration = cron_registration("app", Some("pat_1"), Some("user-1"));
+        {
+            let manager = EventSinkManager::new(path.to_str().unwrap()).unwrap();
+            manager.storage.save_registration(&registration).unwrap();
+            manager.storage.stash_credentials(&registration).unwrap();
+        }
+        let manager = EventSinkManager::new(path.to_str().unwrap()).unwrap();
+        let restored = manager.get_registration("event").unwrap().unwrap();
+        assert_eq!(restored.profile_binding, registration.profile_binding);
+        assert_eq!(restored.token_owner(), Some(account()));
+        assert!(restored.can_fire(Some(&account())));
+        let stash = manager
+            .storage
+            .stashed_credentials("app", "event")
+            .unwrap()
+            .unwrap();
+        assert_eq!(stash.profile_binding, registration.profile_binding);
+        for foreign in [
+            TriggerAccount {
+                profile_id: "profile-2".into(),
+                ..account()
+            },
+            TriggerAccount {
+                issuer: "https://other-issuer.example".into(),
+                ..account()
+            },
+        ] {
+            assert!(!restored.can_fire(Some(&foreign)));
+            assert!(!stash.owned_by(Some(&foreign)));
+        }
+        let legacy = EventRegistration {
+            offline: true,
+            profile_binding: None,
+            ..restored
+        };
+        assert!(!legacy.can_fire(None));
         drop(manager);
         let _ = std::fs::remove_file(path);
     }
@@ -3386,6 +3522,7 @@ mod tests {
         let next_account = user("user-2");
         let as_next_account = TriggerSignIn {
             offline: false,
+            profile_binding: next_account.profile_binding(),
             account: Some(next_account.clone()),
             given: None,
             geofence: None,
@@ -3609,6 +3746,7 @@ mod tests {
 
         let offline_save = TriggerSignIn {
             offline: true,
+            profile_binding: profile_binding(None),
             account: None,
             given: None,
             geofence: None,
@@ -3767,6 +3905,7 @@ mod tests {
 
         let next_owner = TriggerSignIn {
             offline: false,
+            profile_binding: user("user-2").profile_binding(),
             account: Some(user("user-2")),
             given: Some(GivenToken {
                 pat: "pat_2".to_string(),

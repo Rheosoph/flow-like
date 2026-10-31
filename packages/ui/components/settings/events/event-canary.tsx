@@ -20,6 +20,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useAppPermissions } from "../../../hooks/use-app-permissions";
+import { useBoardVersionCurrent } from "../../../hooks/use-board-version-current";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks/use-invoke";
 import { formatDuration } from "../../../lib/date";
 import { RolePermissions } from "../../../lib/permission/role-permission";
@@ -84,6 +85,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "../../ui";
+import { LatestBoardVersionLabel } from "../../ui/latest-board-version-label";
 import { SectionLockedPanel } from "../permission/permission-gate";
 import { PermissionNotice } from "../permission/permission-notice";
 
@@ -1595,6 +1597,7 @@ function VariantEditorDialog({
 		[appId, boardId],
 		Boolean(appId && boardId),
 	);
+	const versionCurrent = useBoardVersionCurrent(appId, boardId);
 	const board = useInvoke(
 		backend.boardState.getBoard,
 		backend.boardState,
@@ -1813,6 +1816,13 @@ function VariantEditorDialog({
 						<Label>{t("flowVersion", "Flow Version")}</Label>
 						<Select
 							value={version?.join(".") ?? "latest"}
+							disabled={!boardId}
+							onOpenChange={(open) => {
+								if (open) {
+									void versions.refetch();
+									void versionCurrent.refetch();
+								}
+							}}
 							onValueChange={(value) => {
 								setVersion(
 									value === "latest"
@@ -1822,11 +1832,17 @@ function VariantEditorDialog({
 								setNodeId("");
 							}}
 						>
-							<SelectTrigger>
+							<SelectTrigger className="w-full text-left whitespace-normal data-[size=default]:h-auto *:data-[slot=select-value]:line-clamp-none">
 								<SelectValue />
 							</SelectTrigger>
-							<SelectContent>
-								<SelectItem value="latest">{t("latest", "Latest")}</SelectItem>
+							<SelectContent className="max-w-[calc(100vw-2rem)]">
+								<SelectItem value="latest">
+									<LatestBoardVersionLabel
+										state={
+											versionCurrent.isError ? undefined : versionCurrent.data
+										}
+									/>
+								</SelectItem>
 								{asArray(versions.data).map((entry) => (
 									<SelectItem key={entry.join(".")} value={entry.join(".")}>
 										v{entry.join(".")}
@@ -1836,8 +1852,8 @@ function VariantEditorDialog({
 						</Select>
 						<p className="text-xs text-muted-foreground">
 							{t(
-								"variantVersionHint",
-								"Latest floats with new versions of the flow; a pinned version stays put until you promote.",
+								"variantSavedDraftVersionHint",
+								"Latest runs the saved draft, including unpublished changes. A pinned version stays put until you promote.",
 							)}
 						</p>
 					</div>

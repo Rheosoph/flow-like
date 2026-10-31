@@ -52,7 +52,7 @@ pub mod web_watcher;
 pub mod webhook;
 
 use manager::DbConnection;
-use trigger_token::TriggerAccount;
+use trigger_token::{TriggerAccount, TriggerProfile};
 
 // Re-export manager for convenience
 pub use manager::EventSinkManager;
@@ -67,12 +67,14 @@ fn token_owned_by(
     pat: Option<&str>,
     owner_sub: Option<&str>,
     hub_origin: Option<&str>,
+    profile_binding: Option<&TriggerProfile>,
     account: Option<&TriggerAccount>,
 ) -> bool {
     has_token(pat)
         && account.is_some_and(|account| {
             owner_sub == Some(account.sub.as_str())
                 && hub_origin == Some(account.hub_origin.as_str())
+                && profile_binding.and_then(TriggerProfile::account).as_ref() == Some(account)
         })
 }
 
@@ -97,8 +99,8 @@ pub(crate) fn ensure_signed_in_owner(
             "its personal access token was verified with {}, but the current profile uses {}; switch back or add a token for this hub in the event's settings",
             owner.hub_origin, account.hub_origin
         ),
-        (Some(owner), Some(account)) if owner.sub != account.sub => String::from(
-            "its personal access token belongs to another account than the one signed in; add a token of yours in the event's settings",
+        (Some(owner), Some(account)) if owner != account => String::from(
+            "its personal access token belongs to another profile or account; enable the trigger for the intended profile again",
         ),
         _ => return Ok(()),
     };
@@ -220,6 +222,9 @@ pub struct EventRegistration {
     /// Origin of the hub the PAT was verified against.
     #[serde(default)]
     pub hub_origin: Option<String>,
+    /// Profile and account that explicitly enabled this trigger. Legacy rows require re-enabling.
+    #[serde(default)]
+    pub profile_binding: Option<TriggerProfile>,
     /// The event runs on the hub; this device only forwards its trigger.
     #[serde(default)]
     pub remote: bool,
@@ -234,25 +239,23 @@ impl EventRegistration {
     /// account on the current profile's hub. Each run checks this again when
     /// it starts (see [`ensure_signed_in_owner`]).
     pub fn can_fire(&self, account: Option<&TriggerAccount>) -> bool {
-        self.offline || self.owns_token(account)
+        self.profile_binding.is_some() && (self.offline || self.owns_token(account))
     }
 
     /// Whether the stored PAT was verified with the hub, which recorded its owner.
     pub(crate) fn has_verified_token(&self) -> bool {
-        has_token(self.personal_access_token.as_deref())
-            && self.pat_owner_sub.is_some()
-            && self.hub_origin.is_some()
+        self.token_owner().is_some()
     }
 
     /// Whom the stored PAT was verified for, and on which hub.
     pub(crate) fn token_owner(&self) -> Option<TriggerAccount> {
-        if !self.has_verified_token() {
+        if !has_token(self.personal_access_token.as_deref()) {
             return None;
         }
-        Some(TriggerAccount {
-            sub: self.pat_owner_sub.clone()?,
-            hub_origin: self.hub_origin.clone()?,
-        })
+        let owner = self.profile_binding.as_ref()?.account()?;
+        (self.pat_owner_sub.as_deref() == Some(owner.sub.as_str())
+            && self.hub_origin.as_deref() == Some(owner.hub_origin.as_str()))
+        .then_some(owner)
     }
 
     /// Drops the PAT and whom it was verified for.
@@ -275,6 +278,7 @@ impl EventRegistration {
             self.personal_access_token.as_deref(),
             self.pat_owner_sub.as_deref(),
             self.hub_origin.as_deref(),
+            self.profile_binding.as_ref(),
             account,
         )
     }
@@ -287,6 +291,7 @@ impl EventRegistration {
     /// refreshing this registration with it would change nothing.
     pub(crate) fn same_trigger(&self, other: &EventRegistration) -> bool {
         self.trigger_key() == other.trigger_key()
+            && self.profile_binding == other.profile_binding
             && same_json(&self.config, &other.config)
             && same_json(&self.oauth_tokens, &other.oauth_tokens)
     }

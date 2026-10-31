@@ -6,6 +6,7 @@
 //! todo/EU-AI.md §5 and §7.
 
 pub mod board_scan;
+pub(crate) mod model_posture;
 pub mod questionnaire;
 pub mod signals;
 
@@ -19,6 +20,7 @@ use crate::{
 use axum::{
     Extension, Json, Router,
     extract::{Path, State},
+    response::Response,
     routing::{get, post},
 };
 use flow_like_types::create_id;
@@ -215,9 +217,10 @@ pub async fn get_questionnaire(
     let sub = permission.sub()?;
 
     let app = state.master_app(&sub, &app_id, &state).await?;
-    let signals = board_scan::scan_app_signals(&state, &sub, &app_id, &app)
+    let mut signals = board_scan::scan_app_signals(&state, &sub, &app_id, &app)
         .await
         .unwrap_or_default();
+    model_posture::enrich_scoring_signals(&state, &app_id, &mut signals).await?;
 
     let existing = ai_act_assessment::Entity::find()
         .filter(ai_act_assessment::Column::AppId.eq(&app_id))
@@ -335,9 +338,10 @@ pub async fn classify_preview(
     let sub = permission.sub()?;
 
     let app = state.master_app(&sub, &app_id, &state).await?;
-    let signals = board_scan::scan_app_signals(&state, &sub, &app_id, &app)
+    let mut signals = board_scan::scan_app_signals(&state, &sub, &app_id, &app)
         .await
         .unwrap_or_default();
+    model_posture::enrich_scoring_signals(&state, &app_id, &mut signals).await?;
 
     let classification = classify(&body.answers, &signals);
     let recommendations = questionnaire::recommendations(&body.answers, &signals, &classification);
@@ -469,9 +473,10 @@ pub async fn put_assessment(
     let sub = permission.sub()?;
 
     let app = state.master_app(&sub, &app_id, &state).await?;
-    let signals = board_scan::scan_app_signals(&state, &sub, &app_id, &app)
+    let mut signals = board_scan::scan_app_signals(&state, &sub, &app_id, &app)
         .await
         .unwrap_or_default();
+    model_posture::enrich_scoring_signals(&state, &app_id, &mut signals).await?;
 
     let classification = classify(&body.answers, &signals);
     let now = chrono::Utc::now().fixed_offset();
@@ -562,11 +567,14 @@ pub async fn put_assessment(
 #[derive(Clone, Deserialize, Debug, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SuggestBody {
+    /// Stream the result with keep-alive comments while the model works.
+    #[serde(default)]
+    pub stream: bool,
     /// Optional model id override; defaults to the platform copilot model.
     #[serde(default)]
     pub model_id: Option<String>,
     /// Optional caller profile used to resolve which model bits to use.
-    /// When omitted the agent falls back to the platform default model.
+    /// When omitted the agent loads the caller's synced profile.
     #[serde(default)]
     #[schema(value_type = Option<Object>)]
     pub profile: Option<flow_like::profile::Profile>,
@@ -587,11 +595,14 @@ pub struct SuggestResponse {
     post,
     path = "/apps/{app_id}/ai-act/assessment/suggest",
     tag = "ai-act",
-    description = "Run the governance FlowPilot agent over the app's boards (in their FlowScript state) to propose questionnaire answers. Read-only. Requires owner permission.",
+    description = "Run the governance FlowPilot agent over the app's boards (in their FlowScript state) to propose questionnaire answers. Read-only. Requires owner permission. Set stream to true for SSE keep-alive comments followed by a completed event containing SuggestResponse, or an error event containing error and code strings.",
     params(("app_id" = String, Path, description = "Application ID")),
     request_body = SuggestBody,
     responses(
-        (status = 200, description = "Suggested answers", body = SuggestResponse),
+        (status = 200, description = "Suggested answers or an SSE result stream", content(
+            (SuggestResponse = "application/json"),
+            (String = "text/event-stream"),
+        )),
         (status = 400, description = "Feature disabled"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
@@ -600,14 +611,15 @@ pub struct SuggestResponse {
 )]
 #[tracing::instrument(
     name = "POST /apps/{app_id}/ai-act/assessment/suggest",
-    skip(state, user, body)
+    skip(state, user, reporter, body)
 )]
 pub async fn suggest_assessment(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path(app_id): Path<String>,
+    reporter: crate::middleware::error_reporting::StreamErrorReporter,
     Json(body): Json<SuggestBody>,
-) -> Result<Json<SuggestResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     ensure_feature(&state)?;
     // Hosted Bit models authenticate against this server's metered `/chat/completions` with the
     // caller's token; capture it before the permission macro consumes `user`.
@@ -620,22 +632,19 @@ pub async fn suggest_assessment(
         api_base_url: None,
     });
 
-    let (suggestion, signals, model) = crate::routes::ai::governance::run_governance_agent(
-        &state,
-        &sub,
-        &app_id,
-        body.model_id,
-        body.profile,
-        token,
-        usage_context,
-    )
-    .await?;
-
-    Ok(Json(SuggestResponse {
-        suggestion: serde_json::to_value(&suggestion).unwrap_or(Value::Null),
-        signals: serde_json::to_value(&signals).unwrap_or(Value::Null),
-        model,
-    }))
+    crate::routes::ai::governance::governance_response(body.stream, Some(reporter), async move {
+        crate::routes::ai::governance::run_governance_agent(
+            &state,
+            &sub,
+            &app_id,
+            body.model_id,
+            body.profile,
+            token,
+            usage_context,
+        )
+        .await
+    })
+    .await
 }
 
 /// Re-export of the live classification preview helper for the publishing flow.

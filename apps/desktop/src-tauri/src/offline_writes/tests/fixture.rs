@@ -27,7 +27,8 @@ use flow_like::flow_like_storage::{
         ObjectStore as LanceObjectStore, ObjectStoreParams, ObjectStoreProvider,
         ObjectStoreRegistry,
     },
-    lance_object_store, lancedb::{self, Connection},
+    lance_object_store,
+    lancedb::{self, Connection},
     object_store::{ObjectStore, local::LocalFileSystem},
 };
 use flow_like_device_protocol::{
@@ -96,8 +97,9 @@ pub(crate) struct StubTokens {
     pub(crate) sinks: Mutex<HashMap<String, String>>,
 }
 
+#[async_trait::async_trait]
 impl TokenSource for StubTokens {
-    fn session_token(&self, _hub: &str, _subject: &str) -> Option<String> {
+    async fn session_token(&self, _key: &ScopeKey) -> Option<String> {
         self.session.lock().unwrap().clone()
     }
 
@@ -363,6 +365,8 @@ async fn replay(
         return answer(status, &body);
     }
     let key = ScopeKey {
+        profile_id: None,
+        issuer: None,
         hub: String::new(),
         subject,
         app_id: app,
@@ -606,6 +610,8 @@ impl Fixture {
 
     pub(crate) fn key(&self, subject: &str) -> ScopeKey {
         ScopeKey {
+            profile_id: None,
+            issuer: None,
             hub: self.hub_key(),
             subject: subject.to_owned(),
             app_id: APP.to_owned(),

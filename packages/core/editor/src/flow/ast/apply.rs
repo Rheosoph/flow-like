@@ -61,6 +61,9 @@ pub struct ApplyFlowScriptResult {
     /// even if the repaired document required no board mutation.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub corrections: Vec<String>,
+    /// Non-blocking lint findings for the submitted source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     pub diagnostics: Vec<String>,
     /// Positioned validation errors for the submitted FlowScript source.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -496,6 +499,7 @@ pub async fn apply_flowscript_to_board_file(
     };
 
     let corrections = std::mem::take(&mut reconcile.corrections);
+    let warnings = std::mem::take(&mut reconcile.warnings);
 
     // FlowScript is a program, not a bag of best-effort mutations. Every reconcile diagnostic means
     // some requested call, pin, connection, execution edge or boundary could not be represented.
@@ -507,6 +511,7 @@ pub async fn apply_flowscript_to_board_file(
             commands: Vec::new(),
             board_commands: reconcile.commands,
             corrections,
+            warnings,
             diagnostics: reconcile.diagnostics,
             structured_diagnostics,
             changes: FlowScriptChanges::default(),
@@ -522,6 +527,7 @@ pub async fn apply_flowscript_to_board_file(
                 commands: Vec::new(),
                 board_commands: reconcile.commands,
                 corrections,
+                warnings,
                 diagnostics,
                 structured_diagnostics: Vec::new(),
                 changes: FlowScriptChanges::default(),
@@ -542,6 +548,7 @@ pub async fn apply_flowscript_to_board_file(
     )
     .await?;
     applied.corrections = corrections;
+    applied.warnings = warnings;
     Ok(applied)
 }
 
@@ -820,6 +827,7 @@ async fn apply_board_commands_to_staged_board(
                 commands: Vec::new(),
                 board_commands,
                 corrections: Vec::new(),
+                warnings: Vec::new(),
                 diagnostics: vec!["FlowScript apply failed and was rolled back".to_string()],
                 structured_diagnostics: Vec::new(),
                 changes: FlowScriptChanges::default(),
@@ -862,6 +870,7 @@ async fn apply_board_commands_to_staged_board(
         commands: applied_commands,
         board_commands,
         corrections: Vec::new(),
+        warnings: Vec::new(),
         diagnostics: Vec::new(),
         structured_diagnostics: Vec::new(),
         changes: FlowScriptChanges::default(),
@@ -4308,6 +4317,58 @@ mod tests {
             &["even an unfamiliar diagnostic is atomic".to_string()]
         ));
         assert!(!reconcile_is_safe_to_apply(&[], &[]));
+    }
+
+    #[tokio::test]
+    async fn node_scoped_directory_warnings_do_not_block_apply() {
+        let mut event = Node::new("events_simple", "Simple Event", "", "events");
+        event.set_start(true);
+        event.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        let mut directory = Node::new("path_from_cache_dir", "Cache Dir", "", "files");
+        directory.set_flowscript_name("files", "cacheDir");
+        directory.add_input_pin("node_scope", "Node Scope", "", VariableType::Boolean);
+        directory.add_output_pin("path", "Path", "", VariableType::String);
+        let mut log = Node::new("log", "Log", "", "debug");
+        log.add_input_pin("exec_in", "Exec In", "", VariableType::Execution);
+        log.add_input_pin("message", "Message", "", VariableType::String);
+        log.add_output_pin("exec_out", "Exec Out", "", VariableType::Execution);
+        let catalog = vec![event, directory, log];
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let source = r#"eventsSimple() {
+    log({ message: files::cacheDir({ nodeScope: true }) })
+    log({ message: files::cacheDir({ nodeScope: true }) })
+}"#;
+        let mut board = empty_board();
+        let result =
+            apply_flowscript_to_board(&mut board, source, &catalog, state.clone(), None, true)
+                .await
+                .unwrap();
+        assert!(result.diagnostics.is_empty(), "{:?}", result.diagnostics);
+        assert!(!result.commands.is_empty());
+        assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+        assert!(result.warnings[0].contains("nodeScope"));
+        assert_eq!(
+            board
+                .nodes
+                .values()
+                .filter(|node| node.name == "path_from_cache_dir")
+                .count(),
+            2
+        );
+        let serialized = serde_json::to_value(&result).unwrap();
+        assert_eq!(serialized["warnings"].as_array().unwrap().len(), 1);
+
+        let invalid = source.replace("log({ message:", "log({ unknown:");
+        let mut empty = empty_board();
+        let blocked = apply_flowscript_to_board(&mut empty, &invalid, &catalog, state, None, true)
+            .await
+            .unwrap();
+        assert!(blocked.commands.is_empty());
+        assert!(!blocked.diagnostics.is_empty());
+        assert_eq!(blocked.warnings, result.warnings);
     }
 
     #[tokio::test]

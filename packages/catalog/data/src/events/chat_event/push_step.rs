@@ -70,6 +70,8 @@ impl NodeLogic for PushStepNode {
         let description: Option<String> = context.evaluate_pin("description").await.ok();
 
         let cached_response = CachedChatResponse::load(context).await?;
+        let _message_guard = cached_response.emission.lock().await;
+        let message_id = cached_response.message_id().await;
         let step_id = {
             let mut mutable_reasoning = cached_response.reasoning.lock().await;
 
@@ -91,11 +93,13 @@ impl NodeLogic for PushStepNode {
 
         let reasoning_ref = cached_response.reasoning.lock().await;
         let streaming_response = ChatStreamingResponse {
+            message_id,
             actions: vec![],
             attachments: vec![],
             chunk: None,
             plan: Some(reasoning_ref.clone()),
             widgets: vec![],
+            main_widget: None,
         };
         drop(reasoning_ref);
 

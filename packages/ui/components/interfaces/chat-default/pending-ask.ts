@@ -1,5 +1,6 @@
 import { type IContent, IRole } from "../../../lib/schema/llm/history";
 import type { IMessage, IPlanStep } from "./chat-db";
+import { isVisibleChatMessage } from "./chat-message-interaction";
 import { joinContentText } from "./inline-segments";
 
 /** Where a sent question stands while its answer has shown nothing yet. */
@@ -150,6 +151,7 @@ export function resolvePendingAsks(
 		answered.add(ask.id);
 		if (!isAwaitingFirstEvent(answer, hasHostContent(answer.id))) continue;
 		hidden.add(answer.id);
+		if (!isVisibleChatMessage(ask)) continue;
 		byAsk.set(ask.id, {
 			phase: "waiting",
 			since: isSendOf(ask, send) ? send.startedAt : ask.timestamp,
@@ -159,6 +161,7 @@ export function resolvePendingAsks(
 	const latest = asks.at(-1);
 	if (
 		latest &&
+		isVisibleChatMessage(latest) &&
 		send?.inFlight &&
 		!answered.has(latest.id) &&
 		isSendOf(latest, send)

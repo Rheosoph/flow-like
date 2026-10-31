@@ -134,7 +134,8 @@ impl ZipSource {
         // The stream gets a duplicate of the handle rather than an open of its own, so a
         // replacement of `path` cannot slip in between two opens. The duplicate shares the
         // cursor, which is why `file` is only ever read at explicit offsets.
-        let archive = ZipArchive::new(BufReader::new(file.try_clone()?))?;
+        let mut archive = ZipArchive::new(BufReader::new(file.try_clone()?))?;
+        archive.validate_header_consistency()?;
 
         let names = archive.file_names().collect::<Result<Vec<_>, _>>()?;
         let root = names
@@ -307,6 +308,50 @@ impl ZipSource {
             )));
         }
         read_zip_entry(&mut entry, name, size, size, self.file_len)
+    }
+}
+
+#[cfg(test)]
+mod header_consistency_tests {
+    use super::*;
+    use std::io::{Cursor, Write};
+
+    fn archive() -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options =
+            zip::write::SimpleFileOptions::default().compression_method(CompressionMethod::Stored);
+        for (name, payload) in [
+            ("model/data.pkl", b"metadata".as_slice()),
+            ("model/data/0", b"tensor".as_slice()),
+        ] {
+            writer.start_file(name, options).unwrap();
+            writer.write_all(payload).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn consistent_headers_allow_metadata_and_storage_reads() {
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&archive()).unwrap();
+        let source = ZipSource::open(file.path()).unwrap();
+        assert_eq!(source.pickle().unwrap(), b"metadata");
+        assert_eq!(source.read_storage("0", 0, 6).unwrap().0, b"tensor");
+    }
+
+    #[test]
+    fn conflicting_storage_headers_are_rejected_at_open() {
+        let mut bytes = archive();
+        let offset = ZipArchive::new(Cursor::new(&bytes))
+            .unwrap()
+            .by_name("model/data/0")
+            .unwrap()
+            .header_start() as usize;
+        bytes[offset + 30] = b'x';
+        let mut file = tempfile::NamedTempFile::new().unwrap();
+        file.write_all(&bytes).unwrap();
+        let error = ZipSource::open(file.path()).err().unwrap();
+        assert!(error.to_string().contains("filename mismatch"), "{error}");
     }
 }
 

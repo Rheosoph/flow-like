@@ -15,9 +15,20 @@ use super::{
 };
 use crate::{
     egress::ProviderEgress,
+    history::History,
+    llm::{
+        AgentSettings, LLMCallback, ModelConstructor, UsageReportingMode, with_output_budget,
+        without_output_budget,
+    },
     provider::{ModelApiSurface, ModelProvider},
+    response::Response,
     systemone::SystemOneClient,
 };
+use async_trait::async_trait;
+use serde_json::Value;
+
+#[cfg(test)]
+mod request_params_tests;
 
 /// Whether a client may fall back to the host process's own cloud identity when the Bit
 /// carries no credentials. Server-side that identity belongs to the platform.
@@ -66,7 +77,102 @@ pub async fn build(
         "custom:vertex" => Arc::new(VertexModel::from_provider(provider, egress).await?),
         _ => bail!("Unsupported custom provider: {provider_name}"),
     };
-    Ok(model)
+    Ok(match configured_output_budget(&name, provider) {
+        Some(budget) => Arc::new(ConfiguredBudgetModel {
+            inner: model,
+            budget,
+        }),
+        None => model,
+    })
+}
+
+/// A configured null (or non-numeric value) removes local budget inference. The exact value
+/// still reaches the provider, which owns validation of its native request parameters.
+fn configured_output_budget(name: &str, provider: &ModelProvider) -> Option<Option<u64>> {
+    let params = provider.params.as_ref()?.get("request_params")?;
+    let nested = |key: &str, limit: &str| {
+        let value = params.get(key)?;
+        if !value.is_object() {
+            return Some(None);
+        }
+        value.get(limit).map(Value::as_u64)
+    };
+    match name {
+        "custom:gemini" | "custom:vertex" => nested("generationConfig", "maxOutputTokens"),
+        "custom:ollama" => nested("options", "num_predict"),
+        "custom:xai" | "custom:mozilla" => params.get("max_output_tokens").map(Value::as_u64),
+        "custom:openai"
+            if !provider.params.as_ref().is_some_and(|params| {
+                params.get("is_azure").and_then(Value::as_bool) == Some(true)
+            }) && provider.api_surface.unwrap_or(ModelApiSurface::Responses)
+                == ModelApiSurface::Responses =>
+        {
+            params.get("max_output_tokens").map(Value::as_u64)
+        }
+        "custom:openai" | "custom:bedrock" => params
+            .get("max_completion_tokens")
+            .or_else(|| params.get("max_tokens"))
+            .map(Value::as_u64),
+        _ => params.get("max_tokens").map(Value::as_u64),
+    }
+}
+
+struct ConfiguredBudgetModel {
+    inner: Arc<dyn ModelLogic>,
+    budget: Option<u64>,
+}
+
+#[async_trait]
+impl ModelLogic for ConfiguredBudgetModel {
+    async fn provider(&self) -> Result<ModelConstructor> {
+        Ok(self.inner.provider().await?.with_output_budget(self.budget))
+    }
+
+    async fn default_model(&self) -> Option<String> {
+        self.inner.default_model().await
+    }
+
+    fn additional_params(&self, history: &Option<History>) -> Option<Value> {
+        self.inner.additional_params(history)
+    }
+
+    fn usage_reporting(&self) -> UsageReportingMode {
+        self.inner.usage_reporting()
+    }
+
+    fn transform_history(&self, history: &mut History) {
+        self.inner.transform_history(history);
+    }
+
+    fn request_params(&self, history: &History, streaming: bool) -> Result<Option<Value>> {
+        self.inner.request_params(history, streaming)
+    }
+
+    fn agent_settings(&self, history: &Option<History>) -> Result<AgentSettings> {
+        let mut settings = self.inner.agent_settings(history)?;
+        settings.max_tokens = self.budget;
+        Ok(settings)
+    }
+
+    async fn invoke(&self, history: &History, callback: Option<LLMCallback>) -> Result<Response> {
+        let mut history = history.clone();
+        // History stores u32, while native bodies and response accounting support u64. The
+        // final HTTP overlay keeps the full value; this bounded hint prepares model constraints.
+        history.max_completion_tokens =
+            self.budget.map(|budget| budget.min(u32::MAX as u64) as u32);
+        // A caller callback may invoke another model. Its request must not inherit this limit.
+        let callback = callback.map(|callback| -> LLMCallback {
+            Arc::new(move |chunk| {
+                let callback = callback.clone();
+                Box::pin(without_output_budget(async move { callback(chunk).await }))
+            })
+        });
+        with_output_budget(self.budget, async {
+            // Keep provider-specific invocation, including Gemini's media preparation.
+            self.inner.invoke(&history, callback).await
+        })
+        .await
+    }
 }
 
 /// `custom:vertex` falls back to Google application-default credentials when the Bit
@@ -137,7 +243,8 @@ pub fn systemone(
         .or(default_endpoint)
         .ok_or_else(|| anyhow!("Custom SystemOne providers require an endpoint"))?;
     let client = SystemOneClient::new(endpoint, model, param("api_key").unwrap_or_default())?
-        .with_egress(egress)?;
+        .with_egress(egress)?
+        .with_request_params(provider)?;
     Ok(if name == "custom:openrouter" {
         client.with_openrouter_state_images()
     } else {

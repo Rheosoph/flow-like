@@ -14,6 +14,7 @@ fn main() {
 
         SwiftLinker::new("10.15")
             .with_ios("11")
+            .with_visionos("1")
             .with_package("test-swift", "tests/swift-pkg")
             .link();
     }

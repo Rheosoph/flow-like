@@ -457,6 +457,7 @@ mod tests {
             buckets: vec!["bucket".into()],
             allowed_https_hosts: vec![],
             object_store_tls_gateway: false,
+            channel_nats_url: None,
         }
     }
 
@@ -554,6 +555,7 @@ mod tests {
             buckets: vec!["bucket".into()],
             allowed_https_hosts: vec![],
             object_store_tls_gateway: false,
+            channel_nats_url: None,
         };
         assert!(gateway.assign(Policy::new(data).unwrap()).is_err());
         assert!(gateway.active_policy().is_err());

@@ -155,6 +155,16 @@ declare namespace chat {
     function pushWidgets({ elementRef: Struct }): void;
 
     /**
+     * Adds or removes a workflow emoji reaction on a chat message without starting another turn.
+     * @node events_chat_react @alias eventsChatReact
+     * @param emoji — Emoji to add or remove
+     * @param messageId (optional) — Leave empty to react to the user message that started this run
+     * @param operation (optional) — Add or remove the workflow's reaction
+     * @impure has side effects / drives control flow
+     */
+    function react({ emoji: string, messageId?: string, operation?: string }): void;
+
+    /**
      * Removes a step from the plan by its ID
      * @node events_chat_remove_step @alias eventsChatRemoveStep
      * @param stepId — ID of the step to remove
@@ -2513,7 +2523,7 @@ declare namespace files {
     /**
      * Converts the cache directory to a Path
      * @node path_from_cache_dir @alias pathFromCacheDir
-     * @param nodeScope (optional) — Is this node in the node scope?
+     * @param nodeScope (optional) — Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory.
      * @param userScope (optional) — Store in user context?
      * @returns path — Output Path
      */
@@ -2522,7 +2532,7 @@ declare namespace files {
     /**
      * Converts the storage directory to a Path
      * @node path_from_storage_dir @alias pathFromStorageDir
-     * @param nodeScope (optional) — Is this node in the node scope?
+     * @param nodeScope (optional) — Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory.
      * @returns path — Output Path
      */
     function storageDir({ nodeScope?: bool }): Struct;
@@ -2537,7 +2547,7 @@ declare namespace files {
     /**
      * Converts the user directory to a Path
      * @node path_from_user_dir @alias pathFromUserDir
-     * @param nodeScope (optional) — Is this node in the node scope?
+     * @param nodeScope (optional) — Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory.
      * @returns path — Output Path
      */
     function userDir({ nodeScope?: bool }): Struct;

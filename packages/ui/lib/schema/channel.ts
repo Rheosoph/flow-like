@@ -13,6 +13,13 @@ export type IChannelClientDescriptor =
 	| { type: "http"; push_url: string; token: string }
 	| { type: "in_process" }
 	| {
+			type: "nats";
+			url: string;
+			subject: string;
+			token: string;
+			expires_at: number;
+	  }
+	| {
 			type: "aws_mqtt";
 			endpoint: string;
 			region: string;

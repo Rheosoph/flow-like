@@ -9,12 +9,15 @@ import type { IIntercomEvent } from "../../lib/schema/events/intercom-event";
 import type { IBackendState, IEventState } from "../../state/backend-state";
 import { ChatInterface } from "./chat-default";
 import {
+	type IChatMainWidget,
 	type IMessage,
 	chatDb,
 	decodeMessageRow,
 	latestChatDraft,
+	putChatDrafts,
 	putChatMessage,
 } from "./chat-default/chat-db";
+import { resolveMainChatWidget } from "./chat-default/main-widget-state";
 import type { IUseInterfaceProps } from "./interfaces";
 
 const state = vi.hoisted(() => ({
@@ -105,6 +108,9 @@ vi.mock("./chat-default/history", () => ({ ChatHistory: () => null }));
 vi.mock("./chat-default/welcome", () => ({ ChatWelcome: () => null }));
 vi.mock("./chat-default/respond-interaction", () => ({
 	submitInteractionResponse: vi.fn(),
+}));
+vi.mock("./chat-default/use-chat-model", () => ({
+	useChatModel: () => ({ selectedModel: undefined }),
 }));
 
 const failureMessage =
@@ -206,7 +212,233 @@ async function putUserMessage() {
 	} as IMessage);
 }
 
+async function completeDetachedRun(events: IIntercomEvent[]) {
+	const eventState: Pick<IEventState, "executeEvent"> = {
+		executeEvent: async (_app, _event, _payload, _stream, _start, onEvents) => {
+			onEvents?.(events);
+			return undefined;
+		},
+	};
+	state.engine.setBackend({ eventState } as IBackendState);
+	await state.engine.executeEvent("session", {
+		appId: "app",
+		eventId: "chat",
+		payload: { id: "node" },
+	});
+	await waitForChat(() => {
+		expect(state.engine.isStreamComplete("session")).toBe(true);
+	});
+}
+
+async function putMainWidgetHistory() {
+	const main = {
+		command_id: "show-browser",
+		title: "Browser",
+		display: "open",
+		widget: {
+			instance_id: "browser",
+			widget_id: "browser-widget",
+			surface_id: "browser",
+			component: { type: "text", text: { literalString: "Starting" } },
+			updates: [],
+		},
+	} satisfies IChatMainWidget;
+	await putChatMessage({
+		id: "prior-turn",
+		appId: "app",
+		sessionId: "session",
+		timestamp: 1,
+		files: [],
+		inner: { role: "assistant", content: "Opened the browser" },
+		main_widget: main,
+	} as IMessage);
+	return main;
+}
+
+describe("chat main widget reconnect", () => {
+	test("inherits the prior pane and preserves replayed updates across response resends and reopening", async () => {
+		await putUserMessage();
+		const main = await putMainWidgetHistory();
+		const updates = ["Loading page", "Page loaded"].map((text) => ({
+			type: "upsertElement",
+			element_id: "browser",
+			value: { type: "setText", text },
+		}));
+		await putChatDrafts([
+			{
+				id: "reply:backend-second",
+				stream_root_id: "reply",
+				stream_root_timestamp: 10,
+				stream_message_id: "backend-second",
+				appId: "app",
+				sessionId: "session",
+				timestamp: 11,
+				files: [],
+				inner: { role: "assistant", content: "Finished" },
+				main_widget: {
+					...main,
+					widget: { ...main.widget, updates },
+				},
+			} as IMessage,
+		]);
+		const response = (content: string) => ({
+			choices: [{ index: 0, message: { role: "assistant", content } }],
+		});
+		await completeDetachedRun([
+			{
+				event_id: "first-response",
+				event_type: "chat_stream",
+				payload: {
+					message_id: "backend-first",
+					response: response("Opening page"),
+				},
+			},
+			{ event_id: "loading", event_type: "a2ui", payload: updates[0] },
+			{
+				event_id: "second-response",
+				event_type: "chat_stream",
+				payload: {
+					message_id: "backend-second",
+					response: response("Finished"),
+					main_widget: main,
+				},
+			},
+			{ event_id: "loaded", event_type: "a2ui", payload: updates[1] },
+			{
+				event_id: "final-response",
+				event_type: "chat_out",
+				payload: {
+					message_id: "backend-second",
+					response: response("Finished"),
+					main_widget: main,
+				},
+			},
+		] as IIntercomEvent[]);
+		await act(async () =>
+			root.render(<ChatInterface appId="app" event={event} />),
+		);
+		await waitForChat(async () => {
+			const messages = (await chatDb.messages.toArray()).map(decodeMessageRow);
+			const first = messages.find((message) => message.id === "reply");
+			const second = messages.find(
+				(message) => message.id === "reply:backend-second",
+			);
+			expect(first?.main_widget?.widget?.updates).toEqual([updates[0]]);
+			expect(second?.main_widget?.widget?.updates).toEqual(updates);
+			expect(second?.error).toBeUndefined();
+			expect(
+				messages.find((message) => message.id === "prior-turn")?.main_widget
+					?.widget?.updates,
+			).toEqual([]);
+			expect(await chatDb.drafts.count()).toBe(0);
+			expect(state.engine.hasStream("session")).toBe(false);
+		});
+		await act(async () => root.unmount());
+		root = createRoot(container);
+		await act(async () =>
+			root.render(<ChatInterface appId="app" event={event} />),
+		);
+		await waitForChat(async () => {
+			const messages = (await chatDb.messages.toArray()).map(decodeMessageRow);
+			expect(
+				resolveMainChatWidget(messages, "session")?.widget?.updates,
+			).toEqual(updates);
+			expect(messages).toHaveLength(4);
+		});
+	});
+
+	test("restores an explicit clear after reopening without reviving the earlier pane", async () => {
+		await putUserMessage();
+		await putMainWidgetHistory();
+		await completeDetachedRun([
+			{
+				event_id: "clear-pane",
+				event_type: "chat_stream_partial",
+				payload: {
+					message_id: "clear-response",
+					main_widget: { command_id: "clear-browser", widget: null, title: "" },
+				},
+			},
+			{
+				event_id: "final-response",
+				event_type: "chat_out",
+				payload: { message_id: "clear-response" },
+			},
+		] as IIntercomEvent[]);
+		await act(async () =>
+			root.render(<ChatInterface appId="app" event={event} />),
+		);
+		await waitForChat(async () => {
+			const messages = (await chatDb.messages.toArray()).map(decodeMessageRow);
+			expect(resolveMainChatWidget(messages, "session")).toMatchObject({
+				command_id: "clear-browser",
+				widget: null,
+			});
+			expect(state.engine.hasStream("session")).toBe(false);
+		});
+		await act(async () => root.unmount());
+		root = createRoot(container);
+		await act(async () =>
+			root.render(<ChatInterface appId="app" event={event} />),
+		);
+		await waitForChat(async () => {
+			const messages = (await chatDb.messages.toArray()).map(decodeMessageRow);
+			expect(resolveMainChatWidget(messages, "session")?.widget).toBeNull();
+			expect(messages).toHaveLength(3);
+		});
+	});
+});
+
 describe("chat reconnect after a failed run", () => {
+	test("replays every response under its original IDs after a multi-message checkpoint", async () => {
+		await putUserMessage();
+		const messages = ["First answer", "Second answer"].map(
+			(content, index) => ({
+				id: index === 0 ? "reply" : "reply:backend-second",
+				stream_root_id: "reply",
+				stream_root_timestamp: 10,
+				stream_message_id: index === 0 ? "backend-first" : "backend-second",
+				appId: "app",
+				sessionId: "session",
+				timestamp: 10 + index,
+				files: [],
+				inner: { role: "assistant", content },
+			}),
+		) as IMessage[];
+		await putChatDrafts(messages);
+		const events = messages.map((message, index) => ({
+			event_id: `response-${index}`,
+			event_type: "chat_stream",
+			payload: {
+				message_id: message.stream_message_id,
+				response: {
+					choices: [{ index: 0, message: message.inner }],
+				},
+				attachments: [],
+				widgets: [],
+			},
+		})) as IIntercomEvent[];
+		await failDetachedRun(failureMessage, events);
+		await act(async () =>
+			root.render(<ChatInterface appId="app" event={event} />),
+		);
+		await waitForChat(async () => {
+			const replies = (await chatDb.messages.toArray())
+				.map(decodeMessageRow)
+				.filter((message) => message.inner.role === "assistant")
+				.sort((a, b) => a.timestamp - b.timestamp);
+			expect(
+				replies.map((message) => [message.id, message.inner.content]),
+			).toEqual([
+				["reply", "First answer"],
+				["reply:backend-second", "Second answer"],
+			]);
+			expect(replies[0].error).toBeUndefined();
+			expect(replies[1].error?.message).toBe(failureMessage);
+			expect(await chatDb.drafts.count()).toBe(0);
+		});
+	});
+
 	test.each([failureMessage, { error: failureMessage }])(
 		"preserves a native preamble rejection without any streamed events: %j",
 		async (failure) => {

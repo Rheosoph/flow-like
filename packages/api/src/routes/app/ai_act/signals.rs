@@ -14,6 +14,12 @@ pub struct DetectedModel {
     pub provider: Option<String>,
     /// True for dynamic selectors (e.g. the `Find Model` node).
     pub dynamic_selector: bool,
+    /// An administrator has reviewed this provider/model pair in the registry.
+    #[serde(default)]
+    pub vetted: bool,
+    /// The registry records a GPAI posture other than UNKNOWN.
+    #[serde(default)]
+    pub posture_known: bool,
 }
 
 /// Capabilities inferred from the node types / categories present in an app's
@@ -44,6 +50,9 @@ pub struct CapabilitySignals {
 pub struct Signals {
     /// Models discovered via the static board scan (§1.4.1, source = board_scan).
     pub models: Vec<DetectedModel>,
+    /// Every current board loaded successfully during this scan.
+    #[serde(default)]
+    pub board_scan_complete: bool,
     pub capabilities: CapabilitySignals,
     /// App primary/secondary category (HEALTH, FINANCE, EDUCATION, ...).
     pub primary_category: Option<String>,

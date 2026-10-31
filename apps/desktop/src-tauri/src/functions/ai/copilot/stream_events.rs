@@ -619,17 +619,7 @@ pub(super) fn render_recovered_mutation_message(completion: &McpToolCompletion) 
 }
 
 pub(super) fn preview_tool_result(content: &str) -> String {
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(content) {
-        return flow_like::flow::copilot::stream::safe_json_preview(
-            &parsed,
-            flow_like::flow::copilot::stream::TOOL_RESULT_PREVIEW_CHARS,
-        );
-    }
-
-    flow_like::flow::copilot::stream::safe_text_preview(
-        content,
-        flow_like::flow::copilot::stream::TOOL_RESULT_PREVIEW_CHARS,
-    )
+    flow_like::flow::copilot::stream::safe_tool_activity_result_preview(content)
 }
 
 pub(super) fn send_commands_event(channel: &Channel<String>, commands: &[BoardCommand]) {

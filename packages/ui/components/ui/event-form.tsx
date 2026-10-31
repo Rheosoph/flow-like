@@ -22,6 +22,7 @@ import {
 	useState,
 } from "react";
 import type { IOAuthConsentStore } from "../../db/oauth-db";
+import { useBoardVersionCurrent } from "../../hooks/use-board-version-current";
 import { useInvoke } from "../../hooks/use-invoke";
 import type { IEvent, IOAuthProvider, IOAuthToken } from "../../lib";
 import {
@@ -88,6 +89,7 @@ import {
 import { EventStartPicker, type EventStartTarget } from "./event-start-picker";
 import { Input } from "./input";
 import { Label } from "./label";
+import { LatestBoardVersionLabel } from "./latest-board-version-label";
 import {
 	Select,
 	SelectContent,
@@ -305,6 +307,7 @@ export function EventForm({
 		[appId, formData.board_id],
 		!!formData.board_id,
 	);
+	const versionCurrent = useBoardVersionCurrent(appId, formData.board_id);
 	const node = board.data?.nodes?.[formData.node_id ?? ""];
 	const mapping = node ? eventConfig[node.name] : undefined;
 	const boardExecutionMode = board.data?.execution_mode;
@@ -1020,7 +1023,7 @@ export function EventForm({
 								)}
 							</section>
 						)}
-						<section className="grid grid-cols-[minmax(0,1fr)_140px] gap-3 border-t pt-5">
+						<section className="grid grid-cols-1 gap-3 border-t pt-5 sm:grid-cols-2">
 							<div className="space-y-1.5">
 								<Label htmlFor={`${formId}-name`}>
 									{t("eventName", "Event name")}
@@ -1041,6 +1044,12 @@ export function EventForm({
 								<Select
 									value={formData.board_version?.join(".") ?? "latest"}
 									disabled={locked || !formData.board_id}
+									onOpenChange={(open) => {
+										if (open) {
+											void versions.refetch();
+											void versionCurrent.refetch();
+										}
+									}}
 									onValueChange={(value) => {
 										handleInputChange(
 											"board_version",
@@ -1052,13 +1061,19 @@ export function EventForm({
 								>
 									<SelectTrigger
 										id={`${formId}-version`}
-										className="h-10 w-full"
+										className="w-full min-h-10 text-left whitespace-normal data-[size=default]:h-auto *:data-[slot=select-value]:line-clamp-none"
 									>
 										<SelectValue />
 									</SelectTrigger>
-									<SelectContent>
+									<SelectContent className="max-w-[calc(100vw-2rem)]">
 										<SelectItem value="latest">
-											{t("latest", "Latest")}
+											<LatestBoardVersionLabel
+												state={
+													versionCurrent.isError
+														? undefined
+														: versionCurrent.data
+												}
+											/>
 										</SelectItem>
 										{asArray(versions.data).map((version) => (
 											<SelectItem
@@ -1071,15 +1086,15 @@ export function EventForm({
 									</SelectContent>
 								</Select>
 							</div>
-							<p className="col-span-2 text-xs leading-relaxed text-muted-foreground">
+							<p className="text-xs leading-relaxed text-muted-foreground sm:col-span-2">
 								{destination === "device"
 									? t(
 											"deviceVersionSnapshot",
 											"Devices run the flow as it was when you last deployed or updated it.",
 										)
 									: t(
-											"latestOrPinnedFlow",
-											"Latest follows the current flow. A pinned version keeps the same snapshot.",
+											"latestSavedDraftOrPinnedFlow",
+											"Latest runs the saved draft, including unpublished changes. A pinned version keeps the same published snapshot.",
 										)}
 							</p>
 						</section>

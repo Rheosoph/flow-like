@@ -31,6 +31,7 @@ use std::{path::PathBuf, sync::Arc};
 use tauri::{AppHandle, Manager};
 
 pub(crate) struct RunStorageRequest<'a> {
+    pub profile_id: Option<&'a str>,
     pub visibility: &'a AppVisibility,
     pub app_id: &'a str,
     /// `profile.hub_profile.hub`, raw.
@@ -39,6 +40,7 @@ pub(crate) struct RunStorageRequest<'a> {
     pub token: Option<&'a str>,
     pub session_id: Option<&'a str>,
     pub webview: Option<&'a str>,
+    pub native_auth: Option<&'a crate::native_auth::SessionBinding>,
     pub event_id: Option<&'a str>,
     /// Credentials the caller passed; only Offline apps use them.
     pub device_credentials: Option<SharedCredentials>,
@@ -138,6 +140,37 @@ pub(crate) fn disconnected_subject(
 }
 
 impl RunStorage {
+    async fn owner(
+        app_handle: Option<&AppHandle>,
+        request: &RunStorageRequest<'_>,
+        hub: &str,
+        subject: &str,
+    ) -> flow_like_types::Result<(Option<String>, Option<String>)> {
+        if let Some(binding) = request.native_auth {
+            anyhow::ensure!(
+                binding.is_current() && binding.hub == hub && binding.subject == subject,
+                "The offline storage identity changed during execution"
+            );
+            return Ok((
+                Some(binding.profile_id.clone()),
+                Some(binding.issuer.clone()),
+            ));
+        }
+        match app_handle {
+            Some(app) => {
+                super::scope_owner_for_profile(
+                    app,
+                    request
+                        .profile_id
+                        .context("Offline storage requires the execution profile")?,
+                    hub,
+                    subject,
+                )
+                .await
+            }
+            None => Ok((None, None)),
+        }
+    }
     fn device(credentials: Option<SharedCredentials>, app_id: &str) -> Self {
         Self {
             mode: RunStorageMode::Device,
@@ -168,14 +201,18 @@ impl RunStorage {
         if matches!(request.visibility, AppVisibility::Offline) {
             return Ok(Self::device(request.device_credentials, request.app_id));
         }
-        let prepared = crate::execution_credentials::prepare(
-            request.hub,
-            request.app_id,
-            request.token,
-            request.session_id,
-            request.webview,
-        )
-        .await;
+        let prepared = if let Some(binding) = request.native_auth {
+            crate::execution_credentials::prepare_native(binding.clone(), request.app_id).await
+        } else {
+            crate::execution_credentials::prepare(
+                request.hub,
+                request.app_id,
+                request.token,
+                request.session_id,
+                request.webview,
+            )
+            .await
+        };
         let dirs = scope::cache_dirs(app_handle).await?;
         let registry = app_handle.try_state::<OfflineWrites>();
         let (hub, app_id) = (request.hub, request.app_id);
@@ -273,7 +310,10 @@ impl RunStorage {
             }
             return Ok(storage);
         };
+        let (profile_id, issuer) = Self::owner(app_handle, request, &hub, &subject).await?;
         let key = ScopeKey {
+            profile_id,
+            issuer,
             hub,
             subject,
             app_id: request.app_id.to_owned(),
@@ -324,7 +364,10 @@ impl RunStorage {
             storage.unbound_reason = Some(texts::UNATTRIBUTED.to_owned());
             return Ok(storage);
         };
+        let (profile_id, issuer) = Self::owner(app_handle, request, &hub, &subject).await?;
         let key = ScopeKey {
+            profile_id,
+            issuer,
             hub,
             subject,
             app_id: request.app_id.to_owned(),

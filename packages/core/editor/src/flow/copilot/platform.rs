@@ -45,8 +45,8 @@ use super::public_web::{
 };
 use super::stream::{
     FlowScriptToolCallPreviewTracker, detailed_tool_end_frame, detailed_tool_start_frame,
-    plan_step_frame, safe_tool_result_preview, tool_result_stream_status, tool_result_summary,
-    tool_result_terminal_status, usage_stat_frame,
+    plan_step_frame, safe_tool_activity_result_preview, tool_result_stream_status,
+    tool_result_summary, tool_result_terminal_status, usage_stat_frame,
 };
 use super::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, HTTP_REQUEST_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL,
@@ -1046,7 +1046,7 @@ impl PlatformCopilot {
                 .iter()
                 .any(|tool_call| platform_tool_enters_private_context(&tool_call.function.name));
             let mut prepared_arguments = Vec::with_capacity(tool_calls.len());
-            for tool_call in &tool_calls {
+            for (tool_index, tool_call) in tool_calls.iter().enumerate() {
                 let tool_name = tool_call.function.name.as_str();
                 if !advertised_tool_names.contains(tool_name) {
                     prepared_arguments.push(Err(json!({
@@ -1084,17 +1084,33 @@ impl PlatformCopilot {
                             let timeout_secs = find_global_tool_spec(RESEARCH_AGENT_TOOL)
                                 .map(|spec| spec.timeout_secs)
                                 .unwrap_or(900);
-                            match tokio::time::timeout(
+                            let progress = SealedResearchProgress {
+                                parent_request_id: &frame_ids[tool_index],
+                                on_token: on_token.as_ref().map(|callback| {
+                                    callback as &(dyn Fn(String) + Send + Sync)
+                                }),
+                            };
+                            progress.lifecycle("started", "progress");
+                            let outcome = tokio::time::timeout(
                                 Duration::from_secs(timeout_secs),
                                 run_sealed_research_agent(
                                     completion_client.as_ref(),
                                     &model_name,
                                     thinking.clone(),
                                     &user_prompt,
+                                    &progress,
                                 ),
                             )
-                            .await
-                            {
+                            .await;
+                            progress.lifecycle(
+                                "finished",
+                                if matches!(&outcome, Ok(Ok(_))) {
+                                    "done"
+                                } else {
+                                    "error"
+                                },
+                            );
+                            match outcome {
                                 Ok(Ok(outcome)) => {
                                     sealed_research_used = true;
                                     for call in &outcome.stats.calls {
@@ -1307,8 +1323,7 @@ impl PlatformCopilot {
                 if let (Some(callback), Some(frame_id)) = (&on_token, frame_ids.get(i)) {
                     let terminal_status = tool_result_terminal_status(output);
                     let result_summary = tool_result_summary(output);
-                    let result_preview =
-                        safe_tool_result_preview(output, super::stream::TOOL_RESULT_PREVIEW_CHARS);
+                    let result_preview = safe_tool_activity_result_preview(output);
                     callback(detailed_tool_end_frame(
                         frame_id,
                         name,
@@ -1492,6 +1507,59 @@ struct SealedResearchOutcome {
     opened_urls: Vec<String>,
 }
 
+/// Public tool activity uses the same nested stream envelope as host-managed specialists.
+/// Research model text stays inside the sealed context until its findings pass citation checks.
+struct SealedResearchProgress<'a> {
+    parent_request_id: &'a str,
+    on_token: Option<&'a (dyn Fn(String) + Send + Sync)>,
+}
+
+impl SealedResearchProgress<'_> {
+    fn emit(&self, frame: String, lifecycle: Option<(&str, &str)>) {
+        let Some(callback) = self.on_token else {
+            return;
+        };
+        let mut event = json!({
+            "type": "native_specialist_event",
+            "requestId": format!("{}:agent", self.parent_request_id),
+            "parentRequestId": self.parent_request_id,
+            "toolName": RESEARCH_AGENT_TOOL,
+            "frame": frame,
+        });
+        if let Some((stage, status)) = lifecycle {
+            event["stage"] = json!(stage);
+            event["status"] = json!(status);
+        }
+        callback(event.to_string());
+    }
+
+    fn lifecycle(&self, stage: &str, status: &str) {
+        self.emit(String::new(), Some((stage, status)));
+    }
+
+    fn tool_start(&self, id: &str, tool: &str, arguments: &Value) {
+        self.emit(
+            detailed_tool_start_frame(id, tool, None, Some(arguments)),
+            None,
+        );
+    }
+
+    fn tool_end(&self, id: &str, tool: &str, result: &Value) {
+        let output = result.to_string();
+        self.emit(
+            detailed_tool_end_frame(
+                id,
+                tool,
+                tool_result_stream_status(&output),
+                tool_result_terminal_status(&output).as_deref(),
+                Some(&tool_result_summary(&output)),
+                Some(&safe_tool_activity_result_preview(&output)),
+            ),
+            None,
+        );
+    }
+}
+
 /// Run public research in a context that can see only the immutable source request and public-web
 /// tools. This is the rig/Bits equivalent of the frontend-managed Research specialist. The root
 /// model cannot supply arguments, history, recalled memory, attachments, or app inventory to this
@@ -1501,6 +1569,7 @@ async fn run_sealed_research_agent(
     model_name: &str,
     thinking: Option<Value>,
     source_user_prompt: &str,
+    progress: &SealedResearchProgress<'_>,
 ) -> Result<SealedResearchOutcome> {
     let research_date = format!(
         "Current UTC date: {}.",
@@ -1609,9 +1678,15 @@ async fn run_sealed_research_agent(
         });
 
         let mut results = Vec::with_capacity(tool_calls.len());
-        for call in tool_calls {
+        for (call_index, call) in tool_calls.into_iter().enumerate() {
             let name = call.function.name.as_str();
             let arguments = call.function.arguments;
+            let frame_id = if call.id.is_empty() {
+                format!("research_{iteration}_{call_index}")
+            } else {
+                call.id.clone()
+            };
+            progress.tool_start(&frame_id, name, &arguments);
             let mut value = match name {
                 INTERNET_SEARCH_TOOL => {
                     if web_session.reserve_search_call() {
@@ -1650,6 +1725,7 @@ async fn run_sealed_research_agent(
                 }),
             };
             web_session.register_and_decorate_tool_result(name, &mut value);
+            progress.tool_end(&frame_id, name, &value);
             results.push(UserContent::ToolResult(RigToolResult {
                 id: call.id,
                 call_id: None,
@@ -2292,6 +2368,78 @@ fn search_query_contains_likely_secret(query: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sealed_research_progress_exposes_queries_sources_and_failures() {
+        let frames = std::sync::Mutex::new(Vec::new());
+        let callback = |frame| frames.lock().unwrap().push(frame);
+        let progress = SealedResearchProgress {
+            parent_request_id: "research-call",
+            on_token: Some(&callback),
+        };
+        progress.lifecycle("started", "progress");
+        progress.tool_start(
+            "search-call",
+            INTERNET_SEARCH_TOOL,
+            &json!({"query": "Porsche long distance comfort"}),
+        );
+        progress.tool_end(
+            "search-call",
+            INTERNET_SEARCH_TOOL,
+            &json!({
+                "status": "ok",
+                "results": [{"title": "Touring comfort", "url": "https://example.com/review"}],
+            }),
+        );
+        progress.tool_start(
+            "open-call",
+            OPEN_URL_TOOL,
+            &json!({"url": "https://example.com/review?token=private-token"}),
+        );
+        progress.tool_end(
+            "open-call",
+            OPEN_URL_TOOL,
+            &json!({"status": "error", "code": "fetch_failed"}),
+        );
+        progress.lifecycle("finished", "error");
+
+        let frames = frames.lock().unwrap();
+        let events: Vec<Value> = frames
+            .iter()
+            .map(|frame| serde_json::from_str(frame).unwrap())
+            .collect();
+        assert_eq!(events.len(), 6);
+        for event in &events {
+            assert_eq!(event["type"], "native_specialist_event");
+            assert_eq!(event["requestId"], "research-call:agent");
+            assert_eq!(event["parentRequestId"], "research-call");
+            assert_eq!(event["toolName"], RESEARCH_AGENT_TOOL);
+        }
+        let payload = |index: usize, tag: &str| -> Value {
+            let frame = events[index]["frame"].as_str().unwrap();
+            serde_json::from_str(
+                frame
+                    .strip_prefix(&format!("<{tag}>"))
+                    .unwrap()
+                    .strip_suffix(&format!("</{tag}>"))
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let search = payload(1, "tool_start");
+        let arguments: Value =
+            serde_json::from_str(search["arguments_preview"].as_str().unwrap()).unwrap();
+        assert_eq!(arguments["query"], "Porsche long distance comfort");
+        let searched = payload(2, "tool_end");
+        let result: Value =
+            serde_json::from_str(searched["result_preview"].as_str().unwrap()).unwrap();
+        assert_eq!(result["results"][0]["title"], "Touring comfort");
+        assert_eq!(result["results"][0]["url"], "https://example.com/review");
+        assert!(!frames[3].contains("private-token"));
+        assert_eq!(payload(4, "tool_end")["status"], "error");
+        assert_eq!(events[5]["stage"], "finished");
+        assert_eq!(events[5]["status"], "error");
+    }
 
     /// Raw public-web schemas must stay out of the root context. The sealed no-argument fallback
     /// runs an isolated local research loop instead.

@@ -26,6 +26,8 @@ pub struct PolicyData {
     pub allowed_https_hosts: Vec<String>,
     #[serde(default)]
     pub object_store_tls_gateway: bool,
+    #[serde(default)]
+    pub channel_nats_url: Option<String>,
 }
 
 fn default_buckets() -> Vec<String> {
@@ -79,6 +81,24 @@ pub struct Policy {
     token: String,
     buckets: HashSet<String>,
     https_hosts: HashSet<String>,
+    nats: Option<(String, u16)>,
+}
+
+pub fn nats_destination(value: &str) -> Result<(String, u16), BoxError> {
+    let url = url::Url::parse(value)?;
+    let host = url.host_str().ok_or("NATS endpoint has no host")?;
+    if url.scheme() != "nats"
+        || !hostname(host)
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || !matches!(url.path(), "" | "/")
+        || url.port() == Some(0)
+    {
+        return Err("Invalid NATS endpoint".into());
+    }
+    Ok((host.to_ascii_lowercase(), url.port().unwrap_or(4222)))
 }
 
 pub fn now() -> f64 {
@@ -165,6 +185,17 @@ impl Policy {
         }
         let callback = Origin::parse(&data.callback_url.parse()?)?;
         let storage = Origin::parse(&data.object_store_url.parse()?)?;
+        let nats = data
+            .channel_nats_url
+            .as_deref()
+            .map(nats_destination)
+            .transpose()?;
+        if nats.as_ref().is_some_and(|(host, port)| {
+            (host == &callback.host && *port == callback.port)
+                || (host == &storage.host && *port == storage.port)
+        }) {
+            return Err("NATS and HTTP services must have separate authorities".into());
+        }
         if callback == storage {
             return Err("Storage and callback must have separate authorities".into());
         }
@@ -191,6 +222,7 @@ impl Policy {
             callback,
             storage,
             https_hosts,
+            nats,
         })
     }
 
@@ -360,7 +392,11 @@ impl Policy {
                     host: host.clone(),
                     port,
                 };
-        if !storage && (port != 443 || !self.https_hosts.contains(&host)) {
+        let nats = self
+            .nats
+            .as_ref()
+            .is_some_and(|(allowed, allowed_port)| allowed == &host && *allowed_port == port);
+        if !storage && !nats && (port != 443 || !self.https_hosts.contains(&host)) {
             return Err("CONNECT destination denied".into());
         }
         let addresses: Vec<_> = tokio::time::timeout(
@@ -370,7 +406,7 @@ impl Policy {
         .await??
         .take(33)
         .collect();
-        self.checked_addresses(&addresses, storage)
+        self.checked_addresses(&addresses, storage || nats)
     }
 
     fn checked_addresses(
@@ -440,6 +476,57 @@ mod tests {
             buckets: default_buckets(),
             allowed_https_hosts: vec!["example.com".into()],
             object_store_tls_gateway: false,
+            channel_nats_url: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn nats_connect_is_scoped_to_one_broker_and_execution_lifetime() {
+        let mut input = data();
+        input.channel_nats_url = Some("nats://127.0.0.1:4222".into());
+        let mut policy = Policy::new(input).unwrap();
+        assert_eq!(
+            policy.connect_destination("127.0.0.1:4222").await.unwrap(),
+            "127.0.0.1:4222".parse::<SocketAddr>().unwrap()
+        );
+        for target in [
+            "127.0.0.1:8222",
+            "localhost:4222",
+            "127.0.0.2:4222",
+            "callback:8080",
+        ] {
+            assert!(
+                policy.connect_destination(target).await.is_err(),
+                "{target}"
+            );
+        }
+        assert!(
+            policy
+                .authorize(
+                    &Method::GET,
+                    &"http://127.0.0.1:4222/".parse().unwrap(),
+                    &auth("http://127.0.0.1:4222/", false)
+                )
+                .is_err()
+        );
+        policy.data.deadline = now() - 1.0;
+        assert!(policy.connect_destination("127.0.0.1:4222").await.is_err());
+    }
+
+    #[test]
+    fn nats_endpoint_cannot_grant_http_services_or_url_credentials() {
+        for endpoint in [
+            "nats://callback:8080",
+            "nats://objects:9000",
+            "nats://user:secret@nats:4222",
+            "nats://nats:4222/path",
+            "nats://nats:4222?token=x",
+            "tls://nats:4222",
+            "nats://nats:0",
+        ] {
+            let mut input = data();
+            input.channel_nats_url = Some(endpoint.into());
+            assert!(Policy::new(input).is_err(), "{endpoint}");
         }
     }
     fn auth(target: &str, token: bool) -> HeaderMap {

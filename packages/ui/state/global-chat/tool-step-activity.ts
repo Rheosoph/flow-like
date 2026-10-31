@@ -1,8 +1,8 @@
 import type { IToolActivityDetail } from "../../components/interfaces/chat-default/chat-db";
 
 const MAX_CONTEXT_CHARS = 240;
-const MAX_PREVIEW_CHARS = 64 * 1024;
-const MAX_SOURCES = 4;
+const MAX_QUERY_CHARS = 512;
+const MAX_PREVIEW_CHARS = 128 * 1024;
 
 const TOOL_ACTIVITIES: Record<
 	string,
@@ -11,10 +11,12 @@ const TOOL_ACTIVITIES: Record<
 	http_request: ["web", "Making an HTTP request"],
 	open_url: ["web", "Reading a webpage"],
 	web_fetch: ["web", "Reading a webpage"],
+	webfetch: ["web", "Reading a webpage"],
 	fetch_url: ["web", "Reading a webpage"],
 	archive_lookup: ["web", "Checking the web archive"],
 	internet_search: ["search", "Searching the web"],
 	web_search: ["search", "Searching the web"],
+	websearch: ["search", "Searching the web"],
 	research_agent: ["search", "Researching sources"],
 	list_apps: ["apps", "Checking available apps"],
 	search_apps: ["apps", "Searching apps"],
@@ -103,6 +105,10 @@ function sourceFromUrl(value: unknown) {
 
 /** Keep display text short and remove credentials and URL parameters from summaries. */
 export function toolActivityText(value: unknown): string | undefined {
+	return activityText(value, MAX_CONTEXT_CHARS);
+}
+
+function activityText(value: unknown, maxChars: number): string | undefined {
 	if (typeof value !== "string") return undefined;
 	const text = value.trim();
 	// SDK fallback summaries can be a complete JSON argument preview.
@@ -122,8 +128,9 @@ export function toolActivityText(value: unknown): string | undefined {
 			"[redacted]",
 		)
 		.replace(/\s+/g, " ");
-	return cleaned.length > MAX_CONTEXT_CHARS
-		? `${cleaned.slice(0, MAX_CONTEXT_CHARS - 1)}…`
+	const characters = Array.from(cleaned);
+	return characters.length > maxChars
+		? `${characters.slice(0, maxChars - 1).join("")}…`
 		: cleaned;
 }
 
@@ -138,30 +145,67 @@ function firstText(records: Record<string, unknown>[], keys: string[]) {
 }
 
 function collectSources(records: Record<string, unknown>[]) {
-	const sources: NonNullable<IToolActivityDetail["sources"]> = [];
-	const add = (value: unknown, linkable?: unknown) => {
+	type Source = NonNullable<IToolActivityDetail["sources"]>[number];
+	const sources = new Map<string, Source>();
+	const add = (value: unknown, metadata?: Record<string, unknown>) => {
 		const source = sourceFromUrl(value);
-		if (source && linkable === false) source.linkable = false;
-		const existing = source && sources.find((item) => item.url === source.url);
-		if (existing && source?.linkable === false) existing.linkable = false;
-		if (source && !existing) sources.push(source);
+		if (!source) return;
+		if (metadata?.linkable === false) source.linkable = false;
+		const title = toolActivityText(metadata?.title);
+		const existing = sources.get(source.url);
+		sources.set(source.url, {
+			...existing,
+			...source,
+			...(title ? { title } : {}),
+		});
+	};
+	const addRecord = (record: Record<string, unknown>) => {
+		for (const key of ["url", "uri", "href", "requested_url", "source_url"])
+			add(record[key], record);
+		// Archive results describe the snapshot in `title`, not its original page.
+		add(record.original_url);
 	};
 	for (const record of records) {
-		for (const key of ["url", "uri", "href", "requested_url", "source_url"])
-			add(record[key]);
+		addRecord(record);
+		const source = asRecord(record.source);
+		if (source) addRecord(source);
 		for (const key of ["urls", "sources", "results"]) {
 			const entries = record[key];
 			if (!Array.isArray(entries)) continue;
-			for (const entry of entries.slice(0, MAX_SOURCES)) {
+			for (const entry of entries) {
 				if (typeof entry === "string") add(entry);
 				else {
 					const source = asRecord(entry);
-					add(source?.url ?? source?.href ?? source?.uri, source?.linkable);
+					if (source) addRecord(source);
 				}
 			}
 		}
 	}
-	return sources.slice(0, MAX_SOURCES);
+	return [...sources.values()];
+}
+
+function collectQueries(records: Record<string, unknown>[]) {
+	const queries = new Set<string>();
+	const add = (value: unknown) => {
+		const text = activityText(value, MAX_QUERY_CHARS);
+		if (text) queries.add(text);
+	};
+	for (const record of records) {
+		for (const key of ["query", "search_query", "searchQuery", "q"])
+			add(record[key]);
+		for (const key of ["queries", "search_queries", "search_query"]) {
+			const entries = record[key];
+			if (!Array.isArray(entries)) continue;
+			for (const entry of entries) {
+				if (typeof entry === "string") add(entry);
+				else {
+					const query = asRecord(entry);
+					add(query?.query ?? query?.q ?? query?.search_query);
+				}
+			}
+		}
+	}
+	return [...queries];
 }
 
 /** Extract only display context. Raw arguments, request bodies and tool results stay out. */
@@ -188,7 +232,7 @@ export function buildToolActivity(
 	const results = result ? [result] : [];
 	// MCP providers may wrap a JSON tool result in a text content block.
 	if (Array.isArray(result?.content)) {
-		for (const block of result.content.slice(0, MAX_SOURCES)) {
+		for (const block of result.content) {
 			const content = asRecord(asRecord(block)?.text);
 			if (content) results.push(content);
 		}
@@ -198,9 +242,16 @@ export function buildToolActivity(
 		...context,
 		...results,
 	]);
-	const query = ["search", "apps"].includes(category)
-		? firstText(context, ["query", "search_query", "searchQuery", "q"])
-		: undefined;
+	const queries = ["search", "apps"].includes(category)
+		? collectQueries([
+				...(previous
+					? [{ query: previous.query, queries: previous.queries }]
+					: []),
+				...context,
+				...results,
+			])
+		: [];
+	const query = queries[0];
 	const targetKeys =
 		category === "files"
 			? ["path", "file_path", "filePath", "filename", "prefix"]
@@ -310,6 +361,7 @@ export function buildToolActivity(
 		label,
 		...(target ? { target } : {}),
 		...(query ? { query } : {}),
+		...(queries.length ? { queries } : {}),
 		...(method ? { method } : {}),
 		...(sources.length ? { sources } : {}),
 		...(outcome ? { outcome } : {}),

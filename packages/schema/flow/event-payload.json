@@ -31,6 +31,14 @@
 				"allow_file_upload": {
 					"type": ["boolean", "null"]
 				},
+				"allow_model_selection": {
+					"description": "Show the chat model picker. Defaults to enabled.",
+					"type": ["boolean", "null"]
+				},
+				"require_vlm": {
+					"description": "Limit the chat model picker to models that accept images. Defaults to disabled.",
+					"type": ["boolean", "null"]
+				},
 				"allow_voice_input": {
 					"type": ["boolean", "null"]
 				},

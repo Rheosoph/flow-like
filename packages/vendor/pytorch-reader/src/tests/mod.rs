@@ -1636,14 +1636,13 @@ fn rezip(
     writer.finish().unwrap();
 }
 
-/// Rezip `float32.pt` with `compression`, let `patch` edit its bytes at an offset taken
-/// from its `data/0` entry, and return the error that reading `tensor` then produces.
-fn read_error_after_patching(
+/// Rezip `float32.pt` and edit its bytes at an offset taken from its `data/0` entry.
+fn patched_storage_archive(
     dir: &std::path::Path,
     compression: zip::CompressionMethod,
     offset: impl FnOnce(&zip::read::ZipFile<'_, std::fs::File>) -> u64,
     patch: impl FnOnce(&mut [u8], usize),
-) -> std::io::Error {
+) -> PathBuf {
     let path = dir.join("patched.pt");
     rezip(
         &test_data_path("float32.pt"),
@@ -1659,7 +1658,16 @@ fn read_error_after_patching(
     let mut bytes = std::fs::read(&path).unwrap();
     patch(&mut bytes, at);
     std::fs::write(&path, &bytes).unwrap();
+    path
+}
 
+fn read_error_after_patching(
+    dir: &std::path::Path,
+    compression: zip::CompressionMethod,
+    offset: impl FnOnce(&zip::read::ZipFile<'_, std::fs::File>) -> u64,
+    patch: impl FnOnce(&mut [u8], usize),
+) -> std::io::Error {
+    let path = patched_storage_archive(dir, compression, offset, patch);
     let reader = PytorchReader::new(&path).expect("metadata still parses");
     reader
         .get("tensor")
@@ -1881,8 +1889,16 @@ fn test_deflated_checksum_mismatch_is_an_error() {
         dir.path(),
         zip::CompressionMethod::Deflated,
         |entry| entry.central_header_start(),
-        // The CRC-32 is at offset 16 of the 46 byte central directory header.
-        |bytes, central_header_start| bytes[central_header_start + 16] ^= 0xff,
+        |bytes, central_header_start| {
+            let local_header_start = u32::from_le_bytes(
+                bytes[central_header_start + 42..central_header_start + 46]
+                    .try_into()
+                    .unwrap(),
+            ) as usize;
+            // Keep both headers consistent so the payload checksum fails during the read.
+            bytes[central_header_start + 16] ^= 0xff;
+            bytes[local_header_start + 14] ^= 0xff;
+        },
     );
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
     assert!(err.to_string().contains("Invalid checksum"), "{err}");
@@ -1916,8 +1932,14 @@ fn test_deflated_zip_without_checksums_loads() {
     let crc_offsets: Vec<usize> = {
         let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
         (0..archive.len())
-            // The CRC-32 is at offset 16 of the 46 byte central directory header.
-            .map(|i| archive.by_index_raw(i).unwrap().central_header_start() as usize + 16)
+            .flat_map(|i| {
+                let entry = archive.by_index_raw(i).unwrap();
+                // Both headers declare the absent checksum.
+                [
+                    entry.central_header_start() as usize + 16,
+                    entry.header_start() as usize + 14,
+                ]
+            })
             .collect()
     };
     let mut bytes = std::fs::read(&path).unwrap();
@@ -1931,14 +1953,12 @@ fn test_deflated_zip_without_checksums_loads() {
     assert_eq!(read_as::<f32>(tensor), [1.0, 2.5, -3.7, 0.0]);
 }
 
-// The positional path's own check; the stream path reports this as a checksum failure.
-#[cfg(unix)]
 #[test]
 fn test_zip_storage_beyond_file_end_is_an_error() {
     // A local header whose extra field length puts the entry's data past the end of the
     // file. The central directory still declares 16 bytes, so nothing else looks wrong.
     let dir = tempfile::tempdir().unwrap();
-    let err = read_error_after_patching(
+    let path = patched_storage_archive(
         dir.path(),
         zip::CompressionMethod::Stored,
         |entry| entry.header_start(),
@@ -1947,21 +1967,23 @@ fn test_zip_storage_beyond_file_end_is_an_error() {
             bytes[header_start + 28..header_start + 30].copy_from_slice(&u16::MAX.to_le_bytes());
         },
     );
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+    let err = PytorchReader::new(&path).expect_err("invalid local header must fail at open");
     assert!(
-        err.to_string().contains("beyond the end of the file"),
+        matches!(
+            err,
+            crate::PytorchError::Zip(zip::result::ZipError::Io(ref error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof
+        ),
         "unexpected error: {err}"
     );
 }
 
-// The positional path's own check; the stream path reports this as a short read.
-#[cfg(unix)]
 #[test]
 fn test_zip_stored_entry_size_mismatch_is_an_error() {
     // A stored entry whose central directory sizes disagree. The bytes past the smaller
     // one belong to the next entry, so a windowed read must not hand them out.
     let dir = tempfile::tempdir().unwrap();
-    let err = read_error_after_patching(
+    let path = patched_storage_archive(
         dir.path(),
         zip::CompressionMethod::Stored,
         |entry| entry.central_header_start(),
@@ -1971,9 +1993,9 @@ fn test_zip_stored_entry_size_mismatch_is_an_error() {
                 .copy_from_slice(&8u32.to_le_bytes());
         },
     );
-    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+    let err = PytorchReader::new(&path).expect_err("inconsistent sizes must fail at open");
     assert!(
-        err.to_string().contains("declares 16 bytes but stores 8"),
+        err.to_string().contains("compressed size mismatch"),
         "unexpected error: {err}"
     );
 }

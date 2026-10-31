@@ -1,12 +1,18 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { isWidgetAccessRefusedError } from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
 import {
+	getExecutionRuntime,
+	resetExecutionRuntimes,
+} from "@flow-like/flow-like-ui/lib/execution/runtime-client";
+import { EXECUTION_METADATA } from "@flow-like/flow-like-ui/lib/execution/types";
+import {
 	HUB_REFRESH_TIMEOUT_MS,
 	RequestTimeoutError,
 	WRITE_REQUEST_TIMEOUT_MS,
 } from "@flow-like/flow-like-ui/lib/request-deadline";
 import type { PageTrigger } from "@flow-like/flow-like-ui/lib/schema/flow/page-trigger";
 import type { AuthContextProps } from "react-oidc-context";
+import { isSessionRejected } from "./auth-session";
 import {
 	type HostedBootstrap,
 	HostedHttpError,
@@ -17,8 +23,222 @@ import {
 } from "./hosted-backend";
 
 const originalFetch = globalThis.fetch;
-afterEach(() => {
+
+function mockFetch(
+	implementation: (
+		...args: Parameters<typeof fetch>
+	) => ReturnType<typeof fetch>,
+) {
+	globalThis.fetch = Object.assign(implementation, {
+		preconnect: originalFetch.preconnect,
+	});
+}
+
+afterEach(async () => {
+	await resetExecutionRuntimes();
 	globalThis.fetch = originalFetch;
+});
+
+describe("hosted shared execution transport", () => {
+	const data = {
+		app_id: "published-app",
+		auth_proxy: true,
+		bootstrap: { event: { id: "published-event", name: "Support" } },
+	} as HostedBootstrap;
+	const target = { app: "published-app", route: "/support", variant: "stable" };
+	const completed = () =>
+		new Response(
+			'data: {"event_type":"completed","payload":{"status":"completed"}}\n\n',
+		);
+	const run = (
+		backend: ReturnType<typeof createHostedBackend>,
+		onRunId?: (id: string) => void,
+	) =>
+		backend.eventState.executeEvent(
+			"published-app",
+			"published-event",
+			{ id: "node", payload: {} },
+			false,
+			onRunId,
+		);
+
+	it("prepares a renewed request without fetching its stream in the page", async () => {
+		const auth = {
+			user: {
+				access_token: "expired",
+				expired: true,
+				profile: { sub: "viewer" },
+			},
+			signinSilent: async () => ({
+				access_token: "fresh",
+				expired: false,
+				profile: { sub: "viewer" },
+			}),
+		} as unknown as AuthContextProps;
+		let requests = 0;
+		mockFetch(async () => {
+			requests++;
+			return completed();
+		});
+		const request = createHostedRequest(target, "expired", auth);
+		const prepared = await request.prepareExecution("{}");
+		expect(requests).toBe(0);
+		expect(prepared.request.headers).toMatchObject({
+			authorization: "Bearer fresh",
+			"content-type": "application/json",
+		});
+		expect(prepared.request).toMatchObject({ body: "{}", credentials: "omit" });
+		expect(new URL(prepared.request.url).searchParams.get("route")).toBe(
+			"/support",
+		);
+		expect(JSON.parse(request.executionScope())).toContain("viewer");
+	});
+
+	it("renews one rejected bearer while the shared transport owns the fetch", async () => {
+		let renewals = 0;
+		const auth = {
+			user: { access_token: "old", expired: false, profile: { sub: "viewer" } },
+			signinSilent: async () => {
+				renewals++;
+				return {
+					access_token: "fresh",
+					expired: false,
+					profile: { sub: "viewer" },
+				};
+			},
+		} as unknown as AuthContextProps;
+		const bearers: (string | null)[] = [];
+		mockFetch(async (_url, init) => {
+			const bearer = new Headers(init?.headers).get("Authorization");
+			bearers.push(bearer);
+			return bearer === "Bearer old"
+				? new Response("expired", { status: 401 })
+				: completed();
+		});
+		await run(
+			createHostedBackend(data, createHostedRequest(target, "old", auth)),
+		);
+		expect(bearers).toEqual(["Bearer old", "Bearer fresh"]);
+		expect(renewals).toBe(1);
+	});
+
+	it("keeps the viewer signed in when renewal fails because the network is unavailable", async () => {
+		const auth = {
+			user: { access_token: "old", expired: false, profile: { sub: "viewer" } },
+			signinSilent: async () => {
+				throw new TypeError("Network unavailable");
+			},
+			signinRedirect: async () => {},
+		} as unknown as AuthContextProps;
+		mockFetch(async () => new Response("expired", { status: 401 }));
+		await expect(
+			run(createHostedBackend(data, createHostedRequest(target, "old", auth))),
+		).rejects.toThrow("Network unavailable");
+		expect(isSessionRejected(auth, "old")).toBe(false);
+	});
+
+	it("allows another backend in the same scope to stop the hosted run through its published route", async () => {
+		let signal: AbortSignal | undefined;
+		let cancellation: { url: string; headers: Headers } | undefined;
+		mockFetch(async (_url, init) => {
+			if (init?.method === "DELETE") {
+				cancellation = {
+					url: String(_url),
+					headers: new Headers(init.headers),
+				};
+				return Response.json({ cancelled: true });
+			}
+			signal = init?.signal ?? undefined;
+			return new Response(
+				new ReadableStream({
+					start(controller) {
+						controller.enqueue(
+							new TextEncoder().encode(
+								'data: {"event_type":"run_initiated","payload":{"run_id":"shared-hosted-run"}}\n\n',
+							),
+						);
+						signal?.addEventListener("abort", () =>
+							controller.error(new DOMException("cancelled", "AbortError")),
+						);
+					},
+				}),
+			);
+		});
+		const request = createHostedRequest(target);
+		let started!: () => void;
+		const ready = new Promise<void>((resolve) => {
+			started = resolve;
+		});
+		const outcome = run(createHostedBackend(data, request), started).catch(
+			(error: unknown) => error,
+		);
+		await ready;
+		const runtime = await getExecutionRuntime(request.executionScope());
+		expect(runtime.getTasks()).toEqual([
+			expect.objectContaining({ runId: "shared-hosted-run", title: "Support" }),
+		]);
+		await createHostedBackend(
+			data,
+			createHostedRequest(target),
+		).eventState.cancelExecution("shared-hosted-run");
+		expect(signal?.aborted).toBe(true);
+		expect(await outcome).toMatchObject({ name: "AbortError" });
+		const url = new URL(cancellation?.url ?? "");
+		expect(url.pathname).toBe(
+			"/frontend/a/published-app/runs/shared-hosted-run",
+		);
+		expect(url.searchParams.get("route")).toBe("/support");
+		expect(url.searchParams.get("__variant")).toBe("stable");
+		expect(cancellation?.headers.get("X-Flow-Like-Session")).toBeTruthy();
+	});
+
+	it("preserves server refusal details and rejects premature EOF", async () => {
+		mockFetch(
+			async () =>
+				new Response(
+					'{"error":{"code":"PUBLISHED_REVOKED","message":"Access was removed"}}',
+					{ status: 403 },
+				),
+		);
+		const backend = createHostedBackend(data, createHostedRequest(target));
+		await expect(run(backend)).rejects.toMatchObject({
+			status: 403,
+			code: "PUBLISHED_REVOKED",
+			message: "Access was removed",
+		});
+		mockFetch(
+			async () =>
+				new Response(
+					'data: {"event_type":"stream_text","payload":"partial"}\n\n',
+				),
+		);
+		await expect(run(backend)).rejects.toThrow("before");
+	});
+
+	it("refuses dispatch when the provider still belongs to an older browser session", async () => {
+		let requests = 0;
+		mockFetch(async () => {
+			requests++;
+			return completed();
+		});
+		const backend = createHostedBackend(data, createHostedRequest(target));
+		await expect(
+			backend.eventState.executeEvent("published-app", "published-event", {
+				id: "node",
+				payload: {},
+				[EXECUTION_METADATA]: {
+					taskId: "old-session-task",
+					streamId: "old-session-task",
+					scope: "old-browser-session",
+					appId: "published-app",
+					eventId: "published-event",
+					title: "Support",
+					startedAt: new Date().toISOString(),
+				},
+			} as never),
+		).rejects.toThrow("account or browser session changed");
+		expect(requests).toBe(0);
+	});
 });
 
 describe("hosted API contract", () => {
@@ -36,10 +256,10 @@ describe("hosted API contract", () => {
 			}),
 		} as unknown as AuthContextProps;
 		const bearers: (string | null)[] = [];
-		globalThis.fetch = (async (_input, init) => {
+		mockFetch(async (_input, init) => {
 			bearers.push(new Headers(init?.headers).get("Authorization"));
 			return new Response("{}");
-		}) as typeof fetch;
+		});
 		await createHostedRequest(
 			{ app: "published-app", route: "/" },
 			"expired",
@@ -66,10 +286,10 @@ describe("hosted API contract", () => {
 				},
 			});
 			let requestedUrl = "";
-			globalThis.fetch = (async (input) => {
+			mockFetch(async (input) => {
 				requestedUrl = String(input);
 				return new Response("{}");
-			}) as typeof fetch;
+			});
 			await createHostedRequest({ app: "published-app", route: "/contact" })();
 			expect(requestedUrl).toBe(
 				"https://api.example.test/frontend/a/published-app?route=%2Fcontact",
@@ -114,13 +334,10 @@ describe("hosted API contract", () => {
 	});
 	it("addresses the app, and preserves the route, session and variant on every request", async () => {
 		const requests: { url: URL; init?: RequestInit }[] = [];
-		globalThis.fetch = (async (
-			input: string | URL | Request,
-			init?: RequestInit,
-		) => {
+		mockFetch(async (input, init) => {
 			requests.push({ url: new URL(String(input)), init });
 			return new Response("{}", { status: 200 });
-		}) as typeof fetch;
+		});
 		const request = createHostedRequest(
 			{ app: "app-1", route: "/support/demo", variant: "preview one" },
 			"visitor-token",
@@ -156,10 +373,10 @@ describe("hosted API contract", () => {
 	});
 	it("sends the root route explicitly and encodes the app id", async () => {
 		let requestedUrl: URL | undefined;
-		globalThis.fetch = (async (input: string | URL | Request) => {
+		mockFetch(async (input) => {
 			requestedUrl = new URL(String(input));
 			return new Response("{}");
-		}) as typeof fetch;
+		});
 		await createHostedRequest({ app: "app_1", route: "/" })();
 		expect(requestedUrl?.pathname).toBe("/frontend/a/app_1");
 		expect(requestedUrl?.searchParams.get("route")).toBe("/");
@@ -448,10 +665,7 @@ describe("hosted API contract", () => {
 
 		function recordRegistry() {
 			const requests: { path: string; init?: RequestInit }[] = [];
-			globalThis.fetch = (async (
-				input: string | URL | Request,
-				init?: RequestInit,
-			) => {
+			mockFetch(async (input, init) => {
 				const path = new URL(String(input)).pathname;
 				requests.push({ path, init });
 				if (path.endsWith("/widget-access"))
@@ -474,7 +688,7 @@ describe("hosted API contract", () => {
 					policyDigest: DIGEST,
 					networkInputs: [],
 				});
-			}) as typeof fetch;
+			});
 			return requests;
 		}
 
@@ -677,10 +891,10 @@ describe("hosted API contract", () => {
 					return 0;
 				}) as unknown as typeof setTimeout);
 				const signals: (AbortSignal | null | undefined)[] = [];
-				globalThis.fetch = ((_input: unknown, init?: RequestInit) => {
+				mockFetch((_input, init) => {
 					signals.push(init?.signal);
 					return new Promise(() => {});
-				}) as unknown as typeof fetch;
+				});
 				return { deadlines, signals, restore: () => timers.mockRestore() };
 			}
 			const outcomeOf = (request: Promise<unknown> | undefined) =>

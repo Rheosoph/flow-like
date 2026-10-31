@@ -37,7 +37,7 @@ spec:
     - fromEntities: [host]
       toPorts:
         - ports:
-            {{- range list "8080" "9000" "9001" "9090" "3000" "3001" "3200" (toString .Values.signaling.service.port) (toString .Values.compiler.service.port) (toString .Values.executorPool.service.port) | uniq }}
+            {{- range list "8080" "8222" "9000" "9001" "9090" "3000" "3001" "3200" (toString .Values.signaling.service.port) (toString .Values.compiler.service.port) (toString .Values.executorPool.service.port) | uniq }}
             - {port: {{ . | quote }}, protocol: TCP}
             {{- end }}
 {{- end }}

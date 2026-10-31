@@ -504,6 +504,39 @@ describe("global chat inline anchors", () => {
 		expect(useGlobalChatStore.getState().runs["run-1"]).toBe(before);
 	});
 
+	test("main widget commands survive parent text updates and stay within their run", () => {
+		stream("run-1", "Opening a browser.");
+		stream("run-2", "Other work.");
+		const mainWidget = {
+			widget: { ...widget([]), origin: { appId: "app", boardId: "board" } },
+			title: "Browser",
+			command_id: "set-browser",
+			updated_at: 100,
+		};
+		useGlobalChatStore.getState().setSubMainWidget("run-1", mainWidget);
+		useGlobalChatStore
+			.getState()
+			.setRunMessage("run-1", reply("run-1", "Browser ready."));
+		const runs = useGlobalChatStore.getState().runs;
+		expect(runs["run-1"].message?.main_widget).toBe(mainWidget);
+		expect(runs["run-1"].message?.widgets).toBeUndefined();
+		expect(runs["run-2"].message?.main_widget).toBeUndefined();
+	});
+
+	test("clearing a main widget persists through a later parent message snapshot", () => {
+		stream("run-1", "Opening a browser.");
+		const store = useGlobalChatStore.getState();
+		store.setSubMainWidget("run-1", { widget: widget([]), title: "Browser" });
+		const cleared = { widget: null, command_id: "clear" };
+		store.setSubMainWidget("run-1", cleared);
+		store.setRunMessage("run-1", reply("run-1", "Done."));
+		expect(
+			useGlobalChatStore.getState().runs["run-1"].message?.main_widget,
+		).toBe(cleared);
+		store.setSubMainWidget("missing-run", { widget: widget([]) });
+		expect(useGlobalChatStore.getState().runs["missing-run"]).toBeUndefined();
+	});
+
 	test("inline cards anchor into the only streaming reply at its current text", () => {
 		stream("run-1", "Let me open it. ");
 		const store = useGlobalChatStore.getState();

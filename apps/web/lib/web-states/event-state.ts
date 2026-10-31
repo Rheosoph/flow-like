@@ -10,25 +10,25 @@ import {
 	type IRunPayload,
 	type IVersionType,
 	type PageTrigger,
-	type ProgressToastData,
 	checkOAuthTokensFromPrerun,
 	classifyPageContractError,
-	finishAllProgressToasts,
 	getCurrentPageContext,
 	notifyPageContractRejected,
 	serializePageTrigger,
-	showProgressToast,
 	withCurrentManifestRevision,
 } from "@flow-like/flow-like-ui";
-import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
 import {
 	apiResponseError,
 	isMissingResourceError,
 } from "@flow-like/flow-like-ui/lib/api-error";
+import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
+import { cancelDeviceCommands } from "@flow-like/flow-like-ui/lib/device-bridge";
+import { getExecutionRuntime } from "@flow-like/flow-like-ui/lib/execution/runtime-client";
 import {
-	cancelDeviceCommands,
-	withDeviceCommandBridge,
-} from "@flow-like/flow-like-ui/lib/device-bridge";
+	getExecutionMetadata,
+	isExecutionFinished,
+	type ExecutionMetadata,
+} from "@flow-like/flow-like-ui/lib/execution/types";
 import {
 	isDeviceEventSource,
 	resolveEventSourceIntent,
@@ -81,8 +81,8 @@ import type {
 	IUserSchedules,
 } from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import type { IPrerunEventResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
-import { toast } from "sonner";
 import { oauthConsentStore, oauthTokenStore } from "../oauth-db";
+import { prepareSessionRequest } from "../session-request";
 import { getOAuthApiBaseUrl, getOAuthService } from "../oauth-service";
 import {
 	type WebBackendRef,
@@ -163,36 +163,6 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 	return hubCachePromise;
 }
 
-interface ToastEventPayload {
-	message: string;
-	level: "success" | "error" | "info" | "warning";
-}
-
-function handleToastEvent(event: IIntercomEvent): void {
-	const payload = event.payload as ToastEventPayload;
-	if (!payload?.message) return;
-
-	switch (payload.level) {
-		case "success":
-			toast.success(payload.message);
-			break;
-		case "error":
-			toast.error(payload.message);
-			break;
-		case "warning":
-			toast.warning(payload.message);
-			break;
-		default:
-			toast.info(payload.message);
-	}
-}
-
-function handleProgressEvent(event: IIntercomEvent): void {
-	const payload = event.payload as ProgressToastData;
-	if (!payload?.id) return;
-	showProgressToast(payload);
-}
-
 /**
  * Tell any mounted Page that the authority refused this trigger for a reason a
  * refreshed contract can cure. Only classified contract failures publish — a
@@ -218,7 +188,7 @@ function reportPageContractRejection(
 
 export class WebEventState implements IEventState {
 	readonly alwaysRemote = true;
-	private readonly runStreams = new Map<string, AbortController>();
+	private readonly runScopes = new Map<string, string>();
 	// Response identity keeps simultaneous dispatches from consuming each other's prerun.
 	private readonly pagePreruns = new WeakMap<
 		IPrerunEventResponse,
@@ -521,22 +491,17 @@ export class WebEventState implements IEventState {
 		preparedPrerun?: IPrerunEventResponse,
 	): Promise<ILogMetadata | undefined> {
 		beforeDispatch?.();
-		return withDeviceCommandBridge(
-			{ appId, eventId, executionTarget: "remote" },
+		return this.executeEventInternal(
+			appId,
+			eventId,
+			payload,
+			streamState,
+			onEventId,
 			cb,
-			(bridgeCallback) =>
-				this.executeEventInternal(
-					appId,
-					eventId,
-					payload,
-					streamState,
-					onEventId,
-					bridgeCallback,
-					skipConsentCheck,
-					pageTrigger,
-					beforeDispatch,
-					preparedPrerun,
-				),
+			skipConsentCheck,
+			pageTrigger,
+			beforeDispatch,
+			preparedPrerun,
 		);
 	}
 
@@ -672,179 +637,123 @@ export class WebEventState implements IEventState {
 		const invokePath = `apps/${appId}/events/${eventId}/invoke`;
 		const url = `${getApiBaseUrl()}/api/v1/${invokePath}`;
 
-		const headers: HeadersInit = {
-			"Content-Type": "application/json",
-		};
-		if (this.backend.auth?.user?.access_token) {
-			headers.Authorization = `Bearer ${this.backend.auth.user.access_token}`;
-		}
-
-		console.log("[OAuth] Sending event execution with tokens:", {
-			hasOAuthTokens: !!oauthTokens,
-			tokenProviders: oauthTokens ? Object.keys(oauthTokens) : [],
+		const session = await prepareSessionRequest(
+			{
+				"Content-Type": "application/json",
+				...(this.backend.auth?.user?.access_token
+					? { Authorization: `Bearer ${this.backend.auth.user.access_token}` }
+					: {}),
+			},
+			this.backend.auth,
+		);
+		const metadata =
+			getExecutionMetadata(payload) ??
+			this.executionMetadata(appId, eventId, payload.payload);
+		const runtime = await getExecutionRuntime(metadata.scope);
+		const body = JSON.stringify({
+			payload: payload.payload,
+			oauth_tokens: oauthTokens,
+			runtime_variables: payload.runtime_variables,
+			profile_id: this.backend.profile?.id,
+			page_trigger: activeTrigger
+				? serializePageTrigger(activeTrigger)
+				: undefined,
 		});
-
-		let executionFinished = false;
 		let foundRunId = false;
 		let dispatchStart: number | undefined;
 		let runId: string | undefined;
-		const stream = new AbortController();
 		try {
 			beforeDispatch?.();
-			dispatchStart = runTimingNow();
-			const body = JSON.stringify({
-				payload: payload.payload,
-				oauth_tokens: oauthTokens,
-				runtime_variables: payload.runtime_variables,
-				profile_id: this.backend.profile?.id,
-				page_trigger: activeTrigger
-					? serializePageTrigger(activeTrigger)
-					: undefined,
-			});
-			// The API sends headers only once the whole dispatch is done (compile,
-			// admission, executor cold start), so they get the dispatch deadline.
-			// It is released on arrival: the SSE body streams as long as the run.
-			const response = await timeRunStep("invoke.response", () =>
-				withRequestDeadline(
+			const startedAt = runTimingNow();
+			dispatchStart = startedAt;
+			return await runtime.execute(
+				metadata,
+				{
 					url,
-					async ({ signal, release }) => {
-						const res = await fetch(url, {
-							method: "POST",
-							headers,
-							body,
-							signal,
-						});
-						release();
-						return res;
+					headers: Object.fromEntries(session.headers.entries()),
+					body,
+					cancelUrl: `${getApiBaseUrl()}/api/v1/execution/run/{runId}`,
+					timeoutMs: requestTimeoutMs(invokePath, "POST", body.length),
+				},
+				{
+					onResponse: () => recordRunStep("invoke.response", startedAt),
+					onUnauthorized: session.onUnauthorized,
+					onExecutionStart: (id) => {
+						if (foundRunId) return;
+						foundRunId = true;
+						runId = id;
+						this.runScopes.set(id, metadata.scope);
+						recordRunStep("invoke.until_run_initiated", startedAt);
+						onEventId?.(id);
 					},
-					{
-						timeoutMs: requestTimeoutMs(invokePath, "POST", body.length),
-						controller: stream,
-					},
-				),
+					onEvents: cb,
+				},
 			);
-
-			if (!response.ok) {
-				// The status alone destroys the server's reason, which is the only
-				// thing that tells a Page contract failure apart from any other 400.
-				const body = await response.text().catch(() => "");
-				const error = apiResponseError(response, body, url);
-				reportPageContractRejection(appId, eventId, activeTrigger, error);
-				throw error;
-			}
-
-			// Always consume the SSE stream - the API always returns one
-			if (response.body) {
-				const reader = response.body.getReader();
-				const decoder = new TextDecoder();
-				let buffer = "";
-
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-
-					buffer += decoder.decode(value, { stream: true });
-
-					// SSE events are separated by double newlines
-					const parts = buffer.split("\n\n");
-					buffer = parts.pop() ?? "";
-
-					for (const part of parts) {
-						if (!part.trim()) continue;
-
-						// Parse SSE format: "event: xxx\ndata: {...}"
-						let eventName = "message";
-						const dataLines: string[] = [];
-
-						for (const line of part.split("\n")) {
-							if (line.startsWith("event:")) {
-								eventName = line.slice(6).trim();
-							} else if (line.startsWith("data:")) {
-								// Strip only the optional single leading space —
-								// trimming destroys whitespace-only tokens.
-								const value = line.slice(5);
-								dataLines.push(value.startsWith(" ") ? value.slice(1) : value);
-							}
-						}
-
-						const eventData = dataLines.join("\n");
-
-						if (!eventData.trim() || eventData === "keep-alive") continue;
-
-						try {
-							const event = JSON.parse(eventData) as IIntercomEvent;
-
-							// Handle run_initiated to get run ID
-							if (!foundRunId && event.event_type === "run_initiated") {
-								runId = (event.payload as { run_id?: string })?.run_id;
-								if (runId) {
-									recordRunStep("invoke.until_run_initiated", dispatchStart);
-									this.runStreams.set(runId, stream);
-									onEventId?.(runId);
-									foundRunId = true;
-								}
-							}
-
-							// Handle toast events
-							dispatchPaymentRequest(event);
-							if (event.event_type === "toast") {
-								handleToastEvent(event);
-							}
-
-							// Handle progress events
-							if (event.event_type === "progress") {
-								handleProgressEvent(event);
-							}
-
-							// Forward event to callback
-							if (cb) {
-								cb([event]);
-							}
-
-							// Note the terminal event but keep delivering the rest of
-							// the decoded batch — the executor coalesces trailing
-							// chat_out/usage events into the same network chunk.
-							if (
-								eventName === "done" ||
-								eventName === "completed" ||
-								event.event_type === "completed"
-							) {
-								executionFinished = true;
-								finishAllProgressToasts(true);
-							} else if (event.event_type === "error") {
-								executionFinished = true;
-								finishAllProgressToasts(false);
-							}
-						} catch {
-							console.warn("[SSE] Dropping unparseable event frame", {
-								bytes: eventData.length,
-							});
-						}
-					}
-					if (executionFinished) {
-						// The server may hold the body open past the terminal event;
-						// cancelling closes the connection instead of leaking it.
-						await reader.cancel().catch(() => {});
-						break;
-					}
-				}
-			}
-
-			// Ensure progress toasts are finished when stream ends
-			if (!executionFinished) {
-				finishAllProgressToasts(true);
-			}
-
-			return undefined;
-		} catch (error) {
-			if (!foundRunId && dispatchStart !== undefined) {
+		} catch (cause) {
+			if (!foundRunId && dispatchStart !== undefined)
 				recordRunStep("invoke.until_error", dispatchStart);
-			}
-			finishAllProgressToasts(false);
+			const response = cause as {
+				status?: number;
+				statusText?: string;
+				body?: string;
+				headers?: Record<string, string>;
+			};
+			const error =
+				typeof response?.status === "number"
+					? apiResponseError(
+							{
+								status: response.status,
+								statusText: response.statusText ?? "",
+								headers: new Headers(response.headers),
+							},
+							response.body ?? "",
+							url,
+						)
+					: cause;
+			if (response?.status === 401) session.onRejected?.();
+			reportPageContractRejection(appId, eventId, activeTrigger, error);
 			throw error;
 		} finally {
-			if (runId) this.runStreams.delete(runId);
+			if (runId) this.runScopes.delete(runId);
 		}
+	}
+
+	private executionScope(): string {
+		return JSON.stringify([
+			getApiOrigin(this.backend.profile),
+			this.backend.profile?.id ?? "",
+			(this.backend.auth?.isAuthenticated
+				? this.backend.auth.user?.profile.sub
+				: undefined) ?? "local",
+		]);
+	}
+
+	private executionMetadata(
+		appId: string,
+		eventId: string,
+		payload: unknown,
+	): ExecutionMetadata {
+		const taskId = crypto.randomUUID();
+		const context =
+			payload && typeof payload === "object"
+				? (payload as Record<string, unknown>)
+				: undefined;
+		return {
+			taskId,
+			streamId: taskId,
+			scope: this.executionScope(),
+			appId,
+			eventId,
+			title: "Workflow",
+			path: `/use?id=${encodeURIComponent(appId)}&eventId=${encodeURIComponent(eventId)}`,
+			startedAt: new Date().toISOString(),
+			pageId:
+				typeof context?._page_id === "string" ? context._page_id : undefined,
+			widgetInstanceId:
+				typeof context?._widget_instance_id === "string"
+					? context._widget_instance_id
+					: undefined,
+		};
 	}
 
 	async invokeMcp(
@@ -863,8 +772,38 @@ export class WebEventState implements IEventState {
 	}
 
 	async cancelExecution(runId: string): Promise<void> {
+		const credentialScope = this.executionScope();
+		const ownerScope = this.runScopes.get(runId);
+		if (ownerScope && ownerScope !== credentialScope)
+			throw new Error("The active account or workspace changed.");
 		cancelDeviceCommands(runId);
-		this.runStreams.get(runId)?.abort();
+		const runtime = await getExecutionRuntime(ownerScope ?? credentialScope);
+		const active = runtime
+			.getTasks()
+			.some((task) => task.runId === runId && !isExecutionFinished(task));
+		if (active) {
+			const session = await prepareSessionRequest(
+				this.backend.auth?.user?.access_token
+					? { Authorization: `Bearer ${this.backend.auth.user.access_token}` }
+					: undefined,
+				this.backend.auth,
+			);
+			try {
+				if (this.executionScope() !== credentialScope)
+					throw new Error("The active account or workspace changed.");
+				await runtime.cancel(runId, {
+					headers: Object.fromEntries(session.headers.entries()),
+					onUnauthorized: session.onUnauthorized,
+				});
+			} catch (error) {
+				if ((error as { status?: number })?.status === 401)
+					session.onRejected?.();
+				throw error;
+			}
+			return;
+		}
+		if (this.executionScope() !== credentialScope)
+			throw new Error("The active account or workspace changed.");
 		await apiDelete(
 			`execution/run/${encodeURIComponent(runId)}`,
 			this.backend.auth,
