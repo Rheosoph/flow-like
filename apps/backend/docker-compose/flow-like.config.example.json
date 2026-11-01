@@ -11,6 +11,7 @@
 			"response_type": "code",
 			"scope": "openid email profile",
 			"jwks_url": "https://your-auth-provider.com/.well-known/jwks.json",
+			"user_info_url": "https://your-auth-provider.com/userinfo",
 			"discovery_url": "https://your-auth-provider.com/.well-known/openid-configuration"
 		}
 	},

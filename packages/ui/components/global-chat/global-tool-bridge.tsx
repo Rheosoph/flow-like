@@ -172,12 +172,18 @@ import { normalizeHomeLayout, resolveHomeLayout } from "../home/home-layout";
 import { homeLayoutFingerprint } from "../home/home-layout-json";
 import type {
 	IBuildLaneDetail,
+	IChatMainWidget,
 	IChatUsageStat,
 	IChatWidget,
 	IPlanStep,
 } from "../interfaces/chat-default/chat-db";
 import type { IAttachment, IMessage } from "../interfaces/chat-default/chat-db";
 import { processChatEvents } from "../interfaces/chat-default/event-processor";
+import { joinContentText } from "../interfaces/chat-default/inline-segments";
+import {
+	refreshMainChatWidget,
+	resolveMainChatWidget,
+} from "../interfaces/chat-default/main-widget-state";
 import { purchasingAllowed } from "../payments/use-payments";
 import {
 	activePageEventCandidates,
@@ -331,6 +337,8 @@ export interface FrontendToolRequest {
 	requestId: string;
 	toolName: string;
 	arguments: Record<string, unknown>;
+	/** The native host retains the operation and asks this client only for consent. */
+	approvalOnly?: boolean;
 	/**
 	 * How to answer. Present on every request the backend sends (Tauri event or SSE frame); absent
 	 * only on bridge-internal synthetic requests that are never replied to.
@@ -626,6 +634,7 @@ export interface RunScope {
 	setSubPlanSteps(steps: IPlanStep[]): void;
 	addSubUsageStats(stats: IChatUsageStat[]): void;
 	addSubWidgets(widgets: IChatWidget[]): void;
+	setSubMainWidget(mainWidget: IChatMainWidget): void;
 	addSubAttachments(files: IAttachment[]): void;
 	setFlowscriptWorkspace(workspace: FlowScriptWorkspaceCandidate | null): void;
 	setPendingComponents(
@@ -697,6 +706,8 @@ function createRunScope(runId: string | undefined): RunScope {
 			guard((id) => store().addSubUsageStats(id, stats)),
 		addSubWidgets: (widgets) =>
 			guard((id) => store().addSubWidgets(id, widgets)),
+		setSubMainWidget: (mainWidget) =>
+			guard((id) => store().setSubMainWidget(id, mainWidget)),
 		addSubAttachments: (files) =>
 			guard((id) => store().addSubAttachments(id, files)),
 		// The workspace/components panels outlive the run that filled them (the user reviews them
@@ -7570,7 +7581,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 						},
 					};
 
-					const responseMessage: IMessage = {
+					let responseMessage: IMessage = {
 						id: createId(),
 						appId,
 						sessionId: chatId,
@@ -7580,8 +7591,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 						actions: [],
 						timestamp: Date.now(),
 					};
+					const responseMessages = [responseMessage];
 					let intermediate = Response.default();
-					const attachments = new Map<string, IAttachment>();
+					let attachments = new Map<string, IAttachment>();
+					let chatDone = false;
 					// Capture any a2ui UI the app chat pushes (event_type "a2ui"). The app builds this
 					// UI for the user, not the model — processChatEvents ignores it, so we fold the
 					// pushes into surfaces here and render them as an inline card after the run. The
@@ -7600,11 +7613,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 							recordDebugEvent: (event) => recordNestedDebug(request, event),
 						});
 					const syncSubSteps = () => {
-						const steps = responseMessage.plan_steps;
-						if (!steps?.length) return;
-						for (const step of steps) {
-							if (!subAcc.steps.has(step.id)) subAcc.stepOrder.push(step.id);
-							subAcc.steps.set(step.id, step);
+						for (const message of responseMessages) {
+							for (const step of message.plan_steps ?? []) {
+								const id = `${message.id}:${step.id}`;
+								if (!subAcc.steps.has(id)) subAcc.stepOrder.push(id);
+								subAcc.steps.set(id, { ...step, id });
+							}
 						}
 						publishSubSteps();
 					};
@@ -7617,12 +7631,50 @@ Completion contract: build complete helper logic first and add the Event entry l
 						boardId: chatEvent.board_id,
 						eventId: chatEvent.id,
 					};
+					const currentMainWidget = () => {
+						const paneState = useGlobalChatStore.getState();
+						const ownerRun = scope.runId
+							? paneState.runs[scope.runId]
+							: undefined;
+						return ownerRun
+							? resolveMainChatWidget(
+									[
+										...paneState.messages,
+										...Object.values(paneState.runs).flatMap((run) =>
+											run.message ? [run.message] : [],
+										),
+									],
+									ownerRun.conversationId,
+								)
+							: undefined;
+					};
+					const inheritedMainWidget = currentMainWidget();
+					if (
+						inheritedMainWidget?.widget?.origin?.appId === appId &&
+						inheritedMainWidget.widget.origin.boardId === chatEvent.board_id
+					) {
+						responseMessage.main_widget = inheritedMainWidget;
+					}
+					let lastPublishedMainWidget = responseMessage.main_widget;
 					const publishWidgets = () => {
-						const widgets = responseMessage.widgets;
-						if (!widgets?.length) return;
-						scope.addSubWidgets(
-							widgets.map((widget) => ({ ...widget, origin: widgetOrigin })),
+						const widgets = responseMessages.flatMap(
+							(message) => message.widgets ?? [],
 						);
+						if (widgets?.length) {
+							scope.addSubWidgets(
+								widgets.map((widget) => ({ ...widget, origin: widgetOrigin })),
+							);
+						}
+						const mainWidget = responseMessage.main_widget;
+						if (mainWidget && mainWidget !== lastPublishedMainWidget) {
+							lastPublishedMainWidget = mainWidget;
+							scope.setSubMainWidget({
+								...mainWidget,
+								widget: mainWidget.widget
+									? { ...mainWidget.widget, origin: widgetOrigin }
+									: null,
+							});
+						}
 					};
 
 					try {
@@ -7635,18 +7687,23 @@ Completion contract: build complete helper logic first and add the Event entry l
 							false,
 							undefined,
 							(batch) => {
+								refreshMainChatWidget(responseMessage, currentMainWidget());
 								const result = processChatEvents(batch, {
 									intermediateResponse: intermediate,
 									responseMessage,
+									responseMessages,
 									attachments,
 									tmpLocalState: null,
 									tmpGlobalState: null,
-									done: false,
+									done: chatDone,
 									appId,
 									eventId: chatEvent.id,
 									sessionId: chatId,
 								});
 								intermediate = result.intermediateResponse;
+								responseMessage = result.responseMessage;
+								attachments = result.attachments;
+								chatDone = result.done;
 								syncSubSteps();
 								for (const event of batch) {
 									if (event?.event_type === "a2ui" && event.payload) {
@@ -7694,14 +7751,16 @@ Completion contract: build complete helper logic first and add the Event entry l
 						);
 					}
 
-					const text =
-						typeof responseMessage.inner.content === "string"
-							? responseMessage.inner.content
-							: "";
+					const text = responseMessages
+						.map((message) => joinContentText(message.inner.content))
+						.filter(Boolean)
+						.join("\n\n");
 
 					// Fold any attachments the app chat produced into the owning message so they
 					// render, and report them back to the assistant so it can relay/reference them.
-					const files = responseMessage.files ?? [];
+					const files = responseMessages.flatMap(
+						(message) => message.files ?? [],
+					);
 					if (files.length > 0) {
 						scope.addSubAttachments(files);
 					}
@@ -7713,14 +7772,20 @@ Completion contract: build complete helper logic first and add the Event entry l
 
 					// Surface the called app's own model usage (its chat_usage_stat events land on
 					// responseMessage.usage_stats) in the global chat's stats badge.
-					if (responseMessage.usage_stats?.length) {
-						scope.addSubUsageStats(responseMessage.usage_stats);
+					const usageStats = responseMessages.flatMap(
+						(message) => message.usage_stats ?? [],
+					);
+					if (usageStats.length) {
+						scope.addSubUsageStats(usageStats);
 					}
 
 					const forwardedFileNames = forwardedAttachments.map((file) =>
 						typeof file === "string" ? file : (file.name ?? file.url),
 					);
-					const embeddedWidgetCount = responseMessage.widgets?.length ?? 0;
+					const embeddedWidgetCount = responseMessages.reduce(
+						(count, message) => count + (message.widgets?.length ?? 0),
+						0,
+					);
 
 					scope.referenceApp(appId);
 					return {
@@ -7842,7 +7907,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					};
 				}
 
-				if (request.toolName === "http_request") {
+				if (request.toolName === "http_request" && !request.approvalOnly) {
 					const refusal = httpRequestRefusal(
 						scope.runId,
 						scope.runId ? solveRoutingStateByRun.get(scope.runId) : undefined,
@@ -7897,6 +7962,13 @@ Completion contract: build complete helper logic first and add the Event entry l
 
 				assertRequestActive(request, "tool mutation");
 				await assertHomeProfile(request);
+				if (request.approvalOnly) {
+					return {
+						requestId: request.requestId,
+						approved: true,
+						result: { status: "ok", native_approved: true },
+					};
+				}
 				const result = await runTool(request, scope);
 				await assertHomeProfile(request);
 				assertRequestActive(request, "tool completion");
@@ -8198,6 +8270,21 @@ Completion contract: build complete helper logic first and add the Event entry l
 		registerGlobalChatToolExecutor((request) => executeRef.current(request));
 		return () => registerGlobalChatToolExecutor(null);
 	}, []);
+
+	useEffect(() => {
+		let disposed = false;
+		let stop: (() => void) | undefined;
+		void listenInCurrentWindow("flowpilot://native-tool-completed", () => {
+			void queryClient.invalidateQueries();
+		}).then((unlisten) => {
+			if (disposed) unlisten();
+			else stop = unlisten;
+		}).catch(() => {});
+		return () => {
+			disposed = true;
+			stop?.();
+		};
+	}, [queryClient]);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;

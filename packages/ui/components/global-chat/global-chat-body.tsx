@@ -1,5 +1,7 @@
 "use client";
 
+import { resolveMainChatWidget } from "../interfaces/chat-default/main-widget-state";
+
 import {
 	getWorkspaceEvaluation,
 	workspaceEvaluationAllowsApp,
@@ -108,6 +110,10 @@ import {
 	listGlobalChatMemories,
 } from "../../state/global-chat/global-chat-memory";
 import {
+	globalChatModelInput,
+	persistGlobalChatReaction,
+} from "../../state/global-chat/global-chat-message-interaction";
+import {
 	AGENT_MODEL_KEY,
 	type GlobalChatRun,
 	type InlineAppChat,
@@ -154,6 +160,10 @@ import {
 	type IChatConcurrency,
 	type IChatRef,
 } from "../interfaces/chat-default/chat";
+import {
+	type IChatMessageInteraction,
+	createMessageReference,
+} from "../interfaces/chat-default/chat-message-interaction";
 import { ChatWidgetExecutionProvider } from "../interfaces/chat-default/chat-widget-execution";
 import type {
 	ChatBoxThinking,
@@ -170,6 +180,7 @@ import {
 	turnThinking,
 } from "../thinking/thinking-options";
 import { useThinkingLabels } from "../thinking/thinking-picker";
+import { ChatActivityMenu, useChatActivityVisible } from "./chat-activity";
 import {
 	FlowPilotEmptyState,
 	type IEmptyStateSuggestion,
@@ -699,7 +710,15 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			content: string,
 			filesAttached?: File[],
 			nativeRequest?: NativeActionRequest,
+			interaction?: IChatMessageInteraction,
+			previouslyAcceptedReaction = false,
 		): Promise<IMessage | undefined> => {
+			let reactionAccepted = previouslyAcceptedReaction;
+			const acceptReaction = async (conversationId: string) => {
+				if (reactionAccepted || interaction?.type !== "reaction") return;
+				await persistGlobalChatReaction(interaction, conversationId);
+				reactionAccepted = true;
+			};
 			const checkCurrent = () => {
 				if (nativeRequest)
 					assertNativeActionCurrent(nativeRequest, getNativeScope());
@@ -727,11 +746,14 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			// dropped, and drains as soon as a turn finishes.
 			if (isGlobalChatAtRunCapacity(state)) {
 				if (!trimmed && (filesAttached?.length ?? 0) === 0) return;
+				await acceptReaction(state.activeConversationId);
 				state.enqueueMessage({
 					conversationId: state.activeConversationId,
 					content: trimmed,
 					files: filesAttached,
 					nativeRequest,
+					interaction,
+					reactionAccepted,
 				});
 				return;
 			}
@@ -797,11 +819,14 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			// Attachment preparation is asynchronous, so re-check capacity: several sends can be
 			// preparing uploads at the same time.
 			if (isGlobalChatAtRunCapacity(useGlobalChatStore.getState())) {
+				await acceptReaction(state.activeConversationId);
 				useGlobalChatStore.getState().enqueueMessage({
 					conversationId: state.activeConversationId,
 					content: trimmed,
 					files: filesAttached,
 					nativeRequest,
+					interaction,
+					reactionAccepted,
 				});
 				return;
 			}
@@ -818,6 +843,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 
 			const userMessage = makeGlobalChatMessage(IRole.User, trimmed, sessionId);
 			userMessage.files = attachments;
+			userMessage.interaction = interaction;
+			if (interaction?.type === "reaction") await acceptReaction(sessionId);
 			userMessage.thinking = turnThinking(
 				isAgentBackendProvider(normalizeAIProvider(agentSelection.provider)),
 				agentSelection.reasoningEffort,
@@ -842,18 +869,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 			if (!nativeRequest)
 				setActiveRun(sessionId, responseMessage.id, turnSelection);
 
-			// A turn that failed carries its reason on `error`, not in the text — an assistant entry
-			// with nothing in it teaches the model nothing, so drop it from the history instead.
-			const historyPayload = priorMessages
-				.filter(
-					(m) =>
-						!m.error ||
-						(typeof m.inner.content === "string" && m.inner.content.trim()),
-				)
-				.map((m) => ({
-					role: m.inner.role === IRole.Assistant ? "Assistant" : "User",
-					content: typeof m.inner.content === "string" ? m.inner.content : "",
-				}));
+			const { prompt: modelPrompt, history: historyPayload } =
+				globalChatModelInput(userMessage, priorMessages);
 
 			// Snapshot the latest assistant message's embedded widgets so the
 			// model can see the rendered UI state the user is reacting to.
@@ -866,10 +883,18 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					.find(
 						(m) => m.inner.role === IRole.Assistant && m.widgets?.length,
 					)?.widgets;
-				if (latestWidgets?.length) {
-					const snapshots = await captureWidgetSnapshots(
-						latestWidgets.map((widget) => widget.instance_id),
-					);
+				const mainWidget = resolveMainChatWidget(
+					priorMessages,
+					state.activeConversationId,
+				)?.widget;
+				const widgetIds = [
+					...new Set([
+						...(latestWidgets ?? []).map((widget) => widget.instance_id),
+						...(mainWidget ? [mainWidget.instance_id] : []),
+					]),
+				];
+				if (widgetIds.length) {
+					const snapshots = await captureWidgetSnapshots(widgetIds);
 					checkCurrent();
 					for (const dataUrl of snapshots) {
 						const [header, data] = dataUrl.split(",", 2);
@@ -897,6 +922,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 					content: trimmed,
 					files: filesAttached,
 					nativeRequest,
+					interaction,
+					reactionAccepted,
 				});
 				return;
 			}
@@ -993,6 +1020,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				// browser drives the same run over HTTP+SSE, with tool requests routed to the mounted
 				// tool bridge via the registry. Both feed the shared parser identically.
 				start: async (onChunk) => {
+					await backend.prepareFlowpilotRun?.();
 					// Lazy transport imports must not open a race after the final identity check.
 					checkCurrent();
 					return (
@@ -1001,7 +1029,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 									"global_chat",
 									{
 										scope: "Frontend",
-										userPrompt: trimmed,
+										userPrompt: modelPrompt,
 										attachmentUrls:
 											imageAttachmentUrls.length > 0
 												? imageAttachmentUrls
@@ -1021,6 +1049,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 										boardContext,
 										dataStudioContext,
 										runId: responseMessage.id,
+										autoApprove: state.autoMode,
+										conversationId: sessionId,
 									},
 									checkCurrent,
 								)
@@ -1044,7 +1074,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 										: undefined,
 									body: {
 										scope: "Frontend",
-										user_prompt: trimmed,
+										user_prompt: modelPrompt,
 										history: historyPayload,
 										current_images:
 											widgetImages.length > 0 ? widgetImages : undefined,
@@ -1075,8 +1105,30 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		[appendMessage, backend, variant, getNativeScope, t],
 	);
 	const handleSendMessage: ISendMessageFunction = useCallback(
-		async (content, files) => {
-			await sendMessage(content, files);
+		async (content, files, _tools, _audio, interaction) => {
+			await sendMessage(content, files, undefined, interaction);
+		},
+		[sendMessage],
+	);
+	const handleMessageReaction = useCallback(
+		async (
+			message: IMessage,
+			emoji: string,
+			operation: "add" | "remove",
+			replacesEmoji?: string,
+		) => {
+			if (
+				message.sessionId !== useGlobalChatStore.getState().activeConversationId
+			) {
+				throw new Error("The message is no longer in the open conversation.");
+			}
+			await sendMessage(emoji, undefined, undefined, {
+				type: "reaction",
+				target: createMessageReference(message),
+				emoji,
+				operation,
+				...(operation === "add" && replacesEmoji ? { replacesEmoji } : {}),
+			});
 		},
 		[sendMessage],
 	);
@@ -1084,6 +1136,8 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 		async (draft: {
 			prompt: string;
 			files?: File[];
+			interaction?: IChatMessageInteraction;
+			reactionAccepted?: boolean;
 			nativeRequest?: NativeActionRequest;
 			nativeScope?: string;
 		}) => {
@@ -1092,16 +1146,31 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				(draft.nativeScope
 					? { id: createId(), scope: draft.nativeScope }
 					: undefined);
-			if (!request) return handleSendMessage(draft.prompt, draft.files);
+			if (!request) {
+				await sendMessage(
+					draft.prompt,
+					draft.files,
+					undefined,
+					draft.interaction,
+					draft.reactionAccepted,
+				);
+				return;
+			}
 			await runNativeAction(request, {
 				getCurrentScope: getNativeScope,
 				run: async () => {
-					const message = await sendMessage(draft.prompt, draft.files, request);
+					const message = await sendMessage(
+						draft.prompt,
+						draft.files,
+						request,
+						draft.interaction,
+						draft.reactionAccepted,
+					);
 					return message ? nativeChatOutcome(message) : undefined;
 				},
 			});
 		},
-		[sendMessage, handleSendMessage, getNativeScope],
+		[sendMessage, getNativeScope],
 	);
 
 	// Rate one assistant turn. The local write is authoritative and happens first: a thumb the user
@@ -1196,8 +1265,11 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				.activeInteractions.find((i) => i.id === interactionId);
 			if (!interaction) return;
 			try {
-				await submitInteractionResponse(interaction, value);
-				setInteractionResponded(interactionId, value);
+				const accepted = await submitInteractionResponse(interaction, value);
+				setInteractionResponded(
+					interactionId,
+					accepted ? accepted.value : value,
+				);
 			} catch (error) {
 				toast.error(
 					t("failedToSubmitResponseVal", "Failed to submit response: {{val}}", {
@@ -1213,12 +1285,12 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	// capacity may finish long after the surface that started it unmounted — the finishing run
 	// calls this directly. The effect below covers the other direction: capacity that frees up
 	// while this surface is mounted, e.g. after a cancel.
-	const sendRef = useRef(handleSendMessage);
+	const sendRef = useRef(sendMessage);
 	const nativeSendRef = useRef(handleNativeDraft);
 	nativeSendRef.current = handleNativeDraft;
 	useEffect(() => {
-		sendRef.current = handleSendMessage;
-	}, [handleSendMessage]);
+		sendRef.current = sendMessage;
+	}, [sendMessage]);
 	const drainQueue = useCallback((conversationId: string) => {
 		const state = useGlobalChatStore.getState();
 		if (conversationId !== state.activeConversationId) return;
@@ -1230,8 +1302,18 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 				prompt: next.content,
 				files: next.files,
 				nativeRequest: next.nativeRequest,
+				interaction: next.interaction,
+				reactionAccepted: next.reactionAccepted,
 			});
-		else void sendRef.current(next.content, next.files);
+		else {
+			void sendRef.current(
+				next.content,
+				next.files,
+				undefined,
+				next.interaction,
+				next.reactionAccepted,
+			);
+		}
 	}, []);
 	useEffect(() => {
 		setGlobalChatQueueDrain(drainQueue);
@@ -1386,6 +1468,11 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 	const canSideBySide = layoutWidth >= 768;
 	const showWorkspace = hasFlowscript && !flowscriptHidden;
 	const sideBySideWorkspace = showWorkspace && canSideBySide;
+	useChatActivityVisible(
+		showWorkspace && !canSideBySide
+			? null
+			: { kind: "flowpilot", sessionId: activeConversationId },
+	);
 	// Keyed by the live reply ids so streamed tokens leave the card placement — and every message
 	// memo comparing it — untouched until a reply starts or settles.
 	const liveReplyIds = liveReplyIdsKey(activeRuns);
@@ -1778,6 +1865,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 						</Button>
 					)}
 				</div>
+				<ChatActivityMenu />
 				<GlobalChatHistory className="ml-auto" />
 			</header>
 
@@ -1828,6 +1916,7 @@ export function GlobalChatBody({ variant = "page" }: GlobalChatBodyProps) {
 								activeInteractions={activeInteractions}
 								onRespondToInteraction={handleRespondToInteraction}
 								onMessageUpdate={handleMessageUpdate}
+								onMessageReaction={handleMessageReaction}
 								showAiDisclosure
 								inlineContent={inlineArtifacts}
 								messageInlineContent={inlineCards.byMessage}

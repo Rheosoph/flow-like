@@ -25,6 +25,18 @@ azure = [
     "dep:webpki-roots",
 ]
 gcp = ["dep:jsonwebtoken", "dep:eventsource-stream"]
+nats = [
+    "dep:async-nats",
+    "dep:nkeys",
+    "dep:base64",
+    "dep:sha2",
+    "dep:data-encoding",
+    "dep:rustls",
+    "dep:webpki-roots",
+    "tokio/net",
+    "tokio/io-util",
+    "tokio/io-std",
+]
 
 [dependencies]
 flow-like-types.workspace = true
@@ -36,6 +48,11 @@ tokio = { workspace = true, features = ["sync", "time", "rt", "macros"] }
 futures-util.workspace = true
 reqwest = { workspace = true, features = ["stream"] }
 chrono.workspace = true
+async-nats = { version = "0.50", default-features = false, features = ["ring", "websockets"], optional = true }
+nkeys = { version = "0.4", optional = true }
+base64 = { workspace = true, optional = true }
+sha2 = { version = "0.10", optional = true }
+data-encoding = { version = "2", optional = true }
 
 # ---- aws ----
 aws-credential-types = { version = "1", optional = true }
@@ -63,3 +80,7 @@ eventsource-stream = { version = "0.2", optional = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
 rsa = { version = "0.9", default-features = false, features = ["std", "pem"] }
 rand = "0.8"
+
+[[example]]
+name = "nats-channel-worker"
+required-features = ["nats"]

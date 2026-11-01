@@ -92,6 +92,9 @@ spec:
             - {name: SANDBOX_TOLERATIONS, value: {{ .Values.executionManager.sandbox.tolerations | toJson | quote }}}
             - {name: SANDBOX_IMAGE_PULL_SECRETS, value: {{ .Values.global.imagePullSecrets | toJson | quote }}}
             - {name: EXECUTION_CALLBACK_URL, value: {{ printf "http://%s-api:%d" (include "flow-like.fullname" .) (int .Values.api.service.port) | quote }}}
+            {{- if eq .Values.channels.transport "nats" }}
+            - {name: CHANNEL_NATS_URL, value: {{ default (printf "nats://%s-nats:4222" (include "flow-like.fullname" .)) .Values.channels.nats.url | quote }}}
+            {{- end }}
             - {name: EXECUTION_OBJECT_STORE_URL, value: {{ include "flow-like.objectStorePublicEndpoint" . | quote }}}
             - {name: EXECUTION_OBJECT_STORE_TLS_GATEWAY, value: {{ .Values.executionManager.objectStoreTlsGateway | quote }}}
             - {name: EXECUTION_ALLOWED_HTTPS_HOSTS, value: {{ join "," .Values.executionManager.allowedHttpsHosts | quote }}}

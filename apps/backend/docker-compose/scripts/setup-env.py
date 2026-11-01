@@ -9,9 +9,15 @@ import os
 from pathlib import Path
 import re
 import secrets
+import shutil
 import subprocess
+import sys
 import time
 from urllib.parse import quote, urlsplit
+import oidc_setup
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import nats_bootstrap
 
 ROOT = Path(__file__).resolve().parents[1]
 AUDIT_KMS_SETTINGS = ("AUDIT_KMS_KEY_ID", "AUDIT_KMS_PROVIDER", "AUDIT_KMS_REGION", "AUDIT_KID",
@@ -110,6 +116,12 @@ def generate(template, mode, web_origin, api_url, s3_endpoint, runtime_config=No
     public = subprocess.run(["openssl", "pkey", "-pubout"], input=private, capture_output=True, check=True).stdout
     values["BACKEND_KEY"] = base64.b64encode(private).decode()
     values["BACKEND_PUB"] = base64.b64encode(public).decode()
+    nats = nats_bootstrap.generate()
+    values["CHANNEL_NATS_ACCOUNT_SEED"] = nats["account_seed"]
+    values["NATS_SERVER_CONFIG"] = base64.b64encode(nats_bootstrap.server_config(
+        nats, [web_origin, "http://tauri.localhost", "https://tauri.localhost"]
+    ).encode()).decode()
+    values["CHANNEL_NATS_WS_URL"] = ("wss" if urlsplit(api_url).scheme == "https" else "ws") + "://" + urlsplit(api_url).netloc + "/nats"
     values.update(audit_key_values(audit_kms))
     values["AUDIT_ENTRY_KEY"] = base64.b64encode(secrets.token_bytes(32)).decode()
     values["MIGRATION_DATABASE_URL"] = f"postgresql://flowlike:{quote(values['POSTGRES_PASSWORD'], safe='')}@postgres:5432/flowlike"
@@ -141,6 +153,14 @@ def main():
     parser.add_argument("--web-origin", default="http://localhost:3001")
     parser.add_argument("--api-url", default="http://localhost:8080")
     parser.add_argument("--s3-endpoint", default="http://s3.localhost:9000")
+    parser.add_argument("--oidc", choices=["external", "bundled"], default="external", help="Use your own provider or provision Keycloak in this Compose installation")
+    parser.add_argument("--oidc-url", default="https://auth.localhost:8443")
+    parser.add_argument("--oidc-bootstrap-user", default="owner")
+    parser.add_argument("--oidc-bootstrap-email", default="owner@localhost.invalid")
+    parser.add_argument("--oidc-redirect-uri", action="append", default=[], help="Additional exact desktop callback URI (repeatable)")
+    parser.add_argument("--oidc-tls-cert", type=Path)
+    parser.add_argument("--oidc-tls-key", type=Path)
+    parser.add_argument("--oidc-ca-cert", type=Path)
     args = parser.parse_args()
     for value in [args.web_origin, args.api_url, args.s3_endpoint]:
         url = urlsplit(value)
@@ -151,14 +171,29 @@ def main():
     runtime_config = {key: os.environ[key] for key in ("FLOW_LIKE_RUNTIME_CONFIG_FILE", "FLOW_LIKE_CONFIG_FILE", "FLOW_LIKE_CONFIG_JSON", "FLOW_LIKE_CONFIG_SECRET_REF") if key in os.environ}
     audit_kms = {key: os.environ[key] for key in AUDIT_KMS_SETTINGS if key in os.environ}
     stripe = {key: os.environ[key] for key in STRIPE_SETTINGS if key in os.environ}
+    if args.oidc == "bundled" and any(runtime_config.values()):
+        parser.error("Bundled OIDC generates its own runtime config; unset FLOW_LIKE_CONFIG_* and FLOW_LIKE_RUNTIME_CONFIG_FILE before setup")
+    directory = None
     try:
         data = generate((ROOT / ".env.example").read_text(), args.mode, args.web_origin.rstrip("/"), args.api_url.rstrip("/"), args.s3_endpoint.rstrip("/"), runtime_config, audit_kms, stripe)
-    except ValueError as error:
+        if args.oidc == "bundled":
+            values, directory = oidc_setup.prepare(
+                args.output, (ROOT / "flow-like.config.example.json").read_text(), args.oidc_url,
+                args.web_origin.rstrip("/"), args.api_url.rstrip("/"), args.oidc_bootstrap_user,
+                args.oidc_bootstrap_email, args.oidc_redirect_uri,
+                (args.oidc_tls_cert, args.oidc_tls_key, args.oidc_ca_cert))
+            data = oidc_setup.apply_values(data, values)
+        fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as target:
+            target.write(data)
+    except (ValueError, OSError) as error:
+        if directory is not None:
+            shutil.rmtree(directory)
         parser.error(str(error))
-    fd = os.open(args.output, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as target:
-        target.write(data)
     print(f"Created {args.output} with mode 0600. Review URLs, then run scripts/preflight.py.")
+    if directory is not None:
+        print(f"Bundled OIDC files: {directory}. Credentials are in the private env file; no passwords were printed.")
+        print("Trust ca.crt in the browser and desktop OS before signing in. For public hosting, use your supplied CA and TLS certificate.")
 
 
 if __name__ == "__main__":

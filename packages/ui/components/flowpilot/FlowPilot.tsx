@@ -422,6 +422,7 @@ interface FrontendToolRequest {
 	requestId: string;
 	toolName: string;
 	arguments: Record<string, unknown>;
+	approvalOnly?: boolean;
 	context?: { appId?: string; app_id?: string };
 	approval?: FrontendToolApproval;
 	deadlineAtMs?: number;
@@ -1366,6 +1367,13 @@ function FlowPilotImpl({
 				}
 
 				lease.assertActive("tool execution");
+				if (request.approvalOnly) {
+					return {
+						requestId: request.requestId,
+						approved: true,
+						result: { status: "ok", native_approved: true },
+					};
+				}
 				let result: unknown;
 				switch (request.toolName) {
 					case "search_workspace":

@@ -188,6 +188,16 @@ pub fn validate_payload(raw: &[u8], config: &CommonConfig) -> Result<Dispatch> {
             "Dispatch does not match the approved execution capability",
         ));
     }
+    if let Some(grant) = &payload.channel
+        && let flow_like_types_contracts::channel::ChannelExecutorGrant::Nats { url, .. } =
+            &grant.executor
+        && (grant.channel_id != payload.run_id
+            || config.channel_nats_url.as_deref() != Some(url.as_str()))
+    {
+        return Err(Error::invalid(
+            "NATS channel does not match the configured execution broker",
+        ));
+    }
     // Use the same wire type as the API and runtime. The isolated runtime still
     // verifies the JWT and complete payload binding before loading tenant code.
     if serde_json::to_vec(&json!({"mode":Mode::CallbackQueued,"payload":&payload}))?.len() + 1

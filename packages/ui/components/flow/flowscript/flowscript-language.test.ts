@@ -982,6 +982,363 @@ eventsSimple onLoad() {
 	});
 });
 
+describe("FlowScript node-scoped directory diagnostics", () => {
+	const directoryCatalog = [
+		...catalog,
+		...["cache", "storage", "user"].map((kind) =>
+			node(
+				`path_from_${kind}_dir`,
+				[{ name: "node_scope", type: IVariableType.Boolean, optional: true }],
+				[{ name: "path", type: IVariableType.Struct }],
+			),
+		),
+	];
+	const directoryDiagnostics = (text: string) =>
+		(
+			computeFlowScriptDiagnostics(diagnosticMonaco, text, directoryCatalog)
+				.markers as {
+				message: string;
+				severity: number;
+				startLineNumber: number;
+				startColumn: number;
+				endColumn: number;
+			}[]
+		).filter((marker) => marker.message.startsWith("Repeated `files::"));
+
+	test.each(["cache", "storage", "user"])(
+		"warns on repeated %sDir calls in a function",
+		(kind) => {
+			const diagnostics = directoryDiagnostics(`function processFile() {
+	const output = files::${kind}Dir({ nodeScope: true })
+	const input = files::${kind}Dir({ nodeScope: true })
+}`);
+			expect(diagnostics).toHaveLength(1);
+			expect(diagnostics[0]).toMatchObject({
+				severity: diagnosticMonaco.MarkerSeverity.Warning,
+				startLineNumber: 3,
+				startColumn: 16,
+				endColumn: 16 + `files::${kind}Dir`.length,
+			});
+			expect(diagnostics[0].message).toContain("unique to its node");
+			expect(diagnostics[0].message).toContain("one shared path variable");
+			expect(diagnostics[0].message).toContain("nodeScope: false");
+		},
+	);
+
+	test("resolves imports, namespace aliases, flat names and positional arguments", () => {
+		const diagnostics = directoryDiagnostics(`use files as dirs
+use files::{ cacheDir }
+eventsGeneric onLoad() {
+	const first = dirs::cacheDir({ nodeScope: true })
+	const second = cacheDir(true)
+	const third = pathFromCacheDir({ nodeScope: true })
+}`);
+		expect(diagnostics).toHaveLength(2);
+		expect(diagnostics.map((marker) => marker.startLineNumber)).toEqual([5, 6]);
+	});
+
+	test("recognizes raw pin names and parenthesized literals with comments", () => {
+		const diagnostics = directoryDiagnostics(`function processFile() {
+	const first = files::cacheDir({ node_scope: ((true)) })
+	const second = files::cacheDir({ nodeScope:
+		// Each call has its own node scope.
+		(true)
+	})
+}`);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].startLineNumber).toBe(3);
+	});
+
+	test("counts nested expressions, branches, loops and visual groups in their enclosing event", () => {
+		const diagnostics = directoryDiagnostics(`eventsGeneric onLoad() {
+	if (ready) {
+		const first = files::cacheDir({ nodeScope: true })
+	}
+	for (const item of items) {
+		@collapse("Read") {
+			consume({ path: files::cacheDir({ nodeScope: true }) })
+		}
+	}
+}`);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].startLineNumber).toBe(7);
+	});
+
+	test("counts directory calls inside template expressions", () => {
+		const diagnostics = directoryDiagnostics(`function processFile() {
+	const path = files::cacheDir({ nodeScope: true })
+	const label = \`\${files::cacheDir({ nodeScope: true })}\`
+}`);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].startLineNumber).toBe(3);
+	});
+
+	test("keeps separate functions, events and nested handlers independent", () => {
+		const diagnostics = directoryDiagnostics(`function first() {
+	const path = files::cacheDir({ nodeScope: true })
+}
+function second() {
+	const path = files::cacheDir({ nodeScope: true })
+}
+eventsGeneric onLoad() {
+	const path = files::cacheDir({ nodeScope: true })
+	eventsGeneric tool() {
+		const path = files::cacheDir({ nodeScope: true })
+	}
+}
+event another() {
+	const path = files::cacheDir({ nodeScope: true })
+}`);
+		expect(diagnostics).toEqual([]);
+	});
+
+	test("resumes the enclosing scope after a nested handler", () => {
+		const diagnostics = directoryDiagnostics(`eventsGeneric onLoad() {
+	const first = files::cacheDir({ nodeScope: true })
+	eventsGeneric tool() {
+		const nested = files::cacheDir({ nodeScope: true })
+	}
+	const second = files::cacheDir({ nodeScope: true })
+}`);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].startLineNumber).toBe(6);
+	});
+
+	test("recognizes separate and nested callable scopes on the same line", () => {
+		expect(
+			directoryDiagnostics(
+				"function first() { files::cacheDir(true) } function second() { files::cacheDir(true) }",
+			),
+		).toEqual([]);
+		expect(
+			directoryDiagnostics(
+				"eventsGeneric outer() { files::cacheDir(true); eventsGeneric inner() { files::cacheDir(true) } }",
+			),
+		).toEqual([]);
+		const source =
+			"eventsGeneric outer() { files::cacheDir(true); eventsGeneric inner() { files::cacheDir(true); files::cacheDir(true) } }";
+		const diagnostics = directoryDiagnostics(source);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].startColumn).toBe(source.lastIndexOf("files::") + 1);
+	});
+
+	test("keeps callable scopes distinct across modules", () => {
+		const diagnostics = directoryDiagnostics(`module uploads {
+	function processFile() {
+		const path = files::cacheDir({ nodeScope: true })
+	}
+}
+module downloads {
+	function processFile() {
+		const first = files::cacheDir({ nodeScope: true })
+		const second = files::cacheDir({ nodeScope: true })
+	}
+}`);
+		expect(diagnostics).toHaveLength(1);
+		expect(diagnostics[0].startLineNumber).toBe(9);
+	});
+
+	test("ignores shared, default, dynamic, commented and quoted scopes", () => {
+		const diagnostics =
+			directoryDiagnostics(`function processFile(nodeScope: bool) {
+	const first = files::cacheDir({ nodeScope: true })
+	const shared = first
+	const app = files::cacheDir({ nodeScope: false })
+	const defaults = files::cacheDir()
+	const dynamic = files::cacheDir({ nodeScope: nodeScope })
+	const storage = files::storageDir({ nodeScope: true })
+	const user = files::userDir({ nodeScope: true })
+	// files::cacheDir({ nodeScope: true })
+	const text = "files::cacheDir({ nodeScope: true })"
+}`);
+		expect(diagnostics).toEqual([]);
+	});
+
+	test("does not match user functions with a directory helper's name", () => {
+		const diagnostics =
+			directoryDiagnostics(`function cacheDir(nodeScope: bool) {}
+function processFile() {
+	cacheDir({ nodeScope: true })
+	cacheDir({ nodeScope: true })
+}`);
+		expect(diagnostics).toEqual([]);
+	});
+
+	test("does not match user functions with a legacy flat directory name", () => {
+		expect(
+			directoryDiagnostics(`function pathFromCacheDir(nodeScope: bool) {}
+function processFile() {
+	pathFromCacheDir({ nodeScope: true })
+	pathFromCacheDir({ nodeScope: true })
+}`),
+		).toEqual([]);
+	});
+});
+
+describe("FlowScript Apply diagnostic parity", () => {
+	const nodes = [
+		...catalog,
+		node("delay", [{ name: "time", type: IVariableType.Float }], [], {
+			impure: true,
+		}),
+		// Catalog metadata can still expose the older rpa::delay alias.
+		node(
+			"rpa_delay",
+			[{ name: "duration_ms", type: IVariableType.Integer }],
+			[],
+			{ impure: true, namespace: "rpa", alias: "delay", receiver: "" },
+		),
+	];
+	const diagnostics = (text: string) =>
+		computeFlowScriptDiagnostics(diagnosticMonaco, text, nodes)
+			.markers as TestMarker[];
+	const messages = (text: string) =>
+		diagnostics(text).map((marker) => marker.message);
+
+	test("reports the flat/import collision and its Integer argument before Apply", () => {
+		const text = `use rpa::*
+const duration = string::length({ string: "wait" })
+delay({ time: duration })`;
+		const markers = diagnostics(text);
+		expect(markers).toHaveLength(2);
+		expect(markers[0]).toMatchObject({
+			message:
+				"'delay' is ambiguous: `control::delay`, `rpa::delay`. Write the qualified name.",
+			startLineNumber: 3,
+			startColumn: 1,
+			endColumn: 6,
+		});
+		expect(markers[1]).toMatchObject({
+			message: "Type mismatch for 'time' of 'delay': expected float, got int",
+			startLineNumber: 3,
+			startColumn: 15,
+			endColumn: 23,
+		});
+	});
+
+	test("keeps a flat/import collision even when only the opened member fits", () => {
+		const result = messages("use rpa::{ delay }\ndelay({ durationMs: 100 })");
+		expect(
+			result.some((message) => message.includes("'delay' is ambiguous")),
+		).toBeTrue();
+	});
+
+	test("still narrows imported members when there is no flat-name collision", () => {
+		expect(
+			messages(`use string::*
+use array::*
+length({ string: "wait" })
+length({ array: [1, 2] })`),
+		).toEqual([]);
+	});
+
+	test("qualifying the call removes ambiguity but keeps numeric pin checking", () => {
+		expect(
+			messages(`use rpa::*
+const duration = string::length({ string: "wait" })
+control::delay({ time: duration })`),
+		).toEqual([
+			"Type mismatch for 'time' of 'control::delay': expected float, got int",
+		]);
+		expect(
+			messages(`use rpa::*
+control::delay({ time: float::abs({ float: -1.5 }) })
+rpa::delay({ durationMs: int::abs({ integer: -2 }) })`),
+		).toEqual([]);
+	});
+
+	test("rejects numeric output mismatches in named and positional arguments", () => {
+		expect(
+			messages(`control::delay(string::length({ string: "wait" }))
+int::abs({ integer: float::abs({ float: 1.5 }) })
+const amount = float::abs({ float: 1.5 })
+int::abs(amount)`),
+		).toEqual([
+			"Type mismatch for 'time' of 'control::delay': expected float, got int",
+			"Type mismatch for 'integer' of 'int::abs': expected int, got float",
+			"Type mismatch for 'integer' of 'int::abs': expected int, got float",
+		]);
+	});
+
+	test("accepts numeric literals and their local aliases as pin defaults", () => {
+		expect(
+			messages(`eventsGeneric onLoad() {
+	const duration = 100
+	const alias = duration
+	const typed: int = 100
+	const typedAlias: int = alias
+	control::delay({ time: 100 })
+	control::delay(100)
+	control::delay({ time: (100) })
+	control::delay({ time: duration })
+	control::delay({ time: alias })
+	control::delay({ time: typed })
+	control::delay({ time: typedAlias })
+	control::delay({ time: 100.5 })
+	int::abs({ integer: 1.5 })
+	int::abs(1.5)
+}`),
+		).toEqual([]);
+	});
+
+	test("checks board variable types even when initialized from literals", () => {
+		expect(
+			messages(`const duration: int = 100
+eventsGeneric onLoad() {
+	control::delay({ time: duration })
+}`),
+		).toEqual([
+			"Type mismatch for 'time' of 'control::delay': expected float, got int",
+		]);
+	});
+
+	test("checks typed local mutable variables instead of their literal defaults", () => {
+		expect(
+			messages(`eventsGeneric onLoad() {
+	let duration: int = 100
+	control::delay({ time: duration })
+}`),
+		).toEqual([
+			"Type mismatch for 'time' of 'control::delay': expected float, got int",
+		]);
+	});
+
+	test("checks module variable types even when initialized from literals", () => {
+		expect(
+			messages(`module task {
+	const duration: int = 100
+	function run() {
+		control::delay({ time: duration })
+	}
+}`),
+		).toEqual([
+			"Type mismatch for 'time' of 'control::delay': expected float, got int",
+		]);
+	});
+
+	test("checks negated expressions as node outputs instead of literal defaults", () => {
+		expect(
+			messages(`eventsGeneric onLoad() {
+	control::delay({ time: -(100) })
+	const duration = -(100)
+	control::delay({ time: duration })
+}`),
+		).toEqual([
+			"Type mismatch for 'time' of 'control::delay': expected float, got int",
+			"Type mismatch for 'time' of 'control::delay': expected float, got int",
+		]);
+	});
+
+	test("does not infer an expression's type from its first integer literal", () => {
+		expect(
+			messages(`eventsGeneric onLoad() {
+	const fraction = 1 / 2
+	control::delay({ time: fraction })
+}`),
+		).toEqual([]);
+	});
+});
+
 describe("FlowScript modules", () => {
 	const board: FlowScriptBoardScope = {
 		modules: ["checkout", "checkout::payments"],

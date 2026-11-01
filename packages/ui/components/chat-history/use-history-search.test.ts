@@ -61,4 +61,30 @@ describe("buildSearchCorpus", () => {
 		expect(buildSearchCorpus(undefined).size).toBe(0);
 		expect(buildSearchCorpus([]).size).toBe(0);
 	});
+
+	test("reaction records neither appear in search nor crowd out visible messages", () => {
+		const visible = message("a", "Shipment arrived", 1);
+		const reactions = Array.from(
+			{ length: 40 },
+			(_, index): IMessage => ({
+				...message("a", "hidden-reaction", index + 3),
+				interaction: {
+					type: "reaction",
+					target: {
+						messageId: visible.id,
+						role: visible.inner.role,
+						text: "Shipment arrived",
+					},
+					emoji: "👍",
+					operation: "add",
+				},
+			}),
+		);
+		const corpus = buildSearchCorpus([
+			visible,
+			message("a", "👍", 2),
+			...reactions,
+		]);
+		expect(corpus.get("a")).toBe("👍 · Shipment arrived");
+	});
 });

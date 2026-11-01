@@ -116,8 +116,13 @@ struct UploadLogsRequest<'a> {
 /// Who a queued report is sent as.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ReportAuth {
-    /// A UI session; its current token is looked up by subject when sending.
+    /// Legacy ownership without a profile. Delivery waits for explicit assignment.
     Session { subject: String },
+    NativeSession {
+        profile_id: String,
+        issuer: String,
+        subject: String,
+    },
     /// The PAT of the sink registration that ran this event.
     Sink { event_id: String },
 }
@@ -138,6 +143,15 @@ impl ReportAuth {
     fn from_row(kind: &str, reference: String) -> Option<Self> {
         match kind {
             "session" => Some(Self::Session { subject: reference }),
+            "native_session" => {
+                let [profile_id, issuer, subject]: [String; 3] =
+                    serde_json::from_str(&reference).ok()?;
+                Some(Self::NativeSession {
+                    profile_id,
+                    issuer,
+                    subject,
+                })
+            }
             "sink" => Some(Self::Sink {
                 event_id: reference,
             }),
@@ -148,14 +162,21 @@ impl ReportAuth {
     fn kind(&self) -> &'static str {
         match self {
             Self::Session { .. } => "session",
+            Self::NativeSession { .. } => "native_session",
             Self::Sink { .. } => "sink",
         }
     }
 
-    fn reference(&self) -> &str {
+    fn reference(&self) -> String {
         match self {
-            Self::Session { subject } => subject,
-            Self::Sink { event_id } => event_id,
+            Self::Session { subject } => subject.clone(),
+            Self::NativeSession {
+                profile_id,
+                issuer,
+                subject,
+            } => serde_json::to_string(&[profile_id, issuer, subject])
+                .expect("report owner serializes"),
+            Self::Sink { event_id } => event_id.clone(),
         }
     }
 }
@@ -169,6 +190,7 @@ pub(crate) struct FinishedRun<'a> {
     pub secure: bool,
     /// The token the run executed with: a UI session JWT or a sink PAT.
     pub token: Option<&'a str>,
+    pub native_auth: Option<&'a crate::native_auth::SessionBinding>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -198,7 +220,17 @@ impl QueuedReport {
         }
         let meta = run.meta;
         let hub = flow_like::hub::hub_origin(run.hub, run.secure)?;
-        let auth = ReportAuth::for_token(run.token?, &meta.event_id)?;
+        let mut auth = ReportAuth::for_token(run.token?, &meta.event_id)?;
+        if let (ReportAuth::Session { subject }, Some(binding)) = (&auth, run.native_auth) {
+            if binding.hub != hub || binding.subject != *subject {
+                return None;
+            }
+            auth = ReportAuth::NativeSession {
+                profile_id: binding.profile_id.clone(),
+                issuer: binding.issuer.clone(),
+                subject: subject.clone(),
+            };
+        }
         Some(Self {
             run_id: meta.run_id.clone(),
             app_id: meta.app_id.clone(),
@@ -476,6 +508,38 @@ pub(crate) async fn enqueue(app_handle: &AppHandle, run: FinishedRun<'_>) {
     }
 }
 
+pub(crate) async fn legacy_report_count(
+    app: &AppHandle,
+    binding: &crate::native_auth::SessionBinding,
+) -> flow_like_types::Result<usize> {
+    let Some(queue) = app.try_state::<RunReportQueue>() else {
+        return Ok(0);
+    };
+    let hub = binding.hub.clone();
+    let subject = binding.subject.clone();
+    queue.with_conn("count unassigned reports", move |conn| conn.query_row(
+        "SELECT COUNT(*) FROM run_reports WHERE auth_kind='session' AND hub=?1 AND auth_ref=?2", params![hub, subject], |row| row.get(0),
+    )).await
+}
+
+pub(crate) async fn recover_legacy_reports(
+    app: &AppHandle,
+    binding: &crate::native_auth::SessionBinding,
+) -> flow_like_types::Result<usize> {
+    let Some(queue) = app.try_state::<RunReportQueue>() else {
+        return Ok(0);
+    };
+    let binding = binding.clone();
+    let recovered = queue.with_conn("assign unowned reports", move |conn| {
+        if !binding.is_current() { return Err(rusqlite::Error::InvalidQuery); }
+        let owner = ReportAuth::NativeSession {profile_id:binding.profile_id, issuer:binding.issuer, subject:binding.subject.clone()};
+        conn.execute("UPDATE run_reports SET auth_kind='native_session',auth_ref=?1,state='pending',attempts=0,next_attempt_at=?2,created_at=?2,last_error=NULL WHERE auth_kind='session' AND hub=?3 AND auth_ref=?4",
+            params![owner.reference(), now_millis(), binding.hub, binding.subject])
+    }).await?;
+    queue.wake.notify_one();
+    Ok(recovered)
+}
+
 /// Starts the single task that delivers queued reports. It runs on enqueue and
 /// every minute, so reports parked offline or without a token go out later.
 pub(crate) fn spawn_drain(app_handle: AppHandle) {
@@ -550,16 +614,33 @@ async fn drain(app_handle: &AppHandle, queue: &RunReportQueue, client: &reqwest:
 }
 
 enum TokenLookup {
-    Ready(String),
+    Ready(String, Option<crate::native_auth::SessionBinding>),
     Pending,
     Gone,
 }
 
-fn resolve_token(app_handle: &AppHandle, report: &QueuedReport) -> TokenLookup {
+async fn resolve_token(app_handle: &AppHandle, report: &QueuedReport) -> TokenLookup {
     match &report.auth {
-        ReportAuth::Session { subject } => {
-            crate::execution_credentials::session_token(&report.hub, subject)
-                .map_or(TokenLookup::Pending, TokenLookup::Ready)
+        // Older rows have no profile identity. Keep them pending rather than
+        // attributing their logs to an arbitrary profile with the same subject.
+        ReportAuth::Session { .. } => TokenLookup::Pending,
+        ReportAuth::NativeSession {
+            profile_id,
+            issuer,
+            subject,
+        } => {
+            let Ok(Some(binding)) =
+                crate::native_auth::SessionBinding::capture(profile_id, &report.hub).await
+            else {
+                return TokenLookup::Pending;
+            };
+            if binding.subject != *subject || binding.issuer != *issuer {
+                return TokenLookup::Pending;
+            }
+            match binding.access_token(None).await {
+                Ok(token) => TokenLookup::Ready(token, Some(binding)),
+                Err(_) => TokenLookup::Pending,
+            }
         }
         ReportAuth::Sink { event_id } => {
             let Some(manager) = app_handle.try_state::<TauriEventSinkManagerState>() else {
@@ -569,7 +650,7 @@ fn resolve_token(app_handle: &AppHandle, report: &QueuedReport) -> TokenLookup {
                 return TokenLookup::Pending;
             };
             match crate::event_sink::EventSinkManager::access_token(db, &report.app_id, event_id) {
-                Ok(Some(token)) => TokenLookup::Ready(token),
+                Ok(Some(token)) => TokenLookup::Ready(token, None),
                 Ok(None) => TokenLookup::Gone,
                 Err(error) => {
                     tracing::warn!(event_id = %event_id, error = %error, "Failed to read the sink token for a run report");
@@ -588,7 +669,9 @@ async fn deliver(
     mut report: QueuedReport,
 ) -> flow_like_types::Result<Pass> {
     let now = now_millis();
-    if now.saturating_sub(report.created_at) > millis(MAX_AGE) {
+    if !matches!(report.auth, ReportAuth::Session { .. })
+        && now.saturating_sub(report.created_at) > millis(MAX_AGE)
+    {
         tracing::warn!(
             run_id = %report.run_id,
             attempts = report.attempts,
@@ -598,8 +681,8 @@ async fn deliver(
         return Ok(Pass::Continue);
     }
 
-    let token = match resolve_token(app_handle, &report) {
-        TokenLookup::Ready(token) => token,
+    let (token, native_auth) = match resolve_token(app_handle, &report).await {
+        TokenLookup::Ready(token, binding) => (token, binding),
         TokenLookup::Pending => {
             queue
                 .await_auth(&report.run_id, now.saturating_add(millis(DRAIN_INTERVAL)))
@@ -617,7 +700,15 @@ async fn deliver(
     };
 
     if !report.report_sent {
-        let outcome = send(client, &report, Stage::Report, &token, &report.report).await;
+        let outcome = send(
+            client,
+            &report,
+            Stage::Report,
+            &token,
+            native_auth.as_ref(),
+            &report.report,
+        )
+        .await;
         if let Some(pass) = settle(queue, &report, now, Stage::Report, outcome).await? {
             return Ok(pass);
         }
@@ -643,7 +734,15 @@ async fn deliver(
             }
         };
         let body = UploadLogsRequest { logs: &logs };
-        let outcome = send(client, &report, Stage::Logs, &token, &body).await;
+        let outcome = send(
+            client,
+            &report,
+            Stage::Logs,
+            &token,
+            native_auth.as_ref(),
+            &body,
+        )
+        .await;
         if let Some(pass) = settle(queue, &report, now, Stage::Logs, outcome).await? {
             return Ok(pass);
         }
@@ -691,31 +790,66 @@ async fn send<T: Serialize + ?Sized>(
     report: &QueuedReport,
     stage: Stage,
     token: &str,
+    native_auth: Option<&crate::native_auth::SessionBinding>,
     body: &T,
 ) -> Outcome {
-    let Ok(mut header) = HeaderValue::from_str(&authorization(token)) else {
-        return Outcome::Rejected("the token is not a valid header value".to_string());
-    };
-    header.set_sensitive(true);
-    let response = client
-        .post(report.url(stage))
-        .header(AUTHORIZATION, header)
-        .header(
-            "x-flow-like-board-format",
-            CURRENT_BOARD_FORMAT_VERSION.to_string(),
-        )
-        .json(body)
-        .send()
-        .await;
-    match response {
-        Ok(response) => classify(response.status(), stage),
-        Err(error) if error.is_connect() || error.is_timeout() => {
-            Outcome::Unreachable(error.to_string())
+    let mut token = token.to_owned();
+    for attempt in 0..2 {
+        if let Some(binding) = native_auth {
+            match binding.access_token(None).await {
+                Ok(current) => token = current,
+                Err(_) => {
+                    return Outcome::Retry {
+                        error: "profile authentication is unavailable or changed".into(),
+                        resend_report: false,
+                    };
+                }
+            }
         }
-        Err(error) => Outcome::Retry {
-            error: error.to_string(),
-            resend_report: false,
-        },
+        let Ok(mut header) = HeaderValue::from_str(&authorization(&token)) else {
+            return Outcome::Rejected("the token is not a valid header value".to_string());
+        };
+        header.set_sensitive(true);
+        let response = client
+            .post(report.url(stage))
+            .header(AUTHORIZATION, header)
+            .header(
+                "x-flow-like-board-format",
+                CURRENT_BOARD_FORMAT_VERSION.to_string(),
+            )
+            .json(body)
+            .send()
+            .await;
+        if let Ok(response) = &response {
+            if response.status() == StatusCode::UNAUTHORIZED
+                && attempt == 0
+                && let Some(binding) = native_auth
+            {
+                if binding.access_token(Some(&token)).await.is_ok() {
+                    continue;
+                }
+            }
+        }
+        if native_auth.is_some_and(|binding| !binding.is_current()) {
+            return Outcome::Retry {
+                error: "profile authentication changed while reporting the run".into(),
+                resend_report: false,
+            };
+        }
+        return match response {
+            Ok(response) => classify(response.status(), stage),
+            Err(error) if error.is_connect() || error.is_timeout() => {
+                Outcome::Unreachable(error.to_string())
+            }
+            Err(error) => Outcome::Retry {
+                error: error.to_string(),
+                resend_report: false,
+            },
+        };
+    }
+    Outcome::Retry {
+        error: "hub refused renewed profile authentication".into(),
+        resend_report: false,
     }
 }
 
@@ -943,6 +1077,7 @@ mod tests {
             hub: "api.example.test",
             secure: true,
             token,
+            native_auth: None,
         }
     }
 
@@ -1025,6 +1160,26 @@ mod tests {
                 "https://api.example.test/api/v1/apps/app/board/board/runs/run/logs"
             );
         }
+    }
+
+    #[test]
+    fn native_report_owners_round_trip_profile_issuer_and_subject() {
+        let owner = ReportAuth::NativeSession {
+            profile_id: "profile-a".into(),
+            issuer: "https://issuer.test".into(),
+            subject: "alice".into(),
+        };
+        assert_eq!(
+            ReportAuth::from_row(owner.kind(), owner.reference()),
+            Some(owner)
+        );
+        assert!(ReportAuth::from_row("native_session", "alice".into()).is_none());
+        assert_eq!(
+            ReportAuth::from_row("session", "alice".into()),
+            Some(ReportAuth::Session {
+                subject: "alice".into()
+            })
+        );
     }
 
     #[test]

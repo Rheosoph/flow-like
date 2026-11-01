@@ -52,6 +52,13 @@ targets:
         FirebaseAppDelegateProxyEnabled: false
         UIBackgroundModes: [remote-notification, fetch]
         LSRequiresIPhoneOS: true
+        # Keep this aligned with Info.ios.plist for XcodeGen and direct Xcode archives.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: TaoSceneDelegate
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:

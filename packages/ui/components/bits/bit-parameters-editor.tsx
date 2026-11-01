@@ -8,6 +8,10 @@ import {
 	Trash2,
 } from "lucide-react";
 import { createContext, useContext, useState } from "react";
+import {
+	supportsCustomRequestParams,
+	withCustomRequestParams,
+} from "../../lib/bit/custom-request-params";
 import { isHostedLlmProviderName } from "../../lib/bit/local-model-filter";
 import { IBitTypes } from "../../lib/schema/bit/bit";
 import { useBackend } from "../../state/backend-state";
@@ -30,6 +34,7 @@ const LABELS: Record<string, string> = {
 	model_id: "Model ID",
 	api_surface: "API surface",
 	params: "Provider settings",
+	request_params: "Request parameters",
 	vector_length: "Vector dimensions",
 	input_length: "Input length",
 	api_key: "API key",
@@ -49,6 +54,8 @@ const HINTS: Record<string, string> = {
 	provider_name: "The service or local engine that runs this model.",
 	model_classification: "Capability scores use a scale from 0 to 1.",
 	huggingface: "Pinned model files used by the local runtime.",
+	request_params:
+		"Fields are sent in the provider's request body and override generated values. The app controls streaming mode.",
 };
 const ProviderScope = createContext<"custom" | "admin">("admin");
 const CUSTOM_PROVIDERS = [
@@ -262,7 +269,7 @@ function ParameterValue({
 		);
 	return (
 		<details
-			open={name === "provider" || name === "params" || name === "prefix"}
+			open={["provider", "params", "prefix", "request_params"].includes(name)}
 			className="group rounded-xl border bg-background p-4"
 		>
 			<summary className="flex cursor-pointer list-none items-center justify-between text-sm font-medium">
@@ -445,6 +452,18 @@ export function BitParametersEditor({
 	const showHostedEmbedding =
 		scope === "admin" && bitType === IBitTypes.Embedding;
 	const providerName = record(params.provider).provider_name;
+	const provider = record(params.provider);
+	const providerParams = record(provider.params);
+	const showRequestParams =
+		isModel && scope === "custom" && supportsCustomRequestParams(providerName);
+	const updateRequestParams = (value: Record<string, unknown> | undefined) =>
+		onChange({
+			...params,
+			provider: {
+				...provider,
+				params: withCustomRequestParams(providerParams, value),
+			},
+		});
 	const showPricing =
 		scope === "admin" &&
 		isModel &&
@@ -552,6 +571,34 @@ export function BitParametersEditor({
 								Add context length
 							</Button>
 						)}
+						{showRequestParams &&
+							!Object.hasOwn(providerParams, "request_params") && (
+								<Button
+									variant="outline"
+									onClick={() => updateRequestParams({})}
+								>
+									Add request parameters
+								</Button>
+							)}
+						{isSystemOne &&
+							showRequestParams &&
+							Object.hasOwn(providerParams, "request_params") && (
+								<div className="space-y-2">
+									<ParameterValue
+										name="request_params"
+										path="parameter-provider-params-request_params"
+										value={providerParams.request_params}
+										onChange={(next) => updateRequestParams(record(next))}
+									/>
+									<Button
+										variant="ghost"
+										size="sm"
+										onClick={() => updateRequestParams(undefined)}
+									>
+										Remove request parameters
+									</Button>
+								</div>
+							)}
 						{isForecasting ? null : typeof value === "object" &&
 							value !== null &&
 							!Array.isArray(value) ? (

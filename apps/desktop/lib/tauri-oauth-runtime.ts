@@ -33,6 +33,7 @@ async function oauthRequest(
 		(binding &&
 			binding.sessionKey !==
 				oauthSessionKey({
+					profileId: profile.id,
 					hub,
 					subject: backend.auth.user?.profile.sub ?? "",
 					issuer: backend.auth.user?.profile.iss,

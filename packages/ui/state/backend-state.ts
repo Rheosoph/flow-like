@@ -251,6 +251,8 @@ export interface ICapabilities {
 }
 
 export interface IBackendState {
+	/** Capture host presentation state before a native FlowPilot run starts. */
+	prepareFlowpilotRun?: () => Promise<void>;
 	appState: IAppState;
 	apiState: IApiState;
 	apiKeyState: IApiKeyState;

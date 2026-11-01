@@ -60,6 +60,10 @@ import {
 	isChannelHandle,
 } from "@flow-like/flow-like-ui/lib/channel";
 import { withDeviceCommandBridge } from "@flow-like/flow-like-ui/lib/device-bridge";
+import {
+	type FlowVersionState,
+	parseFlowVersionState,
+} from "@flow-like/flow-like-ui/lib/device-management/hub/endpoints";
 import type { FlowScriptApplyOrigin } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import {
 	applyFlowScriptFromResponse,
@@ -501,6 +505,18 @@ export class WebBoardState implements IBoardState {
 		} catch {
 			return [];
 		}
+	}
+
+	async getBoardVersionCurrent(
+		appId: string,
+		boardId: string,
+	): Promise<FlowVersionState> {
+		return parseFlowVersionState(
+			await apiGet<unknown>(
+				`apps/${encodeURIComponent(appId)}/board/${encodeURIComponent(boardId)}/version/current`,
+				this.backend.auth,
+			),
+		);
 	}
 
 	async getBoardVersionInfos(

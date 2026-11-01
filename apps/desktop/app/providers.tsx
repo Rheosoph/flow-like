@@ -53,6 +53,13 @@ import { initBlobOffload } from "../lib/init-blob-offload";
 // Keep the always-mounted chat surfaces out of the synchronous root-layout chunk. The bridge is
 // still rendered unconditionally once its client chunk loads, so it keeps listening independently
 // of whether the overlay is open.
+const ChatActivityProvider = dynamic(
+	() =>
+		import(
+			"@flow-like/flow-like-ui/components/global-chat/chat-activity"
+		).then((module) => module.ChatActivityProvider),
+	{ ssr: false },
+);
 const GlobalChatOverlay = dynamic(
 	() =>
 		import(
@@ -182,6 +189,7 @@ export function Providers({
 																				<NativeIntegrationProvider />
 																			</Suspense>
 																			<AppSidebar>{children}</AppSidebar>
+																			<ChatActivityProvider />
 																			<GlobalToolBridge />
 																			<GlobalChatOverlay />
 																			<FlowPilotBubbleButton />

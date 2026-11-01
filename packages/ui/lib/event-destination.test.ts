@@ -150,12 +150,12 @@ describe("destination resolution", () => {
 		expect(resolveDestination("device", web).destination).toBe("hub");
 	});
 
-	test("a preferred computer that stops fitting prefers the device before the hub", () => {
+	test("a preferred computer that stops fitting prefers the hub before a device", () => {
 		const statuses = destinationStatuses(
 			{ eventType: "cron" },
 			env({ boardMode: "Remote" }),
 		);
-		expect(resolveDestination("computer", statuses).destination).toBe("device");
+		expect(resolveDestination("computer", statuses).destination).toBe("hub");
 	});
 
 	test("reports when nothing fits and keeps the preferred destination", () => {
@@ -188,10 +188,13 @@ describe("destination resolution", () => {
 describe("initial destination", () => {
 	const host = { deviceCreation: true, canExecuteLocally: true };
 
-	test("opens on a device when the host can create them, else computer, else hub", () => {
-		expect(initialDestination(host)).toBe("device");
+	test("opens on this computer when available, otherwise the hub, even with device creation", () => {
+		expect(initialDestination(host)).toBe("computer");
 		expect(initialDestination({ ...host, deviceCreation: false })).toBe(
 			"computer",
+		);
+		expect(initialDestination({ ...host, canExecuteLocally: false })).toBe(
+			"hub",
 		);
 		expect(
 			initialDestination({ deviceCreation: false, canExecuteLocally: false }),
@@ -208,7 +211,7 @@ describe("initial destination", () => {
 				{ ...host, canExecuteLocally: false },
 				{ execution_mode: "Local" },
 			),
-		).toBe("device");
+		).toBe("hub");
 		const marked = withDeviceEventSource({ config: [] as number[] }).config;
 		expect(
 			initialDestination(host, { config: marked, execution_mode: "Remote" }),

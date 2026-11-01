@@ -75,6 +75,7 @@ impl Config {
                 ("RUST_LOG", "warn".into()),
                 ("HTTP_PROXY", proxy.clone()),
                 ("HTTPS_PROXY", proxy.clone()),
+                ("CHANNEL_NATS_PROXY_URL", proxy.clone()),
                 ("http_proxy", proxy.clone()),
                 ("https_proxy", proxy),
                 ("NO_PROXY", String::new()),

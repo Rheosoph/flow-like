@@ -74,7 +74,7 @@ pub struct QuestionnaireSchema {
 
 /// Questionnaire schema version. Bump when questions change so stored
 /// assessments can be migrated / re-reviewed.
-pub const QUESTIONNAIRE_VERSION: i32 = 1;
+pub const QUESTIONNAIRE_VERSION: i32 = 2;
 
 // ---------------------------------------------------------------------------
 // Stable keys
@@ -88,6 +88,7 @@ pub mod keys {
     pub const CHATBOT: &str = "interacts_with_people";
     pub const GENAI: &str = "generates_content";
     pub const EMOTION_BIOMETRIC: &str = "emotion_or_biometric";
+    pub const ACK_TRANSPARENCY: &str = "ack_transparency";
     pub const HUMAN_OVERSIGHT: &str = "human_oversight";
     pub const PERSONAL_DATA: &str = "uses_personal_data";
     pub const INSTRUCTIONS: &str = "instructions_documented";
@@ -268,9 +269,10 @@ fn answer_str<'a>(answers: &'a Value, key: &str) -> Option<&'a str> {
 }
 
 fn answer_yes(answers: &Value, key: &str) -> Option<bool> {
-    match answer_str(answers, key) {
-        Some("yes") => Some(true),
-        Some("no") => Some(false),
+    match answers.get(key) {
+        Some(Value::Bool(value)) => Some(*value),
+        Some(Value::String(value)) if value == "yes" => Some(true),
+        Some(Value::String(value)) if value == "no" => Some(false),
         _ => None,
     }
 }
@@ -284,7 +286,18 @@ fn answer_list<'a>(answers: &'a Value, key: &str) -> Vec<&'a str> {
 }
 
 fn is_unsure(answers: &Value, key: &str) -> bool {
-    answer_str(answers, key) == Some(UNSURE)
+    answer_str(answers, key) == Some(UNSURE) || answer_list(answers, key).contains(&UNSURE)
+}
+
+fn has_transparency_duties(obligations: &[TransparencyObligation]) -> bool {
+    obligations.iter().any(|obligation| {
+        matches!(
+            obligation,
+            TransparencyObligation::DiscloseAiInteraction
+                | TransparencyObligation::LabelGeneratedContent
+                | TransparencyObligation::DiscloseEmotionBiometric
+        )
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -396,14 +409,12 @@ fn conformity_score(
 ) -> (i32, Vec<String>) {
     let mut rationale = Vec::new();
 
-    // Transparency (25): satisfied when all triggered obligations are
-    // acknowledged. With no obligations, full marks.
-    let transparency = if obligations.is_empty() {
+    // Transparency (25): acknowledge the triggered Art. 50 duties. Oversight
+    // and technical documentation have their own questionnaire answers.
+    let transparency = if !has_transparency_duties(obligations) {
         25.0
     } else {
-        // Acknowledged when the corresponding answer is affirmative; the
-        // wizard requires explicit acknowledgement of each obligation.
-        let ack = answer_yes(answers, "ack_transparency").unwrap_or(false);
+        let ack = answer_yes(answers, keys::ACK_TRANSPARENCY).unwrap_or(false);
         if ack { 25.0 } else { 8.0 }
     };
 
@@ -441,7 +452,7 @@ fn conformity_score(
         None => 9.0,
     };
 
-    // Model posture (15): penalise unvetted / systemic-risk / dynamic models.
+    // Model posture (15): require a reviewed registry entry and a fixed model.
     let posture = model_posture_score(signals);
     if signals.models.iter().any(|m| m.dynamic_selector) {
         rationale
@@ -450,7 +461,7 @@ fn conformity_score(
 
     let total = (transparency + board + oversight + data + posture).round() as i32;
     rationale.push(format!(
-        "Score breakdown — transparency {:.0}, board {:.0}, oversight {:.0}, data {:.0}, posture {:.0}",
+        "Score breakdown: transparency {:.0}, board {:.0}, oversight {:.0}, data {:.0}, posture {:.0}",
         transparency, board, oversight, data, posture
     ));
     (total.clamp(0, 100), rationale)
@@ -467,7 +478,14 @@ fn model_posture_score(signals: &Signals) -> f32 {
     let known = signals
         .models
         .iter()
-        .filter(|m| m.provider.is_some() && !m.dynamic_selector)
+        .filter(|m| {
+            m.provider
+                .as_ref()
+                .is_some_and(|provider| !provider.trim().is_empty())
+                && m.vetted
+                && m.posture_known
+                && !m.dynamic_selector
+        })
         .count();
     let ratio = known as f32 / signals.models.len() as f32;
     let base = 15.0 * ratio;
@@ -544,7 +562,15 @@ pub fn recommendations(
             category: "Classification".to_string(),
             potential_points: 0,
             article: None,
-            answer_key: Some(keys::CONSEQUENTIAL.to_string()),
+            answer_key: [
+                keys::CONSEQUENTIAL,
+                keys::CHATBOT,
+                keys::GENAI,
+                keys::EMOTION_BIOMETRIC,
+            ]
+            .into_iter()
+            .find(|key| is_unsure(answers, key))
+            .map(str::to_string),
         });
         return recs;
     }
@@ -553,17 +579,19 @@ pub fn recommendations(
     let risk = classification.risk_category;
 
     // Transparency (25): acknowledge the triggered Art. 50 duties.
-    if !obligations.is_empty() && !answer_yes(answers, "ack_transparency").unwrap_or(false) {
+    if has_transparency_duties(obligations)
+        && !answer_yes(answers, keys::ACK_TRANSPARENCY).unwrap_or(false)
+    {
         recs.push(Recommendation {
             id: "ack-transparency".to_string(),
             title: "Acknowledge transparency obligations".to_string(),
             detail:
-                "Confirm that the triggered Art. 50 duties — disclosing AI interaction, labelling generated content and informing people of emotion/biometric processing where relevant — are implemented. This lifts the transparency component to full marks."
+                "Confirm that the applicable disclosures and content labels shown in the assessment are implemented. Record your confirmation in Interaction & content to complete the transparency component."
                     .to_string(),
             category: "Transparency".to_string(),
             potential_points: 17,
             article: Some("Art. 50".to_string()),
-            answer_key: Some("ack_transparency".to_string()),
+            answer_key: Some(keys::ACK_TRANSPARENCY.to_string()),
         });
     }
 
@@ -637,7 +665,7 @@ pub fn recommendations(
                     id: "document-instructions".to_string(),
                     title: "Document intended use and limitations".to_string(),
                     detail:
-                        "This app processes personal data but its intended use and limitations are not documented. Publish clear usage instructions to satisfy data-governance duties."
+                        "This app processes personal data but its intended use and limitations are not documented. Document them, then confirm the answer in Data handling to complete this score component."
                             .to_string(),
                     category: "Data".to_string(),
                     potential_points: 9,
@@ -651,7 +679,7 @@ pub fn recommendations(
             id: "confirm-personal-data".to_string(),
             title: "Confirm personal-data handling".to_string(),
             detail:
-                "Whether the app processes personal data is unanswered, so only partial data-governance credit is given. Confirm the answer to score this component."
+                "Confirm whether the app processes personal data in Data handling. If it does, also document its intended use and limitations to receive full credit for this component."
                     .to_string(),
             category: "Data".to_string(),
             potential_points: 6,
@@ -669,7 +697,7 @@ pub fn recommendations(
             let detail = if has_dynamic {
                 "A dynamic model selector means the model actually used cannot be verified. Pin to specific, vetted models and register their GPAI posture in the model registry."
             } else {
-                "Some attached models have an unknown provider or posture. Register them in the GPAI model registry with a known posture to raise this component."
+                "Some attached models have not been vetted or have an unknown provider or posture. Have a platform reviewer record their provider, vetting decision and known posture in the GPAI model registry."
             };
             recs.push(Recommendation {
                 id: "vet-models".to_string(),
@@ -796,22 +824,22 @@ pub fn questionnaire_schema() -> QuestionnaireSchema {
                         options: vec![],
                         required: true,
                     },
+                    Question {
+                        key: keys::ACK_TRANSPARENCY.to_string(),
+                        label: "Have you implemented the applicable transparency disclosures and content labels?".to_string(),
+                        kind: QuestionKind::YesNo,
+                        help: Some("Review the obligations shown in this assessment. Confirm only after the applicable AI interaction notices, generated-content labels and emotion or biometric processing notices are in place. If none apply, this answer does not change your score.".to_string()),
+                        options: vec![],
+                        required: false,
+                    },
                 ],
                 high_risk_only: false,
             },
             Screen {
-                id: "high_risk".to_string(),
-                title: "High-risk obligations".to_string(),
-                description: "Because your app may influence consequential decisions, a few extra duties apply.".to_string(),
+                id: "data".to_string(),
+                title: "Data handling".to_string(),
+                description: "Confirm how the app handles personal data and whether its intended use and limitations are documented.".to_string(),
                 questions: vec![
-                    Question {
-                        key: keys::HUMAN_OVERSIGHT.to_string(),
-                        label: "Is there meaningful human oversight before decisions take effect?".to_string(),
-                        kind: QuestionKind::YesNo,
-                        help: None,
-                        options: vec![],
-                        required: true,
-                    },
                     Question {
                         key: keys::PERSONAL_DATA.to_string(),
                         label: "Does your app process personal data?".to_string(),
@@ -824,11 +852,25 @@ pub fn questionnaire_schema() -> QuestionnaireSchema {
                         key: keys::INSTRUCTIONS.to_string(),
                         label: "Have you documented intended use and limitations for users?".to_string(),
                         kind: QuestionKind::YesNo,
-                        help: None,
+                        help: Some("This answer contributes to the data-handling score when the app processes personal data.".to_string()),
                         options: vec![],
                         required: true,
                     },
                 ],
+                high_risk_only: false,
+            },
+            Screen {
+                id: "high_risk".to_string(),
+                title: "High-risk obligations".to_string(),
+                description: "Because your app may influence consequential decisions, confirm the human oversight it provides.".to_string(),
+                questions: vec![Question {
+                    key: keys::HUMAN_OVERSIGHT.to_string(),
+                    label: "Is there meaningful human oversight before decisions take effect?".to_string(),
+                    kind: QuestionKind::YesNo,
+                    help: None,
+                    options: vec![],
+                    required: true,
+                }],
                 high_risk_only: true,
             },
         ],
@@ -838,6 +880,7 @@ pub fn questionnaire_schema() -> QuestionnaireSchema {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::routes::app::ai_act::signals::DetectedModel;
     use serde_json::json;
 
     #[test]
@@ -854,6 +897,23 @@ mod tests {
         let answers = json!({ keys::CONSEQUENTIAL: UNSURE });
         let c = classify(&answers, &Signals::default());
         assert_eq!(c.risk_category, RiskCategory::Undetermined);
+    }
+
+    #[test]
+    fn multi_select_unsure_is_undetermined() {
+        let answers = json!({ keys::CONSEQUENTIAL: ["employment", UNSURE] });
+        let c = classify(&answers, &Signals::default());
+        assert_eq!(c.risk_category, RiskCategory::Undetermined);
+        assert!(c.conformity_score.is_none());
+    }
+
+    #[test]
+    fn uncertainty_recommendation_targets_the_unanswered_question() {
+        let answers = json!({ keys::GENAI: UNSURE });
+        let signals = Signals::default();
+        let c = classify(&answers, &signals);
+        let recs = recommendations(&answers, &signals, &c);
+        assert_eq!(recs[0].answer_key.as_deref(), Some(keys::GENAI));
     }
 
     #[test]
@@ -894,6 +954,159 @@ mod tests {
         let c = classify(&answers, &signals);
         let recs = recommendations(&answers, &signals, &c);
         assert!(recs.iter().any(|r| r.id == "ack-transparency"));
+    }
+
+    #[test]
+    fn limited_risk_recommendations_have_visible_questions() {
+        let answers = json!({ keys::CHATBOT: "yes", keys::PERSONAL_DATA: "yes" });
+        let signals = Signals::default();
+        let c = classify(&answers, &signals);
+        let recs = recommendations(&answers, &signals, &c);
+        let schema = questionnaire_schema();
+        let visible_questions: Vec<_> = schema
+            .screens
+            .iter()
+            .filter(|screen| !screen.high_risk_only)
+            .flat_map(|screen| &screen.questions)
+            .map(|question| question.key.as_str())
+            .collect();
+
+        for key in [
+            keys::ACK_TRANSPARENCY,
+            keys::PERSONAL_DATA,
+            keys::INSTRUCTIONS,
+        ] {
+            assert!(visible_questions.contains(&key), "missing question: {key}");
+        }
+        for key in recs.iter().filter_map(|rec| rec.answer_key.as_deref()) {
+            assert!(
+                visible_questions.contains(&key),
+                "inaccessible recommendation: {key}"
+            );
+        }
+    }
+
+    #[test]
+    fn confirming_transparency_and_data_updates_the_score() {
+        let mut answers = json!({ keys::CHATBOT: "yes" });
+        let signals = Signals::default();
+        let before = classify(&answers, &signals).conformity_score.unwrap();
+
+        answers[keys::ACK_TRANSPARENCY] = json!("yes");
+        answers[keys::PERSONAL_DATA] = json!("no");
+        let after = classify(&answers, &signals);
+        assert_eq!(after.conformity_score, Some(before + 17 + 6));
+        let recs = recommendations(&answers, &signals, &after);
+        assert!(!recs.iter().any(|rec| rec.id == "ack-transparency"));
+        assert!(!recs.iter().any(|rec| rec.id == "confirm-personal-data"));
+    }
+
+    #[test]
+    fn boolean_answers_score_the_same_as_yes_no_answers() {
+        let signals = Signals::default();
+        let boolean_answers = json!({
+            keys::CHATBOT: true,
+            keys::GENAI: false,
+            keys::EMOTION_BIOMETRIC: false,
+            keys::ACK_TRANSPARENCY: true,
+            keys::PERSONAL_DATA: true,
+            keys::INSTRUCTIONS: true,
+            keys::HUMAN_OVERSIGHT: false,
+            keys::CONSEQUENTIAL: ["employment"],
+        });
+        let string_answers = json!({
+            keys::CHATBOT: "yes",
+            keys::GENAI: "no",
+            keys::EMOTION_BIOMETRIC: "no",
+            keys::ACK_TRANSPARENCY: "yes",
+            keys::PERSONAL_DATA: "yes",
+            keys::INSTRUCTIONS: "yes",
+            keys::HUMAN_OVERSIGHT: "no",
+            keys::CONSEQUENTIAL: ["employment"],
+        });
+        let classification = classify(&boolean_answers, &signals);
+        assert_eq!(classification, classify(&string_answers, &signals));
+        assert_eq!(
+            recommendations(&boolean_answers, &signals, &classification),
+            recommendations(&string_answers, &signals, &classification)
+        );
+    }
+
+    #[test]
+    fn personal_data_requires_documented_instructions_for_full_credit() {
+        let mut answers = json!({ keys::PERSONAL_DATA: "yes", keys::INSTRUCTIONS: "no" });
+        let signals = Signals::default();
+        let before = classify(&answers, &signals);
+        assert_eq!(before.risk_category, RiskCategory::Minimal);
+        assert!(
+            recommendations(&answers, &signals, &before)
+                .iter()
+                .any(|rec| rec.id == "document-instructions")
+        );
+
+        answers[keys::INSTRUCTIONS] = json!("yes");
+        let after = classify(&answers, &signals);
+        assert_eq!(
+            after.conformity_score,
+            before.conformity_score.map(|score| score + 9)
+        );
+        assert!(
+            !recommendations(&answers, &signals, &after)
+                .iter()
+                .any(|rec| rec.id == "document-instructions")
+        );
+    }
+
+    #[test]
+    fn high_risk_without_transparency_duties_needs_no_transparency_ack() {
+        let mut answers = json!({ keys::CONSEQUENTIAL: ["employment"] });
+        let signals = Signals::default();
+        let before = classify(&answers, &signals);
+        assert_eq!(before.risk_category, RiskCategory::High);
+        assert!(
+            !recommendations(&answers, &signals, &before)
+                .iter()
+                .any(|rec| rec.id == "ack-transparency")
+        );
+
+        answers[keys::ACK_TRANSPARENCY] = json!("yes");
+        assert_eq!(
+            classify(&answers, &signals).conformity_score,
+            before.conformity_score
+        );
+    }
+
+    #[test]
+    fn model_posture_requires_vetting_known_posture_and_a_fixed_model() {
+        let mut signals = Signals {
+            models: vec![DetectedModel {
+                model_id: "example-model".to_string(),
+                provider: Some("example-provider".to_string()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let answers = json!({});
+        let before = classify(&answers, &signals).conformity_score.unwrap();
+        assert_eq!(model_posture_score(&signals), 0.0);
+
+        signals.models[0].vetted = true;
+        assert_eq!(model_posture_score(&signals), 0.0);
+        signals.models[0].posture_known = true;
+        assert_eq!(model_posture_score(&signals), 15.0);
+        let after = classify(&answers, &signals);
+        assert_eq!(after.conformity_score, Some(before + 15));
+        assert!(
+            !recommendations(&answers, &signals, &after)
+                .iter()
+                .any(|rec| rec.id == "vet-models")
+        );
+
+        signals.models[0].dynamic_selector = true;
+        assert_eq!(model_posture_score(&signals), 0.0);
+        signals.models[0].dynamic_selector = false;
+        signals.models[0].provider = Some(" ".to_string());
+        assert_eq!(model_posture_score(&signals), 0.0);
     }
 
     #[test]

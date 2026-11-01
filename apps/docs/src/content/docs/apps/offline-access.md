@@ -66,9 +66,14 @@ write has reached the hub.
 4. Confirm that the queue is empty and the status is **Synced** before treating
    the device's work as delivered.
 
-Changes belong to their originating account. Work from another account waits
-until that account signs in; switching accounts does not send those changes as
-the new user.
+Changes belong to their originating Profile, hub, and account. Work waits for
+that Profile's login; signing in to another Profile does not send its changes.
+
+Older Desktop versions saved queues without a Profile identity. To assign that
+work, sign in to the original hub and account, open **Offline access**, and select
+**Recover older pending work**. Review the Profile and account in the confirmation
+dialog. Recovery also assigns older pending run reports. Existing caches for the
+same App in the target Profile are left unchanged and reported as conflicts.
 
 | State or problem | What to do |
 | --- | --- |

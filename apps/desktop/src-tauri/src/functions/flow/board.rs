@@ -545,6 +545,8 @@ pub struct CheckFlowScriptReconcileResult {
     /// The reconciled command plan (apply-preview UI); empty when parsing or compiling failed.
     pub board_commands: Vec<flow_like::flow::copilot::BoardCommand>,
     pub corrections: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     pub diagnostics: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub structured_diagnostics: Vec<flow_like::flow::ast::FlowScriptDiagnostic>,
@@ -612,6 +614,7 @@ pub async fn check_flowscript_reconcile(
             command_count: 0,
             board_commands: Vec::new(),
             corrections: Vec::new(),
+            warnings: Vec::new(),
             changes: Default::default(),
             diagnostics,
             structured_diagnostics,
@@ -663,6 +666,7 @@ pub async fn check_flowscript_reconcile(
                 command_count: 0,
                 board_commands: Vec::new(),
                 corrections: Vec::new(),
+                warnings: Vec::new(),
                 changes: Default::default(),
                 diagnostics: vec![format!("FlowScript compiler error: {error}")],
                 structured_diagnostics: Vec::new(),
@@ -680,6 +684,7 @@ pub async fn check_flowscript_reconcile(
         command_count: result.board_commands.len(),
         board_commands: result.board_commands,
         corrections: result.corrections,
+        warnings: result.warnings,
         diagnostics: result.diagnostics,
         structured_diagnostics: result.structured_diagnostics,
         changes: result.changes,

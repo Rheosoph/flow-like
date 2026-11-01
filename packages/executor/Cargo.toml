@@ -44,6 +44,7 @@ tauri = ["flow-like-catalog/tauri"]
 channel-aws = ["flow-like-channels/aws"]
 channel-azure = ["flow-like-channels/azure"]
 channel-gcp = ["flow-like-channels/gcp"]
+channel-nats = ["flow-like-channels/nats"]
 
 [dependencies]
 flow-like-runtime = { workspace = true, features = ["flow-metadata", "flow-runtime", "model"] }

@@ -11,7 +11,7 @@ use axum::{
     extract::{Path, Query, RawQuery, State},
     http::{HeaderMap, header},
     response::{IntoResponse, Redirect, Response},
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use flow_like::{
     a2ui::widget::Page,
@@ -101,6 +101,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/a/{app_id}", get(bootstrap))
         .route("/a/{app_id}/invoke", post(invoke))
+        .route("/a/{app_id}/runs/{run_id}", delete(cancel))
         .route("/a/{app_id}/prerun", get(prerun).post(prerun_page))
         .route("/a/{app_id}/routes", get(published_routes))
         .route("/a/{app_id}/widgets/{widget_id}", get(widget))
@@ -430,6 +431,25 @@ async fn invoke(
     let session = session_id(&headers)?;
     query.variant = variant::pin_from_request(&headers, query.variant.take());
     invoke_hosted_event(state, app_id, event, caller, session, query, body).await
+}
+
+async fn cancel(
+    State(state): State<AppState>,
+    Path((app_id, run_id)): Path<(String, String)>,
+    Query(route): Query<RouteQuery>,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let HostedRoute { event, config, .. } = load_route(&state, &app_id, &route.path()).await?;
+    let caller = caller(&state, &headers, config).await?;
+    let subject = hosted_subject(
+        &event.id,
+        caller.as_ref().unwrap_or(&AppUser::Unauthorized),
+        session_id(&headers)?,
+    )?;
+    let result =
+        super::execution::cancel::cancel_hosted_run(&state, &app_id, &event.id, &run_id, &subject)
+            .await?;
+    Ok(private_json(result))
 }
 
 async fn prerun(

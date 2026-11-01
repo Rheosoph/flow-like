@@ -1,5 +1,12 @@
 import { isTransportFailure } from "@flow-like/flow-like-ui/lib/api-error";
 import {
+	getExecutionRuntime,
+	releaseExecutionRuntime,
+	resetExecutionRuntimes,
+} from "@flow-like/flow-like-ui/lib/execution/runtime-client";
+import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
+import { EXECUTION_METADATA } from "@flow-like/flow-like-ui/lib/execution/types";
+import {
 	DEFAULT_REQUEST_TIMEOUT_MS,
 	DISPATCH_REQUEST_TIMEOUT_MS,
 	RequestTimeoutError,
@@ -97,7 +104,9 @@ function execute(state: WebEventState, cb = vi.fn(), onEventId = vi.fn()) {
 	);
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+	await resetExecutionRuntimes();
+	await getExecutionRuntime("transport-test-warmup");
 	vi.useFakeTimers();
 	vi.spyOn(console, "log").mockImplementation(() => {});
 	vi.spyOn(console, "info").mockImplementation(() => {});
@@ -110,7 +119,8 @@ beforeEach(() => {
 	mocks.getConsentedProviderIds.mockResolvedValue(new Set());
 });
 
-afterEach(() => {
+afterEach(async () => {
+	await resetExecutionRuntimes();
 	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
 	vi.useRealTimers();
@@ -275,9 +285,187 @@ describe("web invoke deadline", () => {
 		expect(steps).toContain("invoke.until_run_initiated");
 		expect(steps).not.toContain("invoke.until_error");
 	});
+
+	test("a clean EOF before completion rejects instead of finalizing a partial reply", async () => {
+		const seen = manualSseResponse();
+		const outcome = outcomeOf(execute(new WebEventState({ auth })));
+		await vi.advanceTimersByTimeAsync(0);
+		seen.stream?.enqueue(
+			sseFrame({ event_type: "chat_out", payload: { text: "partial" } }),
+		);
+		seen.stream?.close();
+		await vi.advanceTimersByTimeAsync(0);
+		expect((await outcome).error).toMatchObject({
+			message: expect.stringContaining("before"),
+		});
+	});
+
+	test("a handled error keeps reading until a later successful terminal event", async () => {
+		const seen = manualSseResponse();
+		const cb = vi.fn();
+		const outcome = outcomeOf(execute(new WebEventState({ auth }), cb));
+		await vi.advanceTimersByTimeAsync(0);
+		seen.stream?.enqueue(
+			sseFrame({
+				event_type: "error",
+				payload: { message: "Recovered node error" },
+			}),
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		expect(seen.cancelled).toBe(false);
+		seen.stream?.enqueue(
+			sseFrame({ event_type: "completed", payload: { status: "completed" } }),
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		expect((await outcome).error).toBeUndefined();
+		expect(
+			cb.mock.calls
+				.flatMap(([events]) => events)
+				.map((event) => event.event_type),
+		).toEqual(["error", "completed"]);
+	});
+
+	test("preserves engine metadata and raw device events in the shared task", async () => {
+		const seen = manualSseResponse();
+		const metadata = {
+			taskId: "metadata-task",
+			streamId: "session-1",
+			scope: "metadata-scope",
+			appId: "app-1",
+			eventId: "event-1",
+			title: "Support",
+			startedAt: new Date().toISOString(),
+		};
+		const state = new WebEventState({ auth });
+		const outcome = outcomeOf(
+			state.executeEvent(
+				"app-1",
+				"event-1",
+				{
+					id: "node-1",
+					payload: {},
+					[EXECUTION_METADATA]: metadata,
+				} as never,
+				false,
+				undefined,
+				undefined,
+				true,
+			),
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		seen.stream?.enqueue(
+			sseFrame({ event_type: "device_request", payload: { id: "device-1" } }),
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		const runtime = await getExecutionRuntime(metadata.scope);
+		expect(runtime.getTask(metadata.taskId)).toMatchObject({
+			...metadata,
+			events: [expect.objectContaining({ event_type: "device_request" })],
+		});
+		seen.stream?.enqueue(sseFrame({ event_type: "completed", payload: {} }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect((await outcome).error).toBeUndefined();
+	});
 });
 
 describe("web run cancellation", () => {
+	test("uses the cancelling tab's renewed credentials after the initiating client disconnects", async () => {
+		const originalAuth = {
+			isAuthenticated: true,
+			user: { access_token: "original", profile: { sub: "viewer" } },
+		} as never;
+		let signal: AbortSignal | undefined;
+		const bearers: (string | null)[] = [];
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async (_url: string, init?: RequestInit) => {
+				if (init?.method === "DELETE") {
+					const bearer = new Headers(init.headers).get("Authorization");
+					bearers.push(bearer);
+					return Response.json(
+						{},
+						{ status: bearer === "Bearer renewed-cancel" ? 200 : 401 },
+					);
+				}
+				signal = init?.signal ?? undefined;
+				return new Response(
+					new ReadableStream<Uint8Array>({
+						start(controller) {
+							controller.enqueue(
+								sseFrame({
+									event_type: "run_initiated",
+									payload: { run_id: "orphaned-run" },
+								}),
+							);
+							signal?.addEventListener("abort", () =>
+								controller.error(new DOMException("cancelled", "AbortError")),
+							);
+						},
+					}),
+				);
+			}),
+		);
+		const firstOutcome = outcomeOf(
+			execute(new WebEventState({ auth: originalAuth })),
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		const scope = JSON.stringify([getApiOrigin(), "", "viewer"]);
+		releaseExecutionRuntime(scope);
+		await vi.advanceTimersByTimeAsync(0);
+		expect((await firstOutcome).error).toBeDefined();
+		expect(signal?.aborted).toBe(false);
+		const currentAuth = {
+			isAuthenticated: true,
+			user: {
+				access_token: "current-cancel",
+				expired: false,
+				profile: { sub: "viewer" },
+			},
+			signinSilent: vi.fn(async () => ({
+				access_token: "renewed-cancel",
+				expired: false,
+				profile: { sub: "viewer" },
+			})),
+		} as never;
+		await new WebEventState({ auth: currentAuth }).cancelExecution(
+			"orphaned-run",
+		);
+		expect(bearers).toEqual(["Bearer current-cancel", "Bearer renewed-cancel"]);
+		expect(signal?.aborted).toBe(true);
+	});
+
+	test("does not send a different account's bearer to a run started before an account change", async () => {
+		const seen = manualSseResponse();
+		const backend = {
+			auth: {
+				isAuthenticated: true,
+				user: { access_token: "original", profile: { sub: "viewer-1" } },
+			} as never,
+		};
+		const state = new WebEventState(backend);
+		const outcome = outcomeOf(execute(state));
+		await vi.advanceTimersByTimeAsync(0);
+		seen.stream?.enqueue(
+			sseFrame({
+				event_type: "run_initiated",
+				payload: { run_id: "run-owner" },
+			}),
+		);
+		await vi.advanceTimersByTimeAsync(0);
+		backend.auth = {
+			isAuthenticated: true,
+			user: { access_token: "other", profile: { sub: "viewer-2" } },
+		} as never;
+		await expect(state.cancelExecution("run-owner")).rejects.toThrow(
+			"account or workspace changed",
+		);
+		expect(fetch).toHaveBeenCalledTimes(1);
+		expect(seen.signal?.aborted).toBe(false);
+		seen.stream?.enqueue(sseFrame({ event_type: "completed", payload: {} }));
+		await vi.advanceTimersByTimeAsync(0);
+		expect((await outcome).error).toBeUndefined();
+	});
+
 	test("cancelling a running invoke stops the server run and closes this client's stream", async () => {
 		mocks.apiDelete.mockResolvedValue({ cancelled: true });
 		let signal: AbortSignal | undefined;
@@ -285,6 +473,8 @@ describe("web run cancellation", () => {
 		vi.stubGlobal(
 			"fetch",
 			vi.fn(async (_url: string, init?: RequestInit) => {
+				if (init?.method === "DELETE")
+					return Response.json({ cancelled: true });
 				signal = init?.signal ?? undefined;
 				return new Response(
 					new ReadableStream<Uint8Array>({
@@ -310,10 +500,17 @@ describe("web run cancellation", () => {
 			sseFrame({ event_type: "run_initiated", payload: { run_id: "run/1" } }),
 		);
 		await vi.advanceTimersByTimeAsync(0);
-		await state.cancelExecution("run/1");
+		// A second backend has no local controller or run map for this execution.
+		await new WebEventState({ auth }).cancelExecution("run/1");
 
 		expect(mocks.cancelDeviceCommands).toHaveBeenCalledWith("run/1");
-		expect(mocks.apiDelete).toHaveBeenCalledWith("execution/run/run%2F1", auth);
+		expect(fetch).toHaveBeenCalledWith(
+			"https://api.test/api/v1/execution/run/run%2F1",
+			expect.objectContaining({
+				method: "DELETE",
+				headers: expect.objectContaining({ authorization: "Bearer token-a" }),
+			}),
+		);
 		expect(signal?.aborted).toBe(true);
 		expect((await outcome).error).toBeDefined();
 		expect(cb).toHaveBeenCalledTimes(1);

@@ -6,6 +6,7 @@ use flow_like::flow::compiled::{
     CompiledRunTemplate, TemplateCache,
     prerun::{PAGE_ACTION_ID_PREFIX, PrerunPageExecution, page_execution_revision},
 };
+use flow_like::flow::event::Event;
 use flow_like::flow::execution::log::LogMessage;
 use flow_like::flow::execution::log_query::LogQuery;
 use flow_like::flow::execution::log_summary::LogSummary;
@@ -422,6 +423,10 @@ pub(crate) async fn resolve_run_template(
 
 #[derive(Default)]
 struct ExecutionOverrides {
+    native_auth: Option<crate::native_auth::SessionBinding>,
+    resolved_event: Option<Event>,
+    emit_terminal_event: bool,
+    execution_profile: Option<crate::profile::UserProfile>,
     require_remembered_automation_approval: bool,
     cancellation_token: Option<CancellationToken>,
     cancellation_log_level: Option<LogLevel>,
@@ -665,7 +670,7 @@ async fn execute_prepared(
     credentials: Option<SharedCredentials>,
     token: Option<String>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
-    overrides: ExecutionOverrides,
+    mut overrides: ExecutionOverrides,
     started: Arc<AtomicBool>,
     timer: &mut PreambleTimer,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
@@ -684,23 +689,61 @@ async fn execute_prepared(
     // Desktop execution is trusted — allow secret overrides from local runtime vars
     payload.filter_secrets = Some(false);
 
-    let mut profile = TauriSettingsState::current_profile(&app_handle).await?;
+    let mut profile = if let Some(profile) = overrides.execution_profile.as_ref() {
+        profile.clone()
+    } else if let Some(binding) = overrides.native_auth.as_ref() {
+        let settings = TauriSettingsState::construct(&app_handle).await?;
+        let settings = settings.lock().await;
+        settings
+            .profiles
+            .get(&binding.profile_id)
+            .cloned()
+            .ok_or_else(|| TauriFunctionError::new("The execution profile no longer exists"))?
+    } else {
+        TauriSettingsState::current_profile(&app_handle).await?
+    };
+    if overrides.native_auth.is_none()
+        && token
+            .as_deref()
+            .is_some_and(|token| !token.trim_start_matches("Bearer ").starts_with("pat_"))
+    {
+        overrides.native_auth =
+            crate::event_sink::oauth::capture_authority(&profile.hub_profile, token.as_deref())
+                .await?;
+    }
+    if let Some(binding) = overrides.native_auth.as_ref() {
+        if !binding.is_current()
+            || profile.hub_profile.id != binding.profile_id
+            || flow_like::hub::hub_origin(&profile.hub_profile.hub, profile.hub_profile.secure)
+                .as_deref()
+                != Some(binding.hub.as_str())
+        {
+            return Err(TauriFunctionError::new(
+                "The execution profile or authentication session changed",
+            ));
+        }
+    }
     if let Some(hub) = &overrides.execution_hub {
         profile.hub_profile.hub = hub.clone();
     }
     timer.lap("profile");
 
-    let request_authorizer = crate::execution_credentials::request_authorizer(
-        &profile.hub_profile.hub,
-        &app_id,
-        token.as_deref(),
-        overrides.execution_session_id.as_deref(),
-        overrides.execution_webview.as_deref(),
-    );
+    let request_authorizer = if let Some(binding) = overrides.native_auth.clone() {
+        crate::execution_credentials::native_request_authorizer(binding, &app_id)
+    } else {
+        crate::execution_credentials::request_authorizer(
+            &profile.hub_profile.hub,
+            &app_id,
+            token.as_deref(),
+            overrides.execution_session_id.as_deref(),
+            overrides.execution_webview.as_deref(),
+        )
+    };
 
     let storage = RunStorage::resolve(
         &app_handle,
         RunStorageRequest {
+            profile_id: Some(&profile.hub_profile.id),
             visibility: &app.visibility,
             app_id: &app_id,
             hub: &profile.hub_profile.hub,
@@ -708,6 +751,7 @@ async fn execute_prepared(
             token: token.as_deref(),
             session_id: overrides.execution_session_id.as_deref(),
             webview: overrides.execution_webview.as_deref(),
+            native_auth: overrides.native_auth.as_ref(),
             event_id: event_id.as_deref(),
             device_credentials: credentials,
         },
@@ -715,12 +759,28 @@ async fn execute_prepared(
     .await?;
     let mut execution_state = (*flow_like_state).clone();
     execution_state.request_authorizer = Some(request_authorizer);
+    #[cfg(desktop)]
+    {
+        execution_state.device_model_connector = overrides
+            .native_auth
+            .as_ref()
+            .map(|binding| crate::device_models::connector_for_session(binding.clone()));
+    }
     let credentials = storage.install(&mut execution_state).await?;
     let flow_like_state = Arc::new(execution_state);
     timer.lap("renewable_credentials");
 
     if let Some(event_id) = &event_id {
-        let intermediate_event = app.get_event(event_id, None).await?;
+        let intermediate_event = if let Some(event) = overrides.resolved_event.as_ref() {
+            if event.id != *event_id {
+                return Err(TauriFunctionError::new(
+                    "The resolved Event does not match the requested Event",
+                ));
+            }
+            event.clone()
+        } else {
+            app.get_event(event_id, None).await?
+        };
         if intermediate_event.is_device_source() {
             return Err(TauriFunctionError::new(
                 "This event runs on its deployed devices. Open Devices to run it.",
@@ -1094,7 +1154,7 @@ async fn execute_prepared(
         run.status.clone()
     };
 
-    if event_id.is_some() {
+    if event_id.is_some() || overrides.emit_terminal_event {
         let _ = buffered_sender
             .send(completed_event(
                 &run_id,
@@ -1119,6 +1179,7 @@ async fn execute_prepared(
                 hub: &profile.hub_profile.hub,
                 secure: profile.hub_profile.secure,
                 token: token_for_report.as_deref(),
+                native_auth: overrides.native_auth.as_ref(),
             },
         )
         .await;
@@ -1134,8 +1195,7 @@ async fn execute_prepared(
 
 /// Starts one run of the daemon of `event_id`, on every start and restart.
 /// An online app's run signs in with `token` only while `token_owner`, whom
-/// it was verified for, is signed in on the current profile's hub, and then
-/// stays on that hub.
+/// it was verified for, is signed in to the trigger's saved profile and hub.
 pub(crate) async fn execute_daemon_event(
     app_handle: AppHandle,
     app_id: String,
@@ -1144,28 +1204,51 @@ pub(crate) async fn execute_daemon_event(
     cancellation_token: CancellationToken,
     token: Option<String>,
     token_owner: Option<TriggerAccount>,
+    profile_binding: Option<crate::event_sink::trigger_token::TriggerProfile>,
     oauth_tokens: Option<HashMap<String, OAuthToken>>,
     log_flush_interval: Duration,
     log_batch_size: usize,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let offline = app_is_offline(&app_handle, &app_id).await;
+    let profile_binding = profile_binding.ok_or_else(|| {
+        TauriFunctionError::new("Enable this daemon trigger again to bind it to a profile")
+    })?;
+    let (profile, captured_auth) = profile_binding.resolve(&app_handle).await?;
+    if !offline {
+        let account = TriggerAccount::signed_in_to(&app_handle, &profile.hub_profile).await;
+        ensure_signed_in_owner(
+            &event_id,
+            token.as_deref(),
+            token_owner.as_ref(),
+            account.as_ref(),
+        )?;
+    }
+    let native_auth =
+        crate::event_sink::trigger_token::execution_authority(captured_auth, token.as_deref())?;
+    let token = match native_auth.as_ref() {
+        Some(binding) if offline => Some(
+            binding
+                .cached_access_token()
+                .await
+                .map_err(|error| TauriFunctionError::new(&error))?,
+        ),
+        Some(binding) => Some(
+            binding
+                .access_token(None)
+                .await
+                .map_err(|error| TauriFunctionError::new(&error))?,
+        ),
+        None => token,
+    };
     let mut execution_hub = None;
     let (credentials, run_sub_override) = if offline {
         (None, None)
     } else {
         'credentials: {
-            let profile = TauriSettingsState::current_profile(&app_handle).await?;
-            let account = TriggerAccount::signed_in_to(&app_handle, &profile.hub_profile).await;
-            ensure_signed_in_owner(
-                &event_id,
-                token.as_deref(),
-                token_owner.as_ref(),
-                account.as_ref(),
-            )?;
             let token = token.as_deref().ok_or_else(|| {
                 TauriFunctionError::new("No token registered, cannot run online daemon event")
             })?;
-            let hub_url = profile.hub_profile.hub;
+            let hub_url = profile.hub_profile.hub.clone();
 
             if hub_url.is_empty() {
                 return Err(TauriFunctionError::new(
@@ -1180,15 +1263,13 @@ pub(crate) async fn execute_daemon_event(
                 token_kind = if token.starts_with("pat_") { "pat" } else { "jwt" },
                 "Fetching credentials for daemon event"
             );
-            let shared_credentials = match crate::execution_credentials::prepare(
-                &hub_url,
-                &app_id,
-                Some(token),
-                None,
-                None,
-            )
-            .await
-            {
+            let prepared = if let Some(binding) = native_auth.as_ref() {
+                crate::execution_credentials::prepare_native(binding.clone(), &app_id).await
+            } else {
+                crate::execution_credentials::prepare(&hub_url, &app_id, Some(token), None, None)
+                    .await
+            };
+            let shared_credentials = match prepared {
                 Ok(credentials) => credentials,
                 Err(err) if crate::offline_writes::run_storage::hub_unreachable(&err) => {
                     tracing::warn!(
@@ -1229,35 +1310,134 @@ pub(crate) async fn execute_daemon_event(
         }
     };
 
+    let (oauth_tokens, _) = crate::event_sink::oauth::resolve_tokens(
+        &profile.hub_profile.hub,
+        profile.hub_profile.secure,
+        token.as_deref(),
+        native_auth.as_ref(),
+        &oauth_tokens.unwrap_or_default(),
+    )
+    .await?;
+
+    crate::functions::ai::native_tool_bridge::with_execution_profile(
+        profile.hub_profile.id.clone(),
+        execute_internal(
+            app_handle,
+            app_id,
+            String::new(),
+            RunPayload {
+                id: String::new(),
+                payload,
+                runtime_variables: None,
+                filter_secrets: Some(false),
+            },
+            None,
+            None,
+            Some(event_id),
+            None,
+            false,
+            credentials,
+            token,
+            Some(oauth_tokens),
+            ExecutionOverrides {
+                require_remembered_automation_approval: true,
+                resolved_event: None,
+                emit_terminal_event: false,
+                native_auth,
+                execution_profile: Some(profile),
+                cancellation_token: Some(cancellation_token),
+                cancellation_log_level: Some(LogLevel::Info),
+                cancellation_log_message: Some("Daemon run stopped".to_string()),
+                log_flush_interval: Some(log_flush_interval),
+                log_batch_size: Some(log_batch_size),
+                run_sub_override,
+                execution_hub,
+                execution_session_id: None,
+                execution_webview: None,
+            },
+        ),
+    )
+    .await
+}
+
+/// Runs an approved FlowPilot operation without borrowing a window's credential lease.
+pub(crate) async fn execute_flowpilot(
+    app_handle: AppHandle,
+    app_id: String,
+    board_id: String,
+    event_id: Option<String>,
+    resolved_event: Option<Event>,
+    payload: RunPayload,
+    events: tauri::ipc::Channel<Vec<InterComEvent>>,
+    native_auth: Option<crate::native_auth::SessionBinding>,
+    execution_profile: crate::profile::UserProfile,
+    cancellation: CancellationToken,
+    stream_state: bool,
+) -> Result<Option<LogMeta>, TauriFunctionError> {
+    let token = match native_auth.as_ref() {
+        Some(binding) => Some(
+            binding
+                .access_token(None)
+                .await
+                .map_err(|error| TauriFunctionError::new(&error))?,
+        ),
+        None => None,
+    };
+    let execution_hub = native_auth.as_ref().map(|binding| binding.hub.clone());
+    let (requirements_board, requirements_version) = if let Some(event_id) = &event_id {
+        let state = TauriFlowLikeState::construct(&app_handle).await?;
+        let app = App::load(app_id.clone(), state).await?;
+        let event = match resolved_event.as_ref() {
+            Some(event) if event.id == *event_id => event.clone(),
+            Some(_) => {
+                return Err(TauriFunctionError::new(
+                    "The resolved Event does not match the requested Event",
+                ));
+            }
+            None => app.get_event(event_id, None).await?,
+        };
+        (event.board_id, event.board_version)
+    } else {
+        (board_id.clone(), None)
+    };
+    let requirements = super::board::get_board_run_requirements(
+        app_handle.clone(),
+        app_id.clone(),
+        requirements_board,
+        requirements_version,
+    )
+    .await?;
+    let oauth_tokens = crate::native_auth::oauth::resolve(
+        &app_handle,
+        native_auth.as_ref(),
+        &app_id,
+        &requirements.oauth_requirements,
+    )
+    .await
+    .map_err(|error| TauriFunctionError::new(&error))?;
     execute_internal(
         app_handle,
         app_id,
-        String::new(),
-        RunPayload {
-            id: String::new(),
-            payload,
-            runtime_variables: None,
-            filter_secrets: Some(false),
-        },
+        board_id,
+        payload,
         None,
+        Some(events),
+        event_id,
         None,
-        Some(event_id),
+        stream_state,
         None,
-        false,
-        credentials,
         token,
-        oauth_tokens,
+        Some(oauth_tokens),
         ExecutionOverrides {
-            require_remembered_automation_approval: true,
-            cancellation_token: Some(cancellation_token),
-            cancellation_log_level: Some(LogLevel::Info),
-            cancellation_log_message: Some("Daemon run stopped".to_string()),
-            log_flush_interval: Some(log_flush_interval),
-            log_batch_size: Some(log_batch_size),
-            run_sub_override,
+            native_auth,
+            execution_profile: Some(execution_profile),
+            resolved_event,
+            emit_terminal_event: true,
             execution_hub,
-            execution_session_id: None,
-            execution_webview: None,
+            cancellation_token: Some(cancellation),
+            // Auto mode never grants operating-system automation consent.
+            require_remembered_automation_approval: true,
+            ..Default::default()
         },
     )
     .await

@@ -8,6 +8,7 @@ use zip::write::SimpleFileOptions;
 /// Read document parts without trusting the archive's declared sizes for allocation.
 pub fn read_zip(data: &[u8]) -> Result<HashMap<String, Vec<u8>>> {
     let mut archive = zip::ZipArchive::new(Cursor::new(data))?;
+    archive.validate_header_consistency()?;
     let mut files = HashMap::new();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i)?;
@@ -963,7 +964,7 @@ mod security_tests {
     }
 
     #[test]
-    fn preserves_archive_keys_and_duplicate_last_entry_wins_behavior() {
+    fn preserves_archive_keys_and_rejects_ambiguous_duplicates() {
         assert_eq!(
             read_zip(&archive(&[("../escape", b"x")])).unwrap()["../escape"],
             b"x"
@@ -976,7 +977,12 @@ mod security_tests {
                 data[i..i + 5].copy_from_slice(b"first");
             }
         }
-        assert_eq!(read_zip(&data).unwrap()["first"], b"b");
+        assert!(
+            read_zip(&data)
+                .unwrap_err()
+                .to_string()
+                .contains("duplicate file names")
+        );
         let files = HashMap::from([("../escape".to_string(), b"kept".to_vec())]);
         assert_eq!(read_zip(&write_zip(&files).unwrap()).unwrap(), files);
     }

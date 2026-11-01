@@ -112,6 +112,22 @@ run = "bun run --cwd ./apps/docs dev"
 description = "Start FlowBook dev server"
 run = "bun run --cwd ./apps/book dev"
 
+[tasks."debug:desktop:sample"]
+description = "Capture a 10-second macOS thread sample of Flow Like"
+run = '''
+set -eu
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo "This task requires macOS and its sample command." >&2
+  exit 1
+fi
+
+sample_dir="$(mktemp -d /tmp/flow-like-hang.XXXXXX)"
+sample_file="$sample_dir/sample.txt"
+printf 'Keep Flow Like running until sampling finishes.\nOutput: %s\n' "$sample_file"
+/usr/bin/sample flow-like-desktop 10 -mayDie -file "$sample_file"
+printf 'Sample saved to %s\n' "$sample_file"
+'''
+
 # ── Build ────────────────────────────────────
 
 [tasks."build:desktop"]

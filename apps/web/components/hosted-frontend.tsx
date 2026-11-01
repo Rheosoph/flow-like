@@ -32,6 +32,7 @@ import {
 	useMemo,
 	useRef,
 	useState,
+	useSyncExternalStore,
 } from "react";
 import {
 	type AuthContextProps,
@@ -53,6 +54,7 @@ import {
 	hostedNavigationPath,
 	isHostedQueryPath,
 	parseHostedTarget,
+	subscribeHostedSession,
 } from "../lib/hosted-route";
 
 import { getWebOidcSettings } from "../lib/oidc-settings";
@@ -190,9 +192,21 @@ function tokenBoundRequest(
 	target: HostedTarget,
 	token: RefObject<string | undefined>,
 	auth: RefObject<AuthContextProps>,
+	useViewer = true,
 ): HostedRequest {
-	return (suffix, init) =>
-		createHostedRequest(target, token.current, auth.current)(suffix, init);
+	const current = () =>
+		createHostedRequest(
+			target,
+			useViewer ? token.current : undefined,
+			useViewer ? auth.current : undefined,
+		);
+	return Object.assign(
+		(suffix?: string, init?: RequestInit) => current()(suffix, init),
+		{
+			prepareExecution: (body: string) => current().prepareExecution(body),
+			executionScope: () => current().executionScope(),
+		},
+	);
 }
 
 export function HostedSession({
@@ -278,9 +292,14 @@ export function HostedSession({
 	const runtimeRequest = useMemo(
 		() =>
 			target
-				? tokenBoundRequest({ ...target, variant }, tokenRef, authRef)
+				? tokenBoundRequest(
+						{ ...target, variant },
+						tokenRef,
+						authRef,
+						data?.auth_proxy ?? true,
+					)
 				: null,
-		[target, variant],
+		[target, variant, data?.auth_proxy],
 	);
 	if (auth.error) return <Status error>{auth.error.message}</Status>;
 	if (error) return <Status error>{error}</Status>;
@@ -325,6 +344,11 @@ function HostedRuntime({
 	authContext: () => AuthContextProps;
 	queryParams: Record<string, string>;
 }) {
+	const executionScope = useSyncExternalStore(
+		subscribeHostedSession,
+		request.executionScope,
+		() => undefined,
+	);
 	// Only a sign-in interface knows its visitor, so only it offers their own sign-ins.
 	const oauth = useMemo(
 		() =>
@@ -426,7 +450,7 @@ function HostedRuntime({
 				>
 					<TooltipProvider>
 						<QueryParamNavigationContext.Provider value={updateQueryParams}>
-							<ExecutionEngineProviderComponent>
+							<ExecutionEngineProviderComponent executionScope={executionScope}>
 								<main
 									id="hosted-interface"
 									className="flex h-dvh min-h-0 flex-col overflow-hidden"

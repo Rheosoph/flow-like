@@ -151,6 +151,25 @@ compiler:
   tolerations: []
   affinity: {}
 
+# Run reply channels. setup-config.py creates separate broker trust and API signer Secrets.
+channels:
+  transport: nats
+  nats:
+    enabled: true
+    # Empty uses the bundled broker's Service. Set both URLs for an external broker.
+    url: ""
+    publicWebsocketUrl: ""
+    issuerSecret: ""
+    # Contains nats.conf with operator/account JWTs and exact browser origins, never a seed.
+    serverSecret: ""
+    image: nats:2.15.2-alpine
+    # Bundled deployment is one broker. Use an external NATS cluster for broker HA.
+    replicaCount: 1
+    websocketPath: /nats
+    resources:
+      requests: {memory: 64Mi, cpu: 50m}
+      limits: {memory: 256Mi, cpu: "1"}
+
 # Realtime Signaling Configuration (collaboration WebSockets)
 # Verifies realtime JWTs with BACKEND_PUB/BACKEND_KID from the jwt secret, so
 # the API's BACKEND_KEY signer must belong to the same keypair.

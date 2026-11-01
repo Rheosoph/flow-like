@@ -66,6 +66,17 @@ const richMessage = (): IMessage => ({
 		},
 	],
 	app_refs: ["other"],
+	main_widget: {
+		widget: {
+			instance_id: "main",
+			widget_id: "browser",
+			surface_id: "main",
+			component: { type: "widgetInstance" },
+			updates: [{ type: "dataModelUpdate", path: "/url", value: "about:blank" }],
+		},
+		title: "Browser",
+		display: "maximized",
+	},
 	run_context: { schema: "1", provider: "openai" },
 });
 

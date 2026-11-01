@@ -1,0 +1,4924 @@
+{
+  "catalog": {
+    "status": "ok",
+    "total": 88,
+    "widget_type_total": 26,
+    "widget_types": {
+      "workspace-pulse": {
+        "type": "workspace-pulse",
+        "description": "Profile app and account activity summary.",
+        "additional_properties": false,
+        "fields": {
+          "mode": {
+            "type": "string",
+            "description": "Workspace summary presentation.",
+            "default": "card",
+            "enum": [
+              "card",
+              "strip",
+              "attention"
+            ]
+          },
+          "days": {
+            "type": "number",
+            "description": "UTC activity period.",
+            "default": 7,
+            "enum": [
+              1,
+              7,
+              30
+            ]
+          },
+          "showAttention": {
+            "type": "boolean",
+            "description": "Include Error or Fatal records.",
+            "default": true
+          }
+        }
+      },
+      "section-heading": {
+        "type": "section-heading",
+        "description": "A section title with an optional destination.",
+        "additional_properties": false,
+        "fields": {
+          "linkLabel": {
+            "type": "string",
+            "description": "Optional destination label."
+          },
+          "href": {
+            "type": "string",
+            "description": "Optional destination.",
+            "reference": {
+              "kind": "safe_home_url",
+              "provenance": "local_safety_check",
+              "validation": "local"
+            }
+          }
+        }
+      },
+      "app-spotlight": {
+        "type": "app-spotlight",
+        "description": "A hero or compact feature for one app.",
+        "additional_properties": false,
+        "fields": {
+          "source": {
+            "type": "string",
+            "description": "Which app inventory supplies the widget.",
+            "default": "new",
+            "enum": [
+              "new",
+              "popular",
+              "library",
+              "manual"
+            ]
+          },
+          "appId": {
+            "type": "string",
+            "description": "Exact app used by a single-app manual selection.",
+            "default": "",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps",
+              "when": {
+                "field": "source",
+                "equals": "manual"
+              }
+            }
+          },
+          "appIds": {
+            "type": "string_list",
+            "description": "Ordered app ids from the current profile.",
+            "unique_items": true,
+            "max_items": 1,
+            "reference": {
+              "kind": "profile_app_ids",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps",
+              "when": {
+                "all": [
+                  {
+                    "field": "source",
+                    "equals": "manual"
+                  },
+                  {
+                    "field": "appId",
+                    "equals": ""
+                  }
+                ]
+              }
+            }
+          },
+          "query": {
+            "type": "string",
+            "description": "Case-insensitive app search text."
+          },
+          "category": {
+            "type": "string",
+            "description": "Exact app category filter.",
+            "enum": [
+              "",
+              "Productivity",
+              "Business",
+              "Utilities",
+              "Communication",
+              "Social",
+              "Education",
+              "Entertainment",
+              "Games",
+              "Music",
+              "Photography",
+              "News",
+              "Finance",
+              "Health",
+              "Lifestyle",
+              "Sports",
+              "Travel",
+              "FoodAndDrink",
+              "Shopping",
+              "Weather",
+              "Anime",
+              "Other"
+            ]
+          },
+          "tag": {
+            "type": "string",
+            "description": "Exact app tag filter."
+          },
+          "eyebrow": {
+            "type": "string",
+            "description": "Short label above the widget heading."
+          },
+          "mode": {
+            "type": "string",
+            "description": "Spotlight size.",
+            "default": "hero",
+            "enum": [
+              "hero",
+              "compact"
+            ]
+          }
+        },
+        "requirements": [
+          {
+            "severity": "warning",
+            "code": "app_spotlight_manual_empty",
+            "message": "A manual app spotlight should identify one profile app.",
+            "when": {
+              "field": "source",
+              "equals": "manual"
+            },
+            "any_non_empty": [
+              "appId",
+              "appIds"
+            ]
+          }
+        ]
+      },
+      "app-ranking": {
+        "type": "app-ranking",
+        "description": "A ranked app list from a live or manual source.",
+        "additional_properties": false,
+        "fields": {
+          "source": {
+            "type": "string",
+            "description": "Which app inventory supplies the widget.",
+            "default": "popular",
+            "enum": [
+              "new",
+              "popular",
+              "library",
+              "manual"
+            ]
+          },
+          "appId": {
+            "type": "string",
+            "description": "Exact app used by a single-app manual selection.",
+            "default": "",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps",
+              "when": {
+                "field": "source",
+                "equals": "manual"
+              }
+            }
+          },
+          "appIds": {
+            "type": "string_list",
+            "description": "Ordered app ids from the current profile.",
+            "unique_items": true,
+            "max_items": 10,
+            "reference": {
+              "kind": "profile_app_ids",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps",
+              "when": {
+                "all": [
+                  {
+                    "field": "source",
+                    "equals": "manual"
+                  },
+                  {
+                    "field": "appId",
+                    "equals": ""
+                  }
+                ]
+              }
+            }
+          },
+          "query": {
+            "type": "string",
+            "description": "Case-insensitive app search text."
+          },
+          "category": {
+            "type": "string",
+            "description": "Exact app category filter.",
+            "enum": [
+              "",
+              "Productivity",
+              "Business",
+              "Utilities",
+              "Communication",
+              "Social",
+              "Education",
+              "Entertainment",
+              "Games",
+              "Music",
+              "Photography",
+              "News",
+              "Finance",
+              "Health",
+              "Lifestyle",
+              "Sports",
+              "Travel",
+              "FoodAndDrink",
+              "Shopping",
+              "Weather",
+              "Anime",
+              "Other"
+            ]
+          },
+          "tag": {
+            "type": "string",
+            "description": "Exact app tag filter."
+          },
+          "eyebrow": {
+            "type": "string",
+            "description": "Short label above the widget heading."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum items to show.",
+            "default": 6,
+            "integer": true,
+            "minimum": 1,
+            "maximum": 10
+          },
+          "linkLabel": {
+            "type": "string",
+            "description": "Optional destination label."
+          },
+          "href": {
+            "type": "string",
+            "description": "Optional destination override.",
+            "reference": {
+              "kind": "safe_home_url",
+              "provenance": "local_safety_check",
+              "validation": "local"
+            }
+          }
+        },
+        "requirements": [
+          {
+            "severity": "warning",
+            "code": "app_ranking_manual_empty",
+            "message": "A manual app ranking should contain at least one profile app.",
+            "when": {
+              "field": "source",
+              "equals": "manual"
+            },
+            "any_non_empty": [
+              "appId",
+              "appIds"
+            ]
+          }
+        ]
+      },
+      "app-collection-feature": {
+        "type": "app-collection-feature",
+        "description": "An editorial feature for a selected app collection.",
+        "additional_properties": false,
+        "fields": {
+          "source": {
+            "type": "string",
+            "description": "Which app inventory supplies the widget.",
+            "default": "new",
+            "enum": [
+              "new",
+              "popular",
+              "library",
+              "manual"
+            ]
+          },
+          "appId": {
+            "type": "string",
+            "description": "Exact app used by a single-app manual selection.",
+            "default": "",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps",
+              "when": {
+                "field": "source",
+                "equals": "manual"
+              }
+            }
+          },
+          "appIds": {
+            "type": "string_list",
+            "description": "Ordered app ids from the current profile.",
+            "unique_items": true,
+            "max_items": 6,
+            "reference": {
+              "kind": "profile_app_ids",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps",
+              "when": {
+                "all": [
+                  {
+                    "field": "source",
+                    "equals": "manual"
+                  },
+                  {
+                    "field": "appId",
+                    "equals": ""
+                  }
+                ]
+              }
+            }
+          },
+          "query": {
+            "type": "string",
+            "description": "Case-insensitive app search text."
+          },
+          "category": {
+            "type": "string",
+            "description": "Exact app category filter.",
+            "enum": [
+              "",
+              "Productivity",
+              "Business",
+              "Utilities",
+              "Communication",
+              "Social",
+              "Education",
+              "Entertainment",
+              "Games",
+              "Music",
+              "Photography",
+              "News",
+              "Finance",
+              "Health",
+              "Lifestyle",
+              "Sports",
+              "Travel",
+              "FoodAndDrink",
+              "Shopping",
+              "Weather",
+              "Anime",
+              "Other"
+            ]
+          },
+          "tag": {
+            "type": "string",
+            "description": "Exact app tag filter."
+          },
+          "eyebrow": {
+            "type": "string",
+            "description": "Short label above the widget heading."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum items to show.",
+            "default": 3,
+            "integer": true,
+            "minimum": 1,
+            "maximum": 6
+          },
+          "headline": {
+            "type": "string",
+            "description": "Feature headline."
+          },
+          "description": {
+            "type": "string",
+            "description": "Feature supporting copy."
+          },
+          "linkLabel": {
+            "type": "string",
+            "description": "Optional destination label."
+          },
+          "href": {
+            "type": "string",
+            "description": "Optional destination override.",
+            "reference": {
+              "kind": "safe_home_url",
+              "provenance": "local_safety_check",
+              "validation": "local"
+            }
+          }
+        },
+        "requirements": [
+          {
+            "severity": "warning",
+            "code": "app_feature_manual_empty",
+            "message": "A manual app feature should contain at least one profile app.",
+            "when": {
+              "field": "source",
+              "equals": "manual"
+            },
+            "any_non_empty": [
+              "appId",
+              "appIds"
+            ]
+          }
+        ]
+      },
+      "model-spotlight": {
+        "type": "model-spotlight",
+        "description": "A feature for one profile or catalog model.",
+        "additional_properties": false,
+        "fields": {
+          "source": {
+            "type": "string",
+            "description": "Model inventory.",
+            "default": "explore",
+            "enum": [
+              "explore",
+              "profile",
+              "manual"
+            ]
+          },
+          "modelId": {
+            "type": "string",
+            "description": "Exact model id for manual selection.",
+            "reference": {
+              "kind": "model_id",
+              "provenance": "manual_profile_model",
+              "validation": "unverified",
+              "note": "No Home model inventory tool currently resolves exact model references. Prefer source plus query unless the exact reference is already known.",
+              "when": {
+                "field": "source",
+                "equals": "manual"
+              }
+            }
+          },
+          "modelHub": {
+            "type": "string",
+            "description": "Optional model hub paired with modelId.",
+            "reference": {
+              "kind": "model_hub",
+              "provenance": "manual_profile_model",
+              "validation": "unverified",
+              "note": "No Home model inventory tool currently resolves exact model references. Prefer source plus query unless the exact reference is already known.",
+              "when": {
+                "field": "source",
+                "equals": "manual"
+              }
+            }
+          },
+          "query": {
+            "type": "string",
+            "description": "Case-insensitive model search text."
+          },
+          "eyebrow": {
+            "type": "string",
+            "description": "Short label above the widget heading."
+          }
+        },
+        "requirements": [
+          {
+            "code": "model_spotlight_manual_empty",
+            "message": "A manual model spotlight needs an exact model id.",
+            "when": {
+              "field": "source",
+              "equals": "manual"
+            },
+            "non_empty": [
+              "modelId"
+            ]
+          }
+        ]
+      },
+      "flowpilot": {
+        "type": "flowpilot",
+        "description": "A FlowPilot entry point.",
+        "additional_properties": false,
+        "fields": {
+          "mode": {
+            "type": "string",
+            "description": "FlowPilot presentation.",
+            "default": "bar",
+            "enum": [
+              "orb",
+              "bar",
+              "card",
+              "hero"
+            ]
+          },
+          "suggestions": {
+            "type": "boolean",
+            "description": "Show prompt suggestions."
+          },
+          "emphasis": {
+            "type": "boolean",
+            "description": "Emphasize the prompt with the accent color.",
+            "default": false
+          },
+          "placeholder": {
+            "type": "string",
+            "description": "Prompt input placeholder."
+          }
+        }
+      },
+      "app-embed": {
+        "type": "app-embed",
+        "description": "An embedded app landing page, route, or Event interface.",
+        "additional_properties": false,
+        "fields": {
+          "target": {
+            "type": "string",
+            "description": "Embedded app destination kind.",
+            "default": "landing",
+            "enum": [
+              "landing",
+              "route",
+              "event"
+            ]
+          },
+          "appId": {
+            "type": "string",
+            "description": "App from the current profile.",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps"
+            }
+          },
+          "route": {
+            "type": "string",
+            "description": "App route beginning with a single slash.",
+            "default": "/",
+            "string_format": "route",
+            "reference": {
+              "kind": "app_route",
+              "provenance": "app_interface",
+              "validation": "reference",
+              "discover_with": "list_apps",
+              "app_field": "appId",
+              "when": {
+                "field": "target",
+                "equals": "route"
+              }
+            }
+          },
+          "eventId": {
+            "type": "string",
+            "description": "Embeddable Event interface id.",
+            "reference": {
+              "kind": "app_event_id",
+              "provenance": "app_interface",
+              "validation": "reference",
+              "note": "Choose an active Event with a nonempty default_page_id or event_type simple_chat, generic_form, or quick_action.",
+              "discover_with": "list_apps",
+              "app_field": "appId",
+              "when": {
+                "field": "target",
+                "equals": "event"
+              },
+              "inspect_with": "describe_app_interface"
+            }
+          },
+          "query": {
+            "type": "string",
+            "description": "URL-encoded query parameters without routing keys."
+          }
+        },
+        "requirements": [
+          {
+            "code": "app_embed_missing_app",
+            "message": "Choose an app from the current profile.",
+            "non_empty": [
+              "appId"
+            ]
+          },
+          {
+            "code": "app_embed_missing_event",
+            "message": "Choose an embeddable Event interface.",
+            "when": {
+              "field": "target",
+              "equals": "event"
+            },
+            "non_empty": [
+              "eventId"
+            ]
+          }
+        ]
+      },
+      "app-collection": {
+        "type": "app-collection",
+        "description": "A filtered or hand-picked app collection.",
+        "additional_properties": false,
+        "fields": {
+          "source": {
+            "type": "string",
+            "description": "Which app inventory supplies the collection.",
+            "default": "library",
+            "enum": [
+              "library",
+              "recent",
+              "favorites",
+              "manual",
+              "new",
+              "popular"
+            ]
+          },
+          "appIds": {
+            "type": "string_list",
+            "description": "Ordered app ids from the current profile.",
+            "unique_items": true,
+            "reference": {
+              "kind": "profile_app_ids",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps",
+              "when": {
+                "field": "source",
+                "equals": "manual"
+              }
+            }
+          },
+          "query": {
+            "type": "string",
+            "description": "Case-insensitive app search text."
+          },
+          "category": {
+            "type": "string",
+            "description": "Exact app category filter.",
+            "enum": [
+              "",
+              "Productivity",
+              "Business",
+              "Utilities",
+              "Communication",
+              "Social",
+              "Education",
+              "Entertainment",
+              "Games",
+              "Music",
+              "Photography",
+              "News",
+              "Finance",
+              "Health",
+              "Lifestyle",
+              "Sports",
+              "Travel",
+              "FoodAndDrink",
+              "Shopping",
+              "Weather",
+              "Anime",
+              "Other"
+            ]
+          },
+          "tag": {
+            "type": "string",
+            "description": "Exact app tag filter."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum items to show.",
+            "default": 8,
+            "integer": true,
+            "minimum": 1,
+            "maximum": 50
+          },
+          "rendering": {
+            "type": "string",
+            "description": "Collection card presentation.",
+            "default": "standard",
+            "enum": [
+              "standard",
+              "compact",
+              "list",
+              "editorial",
+              "icons",
+              "carousel"
+            ],
+            "legacy_values": [
+              {
+                "value": "spotlight",
+                "maps_to": "editorial"
+              }
+            ]
+          },
+          "showUpdated": {
+            "type": "boolean",
+            "description": "Show app update dates.",
+            "default": false
+          },
+          "maxColumns": {
+            "type": "number",
+            "description": "Maximum card columns. Zero uses automatic layout.",
+            "default": 0,
+            "enum": [
+              0,
+              1,
+              2,
+              3,
+              4,
+              6
+            ]
+          }
+        },
+        "requirements": [
+          {
+            "severity": "warning",
+            "code": "app_collection_manual_empty",
+            "message": "A manual app collection should contain at least one profile app.",
+            "when": {
+              "field": "source",
+              "equals": "manual"
+            },
+            "non_empty": [
+              "appIds"
+            ]
+          }
+        ]
+      },
+      "categories": {
+        "type": "categories",
+        "description": "App category chips or tiles.",
+        "additional_properties": false,
+        "fields": {
+          "rendering": {
+            "type": "string",
+            "description": "Category presentation.",
+            "default": "chips",
+            "enum": [
+              "chips",
+              "grid"
+            ]
+          },
+          "categories": {
+            "type": "string_list",
+            "description": "Categories to show. Empty means all categories.",
+            "unique_items": true,
+            "item_enum": [
+              "Productivity",
+              "Business",
+              "Utilities",
+              "Communication",
+              "Social",
+              "Education",
+              "Entertainment",
+              "Games",
+              "Music",
+              "Photography",
+              "News",
+              "Finance",
+              "Health",
+              "Lifestyle",
+              "Sports",
+              "Travel",
+              "FoodAndDrink",
+              "Shopping",
+              "Weather",
+              "Anime",
+              "Other"
+            ]
+          }
+        }
+      },
+      "packages": {
+        "type": "packages",
+        "description": "A package-store collection.",
+        "additional_properties": false,
+        "fields": {
+          "query": {
+            "type": "string",
+            "description": "Package search text."
+          },
+          "category": {
+            "type": "string",
+            "description": "Optional package category."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum items to show.",
+            "default": 6,
+            "integer": true,
+            "minimum": 1,
+            "maximum": 50
+          },
+          "sort": {
+            "type": "string",
+            "description": "Package sort order.",
+            "default": "downloads",
+            "enum": [
+              "downloads",
+              "created_at",
+              "updated_at",
+              "relevance"
+            ]
+          },
+          "rendering": {
+            "type": "string",
+            "description": "Package card presentation.",
+            "default": "standard",
+            "enum": [
+              "standard",
+              "compact",
+              "featured"
+            ],
+            "legacy_values": [
+              {
+                "value": "list",
+                "maps_to": "compact"
+              },
+              {
+                "value": "grid",
+                "maps_to": "standard"
+              }
+            ]
+          }
+        }
+      },
+      "models": {
+        "type": "models",
+        "description": "A profile or catalog model collection.",
+        "additional_properties": false,
+        "fields": {
+          "source": {
+            "type": "string",
+            "description": "Model inventory.",
+            "default": "profile",
+            "enum": [
+              "profile",
+              "explore"
+            ]
+          },
+          "query": {
+            "type": "string",
+            "description": "Case-insensitive model search text."
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum items to show.",
+            "default": 6,
+            "integer": true,
+            "minimum": 1,
+            "maximum": 50
+          },
+          "rendering": {
+            "type": "string",
+            "description": "Model card presentation.",
+            "default": "standard",
+            "enum": [
+              "standard",
+              "list"
+            ]
+          }
+        }
+      },
+      "greeting": {
+        "type": "greeting",
+        "description": "A personalized greeting.",
+        "additional_properties": false,
+        "fields": {
+          "mode": {
+            "type": "string",
+            "description": "Greeting presentation.",
+            "default": "standard",
+            "enum": [
+              "standard",
+              "masthead"
+            ]
+          },
+          "name": {
+            "type": "string",
+            "description": "Optional name override."
+          },
+          "subtitle": {
+            "type": "string",
+            "description": "Optional welcome message."
+          }
+        }
+      },
+      "quick-actions": {
+        "type": "quick-actions",
+        "description": "Built-in Home actions.",
+        "additional_properties": false,
+        "fields": {
+          "actions": {
+            "type": "string_list",
+            "description": "Ordered built-in action ids.",
+            "unique_items": true,
+            "item_enum": [
+              "create",
+              "import",
+              "library",
+              "packages",
+              "explore",
+              "learn"
+            ]
+          },
+          "layout": {
+            "type": "string",
+            "description": "Action presentation.",
+            "default": "cards",
+            "enum": [
+              "cards",
+              "toolbar"
+            ]
+          }
+        }
+      },
+      "quick-links": {
+        "type": "quick-links",
+        "description": "Internal or external destination links.",
+        "additional_properties": false,
+        "fields": {
+          "rendering": {
+            "type": "string",
+            "description": "Link presentation.",
+            "default": "grid",
+            "enum": [
+              "grid",
+              "list"
+            ]
+          },
+          "links": {
+            "type": "object_list",
+            "description": "Ordered destination links.",
+            "item": {
+              "additional_properties": false,
+              "fields": {
+                "id": {
+                  "type": "string",
+                  "description": "Optional stable link id."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "Link title."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Optional link description."
+                },
+                "href": {
+                  "type": "string",
+                  "description": "Link destination.",
+                  "reference": {
+                    "kind": "safe_home_url",
+                    "provenance": "local_safety_check",
+                    "validation": "local"
+                  }
+                }
+              },
+              "required": [
+                "title",
+                "href"
+              ],
+              "unique_by": "id"
+            }
+          }
+        }
+      },
+      "information": {
+        "type": "information",
+        "description": "Markdown, structured guidance, media, or an announcement.",
+        "additional_properties": false,
+        "fields": {
+          "mode": {
+            "type": "string",
+            "description": "Information presentation.",
+            "default": "markdown",
+            "enum": [
+              "markdown",
+              "banner",
+              "announcement",
+              "faq",
+              "checklist",
+              "countdown",
+              "story",
+              "image",
+              "quote",
+              "feed",
+              "steps",
+              "resources",
+              "facts"
+            ]
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown body."
+          },
+          "items": {
+            "type": "object_list",
+            "description": "Items for FAQ, checklist, feed, steps, resources, and facts modes.",
+            "item": {
+              "additional_properties": false,
+              "fields": {
+                "id": {
+                  "type": "string",
+                  "description": "Optional stable item id."
+                },
+                "title": {
+                  "type": "string",
+                  "description": "Item heading."
+                },
+                "body": {
+                  "type": "string",
+                  "description": "Optional Markdown body."
+                },
+                "href": {
+                  "type": "string",
+                  "description": "Optional item destination.",
+                  "reference": {
+                    "kind": "safe_home_url",
+                    "provenance": "local_safety_check",
+                    "validation": "local"
+                  }
+                },
+                "label": {
+                  "type": "string",
+                  "description": "Optional short label, date, or category."
+                },
+                "checked": {
+                  "type": "boolean",
+                  "description": "Checklist completion state.",
+                  "default": false
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "unique_by": "id"
+            }
+          },
+          "layout": {
+            "type": "string",
+            "description": "Resource presentation.",
+            "default": "cards",
+            "enum": [
+              "cards",
+              "list"
+            ]
+          },
+          "date": {
+            "type": "string",
+            "description": "Milestone date or date-time.",
+            "string_format": "date-time"
+          },
+          "eyebrow": {
+            "type": "string",
+            "description": "Short label above the content."
+          },
+          "imageSource": {
+            "type": "string",
+            "description": "Image source for image and story presentations.",
+            "default": "url",
+            "enum": [
+              "url",
+              "storage"
+            ]
+          },
+          "imageUrl": {
+            "type": "string",
+            "description": "HTTP(S) or relative image URL.",
+            "string_format": "image-url",
+            "when": {
+              "field": "imageSource",
+              "not_equals": "storage"
+            },
+            "reference": {
+              "kind": "safe_home_url",
+              "provenance": "local_safety_check",
+              "validation": "local",
+              "when": {
+                "field": "imageSource",
+                "not_equals": "storage"
+              }
+            }
+          },
+          "imageAppId": {
+            "type": "string",
+            "description": "App that owns the selected storage image.",
+            "default": "",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps",
+              "when": {
+                "field": "imageSource",
+                "equals": "storage"
+              }
+            }
+          },
+          "imagePath": {
+            "type": "string",
+            "description": "App-relative image file path, such as media/banner.png. Home requests download URLs using the viewer's existing app permissions. Save the path instead of a signed URL.",
+            "when": {
+              "field": "imageSource",
+              "equals": "storage"
+            },
+            "string_format": "storage-image-path"
+          },
+          "imageAlt": {
+            "type": "string",
+            "description": "Accessible image description."
+          },
+          "actionLabel": {
+            "type": "string",
+            "description": "Call-to-action label."
+          },
+          "actionHref": {
+            "type": "string",
+            "description": "Call-to-action destination.",
+            "reference": {
+              "kind": "safe_home_url",
+              "provenance": "local_safety_check",
+              "validation": "local"
+            }
+          },
+          "attribution": {
+            "type": "string",
+            "description": "Quote attribution."
+          }
+        },
+        "requirements": [
+          {
+            "code": "information_storage_image_app_missing",
+            "message": "Choose an app for the storage image.",
+            "when": {
+              "field": "imageSource",
+              "equals": "storage"
+            },
+            "non_empty": [
+              "imageAppId"
+            ]
+          },
+          {
+            "code": "information_storage_image_path_missing",
+            "message": "Choose an image file from the app's storage.",
+            "when": {
+              "field": "imageSource",
+              "equals": "storage"
+            },
+            "non_empty": [
+              "imagePath"
+            ]
+          },
+          {
+            "severity": "warning",
+            "code": "information_countdown_empty",
+            "message": "A countdown should include a valid milestone date.",
+            "when": {
+              "field": "mode",
+              "equals": "countdown"
+            },
+            "non_empty": [
+              "date"
+            ]
+          }
+        ]
+      },
+      "notifications": {
+        "type": "notifications",
+        "description": "Personal notifications.",
+        "additional_properties": false,
+        "fields": {
+          "notificationType": {
+            "type": "string",
+            "description": "Notification filter.",
+            "default": "all",
+            "enum": [
+              "all",
+              "WORKFLOW",
+              "SYSTEM"
+            ]
+          },
+          "unread": {
+            "type": "boolean",
+            "description": "Only show unread notifications.",
+            "default": false
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum items to show.",
+            "default": 8,
+            "integer": true,
+            "minimum": 1,
+            "maximum": 50
+          }
+        }
+      },
+      "needs-attention": {
+        "type": "needs-attention",
+        "description": "Unread workflow notifications and Error or Fatal execution records.",
+        "additional_properties": false,
+        "fields": {
+          "notificationType": {
+            "type": "string",
+            "description": "Notification filter.",
+            "default": "WORKFLOW",
+            "enum": [
+              "all",
+              "WORKFLOW",
+              "SYSTEM"
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum items to show.",
+            "default": 8,
+            "integer": true,
+            "minimum": 1,
+            "maximum": 50
+          },
+          "days": {
+            "type": "number",
+            "description": "Execution lookback in UTC.",
+            "default": 7,
+            "enum": [
+              1,
+              7,
+              30
+            ]
+          },
+          "appId": {
+            "type": "string",
+            "description": "Optional app filter from the current profile.",
+            "default": "",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps"
+            }
+          }
+        }
+      },
+      "run-stats": {
+        "type": "run-stats",
+        "description": "Recorded execution or AI usage statistics.",
+        "additional_properties": false,
+        "fields": {
+          "metric": {
+            "type": "string",
+            "description": "Statistic to display.",
+            "default": "overview",
+            "enum": [
+              "overview",
+              "executions",
+              "ai",
+              "embeddings",
+              "errors",
+              "duration"
+            ]
+          },
+          "days": {
+            "type": "number",
+            "description": "UTC time window. Applies to the period statistics.",
+            "default": 7,
+            "enum": [
+              1,
+              7,
+              30
+            ]
+          },
+          "appId": {
+            "type": "string",
+            "description": "Optional app filter from the current profile.",
+            "default": "",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps",
+              "when": {
+                "field": "metric",
+                "in": [
+                  "errors",
+                  "duration"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "run-activity": {
+        "type": "run-activity",
+        "description": "Execution activity by UTC day.",
+        "additional_properties": false,
+        "fields": {
+          "days": {
+            "type": "number",
+            "description": "UTC time window.",
+            "default": 7,
+            "enum": [
+              1,
+              7,
+              30
+            ]
+          },
+          "appId": {
+            "type": "string",
+            "description": "Optional app filter from the current profile.",
+            "default": "",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps"
+            }
+          }
+        }
+      },
+      "executions-by-app": {
+        "type": "executions-by-app",
+        "description": "Recent execution counts grouped by app.",
+        "additional_properties": false,
+        "fields": {
+          "days": {
+            "type": "number",
+            "description": "UTC time window.",
+            "default": 7,
+            "enum": [
+              1,
+              7,
+              30
+            ]
+          },
+          "appId": {
+            "type": "string",
+            "description": "Optional app filter from the current profile.",
+            "default": "",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps"
+            }
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum items to show.",
+            "default": 5,
+            "integer": true,
+            "minimum": 1,
+            "maximum": 50
+          }
+        }
+      },
+      "ai-usage": {
+        "type": "ai-usage",
+        "description": "Shows account AI and embedding usage totals.",
+        "additional_properties": false,
+        "fields": {}
+      },
+      "recent-runs": {
+        "type": "recent-runs",
+        "description": "Recent execution records.",
+        "additional_properties": false,
+        "fields": {
+          "appId": {
+            "type": "string",
+            "description": "Optional app filter from the current profile.",
+            "default": "",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps"
+            }
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum items to show.",
+            "default": 8,
+            "integer": true,
+            "minimum": 1,
+            "maximum": 50
+          }
+        }
+      },
+      "schedules": {
+        "type": "schedules",
+        "description": "Upcoming active app schedules.",
+        "additional_properties": false,
+        "fields": {
+          "appIds": {
+            "type": "string_list",
+            "description": "Ordered app ids from the current profile.",
+            "unique_items": true,
+            "reference": {
+              "kind": "profile_app_ids",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps"
+            }
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum items to show.",
+            "default": 8,
+            "integer": true,
+            "minimum": 1,
+            "maximum": 50
+          }
+        }
+      },
+      "saved-forecast": {
+        "type": "saved-forecast",
+        "description": "A saved prediction and its uncertainty, shown without running the model again.",
+        "additional_properties": false,
+        "fields": {
+          "appId": {
+            "type": "string",
+            "description": "App that holds the saved prediction.",
+            "default": "",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps"
+            }
+          },
+          "forecastId": {
+            "type": "string",
+            "description": "Saved prediction id in that app."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Where the prediction is saved.",
+            "default": "project",
+            "enum": [
+              "project",
+              "personal"
+            ]
+          },
+          "view": {
+            "type": "string",
+            "description": "What the widget shows.",
+            "default": "forecast",
+            "enum": [
+              "forecast",
+              "evaluation"
+            ]
+          },
+          "seriesId": {
+            "type": "string",
+            "description": "Optional series of the prediction to show."
+          },
+          "target": {
+            "type": "string",
+            "description": "Optional target column to show."
+          }
+        },
+        "requirements": [
+          {
+            "code": "saved_forecast_missing_source",
+            "message": "Choose an app and a saved prediction.",
+            "non_empty": [
+              "appId",
+              "forecastId"
+            ]
+          }
+        ]
+      },
+      "data": {
+        "type": "data",
+        "description": "A table, ontology, or saved-query visualization.",
+        "additional_properties": false,
+        "fields": {
+          "sourceKind": {
+            "type": "string",
+            "description": "Data source kind.",
+            "default": "table",
+            "enum": [
+              "table",
+              "ontology",
+              "query"
+            ]
+          },
+          "appId": {
+            "type": "string",
+            "description": "App from the current profile that owns the source.",
+            "reference": {
+              "kind": "profile_app_id",
+              "provenance": "current_profile",
+              "validation": "reference",
+              "discover_with": "list_apps"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "description": "Project or current-user personal data.",
+            "default": "project",
+            "enum": [
+              "project",
+              "personal"
+            ]
+          },
+          "table": {
+            "type": "string",
+            "description": "Exact table name.",
+            "reference": {
+              "kind": "table_name",
+              "provenance": "home_data_source",
+              "validation": "reference",
+              "discover_with": "list_home_data_sources",
+              "app_field": "appId",
+              "scope_field": "scope",
+              "source_field": "sourceKind",
+              "when": {
+                "field": "sourceKind",
+                "equals": "table"
+              }
+            }
+          },
+          "ontologyId": {
+            "type": "string",
+            "description": "Exact ontology id.",
+            "reference": {
+              "kind": "ontology_id",
+              "provenance": "home_data_source",
+              "validation": "reference",
+              "discover_with": "list_home_data_sources",
+              "app_field": "appId",
+              "scope_field": "scope",
+              "source_field": "sourceKind",
+              "when": {
+                "field": "sourceKind",
+                "equals": "ontology"
+              }
+            }
+          },
+          "objectType": {
+            "type": "string",
+            "description": "Exact ontology object-type label.",
+            "reference": {
+              "kind": "ontology_object_type",
+              "provenance": "home_data_source",
+              "validation": "reference",
+              "discover_with": "list_home_data_sources",
+              "app_field": "appId",
+              "scope_field": "scope",
+              "source_field": "ontologyId",
+              "when": {
+                "field": "sourceKind",
+                "equals": "ontology"
+              }
+            }
+          },
+          "queryId": {
+            "type": "string",
+            "description": "Exact saved-query id.",
+            "reference": {
+              "kind": "saved_query_id",
+              "provenance": "home_data_source",
+              "validation": "reference",
+              "discover_with": "list_home_data_sources",
+              "app_field": "appId",
+              "scope_field": "scope",
+              "source_field": "sourceKind",
+              "when": {
+                "field": "sourceKind",
+                "equals": "query"
+              }
+            }
+          },
+          "queryParams": {
+            "type": "object",
+            "description": "Saved-query parameters. Values may use $viewer.id.",
+            "reference": {
+              "kind": "saved_query_parameters",
+              "provenance": "home_data_source",
+              "validation": "reference",
+              "discover_with": "list_home_data_sources",
+              "source_field": "queryId",
+              "when": {
+                "field": "sourceKind",
+                "equals": "query"
+              }
+            }
+          },
+          "visualization": {
+            "type": "string",
+            "description": "Data presentation.",
+            "default": "bar",
+            "enum": [
+              "stat",
+              "metricstrip",
+              "progress",
+              "gauge",
+              "bullet",
+              "bar",
+              "horizontal",
+              "stacked",
+              "percentstacked",
+              "line",
+              "area",
+              "donut",
+              "pie",
+              "scatter",
+              "histogram",
+              "heatmap",
+              "calendar",
+              "treemap",
+              "boxplot",
+              "funnel",
+              "waterfall",
+              "sankey",
+              "pivot",
+              "table",
+              "list",
+              "cards",
+              "kanban",
+              "record",
+              "timeline",
+              "recordcalendar",
+              "comparison",
+              "graph"
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "description": "Aggregate measures or source records.",
+            "default": "aggregate",
+            "enum": [
+              "aggregate",
+              "records"
+            ]
+          },
+          "measures": {
+            "type": "object_list",
+            "description": "Up to six aggregate measures.",
+            "min_items": 1,
+            "max_items": 6,
+            "item": {
+              "additional_properties": false,
+              "fields": {
+                "id": {
+                  "type": "string",
+                  "description": "Optional stable measure id."
+                },
+                "aggregation": {
+                  "type": "string",
+                  "description": "Aggregation to calculate.",
+                  "enum": [
+                    "count",
+                    "distinct",
+                    "sum",
+                    "avg",
+                    "min",
+                    "max",
+                    "median"
+                  ]
+                },
+                "field": {
+                  "type": "string",
+                  "description": "Source field used by non-count aggregations.",
+                  "reference": {
+                    "kind": "data_field",
+                    "provenance": "home_data_source",
+                    "validation": "reference_when_schema_available",
+                    "note": "Saved-query result fields cannot be verified unless the source exposes a result schema.",
+                    "discover_with": "list_home_data_sources",
+                    "source_field": "sourceKind"
+                  }
+                },
+                "label": {
+                  "type": "string",
+                  "description": "Optional display label."
+                }
+              },
+              "required": [
+                "aggregation"
+              ],
+              "requirements": [
+                {
+                  "code": "data_measure_field_missing",
+                  "message": "Choose a source field for every aggregation except count.",
+                  "when": {
+                    "field": "aggregation",
+                    "not_equals": "count"
+                  },
+                  "non_empty": [
+                    "field"
+                  ]
+                }
+              ],
+              "unique_by": "id"
+            }
+          },
+          "groupBy": {
+            "type": "string",
+            "description": "Grouping or status field.",
+            "reference": {
+              "kind": "data_field",
+              "provenance": "home_data_source",
+              "validation": "reference_when_schema_available",
+              "note": "Saved-query result fields cannot be verified unless the source exposes a result schema.",
+              "discover_with": "list_home_data_sources"
+            }
+          },
+          "seriesBy": {
+            "type": "string",
+            "description": "Secondary series field.",
+            "reference": {
+              "kind": "data_field",
+              "provenance": "home_data_source",
+              "validation": "reference_when_schema_available",
+              "note": "Saved-query result fields cannot be verified unless the source exposes a result schema.",
+              "discover_with": "list_home_data_sources"
+            }
+          },
+          "timeBucket": {
+            "type": "string",
+            "description": "UTC date bucketing for groupBy.",
+            "default": "none",
+            "enum": [
+              "none",
+              "day",
+              "week",
+              "month",
+              "quarter",
+              "year"
+            ]
+          },
+          "filters": {
+            "type": "object_list",
+            "description": "All-match source filters.",
+            "max_items": 12,
+            "item": {
+              "additional_properties": false,
+              "fields": {
+                "id": {
+                  "type": "string",
+                  "description": "Optional stable filter id."
+                },
+                "field": {
+                  "type": "string",
+                  "description": "Source field to filter.",
+                  "reference": {
+                    "kind": "data_field",
+                    "provenance": "home_data_source",
+                    "validation": "reference_when_schema_available",
+                    "note": "Saved-query result fields cannot be verified unless the source exposes a result schema.",
+                    "discover_with": "list_home_data_sources",
+                    "source_field": "sourceKind"
+                  }
+                },
+                "operator": {
+                  "type": "string",
+                  "description": "Filter comparison.",
+                  "enum": [
+                    "eq",
+                    "neq",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "contains",
+                    "empty",
+                    "not_empty"
+                  ]
+                },
+                "value": {
+                  "type": "string",
+                  "description": "Comparison value. Empty and not_empty ignore this field."
+                },
+                "valueType": {
+                  "type": "string",
+                  "description": "How the comparison value is converted.",
+                  "enum": [
+                    "text",
+                    "number",
+                    "boolean",
+                    "viewer"
+                  ]
+                }
+              },
+              "required": [
+                "field",
+                "operator",
+                "valueType"
+              ],
+              "requirements": [
+                {
+                  "code": "data_filter_number_invalid",
+                  "message": "A numeric filter needs a finite numeric value.",
+                  "when": {
+                    "all": [
+                      {
+                        "field": "valueType",
+                        "equals": "number"
+                      },
+                      {
+                        "field": "operator",
+                        "not_in": [
+                          "empty",
+                          "not_empty"
+                        ]
+                      }
+                    ]
+                  },
+                  "numeric_strings": [
+                    "value"
+                  ]
+                },
+                {
+                  "code": "data_filter_boolean_invalid",
+                  "message": "A boolean filter value must be true or false.",
+                  "when": {
+                    "all": [
+                      {
+                        "field": "valueType",
+                        "equals": "boolean"
+                      },
+                      {
+                        "field": "operator",
+                        "not_in": [
+                          "empty",
+                          "not_empty"
+                        ]
+                      }
+                    ]
+                  },
+                  "allowed_values": {
+                    "value": [
+                      "true",
+                      "false"
+                    ]
+                  }
+                }
+              ],
+              "unique_by": "id"
+            }
+          },
+          "dateField": {
+            "type": "string",
+            "description": "Field used by a relative date range.",
+            "reference": {
+              "kind": "data_field",
+              "provenance": "home_data_source",
+              "validation": "reference_when_schema_available",
+              "note": "Saved-query result fields cannot be verified unless the source exposes a result schema.",
+              "discover_with": "list_home_data_sources"
+            }
+          },
+          "dateRange": {
+            "type": "string",
+            "description": "Relative UTC time range.",
+            "default": "all",
+            "enum": [
+              "all",
+              "7d",
+              "30d",
+              "90d",
+              "year"
+            ]
+          },
+          "sortBy": {
+            "type": "string",
+            "description": "Source field, value, or group.",
+            "default": "value",
+            "reference": {
+              "kind": "data_field",
+              "provenance": "home_data_source",
+              "validation": "reference_when_schema_available",
+              "note": "Saved-query result fields cannot be verified unless the source exposes a result schema.",
+              "discover_with": "list_home_data_sources"
+            }
+          },
+          "sortDirection": {
+            "type": "string",
+            "description": "Result order.",
+            "default": "desc",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "limit": {
+            "type": "number",
+            "description": "Maximum returned rows.",
+            "default": 20,
+            "integer": true,
+            "minimum": 1,
+            "maximum": 500
+          },
+          "refreshSeconds": {
+            "type": "number",
+            "description": "Refresh interval. Zero disables periodic refresh.",
+            "default": 0,
+            "integer": true,
+            "ranges": [
+              {
+                "minimum": 0,
+                "maximum": 0
+              },
+              {
+                "minimum": 30,
+                "maximum": 3600
+              }
+            ]
+          },
+          "fields": {
+            "type": "string_list",
+            "description": "Visible record fields, in order.",
+            "max_items": 20,
+            "unique_items": true,
+            "reference": {
+              "kind": "data_field",
+              "provenance": "home_data_source",
+              "validation": "reference_when_schema_available",
+              "note": "Saved-query result fields cannot be verified unless the source exposes a result schema.",
+              "discover_with": "list_home_data_sources"
+            }
+          },
+          "xField": {
+            "type": "string",
+            "description": "X, source-id, or record-date field.",
+            "reference": {
+              "kind": "data_field",
+              "provenance": "home_data_source",
+              "validation": "reference_when_schema_available",
+              "note": "Saved-query result fields cannot be verified unless the source exposes a result schema.",
+              "discover_with": "list_home_data_sources"
+            }
+          },
+          "yField": {
+            "type": "string",
+            "description": "Y, target-id, or distribution field.",
+            "reference": {
+              "kind": "data_field",
+              "provenance": "home_data_source",
+              "validation": "reference_when_schema_available",
+              "note": "Saved-query result fields cannot be verified unless the source exposes a result schema.",
+              "discover_with": "list_home_data_sources"
+            }
+          },
+          "binWidth": {
+            "type": "number",
+            "description": "Positive histogram bin width.",
+            "default": 10,
+            "exclusive_minimum": 0
+          },
+          "format": {
+            "type": "string",
+            "description": "Numeric display format.",
+            "default": "number",
+            "enum": [
+              "number",
+              "currency",
+              "percent"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "description": "Uppercase ISO-style currency code.",
+            "default": "USD",
+            "pattern": "^[A-Z]{3}$"
+          },
+          "decimals": {
+            "type": "number",
+            "description": "Decimal places.",
+            "default": 2,
+            "integer": true,
+            "minimum": 0,
+            "maximum": 6
+          },
+          "target": {
+            "type": "number",
+            "description": "Optional positive target for target visualizations.",
+            "default": null,
+            "nullable": true
+          },
+          "categoryOrder": {
+            "type": "string_list",
+            "description": "Optional explicit category order.",
+            "max_items": 100
+          },
+          "baseline": {
+            "type": "number",
+            "description": "Waterfall starting value.",
+            "default": 0
+          }
+        },
+        "requirements": [
+          {
+            "code": "data_source_missing_app",
+            "message": "Choose an app from the current profile.",
+            "non_empty": [
+              "appId"
+            ]
+          },
+          {
+            "code": "data_table_missing",
+            "message": "Choose an available table.",
+            "when": {
+              "field": "sourceKind",
+              "equals": "table"
+            },
+            "non_empty": [
+              "table"
+            ]
+          },
+          {
+            "code": "data_ontology_missing",
+            "message": "Choose an ontology and object type.",
+            "when": {
+              "field": "sourceKind",
+              "equals": "ontology"
+            },
+            "non_empty": [
+              "ontologyId",
+              "objectType"
+            ]
+          },
+          {
+            "code": "data_query_missing",
+            "message": "Choose an available saved query.",
+            "when": {
+              "field": "sourceKind",
+              "equals": "query"
+            },
+            "non_empty": [
+              "queryId"
+            ]
+          },
+          {
+            "code": "data_target_missing",
+            "message": "Progress, gauge, and bullet views need a target greater than zero.",
+            "when": {
+              "field": "visualization",
+              "in": [
+                "progress",
+                "gauge",
+                "bullet"
+              ]
+            },
+            "positive": [
+              "target"
+            ]
+          },
+          {
+            "code": "data_xy_fields_missing",
+            "message": "Scatter and graph views need both X/source and Y/target fields.",
+            "when": {
+              "field": "visualization",
+              "in": [
+                "scatter",
+                "graph"
+              ]
+            },
+            "non_empty": [
+              "xField",
+              "yField"
+            ]
+          },
+          {
+            "code": "data_group_series_missing",
+            "message": "This visualization needs both group and series fields.",
+            "when": {
+              "field": "visualization",
+              "in": [
+                "heatmap",
+                "pivot",
+                "sankey",
+                "percentstacked"
+              ]
+            },
+            "non_empty": [
+              "groupBy",
+              "seriesBy"
+            ]
+          },
+          {
+            "code": "data_calendar_fields_invalid",
+            "message": "Calendar needs a date group, daily bucketing, and no series.",
+            "when": {
+              "field": "visualization",
+              "equals": "calendar"
+            },
+            "non_empty": [
+              "groupBy"
+            ],
+            "empty": [
+              "seriesBy"
+            ],
+            "equals": {
+              "timeBucket": "day"
+            }
+          },
+          {
+            "code": "data_kanban_group_missing",
+            "message": "Kanban needs a status field.",
+            "when": {
+              "field": "visualization",
+              "equals": "kanban"
+            },
+            "non_empty": [
+              "groupBy"
+            ]
+          },
+          {
+            "code": "data_record_date_missing",
+            "message": "Timeline and record-calendar views need a date field.",
+            "when": {
+              "field": "visualization",
+              "in": [
+                "timeline",
+                "recordcalendar"
+              ]
+            },
+            "non_empty": [
+              "xField"
+            ]
+          },
+          {
+            "code": "data_boxplot_field_missing",
+            "message": "Box plot needs a numeric distribution field.",
+            "when": {
+              "field": "visualization",
+              "equals": "boxplot"
+            },
+            "non_empty": [
+              "yField"
+            ]
+          },
+          {
+            "code": "data_histogram_field_missing",
+            "message": "Histogram needs a numeric grouping field.",
+            "when": {
+              "field": "visualization",
+              "equals": "histogram"
+            },
+            "non_empty": [
+              "groupBy"
+            ]
+          },
+          {
+            "code": "data_date_field_missing",
+            "message": "A relative date range needs a date field.",
+            "when": {
+              "field": "dateRange",
+              "in": [
+                "7d",
+                "30d",
+                "90d",
+                "year"
+              ]
+            },
+            "non_empty": [
+              "dateField"
+            ]
+          }
+        ],
+        "relations": [
+          {
+            "kind": "mode_by_visualization",
+            "record_only": [
+              "kanban",
+              "record",
+              "graph",
+              "scatter",
+              "timeline",
+              "recordcalendar",
+              "comparison"
+            ],
+            "aggregate_only": [
+              "stat",
+              "metricstrip",
+              "progress",
+              "gauge",
+              "bullet",
+              "bar",
+              "horizontal",
+              "stacked",
+              "percentstacked",
+              "line",
+              "area",
+              "donut",
+              "pie",
+              "histogram",
+              "heatmap",
+              "calendar",
+              "treemap",
+              "boxplot",
+              "funnel",
+              "waterfall",
+              "sankey",
+              "pivot"
+            ],
+            "either": [
+              "table",
+              "list",
+              "cards"
+            ]
+          },
+          {
+            "kind": "saved_query_parameter_namespace",
+            "reserved_prefix": "__home_"
+          }
+        ]
+      }
+    },
+    "layout_contract": {
+      "version": 1,
+      "max_widgets": 80,
+      "max_bytes": 131072,
+      "grid_columns": {
+        "mobile": 1,
+        "tablet": 6,
+        "desktop": 12
+      },
+      "breakpoints": {
+        "mobile_max_exclusive": 600,
+        "desktop_min": 1050
+      },
+      "height_modes": [
+        "auto",
+        "content",
+        "fixed"
+      ],
+      "class_name": {
+        "field": "appearance.className",
+        "optional": true,
+        "max_bytes": 1024,
+        "applies_to": "The widget surface: the element inside the widget's grid item that draws its fill, border, radius and shadow. Utilities for the surface's own background, border, radius, text color and shadow replace the built-in ones from variant and accent. Editor controls (toolbar, selection overlay, resize handle) sit outside the surface, so classes and descendant variants never reach them.",
+        "syntax": "Space-separated Tailwind CSS v4 utilities compiled at runtime; v4 names such as bg-linear-to-br and arbitrary values such as bg-[#0f172a] or [--home-accent:#0ea5e9] work. Style descendants with variants such as [&_h2]:text-lg and pseudo-elements with before: and after:.",
+        "pseudo_elements": "The surface is position:relative and clips overflow, so before: and after: make decoration layers, e.g. before:absolute before:inset-x-0 before:top-0 before:h-1 before:bg-(--home-accent).",
+        "shadows": "The theme's shadow scale (shadow-2xs … shadow-2xl) is transparent in this theme. For elevation use an arbitrary shadow that includes its color, e.g. shadow-[0_12px_32px_-16px_rgb(0_0_0/0.35)], or box-shadow in css.",
+        "contrast": "A surface text color reaches only inheriting text; descriptions, dates and metadata use text-muted-foreground, which reads var(--muted-foreground). On a dark or saturated fill, redefine it on the surface too, e.g. [--muted-foreground:color-mix(in_oklab,var(--primary-foreground)_75%,transparent)].",
+        "motion": "tw-animate classes (animate-in, fade-in-*, slide-in-from-*) are not compiled at runtime. Define custom motion with @keyframes in appearance.css inside @media (prefers-reduced-motion: no-preference).",
+        "avoid": "The layout owns the surface's position, grid span, height and self-alignment, so absolute, relative, sticky, static, z-*, col-*/row-* span/start/end and self-* do nothing on the surface; they work behind before:, after:, *: or [&_…]: variants that target other elements. Never fixed (it escapes the widget, with or without a variant) or sibling variants (~, +), which reach neighboring widgets.",
+        "prefer": "Theme tokens (bg-card, text-primary, border-primary/30) and the surface_variables (text-(--home-accent), border-(--home-accent)/40, from-(--home-accent)/15) so light/dark mode and the accent setting keep working. When the user asks for a neat, polished, modern or branded look, style deliberately: surface fill or gradient, border, radius, elevation, typography and a decorative pseudo-element; colors the user supplies are fine. Keep styling coherent across widgets rather than decorating every card differently."
+      },
+      "css": {
+        "field": "appearance.css",
+        "optional": true,
+        "max_bytes": 8192,
+        "applies_to": "A stylesheet scoped to this widget. :root is the widget surface; :root:is(.dark *) targets dark mode; every other selector matches inside the widget. Rules override className utilities.",
+        "syntax": "Plain CSS, not Tailwind: @apply, @tailwind, @theme, @variant, @utility, theme() and --alpha() do nothing here, so put utilities in className. @keyframes names are local to the widget.",
+        "pseudo_elements": "The surface is position:relative and clips overflow, so :root::before and :root::after may use content, position:absolute, inset, z-index, width and height for decoration. Set isolation:isolate on :root when a layer uses z-index:-1.",
+        "shadows": "Give elevation an explicit color, e.g. box-shadow: 0 12px 32px -16px rgb(0 0 0 / 0.35); the theme's shadow scale is transparent.",
+        "contrast": "On a dark or saturated fill, redefine :root { --muted-foreground: … } too, because descriptions, dates and metadata read var(--muted-foreground) instead of inheriting the surface text color.",
+        "motion": "Define custom motion with @keyframes and wrap it in @media (prefers-reduced-motion: no-preference).",
+        "avoid": "+ or ~ after :root (reaches neighboring widgets); @property, @font-face, @counter-style and @page (document-wide); position, inset, z-index, grid placement, order, width or height on :root itself (the layout owns them); position:fixed anywhere; hsl(), rgb() or oklch() around color variables. @import is removed.",
+        "prefer": "className for anything utilities express; css for @keyframes, :root::before/::after decoration and several descendant rules. Use theme_colors and surface_variables so light/dark mode and the accent setting keep working."
+      },
+      "surface_variables": {
+        "names": [
+          "--home-accent",
+          "--home-accent-foreground",
+          "--home-surface-background",
+          "--home-surface-foreground",
+          "--home-surface-muted",
+          "--home-surface-accent",
+          "--home-surface-border",
+          "--home-surface-item",
+          "--home-surface-item-hover"
+        ],
+        "usage": "Set from the widget's variant and accent and inherited by the surface. Use them so custom styling follows the accent setting: className text-(--home-accent), border-(--home-accent)/40, from-(--home-accent)/15; css color-mix(in oklab, var(--home-accent) 20%, transparent). Redefine one on the surface (css :root { --home-accent: … } or className [--home-accent:…]) to retint the widget's own content."
+      },
+      "theme_colors": {
+        "names": [
+          "--background",
+          "--foreground",
+          "--card",
+          "--card-foreground",
+          "--primary",
+          "--primary-foreground",
+          "--secondary",
+          "--muted",
+          "--muted-foreground",
+          "--accent",
+          "--border",
+          "--chart-1",
+          "--chart-2",
+          "--chart-3",
+          "--chart-4",
+          "--chart-5"
+        ],
+        "usage": "These CSS variables hold complete colors. In css use var(--primary) directly or color-mix(in oklab, var(--primary) 30%, transparent); never wrap them in hsl(), rgb() or oklch()."
+      },
+      "targets": {
+        "surface": "The styled element of one widget. Select it with :root in css; unprefixed utilities in className apply to it.",
+        "generic_header": "Widget types without their own header (all except section-heading, greeting, flowpilot, app-embed, quick-actions, app-spotlight, app-ranking, app-collection-feature, model-spotlight and workspace-pulse) render one only when title or description is set. className: [&>div>header], [&>div>header>h2] (starts with an svg icon, [&>div>header>h2>svg]) and [&>div>header>p] (description); css: :root > div > header > h2. Prefer these child paths over a bare header or h2, which also match headings inside app-ranking and section-heading bodies.",
+        "hooks": "[data-home-section-heading] h2/p/a; [data-home-greeting] h1/p; [data-home-discovery=app-spotlight|app-ranking|app-collection-feature|model-spotlight] h2/p/a with [data-home-discovery-mode=hero|compact]; [data-workspace-pulse=starter|loading|unavailable|activity] with [data-workspace-mode=attention|strip]; [data-home-collection-rendering]; [data-home-package-rendering] > [data-package-card]; [data-home-app-updated]; [data-home-data-state]; [data-home-data-presentation=<visualization>]; [data-home-data-calendar]. Reach them with e.g. [&_[data-home-greeting]_h1]:text-4xl.",
+        "source_note": "run-activity, executions-by-app, ai-usage, run-stats, recent-runs, schedules and workspace-pulse show their data source as details > summary with details > p.",
+        "unhooked": "Body wrappers and empty, loading and error states are plain divs without hooks; editor chrome is outside the surface and cannot be styled."
+      }
+    },
+    "categories": [
+      "activity",
+      "content",
+      "apps",
+      "assistant",
+      "data"
+    ],
+    "accents": [
+      "neutral",
+      "violet",
+      "blue",
+      "emerald",
+      "orange",
+      "amber",
+      "rose"
+    ],
+    "surface_variants": [
+      "card",
+      "borderless",
+      "tinted",
+      "solid"
+    ],
+    "visualizations": [
+      {
+        "id": "stat",
+        "name": "Single metric"
+      },
+      {
+        "id": "metricstrip",
+        "name": "Metric strip"
+      },
+      {
+        "id": "progress",
+        "name": "Target progress"
+      },
+      {
+        "id": "gauge",
+        "name": "Target gauge"
+      },
+      {
+        "id": "bullet",
+        "name": "Bullet chart"
+      },
+      {
+        "id": "bar",
+        "name": "Column chart"
+      },
+      {
+        "id": "horizontal",
+        "name": "Ranked bars"
+      },
+      {
+        "id": "stacked",
+        "name": "Stacked columns"
+      },
+      {
+        "id": "percentstacked",
+        "name": "100% stacked columns"
+      },
+      {
+        "id": "line",
+        "name": "Line chart"
+      },
+      {
+        "id": "area",
+        "name": "Area chart"
+      },
+      {
+        "id": "donut",
+        "name": "Donut"
+      },
+      {
+        "id": "pie",
+        "name": "Pie"
+      },
+      {
+        "id": "scatter",
+        "name": "Scatter plot"
+      },
+      {
+        "id": "histogram",
+        "name": "Histogram"
+      },
+      {
+        "id": "heatmap",
+        "name": "Heatmap"
+      },
+      {
+        "id": "calendar",
+        "name": "Calendar heatmap"
+      },
+      {
+        "id": "treemap",
+        "name": "Treemap"
+      },
+      {
+        "id": "boxplot",
+        "name": "Box plot"
+      },
+      {
+        "id": "funnel",
+        "name": "Funnel"
+      },
+      {
+        "id": "waterfall",
+        "name": "Waterfall"
+      },
+      {
+        "id": "sankey",
+        "name": "Sankey"
+      },
+      {
+        "id": "pivot",
+        "name": "Pivot table"
+      },
+      {
+        "id": "table",
+        "name": "Table"
+      },
+      {
+        "id": "list",
+        "name": "Record list"
+      },
+      {
+        "id": "cards",
+        "name": "Record cards"
+      },
+      {
+        "id": "kanban",
+        "name": "Board by status"
+      },
+      {
+        "id": "record",
+        "name": "Record detail"
+      },
+      {
+        "id": "timeline",
+        "name": "Record timeline"
+      },
+      {
+        "id": "recordcalendar",
+        "name": "Record calendar"
+      },
+      {
+        "id": "comparison",
+        "name": "Object comparison"
+      },
+      {
+        "id": "graph",
+        "name": "Relationship graph"
+      }
+    ],
+    "data_options": {
+      "source_kinds": [
+        "table",
+        "ontology",
+        "query"
+      ],
+      "scopes": [
+        "project",
+        "personal"
+      ],
+      "modes": [
+        "aggregate",
+        "records"
+      ],
+      "aggregations": [
+        "count",
+        "distinct",
+        "sum",
+        "avg",
+        "min",
+        "max",
+        "median"
+      ],
+      "filter_operators": [
+        "eq",
+        "neq",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "contains",
+        "empty",
+        "not_empty"
+      ],
+      "time_buckets": [
+        "none",
+        "day",
+        "week",
+        "month",
+        "quarter",
+        "year"
+      ],
+      "date_ranges": [
+        "all",
+        "7d",
+        "30d",
+        "90d",
+        "year"
+      ],
+      "sort_directions": [
+        "asc",
+        "desc"
+      ],
+      "formats": [
+        "number",
+        "currency",
+        "percent"
+      ],
+      "filter_value_types": [
+        "text",
+        "number",
+        "boolean",
+        "viewer"
+      ]
+    },
+    "renderings": {
+      "apps": [
+        {
+          "id": "standard",
+          "name": "Standard library cards"
+        },
+        {
+          "id": "compact",
+          "name": "Compact cards"
+        },
+        {
+          "id": "list",
+          "name": "List"
+        },
+        {
+          "id": "editorial",
+          "name": "Editorial feature"
+        },
+        {
+          "id": "icons",
+          "name": "App icons"
+        },
+        {
+          "id": "carousel",
+          "name": "Card carousel"
+        }
+      ],
+      "models": [
+        {
+          "id": "standard",
+          "name": "Standard model cards"
+        },
+        {
+          "id": "list",
+          "name": "Compact list"
+        }
+      ],
+      "packages": [
+        {
+          "id": "standard",
+          "name": "Standard Explore cards"
+        },
+        {
+          "id": "compact",
+          "name": "Compact cards"
+        },
+        {
+          "id": "featured",
+          "name": "Featured cards"
+        }
+      ],
+      "quick_links": [
+        "grid",
+        "list"
+      ]
+    },
+    "presets": [
+      {
+        "preset_id": "workspace-strip",
+        "name": "Workspace summary",
+        "description": "Keep your profile and account activity within reach in a compact summary.",
+        "category": "activity",
+        "widget": {
+          "type": "workspace-pulse",
+          "title": "Workspace summary",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 1
+          },
+          "appearance": {
+            "variant": "borderless",
+            "accent": "violet"
+          },
+          "config": {
+            "mode": "strip",
+            "days": 7,
+            "showAttention": true
+          }
+        }
+      },
+      {
+        "preset_id": "section-heading",
+        "name": "Section heading",
+        "description": "Give a group of widgets a clear introduction and a useful destination.",
+        "category": "content",
+        "widget": {
+          "type": "section-heading",
+          "title": "Section heading",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 1
+          },
+          "appearance": {
+            "variant": "borderless",
+            "accent": "neutral"
+          },
+          "config": {
+            "href": "",
+            "linkLabel": ""
+          }
+        }
+      },
+      {
+        "preset_id": "workspace-attention",
+        "name": "Needs attention",
+        "description": "Review flagged execution records with links back to your apps.",
+        "category": "activity",
+        "widget": {
+          "type": "workspace-pulse",
+          "title": "Needs attention",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "mode": "attention",
+            "days": 7,
+            "showAttention": true
+          }
+        }
+      },
+      {
+        "preset_id": "app-spotlight",
+        "name": "App spotlight",
+        "description": "Give one app a bold feature with artwork, details, and a clear way in.",
+        "category": "apps",
+        "widget": {
+          "type": "app-spotlight",
+          "title": "App spotlight",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "tinted",
+            "accent": "violet"
+          },
+          "config": {
+            "source": "new",
+            "eyebrow": "IN THE SPOTLIGHT"
+          }
+        }
+      },
+      {
+        "preset_id": "app-ranking",
+        "name": "Community favorites",
+        "description": "A compact numbered list of apps ranked by community ratings.",
+        "category": "apps",
+        "widget": {
+          "type": "app-ranking",
+          "title": "Community favorites",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 5
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "popular",
+            "limit": 6
+          }
+        }
+      },
+      {
+        "preset_id": "app-collection-feature",
+        "name": "A collection worth exploring",
+        "description": "Put a curated group of apps in a bold, colorful feature.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection-feature",
+          "title": "A collection worth exploring",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "solid",
+            "accent": "orange"
+          },
+          "config": {
+            "source": "new",
+            "category": "Productivity",
+            "limit": 3,
+            "eyebrow": "THE EVERYDAY, UPGRADED",
+            "headline": "Less busywork. More possibility."
+          }
+        }
+      },
+      {
+        "preset_id": "model-spotlight",
+        "name": "Model spotlight",
+        "description": "Put a capable model in focus, with its real details and profile controls.",
+        "category": "apps",
+        "widget": {
+          "type": "model-spotlight",
+          "title": "Model spotlight",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "explore",
+            "eyebrow": "MEET YOUR NEXT MODEL"
+          }
+        }
+      },
+      {
+        "preset_id": "workspace-pulse",
+        "name": "Your workspace at a glance",
+        "description": "See your apps, recent activity, and what needs a closer look.",
+        "category": "activity",
+        "widget": {
+          "type": "workspace-pulse",
+          "title": "Your workspace at a glance",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "violet"
+          },
+          "config": {
+            "days": 7,
+            "showAttention": true
+          }
+        }
+      },
+      {
+        "preset_id": "flowpilot-bar",
+        "name": "Ask FlowPilot",
+        "description": "A prompt bar for ideas, questions, and getting work done.",
+        "category": "assistant",
+        "widget": {
+          "type": "flowpilot",
+          "title": "Ask FlowPilot",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 1
+          },
+          "appearance": {
+            "variant": "borderless",
+            "accent": "violet"
+          },
+          "config": {
+            "mode": "bar"
+          }
+        }
+      },
+      {
+        "preset_id": "flowpilot-hero",
+        "name": "FlowPilot hero",
+        "description": "Give your assistant room to welcome you.",
+        "category": "assistant",
+        "widget": {
+          "type": "flowpilot",
+          "title": "FlowPilot hero",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "borderless",
+            "accent": "neutral"
+          },
+          "config": {
+            "mode": "hero"
+          }
+        }
+      },
+      {
+        "preset_id": "flowpilot-card",
+        "name": "FlowPilot composer",
+        "description": "A focused space to describe your next task.",
+        "category": "assistant",
+        "widget": {
+          "type": "flowpilot",
+          "title": "FlowPilot composer",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "tinted",
+            "accent": "violet"
+          },
+          "config": {
+            "mode": "card"
+          }
+        }
+      },
+      {
+        "preset_id": "flowpilot-orb",
+        "name": "FlowPilot orb",
+        "description": "A small, familiar entry point to your assistant.",
+        "category": "assistant",
+        "widget": {
+          "type": "flowpilot",
+          "title": "FlowPilot orb",
+          "description": "",
+          "size": {
+            "columns": 3,
+            "rows": 2
+          },
+          "appearance": {
+            "variant": "borderless",
+            "accent": "violet"
+          },
+          "config": {
+            "mode": "orb"
+          }
+        }
+      },
+      {
+        "preset_id": "app-embed",
+        "name": "Embed an app",
+        "description": "Use an app's landing page, a specific page, or a chat right here.",
+        "category": "apps",
+        "widget": {
+          "type": "app-embed",
+          "title": "Embed an app",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 6
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "target": "landing",
+            "appId": "",
+            "route": "/",
+            "query": ""
+          }
+        }
+      },
+      {
+        "preset_id": "app-chat",
+        "name": "App chat",
+        "description": "Keep a conversation with an app on your home.",
+        "category": "apps",
+        "widget": {
+          "type": "app-embed",
+          "title": "App chat",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 6
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "target": "event",
+            "appId": "",
+            "eventId": "",
+            "query": ""
+          }
+        }
+      },
+      {
+        "preset_id": "app-page",
+        "name": "App page",
+        "description": "Pin a page with its own route and query parameters.",
+        "category": "apps",
+        "widget": {
+          "type": "app-embed",
+          "title": "App page",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 6
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "target": "route",
+            "appId": "",
+            "route": "/",
+            "query": ""
+          }
+        }
+      },
+      {
+        "preset_id": "my-apps",
+        "name": "Your apps",
+        "description": "Your library, arranged just how you like it.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection",
+          "title": "Your apps",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "library",
+            "limit": 6,
+            "rendering": "standard"
+          }
+        }
+      },
+      {
+        "preset_id": "recent-apps",
+        "name": "Recently updated",
+        "description": "Pick up apps that have changed recently.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection",
+          "title": "Recently updated",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 2
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "recent",
+            "limit": 6,
+            "rendering": "standard"
+          }
+        }
+      },
+      {
+        "preset_id": "favorite-apps",
+        "name": "Favorite apps",
+        "description": "The apps you have marked as favorites in this profile.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection",
+          "title": "Favorite apps",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "favorites",
+            "limit": 8,
+            "rendering": "icons"
+          }
+        }
+      },
+      {
+        "preset_id": "app-collection",
+        "name": "App collection",
+        "description": "Bring a handpicked set of apps together around a task.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection",
+          "title": "App collection",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "manual",
+            "appIds": [],
+            "limit": 8,
+            "rendering": "standard"
+          }
+        }
+      },
+      {
+        "preset_id": "app-directory",
+        "name": "App directory",
+        "description": "An informative, compact list of apps and their purpose.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection",
+          "title": "App directory",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "library",
+            "limit": 12,
+            "rendering": "list"
+          }
+        }
+      },
+      {
+        "preset_id": "featured-collection",
+        "name": "Featured collection",
+        "description": "An editorial presentation for a collection worth exploring.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection",
+          "title": "Featured collection",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "orange"
+          },
+          "config": {
+            "source": "manual",
+            "appIds": [],
+            "limit": 4,
+            "rendering": "editorial"
+          }
+        }
+      },
+      {
+        "preset_id": "app-shelf",
+        "name": "App shelf",
+        "description": "Browse a collection in a horizontal carousel.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection",
+          "title": "App shelf",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "new",
+            "limit": 8,
+            "rendering": "carousel"
+          }
+        }
+      },
+      {
+        "preset_id": "new-apps",
+        "name": "New apps",
+        "description": "Discover the latest additions to the community.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection",
+          "title": "New apps",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "new",
+            "limit": 6,
+            "rendering": "standard"
+          }
+        }
+      },
+      {
+        "preset_id": "popular-apps",
+        "name": "Popular apps",
+        "description": "Explore popular apps, optionally filtered by topic.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection",
+          "title": "Popular apps",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "popular",
+            "limit": 6,
+            "rendering": "list"
+          }
+        }
+      },
+      {
+        "preset_id": "categories",
+        "name": "Explore categories",
+        "description": "Find apps by the kind of work you want to do.",
+        "category": "apps",
+        "widget": {
+          "type": "categories",
+          "title": "Explore categories",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 2
+          },
+          "appearance": {
+            "variant": "borderless",
+            "accent": "neutral"
+          },
+          "config": {}
+        }
+      },
+      {
+        "preset_id": "packages",
+        "name": "Explore packages",
+        "description": "Find packages and nodes to extend your apps.",
+        "category": "apps",
+        "widget": {
+          "type": "packages",
+          "title": "Explore packages",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "query": "",
+            "limit": 6,
+            "rendering": "standard"
+          }
+        }
+      },
+      {
+        "preset_id": "models",
+        "name": "Model collection",
+        "description": "Bring useful models into view.",
+        "category": "apps",
+        "widget": {
+          "type": "models",
+          "title": "Model collection",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "query": "",
+            "limit": 4,
+            "rendering": "standard"
+          }
+        }
+      },
+      {
+        "preset_id": "greeting",
+        "name": "Welcome",
+        "description": "A personal greeting and today's date.",
+        "category": "content",
+        "widget": {
+          "type": "greeting",
+          "title": "Welcome",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 1
+          },
+          "appearance": {
+            "variant": "borderless",
+            "accent": "neutral"
+          },
+          "config": {}
+        }
+      },
+      {
+        "preset_id": "quick-actions",
+        "name": "Quick actions",
+        "description": "Create an app, import a flow, or explore your library.",
+        "category": "content",
+        "widget": {
+          "type": "quick-actions",
+          "title": "Quick actions",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 2
+          },
+          "appearance": {
+            "variant": "borderless",
+            "accent": "neutral"
+          },
+          "config": {
+            "actions": [
+              "create",
+              "import",
+              "library",
+              "packages"
+            ]
+          }
+        }
+      },
+      {
+        "preset_id": "quick-links",
+        "name": "Links and destinations",
+        "description": "Useful pages, app destinations, and external resources.",
+        "category": "content",
+        "widget": {
+          "type": "quick-links",
+          "title": "Links and destinations",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "links": [
+              {
+                "title": "Explore apps",
+                "description": "Find your next useful app",
+                "href": "/store/explore/apps"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "preset_id": "info",
+        "name": "Information panel",
+        "description": "Make space for context, instructions, or a helpful explanation.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Information panel",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "mode": "markdown",
+            "body": "Make this space your own. Add context, useful links, or a guide for your team."
+          }
+        }
+      },
+      {
+        "preset_id": "notes",
+        "name": "Notes",
+        "description": "Keep a thought, plan, or reference close at hand.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Notes",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "tinted",
+            "accent": "amber"
+          },
+          "config": {
+            "mode": "markdown",
+            "body": ""
+          }
+        }
+      },
+      {
+        "preset_id": "banner",
+        "name": "Feature banner",
+        "description": "Highlight a message with a prominent visual treatment.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Feature banner",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "tinted",
+            "accent": "orange"
+          },
+          "config": {
+            "mode": "banner",
+            "body": "A space for what matters next."
+          }
+        }
+      },
+      {
+        "preset_id": "announcement",
+        "name": "Announcement",
+        "description": "Share an update, release, or important destination.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Announcement",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 2
+          },
+          "appearance": {
+            "variant": "tinted",
+            "accent": "blue"
+          },
+          "config": {
+            "mode": "announcement",
+            "body": "Add your announcement here."
+          }
+        }
+      },
+      {
+        "preset_id": "faq",
+        "name": "Questions and answers",
+        "description": "Make common questions easy to answer.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Questions and answers",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "mode": "faq",
+            "items": [
+              {
+                "title": "Where should I start?",
+                "body": "Add guidance and useful links for this profile."
+              }
+            ]
+          }
+        }
+      },
+      {
+        "preset_id": "checklist",
+        "name": "Checklist",
+        "description": "Keep a plan or getting-started guide in view.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Checklist",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "mode": "checklist",
+            "items": [
+              {
+                "title": "Add your first step",
+                "checked": false
+              }
+            ]
+          }
+        }
+      },
+      {
+        "preset_id": "countdown",
+        "name": "Milestone",
+        "description": "An upcoming date, deadline, or moment to look forward to.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Milestone",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 2
+          },
+          "appearance": {
+            "variant": "tinted",
+            "accent": "violet"
+          },
+          "config": {
+            "mode": "countdown",
+            "date": ""
+          }
+        }
+      },
+      {
+        "preset_id": "notifications",
+        "name": "Your inbox",
+        "description": "Your personal notifications and links to relevant work.",
+        "category": "activity",
+        "widget": {
+          "type": "notifications",
+          "title": "Your inbox",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {}
+        }
+      },
+      {
+        "preset_id": "needs-attention",
+        "name": "Needs your attention",
+        "description": "Unread workflow notifications and recent executions with error severity.",
+        "category": "activity",
+        "widget": {
+          "type": "needs-attention",
+          "title": "Needs your attention",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 5
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "orange"
+          },
+          "config": {}
+        }
+      },
+      {
+        "preset_id": "run-stats",
+        "name": "Your run statistics",
+        "description": "A summary of execution and AI usage for your account.",
+        "category": "activity",
+        "widget": {
+          "type": "run-stats",
+          "title": "Your run statistics",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 2
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {}
+        }
+      },
+      {
+        "preset_id": "run-activity",
+        "name": "Your run activity",
+        "description": "Review recorded execution activity by day, with error severity highlighted.",
+        "category": "activity",
+        "widget": {
+          "type": "run-activity",
+          "title": "Your run activity",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "days": 7
+          }
+        }
+      },
+      {
+        "preset_id": "executions-by-app",
+        "name": "Executions by app",
+        "description": "See which apps appear most often in your recent execution records.",
+        "category": "activity",
+        "widget": {
+          "type": "executions-by-app",
+          "title": "Executions by app",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "days": 7,
+            "limit": 8
+          }
+        }
+      },
+      {
+        "preset_id": "ai-usage",
+        "name": "Your AI usage",
+        "description": "Recorded AI and embedding requests with their reported costs.",
+        "category": "activity",
+        "widget": {
+          "type": "ai-usage",
+          "title": "Your AI usage",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {}
+        }
+      },
+      {
+        "preset_id": "recent-runs",
+        "name": "Your recent runs",
+        "description": "Recent execution outcomes with links to their apps.",
+        "category": "activity",
+        "widget": {
+          "type": "recent-runs",
+          "title": "Your recent runs",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "limit": 8
+          }
+        }
+      },
+      {
+        "preset_id": "schedules",
+        "name": "Scheduled next",
+        "description": "Upcoming scheduled events in your apps.",
+        "category": "activity",
+        "widget": {
+          "type": "schedules",
+          "title": "Scheduled next",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "limit": 8
+          }
+        }
+      },
+      {
+        "preset_id": "resource-directory",
+        "name": "Resource directory",
+        "description": "A curated hub of guides, app pages, and useful destinations.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Resource directory",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "mode": "resources",
+            "items": []
+          }
+        }
+      },
+      {
+        "preset_id": "guided-steps",
+        "name": "Guided steps",
+        "description": "Explain a process with numbered steps and links to the tools for each one.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Guided steps",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "mode": "steps",
+            "items": []
+          }
+        }
+      },
+      {
+        "preset_id": "updates-feed",
+        "name": "Updates and changelog",
+        "description": "Publish a series of updates with dates, labels, and useful links.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Updates and changelog",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "mode": "feed",
+            "items": []
+          }
+        }
+      },
+      {
+        "preset_id": "editorial-story",
+        "name": "Editorial story",
+        "description": "Tell a story with an image, rich text, and a call to action.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Editorial story",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "tinted",
+            "accent": "violet"
+          },
+          "config": {
+            "mode": "story",
+            "body": "",
+            "imageSource": "url",
+            "imageUrl": "",
+            "imageAlt": "",
+            "actionHref": ""
+          }
+        }
+      },
+      {
+        "preset_id": "image-card",
+        "name": "Image and caption",
+        "description": "Bring a diagram, illustration, or visual reference onto your home.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Image and caption",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "mode": "image",
+            "body": "",
+            "imageSource": "url",
+            "imageUrl": "",
+            "imageAlt": ""
+          }
+        }
+      },
+      {
+        "preset_id": "quote-card",
+        "name": "Quote",
+        "description": "Keep a useful quotation and its attribution in view.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Quote",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "tinted",
+            "accent": "blue"
+          },
+          "config": {
+            "mode": "quote",
+            "body": "",
+            "attribution": ""
+          }
+        }
+      },
+      {
+        "preset_id": "facts-card",
+        "name": "Facts and highlights",
+        "description": "Give key facts, definitions, and context their own cards.",
+        "category": "content",
+        "widget": {
+          "type": "information",
+          "title": "Facts and highlights",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "mode": "facts",
+            "items": []
+          }
+        }
+      },
+      {
+        "preset_id": "app-toolkit",
+        "name": "App toolkit",
+        "description": "Hand-pick a compact group of apps for a particular task or team.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection",
+          "title": "App toolkit",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "manual",
+            "appIds": [],
+            "limit": 12,
+            "rendering": "icons"
+          }
+        }
+      },
+      {
+        "preset_id": "topic-apps",
+        "name": "Apps by topic",
+        "description": "Build a living collection filtered by category or tag.",
+        "category": "apps",
+        "widget": {
+          "type": "app-collection",
+          "title": "Apps by topic",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "source": "new",
+            "category": "",
+            "tag": "",
+            "limit": 8,
+            "rendering": "standard"
+          }
+        }
+      },
+      {
+        "preset_id": "app-destinations",
+        "name": "App page directory",
+        "description": "Link directly to app pages, chats, or bookmarked query views.",
+        "category": "apps",
+        "widget": {
+          "type": "quick-links",
+          "title": "App page directory",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "grid",
+            "accent": "neutral"
+          },
+          "config": {
+            "links": []
+          }
+        }
+      },
+      {
+        "preset_id": "saved-forecast",
+        "name": "Saved forecast",
+        "description": "Keep a saved prediction and its uncertainty in view without running the model again.",
+        "category": "data",
+        "widget": {
+          "type": "saved-forecast",
+          "title": "Saved forecast",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 5
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "orange"
+          },
+          "config": {
+            "appId": "",
+            "forecastId": "",
+            "scope": "project",
+            "view": "forecast"
+          }
+        }
+      },
+      {
+        "preset_id": "target-progress",
+        "name": "Progress to target",
+        "description": "Track an aggregate against a target you set.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Progress to target",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 2
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "progress",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "target-gauge",
+        "name": "Target gauge",
+        "description": "Read progress toward a target at a glance.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Target gauge",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "gauge",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "target-bullet",
+        "name": "Bullet chart",
+        "description": "Compare a measure with a target on a compact scale.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Bullet chart",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 2
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "bullet",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "percent-stacked",
+        "name": "100% stacked chart",
+        "description": "Compare the composition of groups as percentages.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "100% stacked chart",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "percentstacked",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "box-plot",
+        "name": "Box plot",
+        "description": "Compare ranges, medians, and approximate quartiles.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Box plot",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "boxplot",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "funnel",
+        "name": "Funnel",
+        "description": "Compare volumes across ordered stages.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Funnel",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "funnel",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "waterfall",
+        "name": "Waterfall",
+        "description": "Show how positive and negative changes build a total.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Waterfall",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "waterfall",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "sankey",
+        "name": "Sankey",
+        "description": "See weighted connections between two sets of categories.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Sankey",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 5
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "sankey",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "pivot-table",
+        "name": "Pivot table",
+        "description": "Compare an aggregate across row and column groups.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Pivot table",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "pivot",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "record-timeline",
+        "name": "Record timeline",
+        "description": "Place dated records in chronological order.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Record timeline",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "timeline",
+            "mode": "records"
+          }
+        }
+      },
+      {
+        "preset_id": "record-calendar",
+        "name": "Record calendar",
+        "description": "See dated records in a monthly calendar.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Record calendar",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 5
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "recordcalendar",
+            "mode": "records"
+          }
+        }
+      },
+      {
+        "preset_id": "object-comparison",
+        "name": "Record comparison",
+        "description": "Compare the fields of up to ten records side by side.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Record comparison",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "comparison",
+            "mode": "records"
+          }
+        }
+      },
+      {
+        "preset_id": "metric",
+        "name": "Metric",
+        "description": "A count, total, average, or other measure from your data.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Metric",
+          "description": "",
+          "size": {
+            "columns": 3,
+            "rows": 2
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "stat",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "metric-strip",
+        "name": "Metric strip",
+        "description": "Several related measures in one view.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Metric strip",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 2
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "metricstrip",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "bar-chart",
+        "name": "Bar chart",
+        "description": "Compare categories, teams, or periods.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Bar chart",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "bar",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "ranked-bars",
+        "name": "Ranked bars",
+        "description": "Rank categories with horizontal bars and readable labels.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Ranked bars",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "horizontal",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "stacked-chart",
+        "name": "Stacked chart",
+        "description": "See how categories contribute to a total.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Stacked chart",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "stacked",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "line-chart",
+        "name": "Line chart",
+        "description": "Follow a measure over time.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Line chart",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "line",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "area-chart",
+        "name": "Area chart",
+        "description": "Understand changes in volume over time.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Area chart",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "area",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "donut-chart",
+        "name": "Donut chart",
+        "description": "Compare each category's share of a total.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Donut chart",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "donut",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "pie-chart",
+        "name": "Pie chart",
+        "description": "A compact breakdown of a few categories.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Pie chart",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "pie",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "scatter-chart",
+        "name": "Scatter plot",
+        "description": "Explore the relationship between numeric measures.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Scatter plot",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "scatter",
+            "mode": "records"
+          }
+        }
+      },
+      {
+        "preset_id": "histogram",
+        "name": "Histogram",
+        "description": "Inspect the distribution of numeric values.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Histogram",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "histogram",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "heatmap",
+        "name": "Heatmap",
+        "description": "Spot patterns across two dimensions.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Heatmap",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "heatmap",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "calendar-heatmap",
+        "name": "Activity calendar",
+        "description": "See daily activity across a date range.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Activity calendar",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "calendar",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "treemap",
+        "name": "Treemap",
+        "description": "Show how categories contribute to a whole.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Treemap",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "treemap",
+            "mode": "aggregate"
+          }
+        }
+      },
+      {
+        "preset_id": "data-table",
+        "name": "Data table",
+        "description": "Choose columns, filter records, and explore the results.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Data table",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 5
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "table",
+            "mode": "records"
+          }
+        }
+      },
+      {
+        "preset_id": "record-list",
+        "name": "Record list",
+        "description": "A compact list from a table or ontology.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Record list",
+          "description": "",
+          "size": {
+            "columns": 6,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "list",
+            "mode": "records"
+          }
+        }
+      },
+      {
+        "preset_id": "record-gallery",
+        "name": "Record gallery",
+        "description": "Present records as a collection of cards.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Record gallery",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 4
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "cards",
+            "mode": "records"
+          }
+        }
+      },
+      {
+        "preset_id": "kanban",
+        "name": "Status board",
+        "description": "Group records by a status or category.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Status board",
+          "description": "",
+          "size": {
+            "columns": 12,
+            "rows": 5
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "kanban",
+            "mode": "records"
+          }
+        }
+      },
+      {
+        "preset_id": "object-card",
+        "name": "Object details",
+        "description": "Keep an important record and its properties in view.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Object details",
+          "description": "",
+          "size": {
+            "columns": 4,
+            "rows": 3
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "record",
+            "mode": "records"
+          }
+        }
+      },
+      {
+        "preset_id": "relationship-graph",
+        "name": "Relationship graph",
+        "description": "Explore connections from source and target fields.",
+        "category": "data",
+        "widget": {
+          "type": "data",
+          "title": "Relationship graph",
+          "description": "",
+          "size": {
+            "columns": 8,
+            "rows": 5
+          },
+          "appearance": {
+            "variant": "card",
+            "accent": "neutral"
+          },
+          "config": {
+            "visualization": "graph",
+            "mode": "records"
+          }
+        }
+      }
+    ],
+    "note": "Give every widget a unique id when placing it in a layout."
+  },
+  "default_layout": {
+    "version": 1,
+    "title": "Your workspace, with room for inspiration.",
+    "widgets": [
+      {
+        "id": "default-greeting",
+        "type": "greeting",
+        "title": "Welcome",
+        "description": "",
+        "size": {
+          "columns": 12,
+          "rows": 1,
+          "heightMode": "auto"
+        },
+        "appearance": {
+          "variant": "borderless",
+          "accent": "neutral"
+        },
+        "config": {
+          "mode": "masthead"
+        }
+      },
+      {
+        "id": "default-flowpilot-bar",
+        "type": "flowpilot",
+        "title": "Ask FlowPilot",
+        "description": "",
+        "size": {
+          "columns": 12,
+          "rows": 1,
+          "heightMode": "auto"
+        },
+        "appearance": {
+          "variant": "borderless",
+          "accent": "violet"
+        },
+        "config": {
+          "mode": "bar",
+          "suggestions": true,
+          "emphasis": true,
+          "placeholder": "Ask FlowPilot to build an app, find a node, or work through an idea…"
+        }
+      },
+      {
+        "id": "default-quick-actions",
+        "type": "quick-actions",
+        "title": "Quick actions",
+        "description": "",
+        "size": {
+          "columns": 12,
+          "rows": 2,
+          "heightMode": "auto"
+        },
+        "appearance": {
+          "variant": "borderless",
+          "accent": "neutral"
+        },
+        "config": {
+          "actions": [
+            "create",
+            "import",
+            "library",
+            "packages"
+          ],
+          "layout": "toolbar"
+        }
+      },
+      {
+        "id": "default-recent-apps",
+        "type": "app-collection",
+        "title": "Your apps",
+        "description": "Recently updated in this profile.",
+        "size": {
+          "columns": 8,
+          "rows": 2,
+          "heightMode": "auto"
+        },
+        "appearance": {
+          "variant": "card",
+          "accent": "neutral"
+        },
+        "config": {
+          "source": "recent",
+          "limit": 6,
+          "rendering": "compact",
+          "showUpdated": true,
+          "maxColumns": 2
+        }
+      },
+      {
+        "id": "default-workspace-pulse",
+        "type": "workspace-pulse",
+        "title": "Workspace overview",
+        "description": "",
+        "size": {
+          "columns": 4,
+          "rows": 4,
+          "heightMode": "auto"
+        },
+        "appearance": {
+          "variant": "card",
+          "accent": "violet"
+        },
+        "config": {
+          "days": 7,
+          "showAttention": true
+        }
+      },
+      {
+        "id": "default-discover-heading",
+        "type": "section-heading",
+        "title": "Explore and build",
+        "description": "Apps and building blocks from your connected catalog.",
+        "size": {
+          "columns": 12,
+          "rows": 1,
+          "heightMode": "auto"
+        },
+        "appearance": {
+          "variant": "borderless",
+          "accent": "neutral"
+        },
+        "config": {
+          "href": "/store/explore/apps",
+          "linkLabel": "Explore apps"
+        }
+      },
+      {
+        "id": "default-app-spotlight",
+        "type": "app-spotlight",
+        "title": "App spotlight",
+        "description": "",
+        "size": {
+          "columns": 8,
+          "rows": 4,
+          "heightMode": "auto"
+        },
+        "appearance": {
+          "variant": "tinted",
+          "accent": "violet"
+        },
+        "config": {
+          "source": "new",
+          "eyebrow": "IN THE SPOTLIGHT",
+          "mode": "compact"
+        }
+      },
+      {
+        "id": "default-resource-directory",
+        "type": "information",
+        "title": "Make this home yours",
+        "description": "",
+        "size": {
+          "columns": 4,
+          "rows": 4,
+          "heightMode": "auto"
+        },
+        "appearance": {
+          "variant": "card",
+          "accent": "neutral"
+        },
+        "config": {
+          "mode": "resources",
+          "items": [
+            {
+              "id": "embed",
+              "title": "Keep an app open here",
+              "body": "In Customize, add Embed an app. Choose a page or chat, then add query parameters if needed."
+            },
+            {
+              "id": "data",
+              "title": "Turn data into a daily view",
+              "body": "In Customize, add a data widget. Choose a table or ontology, then set your chart, measures, and filters."
+            },
+            {
+              "id": "learn",
+              "title": "Build your first flow",
+              "body": "Follow a course from your first node to a working app.",
+              "href": "/learn"
+            }
+          ],
+          "layout": "list"
+        }
+      },
+      {
+        "id": "default-packages",
+        "type": "packages",
+        "title": "Extend your flows",
+        "description": "Packages add nodes, tools, and integrations.",
+        "size": {
+          "columns": 8,
+          "rows": 4,
+          "heightMode": "auto"
+        },
+        "appearance": {
+          "variant": "card",
+          "accent": "neutral"
+        },
+        "config": {
+          "query": "",
+          "limit": 2,
+          "rendering": "compact"
+        }
+      },
+      {
+        "id": "default-model-spotlight",
+        "type": "model-spotlight",
+        "title": "Model spotlight",
+        "description": "",
+        "size": {
+          "columns": 4,
+          "rows": 3,
+          "heightMode": "auto"
+        },
+        "appearance": {
+          "variant": "card",
+          "accent": "neutral"
+        },
+        "config": {
+          "source": "manual",
+          "eyebrow": "MEET YOUR NEXT MODEL",
+          "modelId": "s14lujkm2gut2mwg0zo3imxv",
+          "modelHub": "api.flow-like.com"
+        }
+      },
+      {
+        "id": "default-categories",
+        "type": "categories",
+        "title": "Browse apps by category",
+        "description": "",
+        "size": {
+          "columns": 12,
+          "rows": 2,
+          "heightMode": "auto"
+        },
+        "appearance": {
+          "variant": "borderless",
+          "accent": "neutral"
+        },
+        "config": {
+          "categories": [
+            "Productivity",
+            "Business",
+            "Utilities",
+            "Communication",
+            "Education",
+            "Entertainment",
+            "Games"
+          ],
+          "rendering": "chips"
+        }
+      }
+    ]
+  },
+  "default_fingerprint": "fp1:282f9ced7e261f45541da14b302bc1f3"
+}

@@ -1,8 +1,11 @@
 import { createId } from "@paralleldrive/cuid2";
+import { createNativeStreamPresentation } from "./native-stream-presentation";
+import { createNativeAutoModeControl } from "./native-auto-mode";
 import {
 	isAgentBackendProvider,
 	normalizeAIProvider,
 } from "../../components/flowpilot/types";
+import { joinContentText } from "../../components/interfaces/chat-default/inline-segments";
 import { copilotBackendConnectionCoordinator } from "../../hooks/copilot-backend-coordinator";
 import {
 	FLOWPILOT_DEBUG_ENABLED,
@@ -16,6 +19,7 @@ import { buildChatMessageError } from "../../lib/flowpilot/chat-error";
 import { sanitizeFlowScriptForPersistence } from "../../lib/flowscript-persistence";
 import { isTauri } from "../../lib/platform";
 import { IRole } from "../../lib/schema/llm/history";
+import { recordChatActivity, removeChatActivity } from "../chat-activity-store";
 import {
 	createAgentDebugStreamRecorder,
 	summarizeAgentDebugRootOutcomes,
@@ -216,7 +220,7 @@ const deletedConversations = new Set<string>();
 export const RUN_CONTEXT_SCHEMA = "flowpilot.run-context/v1";
 
 export async function persistGlobalChatMessage(message: IMessage) {
-	if (deletedConversations.has(message.sessionId)) return;
+	if (deletedConversations.has(message.sessionId)) return false;
 	try {
 		let persistedMessage = message;
 		const workspace = message.flowscript_workspace;
@@ -232,15 +236,17 @@ export async function persistGlobalChatMessage(message: IMessage) {
 		}
 		if (FLOWPILOT_DEBUG_ENABLED) {
 			await globalChatDb.messages.put(persistedMessage);
-			return;
+			return true;
 		}
 		// Defense in depth: callers can pass restored or backend-provided messages that still carry
 		// an old report. Production must never write that diagnostic payload back to history.
 		await globalChatDb.messages.put(
 			stripFlowPilotDebugReport(persistedMessage),
 		);
+		return true;
 	} catch {
 		// history persistence is best-effort in v1
+		return false;
 	}
 }
 
@@ -313,6 +319,7 @@ export async function deleteGlobalChatConversation(sessionId: string) {
 	// Tombstone first: cancellation is not synchronous, so this is what actually stops a run's
 	// in-flight checkpoint or its closing write from re-creating rows behind the delete.
 	deletedConversations.add(sessionId);
+	removeChatActivity({ kind: "flowpilot", sessionId });
 
 	const state = useGlobalChatStore.getState();
 	const liveRunIds = Object.values(state.runs)
@@ -379,8 +386,34 @@ export function tauriStart(
 		const { Channel, invoke } = await import("@tauri-apps/api/core");
 		beforeInvoke?.();
 		const channel = new Channel<string>();
-		channel.onmessage = onChunk;
-		return invoke(command, { ...args, channel });
+		const autoControl =
+			(command === "global_chat" || command === "global_chat_resume") &&
+			typeof args.runId === "string"
+				? createNativeAutoModeControl({
+						runId: args.runId,
+						read: () => useGlobalChatStore.getState().autoMode,
+						subscribe: (changed) =>
+							useGlobalChatStore.subscribe((state, previous) => {
+								if (state.autoMode !== previous.autoMode) changed();
+							}),
+						update: (request) =>
+							invoke("set_native_run_auto_mode", { ...request }),
+					})
+				: undefined;
+		channel.onmessage = (chunk) => {
+			if (!autoControl?.accept(chunk)) onChunk(chunk);
+		};
+		try {
+			return await invoke(command, {
+				...args,
+				...(command === "global_chat"
+					? { autoApprove: useGlobalChatStore.getState().autoMode }
+					: {}),
+				channel,
+			});
+		} finally {
+			autoControl?.dispose();
+		}
 	};
 }
 
@@ -502,7 +535,12 @@ export async function driveGlobalChatStream({
 		}
 	};
 
+	const presentNativeOutput = createNativeStreamPresentation(runId);
 	const onChunk = (chunk: string) => {
+		if (presentNativeOutput(chunk)) {
+			syncMessage();
+			return;
+		}
 		for (const event of debugStream.push(chunk)) {
 			applyStreamEvent(acc, event);
 		}
@@ -700,7 +738,29 @@ export async function driveGlobalChatStream({
 				),
 			};
 			store.getState().commitMessage(finalized);
-			void persistGlobalChatMessage(finalized);
+			const saved = await persistGlobalChatMessage(finalized);
+			if (
+				saved &&
+				!deletedConversations.has(finalized.sessionId) &&
+				finalized.error?.kind !== "cancelled"
+			) {
+				const session = await globalChatDb.sessions
+					.get(finalized.sessionId)
+					.catch(() => undefined);
+				const preview =
+					joinContentText(finalized.inner.content).trim() ||
+					finalized.error?.message ||
+					(finalized.files.length > 0 ? "Shared an attachment" : "") ||
+					(finalized.widgets?.length ? "Shared a widget" : "");
+				if (preview && !deletedConversations.has(finalized.sessionId)) {
+					recordChatActivity({
+						target: { kind: "flowpilot", sessionId: finalized.sessionId },
+						messageId: finalized.id,
+						title: session?.summarization || label || "FlowPilot",
+						preview,
+					});
+				}
+			}
 		}
 
 		// A turn can end before it reaches a boundary where steering could be folded in. Recover
@@ -869,6 +929,7 @@ export function resumeGlobalChatStream() {
 			responseMessage.usage_stats = checkpoint.usage_stats;
 			responseMessage.files = checkpoint.files ?? [];
 			responseMessage.widgets = checkpoint.widgets;
+			responseMessage.main_widget = checkpoint.main_widget;
 			responseMessage.app_refs = checkpoint.app_refs;
 			responseMessage.flowscript_workspace = checkpoint.flowscript_workspace;
 			responseMessage.timestamp = checkpoint.timestamp;

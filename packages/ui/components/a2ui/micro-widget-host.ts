@@ -481,6 +481,19 @@ export interface MicroWidgetBridgeHandle {
 }
 
 const liveBridges = new Map<string, MicroWidgetBridgeHandle>();
+const bridgeListeners = new Set<() => void>();
+
+/** Pending workflow queries retry when a matching widget mounts or replaces its bridge. */
+export function subscribeMicroWidgetBridges(listener: () => void): () => void {
+	bridgeListeners.add(listener);
+	return () => {
+		bridgeListeners.delete(listener);
+	};
+}
+
+function notifyMicroWidgetBridges() {
+	for (const listener of bridgeListeners) listener();
+}
 
 /**
  * Register a live micro-widget bridge for imperative host access (run/query
@@ -492,9 +505,11 @@ export function registerMicroWidgetBridge(
 	handle: MicroWidgetBridgeHandle,
 ): () => void {
 	liveBridges.set(instanceId, handle);
+	notifyMicroWidgetBridges();
 	return () => {
 		if (liveBridges.get(instanceId) === handle) {
 			liveBridges.delete(instanceId);
+			notifyMicroWidgetBridges();
 		}
 	};
 }

@@ -42,7 +42,7 @@ describe("tool activity context", () => {
 			).toBeUndefined();
 	});
 
-	test("deduplicates and bounds sources without preserving URL parameters", () => {
+	test("deduplicates sources without preserving URL parameters", () => {
 		const detail = buildToolActivity("internet_search", {
 			input: { query: "license terms" },
 			result_preview: JSON.stringify({
@@ -59,6 +59,164 @@ describe("tool activity context", () => {
 			"https://example.com/license",
 			"https://other.example/terms",
 		]);
+	});
+
+	test("retains every search result and all queries across streamed updates", () => {
+		const previous = buildToolActivity("internet_search", {
+			arguments: {
+				queries: ["Porsche Panamera comfort", "BMW 7 Series ride"],
+				headers: { Authorization: "Bearer private" },
+			},
+		});
+		const detail = buildToolActivity(
+			"internet_search",
+			{
+				result_preview: JSON.stringify({
+					query: "Porsche Panamera comfort",
+					results: Array.from({ length: 12 }, (_, index) => ({
+						url: `https://reviews.example/car-${index}`,
+						title: `Review ${index}`,
+						snippet: "Private raw result snippet",
+					})),
+				}),
+			},
+			previous,
+		);
+		expect(detail.query).toBe("Porsche Panamera comfort");
+		expect(detail.queries).toEqual([
+			"Porsche Panamera comfort",
+			"BMW 7 Series ride",
+		]);
+		expect(detail.sources).toHaveLength(12);
+		expect(detail.sources?.at(-1)).toEqual({
+			url: "https://reviews.example/car-11",
+			hostname: "reviews.example",
+			path: "/car-11",
+			title: "Review 11",
+		});
+		expect(JSON.stringify(detail)).not.toContain("private");
+		expect(JSON.stringify(detail)).not.toContain("snippet");
+	});
+
+	test("accepts batched query objects and later search attempts without losing earlier queries", () => {
+		const previous = buildToolActivity("web_search", {
+			arguments: {
+				search_query: [{ q: "first search" }, { query: "second search" }],
+			},
+		});
+		const detail = buildToolActivity(
+			"web_search",
+			{
+				arguments: {
+					queries: ["first search", "third search api_key=private"],
+				},
+			},
+			previous,
+		);
+		expect(detail.queries).toEqual([
+			"first search",
+			"second search",
+			"third search [redacted]",
+		]);
+	});
+
+	test("preserves full-length distinct queries before deduplication", () => {
+		const prefix = "Porsche comfort ".padEnd(500, "a");
+		const queries = [`${prefix} rear seats`, `${prefix} suspension`];
+		const detail = buildToolActivity("internet_search", {
+			arguments: { queries },
+		});
+		expect(detail.queries).toEqual(queries);
+		expect(detail.query).toBe(queries[0]);
+		expect(toolActivityText(queries[0])?.length).toBe(240);
+	});
+
+	test("adds page titles from a nested source without losing the original request or restrictions", () => {
+		const previous = buildToolActivity("open_url", {
+			arguments: { url: "https://reviews.example/read?token=private" },
+		});
+		const detail = buildToolActivity(
+			"open_url",
+			{
+				result: {
+					requested_url: "https://reviews.example/read",
+					url: "https://reviews.example/review",
+					source: {
+						url: "https://reviews.example/review",
+						title: "Panamera review",
+					},
+					body: "Private body",
+				},
+			},
+			previous,
+		);
+		expect(detail.sources).toEqual([
+			{
+				url: "https://reviews.example/read",
+				hostname: "reviews.example",
+				path: "/read",
+				linkable: false,
+			},
+			{
+				url: "https://reviews.example/review",
+				hostname: "reviews.example",
+				path: "/review",
+				title: "Panamera review",
+			},
+		]);
+	});
+
+	test("reads all MCP content blocks and sanitizes result titles", () => {
+		const detail = buildToolActivity("web_search", {
+			result: {
+				content: Array.from({ length: 6 }, (_, index) => ({
+					type: "text",
+					text: JSON.stringify({
+						url: `https://reviews.example/page-${index}`,
+						title: `Review ${index} token=private`,
+					}),
+				})),
+			},
+		});
+		expect(detail.sources).toHaveLength(6);
+		expect(detail.sources?.at(-1)?.title).toBe("Review 5 [redacted]");
+	});
+
+	test("keeps archive originals and snapshots distinct", () => {
+		const detail = buildToolActivity("archive_lookup", {
+			result_preview: JSON.stringify({
+				tool: "archive_lookup",
+				status: "ok",
+				original_url: "https://reviews.example/panamera",
+				url: "https://web.archive.org/web/20260101/https://reviews.example/panamera",
+				source: {
+					title: "Archived Panamera review",
+					url: "https://web.archive.org/web/20260101/https://reviews.example/panamera",
+					original_url: "https://reviews.example/panamera",
+				},
+			}),
+		});
+		expect(detail.sources).toHaveLength(2);
+		expect(
+			detail.sources?.find((source) => source.hostname === "reviews.example")
+				?.title,
+		).toBeUndefined();
+		expect(
+			detail.sources?.find((source) => source.hostname === "web.archive.org")
+				?.title,
+		).toBe("Archived Panamera review");
+	});
+
+	test("accepts the larger compact research preview without losing long URLs", () => {
+		const results = Array.from({ length: 20 }, (_, index) => ({
+			url: `https://reviews.example/${index}/${"a".repeat(3600)}`,
+			title: `Review ${index}`,
+		}));
+		const result_preview = JSON.stringify({ tool: "internet_search", results });
+		expect(result_preview.length).toBeGreaterThan(64 * 1024);
+		const detail = buildToolActivity("internet_search", { result_preview });
+		expect(detail.sources).toHaveLength(20);
+		expect(detail.sources?.at(-1)?.url).toBe(results[19].url);
 	});
 
 	test("retains only relevant resource fields for app, file and data tools", () => {
@@ -243,6 +401,27 @@ describe("tool activity context", () => {
 		);
 		expect(getToolActivityLabel("custom_lookup")).toBe("Custom lookup");
 		expect(getToolActivityLabel("")).toBe("Working");
+	});
+
+	test("recognizes Claude's native search and fetch tools", () => {
+		expect(
+			buildToolActivity("WebSearch", {
+				arguments: { query: "Panamera comfort" },
+			}),
+		).toMatchObject({
+			category: "search",
+			label: "Searching the web",
+			queries: ["Panamera comfort"],
+		});
+		expect(
+			buildToolActivity("WebFetch", {
+				arguments: { url: "https://reviews.example/panamera" },
+			}),
+		).toMatchObject({
+			category: "web",
+			label: "Reading a webpage",
+			sources: [{ url: "https://reviews.example/panamera" }],
+		});
 	});
 
 	test("keeps summaries short and strips raw JSON and credentials", () => {

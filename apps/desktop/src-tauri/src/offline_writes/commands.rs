@@ -472,8 +472,12 @@ async fn scope_of(
     token: Option<&str>,
 ) -> Result<Arc<AppOfflineScope>> {
     let subject = token_subject(token).ok_or_else(|| anyhow!(texts::SIGN_IN_MANAGE))?;
+    let hub = current_hub(app_handle).await?;
+    let (profile_id, issuer) = super::scope_owner(app_handle, &hub, &subject).await?;
     let key = ScopeKey {
-        hub: current_hub(app_handle).await?,
+        profile_id,
+        issuer,
+        hub,
         subject,
         app_id: app_id.to_owned(),
     };
@@ -502,11 +506,11 @@ async fn signed_in_scope(
     app_id: &str,
     token: &str,
 ) -> Result<Arc<AppOfflineScope>> {
-    signed_in(command_scope(app_handle, app_id, Some(token)).await?)
+    signed_in(command_scope(app_handle, app_id, Some(token)).await?).await
 }
 
-pub(crate) fn signed_in(scope: Arc<AppOfflineScope>) -> Result<Arc<AppOfflineScope>> {
-    ensure!(scope.signed_in(), texts::SIGN_IN_MANAGE);
+pub(crate) async fn signed_in(scope: Arc<AppOfflineScope>) -> Result<Arc<AppOfflineScope>> {
+    ensure!(scope.signed_in().await, texts::SIGN_IN_MANAGE);
     Ok(scope)
 }
 
@@ -719,11 +723,17 @@ pub async fn offline_writes_forget_app(
         .try_state::<OfflineWrites>()
         .ok_or_else(|| error("Offline changes are not initialized on this device"))?;
     let current = match token_subject(token.as_deref()) {
-        Some(subject) => Some(ScopeKey {
-            hub: current_hub(&app_handle).await?,
-            subject,
-            app_id: app_id.clone(),
-        }),
+        Some(subject) => {
+            let hub = current_hub(&app_handle).await?;
+            let (profile_id, issuer) = super::scope_owner(&app_handle, &hub, &subject).await?;
+            Some(ScopeKey {
+                profile_id,
+                issuer,
+                hub,
+                subject,
+                app_id: app_id.clone(),
+            })
+        }
         None => None,
     };
     registry

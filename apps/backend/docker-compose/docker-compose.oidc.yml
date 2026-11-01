@@ -1,0 +1,147 @@
+# setup-env.py --oidc bundled adds this file to COMPOSE_FILE.
+# Identity data has its own database and survives ordinary Compose restarts.
+services:
+  oidc-db:
+    image: postgres:16-alpine
+    user: postgres
+    environment:
+      POSTGRES_USER: keycloak
+      POSTGRES_DB: keycloak
+      POSTGRES_PASSWORD: ${OIDC_DB_PASSWORD:?Generate bundled OIDC configuration with scripts/setup-env.py}
+    volumes:
+      - oidc_database:/var/lib/postgresql/data
+    networks:
+      - oidc-database
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U keycloak -d keycloak"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    command: [postgres, -c, max_connections=40]
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    pids_limit: 128
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: ${OIDC_DB_CPUS:-1}
+          memory: ${OIDC_DB_MEMORY:-512M}
+          pids: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  oidc:
+    image: ${OIDC_IMAGE:-quay.io/keycloak/keycloak:26.8.1}
+    # The upstream image applies its build options on first startup.
+    command: [start, --import-realm]
+    depends_on:
+      oidc-db:
+        condition: service_healthy
+    environment:
+      KC_DB: postgres
+      KC_DB_URL: jdbc:postgresql://oidc-db:5432/keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${OIDC_DB_PASSWORD:?Generate bundled OIDC configuration with scripts/setup-env.py}
+      KC_DB_POOL_MAX_SIZE: 20
+      KC_HOSTNAME: ${OIDC_PUBLIC_URL:?Configure the browser-visible HTTPS OIDC origin}
+      KC_HOSTNAME_STRICT: "true"
+      KC_HTTP_ENABLED: "false"
+      KC_HTTPS_PORT: ${OIDC_PORT:-8443}
+      KC_HTTPS_CERTIFICATE_FILE: /etc/flow-like/oidc/tls.crt
+      KC_HTTPS_CERTIFICATE_KEY_FILE: /etc/flow-like/oidc/tls.key
+      KC_HEALTH_ENABLED: "true"
+      # Keycloak includes database readiness only when metrics are enabled.
+      KC_METRICS_ENABLED: "true"
+      KC_HTTP_MANAGEMENT_HEALTH_ENABLED: "true"
+      KC_HTTP_MANAGEMENT_HOST: 127.0.0.1
+      KC_HTTP_MANAGEMENT_PORT: 9000
+      KC_HTTP_MANAGEMENT_SCHEME: http
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${OIDC_ADMIN_USERNAME:-admin}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${OIDC_ADMIN_PASSWORD:?Generate the OIDC administrator password}
+      OIDC_BOOTSTRAP_USERNAME: ${OIDC_BOOTSTRAP_USERNAME:-owner}
+      OIDC_BOOTSTRAP_EMAIL: ${OIDC_BOOTSTRAP_EMAIL:-owner@localhost.invalid}
+      OIDC_BOOTSTRAP_PASSWORD: ${OIDC_BOOTSTRAP_PASSWORD:?Generate the first OIDC user password}
+    volumes:
+      - type: bind
+        source: ${OIDC_REALM_FILE:?Generate the bundled OIDC realm}
+        target: /opt/keycloak/data/import/flow-like-realm.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${OIDC_TLS_CERT_FILE:?Configure the OIDC TLS certificate}
+        target: /etc/flow-like/oidc/tls.crt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${OIDC_TLS_KEY_FILE:?Configure the OIDC TLS private key}
+        target: /etc/flow-like/oidc/tls.key
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      app:
+        aliases:
+          - ${OIDC_HOSTNAME:?Configure the shared browser and container OIDC hostname}
+      oidc-database: {}
+    ports:
+      - ${OIDC_BIND_ADDRESS:-127.0.0.1}:${OIDC_PORT:-8443}:${OIDC_PORT:-8443}
+    healthcheck:
+      # Keycloak's image has no curl. Check HTTP status with Bash built-ins.
+      test:
+        - CMD
+        - bash
+        - -ec
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9000;
+          printf 'GET /health/ready HTTP/1.0\r\nHost: localhost\r\n\r\n' >&3;
+          read -r status <&3;
+          [[ "$$status" == HTTP/*" 200 "* ]]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 120s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    # A public HTTPS origin can use port 443 inside the container too.
+    cap_add: [NET_BIND_SERVICE]
+    pids_limit: 512
+    stop_grace_period: 30s
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: ${OIDC_CPUS:-2}
+          memory: ${OIDC_MEMORY:-2G}
+          pids: 512
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  api:
+    depends_on:
+      oidc:
+        condition: service_healthy
+    environment:
+      OIDC_CA_CERT_FILE: /etc/flow-like/oidc-ca.pem
+    volumes:
+      - type: bind
+        source: ${OIDC_CA_CERT_FILE:?Configure the OIDC certificate authority bundle}
+        target: /etc/flow-like/oidc-ca.pem
+        read_only: true
+        bind:
+          create_host_path: false
+volumes:
+  oidc_database: {}
+networks:
+  oidc-database:
+    internal: true

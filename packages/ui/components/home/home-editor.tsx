@@ -833,6 +833,11 @@ export function HomeEditor({
 			}
 		};
 	}, [admin, profileId, getHomeSnapshot, stageHomeLayout]);
+	useEffect(() => {
+		if (!admin && profileId) {
+			window.dispatchEvent(new Event("flowpilot:home-snapshot-changed"));
+		}
+	}, [admin, profileId, draft, runtimeLayout, editing, dirty]);
 	const applyJson = useCallback(
 		(value: IHomeLayout) => {
 			if (homeLayoutsEqual(draft, value)) {

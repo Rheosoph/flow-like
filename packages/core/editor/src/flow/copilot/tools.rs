@@ -3303,6 +3303,12 @@ fn render_edit_flowscript_result_inner(
             "\n<flowscript_corrections>{payload}</flowscript_corrections>\nApply these exact canonical rewrites to the retained FlowScript source on the next patch."
         ));
     }
+    if !result.warnings.is_empty() {
+        let payload = serde_json::to_string(&result.warnings).unwrap_or_else(|_| "[]".into());
+        rendered.push_str(&format!(
+            "\n<flowscript_warnings>{payload}</flowscript_warnings>"
+        ));
+    }
     if result.diagnostics.is_empty() {
         return rendered;
     }
@@ -4410,6 +4416,7 @@ eventsGeneric(payload: Struct) {
         let result = ReconcileResult {
             commands: Vec::new(),
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: vec![
                 "FlowScript parse error at line 31, col 21: expected `Colon`, found `Assign`"
                     .to_string(),
@@ -4432,6 +4439,7 @@ eventsGeneric(payload: Struct) {
         let result = ReconcileResult {
             commands: Vec::new(),
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: vec![
                 "FlowScript parse error at line 45, col 9: `const` binding requires a call expression"
                     .to_string(),
@@ -4462,6 +4470,7 @@ eventsSimple() {
         let result = ReconcileResult {
             commands: Vec::new(),
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: vec![
                 "FlowScript call `connectImap` does not match a catalog declaration; call `get_declarations` and use the exact function name"
                     .to_string(),
@@ -4480,6 +4489,7 @@ eventsSimple() {
         let result = ReconcileResult {
             commands: Vec::new(),
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: vec!["return value 1 has no matching function return pin".to_string()],
         };
         let output = render_edit_flowscript_result(
@@ -4506,6 +4516,7 @@ eventsSimple() {
                 summary: None,
             }],
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: vec![
                 "new FlowScript loop statements are not yet converted automatically; repair the loop with supported FlowScript declarations because model-facing emit_commands cannot wire executable loop bodies"
                     .to_string(),
@@ -4536,6 +4547,7 @@ eventsSimple() {
                 summary: None,
             }],
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: vec!["future reconcile diagnostic wording".to_string()],
         };
 
@@ -4564,6 +4576,7 @@ eventsSimple() {
                 summary: None,
             }],
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: Vec::new(),
         };
         // "Todo" lives in a user-facing label literal and "todoList" is an identifier; neither is
@@ -4592,6 +4605,7 @@ eventsSimple() {
                 summary: None,
             }],
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: Vec::new(),
         };
         // Even a marker outside string literals must not void a commit the draft store already
@@ -4617,6 +4631,7 @@ eventsSimple() {
                 summary: None,
             }],
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: Vec::new(),
         };
 
@@ -4901,6 +4916,7 @@ detached {
                 summary: None,
             }],
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: Vec::new(),
         };
         let output = render_edit_flowscript_result("run() {\n}", &result, false, false);
@@ -4922,6 +4938,7 @@ detached {
     fn edit_flowscript_result_exposes_nonblocking_canonical_corrections() {
         let result = ReconcileResult {
             commands: Vec::new(),
+            warnings: Vec::new(),
             corrections: vec![
                 "Auto-corrected `stringReplace` argument `regex` to `isRegex`.".to_string(),
             ],

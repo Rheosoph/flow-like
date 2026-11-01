@@ -45,6 +45,8 @@ interface MessageWidgetProps {
 	eventId?: string;
 	/** Pre-capture the rendered widget for the model's context once it settles. */
 	snapshots: boolean;
+	/** The surrounding main pane owns its frame and display controls. */
+	pane?: boolean;
 }
 
 function replaySurface(widget: IChatWidget): Surface {
@@ -65,6 +67,9 @@ function updateSignature(
 
 interface ReplayState {
 	instanceId: string;
+	surfaceId: string;
+	component: IChatWidget["component"];
+	componentSignature: string;
 	appliedCount: number;
 	/** The last applied entry itself; identity short-circuits the content check. */
 	lastApplied: unknown;
@@ -77,6 +82,9 @@ function replayState(widget: IChatWidget): ReplayState {
 	const updates = widget.updates ?? [];
 	return {
 		instanceId: widget.instance_id,
+		surfaceId: widget.surface_id || widget.instance_id,
+		component: widget.component,
+		componentSignature: JSON.stringify(widget.component),
 		appliedCount: updates.length,
 		lastApplied: updates[updates.length - 1],
 		lastSig: updateSignature(updates, updates.length - 1),
@@ -113,12 +121,13 @@ function contentSignature(state: ReplayState): string {
  * iframes). The event processor and `mergeChatWidgets` keep the widget object
  * unless its updates actually grow, so identity is the right key.
  */
-const MessageWidget = memo(function MessageWidget({
+export const MessageWidget = memo(function MessageWidget({
 	widget,
 	appId,
 	boardId,
 	eventId,
 	snapshots,
+	pane = false,
 }: MessageWidgetProps) {
 	const { t } = useTranslation("chat");
 	// Dexie liveQuery re-materializes message objects on every table write, so
@@ -128,11 +137,13 @@ const MessageWidget = memo(function MessageWidget({
 	// not identity), only the new tail is applied onto the CURRENT surface —
 	// full O(n) reseeds per streamed update become O(1), and unpersisted
 	// action-feedback state (applied via onA2UIMessage) survives. The push-time
-	// component snapshot never changes for an instance (re-registrations ride
-	// the updates array), so a shrunk or diverged updates array is the only
-	// full-reseed trigger.
+	// component snapshot normally stays fixed. Set Main Widget can replace it
+	// for the same instance, so changed snapshots also reseed the surface.
 	const replayRef = useRef<ReplayState>({
 		instanceId: "",
+		surfaceId: "",
+		component: {},
+		componentSignature: "",
 		appliedCount: 0,
 		lastApplied: undefined,
 		lastSig: null,
@@ -147,21 +158,38 @@ const MessageWidget = memo(function MessageWidget({
 	);
 	const [maximized, setMaximized] = useState(false);
 	const containerRef = useRef<HTMLDivElement>(null);
+	const pendingFeedback = useRef<string[]>([]);
 
 	useEffect(() => {
 		const updates = widget.updates ?? [];
 		const state = replayRef.current;
+		const sameComponent =
+			state.component === widget.component ||
+			state.componentSignature === JSON.stringify(widget.component);
 
 		if (
 			state.instanceId === widget.instance_id &&
+			state.surfaceId === (widget.surface_id || widget.instance_id) &&
+			sameComponent &&
 			extendsReplay(state, updates)
 		) {
+			state.component = widget.component;
 			if (updates.length === state.appliedCount) return;
-			const tail = updates.slice(state.appliedCount);
+			const tail = updates
+				.slice(state.appliedCount)
+				.map(normalizeA2UIWireMessage)
+				.filter((update) => {
+					if (!pane) return true;
+					const index = pendingFeedback.current.indexOf(JSON.stringify(update));
+					if (index < 0) return true;
+					// Action feedback reaches the mounted surface before the chat saves
+					// it. Consume that copy when it appears in the persisted replay.
+					pendingFeedback.current.splice(index, 1);
+					return false;
+				});
 			setSurface((prev) =>
 				tail.reduce<Surface>(
-					(acc, update) =>
-						applyA2UIMessage(acc, normalizeA2UIWireMessage(update)),
+					(acc, update) => applyA2UIMessage(acc, update),
 					prev,
 				),
 			);
@@ -172,18 +200,25 @@ const MessageWidget = memo(function MessageWidget({
 			return;
 		}
 
-		replayRef.current = replayState(widget);
+		replayRef.current = {
+			...replayState(widget),
+			feedbackCount: state.feedbackCount + 1,
+		};
+		pendingFeedback.current = [];
 		setSurface(replaySurface(widget));
 		setSignature(contentSignature(replayRef.current));
-	}, [widget]);
+	}, [widget, pane]);
 
-	const onA2UIMessage = useCallback((message: A2UIServerMessage) => {
-		setSurface((prev) =>
-			applyA2UIMessage(prev, normalizeA2UIWireMessage(message)),
-		);
-		replayRef.current.feedbackCount += 1;
-		setSignature(contentSignature(replayRef.current));
-	}, []);
+	const onA2UIMessage = useCallback(
+		(message: A2UIServerMessage) => {
+			const normalized = normalizeA2UIWireMessage(message);
+			if (pane) pendingFeedback.current.push(JSON.stringify(normalized));
+			setSurface((prev) => applyA2UIMessage(prev, normalized));
+			replayRef.current.feedbackCount += 1;
+			setSignature(contentSignature(replayRef.current));
+		},
+		[pane],
+	);
 
 	// The inline container is the capture source; while maximized it is empty,
 	// so pre-capture pauses and the last inline capture keeps serving. With
@@ -207,9 +242,21 @@ const MessageWidget = memo(function MessageWidget({
 			eventId={eventId}
 			isPreviewMode={true}
 			onA2UIMessage={onA2UIMessage}
-			className="w-full"
+			className={pane ? "h-full min-h-0 w-full" : "w-full"}
 		/>
 	);
+
+	if (pane) {
+		return (
+			<div
+				ref={containerRef}
+				className="h-full min-h-0 w-full overflow-auto"
+				{...(snapshots ? widgetSnapshotAttribute(widget.instance_id) : {})}
+			>
+				{renderer}
+			</div>
+		);
+	}
 
 	return (
 		<div className="relative rounded-xl border bg-muted/20 overflow-hidden group/widget">

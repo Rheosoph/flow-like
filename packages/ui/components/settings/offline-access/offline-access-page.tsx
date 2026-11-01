@@ -3,7 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CloudOffIcon, RefreshCwIcon, TriangleAlertIcon } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useState } from "react";
 import { useBackend, useBackendReady } from "../../../state/backend-state";
 import type {
 	IOfflineAppOverview,
@@ -227,7 +227,10 @@ function OfflineAccessContent({
 	);
 }
 
-export function OfflineAccessPage({ appId }: Readonly<{ appId: string }>) {
+export function OfflineAccessPage({
+	appId,
+	recoveryAction,
+}: Readonly<{ appId: string; recoveryAction?: ReactNode }>) {
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
 	const ready = useBackendReady();
@@ -246,6 +249,7 @@ export function OfflineAccessPage({ appId }: Readonly<{ appId: string }>) {
 					)}
 				</p>
 			</div>
+			{recoveryAction}
 			{ready && state && <OfflineAccessContent appId={appId} state={state} />}
 		</div>
 	);

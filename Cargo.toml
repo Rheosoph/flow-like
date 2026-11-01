@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
 # Keep vendored upstream test suites out of workspace test runs.
-exclude = ["packages/vendor/swift-rs", "packages/vendor/profirust", "packages/vendor/pytorch-reader", "packages/vendor/telegenic", "packages/vendor/ads", "packages/vendor/dust-dds"]
+exclude = ["packages/vendor/swift-rs", "packages/vendor/profirust", "packages/vendor/pytorch-reader", "packages/vendor/telegenic", "packages/vendor/ads", "packages/vendor/dust-dds", "packages/vendor/tauri-plugin-updater"]
 # Bare Cargo commands target the shared editing loop. Product crates remain one
 # short alias away, while CI always passes --workspace explicitly.
 default-members = [
@@ -315,7 +315,7 @@ thiserror = "2.0.17"
 mimalloc = { version = "0.1.48", default-features = false }
 lettre = { version = "0.11.22", default-features = false, features = ["tokio1-rustls-tls", "builder", "hostname", "pool", "smtp-transport"] }
 reqwest = { version = "0.12.28", default-features = false, features = ["json", "rustls-tls"] }
-markitdown = { git = "https://github.com/Rheosoph/markitdown-rs.git", rev = "5f4f80883230e58ec8218c51a9349d3ad53515d8", default-features = false, features = ["rustls-tls", "static-liblzma"] }
+markitdown = { git = "https://github.com/Rheosoph/markitdown-rs.git", rev = "0c7dc7a2c6ddd0ecacf0f2ad7c1f9c72373c4eab", default-features = false, features = ["rustls-tls", "static-liblzma"] }
 kube = { version = "0.98", features = ["runtime", "derive"] }
 k8s-openapi = { version = "0.24", features = ["v1_32"] }
 percent-encoding = "2.3.2"
@@ -348,6 +348,52 @@ wasmtime-wasi = "=48.0.7"
 wasmtime-wasi-http = "=48.0.7"
 
 [patch.crates-io]
+# Backport dependency security fixes without changing the surrounding platform APIs.
+serenity = { git = "https://github.com/Rheosoph/serenity.git", rev = "22689c4fbb86d7b19ce39124906f88981e0bca86" }
+rumqttc = { git = "https://github.com/Rheosoph/rumqtt.git", rev = "3434ed9cc52914cf3f9a2e2ce4f284fbb486ad43" }
+rmcp = { git = "https://github.com/Rheosoph/rust-sdk.git", rev = "1380a02f26143d998faacdf0a08bb6d757ff8bec" }
+rmcp-macros = { git = "https://github.com/Rheosoph/rust-sdk.git", rev = "1380a02f26143d998faacdf0a08bb6d757ff8bec" }
+# Keep ZIP local-header validation when updating the desktop installer.
+tauri-plugin-updater = { path = "packages/vendor/tauri-plugin-updater" }
+utoipa-swagger-ui = { git = "https://github.com/Rheosoph/utoipa.git", rev = "56f14cf34ee23f0e7a376c0757f710c066ddc283" }
+umya-spreadsheet = { git = "https://github.com/Rheosoph/umya-spreadsheet.git", rev = "904f7871ef2d4de7a8ee66355c0a10404f8b0363" }
+calamine = { git = "https://github.com/Rheosoph/calamine.git", rev = "337d005d652f85c509a1844cf1f43441d86ab68d" }
+glib = { git = "https://github.com/Rheosoph/gtk-rs-core.git", rev = "0dc4c80059fa3dd2495a9f1a71815824126719aa" }
+tch = { git = "https://github.com/Rheosoph/tch-rs.git", rev = "7ffe2b0d23de65d803bccc5490c737e1217e9496" }
+torch-sys = { git = "https://github.com/Rheosoph/tch-rs.git", rev = "7ffe2b0d23de65d803bccc5490c737e1217e9496" }
+libduckdb-sys = { git = "https://github.com/Rheosoph/duckdb-rs.git", rev = "910f2c516ed5e5ae9f2222290130d8399cfa6b68" }
+thrift = { git = "https://github.com/Rheosoph/thrift.git", rev = "a4452be98ce33e59498401dd2c1d2b6252781038" }
+# Zenoh crates share transport types and must resolve to the same source.
+zenoh = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-buffers = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-codec = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-collections = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-config = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-core = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-crypto = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-keyexpr = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-link = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-link-commons = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-link-quic_datagram = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-link-tcp = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-link-tls = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-link-udp = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-macros = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-plugin-trait = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-protocol = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-result = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-runtime = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-sync = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-task = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-transport = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+zenoh-util = { git = "https://github.com/Rheosoph/zenoh.git", rev = "229a5157b8bc921b1b2be35f151108a58183bdca" }
+# Candle crates share public tensor types and must resolve to the same source.
+candle-core = { git = "https://github.com/Rheosoph/candle.git", rev = "6fefd7694d55609b914eb766b8c5c1bdb961b5f7" }
+candle-nn = { git = "https://github.com/Rheosoph/candle.git", rev = "6fefd7694d55609b914eb766b8c5c1bdb961b5f7" }
+candle-transformers = { git = "https://github.com/Rheosoph/candle.git", rev = "6fefd7694d55609b914eb766b8c5c1bdb961b5f7" }
+candle-kernels = { git = "https://github.com/Rheosoph/candle.git", rev = "6fefd7694d55609b914eb766b8c5c1bdb961b5f7" }
+candle-metal-kernels = { git = "https://github.com/Rheosoph/candle.git", rev = "6fefd7694d55609b914eb766b8c5c1bdb961b5f7" }
+candle-ug = { git = "https://github.com/Rheosoph/candle.git", rev = "6fefd7694d55609b914eb766b8c5c1bdb961b5f7" }
 # Fix DDS request cancellation, XTypes matching, and participant disposal.
 dust_dds = { path = "packages/vendor/dust-dds" }
 # Accept Beckhoff's notification stream lengths with complete payload validation.

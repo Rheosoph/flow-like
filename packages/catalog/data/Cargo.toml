@@ -110,7 +110,7 @@ dirs-next.workspace = true
 once_cell = "1.21.3"
 
 # Data processing dependencies - only included when execute feature is enabled
-calamine = { version = "0.34", default-features = false, features = ["dates"], optional = true }
+calamine = { version = "0.37", default-features = false, features = ["dates"], optional = true }
 umya-spreadsheet = { version = "2.3.2", optional = true }
 csv-async = { version = "1.3.0", features = ["tokio"], optional = true }
 csv = { version = "1.3", optional = true }

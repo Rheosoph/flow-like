@@ -14,6 +14,7 @@ import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { openPath, revealItemInDir } from "@tauri-apps/plugin-opener";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useMemo } from "react";
+import { isMobileDevice, isTauriRuntime } from "../../../../lib/platform";
 
 export default function Page() {
 	const { t } = useTranslation("common");
@@ -25,6 +26,7 @@ export default function Page() {
 		!permissions.isLoading && permissions.can(RolePermissions.WriteFiles);
 	const prefix = searchParams.get("prefix") ?? "";
 	const router = useRouter();
+	const desktopActions = isTauriRuntime() && !isMobileDevice();
 
 	const resolveFullPath = useCallback(
 		(location: string) =>
@@ -125,9 +127,9 @@ export default function Page() {
 			storageScopeKey="user"
 			operations={operations}
 			canWrite={canWrite}
-			revealInExplorer={handleRevealInExplorer}
-			openWithApp={handleOpenWithApp}
-			listAppsForFile={handleListAppsForFile}
+			revealInExplorer={desktopActions ? handleRevealInExplorer : undefined}
+			openWithApp={desktopActions ? handleOpenWithApp : undefined}
+			listAppsForFile={desktopActions ? handleListAppsForFile : undefined}
 			updatePrefix={(nextPrefix) => {
 				router.push(
 					`/library/config/user-storage?id=${id}&prefix=${encodeURIComponent(nextPrefix)}`,

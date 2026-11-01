@@ -85,6 +85,42 @@ services:
           memory: ${REDIS_MEMORY:-1G}
           pids: ${REDIS_PIDS:-256}
     pids_limit: ${REDIS_PIDS:-256}
+  nats:
+    image: ${NATS_IMAGE:-nats:2.15.2-alpine}
+    user: 65532:65532
+    entrypoint: [sh, -ec]
+    command:
+      - 'printf "%s" "$$NATS_SERVER_CONFIG" | base64 -d > /tmp/nats.conf; exec nats-server -c /tmp/nats.conf'
+    environment:
+      NATS_SERVER_CONFIG: ${NATS_SERVER_CONFIG:?Run scripts/setup-env.py to generate NATS trust}
+    networks:
+      - app
+      - execution-egress
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://localhost:8222/healthz]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    pids_limit: 128
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: ${NATS_CPUS:-1}
+          memory: ${NATS_MEMORY:-256M}
+          pids: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
   db-init:
     image: ${DB_INIT_IMAGE:-ghcr.io/rheosoph/flow-like-docker-compose-db-init:${FLOW_LIKE_IMAGE_TAG:-dev}}
     build:
@@ -203,6 +239,8 @@ services:
       args:
         FLOW_LIKE_CONFIG: ${FLOW_LIKE_CONFIG:-apps/backend/docker-compose/flow-like.config.example.json}
     depends_on:
+      nats:
+        condition: service_healthy
       postgres:
         condition: service_healthy
       redis:
@@ -228,6 +266,10 @@ services:
       EXECUTION_STATE_BACKEND: ${EXECUTION_STATE_BACKEND:-redis}
       EXECUTION_STATE_TTL_SECONDS: ${EXECUTION_STATE_TTL_SECONDS:-86400}
       CHANNEL_TTL_SECONDS: ${CHANNEL_TTL_SECONDS:-7200}
+      CHANNEL_TRANSPORT: ${CHANNEL_TRANSPORT:-nats}
+      CHANNEL_NATS_URL: ${CHANNEL_NATS_URL:-nats://nats:4222}
+      CHANNEL_NATS_WS_URL: ${CHANNEL_NATS_WS_URL:?Set the browser-visible NATS WebSocket URL}
+      CHANNEL_NATS_ACCOUNT_SEED: ${CHANNEL_NATS_ACCOUNT_SEED:?Run scripts/setup-env.py to generate NATS trust}
       CACHE_BACKEND: ${CACHE_BACKEND:-redis}
       CACHE_DEFAULT_TTL_SECONDS: ${CACHE_DEFAULT_TTL_SECONDS:-0}
       STORAGE_PROVIDER: ${STORAGE_PROVIDER:-aws}
@@ -1200,6 +1242,7 @@ services:
       SANDBOX_RUNTIME: ${SANDBOX_RUNTIME:-runsc}
       SANDBOX_GATEWAY_NETWORK: ${COMPOSE_PROJECT_NAME:-flowlike}-execution-egress
       EXECUTION_CALLBACK_URL: ${API_BASE_URL:-http://execution-callback:8080}
+      CHANNEL_NATS_URL: ${CHANNEL_NATS_URL:-nats://nats:4222}
       EXECUTION_OBJECT_STORE_URL: ${S3_PUBLIC_ENDPOINT:?Run scripts/setup-env.py and configure .env}
       EXECUTION_ALLOWED_HTTPS_HOSTS: ${EXECUTION_ALLOWED_HTTPS_HOSTS:-}
       MAX_CONCURRENT_EXECUTIONS: ${MAX_CONCURRENT_EXECUTIONS:-10}

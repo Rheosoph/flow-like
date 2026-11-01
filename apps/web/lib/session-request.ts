@@ -115,17 +115,16 @@ export function renewWebSession(
 	return state.renewing;
 }
 
-/** Refresh before expiry and retry an authenticated 401 once with the returned token. */
-export async function fetchWithSession(
-	url: string,
-	init: RequestInit,
+/** Resolve the browser session before handing a request to a transport worker. */
+export async function prepareSessionRequest(
+	requestHeaders: HeadersInit | undefined,
 	auth?: AuthContextProps,
-): Promise<Response> {
-	const headers = new Headers(init.headers);
+) {
+	const headers = new Headers(requestHeaders);
 	const suppliedToken = headers.get("Authorization");
 	const accountToken = auth?.user?.access_token;
 	if (!auth || (suppliedToken && suppliedToken !== `Bearer ${accountToken}`)) {
-		return fetch(url, init);
+		return { headers };
 	}
 	let user = currentUser(auth);
 	if (user && expired(user)) {
@@ -140,20 +139,49 @@ export async function fetchWithSession(
 	if (user?.access_token)
 		headers.set("Authorization", `Bearer ${user.access_token}`);
 	else headers.delete("Authorization");
-	const usedToken = user?.access_token;
+	return {
+		headers,
+		onUnauthorized: async (usedToken?: string) => {
+			if (!usedToken) {
+				reportUnauthorized(auth, usedToken);
+				return undefined;
+			}
+			try {
+				const renewed = await renewWebSession(auth, usedToken);
+				headers.set("Authorization", `Bearer ${renewed.access_token}`);
+				return Object.fromEntries(headers.entries());
+			} catch (error) {
+				if (requiresInteractiveSignIn(error))
+					reportUnauthorized(auth, usedToken);
+				else throw error;
+				return undefined;
+			}
+		},
+		onRejected: () =>
+			reportUnauthorized(auth, headers.get("Authorization")?.slice(7)),
+	};
+}
+
+/** Refresh before expiry and retry an authenticated 401 once with the returned token. */
+export async function fetchWithSession(
+	url: string,
+	init: RequestInit,
+	auth?: AuthContextProps,
+): Promise<Response> {
+	const suppliedToken = new Headers(init.headers).get("Authorization");
+	if (
+		!auth ||
+		(suppliedToken && suppliedToken !== `Bearer ${auth.user?.access_token}`)
+	)
+		return fetch(url, init);
+	const prepared = await prepareSessionRequest(init.headers, auth);
+	const { headers } = prepared;
 	const response = await fetch(url, { ...init, headers });
-	if (response.status !== 401) return response;
-	if (!usedToken) {
-		reportUnauthorized(auth, usedToken);
-		return response;
-	}
-	try {
-		user = await renewWebSession(auth, usedToken);
-	} catch (error) {
-		if (requiresInteractiveSignIn(error)) reportUnauthorized(auth, usedToken);
-		if (!requiresInteractiveSignIn(error)) throw error;
-		return response;
-	}
+	if (response.status !== 401 || !prepared.onUnauthorized) return response;
+	const renewedHeaders = await prepared.onUnauthorized(
+		headers.get("Authorization")?.slice(7),
+	);
+	if (!renewedHeaders) return response;
 	// A caller-owned stream cannot be sent twice. Its next request uses the fresh session.
 	if (
 		typeof ReadableStream !== "undefined" &&
@@ -161,8 +189,7 @@ export async function fetchWithSession(
 	)
 		return response;
 	await response.body?.cancel();
-	headers.set("Authorization", `Bearer ${user.access_token}`);
-	const retried = await fetch(url, { ...init, headers });
-	if (retried.status === 401) reportUnauthorized(auth, user.access_token);
+	const retried = await fetch(url, { ...init, headers: renewedHeaders });
+	if (retried.status === 401) prepared.onRejected?.();
 	return retried;
 }

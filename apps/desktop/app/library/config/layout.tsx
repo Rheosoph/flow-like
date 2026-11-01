@@ -14,7 +14,6 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 	IAppVisibility,
-	type IEvent,
 	Input,
 	RolePermissions,
 	ScrollArea,
@@ -51,6 +50,7 @@ import {
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityUpgradeDialog } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-upgrade-dialog";
+import { useQuickAction } from "@flow-like/flow-like-ui/hooks/use-quick-action";
 import {
 	type INavigationItem,
 	type INavigationItemState,
@@ -70,6 +70,7 @@ import {
 	ChevronLeftIcon,
 	DownloadIcon,
 	LayoutGridIcon,
+	Loader2Icon,
 	Maximize2Icon,
 	MenuIcon,
 	Minimize2Icon,
@@ -456,32 +457,21 @@ export default function Id({
 		activeItem,
 	]);
 
-	async function executeEvent(event: IEvent) {
-		if (!id) return;
-		const runMeta = executionService
-			? await executionService.executeEvent(
-					id,
-					event.id,
-					{ id: event.node_id },
-					false,
-					() => {},
-					() => {},
-				)
-			: await backend.eventState.executeEvent(
-					id,
-					event.id,
-					{ id: event.node_id },
-					false,
-					() => {},
-					() => {},
+	const { execute: executeEvent, isRunning: isQuickActionRunning } =
+		useQuickAction({
+			appId: id,
+			executeEvent:
+				executionService?.executeEvent ??
+				backend.eventState.executeEvent.bind(backend.eventState),
+			streamState: false,
+			onError: (error) => {
+				console.warn("Failed to execute quick action", error);
+				toastError(
+					t("failedToExecuteBoard", "Failed to execute board"),
+					<PlayCircleIcon className="w-4 h-4" />,
 				);
-		if (!runMeta) {
-			toastError(
-				t("failedToExecuteBoard", "Failed to execute board"),
-				<PlayCircleIcon className="w-4 h-4" />,
-			);
-		}
-	}
+			},
+		});
 
 	return (
 		<TooltipProvider>
@@ -844,11 +834,17 @@ export default function Id({
 																	variant="outline"
 																	size="sm"
 																	className="justify-start gap-2 h-auto py-2 px-3"
+																	disabled={isQuickActionRunning(event.id)}
+																	aria-busy={isQuickActionRunning(event.id)}
 																	onClick={async () => {
 																		await executeEvent(event);
 																	}}
 																>
-																	<PlayCircleIcon className="w-3 h-3 text-green-600" />
+																	{isQuickActionRunning(event.id) ? (
+																		<Loader2Icon className="w-3 h-3 animate-spin" />
+																	) : (
+																		<PlayCircleIcon className="w-3 h-3 text-green-600" />
+																	)}
 																	<span className="truncate text-xs">
 																		{event.name}
 																	</span>

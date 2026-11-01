@@ -71,6 +71,7 @@ fn setup() -> (Arc<MockBackend>, ServerState) {
         allowed_https_hosts: vec![],
         buckets: vec!["meta".into(), "content".into(), "logs".into()],
         object_store_tls_gateway: false,
+        channel_nats_url: None,
         backend_pub: "public-key".into(),
         capacity: 1,
         timeout: 1,
@@ -96,6 +97,26 @@ fn setup() -> (Arc<MockBackend>, ServerState) {
 fn payload() -> Value {
     json!({"job_id":"job","run_id":"run","app_id":"app","board_id":"board","node_id":"node","user_id":"user", "credentials":{},"executor_jwt":"signed-token","callback_url":"http://callback:8080",
         "artifact":{"url":"http://store:9000/meta/artifact","path":"artifact","registry_fingerprint":"hash"}})
+}
+
+#[test]
+fn nats_dispatch_requires_the_configured_broker_and_run() {
+    let (_, state) = setup();
+    let mut config = (*state.config).clone();
+    config.channel_nats_url = Some("nats://nats:4222".into());
+    let mut body = payload();
+    body["channel"] = json!({
+        "channel_id": "run", "expires_at": 123,
+        "executor": {"type": "nats", "url": "nats://nats:4222", "subject": "channel.run.inbox", "token": "scoped-token"},
+        "client": {"channel_id": "run", "expires_at": 123,
+            "transport": {"type": "http", "push_url": "https://api/channels/run/push", "token": "responder-token"}}
+    });
+    assert!(validate_payload(&serde_json::to_vec(&body).unwrap(), &config).is_ok());
+    body["channel"]["executor"]["url"] = json!("nats://other:4222");
+    assert!(validate_payload(&serde_json::to_vec(&body).unwrap(), &config).is_err());
+    body["channel"]["executor"]["url"] = json!("nats://nats:4222");
+    body["channel"]["channel_id"] = json!("another-run");
+    assert!(validate_payload(&serde_json::to_vec(&body).unwrap(), &config).is_err());
 }
 
 fn request(path: &str, value: Value) -> Request {

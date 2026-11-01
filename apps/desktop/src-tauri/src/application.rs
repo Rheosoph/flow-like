@@ -23,6 +23,7 @@ mod functions;
 mod local_page_actions;
 #[cfg(any(test, not(debug_assertions)))]
 mod logging;
+mod native_auth;
 mod offline_writes;
 mod profile;
 mod run_index;
@@ -668,6 +669,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
+            native_auth::initialize(app.handle().clone());
             functions::native::setup(app.handle());
             #[cfg(desktop)]
             diffusion_runtime::configure(app)?;
@@ -1369,6 +1371,13 @@ pub fn run() {
             functions::ai::copilot::flowpilot_apply_flow_ir_commit,
             functions::ai::copilot::flowpilot_read_flow_ir_commit_board,
             functions::ai::copilot::global_chat,
+            functions::ai::native_tool_bridge::set_native_run_auto_mode,
+            functions::ai::native_specialist_tools::flowpilot_capture_home_snapshot,
+            functions::ai::native_specialist_tools::flowpilot_capture_widget_snapshot,
+            functions::ai::native_specialist_tools::flowpilot_get_widget_proposal,
+            functions::ai::native_specialist_tools::flowpilot_resolve_widget_proposal,
+            functions::ai::native_specialist_tools::flowpilot_get_home_proposal,
+            functions::ai::native_specialist_tools::flowpilot_resolve_home_proposal,
             functions::ai::copilot::global_chat_resume,
             functions::ai::copilot::global_chat_steer,
             functions::ai::copilot::global_chat_take_unconsumed_steering,
@@ -1458,6 +1467,14 @@ pub fn run() {
             functions::registry::registry_set_auth_token,
             execution_open_auth_session,
             execution_set_auth,
+            native_auth::native_auth_read,
+            native_auth::native_auth_write,
+            native_auth::native_auth_clear,
+            native_auth::native_auth_refresh,
+            native_auth::begin_login,
+            native_auth::native_auth_logout,
+            native_auth::oauth::native_oauth_sync,
+            native_auth::recovery::native_auth_recover_background_work,
             offline_writes::commands::offline_writes_overview,
             offline_writes::commands::offline_writes_set_table,
             offline_writes::commands::offline_writes_remove_table,

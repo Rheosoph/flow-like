@@ -82,7 +82,7 @@ pub struct FlowIrCommitReadback {
 /// can inline distinct getter nodes into identical expressions, so source text cannot prove the
 /// compiled graph was persisted. Derived cache hashes can change on reload without a graph edit.
 /// Internal receipt refs are excluded by Board's JSON serializer.
-pub(super) fn persisted_board_graph_fingerprint(board: &Board) -> Result<String, String> {
+pub(crate) fn persisted_board_graph_fingerprint(board: &Board) -> Result<String, String> {
     let mut value = persisted_board_graph_value(board)?;
     remove_graph_cache_hashes(&mut value);
     hash_persisted_board_graph(value, "flowpilot-board-v2")

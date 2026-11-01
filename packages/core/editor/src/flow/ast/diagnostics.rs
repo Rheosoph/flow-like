@@ -1414,6 +1414,7 @@ mod tests {
         ReconcileResult {
             commands: Vec::new(),
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: messages
                 .iter()
                 .map(|message| (*message).to_string())

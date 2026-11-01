@@ -141,11 +141,16 @@ first time this computer runs an Event, the desktop app asks you to allow it
 and to choose a token; a token of another account is refused. An Event saved
 before tokens were checked shows **Needs a token** and does not fire until you
 choose one with **Add token** in its settings. A Local Event fires only while
-the account its token belongs to is signed in to the same hub on this computer:
-after you sign out, switch accounts or point the profile at another hub, it
-shows **Needs a token** and does not fire, and its token is never sent to
-another hub. A token needs **Read & Write** access. Events of offline Apps need
-no token.
+the saved Profile is signed in as the account its token belongs to, on the same
+hub. Opening another Profile does not change the trigger's account. Signing out
+of the saved Profile, changing its account, or pointing it at another hub stops
+the trigger from firing. Its token is never sent to another hub. A token needs
+**Read & Write** access. Events of offline Apps need no token, but still retain
+the Profile under which they were enabled.
+
+Older device registrations without a saved Profile binding must be enabled
+again. Desktop asks for consent and binds them to the selected Profile instead
+of assigning them to whichever Profile happens to be open later.
 
 ### Publish a hosted chat, form or page
 

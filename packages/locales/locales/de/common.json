@@ -3727,5 +3727,6 @@
 	"oneStylesheetForEveryPageInThisApp": "Ein Stylesheet für jede Seite dieser App",
 	"labelUnlockable": "{{label}} — du kannst das freischalten",
 	"yourRoleOnThisProjectCannotOpenLabelDescription": "Deine Rolle in diesem Projekt kann {{label}} nicht öffnen. {{description}}",
-	"unlockLabel": "{{label}} freischalten"
+	"unlockLabel": "{{label}} freischalten",
+	"latestSavedDraftOrPinnedFlow": "Neueste führt den gespeicherten Entwurf aus, einschließlich unveröffentlichter Änderungen. Eine angeheftete Version behält denselben veröffentlichten Stand."
 }

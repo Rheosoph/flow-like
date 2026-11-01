@@ -7,9 +7,16 @@ import {
 	parseWidgetPolicyDescriptor,
 } from "@flow-like/flow-like-ui/components/a2ui/micro-widget-policy";
 import { getApiOrigin, getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
+import { getExecutionRuntime } from "@flow-like/flow-like-ui/lib/execution/runtime-client";
+import {
+	getExecutionMetadata,
+	type ExecutionMetadata,
+	type PreparedExecutionRequest,
+} from "@flow-like/flow-like-ui/lib/execution/types";
 import type { IAppLegalLinks } from "@flow-like/flow-like-ui/lib/legal-links";
 import type { IOAuthToken } from "@flow-like/flow-like-ui/lib/oauth/types";
 import {
+	DISPATCH_REQUEST_TIMEOUT_MS,
 	HUB_REFRESH_TIMEOUT_MS,
 	requestTimeoutMs,
 	withRequestDeadline,
@@ -58,7 +65,7 @@ import {
 	hostedSessionId,
 } from "./hosted-route";
 import { consumeHostedStream } from "./hosted-stream";
-import { fetchWithSession } from "./session-request";
+import { fetchWithSession, prepareSessionRequest } from "./session-request";
 
 /** The interface a route serves: `u` a custom page, `c` a chat, `f` a form. */
 export type HostedKind = "c" | "f" | "u";
@@ -90,13 +97,41 @@ export class HostedHttpError extends Error {
 	}
 }
 
+interface PreparedHostedExecution {
+	request: PreparedExecutionRequest;
+	path: string;
+	scope: string;
+	onUnauthorized?: (
+		rejectedToken?: string,
+	) => Promise<Record<string, string> | undefined>;
+	onRejected?: () => void;
+}
+
+export type HostedRequest = ((
+	suffix?: string,
+	init?: RequestInit,
+) => Promise<Response>) & {
+	prepareExecution?: (body: string) => Promise<PreparedHostedExecution>;
+	executionScope?: () => string;
+};
+
 export function createHostedRequest(
 	target: HostedTarget,
 	accessToken?: string,
 	auth?: AuthContextProps,
 ) {
 	const endpoint = `${getApiOrigin()}/${hostedApiPath(target)}`;
-	return async (suffix = "", init: RequestInit = {}): Promise<Response> => {
+	const executionScope = (anonymousSession = hostedSessionId()) =>
+		JSON.stringify([
+			getApiOrigin(),
+			"hosted",
+			target.app,
+			target.variant ?? "stable",
+			accessToken && auth?.user?.profile.sub
+				? auth.user.profile.sub
+				: anonymousSession,
+		]);
+	const prepare = (suffix: string, init: RequestInit) => {
 		const headers = new Headers(init.headers);
 		headers.set("X-Flow-Like-Session", hostedSessionId());
 		if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
@@ -104,6 +139,13 @@ export function createHostedRequest(
 		const url = new URL(`${endpoint}${suffix}`);
 		url.searchParams.set("route", target.route);
 		if (target.variant) url.searchParams.set("__variant", target.variant);
+		return { url, headers };
+	};
+	const request = async (
+		suffix = "",
+		init: RequestInit = {},
+	): Promise<Response> => {
+		const { url, headers } = prepare(suffix, init);
 		const response = await fetchWithSession(
 			url.href,
 			{
@@ -121,6 +163,29 @@ export function createHostedRequest(
 			);
 		return response;
 	};
+	return Object.assign(request, {
+		executionScope,
+		prepareExecution: async (
+			body: string,
+		): Promise<PreparedHostedExecution> => {
+			const { url, headers } = prepare("/invoke", { body });
+			const session = await prepareSessionRequest(headers, auth);
+			return {
+				scope: executionScope(headers.get("X-Flow-Like-Session") ?? undefined),
+				path: `/a?${new URLSearchParams({ app: target.app, route: target.route, ...(target.variant ? { __variant: target.variant } : {}) })}`,
+				request: {
+					url: url.href,
+					cancelUrl: `${endpoint}/runs/{runId}${url.search}`,
+					headers: Object.fromEntries(session.headers.entries()),
+					body,
+					credentials: "omit",
+					timeoutMs: DISPATCH_REQUEST_TIMEOUT_MS,
+				},
+				onUnauthorized: session.onUnauthorized,
+				onRejected: session.onRejected,
+			};
+		},
+	});
 }
 
 /** The API answers `{"error":{"code","message"}}`; a 404 means the link itself is not live. */
@@ -146,8 +211,6 @@ export function hostedErrorCode(body: string): string | undefined {
 	} catch {}
 	return typeof code === "string" && code.trim() ? code.trim() : undefined;
 }
-
-type HostedRequest = ReturnType<typeof createHostedRequest>;
 
 function scopedState<T extends object>(methods: Partial<T>): T {
 	return new Proxy(methods, {
@@ -268,6 +331,7 @@ function publicWidgetRegistry(
 
 class HostedEventState extends EmptyEventState {
 	private readonly runs = new Map<string, AbortController>();
+	private readonly runScopes = new Map<string, string>();
 
 	constructor(
 		private readonly data: HostedBootstrap,
@@ -363,19 +427,78 @@ class HostedEventState extends EmptyEventState {
 		}
 		const oauthTokens =
 			oauth && requirements.length > 0 ? await oauth(requirements) : undefined;
+		const body = JSON.stringify({
+			payload: payload.payload,
+			page_trigger: activeTrigger
+				? serializePageTrigger(activeTrigger)
+				: undefined,
+			oauth_tokens: oauthTokens,
+		});
+		if (this.request.prepareExecution) {
+			const prepared = await this.request.prepareExecution(body);
+			const taskId = crypto.randomUUID();
+			const context =
+				payload.payload && typeof payload.payload === "object"
+					? (payload.payload as Record<string, unknown>)
+					: undefined;
+			const metadata: ExecutionMetadata = getExecutionMetadata(payload) ?? {
+				taskId,
+				streamId: taskId,
+				scope: prepared.scope,
+				appId,
+				eventId,
+				title: this.data.bootstrap.event.name || "Workflow",
+				path: prepared.path,
+				startedAt: new Date().toISOString(),
+				pageId:
+					typeof context?._page_id === "string" ? context._page_id : undefined,
+				widgetInstanceId:
+					typeof context?._widget_instance_id === "string"
+						? context._widget_instance_id
+						: undefined,
+			};
+			const runtime = await getExecutionRuntime(metadata.scope);
+			let runId: string | undefined;
+			try {
+				beforeDispatch?.();
+				if (
+					prepared.scope !== metadata.scope ||
+					(this.request.executionScope &&
+						this.request.executionScope() !== metadata.scope)
+				)
+					throw new Error("The active account or browser session changed.");
+				return await runtime.execute(metadata, prepared.request, {
+					onUnauthorized: prepared.onUnauthorized,
+					onEvents,
+					onExecutionStart: (id) => {
+						runId = id;
+						this.runScopes.set(id, metadata.scope);
+						onRunId?.(id);
+					},
+				});
+			} catch (cause) {
+				const response = cause as { status?: number; body?: string };
+				if (typeof response?.status === "number") {
+					if (response.status === 401) prepared.onRejected?.();
+					throw new HostedHttpError(
+						response.status,
+						hostedErrorMessage(response.status, response.body ?? ""),
+						hostedErrorCode(response.body ?? ""),
+					);
+				}
+				throw cause;
+			} finally {
+				if (runId) this.runScopes.delete(runId);
+			}
+		}
+		// Injectable request adapters can own a native transport instead of a fetch.
 		beforeDispatch?.();
 		const controller = new AbortController();
 		let runId: string | undefined;
 		try {
 			const response = await this.request("/invoke", {
 				method: "POST",
-				body: JSON.stringify({
-					payload: payload.payload,
-					page_trigger: activeTrigger
-						? serializePageTrigger(activeTrigger)
-						: undefined,
-					oauth_tokens: oauthTokens,
-				}),
+				body,
 				signal: controller.signal,
 			});
 			if (!response.body)
@@ -392,9 +515,36 @@ class HostedEventState extends EmptyEventState {
 			if (runId) this.runs.delete(runId);
 		}
 	};
-	// The hosted surface has no cancel route; closing the stream stops this client listening.
 	async cancelExecution(runId: string): Promise<void> {
+		const currentScope = this.request.executionScope?.();
+		const ownerScope = this.runScopes.get(runId);
+		if (ownerScope && currentScope && ownerScope !== currentScope)
+			throw new Error("The active account changed.");
 		this.runs.get(runId)?.abort();
+		const scope = ownerScope ?? currentScope;
+		if (scope) {
+			const runtime = await getExecutionRuntime(scope);
+			if (runtime.getTasks().some((task) => task.runId === runId)) {
+				const prepared = await this.request.prepareExecution?.("{}");
+				try {
+					if (this.request.executionScope?.() !== currentScope)
+						throw new Error("The active account changed.");
+					await runtime.cancel(
+						runId,
+						prepared
+							? {
+									headers: prepared.request.headers,
+									onUnauthorized: prepared.onUnauthorized,
+								}
+							: undefined,
+					);
+				} catch (error) {
+					if ((error as { status?: number })?.status === 401)
+						prepared?.onRejected?.();
+					throw error;
+				}
+			}
+		}
 	}
 }
 

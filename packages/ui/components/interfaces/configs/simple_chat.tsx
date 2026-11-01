@@ -581,6 +581,47 @@ export function SimpleChatConfig({
 						<div className="flex items-center space-x-2">
 							<Switch
 								disabled={!isEditing}
+								id="allow_model_selection"
+								checked={config?.allow_model_selection ?? true}
+								onCheckedChange={(checked) => {
+									setValue("allow_model_selection", checked);
+								}}
+							/>
+							<Label htmlFor="allow_model_selection">
+								{t("modelPicker", "Model Picker")}
+							</Label>
+						</div>
+						<p className="text-sm text-muted-foreground">
+							{t(
+								"modelPickerDescription",
+								"Let users choose a model for this app. Find Model uses their selection with default weights and no model name hint.",
+							)}
+						</p>
+						<div className="flex items-center space-x-2">
+							<Switch
+								disabled={!isEditing || config?.allow_model_selection === false}
+								id="require_vlm"
+								checked={config?.require_vlm ?? false}
+								onCheckedChange={(checked) => {
+									setValue("require_vlm", checked);
+								}}
+							/>
+							<Label htmlFor="require_vlm">
+								{t("requireVisionModel", "Require Vision Model")}
+							</Label>
+						</div>
+						<p className="text-sm text-muted-foreground">
+							{t(
+								"requireVisionModelDescription",
+								"Only offer models that can read images in the model picker.",
+							)}
+						</p>
+					</div>
+
+					<div className="space-y-4">
+						<div className="flex items-center space-x-2">
+							<Switch
+								disabled={!isEditing}
 								id="allow_thinking_selection"
 								checked={config?.allow_thinking_selection ?? true}
 								onCheckedChange={(checked) => {

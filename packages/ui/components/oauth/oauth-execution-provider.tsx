@@ -63,6 +63,9 @@ interface OAuthRequiredEvent extends CustomEvent {
 		boardId: string;
 		nodeId: string;
 		payload?: object;
+		eventId?: string;
+		sessionId?: string;
+		requestId?: string;
 	};
 }
 
@@ -71,6 +74,9 @@ interface PendingExecution {
 	boardId: string;
 	nodeId: string;
 	payload?: object;
+	eventId?: string;
+	sessionId?: string;
+	requestId?: string;
 }
 
 export interface OAuthExecutionProviderProps {
@@ -197,13 +203,8 @@ export function OAuthExecutionProvider({
 	useEffect(() => {
 		const handleOAuthRequired = async (event: Event) => {
 			const oauthEvent = event as OAuthRequiredEvent;
-			const {
-				appId,
-				boardId,
-				nodeId,
-				payload,
-				missingProviders: allMissing,
-			} = oauthEvent.detail;
+			const { missingProviders: allMissing, ...execution } = oauthEvent.detail;
+			const { appId, boardId, nodeId } = execution;
 			console.log("[OAuthExecutionProvider] Received oauth-required:", {
 				appId,
 				boardId,
@@ -211,7 +212,7 @@ export function OAuthExecutionProvider({
 				missingProviders: allMissing?.length,
 			});
 			setCurrentAppId(appId);
-			setPendingExecution({ appId, boardId, nodeId, payload });
+			setPendingExecution(execution);
 
 			const autoConsentProviders: IOAuthProvider[] = [];
 			const needsDialogProviders: IOAuthProvider[] = [];
@@ -387,6 +388,13 @@ export function OAuthExecutionProvider({
 	}, []);
 
 	const handleCancel = useCallback(() => {
+		const execution = pendingExecutionRef.current;
+		pendingExecutionRef.current = null;
+		if (execution) {
+			window.dispatchEvent(
+				new CustomEvent("flow:oauth-cancelled", { detail: execution }),
+			);
+		}
 		setIsDialogOpen(false);
 		setMissingScopesByProvider({});
 		setMissingProviders([]);
@@ -459,7 +467,10 @@ export function OAuthExecutionProvider({
 			{children}
 			<OAuthConsentDialog
 				open={isDialogOpen}
-				onOpenChange={setIsDialogOpen}
+				onOpenChange={(open) => {
+					if (open) setIsDialogOpen(true);
+					else handleCancel();
+				}}
 				providers={missingProviders}
 				onAuthorize={handleAuthorize}
 				onConfirmAll={handleConfirmAll}

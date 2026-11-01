@@ -7,11 +7,13 @@ import {
 	spyOn,
 	test,
 } from "bun:test";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Window } from "happy-dom";
 import { createInstance } from "i18next";
 import { act } from "react";
 import { I18nextProvider } from "react-i18next";
 import type { INode } from "../../lib/schema/flow/board";
+import type { IEvent } from "../../lib/schema/flow/event";
 import type { ILogMetadata } from "../../lib/schema/flow/log-metadata";
 import type { IBackendState } from "../../state/backend-state";
 
@@ -94,6 +96,7 @@ await i18n.init({ lng: "en", resources: {}, initAsync: false });
 
 let container: HTMLDivElement;
 let root: ReturnType<typeof createRoot>;
+let queryClient: QueryClient;
 
 beforeEach(() => {
 	Object.assign(globalThis, globals);
@@ -102,10 +105,14 @@ beforeEach(() => {
 	container = document.createElement("div");
 	document.body.append(container);
 	root = createRoot(container);
+	queryClient = new QueryClient({
+		defaultOptions: { queries: { retry: false, gcTime: 0 } },
+	});
 });
 
 afterEach(async () => {
 	await act(async () => root.unmount());
+	queryClient.clear();
 	container.remove();
 	useLogAggregation.setState(initialState, true);
 });
@@ -136,6 +143,8 @@ function runAt(index: number): ILogMetadata {
 async function render(
 	listRuns: IBackendState["boardState"]["listRuns"],
 	options: {
+		appId?: string;
+		getEvents?: IBackendState["eventState"]["getEvents"];
 		getCorpusPayload?: IBackendState["eventState"]["getCorpusPayload"];
 		executeBoard?: (node: INode, payload?: object) => Promise<void>;
 		nodes?: Record<string, INode>;
@@ -143,26 +152,124 @@ async function render(
 ) {
 	const backend = {
 		boardState: { listRuns },
-		eventState: { getCorpusPayload: options.getCorpusPayload },
+		eventState: {
+			getEvents: options.getEvents ?? (async () => []),
+			getCorpusPayload: options.getCorpusPayload,
+		},
 	} as IBackendState;
 	await act(async () => {
 		root.render(
-			<I18nextProvider i18n={i18n}>
-				<BackendContext.Provider value={backend}>
-					<FlowRuns
-						appId="app"
-						boardId="board"
-						nodes={options.nodes ?? {}}
-						version={[1, 0, 0]}
-						executeBoard={options.executeBoard ?? (async () => {})}
-						onVersionChange={() => {}}
-						onFocusNode={() => {}}
-					/>
-				</BackendContext.Provider>
-			</I18nextProvider>,
+			<QueryClientProvider client={queryClient}>
+				<I18nextProvider i18n={i18n}>
+					<BackendContext.Provider value={backend}>
+						<FlowRuns
+							appId={options.appId ?? "app"}
+							boardId="board"
+							nodes={options.nodes ?? {}}
+							version={[1, 0, 0]}
+							executeBoard={options.executeBoard ?? (async () => {})}
+							onVersionChange={() => {}}
+							onFocusNode={() => {}}
+						/>
+					</BackendContext.Provider>
+				</I18nextProvider>
+			</QueryClientProvider>,
 		);
 	});
 }
+
+async function flushQueries() {
+	await act(async () => {
+		await new Promise((resolve) => setTimeout(resolve, 0));
+	});
+}
+
+test("legacy cron runs show the existing Event name when their node ID contains the Event ID", async () => {
+	const getEvents = mock(async () => [
+		{ id: "event", name: "Nightly import", event_type: "cron" } as IEvent,
+	]);
+	await render(
+		async () => [
+			{ ...runAt(0), node_id: "event", is_remote: true },
+			{ ...runAt(1), node_id: "event", is_remote: true },
+		],
+		{ getEvents },
+	);
+	await flushQueries();
+
+	expect(container.textContent?.match(/Nightly import/g)).toHaveLength(2);
+	expect(container.textContent).not.toContain("Deleted Event");
+	expect(getEvents).toHaveBeenCalledTimes(1);
+	expect(getEvents).toHaveBeenCalledWith("app", true);
+});
+
+test("runs with a known node keep its name without loading Events", async () => {
+	const getEvents = mock(async () => []);
+	const node = { id: "node", friendly_name: "Schedule start" } as INode;
+	await render(async () => [runAt(0)], {
+		getEvents,
+		nodes: { [node.id]: node },
+	});
+
+	expect(container.textContent).toContain("Schedule start");
+	expect(container.textContent).not.toContain("Deleted Event");
+	expect(getEvents).not.toHaveBeenCalled();
+});
+
+test("legacy runs retain the deleted label when their Event no longer exists", async () => {
+	await render(async () => [
+		{ ...runAt(0), node_id: "event", is_remote: true },
+	]);
+	await flushQueries();
+
+	expect(container.textContent).toContain("Deleted Event");
+});
+
+test("a failed Event lookup does not label an existing cron Event as deleted", async () => {
+	const consoleError = spyOn(console, "error").mockImplementation(() => {});
+	try {
+		await render(
+			async () => [{ ...runAt(0), node_id: "event", is_remote: true }],
+			{
+				getEvents: async () => {
+					throw new Error("Connection lost");
+				},
+			},
+		);
+		await flushQueries();
+
+		expect(container.textContent).not.toContain("Deleted Event");
+		expect(container.querySelector("small.leading-none")?.textContent).toBe(
+			"Event",
+		);
+	} finally {
+		consoleError.mockRestore();
+	}
+});
+
+test("an Event lookup pending for a previous app cannot rename the current app's runs", async () => {
+	let resolveEvents!: (events: IEvent[]) => void;
+	const oldEvents = new Promise<IEvent[]>((resolve) => {
+		resolveEvents = resolve;
+	});
+	const getEvents = mock(async (appId: string) =>
+		appId === "app" ? oldEvents : [],
+	);
+	const listRuns = async () => [
+		{ ...runAt(0), node_id: "event", is_remote: true },
+	];
+	await render(listRuns, { getEvents });
+	expect(container.textContent).not.toContain("Deleted Event");
+	await render(listRuns, { appId: "other-app", getEvents });
+	await flushQueries();
+	await act(async () => {
+		resolveEvents([{ id: "event", name: "Previous app's schedule" } as IEvent]);
+	});
+	await flushQueries();
+
+	expect(container.textContent).toContain("Deleted Event");
+	expect(container.textContent).not.toContain("Previous app's schedule");
+});
 
 async function rerunFirst() {
 	const actions = container.querySelector<HTMLButtonElement>(

@@ -34,7 +34,7 @@ impl NodeLogic for PathFromCacheDirNode {
         node.add_input_pin(
             "node_scope",
             "Node Scope",
-            "Is this node in the node scope?",
+            "Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory.",
             VariableType::Boolean,
         )
         .set_default_value(Some(json!(false)));

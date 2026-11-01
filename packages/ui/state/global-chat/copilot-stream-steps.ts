@@ -4,7 +4,11 @@ import type {
 	IPlanStep,
 	PlanStepStatus,
 } from "../../components/interfaces/chat-default/chat-db";
-import { buildToolActivity, toolActivityText } from "./tool-step-activity";
+import {
+	buildToolActivity,
+	getToolActivityLabel,
+	toolActivityText,
+} from "./tool-step-activity";
 
 // Turns the FlowPilot copilot stream protocol (plan_step / tool_start / tool_call / …) into an
 // ordered IPlanStep list. Shared by the global chat's own response stream and by nested sub-agent
@@ -229,7 +233,14 @@ function toolFieldSummary(data: unknown): string | undefined {
 function toolActivityDetail(name: string, data: unknown, existing?: IPlanStep) {
 	if (existing?.detail?.kind === "build_lane") return existing.detail;
 	if (name === "think") return undefined;
-	return buildToolActivity(name, data, existing?.detail);
+	const previous = existing?.detail;
+	return buildToolActivity(
+		name,
+		data,
+		previous && existing?.toolName && existing.toolName !== name
+			? { ...previous, label: getToolActivityLabel(name) }
+			: previous,
+	);
 }
 
 export function applyStreamEvent(
@@ -306,14 +317,20 @@ export function applyStreamEvent(
 			const existing = acc.steps.get(id);
 			const message = toolFieldSummary(event.data);
 			if (existing) {
+				const reportedName = toolFieldName(event.data);
+				const name =
+					reportedName !== "tool"
+						? reportedName
+						: (existing.toolName ?? reportedName);
 				acc.steps.set(id, {
 					...existing,
+					title:
+						existing.title === `Using ${existing.toolName}`
+							? `Using ${name}`
+							: existing.title,
+					toolName: name,
 					description: message ?? existing.description,
-					detail: toolActivityDetail(
-						existing.toolName ?? toolFieldName(event.data),
-						event.data,
-						existing,
-					),
+					detail: toolActivityDetail(name, event.data, existing),
 				});
 				break;
 			}
@@ -338,15 +355,25 @@ export function applyStreamEvent(
 		case "tool_end": {
 			const id = toolFieldId(event.data, "");
 			const existing = id ? acc.steps.get(id) : undefined;
-			if (existing) {
-				acc.steps.set(id, {
+			const reportedName = toolFieldName(event.data);
+			const name =
+				reportedName !== "tool"
+					? reportedName
+					: (existing?.toolName ?? reportedName);
+			// Native browser tools may first appear in a provider's completed item.
+			if (id && (existing || name !== "tool")) {
+				upsertStep({
 					...existing,
+					id,
+					title:
+						!existing || existing.title === `Using ${existing.toolName}`
+							? `Using ${name}`
+							: existing.title,
+					toolName: name,
 					status: toolEndPlanStepStatus(event.data),
-					detail: toolActivityDetail(
-						existing.toolName ?? toolFieldName(event.data),
-						event.data,
-						existing,
-					),
+					detail: toolActivityDetail(name, event.data, existing),
+					timestamp: existing?.timestamp ?? Date.now(),
+					content_offset: existing?.content_offset ?? acc.content.length,
 					endTime: Date.now(),
 				});
 			}

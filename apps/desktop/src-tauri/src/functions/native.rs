@@ -9,6 +9,10 @@ mod location;
 mod shared_files;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
+#[path = "native_actions.rs"]
+mod actions;
+
+#[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple {
     use super::*;
     use std::ffi::{CStr, CString, c_char};
@@ -19,6 +23,11 @@ mod apple {
         fn flow_like_native_clear_snapshot() -> i32;
         fn flow_like_native_take_actions() -> *mut c_char;
         fn flow_like_native_pending_actions() -> *mut c_char;
+        fn flow_like_native_claim_background_actions() -> *mut c_char;
+        fn flow_like_native_background_action_active(
+            id: *const c_char,
+            scope: *const c_char,
+        ) -> i32;
         fn flow_like_native_ack_action(id: *const c_char, scope: *const c_char) -> i32;
         fn flow_like_native_publish_app_icons(payload: *const c_char) -> i32;
         fn flow_like_native_complete_action(result: *const c_char) -> i32;
@@ -32,6 +41,7 @@ mod apple {
     }
     extern "C" fn action_ready() {
         if let Some(app) = APP.get() {
+            super::actions::notify(app);
             crate::utils::emit_to_ui(app, "native-action", json!({}));
         }
     }
@@ -83,6 +93,18 @@ mod apple {
     }
     pub fn pending_actions() -> Result<Value, String> {
         unsafe { take_json(flow_like_native_pending_actions()) }
+    }
+    pub fn claim_background_actions() -> Result<Value, String> {
+        unsafe { take_json(flow_like_native_claim_background_actions()) }
+    }
+    pub fn background_action_active(id: &str, scope: &str) -> Result<bool, String> {
+        let id = CString::new(id).map_err(|e| e.to_string())?;
+        let scope = CString::new(scope).map_err(|e| e.to_string())?;
+        match unsafe { flow_like_native_background_action_active(id.as_ptr(), scope.as_ptr()) } {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err("Could not verify the background action's lifetime".into()),
+        }
     }
     pub fn acknowledge_action(id: String, scope: String) -> Result<(), String> {
         let id = CString::new(id).map_err(|e| e.to_string())?;

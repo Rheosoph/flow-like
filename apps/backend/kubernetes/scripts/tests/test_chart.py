@@ -91,6 +91,38 @@ class ChartTest(unittest.TestCase):
         self.assertEqual(queue["REDIS_EXECUTION_QUEUE"]["value"], api["REDIS_EXECUTION_QUEUE"]["value"])
         self.assertFalse(any(x["metadata"]["name"] == "flow-like-executor-pool" for x in self.docs))
 
+    def test_nats_broker_uses_public_trust_and_only_api_receives_signer(self):
+        api = self.env("api")
+        self.assertEqual(api["CHANNEL_TRANSPORT"]["value"], "nats")
+        self.assertEqual(api["CHANNEL_NATS_URL"]["value"], "nats://flow-like-nats:4222")
+        self.assertEqual(self.env("execution-manager")["CHANNEL_NATS_URL"]["value"], api["CHANNEL_NATS_URL"]["value"])
+        self.assertEqual(api["CHANNEL_NATS_ACCOUNT_SEED"]["valueFrom"]["secretKeyRef"]["name"], "flow-like-nats-issuer")
+        broker = self.resource("Deployment", "nats")
+        self.assertEqual(broker["spec"]["replicas"], 1)
+        self.assertEqual(broker["spec"]["strategy"]["type"], "Recreate")
+        pod = broker["spec"]["template"]["spec"]
+        self.assertFalse(pod["automountServiceAccountToken"])
+        self.assertEqual(pod["volumes"][0]["secret"]["secretName"], "flow-like-nats-server")
+        self.assertNotIn("nats-issuer", json.dumps(pod))
+        service = self.resource("Service", "nats")
+        self.assertEqual({item["port"] for item in service["spec"]["ports"]}, {4222, 8080})
+        policy = self.resource("NetworkPolicy", "nats-access")
+        sources = policy["spec"]["ingress"][0]["from"][0]["podSelector"]["matchExpressions"][0]["values"]
+        self.assertIn("execution-egress", sources)
+        self.assertNotIn("execution-sandbox", sources)
+
+    def test_nats_ingress_and_external_broker_configuration(self):
+        docs = self.render("--set", "ingress.enabled=true")
+        ingress = next(item for item in docs if item["kind"] == "Ingress" and item["metadata"]["name"] == "flow-like")
+        routes = ingress["spec"]["rules"][0]["http"]["paths"]
+        nats = next(route for route in routes if route["path"] == "/nats")
+        self.assertEqual(nats["backend"]["service"], {"name": "flow-like-nats", "port": {"number": 8080}})
+        self.assertIn("one replica", self.render("--set", "channels.nats.replicaCount=2", valid=False))
+        docs = self.render("--set", "channels.nats.enabled=false,channels.nats.url=nats://nats.example.test:4222")
+        self.assertFalse(any(item["kind"] == "Deployment" and item["metadata"]["name"] == "flow-like-nats" for item in docs))
+        self.assertEqual(self.env("api", docs)["CHANNEL_NATS_URL"]["value"], "nats://nats.example.test:4222")
+        self.assertIn("trusted_shared", self.render("--set", "channels.nats.enabled=false,channels.nats.url=tls://nats.example.test:4222", valid=False))
+
     def test_aws_bucket_keys_default_on_and_preserve_explicit_opt_out(self):
         args = ("--set", "storage.provider=aws,rustfs.enabled=false,execution.isolationMode=trusted_shared,execution.asyncBackend=http", "--set-string", "storage.aws.existingSecret=")
         docs = self.render(*args)

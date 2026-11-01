@@ -63092,6 +63092,46 @@
       "alias": "pushWidgets"
     },
     {
+      "node_type": "events_chat_react",
+      "display": "eventsChatReact",
+      "friendly": "React to Message",
+      "category": "Events/Chat",
+      "inputs": [
+        {
+          "name": "emoji",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": false,
+          "doc": "Emoji to add or remove"
+        },
+        {
+          "name": "message_id",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Leave empty to react to the user message that started this run"
+        },
+        {
+          "name": "operation",
+          "ty": {
+            "base": "string",
+            "container": "Normal"
+          },
+          "optional": true,
+          "doc": "Add or remove the workflow's reaction"
+        }
+      ],
+      "outputs": [],
+      "impure": true,
+      "doc": "Adds or removes a workflow emoji reaction on a chat message without starting another turn.",
+      "namespace": "chat",
+      "alias": "react"
+    },
+    {
       "node_type": "events_chat_remove_step",
       "display": "eventsChatRemoveStep",
       "friendly": "Remove Step",
@@ -102065,7 +102105,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Is this node in the node scope?"
+          "doc": "Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory."
         },
         {
           "name": "user_scope",
@@ -102107,7 +102147,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Is this node in the node scope?"
+          "doc": "Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory."
         }
       ],
       "outputs": [
@@ -102163,7 +102203,7 @@
             "container": "Normal"
           },
           "optional": true,
-          "doc": "Is this node in the node scope?"
+          "doc": "Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory."
         }
       ],
       "outputs": [

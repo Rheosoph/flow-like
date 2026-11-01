@@ -1,5 +1,6 @@
 """Render actual Compose graphs and reject unsafe mode/configuration combinations."""
 import importlib.util
+import base64
 import json
 import os
 from pathlib import Path
@@ -100,6 +101,36 @@ class DeploymentTest(unittest.TestCase):
                 self.assertEqual(api["CORS_ALLOWED_ORIGINS"], frontend)
                 web = config["services"]["web"]["environment"]
                 self.assertEqual(web["FLOW_LIKE_WEB_REDIRECT_URL"], frontend + "/callback")
+
+    def test_nats_grants_and_broker_trust_stay_separate(self):
+        for compose_file in ("docker-compose.yml", "docker-stack.yml"):
+            values, config = self.render(compose_file=compose_file)
+            services = config["services"]
+            api = services["api"]["environment"]
+            broker = services["nats"]
+            self.assertEqual(api["CHANNEL_TRANSPORT"], "nats")
+            self.assertEqual(api["CHANNEL_NATS_WS_URL"], "ws://localhost:8080/nats")
+            self.assertTrue(api["CHANNEL_NATS_ACCOUNT_SEED"].startswith("SA"))
+            self.assertNotIn("ports", broker)
+            self.assertEqual(broker["deploy"]["replicas"], 1)
+            self.assertTrue(broker["read_only"])
+            trust = json.loads(base64.b64decode(broker["environment"]["NATS_SERVER_CONFIG"]))
+            self.assertIn("http://localhost:3001", trust["websocket"]["allowed_origins"])
+            self.assertEqual(trust["resolver"], "MEMORY")
+            self.assertEqual(len(trust["resolver_preload"]), 1)
+            self.assertNotIn(api["CHANNEL_NATS_ACCOUNT_SEED"], json.dumps(trust))
+            for name, service in services.items():
+                if name != "api":
+                    self.assertNotIn("CHANNEL_NATS_ACCOUNT_SEED", service.get("environment", {}))
+            if compose_file == "docker-compose.yml":
+                self.assertEqual(preflight.validate(values, config), [])
+
+    def test_nats_preflight_rejects_missing_trust_and_insecure_browser_url(self):
+        for changes, message in (({"NATS_SERVER_CONFIG": "invalid"}, "NATS_SERVER_CONFIG"),
+                                 ({"CHANNEL_NATS_ACCOUNT_SEED": "invalid"}, "CHANNEL_NATS_ACCOUNT_SEED"),
+                                 ({"PUBLIC_API_URL": "https://api.example.test"}, "wss://")):
+            values, config = self.render(changes)
+            self.assertTrue(any(message in error for error in preflight.validate(values, config)))
 
     def test_bucket_key_auto_default_and_explicit_overrides_reach_api(self):
         for compose_file in ("docker-compose.yml", "docker-stack.yml"):
@@ -459,7 +490,7 @@ class DeploymentTest(unittest.TestCase):
         self.assertFalse(db_init.get("depends_on"))
         self.assertEqual(set(db_init["networks"]), {"app"})
         for name in ("api", "audit-worker"):
-            self.assertEqual(set(config["services"][name]["depends_on"]), {"db-init"}, name)
+            self.assertEqual(set(config["services"][name]["depends_on"]), {"db-init", "nats"} if name == "api" else {"db-init"}, name)
             self.assertEqual(config["services"][name]["depends_on"]["db-init"]["condition"], "service_completed_successfully")
 
     def test_audit_credentials_are_confined_to_worker(self):

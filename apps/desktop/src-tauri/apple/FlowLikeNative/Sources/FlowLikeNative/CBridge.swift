@@ -50,6 +50,19 @@ public func flowLikeNativePendingActions() -> UnsafeMutablePointer<CChar>? {
     return strdup(json)
 }
 
+@_cdecl("flow_like_native_claim_background_actions")
+public func flowLikeNativeClaimBackgroundActions() -> UnsafeMutablePointer<CChar>? {
+    guard let actions = try? NativeStore.shared.claimBackgroundActions(),
+          let data = try? JSONEncoder().encode(actions) else { return nil }
+    return strdup(String(decoding: data, as: UTF8.self))
+}
+
+@_cdecl("flow_like_native_background_action_active")
+public func flowLikeNativeBackgroundActionActive(_ id: UnsafePointer<CChar>?, _ scope: UnsafePointer<CChar>?) -> Int32 {
+    guard let id, let scope else { return 0 }
+    return (try? NativeStore.shared.backgroundActionActive(id: String(cString: id), scope: String(cString: scope))) == true ? 1 : 0
+}
+
 @_cdecl("flow_like_native_ack_action")
 public func flowLikeNativeAcknowledgeAction(_ id: UnsafePointer<CChar>?, _ scope: UnsafePointer<CChar>?) -> Int32 {
     guard let id, let scope else { return -1 }

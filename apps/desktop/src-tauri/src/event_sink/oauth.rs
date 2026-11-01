@@ -3,11 +3,40 @@ use std::collections::HashMap;
 use flow_like::flow::oauth::{OAuthToken, refresh_on_hub};
 use flow_like_types::{Result, anyhow};
 
+/// PAT registrations retain their limited grant. A JWT run captures this profile's
+/// native account and cannot substitute another account for its registered token.
+pub(crate) async fn capture_authority(
+    profile: &flow_like::profile::Profile,
+    execution_token: Option<&str>,
+) -> Result<Option<crate::native_auth::SessionBinding>> {
+    let token = execution_token.map(|token| token.strip_prefix("Bearer ").unwrap_or(token));
+    if token.is_some_and(|token| token.starts_with("pat_")) {
+        return Ok(None);
+    }
+    let Some(origin) = flow_like::hub::hub_origin(&profile.hub, profile.secure) else {
+        return Ok(None);
+    };
+    let binding = crate::native_auth::SessionBinding::capture(&profile.id, &origin)
+        .await
+        .map_err(|error| anyhow!(error))?;
+    if let Some(token) = token {
+        let subject = flow_like::flow::execution::extract_sub_from_jwt(token)?;
+        anyhow::ensure!(
+            binding
+                .as_ref()
+                .is_some_and(|binding| binding.subject == subject),
+            "The registered execution token belongs to another or signed-out profile account"
+        );
+    }
+    Ok(binding)
+}
+
 /// Scheduled runs resolve saved grants just before execution, after profile selection.
 pub(crate) async fn resolve_tokens(
     hub: &str,
     secure: bool,
     execution_token: Option<&str>,
+    native_auth: Option<&crate::native_auth::SessionBinding>,
     tokens: &HashMap<String, OAuthToken>,
 ) -> Result<(HashMap<String, OAuthToken>, Option<String>)> {
     let renewable: Vec<_> = tokens
@@ -40,15 +69,33 @@ pub(crate) async fn resolve_tokens(
                     .all(|token| token.hub_subject.as_deref() == Some(subject)),
                 "Saved OAuth grants belong to different Hub accounts"
             );
-            crate::execution_credentials::session_token(&origin, subject).ok_or_else(|| {
+            let binding = native_auth.ok_or_else(|| {
                 anyhow!("Sign in to the OAuth grant's Hub account before running this event")
-            })?
+            })?;
+            anyhow::ensure!(
+                binding.hub == origin && binding.subject == subject,
+                "Saved OAuth grants belong to another native profile account"
+            );
+            binding
+                .access_token(None)
+                .await
+                .map_err(|error| anyhow!(error))?
         }
     };
     let mut resolved = HashMap::with_capacity(tokens.len());
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()?;
     for (provider, token) in tokens {
         let next = if token.refresh_token.is_some() {
-            refresh_on_hub(&origin, secure, &authorization, provider, token, None).await?
+            if let Some(binding) = native_auth {
+                crate::native_auth::oauth::refresh_provider(binding, &client, provider, token, &[])
+                    .await
+                    .map_err(|error| anyhow!(error))?
+            } else {
+                refresh_on_hub(&origin, secure, &authorization, provider, token, None).await?
+            }
         } else {
             anyhow::ensure!(
                 !token.is_expired(),
@@ -67,7 +114,7 @@ mod tests {
 
     #[tokio::test]
     async fn events_without_oauth_still_run_without_a_hub() {
-        let (tokens, authorization) = resolve_tokens("", true, None, &HashMap::new())
+        let (tokens, authorization) = resolve_tokens("", true, None, None, &HashMap::new())
             .await
             .unwrap();
         assert!(tokens.is_empty());
@@ -84,6 +131,7 @@ mod tests {
             "http://127.0.0.1:1",
             false,
             Some("pat_secret"),
+            None,
             &HashMap::from([("provider".into(), token)]),
         )
         .await
@@ -99,6 +147,7 @@ mod tests {
             "http://127.0.0.1:1",
             false,
             Some("pat_secret"),
+            None,
             &HashMap::from([("provider".into(), token)]),
         )
         .await

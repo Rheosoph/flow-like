@@ -2601,5 +2601,6 @@
 	"workflowEditor": "",
 	"boardRendererDefaultDescription": "",
 	"useWasmBoardPreview": "",
-	"boardRendererLocalPreference": ""
+	"boardRendererLocalPreference": "",
+	"variantSavedDraftVersionHint": "Neueste führt den gespeicherten Entwurf aus, einschließlich unveröffentlichter Änderungen. Eine angeheftete Version bleibt bestehen, bis du hochstufst."
 }

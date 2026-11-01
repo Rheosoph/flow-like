@@ -1992,5 +1992,16 @@
 	"dynamicPinCannotRemove": "",
 	"wireTraceFocused": "",
 	"wireTraceMoved": "",
-	"wireTracePreviewHint": ""
+	"wireTracePreviewHint": "",
+	"draftUnpublished": "Entwurf (unveröffentlicht)",
+	"publishedVersion": "Veröffentlicht: v{{version}}",
+	"versionCreated": "Version erstellt",
+	"newestPublishedVersion": "Zuletzt veröffentlicht: v{{version}}",
+	"noPublishedVersions": "Keine veröffentlichten Versionen",
+	"publishedVersionsUnavailable": "Veröffentlichte Versionen nicht verfügbar",
+	"loadingPublishedVersions": "Veröffentlichte Versionen werden geladen…",
+	"latestDraft": "Neueste (Entwurf)",
+	"latestPublishedVersion": "Neueste (v{{version}})",
+	"latestChangedDraft": "Neueste (Entwurf enthält Änderungen; veröffentlicht: v{{version}})",
+	"latestUnpublishedDraft": "Neueste (unveröffentlichter Entwurf)"
 }

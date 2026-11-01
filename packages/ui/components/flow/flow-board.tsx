@@ -140,6 +140,7 @@ import { BoardInspector } from "../../components/flow/shell/board-inspector";
 import {
 	BoardIdentityForm,
 	BoardReleaseForm,
+	BoardReleaseStatus,
 	BoardRuntimeForm,
 	executionModeIcon,
 } from "../../components/flow/shell/board-meta-controls";
@@ -5981,9 +5982,12 @@ function FlowBoardContent({
 											/>
 										}
 									>
-										{version
-											? `v${version.join(".")} · ${t("readonly", "- Read-Only")}`
-											: `v${(board.data.version ?? [0, 0, 0]).join(".")} · ${board.data.stage}`}
+										<BoardReleaseStatus
+											appId={appId}
+											boardId={boardId}
+											stage={board.data.stage}
+											version={version}
+										/>
 									</BoardStatusItem>
 								)}
 								{boardDiff.notice && (

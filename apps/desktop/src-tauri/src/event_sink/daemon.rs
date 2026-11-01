@@ -345,6 +345,7 @@ async fn run_daemon_loop(
             run_token.clone(),
             registration.personal_access_token.clone(),
             registration.token_owner(),
+            registration.profile_binding.clone(),
             Some(registration.oauth_tokens.clone()),
             Duration::from_millis(config.log_flush_interval_ms),
             config.log_batch_size,

@@ -1992,5 +1992,16 @@
 	"eguiPinProtectedExplanation": "The first two pins are required. Removing a pin also removes its connections.",
 	"dynamicPinGroupChanged": "This pin group changed. Please try again.",
 	"dynamicPinBoardUnavailable": "The board is not available. Please try again.",
-	"dynamicPinCannotRemove": "This pin can no longer be removed."
+	"dynamicPinCannotRemove": "This pin can no longer be removed.",
+	"draftUnpublished": "Draft (unpublished)",
+	"publishedVersion": "Published v{{version}}",
+	"versionCreated": "Version created",
+	"newestPublishedVersion": "Newest published: v{{version}}",
+	"noPublishedVersions": "No published versions",
+	"publishedVersionsUnavailable": "Published versions unavailable",
+	"loadingPublishedVersions": "Loading published versions…",
+	"latestDraft": "Latest (draft)",
+	"latestPublishedVersion": "Latest (v{{version}})",
+	"latestChangedDraft": "Latest (draft has changes; published v{{version}})",
+	"latestUnpublishedDraft": "Latest (unpublished draft)"
 }

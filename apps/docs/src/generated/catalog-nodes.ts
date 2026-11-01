@@ -86432,7 +86432,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "node_scope",
         "friendlyName": "Node Scope",
-        "description": "Is this node in the node scope?",
+        "description": "Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory.",
         "pinType": "Input",
         "dataType": "Boolean",
         "valueType": "Normal",
@@ -86485,7 +86485,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "node_scope",
         "friendlyName": "Node Scope",
-        "description": "Is this node in the node scope?",
+        "description": "Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory.",
         "pinType": "Input",
         "dataType": "Boolean",
         "valueType": "Normal",
@@ -86561,7 +86561,7 @@ export const catalogNodes: CatalogNode[] = [
       {
         "name": "node_scope",
         "friendlyName": "Node Scope",
-        "description": "Is this node in the node scope?",
+        "description": "Append this node's ID to the directory path. When true, each node has a unique path. Reuse one node's output to share files, or set false to use the base directory.",
         "pinType": "Input",
         "dataType": "Boolean",
         "valueType": "Normal",

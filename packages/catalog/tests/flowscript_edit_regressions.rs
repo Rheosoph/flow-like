@@ -1355,6 +1355,295 @@ async fn a_template_placeholder_reads_its_board_variable() {
     }
 }
 
+/// Applying a smaller placeholder declaration retires its wires and preserves the other pins.
+#[tokio::test(flavor = "multi_thread")]
+async fn removing_declared_placeholders_disconnects_their_pins_and_replays() {
+    for (node_type, before, after, call, setup, result, prefix) in [
+        (
+            "string_format",
+            "{search} {ledger} {completion} {stats}",
+            "{search} {ledger}",
+            r#""{search} {ledger} {completion} {stats}".format({ search: value, ledger: value, completion: value, stats: value })"#,
+            "",
+            "message",
+            "",
+        ),
+        (
+            "string_render_template",
+            "{{ search }} {{ ledger }} {{ completion }} {{ stats }}",
+            "{{ search }} {{ ledger }}",
+            r#""{{ search }} {{ ledger }} {{ completion }} {{ stats }}".renderTemplate({ search: value, ledger: value, completion: value, stats: value })"#,
+            "",
+            "message",
+            "",
+        ),
+        (
+            "df_sql_query",
+            "SELECT $search, $ledger, $completion, $stats",
+            "SELECT $search, $ledger",
+            r#"session.sqlQuery({ query: "SELECT $search, $ledger, $completion, $stats", paramSearch: value, paramLedger: value, paramCompletion: value, paramStats: value })"#,
+            "    const session = df::createSession({ sessionName: \"default\" })\n",
+            "{ rows: message }",
+            "param_",
+        ),
+    ] {
+        let source = format!(
+            "const value = \"input\"\n\neventsSimple placeholders() {{\n{setup}    const {result} = {call}\n    log::info({{ message: message, toast: false }})\n}}\n"
+        );
+        let mut board = board_from(&source).await;
+        let original = board.clone();
+        let node = all_nodes(&board)
+            .into_iter()
+            .find(|node| node.name == node_type)
+            .expect("the placeholder node exists");
+        let node_id = node.id.clone();
+        let kept = ["search", "ledger"].map(|name| {
+            node.get_pin_by_name(&format!("{prefix}{name}"))
+                .expect("declared input pin")
+                .clone()
+        });
+        let removed = ["completion", "stats"].map(|name| {
+            node.get_pin_by_name(&format!("{prefix}{name}"))
+                .expect("declared input pin")
+                .clone()
+        });
+        for pin in kept.iter().chain(&removed) {
+            assert_eq!(pin.depends_on.len(), 1, "{} must be wired", pin.name);
+        }
+        let static_pins = node
+            .pins
+            .values()
+            .filter(|pin| !kept.iter().chain(&removed).any(|input| input.id == pin.id))
+            .filter(|pin| !matches!(pin.name.as_str(), "format_string" | "template" | "query"))
+            .cloned()
+            .collect::<Vec<_>>();
+        let text = anchored(&board);
+        assert!(text.contains(before), "{node_type}: {text}");
+        let mut edited = text.replace(before, after);
+        for name in ["completion", "stats"] {
+            let argument = flow_like_ast::to_camel_case(&format!("{prefix}{name}"));
+            let old = format!("{argument}: value");
+            assert!(edited.contains(&old), "{node_type}: {edited}");
+            edited = edited
+                .replace(&format!("{old}, "), "")
+                .replace(&format!(", {old}"), "");
+        }
+
+        let applied = apply_edit(&mut board, &edited).await;
+        let node = all_nodes(&board)
+            .into_iter()
+            .find(|node| node.id == node_id)
+            .expect("the existing placeholder node is reused");
+        assert_eq!(node.error, None, "{node_type}");
+        for pin in &removed {
+            assert!(node.get_pin_by_name(&pin.name).is_none(), "{}", pin.name);
+            assert!(
+                all_nodes(&board).into_iter().all(|node| node
+                    .pins
+                    .values()
+                    .all(|other| !other.connected_to.contains(&pin.id)
+                        && !other.depends_on.contains(&pin.id))),
+                "{} left a dangling edge",
+                pin.name
+            );
+        }
+        for pin in kept.iter().chain(&static_pins) {
+            let retained = node.pins.get(&pin.id).expect("retained pin keeps its ID");
+            assert_eq!(retained.depends_on, pin.depends_on, "{}", pin.name);
+            assert_eq!(retained.connected_to, pin.connected_to, "{}", pin.name);
+        }
+        assert_round_trips(&board);
+
+        let expected = flow_like_types::json::to_value(&board.nodes).unwrap();
+        let mut replay = original.clone();
+        replay
+            .execute_commands(applied.commands.clone(), catalog_state().await)
+            .await
+            .expect("the applied batch replays with the same dynamic pin IDs");
+        assert_eq!(
+            flow_like_types::json::to_value(&replay.nodes).unwrap(),
+            expected,
+            "{node_type}: replay must reproduce the edited graph"
+        );
+        board
+            .undo(applied.commands, catalog_state().await)
+            .await
+            .expect("undo restores the retired placeholder pins and connections");
+        assert_eq!(
+            flow_like_types::json::to_value(&board.nodes).unwrap(),
+            flow_like_types::json::to_value(&original.nodes).unwrap(),
+            "{node_type}: undo must restore the original graph"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn changing_only_the_format_literal_removes_undeclared_placeholder_pins() {
+    let mut board = board_from(
+        r#"const value = "input"
+
+eventsSimple placeholders() {
+    const message = "{search} {ledger} {completion} {stats}".format({ search: value, ledger: value, completion: value, stats: value })
+    log::info({ message: message, toast: false })
+}
+"#,
+    )
+    .await;
+    let original = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.name == "string_format")
+        .expect("the format node exists")
+        .clone();
+    let text = anchored(&board);
+    let edited = text.replace(
+        "{search} {ledger} {completion} {stats}",
+        "{search} {ledger}",
+    );
+    assert_ne!(text, edited, "only the declared placeholders change");
+    assert!(edited.contains("completion: value"), "{edited}");
+    assert!(edited.contains("stats: value"), "{edited}");
+    apply_edit(&mut board, &edited).await;
+
+    let node = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.id == original.id)
+        .expect("the format node is reused");
+    assert_eq!(node.error, None);
+    for name in ["completion", "stats"] {
+        let removed = original.get_pin_by_name(name).unwrap();
+        assert!(node.get_pin_by_name(name).is_none(), "{name}");
+        assert!(all_nodes(&board).into_iter().all(|node| {
+            node.pins.values().all(|pin| {
+                !pin.depends_on.contains(&removed.id) && !pin.connected_to.contains(&removed.id)
+            })
+        }));
+    }
+    for name in ["search", "ledger"] {
+        let pin = original.get_pin_by_name(name).unwrap();
+        let retained = node.pins.get(&pin.id).expect("declared pin keeps its ID");
+        assert_eq!(retained.depends_on, pin.depends_on, "{name}");
+    }
+    assert_round_trips(&board);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn applying_omitted_arguments_repairs_already_stale_placeholder_pins() {
+    let mut board = board_from(
+        r#"const value = "input"
+
+eventsSimple placeholders() {
+    const message = "{search} {ledger} {completion} {stats}".format({ search: value, ledger: value, completion: value, stats: value })
+    log::info({ message: message, toast: false })
+    log::info({ message: message, toast: false })
+}
+"#,
+    )
+    .await;
+    let node_id = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.name == "string_format")
+        .expect("the shared format node exists")
+        .id
+        .clone();
+    let snapshot = board.clone();
+    let node = board.nodes.get_mut(&node_id).unwrap();
+    node.get_pin_mut_by_name("format_string")
+        .unwrap()
+        .set_default_value(Some(flow_like_types::json::json!("{search} {ledger}")));
+    let logic = CATALOG
+        .logic
+        .iter()
+        .find(|logic| logic.get_node().name == "string_format")
+        .unwrap();
+    logic.on_update(node, &snapshot).await;
+    assert!(
+        node.error
+            .as_deref()
+            .is_some_and(|error| error.contains("completion") && error.contains("stats")),
+        "on_update preserves the stale wired pins before Apply"
+    );
+
+    let text = anchored(&board);
+    let unchanged = apply_edit(&mut board, &text).await;
+    assert!(
+        unchanged.commands.is_empty(),
+        "the unchanged document still explicitly supplies the stale inputs"
+    );
+    let edited = text
+        .replace(", completion: value", "")
+        .replace(", stats: value", "");
+    assert_ne!(text, edited, "the edit omits both stale arguments");
+    let applied = apply_edit(&mut board, &edited).await;
+    assert!(
+        !applied.board_commands.iter().any(|command| matches!(
+            command,
+            BoardCommand::UpdateNodePin { node_id: target, .. } if target == &node_id
+        )),
+        "repair must not depend on rewriting the unchanged configuration"
+    );
+    let node = board.nodes.get(&node_id).unwrap();
+    assert_eq!(node.error, None);
+    assert!(node.get_pin_by_name("completion").is_none());
+    assert!(node.get_pin_by_name("stats").is_none());
+    assert_round_trips(&board);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_computed_format_keeps_existing_placeholder_connections() {
+    let mut board = board_from(
+        r#"const value = "input"
+const runtimeFormat = "{search} {ledger}"
+
+eventsSimple placeholders() {
+    const message = "{search} {ledger} {completion} {stats}".format({ search: value, ledger: value, completion: value, stats: value })
+    log::info({ message: message, toast: false })
+}
+"#,
+    )
+    .await;
+    let original = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.name == "string_format")
+        .expect("the format node exists")
+        .clone();
+    let text = anchored(&board);
+    let edited = text
+        .replace(
+            "\"{search} {ledger} {completion} {stats}\"",
+            "runtimeFormat",
+        )
+        .replace(", completion: value", "")
+        .replace(", stats: value", "");
+    assert_ne!(text, edited, "the literal format becomes a variable read");
+    apply_edit(&mut board, &edited).await;
+
+    let node = all_nodes(&board)
+        .into_iter()
+        .find(|node| node.id == original.id)
+        .expect("the format node is reused");
+    assert!(
+        !node
+            .get_pin_by_name("format_string")
+            .unwrap()
+            .depends_on
+            .is_empty(),
+        "the stored literal no longer determines the runtime placeholders"
+    );
+    for name in ["search", "ledger", "completion", "stats"] {
+        let pin = original.get_pin_by_name(name).unwrap();
+        let retained = node
+            .pins
+            .get(&pin.id)
+            .expect("existing placeholder remains");
+        assert_eq!(retained.depends_on, pin.depends_on, "{name}");
+        assert!(all_nodes(&board).into_iter().any(|producer| {
+            producer.pins.values().any(|output| {
+                pin.depends_on.contains(&output.id) && output.connected_to.contains(&pin.id)
+            })
+        }));
+    }
+}
+
 /// A missing format placeholder must reject Apply without publishing the staged board.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_format_placeholder_without_a_value_rejects_apply() {

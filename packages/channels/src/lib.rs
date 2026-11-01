@@ -25,7 +25,9 @@ pub mod aws;
 pub mod azure;
 #[cfg(feature = "gcp")]
 pub mod gcp;
-#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg(feature = "nats")]
+pub mod nats;
+#[cfg(any(feature = "aws", feature = "azure", feature = "nats"))]
 mod tls;
 
 /// API-side: deliver a push the client could not send itself onto the transport the waiter
@@ -34,6 +36,10 @@ mod tls;
 pub trait ChannelForwarder: Send + Sync {
     fn transport(&self) -> &'static str;
     async fn forward(&self, push: &ChannelPush) -> flow_like_types::Result<()>;
+    /// Preserve a delivery identifier when a client retries through HTTP.
+    async fn forward_with_id(&self, push: &ChannelPush, _id: &str) -> flow_like_types::Result<()> {
+        self.forward(push).await
+    }
 }
 
 fn transport_name(grant: &ChannelExecutorGrant) -> &'static str {
@@ -42,6 +48,7 @@ fn transport_name(grant: &ChannelExecutorGrant) -> &'static str {
         ChannelExecutorGrant::AwsMqtt { .. } => "aws_mqtt",
         ChannelExecutorGrant::AzureWebPubSub { .. } => "azure_web_pubsub",
         ChannelExecutorGrant::GcpFirebaseRtdb { .. } => "gcp_firebase_rtdb",
+        ChannelExecutorGrant::Nats { .. } => "nats",
     }
 }
 
@@ -53,6 +60,7 @@ pub fn transport_compiled(grant: &ChannelExecutorGrant) -> bool {
         ChannelExecutorGrant::AwsMqtt { .. } => cfg!(feature = "aws"),
         ChannelExecutorGrant::AzureWebPubSub { .. } => cfg!(feature = "azure"),
         ChannelExecutorGrant::GcpFirebaseRtdb { .. } => cfg!(feature = "gcp"),
+        ChannelExecutorGrant::Nats { .. } => cfg!(feature = "nats"),
     }
 }
 
@@ -76,6 +84,8 @@ pub async fn connect_executor_channel(
         ChannelExecutorGrant::GcpFirebaseRtdb { .. } => {
             gcp::FirebaseRtdbChannel::connect(grant).await
         }
+        #[cfg(feature = "nats")]
+        ChannelExecutorGrant::Nats { .. } => nats::NatsChannel::connect(grant).await,
         #[allow(unreachable_patterns)]
         other => Err(flow_like_types::anyhow!(
             "channel transport '{}' is not compiled into this executor",

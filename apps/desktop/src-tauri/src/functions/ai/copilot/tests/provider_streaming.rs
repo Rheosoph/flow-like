@@ -188,6 +188,103 @@ fn codex_tool_frames_include_bounded_redacted_input_and_output() {
 }
 
 #[test]
+fn codex_native_web_items_expose_queries_through_completion() {
+    for (event_type, tag) in [
+        ("item.started", "tool_start"),
+        ("item.updated", "tool_progress"),
+        ("item.completed", "tool_end"),
+    ] {
+        let event = serde_json::json!({
+            "type": event_type,
+            "item": {
+                "id": "web-1",
+                "type": "web_search",
+                "query": "Panamera long distance comfort",
+                "status": "completed"
+            }
+        });
+        let frame = external_agent_process_event(&event).expect("native web activity");
+        let payload: serde_json::Value = serde_json::from_str(
+            frame
+                .strip_prefix(&format!("<{tag}>"))
+                .unwrap()
+                .strip_suffix(&format!("</{tag}>"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["tool_call_id"], "web-1");
+        assert_eq!(payload["tool"], "web_search");
+        let context: serde_json::Value =
+            serde_json::from_str(payload["arguments_preview"].as_str().unwrap()).unwrap();
+        assert_eq!(context["query"], "Panamera long distance comfort");
+        if event_type == "item.completed" {
+            assert_eq!(payload["status"], "done");
+        }
+        assert!(!frame.contains("\"sources\""));
+    }
+}
+
+#[test]
+fn codex_native_open_actions_are_pages_and_keep_only_display_context() {
+    for action_type in ["open_page", "find_in_page"] {
+        let event = serde_json::json!({
+            "type": "item.completed",
+            "item": {
+                "id": "web-open",
+                "type": "web_search",
+                "action": {
+                    "type": action_type,
+                    "url": "https://reviews.example/panamera?token=must-not-leak",
+                    "body": "raw page content must stay out"
+                },
+                "status": "failed",
+            }
+        });
+        let frame = external_agent_process_event(&event).expect("native page activity");
+        let payload: serde_json::Value = serde_json::from_str(
+            frame
+                .strip_prefix("<tool_end>")
+                .unwrap()
+                .strip_suffix("</tool_end>")
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(payload["tool"], "open_url");
+        assert_eq!(payload["status"], "error");
+        assert!(frame.contains("reviews.example/panamera"));
+        assert!(!frame.contains("must-not-leak"));
+        assert!(!frame.contains("raw page content"));
+    }
+}
+
+#[test]
+fn codex_native_search_actions_keep_all_supplied_queries() {
+    let event = serde_json::json!({
+        "type": "item.completed",
+        "item": {
+            "id": "web-batch",
+            "type": "web_search",
+            "action": { "type": "search", "queries": ["Panamera comfort", "BMW 7 Series comfort"] },
+        }
+    });
+    let frame = external_agent_process_event(&event).expect("native batched search");
+    let payload: serde_json::Value = serde_json::from_str(
+        frame
+            .strip_prefix("<tool_end>")
+            .unwrap()
+            .strip_suffix("</tool_end>")
+            .unwrap(),
+    )
+    .unwrap();
+    let context: serde_json::Value =
+        serde_json::from_str(payload["arguments_preview"].as_str().unwrap()).unwrap();
+    assert_eq!(context["queries"], event["item"]["action"]["queries"]);
+    assert!(external_agent_process_event(&serde_json::json!({
+        "type": "item.updated", "item": { "type": "mcp_tool_call", "id": "mcp", "tool": "other" }
+    })).is_none());
+}
+
+#[test]
 fn external_tool_results_use_the_provider_neutral_status_classifier() {
     let accepted = serde_json::json!({
         "content": [{

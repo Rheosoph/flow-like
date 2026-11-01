@@ -161,17 +161,11 @@ pub(super) fn external_result_details(
         });
     let result_preview = result_text
         .as_deref()
-        .map(|text| {
-            flow_like::flow::copilot::stream::safe_tool_result_preview(
-                text,
-                flow_like::flow::copilot::stream::TOOL_RESULT_PREVIEW_CHARS,
-            )
-        })
+        .map(flow_like::flow::copilot::stream::safe_tool_activity_result_preview)
         .or_else(|| {
             result.map(|value| {
-                external_debug_value_preview(
-                    value,
-                    flow_like::flow::copilot::stream::TOOL_RESULT_PREVIEW_CHARS,
+                flow_like::flow::copilot::stream::safe_tool_activity_result_preview(
+                    &value.to_string(),
                 )
             })
         });
@@ -185,7 +179,10 @@ pub(super) fn external_agent_process_event(value: &serde_json::Value) -> Option<
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
 
-    if !matches!(event_type, "item.started" | "item.completed") {
+    if !matches!(
+        event_type,
+        "item.started" | "item.updated" | "item.completed"
+    ) {
         return None;
     }
 
@@ -194,6 +191,12 @@ pub(super) fn external_agent_process_event(value: &serde_json::Value) -> Option<
         .get("type")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
+    if item_type == "web_search" {
+        return codex_web_activity_event(event_type, item);
+    }
+    if event_type == "item.updated" {
+        return None;
+    }
     if item_type != "mcp_tool_call" {
         return None;
     }
@@ -266,6 +269,68 @@ pub(super) fn external_agent_process_event(value: &serde_json::Value) -> Option<
             "result_preview": result_preview,
             "result": full_result,
             "error": error.map(|error| flow_like::flow::copilot::stream::safe_text_preview(&error, 600)),
+        }),
+    ))
+}
+
+/// Codex's native browser is reported separately from MCP tool calls. Keep its supplied query
+/// and URL metadata visible, including providers that first report an action on completion.
+fn codex_web_activity_event(event_type: &str, item: &serde_json::Value) -> Option<String> {
+    let id = item.get("id").and_then(serde_json::Value::as_str)?;
+    let action = item.get("action").unwrap_or(item);
+    let tool = match action.get("type").and_then(serde_json::Value::as_str) {
+        Some("open_page" | "find_in_page") => "open_url",
+        _ => "web_search",
+    };
+    let mut context = serde_json::Map::new();
+    for key in ["query", "queries", "url", "urls", "sources", "results"] {
+        if let Some(value) = action.get(key).or_else(|| item.get(key)) {
+            context.insert(key.to_owned(), value.clone());
+        }
+    }
+    let context = serde_json::Value::Object(context);
+    let arguments_preview = flow_like::flow::copilot::stream::safe_json_preview(
+        &context,
+        flow_like::flow::copilot::stream::PUBLIC_WEB_ACTIVITY_PREVIEW_CHARS,
+    );
+    if event_type != "item.completed" {
+        return Some(flowpilot_stream_tag(
+            if event_type == "item.updated" {
+                "tool_progress"
+            } else {
+                "tool_start"
+            },
+            &serde_json::json!({
+                "tool_call_id": id,
+                "tool": tool,
+                "arguments_preview": arguments_preview,
+            }),
+        ));
+    }
+    let status = item
+        .get("status")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("completed");
+    let error = item
+        .pointer("/error/message")
+        .and_then(serde_json::Value::as_str);
+    let status = if error.is_some() {
+        "error"
+    } else {
+        flow_like::flow::copilot::stream::tool_result_stream_status(
+            &serde_json::json!({ "status": status }).to_string(),
+        )
+    };
+    Some(flowpilot_stream_tag(
+        "tool_end",
+        &serde_json::json!({
+            "tool_call_id": id,
+            "tool": tool,
+            "status": status,
+            "arguments_preview": arguments_preview,
+            "result_summary": error.map(|error| {
+                flow_like::flow::copilot::stream::safe_text_preview(error, 600)
+            }),
         }),
     ))
 }

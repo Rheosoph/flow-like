@@ -124,6 +124,24 @@ const text = responseToText({ response: aPICall.response })
 Destructuring renames with `pin: local` (`{ value: reportId }`); a binding used as a whole value
 (`aPICall`) is the node's default output and still exposes every pin as a field.
 
+### Directory scope
+
+`files::cacheDir`, `files::storageDir`, and `files::userDir` accept `nodeScope`, which defaults
+to `false`. When it is `true`, the directory path includes the directory node's ID. Each call
+site creates a separate node, so two calls with `nodeScope: true` return different paths, even
+inside the same function or event.
+
+If several steps need the same file, store the path in one variable and reuse it:
+
+```ts
+const file = files::cacheDir({ nodeScope: true }).child("document.pdf")
+file.writeBytes({ content: documentBytes })
+const pages = ai::processing::extractDocument({ file: file })
+```
+
+Alternatively, set `nodeScope: false` to use the base directory without the node ID. Other
+scope options, such as `userScope` on `cacheDir`, still apply.
+
 ## `use`
 
 `use ns::*` opens a namespace so its members can be called bare. It is only valid at the top of

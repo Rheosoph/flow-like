@@ -2601,5 +2601,6 @@
 	"workflowEditor": "Workflow editor",
 	"boardRendererDefaultDescription": "WASM is the default board renderer. Turn it off to use React Flow.",
 	"useWasmBoardPreview": "Use WASM board (preview)",
-	"boardRendererLocalPreference": "Your choice is saved automatically for this browser or desktop installation."
+	"boardRendererLocalPreference": "Your choice is saved automatically for this browser or desktop installation.",
+	"variantSavedDraftVersionHint": "Latest runs the saved draft, including unpublished changes. A pinned version stays put until you promote."
 }

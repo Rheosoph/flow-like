@@ -1,4 +1,4 @@
-import { describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import {
 	hostedApiPath,
 	hostedNavigationPath,
@@ -10,6 +10,88 @@ import {
 
 const parse = (path: string) =>
 	parseHostedTarget(new URL(path, "https://example.com"));
+
+describe("hosted anonymous identity", () => {
+	const localDescriptor = Object.getOwnPropertyDescriptor(
+		globalThis,
+		"localStorage",
+	);
+	const sessionDescriptor = Object.getOwnPropertyDescriptor(
+		globalThis,
+		"sessionStorage",
+	);
+	const key = "flow-like-hosted-session";
+	const storage = () => {
+		const values = new Map<string, string>();
+		return {
+			getItem: (name: string) => values.get(name) ?? null,
+			setItem: (name: string, value: string) => {
+				values.set(name, value);
+			},
+		};
+	};
+	const tab = async () => {
+		const path = "./hosted-route.ts";
+		return (await import(
+			`${path}?tab=${crypto.randomUUID()}`
+		)) as typeof import("./hosted-route");
+	};
+	const expose = (name: "localStorage" | "sessionStorage", value: unknown) =>
+		Object.defineProperty(globalThis, name, { configurable: true, value });
+	afterEach(() => {
+		for (const [name, descriptor] of [
+			["localStorage", localDescriptor],
+			["sessionStorage", sessionDescriptor],
+		] as const) {
+			if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+			else Reflect.deleteProperty(globalThis, name);
+		}
+	});
+
+	it("migrates a legacy session and shares it with a tab that had a different session", async () => {
+		const shared = storage();
+		const firstSession = storage();
+		firstSession.setItem(key, "anonymous-legacy-session-1");
+		expose("localStorage", shared);
+		expose("sessionStorage", firstSession);
+		const first = await tab();
+		expect(first.hostedSessionId()).toBe("anonymous-legacy-session-1");
+		expect(shared.getItem(key)).toBe("anonymous-legacy-session-1");
+		const otherSession = storage();
+		otherSession.setItem(key, "anonymous-legacy-session-2");
+		expose("sessionStorage", otherSession);
+		const second = await tab();
+		expect(second.hostedSessionId()).toBe(first.hostedSessionId());
+		shared.setItem(key, "anonymous-converged-session");
+		expect(first.hostedSessionId()).toBe("anonymous-converged-session");
+		expect(second.hostedSessionId()).toBe(first.hostedSessionId());
+	});
+
+	it("replaces malformed identities and retains a usable session when shared storage is blocked", async () => {
+		const shared = storage();
+		shared.setItem(key, "not/valid");
+		expose("localStorage", shared);
+		expose("sessionStorage", storage());
+		const first = await tab();
+		const generated = first.hostedSessionId();
+		expect(generated).toMatch(/^[a-zA-Z0-9_-]{16,128}$/);
+		expect(shared.getItem(key)).toBe(generated);
+		expose("localStorage", {
+			getItem() {
+				throw new Error("blocked");
+			},
+			setItem() {
+				throw new Error("blocked");
+			},
+		});
+		const second = await tab();
+		expect(second.hostedSessionId()).toBe(generated);
+		expose("sessionStorage", undefined);
+		const ephemeral = await tab();
+		expect(ephemeral.hostedSessionId()).toBe(ephemeral.hostedSessionId());
+		expect(ephemeral.hostedSessionId()).toMatch(/^[a-zA-Z0-9_-]{16,128}$/);
+	});
+});
 
 describe("hosted interface routes", () => {
 	it("only bypasses app providers for the app-scoped hosted prefix", () => {

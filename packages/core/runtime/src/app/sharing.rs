@@ -1085,6 +1085,14 @@ fn open_segment(
     Ok(SegmentReader::Temp(plain))
 }
 
+fn open_import_zip<R: Read + Seek>(reader: R) -> flow_like_types::Result<ZipArchive<R>> {
+    let mut archive = ZipArchive::new(reader)?;
+    // Validate every entry before trusting names or reading payloads, including
+    // entries the manifest does not reference.
+    archive.validate_header_consistency()?;
+    Ok(archive)
+}
+
 fn read_zip_entry<R: Read + Seek>(
     archive: &mut ZipArchive<R>,
     name: &str,
@@ -2123,7 +2131,7 @@ async fn read_v2_manifest(
             chunk_size,
             &cancelled,
         )?;
-        let mut archive = ZipArchive::new(reader)?;
+        let mut archive = open_import_zip(reader)?;
         parse_manifest(&mut archive, MAX_MANIFEST_SEGMENT_LEN)
     })
     .await
@@ -2191,7 +2199,7 @@ async fn import_v2(
                             chunk_size,
                             &cancelled,
                         )?;
-                        Ok(ZipArchive::new(reader)?)
+                        open_import_zip(reader)
                     }
                 })
                 .await?;
@@ -2444,7 +2452,7 @@ async fn unlock_v1(
     };
 
     let manifest = run_blocking(move || {
-        let mut archive = ZipArchive::new(Cursor::new(manifest_zip))?;
+        let mut archive = open_import_zip(Cursor::new(manifest_zip))?;
         parse_manifest(&mut archive, MAX_MANIFEST_SEGMENT_LEN)
     })
     .await?;
@@ -2487,7 +2495,7 @@ async fn import_v1(
                         Some(password) => decrypt_bytes_v1(&password, &raw)?,
                         None => raw,
                     };
-                    Ok(ZipArchive::new(Cursor::new(plain))?)
+                    open_import_zip(Cursor::new(plain))
                 }
             })
             .await?;
@@ -3602,6 +3610,41 @@ mod tests {
         assert!(!secret_has_value(Some(b"\"\"")));
         assert!(secret_has_value(Some(b"\"sk-1\"")));
         assert!(secret_has_value(Some(b"42")));
+    }
+
+    #[test]
+    fn import_zip_rejects_mismatched_local_filenames_in_every_entry() {
+        let mut writer = ZipWriter::new(Cursor::new(Vec::new()));
+        for name in [MANIFEST_ENTRY_NAME, "unreferenced-blob"] {
+            writer.start_file(name, zip_options()).unwrap();
+            writer.write_all(b"payload").unwrap();
+        }
+        let bytes = writer.finish().unwrap().into_inner();
+        let mut valid = open_import_zip(Cursor::new(&bytes)).expect("consistent ZIP");
+        assert_eq!(
+            read_zip_entry(&mut valid, MANIFEST_ENTRY_NAME, 7).unwrap(),
+            b"payload"
+        );
+
+        for index in 0..valid.len() {
+            let entry = valid.by_index(index).unwrap();
+            let name = entry.name().unwrap().into_owned();
+            // The filename follows the fixed 30-byte local file header.
+            let filename_offset = entry.header_start() as usize + 30;
+            let mut inconsistent = bytes.clone();
+            inconsistent[filename_offset] ^= 1;
+
+            // The default reader accepts the central-directory name and payload.
+            let mut unchecked = ZipArchive::new(Cursor::new(&inconsistent)).unwrap();
+            assert_eq!(
+                read_zip_entry(&mut unchecked, &name, 7).unwrap(),
+                b"payload"
+            );
+            let error = open_import_zip(Cursor::new(inconsistent))
+                .err()
+                .expect("every local filename must match its central-directory entry");
+            assert!(error.to_string().contains("filename mismatch"), "{error}");
+        }
     }
 
     // ---------- Legacy ZIP writer ----------

@@ -520,7 +520,11 @@ impl Manager {
             if self.cancelled(&payload.run_id).await? { return Err(Error::Cancelled); }
             self.request_gateway(slot,"/configure",Some(json!({"callback_url":common.callback_url,"object_store_url":common.object_store_url,
                 "app_id":payload.app_id,"run_id":payload.run_id,"executor_jwt":payload.executor_jwt,"deadline":deadline,
-                "buckets":common.buckets,"allowed_https_hosts":common.allowed_https_hosts,"object_store_tls_gateway":common.object_store_tls_gateway}))).await?;
+                "buckets":common.buckets,"allowed_https_hosts":common.allowed_https_hosts,"object_store_tls_gateway":common.object_store_tls_gateway,
+                "channel_nats_url": payload.channel.as_ref().and_then(|grant| match &grant.executor {
+                    flow_like_types_contracts::channel::ChannelExecutorGrant::Nats { .. } => common.channel_nats_url.as_ref(),
+                    _ => None,
+                })}))).await?;
             if self.cancelled(&payload.run_id).await? { return Err(Error::Cancelled); }
             Ok(())
         }).await.map_err(|_|Error::internal("Execution admission exceeded its startup budget"))??;

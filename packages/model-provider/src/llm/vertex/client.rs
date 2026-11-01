@@ -38,6 +38,7 @@ impl Target {
 #[derive(Clone)]
 pub struct VertexClient {
     inner: Arc<Inner>,
+    request_params: crate::request_params::RequestParams,
 }
 
 struct Inner {
@@ -119,6 +120,7 @@ impl VertexClient {
         media: MediaResolver,
     ) -> Self {
         Self {
+            request_params: crate::request_params::RequestParams::default(),
             inner: Arc::new(Inner {
                 http,
                 base_url,
@@ -127,6 +129,14 @@ impl VertexClient {
                 media,
             }),
         }
+    }
+
+    pub(crate) fn with_request_params(
+        mut self,
+        provider: &crate::provider::ModelProvider,
+    ) -> anyhow::Result<Self> {
+        self.request_params = crate::request_params::RequestParams::from_provider(provider)?;
+        Ok(self)
     }
 
     #[cfg(test)]
@@ -213,7 +223,13 @@ impl VertexClient {
         body: &GenerateContentRequest,
     ) -> Result<Result<reqwest::Response, Rejection>, CompletionError> {
         let headers = self.auth_headers().await?;
-        let payload = serde_json::to_vec(body)?;
+        let payload = if self.request_params.is_empty() {
+            serde_json::to_vec(body)?
+        } else {
+            let mut body = serde_json::to_value(body)?;
+            self.request_params.apply(&mut body);
+            serde_json::to_vec(&body)?
+        };
         let response = self
             .inner
             .http
@@ -429,6 +445,36 @@ mod tests {
             let (key, value) = line.split_once(':')?;
             key.eq_ignore_ascii_case(name).then(|| value.trim())
         })
+    }
+
+    #[tokio::test]
+    async fn native_overrides_survive_vertex_serialization_and_both_transports() {
+        for streaming in [false, true] {
+            let (endpoint, server) = serve(vec![answer("200 OK", "application/json", "{}")]).await;
+            let client = client(&endpoint, Arc::new(FakeNetwork::default()))
+                .with_request_params(&crate::provider::ModelProvider {
+                    provider_name: "custom:vertex".into(), model_id: None, version: None, api_surface: None,
+                    params: Some(HashMap::from([("request_params".into(), json!({
+                        "generationConfig": {"maxOutputTokens": 8192, "futureSetting": {"enabled": false}},
+                        "newApiField": [null, 7],
+                    }))])),
+                }).unwrap();
+            let model = model(&client, "gemini-2.5-flash");
+            let mut request = request(vec![Message::user("hi")]);
+            request.max_tokens = Some(128);
+            request.temperature = Some(0.3);
+            let _ = model.send(request, streaming).await.unwrap();
+            let requests = server.await.unwrap();
+            let body = &requests[0].1;
+            assert_eq!(body["generationConfig"]["maxOutputTokens"], 8192);
+            assert_eq!(body["generationConfig"]["temperature"], 0.3);
+            assert_eq!(
+                body["generationConfig"]["futureSetting"],
+                json!({"enabled": false})
+            );
+            assert_eq!(body["newApiField"], json!([null, 7]));
+            assert_eq!(requests[0].0.contains(":streamGenerateContent"), streaming);
+        }
     }
 
     #[test]

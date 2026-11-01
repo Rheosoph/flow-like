@@ -7,7 +7,7 @@ use axum::{
     extract::{Path, State},
 };
 use flow_like_types::anyhow;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, Statement};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -90,21 +90,72 @@ pub async fn cancel_run(
     {
         return Err(ApiError::FORBIDDEN);
     }
-    if run.mode != RunMode::Local
-        && crate::quota::request_cloud_cancellation(&state, &run.id).await?
+    Ok(Json(
+        cancel_authorized_run(&state, store.as_ref(), &run, &caller).await?,
+    ))
+}
+
+/// Anonymous hosted subjects are retained by admission, while the run's user
+/// foreign key stays empty. A session may cancel only work admitted for itself.
+async fn hosted_run_owner(
+    db: &impl ConnectionTrait,
+    app_id: &str,
+    run_id: &str,
+    subject: &str,
+) -> Result<bool, ApiError> {
+    Ok(db
+        .query_one_raw(Statement::from_sql_and_values(
+            db.get_database_backend(),
+            "SELECT id FROM \"QuotaOperation\" WHERE id=$1 AND \"appId\"=$2 AND \"actorId\"=$3 AND kind='workflow'",
+            vec![run_id.into(), app_id.into(), subject.into()],
+        ))
+        .await?
+        .is_some())
+}
+
+pub(crate) async fn cancel_hosted_run(
+    state: &AppState,
+    app_id: &str,
+    event_id: &str,
+    run_id: &str,
+    subject: &str,
+) -> Result<CancelRunResponse, ApiError> {
+    let store = super::progress::get_state_store(state).await?;
+    let run = store
+        .get_run_for_app(run_id, app_id)
+        .await
+        .map_err(|error| ApiError::internal_error(anyhow!("Cannot load execution: {error}")))?
+        .ok_or(ApiError::NOT_FOUND)?;
+    if run.event_id.as_deref() != Some(event_id)
+        || run.mode == RunMode::Local
+        || !hosted_run_owner(&state.db, app_id, run_id, subject).await?
     {
-        return Ok(Json(CancelRunResponse {
-            run_id: run.id,
+        return Err(ApiError::FORBIDDEN);
+    }
+    cancel_authorized_run(state, store.as_ref(), &run, subject).await
+}
+
+async fn cancel_authorized_run(
+    state: &AppState,
+    store: &dyn ExecutionStateStore,
+    run: &ExecutionRunRecord,
+    actor: &str,
+) -> Result<CancelRunResponse, ApiError> {
+    if run.mode != RunMode::Local
+        && crate::quota::request_cloud_cancellation(state, &run.id).await?
+    {
+        return Ok(CancelRunResponse {
+            run_id: run.id.clone(),
             status: "cancellation_requested".into(),
             cancelled: false,
-        }));
+        });
     }
-    let run = terminate_and_persist(&state, store.as_ref(), &run, &caller).await?;
-    Ok(Json(CancelRunResponse {
+    let run = terminate_and_persist(state, store, run, actor).await?;
+    Ok(CancelRunResponse {
         run_id: run.id,
         cancelled: run.status == RunStatus::Cancelled,
         status: format!("{:?}", run.status),
-    }))
+    })
 }
 
 /// Channel responder capabilities already authorize cancellation for exactly
@@ -181,7 +232,11 @@ async fn terminate_and_persist(
             &crate::audit::ExecutionAuditContext::from(state),
             &sql,
             actor,
-            AuditActorType::User,
+            if crate::execution::subject::account_user_id(actor).is_some() {
+                AuditActorType::User
+            } else {
+                AuditActorType::System
+            },
         )
         .await?;
     }
@@ -277,6 +332,61 @@ async fn confirm_termination(run_id: &str) -> Result<(), ApiError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[flow_like_types::tokio::test]
+    async fn hosted_stop_is_bound_to_the_admitted_run_app_and_visitor() {
+        let db = sea_orm::Database::connect("sqlite::memory:").await.unwrap();
+        db.execute_raw(Statement::from_string(
+            db.get_database_backend(),
+            "CREATE TABLE \"QuotaOperation\" (id TEXT PRIMARY KEY, \"appId\" TEXT, \"actorId\" TEXT, kind TEXT)",
+        ))
+        .await
+        .unwrap();
+        let anonymous = "frontend:event-1:anonymous-session-1";
+        for (id, app, actor, kind) in [
+            ("anonymous-run", "app-1", anonymous, "workflow"),
+            ("signed-in-run", "app-1", "visitor-1", "workflow"),
+            ("another-app-run", "app-2", anonymous, "workflow"),
+            ("model-run", "app-1", anonymous, "model"),
+        ] {
+            db.execute_raw(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                "INSERT INTO \"QuotaOperation\" (id, \"appId\", \"actorId\", kind) VALUES ($1, $2, $3, $4)",
+                vec![id.into(), app.into(), actor.into(), kind.into()],
+            ))
+            .await
+            .unwrap();
+        }
+        for (run, app, caller, allowed) in [
+            ("anonymous-run", "app-1", anonymous, true),
+            ("signed-in-run", "app-1", "visitor-1", true),
+            (
+                "anonymous-run",
+                "app-1",
+                "frontend:event-1:anonymous-session-2",
+                false,
+            ),
+            (
+                "anonymous-run",
+                "app-1",
+                "frontend:event-2:anonymous-session-1",
+                false,
+            ),
+            ("anonymous-run", "app-1", "visitor-1", false),
+            ("signed-in-run", "app-1", "visitor-2", false),
+            ("signed-in-run", "app-1", anonymous, false),
+            ("another-app-run", "app-1", anonymous, false),
+            ("anonymous-run", "app-2", anonymous, false),
+            ("missing-run", "app-1", anonymous, false),
+            ("model-run", "app-1", anonymous, false),
+        ] {
+            assert_eq!(
+                hosted_run_owner(&db, app, run, caller).await.unwrap(),
+                allowed,
+                "run={run}, app={app}, caller={caller}",
+            );
+        }
+    }
 
     #[test]
     fn only_run_creator_or_app_admin_can_cancel() {

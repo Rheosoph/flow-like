@@ -5,13 +5,14 @@ pub(crate) mod commands;
 pub(crate) mod data_studio;
 mod host;
 mod object_index;
+pub(crate) mod recovery;
 pub(crate) mod run_storage;
 mod scope;
 mod stores;
 #[cfg(test)]
 mod tests;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use flow_like::{flow::execution::extract_sub_from_jwt, hub::hub_origin};
 use flow_like_offline_writes::{
     Outbox,
@@ -42,7 +43,17 @@ pub(crate) struct OfflineWrites {
     root: PathBuf,
     installation: OnceLock<String>,
     scopes: Mutex<HashMap<ScopeKey, Arc<AppOfflineScope>>>,
+    recovering: std::sync::atomic::AtomicBool,
+    admission: Mutex<()>,
     services: Option<Services>,
+}
+
+struct ScopeMutation<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for ScopeMutation<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::Release);
+    }
 }
 
 impl OfflineWrites {
@@ -55,6 +66,8 @@ impl OfflineWrites {
             root,
             installation: OnceLock::new(),
             scopes: Mutex::new(HashMap::new()),
+            recovering: std::sync::atomic::AtomicBool::new(false),
+            admission: Mutex::new(()),
             services: None,
         }
     }
@@ -86,7 +99,29 @@ impl OfflineWrites {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    fn begin_mutation(&self) -> Result<ScopeMutation<'_>> {
+        let _admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        ensure!(
+            self.recovering
+                .compare_exchange(
+                    false,
+                    true,
+                    std::sync::atomic::Ordering::AcqRel,
+                    std::sync::atomic::Ordering::Acquire
+                )
+                .is_ok(),
+            "Offline storage is changing; retry shortly"
+        );
+        Ok(ScopeMutation(&self.recovering))
+    }
+
     pub(crate) fn existing(&self, key: &ScopeKey) -> Option<Arc<AppOfflineScope>> {
+        if self.recovering.load(std::sync::atomic::Ordering::Acquire) {
+            return None;
+        }
         self.scopes().get(key).cloned()
     }
 
@@ -97,12 +132,29 @@ impl OfflineWrites {
         dirs: CacheDirs,
         key: ScopeKey,
     ) -> Result<Arc<AppOfflineScope>> {
+        let _admission = self
+            .admission
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        ensure!(
+            !self.recovering.load(std::sync::atomic::Ordering::Acquire),
+            "Offline storage is being assigned to a profile; retry shortly"
+        );
         if let Some(scope) = self.existing(&key) {
             return Ok(scope);
         }
         let installation = self.installation_id()?;
-        let id = scope_id(&key.hub, &key.subject, &key.app_id, &installation);
-        let descriptor = scope::read_descriptor(&self.root, &id)?
+        // Explicit recovery keeps an older engine in place and assigns its descriptor.
+        let adopted = self
+            .descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.key() == key);
+        let id = adopted
+            .as_ref()
+            .map(|descriptor| descriptor.scope.clone())
+            .unwrap_or_else(|| owned_scope_id(&key, &installation));
+        let descriptor = adopted
+            .or(scope::read_descriptor(&self.root, &id)?)
             .filter(|descriptor| descriptor.key() == key)
             .unwrap_or_else(|| ScopeDescriptor::new(&id, &key));
         let services = self
@@ -149,6 +201,7 @@ impl OfflineWrites {
         current: Option<&ScopeKey>,
         all_accounts: bool,
     ) -> Result<()> {
+        let _mutation = self.begin_mutation()?;
         let mut targets = BTreeSet::new();
         if all_accounts {
             targets.extend(
@@ -165,12 +218,13 @@ impl OfflineWrites {
                     .map(|scope| scope.id().to_owned()),
             );
         } else if let Some(key) = current.filter(|key| key.app_id == app_id) {
-            targets.insert(scope_id(
-                &key.hub,
-                &key.subject,
-                app_id,
-                &self.installation_id()?,
-            ));
+            targets.extend(
+                self.descriptors()
+                    .into_iter()
+                    .filter(|descriptor| descriptor.key() == *key)
+                    .map(|descriptor| descriptor.scope),
+            );
+            targets.insert(owned_scope_id(key, &self.installation_id()?));
         }
         let closing: Vec<Arc<AppOfflineScope>> = {
             let mut scopes = self.scopes();
@@ -276,6 +330,48 @@ pub(crate) async fn current_hub(app_handle: &AppHandle) -> Result<String> {
     let profile = crate::state::TauriSettingsState::current_profile(app_handle).await?;
     hub_key(&profile.hub_profile.hub, profile.hub_profile.secure)
         .context("No hub is configured for this profile")
+}
+
+/// Bind a new cache to the selected profile's verified native identity.
+pub(crate) async fn scope_owner(
+    app_handle: &AppHandle,
+    hub: &str,
+    subject: &str,
+) -> Result<(Option<String>, Option<String>)> {
+    let profile = crate::state::TauriSettingsState::current_profile(app_handle)
+        .await?
+        .hub_profile;
+    scope_owner_for_profile(app_handle, &profile.id, hub, subject).await
+}
+
+pub(crate) async fn scope_owner_for_profile(
+    app_handle: &AppHandle,
+    profile_id: &str,
+    hub: &str,
+    subject: &str,
+) -> Result<(Option<String>, Option<String>)> {
+    let settings = crate::state::TauriSettingsState::construct(app_handle).await?;
+    let profile = settings
+        .lock()
+        .await
+        .profiles
+        .get(profile_id)
+        .cloned()
+        .context("The offline storage profile no longer exists")?
+        .hub_profile;
+    ensure!(
+        hub_key(&profile.hub, profile.secure).as_deref() == Some(hub),
+        "The profile hub changed while opening offline storage"
+    );
+    let binding = crate::native_auth::SessionBinding::capture(&profile.id, hub)
+        .await
+        .map_err(|error| anyhow::anyhow!(error))?
+        .context("Sign in to this profile to open offline storage")?;
+    ensure!(
+        binding.subject == subject,
+        "Offline storage belongs to another profile account"
+    );
+    Ok((Some(binding.profile_id), Some(binding.issuer)))
 }
 
 /// The subject of a UI session token; None when signed out.
@@ -393,6 +489,21 @@ pub(crate) fn scope_id(hub: &str, subject: &str, app_id: &str, installation: &st
     };
     let bytes = serde_json::to_vec(&identity).expect("a scope identity always serializes");
     blake3::hash(&bytes).to_hex().to_string()
+}
+
+pub(crate) fn owned_scope_id(key: &ScopeKey, installation: &str) -> String {
+    match key.profile_id.as_deref() {
+        Some(profile) => blake3::hash(
+            &serde_json::to_vec(&serde_json::json!({
+                "app":key.app_id,"hub":key.hub,"installation":installation,"subject":key.subject,
+                "profile":profile,"issuer":key.issuer,"v":2
+            }))
+            .expect("a scope identity always serializes"),
+        )
+        .to_hex()
+        .to_string(),
+        None => scope_id(&key.hub, &key.subject, &key.app_id, installation),
+    }
 }
 
 pub(crate) fn valid_scope(scope: &str) -> bool {

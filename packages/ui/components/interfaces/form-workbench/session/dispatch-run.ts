@@ -52,7 +52,7 @@ export type RuntimeEngine = Pick<
 export type RespondInteraction = (
 	interaction: IInteractionRequest,
 	value: unknown,
-) => Promise<void>;
+) => Promise<void> | Promise<{ value: unknown }>;
 
 /** Calls `callback` about one frame from now; returns its cancel. */
 export type ScheduleFrame = (callback: () => void) => () => void;
@@ -400,8 +400,10 @@ export async function answerInteraction(
 		throw new Error(
 			`Run ${handle.runId} has no open question ${interactionId} to answer.`,
 		);
-	await respond(interaction, value);
+	const accepted = await respond(interaction, value);
 	if (handle.settled) return;
-	handle.accumulator.push([answeredEvent(interactionId, value)]);
+	handle.accumulator.push([
+		answeredEvent(interactionId, accepted ? accepted.value : value),
+	]);
 	reportOutput(report, handle);
 }

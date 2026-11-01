@@ -48,6 +48,7 @@ export interface FlowScriptDraft {
 /** What the last apply reported. */
 export interface FlowScriptApplyReport {
 	diagnostics: string[];
+	warnings?: string[];
 	structuredDiagnostics?: IFlowScriptStructuredDiagnostic[];
 	/** Coordinates are valid only while this submitted draft is still in the editor. */
 	draft?: FlowScriptDraft;
@@ -71,20 +72,23 @@ export function flowScriptApplyReport(
 	{
 		commandCount,
 		diagnostics,
+		warnings = [],
 		structuredDiagnostics,
 	}: {
 		commandCount: number;
 		diagnostics: string[];
+		warnings?: string[];
 		structuredDiagnostics?: IFlowScriptStructuredDiagnostic[];
 	},
 	draft: FlowScriptDraft,
 ): FlowScriptApplyReport | undefined {
-	if (diagnostics.length === 0) return undefined;
+	if (diagnostics.length === 0 && warnings.length === 0) return undefined;
 	return {
 		diagnostics,
+		warnings,
 		structuredDiagnostics,
 		draft,
-		rejected: commandCount === 0 ? draft : undefined,
+		rejected: commandCount === 0 && diagnostics.length > 0 ? draft : undefined,
 	};
 }
 

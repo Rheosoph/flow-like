@@ -20,6 +20,10 @@ import {
 	IValueType,
 	IVariableType,
 } from "../../../lib/schema/flow/pin";
+import {
+	type FlowScriptDeclaration,
+	analyzeFlowScriptDocument,
+} from "./flowscript-language-features";
 import type {
 	CancellationTokenLike,
 	FlowScriptWorkerRequests,
@@ -1460,7 +1464,7 @@ export interface DocumentSymbols {
 function collectEventHeaderNames(text: string): Set<string> {
 	const names = new Set<string>();
 	const eventHeadRe =
-		/(?:^|\n)[\t ]*([A-Za-z_$][\w$]*)(?:[\t ]+([A-Za-z_$][\w$]*))?[\t ]*\([^)]*\)[\t ]*\{/g;
+		/(?:^|[\n;{}])[\t ]*([A-Za-z_$][\w$]*)(?:[\t ]+([A-Za-z_$][\w$]*))?[\t ]*\([^)]*\)[\t ]*\{/g;
 	for (let m = eventHeadRe.exec(text); m; m = eventHeadRe.exec(text)) {
 		if (!KEYWORD_SET.has(m[1])) names.add(m[2] ?? m[1]);
 	}
@@ -1724,6 +1728,8 @@ export interface ValueType {
 	schemaTitle?: string;
 	dataType?: IVariableType;
 	container?: IValueType;
+	/** Numeric literals become pin defaults; typed values require an exact numeric type. */
+	numericLiteral?: boolean;
 	/** Set when the value is a bare call to a multi-output node (a result bundle, not a value). */
 	multiOutput?: { node: string; outputs: string[] };
 }
@@ -1920,8 +1926,13 @@ function memberValueType(member: StructMember): ValueType {
 	return parseTypeAnnotation(member.typeString.replace(/\?$/, ""));
 }
 
+const NUMERIC_LITERAL_RE = /^-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+
 /** Maps document variables to a resolved type from annotations or literal initializers. */
-function collectVariableTypes(masked: string): Map<string, ValueType> {
+function collectVariableTypes(
+	masked: string,
+	vars: VariableExprs,
+): Map<string, ValueType> {
 	const map = new Map<string, ValueType>();
 	const annotated =
 		/(?:^|[\n;{}])\s*(?:const|let)\s+([A-Za-z_$][\w$]*)\s*:\s*([^=\n]+?)\s*=/g;
@@ -1950,7 +1961,9 @@ function collectVariableTypes(masked: string): Map<string, ValueType> {
 				isArray: false,
 				dataType: IVariableType.Struct,
 			});
-		else if (m[3])
+		else if (m[3]) {
+			// A numeric prefix does not type the whole initializer (`1 / 2`, `1 + x`).
+			if (!NUMERIC_LITERAL_RE.test(vars.exprs.get(m[1]) ?? "")) continue;
 			map.set(m[1], {
 				group: "number",
 				isArray: false,
@@ -1958,12 +1971,41 @@ function collectVariableTypes(masked: string): Map<string, ValueType> {
 					? IVariableType.Float
 					: IVariableType.Integer,
 			});
-		else
+		} else
 			map.set(m[1], {
 				group: "bool",
 				isArray: false,
 				dataType: IVariableType.Boolean,
 			});
+	}
+	// Top-level declarations and typed local `let`s become board variables. Local
+	// literal aliases instead become pin defaults, including aliases with a const annotation.
+	const literalAliases = new Set<string>();
+	const declarations =
+		/(?:^|[\n;{}])\s*(const|let)\s+([A-Za-z_$][\w$]*)\s*(:[^=\n]+)?\s*=/g;
+	for (let m = declarations.exec(masked); m; m = declarations.exec(masked)) {
+		const nameStart = m.index + m[0].indexOf(m[1]);
+		if (inStatementBlock(masked, nameStart) && (m[1] === "const" || !m[3]))
+			literalAliases.add(m[2]);
+	}
+	const isNumericLiteral = (expr: string, depth = 0): boolean => {
+		if (depth > 8) return false;
+		const value = expr.trim();
+		if (NUMERIC_LITERAL_RE.test(value)) return true;
+		if (value[0] === "(" && matchBracket(value, 0) === value.length - 1)
+			return isNumericLiteral(value.slice(1, -1), depth + 1);
+		return (
+			literalAliases.has(value) &&
+			isNumericLiteral(vars.exprs.get(value) ?? "", depth + 1)
+		);
+	};
+	for (const [name, type] of map) {
+		if (
+			type.group === "number" &&
+			literalAliases.has(name) &&
+			isNumericLiteral(vars.exprs.get(name) ?? "")
+		)
+			type.numericLiteral = true;
 	}
 	return map;
 }
@@ -2033,12 +2075,13 @@ export interface TypeEnv {
 
 export function buildTypeEnv(masked: string, index: FlowScriptIndex): TypeEnv {
 	const symbols = collectDocumentSymbols(masked);
+	const vars = collectVariableExprs(masked);
 	return {
 		index,
 		scope: buildUseScope(symbols.uses, index),
 		symbols,
-		docVars: collectVariableTypes(masked),
-		vars: collectVariableExprs(masked),
+		docVars: collectVariableTypes(masked, vars),
+		vars,
 	};
 }
 
@@ -2191,7 +2234,8 @@ export function receiverIsBound(resolution: CallResolution): boolean {
 
 /**
  * Narrows ambiguous candidates by argument shape (every named key must be an input of the
- * node, the receiver excluded in method form), mirroring reconcile's arg-shape filter.
+ * node, the receiver excluded in method form). Flat-name/import collisions are rejected
+ * before this filter, matching reconcile's bare-call resolution.
  */
 function narrowByArgShape(
 	resolution: CallResolution,
@@ -2370,7 +2414,9 @@ function evaluateExprUncached(
 	if (e[0] === "!") return scalar("bool", IVariableType.Boolean);
 	if (e[0] === "-" && !/^-\s*\d/.test(e)) {
 		const operand = evaluateExpr(e.slice(1), env, depth + 1);
-		return operand.value?.group === "number" ? operand : scalar("number");
+		return operand.value?.group === "number"
+			? { ...operand, value: { ...operand.value, numericLiteral: false } }
+			: scalar("number");
 	}
 	if (e[0] === "[")
 		return {
@@ -2398,6 +2444,7 @@ function evaluateExprUncached(
 			"number",
 			/[.eE]/.test(num[0]) ? IVariableType.Float : IVariableType.Integer,
 		);
+		if (current.value) current.value.numericLiteral = true;
 		pos = num[0].length;
 	} else {
 		const head = HEAD_RE.exec(e);
@@ -2559,6 +2606,8 @@ export function resolveCallHead(
 			}
 		}
 	})();
+	if (head.kind === "bare" && env.index.byName.has(head.member))
+		return resolved;
 	return narrowByArgShape(resolved, argNames);
 }
 
@@ -3864,6 +3913,19 @@ function typeCompatibility(
 		return `expected ${expected.group}, got ${actual.group}`;
 	}
 	if (
+		expected.group === "number" &&
+		(expected.container ?? IValueType.Normal) === IValueType.Normal &&
+		(actual.container ?? IValueType.Normal) === IValueType.Normal &&
+		!expected.isArray &&
+		!actual.isArray &&
+		expected.dataType &&
+		actual.dataType &&
+		expected.dataType !== actual.dataType &&
+		!actual.numericLiteral
+	) {
+		return `expected ${variableTypeBase(expected.dataType)}, got ${variableTypeBase(actual.dataType)}`;
+	}
+	if (
 		expected.group === "struct" &&
 		expected.schemaTitle &&
 		actual.schemaTitle &&
@@ -3920,6 +3982,39 @@ export interface FlowScriptRawDiagnostic {
 	endColumn: number;
 }
 
+const NODE_SCOPED_DIRECTORIES = new Map([
+	["path_from_cache_dir", "files::cacheDir"],
+	["path_from_storage_dir", "files::storageDir"],
+	["path_from_user_dir", "files::userDir"],
+]);
+
+function callableBodySpans(declarations: FlowScriptDeclaration[]): Span[] {
+	const spans: Span[] = [];
+	for (const declaration of declarations) {
+		if (
+			declaration.bodySpan &&
+			(declaration.kind === "function" ||
+				declaration.kind === "event" ||
+				declaration.kind === "handler")
+		) {
+			spans.push(declaration.bodySpan);
+		}
+		spans.push(...callableBodySpans(declaration.children));
+	}
+	return spans;
+}
+
+function isTrueLiteral(value: string): boolean {
+	let expression = value;
+	while (
+		expression.startsWith("(") &&
+		matchBracket(expression, 0) === expression.length - 1
+	) {
+		expression = expression.slice(1, -1).trim();
+	}
+	return expression === "true";
+}
+
 /**
  * Conservative client-side structural linter: unknown function calls (flat, qualified or method
  * spelling), unknown/duplicate argument keys, positional overflow, unknown `use` namespaces, and
@@ -3946,7 +4041,9 @@ export function computeFlowScriptRawDiagnostics(
 	const moduleRoots = boardModuleRoots(board);
 	const boardFunctions = boardFunctionNames(board);
 	const raw: RawMarker[] = [];
-	const skipSpans: Span[] = [...templateExprs];
+	const skipSpans: Span[] = [];
+	let directoryScopes: Span[] | undefined;
+	const scopedDirectories = new Map<Span, Set<string>>();
 
 	// `use` lines: namespaces must exist (only checked once the catalog carries namespaces).
 	for (const use of env.symbols.uses) {
@@ -4004,6 +4101,15 @@ export function computeFlowScriptRawDiagnostics(
 		);
 		if (resolution.userFunction) continue;
 		const info = resolution.info;
+		const inTemplate = inSpan(nameStart, templateExprs);
+		if (
+			inTemplate &&
+			(!info ||
+				!NODE_SCOPED_DIRECTORIES.has(info.nodeType) ||
+				resolution.candidates.length > 1)
+		) {
+			continue;
+		}
 		if (!info) {
 			if (head.kind === "bare" && declared.has(head.member)) continue;
 			// Cross-file calls on a modular board: `checkout::payments::helper()` is a module path,
@@ -4042,7 +4148,9 @@ export function computeFlowScriptRawDiagnostics(
 					severity: "warning",
 				});
 			}
-			continue; // Method dispatch on an unknown receiver type: cannot validate arguments.
+			// Keep checking the flat candidate for callers that already target that node on the
+			// board. Imported-only and method ambiguities have no known argument contract.
+			if (head.kind !== "bare" || !index.byName.has(head.member)) continue;
 		}
 
 		if (!args) continue;
@@ -4051,6 +4159,41 @@ export function computeFlowScriptRawDiagnostics(
 			(arg) => !(receiverBound && arg === info.receiver),
 		);
 		const label = receiverBound ? `.${head.member}()` : head.display;
+		const directory = NODE_SCOPED_DIRECTORIES.get(info.nodeType);
+		if (directory) {
+			const scopeIndex = bindable.findIndex(
+				(arg) => arg.rawName === "node_scope",
+			);
+			const scopeArg =
+				args.positional[scopeIndex] ??
+				args.named?.find(
+					(arg) =>
+						arg.name === bindable[scopeIndex]?.name ||
+						arg.name === "node_scope",
+				);
+			if (scopeArg && isTrueLiteral(scopeArg.value)) {
+				directoryScopes ??= callableBodySpans(
+					analyzeFlowScriptDocument(text, index).declarations,
+				);
+				// Nested event handlers own their directory calls; branches and visual groups do not.
+				const scope = directoryScopes.findLast(
+					(span) => nameStart > span.start && nameStart < span.end,
+				);
+				if (scope) {
+					const seen = scopedDirectories.get(scope) ?? new Set<string>();
+					if (seen.has(info.nodeType)) {
+						raw.push({
+							message: `Repeated \`${directory}\` calls with nodeScope: true use different directories because each path is unique to its node. Reuse one shared path variable, or set nodeScope: false.`,
+							...range,
+							severity: "warning",
+						});
+					}
+					seen.add(info.nodeType);
+					scopedDirectories.set(scope, seen);
+				}
+			}
+		}
+		if (inTemplate) continue;
 
 		if (args.positional.length > bindable.length) {
 			const overflow = args.positional[bindable.length];

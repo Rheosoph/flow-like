@@ -91,6 +91,13 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(State::new(Arc::new(catalog), Arc::new(cdn_bucket), None).await);
 
+    let requested = flow_like_api::channel::ChannelBackend::parse(
+        std::env::var("CHANNEL_TRANSPORT").ok().as_deref(),
+    )?;
+    if state.channels.backend() != &requested {
+        return Err("Configured channel transport failed to initialize".into());
+    }
+
     if !flow_like_api::execution::is_jwt_configured() {
         return Err("backend JWT signing keys were not initialized".into());
     }

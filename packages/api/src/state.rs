@@ -576,6 +576,8 @@ pub struct State {
     jwks: flow_like_types::tokio::sync::RwLock<JwkSet>,
     jwks_refresh: flow_like_types::tokio::sync::Mutex<JwksRefreshState>,
     pub client: Client<HttpConnector, Body>,
+    pub(crate) oidc_jwks_client: reqwest::Client,
+    pub(crate) oidc_user_info_client: reqwest::Client,
     pub stripe_client: Option<stripe::Client>,
     pub payments_gateway:
         flow_like_types::tokio::sync::OnceCell<Arc<crate::stripe_connect::HttpStripeGateway>>,
@@ -1329,6 +1331,15 @@ impl State {
             .instrument(init_span!("api.init.config"))
             .await;
 
+        let oidc_clients = crate::oidc_http::clients_from_env(
+            platform_config
+                .authentication
+                .as_ref()
+                .and_then(|authentication| authentication.openid.as_ref())
+                .map(|openid| openid.jwks_url.as_str()),
+        )
+        .unwrap_or_else(|error| panic!("Invalid OIDC HTTPS configuration: {error}"));
+
         let (
             service_secrets,
             audit_kid,
@@ -1475,6 +1486,8 @@ impl State {
             db,
             db_dialect,
             client,
+            oidc_jwks_client: oidc_clients.jwks,
+            oidc_user_info_client: oidc_clients.user_info,
             jwks: flow_like_types::tokio::sync::RwLock::new(jwks),
             jwks_refresh: flow_like_types::tokio::sync::Mutex::new(JwksRefreshState::default()),
             stripe_client,
@@ -1618,7 +1631,7 @@ impl State {
         refresh.last_attempt = Some(Instant::now());
 
         let settings = self.openid_validation_settings()?;
-        let refreshed = fetch_jwks(&settings.jwks_url).await?;
+        let refreshed = fetch_jwks(&self.oidc_jwks_client, &settings.jwks_url).await?;
         // Cache every successfully validated set even when this particular `kid` is unknown.
         // Otherwise a bogus first request after startup discards the valid key set and the
         // refresh throttle blocks legitimate tokens until the next interval.
@@ -2265,27 +2278,11 @@ fn entra_tenant_from_issuer(issuer: &str) -> Option<uuid::Uuid> {
     skip_all,
     fields(rpc.service = "openid", rpc.method = "GetJwks")
 )]
-async fn fetch_jwks(raw_url: &str) -> Result<JwkSet> {
+async fn fetch_jwks(client: &reqwest::Client, raw_url: &str) -> Result<JwkSet> {
     let url = validate_jwks_url(raw_url)?;
-    let client = reqwest::Client::builder()
-        .https_only(true)
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(JWKS_REQUEST_TIMEOUT);
-    // The isolated benchmark issuer uses its own CA without changing OS trust.
-    // Native TLS on macOS does not load SSL_CERT_FILE automatically.
-    #[cfg(feature = "benchmark-stack")]
-    let client = if matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")) {
-        if let Some(path) = std::env::var_os("SSL_CERT_FILE") {
-            client.add_root_certificate(reqwest::Certificate::from_pem(&std::fs::read(path)?)?)
-        } else {
-            client
-        }
-    } else {
-        client
-    };
-    let client = client.build()?;
     let mut response = client
         .get(url)
+        .timeout(JWKS_REQUEST_TIMEOUT)
         .header(reqwest::header::ACCEPT, "application/json")
         .send()
         .await?;

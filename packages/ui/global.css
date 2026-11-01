@@ -409,6 +409,21 @@
 	}
 }
 
+/* Reply and add-reaction controls appear on intent; saved reactions stay visible. */
+@media (hover: hover) and (pointer: fine) {
+	[data-fl-chat-message-row] [data-fl-chat-hover-action] {
+		opacity: 0;
+		pointer-events: none;
+	}
+
+	[data-fl-chat-message-row]:hover [data-fl-chat-hover-action],
+	[data-fl-chat-message-row]:focus-within [data-fl-chat-hover-action],
+	[data-fl-chat-message-row]:has([data-state="open"]) [data-fl-chat-hover-action] {
+		opacity: 1;
+		pointer-events: auto;
+	}
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.fl-chat-chrome {
 		transition: none;

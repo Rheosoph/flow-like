@@ -326,6 +326,7 @@ struct EvaluatedFlowScriptSource {
     review_notes: Vec<FlowScriptDiagnostic>,
     commands: Vec<BoardCommand>,
     corrections: Vec<String>,
+    warnings: Vec<String>,
 }
 
 impl EvaluatedFlowScriptSource {
@@ -4568,6 +4569,7 @@ impl FlowIrDraftStore {
                     review_notes: Vec::new(),
                     commands: Vec::new(),
                     corrections: Vec::new(),
+                    warnings: Vec::new(),
                 },
                 evaluation_catalog_fingerprint: String::new(),
                 best_candidate: entry.best_candidate,
@@ -4833,6 +4835,7 @@ fn evaluate_flowscript_source(
         Err(error) => ReconcileResult {
             commands: Vec::new(),
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: vec![format!(
                 "FlowScript parse error at line {}, col {}: {}",
                 error.line, error.col, error.message
@@ -4866,6 +4869,7 @@ fn evaluate_flowscript_source(
         review_notes,
         commands: reconcile.commands,
         corrections: reconcile.corrections,
+        warnings: reconcile.warnings,
     }
 }
 
@@ -5974,6 +5978,7 @@ fn stored_flowscript_draft_size(draft: &StoredFlowScriptDraft) -> usize {
         .saturating_add(encoded_json_size(&draft.evaluation.diagnostics))
         .saturating_add(encoded_json_size(&draft.evaluation.review_notes))
         .saturating_add(encoded_json_size(&draft.evaluation.corrections))
+        .saturating_add(encoded_json_size(&draft.evaluation.warnings))
         .saturating_add(encoded_board_commands_size(&draft.evaluation.commands))
         .saturating_add(draft.checked.as_ref().map_or(0, |checked| {
             checked
@@ -10231,6 +10236,9 @@ pub struct FlowScriptDraftResponse {
     /// model-authored, so callers should apply these exact rewrites on their next patch.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub corrections: Vec<String>,
+    /// Non-blocking source lint findings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub derived_command_count: Option<usize>,
     pub queued_count: usize,
@@ -10257,6 +10265,7 @@ impl FlowScriptDraftResponse {
             diagnostics: Vec::new(),
             review_notes: Vec::new(),
             corrections: Vec::new(),
+            warnings: Vec::new(),
             derived_command_count: None,
             queued_count: 0,
             commands: Vec::new(),
@@ -10287,6 +10296,7 @@ impl FlowScriptDraftResponse {
             diagnostics: draft.evaluation.diagnostics.clone(),
             review_notes: draft.evaluation.review_notes.clone(),
             corrections: draft.evaluation.corrections.clone(),
+            warnings: draft.evaluation.warnings.clone(),
             derived_command_count: Some(draft.evaluation.commands.len()),
             queued_count: 0,
             commands: Vec::new(),
@@ -10366,6 +10376,7 @@ impl FlowScriptDraftResponse {
             let result = ReconcileResult {
                 commands: self.commands.clone(),
                 corrections: self.corrections.clone(),
+                warnings: self.warnings.clone(),
                 diagnostics: Vec::new(),
             };
             let legacy = render_committed_flowscript_result(
@@ -10733,6 +10744,7 @@ impl FlowIrCommitResult {
             let result = ReconcileResult {
                 commands: self.commands.clone(),
                 corrections: Vec::new(),
+                warnings: Vec::new(),
                 diagnostics: Vec::new(),
             };
             let legacy = render_committed_flowscript_result(

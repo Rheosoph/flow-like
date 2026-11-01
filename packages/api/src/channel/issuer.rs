@@ -26,6 +26,8 @@ pub struct ChannelIssuer {
     azure: Option<super::azure::AzureChannelRuntime>,
     #[cfg(feature = "channel-gcp")]
     gcp: Option<super::gcp::GcpChannelRuntime>,
+    #[cfg(feature = "channel-nats")]
+    nats: Option<super::nats::NatsChannelRuntime>,
 }
 
 /// One side of a cloud grant: the descriptor plus when its credential stops working.
@@ -52,6 +54,8 @@ impl ChannelIssuer {
             azure: None,
             #[cfg(feature = "channel-gcp")]
             gcp: None,
+            #[cfg(feature = "channel-nats")]
+            nats: None,
         }
     }
 
@@ -68,6 +72,19 @@ impl ChannelIssuer {
         let backend = ChannelBackend::from_env();
         match backend {
             ChannelBackend::Http => {}
+            #[cfg(feature = "channel-nats")]
+            ChannelBackend::Nats => {
+                match super::nats::NatsChannelRuntime::from_env(secrets).await {
+                    Ok(runtime) => {
+                        issuer.forwarder = Some(runtime.forwarder());
+                        issuer.nats = Some(runtime);
+                        issuer.backend = backend;
+                    }
+                    Err(error) => {
+                        tracing::error!(%error, "nats channel transport unavailable; using http")
+                    }
+                }
+            }
             #[cfg(feature = "channel-aws")]
             ChannelBackend::AwsMqtt => {
                 match super::aws::AwsChannelRuntime::from_env(aws_config).await {
@@ -122,6 +139,53 @@ impl ChannelIssuer {
 
     pub fn forwarder(&self) -> Option<&Arc<dyn ChannelForwarder>> {
         self.forwarder.as_ref()
+    }
+
+    /// Refresh only the client's transport. Reuse the responder token to preserve its deadline.
+    pub async fn refresh_client_handle(
+        &self,
+        claims: &crate::execution::ChannelClaims,
+        responder_token: &str,
+    ) -> Result<ChannelHandle> {
+        let remaining = claims.exp - now_unix();
+        if remaining <= 0 {
+            return Err(anyhow!("channel has expired"));
+        }
+        let http = ChannelClientDescriptor::Http {
+            push_url: push_url(&self.api_base_url, &claims.channel_id),
+            token: responder_token.to_owned(),
+        };
+        let (transport, fallback, expires_at) = if claims.transport == "http" {
+            (http, None, claims.exp)
+        } else {
+            if claims.transport != self.transport() {
+                return Err(anyhow!("channel transport no longer matches this API"));
+            }
+            let minted = match &self.backend {
+                #[cfg(feature = "channel-nats")]
+                ChannelBackend::Nats => self
+                    .nats
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("nats channel transport is not configured"))?
+                    .client_until(&claims.channel_id, claims.exp)?,
+                _ => self
+                    .mint_client(&claims.channel_id, &claims.sub, remaining)
+                    .await?
+                    .ok_or_else(|| anyhow!("channel transport is not configured"))?,
+            };
+            (
+                minted.descriptor,
+                Some(http),
+                minted.expires_at.min(claims.exp),
+            )
+        };
+        Ok(ChannelHandle {
+            channel_id: claims.channel_id.clone(),
+            request_id: None,
+            expires_at,
+            transport,
+            fallback,
+        })
     }
 
     fn ttl(ttl_secs: i64) -> i64 {
@@ -224,6 +288,13 @@ impl ChannelIssuer {
     ) -> Result<Option<MintedDescriptor>> {
         match &self.backend {
             ChannelBackend::Http => Ok(None),
+            #[cfg(feature = "channel-nats")]
+            ChannelBackend::Nats => self
+                .nats
+                .as_ref()
+                .ok_or_else(|| anyhow!("nats channel transport is selected but not configured"))?
+                .client(channel_id, ttl_secs)
+                .map(Some),
             #[cfg(feature = "channel-aws")]
             ChannelBackend::AwsMqtt => self
                 .aws
@@ -264,6 +335,13 @@ impl ChannelIssuer {
     ) -> Result<Option<MintedExecutor>> {
         match &self.backend {
             ChannelBackend::Http => Ok(None),
+            #[cfg(feature = "channel-nats")]
+            ChannelBackend::Nats => self
+                .nats
+                .as_ref()
+                .ok_or_else(|| anyhow!("nats channel transport is selected but not configured"))?
+                .executor(channel_id, ttl_secs)
+                .map(Some),
             #[cfg(feature = "channel-aws")]
             ChannelBackend::AwsMqtt => self
                 .aws
@@ -406,5 +484,22 @@ mod tests {
             ChannelClientDescriptor::Http { .. }
         ));
         assert!(client.fallback.is_none());
+    }
+
+    #[tokio::test]
+    async fn refresh_keeps_original_responder_token_and_deadline() {
+        crate::backend_jwt::init_for_tests();
+        let issuer = ChannelIssuer::http_only("https://api.test");
+        let original = issuer.http_handle("run-1", "user-1", None, 60).unwrap();
+        let ChannelClientDescriptor::Http { token, .. } = &original.transport else {
+            unreachable!()
+        };
+        let claims = verify_channel_responder(token).unwrap();
+        let refreshed = issuer.refresh_client_handle(&claims, token).await.unwrap();
+        assert_eq!(refreshed.expires_at, claims.exp);
+        assert_eq!(refreshed.transport, original.transport);
+        let mut expired = claims;
+        expired.exp = now_unix() - 1;
+        assert!(issuer.refresh_client_handle(&expired, token).await.is_err());
     }
 }

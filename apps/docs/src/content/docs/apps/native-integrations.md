@@ -33,11 +33,26 @@ and select the Ask FlowPilot output as the note's content. The same chain works
 with **Ask App Chat**. For an object result, select its **JSON** property
 and use **Get Dictionary from Input** before reading its fields.
 
-These actions bring Flow-Like to the foreground and wait for execution. A
-question that needs more interaction can continue in the app. Supply required
-Event inputs in the Shortcut; a missing input or a page-only Event reports that
-interaction is needed. The response wait ends after 90 seconds, and the system
-may cancel it sooner. A run that already started can continue in Flow-Like.
+On iOS, **Ask FlowPilot** runs through the native Rust engine without opening
+chat. You can use its Text output in a Shortcuts automation. Open Flow-Like once
+to select your profile, configure a model, and sign in before using the action.
+Each request captures the published profile, Hub, and account. Rust refreshes
+that profile's credentials and refuses the request if its account changes.
+After restarting the device, unlock it once so the saved credentials are available.
+
+Background questions have a 25-second deadline, and iOS may end execution
+sooner. Cancelling the Shortcut or reaching that deadline cancels the FlowPilot
+run. An interrupted request is not replayed automatically. Screen navigation,
+questions, and approval requests return **unavailable**; FlowPilot can continue
+work that needs no interaction. This action returns text and does not start
+voice capture. Use **Open FlowPilot** to start voice in the app.
+
+**Ask App Chat**, **Run Event**, and **Ask FlowPilot** on macOS bring Flow-Like
+to the foreground and wait for execution. A question that needs more interaction
+can continue in the app. Supply required Event inputs in the Shortcut; a missing
+input or a page-only Event reports that interaction is needed. Their response
+wait ends after 90 seconds, and the system may cancel it sooner. A run that
+already started can continue in Flow-Like.
 Responses are limited to 256 KiB in total, with at most 192 KiB each for Text
 and JSON. Larger responses report an error rather than returning truncated data.
 

@@ -4,6 +4,7 @@ pub mod embedding;
 pub mod history;
 pub mod image_embedding;
 pub mod llm;
+mod request_params;
 pub mod response;
 pub mod response_chunk;
 pub mod rig_conversion;

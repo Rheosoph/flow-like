@@ -16,6 +16,7 @@ pub fn load() -> Result<(), Box<dyn Error>> {
         "AUDIT_ENTRY_KEY",
         "BACKEND_KEY",
         "BACKEND_PUB",
+        "CHANNEL_NATS_ACCOUNT_SEED",
         "SINK_TOKEN_ENCRYPTION_KEY",
         "SINK_SECRET",
         "MAINTENANCE_TOKEN",

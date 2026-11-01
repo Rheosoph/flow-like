@@ -55,6 +55,28 @@ services:
     tmpfs:
       - /tmp
     user: redis
+  nats:
+    image: ${NATS_IMAGE:-nats:2.15.2-alpine}
+    user: 65532:65532
+    entrypoint: [sh, -ec]
+    command:
+      - 'printf "%s" "$$NATS_SERVER_CONFIG" | base64 -d > /tmp/nats.conf; exec nats-server -c /tmp/nats.conf'
+    environment:
+      NATS_SERVER_CONFIG: ${NATS_SERVER_CONFIG:?Run scripts/setup-env.py to generate NATS trust}
+    networks: [flowlike]
+    healthcheck:
+      test: [CMD, wget, -q, --spider, http://localhost:8222/healthz]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    read_only: true
+    tmpfs: [/tmp]
+    deploy:
+      replicas: 1
+      resources:
+        limits:
+          cpus: ${NATS_CPUS:-1}
+          memory: ${NATS_MEMORY:-256M}
   db-init:
     image: ${DB_INIT_IMAGE:-ghcr.io/rheosoph/flow-like-docker-compose-db-init:${FLOW_LIKE_IMAGE_TAG:-dev}}
     working_dir: /workspace
@@ -144,6 +166,11 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://api:${REDIS_API_PASSWORD}@redis:6379}
       EXECUTION_STATE_BACKEND: ${EXECUTION_STATE_BACKEND:-redis}
       EXECUTION_STATE_TTL_SECONDS: ${EXECUTION_STATE_TTL_SECONDS:-86400}
+      CHANNEL_TTL_SECONDS: ${CHANNEL_TTL_SECONDS:-7200}
+      CHANNEL_TRANSPORT: ${CHANNEL_TRANSPORT:-nats}
+      CHANNEL_NATS_URL: ${CHANNEL_NATS_URL:-nats://nats:4222}
+      CHANNEL_NATS_WS_URL: ${CHANNEL_NATS_WS_URL:?Set the browser-visible NATS WebSocket URL}
+      CHANNEL_NATS_ACCOUNT_SEED: ${CHANNEL_NATS_ACCOUNT_SEED:?Run scripts/setup-env.py to generate NATS trust}
       CACHE_BACKEND: ${CACHE_BACKEND:-redis}
       CACHE_DEFAULT_TTL_SECONDS: ${CACHE_DEFAULT_TTL_SECONDS:-0}
       STORAGE_PROVIDER: ${STORAGE_PROVIDER:-aws}

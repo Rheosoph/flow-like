@@ -706,6 +706,28 @@ fn enforce_bound(weight: &mut Option<f32>) {
 }
 
 impl BitModelPreference {
+    /// A chat selection can supply the model while the node only constrains image support.
+    pub fn uses_default_ranking(&self) -> bool {
+        [
+            self.cost_weight,
+            self.speed_weight,
+            self.reasoning_weight,
+            self.creativity_weight,
+            self.factuality_weight,
+            self.function_calling_weight,
+            self.safety_weight,
+            self.openness_weight,
+            self.multilinguality_weight,
+            self.coding_weight,
+        ]
+        .iter()
+        .all(Option::is_none)
+            && self
+                .model_hint
+                .as_deref()
+                .is_none_or(|hint| hint.trim().is_empty())
+    }
+
     fn normalize_weight(weight: &mut Option<f32>) {
         if let Some(w) = weight {
             if *w <= 0.0 {
@@ -2343,6 +2365,43 @@ impl Bit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chat_model_selection_requires_unchanged_ranking_preferences() {
+        assert!(BitModelPreference::default().uses_default_ranking());
+        assert!(
+            BitModelPreference {
+                multimodal: Some(true),
+                model_hint: Some(String::new()),
+                ..Default::default()
+            }
+            .uses_default_ranking()
+        );
+        for field in [
+            "cost_weight",
+            "speed_weight",
+            "reasoning_weight",
+            "creativity_weight",
+            "factuality_weight",
+            "function_calling_weight",
+            "safety_weight",
+            "openness_weight",
+            "multilinguality_weight",
+            "coding_weight",
+        ] {
+            let preference: BitModelPreference =
+                flow_like_types::json::from_value(flow_like_types::json::json!({ field: 0.5 }))
+                    .unwrap();
+            assert!(!preference.uses_default_ranking(), "{field}");
+        }
+        assert!(
+            !BitModelPreference {
+                model_hint: Some("specific model".into()),
+                ..Default::default()
+            }
+            .uses_default_ranking()
+        );
+    }
     use crate::state::{FlowLikeConfig, FlowLikeState};
     use flow_like_storage::files::store::FlowLikeStore;
     use flow_like_storage::files::store::local_store::LocalObjectStore;

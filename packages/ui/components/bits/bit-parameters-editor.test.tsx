@@ -45,6 +45,35 @@ test("unpriced hosted models warn admins without inventing rates", () => {
 	}
 });
 
+test("custom HTTP models expose request parameters while subscription and local models do not", () => {
+	for (const provider of [
+		"custom:anthropic",
+		"custom:gemini",
+		"custom:lmstudio",
+	])
+		expect(renderEditor({ scope: "custom", provider })).toContain(
+			"Add request parameters",
+		);
+	expect(
+		renderEditor({
+			scope: "custom",
+			provider: "custom:systemone",
+			bitType: IBitTypes.SystemOne,
+		}),
+	).toContain("Add request parameters");
+	for (const provider of [
+		"Local",
+		"MLX",
+		"custom:claude-code",
+		"custom:codex",
+		"custom:github-copilot",
+		"custom:microsoft-copilot",
+	])
+		expect(renderEditor({ scope: "custom", provider })).not.toContain(
+			"Add request parameters",
+		);
+});
+
 test("hosted pricing fields display exact USD amounts and permit removal", () => {
 	const markup = renderEditor({
 		bitType: IBitTypes.Vlm,
