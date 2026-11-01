@@ -172,7 +172,7 @@ describe("NATS channel delivery", () => {
 		expect(first.callbacks.size).toBe(0);
 	});
 
-	it("aborts an in-flight message without retrying or using HTTP fallback", async () => {
+	it("aborts a legacy direct message without retrying", async () => {
 		const client = new FakeConnection();
 		client.onPublish = undefined;
 		sdk.connect.mockResolvedValue(client);
@@ -184,11 +184,6 @@ describe("NATS channel delivery", () => {
 				channel_id: "run-1",
 				expires_at: descriptor().expires_at,
 				transport: descriptor(),
-				fallback: {
-					type: "http",
-					push_url: "https://api.example/push",
-					token: "http",
-				},
 			},
 			push,
 			{ signal: controller.signal },
@@ -201,7 +196,7 @@ describe("NATS channel delivery", () => {
 		expect(client.callbacks.size).toBe(0);
 	});
 
-	it("preserves the delivery ID when a broker failure uses the HTTP fallback", async () => {
+	it("preserves the delivery ID while using the API without connecting to the broker", async () => {
 		sdk.connect.mockRejectedValue(new Error("unreachable"));
 		vi.spyOn(console, "warn").mockImplementation(() => {});
 		const fetch = vi.fn(
@@ -228,6 +223,8 @@ describe("NATS channel delivery", () => {
 				"x-channel-delivery-id"
 			],
 		).toBe("fallback-id");
+		expect(sdk.connect).not.toHaveBeenCalled();
+		expect(fetch).toHaveBeenCalledTimes(1);
 	});
 
 	it("rejects expired grants and mismatched channels before connecting", async () => {

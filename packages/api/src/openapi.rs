@@ -552,6 +552,8 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::app::locked::executor_set_auto_delete,
         crate::routes::app::locked::executor_purge,
         // Realtime board routes
+        crate::routes::realtime::poll,
+        crate::routes::realtime::connect,
         crate::routes::app::board::realtime::jwks,
         crate::routes::app::board::realtime::access,
         // Invoke presign

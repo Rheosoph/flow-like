@@ -10,7 +10,13 @@ import {
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { IRole } from "../../../lib/schema/llm/history";
-import { Chat, type IChatProps, type IChatRef } from "./chat";
+import type { BotAgentState } from "../../bots/types";
+import {
+	Chat,
+	type IChatConcurrency,
+	type IChatProps,
+	type IChatRef,
+} from "./chat";
 import type { IMessage } from "./chat-db";
 import type { ISendMessageFunction } from "./chatbox";
 
@@ -18,6 +24,7 @@ const state = vi.hoisted(() => ({
 	send: undefined as unknown as ISendMessageFunction,
 	focus: vi.fn(),
 	defaultTools: [] as string[],
+	agentState: undefined as BotAgentState | undefined,
 }));
 
 vi.mock("@flow-like/locales", () => ({
@@ -58,11 +65,17 @@ vi.mock("./chatbox", () => ({
 			{
 				onSendMessage,
 				defaultActiveTools,
-			}: { onSendMessage: ISendMessageFunction; defaultActiveTools: string[] },
+				agentState,
+			}: {
+				onSendMessage: ISendMessageFunction;
+				defaultActiveTools: string[];
+				agentState?: BotAgentState;
+			},
 			ref,
 		) => {
 			state.send = onSendMessage;
 			state.defaultTools = defaultActiveTools;
+			state.agentState = agentState;
 			useImperativeHandle(ref, () => ({ focusInput: state.focus }));
 			return <div data-test-composer />;
 		},
@@ -159,6 +172,45 @@ beforeEach(() => {
 afterEach(async () => {
 	await act(async () => root.unmount());
 	container.remove();
+});
+
+describe("composer agent activity", () => {
+	test("shows working only while the app chat response is active", async () => {
+		await render({ isStreamActive: true });
+		expect(state.agentState).toBe("working");
+		await render({ isStreamActive: false });
+		expect(state.agentState).toBe("idle");
+	});
+
+	test("uses the current conversation's runs when another conversation is streaming", async () => {
+		const concurrency: IChatConcurrency = {
+			runs: [],
+			queued: [],
+			atCapacity: false,
+			onStop: vi.fn(),
+			onSteer: vi.fn(async () => true),
+			onRemoveQueued: vi.fn(),
+		};
+		await render({ isStreamActive: true, concurrency });
+		expect(state.agentState).toBe("idle");
+		await render({
+			isStreamActive: true,
+			concurrency: {
+				...concurrency,
+				runs: [
+					{
+						runId: "run-1",
+						label: "Response",
+						status: "streaming",
+						steers: [],
+					},
+				],
+			},
+		});
+		expect(state.agentState).toBe("working");
+		await render({ isStreamActive: true, concurrency });
+		expect(state.agentState).toBe("idle");
+	});
 });
 
 describe("quoted chat replies", () => {

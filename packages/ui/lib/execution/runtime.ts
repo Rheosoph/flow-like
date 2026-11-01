@@ -1,6 +1,13 @@
 import { isChannelHandle } from "../channel/handle";
+import type { RealtimeRunSnapshot } from "../realtime/types";
 import type { IChannelHandle, IChannelPush } from "../schema/channel";
 import type { IIntercomEvent } from "../schema/events/intercom-event";
+import {
+	type ExecutionRealtimeClientFactory,
+	followRealtimeExecution,
+	readExecutionReceipt,
+	realtimeExecutionEvent,
+} from "./realtime";
 import {
 	type ExecutionAuthorization,
 	type ExecutionCommand,
@@ -16,6 +23,7 @@ import {
 interface RuntimeOptions {
 	fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 	persist?: (task: ExecutionTask, final: boolean) => Promise<void>;
+	realtime?: ExecutionRealtimeClientFactory;
 	push: (
 		handle: IChannelHandle,
 		push: Omit<IChannelPush, "channel_id">,
@@ -42,6 +50,7 @@ interface Run {
 	cancelHeaders?: Record<string, string>;
 	cancellation?: Promise<void>;
 	cancelConfirmed?: boolean;
+	replaying?: boolean;
 }
 
 export function channelRequestKey(handle: IChannelHandle): string {
@@ -142,7 +151,13 @@ export class ExecutionRuntime {
 	}
 
 	private disconnect(port: ExecutionPort) {
+		const scope = this.ports.get(port);
 		this.ports.delete(port);
+		if (scope !== undefined && ![...this.ports.values()].includes(scope)) {
+			for (const run of this.runs.values())
+				if (run.task.scope === scope && run.replaying && !run.finished)
+					run.controller.abort(new Error("Execution account disconnected"));
+		}
 		// A claimed device action may already have run when its tab disconnects. Keep the claim
 		// rather than repeat a side effect whose result was lost with that tab.
 		for (const [id, authorization] of this.authorizations) {
@@ -317,6 +332,7 @@ export class ExecutionRuntime {
 		port: ExecutionPort,
 		run: Run,
 		headers = run.request.headers,
+		rejectedToken?: string,
 	): Promise<Record<string, string> | undefined> {
 		const id = `${run.task.taskId}:auth:${crypto.randomUUID()}`;
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -331,7 +347,7 @@ export class ExecutionRuntime {
 					type: "unauthorized",
 					id,
 					taskId: run.task.taskId,
-					rejectedToken: auth?.replace(/^Bearer\s+/i, ""),
+					rejectedToken: rejectedToken ?? auth?.replace(/^Bearer\s+/i, ""),
 				});
 			});
 		} finally {
@@ -352,6 +368,7 @@ export class ExecutionRuntime {
 
 	private async drive(port: ExecutionPort, run: Run): Promise<unknown> {
 		let terminal = false;
+		let replay: RealtimeRunSnapshot | undefined;
 		let lastError: string | undefined;
 		let hasError = false;
 		let deadline: ReturnType<typeof setTimeout> | undefined;
@@ -410,65 +427,141 @@ export class ExecutionRuntime {
 				this.send(port, { type: "response", taskId: run.task.taskId });
 			run.task.status = "running";
 			this.broadcast(run);
-			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = "";
-			const frame = (raw: string) => {
-				let name = "message";
-				const data: string[] = [];
-				for (const line of raw.split(/\r?\n/)) {
-					if (line.startsWith("event:")) name = line.slice(6).trim();
-					if (line.startsWith("data:"))
-						data.push(line.slice(5).replace(/^ /, ""));
-				}
-				if (data.length === 0 || data.join("\n") === "keep-alive") return;
-				let event: IIntercomEvent;
-				try {
-					event = JSON.parse(data.join("\n"));
-				} catch {
-					throw new Error("The execution stream contained an invalid event.");
-				}
-				if (!event || typeof event.event_type !== "string")
-					throw new Error("The execution stream contained an invalid event.");
-				if (!event.event_id)
-					event.event_id = `${run.task.taskId}:${run.task.events.length}`;
-				this.acceptEvent(run, event);
-				if (event.event_type === "error") {
-					hasError = true;
-					lastError = messageText(event.payload);
-				}
+			if (
+				response.headers
+					.get("Content-Type")
+					?.toLowerCase()
+					.includes("application/json")
+			) {
+				deadline = setTimeout(
+					() => run.controller.abort(new Error("Execution receipt timed out")),
+					15_000,
+				);
+				const receipt = await readExecutionReceipt(response);
+				clearTimeout(deadline);
+				if (!this.options.realtime || !run.request.realtime)
+					throw new Error(
+						"This execution returned a queued run without an account replay session",
+					);
+				run.replaying = true;
+				if (![...this.ports.values()].includes(run.task.scope))
+					throw new Error("Execution account disconnected");
+				this.acceptEvent(run, {
+					event_id: `${receipt.run_id}:receipt`,
+					event_type: "run_initiated",
+					payload: { run_id: receipt.run_id },
+					timestamp: {
+						secs_since_epoch: Math.floor(Date.now() / 1_000),
+						nanos_since_epoch: 0,
+					},
+				});
+				replay = await followRealtimeExecution({
+					createClient: this.options.realtime,
+					session: {
+						...run.request.realtime,
+						headers: run.request.headers ?? run.request.realtime.headers,
+					},
+					receipt,
+					signal: run.controller.signal,
+					onUnauthorized: async (rejectedToken) => {
+						for (const [candidate, scope] of this.ports) {
+							if (scope !== run.task.scope) continue;
+							const headers = await this.authorize(
+								candidate,
+								run,
+								run.request.headers,
+								rejectedToken,
+							);
+							if (headers) {
+								run.request.headers = headers;
+								return headers;
+							}
+						}
+					},
+					onRun: (update) => {
+						for (const event of update.events)
+							this.acceptEvent(
+								run,
+								realtimeExecutionEvent(update.run_id, event),
+							);
+					},
+				});
+				terminal = true;
 				if (
-					name === "done" ||
-					name === "completed" ||
-					event.event_type === "completed" ||
-					event.event_type === "execution_complete"
+					!run.task.events.some((event) =>
+						["completed", "execution_complete"].includes(event.event_type),
+					)
 				)
-					terminal = true;
-			};
-			const drain = () => {
-				while (true) {
-					const separator = /\r?\n\r?\n/.exec(buffer);
-					if (!separator) break;
-					const raw = buffer.slice(0, separator.index);
-					buffer = buffer.slice(separator.index + separator[0].length);
-					frame(raw);
-				}
-			};
-			try {
-				while (true) {
-					const { value, done } = await reader.read();
-					buffer += done
-						? decoder.decode()
-						: decoder.decode(value, { stream: true });
-					drain();
-					if (done || terminal) {
-						if (buffer.trim()) frame(buffer);
-						break;
+					this.acceptEvent(run, {
+						event_id: `${receipt.run_id}:terminal`,
+						event_type: "completed",
+						payload: { status: replay.status, error_message: replay.error },
+						timestamp: {
+							secs_since_epoch: Math.floor(Date.now() / 1_000),
+							nanos_since_epoch: 0,
+						},
+					});
+			} else {
+				const reader = response.body.getReader();
+				const decoder = new TextDecoder();
+				let buffer = "";
+				const frame = (raw: string) => {
+					let name = "message";
+					const data: string[] = [];
+					for (const line of raw.split(/\r?\n/)) {
+						if (line.startsWith("event:")) name = line.slice(6).trim();
+						if (line.startsWith("data:"))
+							data.push(line.slice(5).replace(/^ /, ""));
 					}
+					if (data.length === 0 || data.join("\n") === "keep-alive") return;
+					let event: IIntercomEvent;
+					try {
+						event = JSON.parse(data.join("\n"));
+					} catch {
+						throw new Error("The execution stream contained an invalid event.");
+					}
+					if (!event || typeof event.event_type !== "string")
+						throw new Error("The execution stream contained an invalid event.");
+					if (!event.event_id)
+						event.event_id = `${run.task.taskId}:${run.task.events.length}`;
+					this.acceptEvent(run, event);
+					if (event.event_type === "error") {
+						hasError = true;
+						lastError = messageText(event.payload);
+					}
+					if (
+						name === "done" ||
+						name === "completed" ||
+						event.event_type === "completed" ||
+						event.event_type === "execution_complete"
+					)
+						terminal = true;
+				};
+				const drain = () => {
+					while (true) {
+						const separator = /\r?\n\r?\n/.exec(buffer);
+						if (!separator) break;
+						const raw = buffer.slice(0, separator.index);
+						buffer = buffer.slice(separator.index + separator[0].length);
+						frame(raw);
+					}
+				};
+				try {
+					while (true) {
+						const { value, done } = await reader.read();
+						buffer += done
+							? decoder.decode()
+							: decoder.decode(value, { stream: true });
+						drain();
+						if (done || terminal) {
+							if (buffer.trim()) frame(buffer);
+							break;
+						}
+					}
+				} finally {
+					await reader.cancel().catch(() => undefined);
+					reader.releaseLock();
 				}
-			} finally {
-				await reader.cancel().catch(() => undefined);
-				reader.releaseLock();
 			}
 			if (run.cancelConfirmed) throw abortError();
 			if (!terminal)
@@ -482,7 +575,9 @@ export class ExecutionRuntime {
 						event.event_type === "completed" ||
 						event.event_type === "execution_complete",
 				);
-			const status = String(completed?.payload?.status ?? "").toLowerCase();
+			const status = String(
+				replay?.status ?? completed?.payload?.status ?? "",
+			).toLowerCase();
 			if (status === "cancelled" || status === "canceled") throw abortError();
 			const succeeded = ["completed", "success", "succeeded"].includes(status);
 			if (
@@ -493,7 +588,8 @@ export class ExecutionRuntime {
 					(completed?.payload?.log_level ?? 0) >= 3)
 			) {
 				throw new Error(
-					messageText(completed?.payload) ??
+					replay?.error ??
+						messageText(completed?.payload) ??
 						lastError ??
 						"The workflow failed.",
 				);

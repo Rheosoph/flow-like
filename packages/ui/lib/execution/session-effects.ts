@@ -50,7 +50,7 @@ export function attachExecutionEffects(client: EffectClient): () => void {
 		const current = client
 			.getTasks()
 			.find((item) => item.taskId === task.taskId);
-		if (!current || isExecutionFinished(current)) return;
+		if (!current || current.status === "cancelled") return;
 		const payload = event.payload;
 		if (event.event_type === "toast") {
 			const message =
@@ -70,8 +70,8 @@ export function attachExecutionEffects(client: EffectClient): () => void {
 				id: payload.id,
 				message: payload.message,
 				progress: payload.progress,
-				done: !!payload.done,
-				success: payload.success !== false,
+				done: !!payload.done || isExecutionFinished(current),
+				success: current.status !== "failed" && payload.success !== false,
 			};
 			let owned = progress.get(task.taskId);
 			if (!owned) {

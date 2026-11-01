@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
 	progress: vi.fn(),
 	filter: vi.fn(),
 	close: vi.fn(),
+	payment: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: mocks.toast }));
 vi.mock("../../components/a2ui/elements-request-handler", () => ({
@@ -23,7 +24,7 @@ vi.mock("../../components/a2ui/micro-widget-host", () => ({
 	subscribeMicroWidgetBridges: () => () => {},
 }));
 vi.mock("../../components/payments/payment-events", () => ({
-	dispatchPaymentRequest: vi.fn(),
+	dispatchPaymentRequest: mocks.payment,
 }));
 vi.mock("../../components/ui/progress-toast", () => ({
 	showProgressToast: mocks.progress,
@@ -141,4 +142,41 @@ test("a terminal run closes only progress notifications created for that run", a
 		expect.objectContaining({ id: "progress", done: true, success: false }),
 	);
 	expect(mocks.close).toHaveBeenCalledTimes(1);
+});
+
+test("board notifications claimed before completion still dispatch once when the claim settles", async () => {
+	const { task, client, update } = fixture();
+	task.eventId = "";
+	for (const [id, type, payload] of [
+		["toast", "toast", { message: "Board finished" }],
+		["payment", "payment_request", { amount: 10 }],
+		[
+			"progress",
+			"progress",
+			{ id: "board-progress", message: "Building", done: false },
+		],
+	] as const)
+		task.events.push({
+			event_id: id,
+			event_type: type,
+			payload,
+		} as ExecutionTask["events"][number]);
+	update();
+	task.status = "completed";
+	update();
+	await vi.waitFor(() =>
+		expect(mocks.toast).toHaveBeenCalledWith("Board finished"),
+	);
+	expect(mocks.payment).toHaveBeenCalledOnce();
+	expect(mocks.progress).toHaveBeenCalledWith(
+		expect.objectContaining({
+			id: "board-progress",
+			done: true,
+			success: true,
+		}),
+	);
+	update();
+	expect(client.claimEvent).toHaveBeenCalledTimes(3);
+	expect(mocks.toast).toHaveBeenCalledOnce();
+	expect(mocks.payment).toHaveBeenCalledOnce();
 });

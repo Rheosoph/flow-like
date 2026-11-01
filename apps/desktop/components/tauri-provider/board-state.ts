@@ -125,11 +125,12 @@ import { confirm } from "@tauri-apps/plugin-dialog";
 import { isObject } from "lodash-es";
 import type { CSSProperties } from "react";
 import { toast } from "sonner";
-import { fetcher, streamFetcher } from "../../lib/api";
+import { fetcher } from "../../lib/api";
 import {
 	dispatchFlowNotificationEvent,
 	dispatchFlowNotificationEvents,
 } from "../../lib/flow-notification-events";
+import { runNativeRemoteExecution } from "../../lib/native-remote-execution";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
 import { desktopPlatform } from "../../lib/platform";
@@ -2205,39 +2206,21 @@ export class BoardState implements IBoardState {
 			throw new Error("Profile and auth required for remote execution");
 		}
 
-		let closed = false;
-		let foundRunId = false;
-
-		await streamFetcher<IIntercomEvent>(
-			this.backend.profile,
-			`apps/${appId}/board/${boardId}/invoke`,
-			{
-				method: "POST",
-				body: JSON.stringify({
-					node_id: payload.id,
-					version: payload.version,
-					payload: payload.payload,
-					stream_state: streamState ?? true,
-					runtime_variables: payload.runtime_variables,
-					profile_id: this.backend.profile?.id,
-				}),
+		await runNativeRemoteExecution({
+			owner: this.backend,
+			profile: this.backend.profile,
+			auth: this.backend.auth,
+			path: `apps/${appId}/board/${boardId}/invoke`,
+			body: {
+				node_id: payload.id,
+				version: payload.version,
+				payload: payload.payload,
+				stream_state: streamState ?? true,
+				runtime_variables: payload.runtime_variables,
+				profile_id: this.backend.profile?.id,
 			},
-			this.backend.auth,
-			(event: IIntercomEvent) => {
-				if (closed) {
-					console.warn("Stream closed, ignoring event");
-					return;
-				}
-
-				// Handle run_initiated event to get run ID
-				if (!foundRunId && eventId && event.event_type === "run_initiated") {
-					const runId = event.payload?.run_id;
-					if (runId) {
-						eventId(runId);
-						foundRunId = true;
-					}
-				}
-
+			onRunId: eventId,
+			onEvent: (event) => {
 				// Handle toast events globally
 				dispatchPaymentRequest(event);
 				if (event.event_type === "toast") {
@@ -2266,9 +2249,8 @@ export class BoardState implements IBoardState {
 					console.log("UNDELIVERED Received event:", event);
 				}
 			},
-		);
+		});
 
-		closed = true;
 		finishAllProgressToasts(true);
 		// Full metadata will be fetched separately by the caller
 		return undefined;

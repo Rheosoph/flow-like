@@ -56,6 +56,34 @@ pub struct AzureChannelRuntime {
 }
 
 impl AzureChannelRuntime {
+    pub fn realtime(
+        &self,
+        scope: &str,
+        ttl_secs: i64,
+    ) -> Result<flow_like_types::realtime::RealtimeTransport> {
+        let group = format!("realtime:{scope}");
+        // Initial membership grants reception without any send or join role.
+        let token = client_access_token(
+            &self.config.endpoint,
+            &self.config.hub,
+            &self.access_key,
+            &format!("realtime:{scope}"),
+            &[],
+            std::slice::from_ref(&group),
+            ttl_secs,
+        )?;
+        Ok(
+            flow_like_types::realtime::RealtimeTransport::AzureWebPubSub {
+                url: client_ws_url(&self.config.endpoint, &self.config.hub, &token),
+                group,
+            },
+        )
+    }
+
+    pub async fn publish_realtime(&self, scope: &str, payload: &[u8]) -> Result<()> {
+        self.forwarder.publish_realtime(scope, payload).await
+    }
+
     pub async fn from_env(secrets: &SecretStore) -> Result<Self> {
         let config = AzureChannelConfig::from_env()?;
         let access_key = secrets

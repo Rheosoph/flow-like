@@ -1204,6 +1204,34 @@ async fn invoke_event_impl(
         _ => executor_jwt,
     };
 
+    let isolated_poll_token = if query.isolated {
+        Some(
+            sign_execution_jwt(ExecutionJwtParams {
+                user_id: sub.clone(),
+                technical_user_id: technical_user_id.clone(),
+                run_id: run_id.clone(),
+                app_id: app_id.clone(),
+                board_id: board_id.clone(),
+                event_id: Some(event_id.clone()),
+                app_chain: caller_app_chain.clone(),
+                correlation: None,
+                callback_url: String::new(),
+                token_type: TokenType::User,
+                ttl_seconds: Some(if resolved_page_trigger.is_some() {
+                    24 * 60 * 60
+                } else {
+                    60 * 60
+                }),
+                shadow: None,
+            })
+            .map_err(|error| {
+                ApiError::internal_error(anyhow!("Failed to sign user JWT: {error}"))
+            })?,
+        )
+    } else {
+        None
+    };
+
     let request = DispatchRequest {
         run_id: run_id.clone(),
         app_id: app_id.clone(),
@@ -1270,7 +1298,7 @@ async fn invoke_event_impl(
             run_id,
             status: response.status,
             message: Some(format!("Job dispatched via {} backend", response.backend)),
-            poll_token: None,
+            poll_token: isolated_poll_token,
         })
         .into_response());
     }

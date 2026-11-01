@@ -179,6 +179,8 @@ impl Config {
                 HeaderName::from_static("x-flow-like-app-id"),
                 HeaderName::from_static("x-flow-like-board-format"),
                 HeaderName::from_static("x-flow-like-event-authorization"),
+                HeaderName::from_static("x-flow-like-session"),
+                HeaderName::from_static("x-channel-delivery-id"),
                 HeaderName::from_static("x-request-id"),
                 HeaderName::from_static("idempotency-key"),
                 HeaderName::from_static("flowlike-idempotency-ack"),

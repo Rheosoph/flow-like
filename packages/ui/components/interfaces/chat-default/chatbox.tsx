@@ -21,6 +21,7 @@ import {
 	useState,
 } from "react";
 import { cn, humanFileSize } from "../../../lib/utils";
+import type { BotAgentState } from "../../bots/types";
 import type { ThinkingOption } from "../../thinking/thinking-options";
 import { ThinkingPicker } from "../../thinking/thinking-picker";
 import { Button } from "../../ui/button";
@@ -29,6 +30,10 @@ import { Textarea } from "../../ui/textarea";
 import type { VoiceInvokeMode, VoiceMode } from "../../voice/types";
 import { useSpeechRecognition } from "../../voice/use-speech-recognition";
 import { useVoiceRecorder } from "../../voice/use-voice-recorder";
+import {
+	type ChatBotReactionContext,
+	ChatComposerBot,
+} from "./chat-composer-bot";
 import type { IChatMessageInteraction } from "./chat-message-interaction";
 import { FileManagerDialog } from "./chatbox/file-dialog";
 import { isImageFile, useImagePreviewUrls } from "./chatbox/image-previews";
@@ -75,6 +80,9 @@ interface ChatBoxProps {
 	/** Thinking level picker; omitted when the chat does not offer one. */
 	thinking?: ChatBoxThinking;
 	model?: ChatBoxModel;
+	/** Recent visible messages used only for the bot's browser-local facial reaction. */
+	reactionContext?: ChatBotReactionContext;
+	agentState?: BotAgentState;
 }
 
 export interface ChatBoxThinking {
@@ -118,10 +126,13 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			onInterrupt,
 			thinking,
 			model,
+			reactionContext,
+			agentState,
 		}: Readonly<ChatBoxProps>,
 		ref,
 	) => {
 		const [input, setInput] = useState("");
+		const [composing, setComposing] = useState(false);
 		const [activeTools, setActiveTools] =
 			useState<string[]>(defaultActiveTools);
 		const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -367,6 +378,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		};
 
 		const handleKeyDown = (e: React.KeyboardEvent) => {
+			if (e.nativeEvent.isComposing || composing) return;
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
 				void handleSubmit(e);
@@ -602,16 +614,24 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						}}
 					>
 						{/* Text Input */}
-						<div className="flex-1 py-2 w-full pr-2">
+						<div className="flex flex-1 items-start py-2 w-full pr-2">
+							<ChatComposerBot
+								draft={input}
+								context={reactionContext}
+								composing={composing}
+								agentState={agentState}
+							/>
 							<Textarea
 								aria-label="Message"
 								ref={chatboxRef}
 								value={input}
 								onChange={(e) => setInput(e.target.value)}
+								onCompositionStart={() => setComposing(true)}
+								onCompositionEnd={() => setComposing(false)}
 								onKeyDown={handleKeyDown}
 								onPaste={handlePaste}
 								placeholder={i18next.t("typeAMessage", "Type a message...")}
-								className="border-0 focus:ring-0 resize-none bg-transparent! placeholder:text-muted-foreground text-[16px] sm:text-sm leading-relaxed min-h-[44px] max-h-[180px] overflow-y-auto w-full"
+								className="min-w-0 border-0 focus:ring-0 resize-none bg-transparent! placeholder:text-muted-foreground text-[16px] sm:text-sm leading-relaxed min-h-[44px] max-h-[180px] overflow-y-auto w-full"
 								rows={Math.min(5, Math.max(1, input.split("\n").length))}
 								style={{
 									boxShadow: "none",

@@ -809,7 +809,7 @@ mod tests {
             header(&document, "cross-origin-resource-policy"),
             Some("cross-origin")
         );
-        assert!(csp(&document).ends_with("; sandbox allow-scripts"));
+        assert!(csp(&document).ends_with("; sandbox allow-scripts allow-forms"));
         assert!(csp(&document).contains("; connect-src data: blob:; "));
         assert!(csp(&document).contains("; media-src data: blob:; "));
         assert!(!body(&document).contains("evil.example.org"));
@@ -914,7 +914,9 @@ mod tests {
             assert!(body(&frame).contains(&format!(
                 "frame.setAttribute('src','{relative}widgets/sales-chart/index.0.html');"
             )));
-            assert!(body(&frame).contains("frame.setAttribute('sandbox','allow-scripts');"));
+            assert!(
+                body(&frame).contains("frame.setAttribute('sandbox','allow-scripts allow-forms');")
+            );
             assert_eq!(csp(&frame), expected_csp);
             assert!(csp(&frame).contains(&format!("frame-src {child};")));
             assert_platform_sources_only(csp(&frame));
@@ -1000,7 +1002,7 @@ mod tests {
             directive_sources(csp(&document), "media-src"),
             ["data:", "blob:"]
         );
-        assert!(csp(&document).ends_with("sandbox allow-scripts allow-downloads"));
+        assert!(csp(&document).ends_with("sandbox allow-scripts allow-forms allow-downloads"));
         assert!(body(&document).contains(&widget_document_csp(
             &bundle_sources,
             &network_policy(),
@@ -1069,7 +1071,7 @@ mod tests {
                 "default-src 'none'; script-src 'unsafe-inline' {b}; style-src 'unsafe-inline' {b}; \
 img-src data: blob: {b}; font-src data: {b}; connect-src data: blob:; worker-src 'none'; \
 media-src data: blob:; frame-src 'none'; child-src 'none'; object-src 'none'; \
-manifest-src 'none'; base-uri 'none'; form-action 'none'; sandbox allow-scripts"
+manifest-src 'none'; base-uri 'none'; form-action 'none'; sandbox allow-scripts allow-forms"
             )
         );
 
@@ -1213,7 +1215,7 @@ manifest-src 'none'; base-uri 'none'; form-action 'none'; sandbox allow-scripts"
             ["data:", "blob:", b]
         );
         assert_eq!(directive_sources(csp(&narrowed), "media-src"), [b]);
-        assert!(csp(&narrowed).ends_with("sandbox allow-scripts allow-downloads"));
+        assert!(csp(&narrowed).ends_with("sandbox allow-scripts allow-forms allow-downloads"));
         let narrowed_policy = narrow_policy_for_engine(&effective, &declared, &closed);
         assert_eq!(
             csp(&narrowed),

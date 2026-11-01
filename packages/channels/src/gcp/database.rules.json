@@ -2,6 +2,14 @@
   "rules": {
     ".read": false,
     ".write": false,
+    "realtime": {
+      "$scope": {
+        "wake": {
+          ".read": "auth != null && auth.token.role === 'realtime' && auth.token.realtime_scope === $scope && auth.token.realtime_until > now",
+          ".write": false
+        }
+      }
+    },
     "channels": {
       "$channel_id": {
         ".write": "auth != null && auth.token.role === 'server' && auth.token.run_id === $channel_id && !newData.exists()",

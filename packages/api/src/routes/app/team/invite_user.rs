@@ -233,6 +233,11 @@ pub async fn invite_user(
     .await
     {
         tracing::warn!(error = %error, "Failed to dispatch invitation notification");
+        // dispatch_notification wakes the invitee only once its own write succeeds.
+        state
+            .channels
+            .publish_realtime_invalidation(&params.sub)
+            .await;
     }
 
     audit_branch!(

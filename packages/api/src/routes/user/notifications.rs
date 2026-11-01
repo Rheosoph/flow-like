@@ -174,7 +174,7 @@ pub async fn mark_notification_read(
     let sub = user.sub()?;
 
     let notification = notification::Entity::find_by_id(notification_id.clone())
-        .filter(notification::Column::UserId.eq(sub))
+        .filter(notification::Column::UserId.eq(&sub))
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
@@ -183,6 +183,7 @@ pub async fn mark_notification_read(
     active.read = Set(true);
     active.read_at = Set(Some(chrono::Utc::now().fixed_offset()));
     active.update(&state.db).await?;
+    state.channels.publish_realtime_invalidation(&sub).await;
 
     Ok(Json(()))
 }
@@ -212,13 +213,14 @@ pub async fn delete_notification(
     let sub = user.sub()?;
 
     let notification = notification::Entity::find_by_id(notification_id.clone())
-        .filter(notification::Column::UserId.eq(sub))
+        .filter(notification::Column::UserId.eq(&sub))
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
 
     let active: notification::ActiveModel = notification.into();
     active.delete(&state.db).await?;
+    state.channels.publish_realtime_invalidation(&sub).await;
 
     Ok(Json(()))
 }
@@ -246,7 +248,7 @@ pub async fn mark_all_read(
         &state.db,
         state.db_dialect,
         Condition::all()
-            .add(notification::Column::UserId.eq(sub))
+            .add(notification::Column::UserId.eq(&sub))
             .add(notification::Column::Read.eq(false)),
         vec![
             (notification::Column::Read, Expr::value(true)),
@@ -259,6 +261,9 @@ pub async fn mark_all_read(
     )
     .await?;
 
+    if updated > 0 {
+        state.channels.publish_realtime_invalidation(&sub).await;
+    }
     Ok(Json(updated))
 }
 

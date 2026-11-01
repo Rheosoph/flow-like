@@ -84,6 +84,7 @@
 //! failed write leaves it with no pointer at all.
 
 mod postgres;
+mod replay;
 mod types;
 
 #[cfg(feature = "redis")]
@@ -102,6 +103,7 @@ mod firestore;
 mod object_storage;
 
 pub use postgres::PostgresStateStore;
+pub use replay::*;
 pub use types::*;
 
 /// The staged-payload delete, for the app-deletion step that has to run it

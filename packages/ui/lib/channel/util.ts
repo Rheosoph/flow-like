@@ -3,7 +3,7 @@ export const MAX_ERROR_BODY_CHARS = 1_000;
 export interface ChannelPushOptions {
 	/** Aborts the delivery; an aborted push is never retried through the fallback. */
 	signal?: AbortSignal;
-	/** Preserved across NATS retries and the HTTP fallback to prevent duplicate delivery. */
+	/** Preserved across retries and API forwarding to prevent duplicate delivery. */
 	deliveryId?: string;
 }
 

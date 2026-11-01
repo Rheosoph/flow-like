@@ -19,7 +19,7 @@ use flow_like_types::channel::{
 use flow_like_types::tokio::sync::OnceCell;
 use flow_like_types::tokio_util::sync::CancellationToken;
 
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "aws-receiver"))]
 pub mod aws;
 #[cfg(feature = "azure")]
 pub mod azure;
@@ -27,7 +27,13 @@ pub mod azure;
 pub mod gcp;
 #[cfg(feature = "nats")]
 pub mod nats;
-#[cfg(any(feature = "aws", feature = "azure", feature = "nats"))]
+pub mod realtime;
+#[cfg(any(
+    feature = "aws",
+    feature = "aws-receiver",
+    feature = "azure",
+    feature = "nats"
+))]
 mod tls;
 
 /// API-side: deliver a push the client could not send itself onto the transport the waiter
@@ -57,7 +63,9 @@ fn transport_name(grant: &ChannelExecutorGrant) -> &'static str {
 pub fn transport_compiled(grant: &ChannelExecutorGrant) -> bool {
     match grant {
         ChannelExecutorGrant::Http {} => true,
-        ChannelExecutorGrant::AwsMqtt { .. } => cfg!(feature = "aws"),
+        ChannelExecutorGrant::AwsMqtt { .. } => {
+            cfg!(any(feature = "aws", feature = "aws-receiver"))
+        }
         ChannelExecutorGrant::AzureWebPubSub { .. } => cfg!(feature = "azure"),
         ChannelExecutorGrant::GcpFirebaseRtdb { .. } => cfg!(feature = "gcp"),
         ChannelExecutorGrant::Nats { .. } => cfg!(feature = "nats"),
@@ -74,7 +82,7 @@ pub async fn connect_executor_channel(
         ChannelExecutorGrant::Http {} => Err(flow_like_types::anyhow!(
             "the http channel transport has no connection to open; build a PollingChannel instead"
         )),
-        #[cfg(feature = "aws")]
+        #[cfg(any(feature = "aws", feature = "aws-receiver"))]
         ChannelExecutorGrant::AwsMqtt { .. } => aws::AwsIotChannel::connect(grant).await,
         #[cfg(feature = "azure")]
         ChannelExecutorGrant::AzureWebPubSub { .. } => {

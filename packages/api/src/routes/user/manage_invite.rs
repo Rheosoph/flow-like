@@ -48,13 +48,14 @@ pub async fn reject_invite(
         .await?;
     let deleted = invitation::Entity::delete_many()
         .filter(invitation::Column::Id.eq(invite_id.clone()))
-        .filter(invitation::Column::UserId.eq(sub))
+        .filter(invitation::Column::UserId.eq(&sub))
         .exec(&state.db)
         .await?;
 
     if deleted.rows_affected > 0
         && let Some(invite) = invite
     {
+        state.channels.publish_realtime_invalidation(&sub).await;
         audit_branch!(
             state,
             user,
@@ -186,6 +187,7 @@ pub async fn accept_invite(
         })
         .await?;
 
+    state.channels.publish_realtime_invalidation(&sub).await;
     audit_branch!(
         state,
         user,

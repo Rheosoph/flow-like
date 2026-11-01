@@ -194,6 +194,25 @@ mod tests {
         .claims
     }
 
+    #[test]
+    fn prejoined_realtime_receiver_has_no_publish_or_join_roles() {
+        let group = format!("realtime:{}", "a".repeat(64));
+        let token = client_access_token(
+            ENDPOINT,
+            HUB,
+            KEY,
+            "receiver",
+            &[],
+            std::slice::from_ref(&group),
+            900,
+        )
+        .unwrap();
+        let claims = decode_claims(&token, &client_audience(ENDPOINT, HUB));
+        assert!(claims.role.is_empty());
+        assert_eq!(claims.groups, vec![group]);
+        assert_eq!(claims.exp - claims.iat, 900);
+    }
+
     fn raw_claims(token: &str) -> Value {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_aud = false;

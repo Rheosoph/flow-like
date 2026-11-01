@@ -184,6 +184,12 @@ pub fn has_canonical_identity(event: &CreateEventInput) -> bool {
     event.id == canonical_execution_event_id(&event.run_id, event.sequence)
 }
 
+/// Whether a stored event can be found again by its run and sequence alone.
+/// Events of executors that predate stable identities carry random ids.
+pub fn has_canonical_record_identity(event: &ExecutionEventRecord) -> bool {
+    event.id == canonical_execution_event_id(&event.run_id, event.sequence)
+}
+
 /// Guard for cold imports from the canonical SQL run store: an expired source
 /// row must never be re-imported into a live store, otherwise delete/import
 /// cycles resurrect it (and TTL-based backends re-import it on every poll).
@@ -202,6 +208,28 @@ pub struct EventQuery {
     pub after_sequence: Option<i32>,
     pub only_undelivered: bool,
     pub limit: Option<i32>,
+}
+
+/// Where a replay page starts and how much it may carry.
+#[derive(Clone, Copy, Debug)]
+pub struct ReplayCursor {
+    /// Exclusive: the consumer already holds this sequence and every one before it.
+    pub after_sequence: i32,
+    pub limit: usize,
+    /// The run status read before this page was terminal, so every event write
+    /// of the run has already landed.
+    pub terminal: bool,
+}
+
+/// One replay page of a run.
+#[derive(Clone, Debug, Default)]
+pub struct EventReplay {
+    /// Ascending and contiguous from the cursor, except across sequences the
+    /// store established will never be written.
+    pub events: Vec<ExecutionEventRecord>,
+    /// Further events are visible now or may still become visible. For a
+    /// terminal cursor, `false` means the stream ended.
+    pub has_more: bool,
 }
 
 /// Error type for state store operations
@@ -349,6 +377,15 @@ pub trait ExecutionStateStore: Send + Sync + Debug {
         &self,
         query: EventQuery,
     ) -> Result<Vec<ExecutionEventRecord>, StateStoreError>;
+
+    /// Events for a consumer that acknowledges everything it receives: never a
+    /// later sequence while an earlier one can still appear, and for a terminal
+    /// cursor `has_more: false` only once nothing follows the last event.
+    async fn replay_events(
+        &self,
+        run_id: &str,
+        cursor: ReplayCursor,
+    ) -> Result<EventReplay, StateStoreError>;
 
     /// Get the max sequence number for a run
     async fn get_max_sequence(&self, run_id: &str) -> Result<i32, StateStoreError>;

@@ -1042,8 +1042,8 @@ function MicroWidgetFrame({
 					title={t("widgetWidgetid", "Widget {{widgetId}}", { widgetId })}
 					sandbox={
 						framePolicy?.downloads === true
-							? "allow-scripts allow-downloads"
-							: "allow-scripts"
+							? "allow-scripts allow-forms allow-downloads"
+							: "allow-scripts allow-forms"
 					}
 					referrerPolicy="no-referrer"
 					onLoad={handleFrameLoad}
@@ -1060,8 +1060,8 @@ function MicroWidgetFrame({
 
 /**
  * Renders a package-shipped micro widget in a sandboxed opaque-origin iframe
- * (`sandbox="allow-scripts"`, never `allow-same-origin`) and speaks the flw/1
- * host protocol: init/props:update/theme:change/query out, hello/ready/event/
+ * (`sandbox="allow-scripts allow-forms"`, never `allow-same-origin`) and speaks
+ * the flw/1 host protocol: init/props:update/theme:change/query out, hello/ready/event/
  * query:result/resize/value:changed in. Contract events prefer named handlers,
  * then retain the legacy `widget_event`/component-action fallbacks. Values
  * mirror into the elements payload as `"{instanceId}/values"`. Network sites

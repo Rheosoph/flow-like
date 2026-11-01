@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, spyOn } from "bun:test";
+import { afterEach, describe, expect, it } from "bun:test";
 import {
 	MAX_HOME_LAYOUT_BYTES,
 	homeLayoutByteLength,
@@ -128,7 +128,7 @@ afterEach(() => {
 	restore = undefined;
 });
 
-describe("AWS delivery and HTTP fallback", () => {
+describe("AWS replies forwarded by the API", () => {
 	const fallbackUrl = "https://api.example/push";
 	const handle: IChannelHandle = {
 		channel_id: "run-1",
@@ -154,26 +154,20 @@ describe("AWS delivery and HTTP fallback", () => {
 		},
 	};
 
-	it("publishes bounded frames directly and preserves the original reply on fallback", async () => {
+	it("sends the complete reply once so the API can frame it for the executor", async () => {
 		const original = globalThis.fetch;
 		const calls: { url: string; body: string }[] = [];
-		const warn = spyOn(console, "warn").mockImplementation(() => undefined);
 		restore = () => {
 			globalThis.fetch = original;
-			warn.mockRestore();
 		};
 		globalThis.fetch = (async (url, init) => {
 			calls.push({ url: String(url), body: String(init?.body) });
-			return new Response(null, { status: calls.length === 2 ? 503 : 204 });
+			return new Response(null, { status: 204 });
 		}) as typeof fetch;
 		const value = { canonical_layout: maximumHomeLayout("Current") };
 		await replyToChannel(handle, value);
-		expect(calls).toHaveLength(3);
-		for (const call of calls.slice(0, 2)) {
-			expect(byteLength(call.body)).toBeLessThanOrEqual(AWS_MQTT_PAYLOAD_BYTES);
-			expect(JSON.parse(call.body).kind).toBe("reply_chunk");
-		}
-		expect(calls[2].url).toBe(fallbackUrl);
-		expect(JSON.parse(calls[2].body)).toEqual(reply(value));
+		expect(calls).toHaveLength(1);
+		expect(calls[0].url).toBe(fallbackUrl);
+		expect(JSON.parse(calls[0].body)).toEqual(reply(value));
 	});
 });

@@ -57,7 +57,7 @@ export interface IChannelHandle {
 	/** Unix seconds; the waiter stops listening after this. */
 	expires_at: number;
 	transport: IChannelClientDescriptor;
-	/** Used when `transport` cannot be reached; always the API push endpoint. */
+	/** API push capability, preferred over a legacy cloud transport when present. */
 	fallback?: IChannelClientDescriptor | null;
 }
 

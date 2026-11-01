@@ -9,9 +9,9 @@ import {
 import { getApiOrigin, getApiUrl } from "@flow-like/flow-like-ui/lib/api-url";
 import { getExecutionRuntime } from "@flow-like/flow-like-ui/lib/execution/runtime-client";
 import {
-	getExecutionMetadata,
 	type ExecutionMetadata,
 	type PreparedExecutionRequest,
+	getExecutionMetadata,
 } from "@flow-like/flow-like-ui/lib/execution/types";
 import type { IAppLegalLinks } from "@flow-like/flow-like-ui/lib/legal-links";
 import type { IOAuthToken } from "@flow-like/flow-like-ui/lib/oauth/types";
@@ -180,6 +180,18 @@ export function createHostedRequest(
 					body,
 					credentials: "omit",
 					timeoutMs: DISPATCH_REQUEST_TIMEOUT_MS,
+					realtime:
+						accessToken && auth?.isAuthenticated && auth.user?.profile.sub
+							? {
+									scope: JSON.stringify([
+										getApiOrigin(),
+										auth.user.profile.iss,
+										auth.user.profile.sub,
+									]),
+									url: `${getApiOrigin()}/api/v1/realtime/poll`,
+									headers: Object.fromEntries(session.headers.entries()),
+								}
+							: undefined,
 				},
 				onUnauthorized: session.onUnauthorized,
 				onRejected: session.onRejected,

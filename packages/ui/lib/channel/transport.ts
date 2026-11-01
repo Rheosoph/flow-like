@@ -1,5 +1,5 @@
-// Client half of Channels: deliver a reply / cancel / steer to the waiter behind a run through the
-// transport its handle names, falling back to the API push endpoint when the transport fails.
+// Remote replies use the API push capability. The API forwards to the execution's
+// scoped transport; old handles without an API capability retain their original path.
 
 import type {
 	IChannelClientDescriptor,
@@ -48,19 +48,31 @@ function deliver(
 }
 
 /**
- * Deliver one push through `handle.transport`; on any transport error retry once through
- * `handle.fallback` (the API push endpoint) when the handle carries one.
+ * Prefer the API capability on legacy cloud handles, so replying needs no additional
+ * frontend provider connection. New remote handles already name this HTTP endpoint.
  */
 export async function rawPushChannel(
 	handle: IChannelHandle,
 	push: Omit<IChannelPush, "channel_id">,
 	options: ChannelPushOptions = {},
 ): Promise<void> {
+	if (options.signal?.aborted)
+		throw options.signal.reason ?? new Error("Channel push was aborted.");
 	const body: IChannelPush = { ...push, channel_id: handle.channel_id };
 	const deliveryOptions =
-		handle.transport.type === "nats"
+		handle.transport.type !== "in_process" &&
+		!isScopedHttpChannel(handle.transport)
 			? { ...options, deliveryId: options.deliveryId ?? crypto.randomUUID() }
 			: options;
+	if (
+		handle.transport.type !== "http" &&
+		handle.transport.type !== "in_process" &&
+		handle.fallback?.type === "http"
+	) {
+		// A failed API push remains retryable through the same authority. Opening a
+		// provider write connection here would bypass the shared-connection design.
+		return pushHttp(handle.fallback, body, deliveryOptions);
+	}
 	try {
 		await deliver(handle.transport, body, deliveryOptions);
 	} catch (primary) {

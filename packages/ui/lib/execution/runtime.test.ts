@@ -1,4 +1,13 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
+import { RealtimeRuntime } from "../realtime/runtime";
+import { getRealtimeClientForRuntime } from "../realtime/runtime-client";
+import type {
+	RealtimeClient,
+	RealtimeConnectionSession,
+	RealtimeListener,
+	RealtimePollRequest,
+	RealtimePollResponse,
+} from "../realtime/types";
 import type { IChannelHandle } from "../schema/channel";
 import type { IIntercomEvent } from "../schema/events/intercom-event";
 import { ExecutionRuntime } from "./runtime";
@@ -106,6 +115,218 @@ async function until(check: () => boolean) {
 }
 
 describe("execution runtime", () => {
+	test("queued replay uses renewed dispatch headers and reports the bus's exact rejected bearer", async () => {
+		let session: RealtimeConnectionSession | undefined;
+		let listener: RealtimeListener | undefined;
+		const close = vi.fn();
+		const busClient: RealtimeClient = {
+			mode: "in-tab",
+			close,
+			setActivity: vi.fn(),
+			setSession: vi.fn(),
+			subscribe: (callback) => {
+				listener = callback;
+				return () => {};
+			},
+			setSubscriptions: () => {
+				void listener?.({
+					type: "snapshot",
+					snapshot: {
+						protocol_version: 1,
+						errors: [],
+						runs: [
+							{
+								run_id: "queued",
+								revision: "r1",
+								status: "completed",
+								progress: 100,
+								after_sequence: -1,
+								has_more: false,
+								events: [],
+							},
+						],
+					},
+				});
+			},
+		};
+		const fetcher = vi
+			.fn(async () =>
+				Response.json({ run_id: "queued", poll_token: "capability" }),
+			)
+			.mockResolvedValueOnce(new Response(null, { status: 401 }));
+		const runtime = new ExecutionRuntime({
+			fetch: fetcher,
+			push: async () => {},
+			realtime: async (incoming, options) => {
+				session = incoming;
+				await options?.onUnauthorized?.("bus-rejected");
+				return busClient;
+			},
+		});
+		const client = connect(runtime);
+		const renew = vi
+			.fn(async () => ({ authorization: "Bearer latest" }))
+			.mockResolvedValueOnce({ authorization: "Bearer fresh" });
+		await client.execute(
+			metadata(),
+			{
+				url: "https://hub.test/invoke",
+				body: {},
+				headers: { authorization: "Bearer old" },
+				realtime: {
+					scope: "account-a",
+					url: "https://hub.test/api/v1/realtime/poll",
+					headers: { authorization: "Bearer old" },
+				},
+			},
+			{ onUnauthorized: renew },
+		);
+		expect(session?.headers).toEqual({ authorization: "Bearer fresh" });
+		expect(renew.mock.calls).toEqual([["old"], ["bus-rejected"]]);
+		expect(close).toHaveBeenCalledOnce();
+	});
+
+	test("queued receipts replay through the shared bus and keep one interaction claim across tabs", async () => {
+		const requests: RealtimePollRequest[] = [];
+		let finish!: (response: Response) => void;
+		const final = new Promise<Response>((resolve) => {
+			finish = resolve;
+		});
+		const response = (
+			after: number,
+			hasMore: boolean,
+			events: RealtimePollResponse["runs"][number]["events"],
+		): Response =>
+			Response.json({
+				protocol_version: 1,
+				errors: [],
+				runs: [
+					{
+						run_id: "queued",
+						revision: `r${after}`,
+						status: "completed",
+						progress: 100,
+						after_sequence: after,
+						has_more: hasMore,
+						events,
+					},
+				],
+			});
+		const bus = new RealtimeRuntime({
+			fetch: async (_url, init) => {
+				requests.push(JSON.parse(String(init?.body)));
+				if (requests.length === 1)
+					return response(0, true, [
+						{
+							sequence: 0,
+							event_id: "question",
+							event_type: "a2ui",
+							payload: {
+								type: "requestElements",
+								request_id: "approval",
+								channel: handle,
+							},
+							created_at: "2026-11-01T00:00:00Z",
+						},
+					]);
+				return final;
+			},
+		});
+		const push = vi.fn(async () => {});
+		const runtime = new ExecutionRuntime({
+			fetch: async () =>
+				Response.json({
+					run_id: "queued",
+					status: "pending",
+					poll_token: "private-poll-token",
+				}),
+			push,
+			realtime: (session, options) =>
+				getRealtimeClientForRuntime(bus, session, options),
+		});
+		const first = connect(runtime);
+		const second = connect(runtime);
+		try {
+			const running = first.execute(metadata(), {
+				url: "https://hub.test/invoke",
+				body: {},
+				realtime: {
+					scope: "account-a",
+					url: "https://hub.test/api/v1/realtime/poll",
+					headers: { Authorization: "Bearer account" },
+					transport: "http",
+				},
+			});
+			await until(() => second.getTask("task")?.status === "waiting");
+			expect(await first.claimRequest(handle)).toBe(true);
+			expect(await second.claimRequest(handle)).toBe(false);
+			await Promise.all([
+				first.submitReply(handle, { ok: true }),
+				second.submitReply(handle, { ok: true }),
+			]);
+			expect(push).toHaveBeenCalledTimes(1);
+			expect(first.getTask("task")?.status).toBe("running");
+			await until(() => requests.length === 2);
+			expect(requests[1].runs[0]).toMatchObject({
+				after_sequence: 0,
+				poll_token: "private-poll-token",
+			});
+			finish(
+				response(1, false, [
+					{
+						sequence: 1,
+						event_id: "done",
+						event_type: "completed",
+						payload: { status: "completed" },
+						created_at: "2026-11-01T00:00:01Z",
+					},
+				]),
+			);
+			await running;
+			expect(
+				first.getTask("task")?.events.map((event) => event.event_id),
+			).toEqual(["queued:receipt", "question", "done"]);
+			expect(JSON.stringify(first.getTask("task"))).not.toContain(
+				"private-poll-token",
+			);
+			expect(first.getTask("task")?.status).toBe("completed");
+		} finally {
+			bus.dispose();
+		}
+	});
+
+	test("healthy and interrupted SSE streams do not open a replay subscription", async () => {
+		const realtime = vi.fn();
+		for (const complete of [true, false]) {
+			const source = stream();
+			const runtime = new ExecutionRuntime({
+				fetch: async () => source.response,
+				push: async () => {},
+				realtime,
+			});
+			const client = connect(runtime);
+			const result = client.execute(metadata(), {
+				url: "https://hub.test/invoke",
+				body: {},
+				realtime: {
+					scope: "account-a",
+					url: "https://hub.test/api/v1/realtime/poll",
+					headers: {},
+				},
+			});
+			const settled = result.catch((error) => error);
+			source.emit(event("run", "run_initiated", { run_id: "streamed" }));
+			if (complete)
+				source.emit(event("done", "completed", { status: "completed" }));
+			source.end();
+			await settled;
+			expect(client.getTask("task")?.status).toBe(
+				complete ? "completed" : "failed",
+			);
+		}
+		expect(realtime).not.toHaveBeenCalled();
+	});
+
 	test("replays ordered events to another tab and delivers one reply after the initiating tab closes", async () => {
 		const source = stream();
 		const push = vi.fn(async () => {});

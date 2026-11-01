@@ -7,8 +7,11 @@ description = "Cloud transports for Flow-Like channels (run ⇄ client replies)"
 [features]
 default = []
 aws = [
-    "dep:aws-credential-types",
+    "aws-receiver",
     "dep:aws-sdk-iotdataplane",
+]
+aws-receiver = [
+    "dep:aws-credential-types",
     "dep:aws-sigv4",
     "dep:aws-smithy-runtime-api",
     "dep:http",

@@ -1404,6 +1404,7 @@ pub fn run() {
             functions::channel::channel_push,
             realtime::realtime_subscribe,
             realtime::realtime_unsubscribe,
+            realtime::realtime_acknowledge,
             functions::a2ui::widget::get_widgets,
             functions::a2ui::widget::get_widget,
             functions::a2ui::widget::create_widget,

@@ -225,6 +225,7 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/solution", routes::solution::routes())
         .nest("/execution", routes::execution::routes())
         .nest("/channels", routes::channel::routes())
+        .nest("/realtime", routes::realtime::routes())
         .nest("/maintenance", routes::maintenance::routes())
         .nest("/usage", routes::usage::routes())
         .nest("/registry", routes::registry::routes())

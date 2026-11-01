@@ -1,0 +1,222 @@
+.effects-preview {
+	max-width: 1540px;
+	padding: 42px;
+}
+.effects-header {
+	display: grid;
+	grid-template-columns: 1.6fr 1fr;
+	align-items: start;
+	gap: 50px;
+	margin-bottom: 48px;
+}
+.effects-header h1 {
+	font-size: clamp(40px, 5vw, 64px);
+	letter-spacing: -2px;
+}
+.effects-header p {
+	max-width: 650px;
+	font-size: 17px;
+	line-height: 1.6;
+}
+.effects-preview button,
+.effects-preview select {
+	padding: 8px 12px;
+	border: 1px solid #d9d4df;
+	border-radius: 9px;
+	background: white;
+	color: inherit;
+	font: inherit;
+}
+.effects-preview button {
+	cursor: pointer;
+}
+.effects-pixel-scale {
+	padding: 20px;
+	border: 1px solid #e5e2e6;
+	border-radius: 22px;
+	background: white;
+}
+.effects-pixel-scale h2 {
+	margin: 0;
+	font-size: 20px;
+}
+.effects-pixel-scale p {
+	font-size: 14px;
+	margin: 8px 0 18px;
+}
+.effects-pixel-scale > div {
+	display: flex;
+	align-items: end;
+	justify-content: space-between;
+	gap: 14px;
+}
+.effects-pixel-scale figure {
+	margin: 0;
+	text-align: center;
+}
+.effects-pixel-scale figcaption {
+	margin-top: 10px;
+	color: #7b7582;
+	font: 12px ui-monospace, monospace;
+}
+.effects-collections {
+	display: grid;
+	grid-template-columns: 3fr 2fr;
+	gap: 40px 20px;
+}
+.effects-collection-screen,
+.effects-collection-print {
+	grid-column: 1 / -1;
+}
+.effects-section-heading {
+	display: flex;
+	align-items: baseline;
+	gap: 16px;
+	margin-bottom: 18px;
+}
+.effects-section-heading h2 {
+	margin: 0;
+	font-size: 24px;
+	letter-spacing: -0.6px;
+}
+.effects-section-heading p {
+	margin: 0;
+	color: #7b7582;
+	font: 12px ui-monospace, monospace;
+}
+.effects-grid {
+	display: grid;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	gap: 18px;
+}
+.effects-collection-pop .effects-grid {
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.effects-collection-status .effects-grid {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.effects-grid figure {
+	margin: 0;
+	padding: 16px;
+	border: 1px solid #e5e2e6;
+	border-radius: 22px;
+	background: white;
+}
+.effects-card-art {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 10px;
+}
+.effects-card-examples {
+	display: grid;
+	gap: 10px;
+}
+.effects-grid figcaption {
+	display: grid;
+	gap: 8px;
+	margin-top: 14px;
+}
+.effects-grid figcaption strong {
+	font-size: 21px;
+	letter-spacing: -0.5px;
+}
+.effects-grid figcaption span {
+	min-height: 2.8em;
+	font: 12px / 1.4 ui-monospace, monospace;
+	color: #7b7582;
+}
+.effects-try {
+	margin-top: 40px;
+	padding-top: 24px;
+	border-top: 1px solid #e5e2e6;
+}
+.effects-try > div:first-child {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+}
+.effects-try h2 {
+	font-size: 21px;
+}
+.effects-try label {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+}
+.effects-crew {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 28px;
+	margin-top: 16px;
+}
+.effects-try > p {
+	color: #7b7582;
+	font-size: 14px;
+}
+@media (max-width: 1400px) {
+	.effects-card-art > .fl-bot {
+		--bot-size: 104px !important;
+	}
+	.effects-card-examples .fl-bot {
+		--bot-size: 44px !important;
+	}
+}
+@media (max-width: 1100px) {
+	.effects-grid {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+	.effects-collections {
+		display: block;
+	}
+	.effects-collection + .effects-collection {
+		margin-top: 32px;
+	}
+	.effects-collection-status .effects-grid {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+}
+@media (max-width: 700px) {
+	.effects-preview {
+		padding: 24px 16px;
+	}
+	.effects-header {
+		grid-template-columns: 1fr;
+		gap: 24px;
+		margin-bottom: 32px;
+	}
+	.effects-grid,
+	.effects-collection-pop .effects-grid,
+	.effects-collection-status .effects-grid {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: 12px;
+	}
+	.effects-grid figure {
+		padding: 12px;
+	}
+	.effects-card-art {
+		gap: 4px;
+	}
+	.effects-card-art > .fl-bot {
+		--bot-size: 88px !important;
+	}
+	.effects-card-examples .fl-bot {
+		--bot-size: 32px !important;
+	}
+	.effects-section-heading,
+	.effects-try > div:first-child {
+		align-items: start;
+		flex-direction: column;
+		gap: 8px;
+	}
+	.effects-grid figcaption strong {
+		font-size: 18px;
+	}
+	.effects-grid figcaption span {
+		font-size: 10px;
+	}
+	.effects-crew {
+		gap: 18px;
+	}
+}

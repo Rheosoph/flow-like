@@ -99,7 +99,11 @@ export function describeMicroWidgetSandbox(
 	const withBase = (base: MicroWidgetCspSource[], key: WidgetCspKey) =>
 		extended(WIDGET_CSP_DIRECTIVES[key], base, key);
 
-	const sandbox: MicroWidgetSandboxToken[] = [{ token: "allow-scripts" }];
+	// Form handlers can run; form-action 'none' still blocks submission navigation.
+	const sandbox: MicroWidgetSandboxToken[] = [
+		{ token: "allow-scripts" },
+		{ token: "allow-forms" },
+	];
 	if (has("downloads")) {
 		sandbox.push({ token: "allow-downloads", grantedBy: "downloads" });
 	}

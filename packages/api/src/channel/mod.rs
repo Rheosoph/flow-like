@@ -3,16 +3,18 @@
 //!
 //! `CHANNEL_TRANSPORT` selects the transport for every run this API dispatches:
 //!
-//! | value | feature | client reply path |
+//! | value | feature | API-to-waiter path |
 //! |---|---|---|
-//! | `http` (default) | — | `POST /api/v1/channels/{cid}/push` |
+//! | `http` (default) | none | Database row polling |
 //! | `aws_mqtt` | `channel-aws` | IoT Core `SendDirectMessage` |
 //! | `azure_web_pubsub` | `channel-azure` | Web PubSub `sendToGroup` |
 //! | `gcp_firebase_rtdb` | `channel-gcp` | Realtime Database write |
-//! | `nats` | `channel-nats` | WebSocket publish with executor acknowledgement |
+//! | `nats` | `channel-nats` | NATS publish with executor acknowledgement |
 //!
-//! Every non-HTTP handle carries the HTTP push endpoint as its fallback; a push arriving there
-//! for a cloud-transport channel is forwarded onto that transport.
+//! Remote clients post to `POST /api/v1/channels/{cid}/push`. The responder token binds each
+//! push to its channel and waiter transport. The API forwards cloud-channel input through its
+//! configured provider. Existing direct provider handles can still use their HTTP fallback;
+//! refreshing one returns an HTTP handle with the original capability and deadline.
 //!
 //! Every dispatched run gets a grant, whoever triggered it — which nodes a board runs is not
 //! something dispatch can know in advance. What the trigger decides is how much that grant is
@@ -163,6 +165,36 @@ pub(crate) fn push_url(api_base_url: &str, channel_id: &str) -> String {
     )
 }
 
+/// Provider errors can embed request URLs whose query or user info carries a credential
+/// (a Firebase `access_token`, reqwest's `for url (…)` suffix). Scheme, host and path remain.
+pub(crate) fn redact_provider_error(error: &flow_like_types::Error) -> String {
+    let message = format!("{error:#}");
+    let mut redacted = String::with_capacity(message.len());
+    let mut rest = message.as_str();
+    while let Some(index) = rest.find("://") {
+        let (head, tail) = rest.split_at(index + 3);
+        redacted.push_str(head);
+        let end = tail
+            .find(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '"' | '\'' | '<' | '>'))
+            .unwrap_or(tail.len());
+        let (url, after) = tail.split_at(end);
+        let location = url.split(['?', '#']).next().unwrap_or_default();
+        let (authority, path) = location.split_at(location.find('/').unwrap_or(location.len()));
+        redacted.push_str(
+            authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host),
+        );
+        redacted.push_str(path);
+        if location.len() < url.len() {
+            redacted.push_str("?<redacted>");
+        }
+        rest = after;
+    }
+    redacted.push_str(rest);
+    redacted
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +259,33 @@ mod tests {
         assert_eq!(
             push_url("https://api.test/", "run-1"),
             "https://api.test/api/v1/channels/run-1/push"
+        );
+    }
+
+    #[test]
+    fn provider_error_urls_lose_their_credentials() {
+        let reqwest_style = flow_like_types::anyhow!(
+            "firebase POST channels/run-1/inbound failed: error sending request for url (https://db.example.test/channels/run-1/inbound.json?access_token=ya29.secret&print=silent)"
+        );
+        assert_eq!(
+            redact_provider_error(&reqwest_style),
+            "firebase POST channels/run-1/inbound failed: error sending request for url (https://db.example.test/channels/run-1/inbound.json?<redacted>)"
+        );
+        let user_info = flow_like_types::anyhow!("connect wss://user:secret@nats.example.test/ws");
+        assert_eq!(
+            redact_provider_error(&user_info),
+            "connect wss://nats.example.test/ws"
+        );
+        let chained = flow_like_types::anyhow!("401 from https://h.test/p#sig=secret end")
+            .context("realtime publish failed");
+        assert_eq!(
+            redact_provider_error(&chained),
+            "realtime publish failed: 401 from https://h.test/p?<redacted> end"
+        );
+        let plain = flow_like_types::anyhow!("NATS channel has no connected waiter");
+        assert_eq!(
+            redact_provider_error(&plain),
+            "NATS channel has no connected waiter"
         );
     }
 }

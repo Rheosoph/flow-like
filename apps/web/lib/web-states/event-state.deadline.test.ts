@@ -1,10 +1,10 @@
 import { isTransportFailure } from "@flow-like/flow-like-ui/lib/api-error";
+import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import {
 	getExecutionRuntime,
 	releaseExecutionRuntime,
 	resetExecutionRuntimes,
 } from "@flow-like/flow-like-ui/lib/execution/runtime-client";
-import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { EXECUTION_METADATA } from "@flow-like/flow-like-ui/lib/execution/types";
 import {
 	DEFAULT_REQUEST_TIMEOUT_MS,
@@ -128,6 +128,80 @@ afterEach(async () => {
 });
 
 const SIXTEEN_MINUTES_MS = 16 * 60_000;
+
+test("queued event receipts use the account bus and preserve the execution callback pipeline", async () => {
+	const signedIn = {
+		isAuthenticated: true,
+		user: {
+			access_token: "viewer-token",
+			profile: { sub: "viewer", iss: "issuer" },
+		},
+	} as never;
+	const replayRequests: unknown[] = [];
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (url: string, init?: RequestInit) => {
+			if (String(url).endsWith("/connect"))
+				return Response.json({
+					protocol_version: 1,
+					expires_at: Math.floor(Date.now() / 1000) + 900,
+					transport: { type: "http" },
+				});
+			if (String(url).endsWith("/poll")) {
+				replayRequests.push(JSON.parse(String(init?.body)));
+				return Response.json({
+					protocol_version: 1,
+					errors: [],
+					runs: [
+						{
+							run_id: "queued-event",
+							revision: "r1",
+							status: "completed",
+							progress: 100,
+							after_sequence: 0,
+							has_more: false,
+							events: [
+								{
+									sequence: 0,
+									event_id: "output",
+									event_type: "a2ui",
+									payload: { type: "surfaceUpdate", surface_id: "page" },
+									created_at: "2026-11-01T00:00:00Z",
+								},
+							],
+						},
+					],
+				});
+			}
+			return Response.json({
+				run_id: "queued-event",
+				status: "pending",
+				poll_token: "run-capability",
+			});
+		}),
+	);
+	const events = vi.fn();
+	const started = vi.fn();
+	const outcome = outcomeOf(
+		execute(new WebEventState({ auth: signedIn }), events, started),
+	);
+	await vi.advanceTimersByTimeAsync(1);
+	await vi.advanceTimersByTimeAsync(1);
+	expect((await outcome).error).toBeUndefined();
+	expect(started).toHaveBeenCalledWith("queued-event");
+	expect(replayRequests[0]).toMatchObject({
+		runs: [
+			{
+				run_id: "queued-event",
+				poll_token: "run-capability",
+				after_sequence: -1,
+			},
+		],
+	});
+	expect(events.mock.calls.flatMap(([batch]) => batch)).toContainEqual(
+		expect.objectContaining({ event_id: "output", event_type: "a2ui" }),
+	);
+});
 
 /** An SSE body the test feeds by hand; `cancelled` records a reader cancelling it. */
 function manualSseResponse() {

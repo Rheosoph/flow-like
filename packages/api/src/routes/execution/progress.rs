@@ -4,7 +4,7 @@
 //! 1. **Executor → API**: Report progress/events (executor JWT)
 //! 2. **User → API**: Long poll for status/events (user JWT)
 //!
-//! Events are stored with TTL and deleted after delivery.
+//! Events expire after their retention period. Cursor-based consumers replay them independently.
 
 use crate::{
     entity::{execution_usage_tracking, sea_orm_active_enums::ExecutionStatus},
@@ -20,11 +20,12 @@ use crate::{
         subject::account_user_id,
         verify_execution_jwt, verify_user_jwt,
     },
+    middleware::jwt::AppUser,
     routes::app::prerun_shared::load_exact_prerun_manifest,
     state::AppState,
 };
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Query, State},
     http::HeaderMap,
 };
@@ -175,6 +176,7 @@ pub async fn report_progress(
         return Ok(Json(match claim {
             RunLeaseClaim::Acquired { run, expires_at } => {
                 mirror_run_update_to_sql(&state, store.as_ref(), &run).await?;
+                notify_realtime_run(&state, &claims, run.status.is_terminal()).await;
                 ProgressUpdateResponse {
                     accepted: true,
                     status: format!("{:?}", run.status),
@@ -329,12 +331,39 @@ pub async fn report_progress(
         }
     }
 
+    notify_realtime_run(&state, &claims, updated.status.is_terminal()).await;
     Ok(Json(ProgressUpdateResponse {
         accepted: true,
         status: format!("{:?}", updated.status),
         lease_acquired: lease_identity.map(|_| true),
         lease_expires_at: None,
     }))
+}
+
+/// The account whose clients can replay this run: the run's user, read from the
+/// signed executor claims. Nobody can subscribe to a run nobody attended (an
+/// unattended fire, an API key's or a shadow run) or to a visitor's pseudonym.
+fn realtime_recipient(claims: &ExecutionClaims) -> Option<&str> {
+    if claims.unattended || claims.technical_user_id.is_some() || claims.shadow == Some(true) {
+        return None;
+    }
+    account_user_id(&claims.sub)
+}
+
+async fn notify_realtime_run(state: &AppState, claims: &ExecutionClaims, terminal: bool) {
+    // Only persisted executor callbacks enter this path. HTTP/SSE output keeps
+    // its existing delivery path and does not publish a second copy.
+    let Some(user_id) = realtime_recipient(claims) else {
+        return;
+    };
+    if terminal {
+        state.channels.publish_realtime_invalidation(user_id).await;
+    } else {
+        state
+            .channels
+            .publish_realtime_run_invalidation(user_id)
+            .await;
+    }
 }
 
 /// Best-effort: a quota finish may already have closed the row, and a failed
@@ -481,6 +510,9 @@ pub async fn push_events(
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to push events: {}", e)))?;
 
+    if accepted > 0 {
+        notify_realtime_run(&state, &claims, false).await;
+    }
     crate::teams::runtime::output(&state, &claims, &body.events).await?;
 
     Ok(Json(PushEventsResponse {
@@ -559,6 +591,25 @@ fn cursor_manages_delivery(after_sequence: Option<i32>) -> bool {
     after_sequence.is_some()
 }
 
+/// Receipts of isolated invokes carry a poll token for `/realtime/poll`, which
+/// also requires the account that started the run. Here that token would stand
+/// alone, so it needs the same account; tokens of async invokes stand alone.
+fn ensure_poll_token_holder(
+    run: &ExecutionRunRecord,
+    claims: &ExecutionClaims,
+    caller: &AppUser,
+) -> Result<(), ApiError> {
+    if run.mode != StateRunMode::KubernetesIsolated {
+        return Ok(());
+    }
+    match caller.sub() {
+        Ok(sub) if sub == claims.sub => Ok(()),
+        _ => Err(ApiError::forbidden(
+            "Replay this run through /realtime/poll with the account that started it",
+        )),
+    }
+}
+
 /// GET /execution/poll
 ///
 /// Long poll for run status and events. Requires user JWT in Authorization header.
@@ -571,6 +622,7 @@ fn cursor_manages_delivery(after_sequence: Option<i32>) -> bool {
     responses(
         (status = 200, description = "Run status and events", body = PollResponse),
         (status = 400, description = "Invalid request or JWT"),
+        (status = 403, description = "The token comes from an isolated invoke; replay that run through /realtime/poll with the account that started it"),
         (status = 404, description = "Run not found")
     ),
     security(
@@ -580,6 +632,7 @@ fn cursor_manages_delivery(after_sequence: Option<i32>) -> bool {
 #[tracing::instrument(name = "GET /execution/poll", skip_all)]
 pub async fn poll_status(
     State(state): State<AppState>,
+    Extension(caller): Extension<AppUser>,
     headers: HeaderMap,
     Query(params): Query<PollParams>,
 ) -> Result<Json<PollResponse>, ApiError> {
@@ -602,6 +655,7 @@ pub async fn poll_status(
             .await
             .map_err(|e| ApiError::internal_error(anyhow!("Failed to get run: {}", e)))?
             .ok_or(ApiError::NOT_FOUND)?;
+        ensure_poll_token_holder(&run, &claims, &caller)?;
 
         // Get events after the client's acknowledged sequence.
         let events = store
@@ -1367,6 +1421,102 @@ mod page_action_delivery_tests {
                 .get("pageAction")
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod realtime_delivery_tests {
+    use super::*;
+    use crate::{execution::state::RunVariant, middleware::jwt::OpenIDUser};
+
+    fn claims(changes: serde_json::Value) -> ExecutionClaims {
+        let mut claims = serde_json::json!({
+            "sub": "user-a", "run_id": "run-a", "app_id": "app-a", "board_id": "board-a",
+            "callback_url": "", "typ": "user", "iss": "test", "aud": "test",
+            "iat": 1, "nbf": 1, "exp": 4_102_444_800_i64, "jti": "test-token"
+        });
+        for (field, value) in changes.as_object().unwrap() {
+            claims[field] = value.clone();
+        }
+        serde_json::from_value(claims).unwrap()
+    }
+
+    fn run(mode: StateRunMode) -> ExecutionRunRecord {
+        ExecutionRunRecord {
+            id: "run-a".into(),
+            board_id: "board-a".into(),
+            version: None,
+            event_id: None,
+            status: StateRunStatus::Running,
+            mode,
+            run_variant: RunVariant::Primary,
+            variant_name: None,
+            shadow_of_run_id: None,
+            regression_run_id: None,
+            input_payload_len: 0,
+            output_payload_len: 0,
+            error_message: None,
+            progress: 0,
+            current_step: None,
+            started_at: None,
+            completed_at: None,
+            expires_at: None,
+            user_id: Some("user-a".into()),
+            technical_user_id: None,
+            app_id: "app-a".into(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn account(sub: &str) -> AppUser {
+        AppUser::OpenID(OpenIDUser {
+            sub: sub.into(),
+            access_token: "token".into(),
+        })
+    }
+
+    #[test]
+    fn only_runs_a_person_attended_wake_that_person() {
+        assert_eq!(
+            realtime_recipient(&claims(serde_json::json!({}))),
+            Some("user-a")
+        );
+        for unattended in [
+            serde_json::json!({"unattended": true}),
+            serde_json::json!({"technical_user_id": "api-key"}),
+            serde_json::json!({"shadow": true}),
+            serde_json::json!({"sub": "frontend:event-1:anonymous-session-1"}),
+            serde_json::json!({"sub": "sink:sink-1"}),
+        ] {
+            assert_eq!(
+                realtime_recipient(&claims(unattended.clone())),
+                None,
+                "{unattended}"
+            );
+        }
+        assert_eq!(
+            realtime_recipient(&claims(serde_json::json!({"shadow": false}))),
+            Some("user-a")
+        );
+    }
+
+    #[test]
+    fn isolated_receipt_tokens_need_the_account_that_started_the_run() {
+        let token = claims(serde_json::json!({}));
+        let isolated = run(StateRunMode::KubernetesIsolated);
+        assert!(ensure_poll_token_holder(&isolated, &token, &account("user-a")).is_ok());
+        for caller in [AppUser::Unauthorized, account("user-b")] {
+            assert_eq!(
+                ensure_poll_token_holder(&isolated, &token, &caller)
+                    .unwrap_err()
+                    .status(),
+                403
+            );
+        }
+        for mode in [StateRunMode::Queue, StateRunMode::Local, StateRunMode::Http] {
+            assert!(ensure_poll_token_holder(&run(mode), &token, &AppUser::Unauthorized).is_ok());
+        }
     }
 }
 

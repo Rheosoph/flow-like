@@ -318,11 +318,18 @@ async function fallback(scope: string): Promise<ExecutionRuntimeClient> {
 			import("./runtime"),
 			import("../channel/transport"),
 			import("./chat-persistence"),
+			import("../realtime/runtime-client"),
 		]).then(
-			([{ ExecutionRuntime }, { rawPushChannel }, { persistExecutionChat }]) =>
+			([
+				{ ExecutionRuntime },
+				{ rawPushChannel },
+				{ persistExecutionChat },
+				{ getRealtimeClient },
+			]) =>
 				new ExecutionRuntime({
 					push: rawPushChannel,
 					persist: persistExecutionChat,
+					realtime: getRealtimeClient,
 				}),
 		);
 	const runtime = await fallbackRuntime;
@@ -353,8 +360,8 @@ async function connect(scope: string): Promise<ExecutionRuntimeClient> {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			const worker = new SharedWorker(
-				new URL("./runtime.shared-worker.ts", import.meta.url),
-				{ type: "module", name: "flow-like-executions-v1" },
+				new URL("../realtime/runtime.shared-worker.ts", import.meta.url),
+				{ type: "module", name: "flow-like-realtime-executions-v2" },
 			);
 			workerClient = new ExecutionRuntimeClient(
 				scope,

@@ -34,6 +34,7 @@ import { IdbMigrationGate } from "../components/idb-migration-gate";
 import { IOSWebviewHardening } from "../components/ios-webview-hardening";
 import { LocalSinkConsentProvider } from "../components/local-sink";
 import { NativeIntegrationProvider } from "../components/native-integration-provider";
+import { NativeRealtimeBridge } from "../components/native-realtime-bridge";
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
 import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
@@ -179,6 +180,7 @@ export function Providers({
 														<PendingInviteRedeemer />
 														<DeviceModelUnlockProvider />
 														<NotificationProvider />
+														<NativeRealtimeBridge />
 														<RuntimeVariablesProviderComponent>
 															<ExecutionServiceProvider>
 																<ExecutionEngineProviderComponent>

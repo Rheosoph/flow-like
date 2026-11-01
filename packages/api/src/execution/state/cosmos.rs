@@ -5,7 +5,7 @@
 //! documents carry a relative `ttl`. Event bodies over 100 KiB are offloaded to the
 //! existing Azure-backed `FlowLikeStore`, keeping Cosmos request units predictable.
 
-use super::{PostgresStateStore, types::*};
+use super::{PostgresStateStore, replay::replay_prefix, types::*};
 use crate::cosmos::{
     CosmosClient, CosmosError, MutationOutcome, QueryParameter, ttl_seconds, validate_container_id,
 };
@@ -847,6 +847,16 @@ impl ExecutionStateStore for CosmosStateStore {
             records.push(self.hydrate_event(document).await?);
         }
         Ok(records)
+    }
+
+    /// A batch is created in sequence order and stops at its first failure, and
+    /// one run's events share a partition, which reads as a consistent prefix.
+    async fn replay_events(
+        &self,
+        run_id: &str,
+        cursor: ReplayCursor,
+    ) -> Result<EventReplay, StateStoreError> {
+        replay_prefix(self, run_id, cursor).await
     }
 
     async fn get_max_sequence(&self, run_id: &str) -> Result<i32, StateStoreError> {

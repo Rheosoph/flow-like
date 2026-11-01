@@ -70,6 +70,9 @@ export async function pushHttp(
 				},
 				body: JSON.stringify(push),
 				signal: timeout.signal,
+				credentials: "omit",
+				cache: "no-store",
+				redirect: "error",
 			});
 		} catch (error) {
 			if (timeout.timedOut()) {

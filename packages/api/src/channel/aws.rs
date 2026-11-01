@@ -99,9 +99,56 @@ pub struct AwsChannelRuntime {
     account_id: String,
     region: String,
     forwarder: Arc<AwsIotForwarder>,
+    iot: aws_sdk_iotdataplane::Client,
 }
 
 impl AwsChannelRuntime {
+    fn realtime_topic(&self, scope: &str) -> Result<String> {
+        let topic = format!(
+            "{}/realtime/{scope}/wake",
+            self.config.topic_prefix.trim_matches('/')
+        );
+        validate_topic(&topic)?;
+        Ok(topic)
+    }
+
+    pub async fn realtime(
+        &self,
+        scope: &str,
+        ttl_secs: i64,
+    ) -> Result<flow_like_types::realtime::RealtimeTransport> {
+        let topic = self.realtime_topic(scope)?;
+        // Each device needs its own id; IoT disconnects an existing duplicate client id.
+        let client_id = format!("realtime-{}", flow_like_types::channel::new_request_id());
+        let policy = executor_session_policy(&self.region, &self.account_id, &client_id, &topic);
+        let credentials = self.assume(&client_id, policy, ttl_secs).await?;
+        Ok(flow_like_types::realtime::RealtimeTransport::AwsMqtt {
+            endpoint: self.config.endpoint.clone(),
+            region: self.region.clone(),
+            client_id,
+            topic,
+            credentials,
+        })
+    }
+
+    pub async fn publish_realtime(&self, scope: &str, payload: &[u8]) -> Result<()> {
+        self.iot
+            .publish()
+            .topic(self.realtime_topic(scope)?)
+            .qos(0)
+            .retain(false)
+            .payload(aws_sdk_iotdataplane::primitives::Blob::new(payload))
+            .send()
+            .await
+            .map_err(|e| {
+                anyhow!(
+                    "AWS IoT realtime publication failed: {}",
+                    DisplayErrorContext(&e)
+                )
+            })?;
+        Ok(())
+    }
+
     pub async fn from_env(sdk: Arc<SdkConfig>) -> Result<Self> {
         let config = AwsChannelConfig::from_env()?;
         let region = config
@@ -131,13 +178,17 @@ impl AwsChannelRuntime {
                 .endpoint_url(format!("https://{}", config.endpoint))
                 .build(),
         );
-        let forwarder = Arc::new(AwsIotForwarder::new(iot, config.topic_prefix.clone()));
+        let forwarder = Arc::new(AwsIotForwarder::new(
+            iot.clone(),
+            config.topic_prefix.clone(),
+        ));
         Ok(Self {
             config,
             sts,
             account_id,
             region,
             forwarder,
+            iot,
         })
     }
 

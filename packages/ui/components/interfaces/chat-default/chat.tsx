@@ -16,6 +16,7 @@ import type { IEventPayloadChat } from "../../../lib";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
+import { botReactionMessages } from "./bot-reaction-context";
 import type { IMessage } from "./chat-db";
 import { ChatFollowUpProvider } from "./chat-follow-up";
 import {
@@ -250,6 +251,14 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		// Several turns can generate at once (global chat); app chats keep exactly one.
 		const [currentMessages, setCurrentMessages] = useState<IMessage[]>([]);
 		const [localMessages, setLocalMessages] = useState<IMessage[]>(messages);
+		const reactionContext = useMemo(
+			() => ({
+				conversationId:
+					sessionId ?? `${appId ?? "chat"}:${eventId ?? "default"}`,
+				messages: botReactionMessages(localMessages, sessionId),
+			}),
+			[localMessages, sessionId, appId, eventId],
+		);
 		const [hasInitiallyScrolled, setHasInitiallyScrolled] = useState(false);
 		const chatBox = useRef<ChatBoxRef>(null);
 		const isScrollingProgrammatically = useRef(false);
@@ -260,6 +269,9 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const currentSession = useRef(sessionId);
 		currentSession.current = sessionId;
 		const interactionDisabled = !concurrency && (isSending || isStreamActive);
+		const isResponseActive = concurrency
+			? concurrency.runs.length > 0
+			: isStreamActive;
 		const isSendingRef = useRef(false);
 		const [sendingContent, setSendingContent] = useState("");
 		const [sendingReaction, setSendingReaction] = useState(false);
@@ -980,6 +992,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										defaultActiveTools={defaultActiveTools}
 										onSendMessage={handleComposerSend}
 										onContentChange={onDraftChange}
+										reactionContext={reactionContext}
+										agentState={isResponseActive ? "working" : "idle"}
 										thinking={thinking}
 										model={model}
 										fileUpload={config?.allow_file_upload ?? false}

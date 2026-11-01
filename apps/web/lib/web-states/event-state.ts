@@ -23,17 +23,17 @@ import {
 } from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { cancelDeviceCommands } from "@flow-like/flow-like-ui/lib/device-bridge";
-import { getExecutionRuntime } from "@flow-like/flow-like-ui/lib/execution/runtime-client";
-import {
-	getExecutionMetadata,
-	isExecutionFinished,
-	type ExecutionMetadata,
-} from "@flow-like/flow-like-ui/lib/execution/types";
 import {
 	isDeviceEventSource,
 	resolveEventSourceIntent,
 } from "@flow-like/flow-like-ui/lib/event-source";
 import { ensureDeviceEventCreation } from "@flow-like/flow-like-ui/lib/event-source-capability";
+import { getExecutionRuntime } from "@flow-like/flow-like-ui/lib/execution/runtime-client";
+import {
+	type ExecutionMetadata,
+	getExecutionMetadata,
+	isExecutionFinished,
+} from "@flow-like/flow-like-ui/lib/execution/types";
 import {
 	requestTimeoutMs,
 	withRequestDeadline,
@@ -82,8 +82,8 @@ import type {
 } from "@flow-like/flow-like-ui/state/backend-state/event-state";
 import type { IPrerunEventResponse } from "@flow-like/flow-like-ui/state/backend-state/types";
 import { oauthConsentStore, oauthTokenStore } from "../oauth-db";
-import { prepareSessionRequest } from "../session-request";
 import { getOAuthApiBaseUrl, getOAuthService } from "../oauth-service";
+import { prepareSessionRequest } from "../session-request";
 import {
 	type WebBackendRef,
 	apiDelete,
@@ -674,6 +674,19 @@ export class WebEventState implements IEventState {
 					body,
 					cancelUrl: `${getApiBaseUrl()}/api/v1/execution/run/{runId}`,
 					timeoutMs: requestTimeoutMs(invokePath, "POST", body.length),
+					realtime:
+						this.backend.auth?.isAuthenticated &&
+						this.backend.auth.user?.profile.sub
+							? {
+									scope: JSON.stringify([
+										getApiOrigin(),
+										this.backend.auth.user.profile.iss,
+										this.backend.auth.user.profile.sub,
+									]),
+									url: `${getApiBaseUrl()}/api/v1/realtime/poll`,
+									headers: Object.fromEntries(session.headers.entries()),
+								}
+							: undefined,
 				},
 				{
 					onResponse: () => recordRunStep("invoke.response", startedAt),

@@ -1,0 +1,64 @@
+.fl-bot-effect-overlay {
+	pointer-events: none;
+}
+
+.fl-bot[data-effect="lcd"] .fl-bot-pupils,
+.fl-bot[data-effect="lcd"] .fl-bot-face {
+	transition-timing-function: steps(2, end);
+}
+
+.fl-bot[data-effect="lcd"] .fl-bot-body,
+.fl-bot[data-effect="lcd"] .fl-bot-character,
+.fl-bot[data-effect="lcd"] .fl-bot-detail {
+	animation-timing-function: steps(6, end);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.fl-bot[data-motion="on"][data-effect="glitch"] .fl-bot-effect-rig {
+		animation: fl-bot-effect-glitch 5.7s steps(1, end) infinite;
+	}
+	.fl-bot[data-motion="on"][data-effect="crt"] .fl-bot-effect-overlay {
+		animation: fl-bot-effect-scan 4.8s linear infinite;
+	}
+	.fl-bot[data-motion="on"][data-effect="neon"] .fl-bot-effect-rig {
+		animation: fl-bot-effect-neon 3.4s ease-in-out infinite;
+	}
+}
+
+@keyframes fl-bot-effect-glitch {
+	0%,
+	91%,
+	95%,
+	100% {
+		transform: translate(0, 0);
+	}
+	92% {
+		transform: translate(-.65px, .2px);
+	}
+	93% {
+		transform: translate(.65px, -.2px);
+	}
+	94% {
+		transform: translate(-.3px, 0);
+	}
+}
+
+@keyframes fl-bot-effect-scan {
+	0%,
+	100% {
+		opacity: 0.8;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+
+@keyframes fl-bot-effect-neon {
+	0%,
+	100% {
+		opacity: 0.88;
+	}
+	50% {
+		opacity: 1;
+	}
+}

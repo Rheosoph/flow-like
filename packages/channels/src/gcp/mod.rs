@@ -15,7 +15,7 @@
 //! may only create single-`payload` children. The database has no TTL: the executor deletes its
 //! channel on close and the API sweeps stale runs by `meta/created_at`.
 
-mod auth;
+pub(crate) mod auth;
 mod channel;
 mod forwarder;
 mod router;
@@ -30,7 +30,7 @@ pub use channel::FirebaseRtdbChannel;
 pub use forwarder::{AccessTokenProvider, FirebaseRtdbForwarder};
 pub use token::{
     FIREBASE_CUSTOM_TOKEN_AUDIENCE, MAX_CUSTOM_CLAIMS_BYTES, MAX_CUSTOM_TOKEN_TTL_SECS,
-    MAX_UID_CHARS, RESERVED_CLAIMS, custom_token,
+    MAX_UID_CHARS, RESERVED_CLAIMS, custom_token, realtime_claims,
 };
 
 /// `uid` the executor signs in with; rules key on the `role` claim, not the uid.

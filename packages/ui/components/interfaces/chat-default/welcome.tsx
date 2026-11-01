@@ -45,6 +45,13 @@ export function ChatWelcome({
 	const description = event.description?.trim();
 	const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
 	const voiceEnabled = isVoiceEnabled(voiceConfig);
+	const reactionContext = useMemo(
+		() => ({
+			conversationId: `welcome:${appId ?? "chat"}:${event.id}`,
+			messages: [],
+		}),
+		[appId, event.id],
+	);
 
 	const handleVoiceModeSend = useCallback(
 		(content: string, audioFile?: File) => {
@@ -305,6 +312,7 @@ export function ChatWelcome({
 							availableTools={config?.tools ?? []}
 							defaultActiveTools={config?.default_tools ?? []}
 							onSendMessage={onSendMessage}
+							reactionContext={reactionContext}
 							thinking={thinking}
 							model={model}
 							onContentChange={(content) => {

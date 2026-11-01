@@ -208,10 +208,52 @@ async fn receiver_bounds_queue_and_rejects_expired_requests() {
     assert!(router.register("closed", now_unix() + 60).is_err());
 }
 
+#[tokio::test]
+async fn realtime_publisher_bounds_a_hung_broker_then_fails_fast() {
+    let hung = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let forwarder = std::sync::Arc::new(
+        NatsForwarder::new(
+            format!("nats://{}", hung.local_addr().unwrap()),
+            nkeys::KeyPair::new_account().seed().unwrap(),
+        )
+        .unwrap(),
+    );
+    let scope = "a".repeat(64);
+    let payload = br#"{"protocol_version":1,"kind":"invalidate","nonce":"n"}"#;
+    let started = std::time::Instant::now();
+    let publishes: Vec<_> = (0..8)
+        .map(|_| {
+            let forwarder = forwarder.clone();
+            let scope = scope.clone();
+            tokio::spawn(async move { forwarder.publish_realtime(&scope, payload).await })
+        })
+        .collect();
+    for publish in publishes {
+        assert!(publish.await.unwrap().is_err());
+    }
+    assert!(
+        started.elapsed() < Duration::from_millis(1800),
+        "concurrent wakeups must share one bounded connect: {:?}",
+        started.elapsed()
+    );
+    let started = std::time::Instant::now();
+    let error = forwarder
+        .publish_realtime(&scope, payload)
+        .await
+        .unwrap_err();
+    assert!(
+        started.elapsed() < Duration::from_millis(200),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(error.to_string().contains("unavailable"), "{error}");
+}
+
 struct Broker {
     process: std::process::Child,
     directory: std::path::PathBuf,
     url: String,
+    websocket_url: String,
     seed: String,
 }
 
@@ -229,13 +271,18 @@ impl Broker {
             .local_addr()
             .unwrap()
             .port();
+        let websocket_port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
         let directory = std::env::temp_dir().join(format!(
             "flow-like-nats-test-{}",
             flow_like_types::channel::new_request_id()
         ));
         std::fs::create_dir(&directory).unwrap();
         let config = directory.join("nats.conf");
-        std::fs::write(&config, format!("listen: 127.0.0.1:{port}\noperator: {operator_jwt}\nresolver: MEMORY\nresolver_preload: {{ {}: {account_jwt} }}\n",account.public_key())).unwrap();
+        std::fs::write(&config, format!("listen: 127.0.0.1:{port}\nwebsocket {{ host: 127.0.0.1, port: {websocket_port}, no_tls: true }}\noperator: {operator_jwt}\nresolver: MEMORY\nresolver_preload: {{ {}: {account_jwt} }}\n",account.public_key())).unwrap();
         let log = std::fs::File::create(directory.join("broker.log")).unwrap();
         let process = std::process::Command::new(binary)
             .arg("-c")
@@ -248,6 +295,7 @@ impl Broker {
             process,
             directory,
             url: format!("nats://127.0.0.1:{port}"),
+            websocket_url: format!("ws://127.0.0.1:{websocket_port}"),
             seed: account.seed().unwrap(),
         };
         for _ in 0..100 {
@@ -321,6 +369,113 @@ impl Broker {
         }
         panic!("NATS broker did not restart");
     }
+}
+
+#[tokio::test]
+#[ignore = "requires NATS_SERVER_BIN and permission to open local sockets"]
+async fn real_broker_realtime_receiver_is_read_only_and_account_scoped() {
+    use flow_like_types::realtime::RealtimeTransport;
+    use futures_util::StreamExt;
+    use std::sync::Arc;
+    use tokio::sync::{Notify, watch};
+
+    let mut broker = Broker::start().await;
+    let scope = "a".repeat(64);
+    let other_scope = "b".repeat(64);
+    let subject = realtime_subject(&scope).unwrap();
+    let other_subject = realtime_subject(&other_scope).unwrap();
+    let token = mint_realtime_subscriber_token(&broker.seed, &scope, 120).unwrap();
+    let transport = RealtimeTransport::Nats {
+        url: broker.websocket_url.clone(),
+        subject: subject.clone(),
+        token: token.clone(),
+    };
+    let wake = Arc::new(Notify::new());
+    let (healthy, mut ready) = watch::channel(false);
+    let notifications = Arc::clone(&wake);
+    let listener =
+        tokio::spawn(
+            async move { crate::realtime::listen(&transport, notifications, healthy).await },
+        );
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while !*ready.borrow() {
+            ready.changed().await.unwrap();
+        }
+    })
+    .await
+    .unwrap();
+    wake.notified().await;
+
+    let publisher = connect(
+        &broker.url,
+        &mint_realtime_publisher_token(&broker.seed, 120).unwrap(),
+    )
+    .await
+    .unwrap();
+    let payload =
+        serde_json::to_vec(&json!({"protocol_version":1,"kind":"invalidate","nonce":"trusted"}))
+            .unwrap();
+    publisher
+        .publish(other_subject.clone(), payload.clone().into())
+        .await
+        .unwrap();
+    publisher
+        .publish(
+            subject.clone(),
+            b"untrusted execution payload".to_vec().into(),
+        )
+        .await
+        .unwrap();
+    publisher.flush().await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), wake.notified())
+            .await
+            .is_err()
+    );
+    publisher
+        .publish(subject.clone(), payload.clone().into())
+        .await
+        .unwrap();
+    publisher.flush().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(3), wake.notified())
+        .await
+        .unwrap();
+
+    // The same receiver credential cannot inject even a correctly shaped wakeup.
+    let receiver = connect(&broker.url, &token).await.unwrap();
+    receiver
+        .publish(subject.clone(), payload.clone().into())
+        .await
+        .unwrap();
+    receiver.flush().await.unwrap();
+    assert!(
+        tokio::time::timeout(Duration::from_millis(200), wake.notified())
+            .await
+            .is_err()
+    );
+
+    // A receiver cannot widen its subscription to another account.
+    let mut foreign = receiver.subscribe(other_subject.clone()).await.unwrap();
+    receiver.flush().await.unwrap();
+    publisher
+        .publish(other_subject, payload.clone().into())
+        .await
+        .unwrap();
+    publisher.flush().await.unwrap();
+    assert!(!matches!(
+        tokio::time::timeout(Duration::from_millis(200), foreign.next()).await,
+        Ok(Some(_))
+    ));
+
+    broker.restart().await;
+    let stopped = tokio::time::timeout(Duration::from_secs(5), listener)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        stopped.is_err(),
+        "provider loss must return control to HTTP replay"
+    );
 }
 
 impl Drop for Broker {
@@ -425,4 +580,64 @@ async fn real_broker_reply_steer_cancel_forwarder_permissions_and_expiry() {
     assert!(channel.is_cancelled().await);
     other.close().await;
     channel.close().await;
+}
+
+#[tokio::test]
+#[ignore = "requires NATS_SERVER_BIN and permission to open local sockets"]
+async fn real_broker_reconnect_presents_a_freshly_minted_credential() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut broker = Broker::start().await;
+    let minted = std::sync::Arc::new(AtomicUsize::new(0));
+    let client = connect_with(&broker.url, MAX_RECONNECTS, CONNECT_TIMEOUT, {
+        let (minted, seed) = (minted.clone(), broker.seed.clone());
+        move || {
+            minted.fetch_add(1, Ordering::SeqCst);
+            mint_realtime_publisher_token(&seed, 60)
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(minted.load(Ordering::SeqCst), 1);
+    broker.restart().await;
+    tokio::time::timeout(CONNECT_TIMEOUT, client.flush())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(minted.load(Ordering::SeqCst) >= 2);
+}
+
+#[tokio::test]
+#[ignore = "requires NATS_SERVER_BIN and permission to open local sockets"]
+async fn real_broker_realtime_publishing_recovers_after_a_restart() {
+    use futures_util::StreamExt;
+
+    let mut broker = Broker::start().await;
+    let scope = "a".repeat(64);
+    let token = mint_realtime_subscriber_token(&broker.seed, &scope, 120).unwrap();
+    let payload = br#"{"protocol_version":1,"kind":"invalidate","nonce":"n"}"#;
+    let forwarder = NatsForwarder::new(broker.url.clone(), broker.seed.clone()).unwrap();
+    for round in 0..2 {
+        if round == 1 {
+            broker.restart().await;
+        }
+        let receiver = connect(&broker.url, &token).await.unwrap();
+        let mut wakeups = receiver
+            .subscribe(realtime_subject(&scope).unwrap())
+            .await
+            .unwrap();
+        receiver.flush().await.unwrap();
+        let delivered = tokio::time::timeout(Duration::from_secs(10), async {
+            while forwarder.publish_realtime(&scope, payload).await.is_err()
+                || !matches!(
+                    tokio::time::timeout(Duration::from_millis(500), wakeups.next()).await,
+                    Ok(Some(_))
+                )
+            {
+                tokio::time::sleep(Duration::from_millis(250)).await;
+            }
+        })
+        .await;
+        assert!(delivered.is_ok(), "round {round}");
+    }
 }

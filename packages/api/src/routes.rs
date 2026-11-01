@@ -27,6 +27,7 @@ pub mod oauth;
 pub mod og;
 pub mod profile;
 pub mod quota_recovery;
+pub mod realtime;
 pub mod registry;
 pub mod sink;
 pub mod solution;

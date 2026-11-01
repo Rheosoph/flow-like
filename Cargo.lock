@@ -11817,6 +11817,7 @@ dependencies = [
  "flow-like-browser",
  "flow-like-catalog",
  "flow-like-catalog-ml",
+ "flow-like-channels",
  "flow-like-device-client",
  "flow-like-device-crypto",
  "flow-like-device-protocol",

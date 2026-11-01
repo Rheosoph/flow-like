@@ -396,6 +396,10 @@ pub async fn dispatch_notification_with_status(
     };
 
     notification.insert(&state.db).await?;
+    state
+        .channels
+        .publish_realtime_invalidation(&input.user_id)
+        .await;
 
     input.icon = prepared_icon.push_icon;
     let push_status = match push_to_user(state, &notification_id, &input, false).await {
@@ -449,6 +453,10 @@ pub async fn dispatch_notification_idempotent(
     )
     .exec_without_returning(&state.db)
     .await?;
+    state
+        .channels
+        .publish_realtime_invalidation(&input.user_id)
+        .await;
     input.icon = prepared_icon.push_icon;
     let push_status = push_to_user(state, notification_id, &input, false)
         .await
