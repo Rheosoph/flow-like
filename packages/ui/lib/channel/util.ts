@@ -15,10 +15,6 @@ export function bodyExcerpt(text: string): string {
 	return text.trim().slice(0, MAX_ERROR_BODY_CHARS);
 }
 
-export function unixSeconds(): number {
-	return Math.floor(Date.now() / 1000);
-}
-
 export interface TimeoutSignal {
 	signal: AbortSignal;
 	timedOut: () => boolean;

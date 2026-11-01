@@ -403,16 +403,18 @@ describe("shared realtime runtime", () => {
 		const start = Date.now();
 		const polls: { at: number; after?: number }[] = [];
 		let unavailable = 2;
-		const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-			const request = JSON.parse(String(init?.body));
-			polls.push({
-				at: Date.now() - start,
-				after: request.runs[0]?.after_sequence,
-			});
-			return unavailable-- > 0
-				? response({ errors: [{ run_id: "a", code: "unavailable" }] })
-				: response({ runs: [run("a", [4])] });
-		});
+		const fetcher = vi.fn(
+			async (_url: RequestInfo | URL, init?: RequestInit) => {
+				const request = JSON.parse(String(init?.body));
+				polls.push({
+					at: Date.now() - start,
+					after: request.runs[0]?.after_sequence,
+				});
+				return unavailable-- > 0
+					? response({ errors: [{ run_id: "a", code: "unavailable" }] })
+					: response({ runs: [run("a", [4])] });
+			},
+		);
 		const runtime = create(fetcher);
 		const first: ReturnType<typeof connect> = connect(
 			runtime,
@@ -549,10 +551,11 @@ describe("shared realtime runtime", () => {
 	});
 
 	test("a signed-out account waits for new credentials instead of probing", async () => {
-		const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) =>
-			new Headers(init?.headers).get("Authorization") === "Bearer renewed"
-				? response({ notifications: notification })
-				: new Response(null, { status: 401 }),
+		const fetcher = vi.fn(
+			async (_url: RequestInfo | URL, init?: RequestInit) =>
+				new Headers(init?.headers).get("Authorization") === "Bearer renewed"
+					? response({ notifications: notification })
+					: new Response(null, { status: 401 }),
 		);
 		const runtime = create(fetcher, { portLeaseMs: 3_600_000 });
 		const first = connect(runtime, "first", "account-a", (message) => {
@@ -711,19 +714,19 @@ describe("shared realtime runtime", () => {
 
 	test("the default fetch is called without a receiver, as browsers require", async () => {
 		const urls: string[] = [];
-		vi.stubGlobal("fetch", function (
-			this: unknown,
-			input: RequestInfo | URL,
-		): Promise<Response> {
-			if (this !== undefined && this !== globalThis)
-				throw new TypeError("Illegal invocation");
-			urls.push(String(input));
-			return Promise.resolve(
-				String(input).endsWith("/connect")
-					? httpGrant()
-					: response({ notifications: notification }),
-			);
-		});
+		vi.stubGlobal(
+			"fetch",
+			function (this: unknown, input: RequestInfo | URL): Promise<Response> {
+				if (this !== undefined && this !== globalThis)
+					throw new TypeError("Illegal invocation");
+				urls.push(String(input));
+				return Promise.resolve(
+					String(input).endsWith("/connect")
+						? httpGrant()
+						: response({ notifications: notification }),
+				);
+			},
+		);
 		const runtime = new RealtimeRuntime();
 		runtimes.push(runtime);
 		const first = connect(runtime, "first");
@@ -750,13 +753,15 @@ describe("shared realtime runtime", () => {
 		async ({ runs, interval }) => {
 			vi.spyOn(Math, "random").mockReturnValue(0.5);
 			const polls: { at: number; timeout: number }[] = [];
-			const fetcher = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-				polls.push({
-					at: Date.now(),
-					timeout: JSON.parse(String(init?.body)).timeout_ms,
-				});
-				return response();
-			});
+			const fetcher = vi.fn(
+				async (_url: RequestInfo | URL, init?: RequestInit) => {
+					polls.push({
+						at: Date.now(),
+						timeout: JSON.parse(String(init?.body)).timeout_ms,
+					});
+					return response();
+				},
+			);
 			const runtime = create(fetcher, {}, () =>
 				httpGrant({ max_poll_wait_ms: 0 }),
 			);
@@ -813,6 +818,17 @@ describe("shared realtime runtime", () => {
 				(item: { run_id: string }) => item.run_id === "a",
 			).after_sequence,
 		).toBe(0);
+	});
+
+	test("a closed runtime tells its tabs instead of going silent", async () => {
+		const fetcher = vi.fn(hold);
+		const runtime = create(fetcher);
+		const first = connect(runtime, "first");
+		first.subscribe();
+		await vi.advanceTimersByTimeAsync(1);
+		runtime.dispose();
+		expect(first.messages.at(-1)).toEqual({ type: "state", state: "closed" });
+		expect(fetcher.mock.calls[0][1]?.signal?.aborted).toBe(true);
 	});
 
 	test("a tab on another hub URL for the same account gets its own connection", async () => {

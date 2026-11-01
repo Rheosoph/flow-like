@@ -1,3 +1,4 @@
+import { getBotClothingFit } from "../clothing-fit";
 import type {
 	BotEquipmentDefinition,
 	BotRenderContext,
@@ -268,9 +269,9 @@ export const healthcareShapes: readonly BotShapeDefinition[] = [
 		silhouette: "M35 44H65V72Q65 78 59 81L54 86H46L41 81Q35 78 35 72Z",
 		anchors: {
 			eyes: { left: [43, 59], right: [57, 59], radius: 2.8 },
-			mouth: [50, 71],
+			mouth: [50, 69],
 			head: { x: 50, y: 22, width: 30 },
-			neck: { y: 77, bottom: 87 },
+			neck: { width: 20, y: 75, bottom: 86 },
 			hand: [35, 78],
 		},
 		renderDetails: ({ palette, equipment }) => (
@@ -392,20 +393,21 @@ function MedicalTop({
 	context: { anchors, palette },
 	type,
 }: { context: BotRenderContext; type: "coat" | "tunic" | "scrubs" }) {
-	const { y } = anchors.neck;
-	const x = anchors.head.x;
-	const bottom = y + 24;
-	const width = anchors.head.width / 48;
-	const height = Math.max(1, anchors.neck.bottom - y) / 24;
+	const y = 0;
+	const x = 0;
+	const bottom = 24;
 	return (
-		<g stroke={palette.ink} strokeWidth="1.2" strokeLinejoin="round">
+		<g
+			transform={getBotClothingFit(anchors).transform}
+			stroke={palette.ink}
+			strokeWidth="1.2"
+			strokeLinejoin="round"
+		>
 			<path
-				d={`M0 ${y}H${x - 12 * width}L${x} ${y + 8 * height}L${x + 12 * width} ${y}H100V${anchors.neck.bottom + 8}H0Z`}
+				d="M-100 0H-12L0 8L12 0H100V32H-100Z"
 				fill={type === "coat" ? palette.sclera : palette.clothing}
 			/>
-			<g
-				transform={`translate(${x} ${y}) scale(${width} ${height}) translate(${-x} ${-y})`}
-			>
+			<g>
 				{type === "coat" ? (
 					<>
 						<path

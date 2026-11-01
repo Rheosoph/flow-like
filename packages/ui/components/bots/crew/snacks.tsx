@@ -120,10 +120,10 @@ export const snacksShapes: readonly BotShapeDefinition[] = [
 			sclera: "#fff8f2",
 		},
 		anchors: {
-			eyes: { left: [40, 77], right: [60, 77], radius: 3.4 },
-			mouth: [50, 88],
+			eyes: { left: [40, 72], right: [60, 72], radius: 3.4 },
+			mouth: [50, 81],
 			head: { x: 50, y: 34, width: 48 },
-			neck: { y: 93, bottom: 105 },
+			neck: { y: 86, bottom: 100 },
 		},
 		cheeks: true,
 		silhouette:

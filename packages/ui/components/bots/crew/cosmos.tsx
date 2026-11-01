@@ -70,13 +70,14 @@ export const cosmosShapes: readonly BotShapeDefinition[] = [
 			clothing: "#395f81",
 		},
 		silhouette: radialPath(50, 64, [40, 33], 12),
+		clothingClip: ovalPath(50, 64, 28),
 		bodyMotion: "rotate",
 		bodyOrigin: [50, 64],
 		anchors: {
 			head: { x: 50, y: 29, width: 44 },
 			eyes: { left: [40, 62], right: [60, 62], radius: 3.8 },
 			mouth: [50, 73],
-			neck: { y: 78, bottom: 99 },
+			neck: { y: 78, bottom: 92, width: 40 },
 		},
 		renderDetails: ({ palette }) => (
 			<circle cx="50" cy="64" r="28" fill={palette.accent} />
@@ -128,9 +129,9 @@ export const cosmosShapes: readonly BotShapeDefinition[] = [
 		silhouette: "M32 40Q33 26 50 13Q67 26 68 40V81Q50 89 32 81Z",
 		anchors: {
 			head: { x: 50, y: 16, width: 30 },
-			eyes: { left: [43, 59], right: [57, 59], radius: 3 },
-			mouth: [50, 71],
-			neck: { y: 79, bottom: 88 },
+			eyes: { left: [43, 53], right: [57, 53], radius: 3 },
+			mouth: [50, 65],
+			neck: { y: 73, bottom: 85 },
 			hand: [29, 80],
 		},
 		renderBackDetails: ({ palette }) => (
@@ -148,14 +149,14 @@ export const cosmosShapes: readonly BotShapeDefinition[] = [
 				/>
 				<circle
 					cx="50"
-					cy="62"
+					cy="56"
 					r="16"
 					fill={palette.cheek}
 					stroke={palette.clothing}
 					strokeWidth="1.5"
 				/>
 				<path
-					d="M39 56Q42 50 48 49"
+					d="M39 50Q42 44 48 43"
 					fill="none"
 					stroke={palette.body}
 					strokeWidth="2"

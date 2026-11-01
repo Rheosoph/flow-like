@@ -440,25 +440,22 @@ describe("shared provider lifecycle", () => {
 	test.each([
 		["https://hub.test/api/v1/realtime/poll", "ws://127.0.0.1:4222"],
 		["http://hub.test/api/v1/realtime/poll", "ws://nats.example.com"],
-	])(
-		"allows cleartext providers next to %s for %s",
-		async (api, provider) => {
-			const open = vi.fn<RealtimeProviderOpener>(async () => ({ close() {} }));
-			const fetcher = vi.fn<RealtimeFetch>(async (url) =>
-				String(url).endsWith("/connect") ? grant(900, provider) : empty(),
-			);
-			const runtime = create(fetcher, open);
-			const first = port(runtime, "first");
-			first.send({
-				type: "session",
-				id: "first",
-				session: { ...first.session, url: api },
-			});
-			first.subscribe();
-			await vi.advanceTimersByTimeAsync(2);
-			expect(open).toHaveBeenCalledTimes(1);
-		},
-	);
+	])("allows cleartext providers next to %s for %s", async (api, provider) => {
+		const open = vi.fn<RealtimeProviderOpener>(async () => ({ close() {} }));
+		const fetcher = vi.fn<RealtimeFetch>(async (url) =>
+			String(url).endsWith("/connect") ? grant(900, provider) : empty(),
+		);
+		const runtime = create(fetcher, open);
+		const first = port(runtime, "first");
+		first.send({
+			type: "session",
+			id: "first",
+			session: { ...first.session, url: api },
+		});
+		first.subscribe();
+		await vi.advanceTimersByTimeAsync(2);
+		expect(open).toHaveBeenCalledTimes(1);
+	});
 
 	test("token refreshes update the grant credentials without reconnecting the provider", async () => {
 		const close = vi.fn();

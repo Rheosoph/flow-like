@@ -180,7 +180,13 @@ export interface BotAnchors {
 	mouth: readonly [number, number];
 	head: { x: number; y: number; width: number };
 	/** The neckline and bottom of clothing may be overridden for each silhouette. */
-	neck: { y: number; bottom: number };
+	neck: {
+		y: number;
+		bottom: number;
+		/** Garment center and width may differ from the head on narrow or asymmetric bodies. */
+		x?: number;
+		width?: number;
+	};
 	hand: readonly [number, number];
 }
 
@@ -214,8 +220,10 @@ export interface BotShapeDefinition {
 	/** Omit to allow all palette roles; an empty array disables color editing. */
 	colorSlots?: readonly BotColorSlot[];
 	anchors: BotAnchors;
-	/** Used both for the painted body and the clothing clip. */
+	/** Used for the painted body and the default clothing clip. */
 	silhouette: string;
+	/** Garment boundary, including holes or a torso that excludes surrounding appendages. */
+	clothingClip?: string;
 	bodyMotion?: "rotate" | "float";
 	bodyOrigin?: readonly [number, number];
 	eyeStyle?: "round" | "dots" | "light" | "sleepy";

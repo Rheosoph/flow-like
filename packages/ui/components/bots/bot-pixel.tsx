@@ -354,6 +354,11 @@ export function drawBotPixels(
 				);
 		}
 		const mask = new Uint8Array(BOT_PIXEL_SIZE * BOT_PIXEL_SIZE);
+		const rule = [...clip.children].some(
+			(child) => styleOf(child).clipRule === "evenodd",
+		)
+			? "evenodd"
+			: "nonzero";
 		for (let index = 0; index < mask.length; index++) {
 			mask[index] =
 				(!parent || parent[index]) &&
@@ -361,6 +366,7 @@ export function drawBotPixels(
 					path,
 					(index % BOT_PIXEL_SIZE) + 0.5,
 					Math.floor(index / BOT_PIXEL_SIZE) + 0.5,
+					rule,
 				)
 					? 1
 					: 0;

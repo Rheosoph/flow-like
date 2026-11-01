@@ -147,7 +147,9 @@ describe("browser realtime connection", () => {
 				.fn(hold)
 				.mockResolvedValueOnce(Response.json(oldSnapshot));
 			vi.stubGlobal("fetch", replayOnly(fetcher));
-			const instances = worker(new RealtimeRuntime({ fetch: replayOnly(fetcher) }));
+			const instances = worker(
+				new RealtimeRuntime({ fetch: replayOnly(fetcher) }),
+			);
 			const client = await connect();
 			let finish!: () => void;
 			let observed = false;
@@ -310,7 +312,9 @@ describe("browser realtime connection", () => {
 			}),
 		);
 		vi.stubGlobal("fetch", replayOnly(fetcher));
-		const instances = worker(new RealtimeRuntime({ fetch: replayOnly(fetcher) }));
+		const instances = worker(
+			new RealtimeRuntime({ fetch: replayOnly(fetcher) }),
+		);
 		const client = await connect();
 		client.subscribe(() => {});
 		client.setSubscriptions({ notifications: false, runs: [{ run_id: "a" }] });
@@ -332,7 +336,9 @@ describe("browser realtime connection", () => {
 			}),
 		);
 		vi.stubGlobal("fetch", replayOnly(fetcher));
-		const instances = worker(new RealtimeRuntime({ fetch: replayOnly(fetcher) }));
+		const instances = worker(
+			new RealtimeRuntime({ fetch: replayOnly(fetcher) }),
+		);
 		const client = await connect();
 		const errors: string[] = [];
 		client.subscribe((update) => {

@@ -74,7 +74,7 @@ export const basicsShapes: readonly BotShapeDefinition[] = [
 			eyes: { left: [37, 66], right: [62, 66], radius: 3.1 },
 			mouth: [50, 82],
 			head: { x: 50, y: 35, width: 44 },
-			neck: { y: 89, bottom: 105 },
+			neck: { y: 86, bottom: 103 },
 		},
 	}),
 	crewShape({
@@ -94,10 +94,10 @@ export const basicsShapes: readonly BotShapeDefinition[] = [
 		silhouette:
 			"M18 94C7 88 9 65 28 60C29 34 62 29 72 59C93 59 98 82 86 95Q53 112 18 94Z",
 		anchors: {
-			eyes: { left: [39, 71], right: [62, 71], radius: 8 },
-			mouth: [51, 85],
+			eyes: { left: [39, 66], right: [62, 66], radius: 8 },
+			mouth: [51, 78],
 			head: { x: 50, y: 40, width: 38 },
-			neck: { y: 88, bottom: 105 },
+			neck: { x: 51, y: 83, width: 48, bottom: 100 },
 		},
 	}),
 ];

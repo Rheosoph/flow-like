@@ -7,17 +7,21 @@ import type {
 	RealtimeListener,
 	RealtimePollRequest,
 	RealtimePollResponse,
+	RealtimeRunSnapshot,
 } from "../realtime/types";
 import type { IChannelHandle } from "../schema/channel";
 import type { IIntercomEvent } from "../schema/events/intercom-event";
+import type { ExecutionRealtimeClientFactory } from "./realtime";
 import { ExecutionRuntime } from "./runtime";
 import { ExecutionRuntimeClient } from "./runtime-client";
-import type {
-	ExecutionAuthorization,
-	ExecutionCommand,
-	ExecutionMessage,
-	ExecutionMetadata,
-	ExecutionTask,
+import {
+	type ExecutionAuthorization,
+	type ExecutionCommand,
+	ExecutionDetachedError,
+	type ExecutionMessage,
+	type ExecutionMetadata,
+	type ExecutionTask,
+	type PreparedExecutionRequest,
 } from "./types";
 
 const clients: ExecutionRuntimeClient[] = [];
@@ -114,13 +118,89 @@ async function until(check: () => boolean) {
 	expect(check()).toBe(true);
 }
 
+function queued(
+	overrides: Partial<PreparedExecutionRequest> = {},
+): PreparedExecutionRequest {
+	return {
+		url: "https://hub.test/invoke",
+		body: {},
+		cancelUrl: "https://hub.test/runs/{runId}",
+		realtime: {
+			scope: "account-a",
+			url: "https://hub.test/api/v1/realtime/poll",
+			headers: { Authorization: "Bearer account" },
+		},
+		...overrides,
+	};
+}
+
+/** A replay bus whose updates the test delivers. */
+function fakeBus() {
+	let listener: RealtimeListener | undefined;
+	const factory: ExecutionRealtimeClientFactory = async () => ({
+		setSession: vi.fn(),
+		setActivity: vi.fn(),
+		setSubscriptions: vi.fn(),
+		close: vi.fn(),
+		subscribe: (callback) => {
+			listener = callback;
+			return () => {};
+		},
+	});
+	return {
+		factory,
+		emit: async (update: Parameters<RealtimeListener>[0]) => {
+			await until(() => listener !== undefined);
+			await listener?.(update);
+		},
+	};
+}
+
+function replayed(run: Partial<RealtimeRunSnapshot> = {}) {
+	return {
+		type: "snapshot" as const,
+		snapshot: {
+			protocol_version: 1 as const,
+			errors: [],
+			runs: [
+				{
+					run_id: "queued",
+					revision: "r1",
+					status: "COMPLETED",
+					progress: 100,
+					events: [],
+					after_sequence: -1,
+					has_more: false,
+					...run,
+				},
+			],
+		},
+	};
+}
+
+function queuedRuntime(
+	bus: ReturnType<typeof fakeBus>,
+	deletes: string[] = [],
+) {
+	return new ExecutionRuntime({
+		fetch: async (url, init) => {
+			if (init?.method === "DELETE") {
+				deletes.push(String(url));
+				return new Response(null, { status: 204 });
+			}
+			return Response.json({ run_id: "queued", poll_token: "capability" });
+		},
+		push: async () => {},
+		realtime: bus.factory,
+	});
+}
+
 describe("execution runtime", () => {
 	test("queued replay uses renewed dispatch headers and reports the bus's exact rejected bearer", async () => {
 		let session: RealtimeConnectionSession | undefined;
 		let listener: RealtimeListener | undefined;
 		const close = vi.fn();
 		const busClient: RealtimeClient = {
-			mode: "in-tab",
 			close,
 			setActivity: vi.fn(),
 			setSession: vi.fn(),
@@ -213,7 +293,15 @@ describe("execution runtime", () => {
 				],
 			});
 		const bus = new RealtimeRuntime({
-			fetch: async (_url, init) => {
+			fetch: async (url, init) => {
+				if (String(url).endsWith("/connect"))
+					return Response.json({
+						protocol_version: 1,
+						expires_at: Math.floor(Date.now() / 1000) + 900,
+						expires_in: 900,
+						max_poll_wait_ms: 20_000,
+						transport: { type: "http" },
+					});
 				requests.push(JSON.parse(String(init?.body)));
 				if (requests.length === 1)
 					return response(0, true, [
@@ -470,7 +558,7 @@ describe("execution runtime", () => {
 			},
 		);
 		const runtime = new ExecutionRuntime({
-			fetch: fetcher as typeof fetch,
+			fetch: fetcher,
 			push,
 		});
 		const client = connect(runtime);
@@ -605,7 +693,7 @@ describe("execution runtime", () => {
 			},
 		);
 		const runtime = new ExecutionRuntime({
-			fetch: fetcher as typeof fetch,
+			fetch: fetcher,
 			push: async () => {},
 		});
 		const first = connect(runtime);
@@ -768,5 +856,249 @@ describe("execution runtime", () => {
 				successful ? "completed" : "failed",
 			);
 		}
+	});
+
+	test("a queued run keeps waiting through retrying replay states and unavailable replays", async () => {
+		const bus = fakeBus();
+		const client = connect(queuedRuntime(bus));
+		let settled = false;
+		const result = client.execute(metadata(), queued()).finally(() => {
+			settled = true;
+		});
+		await bus.emit({ type: "state", state: "unsupported" });
+		await bus.emit({ type: "state", state: "unauthorized" });
+		await bus.emit({
+			type: "snapshot",
+			snapshot: {
+				protocol_version: 1,
+				runs: [],
+				errors: [{ run_id: "queued", code: "unavailable" }],
+			},
+		});
+		await new Promise((resolve) => setTimeout(resolve, 5));
+		expect(settled).toBe(false);
+		expect(client.getTask("task")?.status).toBe("running");
+		await bus.emit(replayed());
+		await result;
+		expect(client.getTask("task")?.status).toBe("completed");
+	});
+
+	test("a queued run the API cannot find fails", async () => {
+		const bus = fakeBus();
+		const client = connect(queuedRuntime(bus));
+		const result = client.execute(metadata(), queued()).catch((error) => error);
+		await bus.emit({
+			type: "snapshot",
+			snapshot: {
+				protocol_version: 1,
+				runs: [],
+				errors: [{ run_id: "queued", code: "not_found" }],
+			},
+		});
+		expect((await result).message).toContain("not_found");
+		expect(client.getTask("task")?.status).toBe("failed");
+	});
+
+	test.each([
+		[{ error: "Executor crashed" }, "Executor crashed"],
+		[
+			{
+				events: [
+					{
+						sequence: 0,
+						event_id: "failure",
+						event_type: "error",
+						payload: { message: "Node 'Fetch' failed" },
+						created_at: "2026-11-01T00:00:00Z",
+					},
+				],
+				after_sequence: 0,
+			},
+			"Node 'Fetch' failed",
+		],
+		[{ status: "TIMEOUT" }, "The workflow timed out."],
+	])("a failed queued run reports why it failed: %j", async (run, message) => {
+		const bus = fakeBus();
+		const client = connect(queuedRuntime(bus));
+		const result = client.execute(metadata(), queued()).catch((error) => error);
+		await bus.emit(replayed({ status: "FAILED", ...run }));
+		expect((await result).message).toBe(message);
+		expect(client.getTask("task")).toMatchObject({
+			status: "failed",
+			error: message,
+		});
+	});
+
+	test("following a queued run is not bounded by the dispatch deadline", async () => {
+		const bus = fakeBus();
+		const client = connect(queuedRuntime(bus));
+		const result = client.execute(metadata(), queued({ timeoutMs: 5 }));
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(client.getTask("task")?.status).toBe("running");
+		await bus.emit(replayed());
+		await result;
+		expect(client.getTask("task")?.status).toBe("completed");
+	});
+
+	test("stopping a followed queued run sends the DELETE and ends it as cancelled", async () => {
+		const bus = fakeBus();
+		const deletes: string[] = [];
+		const client = connect(queuedRuntime(bus, deletes));
+		const result = client.execute(metadata(), queued()).catch((error) => error);
+		await until(() => client.getTask("task")?.runId === "queued");
+		await bus.emit({ type: "state", state: "reconnecting" });
+		await client.cancel("task");
+		expect((await result).name).toBe("AbortError");
+		expect(deletes).toEqual(["https://hub.test/runs/queued"]);
+		expect(client.getTask("task")?.status).toBe("cancelled");
+	});
+
+	test("a closed replay detaches the run without failing it, and it can still be stopped", async () => {
+		const bus = fakeBus();
+		const deletes: string[] = [];
+		const client = connect(queuedRuntime(bus, deletes));
+		const result = client.execute(metadata(), queued()).catch((error) => error);
+		await bus.emit({ type: "state", state: "closed" });
+		const error = await result;
+		expect(error).toBeInstanceOf(ExecutionDetachedError);
+		expect(error.runId).toBe("queued");
+		await until(() => client.getTask("task")?.detached === true);
+		expect(client.getTask("task")).toMatchObject({ status: "running" });
+		expect(client.getTask("task")?.error).toBeUndefined();
+		await client.cancel("task");
+		expect(deletes).toEqual(["https://hub.test/runs/queued"]);
+		await until(() => client.getTask("task")?.status === "cancelled");
+	});
+
+	test("a closed account bus detaches the runs it was replaying", async () => {
+		let polls = 0;
+		const bus = new RealtimeRuntime({
+			fetch: async (url, init) => {
+				if (String(url).endsWith("/connect"))
+					return Response.json({
+						protocol_version: 1,
+						expires_at: Math.floor(Date.now() / 1000) + 900,
+						expires_in: 900,
+						max_poll_wait_ms: 20_000,
+						transport: { type: "http" },
+					});
+				polls++;
+				return new Promise<Response>((_, reject) =>
+					init?.signal?.addEventListener(
+						"abort",
+						() => reject(new Error("aborted")),
+						{ once: true },
+					),
+				);
+			},
+		});
+		const runtime = new ExecutionRuntime({
+			fetch: async () => Response.json({ run_id: "queued" }),
+			push: async () => {},
+			realtime: (session, options) =>
+				getRealtimeClientForRuntime(bus, session, options),
+		});
+		const client = connect(runtime);
+		const result = client.execute(metadata(), queued()).catch((error) => error);
+		await until(() => polls > 0);
+		bus.dispose();
+		const error = await result;
+		expect(error).toBeInstanceOf(ExecutionDetachedError);
+		expect(error.runId).toBe("queued");
+		await until(() => client.getTask("task")?.detached === true);
+	});
+
+	test("closing the last tab detaches a followed run that a later tab can stop", async () => {
+		const bus = fakeBus();
+		const deletes: string[] = [];
+		const runtime = queuedRuntime(bus, deletes);
+		const first = connect(runtime);
+		const result = first.execute(metadata(), queued()).catch((error) => error);
+		await until(() => first.getTask("task")?.runId === "queued");
+		await bus.emit({ type: "state", state: "connected" });
+		first.close();
+		const error = await result;
+		expect(error).toBeInstanceOf(ExecutionDetachedError);
+		expect(error.runId).toBe("queued");
+		const second = connect(runtime);
+		await second.ready;
+		await until(() => second.getTask("task")?.detached === true);
+		expect(second.getTask("task")?.status).toBe("running");
+		await second.cancel("task");
+		expect(deletes).toEqual(["https://hub.test/runs/queued"]);
+		await until(() => second.getTask("task")?.status === "cancelled");
+	});
+
+	test("a finished run keeps its outcome for later tabs but releases its events once a tab received it", async () => {
+		const source = stream();
+		const runtime = new ExecutionRuntime({
+			fetch: async () => source.response,
+			push: async () => {},
+		});
+		const first = connect(runtime);
+		await first.ready;
+		const running = first.execute(metadata(), {
+			url: "https://example.test/invoke",
+			body: {},
+		});
+		source.emit(
+			event("out", "chat_out", { response: "Done" }),
+			event("done", "completed", { status: "completed" }),
+		);
+		await running;
+		expect(first.getTask("task")?.events).toHaveLength(2);
+		const late = connect(runtime);
+		await late.ready;
+		expect(late.getTask("task")).toMatchObject({
+			status: "completed",
+			preview: "Done",
+			events: [],
+		});
+	});
+
+	test("a run that finished while no tab was connected reaches the next tab in full", async () => {
+		const sources = [stream(), stream()];
+		const finals: string[] = [];
+		let dispatched = 0;
+		const runtime = new ExecutionRuntime({
+			fetch: async () => sources[dispatched++].response,
+			push: async () => {},
+			persist: async (task, final) => {
+				if (final) finals.push(task.taskId);
+			},
+		});
+		const first = connect(runtime);
+		await first.ready;
+		const chat = {} as ExecutionMetadata["chat"];
+		for (const id of ["a", "b"])
+			void first
+				.execute(
+					{ ...metadata(id), chat },
+					{ url: "https://example.test/invoke", body: {} },
+				)
+				.catch(() => undefined);
+		await until(() => dispatched === 2);
+		first.close();
+		const large = "x".repeat(5 * 1024 * 1024);
+		for (const [index, id] of ["a", "b"].entries()) {
+			sources[index].emit(
+				event(`${id}-out`, "chat_out", { response: large }),
+				event(`${id}-done`, "completed", { status: "completed" }),
+			);
+			await until(() => finals.includes(id));
+		}
+		const late = connect(runtime);
+		await late.ready;
+		expect(late.getTask("a")).toMatchObject({
+			status: "completed",
+			events: [],
+		});
+		expect(late.getTask("b")?.events.map((item) => item.event_id)).toEqual([
+			"b-out",
+			"b-done",
+		]);
+		const later = connect(runtime);
+		await later.ready;
+		expect(later.getTask("b")?.events).toEqual([]);
 	});
 });

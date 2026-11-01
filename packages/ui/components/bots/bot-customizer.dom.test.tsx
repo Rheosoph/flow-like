@@ -5,6 +5,7 @@ import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { BotCustomizer, type BotCustomizerProps } from "./bot-customizer";
 import { defaultBotCatalog } from "./catalog";
+import { canSaveBotAppearance } from "./save-eligibility";
 import type { BotAppearance, BotAvatarProps, BotCatalog } from "./types";
 
 vi.mock("./bot-avatar", () => ({
@@ -217,6 +218,128 @@ async function mount(
 }
 
 describe("BotCustomizer", () => {
+	it("resets the complete draft and preview to the catalog default without saving", async () => {
+		const initial: BotAppearance = {
+			kind: "angular",
+			equipment: { head: "helm", neck: "scarf" },
+			colors: { body: { kind: "swatch", colorId: "color-sky" } },
+			variant: "gold",
+			frame: "square",
+			backdrop: "stars",
+			halo: "orbit",
+			effect: "pixel",
+			emote: "heart",
+			dark: true,
+			skills: ["code"],
+		};
+		const original = structuredClone(initial);
+		const onSave = vi.fn();
+		const onChange = await mount(initial, vi.fn(), { onSave });
+		await search("angular");
+		await click("Pause preview animation");
+		await click("Happy", group("Preview expression"));
+		await click("Follow cursor", group("Preview pose"));
+		const mood = container.querySelector<HTMLSelectElement>(
+			'[aria-label="Preview mood or status"]',
+		);
+		if (!mood) throw new Error("Missing mood picker");
+		await act(async () => {
+			mood.value = "state:offline";
+			mood.dispatchEvent(new Event("change", { bubbles: true }));
+		});
+		await click("Reset bot");
+		expect(onChange).toHaveBeenCalledExactlyOnceWith({ kind: "round" });
+		expect(onSave).not.toHaveBeenCalled();
+		expect(initial).toEqual(original);
+		const preview = container.querySelector('[role="img"]');
+		expect(preview?.getAttribute("data-kind")).toBe("round");
+		expect(preview?.getAttribute("data-expression")).toBe("neutral");
+		expect(preview?.getAttribute("data-pose")).toBe("idle");
+		expect(preview?.getAttribute("data-animated")).toBe("true");
+		expect(preview?.getAttribute("data-agent-state")).toBe("idle");
+		expect(mood.value).toBe("custom");
+		expect(
+			container.querySelector<HTMLInputElement>('[aria-label="Search crew"]')
+				?.value,
+		).toBe("");
+		expect(button("Choose Angular bot")).toBeDefined();
+		expect(button("Choose Custom bot")).toBeDefined();
+	});
+
+	it("randomizes custom catalog items with compatible owned gear and no stale draft fields", async () => {
+		const withGear: BotCatalog = {
+			...catalog,
+			packs: {
+				...catalog.packs,
+				"basics-crew": {
+					...catalog.packs["basics-crew"],
+					equipmentIds: ["cap", "scarf", "custom-hat"],
+				},
+				"tech-crew": {
+					...catalog.packs["tech-crew"],
+					equipmentIds: ["helm", "locked-coat"],
+				},
+			},
+			equipment: {
+				...catalog.equipment,
+				"custom-hat": {
+					id: "custom-hat",
+					label: "Custom hat",
+					slot: "head",
+					kinds: ["custom"],
+					render: () => null,
+				},
+				"locked-coat": {
+					id: "locked-coat",
+					label: "Locked coat",
+					slot: "neck",
+					kinds: ["custom"],
+					render: () => null,
+				},
+			},
+		};
+		const initial: BotAppearance = {
+			kind: "round",
+			equipment: { head: "cap", neck: "locked-coat" },
+			colors: { body: { kind: "swatch", colorId: "holo-aurora" } },
+			variant: "gold",
+			dark: true,
+			skills: ["code"],
+		};
+		const original = structuredClone(initial);
+		const ownedPackIds = ["basics-crew"];
+		const onSave = vi.fn();
+		const onChange = await mount(initial, vi.fn(), {
+			catalog: withGear,
+			ownedPackIds,
+			onSave,
+		});
+		await click("Happy", group("Preview expression"));
+		const random = vi.spyOn(Math, "random").mockReturnValue(0.9);
+		try {
+			await click("Randomize bot");
+		} finally {
+			random.mockRestore();
+		}
+		expect(onChange).toHaveBeenCalledTimes(1);
+		const next = onChange.mock.calls[0][0] as BotAppearance;
+		expect(next.kind).toBe("custom");
+		expect(next.equipment?.neck).toBe("scarf");
+		expect(next.equipment?.head).toBe("custom-hat");
+		expect(next.colors).toBeUndefined();
+		expect(next.variant).toBeUndefined();
+		expect(next.dark).toBeUndefined();
+		expect(next.skills).toBeUndefined();
+		expect(canSaveBotAppearance(next, withGear, ownedPackIds)).toBe(true);
+		expect(button("Save bot").disabled).toBe(false);
+		expect(onSave).not.toHaveBeenCalled();
+		expect(initial).toEqual(original);
+		expect(JSON.parse(JSON.stringify(next))).toEqual(next);
+		expect(
+			container.querySelector('[role="img"]')?.getAttribute("data-expression"),
+		).toBe("neutral");
+	});
+
 	it("groups every look and changes effects without clearing the outfit or emote", async () => {
 		const value: BotAppearance = {
 			kind: "round",

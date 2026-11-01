@@ -1,20 +1,13 @@
 // Remote replies use the API push capability. The API forwards to the execution's
-// scoped transport; old handles without an API capability retain their original path.
+// scoped transport, so a client never holds provider write credentials.
 
 import type {
 	IChannelClientDescriptor,
 	IChannelHandle,
 	IChannelPush,
 } from "../schema/channel";
-import { pushAwsMqtt } from "./aws-mqtt";
-import {
-	pushAzureWebPubSub,
-	resetAzureWebPubSubConnections,
-} from "./azure-web-pubsub";
-import { pushFirebaseRtdb, resetFirebaseSessions } from "./gcp-firebase-rtdb";
 import { isScopedHttpChannel, pushHttp } from "./http";
 import { pushInProcess } from "./in-process";
-import { pushNats, resetNatsConnections } from "./nats";
 import { type ChannelPushOptions, errorMessage } from "./util";
 
 export { isChannelHandle } from "./handle";
@@ -30,26 +23,18 @@ function deliver(
 			return pushHttp(descriptor, push, options);
 		case "in_process":
 			return pushInProcess(push);
-		case "aws_mqtt":
-			return pushAwsMqtt(descriptor, push, options);
-		case "azure_web_pubsub":
-			return pushAzureWebPubSub(descriptor, push, options);
-		case "gcp_firebase_rtdb":
-			return pushFirebaseRtdb(descriptor, push, options);
-		case "nats":
-			return pushNats(descriptor, push, options);
 		default:
 			return Promise.reject(
 				new Error(
-					`Unknown channel transport '${(descriptor as { type?: unknown }).type}' for channel '${push.channel_id}'.`,
+					`Channel '${push.channel_id}' names the '${(descriptor as { type?: unknown }).type}' transport without an API push capability.`,
 				),
 			);
 	}
 }
 
 /**
- * Prefer the API capability on legacy cloud handles, so replying needs no additional
- * frontend provider connection. New remote handles already name this HTTP endpoint.
+ * Provider handles from older APIs carry the API capability as their fallback; it is the
+ * only path a reply takes, so replying needs no frontend provider connection.
  */
 export async function rawPushChannel(
 	handle: IChannelHandle,
@@ -69,8 +54,7 @@ export async function rawPushChannel(
 		handle.transport.type !== "in_process" &&
 		handle.fallback?.type === "http"
 	) {
-		// A failed API push remains retryable through the same authority. Opening a
-		// provider write connection here would bypass the shared-connection design.
+		// A failed API push remains retryable through the same authority.
 		return pushHttp(handle.fallback, body, deliveryOptions);
 	}
 	try {
@@ -94,11 +78,4 @@ export async function rawPushChannel(
 			);
 		}
 	}
-}
-
-/** Drop cached transport sessions when the execution runtime retires. */
-export function resetChannelClientCaches(): void {
-	resetAzureWebPubSubConnections();
-	resetFirebaseSessions();
-	resetNatsConnections();
 }

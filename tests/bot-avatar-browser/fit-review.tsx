@@ -1,7 +1,9 @@
 import { useState } from "react";
 import {
+	BOT_EXPRESSIONS,
 	BotAvatar,
 	type BotEffect,
+	type BotExpression,
 	type BotFrame,
 	type BotPose,
 	defaultBotCatalog,
@@ -20,14 +22,18 @@ const OUTFITS = [
 ] as const;
 const OVERVIEW_OUTFITS = ["sweater", "doctor-coat", "denim-jacket"] as const;
 const POSES: readonly BotPose[] = ["center", "left", "right", "sleep", "idle"];
+const FRAMES: readonly BotFrame[] = ["circle", "squircle", "square"];
+
+function randomValue<T>(values: readonly T[]): T | undefined {
+	return values[Math.floor(Math.random() * values.length)];
+}
 
 export function BotFitReview({ parameters }: { parameters: URLSearchParams }) {
 	const requestedKind = parameters.get("kind") ?? "mochi";
-	const [kind, setKind] = useState(
-		Object.hasOwn(defaultBotCatalog.shapes, requestedKind)
-			? requestedKind
-			: "mochi",
-	);
+	const initialKind = Object.hasOwn(defaultBotCatalog.shapes, requestedKind)
+		? requestedKind
+		: "mochi";
+	const [kind, setKind] = useState(initialKind);
 	const [overview, setOverview] = useState(parameters.has("overview"));
 	const [packId, setPackId] = useState(parameters.get("pack") ?? "all");
 	const requestedPose = parameters.get("pose") as BotPose;
@@ -41,6 +47,12 @@ export function BotFitReview({ parameters }: { parameters: URLSearchParams }) {
 		parameters.get("frame") === "square" ? "square" : "circle",
 	);
 	const [playing, setPlaying] = useState(false);
+	const requestedExpression = parameters.get("expression") as BotExpression;
+	const [expression, setExpression] = useState<BotExpression>(
+		BOT_EXPRESSIONS.includes(requestedExpression)
+			? requestedExpression
+			: "neutral",
+	);
 	const shapes = Object.values(defaultBotCatalog.shapes);
 	const currentIndex = shapes.findIndex((shape) => shape.id === kind);
 	const currentShape = defaultBotCatalog.shapes[kind];
@@ -51,6 +63,31 @@ export function BotFitReview({ parameters }: { parameters: URLSearchParams }) {
 		defaultBotCatalog.equipment[requestedOutfit].slot === "neck"
 			? [...new Set([...OUTFITS, requestedOutfit])]
 			: OUTFITS;
+
+	function resetPreview() {
+		setKind(initialKind);
+		setPackId("all");
+		setPose("center");
+		setExpression("neutral");
+		setFrame("circle");
+		setEffect("none");
+		setPlaying(false);
+		setOverview(false);
+	}
+
+	function randomizePreview() {
+		const collection = Object.hasOwn(defaultBotCatalog.packs, packId)
+			? defaultBotCatalog.packs[packId].shapeIds
+			: shapes.map((shape) => shape.id);
+		setKind(
+			randomValue(collection.filter((character) => character !== kind)) ?? kind,
+		);
+		setPose(randomValue(POSES) ?? "center");
+		setExpression(randomValue(BOT_EXPRESSIONS) ?? "neutral");
+		setFrame(randomValue(FRAMES) ?? "circle");
+		setPlaying(false);
+		setOverview(false);
+	}
 
 	function characterRow(character: string, compact: boolean) {
 		const shape = defaultBotCatalog.shapes[character];
@@ -87,6 +124,7 @@ export function BotFitReview({ parameters }: { parameters: URLSearchParams }) {
 										equipment: outfit === "none" ? {} : { neck: outfit },
 									}}
 									pose={pose}
+									expression={expression}
 									size={compact ? 120 : 200}
 									animated={playing}
 								/>
@@ -112,6 +150,17 @@ export function BotFitReview({ parameters }: { parameters: URLSearchParams }) {
 					Compare the bare silhouette with each garment, one character at a
 					time.
 				</p>
+				<fieldset
+					className="fit-review-actions"
+					aria-label="Fit review actions"
+				>
+					<button type="button" data-fit-reset onClick={resetPreview}>
+						Reset
+					</button>
+					<button type="button" data-fit-randomize onClick={randomizePreview}>
+						Randomize
+					</button>
+				</fieldset>
 			</header>
 			<fieldset className="gallery-controls" aria-label="Fit review controls">
 				<label>
@@ -165,7 +214,21 @@ export function BotFitReview({ parameters }: { parameters: URLSearchParams }) {
 						value={frame}
 						onChange={(event) => setFrame(event.target.value as BotFrame)}
 					>
-						{["circle", "squircle", "square"].map((value) => (
+						{FRAMES.map((value) => (
+							<option key={value}>{value}</option>
+						))}
+					</select>
+				</label>
+				<label>
+					Expression
+					<select
+						aria-label="Fit expression"
+						value={expression}
+						onChange={(event) =>
+							setExpression(event.target.value as BotExpression)
+						}
+					>
+						{BOT_EXPRESSIONS.map((value) => (
 							<option key={value}>{value}</option>
 						))}
 					</select>

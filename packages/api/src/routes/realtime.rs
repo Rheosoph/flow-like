@@ -44,7 +44,7 @@ use sea_orm::{
     ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, QuerySelect,
     QueryTrait,
     prelude::DateTimeWithTimeZone,
-    sea_query::{Alias, Expr, ExprTrait, Query, SelectStatement},
+    sea_query::{Alias, Expr, Query, SelectStatement},
 };
 use serde::Serialize;
 use std::{
@@ -459,6 +459,8 @@ async fn notification_update(
 
 /// One statement per check, so a held poll costs one round trip per pass.
 fn inbox_fingerprint_query(sub: &str) -> SelectStatement {
+    use sea_orm::sea_query::ExprTrait;
+
     let notifications =
         || notification::Entity::find().filter(notification::Column::UserId.eq(sub));
     let mut package_invites = pending_package_invitations(sub, chrono::Utc::now().fixed_offset())

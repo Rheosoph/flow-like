@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { getBotClothingFit } from "./clothing-fit";
 import { defaultBotColorPacks, defaultBotColors } from "./color-catalog";
 import { normalizeBotHex } from "./colors";
 import { crewEquipment, crewPacks, crewSeries, crewShapes } from "./crew";
@@ -101,38 +102,25 @@ function Shirt({
 	hood?: boolean;
 	turtleneck?: boolean;
 }) {
-	const y = anchors.neck.y;
-	const bottom = anchors.neck.bottom;
-	const center = anchors.head.x;
 	return (
-		<g stroke={palette.ink} strokeWidth="1.3" strokeLinejoin="round">
-			<path
-				d={`M0 ${y}H${center - 12}Q${center} ${y + 13} ${center + 12} ${y}H100V${bottom + 8}H0Z`}
-				fill={palette.clothing}
-			/>
+		<g
+			transform={getBotClothingFit(anchors).transform}
+			stroke={palette.ink}
+			strokeWidth="1.3"
+			strokeLinejoin="round"
+		>
+			<path d="M-100 0H-12Q0 13 12 0H100V32H-100Z" fill={palette.clothing} />
 			{turtleneck && (
-				<path
-					d={`M${center - 13} ${y - 1}Q${center} ${y + 4} ${center + 13} ${y - 1}V${y + 6}Q${center} ${y + 11} ${center - 13} ${y + 6}Z`}
-					fill={palette.clothing}
-				/>
+				<path d="M-13-1Q0 4 13-1V6Q0 11-13 6Z" fill={palette.clothing} />
 			)}
 			{hood && (
 				<g fill="none" stroke={palette.sclera} strokeWidth="1.3">
-					<path
-						d={`M${center - 12} ${y + 1}Q${center} ${y + 13} ${center + 12} ${y + 1}M${center - 6} ${y + 8}v8M${center + 6} ${y + 8}v8`}
-					/>
-					<path
-						d={`M${center - 11} ${bottom - 5}h22l-3 -5H${center - 8}Z`}
-						opacity="0.6"
-					/>
+					<path d="M-12 1Q0 13 12 1M-6 8v8M6 8v8" />
+					<path d="M-11 19h22l-3-5H-8Z" opacity="0.6" />
 				</g>
 			)}
 			{!hood && (
-				<path
-					d={`M0 ${bottom - 3}H100`}
-					stroke={palette.sclera}
-					opacity="0.35"
-				/>
+				<path d="M-100 21H100" stroke={palette.sclera} opacity="0.35" />
 			)}
 		</g>
 	);
@@ -440,22 +428,15 @@ const starterEquipment: readonly BotEquipmentDefinition[] = [
 		slot: "neck",
 		render: ({ anchors, palette }) => (
 			<g
+				transform={getBotClothingFit(anchors).transform}
 				fill={palette.clothing}
 				stroke={palette.ink}
 				strokeWidth="1.3"
 				strokeLinejoin="round"
 			>
-				<path
-					d={`M${anchors.head.x - 7} ${anchors.neck.y + 3}l-4 21h12l3 -21Z`}
-				/>
-				<path
-					d={`M0 ${anchors.neck.y - 2}Q${anchors.head.x} ${anchors.neck.y + 8} 100 ${anchors.neck.y - 2}v9Q${anchors.head.x} ${anchors.neck.y + 17} 0 ${anchors.neck.y + 7}Z`}
-				/>
-				<path
-					d={`M${anchors.head.x - 10} ${anchors.neck.y + 19}h11`}
-					stroke={palette.accent}
-					strokeWidth="3"
-				/>
+				<path d="M-7 3l-4 21h12L4 3Z" />
+				<path d="M-100-2Q0 8 100-2v9Q0 17-100 7Z" />
+				<path d="M-10 19h11" stroke={palette.accent} strokeWidth="3" />
 			</g>
 		),
 	},
@@ -465,14 +446,14 @@ const starterEquipment: readonly BotEquipmentDefinition[] = [
 		slot: "neck",
 		render: ({ anchors, palette }) => (
 			<g
-				transform={`translate(${anchors.head.x} ${anchors.neck.y + 6})`}
+				transform={getBotClothingFit(anchors).transform}
 				fill={palette.clothing}
 				stroke={palette.ink}
 				strokeWidth="1.2"
 				strokeLinejoin="round"
 			>
-				<path d="M-2 -2L-14 -7V7L-2 2M2 -2L14 -7V7L2 2" />
-				<rect x="-3" y="-3" width="6" height="6" rx="2" fill={palette.accent} />
+				<path d="M-2 4L-14-1V13L-2 8M2 4L14-1V13L2 8" />
+				<rect x="-3" y="3" width="6" height="6" rx="2" fill={palette.accent} />
 			</g>
 		),
 	},
@@ -482,14 +463,14 @@ const starterEquipment: readonly BotEquipmentDefinition[] = [
 		slot: "neck",
 		render: ({ anchors, palette }) => (
 			<g
-				transform={`translate(${anchors.head.x} ${anchors.neck.y + 2})`}
+				transform={getBotClothingFit(anchors).transform}
 				fill={palette.clothing}
 				stroke={palette.ink}
 				strokeWidth="1.2"
 				strokeLinejoin="round"
 			>
-				<path d="M-3 5L-6 17L0 22L6 17L3 5Z" />
-				<path d="M-5 0H5L3 6H-3Z" fill={palette.accent} />
+				<path d="M-3 7L-6 19L0 24L6 19L3 7Z" />
+				<path d="M-5 2H5L3 8H-3Z" fill={palette.accent} />
 			</g>
 		),
 	},

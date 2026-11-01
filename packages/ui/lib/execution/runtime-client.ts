@@ -8,6 +8,7 @@ import {
 	type ExecutionCallbacks,
 	type ExecutionCancelOptions,
 	type ExecutionCommand,
+	ExecutionDetachedError,
 	type ExecutionMessage,
 	type ExecutionMetadata,
 	type ExecutionTask,
@@ -43,7 +44,12 @@ export class ExecutionRuntimeClient {
 	private readonly listeners = new Set<() => void>();
 	private readonly pending = new Map<
 		string,
-		{ resolve: (value: unknown) => void; reject: (error: Error) => void }
+		{
+			resolve: (value: unknown) => void;
+			reject: (error: Error) => void;
+			/** Set for executions: losing the session detaches from the run, never fails it. */
+			taskId?: string;
+		}
 	>();
 	private readonly observers = new Map<string, Observer>();
 	private readonly cancelAuthorizers = new Map<
@@ -123,7 +129,9 @@ export class ExecutionRuntimeClient {
 						? new RequestTimeoutError(data.url ?? "", data.timeoutMs ?? 900_000)
 						: data.name === "TypeError"
 							? new TypeError(data.message)
-							: new Error(data.message);
+							: data.name === "ExecutionDetachedError"
+								? new ExecutionDetachedError(data.runId, data.message)
+								: new Error(data.message);
 				pending.reject(Object.assign(error, data));
 			} else pending.resolve(message.value);
 			return;
@@ -198,12 +206,12 @@ export class ExecutionRuntimeClient {
 		for (const task of this.tasks.values()) this.updateObserver(task);
 	}
 
-	private command(command: CommandInput): Promise<unknown> {
+	private command(command: CommandInput, taskId?: string): Promise<unknown> {
 		if (this.closed)
 			return Promise.reject(new Error("Execution session is disconnected"));
 		const id = crypto.randomUUID();
 		return new Promise((resolve, reject) => {
-			this.pending.set(id, { resolve, reject });
+			this.pending.set(id, { resolve, reject, taskId });
 			try {
 				this.port.postMessage({ ...command, id } as ExecutionCommand);
 			} catch (error) {
@@ -224,9 +232,10 @@ export class ExecutionRuntimeClient {
 		attachExecutionTransportOwner(metadata.taskId, this);
 		this.observers.set(metadata.taskId, { callbacks, seen: 0 });
 		try {
-			return (await this.command({ type: "execute", metadata, request })) as
-				| ILogMetadata
-				| undefined;
+			return (await this.command(
+				{ type: "execute", metadata, request },
+				metadata.taskId,
+			)) as ILogMetadata | undefined;
 		} finally {
 			this.observers.delete(metadata.taskId);
 		}
@@ -273,8 +282,7 @@ export class ExecutionRuntimeClient {
 			}
 		}
 		this.notify();
-		for (const pending of this.pending.values()) pending.reject(error);
-		this.pending.clear();
+		this.abandon(error);
 		this.close();
 	}
 
@@ -287,12 +295,25 @@ export class ExecutionRuntimeClient {
 		}
 		this.closed = true;
 		this.port.close?.();
-		for (const pending of this.pending.values())
-			pending.reject(new Error("Execution session changed"));
-		this.pending.clear();
+		this.abandon(new Error("Execution session changed"));
 		this.observers.clear();
 		this.listeners.clear();
 		evictClient(this);
+	}
+
+	/** Runs outlive this session on the server, so their callers learn they were detached. */
+	private abandon(reason: Error) {
+		for (const { reject, taskId } of this.pending.values())
+			reject(
+				taskId === undefined
+					? reason
+					: new ExecutionDetachedError(
+							this.observers.get(taskId)?.runId ??
+								this.tasks.get(taskId)?.runId,
+							reason.message,
+						),
+			);
+		this.pending.clear();
 	}
 }
 

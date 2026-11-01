@@ -154,11 +154,13 @@ export const flowShapes: readonly BotShapeDefinition[] = [
 		cheeks: true,
 		mouthScale: 1.6,
 		silhouette: magmaBody,
+		clothingClip:
+			"M20 54C20 29 34 20 51 20C74 20 82 39 81 58C80 66 77 69 75 73L65 73Q50 76 36 72L23 69Q20 64 20 54Z",
 		anchors: {
-			eyes: { left: [40, 49], right: [59, 49], radius: 3.8 },
-			mouth: [50, 60],
+			eyes: { left: [40, 46], right: [59, 46], radius: 3.8 },
+			mouth: [50, 56],
 			head: { x: 50, y: 25, width: 39 },
-			neck: { y: 68, bottom: 88 },
+			neck: { y: 64, bottom: 75, width: 48 },
 			hand: [26, 76],
 		},
 		renderDetails: ({ palette, idPrefix, ...context }) => (

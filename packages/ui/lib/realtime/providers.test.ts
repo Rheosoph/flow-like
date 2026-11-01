@@ -308,9 +308,9 @@ describe("receive-only provider adapters", () => {
 			clockOffsetMs: -3_600_000,
 		});
 		await vi.waitFor(() => expect(Socket.sockets).toHaveLength(1));
-		expect(
-			new URL(Socket.sockets[0].url).searchParams.get("X-Amz-Date"),
-		).toBe("20261031T230000Z");
+		expect(new URL(Socket.sockets[0].url).searchParams.get("X-Amz-Date")).toBe(
+			"20261031T230000Z",
+		);
 		Socket.sockets[0].dispatchEvent(new Event("close"));
 		await expect(pending).rejects.toThrow();
 	});

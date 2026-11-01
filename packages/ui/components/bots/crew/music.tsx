@@ -168,9 +168,9 @@ export const musicShapes: readonly BotShapeDefinition[] = [
 			"M43 17H57V48C71 45 78 56 72 66C87 78 80 101 50 103C20 101 13 78 28 66C22 56 29 45 43 48Z",
 		anchors: {
 			head: { x: 50, y: 20, width: 23 },
-			eyes: { left: [39, 79], right: [61, 79], radius: 3.4 },
-			mouth: [50, 89],
-			neck: { y: 94, bottom: 105 },
+			eyes: { left: [39, 75], right: [61, 75], radius: 3.4 },
+			mouth: [50, 85],
+			neck: { width: 50, y: 90, bottom: 103 },
 		},
 		renderDetails: ({ palette }) => (
 			<>
@@ -208,9 +208,9 @@ export const musicShapes: readonly BotShapeDefinition[] = [
 			"M65 20H73C73 32 91 33 86 49C83 42 78 41 73 40V76C73 91 59 101 43 101C27 101 18 91 22 78C26 65 46 59 65 67Z",
 		anchors: {
 			head: { x: 68, y: 22, width: 24 },
-			eyes: { left: [38, 79], right: [57, 79], radius: 3.3 },
-			mouth: [47, 90],
-			neck: { y: 94, bottom: 104 },
+			eyes: { left: [38, 74], right: [57, 74], radius: 3.3 },
+			mouth: [47, 84],
+			neck: { x: 47, width: 44, y: 89, bottom: 101 },
 		},
 		renderDetails: ({ palette }) => (
 			<path

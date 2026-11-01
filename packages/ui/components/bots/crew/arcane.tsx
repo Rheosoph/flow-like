@@ -188,10 +188,10 @@ export const arcaneShapes: readonly BotShapeDefinition[] = [
 		silhouette:
 			"M28 31H72Q72 49 55 61Q72 71 72 84H28Q28 71 45 61Q28 49 28 31ZM24 84H76V92H24Z",
 		anchors: {
-			eyes: { left: [41, 73], right: [59, 73], radius: 3 },
-			mouth: [50, 82],
+			eyes: { left: [42, 70], right: [58, 70], radius: 3 },
+			mouth: [50, 77],
 			head: { x: 50, y: 27, width: 46 },
-			neck: { y: 86, bottom: 92 },
+			neck: { width: 40, y: 82, bottom: 92 },
 			hand: [27, 78],
 		},
 		renderBackDetails: ({ palette }) => (

@@ -471,7 +471,10 @@ export class RealtimeRuntime {
 	}
 
 	dispose(): void {
-		for (const port of [...this.ports.values()]) this.remove(port);
+		for (const port of [...this.ports.values()]) {
+			this.send(port, { type: "state", state: "closed" });
+			this.remove(port);
+		}
 	}
 
 	private send(
@@ -553,18 +556,24 @@ export class RealtimeRuntime {
 		this.schedule(scope, 0);
 	}
 
+	/** Milliseconds until a blocked account may probe again; undefined while it needs new credentials. */
+	private blockedFor(scope: Scope): number | undefined {
+		if (!scope.blocked) return 0;
+		return scope.blockedUntil === undefined
+			? undefined
+			: scope.blockedUntil - Date.now();
+	}
+
 	private schedule(scope: Scope, delay: number): void {
 		if (!scope.ports.size || scope.controller || scope.timer) return;
-		if (scope.blocked) {
-			if (scope.blockedUntil === undefined) return;
-			delay = Math.max(delay, scope.blockedUntil - Date.now());
-		}
+		const blocked = this.blockedFor(scope);
+		if (blocked === undefined) return;
 		scope.timer = setTimeout(
 			() => {
 				scope.timer = undefined;
 				void this.poll(scope);
 			},
-			Math.max(0, delay),
+			Math.max(0, delay, blocked),
 		);
 	}
 
@@ -868,12 +877,11 @@ export class RealtimeRuntime {
 
 	private async poll(scope: Scope): Promise<void> {
 		if (scope.controller || !scope.ports.size) return;
-		if (scope.blocked) {
-			if (scope.blockedUntil === undefined) return;
-			if (Date.now() < scope.blockedUntil) {
-				this.schedule(scope, 0);
-				return;
-			}
+		const blocked = this.blockedFor(scope);
+		if (blocked === undefined) return;
+		if (blocked > 0) {
+			this.schedule(scope, 0);
+			return;
 		}
 		this.syncProvider(scope);
 		const request = this.request(scope);

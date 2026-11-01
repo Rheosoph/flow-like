@@ -96,31 +96,18 @@ selects the database-backed polling transport instead.
 
 ### Test the channel transport
 
-From the repository root, install the workspace JavaScript dependencies and
-make `nats-server` available on `PATH`. The browser suite uses Puppeteer's
-Chromium; `CHROME_PATH` selects an existing Chrome executable.
+Browsers no longer publish to the broker: replies, steering and cancellation go
+to the API, which forwards them onto NATS. To test the broker side, make
+`nats-server` available on `PATH` and run from the repository root:
 
 ```bash
-cargo build -p flow-like-channels --features nats --example nats-channel-worker
-python3 tests/nats-channels-browser/run.py
 NATS_SERVER_BIN="$(command -v nats-server)" cargo test -p flow-like-channels \
   --features nats real_broker_reply_steer_cancel_forwarder_permissions_and_expiry \
   -- --include-ignored
 ```
 
-The browser runner starts a fresh authenticated broker and exercises replies,
-steering, cancellation, duplicate delivery, HTTP forwarding, channel isolation
-and expiry. `NATS_SERVER_BIN` and `NATS_WORKER_BIN` can select custom binaries.
-To exercise the actual execution gateway too, build
-`cargo build -p flow-like-execution-manager --bin execution-gateway` and run
-with `NATS_GATEWAY_BIN=target/debug/execution-gateway`.
-
-To test an already running Compose or Kubernetes broker, run
-`bun tests/nats-channels-browser/verify.ts --config /private/path/fixture.json`.
-The private JSON file must contain `url`, `ws_url`, `account_seed` and
-`channel_id`. Set `NATS_E2E_BROWSER_PORT` to a free local port and include
-`http://127.0.0.1:<port>` in that test broker's origin list. Use an isolated test
-deployment and remove its credentials after testing.
+The test starts a fresh authenticated broker and exercises replies, steering,
+cancellation, the API forwarder's permissions, channel isolation and expiry.
 
 ## Images
 

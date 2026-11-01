@@ -4,6 +4,19 @@
 .fit-review header {
 	margin-bottom: 20px;
 }
+.fit-review-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 8px;
+	margin: 16px 0 0;
+	padding: 0;
+	border: 0;
+}
+.fit-review-actions [data-fit-randomize] {
+	background: #665391;
+	border-color: #665391;
+	color: #fff;
+}
 .fit-review-packs {
 	display: grid;
 	gap: 28px;

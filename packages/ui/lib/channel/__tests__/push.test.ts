@@ -286,6 +286,15 @@ describe("API forwarding for legacy cloud handles", () => {
 			});
 		});
 
+		it(`refuses a ${transport.type} handle without an API capability instead of publishing to the provider`, async () => {
+			const fetchMock = installFetch(() => Response.json({ accepted: true }));
+			restore = fetchMock.restore;
+			await expect(
+				replyToChannel(httpHandle({ transport, fallback: null }), 1),
+			).rejects.toThrow(/without an API push capability/);
+			expect(fetchMock.calls).toHaveLength(0);
+		});
+
 		it(`keeps a failed ${transport.type} API reply on the HTTP path`, async () => {
 			const fetchMock = installFetch(
 				() => new Response("unavailable", { status: 503 }),

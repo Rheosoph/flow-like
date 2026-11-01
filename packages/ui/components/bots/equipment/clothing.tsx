@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { getBotClothingFit } from "../clothing-fit";
 import type { BotEquipmentDefinition, BotPalette } from "../types";
 
 type Neckline = "round" | "v" | "straight" | "accessory";
@@ -16,7 +17,7 @@ function outfit(
 		slot: "neck",
 		render: ({ anchors, palette }) => (
 			<g
-				transform={`translate(${anchors.head.x} ${anchors.neck.y}) scale(${anchors.head.width / 48} ${Math.max(1, anchors.neck.bottom - anchors.neck.y) / 24})`}
+				transform={getBotClothingFit(anchors).transform}
 				stroke={palette.ink}
 				strokeWidth="1.15"
 				strokeLinecap="round"

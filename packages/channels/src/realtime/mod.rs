@@ -1,4 +1,14 @@
 //! Read-only cloud wakeups. Account data and replay cursors always come from the API.
+#![cfg_attr(
+    not(any(
+        feature = "aws",
+        feature = "aws-receiver",
+        feature = "azure",
+        feature = "gcp",
+        feature = "nats"
+    )),
+    allow(dead_code, unused_variables)
+)]
 
 use flow_like_types::{
     Result, anyhow,

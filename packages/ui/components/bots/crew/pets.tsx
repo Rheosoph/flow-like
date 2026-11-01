@@ -115,7 +115,11 @@ export const petsShapes: readonly BotShapeDefinition[] = [
 			clothing: "#516a78",
 			cheek: "#c78e75",
 		},
-		anchors: { mouth: [50, 81], head: { x: 50, y: 38, width: 51 } },
+		anchors: {
+			mouth: [50, 81],
+			head: { x: 50, y: 38, width: 51 },
+			neck: { y: 89, bottom: 100 },
+		},
 		mouthStyle: "cat",
 		silhouette: `${ovalPath(24, 42, 11)}${ovalPath(76, 42, 11)}${ovalPath(50, 75, 38, 36)}`,
 		renderDetails: ({ palette }) => (
@@ -145,7 +149,11 @@ export const petsShapes: readonly BotShapeDefinition[] = [
 			ink: "#352c30",
 			clothing: "#55766b",
 		},
-		anchors: { mouth: [50, 82], head: { x: 50, y: 34, width: 52 } },
+		anchors: {
+			mouth: [50, 82],
+			head: { x: 50, y: 34, width: 52 },
+			neck: { y: 87, bottom: 100 },
+		},
 		mouthStyle: "cat",
 		silhouette:
 			"M13 67Q13 51 20 42L18 15L39 32Q50 29 61 32L82 15L80 42Q87 51 87 67V104H13Z",

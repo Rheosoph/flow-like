@@ -327,6 +327,16 @@ export function BotAvatar({
 							data-body-motion={shape.bodyMotion}
 						/>
 					</clipPath>
+					{shape.clothingClip && (
+						<clipPath id={`${idPrefix}-clothing`}>
+							<path
+								d={shape.clothingClip}
+								clipRule="evenodd"
+								className="fl-bot-body"
+								data-body-motion={shape.bodyMotion}
+							/>
+						</clipPath>
+					)}
 					<VariantFilter id={`${idPrefix}-variant`} variant={variant} />
 					<BotEffectDefs
 						effect={resolved.effect}
@@ -390,7 +400,10 @@ export function BotAvatar({
 										))}
 									</g>
 								)}
-								<g data-part="neck" clipPath={`url(#${idPrefix}-body)`}>
+								<g
+									data-part="neck"
+									clipPath={`url(#${idPrefix}-${shape.clothingClip ? "clothing" : "body"})`}
+								>
 									{equipment("neck")}
 								</g>
 								<g

@@ -1,3 +1,4 @@
+import { getBotClothingFit } from "../clothing-fit";
 import type { BotEquipmentDefinition, BotShapeDefinition } from "../types";
 import { crewShape } from "./helpers";
 import { BotMotion } from "./motion";
@@ -433,19 +434,12 @@ export const workplaceEquipment: readonly BotEquipmentDefinition[] = [
 		label: "Office blazer",
 		slot: "neck",
 		render: ({ anchors, palette }) => {
-			const { y, bottom } = anchors.neck;
-			const x = anchors.head.x;
-			const scale = Math.min(1, Math.max(1, bottom - y) / 24);
+			const y = 0;
+			const x = 0;
 			return (
-				<>
-					<path d={`M0 ${y}H100V${bottom + 5}H0Z`} fill={palette.clothing} />
-					<g
-						transform={`translate(0 ${y}) scale(1 ${scale}) translate(0 ${-y})`}
-						stroke={palette.ink}
-						strokeWidth="1.2"
-						strokeLinejoin="round"
-					>
-						<path d={`M0 ${y}H100V${y + 28}H0Z`} fill={palette.clothing} />
+				<g transform={getBotClothingFit(anchors).transform}>
+					<g stroke={palette.ink} strokeWidth="1.2" strokeLinejoin="round">
+						<path d="M-100 0H100V32H-100Z" fill={palette.clothing} />
 						<path
 							d={`M${x - 13} ${y}H${x + 13}L${x} ${y + 25}Z`}
 							fill={palette.sclera}
@@ -467,7 +461,7 @@ export const workplaceEquipment: readonly BotEquipmentDefinition[] = [
 							/>
 						</BotMotion>
 					</g>
-				</>
+				</g>
 			);
 		},
 	},
@@ -476,19 +470,12 @@ export const workplaceEquipment: readonly BotEquipmentDefinition[] = [
 		label: "Reception vest",
 		slot: "neck",
 		render: ({ anchors, palette }) => {
-			const { y, bottom } = anchors.neck;
-			const x = anchors.head.x;
-			const scale = Math.min(1, Math.max(1, bottom - y) / 24);
+			const y = 0;
+			const x = 0;
 			return (
-				<>
-					<path d={`M0 ${y}H100V${bottom + 5}H0Z`} fill={palette.sclera} />
-					<g
-						transform={`translate(0 ${y}) scale(1 ${scale}) translate(0 ${-y})`}
-						stroke={palette.ink}
-						strokeWidth="1.1"
-						strokeLinejoin="round"
-					>
-						<path d={`M0 ${y}H100V${y + 28}H0Z`} fill={palette.sclera} />
+				<g transform={getBotClothingFit(anchors).transform}>
+					<g stroke={palette.ink} strokeWidth="1.1" strokeLinejoin="round">
+						<path d="M-100 0H100V32H-100Z" fill={palette.sclera} />
 						<path
 							d={`M${x - 25} ${y}H${x - 11}L${x} ${y + 11}L${x + 11} ${y}H${x + 25}L${x + 29} ${y + 28}H${x - 29}Z`}
 							fill={palette.clothing}
@@ -522,7 +509,7 @@ export const workplaceEquipment: readonly BotEquipmentDefinition[] = [
 							stroke="none"
 						/>
 					</g>
-				</>
+				</g>
 			);
 		},
 	},
@@ -531,12 +518,11 @@ export const workplaceEquipment: readonly BotEquipmentDefinition[] = [
 		label: "Office lanyard",
 		slot: "neck",
 		render: ({ anchors, palette }) => {
-			const { y, bottom } = anchors.neck;
-			const x = anchors.head.x;
-			const drop = Math.min(8, (bottom - y) * 0.35);
-			const scale = Math.min(1, (bottom - y - drop - 1) / 14);
+			const y = 0;
+			const x = 0;
+			const drop = 8;
 			return (
-				<>
+				<g transform={getBotClothingFit(anchors).transform}>
 					<path
 						d={`M${x - 13} ${y}L${x} ${y + drop}L${x + 13} ${y}`}
 						fill="none"
@@ -550,7 +536,7 @@ export const workplaceEquipment: readonly BotEquipmentDefinition[] = [
 						amount={4}
 						duration={4500}
 					>
-						<g transform={`translate(${x} ${y + drop}) scale(${scale})`}>
+						<g transform={`translate(${x} ${y + drop})`}>
 							<rect
 								x="-7"
 								y="0"
@@ -570,7 +556,7 @@ export const workplaceEquipment: readonly BotEquipmentDefinition[] = [
 							/>
 						</g>
 					</BotMotion>
-				</>
+				</g>
 			);
 		},
 	},

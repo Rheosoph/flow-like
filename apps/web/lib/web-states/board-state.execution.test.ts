@@ -330,6 +330,38 @@ describe("web board execution transport", () => {
 		);
 	});
 
+	test("a queued run without live updates resolves so the board loads its logs", async () => {
+		vi.stubGlobal(
+			"fetch",
+			vi.fn(async () =>
+				Response.json({
+					run_id: "detached-board",
+					status: "pending",
+					poll_token: "run-capability",
+				}),
+			),
+		);
+		const state = new WebBoardState({
+			auth: {
+				isAuthenticated: true,
+				user: { access_token: "client-token", profile: { iss: "issuer" } },
+			},
+			profile: { id: "profile-1" },
+		} as never);
+		const started = vi.fn();
+
+		await expect(
+			state.executeBoardRemote(
+				"app-1",
+				"board-1",
+				{ id: "start" },
+				true,
+				started,
+			),
+		).resolves.toBeUndefined();
+		expect(started).toHaveBeenCalledWith("detached-board");
+	});
+
 	test("a run whose stream breaks before any outcome still rejects", async () => {
 		vi.stubGlobal(
 			"fetch",

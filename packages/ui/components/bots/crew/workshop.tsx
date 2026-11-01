@@ -2,6 +2,9 @@ import type { BotShapeDefinition } from "../types";
 import { crewShape } from "./helpers";
 import { BotMotion } from "./motion";
 
+const wrenchBody =
+	"M36 19V38L50 46L64 38V19C82 27 82 48 65 57L68 86Q68 103 50 103Q32 103 32 86L35 57C18 48 18 27 36 19Z";
+
 export const workshopShapes: readonly BotShapeDefinition[] = [
 	crewShape({
 		id: "wrench",
@@ -14,13 +17,13 @@ export const workshopShapes: readonly BotShapeDefinition[] = [
 			accent: "#d5e3e9",
 			clothing: "#547c90",
 		},
-		silhouette:
-			"M36 19V38L50 46L64 38V19C82 27 82 48 65 57L68 86Q68 103 50 103Q32 103 32 86L35 57C18 48 18 27 36 19Z",
+		silhouette: wrenchBody,
+		clothingClip: `${wrenchBody}M46 94a4 4 0 1 0 8 0a4 4 0 1 0-8 0Z`,
 		anchors: {
 			head: { x: 50, y: 25, width: 43 },
 			eyes: { left: [42, 70], right: [58, 70], radius: 3 },
 			mouth: [50, 81],
-			neck: { y: 86, bottom: 104 },
+			neck: { y: 86, bottom: 103, width: 30 },
 			hand: [32, 84],
 		},
 		renderDetails: ({ palette }) => (
@@ -54,7 +57,7 @@ export const workshopShapes: readonly BotShapeDefinition[] = [
 			head: { x: 50, y: 34, width: 52 },
 			eyes: { left: [39, 52], right: [61, 52], radius: 3.7 },
 			mouth: [50, 65],
-			neck: { y: 80, bottom: 105 },
+			neck: { y: 77, bottom: 104, width: 18 },
 			hand: [42, 91],
 		},
 		renderDetails: ({ palette }) => (
@@ -88,7 +91,7 @@ export const workshopShapes: readonly BotShapeDefinition[] = [
 			head: { x: 50, y: 30, width: 40 },
 			eyes: { left: [39, 49], right: [61, 49], radius: 3.4 },
 			mouth: [50, 62],
-			neck: { y: 78, bottom: 105 },
+			neck: { y: 76, bottom: 104, width: 24 },
 			hand: [37, 88],
 		},
 		renderDetails: ({ palette }) => (
@@ -124,7 +127,7 @@ export const workshopShapes: readonly BotShapeDefinition[] = [
 			head: { x: 50, y: 28, width: 42 },
 			eyes: { left: [40, 62], right: [60, 62], radius: 3.3 },
 			mouth: [50, 73],
-			neck: { y: 83, bottom: 104 },
+			neck: { y: 82, bottom: 103, width: 16 },
 			hand: [37, 87],
 		},
 		renderDetails: ({ palette }) => (

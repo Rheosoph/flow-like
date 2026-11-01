@@ -4,7 +4,6 @@ import { rawPushChannel } from "./transport";
 import type { ChannelPushOptions } from "./util";
 
 export { isChannelHandle } from "./handle";
-export { resetChannelClientCaches } from "./transport";
 export type { ChannelPushOptions } from "./util";
 
 /** The shared session arbitrates replies before any cloud or HTTP transport sends them. */

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { getBotClothingFit } from "../clothing-fit";
 import type {
 	BotEquipmentDefinition,
 	BotRenderContext,
@@ -174,10 +175,10 @@ export const serviceShapes: readonly BotShapeDefinition[] = [
 		silhouette:
 			"M29 61Q32 43 57 43Q85 43 88 68Q90 84 70 89H44Q31 87 28 76L12 69L9 48H16L21 61Z",
 		anchors: {
-			eyes: { left: [48, 64], right: [68, 64], radius: 3.5 },
-			mouth: [58, 76],
+			eyes: { left: [48, 62], right: [68, 62], radius: 3.5 },
+			mouth: [58, 73],
 			head: { x: 57, y: 44, width: 42 },
-			neck: { y: 81, bottom: 90 },
+			neck: { width: 50, y: 78, bottom: 90 },
 			hand: [32, 80],
 		},
 		renderBackDetails: ({ palette }) => (
@@ -393,10 +394,10 @@ export const serviceShapes: readonly BotShapeDefinition[] = [
 		silhouette:
 			"M16 65a34 34 0 1 0 68 0a34 34 0 1 0 -68 0ZM50 38a16 16 0 1 1 0 32a16 16 0 1 1 0 -32Z",
 		anchors: {
-			eyes: { left: [39, 76], right: [61, 76], radius: 3.2 },
-			mouth: [50, 86],
+			eyes: { left: [39, 75], right: [61, 75], radius: 3.2 },
+			mouth: [50, 83],
 			head: { x: 50, y: 32, width: 43 },
-			neck: { y: 92, bottom: 100 },
+			neck: { y: 88, bottom: 100 },
 			hand: [23, 83],
 		},
 		renderBackDetails: ({ palette }) => (
@@ -458,20 +459,19 @@ function ServiceUniform({
 	context: BotRenderContext;
 	variant: "police" | "fire" | "field" | "rescue";
 }) {
-	const y = anchors.neck.y;
-	const center = anchors.head.x;
+	const y = 0;
+	const center = 0;
 	const height = 24;
 	const bottom = y + height;
-	const scaleY = Math.max(1, anchors.neck.bottom - y) / height;
 	return (
 		<g
-			transform={`translate(0 ${y}) scale(1 ${scaleY}) translate(0 ${-y})`}
+			transform={getBotClothingFit(anchors).transform}
 			stroke={palette.ink}
 			strokeWidth="1.2"
 			strokeLinejoin="round"
 		>
 			<path
-				d={`M0 ${y}H${center - 11}L${center} ${y + 6}L${center + 11} ${y}H100V${bottom + 8}H0Z`}
+				d={`M-100 ${y}H${center - 11}L${center} ${y + 6}L${center + 11} ${y}H100V${bottom + 8}H-100Z`}
 				fill={variant === "rescue" ? palette.accent : palette.clothing}
 			/>
 			{variant === "police" && (
@@ -493,7 +493,7 @@ function ServiceUniform({
 			{variant === "fire" && (
 				<>
 					<path
-						d={`M0 ${y + height * 0.4}H100M0 ${y + height * 0.85}H100`}
+						d={`M-100 ${y + height * 0.4}H100M-100 ${y + height * 0.85}H100`}
 						stroke={palette.accent}
 						strokeWidth="4"
 					/>
@@ -550,7 +550,7 @@ function ServiceUniform({
 						strokeWidth="5"
 					/>
 					<path
-						d={`M0 ${y + height * 0.75}H100`}
+						d={`M-100 ${y + height * 0.75}H100`}
 						stroke={palette.clothing}
 						strokeWidth="4"
 					/>

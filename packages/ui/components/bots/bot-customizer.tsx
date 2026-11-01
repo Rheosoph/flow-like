@@ -1,7 +1,7 @@
 "use client";
 
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
-import { resolveBotAppearance } from "./appearance";
+import { BOT_OPTIONS, resolveBotAppearance } from "./appearance";
 import { BotAvatar } from "./bot-avatar";
 import { BotColorPicker } from "./bot-color-picker";
 import { BotOutfitTile } from "./bot-outfit-tile";
@@ -146,6 +146,10 @@ const PREVIEW_POSES: readonly (readonly [BotPose, string])[] = [
 	["sleep", "Sleep"],
 	["track", "Follow cursor"],
 ];
+
+function randomItem<T>(items: readonly T[]): T {
+	return items[Math.floor(Math.random() * items.length)];
+}
 
 function Tile({
 	label,
@@ -393,6 +397,59 @@ export function BotCustomizer({
 		onChange(next);
 	}
 
+	function replaceAppearance(next: BotAppearance) {
+		setSaveError(undefined);
+		setPreviewState("custom");
+		setExpression("neutral");
+		setPose("idle");
+		setSearch("");
+		setSeries({ kind: "all" });
+		setOutfitSearch("");
+		setOutfitCollection({ kind: "all" });
+		onChange(next);
+	}
+
+	function reset() {
+		setPlaying(true);
+		setSection("crew");
+		setSlot("head");
+		setFinish("backdrop");
+		replaceAppearance({ kind: catalog.defaultKind });
+	}
+
+	function randomize() {
+		const available = shapes.filter((item) =>
+			canUseBotShape(item.id, catalog, ownedPackIds),
+		);
+		const alternatives = available.filter(
+			(item) => item.id !== appearance.kind,
+		);
+		const candidates = alternatives.length ? alternatives : available;
+		const kind = candidates.length
+			? randomItem(candidates).id
+			: catalog.defaultKind;
+		const equipment: NonNullable<BotAppearance["equipment"]> = {};
+		for (const equipmentSlot of BOT_EQUIPMENT_SLOTS) {
+			const items = Object.values(catalog.equipment).filter(
+				(item) =>
+					item.slot === equipmentSlot &&
+					(!item.kinds || item.kinds.includes(kind)) &&
+					canUseBotEquipment(item.id, catalog, ownedPackIds),
+			);
+			if (items.length && (equipmentSlot === "neck" || Math.random() >= 0.25))
+				equipment[equipmentSlot] = randomItem(items).id;
+		}
+		replaceAppearance({
+			kind,
+			equipment,
+			frame: randomItem(BOT_OPTIONS.frame),
+			backdrop: randomItem(BOT_OPTIONS.backdrop),
+			halo: randomItem(BOT_OPTIONS.halo),
+			effect: randomItem(BOT_OPTIONS.effect),
+			emote: randomItem(BOT_OPTIONS.emote),
+		});
+	}
+
 	function selectColor(
 		colorSlot: BotColorSlot,
 		selection: BotColorSelection | undefined,
@@ -636,6 +693,19 @@ export function BotCustomizer({
 				<div className="fl-bot-studio-character">
 					<h3>{shape.label}</h3>
 					<p>{shape.description ?? "Make this character your own."}</p>
+				</div>
+				<div className="fl-bot-studio-actions">
+					<button type="button" aria-label="Reset bot" onClick={reset}>
+						Reset
+					</button>
+					<button
+						type="button"
+						aria-label="Randomize bot"
+						className="fl-bot-studio-randomize"
+						onClick={randomize}
+					>
+						Randomize
+					</button>
 				</div>
 				<div className="fl-bot-studio-preview-controls">
 					<button

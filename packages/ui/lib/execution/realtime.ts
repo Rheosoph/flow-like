@@ -1,11 +1,14 @@
-import type {
-	RealtimeClient,
-	RealtimeClientOptions,
-	RealtimeConnectionSession,
-	RealtimeRunEvent,
-	RealtimeRunSnapshot,
+import {
+	REALTIME_ERROR_UNAVAILABLE,
+	type RealtimeClient,
+	type RealtimeClientOptions,
+	type RealtimeConnectionSession,
+	type RealtimeRunEvent,
+	type RealtimeRunSnapshot,
+	isTerminalRunStatus,
 } from "../realtime/types";
 import type { IIntercomEvent } from "../schema/events/intercom-event";
+import { ExecutionDetachedError, executionError } from "./types";
 
 /** Replayed events enter the same execution effects and interaction claims as streamed events. */
 export function realtimeExecutionEvent(
@@ -81,7 +84,11 @@ export async function readExecutionReceipt(
 	};
 }
 
-/** The account bus owns networking; this port owns only one run's replay cursor. */
+/**
+ * The account bus owns networking; this port owns only one run's replay cursor. Retrying states
+ * and temporarily unavailable replays keep waiting. Losing the bus detaches from the run, which
+ * continues on the server; only a run the API cannot find fails here.
+ */
 export async function followRealtimeExecution(options: {
 	createClient: ExecutionRealtimeClientFactory;
 	session: RealtimeConnectionSession;
@@ -90,50 +97,53 @@ export async function followRealtimeExecution(options: {
 	onUnauthorized: NonNullable<RealtimeClientOptions["onUnauthorized"]>;
 	onRun: (run: RealtimeRunSnapshot) => void | Promise<void>;
 }): Promise<RealtimeRunSnapshot> {
-	const client = await options.createClient(options.session, {
-		onUnauthorized: options.onUnauthorized,
-	});
+	const runId = options.receipt.run_id;
+	let client: RealtimeClient;
+	try {
+		client = await options.createClient(options.session, {
+			onUnauthorized: options.onUnauthorized,
+		});
+	} catch (error) {
+		throw new ExecutionDetachedError(
+			runId,
+			`Live updates for run ${runId} could not start: ${executionError(error).message}`,
+		);
+	}
 	let unsubscribe: (() => void) | undefined;
 	let abort: (() => void) | undefined;
 	try {
 		return await new Promise<RealtimeRunSnapshot>((resolve, reject) => {
 			abort = () =>
-				reject(
-					options.signal.reason ?? new Error("Execution subscription closed"),
-				);
+				reject(options.signal.reason ?? new ExecutionDetachedError(runId));
 			if (options.signal.aborted) return abort();
 			options.signal.addEventListener("abort", abort, { once: true });
 			unsubscribe = client.subscribe(async (update) => {
 				if (options.signal.aborted) return;
 				if (update.type === "state") {
-					if (["unsupported", "unauthorized", "closed"].includes(update.state))
-						reject(new Error(`Execution replay is ${update.state}`));
+					if (update.state === "closed")
+						reject(
+							new ExecutionDetachedError(
+								runId,
+								`Live updates for run ${runId} closed before it finished.`,
+							),
+						);
 					return;
 				}
 				const error = update.snapshot.errors.find(
-					(item) => item.run_id === options.receipt.run_id,
+					(item) => item.run_id === runId,
 				);
-				if (error) {
-					reject(new Error(`Execution replay is unavailable (${error.code})`));
+				if (error && error.code !== REALTIME_ERROR_UNAVAILABLE) {
+					reject(
+						new Error(
+							`Run ${runId} cannot be followed: the server reported ${error.code}.`,
+						),
+					);
 					return;
 				}
-				const run = update.snapshot.runs.find(
-					(item) => item.run_id === options.receipt.run_id,
-				);
+				const run = update.snapshot.runs.find((item) => item.run_id === runId);
 				if (!run) return;
 				await options.onRun(run);
-				if (
-					!run.has_more &&
-					[
-						"completed",
-						"failed",
-						"cancelled",
-						"canceled",
-						"timeout",
-						"timed_out",
-					].includes(run.status.toLowerCase())
-				)
-					resolve(run);
+				if (!run.has_more && isTerminalRunStatus(run.status)) resolve(run);
 			});
 			client.setSubscriptions({
 				notifications: false,

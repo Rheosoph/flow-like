@@ -127,7 +127,9 @@ export function parseRealtimeGrant(
 		);
 	const lifetime = expiry * 1000 - serverNow;
 	if (lifetime <= 0)
-		throw new RealtimeProviderProtocolError("Expired realtime connection grant");
+		throw new RealtimeProviderProtocolError(
+			"Expired realtime connection grant",
+		);
 	return {
 		...(value as unknown as RealtimeConnectResponse),
 		max_poll_wait_ms:

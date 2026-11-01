@@ -1069,7 +1069,7 @@ mod tests {
             csp(&baseline),
             format!(
                 "default-src 'none'; script-src 'unsafe-inline' {b}; style-src 'unsafe-inline' {b}; \
-img-src data: blob: {b}; font-src data: {b}; connect-src data: blob:; worker-src 'none'; \
+img-src data: blob: {b}; font-src data: blob: {b}; connect-src data: blob:; worker-src 'none'; \
 media-src data: blob:; frame-src 'none'; child-src 'none'; object-src 'none'; \
 manifest-src 'none'; base-uri 'none'; form-action 'none'; sandbox allow-scripts allow-forms"
             )
@@ -1140,7 +1140,7 @@ manifest-src 'none'; base-uri 'none'; form-action 'none'; sandbox allow-scripts 
                 );
                 assert_eq!(directive_sources(header, "media-src"), media, "{policy:?}");
                 assert_eq!(directive_sources(header, "img-src"), ["data:", "blob:", b]);
-                assert_eq!(directive_sources(header, "font-src"), ["data:", b]);
+                assert_eq!(directive_sources(header, "font-src"), ["data:", "blob:", b]);
                 assert_platform_sources_only(header);
             }
             assert!(body(&document).contains(&meta));

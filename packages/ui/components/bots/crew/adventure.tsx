@@ -172,9 +172,9 @@ export const adventureShapes: readonly BotShapeDefinition[] = [
 		silhouette: "M47 21H51V63H91L78 94Q50 105 22 94L9 63H47Z",
 		anchors: {
 			head: { x: 50, y: 27, width: 29 },
-			eyes: { left: [39, 76], right: [61, 76], radius: 3.5 },
-			mouth: [50, 87],
-			neck: { y: 92, bottom: 104 },
+			eyes: { left: [39, 73], right: [61, 73], radius: 3.5 },
+			mouth: [50, 83],
+			neck: { width: 55, y: 88, bottom: 101 },
 		},
 		renderDetails: ({ palette }) => (
 			<>

@@ -66,9 +66,9 @@ export const arcadeShapes: readonly BotShapeDefinition[] = [
 			"M24 66H76Q83 66 85 73L92 93Q94 101 85 101H15Q6 101 8 93L15 73Q17 66 24 66Z",
 		anchors: {
 			head: { x: 50, y: 27, width: 30 },
-			eyes: { left: [38, 81], right: [62, 81], radius: 3.5 },
-			mouth: [50, 92],
-			neck: { y: 96, bottom: 104 },
+			eyes: { left: [38, 76], right: [62, 76], radius: 3.5 },
+			mouth: [50, 85],
+			neck: { width: 60, y: 90, bottom: 101 },
 		},
 		renderDetails: ({ palette, equipment }) => (
 			<>
@@ -209,9 +209,9 @@ export const arcadeShapes: readonly BotShapeDefinition[] = [
 			"M32 25H68Q76 25 76 33V96Q76 104 68 104H32Q24 104 24 96V33Q24 25 32 25Z",
 		anchors: {
 			head: { x: 50, y: 27, width: 38 },
-			eyes: { left: [39, 73], right: [61, 73], radius: 3.5 },
-			mouth: [50, 86],
-			neck: { y: 92, bottom: 106 },
+			eyes: { left: [39, 70], right: [61, 70], radius: 3.5 },
+			mouth: [50, 82],
+			neck: { y: 88, bottom: 104 },
 		},
 		renderDetails: ({ palette }) => (
 			<>

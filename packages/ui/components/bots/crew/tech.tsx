@@ -19,6 +19,7 @@ export const techShapes: readonly BotShapeDefinition[] = [
 			eyes: { left: [39, 64], right: [61, 64], radius: 3.2 },
 			mouth: [50, 81],
 			head: { x: 50, y: 34, width: 46 },
+			neck: { y: 85, bottom: 100 },
 		},
 		renderDetails: ({ palette }) => (
 			<g fill={palette.sclera} stroke={palette.ink} strokeWidth="2.4">
@@ -45,6 +46,7 @@ export const techShapes: readonly BotShapeDefinition[] = [
 			eyes: { left: [38, 66], right: [62, 66], radius: 7.2 },
 			mouth: [50, 82],
 			head: { x: 50, y: 38, width: 47 },
+			neck: { y: 86, bottom: 100 },
 		},
 		renderDetails: ({ palette }) => (
 			<>
@@ -178,10 +180,10 @@ export const techShapes: readonly BotShapeDefinition[] = [
 		},
 		silhouette: "M19 28H76L86 38V105H18V30Q18 28 19 28Z",
 		anchors: {
-			eyes: { left: [42, 74], right: [62, 74], radius: 3.5 },
-			mouth: [52, 86],
+			eyes: { left: [42, 69], right: [62, 69], radius: 3.5 },
+			mouth: [52, 80],
 			head: { x: 50, y: 30, width: 46 },
-			neck: { y: 91, bottom: 108 },
+			neck: { x: 52, y: 85, width: 48, bottom: 100 },
 		},
 		renderDetails: ({ palette }) => (
 			<>

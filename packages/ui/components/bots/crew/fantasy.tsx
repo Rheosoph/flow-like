@@ -47,7 +47,12 @@ export const fantasyShapes: readonly BotShapeDefinition[] = [
 			sclera: "#c6dfb1",
 			clothing: "#627da1",
 		},
-		anchors: { head: { x: 50, y: 38, width: 42 }, mouth: [50, 80] },
+		anchors: {
+			head: { x: 50, y: 38, width: 42 },
+			eyes: { left: [39, 60], right: [61, 60], radius: 3.8 },
+			mouth: [50, 75],
+			neck: { y: 89, bottom: 104, width: 46 },
+		},
 		silhouette:
 			"M22 63C22 43 34 34 50 34S78 43 78 63L80 77Q83 92 75 104H25Q17 92 20 77Z",
 		renderBackDetails: ({ palette }) => (
@@ -68,14 +73,14 @@ export const fantasyShapes: readonly BotShapeDefinition[] = [
 					d="M28 42L26 23Q37 27 39 37M61 37Q63 27 74 23L72 42"
 					fill={palette.accent}
 				/>
-				<ellipse cx="50" cy="80" rx="21" ry="14" fill={palette.sclera} />
+				<ellipse cx="50" cy="75" rx="21" ry="14" fill={palette.sclera} />
 				<path d="M45 43L50 35L55 43Z" fill={palette.accent} />
 			</>
 		),
 		renderFaceDetails: ({ palette }) => (
 			<g fill={palette.body}>
-				<ellipse cx="43" cy="74" rx="1.7" ry="1.2" />
-				<ellipse cx="57" cy="74" rx="1.7" ry="1.2" />
+				<ellipse cx="43" cy="69" rx="1.7" ry="1.2" />
+				<ellipse cx="57" cy="69" rx="1.7" ry="1.2" />
 			</g>
 		),
 	}),

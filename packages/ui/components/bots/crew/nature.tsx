@@ -66,7 +66,7 @@ export const natureShapes: readonly BotShapeDefinition[] = [
 			eyes: { left: [39, 76], right: [61, 76], radius: 3.8 },
 			mouth: [50, 86],
 			head: { x: 50, y: 31, width: 33 },
-			neck: { y: 86, bottom: 104 },
+			neck: { y: 92, bottom: 104 },
 		},
 	}),
 	crewShape({

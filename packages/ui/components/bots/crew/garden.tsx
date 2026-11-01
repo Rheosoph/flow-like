@@ -59,10 +59,11 @@ export const gardenShapes: readonly BotShapeDefinition[] = [
 			head: { x: 50, y: 30, width: 44 },
 			eyes: { left: [39, 56], right: [61, 56], radius: 3.5 },
 			mouth: [50, 68],
-			neck: { y: 77, bottom: 104 },
+			neck: { y: 89, bottom: 104, width: 44 },
 		},
 		silhouette:
 			"M27 80Q7 80 11 61Q4 45 23 42Q22 25 41 29Q50 16 62 29Q80 23 81 42Q99 47 88 62Q94 80 74 80H56V89H77L72 104H28L23 89H44V80Z",
+		clothingClip: "M23 89H77L72 104H28Z",
 		renderDetails: ({ palette }) => (
 			<>
 				<path d="M44 78H56V90H44Z" fill={palette.clothing} />

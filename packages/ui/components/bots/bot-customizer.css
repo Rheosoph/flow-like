@@ -105,6 +105,33 @@
 	font-size: 0.75rem;
 	line-height: 1.5;
 }
+.fl-bot-studio-actions {
+	display: grid;
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: 0.5rem;
+	padding: 0 1rem 1rem;
+}
+.fl-bot-studio-actions button {
+	min-height: 38px;
+	padding: 0.5rem;
+	border: 1px solid var(--studio-border);
+	border-radius: 0.5rem;
+	background: var(--studio-surface);
+	color: var(--studio-ink);
+	font-size: 0.75rem;
+	font-weight: 600;
+}
+.fl-bot-studio-actions button:hover {
+	border-color: var(--studio-accent);
+}
+.fl-bot-studio-actions .fl-bot-studio-randomize {
+	border-color: var(--studio-accent);
+	background: var(--studio-accent);
+	color: #fff;
+}
+.fl-bot-studio-actions .fl-bot-studio-randomize:hover {
+	filter: brightness(1.08);
+}
 .fl-bot-studio-preview-controls {
 	display: flex;
 	flex-wrap: wrap;

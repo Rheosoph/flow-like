@@ -122,7 +122,7 @@ export const officeShapes: readonly BotShapeDefinition[] = [
 			head: { x: 54, y: 33, width: 43 },
 			eyes: { left: [38, 65], right: [60, 65], radius: 3.5 },
 			mouth: [49, 78],
-			neck: { y: 85, bottom: 103 },
+			neck: { x: 45, y: 85, bottom: 101, width: 43 },
 		},
 		renderDetails: ({ palette }) => (
 			<>

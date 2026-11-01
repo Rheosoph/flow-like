@@ -153,6 +153,7 @@ export const zooShapes: readonly BotShapeDefinition[] = [
 			eyes: { left: [39, 65], right: [61, 65], radius: 6.3 },
 			mouth: [50, 83],
 			head: { x: 50, y: 40, width: 48 },
+			neck: { y: 88, bottom: 100 },
 		},
 		eyeStyle: "round",
 		mouthStyle: "cat",

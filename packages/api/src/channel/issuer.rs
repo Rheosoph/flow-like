@@ -84,7 +84,7 @@ impl ChannelIssuer {
     /// transport that fails to configure logs the reason and degrades to HTTP; cloud binaries
     /// validate the same variables at boot so this only happens on hosts that opted out of
     /// that validation.
-    #[allow(unused_variables)]
+    #[allow(unused_variables, unused_mut)]
     pub async fn from_env(
         secrets: &flow_like_secrets::SecretStore,
         #[cfg(feature = "aws")] aws_config: Arc<aws_config::SdkConfig>,

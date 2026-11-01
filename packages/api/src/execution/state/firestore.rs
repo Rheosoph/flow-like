@@ -22,10 +22,7 @@ use flow_like_gcp_data::firestore::{
     QueryFilter, QueryOrder, SortDirection, validate_collection_id,
 };
 use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_storage::{
-    files::store::FlowLikeStore,
-    object_store::{ObjectStore, path::Path},
-};
+use flow_like_storage::{files::store::FlowLikeStore, object_store::path::Path};
 use flow_like_types::utils::constant_time_eq;
 use futures::{StreamExt, stream};
 use sea_orm::DatabaseConnection;

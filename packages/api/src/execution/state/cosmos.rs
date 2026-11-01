@@ -11,10 +11,7 @@ use crate::cosmos::{
 };
 use async_trait::async_trait;
 use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_storage::{
-    files::store::FlowLikeStore,
-    object_store::{ObjectStore, path::Path},
-};
+use flow_like_storage::{files::store::FlowLikeStore, object_store::path::Path};
 use flow_like_types::utils::constant_time_eq;
 use futures::{StreamExt, stream};
 use sea_orm::DatabaseConnection;

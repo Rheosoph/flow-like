@@ -202,17 +202,20 @@ const RUN_OUTCOME_EVENTS = new Set([
 	"error",
 ]);
 
+const SETTLED_ERROR_NAMES = new Set(["AbortError", "ExecutionDetachedError"]);
+
 /**
- * A started run that failed, timed out or was stopped has its outcome in its logs. Board callers load
- * them by run id, so only dispatch and transport failures reject.
+ * A started run that failed, timed out, was stopped or lost its live updates has its outcome in its
+ * logs. Board callers load them by run id, so only dispatch and transport failures reject.
  */
 function endedWithOutcome(
 	task: ExecutionTask | undefined,
 	cause: unknown,
 ): boolean {
 	if (!task?.runId) return false;
+	const name = (cause as { name?: unknown } | null)?.name;
 	return (
-		(cause as { name?: unknown } | null)?.name === "AbortError" ||
+		(typeof name === "string" && SETTLED_ERROR_NAMES.has(name)) ||
 		task.events.some((event) => RUN_OUTCOME_EVENTS.has(event.event_type))
 	);
 }

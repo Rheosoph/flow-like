@@ -156,7 +156,7 @@ export const celebrationsShapes: readonly BotShapeDefinition[] = [
 			head: { x: 50, y: 41, width: 51 },
 			eyes: { left: [40, 61], right: [60, 61], radius: 3.4 },
 			mouth: [50, 75],
-			neck: { y: 81, bottom: 105 },
+			neck: { width: 23, y: 81, bottom: 105 },
 		},
 		renderDetails: ({ palette, equipment, idPrefix }) => (
 			<>
@@ -279,8 +279,8 @@ export const celebrationsShapes: readonly BotShapeDefinition[] = [
 		anchors: {
 			head: { x: 50, y: 54, width: 58 },
 			eyes: { left: [38, 73], right: [62, 73], radius: 3.4 },
-			mouth: [50, 85],
-			neck: { y: 91, bottom: 103 },
+			mouth: [50, 82],
+			neck: { width: 45, y: 87, bottom: 101 },
 		},
 		renderDetails: ({ palette, equipment }) => (
 			<>

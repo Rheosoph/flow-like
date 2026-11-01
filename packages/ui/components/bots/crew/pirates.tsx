@@ -123,7 +123,7 @@ export const piratesShapes: readonly BotShapeDefinition[] = [
 			eyes: { left: [42, 63], right: [58, 63], radius: 3.1 },
 			mouth: [50, 74],
 			head: { x: 50, y: 22, width: 40 },
-			neck: { y: 82, bottom: 100 },
+			neck: { width: 24, y: 82, bottom: 100 },
 			hand: [32, 84],
 		},
 		renderDetails: ({ palette }) => (

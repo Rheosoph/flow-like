@@ -60,7 +60,7 @@ pub async fn replay_contiguous<R: ConsistentEventReads + ?Sized>(
     let mut visible = visible.into_iter().peekable();
     let mut page = Page::new(cursor);
     while let Some(gap) = page.take_contiguous(&mut visible) {
-        let settled = cursor.terminal || now_ms.saturating_sub(gap.created_at) >= UNSETTLED_GAP_MS;
+        let settled = gap.settled(cursor.terminal, now_ms);
         if !page.fill_gap(reads, run_id, gap.until, settled).await? {
             return Ok(page.into_replay(true));
         }
@@ -77,6 +77,13 @@ pub async fn replay_contiguous<R: ConsistentEventReads + ?Sized>(
 struct Gap {
     until: i32,
     created_at: i64,
+}
+
+impl Gap {
+    /// Whether the skipped sequences can no longer be written.
+    fn settled(&self, terminal: bool, now_ms: i64) -> bool {
+        terminal || now_ms.saturating_sub(self.created_at) >= UNSETTLED_GAP_MS
+    }
 }
 
 struct Page {
