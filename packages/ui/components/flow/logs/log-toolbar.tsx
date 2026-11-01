@@ -1,6 +1,6 @@
 import { useTranslation } from "@flow-like/locales";
 import { ListCollapseIcon, type LucideIcon, TimerIcon } from "lucide-react";
-import { type MouseEvent, memo } from "react";
+import { type MouseEvent, type ReactNode, memo } from "react";
 import { cn } from "../../../lib/utils";
 import { LEVEL_SHORT, LEVEL_TONES } from "./level-style";
 import { ALL_LEVELS } from "./log-format";
@@ -138,6 +138,7 @@ export const LogToolbar = memo(function LogToolbar({
 	onFoldChange,
 	relative,
 	onRelativeChange,
+	actions,
 }: Readonly<{
 	queryBar: ILogQueryBarProps;
 	levelsOff: readonly number[];
@@ -149,6 +150,7 @@ export const LogToolbar = memo(function LogToolbar({
 	onFoldChange: (fold: boolean) => void;
 	relative: boolean;
 	onRelativeChange: (relative: boolean) => void;
+	actions?: ReactNode;
 }>) {
 	const { t } = useTranslation("flow");
 	return (
@@ -185,6 +187,7 @@ export const LogToolbar = memo(function LogToolbar({
 				onToggle={onToggleLevel}
 				onOnly={onOnlyLevel}
 			/>
+			{actions}
 		</div>
 	);
 });

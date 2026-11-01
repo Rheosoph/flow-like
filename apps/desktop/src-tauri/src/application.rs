@@ -26,6 +26,7 @@ mod logging;
 mod native_auth;
 mod offline_writes;
 mod profile;
+mod realtime;
 mod run_index;
 mod run_reports;
 mod settings;
@@ -630,11 +631,13 @@ pub fn run() {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
                 execution_credentials::revoke_webview(webview.label());
                 device_tunnels::close_webview(webview.label());
+                realtime::close_webview(webview.label());
             }
         })
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 execution_credentials::revoke_window(window.label());
+                realtime::close_window(window.label());
                 if window.label() == "main" {
                     device_tunnels::close_all();
                 }
@@ -1399,6 +1402,8 @@ pub fn run() {
             functions::ai::copilot::flowpilot_agent_backend_status,
             functions::ai::copilot::flowpilot_agent_backend_list,
             functions::channel::channel_push,
+            realtime::realtime_subscribe,
+            realtime::realtime_unsubscribe,
             functions::a2ui::widget::get_widgets,
             functions::a2ui::widget::get_widget,
             functions::a2ui::widget::create_widget,

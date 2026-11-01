@@ -18,6 +18,8 @@ pub mod geometry;
 pub mod cache;
 #[cfg(feature = "channel")]
 pub mod channel;
+#[cfg(feature = "realtime")]
+pub mod realtime;
 #[cfg(feature = "dispatch")]
 pub mod dispatch;
 #[cfg(feature = "maintenance")]

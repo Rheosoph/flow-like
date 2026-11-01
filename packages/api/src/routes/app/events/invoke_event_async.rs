@@ -511,7 +511,10 @@ pub async fn invoke_event_async(
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().fixed_offset()),
         updated_at: Set(chrono::Utc::now().fixed_offset()),
-        event_version: Set(None),
+        event_version: Set(Some(format!(
+            "{}.{}.{}",
+            event.event_version.0, event.event_version.1, event.event_version.2
+        ))),
         nodes: Set(None),
         logs_count: Set(None),
     };

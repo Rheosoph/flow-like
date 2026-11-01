@@ -8,7 +8,6 @@ use crate::error::ExecutorError;
 use crate::execute::validate_executor_request_claims;
 use crate::jwt::verify_jwt_async;
 use crate::types::{ExecutionRequest, ExecutionStatus, RunSummary};
-use flow_like::flow::event::Event;
 use flow_like::flow::execution::rejection::RejectionStage;
 use flow_like::flow::execution::{InternalRun, LogLevel, RunPayload};
 use flow_like::flow::oauth::OAuthToken;
@@ -30,7 +29,7 @@ async fn execute_until_deadline<T>(
     execution: impl std::future::Future<Output = T>,
     cancellation: &flow_like_types::tokio_util::sync::CancellationToken,
     deadline: tokio::time::Instant,
-) -> Result<T, ()> {
+) -> Result<T, T> {
     let mut execution = Box::pin(execution);
     tokio::select! {
         result = &mut execution => Ok(result),
@@ -38,8 +37,7 @@ async fn execute_until_deadline<T>(
             cancellation.cancel();
             // Join engine cleanup before publishing terminal usage. Dropping
             // the execution future alone can leave spawned node work running.
-            let _ = execution.await;
-            Err(())
+            Err(execution.await)
         }
     }
 }
@@ -100,6 +98,21 @@ pub fn error_event(message: &str) -> StreamEvent {
     InterComEvent::with_type("error", serde_json::json!({ "message": message }))
 }
 
+fn completed_event_with_error(
+    run_id: &str,
+    status: ExecutionStatus,
+    duration_ms: u64,
+    summary: &RunSummary,
+    error_message: Option<&str>,
+) -> StreamEvent {
+    let mut event = completed_event(run_id, status, duration_ms, summary);
+    if let Some(error_message) = error_message {
+        // The API persists this diagnostic before filtering the page response.
+        event.payload["error_message"] = serde_json::json!(error_message);
+    }
+    event
+}
+
 const PAGE_EXECUTION_FAILURE_MESSAGE: &str = "Page execution failed";
 
 fn fallback_error_message(error: &ExecutorError, is_page_execution: bool) -> String {
@@ -129,7 +142,13 @@ async fn send_fallback_failure(
         log_level: Some(LogLevel::Fatal.to_u8()),
         ..failure.summary
     };
-    let mut event = completed_event(run_id, ExecutionStatus::Failed, duration_ms, &summary);
+    let mut event = completed_event_with_error(
+        run_id,
+        ExecutionStatus::Failed,
+        duration_ms,
+        &summary,
+        Some(&failure.error.to_string()),
+    );
     if let (Some(stage), Some(fields)) = (failure.rejection, event.payload.as_object_mut()) {
         fields.insert(
             "current_step".into(),
@@ -139,9 +158,9 @@ async fn send_fallback_failure(
     let _ = tokio::time::timeout(std::time::Duration::from_secs(10), tx.send(event)).await;
 }
 
-/// An execution that ended without a workflow result. A rejection that was
-/// recorded as a run carries its stage and that run's summary so the terminal
-/// event can report both; every other error carries neither.
+/// An execution that could not publish its normal terminal result. Recorded
+/// rejections carry their stage and summary; failures after execution retain
+/// any summary the workflow produced.
 struct StreamFailure {
     error: ExecutorError,
     rejection: Option<RejectionStage>,
@@ -263,7 +282,7 @@ async fn run_execution(
     let duration_ms = start.elapsed().as_millis() as u64;
 
     match result {
-        Ok((status, summary, _output, _error)) => {
+        Ok((status, summary, _output, error)) => {
             config.record_completion(
                 match status {
                     ExecutionStatus::Completed => "completed",
@@ -274,7 +293,13 @@ async fn run_execution(
             );
             let _ = tokio::time::timeout(
                 std::time::Duration::from_secs(10),
-                tx.send(completed_event(&run_id, status, duration_ms, &summary)),
+                tx.send(completed_event_with_error(
+                    &run_id,
+                    status,
+                    duration_ms,
+                    &summary,
+                    error.as_deref(),
+                )),
             )
             .await;
         }
@@ -309,6 +334,7 @@ async fn execute_inner(
     StreamFailure,
 > {
     let claims = verify_jwt_async(&request.executor_jwt).await?;
+    let event = crate::execute::parse_event(request.event_json.as_deref())?;
     let state = crate::execute::build_flow_state(
         &request.credentials,
         Some(crate::widgets::HubAccess::for_run(
@@ -416,12 +442,6 @@ async fn execute_inner(
         "log",
         serde_json::json!({ "message": "Execution started" }),
     );
-
-    // Parse event from JSON if provided
-    let event: Option<Event> = request
-        .event_json
-        .as_ref()
-        .and_then(|json| serde_json::from_str(json).ok());
 
     // Convert OAuth tokens from input format to core format
     let oauth_tokens: HashMap<String, OAuthToken> = request
@@ -561,6 +581,10 @@ async fn execute_inner(
     let mut quota_lease = crate::quota::begin(&quota_claims, &request.executor_jwt).await?;
     let cancellation = config.cancellation().unwrap_or_default();
     run.set_cancellation_token(cancellation.clone());
+    run.set_cancellation_log(
+        "Execution cancelled or its deadline was reached",
+        LogLevel::Error,
+    );
     if let Some(lease) = &mut quota_lease {
         lease.watch_cancellation(cancellation.clone());
     }
@@ -588,7 +612,15 @@ async fn execute_inner(
             )
             .to_lowercase()
         };
-        lease.finish(duration_ms, &status).await?;
+        if let Err(error) = lease.finish(duration_ms, &status).await {
+            channel.close().await;
+            let (Ok(log_meta) | Err(log_meta)) = &execution_result;
+            return Err(StreamFailure {
+                error,
+                rejection: None,
+                summary: log_meta.as_ref().map(RunSummary::from).unwrap_or_default(),
+            });
+        }
     }
     channel.close().await;
 
@@ -607,13 +639,18 @@ async fn execute_inner(
                 ExecutionStatus::Failed | ExecutionStatus::Running => (
                     "error",
                     "Execution failed",
-                    Some("Execution failed".to_string()),
+                    Some(
+                        log_meta
+                            .as_ref()
+                            .and_then(|meta| meta.error_message.clone())
+                            .unwrap_or_else(|| "Execution failed".to_string()),
+                    ),
                 ),
             };
             emit_event(tx, event_type, serde_json::json!({ "message": message }));
             Ok((status, summary, None, error))
         }
-        Err(_) => {
+        Err(log_meta) => {
             emit_event(
                 tx,
                 "error",
@@ -623,7 +660,7 @@ async fn execute_inner(
                 ExecutionStatus::Failed,
                 RunSummary {
                     log_level: Some(LogLevel::Fatal.to_u8()),
-                    ..RunSummary::default()
+                    ..log_meta.as_ref().map(RunSummary::from).unwrap_or_default()
                 },
                 None,
                 Some("Execution timeout".to_string()),
@@ -659,6 +696,43 @@ mod tests {
             cleaned.load(Ordering::SeqCst),
             "terminal quota settlement must wait for cleanup"
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_timeout_keeps_metadata_returned_by_cancelled_execution() {
+        use flow_like::flow::execution::rejection::RejectedRun;
+
+        let cancellation = flow_like_types::tokio_util::sync::CancellationToken::new();
+        let execution = async {
+            cancellation.cancelled().await;
+            let mut meta = RejectedRun::new("app-1", "board-1", RejectionStage::Setup, "timeout")
+                .with_event("event-1", Some("1.2.3".to_string()))
+                .log_meta();
+            meta.nodes = Some(vec![("visited-node".to_string(), 3)]);
+            meta.logs = Some(7);
+            Some(meta)
+        };
+
+        let result =
+            execute_until_deadline(execution, &cancellation, tokio::time::Instant::now()).await;
+        let meta = result
+            .expect_err("deadline elapsed")
+            .expect("cleanup metadata");
+        let event = completed_event_with_error(
+            "run-1",
+            ExecutionStatus::Failed,
+            42,
+            &RunSummary::from(&meta),
+            Some("Execution timeout"),
+        );
+
+        assert_eq!(event.payload["event_version"], "1.2.3");
+        assert_eq!(
+            event.payload["nodes"],
+            serde_json::json!([["visited-node", 3]])
+        );
+        assert_eq!(event.payload["logs"], 7);
+        assert_eq!(event.payload["error_message"], "Execution timeout");
     }
 
     #[tokio::test]
@@ -728,6 +802,10 @@ mod tests {
         assert_eq!(
             completed.payload.get("log_level"),
             Some(&serde_json::json!(4))
+        );
+        assert_eq!(
+            completed.payload.get("error_message"),
+            Some(&serde_json::json!("Board load error: resolver failed"))
         );
         assert!(completed.payload.get("event_version").is_none());
         assert!(completed.payload.get("nodes").is_none());

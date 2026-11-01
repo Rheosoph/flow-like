@@ -2,7 +2,10 @@ import { afterAll, afterEach, describe, expect, test } from "bun:test";
 import { type ReactNode, useMemo } from "react";
 import { withDeviceEventSource } from "../../../lib/event-source";
 import type { IEvent } from "../../../lib/schema/flow/event";
-import type { IEventSinkStatus } from "../../../state/backend-state/event-state";
+import type {
+	IEventSinkStatus,
+	IEventTimelineRun,
+} from "../../../state/backend-state/event-state";
 import {
 	advance,
 	byRole,
@@ -109,11 +112,18 @@ async function mountEditor(
 	relist?: (saved: IEvent) => IEvent,
 	sinkStatus: IEventSinkStatus = { active: false },
 	eventMapping: never = MAPPING,
+	historyRuns: IEventTimelineRun[] = [],
 ) {
 	let listed = stored;
 	const upserts: Array<{ event: IEvent; pat?: string; source?: string }> = [];
 	const repairs: Array<{ appId: string; eventId: string }> = [];
 	const pushes: string[] = [];
+	const logReads: string[] = [];
+	const boardReads: Array<{
+		appId: string;
+		boardId: string;
+		version?: [number, number, number];
+	}> = [];
 	const fake = await createFakeWorkspace();
 	const view = await mountDevices(
 		() => (
@@ -143,17 +153,44 @@ async function mountEditor(
 				boardState: {
 					getBoardSummaries: async () => [],
 					getBoardVersions: async () => [],
-					getBoard: async () => ({
-						id: "board_0",
-						nodes: {
-							node_cron: { id: "node_cron", name: "events_cron", pins: {} },
-						},
-						variables: {},
-					}),
+					getBoard: async (
+						appId: string,
+						boardId: string,
+						version?: [number, number, number],
+					) => {
+						boardReads.push({ appId, boardId, version });
+						return {
+							id: boardId,
+							nodes: {
+								node_cron: { id: "node_cron", name: "events_cron", pins: {} },
+								node_load: {
+									id: "node_load",
+									name: "events_simple",
+									friendly_name: "Load notes",
+									pins: {},
+								},
+							},
+							variables: {},
+						};
+					},
 					listRuns: async () => [],
+					getRunLogSummary: async (run: IEventTimelineRun) => {
+						logReads.push(run.run_id);
+						return null;
+					},
+					countRunLogs: async () => 0,
+					queryRunLogs: async () => [],
 				},
 				eventState: {
 					getEvents: async () => [listed],
+					getEventTimeline: async () => ({
+						event_id: stored.id,
+						boards: [stored.board_id],
+						entries: [],
+						truncated: false,
+						skipped: 0,
+					}),
+					listEventRuns: async () => historyRuns,
 					getEventAuthoritative: async () => stored,
 					isEventSinkActive: async () => sinkStatus.active,
 					getEventSinkStatus: async () => sinkStatus,
@@ -186,13 +223,88 @@ async function mountEditor(
 	);
 	await view.settle();
 	await view.settle();
-	return { ...view, upserts, repairs, pushes };
+	return { ...view, upserts, repairs, pushes, boardReads, logReads };
 }
 
 const toasts = () =>
 	toast
 		.getHistory()
 		.flatMap((entry) => ("title" in entry ? [entry.title] : []));
+
+test("a Page event resolves History names and opens the selected node's runs", async () => {
+	const pageEvent = {
+		...baseEvent,
+		name: "Notes page",
+		default_page_id: "page_notes",
+		board_id: "board_page",
+		board_version: [2, 1, 0],
+		node_id: "",
+	} as IEvent;
+	const view = await mountEditor(pageEvent, undefined, undefined, undefined, [
+		{
+			app_id: APP,
+			board_id: pageEvent.board_id,
+			event_id: pageEvent.id,
+			log_level: 1,
+			node_id: "node_load",
+			nodes: [["node_load", 1]],
+			payload: [],
+			run_id: "run_page_load",
+			start: 1_000_000,
+			end: 2_000_000,
+			version: "v2-1-0",
+		},
+		{
+			app_id: APP,
+			board_id: pageEvent.board_id,
+			event_id: pageEvent.id,
+			log_level: 1,
+			node_id: "node_cron",
+			nodes: [["node_cron", 1]],
+			payload: [],
+			run_id: "run_other_node",
+			start: 3_000_000,
+			end: 4_000_000,
+			version: "v2-1-0",
+		},
+	]);
+	await click(byRole("button", "History"));
+	await view.settle();
+	await view.settle();
+	expect(view.boardReads).toContainEqual({
+		appId: APP,
+		boardId: "board_page",
+		version: [2, 1, 0],
+	});
+	expect(byRole("tabpanel", "Runs").textContent).toContain("Load notes");
+	expect(byRole("button", "Open run run_other_node").textContent).toContain(
+		"Notes page",
+	);
+	const versions = view.container.querySelector("table");
+	expect(versions?.textContent).toMatch(
+		/Runs without a (recorded event )?version/,
+	);
+	expect(versions?.textContent).not.toContain("before version stamping");
+	await click(byRole("tab", "Nodes"));
+	expect(byRole("tabpanel", "Nodes").textContent).toContain("Load notes");
+	await click(byRole("button", "Show runs for Load notes"));
+	expect(byRole("tab", "Runs").getAttribute("aria-selected")).toBe("true");
+	expect(byRole("button", "Open run run_page_load")).toBeTruthy();
+	expect(queryByRole("button", "Open run run_other_node")).toBeNull();
+
+	await click(byRole("button", "Open run run_page_load"));
+	await view.settle();
+	await view.settle();
+	const runDialog = byRole("dialog", "Load notes");
+	expect(runDialog.textContent).toContain("run_page_load");
+	expect(view.logReads).toContain("run_page_load");
+	await click(byRole("button", "Close", runDialog));
+	expect(queryByRole("dialog")).toBeNull();
+
+	await click(byRole("button", "Show all nodes"));
+	expect(byRole("button", "Open run run_page_load")).toBeTruthy();
+	expect(byRole("button", "Open run run_other_node")).toBeTruthy();
+});
 
 describe("the editor of a device-only event", () => {
 	test("reads Devices only, explains it and keeps the ordinary status for others", async () => {

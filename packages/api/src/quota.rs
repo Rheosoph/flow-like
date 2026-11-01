@@ -987,6 +987,7 @@ pub async fn finish_cloud(
             if status == "completed" { 0 } else { 4 },
             Some(runtime_ms),
             &crate::execution::run_summary::RunSummary::default(),
+            None,
         )
         .await?;
     }

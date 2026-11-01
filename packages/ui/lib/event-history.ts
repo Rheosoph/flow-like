@@ -69,7 +69,7 @@ function percentile(sorted: number[], p: number): number {
 
 function compareVersionKeysDesc(a: string | null, b: string | null): number {
 	if (a === b) return 0;
-	// Unversioned runs sort last — they predate version tracking.
+	// Runs without a recorded event version sort last.
 	if (a === null) return 1;
 	if (b === null) return -1;
 	const parsedA = parseDottedEventVersion(a);
@@ -86,8 +86,8 @@ function compareVersionKeysDesc(a: string | null, b: string | null): number {
 }
 
 /**
- * Groups run summaries by their dotted `event_version` key. Runs without one
- * (recorded before version stamping landed) collect under `versionKey: null`.
+ * Groups run summaries by their dotted `event_version` key. Runs without a
+ * valid version collect under `versionKey: null`.
  */
 export function aggregateRunsByEventVersion(
 	runs: readonly ILogMetadata[],

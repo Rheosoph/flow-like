@@ -41,6 +41,8 @@ pub(crate) struct CompletedPayload {
     pub status: RunStatus,
     pub log_level: i32,
     pub summary: RunSummary,
+    /// Internal failure detail retained in History, even for a public Page run.
+    pub error_message: Option<String>,
     /// `rejected:<stage>` when the executor refused the run before it started.
     pub rejection_step: Option<String>,
 }
@@ -62,6 +64,11 @@ pub(crate) fn parse_completed_payload(envelope: &serde_json::Value) -> Completed
     let summary = payload
         .and_then(|p| serde_json::from_value(p.clone()).ok())
         .unwrap_or_default();
+    let error_message = payload
+        .and_then(|p| p.get("error_message"))
+        .and_then(|value| value.as_str())
+        .filter(|message| !message.trim().is_empty())
+        .map(str::to_string);
     let rejection_step = payload
         .and_then(|p| p.get("current_step"))
         .and_then(|s| s.as_str())
@@ -71,6 +78,7 @@ pub(crate) fn parse_completed_payload(envelope: &serde_json::Value) -> Completed
         status,
         log_level,
         summary,
+        error_message,
         rejection_step,
     }
 }
@@ -138,6 +146,7 @@ pub(crate) async fn update_run_on_completed_event(
         completed.log_level,
         None,
         &completed.summary,
+        completed.error_message.as_deref(),
     )
     .await?;
     if let Some(step) = completed.rejection_step {
@@ -404,7 +413,7 @@ fn create_sse_stream(
                     }
 
                     if let Some(db) = &db
-                        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(data)
+                        && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&sse_event.data)
                     {
                         completion.start(db, &run_id, &parsed);
                     }
@@ -491,6 +500,13 @@ fn seal_page_action_sse_envelope(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string();
+    if event_type == "completed"
+        && let Some(payload) = envelope_object
+            .get_mut("payload")
+            .and_then(serde_json::Value::as_object_mut)
+    {
+        payload.remove("error_message");
+    }
     let report = envelope_object
         .get_mut("payload")
         .map(|payload| context.seal_payload(&event_type, &message_id, payload))
@@ -659,6 +675,7 @@ pub async fn update_run_on_completion(
         log_level,
         None,
         &RunSummary::default(),
+        None,
     )
     .await
 }
@@ -771,19 +788,38 @@ pub async fn update_run_on_completion_with_runtime(
     log_level: i32,
     runtime_ms: Option<u64>,
     summary: &RunSummary,
+    error_message: Option<&str>,
 ) -> Result<(), sea_orm::DbErr> {
     let db = context.db.as_ref();
     crate::payments::node::cancel_run_database(db, context.dialect, run_id, "RUN_ENDED")
         .await
         .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
 
-    if let Some(existing) = without_nodes(ExecutionRun::find_by_id(run_id))
+    // A late failure may enrich an unsuccessful run, but cannot attach a
+    // failure reason to a run that completed successfully through another path.
+    let error_message = error_message.filter(|_| {
+        matches!(
+            status,
+            RunStatus::Failed | RunStatus::Timeout | RunStatus::Cancelled
+        )
+    });
+
+    if let Some(mut existing) = without_nodes(ExecutionRun::find_by_id(run_id))
         .one(db)
         .instrument(db_query_span("select", "ExecutionRun"))
         .await?
     {
         if !matches!(existing.status, RunStatus::Pending | RunStatus::Running) {
             apply_run_summary(db, run_id, &existing.app_id, summary).await?;
+            if let Some(message) = error_message {
+                apply_terminal_error(db, run_id, message).await?;
+                if matches!(
+                    existing.status,
+                    RunStatus::Failed | RunStatus::Timeout | RunStatus::Cancelled
+                ) {
+                    existing.error_message = Some(message.to_string());
+                }
+            }
             record_execution_result(context, &existing, run_id, AuditActorType::Executor)
                 .await
                 .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
@@ -818,6 +854,9 @@ pub async fn update_run_on_completion_with_runtime(
         model.status = Set(status);
         model.log_level = Set(log_level);
         summary.apply_to(&mut model);
+        if let Some(message) = error_message {
+            model.error_message = Set(Some(message.to_string()));
+        }
         if started_at.is_none() {
             model.started_at = Set(Some(created_at));
         }
@@ -834,6 +873,9 @@ pub async fn update_run_on_completion_with_runtime(
             Some(persisted) => persisted,
             None => {
                 apply_run_summary(db, run_id, &tracking_app_id, summary).await?;
+                if let Some(message) = error_message {
+                    apply_terminal_error(db, run_id, message).await?;
+                }
                 without_nodes(ExecutionRun::find_by_id(run_id))
                     .one(db)
                     .await?
@@ -866,6 +908,27 @@ pub async fn update_run_on_completion_with_runtime(
         .await?;
         tracing::info!(run_id = %run_id, log_level = log_level, "Updated run status on completion");
     }
+    Ok(())
+}
+
+async fn apply_terminal_error(
+    db: &DatabaseConnection,
+    run_id: &str,
+    message: &str,
+) -> Result<(), sea_orm::DbErr> {
+    ExecutionRun::update_many()
+        .col_expr(
+            execution_run::Column::ErrorMessage,
+            sea_orm::sea_query::Expr::value(message),
+        )
+        .filter(execution_run::Column::Id.eq(run_id))
+        .filter(execution_run::Column::Status.is_in([
+            RunStatus::Failed,
+            RunStatus::Timeout,
+            RunStatus::Cancelled,
+        ]))
+        .exec(db)
+        .await?;
     Ok(())
 }
 
