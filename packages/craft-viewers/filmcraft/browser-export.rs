@@ -12,6 +12,8 @@ use wasm_bindgen_futures::JsFuture;
 
 #[wasm_bindgen(module = "/src/browser-codecs.js")]
 extern "C" {
+    #[wasm_bindgen(catch, js_name = addAacRollGroups)]
+    fn add_aac_roll_groups(bytes: &[u8]) -> Result<Vec<u8>, JsValue>;
     #[wasm_bindgen(js_name = setCalibrationMuxer)]
     fn set_calibration_muxer(callback: &js_sys::Function);
     #[wasm_bindgen(catch, js_name = createEncoder)]
@@ -103,7 +105,7 @@ fn mux_audio_probe(probe: JsValue) -> Result<Vec<u8>, String> {
             )
             .map_err(io)?;
     }
-    Ok(writer.finish_faststart().map_err(io)?.into_inner())
+    add_aac_roll_groups(&writer.finish_faststart().map_err(io)?.into_inner()).map_err(error)
 }
 
 thread_local! { static RESULT: RefCell<Option<Result<Vec<u8>, String>>> = const { RefCell::new(None) }; }
@@ -388,7 +390,8 @@ fn mux(
                 .map_err(io)?;
         }
     }
-    let bytes = writer.finish_faststart().map_err(io)?.into_inner();
+    let bytes =
+        add_aac_roll_groups(&writer.finish_faststart().map_err(io)?.into_inner()).map_err(error)?;
     if bytes.len() > 200 * 1024 * 1024 {
         return Err("The exported video exceeds 200 MiB.".into());
     }

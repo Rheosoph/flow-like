@@ -68,6 +68,8 @@
 	"deleteAmpSwitch": "Delete & switch",
 	"deselect": "Deselect",
 	"deselectAll": "Deselect All",
+	"detachedReplyMessage": "Live updates for this reply stopped, so it may be incomplete. The run continues on the server; you can stop it from Activity.",
+	"detachedReplyTitle": "Still running on the server",
 	"detailedBreakdownOfModelInvocationsForThisMessage": "Detailed breakdown of model invocations for this message",
 	"dismissAppUi": "Dismiss app UI",
 	"donapostAskAgainThisSession": "Don't ask again this session",

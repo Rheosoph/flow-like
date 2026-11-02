@@ -1,7 +1,7 @@
 {
 	"repository": "https://github.com/storytold/filmcraft.git",
-	"revision": "0541d4d182d0bb755a2633ef66824cdadb280c09",
-	"version": "0.7.0",
+	"revision": "77adc30a756bea17441199caff45a24415ba9753",
+	"version": "0.16.0",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "filmcraft-web",
 	"wasmFile": "filmcraft_web",

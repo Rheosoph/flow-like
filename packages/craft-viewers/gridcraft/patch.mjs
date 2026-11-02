@@ -9,37 +9,22 @@ export default function prepare({
 	write,
 	replaceOnce,
 }) {
-	const uiPath = "crates/ui-egui/src/lib.rs";
-	let ui = original(uiPath);
-	ui = replaceOnce(
-		ui,
+	const patch = (path, search, replacement, label) =>
+		write(path, replaceOnce(original(path), search, replacement, label));
+	patch(
+		"crates/ui-egui/src/services.rs",
 		"pub struct Services {",
-		"pub struct Services {\n    pub host_command: Option<Box<dyn Fn(&str) -> Option<Result<Json, String>>>>,",
+		"pub struct Services {\n    pub host_command: Option<Box<dyn Fn(&str) -> Option<Result<serde_json::Value, String>>>>,",
 		"host services",
 	);
 	const run =
 		"pub fn run(&mut self, id: &str, params: Json) -> Result<Json, String> {";
-	ui = replaceOnce(
-		ui,
+	patch(
+		"crates/ui-egui/src/app/commands.rs",
 		run,
 		`${run}\n        if let Some(result) = self.services.host_command.as_ref().and_then(|filter| filter(id)) { return result; }`,
 		"command dispatch",
 	);
-	ui = replaceOnce(
-		ui,
-		"        ribbon::title_bar(self, ui);",
-		"        if self.services.host_command.is_none() { ribbon::title_bar(self, ui); }",
-		"title bar",
-	);
-	const backstage = "pub fn open_backstage(&mut self, page: backstage::Page) {";
-	ui = replaceOnce(
-		ui,
-		backstage,
-		`${backstage}\n        if self.services.host_command.is_some() { return; }`,
-		"file screen",
-	);
-	ui = ui.replaceAll('"GridCraft"', '"Flows Sheets"');
-	write(uiPath, ui);
 	const enginePath = "crates/engine/src/lib.rs";
 	let engine = original(enginePath);
 	engine = replaceOnce(
@@ -57,21 +42,13 @@ export default function prepare({
 		"hosted file commands",
 	);
 	write(enginePath, engine);
-	const ribbonPath = "crates/ui-egui/src/ribbon.rs";
-	let ribbon = replaceOnce(
-		original(ribbonPath),
-		"                    file_menu(app, ui);",
-		"                    if app.services.host_command.is_none() { file_menu(app, ui); }",
-		"File tab",
-	);
-	ribbon = replaceOnce(
-		ribbon,
+	patch(
+		"crates/ui-egui/src/ribbon/automate.rs",
 		'"About\\nGridCraft"',
 		'"About\\nFlows Sheets"',
 		"About button",
 	);
-	write(ribbonPath, ribbon);
-	const gridPath = "crates/ui-egui/src/grid.rs";
+	const gridPath = "crates/ui-egui/src/grid/show.rs";
 	let grid = original(gridPath);
 	grid = replaceOnce(
 		grid,
@@ -87,26 +64,37 @@ export default function prepare({
 	);
 	grid = replaceOnce(
 		grid,
-		"    // Interaction.\n    let previous_popups",
-		"    if read_only {\n        let track_x = if rtl { (available.left(), rect.left()) } else { (rect.right(), available.right()) };\n        vertical_scrollbar(app, ui, sh, &geo, track_x, max_y, &t);\n        return;\n    }\n    // Interaction.\n    let previous_popups",
+		"    show_grid_interactions(app, ui, &resp, &geo, sh, &wb);",
+		"    if !read_only { show_grid_interactions(app, ui, &resp, &geo, sh, &wb); }",
 		"read-only interaction boundary",
 	);
+	patch(
+		"crates/ui-egui/src/grid.rs",
+		"pub use show::show;",
+		"pub use show::{show, show_read_only};",
+		"read-only grid export",
+	);
 	write(gridPath, grid);
-	const dialogsPath = "crates/ui-egui/src/dialogs.rs";
-	let dialogs = original(dialogsPath);
-	for (const [search, replacement] of [
-		[
-			'Dialog::custom("about", "About GridCraft",',
-			'Dialog::custom("about", "About Flows Sheets",',
-		],
-		['ui.heading("GridCraft");', 'ui.heading("Flows Sheets");'],
-		[
-			'ui.label("A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft.");',
-			'ui.label("Spreadsheet viewing and editing in Flow-Like, powered by GridCraft.");',
-		],
-	])
-		dialogs = replaceOnce(dialogs, search, replacement, "product identity");
-	write(dialogsPath, dialogs);
+	patch(
+		"crates/ui-egui/src/dialogs.rs",
+		'Dialog::custom("about", "About GridCraft",',
+		'Dialog::custom("about", "About Flows Sheets",',
+		"About title",
+	);
+	let about = original("crates/ui-egui/src/dialogs/about.rs");
+	about = replaceOnce(
+		about,
+		'ui.heading("GridCraft");',
+		'ui.heading("Flows Sheets");',
+		"product heading",
+	);
+	about = replaceOnce(
+		about,
+		'ui.label("A clean-room, open-source, Rust-native spreadsheet. Part of ArtCraft.");',
+		'ui.label("Spreadsheet viewing and editing in Flow-Like, powered by GridCraft.");',
+		"product identity",
+	);
+	write("crates/ui-egui/src/dialogs/about.rs", about);
 	write("Cargo.lock", original("Cargo.lock"));
 	write(
 		"apps/gridcraft-web/src/web.rs",

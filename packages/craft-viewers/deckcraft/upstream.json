@@ -1,11 +1,15 @@
 {
 	"repository": "https://github.com/storytold/deckcraft.git",
-	"revision": "0ec0cc5e815caea982a7deec51bc437f3ba187ad",
-	"version": "0.6.0",
+	"revision": "ee39ff67816d0039143ec7c98ea604cefe0cd2e5",
+	"version": "0.14.1",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "deckcraft-web",
 	"label": "Flows Slides",
 	"canvasId": "craft_canvas",
-	"extensions": ["pptx", "potx", "ppsx"],
+	"extensions": [
+		"pptx",
+		"potx",
+		"ppsx"
+	],
 	"maxBytes": 52428800
 }

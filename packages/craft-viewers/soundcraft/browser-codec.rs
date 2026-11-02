@@ -6,10 +6,10 @@ fn unsupported() -> AudioError {
     )
 }
 
-pub(crate) fn probe(_: &[u8], _: Option<&str>, _: FileFormat) -> Result<AudioInfo> {
+pub(crate) fn probe(_: &[u8], _: FileFormat) -> Result<AudioInfo> {
     Err(unsupported())
 }
 
-pub(crate) fn decode(_: &[u8], _: Option<&str>, _: FileFormat) -> Result<(AudioInfo, AudioBuffer)> {
+pub(crate) fn decode(_: &[u8], _: FileFormat) -> Result<(AudioInfo, AudioBuffer)> {
     Err(unsupported())
 }

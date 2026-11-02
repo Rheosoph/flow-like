@@ -1,11 +1,13 @@
 {
 	"repository": "https://github.com/storytold/pdfcraft.git",
-	"revision": "87b448b664e1b3c960b479cc0f2c2e7a82c7ac71",
-	"version": "0.7.0",
+	"revision": "7d78f3e14474b978be014715e0cc64895d77025a",
+	"version": "0.17.0",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "pdfcraft-web",
 	"label": "Flows PDF",
 	"canvasId": "craft_canvas",
-	"extensions": ["pdf"],
+	"extensions": [
+		"pdf"
+	],
 	"maxBytes": 209715200
 }

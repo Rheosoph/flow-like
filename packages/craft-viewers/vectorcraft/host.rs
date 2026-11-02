@@ -24,6 +24,12 @@ const INPUTS: &[&str] = &[
     "af",
     "afdesign",
     "afpub",
+    "jpf",
+    "jpx",
+    "jp2",
+    "j2k",
+    "j2c",
+    "jpc",
 ];
 
 #[wasm_bindgen]
@@ -404,13 +410,13 @@ impl eframe::App for Host {
         }
         self.report_dirty();
     }
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         raw.dropped_files.clear();
         if self.read_only {
             self.app.host_cancel_synthetic();
         }
         if !self.read_only {
-            self.app.raw_input_hook(raw);
+            self.app.raw_input_hook(ctx, raw);
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

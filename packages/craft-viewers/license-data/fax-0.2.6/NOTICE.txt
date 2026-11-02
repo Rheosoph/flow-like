@@ -1,0 +1,18 @@
+fax 0.2.6
+
+The published crate declares the MIT license and the following package metadata.
+Its pinned repository revision contains no separate license or copyright file.
+The accompanying spdx/MIT.txt contains the MIT license text.
+
+Source: https://github.com/pdf-rs/fax/blob/40b226eb97b391355e971fd95a8dd532a4c127a0/Cargo.toml
+
+[package]
+name = "fax"
+version = "0.2.6"
+authors = ["Sebastian K <s3bk@protonmail.com>"]
+edition = "2018"
+description = "Decoder and Encoder for CCITT Group 3 and 4 bi-level image encodings used by fax machines TIFF and PDF."
+license = "MIT"
+keywords = ["CCITT", "fax", "CCITTFaxDecode"]
+repository = "https://github.com/pdf-rs/fax"
+exclude = ["T-REC-T.6-198811-I!!PDF-E.pdf", ".vscode/*", ".gitignore"]

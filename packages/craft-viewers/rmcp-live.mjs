@@ -46,6 +46,7 @@ const nativeToolsByEditor = {
 		"session_list",
 		"doc_open",
 		"doc_place",
+		"doc_replace_smart_object",
 		"doc_export_layers",
 		"doc_export_data_sets",
 		"doc_import_data_sets",
@@ -108,6 +109,7 @@ export function prepareRmcpLive({ id, source, write, original, replaceOnce }) {
 			: [
 					"strict_schema",
 					"strict_node",
+					"into_command_rows",
 					"ok_json",
 					"bounded_tool_result",
 					"fail",

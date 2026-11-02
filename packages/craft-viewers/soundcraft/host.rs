@@ -93,7 +93,7 @@ async fn prepare_file(name: &str, bytes: Vec<u8>, purpose: &Purpose) -> Result<P
         (Purpose::Open, "scraft" | "scraftz") => {
             let mut decoded = HashMap::new();
             if bytes.starts_with(b"PK\x03\x04") {
-                let (text, mut media) = io::read_bundle(&bytes).map_err(|e| e.to_string())?;
+                let (text, mut media) = io::read_host_bundle(&bytes).map_err(|e| e.to_string())?;
                 let session =
                     soundcraft_model::Session::from_json(&text).map_err(|e| e.to_string())?;
                 let mut total = 0usize;
@@ -476,7 +476,7 @@ impl Host {
 }
 
 impl eframe::App for Host {
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         raw.dropped_files.clear();
         if self.read_only {
             self.app.host_cancel_synthetic();
@@ -492,7 +492,7 @@ impl eframe::App for Host {
                 )
             });
         }
-        self.app.raw_input_hook(raw);
+        self.app.raw_input_hook(ctx, raw);
     }
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let pending = PENDING.with(|queue| std::mem::take(&mut *queue.borrow_mut()));

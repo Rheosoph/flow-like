@@ -1,7 +1,7 @@
 {
 	"repository": "https://github.com/tangency-labs/solidcraft.git",
-	"revision": "72b7fc385b6fda5cc97f711e14624d8e4ce95810",
-	"version": "0.15.0",
+	"revision": "afd81380ab06b0e77e03fdf68185d4b484d0e84e",
+	"version": "0.30.0",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "solidcraft-web",
 	"label": "Flows CAD",
@@ -9,6 +9,8 @@
 	"maxBytes": 104857600,
 	"extensions": [
 		"solidcraft",
+		"fcstd",
+		"3dm",
 		"step",
 		"stp",
 		"iges",

@@ -1,7 +1,7 @@
 {
 	"repository": "https://github.com/storytold/vectorcraft.git",
-	"revision": "22f14bec246e3dbbe4795765e84572f89ad2b91c",
-	"version": "0.10.0",
+	"revision": "5628de96f866185d8eb289b167b89691f213c0c3",
+	"version": "0.20.0",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "vectorcraft-web",
 	"label": "Flows Vector",
@@ -20,7 +20,13 @@
 		"vctemplate",
 		"af",
 		"afdesign",
-		"afpub"
+		"afpub",
+		"jpf",
+		"jpx",
+		"jp2",
+		"j2k",
+		"j2c",
+		"jpc"
 	],
 	"maxBytes": 52428800
 }

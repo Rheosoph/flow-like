@@ -50,6 +50,12 @@ pub fn host_command(id: &str) -> Option<std::result::Result<Value, String>> {
 		"    pub fn start(&mut self, id: &str) {\n        if self.host_action(id) { return; }",
 		"interactive command dispatch",
 	);
+	ui = replaceOnce(
+		ui,
+		"        file_load::tick(self, ctx);",
+		"        // The storage host advances its trusted file load separately.",
+		"host staged file loading",
+	);
 	ui += `
 mod host_ui;
 impl SolveApp {
@@ -76,8 +82,8 @@ impl SolveApp {
 	);
 	viewport = replaceOnce(
 		viewport,
-		"crate::select_other::track_hold(app, ui.ctx(), &proj, inside, primary_pressed, primary_down, hover, primary_nav.is_some() || mode.is_some());",
-		"!crate::host_ui::read_only() && crate::select_other::track_hold(app, ui.ctx(), &proj, inside, primary_pressed, primary_down, hover, primary_nav.is_some() || mode.is_some());",
+		"crate::select_other::track_hold(app, ui.ctx(), &proj, inside, primary_pressed, primary_down, hover, navigating_from_press);",
+		"!crate::host_ui::read_only() && crate::select_other::track_hold(app, ui.ctx(), &proj, inside, primary_pressed, primary_down, hover, navigating_from_press);",
 		"preview selection hold",
 	);
 	viewport = replaceOnce(
@@ -94,8 +100,8 @@ impl SolveApp {
 	);
 	viewport = replaceOnce(
 		viewport,
-		"    axis_view(app, ui, rect);\n    nav_bar(app, ui, rect);",
-		"    });\n    axis_view(app, ui, rect);\n    nav_bar(app, ui, rect);",
+		"    axis_view(app, ui, rect);\n    crate::view_angles::show(app, ui, rect);",
+		"    });\n    axis_view(app, ui, rect);\n    crate::view_angles::show(app, ui, rect);",
 		"native preview navigation",
 	);
 	write("crates/ui-egui/src/viewport.rs", viewport);
@@ -143,8 +149,8 @@ impl SolveApp {
 		"crates/ui-egui/src/home.rs",
 		replaceOnce(
 			original("crates/ui-egui/src/home.rs"),
-			"    pub fn show(&mut self, _rev: u64) {\n        self.open = true;\n    }",
-			"    pub fn show(&mut self, _rev: u64) {}",
+			"    pub fn show(&mut self, _rev: u64) {\n        self.open = true;",
+			"    pub fn show(&mut self, _rev: u64) {\n        self.open = false;",
 			"embedded home navigation",
 		),
 	);

@@ -15,6 +15,38 @@
     ],
     "revision": "a55d3e1a18bb9ef0e4bccc9083fb13c3e0ad8969"
   },
+  "accesskit@0.25.1": {
+    "files": [
+      "accesskit/LICENSE-APACHE",
+      "accesskit/LICENSE-MIT",
+      "accesskit/LICENSE.chromium",
+      "accesskit-0.25.1/COPYRIGHT.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/AccessKit/accesskit/ce8164ba92995cfa86005b6259115e08c8244253/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/AccessKit/accesskit/ce8164ba92995cfa86005b6259115e08c8244253/LICENSE-MIT",
+      "https://raw.githubusercontent.com/AccessKit/accesskit/ce8164ba92995cfa86005b6259115e08c8244253/LICENSE.chromium",
+      "https://github.com/AccessKit/accesskit/blob/ce8164ba92995cfa86005b6259115e08c8244253/accesskit/src/geometry.rs",
+      "https://github.com/AccessKit/accesskit/blob/ce8164ba92995cfa86005b6259115e08c8244253/accesskit/src/lib.rs"
+    ],
+    "revision": "ce8164ba92995cfa86005b6259115e08c8244253"
+  },
+  "accesskit@0.25.2": {
+    "files": [
+      "accesskit/LICENSE-APACHE",
+      "accesskit/LICENSE-MIT",
+      "accesskit/LICENSE.chromium",
+      "accesskit-0.25.2/COPYRIGHT.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/AccessKit/accesskit/f3026222559c7f5f46d8f25cb7404de68eb149f0/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/AccessKit/accesskit/f3026222559c7f5f46d8f25cb7404de68eb149f0/LICENSE-MIT",
+      "https://raw.githubusercontent.com/AccessKit/accesskit/f3026222559c7f5f46d8f25cb7404de68eb149f0/LICENSE.chromium",
+      "https://github.com/AccessKit/accesskit/blob/f3026222559c7f5f46d8f25cb7404de68eb149f0/accesskit/src/geometry.rs",
+      "https://github.com/AccessKit/accesskit/blob/f3026222559c7f5f46d8f25cb7404de68eb149f0/accesskit/src/lib.rs"
+    ],
+    "revision": "f3026222559c7f5f46d8f25cb7404de68eb149f0"
+  },
   "alloc-stdlib@0.2.4": {
     "files": [
       "rust-alloc-no-stdlib/LICENSE"
@@ -101,6 +133,69 @@
     ],
     "revision": "337a3668a0dc86dd401ea20906e782249a64a228"
   },
+  "cadmpeg-codec-freecad@0.6.3": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/b504b8857432d3aa77e9539bfde1bb58d60ef93d/LICENSE"
+    ],
+    "revision": "b504b8857432d3aa77e9539bfde1bb58d60ef93d"
+  },
+  "cadmpeg-codec-rhino@0.6.3": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/b504b8857432d3aa77e9539bfde1bb58d60ef93d/LICENSE"
+    ],
+    "revision": "b504b8857432d3aa77e9539bfde1bb58d60ef93d"
+  },
+  "cadmpeg-codec-step@0.6.3": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/b504b8857432d3aa77e9539bfde1bb58d60ef93d/LICENSE"
+    ],
+    "revision": "b504b8857432d3aa77e9539bfde1bb58d60ef93d"
+  },
+  "cadmpeg-container@0.6.3": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/b504b8857432d3aa77e9539bfde1bb58d60ef93d/LICENSE"
+    ],
+    "revision": "b504b8857432d3aa77e9539bfde1bb58d60ef93d"
+  },
+  "cadmpeg-core@0.6.3": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/b504b8857432d3aa77e9539bfde1bb58d60ef93d/LICENSE"
+    ],
+    "revision": "b504b8857432d3aa77e9539bfde1bb58d60ef93d"
+  },
+  "cadmpeg-ir@0.6.3": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/b504b8857432d3aa77e9539bfde1bb58d60ef93d/LICENSE"
+    ],
+    "revision": "b504b8857432d3aa77e9539bfde1bb58d60ef93d"
+  },
+  "cadmpeg-registry@0.6.3": {
+    "files": [
+      "cadmpeg-0.6.3/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/cadmpeg/cadmpeg/b504b8857432d3aa77e9539bfde1bb58d60ef93d/LICENSE"
+    ],
+    "revision": "b504b8857432d3aa77e9539bfde1bb58d60ef93d"
+  },
   "convert_case@0.4.0": {
     "files": [
       "convert_case-0.4.0/NOTICE.txt",
@@ -134,6 +229,17 @@
     ],
     "revision": "49682f8baa058bf49e011035cfbd6e825f88a5ef"
   },
+  "ecolor@0.37.0": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-MIT"
+    ],
+    "revision": "6d518fc799681571963842f95b55a6b68431b15a"
+  },
   "eframe@0.36.2": {
     "files": [
       "egui/LICENSE-APACHE",
@@ -144,6 +250,17 @@
       "https://raw.githubusercontent.com/emilk/egui/49682f8baa058bf49e011035cfbd6e825f88a5ef/LICENSE-MIT"
     ],
     "revision": "49682f8baa058bf49e011035cfbd6e825f88a5ef"
+  },
+  "eframe@0.37.0": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-MIT"
+    ],
+    "revision": "6d518fc799681571963842f95b55a6b68431b15a"
   },
   "egui-wgpu@0.36.2": {
     "files": [
@@ -156,6 +273,17 @@
     ],
     "revision": "49682f8baa058bf49e011035cfbd6e825f88a5ef"
   },
+  "egui-wgpu@0.37.0": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-MIT"
+    ],
+    "revision": "6d518fc799681571963842f95b55a6b68431b15a"
+  },
   "egui@0.36.2": {
     "files": [
       "egui/LICENSE-APACHE",
@@ -166,6 +294,17 @@
       "https://raw.githubusercontent.com/emilk/egui/49682f8baa058bf49e011035cfbd6e825f88a5ef/LICENSE-MIT"
     ],
     "revision": "49682f8baa058bf49e011035cfbd6e825f88a5ef"
+  },
+  "egui@0.37.0": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-MIT"
+    ],
+    "revision": "6d518fc799681571963842f95b55a6b68431b15a"
   },
   "egui_extras@0.36.2": {
     "files": [
@@ -178,6 +317,17 @@
     ],
     "revision": "49682f8baa058bf49e011035cfbd6e825f88a5ef"
   },
+  "egui_extras@0.37.0": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-MIT"
+    ],
+    "revision": "6d518fc799681571963842f95b55a6b68431b15a"
+  },
   "egui_glow@0.36.2": {
     "files": [
       "egui/LICENSE-APACHE",
@@ -189,6 +339,17 @@
     ],
     "revision": "49682f8baa058bf49e011035cfbd6e825f88a5ef"
   },
+  "egui_glow@0.37.0": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-MIT"
+    ],
+    "revision": "6d518fc799681571963842f95b55a6b68431b15a"
+  },
   "emath@0.36.2": {
     "files": [
       "egui/LICENSE-APACHE",
@@ -199,6 +360,17 @@
       "https://raw.githubusercontent.com/emilk/egui/49682f8baa058bf49e011035cfbd6e825f88a5ef/LICENSE-MIT"
     ],
     "revision": "49682f8baa058bf49e011035cfbd6e825f88a5ef"
+  },
+  "emath@0.37.0": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-MIT"
+    ],
+    "revision": "6d518fc799681571963842f95b55a6b68431b15a"
   },
   "enum-map-derive@0.17.0": {
     "files": [
@@ -214,6 +386,21 @@
       "https://codeberg.org/xfix/enum-map/src/commit/2026968c30ad14d268f3d70c618a704e22a3b980/enum-map-derive/src/lib.rs"
     ],
     "revision": "2026968c30ad14d268f3d70c618a704e22a3b980"
+  },
+  "enum-map-derive@1.0.1": {
+    "files": [
+      "enum-map/MIT.txt",
+      "enum-map/Apache-2.0.txt",
+      "enum-map-derive-1.0.1/COPYRIGHT.txt"
+    ],
+    "sources": [
+      "https://codeberg.org/xfix/enum-map/raw/commit/ccf562d340723530d54f7bdfeb1782b4ded803a7/LICENSES/MIT.txt",
+      "https://codeberg.org/xfix/enum-map/raw/commit/ccf562d340723530d54f7bdfeb1782b4ded803a7/LICENSES/Apache-2.0.txt",
+      "https://codeberg.org/xfix/enum-map/src/commit/ccf562d340723530d54f7bdfeb1782b4ded803a7/enum-map-derive/src/lib.rs",
+      "https://codeberg.org/xfix/enum-map/src/commit/ccf562d340723530d54f7bdfeb1782b4ded803a7/enum-map-derive/src/derive_enum.rs",
+      "https://codeberg.org/xfix/enum-map/src/commit/ccf562d340723530d54f7bdfeb1782b4ded803a7/enum-map-derive/src/derive_struct.rs"
+    ],
+    "revision": "ccf562d340723530d54f7bdfeb1782b4ded803a7"
   },
   "enum-map@2.7.3": {
     "files": [
@@ -235,6 +422,27 @@
     ],
     "revision": "c788a9c4bd0431308d889942719f7a38761d9884"
   },
+  "enum-map@3.1.0": {
+    "files": [
+      "enum-map/MIT.txt",
+      "enum-map/Apache-2.0.txt",
+      "enum-map-3.1.0/COPYRIGHT.txt"
+    ],
+    "sources": [
+      "https://codeberg.org/xfix/enum-map/raw/commit/a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e/LICENSES/MIT.txt",
+      "https://codeberg.org/xfix/enum-map/raw/commit/a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e/LICENSES/Apache-2.0.txt",
+      "https://codeberg.org/xfix/enum-map/src/commit/a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e/enum-map/tests/test.rs",
+      "https://codeberg.org/xfix/enum-map/src/commit/a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e/enum-map/tests/serde.rs",
+      "https://codeberg.org/xfix/enum-map/src/commit/a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e/enum-map/src/arbitrary.rs",
+      "https://codeberg.org/xfix/enum-map/src/commit/a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e/enum-map/src/enum_map_impls.rs",
+      "https://codeberg.org/xfix/enum-map/src/commit/a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e/enum-map/src/serde.rs",
+      "https://codeberg.org/xfix/enum-map/src/commit/a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e/enum-map/src/lib.rs",
+      "https://codeberg.org/xfix/enum-map/src/commit/a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e/enum-map/src/iter.rs",
+      "https://codeberg.org/xfix/enum-map/src/commit/a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e/enum-map/src/internal.rs",
+      "https://codeberg.org/xfix/enum-map/src/commit/a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e/enum-map/src/bytemuck.rs"
+    ],
+    "revision": "a09d924a4afde4e2864a1df7b1438a5e6cdf3e7e"
+  },
   "epaint@0.36.2": {
     "files": [
       "egui/LICENSE-APACHE",
@@ -246,6 +454,17 @@
     ],
     "revision": "49682f8baa058bf49e011035cfbd6e825f88a5ef"
   },
+  "epaint@0.37.0": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-MIT"
+    ],
+    "revision": "6d518fc799681571963842f95b55a6b68431b15a"
+  },
   "epaint_default_fonts@0.36.2": {
     "files": [
       "egui/LICENSE-APACHE",
@@ -256,6 +475,17 @@
       "https://raw.githubusercontent.com/emilk/egui/49682f8baa058bf49e011035cfbd6e825f88a5ef/LICENSE-MIT"
     ],
     "revision": "49682f8baa058bf49e011035cfbd6e825f88a5ef"
+  },
+  "epaint_default_fonts@0.37.0": {
+    "files": [
+      "egui/LICENSE-APACHE",
+      "egui/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/storytold/egui/6d518fc799681571963842f95b55a6b68431b15a/LICENSE-MIT"
+    ],
+    "revision": "6d518fc799681571963842f95b55a6b68431b15a"
   },
   "flatbuffers@24.12.23": {
     "files": [
@@ -288,6 +518,15 @@
     ],
     "revision": "d8c914dc29afd4d4824dacd2c134dbc16168e78c"
   },
+  "i_key_sort@0.12.0": {
+    "files": [
+      "ikeysort/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/iShape-Rust/iKeySort/688424e09b7758d04e62e350160d164c7384f54b/LICENSE"
+    ],
+    "revision": "688424e09b7758d04e62e350160d164c7384f54b"
+  },
   "i_overlay@9.0.0": {
     "files": [
       "ioverlay/LICENSE-APACHE",
@@ -298,6 +537,17 @@
       "https://raw.githubusercontent.com/iShape-Rust/iOverlay/26782e3b93f9b7d2516e7653f3d56eebc31af798/LICENSE-MIT"
     ],
     "revision": "26782e3b93f9b7d2516e7653f3d56eebc31af798"
+  },
+  "i_overlay@9.1.0": {
+    "files": [
+      "i_overlay-9.1.0/LICENSE-APACHE",
+      "ioverlay/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/iShape-Rust/iOverlay/117637e3a65804973da2bfd7c59f42773f4dcc0d/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/iShape-Rust/iOverlay/117637e3a65804973da2bfd7c59f42773f4dcc0d/LICENSE-MIT"
+    ],
+    "revision": "117637e3a65804973da2bfd7c59f42773f4dcc0d"
   },
   "katexit@0.1.5": {
     "files": [
@@ -348,6 +598,56 @@
     ],
     "obligations": "The pinned upstream NOTICE identifies content_draw_path in src/content.rs as copied or adapted from MPL-licensed resvg code and identifies other Apache-2.0-derived code. Preserve those terms and provide the exact source archive containing the covered portions; other files retain their original licenses."
   },
+  "krilla@0.8.2#92d392cff132eaf53e13afff77f38b5c11b73aa0": {
+    "files": [
+      "krilla-3ffdf0588cf9/LICENSE_APACHE",
+      "krilla-3ffdf0588cf9/LICENSE_MIT",
+      "krilla-3ffdf0588cf9/NOTICE.txt",
+      "symphonia/LICENSE",
+      "craft-libs-92d392cff132/NOTICE.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_APACHE",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_MIT",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/NOTICE.md",
+      "https://github.com/LaurenzV/krilla/blob/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/crates/krilla/src/content.rs#L1275",
+      "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+      "https://github.com/storytold/craft-libs/blob/92d392cff132eaf53e13afff77f38b5c11b73aa0/NOTICE",
+      "https://github.com/storytold/craft-libs/blob/92d392cff132eaf53e13afff77f38b5c11b73aa0/vendor/krilla/SOURCE.json",
+      "https://github.com/storytold/craft-libs/blob/92d392cff132eaf53e13afff77f38b5c11b73aa0/vendor/krilla/src/content.rs"
+    ],
+    "revision": "92d392cff132eaf53e13afff77f38b5c11b73aa0",
+    "additionalLicenses": [
+      "Apache-2.0",
+      "MPL-2.0"
+    ],
+    "obligations": "The pinned upstream NOTICE identifies content_draw_path in src/content.rs as copied or adapted from MPL-licensed resvg code and identifies other Apache-2.0-derived code. Preserve those terms and provide the exact source archive containing the covered portions; other files retain their original licenses."
+  },
+  "krilla@0.8.2#c5a1cbfb5f9049f9270955caffb5bee5997aebf7": {
+    "files": [
+      "krilla-3ffdf0588cf9/LICENSE_APACHE",
+      "krilla-3ffdf0588cf9/LICENSE_MIT",
+      "krilla-3ffdf0588cf9/NOTICE.txt",
+      "symphonia/LICENSE",
+      "craft-libs-c5a1cbfb5f90/NOTICE.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_APACHE",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/LICENSE_MIT",
+      "https://raw.githubusercontent.com/LaurenzV/krilla/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/NOTICE.md",
+      "https://github.com/LaurenzV/krilla/blob/3ffdf0588cf98050aad6edba51ca70162e1fb5b5/crates/krilla/src/content.rs#L1275",
+      "https://raw.githubusercontent.com/pdeljanov/Symphonia/6d533f26150953a882a6a111ebd13f0abf7129d5/LICENSE",
+      "https://github.com/storytold/craft-libs/blob/c5a1cbfb5f9049f9270955caffb5bee5997aebf7/NOTICE",
+      "https://github.com/storytold/craft-libs/blob/c5a1cbfb5f9049f9270955caffb5bee5997aebf7/vendor/krilla/SOURCE.json",
+      "https://github.com/storytold/craft-libs/blob/c5a1cbfb5f9049f9270955caffb5bee5997aebf7/vendor/krilla/src/content.rs"
+    ],
+    "revision": "c5a1cbfb5f9049f9270955caffb5bee5997aebf7",
+    "additionalLicenses": [
+      "Apache-2.0",
+      "MPL-2.0"
+    ],
+    "obligations": "The pinned upstream NOTICE identifies content_draw_path in src/content.rs as copied or adapted from MPL-licensed resvg code and identifies other Apache-2.0-derived code. Preserve those terms and provide the exact source archive containing the covered portions; other files retain their original licenses."
+  },
   "lyon_geom@1.0.19": {
     "files": [
       "lyon-56219c95c658/LICENSE-APACHE",
@@ -358,6 +658,17 @@
       "https://raw.githubusercontent.com/nical/lyon/56219c95c658d4f39de7b190d98e57d5773ba241/LICENSE-MIT"
     ],
     "revision": "56219c95c658d4f39de7b190d98e57d5773ba241"
+  },
+  "lyon_geom@1.0.20": {
+    "files": [
+      "lyon-56219c95c658/LICENSE-APACHE",
+      "lyon-56219c95c658/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-MIT"
+    ],
+    "revision": "db98d26a1a90076a7a894262dcb51117eef643c8"
   },
   "lyon_path@1.0.19": {
     "files": [
@@ -380,6 +691,17 @@
       "https://raw.githubusercontent.com/nical/lyon/b456b143215a1942a617c4672776b68b9a30feee/LICENSE-MIT"
     ],
     "revision": "b456b143215a1942a617c4672776b68b9a30feee"
+  },
+  "lyon_tessellation@1.0.23": {
+    "files": [
+      "lyon-56219c95c658/LICENSE-APACHE",
+      "lyon-56219c95c658/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/nical/lyon/db98d26a1a90076a7a894262dcb51117eef643c8/LICENSE-MIT"
+    ],
+    "revision": "db98d26a1a90076a7a894262dcb51117eef643c8"
   },
   "ocrs@0.13.1": {
     "files": [
@@ -434,6 +756,19 @@
     ],
     "obligations": "The pinned upstream license retains MIT terms for contributions without relicensing consent. Preserve both the Apache-2.0 and MIT notices."
   },
+  "rmcp-macros@3.7.0": {
+    "files": [
+      "rmcp-0cde3c5cf3e6/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/5d6a11f2ae022f513aec0f6e0f10f89a57891a7f/LICENSE"
+    ],
+    "revision": "5d6a11f2ae022f513aec0f6e0f10f89a57891a7f",
+    "additionalLicenses": [
+      "MIT"
+    ],
+    "obligations": "The pinned upstream license retains MIT terms for contributions without relicensing consent. Preserve both the Apache-2.0 and MIT notices."
+  },
   "rmcp@3.5.0": {
     "files": [
       "rmcp-0cde3c5cf3e6/LICENSE"
@@ -442,6 +777,19 @@
       "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/0cde3c5cf3e6aff0cc852ce6045f107e95991f48/LICENSE"
     ],
     "revision": "0cde3c5cf3e6aff0cc852ce6045f107e95991f48",
+    "additionalLicenses": [
+      "MIT"
+    ],
+    "obligations": "The pinned upstream license retains MIT terms for contributions without relicensing consent. Preserve both the Apache-2.0 and MIT notices."
+  },
+  "rmcp@3.6.0": {
+    "files": [
+      "rmcp-0cde3c5cf3e6/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/modelcontextprotocol/rust-sdk/74d789515fdee63ef46a1635b801364aad6695e4/LICENSE"
+    ],
+    "revision": "74d789515fdee63ef46a1635b801364aad6695e4",
     "additionalLicenses": [
       "MIT"
     ],
@@ -457,6 +805,17 @@
       "https://raw.githubusercontent.com/georust/rstar/c8c5bf9e41468281d030869d409e3f67f1aaf5b7/LICENSE-MIT"
     ],
     "revision": "c8c5bf9e41468281d030869d409e3f67f1aaf5b7"
+  },
+  "rstar@0.13.0": {
+    "files": [
+      "rstar-c8c5bf9e4146/LICENSE-APACHE",
+      "rstar-c8c5bf9e4146/LICENSE-MIT"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/georust/rstar/82c969d4677a6f624900056e044d7e7ec8439c18/LICENSE-APACHE",
+      "https://raw.githubusercontent.com/georust/rstar/82c969d4677a6f624900056e044d7e7ec8439c18/LICENSE-MIT"
+    ],
+    "revision": "82c969d4677a6f624900056e044d7e7ec8439c18"
   },
   "rten-base@0.26.0": {
     "files": [
@@ -1106,5 +1465,47 @@
       "https://github.com/etemesi254/zune-image/blob/31d81fed7551c8ccea456d9d8e2b1fd8bebb6995/crates/zune-jpeg/src/color_convert/neon64.rs"
     ],
     "revision": "31d81fed7551c8ccea456d9d8e2b1fd8bebb6995"
+  },
+  "rten-onnx@0.26.0": {
+    "files": [
+      "rten/LICENSE-APACHE.txt",
+      "rten/LICENSE-MIT.txt"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/robertknight/rten/14cbf4620476f402237bb29f731a244d3b6bed4d/LICENSE-APACHE.txt",
+      "https://raw.githubusercontent.com/robertknight/rten/14cbf4620476f402237bb29f731a244d3b6bed4d/LICENSE-MIT.txt"
+    ],
+    "revision": "14cbf4620476f402237bb29f731a244d3b6bed4d"
+  },
+  "fax_derive@0.2.0": {
+    "files": [
+      "fax_derive-0.2.0/NOTICE.txt",
+      "spdx/MIT.txt"
+    ],
+    "sources": [
+      "https://github.com/pdf-rs/fax/blob/40b226eb97b391355e971fd95a8dd532a4c127a0/derive/Cargo.toml",
+      "https://raw.githubusercontent.com/spdx/license-list-data/31ba1a50e5397e00a304dbadc76531740e89ee48/text/MIT.txt"
+    ],
+    "revision": "40b226eb97b391355e971fd95a8dd532a4c127a0"
+  },
+  "fax@0.2.6": {
+    "files": [
+      "fax-0.2.6/NOTICE.txt",
+      "spdx/MIT.txt"
+    ],
+    "sources": [
+      "https://github.com/pdf-rs/fax/blob/40b226eb97b391355e971fd95a8dd532a4c127a0/Cargo.toml",
+      "https://raw.githubusercontent.com/spdx/license-list-data/31ba1a50e5397e00a304dbadc76531740e89ee48/text/MIT.txt"
+    ],
+    "revision": "40b226eb97b391355e971fd95a8dd532a4c127a0"
+  },
+  "fax@0.2.7": {
+    "files": [
+      "fax-0.2.7/LICENSE"
+    ],
+    "sources": [
+      "https://raw.githubusercontent.com/pdf-rs/fax/ac2a4b2237d98830ea1fd37c7d280eec0e87c1d8/LICENSE"
+    ],
+    "revision": "ac2a4b2237d98830ea1fd37c7d280eec0e87c1d8"
   }
 }

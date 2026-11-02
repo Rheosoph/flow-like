@@ -34,11 +34,14 @@ export default function prepare({
 	write,
 	replaceOnce,
 }) {
-	const thumbsPath = "crates/ui-egui/src/thumbs.rs";
-	write(
-		thumbsPath,
-		patchThumbnailVisibility(original(thumbsPath), replaceOnce),
-	);
+	const patch = (path, search, replacement, label) =>
+		write(path, replaceOnce(original(path), search, replacement, label));
+	if (
+		!original("crates/ui-egui/src/panels/thumbs.rs").includes(
+			"let tex = if near {",
+		)
+	)
+		throw new Error("Review upstream thumbnail visibility.");
 	const uiPath = "crates/ui-egui/src/lib.rs";
 	let ui = original(uiPath);
 	ui = replaceOnce(
@@ -49,42 +52,44 @@ export default function prepare({
 	);
 	ui = replaceOnce(
 		ui,
-		"pub struct Services {",
-		"pub struct Services {\n    pub host_command: Option<Box<dyn Fn(&str) -> Option<Result<Value, String>>>>,",
-		"host services",
-	);
-	const run =
-		"pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {";
-	ui = replaceOnce(
-		ui,
-		run,
-		`${run}\n        if let Some(result) = self.services.host_command.as_ref().and_then(|filter| filter(id)) { return result; }`,
-		"command dispatch",
-	);
-	ui = replaceOnce(
-		ui,
-		"        ribbon::title_bar(self, ui);",
-		"        if self.services.host_command.is_none() { ribbon::title_bar(self, ui); }",
-		"title bar",
-	);
-	for (const [signature, command] of [
-		["pub fn save(&mut self) {", "file.save"],
-		["pub fn save_as_dialog(&mut self, format: &str) {", "file.saveAs"],
-	]) {
-		ui = replaceOnce(
-			ui,
-			signature,
-			`${signature}\n        if let Some(result) = self.services.host_command.as_ref().and_then(|filter| filter("${command}")) {\n            if let Err(error) = result { self.set_status(error); }\n            return;\n        }`,
-			command,
-		);
-	}
-	ui = replaceOnce(
-		ui,
 		'"About DeckCraft"',
 		'"About Flows Slides"',
 		"About command",
 	);
 	write(uiPath, ui);
+	patch(
+		"crates/ui-egui/src/services.rs",
+		"pub struct Services {",
+		"pub struct Services {\n    pub host_command: Option<Box<dyn Fn(&str) -> Option<Result<serde_json::Value, String>>>>,",
+		"host services",
+	);
+	const run =
+		"pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {";
+	patch(
+		"crates/ui-egui/src/app/commands.rs",
+		run,
+		`${run}\n        if let Some(result) = self.services.host_command.as_ref().and_then(|filter| filter(id)) { return result; }`,
+		"command dispatch",
+	);
+	patch(
+		"crates/ui-egui/src/app.rs",
+		"        ribbon::title_bar(self, ui);",
+		"        if self.services.host_command.is_none() { ribbon::title_bar(self, ui); }",
+		"title bar",
+	);
+	let files = original("crates/ui-egui/src/app/files.rs");
+	for (const [signature, command] of [
+		["pub fn save(&mut self) {", "file.save"],
+		["pub fn save_as_dialog(&mut self, format: &str) {", "file.saveAs"],
+	]) {
+		files = replaceOnce(
+			files,
+			signature,
+			`${signature}\n        if let Some(result) = self.services.host_command.as_ref().and_then(|filter| filter("${command}")) {\n            if let Err(error) = result { self.set_status(error); }\n            return;\n        }`,
+			command,
+		);
+	}
+	write("crates/ui-egui/src/app/files.rs", files);
 	const enginePath = "crates/engine/src/lib.rs";
 	let engine = original(enginePath);
 	engine = replaceOnce(
@@ -108,10 +113,9 @@ export default function prepare({
 		"hosted file commands",
 	);
 	write(enginePath, engine);
-	const dialogsPath = "crates/ui-egui/src/dialogs.rs";
+	const dialogsPath = "crates/ui-egui/src/dialogs/about.rs";
 	let dialogs = original(dialogsPath);
 	for (const [search, replacement] of [
-		['"about" => "About DeckCraft",', '"about" => "About Flows Slides",'],
 		[
 			'egui::RichText::new("DeckCraft").font(theme::bold(22.0))',
 			'egui::RichText::new("Flows Slides").font(theme::bold(22.0))',
@@ -127,6 +131,12 @@ export default function prepare({
 	])
 		dialogs = replaceOnce(dialogs, search, replacement, "product identity");
 	write(dialogsPath, dialogs);
+	patch(
+		"crates/ui-egui/src/dialogs.rs",
+		'"about" => "About DeckCraft",',
+		'"about" => "About Flows Slides",',
+		"About dialog title",
+	);
 	const manifest = "apps/deckcraft-web/Cargo.toml";
 	write(
 		manifest,
