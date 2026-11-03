@@ -34,6 +34,7 @@ CREATE TABLE "BotApp" (
     "botId" TEXT NOT NULL,
     "appId" TEXT NOT NULL,
     "addedAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "scopes" JSONB NOT NULL DEFAULT '{}',
 
     CONSTRAINT "BotApp_pkey" PRIMARY KEY ("botId","appId")
 );

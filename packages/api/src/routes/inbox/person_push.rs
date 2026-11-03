@@ -6,9 +6,7 @@
 use super::{MEMBER_ACTIVE, active_member, model::InboxEntry, stored};
 use crate::{
     bot_notify::{NoticeSink, StateSink, text_of},
-    entity::{
-        conversation, conversation_member, sea_orm_active_enums::NotificationType, user,
-    },
+    entity::{conversation, conversation_member, sea_orm_active_enums::NotificationType, user},
     error::ApiError,
     middleware::jwt::AppUser,
     push_notifications::DispatchNotificationInput,
@@ -190,7 +188,10 @@ pub(crate) async fn set_muted_in<C: ConnectionTrait>(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "PATCH /inbox/conversations/{conversation_id}/mute", skip(state, user, body))]
+#[tracing::instrument(
+    name = "PATCH /inbox/conversations/{conversation_id}/mute",
+    skip(state, user, body)
+)]
 pub async fn set_mute(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

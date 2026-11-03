@@ -11,9 +11,12 @@ use utoipa::ToSchema;
 use crate::{
     bot_flow::bot_from_technical_id,
     ensure_permission,
-    entity::{bot, execution_run}, error::ApiError,
-    execution::run_summary::log_meta_from_run, middleware::jwt::AppUser,
-    permission::role_permission::RolePermissions, state::AppState,
+    entity::{bot, execution_run},
+    error::ApiError,
+    execution::run_summary::log_meta_from_run,
+    middleware::jwt::AppUser,
+    permission::role_permission::RolePermissions,
+    state::AppState,
 };
 
 use super::db::get_event_from_db_opt;

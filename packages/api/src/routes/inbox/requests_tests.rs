@@ -2,15 +2,11 @@ use super::{
     INBOX_REQUEST_LIMIT, MEMBER_ACTIVE, MEMBER_BLOCKED, MEMBER_DECLINED, MEMBER_PENDING, Reader,
     conversations::{NewConversation, start_direct_as, start_group},
     entries::send_in,
-    fixture::{
-        assert_code, at, bot_principal, copies, database, insert_bot, outgoing, text, user,
-    },
+    fixture::{assert_code, at, bot_principal, copies, database, insert_bot, outgoing, text, user},
     invitations::{accept_in, classify, decline_in, invitations_for, invite_in},
     model::InboxEntry,
     person_push::{is_muted, notify_message, push_targets, set_muted_in},
-    requests::{
-        MAX_HELD_MESSAGES, answer_by_writing, block_in, deliver_held_in, plan_direct,
-    },
+    requests::{MAX_HELD_MESSAGES, answer_by_writing, block_in, deliver_held_in, plan_direct},
     view::conversations_for,
 };
 use crate::{
@@ -208,7 +204,10 @@ async fn declining_hides_the_request_and_the_sender_keeps_seeing_pending() {
     let mine = conversations_for(&db, &Reader::own("user-a"), None)
         .await
         .unwrap();
-    assert_eq!(mine[0].pending[0].status, "pending", "declined looks pending");
+    assert_eq!(
+        mine[0].pending[0].status, "pending",
+        "declined looks pending"
+    );
 }
 
 #[tokio::test]
@@ -243,7 +242,10 @@ async fn blocking_also_declines_their_other_invitations_and_stops_new_ones() {
     let again = invite_in(&db, "room", "user-a", &invitees, &none, at(3))
         .await
         .unwrap();
-    assert!(again.invited.is_empty(), "a blocked person isn't invited again");
+    assert!(
+        again.invited.is_empty(),
+        "a blocked person isn't invited again"
+    );
 }
 
 #[tokio::test]
@@ -337,9 +339,15 @@ async fn a_sender_can_leave_only_a_few_messages_before_an_answer() {
     let db = world().await;
     request_to(&db, "user-b").await;
     for index in 0..MAX_HELD_MESSAGES {
-        send_in(&db, "dm", "user-a", &text(&format!("m{index}")), at(10 + index as i64))
-            .await
-            .unwrap();
+        send_in(
+            &db,
+            "dm",
+            "user-a",
+            &text(&format!("m{index}")),
+            at(10 + index as i64),
+        )
+        .await
+        .unwrap();
     }
     let over = send_in(&db, "dm", "user-a", &text("one-too-many"), at(99))
         .await
@@ -409,7 +417,11 @@ async fn person_messages_push_once_per_recipient_grouped_by_conversation() {
         &db,
         "dm",
         "user-a",
-        &outgoing("m1", InboxEntryKind::Message, json!({ "text": "  hello   there " })),
+        &outgoing(
+            "m1",
+            InboxEntryKind::Message,
+            json!({ "text": "  hello   there " }),
+        ),
         at(3),
     )
     .await

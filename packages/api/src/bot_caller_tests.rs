@@ -62,9 +62,18 @@ fn check_applies_every_name() {
     };
     assert_eq!(status(check(&room, &names)), None);
     for wrong in [
-        Names { as_bot: Some("bot_2"), ..names },
-        Names { conversation: Some("room-9"), ..names },
-        Names { turn: Some("bt_9"), ..names },
+        Names {
+            as_bot: Some("bot_2"),
+            ..names
+        },
+        Names {
+            conversation: Some("room-9"),
+            ..names
+        },
+        Names {
+            turn: Some("bt_9"),
+            ..names
+        },
     ] {
         assert_eq!(status(check(&room, &wrong)), Some(StatusCode::FORBIDDEN));
     }

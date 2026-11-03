@@ -1,5 +1,5 @@
 -- Room invitations: a member is ACTIVE, PENDING (invited) or DECLINED; existing rows are ACTIVE. A bot's room limits live on its membership.
-ALTER TABLE "ConversationMember" ADD COLUMN "status" TEXT NOT NULL DEFAULT 'ACTIVE';
+-- `status` is created with the table: DSQL cannot add a NOT NULL or defaulted column.
 ALTER TABLE "ConversationMember" ADD COLUMN "limits" JSONB;
 ALTER TABLE "ConversationMember" ADD COLUMN "invitedBy" TEXT;
 ALTER TABLE "ConversationMember" ADD COLUMN "invitedAt" TIMESTAMPTZ(3);

@@ -666,19 +666,21 @@ pub(crate) async fn invitations_for<C: ConnectionTrait>(
         .map(|row| {
             let (count, messages) = held.remove(&row.conversation_id).unwrap_or_default();
             Invitation {
-            id: format!("{}:{}", row.conversation_id, row.principal_id),
-            title: described.get(&row.conversation_id).and_then(|(title, _)| title.clone()),
-            conversation_kind: described
-                .get(&row.conversation_id)
-                .map_or_else(|| "group".to_string(), |(_, kind)| kind.clone()),
-            held_count: count,
-            held: messages,
-            bot_name: bots.get(&row.principal_id).cloned().flatten(),
-            kind: row.principal_kind.to_ascii_lowercase(),
-            conversation_id: row.conversation_id,
-            principal_id: row.principal_id,
-            invited_by: row.invited_by,
-            invited_at: row.invited_at,
+                id: format!("{}:{}", row.conversation_id, row.principal_id),
+                title: described
+                    .get(&row.conversation_id)
+                    .and_then(|(title, _)| title.clone()),
+                conversation_kind: described
+                    .get(&row.conversation_id)
+                    .map_or_else(|| "group".to_string(), |(_, kind)| kind.clone()),
+                held_count: count,
+                held: messages,
+                bot_name: bots.get(&row.principal_id).cloned().flatten(),
+                kind: row.principal_kind.to_ascii_lowercase(),
+                conversation_id: row.conversation_id,
+                principal_id: row.principal_id,
+                invited_by: row.invited_by,
+                invited_at: row.invited_at,
             }
         })
         .collect())

@@ -5,12 +5,11 @@ use super::{
     invitations::{self, InviteMode, Invitee},
     lock_conversation, member_conversation,
     members::{Principal, join_copies, lock_live_bots, requested_members},
-    requests,
     model::{
         Conversation, ConversationList, CreateConversationRequest, ReaderQuery,
         RenameConversationRequest,
     },
-    now_millis, reader, stored,
+    now_millis, reader, requests, stored,
     view::{conversations_for, visible_conversation},
     wake,
 };
@@ -206,12 +205,9 @@ pub(crate) async fn start_direct_as<C: ConnectionTrait>(
         } else {
             member_row(&id, other, Some(&creator.id), now)
         };
-        conversation_member::Entity::insert_many([
-            member_row(&id, &creator, None, now),
-            recipient,
-        ])
-        .exec_without_returning(db)
-        .await?;
+        conversation_member::Entity::insert_many([member_row(&id, &creator, None, now), recipient])
+            .exec_without_returning(db)
+            .await?;
         return Ok(id);
     }
     direct_conversation_id(db, &key).await?.ok_or_else(|| {
@@ -426,8 +422,15 @@ async fn open_direct(
                 if !direct.request {
                     lock_live_bots(txn, &sub, std::slice::from_ref(&direct.other)).await?;
                 }
-                start_direct_as(txn, &sub, &direct.other, encryption, direct.request, now_millis())
-                    .await
+                start_direct_as(
+                    txn,
+                    &sub,
+                    &direct.other,
+                    encryption,
+                    direct.request,
+                    now_millis(),
+                )
+                .await
             })
         })
         .await?;

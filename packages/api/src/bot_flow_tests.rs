@@ -124,12 +124,18 @@ fn only_bot_ids_name_a_bot_behind_a_connection() {
 #[test]
 fn the_invoke_routes_admit_a_bot_through_this_module_only() {
     let routes = [
-        ("invoke_event", include_str!("routes/app/events/invoke_event.rs")),
+        (
+            "invoke_event",
+            include_str!("routes/app/events/invoke_event.rs"),
+        ),
         (
             "invoke_event_async",
             include_str!("routes/app/events/invoke_event_async.rs"),
         ),
-        ("invoke_board", include_str!("routes/app/board/invoke_board.rs")),
+        (
+            "invoke_board",
+            include_str!("routes/app/board/invoke_board.rs"),
+        ),
         (
             "invoke_board_async",
             include_str!("routes/app/board/invoke_board_async.rs"),
@@ -138,20 +144,38 @@ fn the_invoke_routes_admit_a_bot_through_this_module_only() {
     for (name, source) in routes {
         let production = source.split("#[cfg(test)]").next().unwrap();
         assert!(production.contains("BotFlowRun::admit_"), "{name} admits");
-        assert!(production.contains("credential_target("), "{name} credentials");
+        assert!(
+            production.contains("credential_target("),
+            "{name} credentials"
+        );
         assert!(production.contains("bind_executor("), "{name} binds");
         assert!(production.contains("run_user_id()"), "{name} payer");
-        assert!(!production.contains("person_user_id()"), "{name} owner borrow");
+        assert!(
+            !production.contains("person_user_id()"),
+            "{name} owner borrow"
+        );
     }
 }
 
 #[test]
 fn the_routes_that_borrow_the_owner_stay_closed_to_bots() {
     for (name, source) in [
-        ("regression", include_str!("routes/app/events/regression.rs")),
-        ("mcp_operation", include_str!("routes/app/events/mcp_operation.rs")),
-        ("page_trigger", include_str!("routes/app/events/page_trigger.rs")),
-        ("create_api_key", include_str!("routes/app/api/create_api_key.rs")),
+        (
+            "regression",
+            include_str!("routes/app/events/regression.rs"),
+        ),
+        (
+            "mcp_operation",
+            include_str!("routes/app/events/mcp_operation.rs"),
+        ),
+        (
+            "page_trigger",
+            include_str!("routes/app/events/page_trigger.rs"),
+        ),
+        (
+            "create_api_key",
+            include_str!("routes/app/api/create_api_key.rs"),
+        ),
         ("actions", include_str!("routes/app/graph/actions.rs")),
     ] {
         assert!(source.contains("person_user_id()"), "{name}");

@@ -144,8 +144,8 @@ mod tests {
 
     #[test]
     fn a_bot_run_is_technical_and_reports_the_bot() {
-        let context = UserExecutionContext::bot("bot_1", role())
-            .with_on_behalf_of(Some("owner".to_string()));
+        let context =
+            UserExecutionContext::bot("bot_1", role()).with_on_behalf_of(Some("owner".to_string()));
         assert!(context.is_technical());
         assert_eq!(context.principal, ExecutionPrincipal::Bot);
         assert_eq!(caller_id(&context), "bot_1");
@@ -162,9 +162,13 @@ mod tests {
     #[test]
     fn the_pin_descriptions_name_the_bot() {
         let node = IsTechnicalUserNode::new().get_node();
-        assert_eq!(node.version, 3);
+        assert_eq!(node.version, Some(3));
         assert!(node.description.contains("bot"));
-        let principal = node.pins.values().find(|pin| pin.name == "principal").unwrap();
+        let principal = node
+            .pins
+            .values()
+            .find(|pin| pin.name == "principal")
+            .unwrap();
         assert!(principal.description.contains("'bot'"));
     }
 }
