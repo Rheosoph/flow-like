@@ -179,7 +179,7 @@ function buildTranscript(
 /**
  * Assemble everything a reviewer needs to judge one rated turn.
  *
- * Lives here rather than in the chat component so `/chat` and the docked overlay — which mount the
+ * Lives here rather than in the chat component so the Bots tab and the docked overlay — which mount the
  * same body but are separate call sites in principle — can never drift into capturing different
  * things, and so it stays unit-testable without React.
  */

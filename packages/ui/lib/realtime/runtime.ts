@@ -22,8 +22,15 @@ const BLOCKED_RETRY_MS = 30_000;
 const RUN_INTERVAL_MS = 2_000;
 const IDLE_INTERVAL_MS = 30_000;
 const CHASE_MS = 750;
+/** An API that does not hold polls answers well within this; one that holds them, never. */
+const HELD_MS = 1_000;
 const UNAVAILABLE_RETRY_MS = 2_000;
 const UNAVAILABLE_RETRY_MAX_MS = 30_000;
+
+/** A tab's replay position; `has_more` is what the last batch it accepted said about the run. */
+interface PortRun extends RealtimeRunSubscription {
+	has_more?: boolean;
+}
 
 interface PortState {
 	id: string;
@@ -35,8 +42,10 @@ interface PortState {
 	transport: "configured" | "http";
 	notificationRevision?: string;
 	subscriptionVersion?: number;
-	runs: Map<string, RealtimeRunSubscription>;
+	runs: Map<string, PortRun>;
 	pending?: { id: string; snapshot: RealtimePollResponse; sent: number };
+	/** A poll went out without this tab's subscriptions while its last batch was unacknowledged. */
+	skipped?: boolean;
 }
 
 interface Scope {
@@ -106,6 +115,15 @@ function scopeKey(session: RealtimeConnectionSession): string {
 /** Capabilities of one run replay independently; so do their failures. */
 function capabilityKey(run: RealtimeRunSubscription): string {
 	return JSON.stringify([run.run_id, run.poll_token ?? null]);
+}
+
+/** The API answers a held poll early only with one of these. */
+function hasPollChanges(response: RealtimePollResponse): boolean {
+	return (
+		response.notifications !== undefined ||
+		response.runs.length > 0 ||
+		response.errors.length > 0
+	);
 }
 
 function validCursor(value: unknown): value is number {
@@ -406,31 +424,29 @@ export class RealtimeRuntime {
 			case "subscribe": {
 				const desired = command.subscription;
 				if (!validRealtimeSubscription(desired)) return;
-				const runs = new Map<string, RealtimeRunSubscription>();
-				for (const run of desired.runs) {
-					const old = connected.runs.get(run.run_id);
+				const runs = new Map<string, PortRun>();
+				for (const {
+					run_id,
+					poll_token,
+					after_sequence = -1,
+					revision,
+				} of desired.runs) {
+					const old = connected.runs.get(run_id);
 					runs.set(
-						run.run_id,
+						run_id,
 						old &&
-							old.poll_token === run.poll_token &&
-							(old.after_sequence ?? -1) >= (run.after_sequence ?? -1)
+							old.poll_token === poll_token &&
+							(old.after_sequence ?? -1) >= after_sequence
 							? old
-							: { ...run, after_sequence: run.after_sequence ?? -1 },
+							: { run_id, poll_token, after_sequence, revision },
 					);
 				}
 				connected.runs = runs;
 				connected.subscriptionVersion = command.subscription_version;
 				connected.notifications = desired.notifications;
 				connected.pending = undefined;
-				if (
-					desired.notifications &&
-					scope.notification &&
-					connected.notificationRevision !== scope.notification.revision
-				)
-					this.deliver(connected, {
-						...emptyResponse(),
-						notifications: scope.notification,
-					});
+				connected.skipped = false;
+				this.offerNotification(connected);
 				this.restart(scope);
 				return;
 			}
@@ -451,12 +467,16 @@ export class RealtimeRuntime {
 								run.after_sequence,
 							),
 							revision: run.revision,
+							has_more: run.has_more,
 						});
 				}
 				for (const error of pending.snapshot.errors)
 					if (error.code !== REALTIME_ERROR_UNAVAILABLE)
 						connected.runs.delete(error.run_id);
-				if (scope.controller && scope.deferred) this.restart(scope);
+				if (this.offerNotification(connected)) return;
+				const skipped = connected.skipped;
+				connected.skipped = false;
+				if (skipped) this.pollNow(scope);
 				else this.schedule(scope, 0);
 				return;
 			}
@@ -564,6 +584,20 @@ export class RealtimeRuntime {
 			: scope.blockedUntil - Date.now();
 	}
 
+	/** A tab left out of a poll replays at once instead of waiting out a recovery or interval timer. */
+	private pollNow(scope: Scope): void {
+		if (scope.controller) {
+			if (scope.deferred) this.restart(scope);
+			else scope.wakePending = true;
+			return;
+		}
+		if (!scope.failures) {
+			clearTimeout(scope.timer);
+			scope.timer = undefined;
+		}
+		this.schedule(scope, 0);
+	}
+
 	private schedule(scope: Scope, delay: number): void {
 		if (!scope.ports.size || scope.controller || scope.timer) return;
 		const blocked = this.blockedFor(scope);
@@ -602,7 +636,8 @@ export class RealtimeRuntime {
 					(port) => port.notifications || port.runs.size,
 				);
 		if (!active.length) {
-			scope.provider?.close();
+			if (scope.blocked) scope.provider?.close();
+			else scope.provider?.pause();
 			return;
 		}
 		scope.provider ??= new RealtimeProviderSession({
@@ -650,28 +685,41 @@ export class RealtimeRuntime {
 		for (const id of scope.unavailable.keys())
 			if (!subscribed.has(id)) scope.unavailable.delete(id);
 		const runs = new Map<string, RealtimeRunSubscription>();
+		const unacknowledged: PortState[] = [];
 		let notifications = false;
-		let deferred = false;
 		for (const port of online) {
 			if (port.pending) {
-				deferred ||= port.notifications || port.runs.size > 0;
+				unacknowledged.push(port);
 				continue;
 			}
 			notifications ||= port.notifications;
 			for (const run of port.runs.values()) {
 				const id = capabilityKey(run);
 				if ((scope.unavailable.get(id)?.retryAt ?? 0) > now) continue;
+				// A revision from a page with more to come can already describe the finished run;
+				// the API would then leave out the closing page this tab still waits for.
+				const revision = run.has_more === false ? run.revision : undefined;
 				const current = runs.get(id);
-				if (!current) runs.set(id, { ...run });
+				if (!current)
+					runs.set(id, {
+						run_id: run.run_id,
+						poll_token: run.poll_token,
+						after_sequence: run.after_sequence ?? -1,
+						revision,
+					});
 				else {
 					current.after_sequence = Math.min(
 						current.after_sequence ?? -1,
 						run.after_sequence ?? -1,
 					);
-					if (current.revision !== run.revision) current.revision = undefined;
+					if (current.revision !== revision) current.revision = undefined;
 				}
 			}
 		}
+		const deferred = unacknowledged.filter(
+			(port) => port.runs.size > 0 || (port.notifications && !notifications),
+		);
+		for (const port of deferred) port.skipped = true;
 		const all = [...runs.values()];
 		const offset = all.length ? scope.rotation % all.length : 0;
 		const selected: RealtimeRunSubscription[] = [];
@@ -685,7 +733,7 @@ export class RealtimeRuntime {
 		scope.rotation = offset + 1;
 		if (!notifications && !selected.length) return;
 		const timeout = scope.provider?.connected ? 0 : this.pollWaitMs(scope);
-		scope.deferred = deferred && timeout > 0;
+		scope.deferred = deferred.length > 0 && timeout > 0;
 		return {
 			...(notifications
 				? { notifications: { revision: scope.notification?.revision } }
@@ -735,12 +783,14 @@ export class RealtimeRuntime {
 
 	/**
 	 * Live providers wake replay; their dropped wakeups are covered by a chase poll while a run
-	 * streams. Without one, the API's poll wait decides between long polls and an interval.
+	 * streams. Without one, the API's poll wait decides between long polls and an interval. A
+	 * long poll that comes back early without changes was not held, so it paces like an interval.
 	 */
 	private nextDelay(
 		scope: Scope,
 		request: RealtimePollRequest,
 		response: RealtimePollResponse,
+		elapsedMs: number,
 	): number {
 		if (response.runs.some((run) => run.has_more)) return 50;
 		const runs = [...scope.ports].some(
@@ -757,8 +807,23 @@ export class RealtimeRuntime {
 				? this.options.providerRunRecoveryMs
 				: this.options.providerRecoveryMs;
 		}
-		if (request.timeout_ms > 0) return 50;
+		const held = elapsedMs >= Math.min(request.timeout_ms / 2, HELD_MS);
+		if (request.timeout_ms > 0 && (held || hasPollChanges(response))) return 50;
 		return jitter(runs ? RUN_INTERVAL_MS : IDLE_INTERVAL_MS);
+	}
+
+	/** Hands a tab the account's newest known inbox snapshot when it holds an older one. */
+	private offerNotification(port: PortState): boolean {
+		const notification = port.scope.notification;
+		if (
+			port.pending ||
+			!port.notifications ||
+			!notification ||
+			port.notificationRevision === notification.revision
+		)
+			return false;
+		this.deliver(port, { ...emptyResponse(), notifications: notification });
+		return true;
 	}
 
 	private deliver(port: PortState, snapshot: RealtimePollResponse): void {
@@ -807,7 +872,11 @@ export class RealtimeRuntime {
 				const events = run.events.filter(
 					(event) => event.sequence > (subscribed.after_sequence ?? -1),
 				);
-				if (events.length || subscribed.revision !== run.revision)
+				if (
+					events.length ||
+					subscribed.revision !== run.revision ||
+					(subscribed.has_more !== false && !run.has_more)
+				)
 					snapshot.runs.push({
 						...run,
 						events,
@@ -903,6 +972,7 @@ export class RealtimeRuntime {
 		if (scope.state !== "connected" && !scope.blocked)
 			this.state(scope, scope.failures ? "reconnecting" : "connecting");
 		let delay = 50;
+		const sentAt = Date.now();
 		try {
 			const response = await this.fetcher(scope.session.url, {
 				method: "POST",
@@ -964,7 +1034,7 @@ export class RealtimeRuntime {
 			this.state(scope, "connected");
 			this.trackUnavailable(scope, request, parsed);
 			this.publish(scope, parsed, request);
-			delay = this.nextDelay(scope, request, parsed);
+			delay = this.nextDelay(scope, request, parsed, Date.now() - sentAt);
 		} catch (error) {
 			if (scope.epoch !== epoch || !scope.ports.size) return;
 			if (error instanceof RealtimeProtocolError) {

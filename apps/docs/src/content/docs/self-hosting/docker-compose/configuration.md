@@ -420,6 +420,34 @@ Model-provider keys and endpoint variables are listed in `.env.example`.
 Populate only the providers your installation uses, and keep their secrets out
 of hub JSON.
 
+### Hosted image providers
+
+Install the provider credentials on the API before registering a hosted
+**ImageGeneration** Bit. Image generation reuses these existing server secrets:
+
+| Provider | Required secrets | Supported models |
+| --- | --- | --- |
+| `hosted:cloudflare` | `HOSTED_CLOUDFLARE_API_TOKEN`, `HOSTED_CLOUDFLARE_ACCOUNT_ID` | `@cf/black-forest-labs/flux-1-schnell`, `@cf/stabilityai/stable-diffusion-xl-base-1.0` |
+| `hosted:openrouter` | `OPENROUTER_API_KEY` | Raster image models served by OpenRouter's `/api/v1/images` endpoint |
+
+The Bit stores its upstream ID in `parameters.provider.model_id` and its access
+tier in `parameters.provider.params.tier`. An omitted tier uses `ENTERPRISE`.
+Credentials and endpoint overrides are not accepted in hosted image Bits.
+
+Set `parameters.pricing.request_micro_usd` to a nonnegative integer in micro-USD.
+For Cloudflare this is the provider tariff for one image at the fixed step
+count. For OpenRouter it is the maximum provider cost reserved before a call;
+settlement uses the reported cost. Include the most expensive permitted
+settings and routed provider when choosing that maximum. Serving charges also
+apply. A zero reservation does not make a paid OpenRouter request free.
+
+Runners call `POST /api/v1/images/generations` with the catalog Bit ID. Device
+instances use `/api/v1/instances/images/generations` and their approved model
+and spending grants. The API resolves the official catalog entry before
+dispatch; a private Bit cannot authorize use of server credentials. See
+[hosted image generation](/topics/genai/models/#hosted-image-generation) for
+workflow inputs and request limits.
+
 ### Hosted embedding providers
 
 Hosted embedding Bits send document and query requests through the API. The API

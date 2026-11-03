@@ -204,7 +204,7 @@ test("cold launch opens queued FlowPilot without waiting for widget API data", a
 	queue.push(request("cold"));
 	await render();
 	expect(mocks.loadSnapshot).toHaveBeenCalledOnce();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(mocks.error).not.toHaveBeenCalled();
 });
 
@@ -212,7 +212,7 @@ test("warm native callbacks open voice FlowPilot while a snapshot refresh is pen
 	await render();
 	queue.push(request("warm", { kind: "flowpilot", voice: true }));
 	await notify();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat?voice=1");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots?voice=1");
 });
 
 test("launch delivery waits for authentication and backend readiness", async () => {
@@ -226,7 +226,7 @@ test("launch delivery waits for authentication and backend readiness", async () 
 	expect(mocks.invoke).not.toHaveBeenCalledWith("native_pending_actions");
 	mocks.auth.isLoading = false;
 	await render();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 });
 
 test("cold launch waits for the observed profile read without a navigation rerender", async () => {
@@ -242,7 +242,7 @@ test("cold launch waits for the observed profile read without a navigation reren
 	expect(mocks.loadSnapshot).not.toHaveBeenCalled();
 	await act(async () => profile.resolve({ id: "profile-a" }));
 	await flushQueries();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(mocks.setDraft).toHaveBeenCalledWith(
 		expect.objectContaining({
 			prompt: "Hello",
@@ -265,7 +265,7 @@ test("cached profile data cannot drain actions before a fresh startup read", asy
 	expect(mocks.invoke).not.toHaveBeenCalledWith("native_pending_actions");
 	await act(async () => profile.resolve({ id: "profile-a" }));
 	await flushQueries();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(mocks.invoke).not.toHaveBeenCalledWith("native_clear_snapshot");
 });
 
@@ -279,7 +279,7 @@ test("temporary authentication hydration preserves the same account's pending ac
 	mocks.auth.isLoading = false;
 	mocks.auth.isAuthenticated = true;
 	await render();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(mocks.invoke).not.toHaveBeenCalledWith("native_clear_snapshot");
 });
 
@@ -294,7 +294,7 @@ test("route changes preserve an already consumed batch of native actions", async
 	mocks.webOrigin = "https://app.flow-like.com";
 	await render();
 	await act(async () => batch.resolve([request("pending")]));
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(
 		mocks.invoke.mock.calls.filter(
 			([name]) => name === "native_pending_actions",
@@ -318,9 +318,9 @@ test("file-only shares open FlowPilot immediately and survive its route change",
 		},
 	);
 	await render();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(mocks.setDraft).not.toHaveBeenCalled();
-	mocks.pathname = "/chat";
+	mocks.pathname = "/bots";
 	await render();
 	await act(async () =>
 		file.resolve({
@@ -402,7 +402,7 @@ test("replayed actions are deduplicated even when webview session storage is una
 	await render();
 	queue.push(request("repeat"));
 	await notify();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 });
 
 test("current page publication updates without restarting native action delivery", async () => {
@@ -418,7 +418,7 @@ test("current page publication updates without restarting native action delivery
 	};
 	mocks.loadSnapshot.mockResolvedValue(snapshot);
 	await render();
-	mocks.pathname = "/chat";
+	mocks.pathname = "/bots";
 	mocks.query = "voice=1";
 	await render();
 	expect(mocks.loadSnapshot).toHaveBeenCalledOnce();
@@ -529,7 +529,7 @@ test("failed acknowledgement retries delivery without opening the action twice",
 	expect(queue).toHaveLength(1);
 	await notify();
 	expect(queue).toHaveLength(0);
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(attempts).toBe(2);
 });
 

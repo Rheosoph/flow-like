@@ -399,7 +399,7 @@ fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-async fn resolve_usage_context(
+pub(crate) async fn resolve_usage_context(
     state: &AppState,
     user: &AppUser,
     headers: &HeaderMap,
@@ -460,7 +460,7 @@ async fn fetch_provider(
     Ok((bit_model, provider, hosted_provider))
 }
 
-async fn enforce_tier(
+pub(crate) async fn enforce_tier(
     payer_id: &str,
     state: &AppState,
     provider: &ModelProvider,
@@ -478,7 +478,7 @@ async fn enforce_tier(
     Ok(())
 }
 
-fn required_model_tier(provider: &ModelProvider) -> &str {
+pub(crate) fn required_model_tier(provider: &ModelProvider) -> &str {
     provider
         .params
         .as_ref()
@@ -515,6 +515,10 @@ pub(crate) async fn current_instance_model_tier(
 }
 
 fn instance_model_tier(bit: &Bit, request_path: &str) -> Result<String, ApiError> {
+    if request_path == "/instances/images/generations" {
+        let provider = crate::routes::images::catalog_provider(bit)?;
+        return Ok(required_model_tier(&provider).to_owned());
+    }
     if request_path == "/instances/embeddings/embed" {
         crate::routes::embeddings::embed::embedding_provider_for_bit(bit)?;
         return Ok(String::new());
@@ -1826,6 +1830,38 @@ mod tests {
             &HostedProvider::TypeSafe,
             ModelApiSurface::ChatCompletions
         ));
+    }
+
+    #[test]
+    fn instance_images_require_an_image_bit_and_recheck_its_tier() {
+        let mut bit = Bit {
+            id: "hosted-image".into(),
+            bit_type: BitTypes::ImageGeneration,
+            parameters: serde_json::json!({
+                "provider": {
+                    "provider_name": "hosted:openrouter",
+                    "model_id": "google/gemini-2.5-flash-image",
+                    "params": {"tier": "FREE"}
+                },
+                "pricing": {"request_micro_usd": 100_000}
+            }),
+            ..Default::default()
+        };
+        let image_path = "/instances/images/generations";
+        assert_eq!(instance_model_tier(&bit, image_path).unwrap(), "FREE");
+        for path in [
+            "/instances/chat/completions",
+            "/instances/responses",
+            "/instances/systemone",
+            "/instances/embeddings/embed",
+        ] {
+            assert!(instance_model_tier(&bit, path).is_err());
+        }
+        bit.parameters["provider"]["params"]["tier"] = serde_json::json!("PREMIUM");
+        assert_eq!(instance_model_tier(&bit, image_path).unwrap(), "PREMIUM");
+        bit.parameters["provider"]["provider_name"] = serde_json::json!("custom:openrouter");
+        assert!(instance_model_tier(&bit, image_path).is_err());
+        assert!(instance_model_tier(&test_bit(JsonValue::Null), image_path).is_err());
     }
 
     #[test]

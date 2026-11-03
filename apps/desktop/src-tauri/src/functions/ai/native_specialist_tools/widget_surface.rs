@@ -1,6 +1,5 @@
 use super::*;
 use std::time::{Duration, Instant};
-use tauri::Emitter;
 
 #[derive(Clone)]
 struct Capture {
@@ -158,9 +157,11 @@ pub(super) async fn stage(
     tokio::fs::rename(temporary, path)
         .await
         .map_err(|e| e.to_string())?;
-    let _ = session
-        .app_handle
-        .emit("flowpilot:widget-components-staged", &proposal);
+    crate::utils::emit_to_ui(
+        &session.app_handle,
+        "flowpilot:widget-components-staged",
+        proposal,
+    );
     Ok(
         json!({"status":"ok","staged":true,"applied":false,"proposal_id":request_id,"component_count":response.components.len(),"app_id":before["appId"],"page_id":before["pageId"],"widget_id":before["widgetId"],"specialist_message":response.message,"message":"Generated components are retained for review. Apply them in the matching builder; they have not changed the saved page or widget."}),
     )

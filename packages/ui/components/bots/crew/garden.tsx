@@ -56,21 +56,32 @@ export const gardenShapes: readonly BotShapeDefinition[] = [
 			sclera: "#c5d9e4",
 		},
 		anchors: {
-			head: { x: 50, y: 30, width: 44 },
-			eyes: { left: [39, 56], right: [61, 56], radius: 3.5 },
-			mouth: [50, 68],
-			neck: { y: 89, bottom: 104, width: 44 },
+			head: { x: 50, y: 28, width: 44 },
+			eyes: { left: [40, 48], right: [60, 48], radius: 3.5 },
+			mouth: [50, 59],
+			neck: { y: 80, bottom: 99, width: 42 },
 		},
 		silhouette:
-			"M27 80Q7 80 11 61Q4 45 23 42Q22 25 41 29Q50 16 62 29Q80 23 81 42Q99 47 88 62Q94 80 74 80H56V89H77L72 104H28L23 89H44V80Z",
-		clothingClip: "M23 89H77L72 104H28Z",
+			"M28 65C17 65 12 56 18 49C12 39 21 32 31 34C32 23 44 21 50 29C61 20 74 27 73 36C84 34 91 45 82 53C87 62 75 68 64 65H55V77H77L72 99H28L23 77H45V65Z",
+		clothingClip: "M24 81H76L72 99H28Z",
 		renderDetails: ({ palette }) => (
 			<>
-				<path d="M44 78H56V90H44Z" fill={palette.clothing} />
-				<path d="M23 88H77L72 104H28Z" fill={palette.clothing} />
-				<path d="M23 88H77V92H23Z" fill={palette.sclera} />
 				<path
-					d="M22 49Q22 38 32 39M40 33Q47 27 54 34M72 45Q81 43 83 51"
+					d="M46 63H55Q52 70 56 78H44Q49 70 46 63Z"
+					fill={palette.ink}
+					opacity=".5"
+				/>
+				<path d="M23 77H77L72 99H28Z" fill={palette.clothing} />
+				<path d="M23 77H77V82H23Z" fill={palette.sclera} />
+				<path
+					d="M28 84L31 96"
+					stroke={palette.sclera}
+					strokeWidth="2"
+					opacity=".45"
+					strokeLinecap="round"
+				/>
+				<path
+					d="M23 44Q24 37 33 39M39 31Q44 28 48 33M70 41Q78 38 81 46"
 					fill="none"
 					stroke={palette.accent}
 					strokeWidth="3"

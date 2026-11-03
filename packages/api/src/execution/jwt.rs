@@ -296,6 +296,13 @@ pub(super) fn bind_dispatch(token: &str, hash: String) -> Result<String, Executi
     backend_jwt::sign(&claims)
 }
 
+/// Binds an unattended executor token to one bot tool job.
+pub(crate) fn bind_tool_job(token: &str, hash: String) -> Result<String, ExecutionJwtError> {
+    let mut claims = verify(token)?;
+    claims.dispatch_hash = Some(hash);
+    backend_jwt::sign(&claims)
+}
+
 pub(super) fn bind_runtime_limit(
     token: &str,
     runtime_limit_ms: u64,

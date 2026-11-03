@@ -18,6 +18,7 @@ import {
 	useChatActivityStore,
 } from "../../state/chat-activity-store";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
+import { BOTS_ROUTE } from "../bots-tab/dock-selection";
 import { Button } from "../ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
 
@@ -53,7 +54,9 @@ function useOpenChatActivity() {
 						entry.target.sessionId,
 					);
 					if (!restored) return false;
-					if (pathname !== "/chat") {
+					if (pathname === BOTS_ROUTE) {
+						useGlobalChatStore.getState().requestReveal();
+					} else {
 						useGlobalChatStore.getState().openOverlay();
 					}
 				} else {

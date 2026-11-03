@@ -39,6 +39,8 @@ extern crate flow_like_runtime as flow_like;
 pub mod benchmark;
 
 pub mod channel;
+#[cfg(feature = "code-sandbox")]
+pub mod code_sandbox;
 pub mod config;
 pub mod error;
 pub mod execute;
@@ -47,6 +49,8 @@ pub mod quota;
 pub mod resolve;
 pub mod router;
 pub mod streaming;
+#[cfg(feature = "bot-tools")]
+pub(crate) mod tool;
 pub mod types;
 pub mod wasm_loader;
 pub mod widgets;

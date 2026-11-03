@@ -214,6 +214,27 @@ export function createChatActivityTracker(options: {
 		return entry;
 	}
 
+	/** Points an unread entry at the conversation's new id without notifying again; a newer one there wins. */
+	function retarget(from: ChatActivityTarget, to: ChatActivityTarget) {
+		initialize(true);
+		const fromId = chatActivityKey(from);
+		const toId = chatActivityKey(to);
+		const entries = store.getState().entries;
+		const moved = entries.find((entry) => entry.id === fromId);
+		if (!moved) return;
+		const existing = entries.find((entry) => entry.id === toId);
+		const movedWins = !existing || existing.createdAt < moved.createdAt;
+		store.setState({
+			entries: entries.flatMap((entry) => {
+				if (entry.id === fromId)
+					return movedWins ? [{ ...moved, id: toId, target: to }] : [];
+				if (entry.id === toId) return movedWins ? [] : [entry];
+				return [entry];
+			}),
+		});
+		persist();
+	}
+
 	function registerSurface(target: ChatActivityTarget) {
 		const token = Symbol();
 		surfaces.set(token, chatActivityKey(target));
@@ -228,6 +249,7 @@ export function createChatActivityTracker(options: {
 		initialize,
 		synchronize: refreshVisibility,
 		record,
+		retarget,
 		refreshVisibility,
 		registerSurface,
 		remove: (target: ChatActivityTarget) =>
@@ -267,6 +289,7 @@ export function recordChatActivity(
 	return tracker.record(input);
 }
 export const removeChatActivity = tracker.remove;
+export const retargetChatActivity = tracker.retarget;
 export const subscribeChatActivity = tracker.subscribe;
 export const registerChatActivitySurface = tracker.registerSurface;
 export const refreshChatActivityVisibility = tracker.refreshVisibility;

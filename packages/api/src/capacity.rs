@@ -4,10 +4,13 @@
 //! at admission and survives editing, source retirement and deletion.
 
 use flow_like_storage::object_store::ObjectStoreExt;
-use sea_orm::{ConnectionTrait, DatabaseTransaction, Statement};
+use sea_orm::{ConnectionTrait, DatabaseTransaction, EntityTrait, QuerySelect, Statement};
 
 use crate::{
-    entity::sea_orm_active_enums::Visibility,
+    entity::{
+        sea_orm_active_enums::{UserTier, Visibility},
+        user,
+    },
     error::{ApiError, QuotaLimitDetails},
     state::AppState,
 };
@@ -116,6 +119,7 @@ fn baseline_pending() -> ApiError {
 
 /// Advance one indexed membership page. Partial totals stay unavailable for
 /// admission; a retained project row marks which stored bytes already contribute.
+/// A bot's workspace contributes its bytes but never a project.
 async fn baseline_page(
     txn: &DatabaseTransaction,
     payer_id: &str,
@@ -137,7 +141,7 @@ async fn baseline_page(
     let mut cursor: String = row.try_get("", "baselineAppId")?;
     let rows = txn.query_all_raw(Statement::from_sql_and_values(txn.get_database_backend(),r#"
         SELECT m."appId",a.id AS "ownedAppId",a."totalSize",
-          COALESCE(a.visibility IN ('PRIVATE','PROTOTYPE') AND NOT COALESCE(s.visibility IN ('PUBLIC','PUBLIC_REQUEST_ACCESS'),false),false) AS counted,
+          COALESCE(a."botId" IS NULL AND a.visibility IN ('PRIVATE','PROTOTYPE') AND NOT COALESCE(s.visibility IN ('PUBLIC','PUBLIC_REQUEST_ACCESS'),false),false) AS counted,
           CASE WHEN s.visibility IN ('PUBLIC','PUBLIC_REQUEST_ACCESS') THEN s.id ELSE NULL END AS source
         FROM (SELECT "appId","roleId" FROM "Membership" WHERE "userId"=$1 AND "appId">$2 ORDER BY "appId" LIMIT $3) m
         LEFT JOIN "App" a ON a.id=m."appId" AND a."ownerRoleId"=m."roleId"
@@ -409,6 +413,44 @@ pub async fn admit_project(
     Ok(())
 }
 
+/// Admits a bot's workspace: its bytes count toward the owner's storage like any app of
+/// theirs, but it takes no project slot, so no plan limit applies. Call inside the
+/// transaction that creates its rows.
+pub async fn admit_bot_workspace(
+    txn: &DatabaseTransaction,
+    payer_id: &str,
+    app_id: &str,
+) -> Result<(), ApiError> {
+    flow_like_db::coordination::app_capacity(txn, app_id).await?;
+    crate::db::coordination::coordinate(txn, "account-quota", &[payer_id]).await?;
+    lock_account(txn, payer_id).await?;
+    txn.execute_raw(Statement::from_sql_and_values(
+        txn.get_database_backend(),
+        r#"INSERT INTO "ProjectCapacity" ("appId", "payerId", "counted") VALUES ($1, $2, false)"#,
+        [app_id.into(), payer_id.into()],
+    ))
+    .await?;
+    Ok(())
+}
+
+/// A bot's workspace stays its owner's private app: its visibility and payer never change.
+async fn refuse_bot_workspace(txn: &DatabaseTransaction, app_id: &str) -> Result<(), ApiError> {
+    let bot_id = txn
+        .query_one_raw(Statement::from_sql_and_values(
+            txn.get_database_backend(),
+            r#"SELECT "botId" FROM "App" WHERE "id" = $1"#,
+            [app_id.into()],
+        ))
+        .await?
+        .map(|row| row.try_get::<Option<String>>("", "botId"))
+        .transpose()?
+        .flatten();
+    match bot_id {
+        Some(_) => Err(crate::routes::bots::workspace::locked(app_id)),
+        None => Ok(()),
+    }
+}
+
 /// Deletion releases the slot once, while preserving the payer for late S3 events.
 pub async fn release_project(state: &AppState, app_id: &str) -> Result<(), ApiError> {
     if let Some(payer) = payer_for_app(&state.db, app_id).await? {
@@ -441,6 +483,7 @@ pub async fn set_visibility(
     plan: &str,
     limit: i64,
 ) -> Result<(), ApiError> {
+    refuse_bot_workspace(txn, app_id).await?;
     flow_like_db::coordination::app_capacity(txn, app_id).await?;
     let Some(payer_id) = payer_for_app(txn, app_id).await? else {
         return Ok(());
@@ -493,6 +536,7 @@ pub async fn transfer_project(
     project_limit: i64,
     storage_limit: i64,
 ) -> Result<(), ApiError> {
+    refuse_bot_workspace(txn, app_id).await?;
     flow_like_db::coordination::app_capacity(txn, app_id).await?;
     let old_payer = payer_for_app(txn, app_id)
         .await?
@@ -677,6 +721,42 @@ pub async fn check_storage_write(
         ));
     }
     Ok(())
+}
+
+/// Bots a person may keep on the server, by plan; -1 is unlimited. Assistant, Flux and bots on
+/// a desktop or device don't count. Every bot a person creates also counts toward the all-bots
+/// safety cap in `routes::bots`.
+pub fn max_server_bots(plan: &UserTier) -> i64 {
+    match plan {
+        UserTier::Free => 3,
+        UserTier::Premium => 10,
+        UserTier::Pro => 25,
+        UserTier::Max => 50,
+        UserTier::Enterprise => -1,
+    }
+}
+
+/// Turns bots may start for each other (a bot's message waking another bot) in any 24 hours, by
+/// the owner's plan; -1 is unlimited. Turns a person starts never count.
+pub fn max_bot_started_turns_per_day(plan: &UserTier) -> i64 {
+    match plan {
+        UserTier::Free => 50,
+        UserTier::Premium => 200,
+        UserTier::Pro => 500,
+        UserTier::Max => 1000,
+        UserTier::Enterprise => -1,
+    }
+}
+
+/// The person's plan; FREE, the plan every account starts on, until their account row exists.
+pub async fn plan_of<C: ConnectionTrait>(db: &C, user_id: &str) -> Result<UserTier, ApiError> {
+    Ok(user::Entity::find_by_id(user_id)
+        .select_only()
+        .column(user::Column::Tier)
+        .into_tuple::<UserTier>()
+        .one(db)
+        .await?
+        .unwrap_or(UserTier::Free))
 }
 
 fn object_id(bucket: &str, key: &str) -> String {
@@ -1039,6 +1119,36 @@ mod tests {
         assert_eq!(public_fork_source(&Visibility::Offline, "source"), None);
     }
 
+    #[test]
+    fn bot_started_turn_limits_grow_with_the_plan() {
+        let limits: Vec<i64> = [
+            UserTier::Free,
+            UserTier::Premium,
+            UserTier::Pro,
+            UserTier::Max,
+            UserTier::Enterprise,
+        ]
+        .iter()
+        .map(max_bot_started_turns_per_day)
+        .collect();
+        assert_eq!(limits, [50, 200, 500, 1000, -1]);
+    }
+
+    #[test]
+    fn server_bot_limits_grow_with_the_plan() {
+        let limits: Vec<i64> = [
+            UserTier::Free,
+            UserTier::Premium,
+            UserTier::Pro,
+            UserTier::Max,
+            UserTier::Enterprise,
+        ]
+        .iter()
+        .map(max_server_bots)
+        .collect();
+        assert_eq!(limits, [3, 10, 25, 50, -1]);
+    }
+
     async fn postgres_test_database() -> Option<(DatabaseConnection, DatabaseConnection, String)> {
         use sea_orm::sqlx::postgres::{PgConnectOptions, PgPoolOptions};
         use std::str::FromStr;
@@ -1073,7 +1183,7 @@ mod tests {
             r#"CREATE TABLE "QuotaOperation" (id TEXT PRIMARY KEY, "appId" TEXT, status TEXT)"#,
             r#"CREATE TABLE "User" (id TEXT PRIMARY KEY,tier TEXT)"#,
             r#"INSERT INTO "User" VALUES ('payer','FREE'),('recipient','FREE')"#,
-            r#"CREATE TABLE "App" ("id" TEXT PRIMARY KEY, "ownerRoleId" TEXT, "visibility" TEXT, "forkedFrom" TEXT, "totalSize" BIGINT)"#,
+            r#"CREATE TABLE "App" ("id" TEXT PRIMARY KEY, "ownerRoleId" TEXT, "visibility" TEXT, "forkedFrom" TEXT, "totalSize" BIGINT, "botId" TEXT)"#,
             r#"CREATE TABLE "Membership" ("userId" TEXT, "roleId" TEXT, "appId" TEXT)"#,
             r#"CREATE TABLE "ForkJob" (id TEXT PRIMARY KEY DEFAULT 'fork-job', "destAppId" TEXT, "policy" JSONB, status TEXT DEFAULT 'DONE')"#,
             r#"CREATE TABLE "FileAccountingObject" ("id" TEXT PRIMARY KEY, "size" BIGINT)"#,
@@ -1230,6 +1340,7 @@ mod tests {
             .unwrap();
     }
 
+    #[cfg(feature = "db-chaos")]
     #[tokio::test]
     async fn postgres_transfer_moves_upload_reservations_without_rewriting_grants() {
         let Some((admin, db, schema)) = postgres_test_database().await else {

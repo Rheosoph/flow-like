@@ -34,9 +34,14 @@ impl FirebaseRtdbForwarder {
         database_url: &str,
         access_token: AccessTokenProvider,
     ) -> flow_like_types::Result<Self> {
+        let root = database_root(database_url)?;
+        let client = reqwest::Client::builder()
+            .redirect(super::redirect_policy(root.host_str().unwrap_or_default()))
+            .build()
+            .map_err(|err| flow_like_types::anyhow!("firebase http client: {err}"))?;
         Ok(Self {
-            client: reqwest::Client::new(),
-            root: database_root(database_url)?,
+            client,
+            root,
             access_token,
         })
     }

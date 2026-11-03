@@ -1602,8 +1602,8 @@ impl ExecutionStateStore for DynamoDbStateStore {
 
         stream::iter(
             event_ids
-                .to_vec()
-                .into_iter()
+                .iter()
+                .cloned()
                 .map(|id| self.mark_event_delivered(run_id, id)),
         )
         .buffer_unordered(EVENT_WRITE_CONCURRENCY)

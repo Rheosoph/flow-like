@@ -61,7 +61,14 @@ publish action. See the [AWS IoT action reference](https://docs.aws.amazon.com/i
 for the resource types.
 
 Grants expire after 15 minutes. A failed grant request returns an HTTP fallback
-with a short retry deadline; failed wakeups are recovered by HTTP replay.
+that retries the grant after 5 minutes; failed wakeups are recovered by HTTP
+replay.
+
+`REALTIME_POLL_MAX_WAIT_MS` caps how long `/api/v1/realtime/poll` holds a
+request open. On Lambda it defaults to `0`: the endpoint answers at once, and
+clients without a live connection poll every 2 seconds while following a run
+and every 30 seconds otherwise, so open tabs do not each keep an execution
+environment busy. Elsewhere it defaults to `20000`, a 20-second long poll.
 
 ## Hosted Bedrock models
 

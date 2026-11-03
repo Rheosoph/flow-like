@@ -2,8 +2,9 @@ use super::computer_use::AgentAction;
 use super::history::ToolCallRequest;
 use super::observe::{Observation, ZoomView, zoom_box, zoom_view};
 use super::tools::{Action, ForbiddenText, MouseButton, ScrollDirection, parse_action};
-use crate::computer::keyboard::{ChordModifier, KeyChord, parse_key};
-use crate::computer::mouse::{check_cancellation, click_at, interruptible_sleep, perform_drag};
+use crate::computer::keyboard::{ChordModifier, KeyChord};
+use crate::computer::mouse::{click_at, interruptible_sleep, perform_drag};
+use crate::computer::native::gestures::{self, chord_keys, with_modifiers};
 use crate::computer::native::input::DesktopInput;
 use crate::computer::ocr::InputPoint;
 use crate::types::handles::AutomationSession;
@@ -14,8 +15,6 @@ use flow_like_types::{async_trait, tokio_util::sync::CancellationToken};
 pub(crate) const EARLIER_FAILED: &str = "an earlier action in this turn failed";
 const TASK_ENDED: &str = "the task already ended in this turn";
 const DRAG_MS: u64 = 500;
-const SCROLL_TICK_MS: u64 = 15;
-const KEY_REPEAT_MS: u64 = 40;
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Terminal {
@@ -182,57 +181,6 @@ fn modifier_list(modifiers: &[ChordModifier]) -> String {
         .join(",")
 }
 
-fn chord_keys(chord: &KeyChord) -> flow_like_types::Result<(Vec<enigo::Key>, enigo::Key)> {
-    let modifiers = chord
-        .modifiers
-        .iter()
-        .map(|modifier| match modifier {
-            ChordModifier::Control => enigo::Key::Control,
-            ChordModifier::Shift => enigo::Key::Shift,
-            ChordModifier::Alt => enigo::Key::Alt,
-            ChordModifier::Meta => enigo::Key::Meta,
-        })
-        .collect();
-    Ok((modifiers, parse_key(&chord.key)?))
-}
-
-/// Presses `modifiers` in order, runs `body`, then releases them in reverse, even on failure.
-fn with_modifiers(
-    input: &mut DesktopInput,
-    modifiers: &[enigo::Key],
-    body: impl FnOnce(&mut DesktopInput) -> flow_like_types::Result<()>,
-) -> flow_like_types::Result<()> {
-    use enigo::{Direction, Keyboard};
-    let mut pressed = Vec::new();
-    let mut result = Ok(());
-    for modifier in modifiers {
-        if let Err(error) = input.key(*modifier, Direction::Press) {
-            result = Err(flow_like_types::anyhow!(
-                "Failed to press modifier {:?}: {}",
-                modifier,
-                error
-            ));
-            break;
-        }
-        pressed.push(*modifier);
-    }
-    if result.is_ok() {
-        result = body(input);
-    }
-    for modifier in pressed.into_iter().rev() {
-        if let Err(error) = input.key(modifier, Direction::Release)
-            && result.is_ok()
-        {
-            result = Err(flow_like_types::anyhow!(
-                "Failed to release modifier {:?}: {}",
-                modifier,
-                error
-            ));
-        }
-    }
-    result
-}
-
 fn error_text(error: impl std::fmt::Display) -> String {
     format!("{error:#}")
 }
@@ -333,16 +281,9 @@ impl<'a> DesktopRunner<'a> {
     }
 
     async fn move_to(&self, x: f64, y: f64) -> Result<Performed, String> {
-        use enigo::{Coordinate, Mouse};
         let point = self.point(x, y)?;
-        self.with_input(move |input, _| {
-            input
-                .move_mouse(point.0, point.1, Coordinate::Abs)
-                .map_err(|e| {
-                    flow_like_types::anyhow!("Failed to move the mouse to {:?}: {}", point, e)
-                })
-        })
-        .await?;
+        self.with_input(move |input, _| gestures::move_to(input, point))
+            .await?;
         Ok(Performed::at(
             format!("Moved the pointer to ({x}, {y})"),
             &[point],
@@ -379,7 +320,7 @@ impl<'a> DesktopRunner<'a> {
         direction: ScrollDirection,
         ticks: u32,
     ) -> Result<Performed, String> {
-        use enigo::{Axis, Coordinate, Mouse};
+        use enigo::Axis;
         let point = self.point(x, y)?;
         let (axis, step) = match direction {
             ScrollDirection::Up => (Axis::Vertical, -1),
@@ -388,20 +329,7 @@ impl<'a> DesktopRunner<'a> {
             ScrollDirection::Right => (Axis::Horizontal, 1),
         };
         self.with_input(move |input, cancellation| {
-            input
-                .move_mouse(point.0, point.1, Coordinate::Abs)
-                .map_err(|e| {
-                    flow_like_types::anyhow!("Failed to move the mouse to {:?}: {}", point, e)
-                })?;
-            interruptible_sleep(50, cancellation)?;
-            for _ in 0..ticks {
-                check_cancellation(cancellation)?;
-                input
-                    .scroll(step, axis)
-                    .map_err(|e| flow_like_types::anyhow!("Failed to scroll: {}", e))?;
-                interruptible_sleep(SCROLL_TICK_MS, cancellation)?;
-            }
-            Ok(())
+            gestures::scroll(input, point, axis, step, ticks, cancellation)
         })
         .await?;
         Ok(Performed::at(
@@ -411,20 +339,10 @@ impl<'a> DesktopRunner<'a> {
     }
 
     async fn type_text(&self, text: &str, press_enter: bool) -> Result<Performed, String> {
-        use enigo::{Direction, Keyboard};
         self.forbidden.check(text)?;
         let typed = text.to_string();
         self.with_input(move |input, cancellation| {
-            check_cancellation(cancellation)?;
-            input
-                .text(&typed)
-                .map_err(|e| flow_like_types::anyhow!("Failed to type text: {}", e))?;
-            if press_enter {
-                input
-                    .key(enigo::Key::Return, Direction::Click)
-                    .map_err(|e| flow_like_types::anyhow!("Failed to press Enter: {}", e))?;
-            }
-            Ok(())
+            gestures::type_text(input, &typed, press_enter, cancellation)
         })
         .await?;
         let enter = if press_enter {
@@ -439,21 +357,9 @@ impl<'a> DesktopRunner<'a> {
     }
 
     async fn press(&self, chord: &KeyChord, repeat: u32) -> Result<Performed, String> {
-        use enigo::{Direction, Keyboard};
         let (modifiers, key) = chord_keys(chord).map_err(error_text)?;
         self.with_input(move |input, cancellation| {
-            for index in 0..repeat {
-                check_cancellation(cancellation)?;
-                if index > 0 {
-                    interruptible_sleep(KEY_REPEAT_MS, cancellation)?;
-                }
-                with_modifiers(input, &modifiers, |input| {
-                    input
-                        .key(key, Direction::Click)
-                        .map_err(|e| flow_like_types::anyhow!("Failed to press {:?}: {}", key, e))
-                })?;
-            }
-            Ok(())
+            gestures::press(input, &modifiers, key, repeat, cancellation)
         })
         .await?;
         Ok(Performed::plain(format!(

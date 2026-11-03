@@ -481,7 +481,9 @@ impl RegistrationStorage {
         let conn = self.conn.lock().unwrap();
         Self::init_registrations(&conn)?;
         Self::init_credential_stash(&conn)?;
-        Self::init_trigger_failures(&conn)
+        Self::init_trigger_failures(&conn)?;
+        super::email::forget_stored_passwords(&conn)?;
+        super::bot_vault::forget_registration_tokens(&conn)
     }
 
     fn init_registrations(conn: &Connection) -> Result<()> {
@@ -624,7 +626,7 @@ impl RegistrationStorage {
     }
 
     fn save_registration(&self, registration: &EventRegistration) -> Result<()> {
-        let config_json = serde_json::to_string(&registration.config)?;
+        let config_json = serde_json::to_string(&registration.config.for_storage())?;
         let default_payload_json = registration
             .default_payload
             .as_ref()
@@ -2313,7 +2315,6 @@ impl EventSinkManager {
                             imap_server: String::new(),
                             imap_port: 993,
                             username: String::new(),
-                            password: String::new(),
                             folder: None,
                             use_tls: true,
                             last_seen_uid: None,
@@ -3455,7 +3456,7 @@ mod tests {
             "{elsewhere}"
         );
         let foreign = refusal(Some(&user("user-2")));
-        assert!(foreign.contains("another account"), "{foreign}");
+        assert!(foreign.contains("another profile or account"), "{foreign}");
         let signed_out = refusal(None);
         assert!(signed_out.contains("nobody is signed in"), "{signed_out}");
 

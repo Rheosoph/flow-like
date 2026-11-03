@@ -1,6 +1,17 @@
 """Flow-Like Python SDK."""
 
 from .client import FlowLikeClient
+from .bots import Bot, BotApp, BotClassification, BotModelPolicy, BotSecret
+from .inbox import (
+    Conversation,
+    ConversationMember,
+    InboxEntriesPage,
+    InboxEntry,
+    InboxKey,
+    InboxReadMarker,
+    new_inbox_message_id,
+    plain_envelope,
+)
 from ._errors import (
     APIError,
     AuthenticationError,
@@ -96,4 +107,17 @@ __all__ = [
     "TableSchema",
     "UpsertBoardResponse",
     "UsageInfo",
+    "Bot",
+    "BotApp",
+    "BotClassification",
+    "BotModelPolicy",
+    "BotSecret",
+    "Conversation",
+    "ConversationMember",
+    "InboxEntriesPage",
+    "InboxEntry",
+    "InboxKey",
+    "InboxReadMarker",
+    "new_inbox_message_id",
+    "plain_envelope",
 ]

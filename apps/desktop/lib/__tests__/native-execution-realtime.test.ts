@@ -1,8 +1,8 @@
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type {
 	RealtimePollResponse,
 	RealtimeRunSnapshot,
 } from "@flow-like/flow-like-ui/lib/realtime/types";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 const { invoke, channels } = vi.hoisted(() => ({
 	invoke: vi.fn(),
@@ -147,12 +147,22 @@ test("surfaces authoritative failure even when no completed event was stored", a
 	expect(run.onEvent.mock.calls[0][0].payload.status).toBe("FAILED");
 });
 
+test("keeps following while the native owner retries a blocked account", async () => {
+	const run = start();
+	channels[0].onmessage({ type: "state", state: "unauthorized" });
+	channels[0].onmessage({ type: "state", state: "unsupported" });
+	deliver(snapshot({ status: "completed", events: [event(0)] }));
+	await vi.runAllTimersAsync();
+	expect((await run.outcome).error).toBeUndefined();
+	expect(run.onEvent).toHaveBeenCalled();
+});
+
 test("ignores other run failures and closes on logout without accepting late events", async () => {
 	const run = start();
 	deliver(snapshot(), "delivery", [{ run_id: "other", code: "unavailable" }]);
 	await vi.advanceTimersByTimeAsync(0);
 	channels[0].onmessage({ type: "state", state: "signed_out" });
-	expect((await run.outcome).error?.message).toContain("signed out");
+	expect((await run.outcome).error?.name).toBe("ExecutionDetachedError");
 	deliver(snapshot({ events: [event(0)] }), "late");
 	await vi.runAllTimersAsync();
 	expect(run.onEvent).not.toHaveBeenCalled();

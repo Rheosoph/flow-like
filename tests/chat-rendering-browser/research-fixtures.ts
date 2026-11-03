@@ -48,6 +48,9 @@ export const researchSources = [
 export const researchQueries = [
 	"Porsche Panamera vs BMW 5 Series 7 Series ride comfort",
 	"Panamera air suspension long distance seats road test",
+	"Panamera 4 E-Hybrid Reichweite Langstrecke Test",
+	"BMW 7 Series vs Panamera rear seat comfort review",
+	"Panamera Sport Turismo Kofferraum Alltag",
 	"Panamera Komfort Langstrecke Vergleich BMW 7er",
 ];
 
@@ -88,7 +91,7 @@ export function researchSteps(settled = false): IPlanStep[] {
 				id: `search-${index}`,
 				toolName: "internet_search",
 				title: "↳ Using internet_search",
-				status: index === 2 ? progress : "done",
+				status: index === researchQueries.length - 1 ? progress : "done",
 				detail: {
 					kind: "tool_activity",
 					category: "search",

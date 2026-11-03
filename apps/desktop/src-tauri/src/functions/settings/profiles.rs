@@ -619,6 +619,7 @@ pub async fn remap_profile_id(
 
     // Re-insert with new ID
     settings.profiles.insert(server_id.clone(), profile);
+    crate::functions::local_bots::remap_profile(&app_handle, &local_id, &server_id).await;
 
     // Update current_profile if it was pointing to the old ID
     if settings.current_profile == local_id {

@@ -63,23 +63,33 @@ export const arcadeShapes: readonly BotShapeDefinition[] = [
 			clothing: "#4e757e",
 		},
 		silhouette:
-			"M24 66H76Q83 66 85 73L92 93Q94 101 85 101H15Q6 101 8 93L15 73Q17 66 24 66Z",
+			"M27 57H73Q80 57 82 64L88 81Q90 86 84 89L75 94Q50 102 25 94L16 89Q10 86 12 81L18 64Q20 57 27 57Z",
 		anchors: {
 			head: { x: 50, y: 27, width: 30 },
-			eyes: { left: [38, 76], right: [62, 76], radius: 3.5 },
-			mouth: [50, 85],
-			neck: { width: 60, y: 90, bottom: 101 },
+			eyes: { left: [38, 69], right: [62, 69], radius: 3.5 },
+			mouth: [50, 79],
+			neck: { width: 56, y: 85, bottom: 98 },
 		},
 		renderDetails: ({ palette, equipment }) => (
 			<>
-				<ellipse cx="50" cy="66" rx="10" ry="4" fill={palette.clothing} />
+				<path
+					d="M27 58H73Q79 58 81 64Q50 69 19 64Q21 58 27 58Z"
+					fill={palette.sclera}
+					opacity=".2"
+				/>
+				<path
+					d="M16 87Q50 97 84 87L75 94Q50 102 25 94Z"
+					fill={palette.clothing}
+					opacity=".22"
+				/>
+				<ellipse cx="50" cy="58" rx="9" ry="3.5" fill={palette.clothing} />
 				<BotMotion
 					kind="sway"
-					origin={[50, 66]}
+					origin={[50, 58]}
 					amount={equipment?.head ? 0 : 5}
 					duration={3800}
 				>
-					<path d="M47 44H53V66H47Z" fill={palette.clothing} />
+					<path d="M47 44H53V58H47Z" fill={palette.clothing} />
 					<circle cx="50" cy="38" r="14" fill={palette.accent} />
 					<path
 						d="M42 33Q44 28 49 28"
@@ -90,7 +100,8 @@ export const arcadeShapes: readonly BotShapeDefinition[] = [
 						opacity=".6"
 					/>
 				</BotMotion>
-				<ellipse cx="73" cy="71" rx="6" ry="3" fill={palette.accent} />
+				<ellipse cx="72" cy="61" rx="5" ry="2.5" fill={palette.clothing} />
+				<ellipse cx="72" cy="60" rx="5" ry="2.5" fill={palette.accent} />
 			</>
 		),
 	}),

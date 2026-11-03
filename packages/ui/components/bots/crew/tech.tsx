@@ -1,5 +1,5 @@
 import type { BotShapeDefinition } from "../types";
-import { crewShape, radialPath } from "./helpers";
+import { crewShape, ovalPath, radialPath } from "./helpers";
 
 export const techShapes: readonly BotShapeDefinition[] = [
 	crewShape({
@@ -147,19 +147,20 @@ export const techShapes: readonly BotShapeDefinition[] = [
 			ink: "#51402f",
 		},
 		bodyMotion: "rotate",
-		bodyOrigin: [50, 70],
-		silhouette: radialPath(50, 70, [33, 42, 42, 33], 9),
+		bodyOrigin: [50, 61],
+		silhouette: radialPath(50, 61, [30, 37, 37, 30], 10),
+		clothingClip: ovalPath(50, 61, 25),
 		anchors: {
-			eyes: { left: [41, 66], right: [59, 66], radius: 3.3 },
-			mouth: [50, 79],
-			head: { x: 50, y: 35, width: 48 },
-			neck: { y: 85, bottom: 109 },
+			eyes: { left: [41, 55], right: [59, 55], radius: 3.3 },
+			mouth: [50, 66],
+			head: { x: 50, y: 27, width: 44 },
+			neck: { y: 73, bottom: 86, width: 40 },
 		},
 		renderDetails: ({ palette }) => (
 			<circle
 				cx="50"
-				cy="70"
-				r="25"
+				cy="61"
+				r="26"
 				fill={palette.body}
 				stroke={palette.accent}
 				strokeWidth="2.5"

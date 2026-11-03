@@ -95,6 +95,7 @@ function CraftSession({
 	const [status, setStatus] = useState<"loading" | "ready" | "failed">(
 		"loading",
 	);
+	const [interactiveLoading, setInteractiveLoading] = useState(false);
 	const [editing, setEditing] = useState(initialEditing && editable);
 	const [dirty, setDirty] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -209,6 +210,7 @@ function CraftSession({
 
 	useEffect(() => {
 		active.current = true;
+		setInteractiveLoading(false);
 		const runtimeFrame = frame.current;
 		const ownerWindow = runtimeFrame?.ownerDocument.defaultView ?? window;
 		const origin = runtimeFrame
@@ -219,7 +221,8 @@ function CraftSession({
 		let opened = false;
 		let sent = false;
 		let bytes: ArrayBuffer | undefined;
-		const timeout = setTimeout(() => {
+		let timeout: ReturnType<typeof setTimeout>;
+		const onLoadTimeout = () => {
 			if (runtimeRequested && runtimeAvailable && !opened) {
 				controller.abort();
 				setStatus("failed");
@@ -227,7 +230,12 @@ function CraftSession({
 					"The document viewer did not start. Try opening the file again.",
 				);
 			}
-		}, 90_000);
+		};
+		const resetLoadTimeout = () => {
+			clearTimeout(timeout);
+			timeout = setTimeout(onLoadTimeout, 90_000);
+		};
+		resetLoadTimeout();
 		const open = () => {
 			if (!ready || sent || (!create && !bytes) || controller.signal.aborted)
 				return;
@@ -266,6 +274,11 @@ function CraftSession({
 				case "ready":
 					ready = true;
 					open();
+					break;
+				case "loading":
+					if (!sent || opened) break;
+					setInteractiveLoading(message.interactive);
+					resetLoadTimeout();
 					break;
 				case "opened":
 					if (opened) break;
@@ -602,6 +615,12 @@ function CraftSession({
 				)}
 			</div>
 			{saving && saveProgress && <FileSaveProgress {...saveProgress} />}
+			{viewer.id === "solidcraft" && editing && (
+				<p className="border-b px-3 py-2 text-xs text-muted-foreground">
+					Saved projects require SolidCraft 0.30 or later. Keep the original
+					file if you need to use an older version.
+				</p>
+			)}
 			{warnings.length > 0 && (
 				<output className="max-h-20 overflow-auto border-b px-3 py-2 text-xs text-muted-foreground">
 					{warnings.join(" ")}
@@ -649,7 +668,13 @@ function CraftSession({
 					/>
 				)}
 				{status === "loading" && (
-					<output className="absolute inset-0 flex items-center justify-center gap-2 bg-background">
+					<output
+						className={
+							interactiveLoading
+								? "sr-only"
+								: "absolute inset-0 flex items-center justify-center gap-2 bg-background"
+						}
+					>
 						<Loader2Icon className="size-4 animate-spin" />
 						{runtimeRequested && !runtimeAvailable
 							? `Waiting for ${viewer.label} to finish building...`

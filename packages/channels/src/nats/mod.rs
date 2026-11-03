@@ -13,6 +13,7 @@ pub use token::{
     mint_user_token_until, realtime_subject, subject_for, validate_account_seed, validate_url,
 };
 
+use crate::{ChannelForwardError, ChannelRejection};
 use flow_like_types::channel::ChannelPush;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -20,8 +21,9 @@ use std::time::Duration;
 pub const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 pub const ACK_TIMEOUT: Duration = Duration::from_secs(3);
-/// About a minute of async-nats reconnect backoff. Unbounded, a client whose credential has
-/// expired would retry forever, even after it was dropped.
+/// About a minute of async-nats reconnect backoff per client. Unbounded, a client whose
+/// credential has expired would retry forever, even after it was dropped. An executor inbox
+/// replaces a client that gave up for as long as its grant lasts.
 const MAX_RECONNECTS: usize = 30;
 /// API-side clients retry only briefly; their owner reconnects with a fresh credential.
 const API_MAX_RECONNECTS: usize = 3;
@@ -39,6 +41,19 @@ pub struct Acknowledgement {
     pub error: Option<String>,
 }
 
+/// Texts a waiter refuses a push with. They are wire format: the API maps them back.
+mod refusal {
+    pub const DUPLICATE_DELIVERY: &str = "Delivery id was already used for another message";
+    pub const WRONG_CHANNEL: &str = "Push belongs to another channel";
+    pub const CHANNEL_CLOSED: &str = "Channel is closed";
+    pub const CANCELLED: &str = "Channel is cancelled";
+    pub const INBOUND_FULL: &str = "Channel inbound buffer is full";
+    pub const UNKNOWN_REQUEST: &str = "No pending request with this id";
+    pub const EXPIRED: &str = "Request has expired";
+    pub const WAITER_CLOSED: &str = "Request waiter is closed";
+    pub const ALREADY_ANSWERED: &str = "Request was already answered";
+}
+
 impl Acknowledgement {
     fn accepted() -> Self {
         Self {
@@ -52,6 +67,24 @@ impl Acknowledgement {
             accepted: false,
             error: Some(error.to_owned()),
         }
+    }
+
+    fn rejection(self) -> ChannelForwardError {
+        let reason = self
+            .error
+            .unwrap_or_else(|| "NATS waiter rejected the message".into());
+        let kind = match reason.as_str() {
+            refusal::ALREADY_ANSWERED => ChannelRejection::AlreadyAnswered,
+            refusal::EXPIRED => ChannelRejection::Expired,
+            refusal::UNKNOWN_REQUEST => ChannelRejection::UnknownRequest,
+            refusal::CHANNEL_CLOSED | refusal::WAITER_CLOSED => ChannelRejection::Closed,
+            refusal::CANCELLED => ChannelRejection::Cancelled,
+            refusal::INBOUND_FULL => ChannelRejection::InboundFull,
+            refusal::DUPLICATE_DELIVERY => ChannelRejection::DuplicateDelivery,
+            refusal::WRONG_CHANNEL => ChannelRejection::WrongChannel,
+            _ => ChannelRejection::Other,
+        };
+        ChannelForwardError::Rejected { kind, reason }
     }
 }
 

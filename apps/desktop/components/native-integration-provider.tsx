@@ -2,6 +2,7 @@
 
 import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
 
+import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
 import { useInvoke } from "@flow-like/flow-like-ui/hooks/use-invoke";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import {
@@ -314,7 +315,9 @@ export function NativeIntegrationProvider() {
 					isCurrent: current,
 					flowpilot: async (prompt, voice, paths) => {
 						// Opening FlowPilot must not wait for files to cross the native bridge.
-						navigation.current.router.push(voice ? "/chat?voice=1" : "/chat");
+						navigation.current.router.push(
+							voice ? `${BOTS_ROUTE}?voice=1` : BOTS_ROUTE,
+						);
 						const files = await Promise.all(
 							(paths ?? []).map(async (path) => {
 								const file = await invoke<{

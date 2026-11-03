@@ -106,21 +106,63 @@ function Shirt({
 		<g
 			transform={getBotClothingFit(anchors).transform}
 			stroke={palette.ink}
-			strokeWidth="1.3"
+			strokeWidth="1.1"
 			strokeLinejoin="round"
+			strokeLinecap="round"
 		>
 			<path d="M-100 0H-12Q0 13 12 0H100V32H-100Z" fill={palette.clothing} />
 			{turtleneck && (
-				<path d="M-13-1Q0 4 13-1V6Q0 11-13 6Z" fill={palette.clothing} />
+				<>
+					<path d="M-13 0Q0 5 13 0L12 9Q0 14-12 9Z" fill={palette.clothing} />
+					<path
+						d="M-12 3Q0 8 12 3M-8 5V9M-3 6V10M3 6V10M8 5V9"
+						fill="none"
+						stroke={palette.sclera}
+						opacity="0.35"
+					/>
+				</>
 			)}
 			{hood && (
-				<g fill="none" stroke={palette.sclera} strokeWidth="1.3">
-					<path d="M-12 1Q0 13 12 1M-6 8v8M6 8v8" />
-					<path d="M-11 19h22l-3-5H-8Z" opacity="0.6" />
-				</g>
+				<>
+					<path
+						d="M-12 0Q0 13 12 0L16 1Q14 13 0 14Q-14 13-16 1Z"
+						fill={palette.clothing}
+					/>
+					<path
+						d="M-12 2Q0 16 12 2"
+						fill="none"
+						stroke={palette.sclera}
+						opacity="0.45"
+					/>
+					<path
+						d="M-6 9V17M6 9V17"
+						fill="none"
+						stroke={palette.sclera}
+						strokeWidth="1.4"
+					/>
+					<path d="M-8 17H8L12 22H-12Z" fill={palette.clothing} />
+					<path
+						d="M-8 18L-11 21M8 18L11 21"
+						stroke={palette.sclera}
+						opacity="0.55"
+					/>
+				</>
 			)}
 			{!hood && (
-				<path d="M-100 21H100" stroke={palette.sclera} opacity="0.35" />
+				<>
+					{!turtleneck && (
+						<path
+							d="M-12 0Q0 13 12 0L13 2Q0 19-13 2Z"
+							fill={palette.clothing}
+						/>
+					)}
+					<path
+						d="M-32 21Q0 24 32 21M-24 22V25M-18 22V25M-12 23V26M-6 23V26M0 23V26M6 23V26M12 23V26M18 22V25M24 22V25"
+						fill="none"
+						stroke={palette.sclera}
+						opacity="0.3"
+					/>
+				</>
 			)}
 		</g>
 	);
@@ -431,12 +473,20 @@ const starterEquipment: readonly BotEquipmentDefinition[] = [
 				transform={getBotClothingFit(anchors).transform}
 				fill={palette.clothing}
 				stroke={palette.ink}
-				strokeWidth="1.3"
+				strokeWidth="1.1"
 				strokeLinejoin="round"
 			>
-				<path d="M-7 3l-4 21h12L4 3Z" />
-				<path d="M-100-2Q0 8 100-2v9Q0 17-100 7Z" />
-				<path d="M-10 19h11" stroke={palette.accent} strokeWidth="3" />
+				<path d="M-10 9L2 11L-2 26H-14Z" />
+				<path d="M-60 0Q0 10 60 0V8Q0 19-60 8Z" />
+				<path
+					d="M-60 4Q0 14 60 4"
+					fill="none"
+					stroke={palette.sclera}
+					opacity="0.3"
+				/>
+				<path d="M-10 6Q-4 4 2 7L0 14Q-6 17-12 13Z" />
+				<path d="M-13 21L-2 22" stroke={palette.accent} strokeWidth="3" />
+				<path d="M-11 24V27M-7 24V27M-3 24V27" fill="none" />
 			</g>
 		),
 	},

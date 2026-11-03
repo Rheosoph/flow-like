@@ -7,6 +7,10 @@ import {
 	externalModelProviders,
 } from "../../lib/bit/external-model-providers";
 import { validateForecastingBit } from "../../lib/bit/forecasting-model";
+import {
+	isHostedImageGeneration,
+	validateHostedImageParameters,
+} from "../../lib/bit/hosted-image-generation";
 import { validateSystemOneParameters } from "../../lib/bit/systemone-model";
 import type { IBit, IMetadata } from "../../lib/schema/bit/bit";
 import { IBitTypes } from "../../lib/schema/bit/bit";
@@ -268,6 +272,20 @@ export function validateBitDraft(
 	if (scope === "custom" && !bit.meta.en?.name.trim())
 		return "Add an English display name before saving.";
 	const params = record(bit.parameters);
+	if (isHostedImageGeneration(bit)) {
+		if (scope !== "admin")
+			return "Hosted image models are managed by the server administrator.";
+		const error = validateHostedImageParameters(params);
+		if (error) return error;
+		if (
+			bit.download_link != null ||
+			bit.file_name != null ||
+			bit.dependencies.length ||
+			Number(bit.size ?? 0) !== 0 ||
+			Object.hasOwn(params, "assets")
+		)
+			return "Hosted image models cannot include local files or weight dependencies.";
+	}
 	if (
 		[IBitTypes.Llm, IBitTypes.Vlm, IBitTypes.SystemOne].includes(bit.type) &&
 		supportsCustomRequestParams(record(params.provider).provider_name)

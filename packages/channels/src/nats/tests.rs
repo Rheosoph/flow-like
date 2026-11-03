@@ -208,6 +208,93 @@ async fn receiver_bounds_queue_and_rejects_expired_requests() {
     assert!(router.register("closed", now_unix() + 60).is_err());
 }
 
+/// The kind the API reads from the waiter's acknowledgement, or `None` when it was accepted.
+fn refusal(router: &router::Router, id: &str, push: ChannelPush) -> Option<ChannelRejection> {
+    let ack = router.route(Envelope {
+        id: id.into(),
+        push,
+    });
+    (!ack.accepted).then(|| match ack.rejection() {
+        ChannelForwardError::Rejected { kind, .. } => kind,
+        other => panic!("{other:?}"),
+    })
+}
+
+#[test]
+fn request_refusals_reach_the_api_as_typed_rejections() {
+    let router = router::Router::new("run");
+    let reply = |request: &str, value| push(ChannelPushKind::Reply, Some(request), value);
+    router.register("answered", now_unix() + 60).unwrap();
+    router.register("expired", now_unix() - 1).unwrap();
+    router.register("abandoned", now_unix() + 60).unwrap();
+    drop(router.take_receiver("abandoned"));
+
+    let answer = reply("answered", json!(1));
+    assert_eq!(refusal(&router, "first", answer), None);
+    let mut foreign = reply("answered", json!(1));
+    foreign.channel_id = "other".into();
+    let refused = [
+        (
+            "second",
+            reply("answered", json!(2)),
+            ChannelRejection::AlreadyAnswered,
+        ),
+        (
+            "first",
+            reply("answered", json!(3)),
+            ChannelRejection::DuplicateDelivery,
+        ),
+        (
+            "late",
+            reply("expired", json!(1)),
+            ChannelRejection::Expired,
+        ),
+        (
+            "unknown",
+            reply("missing", json!(1)),
+            ChannelRejection::UnknownRequest,
+        ),
+        (
+            "gone",
+            reply("abandoned", json!(1)),
+            ChannelRejection::Closed,
+        ),
+        ("foreign", foreign, ChannelRejection::WrongChannel),
+    ];
+    for (id, push, kind) in refused {
+        assert_eq!(refusal(&router, id, push), Some(kind), "{id}");
+    }
+}
+
+#[test]
+fn channel_refusals_reach_the_api_as_typed_rejections() {
+    let router = router::Router::new("run");
+    let steer = |value: i32| push(ChannelPushKind::Inbound, None, json!(value));
+    let cancel = || push(ChannelPushKind::Cancel, None, json!(null));
+    for i in 0..8 {
+        assert_eq!(refusal(&router, &format!("steer-{i}"), steer(i)), None);
+    }
+    let full = refusal(&router, "full", steer(8));
+    assert_eq!(full, Some(ChannelRejection::InboundFull));
+    assert_eq!(refusal(&router, "stop", cancel()), None);
+    let cancelled = refusal(&router, "after-stop", steer(9));
+    assert_eq!(cancelled, Some(ChannelRejection::Cancelled));
+    router.close();
+    let closed = refusal(&router, "closed", cancel());
+    assert_eq!(closed, Some(ChannelRejection::Closed));
+
+    for error in [Some("A reason from a newer waiter".to_owned()), None] {
+        let ack = Acknowledgement {
+            accepted: false,
+            error,
+        };
+        assert!(matches!(
+            ack.rejection(),
+            ChannelForwardError::Rejected { kind: ChannelRejection::Other, reason } if !reason.is_empty()
+        ));
+    }
+}
+
 #[tokio::test]
 async fn realtime_publisher_bounds_a_hung_broker_then_fails_fast() {
     let hung = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -247,6 +334,232 @@ async fn realtime_publisher_bounds_a_hung_broker_then_fails_fast() {
         started.elapsed()
     );
     assert!(error.to_string().contains("unavailable"), "{error}");
+}
+
+type Frames = tokio::sync::mpsc::UnboundedSender<Vec<u8>>;
+
+/// Speaks just enough NATS for these tests: the handshake, PING, SUB, skipped publications and
+/// frames a test injects. While down it drops live connections and refuses new ones.
+struct FakeBroker {
+    url: String,
+    up: tokio::sync::watch::Sender<bool>,
+    refused: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    subscriptions: tokio::sync::mpsc::UnboundedReceiver<(String, Frames)>,
+}
+
+impl FakeBroker {
+    async fn start() -> Self {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("nats://{}", listener.local_addr().unwrap());
+        let (up, live) = tokio::sync::watch::channel(true);
+        let refused = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (subscribed, subscriptions) = tokio::sync::mpsc::unbounded_channel();
+        let counter = refused.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                if *live.borrow() {
+                    tokio::spawn(fake_session(stream, live.clone(), subscribed.clone()));
+                } else {
+                    counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+        });
+        Self {
+            url,
+            up,
+            refused,
+            subscriptions,
+        }
+    }
+
+    /// The next `SUB`: its sid, and a way to send frames to the subscribing connection.
+    async fn subscribed(&mut self) -> (String, Frames) {
+        tokio::time::timeout(Duration::from_secs(5), self.subscriptions.recv())
+            .await
+            .expect("no subscription reached the broker")
+            .unwrap()
+    }
+
+    async fn refusals(&self, at_least: usize) {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while self.refused.load(std::sync::atomic::Ordering::SeqCst) < at_least {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("too few connection attempts reached the broker while it was down");
+    }
+
+    fn grant(&self, channel_id: &str) -> flow_like_types::channel::ChannelGrant {
+        use flow_like_types::channel::{
+            ChannelClientDescriptor, ChannelExecutorGrant, ChannelGrant, ChannelHandle,
+        };
+        let expires_at = now_unix() + 60;
+        ChannelGrant {
+            channel_id: channel_id.into(),
+            expires_at,
+            executor: ChannelExecutorGrant::Nats {
+                url: self.url.clone(),
+                subject: subject_for(channel_id).unwrap(),
+                token: "executor-jwt".into(),
+            },
+            client: ChannelHandle {
+                channel_id: channel_id.into(),
+                request_id: None,
+                expires_at,
+                transport: ChannelClientDescriptor::Http {
+                    push_url: format!("https://api.test/api/v1/channels/{channel_id}/push"),
+                    token: "responder".into(),
+                },
+                fallback: None,
+            },
+        }
+    }
+}
+
+async fn fake_session(
+    stream: tokio::net::TcpStream,
+    mut live: tokio::sync::watch::Receiver<bool>,
+    subscribed: tokio::sync::mpsc::UnboundedSender<(String, Frames)>,
+) {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt};
+    let (reader, mut writer) = stream.into_split();
+    let (frames, mut queued) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    let info = r#"INFO {"server_id":"fake","proto":1,"headers":true,"max_payload":1048576}"#;
+    let _ = frames.send(format!("{info}\r\n").into_bytes());
+    let session = async {
+        let mut reader = tokio::io::BufReader::new(reader);
+        let mut line = String::new();
+        while reader.read_line(&mut line).await.is_ok_and(|read| read > 0) {
+            match line.split_whitespace().collect::<Vec<_>>().as_slice() {
+                ["PING"] => {
+                    let _ = frames.send(b"PONG\r\n".to_vec());
+                }
+                ["SUB", _, sid] => {
+                    let _ = subscribed.send((sid.to_string(), frames.clone()));
+                }
+                ["PUB" | "HPUB", .., size] => {
+                    let mut payload = vec![0; size.parse::<usize>().unwrap_or_default() + 2];
+                    if reader.read_exact(&mut payload).await.is_err() {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+            line.clear();
+        }
+    };
+    let writing = async {
+        while let Some(frame) = queued.recv().await {
+            if writer.write_all(&frame).await.is_err() {
+                return;
+            }
+        }
+    };
+    tokio::select! {
+        _ = live.wait_for(|up| !*up) => {}
+        _ = session => {}
+        _ = writing => {}
+    }
+}
+
+fn message_frame(subject: &str, sid: &str, reply: Option<&str>, payload: &[u8]) -> Vec<u8> {
+    let reply = reply.map(|reply| format!("{reply} ")).unwrap_or_default();
+    let mut frame = format!("MSG {subject} {sid} {reply}{}\r\n", payload.len()).into_bytes();
+    frame.extend_from_slice(payload);
+    frame.extend_from_slice(b"\r\n");
+    frame
+}
+
+/// Delivers `push` to a channel's inbox the way the API's forwarder does.
+fn delivery(channel_id: &str, sid: &str, id: &str, push: &ChannelPush) -> Vec<u8> {
+    let subject = subject_for(channel_id).unwrap();
+    let envelope = serde_json::to_vec(&Envelope {
+        id: id.into(),
+        push: push.clone(),
+    })
+    .unwrap();
+    let acks = format!("{subject}.ack.{id}");
+    message_frame(&subject, sid, Some(&acks), &envelope)
+}
+
+#[tokio::test]
+async fn pending_requests_outlive_a_client_that_stopped_reconnecting() {
+    use flow_like_types::channel::ChannelOutcome;
+    let mut broker = FakeBroker::start().await;
+    let grant = broker.grant("run");
+    let channel = NatsChannel::connect_inbox(&grant, 1, Duration::from_millis(20))
+        .await
+        .unwrap();
+    broker.subscribed().await;
+    let ticket = channel.open(Duration::from_secs(30)).await.unwrap();
+    let waiter = tokio::spawn({
+        let (channel, ticket) = (channel.clone(), ticket.clone());
+        async move { channel.wait(&ticket, None).await.unwrap() }
+    });
+
+    broker.up.send_replace(false);
+    // The client's own budget is one attempt; every further refusal is the inbox retrying.
+    broker.refusals(3).await;
+    assert!(
+        !waiter.is_finished(),
+        "a broker outage closed a pending request"
+    );
+
+    broker.up.send_replace(true);
+    let (sid, frames) = broker.subscribed().await;
+    let reply = push(
+        ChannelPushKind::Reply,
+        Some(ticket.request_id.as_str()),
+        json!(42),
+    );
+    frames
+        .send(delivery("run", &sid, "after-outage", &reply))
+        .unwrap();
+    let outcome = tokio::time::timeout(Duration::from_secs(5), waiter)
+        .await
+        .expect("the reply never reached the waiter")
+        .unwrap();
+    assert_eq!(outcome, ChannelOutcome::Responded(json!(42)));
+    channel.close().await;
+}
+
+#[tokio::test]
+async fn confirmed_publications_report_missing_listeners_and_refusals_as_types() {
+    let mut broker = FakeBroker::start().await;
+    let client = connect(&broker.url, "client-jwt").await.unwrap();
+    let subject = subject_for("run").unwrap();
+    let cases = [
+        ("unheard", None, ChannelForwardError::NoListener),
+        (
+            "refused",
+            Some(r#"{"accepted":false,"error":"Request has expired"}"#),
+            ChannelForwardError::Rejected {
+                kind: ChannelRejection::Expired,
+                reason: "Request has expired".into(),
+            },
+        ),
+    ];
+    for (id, answer, expected) in cases {
+        let publication = tokio::spawn({
+            let (client, subject) = (client.clone(), subject.clone());
+            let reply = push(ChannelPushKind::Reply, Some("request"), json!(1));
+            async move { publish_confirmed(&client, &subject, &reply, id).await }
+        });
+        let (sid, frames) = broker.subscribed().await;
+        let acks = format!("{subject}.ack.{id}");
+        let frame = match answer {
+            None => format!("HMSG {acks} {sid} 16 16\r\nNATS/1.0 503\r\n\r\n\r\n").into_bytes(),
+            Some(ack) => message_frame(&acks, &sid, None, ack.as_bytes()),
+        };
+        frames.send(frame).unwrap();
+        let error = publication.await.unwrap().unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<ChannelForwardError>(),
+            Some(&expected),
+            "{error:#}"
+        );
+    }
 }
 
 struct Broker {

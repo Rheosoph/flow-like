@@ -99,6 +99,9 @@ pub struct PollResponse {
     pub events: Vec<ExecutionEvent>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    /// More events follow this page. `None` from servers that predate the field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub has_more: Option<bool>,
 }
 
 impl PollResponse {
@@ -107,6 +110,11 @@ impl PollResponse {
             self.status.to_ascii_uppercase().as_str(),
             "COMPLETED" | "FAILED" | "CANCELLED" | "TIMEOUT"
         )
+    }
+    /// This page ends the run's events. Servers without `has_more` can report a
+    /// final status while pages remain, so there only an empty final page does.
+    pub fn is_finished(&self) -> bool {
+        self.is_terminal() && self.has_more.map_or(self.events.is_empty(), |more| !more)
     }
     pub fn last_sequence(&self) -> Option<i32> {
         self.events.iter().map(|event| event.sequence).max()

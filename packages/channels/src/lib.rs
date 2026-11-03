@@ -39,14 +39,62 @@ mod tls;
 /// API-side: deliver a push the client could not send itself onto the transport the waiter
 /// listens on.
 #[async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait marks the boxed future it already returns as must_use"
+)]
 pub trait ChannelForwarder: Send + Sync {
     fn transport(&self) -> &'static str;
+    /// Fails with a [`ChannelForwardError`] when the transport answered for the waiter; any
+    /// other error is an infrastructure failure the client may retry.
     async fn forward(&self, push: &ChannelPush) -> flow_like_types::Result<()>;
     /// Preserve a delivery identifier when a client retries through HTTP.
     async fn forward_with_id(&self, push: &ChannelPush, _id: &str) -> flow_like_types::Result<()> {
         self.forward(push).await
     }
 }
+
+/// A push the transport delivered nowhere, or the waiter turned down. Forwarders return it
+/// inside their error, under any context they attach.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChannelForwardError {
+    /// Nobody listens on the channel: its waiter finished or never connected.
+    NoListener,
+    /// The waiter received the push and refused it; `reason` is the waiter's own text.
+    Rejected {
+        kind: ChannelRejection,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelRejection {
+    AlreadyAnswered,
+    Expired,
+    UnknownRequest,
+    /// The channel closed, or its waiter stopped waiting for the request.
+    Closed,
+    Cancelled,
+    InboundFull,
+    /// The delivery id was already used for a different message.
+    DuplicateDelivery,
+    WrongChannel,
+    /// A reason this build does not know.
+    Other,
+}
+
+impl std::fmt::Display for ChannelForwardError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::NoListener => f.write_str("no waiter listens on the channel"),
+            Self::Rejected { kind, reason } => {
+                write!(f, "the waiter rejected the push ({kind:?}): {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ChannelForwardError {}
 
 fn transport_name(grant: &ChannelExecutorGrant) -> &'static str {
     match grant {

@@ -2,7 +2,8 @@
 //!
 //! Each descendant is opened without following symlinks. Once opened, parent
 //! directories and files stay pinned for the operation, including publication
-//! and cleanup of streaming uploads.
+//! and cleanup of streaming uploads. A delete also removes the folders it
+//! leaves empty, through the same pinned handles and never the store root.
 
 use async_trait::async_trait;
 use cap_fs_ext::{DirExt, FollowSymlinks, OpenOptionsFollowExt};
@@ -254,6 +255,20 @@ fn open_child(parent: &PinnedDir, name: &str, location: &Path, create: bool) -> 
     }
 }
 
+/// Removes `folders[depth]` from `chain[depth]` while it is empty, deepest first; `chain[0]` is
+/// the root, which is never removed. A folder that still holds an entry, or that can't be
+/// removed, ends the walk.
+fn prune_empty_folders(mut chain: Vec<PinnedDir>, folders: &[&str]) {
+    for (depth, folder) in folders.iter().enumerate().rev() {
+        // Windows refuses to remove a directory while any handle to it is open.
+        chain.truncate(depth + 1);
+        match chain.last() {
+            Some(parent) if parent.remove_dir(folder).is_ok() => {}
+            _ => return,
+        }
+    }
+}
+
 fn open_regular(parent: &Dir, name: &str, location: &Path) -> Result<File> {
     symlink_check(parent, name, location, false)?;
     let mut options = OpenOptions::new();
@@ -383,12 +398,22 @@ impl SecureLocalStore {
             .mutations
             .lock()
             .map_err(|_| generic("Local mutation lock poisoned"))?;
-        let (parent, name) = self.parent(location, false)?;
-        symlink_check(&parent, &name, location, false)?;
+        let mut folders = segments(location)?;
+        let name = folders.pop().ok_or_else(|| denied(location))?;
+        let mut chain = Vec::with_capacity(folders.len() + 1);
+        let mut parent = self.root.as_ref().clone();
+        for folder in &folders {
+            let child = open_child(&parent, folder, location, false)?;
+            chain.push(std::mem::replace(&mut parent, child));
+        }
+        symlink_check(&parent, name, location, false)?;
         // unlink never follows the final component if another process swaps it.
         parent
-            .remove_file(&name)
-            .map_err(|source| error(location, source))
+            .remove_file(name)
+            .map_err(|source| error(location, source))?;
+        chain.push(parent);
+        prune_empty_folders(chain, &folders);
+        Ok(())
     }
 
     fn stage(&self, location: &Path) -> Result<Stage> {
@@ -803,7 +828,15 @@ impl ObjectStore for SecureLocalStore {
         }
         let store = self.clone();
         let location = location.clone();
-        let stage = blocking(move || store.stage(&location)).await?;
+        let stage = blocking(move || {
+            // A delete prunes empty folders, so staging into one waits for it like a put does.
+            let _guard = store
+                .mutations
+                .lock()
+                .map_err(|_| generic("Local mutation lock poisoned"))?;
+            store.stage(&location)
+        })
+        .await?;
         Ok(Box::new(Upload {
             store: self.clone(),
             state: Arc::new(Mutex::new(UploadState {

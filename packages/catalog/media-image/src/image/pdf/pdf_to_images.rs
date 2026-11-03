@@ -1,5 +1,5 @@
 #[cfg(feature = "execute")]
-use crate::image::pdf::{load_pdf_from_flowpath, render_page, validate_scale};
+use crate::image::pdf::{PageBackground, RenderOptions, render_pages};
 use flow_like::flow::execution::context::ExecutionContext;
 use flow_like::flow::node::{Node, NodeLogic};
 use flow_like::flow::pin::{PinOptions, ValueType};
@@ -7,8 +7,6 @@ use flow_like::flow::variable::VariableType;
 use flow_like_catalog_core::FlowPath;
 use flow_like_catalog_core::NodeImage;
 use flow_like_types::{async_trait, json::json};
-#[cfg(feature = "execute")]
-use hayro::RenderCache;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -109,22 +107,18 @@ async fn render_pdf_pages(
     context: &mut ExecutionContext,
     pdf_path: &FlowPath,
     scale: f32,
-    bg_color_hex: &str,
+    bg_color: &str,
 ) -> flow_like_types::Result<Vec<NodeImage>> {
-    validate_scale(scale)?;
-    let pdf = load_pdf_from_flowpath(context, pdf_path).await?;
-    // RenderCache is !Send, so it must be dropped before the next await.
-    let rendered = {
-        let cache = RenderCache::new();
-        pdf.pages()
-            .iter()
-            .map(|page| render_page(page, &cache, scale, bg_color_hex))
-            .collect::<flow_like_types::Result<Vec<_>>>()?
+    let options = RenderOptions {
+        scale,
+        background: PageBackground::from_name(bg_color),
+        max_pixels: None,
     };
+    let rendered = render_pages(pdf_path.get(context, false).await?, None, &options)?;
 
     let mut images = Vec::with_capacity(rendered.len());
-    for image in rendered {
-        images.push(NodeImage::new(context, image).await);
+    for page in rendered {
+        images.push(NodeImage::new(context, page.image).await);
     }
 
     Ok(images)

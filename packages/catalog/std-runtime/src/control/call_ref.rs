@@ -81,20 +81,13 @@ impl NodeLogic for CallReferenceNode {
 
         let node_ref = reference_function.node.clone();
 
-        // Look up the function's layer for proper variable isolation and override handling
         let board = context.get_board().await?;
         let layer_id = {
             let guard = reference_function.node.lock().await;
             guard.layer.clone()
         };
-        let function_variables = layer_id
-            .as_ref()
-            .and_then(|id| board.layers.get(id))
-            .map(|layer| layer.variables.clone())
-            .unwrap_or_default();
-
         let mut sub_context = context
-            .create_function_context(reference_function, &function_variables)
+            .create_reference_context(reference_function, &board)
             .await;
         sub_context.delegated = true;
 

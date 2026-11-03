@@ -66,7 +66,12 @@ import {
 	mergeAttachments,
 	resolveForwardFiles,
 } from "../../lib/forwarded-attachments";
-import { resolveFrontendToolApprovalScope } from "../../lib/frontend-tool-approval-scope";
+import {
+	type ApprovalOwner,
+	StandingApprovals,
+	grantStoreOf,
+	resolveFrontendToolApprovalScope,
+} from "../../lib/frontend-tool-approval-scope";
 import {
 	inspectLiveAppPage,
 	interactWithAppPage,
@@ -74,6 +79,7 @@ import {
 } from "../../lib/interact-app-page";
 import type { IChannelHandle } from "../../lib/schema/channel";
 import type { BoardEditJob, FlowIrCommitToken } from "../../lib/schema/copilot";
+import { grantKeys, grantScopes } from "../../lib/tool-grant-scopes";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { findUndeclaredWidgetActions } from "../../lib/widget-actions";
 import type {
@@ -96,12 +102,17 @@ import {
 	readUsageStat,
 } from "../../state/global-chat/copilot-stream-steps";
 import {
+	conversationBotId,
+	currentConversationId,
+} from "../../state/global-chat/global-chat-bots";
+import {
 	type GlobalChatAgentSelection,
 	type GlobalToolAsk,
 	type GlobalToolPrompt,
 	type GlobalToolPromptResolution,
 	SUB_STEP_PREFIX,
 	getGlobalChatTurnSelection,
+	selectAutoMode,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import { registerGlobalChatToolExecutor } from "../../state/global-chat/global-chat-tool-registry";
@@ -116,6 +127,7 @@ import type {
 	SurfaceComponent,
 } from "../a2ui/types";
 import { buildWorkflowFrontendContext } from "../a2ui/workflow-payload";
+import { BOTS_ROUTE } from "../bots-tab/dock-selection";
 import {
 	BoardEditRecoveryStore,
 	BoardZeroProgressRetryGuard,
@@ -729,7 +741,7 @@ function createRunScope(runId: string | undefined): RunScope {
 
 /** Top-level routes that actually exist in the desktop app. */
 const KNOWN_ROUTE_PREFIXES = [
-	"/chat",
+	BOTS_ROUTE,
 	"/flow",
 	"/learn",
 	"/library",
@@ -1323,9 +1335,37 @@ function extractNestedFlowScriptValidationEvidence(
 	};
 }
 
+/** The run that asks and its chat; together they decide whose standing approvals apply. */
+interface AskingChat {
+	runId?: string;
+	conversationId?: string;
+}
+
+/** The asking chat's bot, `null` for a Flux chat; unknown without a chat, which waives nothing. */
+function approvalOwner({ conversationId }: AskingChat): ApprovalOwner {
+	return conversationId === undefined
+		? undefined
+		: conversationBotId(conversationId);
+}
+
+// A run's chat, kept past the run's end: a board review it left behind still belongs to its owner.
+const conversationByRun = new Map<string, string>();
+const MAX_RUN_CONVERSATIONS = 256;
+
+function rememberRunConversation(runId: string, conversationId: string) {
+	conversationByRun.delete(runId);
+	conversationByRun.set(runId, conversationId);
+	while (conversationByRun.size > MAX_RUN_CONVERSATIONS) {
+		const oldest = conversationByRun.keys().next().value;
+		if (typeof oldest !== "string") break;
+		conversationByRun.delete(oldest);
+	}
+}
+
 function promptForDialog(
 	dialog: DialogState,
 	respond: (value: GlobalToolPromptResolution, promptId?: string) => void,
+	asking: AskingChat,
 ) {
 	const request = dialog.request;
 	// Unique per prompt INSTANCE (one request can spawn several prompts, e.g. tool approval
@@ -1338,6 +1378,7 @@ function promptForDialog(
 		return {
 			id: promptId,
 			kind: "ask" as const,
+			...asking,
 			toolName: request.toolName,
 			title: i18next.t("flowpilotNeedsInput", "FlowPilot needs input"),
 			// A lone question reads best as the card's own subtitle; a batched intake form labels
@@ -1364,11 +1405,15 @@ function promptForDialog(
 		approvalSessionKey: request.approval?.sessionKey,
 		contextAppId: request.context?.appId || request.context?.app_id,
 	});
+	const rememberable =
+		approvalScope.rememberable && asking.conversationId !== undefined;
 	return {
 		id: promptId,
 		kind: "approval" as const,
+		...asking,
 		destructive: dialog.override?.destructive ?? false,
-		rememberable: approvalScope.rememberable,
+		rememberable,
+		rememberAppId: rememberable ? approvalScope.appId : undefined,
 		toolName: request.toolName,
 		title:
 			dialog.override?.title ||
@@ -1438,6 +1483,7 @@ export function GlobalToolBridge() {
 	const openOverlayIfAllowed = useGlobalChatStore(
 		(s) => s.openOverlayIfAllowed,
 	);
+	const requestReveal = useGlobalChatStore((s) => s.requestReveal);
 	const addInlineAppChat = useGlobalChatStore((s) => s.addInlineAppChat);
 	const setToolPrompt = useGlobalChatStore((s) => s.setToolPrompt);
 
@@ -1461,18 +1507,19 @@ export function GlobalToolBridge() {
 		router.push(target);
 		// Dock the conversation alongside the destination view so the user keeps chatting there.
 		// Deferred to the navigation moment (not fired when the tool ran) so the dock never pops
-		// open over the full /chat page mid-stream — /chat renders the conversation itself.
-		if (!target.startsWith("/chat")) openOverlayIfAllowed();
+		// open over the Bots tab mid-stream — its own dock renders the conversation.
+		if (!target.startsWith(BOTS_ROUTE)) openOverlayIfAllowed();
 	}, [navigationBlocked, pendingNavigation, router, openOverlayIfAllowed]);
 
-	// The full /chat page already renders the conversation — only dock the overlay elsewhere.
+	// The Bots tab's dock follows requestReveal; everywhere else the overlay shows the conversation.
 	const pathnameRef = useRef(pathname);
 	useEffect(() => {
 		pathnameRef.current = pathname;
 	}, [pathname]);
 	const showConversation = useCallback(() => {
-		if (pathnameRef.current !== "/chat") openOverlayIfAllowed();
-	}, [openOverlayIfAllowed]);
+		if (pathnameRef.current === BOTS_ROUTE) requestReveal();
+		else openOverlayIfAllowed();
+	}, [openOverlayIfAllowed, requestReveal]);
 	const resolverRef = useRef<{
 		request: FrontendToolRequest;
 		promptId: string;
@@ -1487,7 +1534,14 @@ export function GlobalToolBridge() {
 			resolve: (value: GlobalToolPromptResolution) => void;
 		}>
 	>([]);
-	const approvedKeysRef = useRef<Set<string>>(new Set());
+	// "Don't ask again" per owner: one bot's (or Flux's) answer never waives another's calls.
+	const botStateRef = useRef(backend.botState);
+	botStateRef.current = backend.botState;
+	const standingApprovalsRef = useRef(
+		new StandingApprovals(() => grantStoreOf(botStateRef.current)),
+	);
+	// Board reviews already approved, by job and action: one review never asks twice.
+	const approvedBoardReviewsRef = useRef<Set<string>>(new Set());
 	const requestExecutionFenceRef = useRef(
 		new FrontendRequestExecutionFence<FrontendToolRequest>(),
 	);
@@ -1616,6 +1670,31 @@ export function GlobalToolBridge() {
 		},
 		[],
 	);
+	/**
+	 * The run that asks and its chat, which decide whose auto mode and standing approvals apply.
+	 * Only a run the request (or its parent) names counts — never the chat on screen or a lone live
+	 * run, which could lend one bot's waiver to another.
+	 */
+	const askingChat = useCallback((request: FrontendToolRequest): AskingChat => {
+		const parentId = parentRequestId(request);
+		const runId =
+			request.context?.runId ??
+			request.context?.run_id ??
+			(parentId ? requestOwnerMessageIdsRef.current.get(parentId) : undefined);
+		const conversationId =
+			(runId
+				? (useGlobalChatStore.getState().runs[runId]?.conversationId ??
+					conversationByRun.get(runId))
+				: undefined) ??
+			request.context?.conversationId ??
+			request.context?.conversation_id;
+		return {
+			runId,
+			conversationId: conversationId
+				? currentConversationId(conversationId)
+				: undefined,
+		};
+	}, []);
 	const recordRequestDebug = useCallback(
 		(
 			request: FrontendToolRequest,
@@ -1735,7 +1814,11 @@ export function GlobalToolBridge() {
 			}
 			const next = dialogQueueRef.current.shift();
 			if (next) {
-				const prompt = promptForDialog(next.dialog, resolveDialogRef.current);
+				const prompt = promptForDialog(
+					next.dialog,
+					resolveDialogRef.current,
+					askingChat(next.dialog.request),
+				);
 				resolverRef.current = {
 					request: next.dialog.request,
 					promptId: prompt.id,
@@ -1755,7 +1838,7 @@ export function GlobalToolBridge() {
 				setToolPrompt(null);
 			}
 		},
-		[recordRequestDebug, setToolPrompt],
+		[askingChat, recordRequestDebug, setToolPrompt],
 	);
 	const resolveDialogRef = useRef(resolveDialog);
 	useEffect(() => {
@@ -1777,7 +1860,11 @@ export function GlobalToolBridge() {
 					});
 					return;
 				}
-				const prompt = promptForDialog(next, resolveDialogRef.current);
+				const prompt = promptForDialog(
+					next,
+					resolveDialogRef.current,
+					askingChat(next.request),
+				);
 				resolverRef.current = {
 					request: next.request,
 					promptId: prompt.id,
@@ -1797,7 +1884,7 @@ export function GlobalToolBridge() {
 				// The prompt lives inside the chat surface — make sure one is visible.
 				showConversation();
 			}),
-		[recordRequestDebug, setToolPrompt, showConversation],
+		[askingChat, recordRequestDebug, setToolPrompt, showConversation],
 	);
 
 	// Native jobs outlive any one renderer request. Versioned presentation state prevents duplicate
@@ -1890,8 +1977,16 @@ export function GlobalToolBridge() {
 	const boardReviewApprovalPromisesRef = useRef(
 		new Map<string, Promise<GlobalToolPromptResolution>>(),
 	);
+	/**
+	 * `askingRunId` is the run that asks now (a review tool call); without it the job's own run
+	 * asks. Either way that run's owner decides what is waived.
+	 */
 	const approveBoardEditJob = useCallback(
-		(job: BoardEditJob, action: "apply" | "dismiss" = "apply") => {
+		(
+			job: BoardEditJob,
+			action: "apply" | "dismiss" = "apply",
+			askingRunId?: string,
+		) => {
 			const key = `${job.jobId}:${action}`;
 			const existing = boardReviewApprovalPromisesRef.current.get(key);
 			if (existing) return existing;
@@ -1927,7 +2022,16 @@ export function GlobalToolBridge() {
 						description: job.approval.description,
 						sessionKey: job.approval.sessionKey,
 					},
+					context: {
+						runId:
+							askingRunId ??
+							(job.requestId
+								? requestOwnerMessageIdsRef.current.get(job.requestId)
+								: undefined),
+					},
 				};
+				const asking = askingChat(syntheticRequest);
+				const owner = approvalOwner(asking);
 				const approvalSessionKey =
 					action === "apply"
 						? job.approval.sessionKey ||
@@ -1941,9 +2045,12 @@ export function GlobalToolBridge() {
 					(job.approval.kind === "mutating" ||
 						job.approval.kind === "execute" ||
 						destructive) &&
-					!useGlobalChatStore.getState().autoMode &&
-					!approvedKeysRef.current.has(exactApprovalKey) &&
-					!approvedKeysRef.current.has(approvalSessionKey);
+					!selectAutoMode(
+						useGlobalChatStore.getState(),
+						asking.conversationId,
+					) &&
+					!approvedBoardReviewsRef.current.has(exactApprovalKey) &&
+					!standingApprovalsRef.current.has(owner, approvalSessionKey);
 				const resolution = !needsApproval
 					? { approved: true, remember: false }
 					: await openDialog({
@@ -1972,9 +2079,9 @@ export function GlobalToolBridge() {
 							},
 						});
 				if (resolution && "approved" in resolution && resolution.approved) {
-					approvedKeysRef.current.add(exactApprovalKey);
+					approvedBoardReviewsRef.current.add(exactApprovalKey);
 					if (resolution.remember)
-						approvedKeysRef.current.add(approvalSessionKey);
+						standingApprovalsRef.current.add(owner, approvalSessionKey);
 				}
 				return resolution;
 			})();
@@ -1986,7 +2093,7 @@ export function GlobalToolBridge() {
 			});
 			return promise;
 		},
-		[openDialog],
+		[askingChat, openDialog],
 	);
 	const presentBoardEditJob = useCallback(
 		async (job: BoardEditJob) => {
@@ -2226,7 +2333,11 @@ export function GlobalToolBridge() {
 			if (!resolverRef.current) {
 				const next = dialogQueueRef.current.shift();
 				if (next) {
-					const prompt = promptForDialog(next.dialog, resolveDialogRef.current);
+					const prompt = promptForDialog(
+						next.dialog,
+						resolveDialogRef.current,
+						askingChat(next.dialog.request),
+					);
 					resolverRef.current = {
 						request: next.dialog.request,
 						promptId: prompt.id,
@@ -2248,7 +2359,7 @@ export function GlobalToolBridge() {
 				}
 			}
 		},
-		[recordRequestDebug, setToolPrompt],
+		[askingChat, recordRequestDebug, setToolPrompt],
 	);
 
 	const assertHomeProfile = useCallback(
@@ -4683,7 +4794,11 @@ export function GlobalToolBridge() {
 						getActiveRun: (appId, boardId) =>
 							flowPilotBoardActivity.snapshot(appId, boardId),
 						approve: async (job, action) => {
-							const answer = await approveBoardEditJob(job, action);
+							const answer = await approveBoardEditJob(
+								job,
+								action,
+								askingChat(request).runId,
+							);
 							return answer && "approved" in answer ? answer.approved : null;
 						},
 						onJob: (job) => {
@@ -5625,7 +5740,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 								const destructive =
 									job.review.replacementMode ||
 									job.review.destructiveEffects.length > 0;
-								if (useGlobalChatStore.getState().autoMode) {
+								if (
+									selectAutoMode(
+										useGlobalChatStore.getState(),
+										askingChat(request).conversationId,
+									)
+								) {
 									boardActivity?.update({
 										stage: "applying",
 										commit_state: "applying",
@@ -7821,6 +7941,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 			recordNestedDebug,
 			settleNestedSpecialist,
 			recordSettledGenerationReceipt,
+			askingChat,
 			assertHomeProfile,
 			assertRequestActive,
 			isRequestExpired,
@@ -7930,21 +8051,43 @@ Completion contract: build complete helper logic first and add the Event entry l
 					contextAppId: request.context?.appId || request.context?.app_id,
 				});
 				const sessionKey = approvalScope.sessionKey;
-				// Read through getState() rather than a selector so `execute` keeps a stable
-				// identity. Auto mode is a frontend waiver only: the approval kind sent by the
-				// backend is untouched, so ordered execution of mutating tools still holds.
+				// Waivers belong to the run that asks: its bot's auto mode and "don't ask again", or
+				// Flux's for a Flux chat. Read through getState() rather than a selector so `execute`
+				// keeps a stable identity. Auto mode is a frontend waiver only: the approval kind sent
+				// by the backend is untouched, so ordered execution of mutating tools still holds.
+				const asking = askingChat(request);
+				const owner = approvalOwner(asking);
 				const needsApproval =
-					!useGlobalChatStore.getState().autoMode &&
+					!selectAutoMode(
+						useGlobalChatStore.getState(),
+						asking.conversationId,
+					) &&
 					(approval?.kind === "mutating" || approval?.kind === "execute") &&
 					!shouldSkipUnavailableCreateTableApproval(
 						request.toolName,
 						request.arguments,
 					);
 
+				let remembered = false;
+				const contextAppId = request.context?.appId || request.context?.app_id;
+				const requestGrants = approvalScope.rememberable
+					? grantKeys(request.toolName, request.arguments, contextAppId)
+					: [];
 				if (
 					needsApproval &&
 					(!approvalScope.rememberable ||
-						!approvedKeysRef.current.has(sessionKey))
+						!(
+							standingApprovalsRef.current.has(owner, sessionKey) ||
+							(await standingApprovalsRef.current.coveredByGrant(
+								owner,
+								request.toolName,
+								grantScopes(
+									request.toolName,
+									request.arguments,
+									contextAppId,
+								) ?? [],
+							))
+						))
 				) {
 					const outcome = await openDialog({ type: "approval", request });
 					assertRequestActive(request, "approval response");
@@ -7956,7 +8099,15 @@ Completion contract: build complete helper logic first and add the Event entry l
 						};
 					}
 					if (outcome.remember && approvalScope.rememberable) {
-						approvedKeysRef.current.add(sessionKey);
+						remembered = requestGrants.length > 0;
+						await standingApprovalsRef.current
+							.remember(owner, sessionKey, requestGrants)
+							.catch((error) =>
+								console.warn(
+									`Saving the standing approval for ${request.toolName} failed`,
+									error,
+								),
+							);
 					}
 				}
 
@@ -7966,7 +8117,11 @@ Completion contract: build complete helper logic first and add the Event entry l
 					return {
 						requestId: request.requestId,
 						approved: true,
-						result: { status: "ok", native_approved: true },
+						result: {
+							status: "ok",
+							native_approved: true,
+							...(remembered ? { native_remember: true } : {}),
+						},
 					};
 				}
 				const result = await runTool(request, scope);
@@ -7990,6 +8145,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 			}
 		},
 		[
+			askingChat,
 			assertHomeProfile,
 			assertRequestActive,
 			openDialog,
@@ -8003,6 +8159,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 			const ownerMessageId = ownerMessageIdForRequest(request);
 			if (ownerMessageId) {
 				rememberRequestOwner(request.requestId, ownerMessageId);
+			}
+			const asking = askingChat(request);
+			if (asking.runId && asking.conversationId) {
+				rememberRunConversation(asking.runId, asking.conversationId);
 			}
 			// Resolved once, here, and threaded down: every store write this tool performs is
 			// addressed to the run that asked for it.
@@ -8248,6 +8408,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 			return response;
 		},
 		[
+			askingChat,
 			backend.boardState,
 			cancelRequestDialogs,
 			execute,
@@ -8276,10 +8437,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 		let stop: (() => void) | undefined;
 		void listenInCurrentWindow("flowpilot://native-tool-completed", () => {
 			void queryClient.invalidateQueries();
-		}).then((unlisten) => {
-			if (disposed) unlisten();
-			else stop = unlisten;
-		}).catch(() => {});
+		})
+			.then((unlisten) => {
+				if (disposed) unlisten();
+				else stop = unlisten;
+			})
+			.catch(() => {});
 		return () => {
 			disposed = true;
 			stop?.();

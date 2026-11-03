@@ -281,6 +281,7 @@ impl Policy {
                                 | "teams/members"
                                 | "mail/send"
                                 | "mail/reply"
+                                | "bots/ask"
                                 | "locked/list"
                                 | "locked/get"
                                 | "locked/upload"

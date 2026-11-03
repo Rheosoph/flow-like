@@ -47,16 +47,18 @@ use axum::{
 };
 use flow_like::bit::BitTypes;
 use flow_like::copilot::{ChatImage, CopilotScope, UnifiedCopilotResponse, flowpilot_thinking};
-use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryStatus};
+use flow_like::flow::copilot::memory::{AssistantMemory, MemoryEntry, MemoryScope, MemoryStatus};
 use flow_like::flow::copilot::platform::{PlatformToolBridge, run_internet_search};
 use flow_like::flow::copilot::tool_spec::{
-    HTTP_REQUEST_TOOL, INTERNET_SEARCH_TOOL, PlatformToolSpec, find_data_studio_tool_spec,
-    find_global_tool_spec, find_home_tool_spec_for_access, find_scout_tool_spec,
-    missing_required_args, resolve_tool_approval,
+    HTTP_REQUEST_TOOL, INTERNET_SEARCH_TOOL, PlatformToolSpec, ResolvedToolApproval,
+    find_data_studio_tool_spec, find_global_tool_spec, find_home_tool_spec_for_access,
+    find_scout_tool_spec, missing_required_args, resolve_tool_approval,
 };
 use flow_like::flow::copilot::{
-    AttachmentManifestEntry, ChatMessage, GlobalDataStudioContext, GlobalOpenBoardContext,
-    PlatformContextInput, PlatformSpecialist, build_platform_context, run_platform_chat,
+    AttachmentManifestEntry, BotToolset, ChatMessage, GlobalDataStudioContext,
+    GlobalOpenBoardContext, PlatformContextInput, PlatformSpecialist, bot_platform_context,
+    build_platform_context, find_bot_tool_spec, run_bot_chat_with_talk, run_platform_chat,
+    bot_talk::BotTalk,
 };
 use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
@@ -204,6 +206,16 @@ pub struct GlobalChatRequest {
     /// Reported back in the response's `active_scope`. Defaults to `Board`.
     #[serde(default)]
     pub scope: CopilotScope,
+    /// The bot that answers: one of your bots' ids, `general` for Assistant or `flux` for Flux.
+    /// Omit it for FlowPilot as it is without Flux's edits. A bot answers with its own persona,
+    /// memory and model, with only the tools its capabilities switch on (Flux: FlowPilot's
+    /// complete toolset); another person's bot or an unknown id is refused with 404.
+    #[serde(default)]
+    pub bot_id: Option<String>,
+    /// With `bot_id`: the message this chat wrote to the bot's inbox. The reply is stored there
+    /// as the bot, and the bot's memory reads and extends that conversation.
+    #[serde(default)]
+    pub interactive: Option<crate::bot_host::interactive::InteractiveRef>,
 }
 
 /// A browser-executed tool result: the `value` of the reply pushed into the run's channel. Same
@@ -517,6 +529,10 @@ pub(crate) struct ServerPlatformBridge {
     /// the tool specs approval/timeouts are read from.
     specialist: Option<PlatformSpecialist>,
     read_only: bool,
+    /// Set when the root turn is a bot run: its tools resolve from the bot tool specs.
+    bot: bool,
+    /// The bot tools this server runs for the turn (in the API or on the executor).
+    bot_tools: Option<Arc<crate::bot_tools::BotToolsHost>>,
 }
 
 impl ServerPlatformBridge {
@@ -530,6 +546,19 @@ impl ServerPlatformBridge {
             frames,
             specialist: None,
             read_only: false,
+            bot: false,
+            bot_tools: None,
+        }
+    }
+
+    /// Bridge for a bot's root turn. Core has already checked each call against the bot's limits.
+    pub(crate) fn bot(
+        channel: Arc<dyn Channel>,
+        frames: mpsc::UnboundedSender<GlobalChatFrame>,
+    ) -> Self {
+        Self {
+            bot: true,
+            ..Self::orchestrator(channel, frames)
         }
     }
 
@@ -544,7 +573,17 @@ impl ServerPlatformBridge {
             frames,
             specialist: Some(specialist),
             read_only: false,
+            bot: false,
+            bot_tools: None,
         }
+    }
+
+    pub(crate) fn with_bot_tools(
+        mut self,
+        bot_tools: Option<Arc<crate::bot_tools::BotToolsHost>>,
+    ) -> Self {
+        self.bot_tools = bot_tools;
+        self
     }
 
     pub(crate) fn with_read_only(mut self, read_only: bool) -> Self {
@@ -552,7 +591,78 @@ impl ServerPlatformBridge {
         self
     }
 
+    /// Asks the browser that holds the chat for consent and runs nothing there: the server
+    /// runs the tool itself once the browser acknowledges. `Ok(true)` means the owner chose
+    /// "don't ask again" (`result.native_remember`). `Err` is the model's answer when the owner
+    /// declines or no answer arrives.
+    async fn confirm_in_browser(
+        &self,
+        tool_name: &str,
+        arguments: &Value,
+        approval: &ResolvedToolApproval,
+        timeout_secs: u64,
+    ) -> Result<bool, String> {
+        let ticket = self
+            .channel
+            .open(Duration::from_secs(timeout_secs))
+            .await
+            .map_err(|error| {
+                tracing::warn!(%error, tool_name, "[global_chat] failed to register approval request");
+                tool_error(tool_name, "Failed to register the approval request.")
+            })?;
+        let request = json!({
+            "requestId": ticket.request_id,
+            "toolName": tool_name,
+            "arguments": arguments,
+            "approval": approval,
+            "approvalOnly": true,
+            "channel": ticket.handle,
+        });
+        if self
+            .frames
+            .send(GlobalChatFrame::ToolRequest(request))
+            .is_err()
+        {
+            self.channel.abandon(&ticket).await;
+            return Err(tool_error(
+                tool_name,
+                "The FlowPilot stream is no longer connected.",
+            ));
+        }
+        match self.channel.wait(&ticket, None).await {
+            Ok(ChannelOutcome::Responded(value)) => {
+                match serde_json::from_value::<ToolResultBody>(value) {
+                    Ok(response) => acknowledged_approval(tool_name, response),
+                    Err(_) => Err(tool_error(
+                        tool_name,
+                        "The FlowPilot approval response was malformed.",
+                    )),
+                }
+            }
+            Ok(ChannelOutcome::Expired) => Err(json!({
+                "status": "timeout",
+                "tool": tool_name,
+                "message": "Timed out waiting for the owner's approval."
+            })
+            .to_string()),
+            Ok(ChannelOutcome::Cancelled) | Ok(ChannelOutcome::Closed) => Err(tool_error(
+                tool_name,
+                "The FlowPilot run ended before the owner answered.",
+            )),
+            Err(error) => {
+                tracing::warn!(%error, tool_name, "[global_chat] approval wait failed");
+                Err(tool_error(
+                    tool_name,
+                    "The FlowPilot approval channel failed.",
+                ))
+            }
+        }
+    }
+
     fn tool_spec(&self, tool_name: &str) -> Option<PlatformToolSpec> {
+        if self.bot {
+            return find_bot_tool_spec(tool_name);
+        }
         server_platform_tool_spec(self.specialist, tool_name, self.read_only)
     }
 }
@@ -721,6 +831,52 @@ mod specialist_tool_spec_tests {
     }
 
     #[flow_like_types::tokio::test]
+    async fn bot_bridge_resolves_bot_tools_and_never_flux_tools() {
+        let channel = flow_like_types::channel::InProcessChannel::register(
+            "bot-bridge-test",
+            Duration::from_secs(30),
+        )
+        .await;
+        let (frames, mut received) = mpsc::unbounded_channel();
+        let bridge = ServerPlatformBridge::bot(channel.clone(), frames);
+        for tool_name in [
+            "list_apps",
+            "call_app_chat",
+            "get_app_detail",
+            "database_tool",
+            "graph_query_tool",
+            "storage_tool",
+        ] {
+            assert!(bridge.tool_spec(tool_name).is_some(), "{tool_name}");
+        }
+        let database_spec = bridge.tool_spec("database_tool").unwrap();
+        let insert = json!({ "operation": "insert", "app_id": "app" });
+        assert_eq!(resolve_tool_approval(&database_spec, &insert).kind, "none");
+        let drop_table = json!({ "operation": "delete_table", "app_id": "app" });
+        assert_ne!(resolve_tool_approval(&database_spec, &drop_table).kind, "none");
+        for tool_name in [
+            "flowpilot_board",
+            "create_app",
+            "http_request",
+            "navigate_view",
+        ] {
+            let result = flow_like_types::tokio::time::timeout(
+                Duration::from_secs(1),
+                bridge.call(tool_name, json!({})),
+            )
+            .await
+            .expect("Flux tools must not open a pending request");
+            let result: Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(result["code"], "platform_tool_not_advertised");
+        }
+        assert!(matches!(
+            received.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+        channel.close().await;
+    }
+
+    #[flow_like_types::tokio::test]
     async fn home_read_only_bridge_rejects_apply_without_emitting_a_request() {
         let channel = flow_like_types::channel::InProcessChannel::register(
             "home-read-only-bridge-test",
@@ -845,6 +1001,26 @@ impl PlatformToolBridge for ServerPlatformBridge {
                 .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string());
         }
 
+        if self.bot
+            && let Some(bot_tools) = self
+                .bot_tools
+                .as_ref()
+                .filter(|host| host.handles(tool_name))
+        {
+            let approval = resolve_tool_approval(&spec, &arguments);
+            if approval.kind != "none" && !bot_tools.covers(tool_name, &arguments).await {
+                match self
+                    .confirm_in_browser(tool_name, &arguments, &approval, spec.timeout_secs)
+                    .await
+                {
+                    Ok(true) => bot_tools.remember(tool_name, &arguments).await,
+                    Ok(false) => {}
+                    Err(output) => return output,
+                }
+            }
+            return bot_tools.run(tool_name, arguments).await;
+        }
+
         let approval = resolve_tool_approval(&spec, &arguments);
         let timeout_secs = spec.timeout_secs;
 
@@ -906,6 +1082,33 @@ impl PlatformToolBridge for ServerPlatformBridge {
                 tool_error(tool_name, "The FlowPilot tool channel failed.")
             }
         }
+    }
+}
+
+/// `Ok` only when the browser approved and acknowledged that it ran nothing.
+fn acknowledged_approval(tool_name: &str, response: ToolResultBody) -> Result<bool, String> {
+    if !response.approved || response.error.is_some() {
+        return Err(normalize_response(tool_name, response));
+    }
+    let acknowledged = response
+        .result
+        .as_ref()
+        .and_then(|result| result.get("native_approved"))
+        .and_then(Value::as_bool)
+        == Some(true);
+    if acknowledged {
+        let remember = response
+            .result
+            .as_ref()
+            .and_then(|result| result.get("native_remember"))
+            .and_then(Value::as_bool)
+            == Some(true);
+        Ok(remember)
+    } else {
+        Err(tool_error(
+            tool_name,
+            "The frontend did not acknowledge approval of this call.",
+        ))
     }
 }
 
@@ -1195,6 +1398,42 @@ pub(crate) async fn run_global_chat(
                     "No profile found for this user. A synced profile with model Bits is required to use FlowPilot in the browser.",
                 )
             })?;
+    let mut bot =
+        crate::routes::bots::runtime::chat_bot(&state, &sub, payload.bot_id.as_deref(), &profile)
+            .await?;
+    let interactive_turn = match (&bot, &payload.interactive) {
+        (Some(bot), Some(reference)) => {
+            crate::bot_host::interactive::InteractiveTurn::find(
+                &state,
+                &sub,
+                &bot.context.bot_id,
+                reference,
+            )
+            .await?
+        }
+        _ => None,
+    };
+    // A bot runs on its own model when the server can run it, else on the chat's selection.
+    if let Some(bot) = &bot {
+        let flow_like_state = master_flow_like_state(&state).await?;
+        if let Some(model_id) = crate::routes::bots::runtime::server_bot_model(
+            &state,
+            &sub,
+            &flow_like_state,
+            &profile,
+            &bot.model,
+        )
+        .await
+        {
+            payload.model_id = Some(model_id);
+        }
+        // Memory only with `memory` (FlowPilot bots always), on the bot's own embedding model
+        // when it has one.
+        payload.embedding_model_id = bot
+            .context
+            .memory_model(payload.embedding_model_id.as_deref())
+            .map(str::to_string);
+    }
     if let Some(rejection) = model_access.rejection(payload.model_id.as_deref()) {
         return Err(rejection);
     }
@@ -1292,19 +1531,50 @@ pub(crate) async fn run_global_chat(
     let usage_started = std::time::Instant::now();
     let run_id = next_run_id();
 
+    let hold = interactive_turn
+        .as_ref()
+        .map(|interactive| interactive.hold(&state));
+    let memory_turn = match (&mut bot, &interactive_turn) {
+        (Some(bot), Some(interactive)) => {
+            let wrote = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let opened = crate::bot_host::memory::open_turn(
+                &state,
+                &flow_like_state,
+                &profile,
+                &bot.context,
+                &selected_model,
+                &interactive.turn,
+                &token,
+                &wrote,
+            )
+            .await;
+            if let Some(opened) = &opened {
+                bot.context.host_tools =
+                    opened.host_tools(std::mem::take(&mut bot.context.host_tools));
+            }
+            opened
+        }
+        _ => None,
+    };
+
     // Profile-scoped semantic memory, enabled only when the client selected an embedding model.
     // User-scoped by `sub` so tenants never share a namespace. Failures degrade to no memory.
-    let memory = match payload.embedding_model_id.as_deref() {
+    let memory = match payload.embedding_model_id.as_deref().filter(|_| memory_turn.is_none()) {
         Some(embedding_id) if !embedding_id.trim().is_empty() => {
             match profile
                 .find_bit(embedding_id, flow_like_state.http_client.clone())
                 .await
             {
                 Ok(bit) => {
+                    // A bot keeps its own memory; FlowPilot (and Flux, for now) the profile's.
+                    let memory_scope = match &bot {
+                        Some(bot) => bot.context.memory_scope(&profile.id),
+                        None => MemoryScope::Profile(profile.id.clone()),
+                    };
                     match AssistantMemory::open(
                         flow_like_state.clone(),
                         Some(&sub),
-                        &profile.id,
+                        &memory_scope,
                         &bit,
                         token.clone(),
                         Some(ModelUsageContext {
@@ -1332,14 +1602,26 @@ pub(crate) async fn run_global_chat(
     };
 
     let attachments_manifest = payload.attachments_manifest.clone().unwrap_or_default();
-    let context = build_platform_context(PlatformContextInput {
+    let context_input = PlatformContextInput {
         user_context: payload.user_context.as_deref(),
         active_profile: Some((profile.name.as_str(), profile.id.as_str())),
         switchable_profiles: &[],
         open_board: payload.board_context.as_ref(),
         open_data_studio: payload.data_studio_context.as_ref(),
         attachments: &attachments_manifest,
-    });
+    };
+    let context = match &bot {
+        Some(bot) => bot_platform_context(&bot.context, context_input),
+        None => build_platform_context(context_input),
+    };
+    let context = match &memory_turn {
+        Some(opened) => format!("{context}\n\n{}", opened.context()),
+        None => context,
+    };
+    if let Some(opened) = &memory_turn {
+        payload.user_prompt = opened.prompt().to_string();
+        payload.history = opened.history();
+    }
 
     // Merge inline base64 images with any signed-URL attachments fetched server-side.
     let current_images = {
@@ -1354,10 +1636,28 @@ pub(crate) async fn run_global_chat(
 
     let channel = build_chat_channel(&state, &run_id, &sub).await?;
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<GlobalChatFrame>();
-    let bridge: Arc<dyn PlatformToolBridge> = Arc::new(ServerPlatformBridge::orchestrator(
-        channel.clone(),
-        frames_tx.clone(),
-    ));
+    let bridge: Arc<dyn PlatformToolBridge> = Arc::new(match &bot {
+        Some(bot) if bot.context.toolset == BotToolset::Capabilities => {
+            let bot_tools = crate::bot_tools::turn_host(
+                &state,
+                &sub,
+                &run_id,
+                &bot.context,
+                &profile,
+                &flow_like_state,
+                &selected_model,
+                token.clone(),
+                crate::routes::bots::tool_grants::rows_for_owner(
+                    &state,
+                    &bot.context.bot_id,
+                    &sub,
+                ),
+            )
+            .await;
+            ServerPlatformBridge::bot(channel.clone(), frames_tx.clone()).with_bot_tools(bot_tools)
+        }
+        _ => ServerPlatformBridge::orchestrator(channel.clone(), frames_tx.clone()),
+    });
 
     let token_frames = frames_tx.clone();
     let on_token = move |chunk: String| {
@@ -1367,25 +1667,61 @@ pub(crate) async fn run_global_chat(
     let (done_tx, mut done_rx) = oneshot::channel::<Result<UnifiedCopilotResponse, String>>();
     let channel_for_task = channel.clone();
 
+    let talk = bot.as_ref().map(|bot| {
+        let host = crate::bot_host::talk::ServerTalkHost::for_chat(state.clone(), &sub, &run_id);
+        Arc::new(BotTalk::for_run(
+            Arc::new(host),
+            &bot.context,
+            flow_like_types::bot::BotLocation::Server,
+        ))
+    });
     let usage_state = state.clone();
     flow_like_types::tokio::spawn(async move {
         let remaining = (usage.deadline - chrono::Utc::now())
             .num_milliseconds()
             .max(1) as u64;
-        let result = flow_like_types::tokio::time::timeout(Duration::from_millis(remaining), run_platform_chat(
-            flow_like_state,
-            Some(profile),
-            context,
-            payload.user_prompt,
-            current_images,
-            payload.history,
-            payload.model_id,
-            Some(flowpilot_thinking(payload.reasoning_effort.as_deref())),
-            token,
-            bridge,
-            memory,
-            Some(on_token),
-        )).await
+        let thinking = Some(flowpilot_thinking(payload.reasoning_effort.as_deref()));
+        let chat = async move {
+            match bot {
+                Some(bot) => {
+                    run_bot_chat_with_talk(
+                        flow_like_state,
+                        Some(profile),
+                        Arc::new(bot.context),
+                        context,
+                        payload.user_prompt,
+                        current_images,
+                        payload.history,
+                        payload.model_id,
+                        thinking,
+                        token,
+                        bridge,
+                        memory,
+                        Some(on_token),
+                        talk,
+                    )
+                    .await
+                }
+                None => {
+                    run_platform_chat(
+                        flow_like_state,
+                        Some(profile),
+                        context,
+                        payload.user_prompt,
+                        current_images,
+                        payload.history,
+                        payload.model_id,
+                        thinking,
+                        token,
+                        bridge,
+                        memory,
+                        Some(on_token),
+                    )
+                    .await
+                }
+            }
+        };
+        let result = flow_like_types::tokio::time::timeout(Duration::from_millis(remaining), chat).await
         .map_err(|_| "The cloud assistant reached its runtime allowance. You can continue locally in Studio or review your plan's usage.".to_owned())
         .and_then(|result| result.map_err(|error| error.to_string()))
         .map(|message| UnifiedCopilotResponse {
@@ -1410,6 +1746,22 @@ pub(crate) async fn run_global_chat(
         .await
         {
             tracing::error!(%error, operation_id = %usage.operation_id, "Assistant usage settlement remains pending");
+        }
+
+        if let Some(hold) = hold {
+            hold.abort();
+        }
+        if let Some(interactive) = &interactive_turn {
+            let (text, code) = match &result {
+                Ok(response) => (response.message.as_str(), None),
+                Err(error) => (error.as_str(), Some("BOT_TURN_INTERACTIVE_FAILED")),
+            };
+            if let Err(error) = interactive.store_reply(&usage_state, text, code).await {
+                tracing::error!(%error, turn_id = %interactive.turn.id, "Interactive chat: the reply was not stored");
+            }
+        }
+        if let (Ok(_), Some(opened)) = (&result, memory_turn) {
+            opened.finish();
         }
 
         // Close here (not in the SSE stream) so rows and transport connections never leak when the
@@ -1481,10 +1833,25 @@ pub(crate) async fn run_global_chat(
     Ok(<Sse<_> as axum::response::IntoResponse>::into_response(sse))
 }
 
-/// Query for the memory status/clear endpoints: which profile's memory to act on.
+/// Query for the memory endpoints: FlowPilot's memory of `profile_id`, or with `bot_id` the
+/// memory of one of the caller's bots (`general` for Assistant).
 #[derive(Debug, Deserialize)]
 pub struct MemoryQuery {
     pub profile_id: String,
+    #[serde(default)]
+    pub bot_id: Option<String>,
+}
+
+impl MemoryQuery {
+    async fn scope(&self, state: &AppState, sub: &str) -> Result<MemoryScope, ApiError> {
+        crate::routes::bots::runtime::memory_scope(
+            &state.db,
+            sub,
+            &self.profile_id,
+            self.bot_id.as_deref(),
+        )
+        .await
+    }
 }
 
 /// Stored-memory count + the embedding model that produced it, for the caller's user-scoped memory.
@@ -1496,36 +1863,40 @@ pub async fn global_chat_memory_status(
     Query(query): Query<MemoryQuery>,
 ) -> Result<Json<MemoryStatus>, ApiError> {
     let sub = user.sub()?;
+    let scope = query.scope(&state, &sub).await?;
     let flow_like_state = master_flow_like_state(&state).await?;
-    let status = AssistantMemory::status(flow_like_state, Some(&sub), &query.profile_id)
+    let status = AssistantMemory::status(flow_like_state, Some(&sub), &scope)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to read memory: {e}")))?;
     Ok(Json(status))
 }
 
-/// Drop the caller's memory table for a profile (used when the embedding model changes).
+/// Drop the caller's memory table for a profile or bot (used when the embedding model changes).
 pub async fn global_chat_clear_memory(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Query(query): Query<MemoryQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let sub = user.sub()?;
+    let scope = query.scope(&state, &sub).await?;
     let flow_like_state = master_flow_like_state(&state).await?;
-    AssistantMemory::clear(flow_like_state, Some(&sub), &query.profile_id)
+    AssistantMemory::clear(flow_like_state, Some(&sub), &scope)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to clear memory: {e}")))?;
     Ok(Json(json!({ "status": "ok" })))
 }
 
-/// List the caller's stored observations for a profile (newest first) for review/management.
+/// List the caller's stored observations for a profile or bot (newest first) for
+/// review/management.
 pub async fn global_chat_list_memories(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Query(query): Query<MemoryQuery>,
 ) -> Result<Json<Vec<MemoryEntry>>, ApiError> {
     let sub = user.sub()?;
+    let scope = query.scope(&state, &sub).await?;
     let flow_like_state = master_flow_like_state(&state).await?;
-    let entries = AssistantMemory::list(flow_like_state, Some(&sub), &query.profile_id)
+    let entries = AssistantMemory::list(flow_like_state, Some(&sub), &scope)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to list memories: {e}")))?;
     Ok(Json(entries))
@@ -1539,8 +1910,9 @@ pub async fn global_chat_delete_memory(
     Query(query): Query<MemoryQuery>,
 ) -> Result<Json<Value>, ApiError> {
     let sub = user.sub()?;
+    let scope = query.scope(&state, &sub).await?;
     let flow_like_state = master_flow_like_state(&state).await?;
-    AssistantMemory::delete_entry(flow_like_state, Some(&sub), &query.profile_id, &id)
+    AssistantMemory::delete_entry(flow_like_state, Some(&sub), &scope, &id)
         .await
         .map_err(|e| ApiError::internal(format!("Failed to delete memory: {e}")))?;
     Ok(Json(json!({ "status": "ok" })))

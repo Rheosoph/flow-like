@@ -12,6 +12,7 @@ import {
 	supportsCustomRequestParams,
 	withCustomRequestParams,
 } from "../../lib/bit/custom-request-params";
+import { isHostedImageGeneration } from "../../lib/bit/hosted-image-generation";
 import { isHostedLlmProviderName } from "../../lib/bit/local-model-filter";
 import { IBitTypes } from "../../lib/schema/bit/bit";
 import { useBackend } from "../../state/backend-state";
@@ -23,6 +24,7 @@ import { EditorField, EditorSection, StringList } from "./bit-editor-fields";
 import { record } from "./bit-editor-model";
 import { ForecastingConfiguration } from "./forecasting-configuration";
 import { HostedEmbeddingConfiguration } from "./hosted-embedding-configuration";
+import { HostedImageGenerationConfiguration } from "./hosted-image-generation-configuration";
 import { HostedPricing } from "./hosted-model-pricing";
 import { SystemOneConfiguration } from "./systemone-configuration";
 
@@ -451,6 +453,9 @@ export function BitParametersEditor({
 	);
 	const showHostedEmbedding =
 		scope === "admin" && bitType === IBitTypes.Embedding;
+	const showHostedImage =
+		scope === "admin" &&
+		isHostedImageGeneration({ type: bitType, parameters: params });
 	const providerName = record(params.provider).provider_name;
 	const provider = record(params.provider);
 	const providerParams = record(provider.params);
@@ -560,6 +565,12 @@ export function BitParametersEditor({
 								onChange={onChange}
 							/>
 						)}
+						{showHostedImage && (
+							<HostedImageGenerationConfiguration
+								parameters={params}
+								onChange={onChange}
+							/>
+						)}
 						{showPricing && (
 							<HostedPricing parameters={params} onChange={onChange} />
 						)}
@@ -607,13 +618,15 @@ export function BitParametersEditor({
 								onChange={onChange}
 								path="parameter"
 								hiddenKeys={
-									isSystemOne
-										? ["provider", "context_length", "pricing"]
-										: showHostedEmbedding
-											? ["remote", "pricing"]
-											: showPricing
-												? ["pricing"]
-												: []
+									showHostedImage
+										? ["provider", "pricing"]
+										: isSystemOne
+											? ["provider", "context_length", "pricing"]
+											: showHostedEmbedding
+												? ["remote", "pricing"]
+												: showPricing
+													? ["pricing"]
+													: []
 								}
 							/>
 						) : (

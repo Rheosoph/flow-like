@@ -57,6 +57,7 @@ pub(crate) async fn native_auth_logout(
     app_handle: tauri::AppHandle,
     profile_id: String,
 ) -> Result<(), String> {
+    crate::bot_host::withdraw(&app_handle).await;
     tokio::spawn(async move { interactive::native_auth_logout(app_handle, profile_id).await })
         .await
         .map_err(|_| "Authentication sign-out worker failed")?

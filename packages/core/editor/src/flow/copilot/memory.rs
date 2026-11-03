@@ -1,9 +1,11 @@
-//! Profile-scoped semantic memory for the global assistant, backed by LanceDB.
+//! Semantic memory for the global assistant and for bots, backed by LanceDB.
 //!
-//! Each profile gets its OWN memory table (`assistant-memory/<profile_id>`), so memories in a work
-//! profile never mix with those in another profile. The embedding model is user-selected (a bit id),
-//! resolved through the same `EmbeddingFactory` the rest of the app uses. All of this is reachable
-//! without a flow `ExecutionContext`, so it plugs directly into the context-free `PlatformCopilot`.
+//! Every [`MemoryScope`] gets its OWN memory table: FlowPilot one per profile
+//! (`assistant-memory/<profile_id>`), every bot one of its own (`bot-memory/<bot_id>`), so memories
+//! of a work profile, of FlowPilot and of each bot never mix. The embedding model is user-selected
+//! (a bit id), resolved through the same `EmbeddingFactory` the rest of the app uses. All of this is
+//! reachable without a flow `ExecutionContext`, so it plugs directly into the context-free
+//! `PlatformCopilot`.
 
 #[cfg(feature = "flow-runtime")]
 use std::cmp::Reverse;
@@ -19,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use flow_like_model_provider::embedding::EmbeddingModelLogic;
 #[cfg(feature = "flow-runtime")]
 use flow_like_storage::databases::vector::{VectorStore, lancedb::LanceDBVectorStore};
-#[cfg(feature = "flow-runtime")]
+#[cfg(any(feature = "flow-runtime", test))]
 use flow_like_storage::object_store::path::Path;
 #[cfg(feature = "flow-runtime")]
 use flow_like_types::json::json;
@@ -49,6 +51,35 @@ fn bounded_memory_text(value: &str, max_chars: usize) -> String {
     bounded
 }
 
+/// Whose memory a store holds. FlowPilot keeps one store per profile and every bot keeps its own,
+/// so two bots, or a bot and FlowPilot, never read or write each other's memories.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemoryScope {
+    /// FlowPilot (Flux) in one profile.
+    Profile(String),
+    /// One bot, in whatever profile it runs.
+    Bot(String),
+}
+
+impl MemoryScope {
+    /// `[users/<owner>/]assistant-memory/<profile_id>` or `[users/<owner>/]bot-memory/<bot_id>`.
+    /// `owner` scopes the table to a user on multi-tenant deployments, matching the per-user
+    /// credential prefix; the desktop (single user) passes `None`. Each id is one encoded path
+    /// segment, so no id reaches another scope's directory.
+    #[cfg(any(feature = "flow-runtime", test))]
+    fn directory(&self, owner: Option<&str>) -> Path {
+        let (kind, id) = match self {
+            Self::Profile(profile_id) => ("assistant-memory", profile_id),
+            Self::Bot(bot_id) => ("bot-memory", bot_id),
+        };
+        let base = match owner.map(str::trim).filter(|owner| !owner.is_empty()) {
+            Some(owner) => Path::from("users").join(owner).join(kind),
+            None => Path::from(kind),
+        };
+        base.join(id.as_str())
+    }
+}
+
 /// Snapshot of a profile's memory table: how many observations it holds and which embedding model
 /// they were written with (so the UI can warn before switching to an incompatible model).
 #[derive(Debug, Clone, flow_like_types::json::Serialize)]
@@ -67,37 +98,38 @@ pub struct MemoryEntry {
     pub timestamp: i64,
 }
 
-/// Semantic memory store for one profile. Cheap to hold across the chat loop (async-locked store).
+/// Semantic memory store for one [`MemoryScope`]. Cheap to hold across the chat loop
+/// (async-locked store).
 #[cfg(feature = "flow-runtime")]
 pub struct AssistantMemory {
     store: RwLock<LanceDBVectorStore>,
     embedding: Arc<dyn EmbeddingModelLogic>,
     embedding_model_id: String,
+    scope: MemoryScope,
 }
 
 #[cfg(not(feature = "flow-runtime"))]
-pub struct AssistantMemory;
+pub struct AssistantMemory {
+    scope: MemoryScope,
+}
+
+impl AssistantMemory {
+    /// Whose memory this is; a run only accepts a store of its own scope.
+    pub fn scope(&self) -> &MemoryScope {
+        &self.scope
+    }
+}
 
 #[cfg(feature = "flow-runtime")]
 impl AssistantMemory {
-    /// Open the per-profile LanceDB store (no embedding model). Lazily created on first write.
-    ///
-    /// `owner` scopes the table to a user on multi-tenant deployments: `Some(sub)` stores under
-    /// `users/<sub>/assistant-memory/<profile_id>` (matching the per-user credential prefix so
-    /// scoped writes are allowed and users never share a namespace); `None` (desktop, single user)
-    /// keeps the flat `assistant-memory/<profile_id>` layout.
+    /// Open the LanceDB store of `scope` (no embedding model). Lazily created on first write.
+    /// See [`MemoryScope::directory`] for the layout and how `owner` scopes it.
     async fn open_store(
         state: &Arc<FlowLikeState>,
         owner: Option<&str>,
-        profile_id: &str,
+        scope: &MemoryScope,
     ) -> Result<LanceDBVectorStore> {
-        let dir = match owner.map(str::trim).filter(|owner| !owner.is_empty()) {
-            Some(owner) => Path::from("users")
-                .join(owner)
-                .join("assistant-memory")
-                .join(profile_id),
-            None => Path::from("assistant-memory").join(profile_id),
-        };
+        let dir = scope.directory(owner);
         let builder = {
             let config = state.config.read().await;
             let build = config
@@ -122,14 +154,14 @@ impl AssistantMemory {
         Ok(store)
     }
 
-    /// Open (or lazily create on first write) the memory table for `profile_id`, embedding with the
+    /// Open (or lazily create on first write) the memory table of `scope`, embedding with the
     /// given bit. `access_token` and `usage_context` let a cloud host route a remote-capable Bit
-    /// through the authenticated embedding proxy. See [`open_store`](Self::open_store) for how
-    /// `owner` scopes the table.
+    /// through the authenticated embedding proxy. See [`MemoryScope::directory`] for how `owner`
+    /// scopes the table.
     pub async fn open(
         state: Arc<FlowLikeState>,
         owner: Option<&str>,
-        profile_id: &str,
+        scope: &MemoryScope,
         embedding_bit: &Bit,
         access_token: Option<String>,
         usage_context: Option<ModelUsageContext>,
@@ -138,22 +170,23 @@ impl AssistantMemory {
             .embedding_factory
             .build_text_routed(embedding_bit, state.clone(), access_token, usage_context)
             .await?;
-        let store = Self::open_store(&state, owner, profile_id).await?;
+        let store = Self::open_store(&state, owner, scope).await?;
 
         Ok(Self {
             store: RwLock::new(store),
             embedding,
             embedding_model_id: embedding_bit.id.clone(),
+            scope: scope.clone(),
         })
     }
 
-    /// Report how many observations a profile has stored and which embedding model produced them.
+    /// Report how many observations a scope has stored and which embedding model produced them.
     pub async fn status(
         state: Arc<FlowLikeState>,
         owner: Option<&str>,
-        profile_id: &str,
+        scope: &MemoryScope,
     ) -> Result<MemoryStatus> {
-        let store = Self::open_store(&state, owner, profile_id).await?;
+        let store = Self::open_store(&state, owner, scope).await?;
         let count = store.count(None).await.unwrap_or(0);
         let embedding_model_id = if count > 0 {
             store
@@ -175,28 +208,28 @@ impl AssistantMemory {
         })
     }
 
-    /// Delete all memories for a profile by DROPPING the table (data and schema). Used when the
+    /// Delete all memories of a scope by DROPPING the table (data and schema). Used when the
     /// embedding model changes: a new model usually has a different vector dimension, so the table
     /// must be recreated with the new schema on the next insert — purging rows would keep the old
     /// schema and permanently break `_memory_store`.
     pub async fn clear(
         state: Arc<FlowLikeState>,
         owner: Option<&str>,
-        profile_id: &str,
+        scope: &MemoryScope,
     ) -> Result<()> {
-        let mut store = Self::open_store(&state, owner, profile_id).await?;
+        let mut store = Self::open_store(&state, owner, scope).await?;
         store.drop_table().await
     }
 
-    /// List a profile's stored observations, newest first, for display and management in the UI.
+    /// List a scope's stored observations, newest first, for display and management in the UI.
     /// Reads the table directly (no embedding model needed), mirroring `status`/`clear`. Returns an
-    /// empty list for a fresh profile whose table does not exist yet.
+    /// empty list for a fresh scope whose table does not exist yet.
     pub async fn list(
         state: Arc<FlowLikeState>,
         owner: Option<&str>,
-        profile_id: &str,
+        scope: &MemoryScope,
     ) -> Result<Vec<MemoryEntry>> {
-        let store = Self::open_store(&state, owner, profile_id).await?;
+        let store = Self::open_store(&state, owner, scope).await?;
         let rows = store
             .filter(
                 "1=1",
@@ -238,10 +271,10 @@ impl AssistantMemory {
     pub async fn delete_entry(
         state: Arc<FlowLikeState>,
         owner: Option<&str>,
-        profile_id: &str,
+        scope: &MemoryScope,
         id: &str,
     ) -> Result<()> {
-        let store = Self::open_store(&state, owner, profile_id).await?;
+        let store = Self::open_store(&state, owner, scope).await?;
         let escaped = id.replace('\'', "''");
         store.delete(&format!("id = '{escaped}'")).await
     }
@@ -308,9 +341,14 @@ impl AssistantMemory {
                 sections.push_str(&format!("- {bounded}\n"));
             }
         }
-        sections.push_str(
-            "\n\n## MEMORY\nYou have persistent, profile-scoped memory. Use `_memory_search` to recall facts and `_memory_store` to save important user facts, preferences, and decisions. Store salient facts immediately rather than only saying you will remember them.",
-        );
+        sections.push_str(match self.scope {
+            MemoryScope::Profile(_) => {
+                "\n\n## MEMORY\nYou have persistent, profile-scoped memory. Use `_memory_search` to recall facts and `_memory_store` to save important user facts, preferences, and decisions. Store salient facts immediately rather than only saying you will remember them."
+            }
+            MemoryScope::Bot(_) => {
+                "\n\n## MEMORY\nYou have your own persistent memory, separate from every other bot and from Flux. Use `_memory_search` to recall facts and `_memory_store` to save important facts, preferences, and decisions of your owner. Store salient facts immediately rather than only saying you will remember them."
+            }
+        });
         sections
     }
 
@@ -368,7 +406,7 @@ impl AssistantMemory {
     pub async fn open(
         _state: Arc<FlowLikeState>,
         _owner: Option<&str>,
-        _profile_id: &str,
+        _scope: &MemoryScope,
         _embedding_bit: &Bit,
         _access_token: Option<String>,
         _usage_context: Option<ModelUsageContext>,
@@ -379,7 +417,7 @@ impl AssistantMemory {
     pub async fn status(
         _state: Arc<FlowLikeState>,
         _owner: Option<&str>,
-        _profile_id: &str,
+        _scope: &MemoryScope,
     ) -> Result<MemoryStatus> {
         Self::unavailable()
     }
@@ -387,7 +425,7 @@ impl AssistantMemory {
     pub async fn clear(
         _state: Arc<FlowLikeState>,
         _owner: Option<&str>,
-        _profile_id: &str,
+        _scope: &MemoryScope,
     ) -> Result<()> {
         Self::unavailable()
     }
@@ -395,7 +433,7 @@ impl AssistantMemory {
     pub async fn list(
         _state: Arc<FlowLikeState>,
         _owner: Option<&str>,
-        _profile_id: &str,
+        _scope: &MemoryScope,
     ) -> Result<Vec<MemoryEntry>> {
         Self::unavailable()
     }
@@ -403,7 +441,7 @@ impl AssistantMemory {
     pub async fn delete_entry(
         _state: Arc<FlowLikeState>,
         _owner: Option<&str>,
-        _profile_id: &str,
+        _scope: &MemoryScope,
         _id: &str,
     ) -> Result<()> {
         Self::unavailable()
@@ -432,5 +470,53 @@ mod tests {
         let bounded = bounded_memory_text(&"🙂".repeat(20), 8);
         assert_eq!(bounded.chars().count(), 8);
         assert!(bounded.ends_with('…'));
+    }
+
+    #[test]
+    fn flowpilot_and_every_bot_keep_separate_memory_stores() {
+        let flowpilot = MemoryScope::Profile("profile-1".into());
+        let first = MemoryScope::Bot("bot_a".into());
+        let second = MemoryScope::Bot("bot_b".into());
+        let same_id_as_profile = MemoryScope::Bot("profile-1".into());
+
+        for owner in [None, Some("user-1")] {
+            let directories: Vec<String> = [&flowpilot, &first, &second, &same_id_as_profile]
+                .iter()
+                .map(|scope| scope.directory(owner).to_string())
+                .collect();
+            for (index, directory) in directories.iter().enumerate() {
+                for other in &directories[index + 1..] {
+                    assert_ne!(directory, other);
+                    assert!(!directory.starts_with(&format!("{other}/")));
+                    assert!(!other.starts_with(&format!("{directory}/")));
+                }
+            }
+        }
+        assert_eq!(
+            flowpilot.directory(None).to_string(),
+            "assistant-memory/profile-1"
+        );
+        assert_eq!(first.directory(None).to_string(), "bot-memory/bot_a");
+        assert_eq!(
+            first.directory(Some("user-1")).to_string(),
+            "users/user-1/bot-memory/bot_a"
+        );
+        assert_eq!(
+            MemoryScope::Bot("bot_a".into()).directory(Some("user-2")),
+            Path::from("users/user-2/bot-memory/bot_a")
+        );
+    }
+
+    #[test]
+    fn a_bot_id_cannot_reach_another_memory_store() {
+        for hostile in [
+            "../assistant-memory/profile-1",
+            "..",
+            "bot_a/../../assistant-memory/profile-1",
+        ] {
+            let directory = MemoryScope::Bot(hostile.into()).directory(None).to_string();
+            assert!(directory.starts_with("bot-memory/"), "{directory}");
+            assert_eq!(directory.matches('/').count(), 1, "{directory}");
+        }
     }
 }

@@ -28,6 +28,10 @@
 			"description": "",
 			"label": ""
 		},
+		"flowpilot": {
+			"description": "",
+			"label": ""
+		},
 		"internet": {
 			"description": "",
 			"label": ""
@@ -57,12 +61,17 @@
 			"label": ""
 		}
 	},
+	"chat": {
+		"empty": "",
+		"modelHint": ""
+	},
 	"crew": {
 		"botSettings": "",
 		"botTag": "",
 		"builtIn": "",
 		"cancel": "",
 		"composer": {
+			"botAnswersInChat": "",
 			"encrypted": "",
 			"placeholder": "",
 			"send": "",
@@ -95,12 +104,7 @@
 		},
 		"intro": {
 			"capabilities": "",
-			"message": "",
-			"messageFailed": "",
-			"noCapabilities": "",
-			"notLive": "",
-			"settings": "",
-			"subtitle": ""
+			"noCapabilities": ""
 		},
 		"loadFailed": "",
 		"members": {
@@ -229,7 +233,11 @@
 			"appsRole": "",
 			"appsSearch": "",
 			"appsUntitled": "",
-			"fluxLocked": "",
+			"flowpilot": {
+				"badge": "",
+				"subtitle": "",
+				"title": ""
+			},
 			"groups": {
 				"apps": "",
 				"hands": "",
@@ -255,6 +263,8 @@
 			"creating": "",
 			"delete": "",
 			"deleting": "",
+			"duplicate": "",
+			"duplicating": "",
 			"next": "",
 			"save": "",
 			"saving": ""
@@ -275,6 +285,11 @@
 			"instructionsPlaceholder": "",
 			"local": "",
 			"localOnServer": "",
+			"memoryHint": "",
+			"memoryHost": "",
+			"memoryHostHint": "",
+			"memoryModel": "",
+			"memoryNone": "",
 			"moveDown": "",
 			"moveUp": "",
 			"noModels": "",
@@ -311,11 +326,16 @@
 			"keep": "",
 			"prompt": ""
 		},
+		"duplicate": {
+			"unsaved": ""
+		},
+		"duplicated": "",
 		"errors": {
 			"appLimit": "",
 			"capabilityLocation": "",
 			"createFailed": "",
 			"deleteFailed": "",
+			"duplicateFailed": "",
 			"fluxCapabilities": "",
 			"limitReached": "",
 			"saveFailed": "",
@@ -457,6 +477,16 @@
 			"label": ""
 		}
 	},
+	"memory": {
+		"clearFailed": "",
+		"cleared": "",
+		"count_one": "",
+		"count_other": "",
+		"deleteFailed": "",
+		"justNow": "",
+		"loadFailed": "",
+		"off": ""
+	},
 	"move": {
 		"account": "",
 		"action_one": "",
@@ -479,6 +509,7 @@
 			"failed": "",
 			"openSettings": "",
 			"removeApp": "",
+			"removeSecret": "",
 			"useProfile": ""
 		},
 		"intro": {
@@ -494,9 +525,11 @@
 			"idTaken": "",
 			"invalid": "",
 			"limitReached": "",
+			"localChanged": "",
 			"lookNotOwned": "",
 			"modelUnavailable": "",
 			"profileUnavailable": "",
+			"secretUnreadable": "",
 			"unknown": ""
 		},
 		"parts": {
@@ -510,6 +543,8 @@
 			"nothing": "",
 			"secrets_one": "",
 			"secrets_other": "",
+			"skipped_one": "",
+			"skipped_other": "",
 			"waiting_one": "",
 			"waiting_other": ""
 		},
@@ -587,5 +622,21 @@
 			"description": "",
 			"name": ""
 		}
+	},
+	"workspace": {
+		"failed": "",
+		"filesTitle": "",
+		"memoryEmpty": "",
+		"memoryFailed": "",
+		"preparing": "",
+		"refused": "",
+		"tabs": {
+			"chat": "",
+			"data": "",
+			"files": "",
+			"label": "",
+			"memory": ""
+		},
+		"unsupported": ""
 	}
 }

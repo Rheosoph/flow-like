@@ -104,6 +104,7 @@ describe("pending components live draft", () => {
 		store().setPendingComponentsDraft("run-1", "call-1", null);
 		expect(store().pendingComponents).toEqual({
 			components: components("final"),
+			conversationId: "conversation-1",
 		});
 	});
 

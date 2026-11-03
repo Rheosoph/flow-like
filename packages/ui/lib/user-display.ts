@@ -367,6 +367,17 @@ export function looksLikeUserColumnName(name: string): boolean {
 const MIN_ACCOUNT_ID_LENGTH = 12;
 
 /**
+ * A bot's sub: `bot_` and a cuid2, as `routes/bots/provision.rs` mints it. Only
+ * a reason to ask the directory, which answers for bots too; never proof of one.
+ */
+const BOT_SUB_PATTERN = /^bot_[a-z0-9]{16,}$/;
+
+/** Whether a stored id is shaped like a bot's sub: which renderer to ask, never who it is. */
+export function looksLikeBotSub(value?: string | null): boolean {
+	return BOT_SUB_PATTERN.test(value?.trim() ?? "");
+}
+
+/**
  * Whether a stored value is shaped like an account id and therefore worth
  * resolving against the directory.
  *
@@ -377,6 +388,7 @@ const MIN_ACCOUNT_ID_LENGTH = 12;
 export function looksLikeAccountId(value?: string | null): boolean {
 	const trimmed = value?.trim();
 	if (!trimmed || trimmed.length < MIN_ACCOUNT_ID_LENGTH) return false;
+	if (looksLikeBotSub(trimmed)) return true;
 	// `isIdpHandle` answers "is this unshowable?", for which a run of punctuation
 	// qualifies. A redaction mask is not an id, so it is required to carry one.
 	if (!/[a-z0-9]/i.test(trimmed)) return false;

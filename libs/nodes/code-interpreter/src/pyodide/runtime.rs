@@ -62,6 +62,8 @@ use flow_like_storage::{
 use flow_like_types::Bytes;
 use flow_like_wasm::{AotCache, WasmConfig, WasmEngine, isolated_wasi_ctx_builder};
 
+use super::network::GuestNetwork;
+
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 /// Maximum bytes captured from the Python process's stdout.
@@ -74,7 +76,7 @@ const EPOCH_TICK_MS: u64 = 10;
 const WS_SERVER_POLL_MS: u64 = 20;
 
 /// The Python bootstrap script compiled into the binary.
-const BOOTSTRAP_SCRIPT: &str = include_str!("bootstrap.py");
+pub(crate) const BOOTSTRAP_SCRIPT: &str = include_str!("bootstrap.py");
 
 // ─── Public configuration ─────────────────────────────────────────────────────
 
@@ -85,6 +87,11 @@ pub struct RuntimeConfig {
     /// When `None` the runtime probes the standard locations listed in
     /// [`probe_wasm_path`].
     pub wasm_binary_path: Option<PathBuf>,
+    /// Directory for the precompiled module cache. `None` uses the shared
+    /// WASM cache. Engines with different settings must not share one.
+    pub aot_cache_dir: Option<PathBuf>,
+    /// Compile the engine with fuel metering so runs can carry a fuel budget.
+    pub fuel_metering: bool,
 }
 
 // ─── Workspace info ───────────────────────────────────────────────────────────
@@ -145,12 +152,16 @@ pub struct ExecutionResponse {
 
 /// Intermediate result written by `bootstrap.py` to `/flow/outputs.json`.
 #[derive(Deserialize)]
-struct BootstrapResult {
-    outputs: Value,
-    stdout: String,
-    stderr: String,
-    error: Option<String>,
-    success: bool,
+pub(crate) struct BootstrapResult {
+    pub outputs: Value,
+    pub stdout: String,
+    pub stderr: String,
+    pub error: Option<String>,
+    pub success: bool,
+    #[serde(default)]
+    pub stdout_dropped: u64,
+    #[serde(default)]
+    pub stderr_dropped: u64,
 }
 
 // ─── Resource limiter ─────────────────────────────────────────────────────────
@@ -196,6 +207,31 @@ struct StoreData {
     limiter: MemoryLimiter,
 }
 
+/// How a guest module is launched: its argv, extra guest environment, read-only mounts and
+/// whether it is a reactor (`_initialize` then `run`) or a command (`_start`).
+#[derive(Debug, Clone)]
+pub(crate) struct GuestSpec {
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+    pub read_only_mounts: Vec<(PathBuf, String)>,
+    pub reactor: bool,
+}
+
+impl GuestSpec {
+    pub fn command(args: &[&str]) -> Self {
+        Self {
+            args: args.iter().map(|a| a.to_string()).collect(),
+            env: Vec::new(),
+            read_only_mounts: Vec::new(),
+            reactor: false,
+        }
+    }
+
+    pub fn python_cli() -> Self {
+        Self::command(&["python3", "/flow/bootstrap.py"])
+    }
+}
+
 /// Build the WASI Preview 1 context used by every Python sandbox execution.
 ///
 /// Host environment variables are deliberately not inherited. Wasmtime starts
@@ -205,13 +241,23 @@ fn build_sandbox_wasi_context(
     exec_path: &Path,
     stdout_pipe: MemoryOutputPipe,
     stderr_pipe: MemoryOutputPipe,
-    network_enabled: bool,
+    network: &GuestNetwork,
+    spec: &GuestSpec,
 ) -> Result<WasiP1Ctx> {
     let mut builder = isolated_wasi_ctx_builder();
     builder
         .stdout(stdout_pipe)
         .stderr(stderr_pipe)
-        .args(&["python3", "/flow/bootstrap.py"]);
+        .args(&spec.args);
+    for (key, value) in &spec.env {
+        builder.guest_env(key, value);
+    }
+    for (host, guest) in &spec.read_only_mounts {
+        builder
+            .preopened_dir(host, guest, FsPerms::ReadOnly)
+            .map_err(|e| anyhow::anyhow!("{e:#}"))
+            .with_context(|| format!("preopened {guest}"))?;
+    }
 
     // Only /flow is preopened — workspace access is via the API, not POSIX I/O.
     builder
@@ -219,9 +265,7 @@ fn build_sandbox_wasi_context(
         .map_err(|e| anyhow::anyhow!("{e:#}"))
         .context("preopened /flow")?;
 
-    if network_enabled {
-        builder.inherit_network().allow_tcp(true).allow_udp(true);
-    }
+    network.apply(&mut builder);
 
     Ok(builder.build_p1())
 }
@@ -419,28 +463,91 @@ pub struct PyodideRuntime {
     /// AOT disk cache for fast deserialization on subsequent cold starts.
     aot_cache: Option<AotCache>,
     config: RuntimeConfig,
+    ticker_stop: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for PyodideRuntime {
+    fn drop(&mut self) {
+        self.ticker_stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+pub(crate) struct GuestLimits {
+    pub timeout: Duration,
+    pub memory_limit: usize,
+    pub fuel: Option<u64>,
+}
+
+#[derive(Debug)]
+pub(crate) enum GuestOutcome {
+    Exited,
+    TimedOut,
+    OutOfFuel,
+    Failed(String),
+}
+
+pub(crate) struct GuestRun {
+    pub outcome: GuestOutcome,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+fn classify_guest_exit(result: std::result::Result<(), wasmtime::Error>) -> GuestOutcome {
+    let Err(trap) = result else {
+        return GuestOutcome::Exited;
+    };
+    match trap.downcast_ref::<wasmtime::Trap>() {
+        Some(wasmtime::Trap::Interrupt) => return GuestOutcome::TimedOut,
+        Some(wasmtime::Trap::OutOfFuel) => return GuestOutcome::OutOfFuel,
+        _ => {}
+    }
+    let msg = trap.to_string();
+    if msg.contains("exit status 0") || msg.contains("I32Exit(0)") {
+        GuestOutcome::Exited
+    } else if msg.to_lowercase().contains("epoch") {
+        GuestOutcome::TimedOut
+    } else {
+        GuestOutcome::Failed(msg)
+    }
+}
+
+fn spawn_epoch_ticker(engine: wasmtime::Engine) -> Arc<std::sync::atomic::AtomicBool> {
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = stop.clone();
+    std::thread::Builder::new()
+        .name("sandbox-epoch-ticker".into())
+        .spawn(move || {
+            while !flag.load(std::sync::atomic::Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(EPOCH_TICK_MS));
+                engine.increment_epoch();
+            }
+        })
+        .ok();
+    stop
 }
 
 impl PyodideRuntime {
     /// Create a new runtime instance.
     pub fn new(config: RuntimeConfig) -> Result<Self> {
-        // Disable fuel metering — we use epoch-based timeouts exclusively.
-        let wasm_config = WasmConfig {
-            fuel_metering: false,
+        let mut wasm_config = WasmConfig {
+            fuel_metering: config.fuel_metering,
             ..WasmConfig::production()
         };
+        if let Some(dir) = &config.aot_cache_dir {
+            wasm_config.cache_dir = Some(dir.clone());
+        }
         let aot_cache = wasm_config.cache_dir.as_ref().map(AotCache::new);
 
         let engine = WasmEngine::new(wasm_config).context("create WasmEngine")?;
-        // start_epoch_ticker uses tokio::spawn — valid because `new` is always
-        // called from an async context (inside `do_run`).
-        engine.start_epoch_ticker();
+        let ticker_stop = spawn_epoch_ticker(engine.engine().clone());
 
         Ok(Self {
             engine: Arc::new(engine),
             module: Arc::new(RwLock::new(None)),
             aot_cache,
             config,
+            ticker_stop,
         })
     }
 
@@ -477,7 +584,7 @@ impl PyodideRuntime {
 
         // Try the build-time bundled .cwasm first (zero cold-start).
         #[cfg(has_bundled_python)]
-        {
+        if self.config.wasm_binary_path.is_none() {
             let wasmtime_engine = self.engine.engine();
             match Self::load_bundled(wasmtime_engine) {
                 Ok(module) => {
@@ -557,6 +664,92 @@ impl PyodideRuntime {
         // SAFETY: produced by build.rs with a matching Engine configuration.
         let module = unsafe { Module::deserialize(engine, BUNDLED_CWASM) }?;
         Ok(module)
+    }
+
+    pub(crate) async fn compiled_module(&self) -> Result<Module> {
+        self.get_module().await
+    }
+
+    pub(crate) async fn run_guest(
+        &self,
+        module: &Module,
+        exec_path: &Path,
+        limits: &GuestLimits,
+        network: &GuestNetwork,
+        spec: &GuestSpec,
+    ) -> Result<GuestRun> {
+        let stdout_pipe = MemoryOutputPipe::new(MAX_STDOUT_BYTES);
+        let stderr_pipe = MemoryOutputPipe::new(MAX_STDERR_BYTES);
+        let wasi = build_sandbox_wasi_context(
+            exec_path,
+            stdout_pipe.clone(),
+            stderr_pipe.clone(),
+            network,
+            spec,
+        )?;
+
+        let store_data = StoreData {
+            wasi,
+            limiter: MemoryLimiter {
+                max_bytes: limits.memory_limit,
+            },
+        };
+        let mut store = Store::new(self.engine.engine(), store_data);
+        store.limiter(|data| &mut data.limiter as &mut dyn wasmtime::ResourceLimiter);
+
+        if self.config.fuel_metering {
+            store
+                .set_fuel(limits.fuel.unwrap_or(u64::MAX))
+                .map_err(|e| anyhow::anyhow!("{e:#}"))
+                .context("set fuel budget")?;
+        }
+        let timeout_ticks = limits.timeout.as_millis() as u64 / EPOCH_TICK_MS + 1;
+        store.set_epoch_deadline(timeout_ticks);
+        store.epoch_deadline_trap();
+
+        let mut linker: Linker<StoreData> = Linker::new(self.engine.engine());
+        p1::add_to_linker_async(&mut linker, |data: &mut StoreData| &mut data.wasi)
+            .map_err(|e| anyhow::anyhow!("{e:#}"))
+            .context("add WASI p1 to linker")?;
+        if spec.reactor {
+            linker
+                .func_wrap("host", "call", |_: i32, _: i32, _: i32, _: i32| -> i32 { -1 })
+                .map_err(|e| anyhow::anyhow!("{e:#}"))
+                .context("define host door")?;
+        }
+
+        let instance = linker
+            .instantiate_async(&mut store, module)
+            .await
+            .map_err(|e| anyhow::anyhow!("{e:#}"))
+            .context("instantiate Python WASM module")?;
+        debug!("Calling guest entry point (timeout: {:?})", limits.timeout);
+        let result = if spec.reactor {
+            let init = instance
+                .get_typed_func::<(), ()>(&mut store, "_initialize")
+                .map_err(|e| anyhow::anyhow!("{e:#}"))
+                .context("reactor module must export `_initialize`")?;
+            let run = instance
+                .get_typed_func::<(), i32>(&mut store, "run")
+                .map_err(|e| anyhow::anyhow!("{e:#}"))
+                .context("reactor module must export `run`")?;
+            match init.call_async(&mut store, ()).await {
+                Ok(()) => run.call_async(&mut store, ()).await.map(|_| ()),
+                Err(e) => Err(e),
+            }
+        } else {
+            let start = instance
+                .get_typed_func::<(), ()>(&mut store, "_start")
+                .map_err(|e| anyhow::anyhow!("{e:#}"))
+                .context("module must export `_start` (WASI CLI)")?;
+            start.call_async(&mut store, ()).await
+        };
+
+        Ok(GuestRun {
+            outcome: classify_guest_exit(result),
+            stdout: String::from_utf8_lossy(&stdout_pipe.contents()).into_owned(),
+            stderr: String::from_utf8_lossy(&stderr_pipe.contents()).into_owned(),
+        })
     }
 
     // ── Public execution entry point ──────────────────────────────────────
@@ -651,52 +844,23 @@ impl PyodideRuntime {
             None
         };
 
-        // ── Build WASI context ────────────────────────────────────────────
-        let stdout_pipe = MemoryOutputPipe::new(MAX_STDOUT_BYTES);
-        let stderr_pipe = MemoryOutputPipe::new(MAX_STDERR_BYTES);
-
-        let wasi = build_sandbox_wasi_context(
-            &exec_path,
-            stdout_pipe.clone(),
-            stderr_pipe.clone(),
-            req.network_enabled,
-        )?;
-
-        // ── Create Wasmtime store ─────────────────────────────────────────
-        let store_data = StoreData {
-            wasi,
-            limiter: MemoryLimiter {
-                max_bytes: req.memory_limit,
-            },
+        let network = if req.network_enabled {
+            if req.allowed_hosts.is_empty() {
+                GuestNetwork::PublicInternet
+            } else {
+                GuestNetwork::resolve_hosts(&req.allowed_hosts).await
+            }
+        } else {
+            GuestNetwork::Off
         };
-        let mut store = Store::new(self.engine.engine(), store_data);
-        store.limiter(|data| &mut data.limiter as &mut dyn wasmtime::ResourceLimiter);
-
-        let timeout_ticks = req.timeout.as_millis() as u64 / EPOCH_TICK_MS + 1;
-        store.set_epoch_deadline(timeout_ticks);
-        store.epoch_deadline_trap();
-
-        // ── Linker ────────────────────────────────────────────────────────
-        let mut linker: Linker<StoreData> = Linker::new(self.engine.engine());
-        p1::add_to_linker_async(&mut linker, |data: &mut StoreData| &mut data.wasi)
-            .map_err(|e| anyhow::anyhow!("{e:#}"))
-            .context("add WASI p1 to linker")?;
-
-        // ── Instantiate + run ─────────────────────────────────────────────
-        let instance = linker
-            .instantiate_async(&mut store, &module)
-            .await
-            .map_err(|e| anyhow::anyhow!("{e:#}"))
-            .context("instantiate Python WASM module")?;
-
-        let start = instance
-            .get_typed_func::<(), ()>(&mut store, "_start")
-            .map_err(|e| anyhow::anyhow!("{e:#}"))
-            .context("Python WASM module must export `_start` (WASI CLI)")?;
-
-        debug!("Calling Python WASM _start (timeout: {:?})", req.timeout);
-        let run_result: std::result::Result<(), wasmtime::Error> =
-            start.call_async(&mut store, ()).await;
+        let limits = GuestLimits {
+            timeout: req.timeout,
+            memory_limit: req.memory_limit,
+            fuel: None,
+        };
+        let run = self
+            .run_guest(&module, &exec_path, &limits, &network, &GuestSpec::python_cli())
+            .await;
 
         // ── Shut down workspace file server ───────────────────────────────
         if let Some(handle) = ws_server_handle {
@@ -709,26 +873,18 @@ impl PyodideRuntime {
             upload_ws_puts(&ws_puts, &ws.store, &ws.prefix).await;
         }
 
-        // ── Collect pipe output ───────────────────────────────────────────
-        let raw_stdout = String::from_utf8_lossy(&stdout_pipe.contents()).into_owned();
-        let raw_stderr = String::from_utf8_lossy(&stderr_pipe.contents()).into_owned();
+        let run = run?;
+        let raw_stdout = run.stdout;
+        let raw_stderr = run.stderr;
 
-        // ── Interpret the exit status ─────────────────────────────────────
-        let runtime_error: Option<String> = match run_result {
-            Ok(()) => None,
-            Err(trap) => {
-                let msg = trap.to_string();
-                if msg.contains("exit status 0") || msg.contains("I32Exit(0)") {
-                    None
-                } else if msg.to_lowercase().contains("epoch") {
-                    Some(format!(
-                        "Execution timed out after {:.1}s",
-                        req.timeout.as_secs_f64()
-                    ))
-                } else {
-                    Some(msg)
-                }
-            }
+        let runtime_error: Option<String> = match run.outcome {
+            GuestOutcome::Exited => None,
+            GuestOutcome::TimedOut => Some(format!(
+                "Execution timed out after {:.1}s",
+                req.timeout.as_secs_f64()
+            )),
+            GuestOutcome::OutOfFuel => Some("Execution exhausted its fuel budget".to_string()),
+            GuestOutcome::Failed(msg) => Some(msg),
         };
 
         // ── Read outputs.json ─────────────────────────────────────────────
@@ -866,12 +1022,18 @@ mod tests {
         use wasmtime_wasi::sockets::WasiSocketsView;
 
         for network_enabled in [false, true] {
+            let network = if network_enabled {
+                GuestNetwork::PublicInternet
+            } else {
+                GuestNetwork::Off
+            };
             let exec_dir = tempfile::tempdir().unwrap();
             let mut wasi = build_sandbox_wasi_context(
                 exec_dir.path(),
                 MemoryOutputPipe::new(1024),
                 MemoryOutputPipe::new(1024),
-                network_enabled,
+                &network,
+                &GuestSpec::python_cli(),
             )
             .unwrap();
             let mut sockets = wasi.sockets();
@@ -939,7 +1101,8 @@ mod tests {
             exec_dir.path(),
             MemoryOutputPipe::new(1024),
             MemoryOutputPipe::new(1024),
-            false,
+            &GuestNetwork::Off,
+            &GuestSpec::python_cli(),
         )
         .expect("sandbox WASI context should build");
 

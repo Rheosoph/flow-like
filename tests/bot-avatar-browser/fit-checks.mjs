@@ -25,7 +25,9 @@ const cutouts = [
 		background: false,
 		name: "lower lava drip",
 	},
-	{ kind: "bonsai", point: [50, 83], background: false, name: "exposed trunk" },
+	{ kind: "bonsai", point: [50, 72], background: false, name: "exposed trunk" },
+	{ kind: "jot", point: [50, 97], background: false, name: "graphite tip" },
+	{ kind: "cog", point: [50, 89], background: false, name: "outer gear rim" },
 ];
 
 function pixel(image, x, y) {
@@ -187,7 +189,7 @@ export async function verifyClothingFits(page, { origin, output }) {
 			"Clothing previews must not raise browser errors",
 		);
 		console.log(
-			`Clothing fit checks passed: seven cutout/anatomy controls, eight garment families, vector and pixel looks; all ${garments} neck items on Mallet, Clef, and Pipette. Screenshots: ${screenshots}`,
+			`Clothing fit checks passed: ${cutouts.length} cutout/anatomy controls, eight garment families, vector and pixel looks; all ${garments} neck items on Mallet, Clef, and Pipette. Screenshots: ${screenshots}`,
 		);
 	} finally {
 		page.off("pageerror", onError);

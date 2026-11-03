@@ -2,6 +2,8 @@ use std::{sync::Arc, time::SystemTime};
 
 use crate::{
     audit_branch,
+    credentials::CredentialsAccess,
+    deletion::DeletionRoot,
     entity::{
         app, membership, meta, role,
         sea_orm_active_enums::{Status, Visibility},
@@ -16,15 +18,154 @@ use axum::{
     Extension, Json,
     extract::{Path, Query, State},
 };
+use chrono::{DateTime, FixedOffset};
 use flow_like::{app::App, bit::Metadata};
 use flow_like_types::{anyhow, create_id};
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::{NotSet, Set},
-    ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+    ColumnTrait, DatabaseTransaction, EntityTrait, IntoActiveModel, QueryFilter,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+/// An app being created: its rows go in first ([`insert_app_rows`]), its stored manifest after
+/// they commit ([`materialize_new_app`]).
+#[derive(Clone, Debug)]
+pub(crate) struct NewApp {
+    pub id: String,
+    /// The creator: the only member, with the Owner role.
+    pub owner_id: String,
+    pub metadata: Metadata,
+    pub language: String,
+    pub bits: Vec<String>,
+    /// Set when the app is this bot's workspace.
+    pub bot_id: Option<String>,
+}
+
+fn role_row(
+    app_id: &str,
+    name: &str,
+    permissions: RolePermissions,
+    now: DateTime<FixedOffset>,
+) -> role::ActiveModel {
+    role::ActiveModel {
+        id: Set(create_id()),
+        name: Set(name.to_string()),
+        description: Set(Some(format!("{name} role"))),
+        permissions: Set(permissions.bits()),
+        created_at: Set(now),
+        updated_at: Set(now),
+        app_id: Set(Some(app_id.to_string())),
+        attributes: NotSet,
+    }
+}
+
+/// The app (Private, Active), its metadata, the Owner, Admin and User roles and the owner's
+/// membership. Call inside the transaction that admits the app.
+pub(crate) async fn insert_app_rows(
+    txn: &DatabaseTransaction,
+    new_app: &NewApp,
+    now: DateTime<FixedOffset>,
+) -> Result<app::Model, ApiError> {
+    let app = app::ActiveModel {
+        id: Set(new_app.id.clone()),
+        status: Set(Status::Active),
+        created_at: Set(now),
+        updated_at: Set(now),
+        visibility: Set(Visibility::Private),
+        bits: Set(Some(new_app.bits.clone().into())),
+        bot_id: Set(new_app.bot_id.clone()),
+        ..Default::default()
+    }
+    .insert(txn)
+    .await?;
+
+    let metadata = new_app.metadata.clone();
+    meta::ActiveModel {
+        id: Set(create_id()),
+        app_id: Set(Some(app.id.clone())),
+        name: Set(metadata.name),
+        description: Set(Some(metadata.description)),
+        long_description: Set(metadata.long_description),
+        tags: Set(Some(metadata.tags.into())),
+        lang: Set(new_app.language.clone()),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(txn)
+    .await?;
+
+    let owner_role = role_row(&app.id, "Owner", RolePermissions::Owner, now)
+        .insert(txn)
+        .await?;
+    role_row(&app.id, "Admin", RolePermissions::Admin, now)
+        .insert(txn)
+        .await?;
+    let user_permissions = RolePermissions::ReadTemplates
+        | RolePermissions::ExecuteEvents
+        | RolePermissions::ListEvents;
+    let user_role = role_row(&app.id, "User", user_permissions, now)
+        .insert(txn)
+        .await?;
+
+    let mut app = app.into_active_model();
+    app.owner_role_id = Set(Some(owner_role.id.clone()));
+    app.default_role_id = Set(Some(user_role.id));
+    let app = app.update(txn).await?;
+
+    membership::ActiveModel {
+        id: Set(create_id()),
+        user_id: Set(new_app.owner_id.clone()),
+        app_id: Set(app.id.clone()),
+        role_id: Set(owner_role.id),
+        joined_via: NotSet,
+        created_at: Set(now),
+        updated_at: Set(now),
+    }
+    .insert(txn)
+    .await?;
+    Ok(app)
+}
+
+/// Saves the new app's manifest and metadata with credentials scoped to it. When that fails the
+/// rows [`insert_app_rows`] committed are deleted again, so no app stays half made.
+pub(crate) async fn materialize_new_app(
+    state: &AppState,
+    new_app: &NewApp,
+) -> Result<App, ApiError> {
+    let materialized: Result<App, ApiError> = async {
+        let credentials = state
+            .scoped_credentials(&new_app.owner_id, &new_app.id, CredentialsAccess::EditApp)
+            .await?;
+        let flow_like_state = Arc::new(credentials.to_state(state.clone()).await?);
+        let mut drive_app = App::new(
+            Some(new_app.id.clone()),
+            new_app.metadata.clone(),
+            new_app.bits.clone(),
+            flow_like_state,
+        )
+        .await?;
+        drive_app.bot_id = new_app.bot_id.clone();
+        drive_app.save().await?;
+        Ok(drive_app)
+    }
+    .await;
+    if materialized.is_err()
+        && let Err(cleanup) = crate::deletion::delete_now(
+            state,
+            DeletionRoot::App,
+            &new_app.id,
+            Some(&new_app.owner_id),
+            (),
+        )
+        .await
+    {
+        tracing::error!(new_id = %new_app.id, %cleanup, "Project materialization failed and deletion needs retry");
+    }
+    materialized
+}
 
 #[derive(Clone, Serialize, Deserialize, ToSchema)]
 pub struct AppUpsertBody {
@@ -182,157 +323,35 @@ pub async fn upsert_app(
     };
 
     crate::capacity::check_storage_write(&state, "", &sub, 0).await?;
-    let new_id = create_id();
-
-    let bits = app_body.bits.clone().unwrap_or_default();
+    let new_app = NewApp {
+        id: create_id(),
+        owner_id: sub,
+        metadata,
+        language,
+        bits: app_body.bits.clone().unwrap_or_default(),
+        bot_id: None,
+    };
     state
         .transaction(|txn| {
-            let new_id = new_id.clone();
-            let bits = bits.clone();
-            let metadata = metadata.clone();
-            let language = language.clone();
-            let sub = sub.clone();
+            let new_app = new_app.clone();
             let plan = plan.clone();
             Box::pin(async move {
                 crate::capacity::admit_project(
                     txn,
-                    &sub,
-                    &new_id,
+                    &new_app.owner_id,
+                    &new_app.id,
                     &Visibility::Private,
                     None,
                     &plan,
                     i64::from(tier.max_non_visible_projects),
                 )
                 .await?;
-                let app = app::ActiveModel {
-                    id: Set(new_id),
-                    status: Set(Status::Active),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                    visibility: Set(Visibility::Private),
-                    bits: Set(Some(bits.into())),
-                    ..Default::default()
-                };
-
-                let app = app.insert(txn).await?;
-                let app_id = app.id.clone();
-
-                let meta = meta::ActiveModel {
-                    id: Set(create_id()),
-                    app_id: Set(Some(app_id.clone())),
-                    name: Set(metadata.name),
-                    description: Set(Some(metadata.description)),
-                    long_description: Set(metadata.long_description),
-                    tags: Set(Some(metadata.tags.into())),
-                    lang: Set(language),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                    ..Default::default()
-                };
-                meta.insert(txn).await?;
-
-                let owner_role = role::ActiveModel {
-                    id: Set(create_id()),
-                    name: Set("Owner".to_string()),
-                    description: Set(Some("Owner role".to_string())),
-                    permissions: Set(RolePermissions::Owner.bits()),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                    app_id: Set(Some(app_id.clone())),
-                    attributes: NotSet,
-                };
-
-                let owner_role = owner_role.insert(txn).await?;
-
-                let admin_role = role::ActiveModel {
-                    id: Set(create_id()),
-                    name: Set("Admin".to_string()),
-                    description: Set(Some("Admin role".to_string())),
-                    permissions: Set(RolePermissions::Admin.bits()),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                    app_id: Set(Some(app_id.clone())),
-                    attributes: NotSet,
-                };
-
-                admin_role.insert(txn).await?;
-
-                let mut user_permission = RolePermissions::ReadTemplates;
-                user_permission.insert(RolePermissions::ExecuteEvents);
-                user_permission.insert(RolePermissions::ListEvents);
-
-                let user_role = role::ActiveModel {
-                    id: Set(create_id()),
-                    name: Set("User".to_string()),
-                    description: Set(Some("User role".to_string())),
-                    permissions: Set(user_permission.bits()),
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                    app_id: Set(Some(app_id.clone())),
-                    attributes: NotSet,
-                };
-
-                let user_role = user_role.insert(txn).await?;
-
-                let mut app = app.into_active_model();
-                app.owner_role_id = Set(Some(owner_role.id.clone()));
-                app.default_role_id = Set(Some(user_role.id.clone()));
-
-                let app = app.update(txn).await?;
-
-                let membership = membership::ActiveModel {
-                    id: Set(create_id()),
-                    user_id: Set(sub),
-                    app_id: Set(app.id.clone()),
-                    role_id: Set(owner_role.id.clone()),
-                    joined_via: NotSet,
-                    created_at: Set(now),
-                    updated_at: Set(now),
-                };
-                membership.insert(txn).await?;
-
+                insert_app_rows(txn, &new_app, now).await?;
                 Ok::<_, ApiError>(())
             })
         })
         .await?;
-
-    let materialized: Result<App, ApiError> = async {
-        let credentials = state
-            .scoped_credentials(
-                &sub,
-                &new_id,
-                crate::credentials::CredentialsAccess::EditApp,
-            )
-            .await?;
-        let flow_like_state = Arc::new(credentials.to_state(state.clone()).await?);
-        let new_app = App::new(
-            Some(new_id.clone()),
-            metadata.clone(),
-            app_body.bits.clone().unwrap_or_default(),
-            flow_like_state,
-        )
-        .await?;
-        new_app.save().await?;
-        Ok(new_app)
-    }
-    .await;
-    let drive_app = match materialized {
-        Ok(app) => app,
-        Err(error) => {
-            if let Err(cleanup) = crate::deletion::delete_now(
-                &state,
-                crate::deletion::DeletionRoot::App,
-                &new_id,
-                Some(&sub),
-                (),
-            )
-            .await
-            {
-                tracing::error!(%new_id, %cleanup, "Project materialization failed and deletion needs retry");
-            }
-            return Err(error);
-        }
-    };
+    let drive_app = materialize_new_app(&state, &new_app).await?;
 
     audit_branch!(state, user, drive_app.id, "app.create", "App", drive_app.id);
     Ok(Json(drive_app))

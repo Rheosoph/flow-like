@@ -1,4 +1,5 @@
 import { realtimeExecutionEvent } from "@flow-like/flow-like-ui/lib/execution/realtime";
+import { ExecutionDetachedError } from "@flow-like/flow-like-ui/lib/execution/types";
 import type { RealtimeRunSubscription } from "@flow-like/flow-like-ui/lib/realtime/types";
 import type { IIntercomEvent } from "@flow-like/flow-like-ui/lib/schema/events/intercom-event";
 import { watchNativeRealtime } from "./native-realtime";
@@ -26,7 +27,7 @@ export function followNativeExecution(
 	options: NativeExecutionSubscription,
 ): Promise<void> {
 	return new Promise<void>((resolve, reject) => {
-		let close: (() => void) | undefined;
+		const subscription: { close?: () => void } = {};
 		let settled = false;
 		let sequence = options.run.after_sequence ?? -1;
 		let completed = false;
@@ -35,8 +36,8 @@ export function followNativeExecution(
 			settled = true;
 			options.signal.removeEventListener("abort", abort);
 			// The callback's successful return lets the bridge send its ACK first.
-			if (delivered) setTimeout(() => close?.(), 0);
-			else close?.();
+			if (delivered) setTimeout(() => subscription.close?.(), 0);
+			else subscription.close?.();
 			if (error) reject(error);
 			else resolve();
 		};
@@ -47,7 +48,7 @@ export function followNativeExecution(
 			return;
 		}
 		options.signal.addEventListener("abort", abort, { once: true });
-		close = watchNativeRealtime({
+		subscription.close = watchNativeRealtime({
 			profileId: options.profileId,
 			subject: options.subject,
 			issuer: options.issuer,
@@ -56,13 +57,9 @@ export function followNativeExecution(
 			onMessage: async (message) => {
 				if (settled) return;
 				if (message.type === "state") {
-					if (["signed_out", "unsupported", "closed"].includes(message.state)) {
-						finish(
-							new Error(
-								`Execution updates are ${message.state.replaceAll("_", " ")}`,
-							),
-						);
-					}
+					// The native owner retries blocked states; only a lost session ends the follow.
+					if (message.state === "signed_out" || message.state === "closed")
+						finish(new ExecutionDetachedError(options.run.run_id));
 					return;
 				}
 				const failure = message.response.errors.find(
@@ -120,6 +117,6 @@ export function followNativeExecution(
 				finish(outcomeFailure, true);
 			},
 		});
-		if (settled) close();
+		if (settled) subscription.close();
 	});
 }

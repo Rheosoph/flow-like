@@ -90,6 +90,18 @@ afterEach(async () => {
 });
 
 describe("useBotExpression lifecycle", () => {
+	it("exposes a submitted reaction on an empty composer and clears it on conversation change", async () => {
+		await render({ draft: "Thank you ❤️" });
+		expect(state().expression).toBe("love");
+		await render({ messages: [{ role: "user", content: "Thank you ❤️" }] });
+		expect(state().expression).toBe("love");
+		expect(state().lingering).toBe(true);
+		await render({ conversationId: "two" });
+		expect(state().expression).toBe("neutral");
+		await advance(2500);
+		expect(state().expression).toBe("neutral");
+	});
+
 	it("prewarms after mounting once under StrictMode without classifying empty input", async () => {
 		await render();
 		await advance(750);

@@ -43,7 +43,9 @@ Flow-Like host services for data a node legitimately needs.
 
 Each node exports its own permission labels. The loader converts those labels
 to runtime capabilities. The desktop loader for installed packages then layers
-the package's memory and timeout limits and its `allowed_hosts` list on top.
+the package's memory and timeout limits and its `allowed_hosts` list on top. The
+server executor does the same with the permissions the API sends for each pinned
+package.
 The manifest cannot add or remove capabilities.
 
 | Permission | Protected capability |
@@ -94,15 +96,15 @@ operation. Component Model nodes also receive WASI interfaces. In the current
 linker, any network capability enables the WASI networking context, while
 specific Flow-Like network host functions still check their capability.
 
-The desktop loader for installed packages copies the manifest's
-`allowed_hosts` into each node's execution configuration. The list is checked
-for WebSocket connects and for WASI sockets, where the destination IP address
-is compared with it. A non-empty list also keeps the standard `wasi:http`
-interface from being linked. The Flow-Like HTTP host function does not consult
-the list today, and the server executor applies neither `allowed_hosts` nor the
-manifest's resource tiers. Do not describe `allowed_hosts` as a complete
-execution-time allowlist. Apply network egress restrictions at the executor or
-cluster boundary when destinations must be constrained.
+The desktop loader for installed packages and the server executor copy the
+manifest's `allowed_hosts` and resource tiers into each node's execution
+configuration. The list is checked for WebSocket connects, for the Flow-Like
+HTTP host function and for WASI sockets, where the destination IP address is
+compared with it. With a non-empty list the HTTP host function returns a
+redirect to the node instead of following it, and the standard `wasi:http`
+interface is not linked. Host names are compared as written, so a list does not
+replace network egress restrictions at the executor or cluster boundary when
+destinations must be constrained.
 
 ## Declare only required permissions
 

@@ -234,6 +234,13 @@ impl NodeMovePlan {
         })
     }
 
+    /// Whether `owner`'s execution pin `pin_id`, input or output, lost an edge to a moved node.
+    pub(super) fn exec_pin_lost_to_move(&self, owner: &str, pin_id: &str) -> bool {
+        self.stranded
+            .iter()
+            .any(|stranded| stranded.owner == owner && stranded.pin_id == pin_id)
+    }
+
     /// A moved statement leaves a gap where it was. Writing the section it came from fills it (a
     /// call to the function, or the next statement); a document that leaves that section out would
     /// silently stop what used to run there.

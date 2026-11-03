@@ -37,6 +37,10 @@ mod routes;
 pub mod alerting;
 pub mod audit;
 mod bit_pricing;
+pub mod bot_host;
+pub(crate) mod bot_mail;
+pub(crate) mod bot_notify;
+pub(crate) mod bot_tools;
 pub mod cache;
 pub mod capacity;
 pub mod channel;
@@ -198,6 +202,8 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/info", routes::info::routes())
         .nest("/user", routes::user::routes())
         .nest("/profile", routes::profile::routes())
+        .nest("/bots", routes::bots::routes())
+        .nest("/inbox", routes::inbox::routes())
         .nest("/apps", routes::app::routes())
         .nest("/bit", routes::bit::routes())
         .nest("/store", routes::store::routes())
@@ -218,6 +224,7 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         )
         .nest("/courses", routes::course::routes())
         .nest("/embeddings", routes::embeddings::routes())
+        .nest("/images", routes::images::routes())
         .nest("/ai", routes::ai::routes())
         .nest("/admin", routes::admin::routes())
         .nest("/tmp", routes::tmp::routes())

@@ -110,7 +110,7 @@ describe("bot packs", () => {
 				getBotPackContents(pack, defaultBotCatalog).equipment.map(
 					(item) => item.id,
 				),
-			).toEqual(pack.equipmentIds);
+			).toEqual([...(pack.equipmentIds ?? [])]);
 			expect(pack.equipmentIds).toEqual(
 				expect.arrayContaining(UNIFORM_PACKS[id] ?? []),
 			);

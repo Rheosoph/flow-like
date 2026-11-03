@@ -50,6 +50,10 @@ pub fn routes() -> Router<AppState> {
             )),
         )
         .route(
+            "/apps/{app_id}/bots/ask",
+            post(crate::routes::bots::ask::executor_ask_bot),
+        )
+        .route(
             "/apps/{app_id}/models/chat/completions",
             post(models::chat_completions).layer(DefaultBodyLimit::max(models::MAX_REQUEST_BYTES)),
         )

@@ -94,6 +94,13 @@ pub async fn revoke_invite(
 ) -> Result<Json<()>, ApiError> {
     ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
 
+    let invite = invitation::Entity::find()
+        .filter(invitation::Column::Id.eq(invite_id.clone()))
+        .filter(invitation::Column::AppId.eq(app_id.clone()))
+        .one(&state.db)
+        .await?
+        .ok_or(ApiError::NOT_FOUND)?;
+
     let result = invitation::Entity::delete_many()
         .filter(invitation::Column::Id.eq(invite_id.clone()))
         .filter(invitation::Column::AppId.eq(app_id.clone()))
@@ -103,6 +110,10 @@ pub async fn revoke_invite(
     if result.rows_affected == 0 {
         return Err(ApiError::NOT_FOUND);
     }
+    state
+        .channels
+        .publish_realtime_invalidation(&invite.user_id)
+        .await;
 
     audit_branch!(
         state,

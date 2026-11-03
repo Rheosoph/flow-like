@@ -8,6 +8,8 @@ pub mod get_row;
 pub mod get_sheet_names;
 #[cfg(feature = "execute")]
 pub mod grid;
+#[cfg(feature = "execute")]
+pub mod inspect;
 pub mod insert_column;
 pub mod insert_row;
 pub mod loop_rows;

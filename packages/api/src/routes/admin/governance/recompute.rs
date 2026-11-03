@@ -4,9 +4,17 @@ use crate::{
     routes::app::board::scoring::persist_board_score, state::AppState,
 };
 use axum::{Extension, Json, extract::State};
-use sea_orm::EntityTrait;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QuerySelect, Select};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+/// Every app a platform-wide recompute scores; bots' workspaces have no boards to score.
+pub(crate) fn scored_apps() -> Select<app::Entity> {
+    app::Entity::find()
+        .select_only()
+        .column(app::Column::Id)
+        .filter(app::Column::BotId.is_null())
+}
 
 #[derive(Clone, Deserialize, Debug, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -46,12 +54,7 @@ pub async fn recompute_scores(
 
     let app_ids: Vec<String> = match payload.app_id {
         Some(app_id) => vec![app_id],
-        None => app::Entity::find()
-            .all(&state.db)
-            .await?
-            .into_iter()
-            .map(|a| a.id)
-            .collect(),
+        None => scored_apps().into_tuple().all(&state.db).await?,
     };
 
     let mut apps_processed = 0u64;

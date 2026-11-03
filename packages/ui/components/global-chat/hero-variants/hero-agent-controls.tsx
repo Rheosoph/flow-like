@@ -17,7 +17,7 @@ import { useAgentSelection } from "./use-agent-selection";
  * The bubble composer's agent controls: pick the FlowPilot provider (Profile /
  * GitHub Copilot / Codex / Claude Code, whichever are available), its model and
  * the thinking level. All write to the shared global-chat store — the choice
- * carries into /chat and is remembered.
+ * carries into the Bots tab and is remembered.
  */
 export function HeroAgentControls() {
 	const {

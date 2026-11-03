@@ -27,7 +27,9 @@ serde_json = "1"
 plist = "1.8.0"
 
 [features]
-default = []
+default = ["code-sandbox"]
+code-sandbox = ["dep:flow-like-catalog-code-interpreter", "flow-like-bot-tools/code"]
+devtools = ["dep:tauri-plugin-devtools"]
 local-ml-cuda = ["flow-like/local-ml-cuda", "flow-like-catalog/local-ml-cuda"]
 local-ml-tensorrt = ["local-ml-cuda", "flow-like/local-ml-tensorrt", "flow-like-catalog/local-ml-tensorrt"]
 training-cpu = ["flow-like-catalog/training-cpu"]
@@ -52,9 +54,15 @@ jsonschema.workspace = true
 flow-like = { workspace = true, features = ["app-runtime", "tauri", "local-ml", "local-tts", "local-stt"] }
 flow-like-types.workspace = true
 flow-like-catalog-ml = { workspace = true, default-features = false, features = ["studio"] }
+flow-like-catalog-code-interpreter = { workspace = true, features = ["execute"], optional = true }
 flow-like-wasm = { workspace = true, features = ["model"] }
 flow-like-offline-writes = { workspace = true, features = ["runtime"] }
 flow-like-device-protocol.workspace = true
+flow-like-device-crypto.workspace = true
+flow-like-local-bots.workspace = true
+flow-like-bot-memory.workspace = true
+iana-time-zone.workspace = true
+flow-like-bot-tools = { workspace = true, features = ["documents", "connectors"] }
 
 # Tauri 2.12 uses Tao's corrected iOS scene lifecycle and configuration ownership.
 tauri = { version = "2.12.5", features = [
@@ -88,7 +96,8 @@ tauri-plugin-dialog = "2.8.3"
 tauri-plugin-deep-link = "2.6.2"
 tauri-plugin-clipboard-manager = "2.5.0"
 tauri-plugin-http = "2.8.3"
-tauri-plugin-devtools = "2.2.2"
+# Devtools enables Tauri's synchronous tracing dispatch even before plugin init.
+tauri-plugin-devtools = { version = "2.2.2", optional = true }
 tauri-plugin-fs = "2.7.1"
 urlencoding.workspace = true
 toml.workspace = true
@@ -124,6 +133,7 @@ tauri-plugin-remote-push = { git = "https://github.com/Rheosoph/tauri-plugin-rem
 
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 flow-like-browser.workspace = true
+flow-like-catalog-automation = { workspace = true, features = ["execute"] }
 flow-like-device-client.workspace = true
 flow-like-device-crypto.workspace = true
 tauri-plugin-single-instance = { version = "2.5.4", features = ["deep-link"] }

@@ -51,30 +51,57 @@ export const fantasyShapes: readonly BotShapeDefinition[] = [
 			head: { x: 50, y: 38, width: 42 },
 			eyes: { left: [39, 60], right: [61, 60], radius: 3.8 },
 			mouth: [50, 75],
-			neck: { y: 89, bottom: 104, width: 46 },
+			neck: { y: 87, bottom: 104, width: 46 },
 		},
 		silhouette:
 			"M22 63C22 43 34 34 50 34S78 43 78 63L80 77Q83 92 75 104H25Q17 92 20 77Z",
 		renderBackDetails: ({ palette }) => (
 			<>
 				<BotMotion kind="flutter" origin={[25, 73]} duration={3800} amount={7}>
-					<path d="M25 65L7 49L9 80L25 77Z" fill={palette.body} />
-					<path d="M23 71L12 58L14 73Z" fill={palette.sclera} />
+					<path
+						d="M27 64Q17 54 10 43Q8 60 12 77Q18 71 28 78Z"
+						fill={palette.body}
+					/>
+					<path
+						d="M25 66L13 51Q12 62 15 71Q20 69 25 74Z"
+						fill={palette.sclera}
+					/>
+					<path
+						d="M13 51Q19 62 25 74"
+						fill="none"
+						stroke={palette.body}
+						strokeWidth="1.3"
+					/>
 				</BotMotion>
 				<BotMotion kind="flutter" origin={[75, 73]} duration={3800} amount={-7}>
-					<path d="M75 65L93 49L91 80L75 77Z" fill={palette.body} />
-					<path d="M77 71L88 58L86 73Z" fill={palette.sclera} />
+					<path
+						d="M73 64Q83 54 90 43Q92 60 88 77Q82 71 72 78Z"
+						fill={palette.body}
+					/>
+					<path
+						d="M75 66L87 51Q88 62 85 71Q80 69 75 74Z"
+						fill={palette.sclera}
+					/>
+					<path
+						d="M87 51Q81 62 75 74"
+						fill="none"
+						stroke={palette.body}
+						strokeWidth="1.3"
+					/>
 				</BotMotion>
 			</>
 		),
 		renderDetails: ({ palette }) => (
 			<>
 				<path
-					d="M28 42L26 23Q37 27 39 37M61 37Q63 27 74 23L72 42"
+					d="M31 40Q26 31 29 23Q38 27 40 37ZM60 37Q62 27 71 23Q74 31 69 40Z"
 					fill={palette.accent}
 				/>
-				<ellipse cx="50" cy="75" rx="21" ry="14" fill={palette.sclera} />
-				<path d="M45 43L50 35L55 43Z" fill={palette.accent} />
+				<path
+					d="M34 71Q36 64 43 65H57Q64 64 66 71Q71 85 50 85Q29 85 34 71Z"
+					fill={palette.sclera}
+				/>
+				<path d="M46 43L50 37L54 43Z" fill={palette.accent} />
 			</>
 		),
 		renderFaceDetails: ({ palette }) => (

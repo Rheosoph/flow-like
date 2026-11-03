@@ -205,16 +205,16 @@ export const musicShapes: readonly BotShapeDefinition[] = [
 			clothing: "#705b92",
 		},
 		silhouette:
-			"M65 20H73C73 32 91 33 86 49C83 42 78 41 73 40V76C73 91 59 101 43 101C27 101 18 91 22 78C26 65 46 59 65 67Z",
+			"M65 24Q65 20 69 20H73C73 32 91 33 86 49C83 42 78 41 73 40V74C73 90 59 101 43 101C26 101 17 91 21 77C25 61 45 55 65 63Z",
 		anchors: {
 			head: { x: 68, y: 22, width: 24 },
-			eyes: { left: [38, 74], right: [57, 74], radius: 3.3 },
-			mouth: [47, 84],
-			neck: { x: 47, width: 44, y: 89, bottom: 101 },
+			eyes: { left: [38, 70], right: [57, 70], radius: 3.3 },
+			mouth: [47, 80],
+			neck: { x: 47, width: 44, y: 86, bottom: 100 },
 		},
 		renderDetails: ({ palette }) => (
 			<path
-				d="M28 77Q35 67 47 68"
+				d="M28 73Q35 63 47 64"
 				fill="none"
 				stroke={palette.accent}
 				strokeWidth="3"

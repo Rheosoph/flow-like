@@ -11,6 +11,9 @@ use super::external::ExternalStep;
 pub struct SoftSweep {
     pub table: &'static str,
     pub column: &'static str,
+    /// A table the plan drains whose ids `column` holds instead of the root id. Such a sweep
+    /// runs before the first drain, while those rows still name what it removes.
+    pub via: Option<&'static str>,
 }
 
 /// A by-value reference to the root that is kept on purpose.
@@ -37,7 +40,19 @@ pub struct RootOverrides {
 }
 
 fn sweep(table: &'static str, column: &'static str) -> SoftSweep {
-    SoftSweep { table, column }
+    SoftSweep {
+        table,
+        column,
+        via: None,
+    }
+}
+
+fn sweep_via(via: &'static str, table: &'static str, column: &'static str) -> SoftSweep {
+    SoftSweep {
+        table,
+        column,
+        via: Some(via),
+    }
 }
 
 fn keep(table: &'static str, column: &'static str, reason: &'static str) -> SoftReference {
@@ -163,8 +178,22 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
             restrict_as_cascade: vec![],
         },
         DeletionRoot::User => RootOverrides {
-            before_drain: vec![ExternalStep::UserQuotaPayloads, ExternalStep::UserSinkRunAs],
-            soft_sweeps: vec![sweep("QuotaWarningState", "payerId")],
+            before_drain: vec![
+                ExternalStep::UserQuotaPayloads,
+                ExternalStep::UserSinkRunAs,
+                ExternalStep::UserBotWorkspaces,
+            ],
+            // Inboxes are keyed by principal without foreign keys, for the account and for each
+            // of its bots. Memberships go first so no fan-out lands after the entries are gone.
+            soft_sweeps: vec![
+                sweep_via("Bot", "ConversationMember", "principalId"),
+                sweep_via("Bot", "InboxEntry", "inboxId"),
+                sweep_via("Bot", "InboxKey", "principalId"),
+                sweep("ConversationMember", "principalId"),
+                sweep("InboxEntry", "inboxId"),
+                sweep("InboxKey", "principalId"),
+                sweep("QuotaWarningState", "payerId"),
+            ],
             restrict_as_cascade: vec![
                 ("WasmPackageInvitation", "invitedById"),
                 ("WasmPackageInvitation", "inviteeId"),
@@ -329,6 +358,23 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 keep("UsageLimitAuditLog", "userId", "billing history"),
                 keep("AuditEntry", "chainId", "audit trail"),
                 keep("AuditRecord", "chainId", "audit trail"),
+                keep(
+                    "InboxEntry",
+                    "senderId",
+                    "messages stay in their recipients' inboxes and show a deleted account",
+                ),
+                keep("Conversation", "createdBy", "attribution"),
+                keep("ConversationMember", "addedBy", "attribution"),
+                keep(
+                    "BotPermission",
+                    "grantedBy",
+                    "a grant goes with the bots it links, which the granting owner holds",
+                ),
+                keep(
+                    "App",
+                    "botId",
+                    "a bot's workspace is an app: it goes through its own app deletion",
+                ),
             ],
             ..RootOverrides::default()
         },

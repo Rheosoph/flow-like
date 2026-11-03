@@ -53,6 +53,11 @@ pub struct WasmPackageRef {
     pub wasm_url: String,
     pub cwasm_url: String,
     pub cwasm_checksum: String,
+    /// The package manifest's `permissions` as the registry stores it: the memory and timeout
+    /// tiers and the allowed hosts the executor enforces. `None` when the API predates the
+    /// field; the executor then runs the package with the default limits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permissions: Option<serde_json::Value>,
 }
 
 /// Deterministic authority revision for the executable WASM package set.

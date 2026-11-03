@@ -1,15 +1,16 @@
 "use client";
 
 import { cn, useSidebar } from "@flow-like/flow-like-ui";
+import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
 import { ChatActivityBadge } from "@flow-like/flow-like-ui/components/global-chat/chat-activity";
 import { useTranslation } from "@flow-like/locales";
 import {
+	BotIcon,
 	CompassIcon,
 	HomeIcon,
 	LayoutGridIcon,
 	type LucideIcon,
 	MenuIcon,
-	SparklesIcon,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -21,7 +22,7 @@ interface NavDestination {
 	isActive: (pathname: string) => boolean;
 }
 
-// Home / Explore sit left of the emphasised FlowPilot centre; My Apps sits right.
+// Home / Explore sit left of the emphasised Bots centre; My Apps sits right.
 const DESTINATIONS: readonly NavDestination[] = [
 	{ title: "Home", href: "/", icon: HomeIcon, isActive: (p) => p === "/" },
 	{
@@ -62,7 +63,7 @@ function NavCell({
 
 /**
  * Persistent thumb-reachable navigation on phones. Rendered in-flow at the
- * bottom of the app shell (so page content never hides behind it) with FlowPilot
+ * bottom of the app shell (so page content never hides behind it) with Bots
  * emphasised as the primary mobile surface. "Menu" opens the full sidebar sheet
  * for everything else (profiles, settings, university, …).
  */
@@ -70,7 +71,8 @@ export function MobileBottomNav() {
 	const { t } = useTranslation("common");
 	const pathname = usePathname();
 	const { toggleSidebar } = useSidebar();
-	const flowpilotActive = pathname === "/chat" || pathname.startsWith("/chat/");
+	const botsActive =
+		pathname === BOTS_ROUTE || pathname.startsWith(`${BOTS_ROUTE}/`);
 
 	return (
 		<nav
@@ -82,29 +84,29 @@ export function MobileBottomNav() {
 				<NavCell dest={DESTINATIONS[1]} pathname={pathname} />
 
 				<Link
-					href="/chat"
-					aria-label={t("flowpilot", "FlowPilot")}
-					aria-current={flowpilotActive ? "page" : undefined}
+					href={BOTS_ROUTE}
+					aria-label={t("nav:bots", "Bots")}
+					aria-current={botsActive ? "page" : undefined}
 					className="flex flex-1 flex-col items-center justify-center gap-0.5 outline-none"
 				>
 					<span
 						className={cn(
 							"relative -mt-1 grid size-9 place-items-center rounded-full text-white shadow-md shadow-primary/30",
 							"bg-linear-to-br from-primary via-primary to-purple-600",
-							flowpilotActive &&
+							botsActive &&
 								"ring-2 ring-primary/40 ring-offset-1 ring-offset-background",
 						)}
 					>
-						<SparklesIcon className="size-5" strokeWidth={2.2} aria-hidden />
+						<BotIcon className="size-5" strokeWidth={2.2} aria-hidden />
 						<ChatActivityBadge className="absolute -right-1 -top-1" />
 					</span>
 					<span
 						className={cn(
 							"text-[10.5px] font-medium leading-none",
-							flowpilotActive ? "text-primary" : "text-muted-foreground",
+							botsActive ? "text-primary" : "text-muted-foreground",
 						)}
 					>
-						{t("flowpilot", "FlowPilot")}
+						{t("nav:bots", "Bots")}
 					</span>
 				</Link>
 

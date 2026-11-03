@@ -26,6 +26,8 @@ const INTERVAL_RUNS: Duration = Duration::from_secs(2);
 const INTERVAL_NOTIFICATIONS: Duration = Duration::from_secs(30);
 /// The server drops run wakeups inside its 500 ms per-account window instead of delaying them.
 const CHASE: Duration = Duration::from_millis(750);
+/// An API that does not hold polls answers well within this; one that holds them, never.
+const HELD: Duration = Duration::from_secs(1);
 
 pub(super) fn backoff(base: Duration, cap: Duration, attempt: u32) -> Duration {
     base.saturating_mul(2_u32.saturating_pow(attempt.saturating_sub(1)))
@@ -47,6 +49,11 @@ fn terminal(status: &str) -> bool {
     ]
     .iter()
     .any(|name| status.eq_ignore_ascii_case(name))
+}
+
+/// The API answers a held poll early only with one of these.
+fn changed(response: &RealtimePollResponse) -> bool {
+    response.notifications.is_some() || !response.runs.is_empty() || !response.errors.is_empty()
 }
 
 /// Without a live provider the server holds a poll for at most `max_wait_ms`.
@@ -161,26 +168,29 @@ impl Pacing {
         }
     }
 
-    /// When the next poll is due after a successful one; `None` polls again at once.
+    /// When the next poll is due after a successful one; `None` polls again at once. A long poll
+    /// that came back early without changes was not held, so it paces like an interval.
     pub fn due(
         &self,
         polled: &RealtimePollRequest,
         response: &RealtimePollResponse,
         live: bool,
         max_wait_ms: u64,
+        elapsed: Duration,
         now: Instant,
     ) -> Option<Instant> {
         if response.runs.iter().any(|run| run.has_more) {
             return None;
         }
         let runs = !polled.runs.is_empty();
+        let held = elapsed >= Duration::from_millis(timeout_ms(false, max_wait_ms) / 2).min(HELD);
         let delay = if live {
             if runs {
                 RECOVERY_RUNS
             } else {
                 RECOVERY_NOTIFICATIONS
             }
-        } else if max_wait_ms > 0 {
+        } else if max_wait_ms > 0 && (held || changed(response)) {
             return None;
         } else {
             jitter(if runs {
@@ -200,8 +210,8 @@ impl Pacing {
 mod tests {
     use super::*;
     use flow_like_types::realtime::{
-        REALTIME_ERROR_NOT_FOUND, RealtimeNotificationSubscription, RealtimeRunEvent,
-        RealtimeRunSubscription, RealtimeRunUpdate, RealtimeSubscriptionError,
+        REALTIME_ERROR_NOT_FOUND, RealtimeNotificationSubscription, RealtimeNotificationUpdate,
+        RealtimeRunEvent, RealtimeRunSubscription, RealtimeRunUpdate, RealtimeSubscriptionError,
     };
 
     fn within(delay: Duration, nominal: Duration) -> bool {
@@ -328,14 +338,62 @@ mod tests {
         assert_eq!(timeout_ms(false, 8_000), 8_000);
         assert_eq!(timeout_ms(false, 0), 0);
         assert_eq!(timeout_ms(true, 20_000), 0);
+        let held = Duration::from_secs(8);
         assert!(
             pacing
-                .due(&polled(&["run"], true), &idle, false, 8_000, now)
+                .due(&polled(&["run"], true), &idle, false, 8_000, held, now)
+                .is_none()
+        );
+        let shorter_hold = Duration::from_secs(2);
+        assert!(
+            pacing
+                .due(&polled(&[], true), &idle, false, 20_000, shorter_hold, now)
+                .is_none()
+        );
+        let unheld = pacing
+            .due(
+                &polled(&["run"], true),
+                &idle,
+                false,
+                8_000,
+                Duration::ZERO,
+                now,
+            )
+            .unwrap();
+        assert!(
+            within(unheld - now, Duration::from_secs(2)),
+            "{:?}",
+            unheld - now
+        );
+        let notified = RealtimePollResponse {
+            notifications: Some(RealtimeNotificationUpdate {
+                revision: "next".into(),
+                overview: Default::default(),
+            }),
+            ..Default::default()
+        };
+        assert!(
+            pacing
+                .due(
+                    &polled(&[], true),
+                    &notified,
+                    false,
+                    8_000,
+                    Duration::ZERO,
+                    now
+                )
                 .is_none()
         );
 
         let runs = pacing
-            .due(&polled(&["run"], true), &idle, false, 0, now)
+            .due(
+                &polled(&["run"], true),
+                &idle,
+                false,
+                0,
+                Duration::ZERO,
+                now,
+            )
             .unwrap();
         assert!(
             within(runs - now, Duration::from_secs(2)),
@@ -343,7 +401,7 @@ mod tests {
             runs - now
         );
         let inbox = pacing
-            .due(&polled(&[], true), &idle, false, 0, now)
+            .due(&polled(&[], true), &idle, false, 0, Duration::ZERO, now)
             .unwrap();
         assert!(
             within(inbox - now, Duration::from_secs(30)),
@@ -356,16 +414,23 @@ mod tests {
         };
         assert!(
             pacing
-                .due(&polled(&["run"], false), &more, false, 0, now)
+                .due(
+                    &polled(&["run"], false),
+                    &more,
+                    false,
+                    0,
+                    Duration::ZERO,
+                    now
+                )
                 .is_none()
         );
 
         assert_eq!(
-            pacing.due(&polled(&["run"], true), &idle, true, 0, now),
+            pacing.due(&polled(&["run"], true), &idle, true, 0, Duration::ZERO, now),
             Some(now + Duration::from_secs(5))
         );
         assert_eq!(
-            pacing.due(&polled(&[], true), &idle, true, 20_000, now),
+            pacing.due(&polled(&[], true), &idle, true, 20_000, Duration::ZERO, now),
             Some(now + Duration::from_secs(30))
         );
     }
@@ -387,7 +452,14 @@ mod tests {
             assert!(waiting.runs.is_empty());
             assert!(waiting.notifications.is_some());
             assert_eq!(
-                pacing.due(&waiting, &RealtimePollResponse::default(), true, 0, now),
+                pacing.due(
+                    &waiting,
+                    &RealtimePollResponse::default(),
+                    true,
+                    0,
+                    Duration::ZERO,
+                    now
+                ),
                 Some(retry)
             );
             now = retry;
@@ -426,26 +498,36 @@ mod tests {
         };
         pacing.succeeded(&request, &streaming, true, now);
         let chase = now + Duration::from_millis(750);
-        assert_eq!(pacing.due(&request, &streaming, true, 0, now), Some(chase));
+        assert_eq!(
+            pacing.due(&request, &streaming, true, 0, Duration::ZERO, now),
+            Some(chase)
+        );
 
         let quiet = RealtimePollResponse::default();
         pacing.begin(false, now + Duration::from_millis(10));
         pacing.succeeded(&request, &quiet, true, now + Duration::from_millis(20));
         assert_eq!(
-            pacing.due(&request, &quiet, true, 0, now + Duration::from_millis(20)),
+            pacing.due(
+                &request,
+                &quiet,
+                true,
+                0,
+                Duration::ZERO,
+                now + Duration::from_millis(20)
+            ),
             Some(chase)
         );
         pacing.begin(false, chase);
         pacing.succeeded(&request, &quiet, true, chase);
         assert_eq!(
-            pacing.due(&request, &quiet, true, 0, chase),
+            pacing.due(&request, &quiet, true, 0, Duration::ZERO, chase),
             Some(chase + Duration::from_secs(5))
         );
 
         pacing.succeeded(&request, &streaming, true, now);
         pacing.begin(true, now + Duration::from_millis(100));
         assert_eq!(
-            pacing.due(&request, &quiet, true, 0, now),
+            pacing.due(&request, &quiet, true, 0, Duration::ZERO, now),
             Some(now + Duration::from_secs(5))
         );
     }

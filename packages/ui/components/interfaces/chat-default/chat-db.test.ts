@@ -72,7 +72,9 @@ const richMessage = (): IMessage => ({
 			widget_id: "browser",
 			surface_id: "main",
 			component: { type: "widgetInstance" },
-			updates: [{ type: "dataModelUpdate", path: "/url", value: "about:blank" }],
+			updates: [
+				{ type: "dataModelUpdate", path: "/url", value: "about:blank" },
+			],
 		},
 		title: "Browser",
 		display: "maximized",

@@ -121,6 +121,8 @@ async fn hosted_model_tier(
         &[EMBEDDINGS_PATH]
     } else if bit_type == BitType::SystemOne.to_value() {
         &[super::SYSTEMONE_PATH]
+    } else if bit_type == BitType::ImageGeneration.to_value() {
+        &[super::IMAGES_PATH]
     } else {
         &[CHAT_PATH, RESPONSES_PATH]
     };

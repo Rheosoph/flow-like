@@ -1,4 +1,4 @@
-use super::{Acknowledgement, Envelope};
+use super::{Acknowledgement, Envelope, refusal};
 use flow_like_types::Value;
 use flow_like_types::channel::ChannelPushKind;
 use flow_like_types::tokio_util::sync::CancellationToken;
@@ -98,16 +98,16 @@ impl Router {
             return if previous == &fingerprint {
                 ack.clone()
             } else {
-                Acknowledgement::rejected("Delivery id was already used for another message")
+                Acknowledgement::rejected(refusal::DUPLICATE_DELIVERY)
             };
         }
         let push = envelope.push;
         let ack = if push.channel_id != self.channel_id {
-            Acknowledgement::rejected("Push belongs to another channel")
+            Acknowledgement::rejected(refusal::WRONG_CHANNEL)
         } else if state.closed {
-            Acknowledgement::rejected("Channel is closed")
+            Acknowledgement::rejected(refusal::CHANNEL_CLOSED)
         } else if self.cancelled.is_cancelled() && !matches!(push.kind, ChannelPushKind::Cancel) {
-            Acknowledgement::rejected("Channel is cancelled")
+            Acknowledgement::rejected(refusal::CANCELLED)
         } else {
             match push.kind {
                 ChannelPushKind::Cancel => {
@@ -116,7 +116,7 @@ impl Router {
                 }
                 ChannelPushKind::Inbound => {
                     if state.inbound.len() >= MAX_INBOUND {
-                        Acknowledgement::rejected("Channel inbound buffer is full")
+                        Acknowledgement::rejected(refusal::INBOUND_FULL)
                     } else {
                         state.inbound.push_back(push.value);
                         Acknowledgement::accepted()
@@ -128,21 +128,21 @@ impl Router {
                         .as_ref()
                         .and_then(|id| state.pending.get_mut(id))
                     {
-                        None => Acknowledgement::rejected("No pending request with this id"),
+                        None => Acknowledgement::rejected(refusal::UNKNOWN_REQUEST),
                         Some(pending)
                             if pending.expires_at <= flow_like_types::channel::now_unix() =>
                         {
-                            Acknowledgement::rejected("Request has expired")
+                            Acknowledgement::rejected(refusal::EXPIRED)
                         }
                         Some(pending) => match pending.sender.take() {
                             Some(sender) => {
                                 if sender.send(push.value).is_ok() {
                                     Acknowledgement::accepted()
                                 } else {
-                                    Acknowledgement::rejected("Request waiter is closed")
+                                    Acknowledgement::rejected(refusal::WAITER_CLOSED)
                                 }
                             }
-                            None => Acknowledgement::rejected("Request was already answered"),
+                            None => Acknowledgement::rejected(refusal::ALREADY_ANSWERED),
                         },
                     }
                 }

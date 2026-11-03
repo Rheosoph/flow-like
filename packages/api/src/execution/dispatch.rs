@@ -139,6 +139,9 @@ use flow_like_types::dispatch::{
 
 use super::compiled_artifacts::{EnsuredArtifact, LocalOnlyBoard};
 
+mod tool_job;
+pub use tool_job::ToolTarget;
+
 use crate::channel::ChannelIssuer;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
@@ -1289,6 +1292,14 @@ impl Dispatcher {
             "Lambda tenant isolation active"
         );
         Ok(Some(tenant_id))
+    }
+
+    #[cfg(feature = "lambda")]
+    fn lambda_tenant_id_for_user(&self, user_id: &str) -> Result<Option<String>, DispatchError> {
+        let enabled = *LAMBDA_TENANT_ISOLATION
+            .as_ref()
+            .map_err(|error| DispatchError::Configuration(error.clone()))?;
+        Ok(enabled.then(|| lambda_tenant_id(user_id)))
     }
 
     /// Dispatch through Lambda's native asynchronous delivery queue.

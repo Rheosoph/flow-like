@@ -107,6 +107,39 @@ Use preference-based selection when the board can tolerate a compatible alternat
 
 A provider may expose several model types. A text-generation model is not automatically an embedding, speech, image, or video model.
 
+## Hosted image generation
+
+Select an **ImageGeneration** Bit from the model catalog and connect **Load Bit**
+to the **Provider** input of **Generate Image**. Supply a conversation in
+**History** and a destination in **Output Path**. The node uses the final user
+message as the prompt, generates one image, and returns its saved path and
+metadata. Hosted image Bits use your authenticated Flow-Like account; provider
+keys stay on the server.
+
+Administrators can choose **Hosted** when adding an image model, then select
+Cloudflare Workers AI or OpenRouter, an upstream model, an access tier, and a
+per-image price. Hosted Bits have no downloadable model files. Existing local
+generation and personal provider connections remain available.
+
+Cloudflare supports **FLUX.1 Schnell** with its default square dimensions and
+four steps, and **Stable Diffusion XL Base 1.0** with twenty steps. SDXL also
+accepts a negative prompt and dimensions from 256 to 2048 pixels. OpenRouter
+uses its [dedicated Image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation/)
+with an image model ID. Optional controls depend on the selected model.
+
+Each request accepts a prompt of up to 2,048 characters and returns one PNG,
+JPEG, or WebP image of at most 8 MiB. Reference images, image editing, multiple
+outputs, and arbitrary provider request parameters are outside this hosted
+interface. The returned MIME type determines the saved file extension.
+
+The API reserves credits before generation. Cloudflare uses the catalog's
+configured per-image provider tariff. For OpenRouter, configure the highest
+cost across the model's permitted settings and routed providers; the final
+charge uses its reported cost. Missing cost information or an interrupted
+provider response leaves usage reserved for reconciliation. Check usage before
+retrying a failed call. See [server configuration](/self-hosting/docker-compose/configuration/#hosted-image-providers)
+for credentials and pricing fields.
+
 ## Local models
 
 [Ollama Model](/nodes/ai/generative/provider/ai-generative-build-ollama/) and [LM Studio Model](/nodes/ai/generative/provider/ai-generative-build-lmstudio/) connect to compatible local services.

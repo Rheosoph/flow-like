@@ -12,12 +12,18 @@ use flow_like::{
     },
 };
 #[cfg(feature = "execute")]
+use flow_like_model_provider::llm::{
+    CompletionModelHandle, ModelLogic, lenient_settings::lenient_agent,
+};
+#[cfg(feature = "execute")]
 use flow_like_model_provider::response::{LLMUsageStats, ModelCallEntry, Usage};
 use flow_like_types::json;
 #[cfg(feature = "execute")]
 use flow_like_types::json::{Deserialize, Serialize};
 #[cfg(feature = "execute")]
 use flow_like_types::{Value, anyhow};
+#[cfg(feature = "execute")]
+use rig::agent::AgentBuilder;
 #[cfg(feature = "execute")]
 use rig::completion::{Completion, CompletionError, ToolDefinition};
 #[cfg(feature = "execute")]
@@ -90,19 +96,25 @@ impl Tool for DynamicSubmitTool {
     }
 }
 
+/// How the extracted value travels through the `submit` tool, whose arguments must be an
+/// object.
 #[cfg(feature = "execute")]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) enum ExtractionMode {
+pub enum ExtractionMode {
+    /// The schema is an object schema and is the tool's parameters.
     Direct,
+    /// Any other schema, carried in the tool's `value` argument.
     Wrapped,
 }
 
 #[cfg(feature = "execute")]
-pub(super) struct PreparedSchema {
-    pub(super) tool_parameters: Value,
-    pub(super) output_schema: Value,
-    pub(super) mode: ExtractionMode,
-    pub(super) was_inferred: bool,
+#[derive(Clone, Debug)]
+pub struct PreparedSchema {
+    pub tool_parameters: Value,
+    pub output_schema: Value,
+    pub mode: ExtractionMode,
+    /// The schema was inferred from an example value rather than given.
+    pub was_inferred: bool,
 }
 
 #[cfg(feature = "execute")]
@@ -149,8 +161,9 @@ pub(super) fn compile_validator(schema: &Value) -> flow_like_types::Result<jsons
         .map_err(|error| anyhow!("Schema is not a usable JSON Schema: {error}"))
 }
 
+/// A JSON Schema, or an example value whose schema is inferred, ready for extraction.
 #[cfg(feature = "execute")]
-pub(super) fn prepare_schema(raw: &str) -> flow_like_types::Result<PreparedSchema> {
+pub fn prepare_schema(raw: &str) -> flow_like_types::Result<PreparedSchema> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(anyhow!("Schema input cannot be empty"));
@@ -204,8 +217,9 @@ pub(super) fn prepare_schema(raw: &str) -> flow_like_types::Result<PreparedSchem
     })
 }
 
+/// An object JSON Schema, taken as is; examples are refused.
 #[cfg(feature = "execute")]
-pub(super) fn prepare_reference_schema(raw: &str) -> flow_like_types::Result<PreparedSchema> {
+pub fn prepare_reference_schema(raw: &str) -> flow_like_types::Result<PreparedSchema> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return Err(anyhow!("Reference struct schema cannot be empty"));
@@ -232,8 +246,9 @@ pub(super) fn prepare_reference_schema(raw: &str) -> flow_like_types::Result<Pre
     })
 }
 
+/// The extracted value from `submit`'s arguments, validated against the output schema.
 #[cfg(feature = "execute")]
-pub(super) fn validate_extracted_value(
+pub fn validate_extracted_value(
     prepared_schema: &PreparedSchema,
     args: Value,
 ) -> flow_like_types::Result<Value> {
@@ -310,21 +325,59 @@ fn salvage_json(text: &str) -> Option<Value> {
 }
 
 #[cfg(feature = "execute")]
-pub(super) async fn run_text_extraction(
-    context: &mut ExecutionContext,
-    prepared_schema: PreparedSchema,
-) -> flow_like_types::Result<()> {
-    let model_bit = context.evaluate_pin::<Bit>("model").await?;
-    let text: String = context.evaluate_pin::<String>("text").await?;
-    let hint: String = context.evaluate_pin("hint").await.unwrap_or_default();
-    let max_tokens: i64 = context.evaluate_pin("max_tokens").await.unwrap_or_default();
+#[derive(Clone, Debug, Default)]
+pub struct ExtractOptions {
+    /// Guidance next to the text, e.g. "only line items, not totals". Blank for none.
+    pub hint: String,
+    /// Output token budget per attempt; `None` or 0 leaves it to the provider.
+    pub max_tokens: Option<u64>,
+    /// Model name reported in the usage stats.
+    pub model_label: Option<String>,
+}
 
-    context.log_message(
-        &format!("Using extraction mode: {:?}", prepared_schema.mode),
-        LogLevel::Debug,
-    );
+#[cfg(feature = "execute")]
+#[derive(Clone, Debug)]
+pub struct Extraction {
+    /// The value matching the schema; unwrapped in [`ExtractionMode::Wrapped`].
+    pub value: Value,
+    pub stats: LLMUsageStats,
+}
 
-    let base_input = if hint.trim().is_empty() {
+/// The agent `Bit::agent` builds for a history-less request, from a model the host built.
+#[cfg(feature = "execute")]
+async fn extraction_agent(
+    model: &dyn ModelLogic,
+) -> flow_like_types::Result<AgentBuilder<CompletionModelHandle<'static>>> {
+    let settings = model.agent_settings(&None)?;
+    let model_name = model.default_model().await.unwrap_or_default();
+    let client = model.provider().await?.into_client();
+    let mut builder = lenient_agent(client.as_ref(), &model_name, None);
+    if let Some(params) = settings.params {
+        builder = builder.additional_params(params);
+    }
+    if let Some(temperature) = settings.temperature {
+        builder = builder.temperature(temperature);
+    }
+    if let Some(max_tokens) = settings.max_tokens {
+        builder = builder.max_tokens(max_tokens);
+    }
+    Ok(builder)
+}
+
+/// Extracts `text` into `schema` through the `submit` tool: up to three attempts, transient
+/// provider failures retried with backoff, JSON salvaged from prose replies, and a correction
+/// turn after a reply that called no tool or broke the schema. Every failed attempt is
+/// described in `warnings` as it happens, so they survive a final error.
+#[cfg(feature = "execute")]
+pub async fn extract_with_model(
+    model: &dyn ModelLogic,
+    text: &str,
+    schema: &PreparedSchema,
+    options: &ExtractOptions,
+    warnings: &mut Vec<String>,
+) -> flow_like_types::Result<Extraction> {
+    let max_tokens = options.max_tokens.filter(|&max| max > 0);
+    let base_input = if options.hint.trim().is_empty() {
         format!(
             "Extract structured data from the following text according to the schema.\n\nText:\n{}",
             text
@@ -332,12 +385,11 @@ pub(super) async fn run_text_extraction(
     } else {
         format!(
             "Extract structured data from the following text according to the schema.\n\nExtraction hint: {}\n\nText:\n{}",
-            hint, text
+            options.hint, text
         )
     };
 
     let preamble = "You are a knowledge extraction assistant. Extract data by calling the 'submit' tool with structured data matching the provided schema.";
-    let model_name = model_bit.meta.get("en").map(|m| m.name.clone());
 
     let start = Instant::now();
     let mut usage = Usage::default();
@@ -356,18 +408,17 @@ pub(super) async fn run_text_extraction(
             None => base_input.clone(),
         };
 
-        let mut agent_builder = model_bit
-            .agent(context, &None)
+        let mut agent_builder = extraction_agent(model)
             .await?
             .preamble(preamble)
             .tool(DynamicSubmitTool {
-                parameters: prepared_schema.tool_parameters.clone(),
-                output_schema: prepared_schema.output_schema.clone(),
+                parameters: schema.tool_parameters.clone(),
+                output_schema: schema.output_schema.clone(),
             })
             .tool_choice(ToolChoice::Required);
 
-        if max_tokens > 0 {
-            agent_builder = agent_builder.max_tokens(max_tokens as u64);
+        if let Some(max_tokens) = max_tokens {
+            agent_builder = agent_builder.max_tokens(max_tokens);
         }
 
         let agent = agent_builder.build();
@@ -384,12 +435,9 @@ pub(super) async fn run_text_extraction(
             Ok(response) => response,
             Err(error) => {
                 let transient = is_transient(&error);
-                context.log_message(
-                    &format!(
-                        "Extraction attempt {attempt}/{MAX_EXTRACTION_ATTEMPTS} failed: {error}"
-                    ),
-                    LogLevel::Warn,
-                );
+                warnings.push(format!(
+                    "Extraction attempt {attempt}/{MAX_EXTRACTION_ATTEMPTS} failed: {error}"
+                ));
                 last_error = Some(anyhow!("Extraction request failed: {error}"));
                 if transient {
                     continue;
@@ -409,7 +457,7 @@ pub(super) async fn run_text_extraction(
             .total_tokens
             .saturating_add(attempt_usage.total_tokens);
         calls.push(ModelCallEntry {
-            model: model_name.clone().unwrap_or_default(),
+            model: options.model_label.clone().unwrap_or_default(),
             usage: attempt_usage.clone(),
             duration_ms: Some(attempt_start.elapsed().as_millis() as u64),
         });
@@ -444,7 +492,7 @@ pub(super) async fn run_text_extraction(
 
         let candidate = match submitted {
             Some(arguments) => Some(arguments),
-            None => salvage_json(&spoken).map(|value| match prepared_schema.mode {
+            None => salvage_json(&spoken).map(|value| match schema.mode {
                 ExtractionMode::Direct => value,
                 ExtractionMode::Wrapped => json::json!({ "value": value }),
             }),
@@ -458,14 +506,11 @@ pub(super) async fn run_text_extraction(
             } else {
                 returned.join(", ")
             };
-            let truncated =
-                max_tokens > 0 && i64::from(attempt_usage.completion_tokens) >= max_tokens;
-            context.log_message(
-                &format!(
-                    "Extraction attempt {attempt}/{MAX_EXTRACTION_ATTEMPTS} returned no submit tool call (returned: {observed})"
-                ),
-                LogLevel::Warn,
-            );
+            let truncated = max_tokens
+                .is_some_and(|max_tokens| u64::from(attempt_usage.completion_tokens) >= max_tokens);
+            warnings.push(format!(
+                "Extraction attempt {attempt}/{MAX_EXTRACTION_ATTEMPTS} returned no submit tool call (returned: {observed})"
+            ));
             last_error = Some(anyhow!(
                 "Model returned no 'submit' tool call and its reply held no usable JSON (returned: {observed}; {} completion tokens){}",
                 attempt_usage.completion_tokens,
@@ -482,28 +527,21 @@ pub(super) async fn run_text_extraction(
             continue;
         };
 
-        match validate_extracted_value(&prepared_schema, candidate) {
-            Ok(extracted) => {
-                context.log_message("Successfully extracted structured data", LogLevel::Debug);
+        match validate_extracted_value(schema, candidate) {
+            Ok(value) => {
                 let stats = LLMUsageStats {
                     usage,
-                    model: model_name,
+                    model: options.model_label.clone(),
                     duration_ms: Some(start.elapsed().as_millis() as u64),
                     iterations: Some(attempt),
                     calls,
                 };
-                context.set_pin_value("response", extracted).await?;
-                context.set_pin_value("stats", json::json!(stats)).await?;
-                context.activate_exec_pin("exec_out").await?;
-                return Ok(());
+                return Ok(Extraction { value, stats });
             }
             Err(error) => {
-                context.log_message(
-                    &format!(
-                        "Extraction attempt {attempt}/{MAX_EXTRACTION_ATTEMPTS} did not match the schema: {error}"
-                    ),
-                    LogLevel::Warn,
-                );
+                warnings.push(format!(
+                    "Extraction attempt {attempt}/{MAX_EXTRACTION_ATTEMPTS} did not match the schema: {error}"
+                ));
                 correction = Some(format!(
                     "Your previous reply did not match the schema: {error}. Fix exactly that problem and call 'submit' again."
                 ));
@@ -514,6 +552,61 @@ pub(super) async fn run_text_extraction(
 
     Err(last_error
         .unwrap_or_else(|| anyhow!("Extraction failed after {MAX_EXTRACTION_ATTEMPTS} attempts")))
+}
+
+#[cfg(feature = "execute")]
+pub(super) async fn run_text_extraction(
+    context: &mut ExecutionContext,
+    prepared_schema: PreparedSchema,
+) -> flow_like_types::Result<()> {
+    let model_bit = context.evaluate_pin::<Bit>("model").await?;
+    let text: String = context.evaluate_pin::<String>("text").await?;
+    let hint: String = context.evaluate_pin("hint").await.unwrap_or_default();
+    let max_tokens: i64 = context.evaluate_pin("max_tokens").await.unwrap_or_default();
+
+    context.log_message(
+        &format!("Using extraction mode: {:?}", prepared_schema.mode),
+        LogLevel::Debug,
+    );
+
+    let model = context
+        .app_state
+        .model_factory
+        .clone()
+        .build(
+            &model_bit,
+            context.app_state.clone(),
+            context.token.clone(),
+            context.model_usage_context(),
+        )
+        .await?;
+    let options = ExtractOptions {
+        hint,
+        max_tokens: u64::try_from(max_tokens).ok(),
+        model_label: model_bit.meta.get("en").map(|meta| meta.name.clone()),
+    };
+
+    let mut warnings = Vec::new();
+    let extraction = extract_with_model(
+        model.as_ref(),
+        &text,
+        &prepared_schema,
+        &options,
+        &mut warnings,
+    )
+    .await;
+    for warning in &warnings {
+        context.log_message(warning, LogLevel::Warn);
+    }
+    let extraction = extraction?;
+
+    context.log_message("Successfully extracted structured data", LogLevel::Debug);
+    context.set_pin_value("response", extraction.value).await?;
+    context
+        .set_pin_value("stats", json::json!(extraction.stats))
+        .await?;
+    context.activate_exec_pin("exec_out").await?;
+    Ok(())
 }
 
 #[cfg(all(test, feature = "execute"))]
@@ -611,6 +704,288 @@ mod extraction_tests {
         assert!(!is_transient(&CompletionError::ProviderError(
             "invalid api key".to_string()
         )));
+    }
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod extract_with_model_tests {
+    use super::*;
+    use flow_like_model_provider::llm::{
+        CompletionClientDyn, CompletionModelDyn, ModelConstructor,
+    };
+    use rig::OneOrMany;
+    use rig::completion::{CompletionModel, CompletionRequest, CompletionResponse};
+    use rig::streaming::StreamingCompletionResponse;
+    use std::collections::VecDeque;
+    use std::sync::{Arc, Mutex};
+
+    enum Reply {
+        Submit(Value),
+        Prose(&'static str),
+        Transient,
+        Fatal,
+    }
+
+    #[derive(Clone)]
+    struct Scripted {
+        replies: Arc<Mutex<VecDeque<Reply>>>,
+        sent: Arc<Mutex<Vec<CompletionRequest>>>,
+    }
+
+    impl CompletionModel for Scripted {
+        type Response = ();
+        type StreamingResponse = ();
+        type Client = ();
+
+        fn make(_: &Self::Client, _: impl Into<String>) -> Self {
+            unreachable!()
+        }
+
+        async fn completion(
+            &self,
+            request: CompletionRequest,
+        ) -> Result<CompletionResponse<()>, CompletionError> {
+            self.sent.lock().unwrap().push(request);
+            let reply = self
+                .replies
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("the model was asked more often than scripted");
+            let choice = match reply {
+                Reply::Submit(arguments) => {
+                    AssistantContent::tool_call("call-1", "submit", arguments)
+                }
+                Reply::Prose(text) => AssistantContent::text(text),
+                Reply::Transient => {
+                    return Err(CompletionError::ProviderError(
+                        "error code: 503".to_string(),
+                    ));
+                }
+                Reply::Fatal => {
+                    return Err(CompletionError::ProviderError(
+                        "invalid api key".to_string(),
+                    ));
+                }
+            };
+            Ok(CompletionResponse {
+                choice: OneOrMany::one(choice),
+                usage: rig::completion::Usage {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                    total_tokens: 15,
+                    ..rig::completion::Usage::new()
+                },
+                raw_response: (),
+                message_id: None,
+            })
+        }
+
+        async fn stream(
+            &self,
+            _: CompletionRequest,
+        ) -> Result<StreamingCompletionResponse<()>, CompletionError> {
+            unreachable!("extraction never streams")
+        }
+    }
+
+    struct ScriptedClient(Scripted);
+
+    impl CompletionClientDyn for ScriptedClient {
+        fn completion_model<'a>(&self, _: &str) -> Box<dyn CompletionModelDyn + 'a> {
+            Box::new(self.0.clone())
+        }
+
+        fn agent<'a>(&self, _: &str) -> AgentBuilder<CompletionModelHandle<'a>> {
+            unreachable!()
+        }
+    }
+
+    struct ScriptedModel(Scripted);
+
+    #[async_trait]
+    impl ModelLogic for ScriptedModel {
+        async fn provider(&self) -> flow_like_types::Result<ModelConstructor> {
+            Ok(ModelConstructor {
+                inner: Box::new(ScriptedClient(self.0.clone())),
+            })
+        }
+
+        async fn default_model(&self) -> Option<String> {
+            Some("scripted".to_string())
+        }
+    }
+
+    fn scripted(replies: Vec<Reply>) -> (ScriptedModel, Scripted) {
+        let inner = Scripted {
+            replies: Arc::new(Mutex::new(replies.into())),
+            sent: Arc::default(),
+        };
+        (ScriptedModel(inner.clone()), inner)
+    }
+
+    fn person() -> PreparedSchema {
+        prepare_schema(
+            r#"{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]}"#,
+        )
+        .unwrap()
+    }
+
+    fn prompt(request: &CompletionRequest) -> String {
+        format!("{:?}", request.chat_history.last_ref())
+    }
+
+    async fn extract(
+        model: &ScriptedModel,
+        schema: &PreparedSchema,
+        options: &ExtractOptions,
+    ) -> (flow_like_types::Result<Extraction>, Vec<String>) {
+        let mut warnings = Vec::new();
+        let result = extract_with_model(
+            model,
+            "Ada Lovelace wrote notes.",
+            schema,
+            options,
+            &mut warnings,
+        )
+        .await;
+        (result, warnings)
+    }
+
+    #[tokio::test]
+    async fn the_first_submit_call_is_the_result() {
+        let (model, inner) = scripted(vec![Reply::Submit(json::json!({"name": "Ada"}))]);
+        let options = ExtractOptions {
+            hint: "only people".to_string(),
+            max_tokens: Some(256),
+            model_label: Some("Scripted".to_string()),
+        };
+
+        let (result, warnings) = extract(&model, &person(), &options).await;
+        let extraction = result.unwrap();
+
+        assert_eq!(extraction.value, json::json!({"name": "Ada"}));
+        assert!(warnings.is_empty());
+        assert_eq!(extraction.stats.iterations, Some(1));
+        assert_eq!(extraction.stats.model.as_deref(), Some("Scripted"));
+        assert_eq!(extraction.stats.usage.total_tokens, 15);
+        assert_eq!(extraction.stats.calls.len(), 1);
+        let sent = inner.sent.lock().unwrap();
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].max_tokens, Some(256));
+        assert!(matches!(sent[0].tool_choice, Some(ToolChoice::Required)));
+        assert_eq!(
+            sent[0]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["submit"]
+        );
+        assert!(prompt(&sent[0]).contains("Extraction hint: only people"));
+    }
+
+    #[tokio::test]
+    async fn json_in_a_prose_reply_is_salvaged_and_wrapped_when_needed() {
+        let (model, _) = scripted(vec![Reply::Prose(
+            "Sure! {\"name\": \"Ada\"} -- anything else?",
+        )]);
+        let (result, warnings) = extract(&model, &person(), &ExtractOptions::default()).await;
+        assert_eq!(result.unwrap().value, json::json!({"name": "Ada"}));
+        assert!(warnings.is_empty());
+
+        let (model, _) = scripted(vec![Reply::Prose("```json\n[3, 4]\n```")]);
+        let numbers = prepare_schema("[1, 2]").unwrap();
+        assert_eq!(numbers.mode, ExtractionMode::Wrapped);
+        let (result, _) = extract(&model, &numbers, &ExtractOptions::default()).await;
+        assert_eq!(result.unwrap().value, json::json!([3, 4]));
+    }
+
+    #[tokio::test]
+    async fn a_schema_mismatch_gets_a_correction_turn() {
+        let (model, inner) = scripted(vec![
+            Reply::Submit(json::json!({"name": 42})),
+            Reply::Submit(json::json!({"name": "Ada"})),
+        ]);
+
+        let (result, warnings) = extract(&model, &person(), &ExtractOptions::default()).await;
+
+        let extraction = result.unwrap();
+        assert_eq!(extraction.value, json::json!({"name": "Ada"}));
+        assert_eq!(extraction.stats.iterations, Some(2));
+        assert_eq!(extraction.stats.calls.len(), 2);
+        assert_eq!(extraction.stats.usage.total_tokens, 30);
+        assert_eq!(warnings.len(), 1);
+        assert!(
+            warnings[0].starts_with("Extraction attempt 1/3 did not match the schema"),
+            "{warnings:?}"
+        );
+        let sent = inner.sent.lock().unwrap();
+        assert!(prompt(&sent[1]).contains("Your previous reply did not match the schema"));
+    }
+
+    #[tokio::test]
+    async fn transient_failures_are_retried() {
+        let (model, inner) = scripted(vec![
+            Reply::Transient,
+            Reply::Submit(json::json!({"name": "Ada"})),
+        ]);
+
+        let (result, warnings) = extract(&model, &person(), &ExtractOptions::default()).await;
+
+        let extraction = result.unwrap();
+        assert_eq!(extraction.stats.iterations, Some(2));
+        assert_eq!(extraction.stats.calls.len(), 1);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].starts_with("Extraction attempt 1/3 failed"));
+        assert_eq!(inner.sent.lock().unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn other_failures_end_the_extraction_at_once() {
+        let (model, inner) = scripted(vec![Reply::Fatal]);
+
+        let (result, warnings) = extract(&model, &person(), &ExtractOptions::default()).await;
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.starts_with("Extraction request failed"), "{error}");
+        assert!(error.contains("invalid api key"), "{error}");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(inner.sent.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_last_failure_is_reported_after_every_attempt_failed() {
+        let (model, inner) = scripted(vec![
+            Reply::Prose("I cannot help with that."),
+            Reply::Prose("Still no data."),
+            Reply::Prose("Nothing to extract."),
+        ]);
+        let options = ExtractOptions {
+            max_tokens: Some(5),
+            ..ExtractOptions::default()
+        };
+
+        let (result, warnings) = extract(&model, &person(), &options).await;
+
+        let error = result.unwrap_err().to_string();
+        assert!(
+            error.starts_with("Model returned no 'submit' tool call"),
+            "{error}"
+        );
+        assert!(
+            error.contains("The reply hit the Max Tokens limit"),
+            "{error}"
+        );
+        assert_eq!(warnings.len(), 3);
+        assert!(
+            warnings
+                .iter()
+                .all(|warning| warning.contains("returned no submit tool call (returned: text)"))
+        );
+        let sent = inner.sent.lock().unwrap();
+        assert_eq!(sent.len(), 3);
+        assert!(prompt(&sent[1]).contains("did not call the 'submit' tool"));
     }
 }
 

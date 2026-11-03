@@ -54,6 +54,8 @@ interface Run {
 	cancelHeaders?: Record<string, string>;
 	cancellation?: Promise<void>;
 	cancelConfirmed?: boolean;
+	/** The server accepted a stop, but the run has not reported its end yet. */
+	stopAccepted?: boolean;
 	replaying?: boolean;
 	endedAt?: number;
 	/** Event bytes kept for a tab that has not yet received this finished run. */
@@ -263,7 +265,7 @@ export class ExecutionRuntime {
 					throw new Error("The channel does not identify a request");
 				if (command.type === "claim") {
 					if (
-						(run.finished && !run.task.detached) ||
+						isExecutionFinished(run.task) ||
 						handle.expires_at * 1_000 <= Date.now() ||
 						run.replies.has(key) ||
 						run.claims.has(key)
@@ -617,9 +619,11 @@ export class ExecutionRuntime {
 			run.task.status = "completed";
 			run.task.error = undefined;
 		} catch (error) {
-			run.failure = executionError(run.cancelConfirmed ? abortError() : error);
-			if (error instanceof ExecutionDetachedError && !run.cancelConfirmed)
-				run.task.detached = true;
+			const detached = error instanceof ExecutionDetachedError;
+			// Nothing replays a detached run's end, so a stop the server already accepted is its outcome.
+			const stopped = run.cancelConfirmed || (detached && run.stopAccepted);
+			run.failure = executionError(stopped ? abortError() : error);
+			if (detached && !stopped) run.task.detached = true;
 			else {
 				run.task.status =
 					run.failure.name === "AbortError" ? "cancelled" : "failed";
@@ -627,10 +631,11 @@ export class ExecutionRuntime {
 			}
 		} finally {
 			clearTimeout(deadline);
-			// A detached run keeps waiting on the server: its questions stay answerable until they expire.
+			// A detached run keeps waiting on the server: its questions stay answerable until they expire,
+			// and its reply stays incomplete until a stop saves it again.
 			if (!run.task.detached) this.conclude(run);
 			try {
-				await this.save(run, true);
+				await this.save(run, !run.task.detached);
 			} catch (error) {
 				if (!run.task.detached) {
 					run.failure = executionError(error);
@@ -760,6 +765,9 @@ export class ExecutionRuntime {
 	private drop(run: Run) {
 		clearTimeout(run.expiryTimer);
 		this.runs.delete(this.key(run.task.scope, run.task.taskId));
+		// A detached run nobody stopped gets no other last save to release its reply.
+		if (run.task.detached && !isExecutionFinished(run.task))
+			void this.save(run, true).catch(() => undefined);
 	}
 
 	/**
@@ -801,11 +809,14 @@ export class ExecutionRuntime {
 		// Keep the dispatch alive until its run id arrives so cancellation can reach the server.
 		if (!run.task.runId) return;
 		run.cancellation = this.cancelRemote(run).then(
-			() => {
+			async () => {
+				run.stopAccepted = true;
 				// Nothing replays a detached run's end; the accepted stop is its outcome here.
 				if (!run.task.detached) return;
 				run.task.status = "cancelled";
+				run.task.error = undefined;
 				this.conclude(run);
+				await this.save(run, true).catch(() => undefined);
 				this.broadcast(run);
 				this.retain(run);
 			},
@@ -931,7 +942,7 @@ export class ExecutionRuntime {
 		const key = channelRequestKey(handle);
 		const previous = run.replies.get(key);
 		if (previous) return previous;
-		if (run.finished && !run.task.detached)
+		if (isExecutionFinished(run.task))
 			return Promise.reject(new Error("The execution has already finished"));
 		const request = run.task.pendingInteractions.find(
 			(candidate) => candidate.requestId === handle.request_id,

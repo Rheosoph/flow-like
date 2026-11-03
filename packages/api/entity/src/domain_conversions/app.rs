@@ -151,6 +151,7 @@ impl From<app::Model> for App {
                 SystemTime::UNIX_EPOCH
                     + std::time::Duration::from_secs(date_time.timestamp() as u64)
             }),
+            bot_id: model.bot_id,
         }
     }
 }
@@ -210,6 +211,7 @@ impl From<App> for app::Model {
                         .map(|date_time| date_time.fixed_offset())
                     })
             }),
+            bot_id: app.bot_id,
         }
     }
 }

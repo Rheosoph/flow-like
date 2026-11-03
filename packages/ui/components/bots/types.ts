@@ -107,6 +107,8 @@ export interface BotAppearance {
 	effect?: BotEffect;
 	emote?: BotEmote;
 	dark?: boolean;
+	/** The owner muted this bot's notifications. */
+	mute_notifications?: boolean;
 	/** One catalog item per slot. Missing or unavailable items are omitted. */
 	equipment?: Partial<Record<BotEquipmentSlot, string>>;
 	skills?: readonly string[];
@@ -299,9 +301,11 @@ export interface BotAvatarProps {
 	pose?: BotPose;
 	/** Facial expression changes independently of blinking, gaze and body motion. */
 	expression?: BotExpression;
+	/** Keep an explicit facial reaction while the agent state still controls pose and activity. */
+	expressionOverridesState?: boolean;
 	/** A temporary pose, expression and bubble; leaves saved appearance intact. */
 	mood?: BotMood;
-	/** An active agent state takes priority over mood, pose and expression. */
+	/** An active agent state takes priority over mood and pose, and normally over expression. */
 	agentState?: BotAgentState;
 	/** Normalized gaze in [-1, 1]. Track follows the pointer when these are omitted. */
 	gx?: number;

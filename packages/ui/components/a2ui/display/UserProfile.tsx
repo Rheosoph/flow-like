@@ -5,6 +5,10 @@ import { AtSign, ExternalLink, IdCard, Mail, UserRound } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
 import { useInvoke } from "../../../hooks/use-invoke";
 import {
+	type UserIdentity,
+	useUserIdentity,
+} from "../../../hooks/use-user-lookup";
+import {
 	userAvatarUrl,
 	userDisplayName,
 	userHandle,
@@ -16,11 +20,16 @@ import { useBackend } from "../../../state/backend-state";
 import type { IUserLookup } from "../../../state/backend-state/types";
 import { resolveAccountId } from "../../../state/backend-state/user-state";
 import {
+	ResolvedIdentityAvatar,
+	identityAccessibleName,
+} from "../../identity/identity-avatar";
+import {
 	HoverCard,
 	HoverCardContent,
 	HoverCardTrigger,
 } from "../../ui/hover-card";
 import { Skeleton } from "../../ui/skeleton";
+import { userAvatarPixels } from "../../ui/user-avatar";
 import { UserAvatar, UserProfileHoverContent } from "../../ui/user-identity";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";
@@ -113,6 +122,75 @@ function avatarSizeForVariant(
 	return "md";
 }
 
+/**
+ * A bot's sub, named and drawn with the person it acts for. The batched identity
+ * resolves that, so people stay on the single lookup and cost no second request.
+ */
+function useBotProfile(
+	lookup: IUserLookup | undefined,
+	userId: string | undefined,
+) {
+	const identity = useUserIdentity(lookup?.bot ? userId : undefined);
+	return {
+		bot: identity.bot ? identity : undefined,
+		isPending: Boolean(lookup?.bot) && identity.isPending,
+	};
+}
+
+function profileFields(
+	lookup: IUserLookup | undefined,
+	bot: UserIdentity | undefined,
+	resolvedUserId: string | undefined,
+	options: Readonly<{
+		fallbackLabel: string;
+		showEmail: boolean;
+		showDescription: boolean;
+	}>,
+) {
+	if (bot) {
+		return {
+			label: bot.label,
+			subtitle: bot.subtitle,
+			description: options.showDescription ? bot.bot?.description : undefined,
+			createdAt: undefined,
+		};
+	}
+	return {
+		label: userDisplayName(lookup, resolvedUserId ?? options.fallbackLabel),
+		subtitle: secondaryLabel(lookup, resolvedUserId, options.showEmail),
+		description: options.showDescription ? lookup?.description : undefined,
+		createdAt: lookup?.created_at,
+	};
+}
+
+function ProfileAvatar({
+	bot,
+	avatarUrl,
+	initials,
+	label,
+	size,
+}: Readonly<{
+	bot?: UserIdentity;
+	avatarUrl: string;
+	initials: string;
+	label: string;
+	size: string;
+}>) {
+	if (bot) {
+		return (
+			<ResolvedIdentityAvatar identity={bot} size={userAvatarPixels(size)} />
+		);
+	}
+	return (
+		<UserAvatar
+			avatarUrl={avatarUrl}
+			initials={initials}
+			label={label}
+			size={size}
+		/>
+	);
+}
+
 export function A2UIUserProfile({
 	elementRef,
 	component,
@@ -166,12 +244,18 @@ export function A2UIUserProfile({
 	// resolves it to the current user, so use the account id it returns.
 	const resolvedUserId = resolveAccountId(lookup.data?.id, userId);
 
-	const label = userDisplayName(lookup.data, resolvedUserId ?? fallbackLabel);
-	const subtitle = secondaryLabel(lookup.data, resolvedUserId, showEmail);
+	const botProfile = useBotProfile(lookup.data, userId);
+	const bot = botProfile.bot;
+	const isLoading = lookup.isLoading || botProfile.isPending;
+	const { label, subtitle, description, createdAt } = profileFields(
+		lookup.data,
+		bot,
+		resolvedUserId,
+		{ fallbackLabel, showEmail, showDescription },
+	);
 	const avatarUrl = userAvatarUrl(lookup.data) ?? "";
-	const description = showDescription ? lookup.data?.description : undefined;
-	const createdAt = lookup.data?.created_at;
 	const email = lookup.data?.email;
+	const linksToProfile = showProfileLink && !lookup.data?.bot;
 	const initials = useMemo(() => userInitials(label, "??"), [label]);
 	const rootStyle = resolveInlineStyle(style);
 	const rootClassName = resolveStyle(style);
@@ -180,7 +264,8 @@ export function A2UIUserProfile({
 	const disabledLabel = missingUser ? fallbackLabel : label;
 
 	const avatar = (
-		<UserAvatar
+		<ProfileAvatar
+			bot={bot}
 			avatarUrl={avatarUrl}
 			initials={initials}
 			label={disabledLabel}
@@ -200,7 +285,7 @@ export function A2UIUserProfile({
 					rootClassName,
 				)}
 				style={rootStyle}
-				title={disabledLabel}
+				title={bot ? identityAccessibleName(bot) : disabledLabel}
 			>
 				{missingUser ? (
 					<span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -224,7 +309,7 @@ export function A2UIUserProfile({
 			>
 				{missingUser ? <UserRound className="h-3.5 w-3.5 shrink-0" /> : avatar}
 				<span className="min-w-0 truncate" title={disabledLabel}>
-					{lookup.isLoading && userId ? (
+					{isLoading && userId ? (
 						<Skeleton className="h-3 w-16" />
 					) : (
 						disabledLabel
@@ -251,7 +336,7 @@ export function A2UIUserProfile({
 						avatar
 					)}
 					<div className="min-w-0 flex-1">
-						{lookup.isLoading && userId ? (
+						{isLoading && userId ? (
 							<div className="space-y-2 pt-1">
 								<Skeleton className="h-5 w-3/4" />
 								<Skeleton className="h-4 w-1/2" />
@@ -278,7 +363,7 @@ export function A2UIUserProfile({
 						{description}
 					</p>
 				) : null}
-				{!missingUser && !lookup.isLoading && (
+				{!missingUser && !isLoading && (
 					<div className="mt-4 grid min-w-0 gap-2 border-t pt-3 text-xs">
 						{showEmail && email ? (
 							<div className="flex min-w-0 items-center gap-2 text-muted-foreground">
@@ -299,7 +384,7 @@ export function A2UIUserProfile({
 								</code>
 							</div>
 						) : null}
-						{showProfileLink && resolvedUserId ? (
+						{linksToProfile && resolvedUserId ? (
 							<a
 								href={`/profile?sub=${encodeURIComponent(resolvedUserId)}`}
 								className="inline-flex min-w-0 items-center gap-1 font-medium text-primary hover:underline"
@@ -337,7 +422,7 @@ export function A2UIUserProfile({
 					avatar
 				)}
 				<div className="min-w-0 flex-1">
-					{lookup.isLoading && userId ? (
+					{isLoading && userId ? (
 						<div className="space-y-1.5">
 							<Skeleton className="h-4 w-32 max-w-full" />
 							{isDetailed ? <Skeleton className="h-3 w-48 max-w-full" /> : null}
@@ -392,13 +477,15 @@ export function A2UIUserProfile({
 					subtitle={subtitle}
 					avatarUrl={avatarUrl}
 					initials={initials}
+					avatar={bot && <ResolvedIdentityAvatar identity={bot} size={40} />}
 					description={description}
 					createdAt={createdAt}
 					email={email}
 					showEmail={showEmail}
 					showUserId={showUserId}
-					showProfileLink={showProfileLink}
-					isLoading={lookup.isLoading}
+					idLabel={bot && t("bots:identity.botId")}
+					showProfileLink={linksToProfile}
+					isLoading={isLoading}
 				/>
 			</HoverCardContent>
 		</HoverCard>

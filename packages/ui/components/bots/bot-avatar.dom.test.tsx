@@ -49,6 +49,34 @@ function skills() {
 }
 
 describe("bot avatar rig", () => {
+	it("animates the resolved expression without replacing the working status bubble", async () => {
+		vi.useFakeTimers();
+		vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+		vi.stubGlobal("matchMedia", () => ({
+			matches: false,
+			addEventListener: vi.fn(),
+			removeEventListener: vi.fn(),
+		}));
+		await render({ agentState: "working" });
+		expect(part("hop").hasAttribute("data-reaction")).toBe(false);
+		await render({
+			agentState: "working",
+			expression: "love",
+			expressionOverridesState: true,
+		});
+		expect(part("hop").getAttribute("data-reaction")).toBe("love");
+		expect(part("emote").querySelectorAll("[data-loading-dot]")).toHaveLength(
+			3,
+		);
+		await act(async () => vi.advanceTimersByTime(650));
+		expect(part("hop").hasAttribute("data-reaction")).toBe(false);
+		await render({
+			agentState: "working",
+			expression: "surprised",
+		});
+		expect(part("hop").hasAttribute("data-reaction")).toBe(false);
+	});
+
 	it("keeps thermal features visible without darkening thought bubbles", async () => {
 		await render({
 			appearance: { kind: "flux", effect: "thermal", emote: "heart" },

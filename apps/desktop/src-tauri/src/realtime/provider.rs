@@ -1,5 +1,5 @@
 use super::{
-    AUTH_CHECK, PollFailure, Session,
+    AUTH_CHECK, PollFailure, Session, lock,
     pacing::{BACKOFF_CAP, backoff, jitter},
 };
 use flow_like_types::realtime::{
@@ -7,7 +7,7 @@ use flow_like_types::realtime::{
 };
 use std::{
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -29,12 +29,26 @@ pub(super) struct ProviderConnection {
 }
 
 impl ProviderConnection {
-    pub fn start(client: reqwest::Client, session: Arc<Session>, max_wait: Arc<AtomicU64>) -> Self {
+    /// `reconnect` outlives the connection, so restarting it after a blocked poll keeps the
+    /// grant backoff instead of granting again at once.
+    pub fn start(
+        client: reqwest::Client,
+        session: Arc<Session>,
+        max_wait: Arc<AtomicU64>,
+        reconnect: Arc<Mutex<Reconnect>>,
+    ) -> Self {
         let wake = Arc::new(Notify::new());
         let (sender, healthy) = watch::channel(false);
         let notifications = Arc::clone(&wake);
         let task = tokio::spawn(async move {
-            let work = run(&client, &session, notifications, sender.clone(), &max_wait);
+            let work = run(
+                &client,
+                &session,
+                notifications,
+                sender.clone(),
+                &max_wait,
+                &reconnect,
+            );
             tokio::pin!(work);
             loop {
                 tokio::select! {
@@ -158,11 +172,18 @@ fn secure_transport(hub: &str, transport: RealtimeTransport) -> Option<RealtimeT
 }
 
 #[derive(Default)]
-struct Reconnect {
+pub(super) struct Reconnect {
     failures: u32,
+    not_before: Option<Instant>,
 }
 
 impl Reconnect {
+    fn wait(&self) -> Duration {
+        self.not_before.map_or(Duration::ZERO, |at| {
+            at.saturating_duration_since(Instant::now())
+        })
+    }
+
     fn failed(&mut self, base: Duration) -> Duration {
         self.failures = self.failures.saturating_add(1);
         jitter(backoff(base, BACKOFF_CAP, self.failures))
@@ -216,14 +237,14 @@ async fn serve(
     expires: Instant,
     wake: &Arc<Notify>,
     healthy: &watch::Sender<bool>,
-    reconnect: &mut Reconnect,
+    reconnect: &Mutex<Reconnect>,
 ) -> Duration {
     let remaining = expires.saturating_duration_since(Instant::now());
     let Some(transport) = secure_transport(hub, transport) else {
         tracing::warn!(
             "Refused a cleartext realtime provider grant from an HTTPS API; polling over HTTP"
         );
-        return reconnect.failed(RECONNECT);
+        return lock(reconnect).failed(RECONNECT);
     };
     if matches!(transport, RealtimeTransport::Http {}) {
         // Keep a configured HTTP deployment inexpensive while allowing a
@@ -236,7 +257,7 @@ async fn serve(
             .max(Duration::from_secs(1));
     let (renewed, uptime) = listen(&transport, wake, healthy, renew).await;
     healthy.send_replace(false);
-    reconnect.ended(renewed, uptime).unwrap_or_default()
+    lock(reconnect).ended(renewed, uptime).unwrap_or_default()
 }
 
 async fn run(
@@ -245,10 +266,14 @@ async fn run(
     wake: Arc<Notify>,
     healthy: watch::Sender<bool>,
     max_wait: &AtomicU64,
+    reconnect: &Mutex<Reconnect>,
 ) {
-    let mut reconnect = Reconnect::default();
     loop {
         healthy.send_replace(false);
+        let wait = lock(reconnect).wait();
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
         let next = grant(client, session).await;
         if !session.binding.is_current() {
             return;
@@ -257,20 +282,16 @@ async fn run(
             Ok((grant, expires)) => {
                 max_wait.store(grant.max_poll_wait_ms, Ordering::Relaxed);
                 let hub = &session.binding.hub;
-                serve(
-                    hub,
-                    grant.transport,
-                    expires,
-                    &wake,
-                    &healthy,
-                    &mut reconnect,
-                )
-                .await
+                serve(hub, grant.transport, expires, &wake, &healthy, reconnect).await
             }
-            Err(PollFailure::SignedOut) => return,
-            Err(PollFailure::Unauthorized | PollFailure::Unsupported) => reconnect.failed(BLOCKED),
-            Err(PollFailure::Retry) => reconnect.failed(RECONNECT),
+            // A rejected token is the HTTP owner's to resolve; until it does, back off like
+            // any blocked grant rather than leaving a dead provider in place.
+            Err(PollFailure::SignedOut | PollFailure::Unauthorized | PollFailure::Unsupported) => {
+                lock(reconnect).failed(BLOCKED)
+            }
+            Err(PollFailure::Retry) => lock(reconnect).failed(RECONNECT),
         };
+        lock(reconnect).not_before = Some(Instant::now() + delay);
         tokio::time::sleep(delay).await;
     }
 }
@@ -426,5 +447,20 @@ mod tests {
         );
         assert!(within(reconnect.failed(RECONNECT), 2));
         assert!(within(reconnect.failed(BLOCKED), 60));
+    }
+
+    #[test]
+    fn a_restarted_provider_waits_out_the_previous_backoff() {
+        let pending = Reconnect {
+            failures: 3,
+            not_before: Some(Instant::now() + Duration::from_secs(30)),
+        };
+        assert!(pending.wait() > Duration::from_secs(29));
+        assert_eq!(Reconnect::default().wait(), Duration::ZERO);
+        let elapsed = Reconnect {
+            failures: 3,
+            not_before: Some(Instant::now() - Duration::from_secs(1)),
+        };
+        assert_eq!(elapsed.wait(), Duration::ZERO);
     }
 }

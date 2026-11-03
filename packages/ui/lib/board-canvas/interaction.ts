@@ -21,7 +21,10 @@ export interface HitObstacle extends Bounds {
 export interface WorldPin extends ScenePin {
 	nodeId: string;
 }
-export type ConnectionValidator = (connection: Connection) => boolean;
+export type ConnectionValidator = (
+	connection: Connection,
+	hoveredPin: WorldPin,
+) => boolean;
 
 const CELL_SIZE = 256;
 const MAX_CELLS = 128;
@@ -461,22 +464,6 @@ export class BoardHitIndex {
 		}
 		return result;
 	}
-	selectedEndpointFor(
-		endpoint: SceneEndpoint,
-		canReconnect: (edge: SceneEdge, end: "source" | "target") => boolean = () =>
-			true,
-	) {
-		for (let i = this.selectedEdges.length - 1; i >= 0; i--) {
-			const edge = this.selectedEdges[i];
-			for (const end of ["source", "target"] as const)
-				if (
-					endpointKey(edge[end]) === endpointKey(endpoint) &&
-					canReconnect(edge, end)
-				)
-					return { edge, end };
-		}
-		return undefined;
-	}
 }
 
 export type ConnectionDrop =
@@ -518,7 +505,7 @@ export class ConnectionGesture {
 		}
 		const valid = (pin: WorldPin) => {
 			const connection = connectionFor(anchor, pin);
-			return !!connection && validate(connection);
+			return !!connection && validate(connection, pin);
 		};
 		const held = this.target && index.pin(this.target);
 		const heldDistance = held

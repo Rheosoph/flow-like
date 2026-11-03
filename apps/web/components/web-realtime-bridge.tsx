@@ -1,5 +1,6 @@
 "use client";
 
+import { inboxKeys } from "@flow-like/flow-like-ui/hooks/use-inbox";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { getRealtimeClient } from "@flow-like/flow-like-ui/lib/realtime/runtime-client";
 import type { RealtimeClient } from "@flow-like/flow-like-ui/lib/realtime/types";
@@ -115,6 +116,10 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 							predicate: ({ queryKey }) =>
 								queryKey[0] === "home" && queryKey[4] === "notifications",
 						},
+						{ throwOnError: true },
+					),
+					queryClient.invalidateQueries(
+						{ queryKey: inboxKeys.all },
 						{ throwOnError: true },
 					),
 				]);

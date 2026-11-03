@@ -8,12 +8,14 @@ if TYPE_CHECKING:
 from .apps import AppsMixin
 from .bits import BitsMixin
 from .boards import BoardsMixin
+from .bots import BotsMixin
 from .chat import ChatMixin
 from .database import DatabaseMixin
 from .embeddings import EmbeddingsMixin
 from .events import EventsMixin
 from .execution import ExecutionMixin
 from .files import FilesMixin
+from .inbox import InboxMixin
 from .resources import ResourcesMixin
 from .management import ManagementMixin
 from .sinks import SinksMixin
@@ -34,6 +36,8 @@ class FlowLikeClient(
     AppsMixin,
     BitsMixin,
     BoardsMixin,
+    BotsMixin,
+    InboxMixin,
 ):
     """Unified client for the Flow-Like API.
 

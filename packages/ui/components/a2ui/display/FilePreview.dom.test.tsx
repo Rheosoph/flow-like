@@ -353,6 +353,33 @@ describe("A2UI file creation", () => {
 		},
 	);
 
+	it.each([
+		["solidcraft", "part.FCStd", "solidcraft"],
+		["solidcraft", "part.3dm", "solidcraft"],
+		["designcraft", "layout.indd", "designcraft"],
+		["designcraft", "layout.indt", "designcraft"],
+		["photocraft", "layers.xcf", "pcraft"],
+		["photocraft", "scan.dcm", "pcraft"],
+		["vectorcraft", "scan.jp2", "vectorcraft"],
+	])(
+		"opens %s import %s with its native save target",
+		async (id, filename, outputExtension) => {
+			await renderEditor({
+				editor: { literalString: id },
+				src: { literalString: `/files/${filename}` },
+				eventHandlers: { save: [saveAction] },
+			});
+			expect(editor()).toMatchObject({
+				create: false,
+				filename,
+				editable: true,
+				initialEditing: true,
+				viewer: { id, outputExtension },
+			});
+			expect(editor().url).toContain(`/files/${filename}`);
+		},
+	);
+
 	it("keeps a source image on its native preview until saving is configured", async () => {
 		await renderEditor({
 			editor: { literalString: "photocraft" },
@@ -436,12 +463,51 @@ describe("A2UI file creation", () => {
 
 describe("A2UI file preview routing", () => {
 	it.each([
+		["image/x-xcf", "xcf", "photocraft", "pcraft"],
+		["image/x-xpixmap", "xpm", "photocraft", "pcraft"],
+		["image/vnd-ms.dds", "dds", "photocraft", "dds"],
+		["image/x-dpx", "dpx", "photocraft", "dpx"],
+		["image/x-cin", "cin", "photocraft", "cin"],
+		["image/x-iff", "iff", "photocraft", "iff"],
+		["image/jp2", "jp2", "vectorcraft", "vectorcraft"],
+		["image/jpx", "jpx", "vectorcraft", "vectorcraft"],
+	])(
+		"routes an opaque %s Set Media Source update to its editor",
+		async (mimeType, extension, viewer, outputExtension) => {
+			const updated = applyElementUpdate(
+				{
+					id: "preview",
+					component: { id: "preview", type: "filePreview" },
+				},
+				{
+					type: "setMediaSource",
+					src: "https://storage.example/object?signature=node",
+					mimeType,
+				},
+			);
+			await render(updated.component as FilePreviewComponent);
+			expect(editor()).toMatchObject({
+				filename: `object.${extension}`,
+				viewer: { id: viewer, outputExtension },
+				editable: false,
+			});
+			expect(container.querySelector("img")).toBeNull();
+			expect(fetch).not.toHaveBeenCalled();
+			expect(mocks.upload).not.toHaveBeenCalled();
+		},
+	);
+
+	it.each([
 		["presentation.pptx", "application/octet-stream", "file", "deckcraft"],
 		["letter.docx", "application/octet-stream", "file", "wordcraft"],
 		["report.xlsx", "application/octet-stream", "file", "gridcraft"],
 		["report.csv", "text/csv", "text", "gridcraft"],
 		["part.step", "model/step", "file", "solidcraft"],
 		["part.solidcraft", "application/octet-stream", "file", "solidcraft"],
+		["part.FCStd", "application/octet-stream", "file", "solidcraft"],
+		["part.3dm", "model/vnd.3dm", "file", "solidcraft"],
+		["layout.indd", "application/x-indesign", "file", "designcraft"],
+		["scan.dcm", "application/dicom", "file", "photocraft"],
 	])(
 		"previews %s read-only after the Set Media Source node update",
 		async (filename, mimeType, mediaKind, viewer) => {

@@ -7,6 +7,7 @@ import {
 	EXECUTION_METADATA,
 	type ExecutionTask,
 	isExecutionFinished,
+	isExecutionSettled,
 } from "./execution/types";
 import type { ILogMetadata, PageTrigger } from "./schema";
 import type { IRunPayload } from "./schema";
@@ -119,6 +120,14 @@ const MAX_UNCLAIMED_STREAMS = 8;
 /** A completion handler that never returns must not keep its session busy forever. */
 const COMPLETION_GRACE_MS = 15_000;
 
+/** Why a run that ended in the runtime failed; a detached run continues and did not fail. */
+function taskFailure(task: ExecutionTask): Error | undefined {
+	if (!isExecutionFinished(task) || !task.error) return undefined;
+	return Object.assign(new Error(task.error), {
+		name: task.status === "cancelled" ? "AbortError" : "Error",
+	});
+}
+
 export type ExecuteEventFn = (
 	appId: string,
 	eventId: string,
@@ -196,7 +205,9 @@ export class ExecutionEngineProvider {
 					this.eventStreams.set(task.streamId, stream);
 				}
 				stream.taskId = task.taskId;
-				if (!isExecutionFinished(task) && stream.settled) {
+				// A detached run continues on the server, but no update of it arrives here any more.
+				const ended = isExecutionSettled(task);
+				if (!ended && stream.settled) {
 					stream.isComplete = false;
 					stream.settled = false;
 					stream.settlementPromise = undefined;
@@ -219,17 +230,9 @@ export class ExecutionEngineProvider {
 				};
 				stream.executionPromise ??= Promise.resolve();
 				this.publishEvents(stream, task.events);
-				if (
-					isExecutionFinished(task) &&
-					!stream.initiatedHere &&
-					!stream.settlementPromise
-				) {
-					stream.failure = task.error
-						? Object.assign(new Error(task.error), {
-								name: task.status === "cancelled" ? "AbortError" : "Error",
-							})
-						: undefined;
-					void this.settleRun(stream, undefined, Boolean(task.error));
+				if (ended && !stream.initiatedHere && !stream.settlementPromise) {
+					stream.failure = taskFailure(task);
+					void this.settleRun(stream, undefined, Boolean(stream.failure));
 				}
 			}
 			this.notifyGlobalListeners();
@@ -820,6 +823,14 @@ export class ExecutionEngineProvider {
 				);
 			},
 			(error) => {
+				// The runtime stopped following a run that continues on the server: it did not fail.
+				if (this.runtimeClient?.getTask(task.taskId)?.detached)
+					return this.settleRun(
+						stream,
+						options.onIncrementalSave,
+						false,
+						options.onUnobservedComplete,
+					);
 				console.error("Execution error:", error);
 				captureTelemetryError(error, {
 					culprit: "execution-engine.execute_event",

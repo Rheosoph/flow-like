@@ -3,7 +3,7 @@ import {
 	craftCreationViewer,
 	craftViewer,
 } from "../../storage/craft-viewers";
-import { inferFileName } from "../media-source";
+import { inferFileName } from "../media-filename";
 
 const DOCUMENT_EXTENSIONS: Record<string, string> = {
 	"application/vnd.openxmlformats-officedocument.wordprocessingml.document":
@@ -35,6 +35,19 @@ const DOCUMENT_EXTENSIONS: Record<string, string> = {
 	"model/3mf": "3mf",
 	"model/gltf-binary": "glb",
 	"model/gltf+json": "gltf",
+	"application/x-extension-fcstd": "fcstd",
+	"application/x-freecad": "fcstd",
+	"model/vnd.3dm": "3dm",
+	"application/x-indesign": "indd",
+	"image/x-xcf": "xcf",
+	"image/x-xpixmap": "xpm",
+	"application/dicom": "dcm",
+	"image/vnd-ms.dds": "dds",
+	"image/x-dpx": "dpx",
+	"image/x-cin": "cin",
+	"image/x-iff": "iff",
+	"image/jp2": "jp2",
+	"image/jpx": "jpx",
 };
 
 /** Downloads can have an opaque URL and only a MIME type. */

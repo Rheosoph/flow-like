@@ -1,3 +1,4 @@
+import type { BotAppearance } from "../../components/bots/types";
 import type { IEventExecutionMode, IExecutionMode } from "../../lib/schema";
 
 export interface IStorageItemActionResult {
@@ -392,6 +393,17 @@ export interface IUserLookup {
 	additional_info?: string;
 	description?: string;
 	created_at: string;
+	/** Set when the id is a bot's sub. A bot always acts for its owner. */
+	bot?: IUserLookupBot;
+}
+
+export interface IUserLookupBot {
+	owner_id: string;
+	/** Built-in bots carry no stored name until renamed; show the localized default. */
+	system: "general" | "flux" | null;
+	appearance: BotAppearance;
+	/** The bot was deleted; past actions still show it. */
+	deleted: boolean;
 }
 
 export interface IProjectContactsPage {

@@ -105,6 +105,7 @@ pub struct DispatchNotificationResult {
 struct PushSender {
     name: String,
     icon: Option<String>,
+    thread_id: String,
 }
 
 const MAX_PUSH_SENDER_NAME_BYTES: usize = 128;
@@ -115,6 +116,17 @@ async fn push_sender(
     input: &DispatchNotificationInput,
     targets: &[push_notification_target::Model],
 ) -> Option<PushSender> {
+    if let Some(bot_id) = input
+        .link
+        .as_deref()
+        .and_then(flow_like_types::bot_notify::bot_id_from_link)
+    {
+        return Some(PushSender {
+            name: input.title.clone(),
+            icon: None,
+            thread_id: flow_like_types::bot_notify::group_key(bot_id),
+        });
+    }
     let app_id = input
         .app_id
         .as_ref()
@@ -142,7 +154,11 @@ async fn push_sender(
         .remove(app_id)
         .and_then(|(icon, _)| icon)
         .filter(|url| is_push_image_url(url));
-    Some(PushSender { name, icon })
+    Some(PushSender {
+        name,
+        icon,
+        thread_id: app_id.clone(),
+    })
 }
 
 const DELIVERY_METADATA_KEY: &str = "_flow_like_push_delivery";
@@ -872,10 +888,10 @@ fn apply_apns_sender(
     input: &DispatchNotificationInput,
     sender: Option<&PushSender>,
 ) {
-    let (Some(sender), Some(app_id)) = (sender, input.app_id.as_deref()) else {
+    let Some(sender) = sender else {
         return;
     };
-    payload["aps"]["thread-id"] = serde_json::json!(app_id);
+    payload["aps"]["thread-id"] = serde_json::json!(sender.thread_id);
     payload["aps"]["mutable-content"] = serde_json::json!(1);
     payload["app_name"] = serde_json::json!(push_text(&sender.name, MAX_PUSH_SENDER_NAME_BYTES));
     if let Some(icon) = &sender.icon {
@@ -2335,7 +2351,24 @@ mod tests {
         PushSender {
             name: "Momo".to_string(),
             icon: Some("https://cdn.example.com/app-icon.webp?signature=abc".to_string()),
+            thread_id: "app-id".to_string(),
         }
+    }
+
+    #[test]
+    fn bot_notifications_stack_under_the_bot_on_ios() {
+        let mut input = notification_input();
+        input.app_id = None;
+        input.title = "Researcher".to_string();
+        input.link = Some(flow_like_types::bot_notify::chat_link("bot_1"));
+        let sender = PushSender {
+            name: input.title.clone(),
+            icon: None,
+            thread_id: flow_like_types::bot_notify::group_key("bot_1"),
+        };
+        let payload = apns_payload(&input, HashMap::new(), Some(&sender)).unwrap();
+        assert_eq!(payload["aps"]["thread-id"], "bot:bot_1");
+        assert_eq!(payload["app_name"], "Researcher");
     }
 
     #[test]

@@ -7,6 +7,9 @@
 // host build.
 mod deeplink;
 #[cfg(desktop)]
+mod bot_host;
+#[cfg(feature = "code-sandbox")]
+mod code_sandbox;
 mod device_models;
 mod device_tunnels;
 #[cfg(desktop)]
@@ -480,6 +483,7 @@ pub fn run() {
     let project_dir = settings_state.project_dir.clone();
     let logs_dir = settings_state.logs_dir.clone();
     let temporary_dir = settings_state.temporary_dir.clone();
+    let local_bots_db = functions::local_bots::database_path(&project_dir);
 
     let mut config: FlowLikeConfig = FlowLikeConfig::new();
 
@@ -658,7 +662,7 @@ pub fn run() {
         .manage(state::TauriSettingsState(settings_state.clone()))
         .manage(state::TauriFlowLikeState(state_ref.clone()))
         .manage(state::TauriBoardSyncState::default())
-        .manage(state::TauriRegistryState(registry_state))
+        .manage(state::TauriRegistryState::new(registry_state))
         .manage(state::TauriWasmEngineState(shared_wasm_engine))
         .manage(state::TauriRecordingState::new())
         .manage(run_report_queue)
@@ -759,6 +763,13 @@ pub fn run() {
             // Initialize EventBus and register as managed state
             let (event_bus, mut event_receiver) = EventBus::new(app.app_handle().clone());
             app.manage(state::TauriEventBusState(event_bus));
+
+            // Managed before the event loop runs, so no IPC call finds the store missing.
+            app.manage(functions::local_bots::LocalBots::open(
+                app.app_handle(),
+                &local_bots_db,
+            ));
+            bot_host::start(app.app_handle());
 
             // Initialize Event Sink Manager synchronously to ensure it's ready before accepting commands
             let settings_clone = settings_state_for_sink.clone();
@@ -1118,6 +1129,8 @@ pub fn run() {
             e2e_runtime::intake_e2e_runtime_status,
             restart_app,
             deeplink::deeplink_replay_pending,
+            #[cfg(debug_assertions)]
+            deeplink::deeplink_debug_dispatch,
             functions::native::native_publish_snapshot,
             functions::native::native_clear_snapshot,
             functions::native::native_take_actions,
@@ -1387,6 +1400,9 @@ pub fn run() {
             functions::ai::copilot::global_chat_memory_status,
             functions::ai::copilot::global_chat_clear_memory,
             functions::ai::copilot::global_chat_list_memories,
+            functions::ai::bot_memory_admin::bot_memory_facts,
+            functions::ai::bot_memory_admin::bot_memory_forget,
+            functions::ai::bot_memory_admin::bot_memory_reset,
             functions::ai::copilot::global_chat_delete_memory,
             functions::ai::copilot::copilot_sdk_start,
             functions::ai::copilot::copilot_sdk_stop,
@@ -1440,6 +1456,57 @@ pub fn run() {
             functions::event_sink_commands::get_event_sink,
             functions::event_sink_commands::list_event_sinks,
             functions::event_sink_commands::is_event_sink_active,
+            functions::local_bots::local_bots_list,
+            functions::local_bots::local_bots_get,
+            functions::local_bots::local_bots_create,
+            functions::local_bots::local_bots_update,
+            functions::local_bots::local_bots_delete,
+            functions::local_bots::local_bots_apps,
+            functions::local_bots::local_bots_attach_app,
+            functions::local_bots::local_bots_detach_app,
+            functions::local_bots::local_bots_secrets,
+            functions::local_bots::local_bots_set_secret,
+            functions::local_bots::local_bots_delete_secret,
+            functions::local_bots::local_bots_export,
+            functions::local_bots::local_bots_upload_secrets,
+            functions::local_bots::local_bots_rebind,
+            functions::local_bots::local_bots_forget,
+            functions::local_bots::local_bots_permissions,
+            functions::local_bots::local_bots_grant_permission,
+            functions::local_bots::local_bots_revoke_permission,
+            functions::local_bots::local_bots_clone,
+            functions::local_bots::workspace::local_bots_workspace,
+            functions::local_bots::moves::local_bots_check_move,
+            functions::local_bots::moves::local_bots_move,
+            functions::local_bots::local_inbox_conversations,
+            functions::local_bots::local_inbox_conversation,
+            functions::local_bots::local_inbox_create,
+            functions::local_bots::local_inbox_rename,
+            functions::local_bots::local_inbox_add_members,
+            functions::local_bots::local_inbox_remove_member,
+            functions::local_bots::local_inbox_entries,
+            functions::local_bots::local_inbox_send,
+            functions::local_bots::local_inbox_mark_read,
+            functions::local_bots::local_inbox_forget,
+            functions::local_bots::history::local_inbox_entries_by_position,
+            functions::local_bots::history::local_inbox_topic,
+            functions::local_bots::history::local_inbox_segments,
+            functions::local_bots::history::local_inbox_import_history,
+            functions::local_bots::history::local_inbox_write_segment,
+            bot_host::commands::bot_host_turns,
+            bot_host::commands::bot_host_e2e_status,
+            bot_host::commands::bot_host_e2e_rotate_key,
+            bot_host::commands::bot_host_cancel_turn,
+            bot_host::grant_commands::local_bot_tool_grants,
+            bot_host::grant_commands::local_bot_put_tool_grant,
+            bot_host::grant_commands::local_bot_delete_tool_grant,
+            bot_host::grant_commands::local_bot_answer_approval,
+            bot_host::task_commands::local_bot_tasks,
+            bot_host::task_commands::local_bot_create_task,
+            bot_host::task_commands::local_bot_update_task,
+            bot_host::task_commands::local_bot_delete_task,
+            functions::ai::bot_tools::view::bot_computer_view,
+            functions::ai::bot_tools::view::bot_computer_stop,
             functions::developer::developer_list_projects,
             functions::developer::developer_add_project,
             functions::developer::developer_remove_project,
@@ -1540,11 +1607,10 @@ pub fn run() {
             functions::telemetry::app_start_elapsed_ms,
         ]);
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
     {
-        // `tauri_plugin_devtools` dynamically mutates tracing-subscriber filters. We have observed
-        // a native SIGABRT in that initialization path on macOS. Keep it available for explicit
-        // diagnostics, but do not make every development launch depend on the unstable layer.
+        // The Cargo feature keeps Tauri's synchronous tracing dispatch out of default builds.
+        // Retain the runtime opt-in because devtools filter initialization can abort on macOS.
         if std::env::var_os("FLOW_LIKE_ENABLE_DEVTOOLS_PLUGIN").is_some() {
             builder = builder.plugin(tauri_plugin_devtools::init());
         }
@@ -1586,6 +1652,7 @@ pub fn run() {
     app.run(|_app, _event| {
         if matches!(_event, tauri::RunEvent::Exit) {
             device_tunnels::close_all();
+            tauri::async_runtime::block_on(bot_host::withdraw(_app));
             #[cfg(desktop)]
             device_models::lock_all();
         }

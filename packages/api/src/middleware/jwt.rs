@@ -1300,7 +1300,7 @@ fn role_query_span() -> tracing::Span {
     )
 }
 
-async fn user_app_permission_uncached(
+pub(crate) async fn user_app_permission_uncached(
     sub: &str,
     app_id: &str,
     state: &AppState,

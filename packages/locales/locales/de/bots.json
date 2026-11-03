@@ -28,6 +28,10 @@
 			"description": "Seine Nachrichten und Secrets sind nur für dich und den Host des Bots lesbar",
 			"label": "Ende-zu-Ende-Verschlüsselung"
 		},
+		"flowpilot": {
+			"description": "Baut, bearbeitet und debuggt deine Apps und Flows, inklusive FlowScript",
+			"label": "FlowPilot"
+		},
 		"internet": {
 			"description": "Im Web suchen, Seiten lesen und Web-APIs aufrufen",
 			"label": "Internet"
@@ -57,12 +61,17 @@
 			"label": "Webhook"
 		}
 	},
+	"chat": {
+		"empty": "Frag {{name}}, was du möchtest.",
+		"modelHint": "In den Einstellungen von {{name}} gewählt"
+	},
 	"crew": {
 		"botSettings": "Einstellungen für {{name}}",
 		"botTag": "Bot",
 		"builtIn": "Integriert",
 		"cancel": "Abbrechen",
 		"composer": {
+			"botAnswersInChat": "{{name}} antwortet vorerst nur in seinem eigenen Chat. Was du hier sendest, wartet in seinem Posteingang.",
 			"encrypted": "In Ende-zu-Ende-verschlüsselten Chats kannst du in dieser App noch nicht schreiben.",
 			"placeholder": "Nachricht an {{name}}",
 			"send": "Senden",
@@ -95,12 +104,7 @@
 		},
 		"intro": {
 			"capabilities": "Was er tun darf",
-			"message": "Nachricht schreiben",
-			"messageFailed": "Der Chat mit diesem Bot konnte nicht geöffnet werden.",
-			"noCapabilities": "Noch keine Fähigkeiten eingeschaltet",
-			"notLive": "{{name}} antwortet, sobald seine Laufzeitumgebung aktiv ist. Nachrichten, die du jetzt sendest, warten in seinem Posteingang.",
-			"settings": "Einstellungen",
-			"subtitle": "Dein Bot · {{location}}"
+			"noCapabilities": "Noch keine Fähigkeiten eingeschaltet"
 		},
 		"loadFailed": "Deine Bots konnten nicht geladen werden. Assistent und Flux funktionieren weiterhin.",
 		"members": {
@@ -229,7 +233,11 @@
 			"appsRole": "Deine Rolle: {{role}}",
 			"appsSearch": "Apps durchsuchen",
 			"appsUntitled": "Unbenannte App",
-			"fluxLocked": "Flux behält alle Werkzeuge zum Bauen, die er heute hat.",
+			"flowpilot": {
+				"badge": "Immer an",
+				"subtitle": "Er arbeitet mit dem kompletten Werkzeugkasten von FlowPilot, deshalb lassen sich seine Fähigkeiten nicht ändern.",
+				"title": "Was er kann"
+			},
 			"groups": {
 				"apps": "Apps",
 				"hands": "Hände",
@@ -255,6 +263,8 @@
 			"creating": "Wird erstellt …",
 			"delete": "Bot löschen",
 			"deleting": "Wird gelöscht …",
+			"duplicate": "Duplizieren",
+			"duplicating": "Wird dupliziert …",
 			"next": "Weiter",
 			"save": "Änderungen speichern",
 			"saving": "Wird gespeichert …"
@@ -275,6 +285,11 @@
 			"instructionsPlaceholder": "Wie soll er arbeiten, worauf soll er sich konzentrieren und was soll er nie tun?",
 			"local": "Lokal",
 			"localOnServer": "Dieses Modell läuft auf deiner eigenen Hardware, deshalb kann ein Bot in der Cloud es nicht nutzen. Füge einen Fallback hinzu, der in der Cloud läuft.",
+			"memoryHint": "Das Embedding-Modell, mit dem er seine Erinnerungen speichert und wiederfindet.",
+			"memoryHost": "Den Host wählen lassen",
+			"memoryHostHint": "Die App oder der Server, auf dem er läuft, wählt eines aus",
+			"memoryModel": "Gedächtnismodell",
+			"memoryNone": "Füge deinem Profil ein Embedding-Modell hinzu, um hier eines zu wählen.",
 			"moveDown": "Nach unten verschieben",
 			"moveUp": "Nach oben verschieben",
 			"noModels": "Keine passenden Modelle.",
@@ -311,11 +326,16 @@
 			"keep": "Weiter bearbeiten",
 			"prompt": "Änderungen verwerfen?"
 		},
+		"duplicate": {
+			"unsaved": "Speichere oder verwirf deine Änderungen, um den gespeicherten Bot zu duplizieren."
+		},
+		"duplicated": "Als {{name}} dupliziert",
 		"errors": {
 			"appLimit": "Dieser Bot nutzt bereits die maximale Anzahl von 200 ausgewählten Apps.",
 			"capabilityLocation": "Computersteuerung, Browser und Befehlszeile brauchen die Desktop-App oder ein Gerät. Schalte sie aus oder ändere, wo der Bot läuft.",
 			"createFailed": "Der Bot konnte nicht erstellt werden.",
 			"deleteFailed": "Der Bot konnte nicht gelöscht werden.",
+			"duplicateFailed": "Der Bot konnte nicht dupliziert werden.",
 			"fluxCapabilities": "Die Fähigkeiten von Flux lassen sich nicht ändern.",
 			"limitReached": "Du hast die maximale Anzahl an Bots erreicht. Lösche einen, um einen neuen zu erstellen.",
 			"saveFailed": "Die Änderungen konnten nicht gespeichert werden.",
@@ -457,6 +477,16 @@
 			"label": "Cloud"
 		}
 	},
+	"memory": {
+		"clearFailed": "Erinnerungen konnten nicht gelöscht werden",
+		"cleared": "Alle Erinnerungen gelöscht",
+		"count_one": "{{count}} Erinnerung",
+		"count_other": "{{count}} Erinnerungen",
+		"deleteFailed": "Erinnerung konnte nicht gelöscht werden",
+		"justNow": "gerade eben",
+		"loadFailed": "Erinnerungen konnten nicht geladen werden",
+		"off": "Erinnerungen sind aus. Wähle in den Bot-Einstellungen ein Embedding-Modell, damit Erinnerungen abgerufen und gespeichert werden. Gespeicherte Erinnerungen kannst du hier trotzdem ansehen und löschen."
+	},
 	"move": {
 		"account": "Angemeldet als {{account}}",
 		"action_one": "{{count}} Bot verschieben",
@@ -479,6 +509,7 @@
 			"failed": "Das hat nicht geklappt. Versuche es erneut.",
 			"openSettings": "Einstellungen öffnen",
 			"removeApp": "Aus dem Bot entfernen",
+			"removeSecret": "Secret entfernen",
 			"useProfile": "Aktuelles Profil verwenden"
 		},
 		"intro": {
@@ -494,9 +525,12 @@
 			"idTaken": "Ein anderer Bot verwendet seine ID bereits.",
 			"invalid": "Einige seiner Einstellungen passen nicht zu einem Bot in einem Konto: {{message}}",
 			"limitReached": "Dein Konto hat bereits so viele Bots, wie es haben kann.",
+			"localChanged": "Er hat sich beim Verschieben auf diesem Computer ständig verändert. Versuche es gleich noch einmal.",
 			"lookNotOwned": "Sein Aussehen nutzt Teile, die dein Konto nicht besitzt: {{items}}.",
 			"modelUnavailable": "Sein Modell {{model}} ist für dein Konto nicht verfügbar.",
 			"profileUnavailable": "Das Profil, aus dem seine Apps stammen, ist nicht in deinem Konto.",
+			"secretKey": "Der Schlüsselbund dieses Computers ist gesperrt oder verweigert den Zugriff auf die Secrets des Bots. Entsperre ihn und versuch es noch mal.",
+			"secretUnreadable": "Sein Secret {{name}} lässt sich auf diesem Computer nicht mehr lesen. Entferne es hier und füge es wieder hinzu, sobald der Bot verschoben ist.",
 			"unknown": "Etwas an ihm passt nicht zu deinem Konto."
 		},
 		"parts": {
@@ -510,6 +544,8 @@
 			"nothing": "Nur der Bot selbst",
 			"secrets_one": "{{count}} Secret, verschlüsselt in deinem Konto gespeichert",
 			"secrets_other": "{{count}} Secrets, verschlüsselt in deinem Konto gespeichert",
+			"skipped_one": "{{count}} Nachricht von einem Bot, der seinen Chat verlassen hat, kommt nicht mit",
+			"skipped_other": "{{count}} Nachrichten von Bots, die diese Chats verlassen haben, kommen nicht mit",
 			"waiting_one": "{{count}} Chat folgt, sobald die anderen Bots darin umziehen",
 			"waiting_other": "{{count}} Chats folgen, sobald die anderen Bots darin umziehen"
 		},
@@ -587,5 +623,21 @@
 			"description": "Dein Alltagshelfer",
 			"name": "Assistent"
 		}
+	},
+	"workspace": {
+		"failed": "Der Arbeitsbereich von {{name}} konnte nicht eingerichtet werden.",
+		"filesTitle": "Dateien von {{name}}",
+		"memoryEmpty": "{{name}} merkt sich hier Fakten, Vorlieben und Entscheidungen, während du chattest.",
+		"memoryFailed": "Die Erinnerungen von {{name}} konnten nicht geladen werden.",
+		"preparing": "Arbeitsbereich von {{name}} wird eingerichtet …",
+		"refused": "{{name}} kann noch keine eigenen Dateien und Daten speichern.",
+		"tabs": {
+			"chat": "Chat",
+			"data": "Daten",
+			"files": "Dateien",
+			"label": "Chat und Arbeitsbereich von {{name}}",
+			"memory": "Erinnerungen"
+		},
+		"unsupported": "Dateien und Daten von {{name}} sind hier noch nicht verfügbar."
 	}
 }

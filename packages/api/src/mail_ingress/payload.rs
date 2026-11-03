@@ -228,7 +228,7 @@ fn mime_automated(mail: &Message<'_>) -> bool {
             .any(|(name, value)| automated_header(name, value))
 }
 
-fn envelope_automated(envelope_from: &str) -> bool {
+pub(super) fn envelope_automated(envelope_from: &str) -> bool {
     let sender = envelope_from
         .trim()
         .trim_start_matches('<')
@@ -433,7 +433,7 @@ fn attachment(
     (attachment, (path, bytes))
 }
 
-fn parse(raw: &[u8], prefix: &str) -> Result<(InboundEmail, Objects), ApiError> {
+pub(super) fn parse(raw: &[u8], prefix: &str) -> Result<(InboundEmail, Objects), ApiError> {
     let mail = MessageParser::default()
         .parse(raw)
         .ok_or_else(|| ApiError::bad_request("Invalid MIME message"))?;

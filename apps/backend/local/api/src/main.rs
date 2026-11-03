@@ -144,6 +144,10 @@ async fn main() {
         state.clone(),
         flow_like_api::deletion::DeletionWorkerConfig::from_env(),
     );
+    let _bot_turn_worker = flow_like_api::bot_host::spawn_worker(
+        state.clone(),
+        flow_like_api::bot_host::WorkerConfig::from_env(),
+    );
     let _package_license_sweeper = flow_like_api::package_license::spawn_sweeper(state.clone());
     let _execution_usage_rollup = flow_like_api::execution_usage_rollup::spawn(state.clone());
     let _device_certificate_sweeper =

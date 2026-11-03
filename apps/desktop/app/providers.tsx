@@ -32,6 +32,7 @@ import DownloadNotificationProvider from "../components/download-notification-pr
 import GlobalAnchorHandler from "../components/global-anchor-component";
 import { IdbMigrationGate } from "../components/idb-migration-gate";
 import { IOSWebviewHardening } from "../components/ios-webview-hardening";
+import { LocalBotsBridge } from "../components/local-bots-bridge";
 import { LocalSinkConsentProvider } from "../components/local-sink";
 import { NativeIntegrationProvider } from "../components/native-integration-provider";
 import { NativeRealtimeBridge } from "../components/native-realtime-bridge";
@@ -56,9 +57,9 @@ import { initBlobOffload } from "../lib/init-blob-offload";
 // of whether the overlay is open.
 const ChatActivityProvider = dynamic(
 	() =>
-		import(
-			"@flow-like/flow-like-ui/components/global-chat/chat-activity"
-		).then((module) => module.ChatActivityProvider),
+		import("@flow-like/flow-like-ui/components/global-chat/chat-activity").then(
+			(module) => module.ChatActivityProvider,
+		),
 	{ ssr: false },
 );
 const GlobalChatOverlay = dynamic(
@@ -181,6 +182,7 @@ export function Providers({
 														<DeviceModelUnlockProvider />
 														<NotificationProvider />
 														<NativeRealtimeBridge />
+														<LocalBotsBridge />
 														<RuntimeVariablesProviderComponent>
 															<ExecutionServiceProvider>
 																<ExecutionEngineProviderComponent>

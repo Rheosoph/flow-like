@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import type { ReactNode } from "react";
 import { Avatar, AvatarFallback, AvatarImage } from "../../../ui/avatar";
 import { cx } from "./tone";
 
@@ -23,6 +24,7 @@ export function PersonChip({
 	name,
 	email,
 	avatarUrl,
+	avatar,
 	you = false,
 	fullName = false,
 	className,
@@ -30,6 +32,8 @@ export function PersonChip({
 	name: string;
 	email?: string;
 	avatarUrl?: string;
+	/** Replaces the initials avatar, e.g. with a bot acting for its owner. */
+	avatar?: ReactNode;
 	/** The viewer: rendered as "You" unless `fullName`. */
 	you?: boolean;
 	fullName?: boolean;
@@ -49,12 +53,14 @@ export function PersonChip({
 				className,
 			)}
 		>
-			<Avatar aria-hidden className="size-5">
-				{avatarUrl ? <AvatarImage src={avatarUrl} alt="" /> : null}
-				<AvatarFallback className="bg-muted text-[10px] leading-none font-semibold text-ink-2">
-					{initialsOf(name)}
-				</AvatarFallback>
-			</Avatar>
+			{avatar ?? (
+				<Avatar aria-hidden className="size-5">
+					{avatarUrl ? <AvatarImage src={avatarUrl} alt="" /> : null}
+					<AvatarFallback className="bg-muted text-[10px] leading-none font-semibold text-ink-2">
+						{initialsOf(name)}
+					</AvatarFallback>
+				</Avatar>
+			)}
 			<span className="truncate">{shown}</span>
 		</span>
 	);

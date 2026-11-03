@@ -1,5 +1,7 @@
 use super::{MAX_WAKE_BYTES, ready, valid_wakeup};
-use crate::gcp::{auth::FirebaseAuth, database_root, json_url, path_segments, validate_key};
+use crate::gcp::{
+    auth::FirebaseAuth, database_root, json_url, path_segments, redirect_policy, validate_key,
+};
 use flow_like_types::{Result, anyhow, bail};
 use futures_util::StreamExt;
 use std::time::Duration;
@@ -57,44 +59,6 @@ fn wakeup(kind: &str, text: &str) -> bool {
     event["path"] == "/" && serde_json::to_vec(&event["data"]).is_ok_and(|data| valid_wakeup(&data))
 }
 
-fn dns_label(label: &str) -> bool {
-    !label.is_empty()
-        && label.len() <= 63
-        && label
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-}
-
-/// `firebaseio.com` for legacy databases, `<region>.firebasedatabase.app` for regional ones.
-fn shard_domain(database_host: &str) -> Option<&str> {
-    let (_, domain) = database_host.split_once('.')?;
-    let regional = domain
-        .strip_suffix(".firebasedatabase.app")
-        .is_some_and(dns_label);
-    (domain == "firebaseio.com" || regional).then_some(domain)
-}
-
-/// Firebase moves streaming reads to `s-` shard hosts within the database's own domain
-/// (`s-gke-usc1-nssi3-16.firebaseio.com`, `s-euw1b-nss-206.europe-west1.firebasedatabase.app`).
-/// No other host may receive the ID token in the query.
-fn allows_redirect(original: &str, target: &reqwest::Url) -> bool {
-    let Some(host) = target.host_str() else {
-        return false;
-    };
-    let shard = || {
-        shard_domain(original).is_some_and(|domain| {
-            host.strip_suffix(domain)
-                .and_then(|prefix| prefix.strip_suffix('.'))
-                .is_some_and(|label| label.starts_with("s-") && dns_label(label))
-        })
-    };
-    target.scheme() == "https"
-        && target.username().is_empty()
-        && target.password().is_none()
-        && target.port_or_known_default() == Some(443)
-        && (host == original || shard())
-}
-
 pub(super) async fn listen(
     database_url: &str,
     api_key: &str,
@@ -127,15 +91,8 @@ pub(super) async fn listen(
         .await
         .map_err(|_| anyhow!("Realtime Firebase sign-in failed"))?;
     url.query_pairs_mut().append_pair("auth", &token);
-    let root_host = root.host_str().unwrap_or_default().to_owned();
     let client = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-            if attempt.previous().len() < 3 && allows_redirect(&root_host, attempt.url()) {
-                attempt.follow()
-            } else {
-                attempt.stop()
-            }
-        }))
+        .redirect(redirect_policy(root.host_str().unwrap_or_default()))
         .connect_timeout(Duration::from_secs(10))
         .build()?;
     let response = tokio::time::timeout(
@@ -171,6 +128,7 @@ pub(super) async fn listen(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::gcp::allows_redirect;
 
     #[test]
     fn fragmented_frames_reassemble_and_ignore_other_paths() {

@@ -38,7 +38,7 @@ import {
 	Textarea,
 	applyGenerationModelPreset,
 	applyHuggingFaceMlxImportToBit,
-	buildGenerationModelRootBit,
+	prepareGenerationModelRootBit,
 	buildMlxModelRootBit,
 	createGenerationAssetDrafts,
 	createHuggingFaceGgufAdminDraft,
@@ -53,6 +53,10 @@ import {
 	validateGenerationAssets,
 	validateMlxModelAssets,
 } from "@flow-like/flow-like-ui";
+import {
+	isHostedImageGeneration,
+	validateHostedImageParameters,
+} from "@flow-like/flow-like-ui/lib/bit/hosted-image-generation";
 import { validateBitPricing } from "@flow-like/flow-like-ui/components/bits/bit-editor-model";
 import { validateHostedEmbeddingParameters } from "@flow-like/flow-like-ui/components/bits/bit-editor-model";
 import { HostedPricing } from "@flow-like/flow-like-ui/components/bits/hosted-model-pricing";
@@ -869,6 +873,9 @@ export default function Page() {
 
 	const isHostedMode = mode === "hosted-llm" || mode === "hosted-stt";
 	const isLocalStt = mode === "local-stt";
+	const hostedImageError = isHostedImageGeneration(bit)
+		? validateHostedImageParameters(bit.parameters)
+		: null;
 	const generationKind =
 		mode === "image-generation"
 			? "image"
@@ -1040,32 +1047,33 @@ export default function Page() {
 
 	const registerGenerationModel = useCallback(async () => {
 		if (!profile.data) throw new Error("User profile is not available");
-		const errors = validateGenerationAssets(generationAssets);
-		if (errors.length) throw new Error(errors.join(". "));
-		const registered = await registerGenerationAssets({
-			assets: generationAssets,
-			completed: completedGenerationAssets.current,
-			uploadBit,
-			onProgress: (asset, index) => {
-				setProgress(0);
-				setProgressDownloaded(null);
-				setProgressTotal(asset.bit.size ?? null);
-				setProgressLabel(
-					`Uploading model file ${index + 1} of ${generationAssets.length}: ${asset.bit.file_name}`,
-				);
-				setProgressBit(asset.bit);
-				lastSampleRef.current = null;
-				setSpeedBps(0);
-				setEtaSec(null);
-			},
-			onRegistered: (asset) =>
-				setGenerationAssets((current) =>
-					current.map((candidate) =>
-						candidate.key === asset.key ? asset : candidate,
+		const root = await prepareGenerationModelRootBit(bit, async () => {
+			const errors = validateGenerationAssets(generationAssets);
+			if (errors.length) throw new Error(errors.join(". "));
+			return registerGenerationAssets({
+				assets: generationAssets,
+				completed: completedGenerationAssets.current,
+				uploadBit,
+				onProgress: (asset, index) => {
+					setProgress(0);
+					setProgressDownloaded(null);
+					setProgressTotal(asset.bit.size ?? null);
+					setProgressLabel(
+						`Uploading model file ${index + 1} of ${generationAssets.length}: ${asset.bit.file_name}`,
+					);
+					setProgressBit(asset.bit);
+					lastSampleRef.current = null;
+					setSpeedBps(0);
+					setEtaSec(null);
+				},
+				onRegistered: (asset) =>
+					setGenerationAssets((current) =>
+						current.map((candidate) =>
+							candidate.key === asset.key ? asset : candidate,
+						),
 					),
-				),
+			});
 		});
-		const root = buildGenerationModelRootBit(bit, registered);
 		setBit(root);
 		setProgress(0);
 		setProgressDownloaded(null);
@@ -2165,7 +2173,7 @@ export default function Page() {
 							<Button
 								className="mt-4 w-full max-w-5xl"
 								onClick={handleSubmit}
-								disabled={loading}
+								disabled={loading || !!hostedImageError}
 							>
 								{loading ? (
 									<Loader2Icon className="w-4 h-4 animate-spin mr-2" />

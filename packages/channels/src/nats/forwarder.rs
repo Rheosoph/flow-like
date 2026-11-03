@@ -3,7 +3,7 @@ use super::{
     Role, connect_with, mint_realtime_publisher_token, mint_user_token, subject_for,
     valid_delivery_id, validate_account_seed, validate_url,
 };
-use crate::ChannelForwarder;
+use crate::{ChannelForwardError, ChannelForwarder};
 use flow_like_types::channel::{ChannelPush, new_request_id};
 use flow_like_types::{Result, anyhow, async_trait, bail};
 use futures_util::StreamExt;
@@ -206,18 +206,14 @@ pub async fn publish_confirmed(
             match tokio::time::timeout(ACK_TIMEOUT, acknowledgements.next()).await {
                 Ok(Some(message)) => {
                     if message.status == Some(async_nats::StatusCode::NO_RESPONDERS) {
-                        bail!("NATS channel has no connected waiter");
+                        return Err(ChannelForwardError::NoListener.into());
                     }
                     let ack: Acknowledgement = serde_json::from_slice(&message.payload)
                         .map_err(|_| anyhow!("invalid NATS delivery acknowledgement"))?;
                     if ack.accepted {
                         return Ok(());
                     }
-                    bail!(
-                        "{}",
-                        ack.error
-                            .unwrap_or_else(|| "NATS waiter rejected the message".into())
-                    );
+                    return Err(ack.rejection().into());
                 }
                 Ok(None) => bail!("NATS acknowledgement subscription closed"),
                 Err(_) => {}

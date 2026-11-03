@@ -304,6 +304,7 @@ describe("BotCustomizer", () => {
 			colors: { body: { kind: "swatch", colorId: "holo-aurora" } },
 			variant: "gold",
 			dark: true,
+			effect: "crt",
 			skills: ["code"],
 		};
 		const original = structuredClone(initial);
@@ -329,6 +330,7 @@ describe("BotCustomizer", () => {
 		expect(next.colors).toBeUndefined();
 		expect(next.variant).toBeUndefined();
 		expect(next.dark).toBeUndefined();
+		expect(next.effect).toBe("crt");
 		expect(next.skills).toBeUndefined();
 		expect(canSaveBotAppearance(next, withGear, ownedPackIds)).toBe(true);
 		expect(button("Save bot").disabled).toBe(false);

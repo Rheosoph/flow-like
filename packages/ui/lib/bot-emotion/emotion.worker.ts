@@ -3,6 +3,7 @@ import {
 	AutoTokenizer,
 	env,
 } from "@huggingface/transformers";
+import { calibrateEmotionScores } from "./calibration";
 import {
 	BOT_EMOTION_MODEL,
 	BOT_EMOTION_REVISION,
@@ -81,7 +82,7 @@ function loadScorer() {
 				if (typeof label === "string")
 					scores[label.toLowerCase()] = Number(probabilities[index]);
 			}
-			return scores;
+			return calibrateEmotionScores(scores);
 		});
 	})();
 	return scorer;

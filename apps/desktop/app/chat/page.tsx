@@ -1,45 +1,22 @@
 "use client";
 
-import { GlobalChatView } from "@flow-like/flow-like-ui/components/global-chat/global-chat-view";
-
+import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
 import { useRouter, useSearchParams } from "next/navigation";
-import { NativeVoiceInput } from "../../components/native-voice-input";
-import { useBackend } from "@flow-like/flow-like-ui/state/backend-state";
-import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
-import { useAuth } from "react-oidc-context";
-import { Suspense } from "react";
+import { useEffect } from "react";
 
-export default function ChatPage() {
-	return (
-		<Suspense fallback={null}>
-			<ChatPageContent />
-		</Suspense>
-	);
-}
-
-function ChatPageContent() {
+/**
+ * The Bots tab moved from `/chat` to `/bots`. A static export has no server redirects, so this
+ * forwards on the client, keeping `?voice=`, `?bot=`, `?conversation=` and anything else the
+ * link carried.
+ */
+export default function Page() {
 	const router = useRouter();
-	const params = useSearchParams();
-	const backend = useBackend();
-	const auth = useAuth();
-	const scope = JSON.stringify([
-		getApiOrigin(backend.profile),
-		backend.profile?.id ?? "",
-		(auth.isAuthenticated ? auth.user?.profile.sub : undefined) ?? "local",
-	]);
-	return (
-		<main
-			className="flex flex-col flex-1 w-full min-h-0 overflow-hidden bg-background"
-			data-fl-chat-bottom-nav
-		>
-			{params.get("voice") === "1" && (
-				<NativeVoiceInput
-					key={scope}
-					scope={scope}
-					onClose={() => router.replace("/chat")}
-				/>
-			)}
-			<GlobalChatView />
-		</main>
-	);
+	const searchParams = useSearchParams();
+
+	useEffect(() => {
+		const query = searchParams.toString();
+		router.replace(`${BOTS_ROUTE}${query ? `?${query}` : ""}`);
+	}, [router, searchParams]);
+
+	return null;
 }

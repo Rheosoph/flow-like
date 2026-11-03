@@ -2969,6 +2969,7 @@ mod page_request_binding_tests {
                 wasm_url: "https://example.invalid/package.wasm".into(),
                 cwasm_url: "https://example.invalid/package.cwasm".into(),
                 cwasm_checksum: "cwasm-checksum".into(),
+                permissions: None,
             },
         )]);
         assert!(validate_page_request_binding(

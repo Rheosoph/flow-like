@@ -2,7 +2,7 @@ use super::*;
 use sha2::{Digest, Sha256};
 use std::sync::OnceLock;
 use std::time::Instant;
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 
 static APP: OnceLock<AppHandle> = OnceLock::new();
@@ -259,7 +259,8 @@ async fn begin_login_for_generation(
 
 pub(super) fn changed(profile_id: &str, hub: &str) {
     if let Some(app) = APP.get() {
-        let _ = app.emit(
+        crate::utils::emit_to_ui(
+            app,
             "native-auth-changed",
             json!({"profileId":profile_id,"hub":hub}),
         );
@@ -292,7 +293,11 @@ fn request_login_inner(profile_id: String, generation: Option<String>) {
             begin_login_for_generation(app.clone(), profile_id.clone(), generation.as_deref()).await
         {
             if error != "The authentication session changed" {
-                let _ = app.emit("native-auth-required", json!({"profileId":profile_id}));
+                crate::utils::emit_to_ui(
+                    &app,
+                    "native-auth-required",
+                    json!({"profileId":profile_id}),
+                );
             }
         }
     });
@@ -632,7 +637,8 @@ pub(crate) async fn handle_callback(app: &AppHandle, raw: &str) -> Result<bool, 
         if let Ok(mut prompts) = PROMPTS.lock() {
             prompts.remove(&profile.id);
         }
-        let _ = app.emit(
+        crate::utils::emit_to_ui(
+            app,
             "native-auth-changed",
             json!({"profileId":profile.id,"hub":hub}),
         );
@@ -655,7 +661,8 @@ pub(crate) async fn native_auth_logout(
     if let Ok(mut prompts) = PROMPTS.lock() {
         prompts.remove(&profile_id);
     }
-    let _ = app_handle.emit(
+    crate::utils::emit_to_ui(
+        &app_handle,
         "native-auth-changed",
         json!({"profileId":profile_id,"hub":hub}),
     );

@@ -31,6 +31,38 @@
 .fl-bot-hop[data-hopping="true"] {
 	animation: fl-bot-hop var(--bot-hopMs) ease-in-out both;
 }
+.fl-bot-hop[data-reaction] {
+	animation-duration: var(--bot-reactionMs);
+	animation-timing-function: cubic-bezier(0.22, 0.7, 0.3, 1);
+	animation-fill-mode: both;
+}
+.fl-bot-hop[data-reaction="happy"] {
+	animation-name: fl-bot-react-happy;
+}
+.fl-bot-hop[data-reaction="love"] {
+	animation-name: fl-bot-react-love;
+}
+.fl-bot-hop[data-reaction="wink"] {
+	animation-name: fl-bot-react-wink;
+}
+.fl-bot-hop[data-reaction="curious"] {
+	animation-name: fl-bot-react-curious;
+}
+.fl-bot-hop[data-reaction="surprised"] {
+	animation-name: fl-bot-react-surprised;
+}
+.fl-bot-hop[data-reaction="sad"] {
+	animation-name: fl-bot-react-sad;
+}
+.fl-bot-hop[data-reaction="concerned"] {
+	animation-name: fl-bot-react-concerned;
+}
+.fl-bot-hop[data-reaction="angry"] {
+	animation-name: fl-bot-react-angry;
+}
+.fl-bot-hop[data-reaction="oops"] {
+	animation-name: fl-bot-react-oops;
+}
 .fl-bot-emote {
 	transform-origin: 80px 24px;
 	opacity: 0;
@@ -178,6 +210,107 @@
 	}
 	82% {
 		transform: translateY(0);
+	}
+}
+@keyframes fl-bot-react-happy {
+	0%,
+	100% {
+		transform: translateY(0) scale(1);
+	}
+	20% {
+		transform: scale(1.025, 0.975);
+	}
+	45% {
+		transform: translateY(-4px) scale(0.99, 1.02);
+	}
+	75% {
+		transform: scale(1.015, 0.985);
+	}
+}
+@keyframes fl-bot-react-love {
+	0%,
+	100% {
+		transform: translateY(0) rotate(0);
+	}
+	35% {
+		transform: translateY(-2px) rotate(-3deg);
+	}
+	70% {
+		transform: translateY(-1px) rotate(2deg);
+	}
+}
+@keyframes fl-bot-react-wink {
+	0%,
+	100% {
+		transform: rotate(0);
+	}
+	40% {
+		transform: rotate(-4deg);
+	}
+}
+@keyframes fl-bot-react-curious {
+	0%,
+	100% {
+		transform: rotate(0);
+	}
+	40%,
+	65% {
+		transform: rotate(4deg);
+	}
+}
+@keyframes fl-bot-react-surprised {
+	0%,
+	100% {
+		transform: translateY(0) scale(1);
+	}
+	35% {
+		transform: translateY(-2px) scale(1.05);
+	}
+}
+@keyframes fl-bot-react-sad {
+	0%,
+	100% {
+		transform: translateY(0) scale(1);
+	}
+	45% {
+		transform: translateY(2px) scale(0.99);
+	}
+}
+@keyframes fl-bot-react-concerned {
+	0%,
+	100% {
+		transform: translateY(0) rotate(0);
+	}
+	45% {
+		transform: translateY(1px) rotate(-2deg);
+	}
+}
+@keyframes fl-bot-react-angry {
+	0%,
+	100% {
+		transform: translateX(0);
+	}
+	25%,
+	55% {
+		transform: translateX(-1.4px);
+	}
+	40%,
+	70% {
+		transform: translateX(1.4px);
+	}
+}
+@keyframes fl-bot-react-oops {
+	0%,
+	100% {
+		transform: rotate(0);
+	}
+	25%,
+	55% {
+		transform: rotate(-3deg);
+	}
+	40%,
+	70% {
+		transform: rotate(3deg);
 	}
 }
 @keyframes fl-bot-pop {

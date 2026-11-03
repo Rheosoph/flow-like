@@ -175,6 +175,7 @@ export function BotAvatar({
 	catalog = defaultBotCatalog,
 	pose = "idle",
 	expression,
+	expressionOverridesState = false,
 	mood,
 	agentState = "idle",
 	gx,
@@ -205,14 +206,8 @@ export function BotAvatar({
 	const resolvedPose = preset?.pose ?? pose;
 	const shape = catalog.shapes[resolved.kind];
 	const pixels = Number.isFinite(size) ? Math.max(16, size) : 200;
-	const motion = useBotAnimation({
-		pose: resolvedPose,
-		gx,
-		gy,
-		animated,
-		elementRef,
-	});
 	const resolvedExpression =
+		(expressionOverridesState ? expression : undefined) ??
 		preset?.expression ??
 		expression ??
 		(resolvedPose === "happy"
@@ -220,6 +215,14 @@ export function BotAvatar({
 			: resolvedPose === "oops"
 				? "oops"
 				: "neutral");
+	const motion = useBotAnimation({
+		pose: resolvedPose,
+		expression: resolvedExpression,
+		gx,
+		gy,
+		animated,
+		elementRef,
+	});
 	const solidPalette = getBotPalette(shape.palette, resolved, catalog);
 	const { palette, paints, paintedSlots } = resolveBotPaintPalette(
 		resolved,
@@ -357,6 +360,7 @@ export function BotAvatar({
 							data-part="hop"
 							className="fl-bot-hop"
 							data-hopping={motion.hopping}
+							data-reaction={motion.reaction}
 							data-sleeping={resolvedPose === "sleep"}
 						>
 							<g

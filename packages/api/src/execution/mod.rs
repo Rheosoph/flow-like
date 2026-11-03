@@ -9,7 +9,7 @@ mod dispatch;
 #[cfg(feature = "lambda")]
 pub mod dispatch_intent;
 mod jwt;
-pub(crate) use jwt::{bind_attended_payer, bind_hosted_frontend};
+pub(crate) use jwt::{bind_attended_payer, bind_hosted_frontend, bind_tool_job};
 pub mod live_run;
 mod page_action_jwt;
 mod page_action_sealer;
@@ -34,8 +34,8 @@ pub use channel_jwt::{
 };
 pub use dispatch::{
     ArtifactEnsurer, ByteStream, DispatchConfig, DispatchError, DispatchRequest, DispatchResponse,
-    DispatchTrigger, Dispatcher, ExecutionBackend, StreamChunk, caller_dispatch_profile,
-    fetch_profile_for_dispatch, sink_dispatch_profile,
+    DispatchTrigger, Dispatcher, ExecutionBackend, StreamChunk, ToolTarget,
+    caller_dispatch_profile, fetch_profile_for_dispatch, sink_dispatch_profile,
 };
 pub use jwt::{
     ExecutionClaims, ExecutionJwk, ExecutionJwks, ExecutionJwtError, ExecutionJwtParams,

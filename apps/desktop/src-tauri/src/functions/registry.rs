@@ -30,6 +30,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tauri::AppHandle;
 
+pub(crate) mod initialization;
+
 /// How long a describe waits for an uncached hub before treating it as
 /// announcing no widget storage.
 const HUB_WIDGET_STORAGE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -908,6 +910,12 @@ pub async fn registry_init(
 ) -> Result<(), TauriFunctionError> {
     use tauri::Manager;
 
+    let state = app_handle
+        .try_state::<TauriRegistryState>()
+        .ok_or_else(|| anyhow::anyhow!("Registry state not found"))?;
+    // Startup and every window share this gate. Keep it through the catalog rebuild so
+    // a second caller cannot start another rebuild after the client alone is ready.
+    let mut initialization = state.1.lock().await;
     let settings = TauriSettingsState::construct(&app_handle).await?;
     let settings_guard = settings.lock().await;
 
@@ -927,10 +935,7 @@ pub async fn registry_init(
 
     drop(settings_guard);
 
-    let state = app_handle
-        .try_state::<TauriRegistryState>()
-        .ok_or_else(|| anyhow::anyhow!("Registry state not found"))?;
-
+    let needs_rebuild = initialization.needs_rebuild(&cache_dir);
     let mut guard = state.0.lock().await;
     match guard.as_mut() {
         // Every window initialises the registry. A later one keeps the client
@@ -941,11 +946,12 @@ pub async fn registry_init(
             client.set_default_registry(default_registry);
         }
         _ => {
+            initialization.invalidate();
             let client = RegistryClient::new(RegistryConfig {
                 default_registry,
                 additional_registries: vec![],
                 local_paths: vec![],
-                cache_dir,
+                cache_dir: cache_dir.clone(),
                 cache_duration_hours: 24 * 7,
                 auto_update_index: true,
                 allow_unverified: false,
@@ -957,6 +963,11 @@ pub async fn registry_init(
     }
     drop(guard);
 
+    if !needs_rebuild && initialization.is_ready(&cache_dir) {
+        // Profile and explicit endpoint changes above preserve the installed catalog.
+        return Ok(());
+    }
+
     // Ensure this source is installed synchronously with registry readiness.
     // The early startup registration in `run` is intentionally best-effort and
     // may still be queued when a board opens.
@@ -965,26 +976,20 @@ pub async fn registry_init(
         .register_package_widget_source(Arc::new(RegistryWidgetSource(state.0.clone())))
         .await;
 
-    if let Err(e) = rebuild_node_registry(&app_handle, false).await {
-        tracing::warn!("Failed to load WASM nodes during registry init: {:?}", e);
-    }
+    rebuild_node_registry(&app_handle, false).await?;
 
     super::developer::register_all_developer_packages(&app_handle).await;
 
-    match refresh_open_board_definitions(&app_handle).await {
-        Ok(count) if count > 0 => {
-            tracing::debug!(count, "Refreshed open boards after registry initialization");
-        }
-        Ok(_) => {}
-        Err(e) => {
-            tracing::warn!("Failed to refresh open boards after registry init: {:?}", e);
-        }
+    let count = refresh_open_board_definitions(&app_handle).await?;
+    if count > 0 {
+        tracing::debug!(count, "Refreshed open boards after registry initialization");
     }
 
     // Emit only after open boards have recomputed their dynamic contracts, so
     // the frontend cannot refetch the stale pre-registry snapshot.
     super::developer::emit_catalog_updated(&app_handle);
 
+    initialization.complete(cache_dir);
     Ok(())
 }
 

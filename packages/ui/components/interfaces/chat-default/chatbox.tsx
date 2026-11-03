@@ -13,6 +13,7 @@ import SquareIcon from "lucide-react/dist/esm/icons/square.js";
 import WrenchIcon from "lucide-react/dist/esm/icons/wrench.js";
 import X from "lucide-react/dist/esm/icons/x.js";
 import {
+	type ReactNode,
 	forwardRef,
 	useCallback,
 	useEffect,
@@ -21,7 +22,6 @@ import {
 	useState,
 } from "react";
 import { cn, humanFileSize } from "../../../lib/utils";
-import type { BotAgentState } from "../../bots/types";
 import type { ThinkingOption } from "../../thinking/thinking-options";
 import { ThinkingPicker } from "../../thinking/thinking-picker";
 import { Button } from "../../ui/button";
@@ -30,10 +30,6 @@ import { Textarea } from "../../ui/textarea";
 import type { VoiceInvokeMode, VoiceMode } from "../../voice/types";
 import { useSpeechRecognition } from "../../voice/use-speech-recognition";
 import { useVoiceRecorder } from "../../voice/use-voice-recorder";
-import {
-	type ChatBotReactionContext,
-	ChatComposerBot,
-} from "./chat-composer-bot";
 import type { IChatMessageInteraction } from "./chat-message-interaction";
 import { FileManagerDialog } from "./chatbox/file-dialog";
 import { isImageFile, useImagePreviewUrls } from "./chatbox/image-previews";
@@ -80,9 +76,8 @@ interface ChatBoxProps {
 	/** Thinking level picker; omitted when the chat does not offer one. */
 	thinking?: ChatBoxThinking;
 	model?: ChatBoxModel;
-	/** Recent visible messages used only for the bot's browser-local facial reaction. */
-	reactionContext?: ChatBotReactionContext;
-	agentState?: BotAgentState;
+	/** Additional controls alongside the thinking picker. */
+	actions?: ReactNode;
 }
 
 export interface ChatBoxThinking {
@@ -126,8 +121,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			onInterrupt,
 			thinking,
 			model,
-			reactionContext,
-			agentState,
+			actions,
 		}: Readonly<ChatBoxProps>,
 		ref,
 	) => {
@@ -614,13 +608,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						}}
 					>
 						{/* Text Input */}
-						<div className="flex flex-1 items-start py-2 w-full pr-2">
-							<ChatComposerBot
-								draft={input}
-								context={reactionContext}
-								composing={composing}
-								agentState={agentState}
-							/>
+						<div className="flex-1 py-2 w-full pr-2">
 							<Textarea
 								aria-label="Message"
 								ref={chatboxRef}
@@ -649,7 +637,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						{/* Tool bar and settings */}
 						<div className="flex w-full items-center justify-between rounded-b-xl">
 							{/* Left side buttons */}
-							<div className="flex items-center gap-1 p-2 pt-0">
+							<div className="flex min-w-0 flex-wrap items-center gap-1 p-2 pt-0">
 								{/* File Upload Button */}
 								{fileUpload && (
 									<Popover>
@@ -719,6 +707,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										className="h-11 w-11 sm:h-8 sm:w-8"
 									/>
 								)}
+
+								{actions}
 
 								{/* Tools Settings Button with Active Tools Badge */}
 								{(availableTools?.length ?? 0) > 0 && (

@@ -25,6 +25,7 @@ use crate::event_sink::telegram::TelegramSink;
 use crate::event_sink::web_watcher::WebWatcherSink;
 use crate::event_sink::webhook::WebhookSink;
 
+mod bot_vault;
 pub mod cron;
 pub mod daemon;
 pub mod deeplink;
@@ -185,6 +186,22 @@ pub enum EventConfig {
 }
 
 impl EventConfig {
+    /// The config as the registration table keeps it: the token of a bot lives in the system
+    /// keychain, not in the row.
+    pub(crate) fn for_storage(&self) -> Self {
+        match self {
+            EventConfig::Telegram(sink) => EventConfig::Telegram(TelegramSink {
+                bot_token: String::new(),
+                ..sink.clone()
+            }),
+            EventConfig::Discord(sink) => EventConfig::Discord(DiscordSink {
+                token: String::new(),
+                ..sink.clone()
+            }),
+            other => other.clone(),
+        }
+    }
+
     /// Returns the `sink_execution` target if the underlying sink supports it.
     /// Values: `"LOCAL"`, `"REMOTE"`, `"HYBRID"`, or `None` (default = local).
     pub fn sink_execution(&self) -> Option<&str> {

@@ -44,3 +44,13 @@ export function resolveModelSelection<TModel extends SelectableModel>({
 
 	return null;
 }
+
+/** The selected model's display name, or null while nothing is selected or the catalog lacks it. */
+export function selectedModelLabel(
+	models: readonly { id: string; name?: string | null }[],
+	selectedModelId: string,
+): string | null {
+	if (!selectedModelId) return null;
+	const model = models.find((item) => item.id === selectedModelId);
+	return model ? model.name || model.id : null;
+}

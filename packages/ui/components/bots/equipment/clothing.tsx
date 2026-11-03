@@ -145,33 +145,55 @@ export const clothingBySeries: Readonly<
 			(p) => (
 				<>
 					<path
-						d="M-16 0L-21 7L-7 12L0 24L8 12L21 7L16 0M0 24V32"
+						d="M-11 0L-16 4L-8 11L0 9L8 11L16 4L11 0M0 9V25"
 						fill="none"
 						stroke={p.sclera}
-						strokeWidth="2"
+						strokeWidth="1.5"
 					/>
-					<path d="M14 15H26V25H14Z" fill="none" stroke={p.sclera} />
 					<path
-						d="M-20 13Q-10 14 -12 23Q-22 26 -24 17Q-21 20 -18 18Q-15 16 -20 13Z"
+						d="M-24 12H-12V20Q-18 24-24 20Z"
+						fill="none"
+						stroke={p.sclera}
+					/>
+					<path
+						d="M-16 14A3.5 3.5 0 1 0-15 20A3.5 3.5 0 0 1-16 14Z"
 						fill={p.accent}
 						stroke="none"
 					/>
-					<circle cx="3" cy="26" r="1.5" fill={p.accent} />
+					<g fill={p.sclera} stroke="none">
+						<circle cx="2.5" cy="14" r="1.1" />
+						<circle cx="2.5" cy="20" r="1.1" />
+					</g>
 				</>
 			),
 			"v",
 		),
 		outfit("bomber-jacket", "Bomber jacket", (p) => (
 			<>
-				<path d="M-13 0Q0 12 13 0L10 6Q0 16 -10 6Z" fill={p.accent} />
+				<path d="M-12 0Q0 11 12 0L13 3Q0 17-13 3Z" fill={p.clothing} />
 				<path
-					d="M0 10V32M-24 14L-15 23M24 14L15 23"
+					d="M-11 3Q0 12 11 3M0 9V23"
+					fill="none"
 					stroke={p.sclera}
-					strokeWidth="2"
+					opacity="0.65"
 				/>
-				<path d="M-100 27H100" stroke={p.accent} strokeWidth="5" />
-				<rect x="-2" y="11" width="4" height="5" rx="1" fill={p.sclera} />
-				<path d="M-30 5H-22V14H-30Z" fill={p.accent} />
+				<path d="M-22 12L-14 18M22 12L14 18" stroke={p.ink} strokeWidth="3" />
+				<path d="M-22 11L-14 17M22 11L14 17" stroke={p.sclera} opacity="0.55" />
+				<path d="M-100 21Q0 25 100 21V29H-100Z" fill={p.clothing} />
+				<path
+					d="M-24 23V26M-16 23V26M-8 23V26M0 23V26M8 23V26M16 23V26M24 23V26"
+					stroke={p.sclera}
+					opacity="0.35"
+				/>
+				<rect
+					x="-1.5"
+					y="10"
+					width="3"
+					height="4"
+					rx="0.8"
+					fill={p.accent}
+					stroke="none"
+				/>
 			</>
 		)),
 		outfit(
@@ -179,21 +201,23 @@ export const clothingBySeries: Readonly<
 			"Wrap cardigan",
 			(p) => (
 				<>
+					<path d="M-11 0L7 17L13 25H-100V0Z" fill={p.clothing} />
 					<path
-						d="M-15 0L18 32H-100V0ZM15 0L-14 32"
-						fill={p.clothing}
+						d="M-11 1L10 22M11 1L1 11"
+						fill="none"
 						stroke={p.sclera}
-						strokeWidth="2.5"
+						strokeWidth="1.6"
+						opacity="0.7"
 					/>
-					<path d="M-100 23H100" stroke={p.accent} strokeWidth="5" />
 					<path
-						d="M14 21Q4 12 6 23L14 25Q24 15 25 23L14 25L11 32M16 25L23 32"
+						d="M-100 18Q0 22 100 18"
+						fill="none"
+						stroke={p.accent}
+						strokeWidth="3.5"
+					/>
+					<path
+						d="M12 20Q4 13 6 20L12 21Q20 13 20 20L12 21L10 26M14 21L18 26"
 						fill={p.accent}
-					/>
-					<path
-						d="M-27 12L-19 19M-31 16L-23 23"
-						stroke={p.sclera}
-						opacity=".55"
 					/>
 				</>
 			),
@@ -218,14 +242,38 @@ export const clothingBySeries: Readonly<
 		),
 		outfit("denim-jacket", "Denim jacket", (p) => (
 			<>
-				<Collar color={p.accent} />
 				<path
-					d="M0 7V32M-28 10H-13V19L-20 23L-28 19ZM13 10H28V19L20 23L13 19Z"
+					d="M-11 0L-16 3L-9 10L0 6L9 10L16 3L11 0L0 6Z"
+					fill={p.clothing}
+				/>
+				<path
+					d="M-11 0L-16 3L-9 10L0 6L9 10L16 3L11 0L0 6Z"
+					fill={p.sclera}
+					stroke="none"
+					opacity="0.18"
+				/>
+				<path
+					d="M-11 1L-9 8L-2 6M11 1L9 8L2 6M-2 9V27M2 9V27"
 					fill="none"
 					stroke={p.sclera}
+					opacity="0.5"
 				/>
-				<path d="M-28 10L-20 14L-13 10M13 10L20 14L28 10" fill="none" />
-				<Buttons color={p.accent} />
+				<path
+					d="M-24 11H-11V19L-17.5 22L-24 19ZM11 11H24V19L17.5 22L11 19Z"
+					fill={p.clothing}
+				/>
+				<path
+					d="M-24 11L-17.5 15L-11 11M11 11L17.5 15L24 11M-100 23H100"
+					fill="none"
+					stroke={p.sclera}
+					opacity="0.5"
+				/>
+				<g fill={p.accent} stroke="none">
+					<circle cx="-17.5" cy="14" r="0.9" />
+					<circle cx="17.5" cy="14" r="0.9" />
+					<circle cy="12" r="1" />
+					<circle cy="18" r="1" />
+				</g>
 			</>
 		)),
 		outfit("varsity-jacket", "Varsity jacket", (p) => (

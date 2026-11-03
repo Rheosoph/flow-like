@@ -149,7 +149,7 @@ impl Client {
                     return Err(Error::Stream("Poll response changed run identity".into()));
                 }
                 run_id = Some(response.run_id.clone());
-                let empty = response.events.is_empty();
+                let finished = response.is_finished();
                 if let Some(sequence) = response.last_sequence() {
                     if sequence <= cursor {
                         return Err(Error::Stream("Poll cursor did not advance".into()));
@@ -157,8 +157,7 @@ impl Client {
                     cursor = sequence;
                 }
                 events.append(&mut response.events);
-                // A terminal run can still have multiple pages of persisted events.
-                if response.is_terminal() && empty {
+                if finished {
                     if !response.status.eq_ignore_ascii_case("completed") {
                         return Err(Error::Execution {
                             run_id: response.run_id,

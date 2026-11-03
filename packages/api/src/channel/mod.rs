@@ -165,12 +165,25 @@ pub(crate) fn push_url(api_base_url: &str, channel_id: &str) -> String {
     )
 }
 
-/// Provider errors can embed request URLs whose query or user info carries a credential
-/// (a Firebase `access_token`, reqwest's `for url (…)` suffix). Scheme, host and path remain.
+const REDACTED: &str = "<redacted>";
+
+/// Provider errors can carry credentials: request URLs whose query or user info holds one (a
+/// Firebase `access_token`, reqwest's `for url (…)` suffix, JSON-escaped ones too), AWS
+/// canonical strings with `x-amz-security-token`, `Authorization` and `Bearer` values, JWTs.
+/// URLs keep their scheme, host and path.
 pub(crate) fn redact_provider_error(error: &flow_like_types::Error) -> String {
-    let message = format!("{error:#}");
+    let message = format!("{error:#}").replace("\\/", "/");
+    let message = redact_url_credentials(&message);
+    let message = redact_values(&message, "authorization", assignment, header_value_len);
+    let message = redact_values(&message, "x-amz-security-token", assignment, token_len);
+    let message = redact_values(&message, "access_token", assignment, token_len);
+    let message = redact_values(&message, "bearer", spacing, token_len);
+    redact_jwts(&message)
+}
+
+fn redact_url_credentials(message: &str) -> String {
     let mut redacted = String::with_capacity(message.len());
-    let mut rest = message.as_str();
+    let mut rest = message;
     while let Some(index) = rest.find("://") {
         let (head, tail) = rest.split_at(index + 3);
         redacted.push_str(head);
@@ -187,12 +200,119 @@ pub(crate) fn redact_provider_error(error: &flow_like_types::Error) -> String {
         );
         redacted.push_str(path);
         if location.len() < url.len() {
-            redacted.push_str("?<redacted>");
+            redacted.push('?');
+            redacted.push_str(REDACTED);
         }
         rest = after;
     }
     redacted.push_str(rest);
     redacted
+}
+
+/// Replaces the value after each case-insensitive `key` that `separator` accepts.
+fn redact_values(
+    message: &str,
+    key: &str,
+    separator: fn(&str) -> Option<usize>,
+    value_len: fn(&str) -> usize,
+) -> String {
+    let lower = message.to_ascii_lowercase();
+    let mut redacted = String::with_capacity(message.len());
+    let (mut copied, mut searched) = (0, 0);
+    while let Some(found) = lower[searched..].find(key) {
+        let start = searched + found;
+        searched = start + key.len();
+        if lower[..start].ends_with(|c: char| c.is_ascii_alphanumeric()) {
+            continue;
+        }
+        let Some(gap) = separator(&message[searched..]) else {
+            continue;
+        };
+        let value = searched + gap;
+        let len = value_len(&message[value..]);
+        if len == 0 {
+            continue;
+        }
+        redacted.push_str(&message[copied..value]);
+        redacted.push_str(REDACTED);
+        copied = value + len;
+        searched = copied;
+    }
+    redacted.push_str(&message[copied..]);
+    redacted
+}
+
+/// `key: value` and `key=value`, also quoted or JSON-escaped (`\"key\":\"value\"`).
+fn assignment(rest: &str) -> Option<usize> {
+    let padding = |c: char| matches!(c, '"' | '\'' | '\\' | ' ' | '\t');
+    let value = rest
+        .trim_start_matches(padding)
+        .strip_prefix([':', '='])?
+        .trim_start_matches(padding);
+    Some(rest.len() - value.len())
+}
+
+/// `Bearer value`.
+fn spacing(rest: &str) -> Option<usize> {
+    let gap = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+    (gap > 0).then_some(gap)
+}
+
+/// Base64, base64url and percent-encoded credentials.
+fn token_len(value: &str) -> usize {
+    value
+        .bytes()
+        .take_while(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(b, b'+' | b'/' | b'=' | b'%' | b'-' | b'_' | b'.' | b'~')
+        })
+        .count()
+}
+
+/// A header value runs to the end of its line or its closing quote.
+fn header_value_len(value: &str) -> usize {
+    value
+        .find(['\r', '\n', '"', '\'', '\\'])
+        .unwrap_or(value.len())
+}
+
+fn redact_jwts(message: &str) -> String {
+    let mut redacted = String::with_capacity(message.len());
+    let mut rest = message;
+    while let Some(start) = rest.find("eyJ") {
+        let (head, candidate) = rest.split_at(start);
+        let len = jwt_len(candidate);
+        if len > 0 && !head.ends_with(|c: char| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+        {
+            redacted.push_str(head);
+            redacted.push_str(REDACTED);
+            rest = &candidate[len..];
+        } else {
+            redacted.push_str(&rest[..start + 3]);
+            rest = &candidate[3..];
+        }
+    }
+    redacted.push_str(rest);
+    redacted
+}
+
+/// The length of a `header.payload.signature` token at the start of `text`, or 0.
+fn jwt_len(text: &str) -> usize {
+    let segment = |from: usize| {
+        text[from..]
+            .bytes()
+            .take_while(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+            .count()
+    };
+    let header_end = segment(0);
+    if !text[header_end..].starts_with('.') {
+        return 0;
+    }
+    let payload_end = header_end + 1 + segment(header_end + 1);
+    if payload_end == header_end + 1 || !text[payload_end..].starts_with('.') {
+        return 0;
+    }
+    payload_end + 1 + segment(payload_end + 1)
 }
 
 #[cfg(test)]
@@ -287,5 +407,55 @@ mod tests {
             redact_provider_error(&plain),
             "NATS channel has no connected waiter"
         );
+    }
+
+    #[test]
+    fn provider_errors_lose_tokens_outside_urls() {
+        let cases = [
+            (
+                "InvalidSignatureException: The Canonical String for this request should have been\n'POST\n/topics/channels/run-1\n\nhost:abc-ats.iot.eu-west-1.amazonaws.com\nx-amz-date:20261101T120000Z\nx-amz-security-token:IQoJb3JpZ2luX2VjEJr//////////wEaCWV1LXdlc3QtMSJHMEU+n9=\n\nhost;x-amz-date;x-amz-security-token\ne3b0c44298fc'",
+                "InvalidSignatureException: The Canonical String for this request should have been\n'POST\n/topics/channels/run-1\n\nhost:abc-ats.iot.eu-west-1.amazonaws.com\nx-amz-date:20261101T120000Z\nx-amz-security-token:<redacted>\n\nhost;x-amz-date;x-amz-security-token\ne3b0c44298fc'",
+            ),
+            (
+                "canonical query X-Amz-Credential=ASIAEXAMPLE%2F20261101&X-Amz-Security-Token=IQoJ%2F%2Fsecret%3D&X-Amz-Signature=abc123",
+                "canonical query X-Amz-Credential=ASIAEXAMPLE%2F20261101&X-Amz-Security-Token=<redacted>&X-Amz-Signature=abc123",
+            ),
+            (
+                r#"request headers {"authorization": "Bearer ya29.secret", "x-amz-security-token": "IQoJsecret"}"#,
+                r#"request headers {"authorization": "<redacted>", "x-amz-security-token": "<redacted>"}"#,
+            ),
+            (
+                "signed with Authorization: AWS4-HMAC-SHA256 Credential=ASIAEXAMPLE/20261101/eu-west-1/iotdata/aws4_request, SignedHeaders=host;x-amz-date, Signature=deadbeef\nthen retried",
+                "signed with Authorization: <redacted>\nthen retried",
+            ),
+            (
+                r#"body "{\"authorization\":\"Bearer abc.def\"}""#,
+                r#"body "{\"authorization\":\"<redacted>\"}""#,
+            ),
+            (
+                "upstream answered 401 to Bearer ya29.a0AfH6SMBsecret",
+                "upstream answered 401 to Bearer <redacted>",
+            ),
+            (
+                "rejected token eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJydW4ifQ.c2lnbmF0dXJl for run-1",
+                "rejected token <redacted> for run-1",
+            ),
+            (
+                r#"Firebase answered {"target":"https:\/\/db.example.test\/channels\/run-1.json?access_token=ya29.secret&print=silent"}"#,
+                r#"Firebase answered {"target":"https://db.example.test/channels/run-1.json?<redacted>"}"#,
+            ),
+            (
+                r#"token exchange answered {"access_token":"ya29.secret","expires_in":3599}"#,
+                r#"token exchange answered {"access_token":"<redacted>","expires_in":3599}"#,
+            ),
+            (
+                "NATS AuthorizationViolation: authorization failed; signed headers host;x-amz-security-token; Bearer",
+                "NATS AuthorizationViolation: authorization failed; signed headers host;x-amz-security-token; Bearer",
+            ),
+        ];
+        for (message, expected) in cases {
+            let error = flow_like_types::anyhow!("{message}");
+            assert_eq!(redact_provider_error(&error), expected);
+        }
     }
 }

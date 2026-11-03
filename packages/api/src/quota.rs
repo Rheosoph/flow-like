@@ -388,7 +388,10 @@ pub(crate) async fn reserve_instance_with_db(
     if request.actor_id.as_deref() != Some(usage.delegated_user_id.as_str())
         || request.app_id != usage.app_id
         || request.model_id.as_deref() != Some(usage.model_id.as_str())
-        || !matches!(request.kind.as_str(), "llm" | "embedding")
+        || !matches!(
+            request.kind.as_str(),
+            "llm" | "embedding" | "image_generation"
+        )
         || request.funding_class != "hosted"
         || request.execution_mode != "instance_hosted_ai"
         || request.amounts.ai_calls != 1
@@ -1205,7 +1208,7 @@ pub async fn release_unstarted_with_db(
         {
             if matches!(
                 row.try_get::<String>("", "kind")?.as_str(),
-                "llm" | "embedding"
+                "llm" | "embedding" | "image_generation"
             ) {
                 crate::usage_accounting::release_unstarted_hosted(db, dialect, operation_id)
                     .await?;
@@ -1277,7 +1280,7 @@ pub async fn summary(
     days: i64,
     include_history: bool,
 ) -> Result<Value, ApiError> {
-    summary_with_db(
+    let summary = summary_with_db(
         &state.db,
         state.db_dialect,
         &state.platform_config.tiers,
@@ -1285,7 +1288,14 @@ pub async fn summary(
         days,
         include_history,
     )
-    .await
+    .await?;
+    if summary["warnings"]
+        .as_array()
+        .is_some_and(|warnings| !warnings.is_empty())
+    {
+        state.channels.publish_realtime_invalidation(payer_id).await;
+    }
+    Ok(summary)
 }
 
 pub(crate) async fn summary_with_db(

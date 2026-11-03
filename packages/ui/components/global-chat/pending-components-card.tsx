@@ -9,6 +9,7 @@ import { useAssistantSurface } from "../../index";
 import type { AssistantWidgetSurface } from "../../state/assistant-surface";
 import {
 	type PendingComponentsEntry,
+	selectPendingComponentsAutoMode,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import { PendingComponentsView } from "../flowpilot/PendingComponentsView";
@@ -68,7 +69,7 @@ export function PendingComponentsCard() {
 		(s) => s.setPendingComponents,
 	);
 	const widgetSurface = useAssistantSurface((s) => s.widgetSurface);
-	const autoMode = useGlobalChatStore((s) => s.autoMode);
+	const autoMode = useGlobalChatStore(selectPendingComponentsAutoMode);
 	const applyingRef = useRef(false);
 	const autoAppliedRef = useRef<unknown>(null);
 

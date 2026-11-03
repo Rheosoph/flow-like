@@ -315,3 +315,32 @@ describe("pruneDetached", () => {
 		expect(surfaces.get("page-2")).toBe(other);
 	});
 });
+
+describe("replayed child updates", () => {
+	test("pushing a child that is already listed keeps one copy", () => {
+		const next = apply(withRows("a", "b"), [push("feed-list", "a")]);
+		expect(childList(next, "feed-list")).toEqual(["a", "b"]);
+	});
+
+	test("inserting a child that is already listed keeps one copy", () => {
+		const next = apply(withRows("a", "b"), [
+			upsert("feed-list", { type: "insertChildAt", childId: "b", index: 0 }),
+		]);
+		expect(childList(next, "feed-list")).toEqual(["a", "b"]);
+	});
+
+	test("a load run whose every update arrives twice renders each row once", () => {
+		const load = [
+			clear("feed-list"),
+			instantiate("c"),
+			push("feed-list", "c"),
+			instantiate("d"),
+			push("feed-list", "d"),
+		];
+		const next = apply(
+			withRows("a"),
+			load.flatMap((message) => [message, message]),
+		);
+		expect(childList(next, "feed-list")).toEqual(["c", "d"]);
+	});
+});

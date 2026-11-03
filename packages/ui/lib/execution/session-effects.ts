@@ -19,12 +19,30 @@ import {
 	executionElementSource,
 	subscribeExecutionSurfaces,
 } from "./surfaces";
-import { type ExecutionTask, isExecutionFinished } from "./types";
+import {
+	type ExecutionTask,
+	isExecutionFinished,
+	isExecutionSettled,
+} from "./types";
 
 interface EffectClient {
 	getTasks(): ExecutionTask[];
+	isObserving(taskId: string): boolean;
 	subscribe(listener: () => void): () => void;
 	claimEvent(taskId: string, eventId: string): Promise<boolean>;
+}
+
+function dismissProgress(id: string) {
+	toast.dismiss(id);
+	getActiveProgressToasts().delete(id);
+}
+
+function replyPreview(task: ExecutionTask): string {
+	if (task.preview) return task.preview;
+	const reason = isExecutionFinished(task)
+		? task.error
+		: task.chat?.detachedNotice?.title;
+	return reason || "Reply ready";
 }
 
 /** Tab-only effects are claimed separately from the worker's ordered event processing. */
@@ -34,7 +52,7 @@ export function attachExecutionEffects(client: EffectClient): () => void {
 		ReturnType<typeof createDeviceCommandSession>
 	>();
 	const observed = new Map<string, Set<string>>();
-	const finished = new Set<string>();
+	const concluded = new Set<string>();
 	const progress = new Map<string, Map<string, ProgressToastData>>();
 	let disposed = false;
 	const visible = () =>
@@ -86,6 +104,59 @@ export function attachExecutionEffects(client: EffectClient): () => void {
 		}
 	};
 
+	const recordReply = (task: ExecutionTask) => {
+		if (!task.chat || task.status === "cancelled") return;
+		const messageId = task.chat.responseMessage.id;
+		void chatDb.sessions
+			.get(task.streamId)
+			.then((session) => {
+				if (disposed || session?.appId !== task.appId) return;
+				recordChatActivity({
+					target: {
+						kind: "app",
+						appId: task.appId,
+						eventId: task.eventId,
+						sessionId: task.streamId,
+					},
+					messageId,
+					title: task.title,
+					preview: replyPreview(task),
+				});
+			})
+			.catch((error) =>
+				console.warn("Chat activity could not be recorded", error),
+			);
+	};
+
+	/** Nothing more of the run reaches this tab: end its device session, progress and reply. */
+	const conclude = (task: ExecutionTask) => {
+		sessions.get(task.taskId)?.close();
+		// Progress of a detached run never resolves here, and it did not fail.
+		for (const data of progress.get(task.taskId)?.values() ?? [])
+			if (isExecutionFinished(task))
+				showProgressToast({
+					...data,
+					done: true,
+					success: task.status === "completed",
+				});
+			else dismissProgress(data.id);
+		progress.delete(task.taskId);
+		recordReply(task);
+	};
+
+	/**
+	 * Catches up pages that did not start the run. The caller that started it applies its output
+	 * itself, so replaying it here would apply every non-idempotent update (pushChild) twice.
+	 */
+	const replayToSurfaces = (task: ExecutionTask) => {
+		if (client.isObserving(task.taskId)) return;
+		try {
+			deliverExecutionSurfaceEvents(task);
+		} catch (error) {
+			console.warn("Execution page update failed", error);
+		}
+	};
+
 	const update = () => {
 		if (disposed) return;
 		const tasks = client.getTasks();
@@ -95,16 +166,14 @@ export function attachExecutionEffects(client: EffectClient): () => void {
 				session.close();
 				sessions.delete(id);
 				observed.delete(id);
-				finished.delete(id);
+				concluded.delete(id);
 			}
 		}
 		for (const task of tasks) {
 			const done = isExecutionFinished(task);
-			try {
-				deliverExecutionSurfaceEvents(task);
-			} catch (error) {
-				console.warn("Execution page update failed", error);
-			}
+			// A detached run continues on the server, but none of its output reaches this tab any more.
+			const ended = isExecutionSettled(task);
+			replayToSurfaces(task);
 			const interactions = task.pendingInteractions.flatMap((request) => {
 				if (request.event.event_type !== "interaction_request") return [];
 				const original = request.event.payload as IInteractionRequest;
@@ -132,7 +201,7 @@ export function attachExecutionEffects(client: EffectClient): () => void {
 				seen = new Set();
 				observed.set(task.taskId, seen);
 			}
-			if (!done) {
+			if (!ended) {
 				let session = sessions.get(task.taskId);
 				if (!session) {
 					session = createDeviceCommandSession({
@@ -169,6 +238,8 @@ export function attachExecutionEffects(client: EffectClient): () => void {
 						);
 					}
 				}
+			}
+			if (!done) {
 				// Requests are retried when a matching surface mounts, without repeating an action already claimed.
 				for (const request of task.pendingInteractions) {
 					if (
@@ -185,38 +256,10 @@ export function attachExecutionEffects(client: EffectClient): () => void {
 						),
 					);
 				}
-			} else if (!finished.has(task.taskId)) {
-				finished.add(task.taskId);
-				sessions.get(task.taskId)?.close();
-				for (const data of progress.get(task.taskId)?.values() ?? [])
-					showProgressToast({
-						...data,
-						done: true,
-						success: task.status === "completed",
-					});
-				progress.delete(task.taskId);
-				if (task.chat && task.status !== "cancelled") {
-					const messageId = task.chat.responseMessage.id;
-					void chatDb.sessions
-						.get(task.streamId)
-						.then((session) => {
-							if (disposed || session?.appId !== task.appId) return;
-							recordChatActivity({
-								target: {
-									kind: "app",
-									appId: task.appId,
-									eventId: task.eventId,
-									sessionId: task.streamId,
-								},
-								messageId,
-								title: task.title,
-								preview: task.preview || task.error || "Reply ready",
-							});
-						})
-						.catch((error) =>
-							console.warn("Chat activity could not be recorded", error),
-						);
-				}
+			}
+			if (ended && !concluded.has(task.taskId)) {
+				concluded.add(task.taskId);
+				conclude(task);
 			}
 		}
 	};
@@ -235,9 +278,6 @@ export function attachExecutionEffects(client: EffectClient): () => void {
 		window.removeEventListener("focus", update);
 		for (const session of sessions.values()) session.close();
 		for (const owned of progress.values())
-			for (const id of owned.keys()) {
-				toast.dismiss(id);
-				getActiveProgressToasts().delete(id);
-			}
+			for (const id of owned.keys()) dismissProgress(id);
 	};
 }

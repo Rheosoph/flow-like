@@ -16,10 +16,21 @@ use flow_like::{
     bit::Metadata,
 };
 use sea_orm::sea_query::{Expr, ExprTrait, extension::postgres::PgExpr};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect, Select};
 
 /// Search hits paired with their localized metadata, when any exists.
 pub type AppSearchResults = Vec<(App, Option<Metadata>)>;
+
+/// The apps a search may find: public ones, never a bot's workspace.
+pub(crate) fn searchable_apps() -> Select<app::Entity> {
+    app::Entity::find()
+        .filter(
+            app::Column::Visibility
+                .eq(Visibility::Public)
+                .or(app::Column::Visibility.eq(Visibility::PublicRequestAccess)),
+        )
+        .filter(app::Column::BotId.is_null())
+}
 
 #[utoipa::path(
     get,
@@ -61,14 +72,7 @@ pub async fn search_apps(
     let sort = query.sort.unwrap_or(AppSearchSort::MostRelevant);
 
     let limit = std::cmp::min(query.limit.unwrap_or(50), 100);
-    let mut qb = app::Entity::find()
-        .filter(
-            app::Column::Visibility
-                .eq(Visibility::Public)
-                .or(app::Column::Visibility.eq(Visibility::PublicRequestAccess)),
-        )
-        .limit(Some(limit))
-        .offset(query.offset);
+    let mut qb = searchable_apps().limit(Some(limit)).offset(query.offset);
 
     match sort {
         AppSearchSort::BestRated => qb = qb.order_by_desc(app::Column::AvgRating),

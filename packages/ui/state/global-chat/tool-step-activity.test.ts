@@ -441,3 +441,68 @@ describe("tool activity context", () => {
 		);
 	});
 });
+
+describe("shell_run terminal activity", () => {
+	test("keeps the command, exit code and a redacted output tail", () => {
+		const detail = buildToolActivity("shell_run", {
+			arguments: { command: "git", args: ["status", "--short"] },
+			result: {
+				exit_code: 2,
+				stdout: "line one\nline two",
+				stderr: "token=abc123 denied",
+				timed_out: false,
+			},
+		});
+		expect(detail.category).toBe("terminal");
+		expect(detail.label).toBe("Running a command");
+		expect(detail.terminal?.command).toBe("git status --short");
+		expect(detail.terminal?.exitCode).toBe(2);
+		expect(detail.terminal?.output).toContain("line one\nline two");
+		expect(detail.terminal?.output).not.toContain("abc123");
+	});
+
+	test("caps the output and flags a timeout", () => {
+		const detail = buildToolActivity("shell_run", {
+			arguments: { command: "sleep", args: ["99"] },
+			result: { exit_code: null, stdout: "x".repeat(50_000), timed_out: true },
+		});
+		expect(detail.terminal?.output?.length).toBe(8 * 1024);
+		expect(detail.terminal?.timedOut).toBe(true);
+		expect(detail.terminal?.exitCode).toBeNull();
+	});
+
+	test("a call still running has a command and no exit code yet", () => {
+		const detail = buildToolActivity("shell_run", {
+			arguments: { command: "make" },
+		});
+		expect(detail.terminal).toEqual({ command: "make" });
+	});
+});
+
+describe("ask_bot activity", () => {
+	const result = JSON.stringify({
+		tool: "ask_bot",
+		exchange: {
+			conversation_id: "conv_1",
+			callee: { id: "bot_ledger", name: "Ledger" },
+			question: "Q3 revenue?",
+			answer: "1.2M",
+			status: "answered",
+		},
+	});
+
+	test("an answered ask carries the exchange card", () => {
+		const detail = buildToolActivity("ask_bot", { result });
+		expect(detail.exchange).toMatchObject({
+			state: "answered",
+			calleeName: "Ledger",
+			answer: "1.2M",
+			conversationId: "conv_1",
+		});
+	});
+
+	test("a call still running has no exchange yet, and other tools never do", () => {
+		expect(buildToolActivity("ask_bot", {}).exchange).toBeUndefined();
+		expect(buildToolActivity("read_file", { result }).exchange).toBeUndefined();
+	});
+});

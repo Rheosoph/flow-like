@@ -16,19 +16,42 @@ use crate::execution::{ChannelJwtParams, sign_channel_responder};
 
 use super::{ChannelBackend, api_base_url, push_url, redact_provider_error};
 
-/// Per account, intermediate run wakeups and failure logs each go out at most once per window.
+/// Per account, intermediate run wakeups go out at most once per window.
 const REALTIME_WINDOW: Duration = Duration::from_millis(500);
 /// How long a request waits for its wakeup; a slower publication finishes detached.
 const REALTIME_PUBLISH_WAIT: Duration = Duration::from_millis(250);
 const REALTIME_PUBLISH_TIMEOUT: Duration = Duration::from_secs(2);
+/// A provider outage fails every account's wakeups at once; the transport warns once per window.
+const FAILURE_LOG_WINDOW: Duration = Duration::from_secs(1);
 
 #[derive(Default)]
 struct RealtimeAccount {
     published_at: Option<Instant>,
-    failure_logged_at: Option<Instant>,
 }
 
 type RealtimeAccountState = Arc<parking_lot::Mutex<RealtimeAccount>>;
+
+#[derive(Default)]
+struct FailureWindow {
+    warned_at: Option<Instant>,
+    suppressed: u64,
+}
+
+/// Wakeup failure warnings for the issuer's transport, shared by all accounts.
+#[derive(Default)]
+struct FailureLog(parking_lot::Mutex<FailureWindow>);
+
+impl FailureLog {
+    /// When this failure may warn, the number of failures suppressed since the last warning.
+    fn claim(&self, now: Instant) -> Option<u64> {
+        let mut window = self.0.lock();
+        if !claim_window(&mut window.warned_at, now, FAILURE_LOG_WINDOW) {
+            window.suppressed += 1;
+            return None;
+        }
+        Some(std::mem::take(&mut window.suppressed))
+    }
+}
 
 /// Everything the API needs to hand a run and its client a channel. Held on `State.channels`
 /// and by the dispatcher.
@@ -37,6 +60,8 @@ pub struct ChannelIssuer {
     backend: ChannelBackend,
     forwarder: Option<Arc<dyn ChannelForwarder>>,
     realtime_accounts: moka::sync::Cache<String, RealtimeAccountState>,
+    realtime_failures: Arc<FailureLog>,
+    on_lambda: bool,
     #[cfg(feature = "channel-aws")]
     aws: Option<Arc<super::aws::AwsChannelRuntime>>,
     #[cfg(feature = "channel-azure")]
@@ -69,6 +94,8 @@ impl ChannelIssuer {
                 .max_capacity(10_000)
                 .time_to_idle(Duration::from_secs(60))
                 .build(),
+            realtime_failures: Arc::default(),
+            on_lambda: std::env::var_os("AWS_LAMBDA_FUNCTION_NAME").is_some(),
             #[cfg(feature = "channel-aws")]
             aws: None,
             #[cfg(feature = "channel-azure")]
@@ -255,8 +282,9 @@ impl ChannelIssuer {
         };
         send_wakeup(
             self.realtime_publication(scope, payload),
-            account,
+            self.realtime_failures.clone(),
             self.transport(),
+            publish_wait(throttle, self.on_lambda),
         )
         .await;
     }
@@ -522,24 +550,30 @@ fn realtime_scope(sub: &str) -> String {
 /// Intermediate run batches share the account window and are dropped inside it; terminal and
 /// notification wakeups always go out.
 fn admit(account: &RealtimeAccountState, throttle: bool, now: Instant) -> bool {
-    !throttle || claim_window(&mut account.lock().published_at, now)
+    !throttle || claim_window(&mut account.lock().published_at, now, REALTIME_WINDOW)
 }
 
-fn claim_window(slot: &mut Option<Instant>, now: Instant) -> bool {
-    if slot.is_some_and(|at| now.saturating_duration_since(at) < REALTIME_WINDOW) {
+fn claim_window(slot: &mut Option<Instant>, now: Instant, window: Duration) -> bool {
+    if slot.is_some_and(|at| now.saturating_duration_since(at) < window) {
         return false;
     }
     *slot = Some(now);
     true
 }
 
-/// Lambda freezes detached work with its invocation, so the request gives the publication a
-/// short head start. A slower publication finishes in the background within its own timeout;
-/// clients recover dropped wakeups through HTTP replay.
+/// How long a request holds for its wakeup; `None` until the publication finishes. Lambda
+/// freezes detached work with the invocation, so there terminal and notification wakeups
+/// finish inside the request. Intermediate ones, and every wakeup elsewhere, get a short head
+/// start and finish detached; clients recover dropped wakeups through HTTP replay.
+fn publish_wait(throttle: bool, on_lambda: bool) -> Option<Duration> {
+    (throttle || !on_lambda).then_some(REALTIME_PUBLISH_WAIT)
+}
+
 async fn send_wakeup(
     publication: BoxFuture<'static, Result<()>>,
-    account: RealtimeAccountState,
+    failures: Arc<FailureLog>,
     transport: &'static str,
+    wait: Option<Duration>,
 ) {
     let task = spawn(async move {
         let error = match timeout(REALTIME_PUBLISH_TIMEOUT, publication).await {
@@ -547,15 +581,24 @@ async fn send_wakeup(
             Ok(Err(error)) => redact_provider_error(&error),
             Err(_) => format!("no answer within {REALTIME_PUBLISH_TIMEOUT:?}"),
         };
-        if claim_window(&mut account.lock().failure_logged_at, Instant::now()) {
-            tracing::warn!(
+        match failures.claim(Instant::now()) {
+            Some(suppressed) => tracing::warn!(
                 transport,
                 %error,
+                suppressed,
                 "Realtime wakeup failed; clients recover through HTTP replay"
-            );
+            ),
+            None => tracing::debug!(transport, %error, "Realtime wakeup failed"),
         }
     });
-    let _ = timeout(REALTIME_PUBLISH_WAIT, task).await;
+    match wait {
+        Some(wait) => {
+            let _ = timeout(wait, task).await;
+        }
+        None => {
+            let _ = task.await;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -608,8 +651,9 @@ mod tests {
         let started = Instant::now();
         send_wakeup(
             Box::pin(std::future::pending()),
-            RealtimeAccountState::default(),
+            Arc::default(),
             "test",
+            publish_wait(false, false),
         )
         .await;
         let waited = started.elapsed();
@@ -619,22 +663,80 @@ mod tests {
         );
     }
 
+    #[test]
+    fn lambda_holds_only_terminal_and_notification_wakeups_to_the_end() {
+        assert_eq!(publish_wait(false, true), None);
+        for (throttle, on_lambda) in [(true, true), (false, false), (true, false)] {
+            assert_eq!(
+                publish_wait(throttle, on_lambda),
+                Some(REALTIME_PUBLISH_WAIT),
+                "throttle {throttle}, lambda {on_lambda}"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lambda_request_finishes_a_slow_wakeup_before_it_responds() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let slow = |published: Arc<AtomicBool>| {
+            Box::pin(async move {
+                flow_like_types::tokio::time::sleep(Duration::from_millis(600)).await;
+                published.store(true, Ordering::SeqCst);
+                Ok::<(), flow_like_types::Error>(())
+            })
+        };
+        for (on_lambda, finished) in [(true, true), (false, false)] {
+            let published = Arc::new(AtomicBool::new(false));
+            send_wakeup(
+                slow(published.clone()),
+                Arc::default(),
+                "test",
+                publish_wait(false, on_lambda),
+            )
+            .await;
+            assert_eq!(published.load(Ordering::SeqCst), finished, "{on_lambda}");
+        }
+
+        let started = flow_like_types::tokio::time::Instant::now();
+        send_wakeup(
+            Box::pin(std::future::pending()),
+            Arc::default(),
+            "test",
+            publish_wait(false, true),
+        )
+        .await;
+        let waited = started.elapsed();
+        assert!(
+            waited >= REALTIME_PUBLISH_TIMEOUT
+                && waited < REALTIME_PUBLISH_TIMEOUT + Duration::from_millis(10),
+            "{waited:?}"
+        );
+    }
+
+    #[test]
+    fn a_warning_counts_the_failures_suppressed_since_the_last_one() {
+        let failures = FailureLog::default();
+        let start = Instant::now();
+        assert_eq!(failures.claim(start), Some(0));
+        assert_eq!(failures.claim(start + Duration::from_millis(10)), None);
+        assert_eq!(failures.claim(start + Duration::from_millis(999)), None);
+        assert_eq!(failures.claim(start + FAILURE_LOG_WINDOW), Some(2));
+        assert_eq!(failures.claim(start + FAILURE_LOG_WINDOW * 3), Some(0));
+    }
+
     #[tokio::test]
-    async fn failures_are_logged_once_per_window_per_account() {
-        let failing = || Box::pin(async { Err::<(), _>(anyhow!("provider unavailable")) });
-        let account = RealtimeAccountState::default();
-        send_wakeup(Box::pin(async { Ok(()) }), account.clone(), "test").await;
-        assert!(account.lock().failure_logged_at.is_none());
-
-        send_wakeup(failing(), account.clone(), "test").await;
-        let logged = account.lock().failure_logged_at;
-        assert!(logged.is_some());
-        send_wakeup(failing(), account.clone(), "test").await;
-        assert_eq!(account.lock().failure_logged_at, logged);
-
-        let other = RealtimeAccountState::default();
-        send_wakeup(failing(), other.clone(), "test").await;
-        assert!(other.lock().failure_logged_at.is_some());
+    async fn every_account_shares_one_failure_warning_window() {
+        let failures = Arc::new(FailureLog::default());
+        let wait = publish_wait(false, true);
+        send_wakeup(Box::pin(async { Ok(()) }), failures.clone(), "test", wait).await;
+        assert!(failures.0.lock().warned_at.is_none());
+        for _account in 0..3 {
+            let failing = Box::pin(async { Err::<(), _>(anyhow!("provider unavailable")) });
+            send_wakeup(failing, failures.clone(), "test", wait).await;
+        }
+        let window = failures.0.lock();
+        assert!(window.warned_at.is_some());
+        assert_eq!(window.suppressed, 2);
     }
 
     #[tokio::test]

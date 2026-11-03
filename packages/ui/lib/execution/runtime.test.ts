@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { RealtimeRuntime } from "../realtime/runtime";
 import { getRealtimeClientForRuntime } from "../realtime/runtime-client";
 import type {
@@ -23,6 +23,9 @@ import {
 	type ExecutionTask,
 	type PreparedExecutionRequest,
 } from "./types";
+
+// Chat dispatch loads translations on first use; the app always has them loaded already.
+beforeAll(() => import("@flow-like/locales"));
 
 const clients: ExecutionRuntimeClient[] = [];
 afterEach(() => {
@@ -181,6 +184,7 @@ function replayed(run: Partial<RealtimeRunSnapshot> = {}) {
 function queuedRuntime(
 	bus: ReturnType<typeof fakeBus>,
 	deletes: string[] = [],
+	options: Partial<ConstructorParameters<typeof ExecutionRuntime>[0]> = {},
 ) {
 	return new ExecutionRuntime({
 		fetch: async (url, init) => {
@@ -192,8 +196,19 @@ function queuedRuntime(
 		},
 		push: async () => {},
 		realtime: bus.factory,
+		...options,
 	});
 }
+
+const question = {
+	sequence: 0,
+	event_id: "question",
+	event_type: "interaction_request",
+	payload: { id: "approval", channel: handle },
+	created_at: "2026-11-01T00:00:00Z",
+};
+
+const chatSeed = {} as ExecutionMetadata["chat"];
 
 describe("execution runtime", () => {
 	test("queued replay uses renewed dispatch headers and reports the bus's exact rejected bearer", async () => {
@@ -1027,6 +1042,162 @@ describe("execution runtime", () => {
 		await second.cancel("task");
 		expect(deletes).toEqual(["https://hub.test/runs/queued"]);
 		await until(() => second.getTask("task")?.status === "cancelled");
+	});
+
+	test("a detached chat reply is saved as incomplete until stopping the run saves it once more", async () => {
+		const bus = fakeBus();
+		const saves: { task: ExecutionTask; final: boolean }[] = [];
+		const client = connect(
+			queuedRuntime(bus, [], {
+				persist: async (task, final) => {
+					saves.push({ task, final });
+				},
+			}),
+		);
+		const result = client
+			.execute({ ...metadata(), chat: chatSeed }, queued())
+			.catch((error) => error);
+		await bus.emit({ type: "state", state: "closed" });
+		expect(await result).toBeInstanceOf(ExecutionDetachedError);
+		expect(saves.some((save) => save.final)).toBe(false);
+		expect(saves.at(-1)).toMatchObject({
+			final: false,
+			task: {
+				status: "running",
+				detached: true,
+				chat: { detachedNotice: { title: "Still running on the server" } },
+			},
+		});
+		await client.cancel("task");
+		await until(() => client.getTask("task")?.status === "cancelled");
+		expect(saves.filter((save) => save.final)).toEqual([
+			{ task: expect.objectContaining({ status: "cancelled" }), final: true },
+		]);
+	});
+
+	test.each(["cloud", "channel"] as const)(
+		"a %s stop accepted before the replay detached ends the run as cancelled",
+		async (path) => {
+			const bus = fakeBus();
+			const finals: ExecutionTask[] = [];
+			const push = vi.fn(async () => {});
+			const client = connect(
+				queuedRuntime(bus, [], {
+					fetch: async (_url, init) =>
+						init?.method === "DELETE"
+							? Response.json({
+									status: "cancellation_requested",
+									cancelled: false,
+								})
+							: Response.json({ run_id: "queued", poll_token: "capability" }),
+					push,
+					persist: async (task, final) => {
+						if (final) finals.push(task);
+					},
+				}),
+			);
+			const result = client
+				.execute(
+					{ ...metadata(), chat: chatSeed },
+					queued(path === "channel" ? { cancelUrl: undefined } : {}),
+				)
+				.catch((error) => error);
+			await until(() => client.getTask("task")?.runId === "queued");
+			if (path === "channel")
+				await bus.emit(replayed({ status: "RUNNING", events: [question] }));
+			await client.cancel("task");
+			expect(client.getTask("task")).toMatchObject({
+				status: path === "channel" ? "waiting" : "running",
+				cancellationRequested: true,
+			});
+			await bus.emit({ type: "state", state: "closed" });
+			expect((await result).name).toBe("AbortError");
+			await until(() => client.getTask("task")?.status === "cancelled");
+			expect(client.getTask("task")?.detached).toBeUndefined();
+			expect(finals.map((task) => task.status)).toEqual(["cancelled"]);
+			await client.cancel("task");
+			expect(push).toHaveBeenCalledTimes(path === "channel" ? 1 : 0);
+		},
+	);
+
+	test("stopping a detached run after a failed stop leaves no stale error", async () => {
+		const bus = fakeBus();
+		let attempts = 0;
+		const client = connect(
+			queuedRuntime(bus, [], {
+				fetch: async (_url, init) => {
+					if (init?.method !== "DELETE")
+						return Response.json({
+							run_id: "queued",
+							poll_token: "capability",
+						});
+					return ++attempts === 1
+						? new Response(null, { status: 503 })
+						: Response.json({ status: "cancellation_requested" });
+				},
+			}),
+		);
+		const result = client.execute(metadata(), queued()).catch((error) => error);
+		await bus.emit({ type: "state", state: "closed" });
+		await result;
+		await expect(client.cancel("task")).rejects.toMatchObject({ status: 503 });
+		expect(client.getTask("task")?.error).toContain(
+			"Stop could not be confirmed",
+		);
+		await client.cancel("task");
+		await until(() => client.getTask("task")?.status === "cancelled");
+		expect(client.getTask("task")?.error).toBeUndefined();
+	});
+
+	test("a stopped detached run accepts no late claim or reply for its requests", async () => {
+		const bus = fakeBus();
+		const push = vi.fn(async () => {});
+		const client = connect(queuedRuntime(bus, [], { push }));
+		const result = client.execute(metadata(), queued()).catch((error) => error);
+		await bus.emit(replayed({ status: "RUNNING", events: [question] }));
+		await bus.emit({ type: "state", state: "closed" });
+		await result;
+		await client.cancel("task");
+		await until(() => client.getTask("task")?.status === "cancelled");
+		expect(client.getTask("task")?.pendingInteractions[0].status).toBe(
+			"cancelled",
+		);
+		expect(await client.claimRequest(handle)).toBe(false);
+		await expect(client.submitReply(handle, "late")).rejects.toThrow(
+			"already finished",
+		);
+		expect(push).not.toHaveBeenCalledWith(
+			handle,
+			expect.objectContaining({ kind: "reply" }),
+		);
+		expect(client.getTask("task")?.pendingInteractions[0].status).toBe(
+			"cancelled",
+		);
+	});
+
+	test("a tab that connects after a detached run released its events owns its open requests", async () => {
+		const bus = fakeBus();
+		const push = vi.fn(async () => {});
+		const runtime = queuedRuntime(bus, [], { push });
+		const first = connect(runtime);
+		const result = first.execute(metadata(), queued()).catch((error) => error);
+		await bus.emit(replayed({ status: "RUNNING", events: [question] }));
+		await bus.emit({ type: "state", state: "closed" });
+		await result;
+		const second = connect(runtime);
+		await second.ready;
+		expect(second.getTask("task")).toMatchObject({
+			detached: true,
+			events: [],
+			pendingInteractions: [{ requestId: "approval", status: "pending" }],
+		});
+		expect(second.ownsChannel(handle)).toBe(true);
+		await second.submitReply(handle, "approved");
+		expect(push).toHaveBeenCalledWith(handle, {
+			kind: "reply",
+			request_id: "approval",
+			value: "approved",
+		});
 	});
 
 	test("a finished run keeps its outcome for later tabs but releases its events once a tab received it", async () => {

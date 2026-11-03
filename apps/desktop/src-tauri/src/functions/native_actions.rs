@@ -254,6 +254,7 @@ async fn process(app: AppHandle, value: Value) {
                         Some(task_run_id),
                         Channel::<String>::new(|_| Ok(())),
                         options,
+                        None,
                     ),
                 )
                 .await?;

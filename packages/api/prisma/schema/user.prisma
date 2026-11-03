@@ -53,6 +53,9 @@ model User {
   technicalUsersCreated       TechnicalUser[]          @relation("TechnicalUserCreator")
   eventSinksRunAs             EventSink[]              @relation("EventSinkRunAs")
   regressionSuiteRunsStarted  RegressionSuiteRun[]     @relation("RegressionSuiteRunActor")
+  bots                        Bot[]
+  botPermissions              BotPermission[]
+  botTurns                    BotTurn[]
 
   status String @default("ACTIVE")
   tier   String @default("FREE")

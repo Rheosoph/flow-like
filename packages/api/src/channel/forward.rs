@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use axum::http::StatusCode;
-use flow_like_channels::ChannelForwarder;
+use flow_like_channels::{ChannelForwardError, ChannelForwarder, ChannelRejection};
 use flow_like_types::channel::{
     CHANNEL_TRANSPORT_AWS_MQTT, CHANNEL_TRANSPORT_GCP_FIREBASE_RTDB, CHANNEL_TRANSPORT_NATS,
     ChannelPush, ChannelPushKind, now_unix,
@@ -30,8 +30,9 @@ const AZURE_MAX_PUSH_BYTES: usize = 1024 * 1024;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForwardOutcome {
     Delivered,
-    /// The transport reported that nobody is listening for this channel (the waiter finished or
-    /// never connected); the client gets `accepted: false`.
+    /// Nobody acts on the push: no waiter listens on the channel any more, or the waiter
+    /// answered that the request was already answered, that it closed or that the run was
+    /// cancelled. The client gets `accepted: false`.
     Undeliverable,
 }
 
@@ -67,16 +68,48 @@ pub async fn forward_push_with_id(
         return Ok(ForwardOutcome::Delivered);
     };
     let detail = redact_provider_error(&error);
-    if is_not_connected(&detail) {
-        tracing::debug!(error = %detail, channel_id = %push.channel_id, transport = forwarder.transport(), "channel push had no listener");
-        return Ok(ForwardOutcome::Undeliverable);
+    let transport = forwarder.transport();
+    match error.downcast_ref::<ChannelForwardError>() {
+        Some(ChannelForwardError::NoListener) => {
+            tracing::debug!(error = %detail, channel_id = %push.channel_id, transport, "channel push had no listener");
+            Ok(ForwardOutcome::Undeliverable)
+        }
+        Some(ChannelForwardError::Rejected { kind, .. }) => {
+            tracing::debug!(error = %detail, channel_id = %push.channel_id, transport, ?kind, "channel waiter refused the push");
+            refusal_outcome(*kind)
+        }
+        None => {
+            tracing::warn!(error = %detail, channel_id = %push.channel_id, transport, "channel push forward failed");
+            Err(ApiError::coded(
+                StatusCode::BAD_GATEWAY,
+                "BAD_GATEWAY",
+                "The channel transport did not accept the message; retry shortly",
+            ))
+        }
     }
-    tracing::warn!(error = %detail, channel_id = %push.channel_id, transport = forwarder.transport(), "channel push forward failed");
-    Err(ApiError::coded(
-        StatusCode::BAD_GATEWAY,
-        "BAD_GATEWAY",
-        "The channel transport did not accept the message; retry shortly",
-    ))
+}
+
+/// What the HTTP transport answers in the same situation.
+fn refusal_outcome(kind: ChannelRejection) -> Result<ForwardOutcome, ApiError> {
+    match kind {
+        ChannelRejection::Expired => Err(ApiError::gone("This request has expired")),
+        ChannelRejection::UnknownRequest => {
+            Err(ApiError::not_found("No pending request with this id"))
+        }
+        ChannelRejection::InboundFull => Err(ApiError::too_many_requests(
+            "Too many messages are already waiting for this run",
+        )),
+        ChannelRejection::DuplicateDelivery => Err(ApiError::conflict(
+            "This delivery id was already used for another message",
+        )),
+        ChannelRejection::WrongChannel => {
+            Err(ApiError::forbidden("Push body does not match this channel"))
+        }
+        ChannelRejection::AlreadyAnswered
+        | ChannelRejection::Closed
+        | ChannelRejection::Cancelled
+        | ChannelRejection::Other => Ok(ForwardOutcome::Undeliverable),
+    }
 }
 
 /// Measures the push the way the provider did on the direct client path.
@@ -102,17 +135,6 @@ fn check_push_size(transport: &str, push: &ChannelPush) -> Result<(), ApiError> 
     Ok(())
 }
 
-/// The forwarders phrase a missing listener as a 404 from the transport; every other failure
-/// is an infrastructure error the client should retry against.
-pub fn is_not_connected(message: &str) -> bool {
-    let message = message.to_ascii_lowercase();
-    message.contains("404")
-        || message.contains("no waiter connected")
-        || message.contains("no connected waiter")
-        || message.contains("not connected")
-        || message.contains("not found")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,7 +143,20 @@ mod tests {
     use flow_like_types::channel::CHANNEL_TRANSPORT_AZURE_WEB_PUBSUB;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    struct Stub(Result<(), &'static str>);
+    type Answer = Box<dyn Fn() -> flow_like_types::Result<()> + Send + Sync + 'static>;
+
+    struct Stub(Answer);
+
+    impl Stub {
+        fn answering(answer: Answer) -> Arc<dyn ChannelForwarder> {
+            Arc::new(Self(answer))
+        }
+
+        fn failing(detail: &str) -> Arc<dyn ChannelForwarder> {
+            let detail = detail.to_owned();
+            Self::answering(Box::new(move || Err(flow_like_types::anyhow!("{detail}"))))
+        }
+    }
 
     #[async_trait]
     impl ChannelForwarder for Stub {
@@ -129,7 +164,7 @@ mod tests {
             "stub"
         }
         async fn forward(&self, _push: &ChannelPush) -> flow_like_types::Result<()> {
-            self.0.map_err(|e| flow_like_types::anyhow!("{e}"))
+            (self.0)()
         }
     }
 
@@ -203,24 +238,67 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn outcomes_follow_the_transport_error() {
-        let ok: Arc<dyn ChannelForwarder> = Arc::new(Stub(Ok(())));
+    async fn the_error_type_decides_the_outcome_and_its_text_never_does() {
+        let ok = Stub::answering(Box::new(|| Ok(())));
         assert_eq!(
             forward_push(Some(&ok), &push(), live()).await.unwrap(),
             ForwardOutcome::Delivered
         );
-        let gone: Arc<dyn ChannelForwarder> = Arc::new(Stub(Err(
-            "channel 'run-1' has no waiter connected as 'run-run-1' (AWS IoT direct message returned 404)",
-        )));
+        let gone = Stub::answering(Box::new(|| {
+            Err(flow_like_types::Error::new(ChannelForwardError::NoListener).context(
+                "channel 'run-1' has no waiter connected as 'run-run-1' (AWS IoT direct message returned 404)",
+            ))
+        }));
         assert_eq!(
             forward_push(Some(&gone), &push(), live()).await.unwrap(),
             ForwardOutcome::Undeliverable
         );
-        let broken: Arc<dyn ChannelForwarder> = Arc::new(Stub(Err("tls handshake failed")));
-        let error = forward_push(Some(&broken), &push(), live())
-            .await
-            .unwrap_err();
-        assert_eq!(error.status(), StatusCode::BAD_GATEWAY);
+        for detail in [
+            "tls handshake failed",
+            "channel 'run-404': waiter 'run-run-404' did not acknowledge the push within 10s",
+            "firebase PUT channels/run-1/inbox/not-found-1 returned 503 Service Unavailable",
+            "channel run-1: Azure Web PubSub send to group run:run-1 returned 404 Not Found: hub not connected",
+        ] {
+            let error = forward_push(Some(&Stub::failing(detail)), &push(), live())
+                .await
+                .unwrap_err();
+            assert_eq!(error.status(), StatusCode::BAD_GATEWAY, "{detail}");
+        }
+    }
+
+    #[tokio::test]
+    async fn waiter_refusals_answer_like_the_http_transport() {
+        use ChannelRejection::*;
+        let cases = [
+            (AlreadyAnswered, None),
+            (Closed, None),
+            (Cancelled, None),
+            (Other, None),
+            (Expired, Some(StatusCode::GONE)),
+            (UnknownRequest, Some(StatusCode::NOT_FOUND)),
+            (InboundFull, Some(StatusCode::TOO_MANY_REQUESTS)),
+            (DuplicateDelivery, Some(StatusCode::CONFLICT)),
+            (WrongChannel, Some(StatusCode::FORBIDDEN)),
+        ];
+        for (kind, status) in cases {
+            let refusing = Stub::answering(Box::new(move || {
+                Err(ChannelForwardError::Rejected {
+                    kind,
+                    reason: "waiter detail for run-1".into(),
+                }
+                .into())
+            }));
+            let outcome = forward_push(Some(&refusing), &push(), live()).await;
+            match (outcome, status) {
+                (Ok(outcome), None) => assert_eq!(outcome, ForwardOutcome::Undeliverable),
+                (Err(error), Some(status)) => {
+                    assert_eq!(error.status(), status, "{kind:?}");
+                    let body = body_text(error).await;
+                    assert!(!body.contains("waiter detail"), "{kind:?}: {body}");
+                }
+                (outcome, status) => panic!("{kind:?}: {outcome:?} instead of {status:?}"),
+            }
+        }
     }
 
     #[tokio::test]
@@ -230,7 +308,7 @@ mod tests {
             "channel run-1: Azure Web PubSub send to group run:run-1 returned 500 Internal Server Error: {\"code\":\"internal\",\"target\":\"https://demo.webpubsub.azure.com/api/hubs/channels\"}",
             "firebase POST channels/run-1/inbound failed: error sending request for url (https://demo.firebaseio.com/channels/run-1/inbound.json?access_token=ya29.a404secret&print=silent)",
         ] {
-            let broken: Arc<dyn ChannelForwarder> = Arc::new(Stub(Err(detail)));
+            let broken = Stub::failing(detail);
             let error = forward_push(Some(&broken), &push(), live())
                 .await
                 .unwrap_err();

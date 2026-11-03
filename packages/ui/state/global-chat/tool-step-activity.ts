@@ -1,8 +1,10 @@
+import { parseAskBotResult } from "../../components/global-chat/bot-exchange";
 import type { IToolActivityDetail } from "../../components/interfaces/chat-default/chat-db";
 
 const MAX_CONTEXT_CHARS = 240;
 const MAX_QUERY_CHARS = 512;
 const MAX_PREVIEW_CHARS = 128 * 1024;
+const MAX_TERMINAL_CHARS = 8 * 1024;
 
 const TOOL_ACTIVITIES: Record<
 	string,
@@ -50,6 +52,8 @@ const TOOL_ACTIVITIES: Record<
 	get_declarations: ["search", "Looking up node definitions"],
 	search_by_pin: ["search", "Finding compatible nodes"],
 	ask_user: ["tool", "Requesting your input"],
+	shell_run: ["terminal", "Running a command"],
+	ask_bot: ["tool", "Asking another bot"],
 };
 
 function toolKey(name: string): string {
@@ -108,12 +112,8 @@ export function toolActivityText(value: unknown): string | undefined {
 	return activityText(value, MAX_CONTEXT_CHARS);
 }
 
-function activityText(value: unknown, maxChars: number): string | undefined {
-	if (typeof value !== "string") return undefined;
-	const text = value.trim();
-	// SDK fallback summaries can be a complete JSON argument preview.
-	if (!text || /^[{[]/.test(text)) return undefined;
-	const cleaned = text
+function redactSecrets(text: string): string {
+	return text
 		.replace(
 			/https?:\/\/[^\s<>"']+/gi,
 			(url) => sourceFromUrl(url)?.url ?? "[URL]",
@@ -126,8 +126,15 @@ function activityText(value: unknown, maxChars: number): string | undefined {
 		.replace(
 			/\b(?:password|passwd|secret|token|api[_-]?key|authorization|cookie)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi,
 			"[redacted]",
-		)
-		.replace(/\s+/g, " ");
+		);
+}
+
+function activityText(value: unknown, maxChars: number): string | undefined {
+	if (typeof value !== "string") return undefined;
+	const text = value.trim();
+	// SDK fallback summaries can be a complete JSON argument preview.
+	if (!text || /^[{[]/.test(text)) return undefined;
+	const cleaned = redactSecrets(text).replace(/\s+/g, " ");
 	const characters = Array.from(cleaned);
 	return characters.length > maxChars
 		? `${characters.slice(0, maxChars - 1).join("")}…`
@@ -206,6 +213,35 @@ function collectQueries(records: Record<string, unknown>[]) {
 		}
 	}
 	return [...queries];
+}
+
+function terminalActivity(
+	args: Record<string, unknown> | undefined,
+	results: Record<string, unknown>[],
+	previous?: IToolActivityDetail,
+): IToolActivityDetail["terminal"] {
+	const command = typeof args?.command === "string" ? args.command : undefined;
+	const parts = Array.isArray(args?.args)
+		? args.args.filter((part): part is string => typeof part === "string")
+		: [];
+	const line = command ? [command, ...parts].join(" ") : undefined;
+	const result = results[0];
+	const text = (value: unknown) => (typeof value === "string" ? value : "");
+	const output = result
+		? [text(result.stdout), text(result.stderr)].filter(Boolean).join("\n")
+		: undefined;
+	const exitCode =
+		result && "exit_code" in result ? result.exit_code : undefined;
+	const terminal = {
+		...previous?.terminal,
+		...(line ? { command: activityText(line, MAX_QUERY_CHARS) ?? "" } : {}),
+		...(output !== undefined
+			? { output: redactSecrets(output).slice(-MAX_TERMINAL_CHARS) }
+			: {}),
+		...(typeof exitCode === "number" || exitCode === null ? { exitCode } : {}),
+		...(result?.timed_out === true ? { timedOut: true } : {}),
+	};
+	return terminal.command ? terminal : undefined;
 }
 
 /** Extract only display context. Raw arguments, request bodies and tool results stay out. */
@@ -354,6 +390,15 @@ export function buildToolActivity(
 			? `HTTP ${httpStatus} · ${usefulSummary}`
 			: `HTTP ${httpStatus}`
 		: (appsOutcome ?? usefulSummary);
+	const terminal =
+		key === "shell_run" ? terminalActivity(args, results, previous) : undefined;
+	const exchange =
+		key === "ask_bot"
+			? (parseAskBotResult(
+					record.result ?? record.output ?? record.result_preview,
+					"",
+				) ?? previous?.exchange)
+			: undefined;
 	return {
 		...previous,
 		kind: "tool_activity",
@@ -365,5 +410,7 @@ export function buildToolActivity(
 		...(method ? { method } : {}),
 		...(sources.length ? { sources } : {}),
 		...(outcome ? { outcome } : {}),
+		...(terminal ? { terminal } : {}),
+		...(exchange ? { exchange } : {}),
 	};
 }

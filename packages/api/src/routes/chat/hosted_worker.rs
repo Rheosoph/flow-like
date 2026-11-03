@@ -62,6 +62,7 @@ pub(crate) enum HostedWork {
         context: UsageRequestContext,
     },
     Embedding(crate::routes::embeddings::embed::HostedEmbeddingJob),
+    Image(crate::routes::images::HostedImageJob),
     GlobalAssistant {
         payload: serde_json::Value,
         sub: String,
@@ -77,6 +78,25 @@ pub(crate) enum HostedWork {
     },
     /// A run's call to its owner's private model. The worker decrypts the key when it runs.
     CustomBit(crate::routes::execution::models::RelayCall),
+    /// A server bot's turn: an enqueue-only entry. The invocation claims the turn on the ledger,
+    /// which drops duplicate invocations, and answers it in the conversation instead of a stream.
+    BotTurn {
+        turn_id: String,
+    },
+}
+
+fn initial_request_started(work: &HostedWork) -> bool {
+    !matches!(work, HostedWork::Chat { .. } | HostedWork::Image(_))
+}
+
+fn remaining_request_ms(job: &HostedAiJob) -> Result<u64, ApiError> {
+    let remaining = (job.deadline - Utc::now()).num_milliseconds();
+    if remaining <= 0 {
+        return Err(ApiError::service_unavailable(
+            "Hosted AI dispatch deadline expired",
+        ));
+    }
+    Ok(remaining as u64)
 }
 
 pub(crate) fn apply_worker_tariff(rate: &mut crate::usage_accounting::HostedRateSnapshot) {
@@ -315,7 +335,7 @@ pub(crate) async fn recover_queued(state: &AppState) -> Result<u64, ApiError> {
     let started = Instant::now();
     let now = Utc::now().timestamp_millis();
     let rows=state.db.query_all_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
-        "SELECT id FROM \"QuotaOperation\" WHERE status='reserved' AND kind IN ('llm','embedding','assistant') AND \"updatedAt\"<$1 AND deadline>$2 ORDER BY \"updatedAt\" LIMIT 20",
+        "SELECT id FROM \"QuotaOperation\" WHERE status='reserved' AND kind IN ('llm','embedding','image_generation','assistant') AND \"updatedAt\"<$1 AND deadline>$2 ORDER BY \"updatedAt\" LIMIT 20",
         [(now-30_000).into(),now.into()])).await?;
     let mut dispatched = 0;
     for row in rows {
@@ -402,6 +422,37 @@ async fn invoke(_state: &AppState, _id: &str) -> Result<(), ApiError> {
     Err(ApiError::internal(
         "Hosted AI Lambda dispatch is unavailable",
     ))
+}
+
+/// Asks the hosted worker to drive a queued server bot turn and returns without waiting. The
+/// job carries only the turn's id, and a request already stored for it is kept: the worker's
+/// claim on the ledger decides which invocation runs it.
+pub(crate) async fn enqueue_bot_turn(state: &AppState, turn_id: &str) -> Result<(), ApiError> {
+    let job = HostedAiJob {
+        operation_id: turn_id.to_string(),
+        deadline: Utc::now() + chrono::Duration::minutes(15),
+        request: HostedWork::BotTurn {
+            turn_id: turn_id.to_string(),
+        },
+    };
+    let data = Bytes::from(serde_json::to_vec(&job)?);
+    let stored = state
+        .meta_bucket
+        .as_generic()
+        .put_opts(
+            &job_path(turn_id, "request.json")?,
+            data.into(),
+            flow_like_storage::object_store::PutOptions {
+                mode: flow_like_storage::object_store::PutMode::Create,
+                ..Default::default()
+            },
+        )
+        .await;
+    match stored {
+        Ok(_) | Err(flow_like_storage::object_store::Error::AlreadyExists { .. }) => {}
+        Err(error) => return Err(error.into()),
+    }
+    invoke(state, turn_id).await
 }
 
 pub(crate) async fn dispatch(state: AppState, job: HostedAiJob) -> Result<Response, ApiError> {
@@ -520,6 +571,15 @@ pub(crate) async fn work(
     if job.operation_id != id {
         return Err(ApiError::bad_request("Hosted AI operation mismatch"));
     }
+    if let HostedWork::BotTurn { turn_id } = &job.request {
+        crate::bot_host::run_hosted(&state, turn_id).await;
+        let _ = state
+            .meta_bucket
+            .as_generic()
+            .delete(&job_path(&id, "request.json")?)
+            .await;
+        return Ok(Json(serde_json::json!({"status":"finished"})));
+    }
     if !crate::quota::mark_started(&state, &id).await? {
         return Ok(Json(serde_json::json!({"status":"already_claimed"})));
     }
@@ -546,9 +606,9 @@ pub(crate) async fn work(
             .await?;
     }
     let started = Instant::now();
-    // Chat preparation can fail while resolving IAM credentials, before any
+    // Chat and image preparation can fail while resolving credentials, before any
     // inference request. Finalize those failures without retaining provider spend.
-    let mut provider_request_started = !matches!(&job.request, HostedWork::Chat { .. });
+    let mut provider_request_started = initial_request_started(&job.request);
     let outcome = execute(&state, &job, &mut provider_request_started).await;
     if let Err(error) = outcome {
         // After dispatch, a failed worker may have incurred provider spend.
@@ -619,12 +679,7 @@ async fn execute(
     job: &HostedAiJob,
     provider_request_started: &mut bool,
 ) -> Result<(), ApiError> {
-    let remaining = (job.deadline - Utc::now()).num_milliseconds();
-    if remaining <= 0 {
-        return Err(ApiError::service_unavailable(
-            "Hosted AI dispatch deadline expired",
-        ));
-    }
+    let remaining = remaining_request_ms(job)?;
     let response = match &job.request {
         HostedWork::Chat {
             bit_id,
@@ -656,7 +711,7 @@ async fn execute(
                     model_id,
                     surface,
                     body,
-                    Duration::from_millis(remaining as u64),
+                    Duration::from_millis(remaining),
                 )
                 .await?;
             let url = connection.url;
@@ -694,7 +749,19 @@ async fn execute(
                 state,
                 embedding.clone(),
                 job.operation_id.clone(),
-                remaining as u64,
+                remaining,
+            )
+            .await?
+            .into_response()
+        }
+        HostedWork::Image(image) => {
+            use axum::response::IntoResponse;
+            crate::routes::images::execute_hosted_image(
+                state,
+                image.clone(),
+                job.operation_id.clone(),
+                remaining,
+                provider_request_started,
             )
             .await?
             .into_response()
@@ -745,6 +812,11 @@ async fn execute(
                 &job.operation_id,
             )
             .await
+        }
+        HostedWork::BotTurn { .. } => {
+            return Err(ApiError::internal(
+                "Bot turns are driven by the bot turn worker, not streamed",
+            ));
         }
     };
     let mut head = StreamHead {
@@ -801,6 +873,31 @@ async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expired_image_jobs_have_no_provider_spend_to_retain() {
+        let bit = flow_like::bit::Bit {
+            id: "catalog-image".into(),
+            bit_type: flow_like::bit::BitTypes::ImageGeneration,
+            parameters: serde_json::json!({"provider":{"provider_name":"hosted:openrouter", "model_id":"google/image"},
+                "pricing":{"request_micro_usd":100_000}}),
+            ..Default::default()
+        };
+        let image: crate::routes::images::HostedImageJob =
+            serde_json::from_value(serde_json::json!({
+                "payload":{"model":bit.id,"prompt":"a tree"},
+                "provider":bit.parameters["provider"],
+                "rate":crate::bit_pricing::hosted_image_rate(&bit).unwrap(),
+            }))
+            .unwrap();
+        let job = HostedAiJob {
+            operation_id: "expired-image".into(),
+            request: HostedWork::Image(image),
+            deadline: Utc::now() - chrono::Duration::seconds(1),
+        };
+        assert!(!initial_request_started(&job.request));
+        assert!(remaining_request_ms(&job).is_err());
+    }
 
     #[tokio::test]
     async fn retained_rejections_reach_the_caller_without_an_interrupted_stream() {

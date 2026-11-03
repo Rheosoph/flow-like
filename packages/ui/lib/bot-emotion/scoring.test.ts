@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { BOT_EXPRESSIONS } from "../../components/bots/types";
+import { calibrateEmotionScores } from "./calibration";
 import {
 	type EmotionScores,
 	MAX_CONTEXT_CHARS,
@@ -14,6 +15,117 @@ import {
 } from "./scoring";
 
 describe("bot emotion scoring", () => {
+	it("keeps technical and quoted content out of model input, including history", async () => {
+		const classify = vi.fn(async (_text: string) => ({ neutral: 1 }));
+		const scorer = new EmotionScorer(classify);
+		expect(
+			chooseExpression(
+				await scorer.score({
+					draft: '```js\nconst message = "I hate you 😡";\n```',
+					messages: [],
+				}),
+			),
+		).toBe("neutral");
+		expect(classify).not.toHaveBeenCalled();
+		await scorer.score({
+			draft: 'Translate "I love you ❤️" into German.',
+			messages: [{ role: "assistant", content: "Code: `I am furious 😡`" }],
+		});
+		expect(
+			classify.mock.calls.map(([text]) => text.replace(/\s+/g, " ")),
+		).toEqual(["Translate into German.", "Code:"]);
+	});
+
+	it("does not let cheerful history turn marked sarcasm into happiness", async () => {
+		const scorer = new EmotionScorer(
+			async (text): Promise<EmotionScores> =>
+				text === "Great job /s" ? { joy: 0.8, anger: 0.77 } : { joy: 1 },
+		);
+		const draft = "Great job /s";
+		expect(chooseExpression(await scorer.score({ draft, messages: [] }))).toBe(
+			"neutral",
+		);
+		expect(
+			chooseExpression(
+				await scorer.score({
+					draft,
+					messages: [{ role: "assistant", content: "Cheerful context" }],
+				}),
+			),
+		).toBe("neutral");
+	});
+
+	it.each([
+		["admiration", "happy"],
+		["amusement", "happy"],
+		["anger", "angry"],
+		["annoyance", "concerned"],
+		["approval", "happy"],
+		["caring", "love"],
+		["confusion", "curious"],
+		["curiosity", "curious"],
+		["desire", "curious"],
+		["disappointment", "sad"],
+		["disapproval", "concerned"],
+		["disgust", "angry"],
+		["embarrassment", "oops"],
+		["excitement", "happy"],
+		["fear", "concerned"],
+		["gratitude", "happy"],
+		["grief", "sad"],
+		["joy", "happy"],
+		["love", "love"],
+		["nervousness", "concerned"],
+		["optimism", "happy"],
+		["pride", "happy"],
+		["realization", "surprised"],
+		["relief", "happy"],
+		["remorse", "oops"],
+		["sadness", "sad"],
+		["surprise", "surprised"],
+		["neutral", "neutral"],
+	])(
+		"keeps the model label %s reachable as %s after calibration",
+		(label, expected) => {
+			expect(
+				chooseExpression(
+					expressionScores(calibrateEmotionScores({ [label]: 1 })),
+				),
+			).toBe(expected);
+		},
+	);
+
+	it.each([
+		["😉", "wink"],
+		["😅", "oops"],
+		["😡", "angry"],
+		["🥰", "love"],
+		["😐", "neutral"],
+	])(
+		"keeps %s expressive even when history and model would choose another face",
+		async (draft, expected) => {
+			const classify = vi.fn(async () => ({ sadness: 1 }));
+			const scorer = new EmotionScorer(classify);
+			const scores = await scorer.score({
+				draft,
+				messages: [{ role: "assistant", content: "A sad previous answer" }],
+			});
+			expect(chooseExpression(scores)).toBe(expected);
+			expect(classify).not.toHaveBeenCalled();
+		},
+	);
+
+	it("still classifies text when an earlier emoji is superseded by new wording", async () => {
+		const classify = vi.fn(async () => ({ joy: 1 }));
+		const scorer = new EmotionScorer(classify);
+		expect(
+			chooseExpression(
+				await scorer.score({ draft: "I was 😢, now I'm happy", messages: [] }),
+			),
+		).toBe("happy");
+		expect(classify).toHaveBeenCalledOnce();
+	});
+
 	it("bounds recent text before it reaches the worker", () => {
 		const bounded = boundEmotionInput({
 			draft: `old ${"x".repeat(2000)} newest`,
@@ -34,10 +146,9 @@ describe("bot emotion scoring", () => {
 		expect(bounded.messages[3].content).toBe("current");
 	});
 
-	it("maps anger to concern and keeps weak or conflicting evidence neutral", () => {
-		expect(chooseExpression(expressionScores({ anger: 0.8 }))).toBe(
-			"concerned",
-		);
+	it("distinguishes anger from concern and keeps weak or conflicting evidence neutral", () => {
+		expect(chooseExpression(expressionScores({ anger: 0.8 }))).toBe("angry");
+		expect(chooseExpression(expressionScores({ fear: 0.8 }))).toBe("concerned");
 		expect(chooseExpression(expressionScores({ sadness: 0.8 }))).toBe("sad");
 		expect(chooseExpression(expressionScores({ curiosity: 0.8 }))).toBe(
 			"curious",
@@ -51,7 +162,7 @@ describe("bot emotion scoring", () => {
 		);
 	});
 
-	it.each(["love", "caring", "desire"])(
+	it.each(["love", "caring"])(
 		"uses the love face for a distinct %s signal",
 		(label) => {
 			const scores = expressionScores({ [label]: 0.9 });
@@ -61,7 +172,63 @@ describe("bot emotion scoring", () => {
 		},
 	);
 
-	it("returns every face score while reserving bot moods and activity for explicit state", () => {
+	it("validates prose before keeping a smile or a playful wink", async () => {
+		const classify = vi.fn(
+			async (text: string): Promise<EmotionScores> =>
+				text.includes("devastated") ? { sadness: 0.95 } : { amusement: 0.8 },
+		);
+		const scorer = new EmotionScorer(classify);
+		expect(
+			chooseExpression(
+				await scorer.score({ draft: "I am devastated 🙂", messages: [] }),
+			),
+		).toBe("sad");
+		expect(
+			chooseExpression(
+				await scorer.score({ draft: "Just kidding 😉", messages: [] }),
+			),
+		).toBe("wink");
+		expect(classify).toHaveBeenCalledTimes(2);
+	});
+
+	it("responds with concern when strong distress labels agree across different faces", () => {
+		expect(
+			chooseExpression(
+				expressionScores(
+					calibrateEmotionScores({ anger: 0.9, annoyance: 0.9 }),
+				),
+			),
+		).toBe("concerned");
+		expect(chooseExpression({ sad: 0.8, oops: 0.79, concerned: 0.78 })).toBe(
+			"concerned",
+		);
+		expect(chooseExpression({ sad: 0.8, oops: 0.79, happy: 0.78 })).toBe(
+			"neutral",
+		);
+		expect(chooseExpression({ sad: 0.4, concerned: 0.35 })).toBe("neutral");
+	});
+
+	it("preserves a warm reaction when affection and joy agree", () => {
+		expect(chooseExpression(expressionScores({ joy: 0.8, love: 0.78 }))).toBe(
+			"love",
+		);
+		expect(chooseExpression(expressionScores({ joy: 0.78, love: 0.8 }))).toBe(
+			"love",
+		);
+		expect(chooseExpression(expressionScores({ joy: 0.4, love: 0.35 }))).toBe(
+			"neutral",
+		);
+		expect(
+			chooseExpression(expressionScores({ joy: 0.8, love: 0.79, anger: 0.78 })),
+		).toBe("neutral");
+		expect(
+			chooseExpression(
+				expressionScores({ joy: 0.8, love: 0.79, neutral: 0.78 }),
+			),
+		).toBe("neutral");
+	});
+
+	it("returns finite face scores without accepting expression names as model labels", () => {
 		const scores = expressionScores({
 			joy: 2,
 			sadness: -1,
@@ -78,9 +245,9 @@ describe("bot emotion scoring", () => {
 			happy: 1,
 			sad: 0,
 			love: 0,
-			concerned: 0.8,
+			concerned: 0,
 			wink: 0,
-			angry: 0,
+			angry: 0.8,
 			focused: 0,
 			oops: 0,
 		});
@@ -158,7 +325,7 @@ describe("bot emotion scoring", () => {
 				{ role: "assistant", content: "assistant" },
 			],
 		});
-		expect(result.happy).toBeGreaterThan(result.concerned);
+		expect(result.happy).toBeGreaterThan(result.angry);
 		expect(chooseExpression(result)).toBe("neutral");
 	});
 

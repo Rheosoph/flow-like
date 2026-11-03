@@ -1145,6 +1145,18 @@ mod live {
         ctx: &PageContext,
         request: &SnapshotRequest,
     ) -> flow_like_types::Result<SnapshotOutput> {
+        take_snapshot_with(ctx, request, |warning| {
+            context.log_message(warning, LogLevel::Warn)
+        })
+        .await
+    }
+
+    /// The snapshot without a flow run around it: warnings go to `warn`.
+    pub(crate) async fn take_snapshot_with(
+        ctx: &PageContext,
+        request: &SnapshotRequest,
+        mut warn: impl FnMut(&str),
+    ) -> flow_like_types::Result<SnapshotOutput> {
         let forest = ctx
             .page
             .accessibility_forest(SnapshotOptions {
@@ -1154,7 +1166,7 @@ mod live {
             .await?;
         let view = AxForestView::new(&forest)?;
         for warning in forest.warnings.iter().chain(&view.warnings) {
-            context.log_message(warning, LogLevel::Warn);
+            warn(warning);
         }
         let main = tree::main_frame(&forest)?;
         let (mut allocator, scope) =

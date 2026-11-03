@@ -8,6 +8,7 @@ import type {
 	RealtimeCommand,
 	RealtimeConnectionSession,
 	RealtimeMessage,
+	RealtimePollRequest,
 	RealtimePollResponse,
 	RealtimePort,
 	RealtimeRunSnapshot,
@@ -136,6 +137,45 @@ function run(
 		after_sequence: sequences.at(-1) ?? -1,
 		has_more: false,
 	};
+}
+
+/**
+ * Replays runs like the API: the revision covers the status and whether the store reached the
+ * end, a run without news is left out and a long poll without news is held. `confirmEnd` reports
+ * more after every page with events, like a store that confirms the end with one more read;
+ * `cap` cuts a page the store already finished, like the response budget.
+ */
+function replayApi(state: {
+	status: string;
+	last: number;
+	cap?: number;
+	confirmEnd?: boolean;
+}) {
+	return vi.fn(async (url: RequestInfo | URL, init?: RequestInit) => {
+		const request: RealtimePollRequest = JSON.parse(String(init?.body));
+		const runs = request.runs.flatMap((subscription) => {
+			const after = subscription.after_sequence ?? -1;
+			const stored = Array.from(
+				{ length: Math.max(0, state.last - after) },
+				(_, index) => after + 1 + index,
+			);
+			const more = Boolean(state.confirmEnd && stored.length);
+			const revision = `${state.status}:${state.status === "COMPLETED" && !more}`;
+			if (!stored.length && subscription.revision === revision) return [];
+			const sequences = stored.slice(0, state.cap);
+			return [
+				{
+					...run(subscription.run_id, sequences, revision),
+					status: state.status,
+					after_sequence: sequences.at(-1) ?? after,
+					has_more: more || sequences.length < stored.length,
+				},
+			];
+		});
+		return runs.length || !request.timeout_ms
+			? response({ runs })
+			: hold(url, init);
+	});
 }
 
 const notification = {
@@ -312,6 +352,79 @@ describe("shared realtime runtime", () => {
 		]);
 	});
 
+	test("a finished run's closing page reaches the tab that accepted its last events", async () => {
+		const fetcher = replayApi({
+			status: "COMPLETED",
+			last: 1,
+			confirmEnd: true,
+		});
+		const runtime = create(fetcher);
+		const first = connect(runtime, "first");
+		first.subscribe({ notifications: false, runs: [{ run_id: "a" }] });
+		await vi.advanceTimersByTimeAsync(1);
+		expect(snapshots(first)[0].snapshot.runs[0]).toMatchObject({
+			status: "COMPLETED",
+			after_sequence: 1,
+			has_more: true,
+		});
+		first.accept();
+		await vi.advanceTimersByTimeAsync(60);
+		expect(snapshots(first)[1]?.snapshot.runs[0]).toMatchObject({
+			events: [],
+			after_sequence: 1,
+			has_more: false,
+		});
+	});
+
+	test.each([{ confirmEnd: true }, { cap: 2 }])(
+		"a caught-up tab receives the end of a run another tab replays from behind: %j",
+		async (paging) => {
+			const state = { status: "running", last: 3, ...paging };
+			const fetcher = replayApi(state);
+			const runtime = create(fetcher);
+			const follow = (id: string) => {
+				const port: ReturnType<typeof connect> = connect(
+					runtime,
+					id,
+					"account-a",
+					(message) => {
+						if (message.type === "snapshot")
+							queueMicrotask(() =>
+								port.send({
+									type: "accepted",
+									id,
+									delivery_id: message.delivery_id,
+								}),
+							);
+					},
+				);
+				port.subscribe({
+					notifications: false,
+					runs: [{ run_id: "a", poll_token: "token" }],
+				});
+				return port;
+			};
+			const latest = (port: ReturnType<typeof connect>) =>
+				snapshots(port).at(-1)?.snapshot.runs[0];
+			const ahead = follow("ahead");
+			await vi.advanceTimersByTimeAsync(200);
+			expect(latest(ahead)?.after_sequence).toBe(3);
+			state.status = "COMPLETED";
+			const behind = follow("behind");
+			await vi.advanceTimersByTimeAsync(1);
+			expect(
+				JSON.parse(String(fetcher.mock.calls.at(-1)?.[1]?.body)).runs,
+			).toEqual([{ run_id: "a", poll_token: "token", after_sequence: -1 }]);
+			await vi.advanceTimersByTimeAsync(500);
+			for (const port of [behind, ahead])
+				expect(latest(port)).toMatchObject({
+					status: "COMPLETED",
+					after_sequence: 3,
+					has_more: false,
+				});
+		},
+	);
+
 	test("rejects an advanced cursor without corresponding events", async () => {
 		const fetcher = vi
 			.fn(hold)
@@ -459,7 +572,7 @@ describe("shared realtime runtime", () => {
 			notifications: false,
 			runs: [{ run_id: "b" }],
 		});
-		await vi.advanceTimersByTimeAsync(60);
+		await vi.advanceTimersByTimeAsync(2_500);
 		const bodies = fetcher.mock.calls.map((call) =>
 			JSON.parse(String((call as unknown as [unknown, RequestInit])[1].body)),
 		);
@@ -794,6 +907,39 @@ describe("shared realtime runtime", () => {
 		).toBe(5_000);
 	});
 
+	test("a long poll answered at once without changes paces like an interval", async () => {
+		const fetcher = vi.fn(async () => response());
+		const runtime = create(fetcher, {}, () =>
+			httpGrant({ max_poll_wait_ms: undefined }),
+		);
+		connect(runtime, "first").subscribe({
+			notifications: false,
+			runs: [{ run_id: "a" }],
+		});
+		await vi.advanceTimersByTimeAsync(1_500);
+		expect(fetcher).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(3_500);
+		expect(fetcher.mock.calls.length).toBeLessThanOrEqual(3);
+	});
+
+	test("a poll the API holds for less than the assumed wait still re-polls at once", async () => {
+		const fetcher = vi.fn(
+			() =>
+				new Promise<Response>((resolve) =>
+					setTimeout(() => resolve(response()), 2_000),
+				),
+		);
+		const runtime = create(fetcher, {}, () =>
+			httpGrant({ max_poll_wait_ms: undefined }),
+		);
+		connect(runtime, "first").subscribe({
+			notifications: false,
+			runs: [{ run_id: "a" }],
+		});
+		await vi.advanceTimersByTimeAsync(2_100);
+		expect(fetcher).toHaveBeenCalledTimes(2);
+	});
+
 	test("a late acknowledgement restarts a long poll that left its tab out", async () => {
 		const fetcher = vi
 			.fn(hold)
@@ -818,6 +964,38 @@ describe("shared realtime runtime", () => {
 				(item: { run_id: string }) => item.run_id === "a",
 			).after_sequence,
 		).toBe(0);
+	});
+
+	test("a late acknowledgement gets the inbox snapshot another tab received meanwhile", async () => {
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		let inbox = notification;
+		const fetcher = vi.fn(
+			async (_url: RequestInfo | URL, init?: RequestInit) =>
+				JSON.parse(String(init?.body)).notifications?.revision ===
+				inbox.revision
+					? response()
+					: response({ notifications: inbox }),
+		);
+		const runtime = create(fetcher, {}, () =>
+			httpGrant({ max_poll_wait_ms: 0 }),
+		);
+		const first = connect(runtime, "first");
+		const second = connect(runtime, "second");
+		first.subscribe();
+		second.subscribe();
+		await vi.advanceTimersByTimeAsync(1);
+		first.accept();
+		inbox = { ...notification, revision: "n2" };
+		await vi.advanceTimersByTimeAsync(30_000);
+		expect(snapshots(first).at(-1)?.snapshot.notifications?.revision).toBe(
+			"n2",
+		);
+		const calls = fetcher.mock.calls.length;
+		second.accept();
+		expect(snapshots(second).at(-1)?.snapshot.notifications?.revision).toBe(
+			"n2",
+		);
+		expect(fetcher).toHaveBeenCalledTimes(calls);
 	});
 
 	test("a closed runtime tells its tabs instead of going silent", async () => {

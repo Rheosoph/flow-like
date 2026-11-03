@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import { RealtimeProviderSession } from "./provider-session";
 import type {
 	RealtimeProviderCallbacks,
 	RealtimeProviderOpener,
@@ -191,13 +192,14 @@ describe("shared provider lifecycle", () => {
 		expect(open).toHaveBeenCalledTimes(1);
 	});
 
-	test("a hidden account pauses its provider and reconnects when a tab becomes visible", async () => {
+	test("a hidden account pauses its provider and resumes it with the same grant until renewal is due", async () => {
+		const start = Date.now();
 		const close = vi.fn();
 		const open = vi.fn<RealtimeProviderOpener>(async () => ({ close }));
 		const fetcher = vi.fn<RealtimeFetch>(async (url) =>
 			String(url).endsWith("/connect") ? grant() : empty(),
 		);
-		const runtime = create(fetcher, open);
+		const runtime = create(fetcher, open, longLease);
 		const first = port(runtime, "first");
 		first.subscribe();
 		await vi.advanceTimersByTimeAsync(2);
@@ -215,6 +217,116 @@ describe("shared provider lifecycle", () => {
 		});
 		await vi.advanceTimersByTimeAsync(2);
 		expect(open).toHaveBeenCalledTimes(2);
+		expect(connects(fetcher)).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(start + 870_000 - Date.now() - 1);
+		expect(connects(fetcher)).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(2);
+		expect(connects(fetcher)).toHaveLength(2);
+	});
+
+	test("a provider paused past its grant's renewal time negotiates a new grant on resume", async () => {
+		const open = vi.fn<RealtimeProviderOpener>(async () => ({ close() {} }));
+		const fetcher = vi.fn<RealtimeFetch>(async (url) =>
+			String(url).endsWith("/connect") ? grant(100) : empty(),
+		);
+		const runtime = create(fetcher, open, longLease);
+		const first = port(runtime, "first");
+		first.subscribe();
+		await vi.advanceTimersByTimeAsync(2);
+		first.send({
+			type: "heartbeat",
+			id: "first",
+			activity: { online: false, visible: true },
+		});
+		await vi.advanceTimersByTimeAsync(80_000);
+		expect(connects(fetcher)).toHaveLength(1);
+		first.send({
+			type: "heartbeat",
+			id: "first",
+			activity: { online: true, visible: true },
+		});
+		await vi.advanceTimersByTimeAsync(2);
+		expect(connects(fetcher)).toHaveLength(2);
+		expect(open).toHaveBeenCalledTimes(2);
+	});
+
+	test("an account blocked as unauthorized forgets its grant", async () => {
+		let forbidden = false;
+		const open = vi.fn<RealtimeProviderOpener>(async () => ({ close() {} }));
+		const fetcher = vi.fn<RealtimeFetch>(async (url) => {
+			if (String(url).endsWith("/connect")) return grant();
+			return forbidden ? new Response(null, { status: 403 }) : empty();
+		});
+		const runtime = create(fetcher, open, longLease);
+		const first = port(runtime, "first");
+		first.subscribe();
+		await vi.advanceTimersByTimeAsync(2);
+		forbidden = true;
+		first.subscribe([{ run_id: "run" }]);
+		await vi.advanceTimersByTimeAsync(2);
+		expect(first.messages.at(-1)).toEqual({
+			type: "state",
+			state: "unauthorized",
+		});
+		forbidden = false;
+		first.send({
+			type: "session",
+			id: "first",
+			session: { ...first.session, headers: { Authorization: "Bearer next" } },
+		});
+		await vi.advanceTimersByTimeAsync(2);
+		expect(connects(fetcher)).toHaveLength(2);
+		expect(
+			new Headers(connects(fetcher)[1][1]?.headers).get("Authorization"),
+		).toBe("Bearer next");
+	});
+
+	test("a kept grant is never reused for another account, API or transport preference", async () => {
+		const open = vi.fn<RealtimeProviderOpener>(async () => ({ close() {} }));
+		const fetcher = vi.fn<RealtimeFetch>(async () => grant());
+		const session = new RealtimeProviderSession({
+			fetch: fetcher,
+			open,
+			changed() {},
+			wakeup() {},
+		});
+		const account: RealtimeConnectionSession = {
+			scope: "account",
+			url: "https://hub.test/api/v1/realtime/poll",
+			headers: { Authorization: "Bearer user" },
+		};
+		const steps: [RealtimeConnectionSession, "configured" | "http"][] = [
+			[account, "configured"],
+			[{ ...account, scope: "other" }, "configured"],
+			[
+				{ ...account, url: "https://other.test/api/v1/realtime/poll" },
+				"configured",
+			],
+			[account, "http"],
+			[account, "configured"],
+		];
+		for (const [next, preference] of steps) {
+			session.pause();
+			session.sync(next, preference);
+			await vi.advanceTimersByTimeAsync(1);
+		}
+		expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+			"https://hub.test/api/v1/realtime/connect",
+			"https://hub.test/api/v1/realtime/connect",
+			"https://other.test/api/v1/realtime/connect",
+			"https://hub.test/api/v1/realtime/connect",
+			"https://hub.test/api/v1/realtime/connect",
+		]);
+		session.pause();
+		session.sync(account, "configured");
+		await vi.advanceTimersByTimeAsync(1);
+		expect(fetcher).toHaveBeenCalledTimes(5);
+		expect(open).toHaveBeenCalledTimes(5);
+		session.close();
+		session.sync(account, "configured");
+		await vi.advanceTimersByTimeAsync(1);
+		expect(fetcher).toHaveBeenCalledTimes(6);
+		session.close();
 	});
 
 	test("replay with has_more drains immediately after acknowledgement", async () => {
@@ -485,6 +597,42 @@ describe("shared provider lifecycle", () => {
 		).toBe("Bearer next");
 	});
 
+	test("a grant refused for a token refreshed meanwhile is requested again at once, uncounted", async () => {
+		let callbacks!: RealtimeProviderCallbacks;
+		let refuse: ((response: Response) => void) | undefined;
+		const open = vi.fn<RealtimeProviderOpener>(async (_transport, events) => {
+			callbacks = events;
+			return { close() {} };
+		});
+		const fetcher = vi.fn<RealtimeFetch>(async (url, init) => {
+			if (!String(url).endsWith("/connect")) return replay(init);
+			if (new Headers(init?.headers).get("Authorization") === "Bearer next")
+				return grant();
+			return new Promise((resolve) => {
+				refuse = resolve;
+			});
+		});
+		const runtime = create(fetcher, open, longLease);
+		const first = port(runtime, "first");
+		first.subscribe();
+		await vi.advanceTimersByTimeAsync(1);
+		first.send({
+			type: "session",
+			id: "first",
+			session: { ...first.session, headers: { Authorization: "Bearer next" } },
+		});
+		refuse?.(new Response(null, { status: 401 }));
+		await vi.advanceTimersByTimeAsync(1);
+		expect(connects(fetcher)).toHaveLength(2);
+		expect(
+			new Headers(connects(fetcher)[1][1]?.headers).get("Authorization"),
+		).toBe("Bearer next");
+		expect(open).toHaveBeenCalledTimes(1);
+		callbacks.disconnected();
+		await vi.advanceTimersByTimeAsync(2_001);
+		expect(open).toHaveBeenCalledTimes(2);
+	});
+
 	test("grant lifetimes follow the server clock even when the local clock is skewed", async () => {
 		const open = vi.fn<RealtimeProviderOpener>(async () => ({ close() {} }));
 		const serverNow = Math.floor(Date.now() / 1000) - 3_600;
@@ -558,6 +706,53 @@ describe("shared provider lifecycle", () => {
 		await vi.advanceTimersByTimeAsync(1_000);
 		expect(polls(fetcher)).toHaveLength(settled + 3);
 	});
+
+	test.each([false, true])(
+		"a late acknowledgement replays the runs a poll left out at once (that poll still in flight: %s)",
+		async (inFlight) => {
+			const open = vi.fn<RealtimeProviderOpener>(async () => ({ close() {} }));
+			let served = false;
+			let finish: (() => void) | undefined;
+			const fetcher = vi.fn<RealtimeFetch>(async (url, init) => {
+				if (String(url).endsWith("/connect")) return grant();
+				if (!served && body([url, init]).runs.length) {
+					served = true;
+					return running(0);
+				}
+				if (served && inFlight && !finish)
+					return new Promise((resolve) => {
+						finish = () => resolve(empty());
+					});
+				return empty();
+			});
+			const runtime = create(fetcher, open);
+			port(runtime, "first").subscribe();
+			await vi.advanceTimersByTimeAsync(2);
+			expect(open).toHaveBeenCalledTimes(1);
+			const second = port(runtime, "second");
+			second.subscribe([{ run_id: "run" }]);
+			await vi.advanceTimersByTimeAsync(1_000);
+			const snapshot = second.messages.find(
+				(message) => message.type === "snapshot",
+			);
+			if (snapshot?.type !== "snapshot") throw new Error("Missing replay");
+			const count = polls(fetcher).length;
+			expect(
+				body(polls(fetcher).at(-1) as [RequestInfo | URL, RequestInit?]).runs,
+			).toEqual([]);
+			second.send({
+				type: "accepted",
+				id: "second",
+				delivery_id: snapshot.delivery_id,
+			});
+			finish?.();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(polls(fetcher)).toHaveLength(count + 1);
+			expect(
+				body(polls(fetcher).at(-1) as [RequestInfo | URL, RequestInit?]).runs,
+			).toEqual([{ run_id: "run", after_sequence: 0, revision: "r0" }]);
+		},
+	);
 
 	test("renews grants before expiry and closes provider credentials on logout", async () => {
 		const close = vi.fn();

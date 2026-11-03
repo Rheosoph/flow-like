@@ -163,8 +163,15 @@ impl TauriEventSinkManagerState {
     }
 }
 
-pub struct TauriRegistryState(pub Arc<Mutex<Option<RegistryClient>>>);
+pub struct TauriRegistryState(
+    pub Arc<Mutex<Option<RegistryClient>>>,
+    pub(crate) crate::functions::registry::initialization::RegistryInitialization,
+);
 impl TauriRegistryState {
+    pub fn new(client: Arc<Mutex<Option<RegistryClient>>>) -> Self {
+        Self(client, Default::default())
+    }
+
     #[inline]
     pub async fn construct(
         app_handle: &AppHandle,

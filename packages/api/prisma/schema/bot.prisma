@@ -1,0 +1,210 @@
+/// A person's bot. `id` (`bot_` + cuid) is the bot's sub: records of what the bot did
+/// store it. A bot acts for its owner and never holds more than the owner's current role
+/// in an app. Soft-deleted so past actions keep rendering as that bot.
+model Bot {
+  id              String                @id
+  ownerId         String
+  owner           User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  /// "general" | "flux"; null for custom bots. One row per owner and key.
+  systemKey       String?
+  presetId        String?
+  /// Null on an untouched system bot: the client shows the localized default.
+  name            String?
+  description     String?
+  instructions    String?
+  appearance      Json
+  /// { primary: string | null, fallbacks: string[] }
+  modelPolicy     Json                  @default("{}")
+  /// DataClassification, lowercase.
+  classification  String?
+  pii             Boolean               @default(false)
+  /// Capability ids; every capability is off until the owner switches it on.
+  capabilities    Json                  @default("[]")
+  profileId       String?
+  /// SERVER | DESKTOP | DEVICE
+  location        String                @default("SERVER")
+  deviceId        String?
+  apps            BotApp[]
+  secrets         BotSecret[]
+  createdAt       DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime              @updatedAt @db.Timestamptz(3)
+  deletedAt       DateTime?             @db.Timestamptz(3)
+  /// The id a moved bot had on the device: an import key per owner (NULLs distinct), never an id.
+  importKey       String?
+  /// Bit id of the embedding model its memory uses; null lets the host choose.
+  embeddingModel  String?
+  permissionsFrom BotPermission[]       @relation("BotPermissionFrom")
+  permissionsTo   BotPermission[]       @relation("BotPermissionTo")
+  hostHeartbeats  BotHostHeartbeat[]
+  turns           BotTurn[]
+  toolGrants      BotToolGrant[]
+  mailThreads     BotMailThread[]
+  webhooks        BotWebhook[]
+  tasks           BotTask[]
+  segments        ConversationSegment[]
+
+  @@unique([ownerId, systemKey])
+  @@unique([ownerId, importKey])
+  @@index([ownerId, deletedAt])
+}
+
+/// An app a bot may use under `selected_apps`, attached by the owner without the app
+/// approving. The bot's rights there are the owner's current role.
+model BotApp {
+  botId   String
+  bot     Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  appId   String
+  app     App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  addedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([botId, appId])
+  @@index([appId])
+}
+
+/// A bot's encrypted credential. Write-only for people: no route returns a value.
+/// SERVER: AES-256-GCM under a per-bot key, `v1:` + base64(nonce || ciphertext).
+/// SEALED: an envelope sealed to the bot's inbox key that only the host opens.
+model BotSecret {
+  botId       String
+  bot         Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  name        String
+  /// SERVER | SEALED
+  encryption  String
+  ciphertext  String
+  description String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  lastUsedAt  DateTime? @db.Timestamptz(3)
+
+  @@id([botId, name])
+}
+
+/// A standing grant: bot `fromBotId` may ask bot `toBotId` without asking the owner again.
+/// Directional; revoking deletes the row. A bot's grants go with it in both directions.
+model BotPermission {
+  id        String   @id
+  /// The owner of `fromBotId`, whose list of grants this row is in.
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  fromBotId String
+  fromBot   Bot      @relation("BotPermissionFrom", fields: [fromBotId], references: [id], onDelete: Cascade)
+  toBotId   String
+  toBot     Bot      @relation("BotPermissionTo", fields: [toBotId], references: [id], onDelete: Cascade)
+  grantedAt DateTime @default(now()) @db.Timestamptz(3)
+  /// The person who granted it.
+  grantedBy String
+
+  @@unique([fromBotId, toBotId])
+  @@index([ownerId])
+  @@index([toBotId])
+}
+
+/// A standing approval: the owner allowed `tool` for `scope` and chose not to be asked again, so
+/// the bot runs it without asking on every host. `scope` is `app:<id>`, `host:<h>`,
+/// `connection:<key>`, `table:<name>`, `documents.expensive` or `*` (the whole tool).
+/// Revoking deletes the row.
+model BotToolGrant {
+  id        String   @id
+  botId     String
+  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId   String
+  tool      String
+  scope     String
+  grantedAt DateTime @default(now()) @db.Timestamptz(3)
+  /// The person who granted it.
+  grantedBy String
+
+  @@unique([botId, tool, scope])
+}
+
+/// A host that runs the bot and said so recently. Presence reads the newest `lastSeenAt`.
+model BotHostHeartbeat {
+  botId      String
+  bot        Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  hostId     String
+  /// SERVER | DESKTOP | DEVICE
+  hostKind   String
+  lastSeenAt DateTime @db.Timestamptz(3)
+
+  @@id([botId, hostId])
+}
+
+/// Headless bot work: the bot's turn to answer `triggerMessageId` in `conversationId`, claimed by
+/// one host at a time under a lease. `id` is `bt_` + blake3(botId ‖ triggerMessageId), so a
+/// repeated trigger finds its turn.
+model BotTurn {
+  id               String       @id
+  botId            String
+  bot              Bot          @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId          String
+  owner            User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  conversationId   String
+  conversation     Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  triggerMessageId String
+  /// SERVER | DESKTOP | DEVICE: the kind of host that runs it.
+  hostKind         String
+  /// QUEUED | RUNNING | DONE | FAILED | CANCELLED
+  status           String       @default("QUEUED")
+  attempts         Int          @default(0)
+  /// The host holding the claim.
+  hostId           String?
+  leaseUntil       DateTime?    @db.Timestamptz(3)
+  operationId      String?
+  replyMessageId   String?
+  errorCode        String?
+  /// Bot-to-bot hops that led to the trigger.
+  hops             Int          @default(0)
+  createdAt        DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime     @updatedAt @db.Timestamptz(3)
+
+  @@unique([botId, triggerMessageId])
+  @@index([status, leaseUntil])
+  @@index([ownerId, status])
+}
+
+/// A public URL that wakes a bot: `POST /bots/hooks/{id}` with the secret (or an HMAC signature
+/// keyed by its hash) writes a `trigger` entry with `instruction` and the payload into the bot's
+/// conversation with its owner. The secret is shown once; only its hash is stored.
+model BotWebhook {
+  id           String    @id
+  botId        String
+  bot          Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  name         String
+  /// blake3 of the secret, lowercase hex.
+  secretHash   String
+  /// What the bot should do with a call.
+  instruction  String    @default("")
+  enabled      Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  lastCalledAt DateTime? @db.Timestamptz(3)
+
+  @@index([botId])
+}
+
+/// A task a bot runs for its owner at a time: once (`runAt`) or on a cron schedule in a time
+/// zone. A maintenance sweep claims due tasks with a compare-and-set on `nextRunAt` and writes a
+/// `trigger` entry (source `schedule`) into the bot's conversation with its owner.
+model BotTask {
+  id          String    @id
+  botId       String
+  bot         Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId     String
+  /// ONCE | CRON
+  kind        String
+  runAt       DateTime? @db.Timestamptz(3)
+  cron        String?
+  timezone    String?
+  /// What the bot should do when the task fires.
+  instruction String
+  title       String
+  nextRunAt   DateTime? @db.Timestamptz(3)
+  lastRunAt   DateTime? @db.Timestamptz(3)
+  enabled     Boolean   @default(true)
+  /// BOT | OWNER
+  createdBy   String
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@index([botId])
+  @@index([enabled, nextRunAt])
+}

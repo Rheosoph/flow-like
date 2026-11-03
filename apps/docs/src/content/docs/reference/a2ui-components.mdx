@@ -366,7 +366,16 @@ contents to permanent storage. The workflow can also read the metadata with
 at a permanent destination.
 
 Some editors convert formats: `.potx` and `.ppsx` export as `.pptx`,
-while `.xls`, `.xlsb`, and `.ods` export as `.xlsx`. Use the exported filename
+while `.xls`, `.xlsb`, and `.ods` export as `.xlsx`. FreeCAD `.FCStd` and Rhino
+`.3dm` open in `solidcraft` and export as `.solidcraft`, preserving imported
+geometry without the original feature history. InDesign `.indd` and `.indt`
+open in `designcraft` and export as `.designcraft`. PhotoCraft also imports
+XCF, XPM and DICOM into `.pcraft` projects, and reads and writes DDS, DPX,
+Cineon and IFF images. VectorCraft imports JPEG 2000 images into `.vectorcraft`
+documents. These formats work in both components. Supply `filename`
+when a download URL does not identify the file's extension.
+
+SolidCraft saves require version 0.30 or later. Use the exported filename
 and MIME type when choosing the destination.
 
 Both components use the same save events. For a new document, `src` in the event

@@ -182,6 +182,62 @@ describe("chat activity", () => {
 		expect(tracker.store.getState().entries).toHaveLength(0);
 	});
 
+	test("an unread reply follows its conversation to a new id without a second popup", () => {
+		const { tracker, makeTracker } = harness();
+		const popups: string[] = [];
+		tracker.subscribe((entry) => popups.push(entry.messageId));
+		tracker.record(reply(second, "reply-2"));
+		tracker.record(reply(first, "reply-1"));
+		const moved: ChatActivityTarget = { kind: "flowpilot", sessionId: "moved" };
+
+		tracker.retarget(first, moved);
+		expect(
+			tracker.store
+				.getState()
+				.entries.map((entry) => [entry.id, entry.messageId]),
+		).toEqual([
+			[chatActivityKey(moved), "reply-1"],
+			[chatActivityKey(second), "reply-2"],
+		]);
+		expect(popups).toEqual(["reply-2", "reply-1"]);
+		const reloaded = makeTracker();
+		reloaded.initialize();
+		expect(
+			reloaded.store.getState().entries.map((entry) => entry.target.sessionId),
+		).toEqual(["moved", "second"]);
+	});
+
+	test("moving onto a conversation with its own unread reply keeps the newer one", () => {
+		const { tracker, storage } = harness();
+		const moved: ChatActivityTarget = { kind: "flowpilot", sessionId: "moved" };
+		const entry = (
+			target: ChatActivityTarget,
+			messageId: string,
+			at: number,
+		) => ({
+			...reply(target, messageId),
+			id: chatActivityKey(target),
+			createdAt: at,
+		});
+		const seed = (entries: ReturnType<typeof entry>[]) =>
+			storage.setItem(
+				"flow-like:chat-activity:v1",
+				JSON.stringify({ entries, receipts: [] }),
+			);
+
+		seed([entry(first, "newer", 200), entry(moved, "older", 100)]);
+		tracker.retarget(first, moved);
+		expect(tracker.store.getState().entries).toEqual([
+			entry(moved, "newer", 200),
+		]);
+
+		seed([entry(moved, "newer", 200), entry(first, "older", 100)]);
+		tracker.retarget(first, moved);
+		expect(tracker.store.getState().entries).toEqual([
+			entry(moved, "newer", 200),
+		]);
+	});
+
 	test("survives corrupt storage, blocked persistence, and a failing popup listener", () => {
 		const tracker = createChatActivityTracker({
 			storage: () => ({

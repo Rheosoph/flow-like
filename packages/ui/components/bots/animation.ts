@@ -6,6 +6,7 @@ export const BOT_TIMING = Object.freeze({
 	gazeMs: 135,
 	gazeHoldMs: [600, 1300] as const,
 	hopMs: 1000,
+	reactionMs: 650,
 	sleepBreathMs: 4800,
 	hopIntervalMs: [6500, 10600] as const,
 	emotePopMs: 300,

@@ -1,6 +1,7 @@
 "use client";
 
 import { useBackend, useBackendReady } from "@flow-like/flow-like-ui";
+import { inboxKeys } from "@flow-like/flow-like-ui/hooks/use-inbox";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { useAuth } from "react-oidc-context";
@@ -23,11 +24,12 @@ export function NativeRealtimeBridge() {
 		backend instanceof TauriBackend ? backend.profile?.id : undefined;
 	const subject = auth.user?.profile.sub;
 	const issuer = auth.user?.profile.iss ?? auth.settings.authority;
-	const token = auth.user?.access_token;
+	// The native owner refreshes its own token; a refresh here must not retire its connection.
+	const hasToken = Boolean(auth.user?.access_token);
 	const signedIn = auth.isAuthenticated && !auth.isLoading;
 
 	useEffect(() => {
-		if (!ready || !signedIn || !profileId || !subject || !issuer || !token)
+		if (!ready || !signedIn || !profileId || !subject || !issuer || !hasToken)
 			return;
 		let revision: string | undefined;
 		return watchNativeRealtime({
@@ -44,6 +46,7 @@ export function NativeRealtimeBridge() {
 						{
 							predicate: (query) =>
 								NOTIFICATION_QUERIES.has(String(query.queryKey[0])) ||
+								query.queryKey[0] === inboxKeys.all[0] ||
 								(query.queryKey[0] === "home" &&
 									query.queryKey[4] === "notifications"),
 						},
@@ -54,6 +57,6 @@ export function NativeRealtimeBridge() {
 					});
 			},
 		});
-	}, [ready, signedIn, profileId, subject, issuer, token, queryClient]);
+	}, [ready, signedIn, profileId, subject, issuer, hasToken, queryClient]);
 	return null;
 }

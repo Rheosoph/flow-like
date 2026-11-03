@@ -11,8 +11,8 @@ import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { coordinateOidcRenewal } from "@flow-like/flow-like-ui/lib/auth/oidc-renewal";
 import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { isTauri } from "@tauri-apps/api/core";
 import { getCurrent } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { Amplify } from "aws-amplify";
@@ -46,6 +46,7 @@ import {
 	AuthProvider,
 	useAuth,
 } from "react-oidc-context";
+import { toast } from "sonner";
 import { get } from "../lib/api";
 import { bindHubAuth, renewHubAuth, setHubAuthActive } from "../lib/hub-auth";
 import { NativeUserStore, nativeUserStore } from "../lib/native-auth";
@@ -53,6 +54,8 @@ import { SignInLinkDialog } from "./sign-in-link-dialog";
 import { ProfileSyncer, TauriBackend } from "./tauri-provider";
 
 const AUTH_CHANGED_EVENT = "fl-auth-changed";
+const SIGN_IN_FAILED_MESSAGE =
+	"Sign-in could not be completed. Start a new sign-in request.";
 
 function emitAuthChanged() {
 	window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT));
@@ -368,6 +371,15 @@ export function DesktopAuthProvider({
 	useEffect(() => {
 		if (!openIdAuthConfig) return;
 		const seenUrls = new Set<string>();
+		let cancelled = false;
+
+		const reloadNativeUser = async () => {
+			if (cancelled) return;
+			const user = await userManager?.getUser(true);
+			if (cancelled) return;
+			if (!user) await userManager?.events.unload();
+			emitAuthChanged();
+		};
 
 		const normalizeTo = (target: string, source: string) => {
 			try {
@@ -508,32 +520,68 @@ export function DesktopAuthProvider({
 			const url = (event as CustomEvent<{ url?: string }>).detail?.url;
 			if (!url) return;
 			console.log("Debug OIDC URL received");
-			await handleIncomingOidcUrl(url);
+			if (!isTauri()) {
+				await handleIncomingOidcUrl(url);
+				return;
+			}
+			try {
+				await invoke("deeplink_debug_dispatch", { url });
+				// Dev callbacks also reload directly: an event can be lost during Fast Refresh.
+				await reloadNativeUser();
+			} catch (error) {
+				console.error("Debug OIDC dispatch failed:", error);
+				if (!cancelled) toast.error(SIGN_IN_FAILED_MESSAGE);
+			}
 		}
 
 		window.addEventListener("debug-oidc", debugListener);
 
-		const unlistenNative = listen<{ profileId: string }>(
+		const unlistenNative = listen<{ profileId: string; hub: string }>(
 			"native-auth-changed",
 			async (event) => {
-				if (event.payload.profileId !== profileId) return;
-				const user = await userManager?.getUser(true);
-				if (!user) userManager?.events.unload();
-				emitAuthChanged();
+				if (
+					event.payload.profileId !== profileId ||
+					event.payload.hub !== authConfig?.hub
+				)
+					return;
+				try {
+					await reloadNativeUser();
+				} catch {
+					console.error("Failed to reload the native sign-in session");
+					if (!cancelled) toast.error(SIGN_IN_FAILED_MESSAGE);
+				}
 			},
 		);
+		const unlistenNativeError = listen("native-auth-error", () => {
+			if (!cancelled) toast.error(SIGN_IN_FAILED_MESSAGE);
+		});
 		const unlisten = listen<{ url: string }>("oidc/url", async (event) => {
 			await handleIncomingOidcUrl(event.payload.url);
 		});
+		const subscriptions = [unlisten, unlistenNative, unlistenNativeError];
+		void Promise.all(subscriptions)
+			.then(async () => {
+				// A callback may commit between the initial read and listener attachment.
+				if (isTauri()) await reloadNativeUser();
+			})
+			.catch(() => {
+				if (cancelled) return;
+				console.error("Failed to initialize native sign-in updates");
+				toast.error(SIGN_IN_FAILED_MESSAGE);
+			});
 
 		void processStartupDeepLinks();
 
 		return () => {
-			unlisten.then((unsub) => unsub());
-			unlistenNative.then((unsub) => unsub());
+			cancelled = true;
+			for (const subscription of subscriptions)
+				void subscription.then(
+					(unsub) => unsub(),
+					() => {},
+				);
 			window.removeEventListener("debug-oidc", debugListener);
 		};
-	}, [userManager, openIdAuthConfig, profileId]);
+	}, [userManager, openIdAuthConfig, profileId, authConfig?.hub]);
 
 	return (
 		<UserManagerContext.Provider value={userManager ?? null}>
@@ -599,14 +647,16 @@ function AuthInner({ hub }: Readonly<{ hub: string }>) {
 			if (!userManager) return;
 			try {
 				const user = await userManager.getUser();
+				const events = authEventsRef.current;
 				if (user && !user.expired) {
 					console.log(
 						"[AuthInner] fl-auth-changed: reloading user into context",
 					);
-					const events = authEventsRef.current;
 					if (events) {
 						await events.load(user);
 					}
+				} else if (!user) {
+					await events?.unload();
 				}
 			} catch (err) {
 				console.warn("[AuthInner] Failed to reload user on auth change:", err);

@@ -26,6 +26,7 @@ import {
 	BoardHitIndex,
 	ConnectionGesture,
 	type Point,
+	type WorldPin,
 	boundsInPolygon,
 } from "../../lib/board-canvas/interaction";
 import {
@@ -561,10 +562,25 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				Number(getComputedStyle(wrapper).zIndex);
 			return nativeZ > domZ ? node : undefined;
 		};
+		const isPinExposed = (pin: WorldPin) => {
+			const bounds = root.getBoundingClientRect();
+			const [x, y, zoom] = store.getState().transform;
+			const top = document.elementFromPoint(
+				bounds.left + x + pin.x * zoom,
+				bounds.top + y + pin.y * zoom,
+			);
+			if (!top || !root.contains(top)) return false;
+			if (nativeAboveElement(pin, top)?.id === pin.nodeId) return true;
+			if (isDomControl(top)) return false;
+			const coveredBy =
+				top.closest<HTMLElement>(".react-flow__node")?.dataset.id;
+			return !coveredBy || coveredBy === pin.nodeId;
+		};
 		const validate = (
 			candidate: Parameters<
 				NonNullable<FlowCanvasProps["isValidConnection"]>
 			>[0],
+			hoveredPin: WorldPin,
 		) =>
 			!!currentProps().nodesInteractive &&
 			store.getState().nodesConnectable &&
@@ -577,24 +593,13 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 				{ nodeId: candidate.target, pinId: candidate.targetHandle },
 			].every((endpoint) => {
 				if (!endpoint.pinId) return false;
-				const pin = hitRef.current.pin({
+				return !!hitRef.current.pin({
 					nodeId: endpoint.nodeId,
 					pinId: endpoint.pinId,
 				});
-				if (!pin) return false;
-				const bounds = root.getBoundingClientRect();
-				const [x, y, zoom] = store.getState().transform;
-				const top = document.elementFromPoint(
-					bounds.left + x + pin.x * zoom,
-					bounds.top + y + pin.y * zoom,
-				);
-				if (!top || !root.contains(top)) return false;
-				if (nativeAboveElement(pin, top)?.id === endpoint.nodeId) return true;
-				if (isDomControl(top)) return false;
-				const coveredBy =
-					top.closest<HTMLElement>(".react-flow__node")?.dataset.id;
-				return !coveredBy || coveredBy === endpoint.nodeId;
 			}) &&
+			// Auto-pan may move the fixed endpoint offscreen. Only the hovered pin must be exposed.
+			isPinExposed(hoveredPin) &&
 			(currentProps().isValidConnection?.(candidate) ?? false);
 		const report = (error: unknown) => {
 			if (!disposed)
@@ -2085,7 +2090,7 @@ export function EguiCanvasLayer(props: EguiCanvasLayerProps) {
 			aria-label={
 				props.interactive === false
 					? undefined
-					: "Workflow canvas. Drag from a pin to connect. Select a wire to reconnect either endpoint. Shift-drag selects. Escape cancels."
+					: "Workflow canvas. Drag from a pin to connect. Drag a wire near either endpoint to reconnect it. Shift-drag selects. Escape cancels."
 			}
 			style={{
 				position: "absolute",

@@ -28,6 +28,7 @@ import { nowSystemTime } from "../../../lib/time/now";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
+import { BOTS_ROUTE } from "../../bots-tab/dock-selection";
 import { CreateFlowDialog } from "../../create-flow-dialog";
 import { FlowPilotBubbleOrb } from "../../global-chat/flowpilot-bubble-orb";
 import { useFlowPilotOrbState } from "../../global-chat/flowpilot-orb-state";
@@ -418,7 +419,7 @@ export function HomeQuickActions({ widget, editing }: HomeContentProps) {
 									setDraft({
 										prompt: "Help me import a flow from a file or URL.",
 									});
-									router.push("/chat");
+									router.push(BOTS_ROUTE);
 								}
 							}}
 						>

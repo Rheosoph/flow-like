@@ -47,12 +47,13 @@ export const officeShapes: readonly BotShapeDefinition[] = [
 			sclera: "#f7dfb4",
 		},
 		cheeks: true,
-		silhouette: "M32 27Q32 20 39 20H61Q68 20 68 27V79L50 104L32 79Z",
+		silhouette: "M32 27Q32 20 39 20H61Q68 20 68 27V84L50 100L32 84Z",
+		clothingClip: "M32 42H68V84H32Z",
 		anchors: {
-			eyes: { left: [42, 58], right: [58, 58], radius: 3 },
-			mouth: [50, 70],
+			eyes: { left: [42, 52], right: [58, 52], radius: 3 },
+			mouth: [50, 64],
 			head: { x: 50, y: 21, width: 31 },
-			neck: { y: 76, bottom: 103 },
+			neck: { y: 71, bottom: 84, width: 32 },
 			hand: [32, 80],
 		},
 		renderDetails: ({ palette }) => (
@@ -62,9 +63,17 @@ export const officeShapes: readonly BotShapeDefinition[] = [
 					fill={palette.accent}
 				/>
 				<path d="M32 34H68V42H32Z" fill={palette.clothing} />
-				<path d="M36 44V76M64 44V76" stroke={palette.sclera} strokeWidth="2" />
-				<path d="M32 79H68L50 104Z" fill={palette.sclera} />
-				<path d="M43 94H57L50 104Z" fill={palette.ink} />
+				<path
+					d="M34 37H66M34 40H66"
+					stroke={palette.sclera}
+					strokeWidth=".8"
+					opacity=".6"
+				/>
+				<path d="M32 42H37V84H32Z" fill={palette.sclera} opacity=".55" />
+				<path d="M63 42H68V84H63Z" fill={palette.ink} opacity=".1" />
+				<path d="M32 84H68L50 100Z" fill={palette.sclera} />
+				<path d="M50 84H68L50 100Z" fill={palette.ink} opacity=".08" />
+				<path d="M43 94H57L50 100Z" fill={palette.ink} />
 			</>
 		),
 	}),

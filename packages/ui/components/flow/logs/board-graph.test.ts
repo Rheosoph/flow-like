@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ILayerType } from "../../../lib/schema/flow/board";
-import { IPinType } from "../../../lib/schema/flow/pin";
+import { IPinType, IVariableType } from "../../../lib/schema/flow/pin";
 import {
 	buildBoardGraph,
 	layerPath,
@@ -145,6 +145,109 @@ describe("upstreamNodes", () => {
 });
 
 describe("missedUpstream", () => {
+	function reroutedLookup() {
+		const source = makeNode("entry", "Found Summary", [
+			makePin("path", Output, { connectedTo: ["route_a_in"] }),
+		]);
+		const first = makeNode("route_a", "Reroute", [
+			makePin("route_a_in", Input, { dependsOn: ["path"] }),
+			makePin("route_a_out", Output, { connectedTo: ["route_b_in"] }),
+		]);
+		const second = makeNode("route_b", "Reroute", [
+			makePin("route_b_in", Input, { dependsOn: ["route_a_out"] }),
+			makePin("route_b_out", Output, { connectedTo: ["key"] }),
+		]);
+		const lookup = makeNode("lookup", "Get Value", [
+			makePin("key", Input, { name: "Key", dependsOn: ["route_b_out"] }),
+			makePin("value", Output, { connectedTo: ["summary"] }),
+		]);
+		const setter = makeNode("setter", "Set Summary", [
+			makePin("summary", Input, { dependsOn: ["value"] }),
+		]);
+		return makeBoard([source, first, second, lookup, setter]);
+	}
+
+	test("does not report compiler-spliced reroutes as missed executions", () => {
+		const graph = buildBoardGraph(reroutedLookup());
+		expect(
+			missedUpstream(graph, "setter", new Set(["entry", "lookup", "setter"])),
+		).toEqual([]);
+		// Keep reroutes available when explicitly scoping the logs to upstream nodes.
+		expect(upstreamNodes(graph, "setter").sort()).toEqual([
+			"entry",
+			"lookup",
+			"route_a",
+			"route_b",
+		]);
+	});
+
+	test("reports the source behind reroutes with its consuming pin", () => {
+		const graph = buildBoardGraph(reroutedLookup());
+		expect(
+			missedUpstream(graph, "setter", new Set(["lookup", "setter"])),
+		).toEqual([{ nodeId: "entry", feeds: { nodeId: "lookup", pin: "Key" } }]);
+	});
+
+	test("looks through reroutes across collapsed layers and stops at function parameters", () => {
+		const board = reroutedLookup();
+		board.nodes.route_a.pins.route_a_out.connected_to = ["bridge"];
+		board.nodes.route_b.pins.route_b_in.depends_on = ["bridge"];
+		board.layers = {
+			layer: {
+				id: "layer",
+				name: "Layer",
+				type: ILayerType.Collapsed,
+				pins: {
+					bridge: makePin("bridge", Input, {
+						dependsOn: ["route_a_out"],
+						connectedTo: ["route_b_in"],
+					}),
+				},
+			},
+		} as never;
+		expect(
+			missedUpstream(buildBoardGraph(board), "setter", new Set(["lookup"])),
+		).toEqual([{ nodeId: "entry", feeds: { nodeId: "lookup", pin: "Key" } }]);
+		board.layers.layer.type = ILayerType.Function;
+		expect(
+			missedUpstream(buildBoardGraph(board), "setter", new Set(["lookup"])),
+		).toEqual([]);
+	});
+
+	test.each(["literal", "wasm", "geometry", "extra-pin"])(
+		"still reports a retained %s reroute that did not run",
+		(kind) => {
+			const board = reroutedLookup();
+			const reroute = board.nodes.route_b;
+			if (kind === "literal") {
+				reroute.pins.route_b_in.depends_on = [];
+				reroute.pins.route_b_in.default_value = [34, 107, 101, 121, 34];
+				board.nodes.route_a.pins.route_a_out.connected_to = [];
+			} else if (kind === "wasm") {
+				reroute.wasm = { package_id: "custom-reroute", permissions: [] };
+			} else if (kind === "geometry") {
+				reroute.pins.route_b_out.data_type = IVariableType.Geometry;
+			} else {
+				reroute.pins.extra = makePin("extra", Input);
+			}
+			expect(
+				missedUpstream(buildBoardGraph(board), "setter", new Set(["lookup"])),
+			).toEqual([
+				{ nodeId: "route_b", feeds: { nodeId: "lookup", pin: "Key" } },
+			]);
+		},
+	);
+
+	test("terminates when a reroute chain contains a cycle", () => {
+		const board = reroutedLookup();
+		board.nodes.entry.pins.path.connected_to = [];
+		board.nodes.route_a.pins.route_a_in.depends_on = ["route_b_out"];
+		board.nodes.route_b.pins.route_b_out.connected_to.push("route_a_in");
+		expect(
+			missedUpstream(buildBoardGraph(board), "setter", new Set(["lookup"])),
+		).toEqual([]);
+	});
+
 	test("names the nearest data source that never ran and what it feeds", () => {
 		const graph = buildBoardGraph(sampleBoard());
 		const visited = new Set(["each", "setf", "upsert"]);

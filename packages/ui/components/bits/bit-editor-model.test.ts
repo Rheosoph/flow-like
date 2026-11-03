@@ -46,6 +46,33 @@ function fixture(): IBit {
 }
 const profile = { id: "profile" } as IProfile;
 
+test("hosted image edits validate image pricing, provider settings and file-free Bits", () => {
+	const draft = fixture();
+	draft.type = IBitTypes.ImageGeneration;
+	draft.parameters = {
+		provider: {
+			provider_name: "hosted:openrouter",
+			model_id: "google/gemini-2.5-flash-image",
+			params: { tier: "FREE" },
+		},
+		pricing: { request_micro_usd: 100_000 },
+	};
+	expect(validateBitDraft(draft, "admin")).toBeNull();
+	expect(validateBitDraft(draft, "custom")).toContain("administrator");
+	draft.parameters.pricing = {};
+	expect(validateBitDraft(draft, "admin")).toContain("price");
+	draft.parameters.pricing = { request_micro_usd: 0 };
+	expect(validateBitDraft(draft, "admin")).toBeNull();
+	draft.dependencies = ["weights"];
+	expect(validateBitDraft(draft, "admin")).toContain("weight dependencies");
+	draft.dependencies = [];
+	draft.parameters.provider.provider_name = "Hosted";
+	expect(validateBitDraft(draft, "admin")).toContain("Choose");
+	draft.parameters.provider.provider_name = "hosted:openrouter";
+	draft.parameters.provider.params.api_key = "secret";
+	expect(validateBitDraft(draft, "admin")).toContain("server");
+});
+
 test("custom model request parameters require an object and cannot change streaming mode", () => {
 	const draft = fixture();
 	draft.parameters.provider.provider_name = "custom:anthropic";

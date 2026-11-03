@@ -130,6 +130,56 @@ pub(crate) fn path_segments(path: &str) -> Vec<&str> {
         .collect()
 }
 
+fn dns_label(label: &str) -> bool {
+    !label.is_empty()
+        && label.len() <= 63
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+}
+
+/// `firebaseio.com` for legacy databases, `<region>.firebasedatabase.app` for regional ones.
+fn shard_domain(database_host: &str) -> Option<&str> {
+    let (_, domain) = database_host.split_once('.')?;
+    let regional = domain
+        .strip_suffix(".firebasedatabase.app")
+        .is_some_and(dns_label);
+    (domain == "firebaseio.com" || regional).then_some(domain)
+}
+
+/// Firebase moves streaming reads to `s-` shard hosts within the database's own domain
+/// (`s-gke-usc1-nssi3-16.firebaseio.com`, `s-euw1b-nss-206.europe-west1.firebasedatabase.app`).
+/// No other host may receive the token in the query.
+pub(crate) fn allows_redirect(original: &str, target: &Url) -> bool {
+    let Some(host) = target.host_str() else {
+        return false;
+    };
+    let shard = || {
+        shard_domain(original).is_some_and(|domain| {
+            host.strip_suffix(domain)
+                .and_then(|prefix| prefix.strip_suffix('.'))
+                .is_some_and(|label| label.starts_with("s-") && dns_label(label))
+        })
+    };
+    target.scheme() == "https"
+        && target.username().is_empty()
+        && target.password().is_none()
+        && target.port_or_known_default() == Some(443)
+        && (host == original || shard())
+}
+
+/// Every Firebase request carries a credential in its query, so redirects stay on the database.
+pub(crate) fn redirect_policy(database_host: &str) -> reqwest::redirect::Policy {
+    let database_host = database_host.to_owned();
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() < 3 && allows_redirect(&database_host, attempt.url()) {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -257,6 +257,12 @@ export interface PollResult {
 	events: PollEvent[];
 	started_at: string | null;
 	completed_at: string | null;
+	/**
+	 * More events follow this page: poll again with `lastSequence`. A finished run
+	 * reports its final status only on the page where this is false. Servers that
+	 * predate the field omit it.
+	 */
+	has_more?: boolean;
 	/** Highest returned sequence, or the supplied cursor when this page is empty. */
 	lastSequence: number;
 }

@@ -167,15 +167,19 @@ authored entries are the only source for the store's OAuth listing.
 
 :::caution
 `allowed_hosts` is not a complete egress control. The desktop loader for
-installed packages copies it, together with the memory and timeout tiers, into
-the execution configuration of every node it loads from the package. It is
-checked for WebSocket connects and for WASI sockets, where the destination IP
-address is compared with the list. A non-empty list also keeps the standard
-`wasi:http` interface from being linked, because that path cannot enforce it.
-The Flow-Like HTTP host function does not consult the list today.
+installed packages, the standalone device runtime and the server executor copy
+it, together with the memory and timeout tiers, into the execution
+configuration of every node they load from the package. It is checked for
+WebSocket connects, for the Flow-Like HTTP host function and for WASI sockets,
+where the destination IP address is compared with the list. With a non-empty
+list the HTTP host function returns a redirect to the node instead of
+following it, so each hop is requested, and checked, again. A non-empty list
+also keeps the standard `wasi:http` interface from being linked, because that
+path cannot enforce it.
 
-The server executor applies neither the manifest tiers nor `allowed_hosts`. It
-runs nodes with their declared capabilities and the runtime default limits.
+The server executor receives the package's permissions from the API with the
+download references. A package whose permissions cannot be read is not loaded;
+one from an API that sends none runs with the runtime default limits.
 :::
 
 ## Capability flags are derived

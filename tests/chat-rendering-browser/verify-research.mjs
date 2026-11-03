@@ -19,48 +19,77 @@ const errors = [];
 const passed = [];
 page.on("pageerror", (error) => errors.push(error.message));
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const load = async (query = "") => {
 	await page.goto(`${origin}/?fixture=research${query}`, {
 		waitUntil: "networkidle0",
 	});
 	await page.waitForSelector("[data-fl-plan-group]");
 };
-const clickButton = async (label) => {
+const findButton = async (label) => {
 	for (const button of await page.$$("button")) {
 		if (
 			(await button.evaluate((element) => element.innerText)).trim() === label
-		) {
-			await button.click();
-			return;
-		}
+		)
+			return button;
 	}
 	throw new Error(`Button not found: ${label}`);
 };
+const clickButton = async (label) => (await findButton(label)).click();
 const rootTrigger = "[data-fl-plan-group] > button[aria-expanded]";
 const sourceCount = () =>
 	page.$$eval("[data-research-source]", (items) => items.length);
+const queryCount = () =>
+	page.$$eval("[data-research-query]", (items) => items.length);
+const researchText = () =>
+	page.$eval("[data-research-activity]", (element) => element.textContent);
 const noHorizontalOverflow = () =>
 	page.evaluate(() => document.documentElement.scrollWidth <= innerWidth);
+const nestedScrollers = () =>
+	page.$$eval("[data-research-activity] *", (elements) =>
+		elements
+			.filter(
+				(element) =>
+					/(auto|scroll)/.test(getComputedStyle(element).overflowY) &&
+					element.scrollHeight > element.clientHeight,
+			)
+			.map((element) => element.getAttribute("aria-label") ?? element.tagName),
+	);
+const waitForSourceCount = (count) =>
+	page.waitForFunction(
+		(expected) =>
+			document.querySelectorAll("[data-research-source]").length === expected,
+		{},
+		count,
+	);
 
 try {
 	await page.setViewport({ width: 1280, height: 1000, deviceScaleFactor: 1 });
 	await load();
 	await page.waitForSelector("[data-research-activity]");
-	assert.equal(await sourceCount(), 8);
-	assert.equal(
-		await page.$$eval("[data-research-query]", (items) => items.length),
-		3,
-	);
-	const researchText = await page.$eval(
-		"[data-research-activity]",
-		(element) => element.textContent,
-	);
-	for (const label of ["Read", "Reading", "Found", "Unavailable"])
-		assert.ok(researchText.includes(label), `Missing state: ${label}`);
+	assert.equal(await queryCount(), 4);
+	assert.equal(await sourceCount(), 4);
+	const compact = await researchText();
+	for (const label of ["Read", "Found", "Show all 8 pages"])
+		assert.ok(compact.includes(label), `Missing in compact view: ${label}`);
+	assert.ok(compact.includes("Panamera Komfort Langstrecke Vergleich BMW 7er"));
+	assert.ok(compact.includes("06"), "Visible searches keep their position");
+	assert.ok(!compact.includes("Panamera vs BMW 5 Series"));
+	await clickButton("Show 2 earlier searches");
+	assert.equal(await queryCount(), 6);
 	assert.ok(
-		researchText.includes("Panamera Komfort Langstrecke Vergleich BMW 7er"),
+		(await researchText()).includes(
+			"Porsche Panamera vs BMW 5 Series 7 Series ride comfort",
+		),
 	);
-	assert.ok(researchText.includes("BMW 7 Series long-distance road test"));
+	await clickButton("Hide earlier searches");
+	assert.equal(await queryCount(), 4);
+	await clickButton("Show all 8 pages");
+	await waitForSourceCount(8);
+	const expanded = await researchText();
+	for (const label of ["Read", "Reading", "Found", "Unavailable"])
+		assert.ok(expanded.includes(label), `Missing state: ${label}`);
+	assert.ok(expanded.includes("BMW 7 Series long-distance road test"));
 	const links = await page.$$eval("[data-research-activity] a", (items) =>
 		items.map((item) => ({
 			href: item.href,
@@ -79,15 +108,48 @@ try {
 				!link.inButton,
 		),
 	);
+	assert.deepEqual(await nestedScrollers(), []);
 	assert.ok(await noHorizontalOverflow());
 	await page.screenshot({
 		path: join(output, "research-desktop.png"),
 		fullPage: true,
 	});
 	passed.push(
-		"All searches and eight URLs render with read, found, active and unavailable states",
+		"Searches and sources fold to a preview and expand to every query, URL and state",
 	);
 
+	await page.evaluate(() => {
+		const transcript = document.createElement("div");
+		transcript.style.height = "3000px";
+		document.body.append(transcript);
+	});
+	const sourcesTop = await page.$eval(
+		'[aria-label="Sources"]',
+		(element) => element.getBoundingClientRect().top + scrollY,
+	);
+	await page.evaluate(
+		(top) => scrollTo({ top: top - 100, behavior: "instant" }),
+		sourcesTop,
+	);
+	await sleep(100);
+	const pointer = await page.$eval('[aria-label="Sources"]', (element) => {
+		const bounds = element.getBoundingClientRect();
+		return { x: bounds.x + bounds.width / 2, y: bounds.y + 60 };
+	});
+	const beforeWheel = await page.evaluate(() => scrollY);
+	await page.mouse.move(pointer.x, pointer.y);
+	for (let tick = 0; tick < 10; tick++) {
+		await page.mouse.wheel({ deltaY: 100 });
+		await sleep(40);
+	}
+	await page.waitForFunction(
+		(start) => scrollY >= start + 900,
+		{},
+		beforeWheel,
+	);
+	passed.push("Wheel over the research trail scrolls the transcript");
+
+	await load();
 	await page.click(rootTrigger);
 	await page.waitForFunction(
 		(selector) =>
@@ -105,7 +167,7 @@ try {
 	await page.focus(rootTrigger);
 	await page.keyboard.press("Space");
 	await page.waitForSelector("[data-research-activity]");
-	assert.equal(await sourceCount(), 8);
+	assert.equal(await sourceCount(), 4);
 	passed.push(
 		"Research collapses and reopens with the keyboard, retaining the website summary",
 	);
@@ -120,13 +182,11 @@ try {
 	);
 	await page.click(rootTrigger);
 	await page.waitForSelector("[data-research-activity]");
-	const finished = await page.$eval(
-		"[data-research-activity]",
-		(element) => element.textContent,
-	);
+	await clickButton("Show all 8 pages");
+	await waitForSourceCount(8);
+	const finished = await researchText();
 	assert.ok(!finished.includes("Reading"));
 	assert.ok(finished.includes("Unavailable"));
-	assert.equal(await sourceCount(), 8);
 	passed.push(
 		"Completion collapses automatically and preserves every source and failed attempt",
 	);
@@ -134,49 +194,34 @@ try {
 	await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 });
 	await load("&narrow");
 	await page.waitForSelector("[data-research-activity]");
-	assert.equal(await sourceCount(), 8);
+	assert.equal(await sourceCount(), 4);
+	assert.deepEqual(await nestedScrollers(), []);
 	assert.ok(await noHorizontalOverflow());
 	await page.screenshot({
 		path: join(output, "research-mobile.png"),
 		fullPage: true,
 	});
-	await page.focus('[aria-label="Sources"]');
-	await page.keyboard.press("End");
-	await page.waitForFunction(() => {
-		const sources = document.querySelector('[aria-label="Sources"]');
-		return (
-			sources &&
-			sources.scrollTop + sources.clientHeight >= sources.scrollHeight - 1
-		);
-	});
-	assert.ok(
-		await page.$eval("[data-research-source]:last-child", (element) => {
-			const bounds = element.getBoundingClientRect();
-			const viewport = element
-				.closest('[aria-label="Sources"]')
-				.getBoundingClientRect();
-			return (
-				bounds.bottom <= viewport.bottom + 1 && bounds.top >= viewport.top - 1
-			);
-		}),
-	);
-	passed.push(
-		"Mobile renders without horizontal overflow and every source is reachable by keyboard",
-	);
 	await clickButton("Show all 8 pages");
-	await page.waitForFunction(() => {
-		const sources = document.querySelector('[aria-label="Sources"]');
-		return sources && sources.clientHeight >= sources.scrollHeight - 1;
-	});
+	await waitForSourceCount(8);
 	assert.ok(await noHorizontalOverflow());
-	await clickButton("Show compact view");
-	await page.waitForFunction(() => {
-		const sources = document.querySelector('[aria-label="Sources"]');
-		return sources && sources.clientHeight < sources.scrollHeight;
-	});
-	assert.equal(await sourceCount(), 8);
+	const fold = await findButton("Show fewer pages");
+	await fold.evaluate((element) =>
+		element.scrollIntoView({ block: "end", behavior: "instant" }),
+	);
+	const foldTop = await fold.evaluate(
+		(element) => element.getBoundingClientRect().top,
+	);
+	await fold.click();
+	await waitForSourceCount(4);
+	const foldedTop = await (await findButton("Show all 8 pages")).evaluate(
+		(element) => element.getBoundingClientRect().top,
+	);
+	assert.ok(
+		Math.abs(foldedTop - foldTop) <= 1,
+		`Fold toggle moved from ${foldTop} to ${foldedTop}`,
+	);
 	passed.push(
-		"Show all pages removes source scrolling and compact view restores it without losing pages",
+		"Mobile renders without nested scrolling and folding keeps the toggle in place",
 	);
 
 	await page.setViewport({ width: 1280, height: 1000, deviceScaleFactor: 1 });
@@ -193,7 +238,7 @@ try {
 		path: join(output, "research-light.png"),
 		fullPage: true,
 	});
-	assert.equal(await sourceCount(), 8);
+	assert.equal(await sourceCount(), 4);
 	await page.$$eval("[data-fl-plan-group] img", (items) => {
 		for (const item of items) item.dispatchEvent(new Event("error"));
 	});

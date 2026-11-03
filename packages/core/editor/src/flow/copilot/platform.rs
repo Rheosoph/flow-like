@@ -623,6 +623,8 @@ pub struct PlatformCopilot {
     state: Arc<FlowLikeState>,
     profile: Option<Arc<Profile>>,
     thinking: Option<HistoryThinking>,
+    tool_specs: Option<Vec<PlatformToolSpec>>,
+    tool_rounds: Option<usize>,
 }
 
 impl PlatformCopilot {
@@ -631,12 +633,27 @@ impl PlatformCopilot {
             state,
             profile,
             thinking: None,
+            tool_specs: None,
+            tool_rounds: None,
         }
     }
 
     /// User-chosen thinking level, dropped for the rest of the run if the model rejects it.
     pub fn with_thinking(mut self, thinking: Option<HistoryThinking>) -> Self {
         self.thinking = thinking;
+        self
+    }
+
+    /// Advertise exactly these tools instead of the surface's own set. A bot run keeps the
+    /// surface's budget and policies but holds only the tools its capabilities switch on.
+    pub fn with_tool_specs(mut self, tool_specs: Vec<PlatformToolSpec>) -> Self {
+        self.tool_specs = Some(tool_specs);
+        self
+    }
+
+    /// Tool rounds before the synthesis turn, instead of the surface's own budget.
+    pub fn with_tool_rounds(mut self, tool_rounds: usize) -> Self {
+        self.tool_rounds = Some(tool_rounds);
         self
     }
 
@@ -729,8 +746,11 @@ impl PlatformCopilot {
             system_prompt.push_str(&memory.prompt_sections(&user_prompt).await);
         }
 
-        let max_tool_rounds = surface.max_tool_rounds();
-        let tool_specs = surface.tool_specs(memory.is_some());
+        let max_tool_rounds = self.tool_rounds.unwrap_or_else(|| surface.max_tool_rounds());
+        let tool_specs = self
+            .tool_specs
+            .clone()
+            .unwrap_or_else(|| surface.tool_specs(memory.is_some()));
         let advertised_tool_names: HashSet<String> = tool_specs
             .iter()
             .map(|spec| spec.name.to_string())
@@ -812,7 +832,8 @@ impl PlatformCopilot {
         let mut session_stats = LLMUsageStats::default();
         let mut current_prompt = prompt_message;
         let web_research_session = Arc::new(WebResearchSession::new(&user_prompt));
-        let mut local_app_discovery_returned = false;
+        // A run without an app inventory has no local apps to check before research.
+        let mut local_app_discovery_returned = !advertised_tool_names.contains("list_apps");
         let mut sealed_research_used = false;
 
         // Tool rounds and answer generation have separate budgets. The last iteration deliberately

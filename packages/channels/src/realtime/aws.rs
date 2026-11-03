@@ -57,10 +57,10 @@ pub(super) async fn listen(
                 subscribed = true;
                 ready(healthy, wake);
             }
-            Event::Incoming(Packet::Publish(message)) if message.topic == topic => {
-                if valid_wakeup(&message.payload) {
-                    wake.notify_one();
-                }
+            Event::Incoming(Packet::Publish(message))
+                if message.topic == topic && valid_wakeup(&message.payload) =>
+            {
+                wake.notify_one();
             }
             _ => {}
         }

@@ -698,6 +698,7 @@ mod runtime_config {
     async fn runtime_creates_with_custom_wasm_path() {
         let config = RuntimeConfig {
             wasm_binary_path: Some(PathBuf::from("/nonexistent/python.wasm")),
+            ..Default::default()
         };
         let runtime = PyodideRuntime::new(config);
         assert!(
@@ -710,6 +711,7 @@ mod runtime_config {
     async fn execute_fails_gracefully_without_wasm_binary() {
         let config = RuntimeConfig {
             wasm_binary_path: Some(PathBuf::from("/definitely/does/not/exist.wasm")),
+            ..Default::default()
         };
         let runtime = PyodideRuntime::new(config).unwrap();
 

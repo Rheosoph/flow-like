@@ -1441,34 +1441,20 @@ pub(crate) async fn click_at(
     clicks: u32,
     modifiers: &str,
 ) -> flow_like_types::Result<()> {
-    use enigo::{Coordinate, Direction, Mouse};
     let mut input = session.create_enigo(context).await?;
     let cancellation = context.get_cancellation_token();
     let click_delay_ms = session.click_delay_ms.min(5000);
     let modifiers = modifiers.to_owned();
-    tokio::task::spawn_blocking(move || -> flow_like_types::Result<()> {
-        check_cancellation(cancellation.as_ref())?;
-        input.modifiers(&modifiers)?;
-        input
-            .move_mouse(point.0, point.1, Coordinate::Abs)
-            .map_err(|e| flow_like_types::anyhow!("Failed to move mouse to {:?}: {}", point, e))?;
-        interruptible_sleep(click_delay_ms, cancellation.as_ref())?;
-        for click in 0..clicks {
-            if click > 0 {
-                interruptible_sleep(70, cancellation.as_ref())?;
-            }
-            check_cancellation(cancellation.as_ref())?;
-            input.button(button, Direction::Click).map_err(|e| {
-                flow_like_types::anyhow!(
-                    "Failed click {} of {} at {:?}: {}",
-                    click + 1,
-                    clicks,
-                    point,
-                    e
-                )
-            })?;
-        }
-        Ok(())
+    tokio::task::spawn_blocking(move || {
+        super::native::gestures::click(
+            &mut input,
+            point,
+            button,
+            clicks,
+            &modifiers,
+            click_delay_ms,
+            cancellation.as_ref(),
+        )
     })
     .await?
 }

@@ -39,6 +39,8 @@ export function backoff(
 export interface RealtimeGrant extends RealtimeConnectResponse {
 	/** Local time in milliseconds after which the grant opens no connection. */
 	deadline: number;
+	/** Local time in milliseconds from which a replacement grant is due. */
+	renewAt: number;
 	/** Server clock minus local clock in milliseconds. */
 	clockOffsetMs: number;
 }
@@ -137,8 +139,16 @@ export function parseRealtimeGrant(
 				? MAX_REALTIME_TIMEOUT_MS
 				: Number(value.max_poll_wait_ms),
 		deadline: receivedAt + lifetime,
+		renewAt: receivedAt + lifetime - Math.min(30_000, lifetime / 5),
 		clockOffsetMs: serverNow - receivedAt,
 	};
+}
+
+function sameHeaders(
+	left?: Record<string, string>,
+	right?: Record<string, string>,
+): boolean {
+	return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function loopback(hostname: string): boolean {
@@ -171,7 +181,7 @@ export function refusesCleartextGrant(
 /**
  * Negotiates the account's read grant: a provider connection that wakes the authoritative HTTP
  * replay, or an HTTP grant that tells the replay how long the API holds a poll. Credentials
- * change in place; only a new API or transport preference needs a new grant.
+ * change in place; only a new account, API or transport preference needs a new grant.
  */
 export class RealtimeProviderSession {
 	connected = false;
@@ -179,6 +189,8 @@ export class RealtimeProviderSession {
 	private session?: RealtimeConnectionSession;
 	private preference: RealtimeTransportPreference = "configured";
 	private key?: string;
+	/** Kept through a pause so that resuming before its renewal costs the API no new grant. */
+	private grant?: { key: string; value: RealtimeGrant };
 	private controller?: AbortController;
 	private connection?: RealtimeProviderConnection;
 	private connectedAt = 0;
@@ -203,12 +215,10 @@ export class RealtimeProviderSession {
 		session: RealtimeConnectionSession,
 		preference: RealtimeTransportPreference,
 	): void {
-		const key = JSON.stringify([session.url, preference]);
+		const key = JSON.stringify([session.scope, session.url, preference]);
 		if (this.key === key) {
 			const renewed =
-				this.rejected &&
-				JSON.stringify(session.headers) !==
-					JSON.stringify(this.session?.headers);
+				this.rejected && !sameHeaders(session.headers, this.session?.headers);
 			this.session = session;
 			if (renewed) {
 				this.rejected = false;
@@ -217,7 +227,8 @@ export class RealtimeProviderSession {
 			}
 			return;
 		}
-		this.close();
+		this.pause();
+		if (this.grant?.key !== key) this.grant = undefined;
 		this.key = key;
 		this.session = session;
 		this.preference = preference;
@@ -225,6 +236,12 @@ export class RealtimeProviderSession {
 	}
 
 	close(): void {
+		this.pause();
+		this.grant = undefined;
+	}
+
+	/** Stops listening but keeps the grant for `sync` to resume the same account and API with. */
+	pause(): void {
 		this.epoch++;
 		this.key = undefined;
 		this.session = undefined;
@@ -251,6 +268,7 @@ export class RealtimeProviderSession {
 	/** Every grant costs the API a provider credential, so no retry outpaces this schedule. */
 	private retry(epoch: number, blocked = false): void {
 		if (this.epoch !== epoch || !this.session) return;
+		this.grant = undefined;
 		this.controller?.abort();
 		const lost = this.release();
 		const delay = blocked
@@ -262,9 +280,57 @@ export class RealtimeProviderSession {
 		if (lost) this.options.changed();
 	}
 
+	/** Asks the API for a grant; a refusal or failure schedules the next attempt and yields none. */
+	private async negotiate(
+		api: URL,
+		session: RealtimeConnectionSession,
+		preference: RealtimeTransportPreference,
+		epoch: number,
+		signal: AbortSignal,
+	): Promise<RealtimeGrant | undefined> {
+		const url = new URL(api);
+		url.pathname = `${api.pathname.slice(0, -4)}connect`;
+		const { fetch: fetcher } = this.options;
+		const response = await fetcher(url, {
+			method: "POST",
+			headers: { ...session.headers, "Content-Type": "application/json" },
+			body: JSON.stringify({ transport: preference }),
+			signal,
+			credentials: "omit",
+			cache: "no-store",
+			redirect: "error",
+		});
+		const receivedAt = Date.now();
+		if (this.epoch !== epoch || signal.aborted) {
+			await response.body?.cancel();
+			return;
+		}
+		if (!response.ok) {
+			await response.body?.cancel();
+			const refused = response.status === 401 || response.status === 403;
+			if (
+				refused &&
+				this.epoch === epoch &&
+				!sameHeaders(this.session?.headers, session.headers)
+			) {
+				void this.connect();
+				return;
+			}
+			this.rejected = refused;
+			this.retry(epoch, [400, 403, 404, 405, 501].includes(response.status));
+			return;
+		}
+		try {
+			return parseRealtimeGrant(await boundedJson(response), receivedAt);
+		} catch (error) {
+			this.retry(epoch, error instanceof RealtimeProviderProtocolError);
+		}
+	}
+
 	private async connect(): Promise<void> {
 		const session = this.session;
-		if (!session) return;
+		const key = this.key;
+		if (!session || !key) return;
 		clearTimeout(this.timer);
 		this.timer = undefined;
 		const wait = this.notBefore - Date.now();
@@ -286,37 +352,21 @@ export class RealtimeProviderSession {
 		try {
 			const api = new URL(session.url);
 			if (!api.pathname.endsWith("/realtime/poll")) return;
-			const url = new URL(api);
-			url.pathname = `${api.pathname.slice(0, -4)}connect`;
-			const { fetch: fetcher } = this.options;
-			const response = await fetcher(url, {
-				method: "POST",
-				headers: { ...session.headers, "Content-Type": "application/json" },
-				body: JSON.stringify({ transport: preference }),
-				signal: controller.signal,
-				credentials: "omit",
-				cache: "no-store",
-				redirect: "error",
-			});
-			const receivedAt = Date.now();
-			if (!current()) {
-				await response.body?.cancel();
-				return;
-			}
-			if (!response.ok) {
-				await response.body?.cancel();
-				this.rejected = response.status === 401 || response.status === 403;
-				this.retry(epoch, [400, 403, 404, 405, 501].includes(response.status));
-				return;
-			}
-			let grant: RealtimeGrant;
-			try {
-				grant = parseRealtimeGrant(await boundedJson(response), receivedAt);
-			} catch (error) {
-				this.retry(epoch, error instanceof RealtimeProviderProtocolError);
-				return;
-			}
-			if (!current()) return;
+			const kept =
+				this.grant?.key === key && Date.now() < this.grant.value.renewAt
+					? this.grant.value
+					: undefined;
+			const grant =
+				kept ??
+				(await this.negotiate(
+					api,
+					session,
+					preference,
+					epoch,
+					controller.signal,
+				));
+			if (!grant || !current()) return;
+			this.grant = { key, value: grant };
 			this.rejected = false;
 			this.blockedFailures = 0;
 			const waitChanged = this.maxPollWaitMs !== grant.max_poll_wait_ms;
@@ -348,13 +398,12 @@ export class RealtimeProviderSession {
 				this.connected = true;
 				this.options.changed();
 			} else if (waitChanged) this.options.changed();
-			const lifetime = grant.deadline - Date.now();
 			this.timer = setTimeout(
-				() => void this.connect(),
-				Math.max(
-					1_000,
-					Math.min(2_147_483_647, lifetime - Math.min(30_000, lifetime / 5)),
-				),
+				() => {
+					this.grant = undefined;
+					void this.connect();
+				},
+				Math.max(1_000, Math.min(2_147_483_647, grant.renewAt - Date.now())),
 			);
 		} catch {
 			this.retry(epoch);

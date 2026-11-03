@@ -8,7 +8,10 @@ import { Response } from "../../../lib/llm/response";
 import type { IChatMainWidget, IChatWidget, IMessage } from "./chat-db";
 import { mergeChatWidgets, processChatEvents } from "./event-processor";
 import { joinContentText } from "./inline-segments";
-import { refreshMainChatWidget, resolveMainChatWidget } from "./main-widget-state";
+import {
+	refreshMainChatWidget,
+	resolveMainChatWidget,
+} from "./main-widget-state";
 
 const baseMessage = (): IMessage => ({
 	id: "m1",
@@ -354,7 +357,9 @@ describe("main chat widget", () => {
 			nextUpdate.payload,
 		]);
 		expect(action.main_widget?.widget?.updates).toEqual([actionUpdate.payload]);
-		expect(original.main_widget?.command_at).toBe(action.main_widget?.command_at);
+		expect(original.main_widget?.command_at).toBe(
+			action.main_widget?.command_at,
+		);
 	});
 });
 

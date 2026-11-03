@@ -1,0 +1,110 @@
+/// A conversation between principals (user subs and bot ids). DIRECT holds exactly two
+/// principals, deduplicated by `directKey`; GROUP has a title and at most 50 active members,
+/// so one fan-out stays far below DSQL's 3,000-row transaction cap.
+model Conversation {
+  id             String                @id
+  /// DIRECT | GROUP
+  kind           String
+  title          String?
+  /// PLAIN | E2E
+  encryption     String                @default("PLAIN")
+  /// Order-independent key of the two principals of a DIRECT conversation.
+  directKey      String?               @unique
+  createdBy      String
+  lastActivityAt DateTime              @db.Timestamptz(3)
+  members        ConversationMember[]
+  createdAt      DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime              @updatedAt @db.Timestamptz(3)
+  /// The id a moved conversation had on the device: an import key per creator (NULLs distinct).
+  importKey      String?
+  /// The newest `InboxEntry.seq` handed out, allocated under the conversation's lock; null is 0.
+  lastSeq        BigInt?
+  segments       ConversationSegment[]
+  botTurns       BotTurn[]
+
+  @@unique([createdBy, importKey])
+}
+
+/// A principal in a conversation. Rows stay after leaving (`leftAt`) so history keeps its
+/// members; only active members read and receive.
+model ConversationMember {
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// A user sub or a bot id; no foreign key, bots and users share this column.
+  principalId    String
+  /// USER | BOT
+  principalKind  String
+  addedBy        String?
+  joinedAt       DateTime     @db.Timestamptz(3)
+  leftAt         DateTime?    @db.Timestamptz(3)
+  lastReadAt     DateTime?    @db.Timestamptz(3)
+
+  @@id([conversationId, principalId])
+  @@index([principalId, leftAt])
+}
+
+/// One principal's copy of one conversation event. Pages are ordered by (createdAt, id).
+model InboxEntry {
+  id             String   @id
+  /// The principal that owns this copy.
+  inboxId        String
+  conversationId String
+  /// Shared by every copy of one event; chosen by the sender so a retried send is idempotent.
+  messageId      String
+  senderId       String
+  /// MESSAGE | REACTION | EDIT | DELETE | MEMBER
+  kind           String
+  /// Envelope v1: plain { v, enc: "none", body } or sealed to this inbox's key.
+  envelope       Json
+  createdAt      DateTime @db.Timestamptz(3)
+  /// The event's position in its conversation, the same in every copy and never reused. Null
+  /// on events written before positions existed.
+  seq            BigInt?
+
+  @@unique([inboxId, messageId])
+  /// Reads by position (`seq BETWEEN …`) in one copy; a position appears once per copy. NULLs
+  /// are distinct.
+  @@unique([inboxId, conversationId, seq])
+  @@index([inboxId, conversationId, createdAt])
+  @@index([inboxId, createdAt])
+}
+
+/// One bot's summary of a conversation's history: the events `seqFrom..=seqTo` (level 0), or at
+/// level 1 a summary of its older segments that keeps their range. Written once and never
+/// rewritten; a changed summary is a new `version`. Two bots in one conversation each keep their
+/// own.
+model ConversationSegment {
+  id             String       @id
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// The bot whose host wrote the summary.
+  authorId       String
+  author         Bot          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  level          Int
+  seqFrom        BigInt
+  seqTo          BigInt
+  tFrom          DateTime     @db.Timestamptz(3)
+  tTo            DateTime     @db.Timestamptz(3)
+  title          String?
+  summary        String
+  /// The level-1 segment that merged this one.
+  parentId       String?
+  version        Int
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([conversationId, authorId, level, seqFrom])
+  @@index([authorId])
+}
+
+/// A public key others seal envelopes to. People register their own; owners register their
+/// bots' keys. Anyone signed in may read active keys.
+model InboxKey {
+  principalId String
+  keyId       String
+  algorithm   String
+  publicKey   String
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  revokedAt   DateTime? @db.Timestamptz(3)
+
+  @@id([principalId, keyId])
+}

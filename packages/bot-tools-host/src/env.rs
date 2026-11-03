@@ -1,0 +1,314 @@
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use flow_like_bot_tools::{
+    AppTables, Attachment, Environment, FileData, FileEntry, FileMeta, KnowledgeEmbedder, Limits,
+    ModelRole, Scope, SessionCache, ToolEnv,
+};
+use flow_like_model_provider::llm::ModelLogic;
+use flow_like_storage::Path;
+use flow_like_storage::contracts::column_metadata::ColumnReader;
+use flow_like_storage::files::store::FlowLikeStore;
+use flow_like_storage::lancedb::Connection;
+use flow_like_storage::object_store::{ObjectStoreExt, PutPayload};
+use flow_like_storage::{display_object_path, join_object_path};
+use flow_like_types::{Bytes, Result, anyhow};
+use futures::TryStreamExt;
+
+use crate::models::ModelSource;
+use crate::wire::{JobApp, JobScope};
+
+/// How a host reaches one app's content store and Lance database. Credentials are the host's
+/// business; the env decides what the bot may ask for.
+#[async_trait]
+pub trait AppAccess: Send + Sync {
+    async fn store(&self, app_id: &str) -> Result<FlowLikeStore>;
+    async fn connection(&self, app_id: &str) -> Result<Connection>;
+}
+
+#[derive(Debug, Clone)]
+struct Rights {
+    files: bool,
+    tables: bool,
+    reader: ColumnReader,
+}
+
+impl From<&JobApp> for Rights {
+    fn from(app: &JobApp) -> Self {
+        Self {
+            files: app.files,
+            tables: app.tables,
+            reader: match &app.column_attributes {
+                None => ColumnReader::Unrestricted,
+                Some(attributes) => ColumnReader::with_attributes(attributes),
+            },
+        }
+    }
+}
+
+/// The server's [`ToolEnv`]: files and tables through [`AppAccess`], models through
+/// [`ModelSource`]. Reads follow the per-app rights of the bot's owner; writes reach the
+/// workspace only.
+pub struct HostEnv {
+    scope: Scope,
+    limits: Limits,
+    workspace: String,
+    rights: BTreeMap<String, Rights>,
+    access: Arc<dyn AppAccess>,
+    models: Arc<dyn ModelSource>,
+    sessions: Option<Arc<dyn SessionCache>>,
+    allow_expensive_documents: bool,
+    object_writes: bool,
+    notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
+    scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
+    mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
+}
+
+impl HostEnv {
+    pub fn new(
+        workspace: &str,
+        job_scope: &JobScope,
+        access: Arc<dyn AppAccess>,
+        models: Arc<dyn ModelSource>,
+    ) -> Self {
+        Self {
+            scope: job_scope.to_scope(workspace),
+            limits: Limits::default(),
+            workspace: workspace.to_string(),
+            rights: job_scope
+                .apps
+                .iter()
+                .map(|app| (app.app_id.clone(), Rights::from(app)))
+                .collect(),
+            access,
+            models,
+            sessions: None,
+            allow_expensive_documents: false,
+            object_writes: true,
+            notifier: None,
+            scheduler: None,
+            mail: None,
+        }
+    }
+
+    pub fn with_sessions(mut self, sessions: Arc<dyn SessionCache>) -> Self {
+        self.sessions = Some(sessions);
+        self
+    }
+
+    pub fn with_expensive_documents(mut self, allowed: bool) -> Self {
+        self.allow_expensive_documents = allowed;
+        self
+    }
+
+    /// Whether `write_workspace` stores objects. A host that keeps object writes out of its
+    /// process turns it off; the tools that need it fail with a plain error.
+    pub fn with_object_writes(mut self, allowed: bool) -> Self {
+        self.object_writes = allowed;
+        self
+    }
+
+    pub fn with_notifier(mut self, notifier: Arc<dyn flow_like_bot_tools::OwnerNotifier>) -> Self {
+        self.notifier = Some(notifier);
+        self
+    }
+
+    pub fn with_scheduler(mut self, scheduler: Arc<dyn flow_like_bot_tools::Scheduler>) -> Self {
+        self.scheduler = Some(scheduler);
+        self
+    }
+
+    pub fn with_mail(mut self, mail: Arc<dyn flow_like_bot_tools::email::MailBackend>) -> Self {
+        self.mail = Some(mail);
+        self
+    }
+
+    pub fn with_limits(mut self, limits: Limits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    fn is_workspace(&self, app_id: &str) -> bool {
+        self.workspace == app_id
+    }
+
+    fn files_allowed(&self, app_id: &str) -> Result<()> {
+        if self.is_workspace(app_id) || self.rights.get(app_id).is_some_and(|rights| rights.files) {
+            return Ok(());
+        }
+        Err(anyhow!(
+            "The owner may not read the files of app '{app_id}'"
+        ))
+    }
+
+    fn tables_rights(&self, app_id: &str) -> Result<Rights> {
+        if self.is_workspace(app_id) {
+            return Ok(Rights {
+                files: true,
+                tables: true,
+                reader: ColumnReader::Unrestricted,
+            });
+        }
+        self.rights
+            .get(app_id)
+            .filter(|rights| rights.tables)
+            .cloned()
+            .ok_or_else(|| anyhow!("The owner may not read the tables of app '{app_id}'"))
+    }
+
+    async fn base(&self, app_id: &str) -> Result<(FlowLikeStore, Path)> {
+        self.files_allowed(app_id)?;
+        let store = self.access.store(app_id).await?;
+        let base = store.construct_upload(app_id, "").await?;
+        Ok((store, base))
+    }
+}
+
+#[async_trait]
+impl ToolEnv for HostEnv {
+    fn environment(&self) -> Environment {
+        Environment::Server
+    }
+
+    fn scope(&self) -> &Scope {
+        &self.scope
+    }
+
+    fn limits(&self) -> &Limits {
+        &self.limits
+    }
+
+    fn sessions(&self) -> Option<Arc<dyn SessionCache>> {
+        self.sessions.clone()
+    }
+
+    fn mail(&self) -> Option<Arc<dyn flow_like_bot_tools::email::MailBackend>> {
+        self.mail.clone()
+    }
+
+    fn scheduler(&self) -> Option<Arc<dyn flow_like_bot_tools::Scheduler>> {
+        self.scheduler.clone()
+    }
+
+    fn notifier(&self) -> Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>> {
+        self.notifier.clone()
+    }
+
+    fn allow_expensive_documents(&self) -> bool {
+        self.allow_expensive_documents
+    }
+
+    async fn read_file(
+        &self,
+        app_id: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<Option<FileData>> {
+        let (store, base) = self.base(app_id).await?;
+        let location = join_object_path(&base, path);
+        let generic = store.as_generic();
+        let meta = match generic.head(&location).await {
+            Ok(meta) => meta,
+            Err(flow_like_storage::object_store::Error::NotFound { .. }) => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        let wanted = meta.size.min(max_bytes);
+        let bytes = if wanted == 0 {
+            Bytes::new()
+        } else {
+            generic.get_range(&location, 0..wanted).await?
+        };
+        Ok(Some(FileData {
+            bytes,
+            size: meta.size,
+            mime: Some(flow_like_bot_tools::files::guess_mime(path)),
+            classification: None,
+        }))
+    }
+
+    async fn stat_file(&self, app_id: &str, path: &str) -> Result<Option<FileMeta>> {
+        let (store, base) = self.base(app_id).await?;
+        let location = join_object_path(&base, path);
+        match store.as_generic().head(&location).await {
+            Ok(meta) => Ok(Some(FileMeta {
+                bytes: meta.size,
+                mime: Some(flow_like_bot_tools::files::guess_mime(path)),
+            })),
+            Err(flow_like_storage::object_store::Error::NotFound { .. }) => Ok(None),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    async fn list_files(&self, app_id: &str, prefix: &str, limit: usize) -> Result<Vec<FileEntry>> {
+        let (store, base) = self.base(app_id).await?;
+        let start = join_object_path(&base, prefix);
+        let mut stream = store.as_generic().list(Some(&start));
+        let mut entries = Vec::new();
+        while entries.len() < limit {
+            let Some(meta) = stream.try_next().await? else {
+                break;
+            };
+            let Some(relative) = relative_to(&base, &meta.location) else {
+                continue;
+            };
+            entries.push(FileEntry {
+                mime: Some(flow_like_bot_tools::files::guess_mime(&relative)),
+                path: relative,
+                bytes: meta.size,
+                modified_ms: Some(meta.last_modified.timestamp_millis()),
+            });
+        }
+        Ok(entries)
+    }
+
+    async fn write_workspace(&self, path: &str, data: Bytes, _mime: &str) -> Result<()> {
+        if !self.object_writes {
+            return Err(anyhow!(
+                "This host does not store files; the call belongs on the executor"
+            ));
+        }
+        let (store, base) = self.base(&self.workspace).await?;
+        let location = join_object_path(&base, path);
+        store
+            .as_generic()
+            .put(&location, PutPayload::from_bytes(data))
+            .await?;
+        Ok(())
+    }
+
+    async fn message_attachment(&self, _seq: u64, _part: &str) -> Result<Option<Attachment>> {
+        Ok(None)
+    }
+
+    async fn app_tables(&self, app_id: &str) -> Result<AppTables> {
+        let rights = self.tables_rights(app_id)?;
+        Ok(AppTables {
+            connection: self.access.connection(app_id).await?,
+            writable: self.is_workspace(app_id),
+            reader: rights.reader,
+        })
+    }
+
+    async fn model(&self, role: ModelRole) -> Result<Arc<dyn ModelLogic>> {
+        self.models.model(role).await
+    }
+
+    async fn embedder(&self) -> Result<Option<Arc<dyn KnowledgeEmbedder>>> {
+        self.models.embedder().await
+    }
+
+    async fn secret(&self, _name: &str) -> Result<Option<String>> {
+        Ok(None)
+    }
+}
+
+fn relative_to(base: &Path, location: &Path) -> Option<String> {
+    let base_parts: Vec<_> = base.parts().collect();
+    let parts: Vec<_> = location.parts().collect();
+    if parts.len() <= base_parts.len() || parts[..base_parts.len()] != base_parts[..] {
+        return None;
+    }
+    let relative: Path = parts[base_parts.len()..].iter().cloned().collect();
+    Some(display_object_path(&relative))
+}

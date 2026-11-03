@@ -210,6 +210,79 @@ fn tool_call_has_read_only_override(spec: &PlatformToolSpec, args: &Value) -> bo
     false
 }
 
+/// Title of the approval on a bot's `database_tool`. Bots reach write operations only in their
+/// own workspace, where changes need no approval except dropping a table.
+pub const BOT_DATABASE_APPROVAL_TITLE: &str = "Approve dropping a workspace table";
+
+pub const BOT_ARGS_APPROVAL_TITLE: &str = "Approve outside access";
+
+fn path_is_set(args: &Value, path: &str) -> bool {
+    let value = path
+        .split('.')
+        .try_fold(args, |node, part| node.get(part));
+    match value {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => false,
+        Some(Value::String(text)) => !text.trim().is_empty(),
+        Some(Value::Array(items)) => !items.is_empty(),
+        Some(Value::Object(fields)) => !fields.is_empty(),
+        Some(_) => true,
+    }
+}
+
+fn sets_approval_arg(tool: &str, args: &Value) -> bool {
+    flow_like_bot_tools::spec(tool).is_some_and(|spec| {
+        spec.approval_args
+            .iter()
+            .any(|path| path_is_set(args, path))
+    })
+}
+
+fn has_approval_title(spec: &PlatformToolSpec, wanted: &str) -> bool {
+    matches!(spec.approval, ToolApprovalSpec::Mutating { title, .. } if title == wanted)
+}
+
+fn bot_workspace_write_is_unprompted(spec: &PlatformToolSpec, args: &Value) -> bool {
+    if spec.name == "database_tool" {
+        return has_approval_title(spec, BOT_DATABASE_APPROVAL_TITLE)
+            && spec_arg_str(args, "operation", "operation") != "delete_table";
+    }
+    has_approval_title(spec, BOT_ARGS_APPROVAL_TITLE) && !sets_approval_arg(spec.name, args)
+}
+
+fn network_hosts(args: &Value) -> Vec<String> {
+    let mut hosts: Vec<String> = args
+        .get("network_hosts")
+        .and_then(Value::as_array)
+        .map(|hosts| {
+            hosts
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|host| host.trim().to_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
+    hosts.sort();
+    hosts.dedup();
+    hosts
+}
+
+fn outside_access_message(args: &Value) -> String {
+    format!(
+        "The bot wants to run code that may reach these hosts over the network: {}.",
+        network_hosts(args).join(", ")
+    )
+}
+
+/// Approval of a bot tool whose spec lists `approval_args`: it asks only when a call sets one of
+/// them, and a standing grant covers one destination (see `approval_session_key`).
+pub fn bot_args_approval() -> ToolApprovalSpec {
+    ToolApprovalSpec::Mutating {
+        title: BOT_ARGS_APPROVAL_TITLE,
+        message: outside_access_message,
+        timing: ToolApprovalTiming::BeforeExecution,
+    }
+}
+
 /// Per-call "don't ask again this session" key. It defaults to the tool name, but a call that
 /// destroys one irreplaceable target scopes its memory to that target: approving one table drop
 /// must never authorize dropping every other table for the rest of the session.
@@ -281,6 +354,9 @@ fn approval_session_key(spec: &PlatformToolSpec, args: &Value) -> String {
         };
         return format!("apply_home_layout:{profile_scope}");
     }
+    if spec.name == "code_run" {
+        return format!("code_run:network:{}", network_hosts(args).join(","));
+    }
     if spec.name != "database_tool" {
         return spec.name.to_string();
     }
@@ -307,7 +383,8 @@ pub fn resolve_tool_approval_timing(
     spec: &PlatformToolSpec,
     args: &Value,
 ) -> Option<ToolApprovalTiming> {
-    if tool_call_has_read_only_override(spec, args) {
+    if tool_call_has_read_only_override(spec, args) || bot_workspace_write_is_unprompted(spec, args)
+    {
         None
     } else {
         spec.approval.timing()
@@ -1213,7 +1290,7 @@ Navigation is a non-destructive UI change and runs without an approval dialog. P
                     "type": "object",
                     "properties": {
                         "view": { "type": "string", "description": "Logical view id: 'home', 'apps', 'store', 'settings', 'profile', 'learn', or 'app' (an app's use surface, requires app_id)." },
-                        "route": { "type": "string", "description": "Explicit router path — ONLY these exist: '/', '/library', '/store', '/settings', '/learn', '/chat', '/use?id=<app>' (an app's pages) or '/flow?id=<board>&app=<app>' (a board). Anything else is invalid." },
+                        "route": { "type": "string", "description": "Explicit router path — ONLY these exist: '/', '/library', '/store', '/settings', '/learn', '/bots', '/use?id=<app>' (an app's pages) or '/flow?id=<board>&app=<app>' (a board). Anything else is invalid." },
                         "app_id": { "type": "string", "description": "App id, when the target view is app-scoped." },
                         "page_route": { "type": "string", "description": "Route path of the app page to open inside the app's use surface (from its route mapping), e.g. '/briefing'. Only with app_id." }
                     },
@@ -2626,6 +2703,26 @@ GeoJSON and geometry:
             timing: ToolApprovalTiming::BeforeExecution,
         },
         timeout_secs: 120,
+    }
+}
+
+fn bot_database_drop_message(args: &Value) -> String {
+    format!(
+        "The bot wants to PERMANENTLY DROP its workspace table '{}', including every row and the schema. This cannot be undone.",
+        spec_arg_str(args, "table_name", "tableName")
+    )
+}
+
+/// `database_tool` as a bot with a workspace runs it: its own tables change without asking, a
+/// table drop asks.
+pub fn bot_workspace_database_tool_spec() -> PlatformToolSpec {
+    PlatformToolSpec {
+        approval: ToolApprovalSpec::Mutating {
+            title: BOT_DATABASE_APPROVAL_TITLE,
+            message: bot_database_drop_message,
+            timing: ToolApprovalTiming::BeforeExecution,
+        },
+        ..data_studio_database_tool_spec()
     }
 }
 

@@ -19,12 +19,12 @@ portable-metadata = ["flow-like-catalog/portable-metadata"]
 # Compatibility aliases retain their historical all-implementation semantics.
 execute = ["flow-like-catalog/execute"]
 all-execute = ["flow-like-catalog/all-execute"]
-server-execute = ["flow-like-catalog/server-execute"]
+server-execute = ["flow-like-catalog/server-execute", "code-sandbox", "bot-tools-heavy"]
 all-server-execute = ["flow-like-catalog/all-server-execute"]
 # Product-oriented bundles make the runtime capability selection obvious.
-server = ["flow-like-catalog/server"]
+server = ["flow-like-catalog/server", "code-sandbox", "bot-tools-heavy"]
 server-local-ml = ["flow-like-catalog/server-local-ml"]
-executor = ["flow-like-catalog/executor"]
+executor = ["flow-like-catalog/executor", "code-sandbox", "bot-tools-heavy"]
 executor-local-ml = ["flow-like-catalog/executor-local-ml"]
 local-runtime = ["flow-like-catalog/local-runtime"]
 local-runtime-ml = ["flow-like-catalog/local-runtime-ml"]
@@ -40,6 +40,11 @@ training-onnx-export = ["training-cpu", "flow-like-catalog/training-onnx-export"
 sensor-opcua = ["flow-like-catalog/sensor-opcua"]
 sensor-genicam = ["flow-like-catalog/sensor-genicam"]
 tauri = ["flow-like-catalog/tauri"]
+code-sandbox = ["dep:flow-like-catalog-code-interpreter", "flow-like-bot-tools?/code"]
+# `POST /tool`: bot tool jobs. The light set (files, knowledge, data on Lance tables) needs only this;
+# `bot-tools-heavy` adds documents, file sources and the database drivers.
+bot-tools = ["dep:flow-like-bot-tools", "dep:flow-like-bot-tools-host", "dep:async-trait"]
+bot-tools-heavy = ["bot-tools", "flow-like-bot-tools/documents", "flow-like-bot-tools/connectors"]
 # Cloud channel transports; each executor binary enables exactly its own cloud.
 channel-aws = ["flow-like-channels/aws"]
 channel-azure = ["flow-like-channels/azure"]
@@ -54,7 +59,11 @@ flow-like-catalog.workspace = true
 flow-like-wasm = { workspace = true, features = ["model"] }
 flow-like-channels.workspace = true
 flow-like-catalog-data = { workspace = true, optional = true, features = ["execute"] }
+flow-like-catalog-code-interpreter = { workspace = true, optional = true, features = ["execute"] }
 flow-like-catalog-std-ui = { workspace = true, optional = true, features = ["execute"] }
+flow-like-bot-tools = { workspace = true, optional = true, features = ["data"] }
+flow-like-bot-tools-host = { workspace = true, optional = true }
+async-trait = { workspace = true, optional = true }
 
 blake3.workspace = true
 moka.workspace = true

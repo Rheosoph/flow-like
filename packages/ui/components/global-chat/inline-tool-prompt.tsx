@@ -8,7 +8,8 @@ import {
 	ShieldQuestionIcon,
 	SparklesIcon,
 } from "lucide-react";
-import { useState } from "react";
+import { usePathname } from "next/navigation";
+import { useCallback, useState } from "react";
 import { Button, Checkbox, cn, useBackend, useInvoke } from "../../index";
 import {
 	type AskUserForm,
@@ -16,13 +17,19 @@ import {
 	initialAskUserDrafts,
 	isAskUserFormComplete,
 } from "../../lib/ask-user";
-import type { GlobalToolPrompt } from "../../state/global-chat/global-chat-store";
+import {
+	type GlobalToolPrompt,
+	useGlobalChatStore,
+} from "../../state/global-chat/global-chat-store";
+import { restoreGlobalChatConversation } from "../../state/global-chat/global-chat-stream";
+import { BOTS_ROUTE } from "../bots-tab/dock-selection";
 import {
 	Collapsible,
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from "../ui/collapsible";
 import { AskUserQuestions } from "./ask-user-questions";
+import { useGlobalChatBot } from "./use-global-chat-bot";
 
 const EMPTY_ASK: AskUserForm = { questions: [], batched: false };
 
@@ -102,6 +109,105 @@ function ApprovalDetails({ description }: { description: string }) {
 				</div>
 			</CollapsibleContent>
 		</Collapsible>
+	);
+}
+
+function RememberedInApp({
+	name,
+	appId,
+}: Readonly<{ name: string; appId: string }>) {
+	const { t } = useTranslation("chat");
+	const backend = useBackend();
+	const meta = useInvoke(backend.appState.getAppMeta, backend.appState, [
+		appId,
+	]);
+	return t(
+		"dontAskAgainForBotInApp",
+		"Don't ask again for {{name}} in {{app}}",
+		{
+			name,
+			app: meta.data?.name || t("thisAppInApproval", "this app"),
+		},
+	);
+}
+
+/**
+ * "Don't ask again" for what it covers: the asking run's bot (every Flux chat shares one scope) and,
+ * for a tool that acts in one app, that app.
+ */
+function RememberApproval({
+	prompt,
+	remember,
+	onRememberChange,
+}: Readonly<{
+	prompt: GlobalToolPrompt;
+	remember: boolean;
+	onRememberChange: (remember: boolean) => void;
+}>) {
+	const { t } = useTranslation("chat");
+	const { name } = useGlobalChatBot(prompt.conversationId);
+	return (
+		<label
+			htmlFor="inline-tool-prompt-remember"
+			className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"
+		>
+			<Checkbox
+				id="inline-tool-prompt-remember"
+				checked={remember}
+				onCheckedChange={(checked) => onRememberChange(checked === true)}
+			/>
+			{prompt.rememberAppId ? (
+				<RememberedInApp name={name} appId={prompt.rememberAppId} />
+			) : (
+				t("dontAskAgainForBot", "Don't ask again for {{name}}", { name })
+			)}
+		</label>
+	);
+}
+
+/**
+ * In place of a card that belongs to another chat: who waits for an answer, and the way to the
+ * chat whose run asks. On the Bots tab its dock follows; elsewhere the overlay shows it.
+ */
+export function ToolPromptElsewhere({
+	conversationId,
+}: Readonly<{ conversationId: string }>) {
+	const { t } = useTranslation("chat");
+	const asking = useGlobalChatBot(conversationId);
+	const pathname = usePathname();
+	const openAskingChat = useCallback(async () => {
+		const shown = await restoreGlobalChatConversation(conversationId).catch(
+			() => false,
+		);
+		if (shown && pathname === BOTS_ROUTE) {
+			useGlobalChatStore.getState().requestReveal();
+		}
+	}, [conversationId, pathname]);
+	return (
+		<div
+			className="flex w-full items-center gap-3 rounded-2xl border bg-card px-4 py-3 shadow-floating"
+			style={{ borderColor: "var(--fl-chat-rule-strong, var(--border))" }}
+		>
+			<span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
+				<ShieldQuestionIcon className="size-4" aria-hidden />
+			</span>
+			<p className="min-w-0 flex-1 text-sm">
+				{t(
+					"toolPromptInOtherChat",
+					"{{name}} is waiting for your answer in another chat.",
+					{ name: asking.name },
+				)}
+			</p>
+			<Button
+				type="button"
+				variant="outline"
+				size="sm"
+				className="rounded-full outline-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
+				onClick={() => void openAskingChat()}
+			>
+				{t("openAskingChat", "Open chat")}
+			</Button>
+		</div>
 	);
 }
 
@@ -195,17 +301,11 @@ export function InlineToolPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 				style={{ borderColor: "var(--fl-chat-rule, var(--border))" }}
 			>
 				{isApproval && prompt.rememberable !== false ? (
-					<label
-						htmlFor="inline-tool-prompt-remember"
-						className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground"
-					>
-						<Checkbox
-							id="inline-tool-prompt-remember"
-							checked={remember}
-							onCheckedChange={(checked) => setRemember(checked === true)}
-						/>
-						{t("donapostAskAgainThisSession", "Don't ask again this session")}
-					</label>
+					<RememberApproval
+						prompt={prompt}
+						remember={remember}
+						onRememberChange={setRemember}
+					/>
 				) : (
 					<span />
 				)}

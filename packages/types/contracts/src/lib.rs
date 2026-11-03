@@ -11,6 +11,22 @@ pub mod storage;
 #[cfg(feature = "data-classification")]
 pub mod data_classification;
 
+#[cfg(feature = "bot")]
+pub mod bot;
+
+#[cfg(feature = "inbox")]
+pub mod bot_message;
+#[cfg(feature = "inbox")]
+pub mod bot_notify;
+#[cfg(feature = "bot-task")]
+pub mod bot_task;
+#[cfg(feature = "inbox")]
+pub mod bot_turn;
+#[cfg(feature = "inbox")]
+pub mod inbox;
+#[cfg(feature = "inbox")]
+pub mod tool_grant;
+
 #[cfg(feature = "geometry")]
 pub mod geometry;
 
@@ -18,12 +34,12 @@ pub mod geometry;
 pub mod cache;
 #[cfg(feature = "channel")]
 pub mod channel;
-#[cfg(feature = "realtime")]
-pub mod realtime;
 #[cfg(feature = "dispatch")]
 pub mod dispatch;
 #[cfg(feature = "maintenance")]
 pub mod maintenance;
+#[cfg(feature = "realtime")]
+pub mod realtime;
 
 /// Header carrying registration-level credentials on app-connection proxy requests.
 pub const PROXY_EVENT_AUTHORIZATION_HEADER: &str = "x-flow-like-event-authorization";

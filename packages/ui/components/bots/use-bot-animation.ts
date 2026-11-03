@@ -1,6 +1,6 @@
 "use client";
 
-import { type RefObject, useEffect, useState } from "react";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import {
 	BOT_TIMING,
 	type BotGaze,
@@ -8,10 +8,11 @@ import {
 	getPointerGaze,
 	getPoseGaze,
 } from "./animation";
-import type { BotPose } from "./types";
+import type { BotExpression, BotPose } from "./types";
 
 export interface UseBotAnimationOptions {
 	pose?: BotPose;
+	expression?: BotExpression;
 	gx?: number;
 	gy?: number;
 	animated?: boolean;
@@ -32,12 +33,21 @@ const REST: RigState = {
 	emoteVisible: false,
 };
 
+const NO_IDLE_HOP = new Set<BotExpression>([
+	"sad",
+	"concerned",
+	"angry",
+	"oops",
+	"focused",
+]);
+
 function between([min, max]: readonly [number, number]): number {
 	return min + Math.random() * (max - min);
 }
 
 export function useBotAnimation({
 	pose = "idle",
+	expression = "neutral",
 	gx,
 	gy,
 	animated = true,
@@ -47,6 +57,8 @@ export function useBotAnimation({
 	const [canAnimate, setCanAnimate] = useState(false);
 	const [rig, setRig] = useState<RigState>(REST);
 	const [pointerGaze, setPointerGaze] = useState<BotGaze>(REST.gaze);
+	const [reaction, setReaction] = useState<BotExpression>();
+	const previousExpression = useRef(expression);
 	const motionEnabled = animated && canAnimate;
 
 	useEffect(() => {
@@ -80,6 +92,27 @@ export function useBotAnimation({
 			document.removeEventListener("visibilitychange", update);
 		};
 	}, [elementRef, animated]);
+
+	useEffect(() => {
+		const changed = previousExpression.current !== expression;
+		previousExpression.current = expression;
+		setReaction(undefined);
+		if (
+			!changed ||
+			!motionEnabled ||
+			pose === "sleep" ||
+			pose === "blink" ||
+			expression === "neutral" ||
+			expression === "focused"
+		)
+			return;
+		setReaction(expression);
+		const timer = setTimeout(
+			() => setReaction(undefined),
+			BOT_TIMING.reactionMs,
+		);
+		return () => clearTimeout(timer);
+	}, [expression, motionEnabled, pose]);
 
 	useEffect(() => {
 		setRig(REST);
@@ -187,11 +220,17 @@ export function useBotAnimation({
 
 	return {
 		gaze,
+		reaction: motionEnabled ? reaction : undefined,
 		blinking:
 			pose === "blink" ||
 			pose === "sleep" ||
 			(motionEnabled && (pose === "idle" || pose === "track") && rig.blinking),
-		hopping: motionEnabled && pose === "idle" && rig.hopping,
+		hopping:
+			motionEnabled &&
+			pose === "idle" &&
+			!reaction &&
+			!NO_IDLE_HOP.has(expression) &&
+			rig.hopping,
 		emoteVisible: !motionEnabled || pose !== "idle" || rig.emoteVisible,
 		motionEnabled,
 	};

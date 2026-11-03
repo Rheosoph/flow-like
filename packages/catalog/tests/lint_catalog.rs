@@ -812,6 +812,7 @@ fn flowscript_receivers_name_existing_inputs() {
         "utils_hash_ahash",
         "utils_hash_blake3",
         "utils_types_fallback",
+        "utils_types_is_null",
         "utils_types_type_of",
     ];
     let mut violations = Vec::new();

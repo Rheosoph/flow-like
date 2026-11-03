@@ -9,6 +9,9 @@ pub mod assistant;
 pub mod behavioral_evaluation;
 pub mod behavioral_state;
 pub mod benchmark_cases;
+pub mod bot_run;
+pub mod bot_talk;
+mod capability_tools;
 mod context;
 mod declarations;
 pub(crate) use declarations::opened_alias_reaches_other;
@@ -20,6 +23,9 @@ pub mod ir;
 pub mod ir_tools;
 pub mod manifest;
 pub mod memory;
+#[cfg(feature = "flow-runtime")]
+pub mod memory_open;
+pub mod memory_tools;
 pub mod platform;
 mod provider;
 pub mod public_web;
@@ -28,6 +34,7 @@ pub mod session;
 pub mod stream;
 #[cfg(test)]
 mod tool_schema_tests;
+pub mod tool_grants;
 pub mod tool_spec;
 mod tools;
 mod typed_ir_parse;
@@ -44,6 +51,14 @@ pub use assistant::{
 pub use behavioral_evaluation::*;
 pub use behavioral_state::*;
 pub use benchmark_cases::workflow_benchmark_cases;
+pub use bot_run::{
+    BotRunContext, BotToolHost, BotToolset, FLUX_BOT_ID, FLUX_BOT_NAME, GENERAL_BOT_DESCRIPTION,
+    GENERAL_BOT_ID, GENERAL_BOT_NAME, bot_persona_section, bot_platform_context, bot_system_prompt,
+    find_bot_tool_spec, resolve_bot_model, resolve_host_completion_model, run_bot_chat,
+    run_bot_chat_with_talk, runnable_completion_model,
+};
+pub use memory_tools::{HeadlessMemory, MemoryHandle, MemoryTurnSource, memory_tool_specs};
+pub use capability_tools::{HostTools, bot_tool_spec, linked_tool_names, tool_outcome_output};
 pub use context::{
     BoardLayoutContext, EdgeContext, GraphContext, LayerCacheContext, LayerContext, NodeContext,
     NodeLayoutContext, PinContext, VariableContext, prepare_context, prepare_layout_context,

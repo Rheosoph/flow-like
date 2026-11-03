@@ -155,7 +155,11 @@ describe("InlineStepGroup during a live turn", () => {
 		);
 		const trigger = container.querySelector("button");
 		expect(trigger?.getAttribute("data-state")).toBe("closed");
-		expect(trigger?.textContent?.match(/github\.com/g)).toHaveLength(1);
+		const sites = Array.from(
+			trigger?.querySelectorAll("[data-activity-site]") ?? [],
+		).map((site) => site.getAttribute("title"));
+		expect(sites).toEqual(["github.com"]);
+		expect(trigger?.textContent).toContain("1 website");
 		expect(container.querySelector("a")).toBeNull();
 	});
 

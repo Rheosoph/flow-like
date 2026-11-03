@@ -72,6 +72,7 @@ impl NodeLogic for GetVariable {
             }
         }
 
+        context.override_pin_value_if_active(value_pin.id(), &value_cloned);
         value_pin.set_value(value_cloned).await;
         Ok(())
     }
@@ -293,5 +294,42 @@ mod tests {
         let logs = json::to_string(&context.trace.logs).unwrap();
         assert!(logs.contains(marker));
         assert!(!logs.contains("(hidden)"));
+    }
+
+    #[tokio::test]
+    async fn function_invocations_keep_local_getter_outputs_isolated() {
+        let variable = Variable::new("Summaries", VariableType::String, ValueType::HashMap);
+        let variable_id = variable.id.clone();
+        let parent = context_with_variable(variable.clone(), false).await;
+        let variables = HashMap::from([(variable_id.clone(), variable)]);
+        let mut first = parent
+            .create_function_context(&parent.node, &variables)
+            .await;
+        let mut second = parent
+            .create_function_context(&parent.node, &variables)
+            .await;
+        let first_value = json!({ "first.txt": "First summary" });
+        let second_value = json!({ "second.txt": "Second summary" });
+        first
+            .set_variable_value(&variable_id, first_value.clone())
+            .await
+            .unwrap();
+        second
+            .set_variable_value(&variable_id, second_value.clone())
+            .await
+            .unwrap();
+
+        // Both calls share the getter pin; the second write must preserve the first call's value.
+        GetVariable::new().run(&mut first).await.unwrap();
+        GetVariable::new().run(&mut second).await.unwrap();
+
+        assert_eq!(
+            first.evaluate_pin_raw("value_ref").await.unwrap(),
+            first_value
+        );
+        assert_eq!(
+            second.evaluate_pin_raw("value_ref").await.unwrap(),
+            second_value
+        );
     }
 }

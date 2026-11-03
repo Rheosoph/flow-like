@@ -8,6 +8,7 @@
 
 use super::authority::{RunAsDenial, RunAsVerdict, run_as_authority};
 use super::service::sink_types;
+use super::telegram_updates;
 use crate::{
     entity::{
         event, event_sink, execution_run, pat,
@@ -2212,12 +2213,12 @@ pub struct TelegramQueryParams {
         ("secret_token" = Option<String>, Query, description = "Telegram secret token")
     ),
     responses(
-        (status = 200, description = "Webhook received and processing. With `triggered: false` and no run: left to the device that runs this bot, or not run because the user the event runs as may no longer run it (the event is paused) or its project is not active", body = TriggerResponse),
+        (status = 200, description = "Webhook received and processing. With `triggered: false` and no run: left to the device that runs this bot, an update that was already handled, a chat outside the event's allow or deny list, or not run because the user the event runs as may no longer run it (the event is paused) or its project is not active", body = TriggerResponse),
         (status = 401, description = "Invalid or missing secret token, or the trigger has no secret token configured"),
         (status = 403, description = "Request not from Telegram servers"),
         (status = 404, description = "Webhook not found or inactive"),
         (status = 409, description = "OAUTH_RECONNECT_REQUIRED: a sign-in saved with the event must be connected again before it can run"),
-        (status = 503, description = "The user the event runs as cannot be checked right now, or changed while the update was handled; Telegram retries")
+        (status = 503, description = "The user the event runs as cannot be checked right now, or changed while the update was handled, or the same update is being handled right now; Telegram retries")
     )
 )]
 #[tracing::instrument(
@@ -2338,6 +2339,44 @@ pub async fn trigger_telegram(
         }
     } else {
         None
+    };
+
+    let null = serde_json::Value::Null;
+    let update = payload.as_ref().unwrap_or(&null);
+    if !telegram_updates::chat_admitted(&event.config, update) {
+        tracing::info!(
+            event_id = %event_id,
+            "Telegram update from a chat outside the event's lists; not dispatched"
+        );
+        return Ok(telegram_not_dispatched(
+            "This chat may not start runs of this event",
+        ));
+    }
+
+    let claim = match telegram_updates::update_id(update) {
+        Some(update_id) => match state.cache.platform().await {
+            Ok(cache) => match telegram_updates::claim(cache, &event_id, update_id).await {
+                Ok(telegram_updates::Claim::Fresh(claim)) => Some(claim),
+                Ok(telegram_updates::Claim::Duplicate) => {
+                    tracing::info!(event_id = %event_id, update_id, "Duplicate Telegram update");
+                    return Ok(telegram_not_dispatched("This update was already handled"));
+                }
+                Ok(telegram_updates::Claim::InFlight) => {
+                    return Err(ApiError::service_unavailable(
+                        "This Telegram update is being handled; Telegram delivers it again",
+                    ));
+                }
+                Err(error) => {
+                    tracing::warn!(%error, event_id = %event_id, "Telegram update claim failed; dispatching without one");
+                    None
+                }
+            },
+            Err(error) => {
+                tracing::warn!(%error, event_id = %event_id, "Platform cache unavailable; Telegram updates are not deduplicated");
+                None
+            }
+        },
+        None => None,
     };
 
     let (run_as_result, wasm_packages) = tokio::join!(
@@ -2521,6 +2560,10 @@ pub async fn trigger_telegram(
             tracing::error!(%run_id, %audit_error, "Failed to audit webhook dispatch rejection");
         }
         return Err(ApiError::from(error));
+    }
+
+    if let Some(claim) = claim {
+        claim.settle().await;
     }
 
     // Return immediately - Telegram expects fast acknowledgement
@@ -3119,6 +3162,19 @@ fn telegram_refused(refusal: &ApiError) -> Response {
 /// command's sender sees, and no run.
 fn discord_refused(refusal: &ApiError) -> Response {
     discord_notice(refusal.public_message().unwrap_or("This event is paused"))
+}
+
+/// Telegram's answer for an update that starts no run and must not come again: a success.
+fn telegram_not_dispatched(message: &str) -> Response {
+    (
+        StatusCode::OK,
+        Json(TriggerResponse {
+            triggered: false,
+            run_id: None,
+            message: message.to_owned(),
+        }),
+    )
+        .into_response()
 }
 
 fn telegram_unauthorized(message: &str) -> Response {
@@ -4284,6 +4340,32 @@ mod tests {
         assert!(
             positions.windows(2).all(|pair| pair[0] < pair[1]),
             "{name} must run {needles:?} in this order"
+        );
+    }
+
+    /// An update is filtered by the event's chat lists and claimed against a repeat only once the
+    /// caller is authenticated, so nobody who lacks the secret can use up an `update_id`, and
+    /// before any run exists. A claim is settled after the run is dispatched; one that never
+    /// settles is released when it drops.
+    #[test]
+    fn the_telegram_door_filters_and_claims_an_update_after_authenticating_it() {
+        let source = include_str!("trigger.rs");
+        let telegram = handler(source, "trigger_telegram");
+        in_order(
+            telegram,
+            "trigger_telegram",
+            &[
+                "door_secret(&sink, &event.config)",
+                "telegram_secret_matches(",
+                "if bot_on_device(&state, &sink).await? {",
+                "axum::body::to_bytes(",
+                "telegram_updates::chat_admitted(&event.config, update)",
+                "telegram_updates::claim(cache, &event_id, update_id)",
+                "resolve_sink_run_as(&state, &sink)",
+                "run.insert(&state.db)",
+                "dispatch_async(request)",
+                "claim.settle().await",
+            ],
         );
     }
 

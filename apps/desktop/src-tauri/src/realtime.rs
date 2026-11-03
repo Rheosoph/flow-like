@@ -22,7 +22,7 @@ mod pacing;
 mod provider;
 mod routing;
 use pacing::{Pacing, Recovery};
-use provider::ProviderConnection;
+use provider::{ProviderConnection, Reconnect};
 use routing::{advance, aggregate, filter_response};
 
 const MAX_SESSIONS: usize = 32;
@@ -726,6 +726,7 @@ async fn run(session: Arc<Session>) {
         }
     };
     let max_wait = Arc::new(AtomicU64::new(MAX_REALTIME_TIMEOUT_MS));
+    let reconnect = Arc::new(Mutex::new(Reconnect::default()));
     let mut pacing = Pacing::default();
     let mut provider: Option<ProviderConnection> = None;
     let mut woken = false;
@@ -751,6 +752,7 @@ async fn run(session: Arc<Session>) {
                     client.clone(),
                     Arc::clone(&session),
                     Arc::clone(&max_wait),
+                    Arc::clone(&reconnect),
                 )
             });
         } else {
@@ -800,7 +802,14 @@ async fn run(session: Arc<Session>) {
                 pacing.succeeded(&request, &response, live, now);
                 set_state(&session, ConnectionState::Connected);
                 deliver(&session, &versions, &response, &request);
-                if let Some(until) = pacing.due(&request, &response, live, max_wait_ms, now) {
+                if let Some(until) = pacing.due(
+                    &request,
+                    &response,
+                    live,
+                    max_wait_ms,
+                    started.elapsed(),
+                    now,
+                ) {
                     let polled = (!live).then_some(&versions);
                     woken = idle(&session, until, &wake, &mut provider, polled).await;
                 }

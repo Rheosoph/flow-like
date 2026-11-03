@@ -7,10 +7,28 @@ use async_trait::async_trait;
 use std::{collections::BTreeMap, iter::Peekable, vec::IntoIter};
 
 /// How long a missing sequence of a running run may still arrive, measured from
-/// the event after it. An executor callback that wrote that event can still be
-/// writing the missing one until `POST /execution/events` hits its 120 s
-/// deadline; after that the executor gave up on the batch.
+/// the event after it, which the same callback may have written. The executor
+/// sends a batch at most `EXECUTOR_CALLBACK_RETRIES` (3) more times, abandons each
+/// attempt after `EXECUTOR_CALLBACK_TIMEOUT_MS` (5 s) and pauses 100 ms × attempt
+/// in between, so its last attempt starts within 15.6 s of the first. The API can
+/// still be writing an abandoned attempt until `POST /execution/events` hits its
+/// 120 s deadline; the remaining 14.4 s cover clock skew between API instances.
+/// A longer callback timeout, more retries, or Teams delivery callbacks (130 s
+/// per attempt) let a write land after this window, behind consumers already past it.
 pub const UNSETTLED_GAP_MS: i64 = 150_000;
+
+/// How far a lagging index may trail a write that landed. A sequence it still
+/// omits once its write could last have landed this long ago was never written.
+const INDEX_LAG_MS: i64 = 60_000;
+
+/// The sequences one page reads consistently to settle a gap: one DynamoDB
+/// BatchGetItem. A wider hole takes further polls until it lapses.
+const GAP_PROBE_SEQUENCES: i32 = 100;
+
+/// One executor callback at the default `EXECUTOR_MAX_BATCH_SIZE`. A terminal
+/// run is probed this far past its last event, so a batch the executor gave up
+/// on cannot hide a final batch the index does not show yet.
+const DROPPED_BATCH_SEQUENCES: i32 = 100;
 
 /// Strongly consistent point reads of a run's canonical events.
 #[async_trait]
@@ -40,10 +58,25 @@ pub async fn replay_prefix<S: ExecutionStateStore + ?Sized>(
     run_id: &str,
     cursor: ReplayCursor,
 ) -> Result<EventReplay, StateStoreError> {
-    let mut events = store.get_events(replay_page_query(run_id, cursor)).await?;
-    let has_more = events.len() > cursor.limit;
-    events.truncate(cursor.limit);
-    Ok(EventReplay { events, has_more })
+    Ok(prefix_page(
+        store.get_events(replay_page_query(run_id, cursor)).await?,
+        cursor.limit,
+    ))
+}
+
+/// Executors without stable event ids could store one sequence twice; the first copy wins.
+fn prefix_page(raw: Vec<ExecutionEventRecord>, limit: usize) -> EventReplay {
+    let has_more = raw.len() > limit;
+    let mut events: Vec<ExecutionEventRecord> = Vec::with_capacity(raw.len().min(limit));
+    for event in raw.into_iter().take(limit) {
+        if events
+            .last()
+            .is_none_or(|last| event.sequence > last.sequence)
+        {
+            events.push(event);
+        }
+    }
+    EventReplay { events, has_more }
 }
 
 /// A page from a store whose index of `visible` events can lag behind its
@@ -59,11 +92,11 @@ pub async fn replay_contiguous<R: ConsistentEventReads + ?Sized>(
     let more_indexed = visible.len() > cursor.limit;
     let mut visible = visible.into_iter().peekable();
     let mut page = Page::new(cursor);
-    while let Some(gap) = page.take_contiguous(&mut visible) {
-        let settled = gap.settled(cursor.terminal, now_ms);
-        if !page.fill_gap(reads, run_id, gap.until, settled).await? {
-            return Ok(page.into_replay(true));
-        }
+    if !page
+        .fill(reads, run_id, &mut visible, cursor.terminal, now_ms)
+        .await?
+    {
+        return Ok(page.into_replay(true));
     }
 
     let has_more = visible.peek().is_some() || more_indexed;
@@ -79,10 +112,26 @@ struct Gap {
     created_at: i64,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GapState {
+    /// A skipped sequence can still be written.
+    Open,
+    /// Every write landed, though the index may not show all of them yet.
+    Settled,
+    /// The index shows every write that landed, so the skipped sequences never will.
+    Lapsed,
+}
+
 impl Gap {
-    /// Whether the skipped sequences can no longer be written.
-    fn settled(&self, terminal: bool, now_ms: i64) -> bool {
-        terminal || now_ms.saturating_sub(self.created_at) >= UNSETTLED_GAP_MS
+    fn state(&self, terminal: bool, now_ms: i64) -> GapState {
+        let age = now_ms.saturating_sub(self.created_at);
+        if age >= UNSETTLED_GAP_MS + INDEX_LAG_MS {
+            GapState::Lapsed
+        } else if terminal || age >= UNSETTLED_GAP_MS {
+            GapState::Settled
+        } else {
+            GapState::Open
+        }
     }
 }
 
@@ -141,8 +190,36 @@ impl Page {
         None
     }
 
-    /// Reads the sequences before `until` that the index skipped. `false` when
-    /// one is still missing and can still arrive.
+    /// Takes the indexed events and crosses the gaps between them, reading at
+    /// most one consistently. `false` when the page stops at a gap.
+    async fn fill<R: ConsistentEventReads + ?Sized>(
+        &mut self,
+        reads: &R,
+        run_id: &str,
+        visible: &mut Peekable<IntoIter<ExecutionEventRecord>>,
+        terminal: bool,
+        now_ms: i64,
+    ) -> Result<bool, StateStoreError> {
+        let mut probed = false;
+        while let Some(gap) = self.take_contiguous(visible) {
+            match gap.state(terminal, now_ms) {
+                GapState::Lapsed => self.next = gap.until,
+                // One consistent read per page bounds a poll however wide the hole is.
+                _ if probed => return Ok(false),
+                state => {
+                    probed = true;
+                    let settled = state == GapState::Settled;
+                    if !self.fill_gap(reads, run_id, gap.until, settled).await? {
+                        return Ok(false);
+                    }
+                }
+            }
+        }
+        Ok(true)
+    }
+
+    /// Reads one probe's worth of the sequences before `until` that the index
+    /// skipped. `false` when one is still missing and can still arrive.
     async fn fill_gap<R: ConsistentEventReads + ?Sized>(
         &mut self,
         reads: &R,
@@ -150,10 +227,21 @@ impl Page {
         until: i32,
         settled: bool,
     ) -> Result<bool, StateStoreError> {
+        // A missing sequence ends an open gap's page, so reading past the page's
+        // room gains nothing; a settled one is crossed without taking room.
         let room = i32::try_from(self.limit - self.events.len()).unwrap_or(i32::MAX);
-        let missing: Vec<i32> = (self.next..until.min(self.next.saturating_add(room))).collect();
+        let span = if settled {
+            GAP_PROBE_SEQUENCES
+        } else {
+            room.min(GAP_PROBE_SEQUENCES)
+        };
+        let end = until.min(self.next.saturating_add(span));
+        let missing: Vec<i32> = (self.next..end).collect();
         let mut found = by_sequence(run_id, reads.read_sequences(run_id, &missing).await?);
         for sequence in missing {
+            if self.full() {
+                break;
+            }
             match found.remove(&sequence) {
                 Some(event) => self.push(event),
                 None if settled => self.next = sequence.saturating_add(1),
@@ -164,19 +252,21 @@ impl Page {
     }
 
     /// The terminal status landed after every event write, so a consistent miss
-    /// of the next sequence is the end of the stream.
+    /// is final, and the stream ended unless an event follows within one batch
+    /// the executor may have dropped.
     async fn confirm_end<R: ConsistentEventReads + ?Sized>(
         mut self,
         reads: &R,
         run_id: &str,
     ) -> Result<EventReplay, StateStoreError> {
-        let next = self.next;
-        let following =
-            by_sequence(run_id, reads.read_sequences(run_id, &[next]).await?).remove(&next);
-        let has_more = following.is_some();
-        if let Some(event) = following
-            && !self.full()
-        {
+        let window: Vec<i32> =
+            (self.next..=self.next.saturating_add(DROPPED_BATCH_SEQUENCES)).collect();
+        let following = by_sequence(run_id, reads.read_sequences(run_id, &window).await?);
+        let has_more = !following.is_empty();
+        for event in following.into_values() {
+            if self.full() {
+                break;
+            }
             self.push(event);
         }
         Ok(self.into_replay(has_more))
@@ -277,6 +367,16 @@ mod tests {
             .unwrap()
     }
 
+    #[test]
+    fn prefix_pages_keep_the_first_copy_of_a_duplicated_sequence() {
+        let page = prefix_page(vec![legacy(0), legacy(1), legacy(1), legacy(2)], 3);
+        assert_eq!(sequences(&page), [0, 1]);
+        assert!(page.has_more);
+        let page = prefix_page(vec![legacy(1), legacy(1), legacy(2)], 3);
+        assert_eq!(sequences(&page), [1, 2]);
+        assert!(!page.has_more);
+    }
+
     #[tokio::test]
     async fn an_index_gap_is_filled_by_consistent_reads_before_the_cursor_moves() {
         let base = table(&[0, 1, 2, 3]);
@@ -309,21 +409,80 @@ mod tests {
         let page = replay(&base, &[0, 2], cursor(-1, 10, false)).await;
         assert_eq!(sequences(&page), [0, 2]);
         assert!(!page.has_more);
+        assert_eq!(base.reads.lock().unwrap().last().unwrap(), &vec![1]);
     }
 
     #[tokio::test]
-    async fn a_terminal_run_ends_only_when_the_next_sequence_is_absent() {
+    async fn a_lapsed_gap_is_crossed_without_reading_it() {
+        let lapsed = NOW - UNSETTLED_GAP_MS - INDEX_LAG_MS;
+        let mut base = table(&[0]);
+        for sequence in [5_000, 5_001] {
+            base.events.insert(sequence, event(sequence, lapsed));
+        }
+        let page = replay(&base, &[0, 5_000, 5_001], cursor(-1, 10, false)).await;
+        assert_eq!(sequences(&page), [0, 5_000, 5_001]);
+        assert!(!page.has_more);
+        assert!(base.reads.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_wide_settled_hole_costs_one_read_per_page_until_it_lapses() {
+        let far = 10 * GAP_PROBE_SEQUENCES;
+        let mut base = table(&[0, far]);
+        let page = replay(&base, &[0, far], cursor(-1, 10, true)).await;
+        assert_eq!(sequences(&page), [0]);
+        assert!(page.has_more);
+        assert_eq!(
+            base.reads.lock().unwrap().as_slice(),
+            [(1..=GAP_PROBE_SEQUENCES).collect::<Vec<_>>()]
+        );
+
+        base.events
+            .insert(far, event(far, NOW - UNSETTLED_GAP_MS - INDEX_LAG_MS));
+        base.reads.lock().unwrap().clear();
+        let page = replay(&base, &[far], cursor(0, 10, true)).await;
+        assert_eq!(sequences(&page), [far]);
+        assert!(!page.has_more);
+        assert_eq!(
+            base.reads.lock().unwrap().as_slice(),
+            [(far + 1..=far + 1 + DROPPED_BATCH_SEQUENCES).collect::<Vec<_>>()],
+            "only the end of the stream is read"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_terminal_run_ends_only_when_nothing_follows_its_last_event() {
         let base = table(&[0, 1, 2]);
         let page = replay(&base, &[0], cursor(-1, 10, true)).await;
-        assert_eq!(sequences(&page), [0, 1]);
+        assert_eq!(sequences(&page), [0, 1, 2]);
         assert!(page.has_more, "the index lagged behind the terminal status");
 
         let page = replay(&base, &[2], cursor(1, 10, true)).await;
         assert_eq!(sequences(&page), [2]);
         assert!(!page.has_more);
-        assert_eq!(base.reads.lock().unwrap().last().unwrap(), &vec![3]);
+        assert_eq!(
+            base.reads.lock().unwrap().last().unwrap(),
+            &(3..=3 + DROPPED_BATCH_SEQUENCES).collect::<Vec<_>>()
+        );
 
         let page = replay(&base, &[], cursor(2, 10, true)).await;
+        assert!(page.events.is_empty());
+        assert!(!page.has_more);
+    }
+
+    #[tokio::test]
+    async fn a_dropped_batch_does_not_hide_the_final_events_of_a_terminal_run() {
+        let dropped_until = 4 + DROPPED_BATCH_SEQUENCES;
+        let base = table(&[0, 1, 2, 3, 4, dropped_until + 1, dropped_until + 2]);
+        let page = replay(&base, &[0, 1, 2, 3, 4], cursor(-1, 200, true)).await;
+        assert_eq!(sequences(&page), [0, 1, 2, 3, 4, dropped_until + 1]);
+        assert!(page.has_more);
+
+        let page = replay(&base, &[], cursor(dropped_until + 1, 200, true)).await;
+        assert_eq!(sequences(&page), [dropped_until + 2]);
+        assert!(page.has_more);
+
+        let page = replay(&base, &[], cursor(dropped_until + 2, 200, true)).await;
         assert!(page.events.is_empty());
         assert!(!page.has_more);
     }
@@ -356,6 +515,15 @@ mod tests {
         assert_eq!(sequences(&page), [0, 1]);
         assert!(page.has_more);
         assert_eq!(base.reads.lock().unwrap().last().unwrap(), &vec![1]);
+
+        let page = replay(&base, &[0, 3], cursor(-1, 2, true)).await;
+        assert_eq!(sequences(&page), [0, 1]);
+        assert!(page.has_more);
+        assert_eq!(
+            base.reads.lock().unwrap().last().unwrap(),
+            &vec![1, 2],
+            "a settled hole is read past the page's room"
+        );
     }
 
     #[tokio::test]

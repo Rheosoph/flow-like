@@ -136,7 +136,8 @@ fn transition(from: &Visibility, to: &Visibility) -> Option<Transition> {
         (status = 200, description = "Visibility updated"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 404, description = "Application not found")
+        (status = 404, description = "Application not found"),
+        (status = 409, description = "BOT_WORKSPACE_LOCKED: the app is a bot's workspace, which stays private")
     )
 )]
 #[tracing::instrument(name = "PATCH /apps/{app_id}/visibility", skip(state, user, body))]
@@ -153,6 +154,9 @@ pub async fn change_visibility(
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
+    if app.bot_id.is_some() {
+        return Err(crate::routes::bots::workspace::locked(&app_id));
+    }
 
     if app.visibility == body.visibility {
         tracing::warn!(

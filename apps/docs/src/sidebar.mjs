@@ -467,6 +467,10 @@ export const sidebar = [
 				slug: "self-hosting/locked-storage",
 			},
 			{
+				label: "Bot Code Runtimes",
+				slug: "self-hosting/code-runtimes",
+			},
+			{
 				label: "Local Backend Development",
 				slug: "self-hosting/local-development",
 			},

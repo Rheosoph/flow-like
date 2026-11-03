@@ -2091,7 +2091,11 @@ fn reconcile_inner(
         new_calls
             .iter()
             .map(|(id, call)| (id.as_str(), *call))
-            .chain(placeholder_calls.iter().map(|(id, call)| (id.as_str(), call))),
+            .chain(
+                placeholder_calls
+                    .iter()
+                    .map(|(id, call)| (id.as_str(), call)),
+            ),
         &mut result,
     );
     keep_variables_the_plan_wires(&mut result.commands);
@@ -3000,6 +3004,16 @@ fn duplicate_ast_anchors(ast: &BoardAst) -> Vec<String> {
 /// by its bare id.
 const GROUP_ANCHOR_KEY: &str = "\u{0}group:";
 
+/// A board node in a diagnostic: friendly names repeat across a board (every `if` is a `Branch`),
+/// the anchor names the one line the author has to look at.
+fn anchored_node_label(node: &Node) -> String {
+    format!("`{}` (`//@n:{}`)", node.friendly_name, node.id)
+}
+
+fn anchored_layer_label(layer: &Layer) -> String {
+    format!("`{}` (`//@l:{}`)", layer.name, layer.id)
+}
+
 /// Re-join execution chains severed by deletions: for each removed segment whose predecessor and
 /// (transitive) successor survive, emit the bridging ConnectPins so the tail keeps running.
 /// Function boundary pins count as endpoints: deleting the first statement of a function body
@@ -3141,12 +3155,12 @@ fn bridge_removed_exec_chains(
         successors.dedup();
         let describe = |owner: &str| {
             find_board_node(existing, owner)
-                .map(|node| format!("`{}`", node.friendly_name))
+                .map(anchored_node_label)
                 .or_else(|| {
                     existing
                         .layers
                         .get(owner)
-                        .map(|layer| format!("the end of `{}`", layer.name))
+                        .map(|layer| format!("the end of {}", anchored_layer_label(layer)))
                 })
                 .unwrap_or_else(|| format!("`{owner}`"))
         };
@@ -3186,9 +3200,8 @@ fn bridge_removed_exec_chains(
                     });
                 if !planned && !fed {
                     diagnostics.push(format!(
-                        "removing `{}` leaves {} with no execution predecessor, so it would never run: the statement written before it still drives another one and was not rewired. Keep {} where it was, or remove the `//@n:` anchor from its line so it is recreated in its new position",
+                        "removing `{}` leaves {} with no execution predecessor, so it would never run: the statement written before it still drives another one and was not rewired. Keep it where it was, or remove the `//@n:` anchor from its line so it is recreated in its new position",
                         node.friendly_name,
-                        describe(succ_node),
                         describe(succ_node)
                     ));
                 }
@@ -6313,11 +6326,25 @@ fn canonical_schema_value(value: &flow_like_types::Value) -> String {
                 "{{{}}}",
                 names
                     .into_iter()
-                    .map(|name| format!(
-                        "{}:{}",
-                        serde_json::to_string(name).unwrap_or_else(|_| "\"\"".to_string()),
-                        canonical_schema_value(&fields[name])
-                    ))
+                    .map(|name| {
+                        let value = match (name.as_str(), &fields[name]) {
+                            // `required` is a set; a text round trip lists it in field order.
+                            ("required", flow_like_types::Value::Array(required)) => {
+                                let mut required = required
+                                    .iter()
+                                    .map(canonical_schema_value)
+                                    .collect::<Vec<_>>();
+                                required.sort_unstable();
+                                format!("[{}]", required.join(","))
+                            }
+                            (_, value) => canonical_schema_value(value),
+                        };
+                        format!(
+                            "{}:{}",
+                            serde_json::to_string(name).unwrap_or_else(|_| "\"\"".to_string()),
+                            value
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(",")
             )
@@ -14993,6 +15020,11 @@ impl<'a> StructuralPlanner<'a> {
     /// in the same block (the new edge supersedes it: `A → D` becomes `A → B → D`), or be the
     /// enclosing Function's exit, which follows every statement of its body. Every old source of
     /// the target must be removed. No exec cycle may result.
+    ///
+    /// Only a pair the edit wrote differently from the board's own render, and that borders what
+    /// it removed or moved, is re-joined. The renderer also writes statements next to each other
+    /// that no edge joins, e.g. an unreached chain ahead of a Function's real entry; re-joining
+    /// those rewired sections the edit never touched as soon as anything else was deleted.
     fn rejoin_across_removed(
         &mut self,
         previous: &ExecCursor,
@@ -15022,6 +15054,35 @@ impl<'a> StructuralPlanner<'a> {
         if old_targets.iter().any(|target| target == to_id) {
             return None;
         }
+        let rendered_adjacent = self
+            .execution_baseline
+            .as_ref()
+            .and_then(|plan| plan.get(&(from_id.to_string(), from_pin.clone())))
+            .is_some_and(|target| {
+                target
+                    .as_ref()
+                    .is_some_and(|(node, pin)| node == to_id && *pin == to_pin)
+            });
+        let target_input = find_input_pin(to_node, &to_pin)?;
+        let old_sources = self.board_index.exec_source_edges(target_input);
+        let superseded = self.superseded_sources.get(to_id);
+        let lost_to_move = self.node_moves.is_some_and(|plan| {
+            plan.moves.contains_key(from_id)
+                || plan.moves.contains_key(to_id)
+                || plan.exec_pin_lost_to_move(from_id, &source_pin.id)
+                || plan.exec_pin_lost_to_move(to_id, &target_input.id)
+        });
+        let borders_edit = lost_to_move
+            || old_targets
+                .iter()
+                .any(|target| self.removed_node_ids.contains(target))
+            || old_sources.iter().any(|(source, _)| {
+                self.removed_node_ids.contains(source)
+                    || superseded.is_some_and(|sources| sources.contains(source))
+            });
+        if rendered_adjacent || !borders_edit {
+            return None;
+        }
         let later = self
             .block_positions
             .last()
@@ -15034,21 +15095,14 @@ impl<'a> StructuralPlanner<'a> {
                     .collect::<HashSet<_>>()
             })
             .unwrap_or_default();
-        let target_input = find_input_pin(to_node, &to_pin)?;
-        let superseded = self.superseded_sources.get(to_id);
         if !old_targets.iter().all(|target| {
             self.removed_node_ids.contains(target)
                 || later.contains(target)
                 || self.is_function_layer(target)
-        }) || !self
-            .board_index
-            .exec_source_edges(target_input)
-            .iter()
-            .all(|(source, _)| {
-                self.removed_node_ids.contains(source)
-                    || superseded.is_some_and(|sources| sources.contains(source))
-            })
-            || self.planned_exec_reaches(to_id, from_id)
+        }) || !old_sources.iter().all(|(source, _)| {
+            self.removed_node_ids.contains(source)
+                || superseded.is_some_and(|sources| sources.contains(source))
+        }) || self.planned_exec_reaches(to_id, from_id)
         {
             return None;
         }
@@ -15211,16 +15265,16 @@ impl<'a> StructuralPlanner<'a> {
         for target in orphaned {
             if let Some(layer) = self.existing.layers.get(&target) {
                 self.result.diagnostics.push(format!(
-                    "the new statement order leaves the exit of Function `{}` with no execution predecessor, so its callers would never continue: no statement written last in its body still leads out of it",
-                    layer.name
+                    "the new statement order leaves the exit of Function {} with no execution predecessor, so its callers would never continue: no statement written last in its body still leads out of it",
+                    anchored_layer_label(layer)
                 ));
                 continue;
             }
             let name = find_board_node(self.existing, &target)
-                .map(|node| node.friendly_name.clone())
-                .unwrap_or(target);
+                .map(anchored_node_label)
+                .unwrap_or_else(|| format!("`{target}`"));
             self.result.diagnostics.push(format!(
-                "the new statement order leaves `{name}` with no execution predecessor, so it would never run: the statement written before it still drives another one. Keep `{name}` directly after a statement whose next step you are not moving, or remove the `//@n:` anchor from its line so it is recreated in its new position"
+                "the new statement order leaves {name} with no execution predecessor, so it would never run: the statement written before it still drives another one. Keep it directly after a statement whose next step you are not moving, or remove the `//@n:` anchor from its line so it is recreated in its new position"
             ));
         }
     }
@@ -37965,6 +38019,34 @@ eventsSimple() {
         assert!(!reconcile_schema_contract_eq(
             Some(&live),
             Some(&schema("ToolCall2", "Node", "integer"))
+        ));
+    }
+
+    /// An interface written with its fields in another order re-parses with `required` in that
+    /// order (the chat `History` a local variable carried sorted). It is the same contract; a
+    /// different required set is not.
+    #[test]
+    fn schema_contracts_compare_required_as_a_set() {
+        let schema = |required: &[&str]| {
+            flow_like_types::json::json!({
+                "type": "object",
+                "properties": {
+                    "model": { "type": "string" },
+                    "messages": { "type": "array", "items": { "type": "string" } },
+                    "required": { "type": "array", "items": { "type": "string" } },
+                },
+                "required": required,
+            })
+            .to_string()
+        };
+        let live = schema(&["model", "messages"]);
+        assert!(reconcile_schema_contract_eq(
+            Some(&live),
+            Some(&schema(&["messages", "model"]))
+        ));
+        assert!(!reconcile_schema_contract_eq(
+            Some(&live),
+            Some(&schema(&["messages"]))
         ));
     }
 

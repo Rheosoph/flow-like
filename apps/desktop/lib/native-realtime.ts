@@ -11,6 +11,7 @@ export type NativeRealtimeMessage =
 				| "connecting"
 				| "connected"
 				| "reconnecting"
+				| "unauthorized"
 				| "unsupported"
 				| "signed_out"
 				| "closed";
@@ -117,6 +118,7 @@ export function watchNativeRealtime(
 				return;
 			}
 			if (/command.*(?:not found|not allowed)|unknown command/i.test(reason)) {
+				options.onError?.(new Error(reason));
 				state({ type: "state", state: "unsupported" });
 				return;
 			}

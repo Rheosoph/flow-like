@@ -215,6 +215,10 @@ pub struct App {
     #[serde(default)]
     pub forked_at: Option<SystemTime>,
 
+    /// Set on a bot's workspace: the id of the bot it belongs to. App lists hide such apps.
+    #[serde(default)]
+    pub bot_id: Option<String>,
+
     #[serde(skip)]
     pub app_state: Option<Arc<FlowLikeState>>,
 }
@@ -253,6 +257,7 @@ impl Clone for App {
             allow_forking: self.allow_forking,
             forked_from: self.forked_from.clone(),
             forked_at: self.forked_at,
+            bot_id: self.bot_id.clone(),
         }
     }
 }
@@ -302,6 +307,7 @@ impl App {
             allow_forking: false,
             forked_from: None,
             forked_at: None,
+            bot_id: None,
             app_state: Some(app_state.clone()),
         };
 
@@ -1445,6 +1451,7 @@ mod tests {
             allow_forking: false,
             forked_from: None,
             forked_at: None,
+            bot_id: Some("bot_workspace".to_string()),
         };
 
         let mut buf = Vec::new();
@@ -1452,6 +1459,7 @@ mod tests {
         let deser = super::App::from_proto(flow_like_types::proto::App::decode(&buf[..]).unwrap());
 
         assert_eq!(app.id, deser.id);
+        assert_eq!(app.bot_id, deser.bot_id);
     }
 
     /// The `frontend` slot shipped for a long time without ever surviving a

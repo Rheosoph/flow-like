@@ -22,6 +22,7 @@ pub mod authority;
 pub mod geofence;
 pub mod management;
 pub mod service;
+mod telegram_updates;
 pub mod trigger;
 
 pub fn routes(mail_max_bytes: usize) -> Router<AppState> {

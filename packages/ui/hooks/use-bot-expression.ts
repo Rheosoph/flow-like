@@ -53,7 +53,7 @@ export function useBotExpression({
 	}, [inputKey, conversationId, enabled]);
 
 	if (!enabled || result.conversationId !== conversationId) return REST;
-	return input.draft
+	return input.draft || result.state.lingering
 		? result.state
 		: { ...result.state, expression: "neutral" };
 }

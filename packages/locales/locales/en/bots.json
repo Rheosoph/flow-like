@@ -4,6 +4,10 @@
 			"description": "Drive a web browser on its desktop or device",
 			"label": "Browser"
 		},
+		"channels": {
+			"description": "Talks with people on Slack, Teams, Telegram, Discord or email",
+			"label": "Channels"
+		},
 		"code_execution": {
 			"description": "Write and run code in a sandbox",
 			"label": "Run code"
@@ -16,9 +20,25 @@
 			"description": "See the screen and use the mouse and keyboard on its desktop or device",
 			"label": "Computer use"
 		},
+		"connectors": {
+			"description": "Uses your connected services and MCP servers",
+			"label": "Connectors"
+		},
+		"data_connections": {
+			"description": "Connects to external databases like Postgres, MySQL or ODBC",
+			"label": "Data connections"
+		},
 		"data_studio": {
 			"description": "Keep tables and query them, like an app's Data Studio",
 			"label": "Data Studio"
+		},
+		"delegation": {
+			"description": "Splits work into parallel sub-tasks",
+			"label": "Delegation"
+		},
+		"documents": {
+			"description": "Reads, summarizes and extracts files; creates Word, Excel, PowerPoint and PDF",
+			"label": "Documents"
 		},
 		"email": {
 			"description": "Its own flow-like.me address to send and receive mail",
@@ -28,9 +48,25 @@
 			"description": "Only you and the bot's host can read its messages and secrets",
 			"label": "End-to-end encryption"
 		},
+		"flowpilot": {
+			"description": "Builds, edits and debugs your apps and flows, FlowScript included",
+			"label": "FlowPilot"
+		},
+		"image_generation": {
+			"description": "Creates images with its image model",
+			"label": "Image generation"
+		},
 		"internet": {
 			"description": "Search the web, read pages and call web APIs",
 			"label": "Internet"
+		},
+		"knowledge": {
+			"description": "Builds searchable indexes over your files",
+			"label": "Knowledge"
+		},
+		"memory": {
+			"description": "Remembers what matters from your chats",
+			"label": "Memory"
 		},
 		"profile_apps": {
 			"description": "Use every app in one of your profiles, with your role in each",
@@ -48,6 +84,10 @@
 			"description": "Use only the apps you add, with your role in each",
 			"label": "Selected apps"
 		},
+		"skills": {
+			"description": "Follows and runs installed skills",
+			"label": "Skills"
+		},
 		"storage": {
 			"description": "Keep files, like an app's storage",
 			"label": "Files"
@@ -57,12 +97,40 @@
 			"label": "Webhook"
 		}
 	},
+	"chat": {
+		"defaultModelHint": "{{name}} has no model of its own, so it uses the chat's default model",
+		"empty": "Ask {{name}} anything.",
+		"modelHint": "Chosen in {{name}}'s settings"
+	},
+	"computer": {
+		"alt": "What {{name}} sees right now",
+		"asleep": "Computer is asleep",
+		"asleepHint": "{{name}} wakes it when it opens a browser or uses this computer.",
+		"browser": "Browser",
+		"failed": "Couldn't reach {{name}}'s computer.",
+		"screen": "Screen",
+		"stop": "Stop"
+	},
 	"crew": {
+		"approval": {
+			"always": "Always allow",
+			"answeredAlways": "Always allowed",
+			"answeredDeny": "Denied",
+			"answeredOnce": "Allowed once",
+			"askEveryTime": "Always asks first",
+			"botFallback": "Your bot",
+			"deny": "Deny",
+			"failed": "Couldn't send your answer. Try again.",
+			"label": "Approval request",
+			"once": "Allow once",
+			"title": "{{name}} wants to {{summary}}"
+		},
 		"botSettings": "Settings for {{name}}",
 		"botTag": "Bot",
 		"builtIn": "Built in",
 		"cancel": "Cancel",
 		"composer": {
+			"botAnswersInChat": "{{name}} answers in its own chat for now. What you send here waits in its inbox.",
 			"encrypted": "Writing in end-to-end encrypted chats isn't available in this app yet.",
 			"placeholder": "Message {{name}}",
 			"send": "Send",
@@ -78,6 +146,8 @@
 			"groupSubtitle": "Group · {{people}}, {{bots}}",
 			"groupSubtitlePeople": "Group · {{people}}",
 			"label": "Conversation",
+			"loadFailed": "Their chats open once the list loads.",
+			"loadFailedTitle": "Couldn't load your bots",
 			"loading": "Loading…",
 			"signInForBots": "Sign in to see your bots.",
 			"signInForConversations": "Sign in to see your conversations.",
@@ -95,14 +165,10 @@
 		},
 		"intro": {
 			"capabilities": "What it may do",
-			"message": "Message",
-			"messageFailed": "Couldn't open a chat with this bot.",
-			"noCapabilities": "No abilities switched on yet",
-			"notLive": "{{name}} answers once its runtime is live. Messages you send now wait in its inbox.",
-			"settings": "Settings",
-			"subtitle": "Your bot · {{location}}"
+			"noCapabilities": "No abilities switched on yet"
 		},
 		"loadFailed": "Couldn't load your bots. Assistant and Flux still work.",
+		"loadFailedFlux": "Couldn't load your bots. Flux still works.",
 		"members": {
 			"added": "{{by}} added {{name}}",
 			"joined": "{{name}} joined",
@@ -133,6 +199,7 @@
 			"unsupported": "Message this app can't show"
 		},
 		"needs": {
+			"approvalMeta": "Waiting for you · {{time}}",
 			"assistantMeta": "It paused until you decide",
 			"assistantTitle": "Waiting for your answer",
 			"assistantWhere": "Your chat",
@@ -211,6 +278,12 @@
 			"today": "Today",
 			"yesterday": "Yesterday"
 		},
+		"trigger": {
+			"email": "Email: {{title}}",
+			"event": "Event: {{title}}",
+			"schedule": "Scheduled: {{title}}",
+			"webhook": "Webhook: {{title}}"
+		},
 		"unknownMember": "Someone",
 		"unread_one": "{{count}} unread",
 		"unread_other": "{{count}} unread",
@@ -229,7 +302,11 @@
 			"appsRole": "Your role: {{role}}",
 			"appsSearch": "Search apps",
 			"appsUntitled": "Untitled app",
-			"fluxLocked": "Flux keeps every building tool it has today.",
+			"flowpilot": {
+				"badge": "Always on",
+				"subtitle": "It works with FlowPilot's complete toolset, so its abilities can't be changed.",
+				"title": "What it can do"
+			},
 			"groups": {
 				"apps": "Apps",
 				"hands": "Hands",
@@ -246,6 +323,7 @@
 			"profilePlaceholder": "Choose a profile",
 			"runtime": "Coming with the bot runtime",
 			"subtitle": "Everything starts switched off. In an app, the bot never has more rights than you.",
+			"subtitleMemoryOn": "New bots start with Memory on and everything else off. In an app, the bot never has more rights than you.",
 			"title": "Choose what it may do"
 		},
 		"actions": {
@@ -255,6 +333,8 @@
 			"creating": "Creating…",
 			"delete": "Delete bot",
 			"deleting": "Deleting…",
+			"duplicate": "Duplicate",
+			"duplicating": "Duplicating…",
 			"next": "Next",
 			"save": "Save changes",
 			"saving": "Saving…"
@@ -275,6 +355,11 @@
 			"instructionsPlaceholder": "How should it work, what should it focus on, and what should it never do?",
 			"local": "Local",
 			"localOnServer": "This model runs on your own hardware, so a bot in the cloud can't use it. Add a fallback that runs in the cloud.",
+			"memoryHint": "The embedding model it saves and finds its memories with.",
+			"memoryHost": "Let the host choose",
+			"memoryHostHint": "The app or server it runs on picks one",
+			"memoryModel": "Memory model",
+			"memoryNone": "Add an embedding model to your profile to choose one here.",
 			"moveDown": "Move down",
 			"moveUp": "Move up",
 			"noModels": "No matching models.",
@@ -311,15 +396,22 @@
 			"keep": "Keep editing",
 			"prompt": "Discard your changes?"
 		},
+		"duplicate": {
+			"unsaved": "Save or discard your changes to duplicate the saved bot."
+		},
+		"duplicated": "Duplicated as {{name}}",
 		"errors": {
 			"appLimit": "This bot already uses the maximum of 200 selected apps.",
 			"capabilityLocation": "Computer use, Browser and Command line need the desktop app or a device. Switch them off or change where the bot runs.",
 			"createFailed": "The bot couldn't be created.",
 			"deleteFailed": "The bot couldn't be deleted.",
+			"duplicateFailed": "The bot couldn't be duplicated.",
 			"fluxCapabilities": "Flux's abilities can't be changed.",
 			"limitReached": "You have reached the maximum number of bots. Delete one to create another.",
 			"saveFailed": "The changes couldn't be saved.",
 			"secretLimit": "This bot already keeps the maximum number of secrets.",
+			"serverLimitFact": "Your plan's bots on the server are used up",
+			"serverLimitReached": "{{fact}}. Run it on this desktop or a device, delete one, or upgrade your plan.",
 			"systemUndeletable": "Built-in bots can't be deleted."
 		},
 		"loadFailed": "This bot couldn't be loaded.",
@@ -368,8 +460,8 @@
 			"add": "Add secret",
 			"delete": "Delete",
 			"deleteConfirm": "Delete {{name}}?",
-			"deleted": "{{name}} deleted",
 			"deleteFailed": "The secret couldn't be deleted.",
+			"deleted": "{{name}} deleted",
 			"description": "Description (optional)",
 			"descriptionPlaceholder": "What it's for",
 			"empty": "No secrets yet.",
@@ -384,8 +476,8 @@
 			"neverUsed": "never used",
 			"replaceValue": "Replace",
 			"save": "Save secret",
-			"saved": "{{name}} saved",
 			"saveFailed": "The secret couldn't be saved.",
+			"saved": "{{name}} saved",
 			"sealed": "Sealed",
 			"sealedHint": "Sealed for the bot's host. Delete it and add it again to store a new value through Flow-Like.",
 			"subtitle": "API keys, tokens and passwords the bot may use.",
@@ -417,6 +509,21 @@
 			"edit": "Bot settings"
 		},
 		"unavailable": "Bots need a signed-in Flow-Like account."
+	},
+	"grants": {
+		"app": "Use {{tool}} in app {{app}}",
+		"browser": "Open sites on {{site}}",
+		"command": "Run `{{program}}` on the command line",
+		"computer": "Use the computer's screen and mouse",
+		"connection": "Attach {{kind}} database {{database}} on {{host}}",
+		"documents": "Process large documents",
+		"email": "Send email to {{domain}}",
+		"event": "Run event {{id}} of app {{app}}",
+		"host": "Run code that reaches {{host}}",
+		"other": "{{tool}}: {{scope}}",
+		"page": "Use page {{id}} of app {{app}}",
+		"table": "Use {{tool}} on table {{table}}",
+		"tool": "Use {{tool}}"
 	},
 	"identity": {
 		"bot": "Bot",
@@ -457,6 +564,16 @@
 			"label": "Cloud"
 		}
 	},
+	"memory": {
+		"clearFailed": "Couldn't clear memories",
+		"cleared": "Cleared all memories",
+		"count_one": "{{count}} memory",
+		"count_other": "{{count}} memories",
+		"deleteFailed": "Couldn't delete memory",
+		"justNow": "just now",
+		"loadFailed": "Couldn't load memories",
+		"off": "Memory is off. Choose an embedding model in bot settings to recall and save memories. You can still review and delete saved memories here."
+	},
 	"move": {
 		"account": "Signed in as {{account}}",
 		"action_one": "Move {{count}} bot",
@@ -479,6 +596,7 @@
 			"failed": "That fix didn't go through. Try again.",
 			"openSettings": "Open settings",
 			"removeApp": "Remove from bot",
+			"removeSecret": "Remove secret",
 			"useProfile": "Use current profile"
 		},
 		"intro": {
@@ -494,9 +612,13 @@
 			"idTaken": "Another bot already uses its id.",
 			"invalid": "Some of its settings don't fit a bot in an account: {{message}}",
 			"limitReached": "Your account already holds as many bots as it can.",
+			"localChanged": "It kept changing on this computer while it moved. Try again in a moment.",
 			"lookNotOwned": "Its look uses items your account doesn't own: {{items}}.",
 			"modelUnavailable": "Its model {{model}} isn't available to your account.",
 			"profileUnavailable": "The profile its apps come from isn't in your account.",
+			"secretKey": "This computer's keychain is locked or refused access to the bot's secrets. Unlock it and try again.",
+			"secretUnreadable": "Its secret {{name}} can't be read on this computer anymore. Remove it here and add it again once the bot has moved.",
+			"serverLimitReached": "{{fact}}. Delete one of your bots on the server or upgrade your plan to move it.",
 			"unknown": "Something about it doesn't fit your account."
 		},
 		"parts": {
@@ -510,6 +632,8 @@
 			"nothing": "Just the bot itself",
 			"secrets_one": "{{count}} secret, stored encrypted in your account",
 			"secrets_other": "{{count}} secrets, stored encrypted in your account",
+			"skipped_one": "{{count}} message from a bot that left its chat is left out",
+			"skipped_other": "{{count}} messages from bots that left these chats are left out",
 			"waiting_one": "{{count}} chat moves once the other bots in it do",
 			"waiting_other": "{{count}} chats move once the other bots in them do"
 		},
@@ -517,7 +641,9 @@
 		"recheck": "Check again",
 		"result": {
 			"failed": "Not moved, so it stays on this computer. {{error}}",
-			"unknownError": "Something went wrong."
+			"unknownError": "Something went wrong.",
+			"warnings_one": "{{count}} file link couldn't move",
+			"warnings_other": "{{count}} file links couldn't move"
 		},
 		"status": {
 			"checking": "Checking…",
@@ -529,12 +655,149 @@
 			"ready": "Ready"
 		},
 		"staysHere": "It stays on this computer and keeps working.",
+		"steps": {
+			"apps": "Attaching its apps…",
+			"check": "Checking it against your account…",
+			"conversations": "Moving its chats…",
+			"done": "Finishing up…",
+			"forget_bot": "Removing it from this computer…",
+			"forget_conversations": "Clearing the chats here…",
+			"forget_workspace": "Removing its files here…",
+			"import_bot": "Creating it in your account…",
+			"rebind": "Switching it to your account…",
+			"secrets": "Moving its secrets…",
+			"segments": "Moving its chat summaries…",
+			"update_bot": "Copying its settings…",
+			"verify": "Checking nothing changed meanwhile…",
+			"workspace": "Copying its files…"
+		},
 		"title": "Move bots to your account",
 		"toast": {
 			"action": "Review",
 			"title_one": "{{count}} bot lives only on this computer",
 			"title_other": "{{count}} bots live only on this computer"
 		}
+	},
+	"panel": {
+		"back": "Back to the chat",
+		"cancelTurn": "Cancel",
+		"close": "Close details",
+		"details": {
+			"abilities": "Abilities",
+			"edit": "Edit",
+			"fallbacks_one": "Then {{count}} fallback",
+			"fallbacks_other": "Then {{count}} fallbacks",
+			"runs": "Where it runs",
+			"status": "Status"
+		},
+		"encryption": {
+			"label": "End-to-end encrypted chats",
+			"on": "On",
+			"fingerprint": "Key fingerprint {{fingerprint}}",
+			"host": "Key held by {{host}}",
+			"unpublished": "The key isn't published yet; it is published when the host is online.",
+			"waiting": "Waiting for the host to make the key.",
+			"rotate": "Rotate key",
+			"rotated": "New key published",
+			"rotateFailed": "The key could not be rotated"
+		},
+		"grants": {
+			"none": "Nothing yet. {{name}} asks you before it acts, and you can tell it to stop asking.",
+			"revoke": "Stop allowing: {{action}}",
+			"title": "Allowed actions"
+		},
+		"hide": "Hide {{name}}'s details",
+		"label": "About {{name}}",
+		"mail": {
+			"addressTitle": "Email address",
+			"afterSave": "Save the bot first, then pick its address here or in its Details.",
+			"aliasLabel": "Address name",
+			"aliasPlaceholder": "name",
+			"aliasRules": "3-64 letters, numbers or hyphens; start and end with a letter or number.",
+			"available": "Available",
+			"back": "Back to threads",
+			"change": "Change",
+			"checking": "Checking...",
+			"claim": "Claim",
+			"claimed": "Email address saved",
+			"empty": "No mail yet. Mail sent to the address shows up here.",
+			"emptyNoAddress": "Claim an address in Details to let the bot receive mail.",
+			"localNote": "Bots that only live on this computer have no address; move the bot to your account to give it one.",
+			"noAddress": "Pick a name and the bot gets its own address. Mail to it wakes the bot; the bot answers with its email tools.",
+			"received": "Received",
+			"release": "Release",
+			"sent": "Sent",
+			"taken": "Not available",
+			"unverified": "The sender could not be verified. It may be spoofed."
+		},
+		"notifications": {
+			"failed": "The notification setting could not be saved",
+			"hint": "When this bot messages you without being asked, or sends you a notification, you get a notification under its name.",
+			"label": "Notifications",
+			"off": "Muted",
+			"on": "On"
+		},
+		"openFull": "Open full view",
+		"permissions": {
+			"granted": "{{name}} can ask",
+			"none": "No standing permissions. {{name}} checks with you before asking another bot.",
+			"received": "Can ask {{name}}",
+			"revoke": "Stop {{from}} asking {{to}}",
+			"title": "Can ask"
+		},
+		"show": "Show {{name}}'s details",
+		"tabs": "{{name}}'s details",
+		"tasks": {
+			"at": "When",
+			"create": "Add task",
+			"cron": "0 9 * * 1-5",
+			"cronLabel": "Cron schedule",
+			"delete": "Delete {{name}}",
+			"done": "Done",
+			"full": "This bot has {{count}} tasks, the most it can keep. Delete one to add another.",
+			"instruction": "What should the bot do?",
+			"instructionLabel": "Instruction",
+			"name": "Name (optional)",
+			"nameLabel": "Task name",
+			"next": "Next",
+			"none": "No tasks yet. Schedule one here, or ask the bot to remind you.",
+			"once": "Once",
+			"pause": "Pause {{name}}",
+			"paused": "Paused",
+			"repeat": "Repeat",
+			"resume": "Resume {{name}}",
+			"title": "Tasks",
+			"tz": "Time zone"
+		},
+		"waitingForYou": "Waiting for you",
+		"webhooks": {
+			"copied": "Copied",
+			"copy": "Copy {{label}}",
+			"create": "Create webhook",
+			"delete": "Delete {{name}}",
+			"done": "I saved it",
+			"instruction": "What should the bot do with each call?",
+			"instructionLabel": "Instruction",
+			"issued": "{{name}} is ready",
+			"lastCalled": "Last called {{when}}",
+			"name": "Name, e.g. New order",
+			"nameLabel": "Webhook name",
+			"neverCalled": "Never called",
+			"none": "No webhooks yet. A webhook gives other systems a URL that wakes this bot with their data.",
+			"once": "Copy the secret now. It is shown only once; rotate the webhook if you lose it.",
+			"rotate": "Rotate the secret of {{name}}",
+			"secret": "Secret",
+			"signingKey": "Signing key (HMAC-SHA256)",
+			"title": "Webhooks",
+			"url": "URL"
+		},
+		"working": "Working…"
+	},
+	"presence": {
+		"lastSeen": "Last seen {{when}}",
+		"offline": "Offline",
+		"online": "Online",
+		"unknown": "Not seen yet"
 	},
 	"presets": {
 		"coder": {
@@ -587,5 +850,24 @@
 			"description": "Your everyday helper",
 			"name": "Assistant"
 		}
+	},
+	"workspace": {
+		"failed": "Couldn't set up {{name}}'s workspace.",
+		"filesTitle": "{{name}}'s files",
+		"memoryEmpty": "{{name}} saves facts, preferences and decisions here as you chat.",
+		"memoryFailed": "Couldn't load {{name}}'s memory.",
+		"preparing": "Setting up {{name}}'s workspace…",
+		"refused": "{{name}} can't keep its own files and data yet.",
+		"tabs": {
+			"chat": "Chat",
+			"computer": "Computer",
+			"data": "Data",
+			"details": "Details",
+			"files": "Files",
+			"label": "{{name}}'s chat and workspace",
+			"mail": "Mail",
+			"memory": "Memory"
+		},
+		"unsupported": "Files and data for {{name}} aren't available here yet."
 	}
 }

@@ -1,0 +1,426 @@
+//! The owner's view of a bot's mail: its threads and the mails in each. Threads are group
+//! conversations marked by a `BotMailThread` row; reading marks go through the inbox's own
+//! read endpoint on the thread's conversation id.
+
+use super::owned_bot;
+use crate::{
+    entity::{bot_mail_message, bot_mail_thread, conversation_member, inbox_entry},
+    error::ApiError,
+    middleware::jwt::AppUser,
+    state::AppState,
+};
+use axum::{
+    Extension, Json,
+    extract::{Path, Query, State},
+};
+use chrono::{DateTime, FixedOffset};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashMap;
+use utoipa::{IntoParams, ToSchema};
+
+const PAGE: u64 = 50;
+const MAX_MAILS: u64 = 200;
+
+/// One mail thread of a bot.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MailThread {
+    /// The id of the thread's inbox conversation.
+    pub id: String,
+    pub subject: String,
+    /// Lowercase correspondent addresses.
+    pub participants: Vec<String>,
+    pub last_message_at: DateTime<FixedOffset>,
+    pub last_snippet: Option<String>,
+    pub message_count: i32,
+    /// Received mails the owner has not read yet.
+    pub unread: u64,
+    pub created_at: DateTime<FixedOffset>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MailThreadList {
+    /// Newest activity first.
+    pub threads: Vec<MailThread>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub struct ThreadsQuery {
+    /// Only threads with activity before this time (RFC 3339), for the next page.
+    pub before: Option<DateTime<FixedOffset>>,
+}
+
+/// One mail of a thread.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MailItem {
+    pub id: String,
+    pub seq: Option<i64>,
+    /// `in` or `out`.
+    pub direction: String,
+    pub at: DateTime<FixedOffset>,
+    #[schema(value_type = Object)]
+    pub from: Value,
+    #[schema(value_type = Object)]
+    pub to: Value,
+    #[schema(value_type = Object)]
+    pub cc: Value,
+    pub subject: String,
+    pub text: String,
+    /// False when the sender could not be verified.
+    pub authenticated: bool,
+    /// File names, types, sizes and workspace handles; a handle opens the file in Files.
+    #[schema(value_type = Object)]
+    pub attachments: Value,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct MailThreadView {
+    pub thread: MailThread,
+    pub mails: Vec<MailItem>,
+}
+
+fn participants_of(row: &bot_mail_thread::Model) -> Vec<String> {
+    serde_json::from_str(&row.participants).unwrap_or_default()
+}
+
+fn view(row: bot_mail_thread::Model, unread: u64) -> MailThread {
+    MailThread {
+        participants: participants_of(&row),
+        id: row.id,
+        subject: row.subject,
+        last_message_at: row.last_message_at,
+        last_snippet: row.last_snippet,
+        message_count: row.message_count,
+        unread,
+        created_at: row.created_at,
+    }
+}
+
+async fn unread_counts(
+    state: &AppState,
+    owner: &str,
+    ids: &[String],
+) -> Result<HashMap<String, u64>, ApiError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let read: HashMap<String, Option<DateTime<FixedOffset>>> = conversation_member::Entity::find()
+        .filter(conversation_member::Column::PrincipalId.eq(owner))
+        .filter(conversation_member::Column::ConversationId.is_in(ids.iter().cloned()))
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|member| (member.conversation_id, member.last_read_at))
+        .collect();
+    let received = bot_mail_message::Entity::find()
+        .filter(bot_mail_message::Column::ThreadId.is_in(ids.iter().cloned()))
+        .filter(bot_mail_message::Column::Direction.eq("IN"))
+        .all(&state.db)
+        .await?;
+    let mut counts: HashMap<String, u64> = HashMap::new();
+    for mail in received {
+        let seen = read.get(&mail.thread_id).copied().flatten();
+        if seen.is_none_or(|seen| mail.created_at > seen) {
+            *counts.entry(mail.thread_id).or_default() += 1;
+        }
+    }
+    Ok(counts)
+}
+
+#[utoipa::path(
+    get,
+    path = "/bots/{bot_id}/mail/threads",
+    tag = "Bots",
+    description = "List the bot's mail threads, newest activity first, with correspondents, the last message and how many received mails you have not read.",
+    params(("bot_id" = String, Path, description = "Your bot's id"), ThreadsQuery),
+    responses(
+        (status = 200, description = "The bot's mail threads", body = MailThreadList),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no bot with this id")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn list_mail_threads(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(bot_id): Path<String>,
+    Query(query): Query<ThreadsQuery>,
+) -> Result<Json<MailThreadList>, ApiError> {
+    let sub = user.sub()?;
+    let bot = owned_bot(&state.db, &sub, &bot_id).await?;
+    let mut select = bot_mail_thread::Entity::find()
+        .filter(bot_mail_thread::Column::BotId.eq(bot.id.as_str()))
+        .filter(bot_mail_thread::Column::OwnerId.eq(sub.as_str()));
+    if let Some(before) = query.before {
+        select = select.filter(bot_mail_thread::Column::LastMessageAt.lt(before));
+    }
+    let rows = select
+        .order_by_desc(bot_mail_thread::Column::LastMessageAt)
+        .limit(PAGE)
+        .all(&state.db)
+        .await?;
+    let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
+    let counts = unread_counts(&state, &sub, &ids).await?;
+    let threads = rows
+        .into_iter()
+        .map(|row| {
+            let unread = counts.get(&row.id).copied().unwrap_or(0);
+            view(row, unread)
+        })
+        .collect();
+    Ok(Json(MailThreadList { threads }))
+}
+
+fn text_of(body: &Value) -> String {
+    body.get("text")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+pub(crate) fn mail_item(entry: &inbox_entry::Model) -> Option<MailItem> {
+    let body = entry.envelope.get("body")?;
+    let (direction, source) = match entry.kind.as_str() {
+        "TRIGGER" if body.get("source").and_then(Value::as_str) == Some("email") => {
+            ("in", body.get("payload")?)
+        }
+        "MESSAGE" => ("out", body.get("mail")?),
+        _ => return None,
+    };
+    let field = |name: &str| source.get(name).cloned().unwrap_or(Value::Null);
+    let text = if direction == "in" {
+        source
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned()
+    } else {
+        text_of(body)
+    };
+    Some(MailItem {
+        id: entry.message_id.clone(),
+        seq: entry.seq,
+        direction: direction.to_owned(),
+        at: entry.created_at,
+        from: if direction == "out" {
+            Value::String(source.get("from")?.as_str()?.to_owned())
+        } else {
+            field("from")
+        },
+        to: field("to"),
+        cc: field("cc"),
+        subject: source
+            .get("subject")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_owned(),
+        text,
+        authenticated: direction == "out"
+            || source
+                .get("authenticated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+        attachments: field("attachments"),
+    })
+}
+
+#[utoipa::path(
+    get,
+    path = "/bots/{bot_id}/mail/threads/{thread_id}",
+    tag = "Bots",
+    description = "Open one mail thread: every mail the bot received and sent in it, oldest first.",
+    params(
+        ("bot_id" = String, Path, description = "Your bot's id"),
+        ("thread_id" = String, Path, description = "The thread's id")
+    ),
+    responses(
+        (status = 200, description = "The thread and its mails", body = MailThreadView),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "No such bot or thread of yours")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn get_mail_thread(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((bot_id, thread_id)): Path<(String, String)>,
+) -> Result<Json<MailThreadView>, ApiError> {
+    let sub = user.sub()?;
+    let bot = owned_bot(&state.db, &sub, &bot_id).await?;
+    let row = bot_mail_thread::Entity::find_by_id(thread_id.as_str())
+        .filter(bot_mail_thread::Column::BotId.eq(bot.id.as_str()))
+        .filter(bot_mail_thread::Column::OwnerId.eq(sub.as_str()))
+        .one(&state.db)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Mail thread not found"))?;
+    let entries = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(sub.as_str()))
+        .filter(inbox_entry::Column::ConversationId.eq(thread_id.as_str()))
+        .filter(inbox_entry::Column::Kind.is_in(["TRIGGER", "MESSAGE"]))
+        .order_by_asc(inbox_entry::Column::CreatedAt)
+        .order_by_asc(inbox_entry::Column::Id)
+        .limit(MAX_MAILS)
+        .all(&state.db)
+        .await?;
+    let counts = unread_counts(&state, &sub, std::slice::from_ref(&row.id)).await?;
+    let unread = counts.get(&row.id).copied().unwrap_or(0);
+    Ok(Json(MailThreadView {
+        thread: view(row, unread),
+        mails: entries.iter().filter_map(mail_item).collect(),
+    }))
+}
+
+/// A mail a desktop-hosted account bot sends through the hub, which holds the mail provider.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BotSendMail {
+    pub to: Vec<String>,
+    #[serde(default)]
+    pub cc: Vec<String>,
+    pub subject: String,
+    pub text: String,
+    pub html: String,
+    /// Files with `filename`, `content_type` and standard-base64 `content`; at most 10, 3 MiB.
+    #[serde(default)]
+    #[schema(value_type = Vec<Object>)]
+    pub attachments: Vec<flow_like_catalog_core::MailAttachment>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BotReplyMail {
+    pub thread: String,
+    pub text: String,
+    pub html: String,
+    #[serde(default)]
+    #[schema(value_type = Vec<Object>)]
+    pub attachments: Vec<flow_like_catalog_core::MailAttachment>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct BotSentMail {
+    pub message_id: String,
+    pub thread: String,
+    pub from: String,
+    pub to: Vec<String>,
+    pub subject: String,
+}
+
+fn files_of(
+    attachments: Vec<flow_like_catalog_core::MailAttachment>,
+) -> Result<Vec<flow_like_bot_tools::email::MailFile>, ApiError> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    attachments
+        .into_iter()
+        .map(|attachment| {
+            Ok(flow_like_bot_tools::email::MailFile {
+                bytes: STANDARD
+                    .decode(&attachment.content)
+                    .map_err(|_| {
+                        ApiError::bad_request(format!(
+                            "Attachment {:?} content is not standard base64",
+                            attachment.filename
+                        ))
+                    })?
+                    .into(),
+                filename: attachment.filename,
+                content_type: attachment.content_type,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn failure_status(failure: flow_like_bot_tools::email::MailFailure) -> ApiError {
+    use flow_like_bot_tools::email::failure as code;
+    match failure.code {
+        code::LIMIT => ApiError::too_many_requests(failure.message),
+        code::NO_THREAD => ApiError::not_found(failure.message),
+        code::NO_ADDRESS | code::REFUSED => ApiError::bad_request(failure.message),
+        _ => ApiError::service_unavailable(failure.message),
+    }
+}
+
+fn sent_view(sent: flow_like_bot_tools::email::SentMail) -> Json<BotSentMail> {
+    Json(BotSentMail {
+        message_id: sent.message_id,
+        thread: sent.thread,
+        from: sent.from,
+        to: sent.to,
+        subject: sent.subject,
+    })
+}
+
+#[utoipa::path(
+    post,
+    path = "/bots/{bot_id}/mail/send",
+    tag = "Bots",
+    description = "Send an email from the bot's own address, for a bot whose host runs on your computer. The hub holds the mail provider, applies the daily and per-interval limits and records the mail in a thread.",
+    params(("bot_id" = String, Path, description = "Your bot's id")),
+    request_body = BotSendMail,
+    responses(
+        (status = 200, description = "The mail was accepted by the provider", body = BotSentMail),
+        (status = 400, description = "Invalid mail, or the bot has no address or no email ability"),
+        (status = 404, description = "You have no bot with this id"),
+        (status = 429, description = "Mail limit reached"),
+        (status = 503, description = "Mail is unavailable")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn send_bot_mail(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(bot_id): Path<String>,
+    Json(request): Json<BotSendMail>,
+) -> Result<Json<BotSentMail>, ApiError> {
+    let sub = user.sub()?;
+    let bot = owned_bot(&state.db, &sub, &bot_id).await?;
+    let mail = flow_like_bot_tools::email::OutgoingMail {
+        to: request.to,
+        cc: request.cc,
+        subject: request.subject,
+        text: request.text,
+        html: request.html,
+        attachments: files_of(request.attachments)?,
+    };
+    crate::bot_mail::send(&state, &bot.id, mail)
+        .await
+        .map(sent_view)
+        .map_err(failure_status)
+}
+
+#[utoipa::path(
+    post,
+    path = "/bots/{bot_id}/mail/reply",
+    tag = "Bots",
+    description = "Reply in one of the bot's mail threads, to the sender of its latest received mail, for a bot whose host runs on your computer.",
+    params(("bot_id" = String, Path, description = "Your bot's id")),
+    request_body = BotReplyMail,
+    responses(
+        (status = 200, description = "The reply was accepted by the provider", body = BotSentMail),
+        (status = 400, description = "Invalid mail, or the bot has no address or no email ability"),
+        (status = 404, description = "No such bot or thread of yours"),
+        (status = 429, description = "Mail limit reached"),
+        (status = 503, description = "Mail is unavailable")
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn reply_bot_mail(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(bot_id): Path<String>,
+    Json(request): Json<BotReplyMail>,
+) -> Result<Json<BotSentMail>, ApiError> {
+    let sub = user.sub()?;
+    let bot = owned_bot(&state.db, &sub, &bot_id).await?;
+    let mail = flow_like_bot_tools::email::ReplyMail {
+        thread: request.thread,
+        text: request.text,
+        html: request.html,
+        attachments: files_of(request.attachments)?,
+    };
+    crate::bot_mail::reply(&state, &bot.id, mail)
+        .await
+        .map(sent_view)
+        .map_err(failure_status)
+}

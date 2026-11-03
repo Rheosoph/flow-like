@@ -1,6 +1,10 @@
+import { BotPaintBlend } from "../bot-paints";
 import type { BotShapeDefinition } from "../types";
 import { crewShape, ovalPath } from "./helpers";
 import { BotMotion } from "./motion";
+
+const dripBody =
+	"M50 23C41 38 13 62 13 82C13 107 87 107 87 82C87 62 59 38 50 23Z";
 
 const petals = [
 	[50, 40],
@@ -60,14 +64,33 @@ export const natureShapes: readonly BotShapeDefinition[] = [
 			clothing: "#665887",
 		},
 		mouthStyle: "none",
-		silhouette:
-			"M50 23C41 38 13 62 13 82C13 107 87 107 87 82C87 62 59 38 50 23Z",
+		silhouette: dripBody,
 		anchors: {
-			eyes: { left: [39, 76], right: [61, 76], radius: 3.8 },
-			mouth: [50, 86],
+			eyes: { left: [39, 68], right: [61, 68], radius: 3.8 },
+			mouth: [50, 79],
 			head: { x: 50, y: 31, width: 33 },
-			neck: { y: 92, bottom: 104 },
+			neck: { y: 86, bottom: 100, width: 50 },
 		},
+		renderDetails: (context) => (
+			<>
+				<BotPaintBlend
+					context={context}
+					id="drip"
+					d={dripBody}
+					from="accent"
+					to="body"
+					end={0.85}
+				/>
+				<path
+					d="M26 66Q29 57 37 48"
+					fill="none"
+					stroke={context.palette.sclera}
+					strokeWidth="3"
+					strokeLinecap="round"
+					opacity=".65"
+				/>
+			</>
+		),
 	}),
 	crewShape({
 		id: "ember",

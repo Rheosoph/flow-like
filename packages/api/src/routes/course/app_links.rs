@@ -67,7 +67,8 @@ pub fn parse_purpose(s: &str) -> CourseAppPurpose {
     request_body = AppLinkUpsertBody,
     responses(
         (status = 200, description = "App link created or updated", body = Object),
-        (status = 403, description = "Forbidden")
+        (status = 403, description = "Forbidden"),
+        (status = 409, description = "BOT_WORKSPACE_LOCKED: the app is a bot's workspace, which is never shared")
     )
 )]
 #[tracing::instrument(
@@ -86,6 +87,7 @@ pub async fn upsert_app_link(
     if !app_permission.has_permission(RolePermissions::Admin) {
         return Err(ApiError::FORBIDDEN);
     }
+    crate::routes::bots::workspace::refuse_workspaces(&state.db, [&body.app_id]).await?;
 
     let now = chrono::Utc::now().fixed_offset();
     let purpose = parse_purpose(body.purpose.as_deref().unwrap_or("SHARED_TEMPLATE"));

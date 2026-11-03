@@ -64,6 +64,27 @@ const MIME: Record<string, string> = {
 	"3mf": "model/3mf",
 	glb: "model/gltf-binary",
 	gltf: "model/gltf+json",
+	fcstd: "application/x-extension-fcstd",
+	"3dm": "model/vnd.3dm",
+	indd: "application/x-indesign",
+	indt: "application/x-indesign",
+	xcf: "image/x-xcf",
+	xpm: "image/x-xpixmap",
+	dcm: "application/dicom",
+	dicom: "application/dicom",
+	dc3: "application/dicom",
+	dds: "image/vnd-ms.dds",
+	dpx: "image/x-dpx",
+	cin: "image/x-cin",
+	iff: "image/x-iff",
+	lbm: "image/x-iff",
+	ilbm: "image/x-iff",
+	jpf: "image/jp2",
+	jpx: "image/jpx",
+	jp2: "image/jp2",
+	j2k: "image/jp2",
+	j2c: "image/jp2",
+	jpc: "image/jp2",
 };
 
 const viewers = new Map<string, CraftViewer>();
@@ -103,13 +124,13 @@ register(
 register(
 	"vectorcraft",
 	"Flows Vector",
-	"drawcraft ait af afdesign afpub",
+	"drawcraft ait af afdesign afpub jpf jpx jp2 j2k j2c jpc",
 	"vectorcraft",
 );
 register(
 	"photocraft",
 	"Flows Photo",
-	"pcraft ora psd psb tif tiff dib tga icb vda vst ico qoi exr hdr pnm fits fit fts",
+	"pcraft ora psd psb tif tiff dib tga icb vda vst ico qoi exr hdr pnm fits fit fts dds dpx cin iff lbm ilbm",
 );
 register(
 	"photocraft",
@@ -124,7 +145,7 @@ register("photocraft", "Flows Photo", "apng gif webp", "pcraft", 50, "image");
 register(
 	"photocraft",
 	"Flows Photo",
-	"pbm pgm ppm pam pfm pdn pcx kra dng cr2 cr3 nef nrw arw pef orf rw2 raf afphoto",
+	"pbm pgm ppm pam pfm pdn pcx kra dng cr2 cr3 nef nrw arw pef orf rw2 raf afphoto xcf xpm dcm dicom dc3",
 	"pcraft",
 );
 register("soundcraft", "Flows Audio", "wav wave flac", undefined, 100, "audio");
@@ -150,12 +171,13 @@ register("filmcraft", "Flows Video", "m4v mov webm", "mp4", 200, "video");
 register("filmcraft", "Flows Video", "mkv avi mxf mts m2ts", "mp4", 200);
 register("filmcraft", "Flows Video", "fcproj", undefined, 200);
 register("designcraft", "Flows Design", "idml designcraft");
+register("designcraft", "Flows Design", "indd indt", "designcraft");
 register("cadcraft", "Flows CAD", "dxf", undefined, 100);
 // A SolidCraft project keeps modeling edits without replacing an imported model.
 register(
 	"solidcraft",
 	"Flows CAD",
-	"solidcraft step stp iges igs stl obj 3mf glb gltf",
+	"solidcraft step stp iges igs stl obj 3mf glb gltf fcstd 3dm",
 	"solidcraft",
 	100,
 );

@@ -1,6 +1,7 @@
 import { RequestTimeoutError } from "../request-deadline";
 import type { IChannelHandle } from "../schema/channel";
 import type { ILogMetadata } from "../schema/flow/log-metadata";
+import type { ExecutionChatSeed } from "./chat-persistence";
 import { attachExecutionTransportOwner } from "./owners";
 import { channelRequestKey, executionChannels } from "./runtime";
 import {
@@ -37,6 +38,33 @@ type CommandInput = ExecutionCommand extends infer Command
 	: never;
 
 const channelOwners = new Map<string, ExecutionRuntimeClient>();
+
+/** A detached run's open requests outlive its released events. */
+function taskChannels(task: ExecutionTask): IChannelHandle[] {
+	return [
+		...executionChannels(task.events),
+		...task.pendingInteractions.flatMap((request) =>
+			request.channel ? [request.channel] : [],
+		),
+	];
+}
+
+/** The runtime saves a detached reply by itself, possibly with no tab open, and has no translations. */
+async function withDetachedNotice(
+	chat: ExecutionChatSeed,
+): Promise<ExecutionChatSeed> {
+	const { i18n } = await import("@flow-like/locales");
+	return {
+		...chat,
+		detachedNotice: {
+			title: i18n.t("chat:detachedReplyTitle", "Still running on the server"),
+			message: i18n.t(
+				"chat:detachedReplyMessage",
+				"Live updates for this reply stopped, so it may be incomplete. The run continues on the server; you can stop it from Activity.",
+			),
+		},
+	};
+}
 
 /** One scoped connection. Closing it releases a tab, never the worker's executions. */
 export class ExecutionRuntimeClient {
@@ -78,6 +106,10 @@ export class ExecutionRuntimeClient {
 	}
 	getTask(taskId: string): ExecutionTask | undefined {
 		return this.tasks.get(taskId);
+	}
+	/** True while the caller that started the task in this tab receives its events. */
+	isObserving(taskId: string): boolean {
+		return this.observers.has(taskId);
 	}
 	subscribe(listener: () => void): () => void {
 		this.listeners.add(listener);
@@ -176,7 +208,7 @@ export class ExecutionRuntimeClient {
 			for (const task of message.tasks)
 				if (task.scope === this.scope) {
 					this.tasks.set(task.taskId, task);
-					for (const handle of executionChannels(task.events))
+					for (const handle of taskChannels(task))
 						this.channels.add(channelRequestKey(handle));
 				}
 		} else {
@@ -197,7 +229,7 @@ export class ExecutionRuntimeClient {
 					...message.task.events,
 				],
 			});
-			for (const handle of executionChannels(message.task.events))
+			for (const handle of taskChannels(message.task))
 				this.channels.add(channelRequestKey(handle));
 		}
 		for (const key of this.channels) channelOwners.set(key, this);
@@ -227,13 +259,18 @@ export class ExecutionRuntimeClient {
 		callbacks: ExecutionCallbacks = {},
 	): Promise<ILogMetadata | undefined> {
 		await this.ready;
+		const chat = metadata.chat && (await withDetachedNotice(metadata.chat));
 		if (metadata.scope !== this.scope)
 			throw new Error("Execution scope changed before dispatch");
 		attachExecutionTransportOwner(metadata.taskId, this);
 		this.observers.set(metadata.taskId, { callbacks, seen: 0 });
 		try {
 			return (await this.command(
-				{ type: "execute", metadata, request },
+				{
+					type: "execute",
+					metadata: chat ? { ...metadata, chat } : metadata,
+					request,
+				},
 				metadata.taskId,
 			)) as ILogMetadata | undefined;
 		} finally {

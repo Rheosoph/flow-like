@@ -14,6 +14,26 @@ def _poll_headers(headers: dict[str, str] | None, token: str) -> dict[str, str]:
     return {**clean, "Authorization": f"Bearer {token}"}
 
 
+_FINAL_STATUSES = {"completed", "failed", "cancelled", "timeout", "timed_out"}
+
+
+def _poll_result(data: dict[str, Any], after_sequence: int) -> PollResult:
+    events = data.get("events", [])
+    has_more = bool(data.get("has_more", False))
+    return PollResult(
+        events=events,
+        done=data.get("status", "").lower() in _FINAL_STATUSES and not has_more,
+        run_id=data.get("run_id", ""),
+        status=data.get("status", "unknown"),
+        progress=data.get("progress", 0),
+        current_step=data.get("current_step"),
+        error=data.get("error"),
+        next_sequence=max((event.get("sequence", after_sequence) for event in events), default=after_sequence),
+        has_more=has_more,
+        raw=data,
+    )
+
+
 class ExecutionMixin(HTTPClient):
     """HTTP mixin that provides execution monitoring capabilities."""
     def get_run_status(self, run_id: str) -> RunStatus:
@@ -84,18 +104,7 @@ class ExecutionMixin(HTTPClient):
             timeout=float(timeout + 5),
             **kwargs,
         )
-        data = resp.json()
-        return PollResult(
-            events=data.get("events", []),
-            done=data.get("status", "").lower() in {"completed", "failed", "cancelled", "timeout", "timed_out"},
-            run_id=data.get("run_id", ""),
-            status=data.get("status", "unknown"),
-            progress=data.get("progress", 0),
-            current_step=data.get("current_step"),
-            error=data.get("error"),
-            next_sequence=max((event.get("sequence", after_sequence) for event in data.get("events", [])), default=after_sequence),
-            raw=data,
-        )
+        return _poll_result(resp.json(), after_sequence)
 
     async def apoll_execution(
         self,
@@ -127,18 +136,7 @@ class ExecutionMixin(HTTPClient):
             timeout=float(timeout + 5),
             **kwargs,
         )
-        data = resp.json()
-        return PollResult(
-            events=data.get("events", []),
-            done=data.get("status", "").lower() in {"completed", "failed", "cancelled", "timeout", "timed_out"},
-            run_id=data.get("run_id", ""),
-            status=data.get("status", "unknown"),
-            progress=data.get("progress", 0),
-            current_step=data.get("current_step"),
-            error=data.get("error"),
-            next_sequence=max((event.get("sequence", after_sequence) for event in data.get("events", [])), default=after_sequence),
-            raw=data,
-        )
+        return _poll_result(resp.json(), after_sequence)
 
     def list_runs(self, app_id: str, board_id: str, *, limit: int | None = None, offset: int | None = None, params: dict[str, Any] | None = None) -> Any:
         """List execution history, preserving server pagination and filters."""

@@ -3,7 +3,10 @@
 //! events actually returned to this consumer.
 
 use crate::{
-    entity::{invitation, notification, wasm_package_invitation},
+    entity::{
+        bot_turn, conversation_member, inbox_entry, invitation, notification,
+        wasm_package_invitation,
+    },
     error::ApiError,
     execution::{
         ExecutionClaims, TokenType,
@@ -118,16 +121,22 @@ pub async fn connect(
         fresh_pat_permissions(pat, &state).await?;
     }
     let prefer_http = request.transport == RealtimeTransportPreference::Http;
-    let grant = match timeout(
+    let attempt = match timeout(
         Duration::from_secs(5),
         state.channels.realtime_connect(&sub, prefer_http),
     )
     .await
     {
-        Ok(Ok(grant)) => grant,
-        _ => {
+        Ok(Ok(grant)) => Ok(grant),
+        Ok(Err(error)) => Err(crate::channel::redact_provider_error(&error)),
+        Err(_) => Err("timed out".to_owned()),
+    };
+    let grant = match attempt {
+        Ok(grant) => grant,
+        Err(reason) => {
             tracing::warn!(
                 transport = state.channels.transport(),
+                %reason,
                 "Realtime grant unavailable; using HTTP replay"
             );
             let mut grant = state
@@ -425,14 +434,23 @@ fn pat_can_read_run_events(permissions: i64) -> bool {
 
 /// Everything an inbox change moves: notifications are only inserted, marked read
 /// or deleted, so their counts and newest timestamps change with every mutation.
+/// Invites carry their newest creation time, so replacing one is not a no-op.
+/// Conversation entries are only inserted and read markers only move forward, so the
+/// newest entry and the newest marker move with every delivery and most reads. A bot turn's
+/// update time moves with each queueing, claim and finish of the owner's bots.
 #[derive(Debug, FromQueryResult, Serialize)]
 struct InboxFingerprint {
     app_invites: i64,
+    newest_app_invite: Option<DateTimeWithTimeZone>,
     package_invites: i64,
+    newest_package_invite: Option<DateTimeWithTimeZone>,
     notifications: i64,
     unread: i64,
     newest: Option<DateTimeWithTimeZone>,
     last_read: Option<DateTimeWithTimeZone>,
+    newest_entry: Option<DateTimeWithTimeZone>,
+    last_entry_read: Option<DateTimeWithTimeZone>,
+    newest_bot_turn: Option<DateTimeWithTimeZone>,
 }
 
 async fn notification_update(
@@ -463,21 +481,38 @@ fn inbox_fingerprint_query(sub: &str) -> SelectStatement {
 
     let notifications =
         || notification::Entity::find().filter(notification::Column::UserId.eq(sub));
-    let mut package_invites = pending_package_invitations(sub, chrono::Utc::now().fixed_offset())
+    let app_invites = || invitation::Entity::find().filter(invitation::Column::UserId.eq(sub));
+    let now = chrono::Utc::now().fixed_offset();
+    let mut package_invites = pending_package_invitations(sub, now)
         .select_only()
         .column_as(Expr::col(wasm_package_invitation::Column::Id).count(), "n")
         .into_query();
     package_invites.clear_order_by();
+    let mut newest_package_invite = pending_package_invitations(sub, now)
+        .select_only()
+        .column_as(
+            Expr::col(wasm_package_invitation::Column::CreatedAt).max(),
+            "n",
+        )
+        .into_query();
+    newest_package_invite.clear_order_by();
     Query::select()
         .expr_as(
-            invitation::Entity::find()
+            app_invites()
                 .select_only()
                 .column_as(Expr::col(invitation::Column::Id).count(), "n")
-                .filter(invitation::Column::UserId.eq(sub))
                 .into_query(),
             Alias::new("app_invites"),
         )
+        .expr_as(
+            app_invites()
+                .select_only()
+                .column_as(Expr::col(invitation::Column::CreatedAt).max(), "n")
+                .into_query(),
+            Alias::new("newest_app_invite"),
+        )
         .expr_as(package_invites, Alias::new("package_invites"))
+        .expr_as(newest_package_invite, Alias::new("newest_package_invite"))
         .expr_as(
             notifications()
                 .select_only()
@@ -506,6 +541,39 @@ fn inbox_fingerprint_query(sub: &str) -> SelectStatement {
                 .column_as(Expr::col(notification::Column::ReadAt).max(), "n")
                 .into_query(),
             Alias::new("last_read"),
+        )
+        .expr_as(
+            inbox_entry::Entity::find()
+                .select_only()
+                .column_as(Expr::col(inbox_entry::Column::CreatedAt).max(), "n")
+                .filter(crate::routes::inbox::watched_inboxes(
+                    inbox_entry::Column::InboxId,
+                    sub,
+                ))
+                .into_query(),
+            Alias::new("newest_entry"),
+        )
+        .expr_as(
+            conversation_member::Entity::find()
+                .select_only()
+                .column_as(
+                    Expr::col(conversation_member::Column::LastReadAt).max(),
+                    "n",
+                )
+                .filter(crate::routes::inbox::watched_inboxes(
+                    conversation_member::Column::PrincipalId,
+                    sub,
+                ))
+                .into_query(),
+            Alias::new("last_entry_read"),
+        )
+        .expr_as(
+            bot_turn::Entity::find()
+                .select_only()
+                .column_as(Expr::col(bot_turn::Column::UpdatedAt).max(), "n")
+                .filter(bot_turn::Column::OwnerId.eq(sub))
+                .into_query(),
+            Alias::new("newest_bot_turn"),
         )
         .take()
 }
@@ -610,17 +678,12 @@ fn run_update(
     budget: &mut ResponseBudget,
 ) -> flow_like_types::Result<Option<RealtimeRunUpdate>> {
     let status = status_name(&run.status);
-    let revision = revision(&(
-        &run.id,
-        status,
-        run.progress,
-        &run.current_step,
-        &run.error_message,
-    ))?;
+    let revision = run_revision(run, status, replay.has_more)?;
     if replay.events.is_empty() && subscription.revision.as_deref() == Some(revision.as_str()) {
         return Ok(None);
     }
 
+    let stored_has_more = replay.has_more;
     let mut update = RealtimeRunUpdate {
         run_id: run.id.clone(),
         revision,
@@ -662,7 +725,26 @@ fn run_update(
         update.after_sequence = event.sequence;
         update.events.push(event);
     }
+    if update.has_more != stored_has_more {
+        update.revision = run_revision(run, status, update.has_more)?;
+    }
     Ok(Some(update))
+}
+
+/// A terminal run's closing page can carry no events, so completion is part of its revision.
+fn run_revision(
+    run: &ExecutionRunRecord,
+    status: &str,
+    has_more: bool,
+) -> flow_like_types::Result<String> {
+    revision(&(
+        &run.id,
+        status,
+        run.progress,
+        &run.current_step,
+        &run.error_message,
+        run.status.is_terminal() && !has_more,
+    ))
 }
 
 fn has_changes(response: &RealtimePollResponse) -> bool {
@@ -1300,6 +1382,60 @@ mod tests {
     }
 
     #[test]
+    fn a_page_cut_by_the_soft_cap_does_not_claim_completion() {
+        let mut finished = run();
+        finished.status = RunStatus::Completed;
+        let half = || json!("x".repeat(MAX_RUN_UPDATE_BYTES / 2 + 1));
+        let cut = changed(run_update(
+            &finished,
+            &subscription(),
+            page(vec![event(0, half()), event(1, half())], false),
+            &mut budget(),
+        ));
+        assert!(cut.has_more);
+        assert_eq!(cut.events.len(), 1);
+        assert_eq!(
+            cut.revision,
+            run_revision(&finished, "COMPLETED", true).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_finished_run_reports_completion_after_a_last_page_that_had_more() {
+        let mut finished = run();
+        finished.status = RunStatus::Completed;
+        let last = changed(run_update(
+            &finished,
+            &subscription(),
+            page(vec![event(0, json!("last"))], true),
+            &mut budget(),
+        ));
+        assert!(last.has_more);
+        let mut subscription = subscription();
+        subscription.revision = Some(last.revision);
+        subscription.after_sequence = 0;
+        let closing = changed(run_update(
+            &finished,
+            &subscription,
+            EventReplay::default(),
+            &mut budget(),
+        ));
+        assert!(closing.events.is_empty());
+        assert!(!closing.has_more);
+        subscription.revision = Some(closing.revision);
+        assert!(
+            run_update(
+                &finished,
+                &subscription,
+                EventReplay::default(),
+                &mut budget()
+            )
+            .unwrap()
+            .is_none()
+        );
+    }
+
+    #[test]
     fn foreign_and_out_of_order_store_events_are_never_delivered() {
         let mut foreign = event(0, json!("secret"));
         foreign.run_id = "other-run".into();
@@ -1519,16 +1655,41 @@ mod tests {
                 id TEXT PRIMARY KEY, "userId" TEXT NOT NULL, read BOOLEAN NOT NULL,
                 "createdAt" TEXT NOT NULL, "readAt" TEXT
             )"#,
-            r#"CREATE TABLE public."Invitation" (id TEXT PRIMARY KEY, "userId" TEXT NOT NULL)"#,
+            r#"CREATE TABLE public."Invitation" (
+                id TEXT PRIMARY KEY, "userId" TEXT NOT NULL, "createdAt" TEXT NOT NULL
+            )"#,
             r#"CREATE TABLE public."WasmPackageInvitation" (
                 id TEXT PRIMARY KEY, "inviteeId" TEXT NOT NULL, status TEXT NOT NULL,
                 "createdAt" TEXT NOT NULL, "expiresAt" TEXT
             )"#,
+            r#"CREATE TABLE public."InboxEntry" (
+                id TEXT PRIMARY KEY, "inboxId" TEXT NOT NULL, "createdAt" TEXT NOT NULL
+            )"#,
+            r#"CREATE TABLE public."ConversationMember" (
+                "conversationId" TEXT NOT NULL, "principalId" TEXT NOT NULL, "lastReadAt" TEXT
+            )"#,
+            r#"CREATE TABLE public."Bot" (
+                id TEXT PRIMARY KEY, "ownerId" TEXT NOT NULL, "deletedAt" TEXT
+            )"#,
+            r#"CREATE TABLE public."BotTurn" (
+                id TEXT PRIMARY KEY, "ownerId" TEXT NOT NULL, "updatedAt" TEXT NOT NULL
+            )"#,
+            r#"INSERT INTO public."BotTurn" VALUES
+                ('turn-a','user-a','2026-01-01T00:00:00Z'),
+                ('turn-b','user-b','2026-01-01T00:00:00Z')"#,
+            r#"INSERT INTO public."InboxEntry" VALUES
+                ('entry-a','user-a','2026-01-01T00:00:00Z'),
+                ('entry-b','user-b','2026-12-01T00:00:00Z')"#,
+            r#"INSERT INTO public."ConversationMember" VALUES
+                ('conversation-1','user-a',NULL),
+                ('conversation-1','user-b','2026-12-01T00:00:00Z')"#,
             r#"INSERT INTO public."Notification" VALUES
                 ('notice-1','user-a',false,'2026-01-01T00:00:00Z',NULL),
                 ('notice-2','user-a',true,'2026-01-02T00:00:00Z','2026-01-03T00:00:00Z'),
                 ('foreign','user-b',false,'2026-02-01T00:00:00Z',NULL)"#,
-            r#"INSERT INTO public."Invitation" VALUES ('invite-1','user-a'), ('invite-2','user-b')"#,
+            r#"INSERT INTO public."Invitation" VALUES
+                ('invite-1','user-a','2026-01-01T00:00:00Z'),
+                ('invite-2','user-b','2026-01-01T00:00:00Z')"#,
             r#"INSERT INTO public."WasmPackageInvitation" VALUES
                 ('package-1','user-a','PENDING','2026-01-01T00:00:00Z',NULL),
                 ('package-2','user-a','PENDING','2020-01-01T00:00:00Z','2020-02-01T00:00:00Z'),
@@ -1563,11 +1724,22 @@ mod tests {
             r#"UPDATE public."Notification" SET read=true, "readAt"='2026-01-04T00:00:00Z' WHERE id='notice-1'"#,
             r#"DELETE FROM public."Notification" WHERE id='notice-2'"#,
             r#"INSERT INTO public."Notification" VALUES ('notice-3','user-a',true,'2026-01-05T00:00:00Z','2026-01-05T00:00:00Z')"#,
-            r#"INSERT INTO public."Invitation" VALUES ('invite-3','user-a')"#,
+            r#"INSERT INTO public."Invitation" VALUES ('invite-3','user-a','2026-01-07T00:00:00Z')"#,
+            r#"UPDATE public."Invitation" SET id='invite-4', "createdAt"='2026-01-08T00:00:00Z' WHERE id='invite-1'"#,
+            r#"UPDATE public."WasmPackageInvitation" SET "createdAt"='2026-01-09T00:00:00Z' WHERE id='package-1'"#,
             r#"UPDATE public."WasmPackageInvitation" SET status='ACCEPTED' WHERE id='package-1'"#,
+            r#"INSERT INTO public."InboxEntry" VALUES ('entry-a2','user-a','2026-01-06T00:00:00Z')"#,
+            r#"UPDATE public."ConversationMember" SET "lastReadAt"='2026-01-06T00:00:00Z' WHERE "principalId"='user-a'"#,
+            r#"UPDATE public."BotTurn" SET "updatedAt"='2026-01-10T00:00:00Z' WHERE id='turn-a'"#,
+            r#"INSERT INTO public."BotTurn" VALUES ('turn-a2','user-a','2026-01-11T00:00:00Z')"#,
         ] {
             let unrelated = r#"INSERT INTO public."Notification" VALUES (hex(randomblob(8)),'user-b',false,'2026-03-01T00:00:00Z',NULL)"#;
             db.execute_unprepared(unrelated).await.unwrap();
+            db.execute_unprepared(
+                r#"UPDATE public."BotTurn" SET "updatedAt"=datetime('now') WHERE id='turn-b'"#,
+            )
+            .await
+            .unwrap();
             assert_eq!(
                 &notification_update(&db, "user-a").await.unwrap().revision,
                 revisions.last().unwrap(),

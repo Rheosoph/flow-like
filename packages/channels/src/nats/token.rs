@@ -150,6 +150,20 @@ fn realtime_token(
     )
 }
 
+pub(crate) fn sign(key: &KeyPair, mut claims: Value) -> Result<String> {
+    // NATS uses a base32 digest of claims before jti is inserted.
+    claims["jti"] = data_encoding::BASE32_NOPAD
+        .encode(&Sha256::digest(serde_json::to_vec(&claims)?))
+        .into();
+    let header = URL_SAFE_NO_PAD.encode(br#"{"typ":"JWT","alg":"ed25519-nkey"}"#);
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?);
+    let unsigned = format!("{header}.{payload}");
+    let signature = key
+        .sign(unsigned.as_bytes())
+        .map_err(|_| anyhow!("NATS credential signing failed"))?;
+    Ok(format!("{unsigned}.{}", URL_SAFE_NO_PAD.encode(signature)))
+}
+
 #[cfg(test)]
 mod realtime_tests {
     use super::*;
@@ -196,18 +210,4 @@ mod realtime_tests {
         );
         assert_eq!(publisher["nats"]["sub"], json!({"deny": [">"]}));
     }
-}
-
-pub(crate) fn sign(key: &KeyPair, mut claims: Value) -> Result<String> {
-    // NATS uses a base32 digest of claims before jti is inserted.
-    claims["jti"] = data_encoding::BASE32_NOPAD
-        .encode(&Sha256::digest(serde_json::to_vec(&claims)?))
-        .into();
-    let header = URL_SAFE_NO_PAD.encode(br#"{"typ":"JWT","alg":"ed25519-nkey"}"#);
-    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims)?);
-    let unsigned = format!("{header}.{payload}");
-    let signature = key
-        .sign(unsigned.as_bytes())
-        .map_err(|_| anyhow!("NATS credential signing failed"))?;
-    Ok(format!("{unsigned}.{}", URL_SAFE_NO_PAD.encode(signature)))
 }

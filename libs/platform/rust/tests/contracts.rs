@@ -364,6 +364,32 @@ async fn terminal_polling_drains_remaining_pages_and_surfaces_failure() {
     );
 }
 
+fn page(status: &str, sequences: std::ops::Range<i32>, has_more: bool) -> Value {
+    let mut page = poll(status, sequences);
+    page["has_more"] = json!(has_more);
+    page
+}
+
+#[tokio::test]
+async fn polling_follows_has_more_and_ends_on_the_final_page() {
+    let mut server = Server::start(vec![
+        Reply::json(page("RUNNING", 0..100, true)),
+        Reply::json(page("RUNNING", 100..100, true)),
+        Reply::json(page("COMPLETED", 100..102, false)),
+    ])
+    .await;
+    let completed = server
+        .client()
+        .wait_for_execution("poll-secret", &WaitOptions::default())
+        .await
+        .unwrap();
+    assert_eq!(completed.events.len(), 102);
+    assert_eq!(completed.has_more, Some(false));
+    assert!(server.take().await.target.contains("after_sequence=-1"));
+    assert!(server.take().await.target.contains("after_sequence=99"));
+    assert!(server.take().await.target.contains("after_sequence=99"));
+}
+
 #[tokio::test]
 async fn wait_deadline_cancels_a_pending_poll() {
     let mut reply = Reply::json(poll("RUNNING", 0..0));

@@ -90,6 +90,13 @@ export function isExecutionFinished(
 	);
 }
 
+/** No further update of the run arrives: it finished, or it continues on the server detached. */
+export function isExecutionSettled(
+	task: Pick<ExecutionTask, "status" | "detached">,
+): boolean {
+	return isExecutionFinished(task) || task.detached === true;
+}
+
 export interface ExecutionCallbacks {
 	onEvents?: (events: IIntercomEvent[]) => void;
 	onExecutionStart?: (runId: string) => void;

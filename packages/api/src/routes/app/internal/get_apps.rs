@@ -23,12 +23,13 @@ pub type AppsWithMetadata = Vec<(App, Option<Metadata>)>;
 /// `INACTIVE` is written by exactly two paths — the deletion tombstone and the
 /// destination of an in-flight fork — so an app that is draining and one that
 /// is still being copied both stay out of the library instead of showing up
-/// empty or unopenable.
-fn library_apps(sub: &str) -> Select<app::Entity> {
+/// empty or unopenable. A bot's workspace belongs to its bot, not the library.
+pub(crate) fn library_apps(sub: &str) -> Select<app::Entity> {
     app::Entity::find()
         .order_by_desc(app::Column::UpdatedAt)
         .join(JoinType::InnerJoin, app::Relation::Membership.def())
         .filter(app::Column::Status.ne(Status::Inactive))
+        .filter(app::Column::BotId.is_null())
         .filter(membership::Column::UserId.eq(sub))
 }
 
@@ -104,12 +105,13 @@ mod tests {
     use sea_orm::sea_query::PostgresQueryBuilder;
 
     #[test]
-    fn library_hides_tombstoned_and_half_forked_apps() {
+    fn library_hides_tombstoned_and_half_forked_apps_and_bot_workspaces() {
         let sql = library_apps("user_1")
             .into_query()
             .to_string(PostgresQueryBuilder);
 
         assert!(sql.contains(r#""App"."status" <> 'INACTIVE'"#), "{sql}");
+        assert!(sql.contains(r#""App"."botId" IS NULL"#), "{sql}");
         assert!(sql.contains(r#""Membership"."userId" = 'user_1'"#), "{sql}");
     }
 }

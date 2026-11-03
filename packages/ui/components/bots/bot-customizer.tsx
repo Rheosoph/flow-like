@@ -445,7 +445,7 @@ export function BotCustomizer({
 			frame: randomItem(BOT_OPTIONS.frame),
 			backdrop: randomItem(BOT_OPTIONS.backdrop),
 			halo: randomItem(BOT_OPTIONS.halo),
-			effect: randomItem(BOT_OPTIONS.effect),
+			effect: value.effect,
 			emote: randomItem(BOT_OPTIONS.emote),
 		});
 	}

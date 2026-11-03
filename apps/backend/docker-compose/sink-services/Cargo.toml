@@ -31,6 +31,7 @@ teloxide = { version = "0.17", default-features = false, features = [
     "ctrlc_handler",
 ], optional = true }
 futures = "0.3"
+base64.workspace = true
 
 [features]
 default = []

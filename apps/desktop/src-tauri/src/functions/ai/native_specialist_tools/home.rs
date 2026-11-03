@@ -6,7 +6,6 @@ use std::{
     path::PathBuf,
     time::{Duration, Instant},
 };
-use tauri::Emitter;
 use tokio::io::AsyncWriteExt;
 
 static CONTRACT: LazyLock<Value> = LazyLock::new(|| {
@@ -593,9 +592,11 @@ pub(super) async fn execute(
     {
         STAGED.insert(parent.clone(), response.clone());
     }
-    let _ = session
-        .app_handle
-        .emit("flowpilot:home-layout-staged", &response);
+    crate::utils::emit_to_ui(
+        &session.app_handle,
+        "flowpilot:home-layout-staged",
+        response.clone(),
+    );
     Ok(response)
 }
 #[cfg(test)]

@@ -4,6 +4,7 @@ import { StrictMode, act, useRef } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BOT_TIMING } from "./animation";
 import {
 	type UseBotAnimationOptions,
 	useBotAnimation,
@@ -95,6 +96,81 @@ afterEach(async () => {
 });
 
 describe("bot animation lifecycle", () => {
+	it("reacts once to a changed expression without replaying on rerender", async () => {
+		await render({ expression: "happy" });
+		expect(state().reaction).toBeUndefined();
+		await render({ expression: "curious" });
+		expect(state().reaction).toBe("curious");
+		await advance(300);
+		await render({ expression: "curious", gx: 0.5 });
+		await advance(BOT_TIMING.reactionMs - 300);
+		expect(state().reaction).toBeUndefined();
+		await render({ expression: "surprised" });
+		expect(state().reaction).toBe("surprised");
+		await render({ expression: "neutral" });
+		expect(state().reaction).toBeUndefined();
+		expect(vi.getTimerCount()).toBe(4);
+	});
+
+	it("cancels reactions when hidden or offscreen and does not replay on return", async () => {
+		await render();
+		await render({ expression: "love" });
+		expect(state().reaction).toBe("love");
+		await act(async () => VisibilityObserver.latest.setVisible(false));
+		expect(state().reaction).toBeUndefined();
+		expect(vi.getTimerCount()).toBe(0);
+		await render({ expression: "wink" });
+		await act(async () => VisibilityObserver.latest.setVisible(true));
+		expect(state().reaction).toBeUndefined();
+		await render({ expression: "happy" });
+		expect(state().reaction).toBe("happy");
+		await act(async () => {
+			hidden = true;
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		expect(state().reaction).toBeUndefined();
+		expect(vi.getTimerCount()).toBe(0);
+		await act(async () => {
+			hidden = false;
+			document.dispatchEvent(new Event("visibilitychange"));
+		});
+		expect(state().reaction).toBeUndefined();
+	});
+
+	it("respects reduced motion and static or sleeping avatars during expression changes", async () => {
+		await render();
+		await render({ expression: "love" });
+		await act(async () => {
+			media.matches = true;
+			media.dispatchEvent(new Event("change"));
+		});
+		expect(state().reaction).toBeUndefined();
+		expect(vi.getTimerCount()).toBe(0);
+		await render({ expression: "surprised" });
+		expect(state().reaction).toBeUndefined();
+		await act(async () => {
+			media.matches = false;
+			media.dispatchEvent(new Event("change"));
+		});
+		expect(state().reaction).toBeUndefined();
+		await render({ expression: "angry", animated: false });
+		expect(state().reaction).toBeUndefined();
+		await render({ expression: "sad", pose: "sleep" });
+		expect(state().reaction).toBeUndefined();
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	it.each(["sad", "concerned", "angry", "oops", "focused"] as const)(
+		"keeps a %s bot from doing cheerful idle hops",
+		async (expression) => {
+			await render({ expression });
+			await advance(BOT_TIMING.hopIntervalMs[0]);
+			expect(state().hopping).toBe(false);
+			await render({ expression: "neutral" });
+			expect(state().hopping).toBe(true);
+		},
+	);
+
 	it("keeps static gallery thumbnails free of motion subscriptions and timers", async () => {
 		await render({ animated: false });
 		expect(window.matchMedia).not.toHaveBeenCalled();
