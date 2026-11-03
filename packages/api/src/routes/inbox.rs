@@ -7,9 +7,9 @@
 //! sees content.
 
 use crate::{
+    bot_caller,
     db::coordination::coordinate,
     entity::{bot, conversation, conversation_member, inbox_entry},
-    bot_caller,
     error::ApiError,
     middleware::jwt::AppUser,
     routes::bots::owned_bot,

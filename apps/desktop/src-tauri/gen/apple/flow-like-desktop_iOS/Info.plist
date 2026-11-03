@@ -29,12 +29,12 @@
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
+			<key>CFBundleURLName</key>
+			<string>flow-like</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>flow-like</string>
 			</array>
-			<key>CFBundleURLName</key>
-			<string>flow-like</string>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
@@ -128,5 +128,32 @@
 	</array>
 	<key>NSLocationUsageDescription</key>
 	<string>Flow Like uses your location when you request it in a workflow or map.</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>flow-app</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>Flow-Like App</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Default</string>
+		</dict>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>flow</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>Flow-Like Flow</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Default</string>
+		</dict>
+	</array>
 </dict>
 </plist>

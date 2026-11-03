@@ -2,7 +2,11 @@
 //! token's bot, a turn route names the token's turn, a room route the token's room. The owner is
 //! never read from the token; it is resolved from the live bot row.
 
-use crate::{entity::bot, error::ApiError, middleware::jwt::{AppUser, BotUser}};
+use crate::{
+    entity::bot,
+    error::ApiError,
+    middleware::jwt::{AppUser, BotUser},
+};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 
 /// What a route names that a bot token must match.
@@ -19,9 +23,9 @@ fn trimmed(value: Option<&str>) -> Option<&str> {
 
 pub(crate) fn ensure_as_self(bot: &BotUser, as_bot: Option<&str>) -> Result<(), ApiError> {
     match trimmed(as_bot) {
-        Some(named) if named != bot.bot_id => Err(ApiError::forbidden(
-            "A bot token acts only as its own bot",
-        )),
+        Some(named) if named != bot.bot_id => {
+            Err(ApiError::forbidden("A bot token acts only as its own bot"))
+        }
         _ => Ok(()),
     }
 }
@@ -30,7 +34,9 @@ pub(crate) fn ensure_turn(bot: &BotUser, turn_id: &str) -> Result<(), ApiError> 
     if bot.turn_id == turn_id {
         Ok(())
     } else {
-        Err(ApiError::forbidden("This bot token belongs to another turn"))
+        Err(ApiError::forbidden(
+            "This bot token belongs to another turn",
+        ))
     }
 }
 

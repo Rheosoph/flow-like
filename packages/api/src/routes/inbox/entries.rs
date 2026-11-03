@@ -1,6 +1,6 @@
 use super::{
     Event, INBOX_ENVELOPES_MISMATCH, INBOX_HANDLE_NOT_ALLOWED, INBOX_MESSAGE_ID_TAKEN,
-    active_members, active_membership, allocate_seqs, conversation_not_found,
+    acting_reader, active_members, active_membership, allocate_seqs, conversation_not_found,
     delivery::{
         Addressed, BotDelivery, BotRecipient, bot_recipients, deliver_to_bots, live_bots, woken,
     },
@@ -13,7 +13,7 @@ use super::{
     },
     now_millis,
     positions::{PositionRead, entries_by_position, position_read},
-    acting_reader, reader_membership,
+    reader_membership,
     targets::{check_target, edits_of, tombstone},
     trimmed,
     turns::{desktop_bot, reply_as_bot, reply_interactive_as_bot},
@@ -819,13 +819,7 @@ pub async fn list_entries(
 ) -> Result<Json<InboxEntriesPage>, ApiError> {
     let by_position = position_read(&query, page_limit(&query))?;
     let bounds = page_bounds(&query)?;
-    let reader = acting_reader(
-        &state.db,
-        &user,
-        query.as_bot.as_deref(),
-        &conversation_id,
-    )
-    .await?;
+    let reader = acting_reader(&state.db, &user, query.as_bot.as_deref(), &conversation_id).await?;
     reader_membership(&state.db, &conversation_id, &reader).await?;
     Ok(Json(
         read_entries(
@@ -903,7 +897,7 @@ pub async fn send_entry(
     let (sender, sent) = match sending {
         SendAs::Person => {
             let sent = send_as_person(&state, &conversation_id, &sub, &outgoing).await;
-            (sub, sent)
+            (sub.clone(), sent)
         }
         SendAs::Bot { bot_id, claim } if is_interactive_host(&claim.host_id) => {
             let bot = owned_bot(&state.db, &sub, &bot_id).await?;

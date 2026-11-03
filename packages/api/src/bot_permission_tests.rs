@@ -521,15 +521,10 @@ mod flow_runs {
     #[tokio::test]
     async fn the_board_allow_list_gates_board_runs() {
         let db = flow_world(None, r#"{"boards":["b1"]}"#).await;
-        let run = BotFlowRun::resolve_in(
-            &db,
-            &token_user(),
-            APP,
-            RolePermissions::ExecuteBoards,
-        )
-        .await
-        .unwrap()
-        .unwrap();
+        let run = BotFlowRun::resolve_in(&db, &token_user(), APP, RolePermissions::ExecuteBoards)
+            .await
+            .unwrap()
+            .unwrap();
         run.ensure_board("b1").unwrap();
         assert!(run.ensure_board("b2").is_err());
     }
@@ -537,15 +532,11 @@ mod flow_runs {
     #[tokio::test]
     async fn a_mask_without_execute_refuses_the_run() {
         let db = flow_world(Some(RolePermissions::ReadFiles.bits()), "{}").await;
-        let refusal = BotFlowRun::resolve_in(
-            &db,
-            &token_user(),
-            APP,
-            RolePermissions::ExecuteEvents,
-        )
-        .await
-        .err()
-        .unwrap();
+        let refusal =
+            BotFlowRun::resolve_in(&db, &token_user(), APP, RolePermissions::ExecuteEvents)
+                .await
+                .err()
+                .unwrap();
         assert_eq!(refusal.status(), StatusCode::FORBIDDEN);
     }
 
@@ -598,7 +589,10 @@ mod flow_runs {
         let db = database().await;
         insert_bot(&db, BOT, OWNER, "SERVER").await;
         owner_role(&db, OWNER, APP, full_bits()).await;
-        let refusal = admit(&db, &connection_of_bot(APP), "any").await.err().unwrap();
+        let refusal = admit(&db, &connection_of_bot(APP), "any")
+            .await
+            .err()
+            .unwrap();
         assert_eq!(refusal.status(), StatusCode::FORBIDDEN);
     }
 

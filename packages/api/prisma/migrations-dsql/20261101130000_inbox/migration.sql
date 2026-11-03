@@ -29,6 +29,7 @@ CREATE TABLE "ConversationMember" (
     "joinedAt" TIMESTAMPTZ(3) NOT NULL,
     "leftAt" TIMESTAMPTZ(3),
     "lastReadAt" TIMESTAMPTZ(3),
+    "status" TEXT NOT NULL DEFAULT 'ACTIVE',
 
     CONSTRAINT "ConversationMember_pkey" PRIMARY KEY ("conversationId","principalId")
 );

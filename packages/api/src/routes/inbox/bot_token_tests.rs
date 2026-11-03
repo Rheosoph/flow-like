@@ -97,7 +97,10 @@ async fn a_person_still_reads_only_their_own_bots() {
     let own = acting_reader(&db, &person("user-a"), Some("bot_1"), "TEAM")
         .await
         .unwrap();
-    assert_eq!((own.inbox.as_str(), own.owner.as_deref()), ("bot_1", Some("user-a")));
+    assert_eq!(
+        (own.inbox.as_str(), own.owner.as_deref()),
+        ("bot_1", Some("user-a"))
+    );
     let error = acting_reader(&db, &person("user-a"), Some("bot_2"), "TEAM")
         .await
         .unwrap_err();
@@ -114,18 +117,28 @@ async fn acting_owner_is_the_owner_for_the_tokens_bot_only() {
     };
     let bot = token("bot_1", "bt_1", Some("TEAM"));
     assert_eq!(
-        bot_caller::acting_owner(&db, &bot, &names(Some("bt_1"))).await.unwrap(),
+        bot_caller::acting_owner(&db, &bot, &names(Some("bt_1")))
+            .await
+            .unwrap(),
         "user-a"
     );
     let other_turn = bot_caller::acting_owner(&db, &bot, &names(Some("bt_2"))).await;
     assert_eq!(other_turn.unwrap_err().status(), StatusCode::FORBIDDEN);
-    let foreign = Names { as_bot: Some("bot_2"), ..names(None) };
+    let foreign = Names {
+        as_bot: Some("bot_2"),
+        ..names(None)
+    };
     assert_eq!(
-        bot_caller::acting_owner(&db, &bot, &foreign).await.unwrap_err().status(),
+        bot_caller::acting_owner(&db, &bot, &foreign)
+            .await
+            .unwrap_err()
+            .status(),
         StatusCode::FORBIDDEN
     );
     assert_eq!(
-        bot_caller::acting_owner(&db, &person("user-b"), &names(None)).await.unwrap(),
+        bot_caller::acting_owner(&db, &person("user-b"), &names(None))
+            .await
+            .unwrap(),
         "user-b"
     );
 }
@@ -140,10 +153,19 @@ fn claim(turn: &str) -> TurnClaim {
 #[test]
 fn a_bot_token_sends_only_as_itself_for_its_own_turn() {
     let bot = token("bot_1", "bt_1", None);
-    let own = SendAs::Bot { bot_id: "bot_1".into(), claim: claim("bt_1") };
+    let own = SendAs::Bot {
+        bot_id: "bot_1".into(),
+        claim: claim("bt_1"),
+    };
     assert!(ensure_bot_sends_own_turn(&bot, &own).is_ok());
-    let other_turn = SendAs::Bot { bot_id: "bot_1".into(), claim: claim("bt_2") };
-    let foreign = SendAs::Bot { bot_id: "bot_2".into(), claim: claim("bt_1") };
+    let other_turn = SendAs::Bot {
+        bot_id: "bot_1".into(),
+        claim: claim("bt_2"),
+    };
+    let foreign = SendAs::Bot {
+        bot_id: "bot_2".into(),
+        claim: claim("bt_1"),
+    };
     for refused in [&other_turn, &foreign, &SendAs::Person] {
         let error = ensure_bot_sends_own_turn(&bot, refused).unwrap_err();
         assert_eq!(error.status(), StatusCode::FORBIDDEN);

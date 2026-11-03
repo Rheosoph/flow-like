@@ -559,13 +559,7 @@ pub async fn list_segments(
     Query(query): Query<SegmentsQuery>,
 ) -> Result<Json<ConversationSegmentList>, ApiError> {
     let page = segment_page(&query)?;
-    let reader = acting_reader(
-        &state.db,
-        &user,
-        query.as_bot.as_deref(),
-        &conversation_id,
-    )
-    .await?;
+    let reader = acting_reader(&state.db, &user, query.as_bot.as_deref(), &conversation_id).await?;
     let conversation = member_conversation(&state.db, &conversation_id, &reader.inbox).await?;
     let author = match trimmed(query.author.as_deref()) {
         Some(author) => Some(author.to_string()),

@@ -8,7 +8,10 @@
 use super::{
     INBOX_MEMBER_NOT_ALLOWED, INBOX_REQUEST_LIMIT, MEMBER_ACTIVE, MEMBER_BLOCKED, MEMBER_DECLINED,
     MEMBER_PENDING,
-    delivery::{Addressed, BotDelivery, BotRecipient, bot_recipients, deliver_to_bots, live_bots, people_to_wake},
+    delivery::{
+        Addressed, BotDelivery, BotRecipient, bot_recipients, deliver_to_bots, live_bots,
+        people_to_wake,
+    },
     insert_copies,
     invitations::{
         InvitationAnswer, InviteMode, accept_in, classify, ensure_may_answer, pending_member,
@@ -115,18 +118,16 @@ pub(super) async fn answer_by_writing<C: ConnectionTrait>(
     caller: &str,
     now: DateTime<FixedOffset>,
 ) -> Result<Vec<String>, ApiError> {
-    let held = conversation_member::Entity::find_by_id((
-        conversation_id.to_string(),
-        caller.to_string(),
-    ))
-    .filter(conversation_member::Column::LeftAt.is_null())
-    .filter(conversation_member::Column::Status.is_in([
-        MEMBER_PENDING,
-        MEMBER_DECLINED,
-        MEMBER_BLOCKED,
-    ]))
-    .one(txn)
-    .await?;
+    let held =
+        conversation_member::Entity::find_by_id((conversation_id.to_string(), caller.to_string()))
+            .filter(conversation_member::Column::LeftAt.is_null())
+            .filter(conversation_member::Column::Status.is_in([
+                MEMBER_PENDING,
+                MEMBER_DECLINED,
+                MEMBER_BLOCKED,
+            ]))
+            .one(txn)
+            .await?;
     if held.is_none() {
         return Ok(Vec::new());
     }
@@ -197,8 +198,7 @@ pub(crate) async fn deliver_held_in<C: ConnectionTrait>(
     .filter(super::active_member())
     .one(txn)
     .await?
-    .filter(|member| PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::Bot))
-    else {
+    .filter(|member| PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::Bot)) else {
         return Ok(Vec::new());
     };
     if !is_direct(txn, conversation_id).await? {
@@ -316,8 +316,11 @@ pub(super) async fn held_for<C: ConnectionTrait>(
         .collect();
     let entries = inbox_entry::Entity::find()
         .filter(
-            inbox_entry::Column::ConversationId
-                .is_in(requests.iter().map(|(conversation, _)| conversation.clone())),
+            inbox_entry::Column::ConversationId.is_in(
+                requests
+                    .iter()
+                    .map(|(conversation, _)| conversation.clone()),
+            ),
         )
         .filter(
             inbox_entry::Column::InboxId
@@ -415,7 +418,10 @@ pub(super) async fn blocked_by<C: ConnectionTrait>(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "POST /inbox/invitations/{invitation_id}/block", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /inbox/invitations/{invitation_id}/block",
+    skip(state, user)
+)]
 pub async fn block_invitation(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
