@@ -134,4 +134,8 @@ message App {
   // existed, which is indistinguishable from "never configured" — both mean
   // the app renders with no app-level styling.
   optional FrontendConfiguration frontend = 31;
+
+  // Set on a bot's workspace: the id of the bot the app belongs to. App lists
+  // hide such apps.
+  optional string bot_id = 32;
 }

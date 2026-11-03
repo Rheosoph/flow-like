@@ -1030,9 +1030,23 @@ const FlowNodeInner = memo(
 						className="bg-background hover:bg-card group/play transition-all rounded-md hover:rounded-lg border p-1 absolute left-0 top-0 translate-x-[calc(-120%)] opacity-200!"
 						onClick={async (e) => {
 							const backend = useBackendStore.getState().backend;
-							if (!backend) return;
-							if (activeRunId)
+							if (!backend || !activeRunId) return;
+							try {
 								await backend.eventState.cancelExecution(activeRunId);
+							} catch (error) {
+								console.error("Stopping execution failed", error);
+								toastError(
+									i18next.t(
+										"flow:stopExecutionFailed",
+										"Couldn't stop the execution. {{reason}}",
+										{
+											reason:
+												error instanceof Error ? error.message : String(error),
+										},
+									),
+									<CircleXIcon />,
+								);
+							}
 						}}
 					>
 						<CircleStopIcon className="w-3 h-3 group-hover/play:scale-110 text-primary" />

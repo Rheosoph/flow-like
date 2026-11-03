@@ -7,13 +7,16 @@ import ExternalLink from "lucide-react/dist/esm/icons/external-link.js";
 import FileText from "lucide-react/dist/esm/icons/file-text.js";
 import Globe from "lucide-react/dist/esm/icons/globe.js";
 import Search from "lucide-react/dist/esm/icons/search.js";
+import SquareTerminal from "lucide-react/dist/esm/icons/square-terminal.js";
 import Workflow from "lucide-react/dist/esm/icons/workflow.js";
 import Wrench from "lucide-react/dist/esm/icons/wrench.js";
 import { type ReactNode, useId, useState } from "react";
 import { cn } from "../../../lib/utils";
 import { getToolActivityLabel } from "../../../state/global-chat/tool-step-activity";
+import { BotExchangeCard } from "../../global-chat/bot-exchange-card";
 import type { IPlanStep, IToolActivityDetail } from "./chat-db";
 import { ReasoningBody } from "./reasoning-viewer";
+import { TerminalCard } from "./tool-terminal";
 
 export type ActivitySource = NonNullable<
 	IToolActivityDetail["sources"]
@@ -26,6 +29,7 @@ const ACTIVITY_ICONS = {
 	files: FileText,
 	database: Database,
 	workflow: Workflow,
+	terminal: SquareTerminal,
 	tool: Wrench,
 };
 
@@ -142,30 +146,47 @@ function SourceChip({ source }: { source: ActivitySource }) {
 	);
 }
 
+const COUNTRY_SECOND_LEVEL = /^(?:ac|co|com|edu|gov|net|org)\.[a-z]{2}$/;
+
+/** One key per site, so www.adac.de and adac.de, or de. and en.wikipedia.org, count once. */
+export function siteKey(hostname: string): string {
+	const host = hostname.toLowerCase().replace(/\.$/, "");
+	if (host.includes(":") || /^[\d.]+$/.test(host)) return host;
+	const labels = host.split(".");
+	const tail = labels.slice(-2).join(".");
+	return COUNTRY_SECOND_LEVEL.test(tail) ? labels.slice(-3).join(".") : tail;
+}
+
+/** The folded summary hints at the sites with a few icons; the count carries the rest. */
+const SITE_ICON_LIMIT = 4;
+
 /** Keep the sites visible even after the completed activity group folds away. */
 export function ActivitySources({ steps }: { steps: IPlanStep[] }) {
-	const sources = new Map<string, ActivitySource>();
+	const sites = new Map<string, ActivitySource>();
 	for (const step of steps) {
 		if (step.detail?.kind !== "tool_activity") continue;
 		for (const source of step.detail.sources ?? []) {
-			if (!sources.has(source.hostname)) sources.set(source.hostname, source);
+			const key = siteKey(source.hostname);
+			if (!sites.has(key)) sites.set(key, source);
 		}
 	}
-	if (!sources.size) return null;
+	if (!sites.size) return null;
 	return (
-		<span className="flex min-w-0 flex-wrap items-center gap-1.5 text-[11px] font-normal text-muted-foreground">
-			{[...sources.values()].map((source) => (
-				<span
-					key={source.hostname}
-					title={source.hostname}
-					className="inline-flex size-6 items-center justify-center rounded-full border border-border/60 bg-background"
-				>
-					<WebsiteIcon source={source} />
-					<span className="sr-only">{source.hostname}</span>
-				</span>
-			))}
-			<span className="ml-1 tabular-nums">
-				{sources.size} {sources.size === 1 ? "website" : "websites"}
+		<span className="flex min-w-0 items-center gap-2 text-[11px] font-normal text-muted-foreground">
+			<span className="flex shrink-0 -space-x-1.5" aria-hidden="true">
+				{[...sites].slice(0, SITE_ICON_LIMIT).map(([key, source]) => (
+					<span
+						key={key}
+						title={key}
+						data-activity-site
+						className="inline-flex size-6 items-center justify-center rounded-full border border-border/60 bg-background"
+					>
+						<WebsiteIcon source={source} />
+					</span>
+				))}
+			</span>
+			<span className="truncate tabular-nums">
+				{sites.size} {sites.size === 1 ? "website" : "websites"}
 			</span>
 		</span>
 	);
@@ -258,6 +279,8 @@ export function ToolActivityRow({
 							))}
 						</div>
 					)}
+					{detail.terminal && <TerminalCard terminal={detail.terminal} />}
+					{detail.exchange && <BotExchangeCard exchange={detail.exchange} />}
 					{hasMeta && (
 						<div className="flex min-w-0 items-center gap-2 pt-0.5 text-[11px] text-muted-foreground/80">
 							{detail.method && (

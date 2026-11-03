@@ -64,6 +64,7 @@ const LANE_GAP = 24;
 const CELL_SIZE = 128;
 const FLATNESS = 0.25;
 const MAX_CANDIDATES = 64;
+const LOCAL_LINK_SPAN = 160;
 // A crossing may justify a short detour, but not a trip around the whole board.
 const CROSSING_COST = 800;
 const WAYPOINT_COST = 80;
@@ -844,6 +845,23 @@ function routeInOrder(
 			collisions(wire, wire.segments, boxIndex),
 		]),
 	);
+	// Keep clear connections across a column gap as routing guides. Detouring
+	// these short links to avoid a crossing braids the pins and blocks the lanes
+	// needed by longer wires. Check before any generated dots become obstacles.
+	const directLinks = new Set(
+		eligible
+			.filter((wire) => {
+				const span = wire.target.x - wire.source.x;
+				return (
+					span > 0 &&
+					span <= LOCAL_LINK_SPAN &&
+					Math.abs(wire.target.y - wire.source.y) <= span &&
+					initialCollisions.get(wire.key) === 0 &&
+					branchCost(wire, wire.segments) === 0
+				);
+			})
+			.map((wire) => wire.key),
+	);
 	eligible.sort(
 		(a, b) =>
 			(initialCollisions.get(b.key) ?? 0) -
@@ -883,10 +901,11 @@ function routeInOrder(
 				}
 			};
 			if (
-				route.waypoints.length === 0 &&
-				originalHits === 0 &&
-				originalCrossings === 0 &&
-				originalBranchCost === 0
+				directLinks.has(wire.key) ||
+				(route.waypoints.length === 0 &&
+					originalHits === 0 &&
+					originalCrossings === 0 &&
+					originalBranchCost === 0)
 			) {
 				restoreBoxes();
 				continue;
@@ -1266,12 +1285,9 @@ function shareDataTrunks(
 					});
 				}
 				const value = evaluate(choices, true);
-				if (
-					!value ||
-					value.score >= best ||
-					value.locality > baseline.locality ||
-					(!baseline.hits && value.crossed > baseline.crossed)
-				)
+				// The score already prices crossings. A shared trunk can be easier
+				// to follow than duplicate outer lanes even with an extra crossing.
+				if (!value || value.score >= best || value.locality > baseline.locality)
 					continue;
 				best = value.score;
 				chosen = choices;

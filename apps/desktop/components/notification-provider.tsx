@@ -69,6 +69,22 @@ async function loadNotificationPlugin(): Promise<NotificationApi | null> {
 	}
 }
 
+const BOT_CHAT_PATH = "/bots";
+
+function isBotChatFocused(link?: string | null): boolean {
+	if (!link || typeof window === "undefined" || !document.hasFocus()) {
+		return false;
+	}
+	const target = new URL(link, window.location.origin);
+	const botId = target.searchParams.get("bot");
+	if (target.pathname !== BOT_CHAT_PATH || !botId) return false;
+	const here = new URL(window.location.href);
+	return (
+		here.pathname.replace(/\/$/, "") === BOT_CHAT_PATH &&
+		here.searchParams.get("bot") === botId
+	);
+}
+
 function showNotificationToast(
 	title: string,
 	description?: string,
@@ -644,6 +660,8 @@ export default function NotificationProvider({
 					sourceRunId: notification.source_run_id,
 					sourceNodeId: notification.source_node_id,
 				});
+
+				if (isBotChatFocused(notification.link)) continue;
 
 				if (
 					notificationApi.current &&

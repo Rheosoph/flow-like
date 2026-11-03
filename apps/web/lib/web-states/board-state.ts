@@ -29,21 +29,18 @@ import {
 	type IRunPayload,
 	type IScopedFlowScriptResponse,
 	type IVersionType,
-	type ProgressToastData,
 	checkOAuthTokens,
-	finishAllProgressToasts,
-	showProgressToast,
 } from "@flow-like/flow-like-ui";
 import type {
 	CanvasSettings,
 	SurfaceComponent,
 } from "@flow-like/flow-like-ui/components/a2ui/types";
-import { dispatchPaymentRequest } from "@flow-like/flow-like-ui/components/payments/payment-events";
 import {
 	apiResponseError,
 	isMissingResourceError,
 	isMissingRouteError,
 } from "@flow-like/flow-like-ui/lib/api-error";
+import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import {
 	BOARD_FORMAT_HEADER,
 	type BoardFormatCapabilities,
@@ -64,12 +61,18 @@ import {
 	type FlowVersionState,
 	parseFlowVersionState,
 } from "@flow-like/flow-like-ui/lib/device-management/hub/endpoints";
+import { getExecutionRuntime } from "@flow-like/flow-like-ui/lib/execution/runtime-client";
+import {
+	type ExecutionTask,
+	getExecutionMetadata,
+} from "@flow-like/flow-like-ui/lib/execution/types";
 import type { FlowScriptApplyOrigin } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import {
 	applyFlowScriptFromResponse,
 	flowScriptFromResponse,
 	scopedFlowScriptFromResponse,
 } from "@flow-like/flow-like-ui/lib/flowscript/response";
+import { requestTimeoutMs } from "@flow-like/flow-like-ui/lib/request-deadline";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IChannelHandle } from "@flow-like/flow-like-ui/lib/schema/channel";
 import type {
@@ -90,9 +93,9 @@ import type { IPrerunBoardResponse } from "@flow-like/flow-like-ui/state/backend
 import { globalChatTransportRunId } from "@flow-like/flow-like-ui/state/global-chat/global-chat-run-control";
 import { runGlobalChatTool } from "@flow-like/flow-like-ui/state/global-chat/global-chat-tool-registry";
 import { dispatchSpecialistToolRequest } from "@flow-like/flow-like-ui/state/global-chat/global-chat-web-transport";
-import { toast } from "sonner";
 import { oauthConsentStore, oauthTokenStore } from "../oauth-db";
 import { getOAuthApiBaseUrl, getOAuthService } from "../oauth-service";
+import { prepareSessionRequest } from "../session-request";
 import {
 	type WebBackendRef,
 	apiDelete,
@@ -176,36 +179,6 @@ async function getHubConfig(profile?: { hub?: string }): Promise<
 	return hubCachePromise;
 }
 
-interface ToastEventPayload {
-	message: string;
-	level: "success" | "error" | "info" | "warning";
-}
-
-function handleToastEvent(event: IIntercomEvent): void {
-	const payload = event.payload as ToastEventPayload;
-	if (!payload?.message) return;
-
-	switch (payload.level) {
-		case "success":
-			toast.success(payload.message);
-			break;
-		case "error":
-			toast.error(payload.message);
-			break;
-		case "warning":
-			toast.warning(payload.message);
-			break;
-		default:
-			toast.info(payload.message);
-	}
-}
-
-function handleProgressEvent(event: IIntercomEvent): void {
-	const payload = event.payload as ProgressToastData;
-	if (!payload?.id) return;
-	showProgressToast(payload);
-}
-
 /**
  * `POST /board/{id}` answers with a bare command list for requests without `sync`, and with
  * `{commands, sync}` when the request carried the held manifest. Both are accepted so a client
@@ -221,6 +194,30 @@ function normalizeExecuteCommandsWire(wire: ExecuteCommandsWire): {
 } {
 	if (Array.isArray(wire)) return { commands: wire, sync: undefined };
 	return { commands: wire.commands ?? [], sync: wire.sync ?? undefined };
+}
+
+const RUN_OUTCOME_EVENTS = new Set([
+	"completed",
+	"execution_complete",
+	"error",
+]);
+
+const SETTLED_ERROR_NAMES = new Set(["AbortError", "ExecutionDetachedError"]);
+
+/**
+ * A started run that failed, timed out, was stopped or lost its live updates has its outcome in its
+ * logs. Board callers load them by run id, so only dispatch and transport failures reject.
+ */
+function endedWithOutcome(
+	task: ExecutionTask | undefined,
+	cause: unknown,
+): boolean {
+	if (!task?.runId) return false;
+	const name = (cause as { name?: unknown } | null)?.name;
+	return (
+		(typeof name === "string" && SETTLED_ERROR_NAMES.has(name)) ||
+		task.events.some((event) => RUN_OUTCOME_EVENTS.has(event.event_type))
+	);
 }
 
 export class WebBoardState implements IBoardState {
@@ -719,139 +716,90 @@ export class WebBoardState implements IBoardState {
 			}
 		>,
 	): Promise<ILogMetadata | undefined> {
-		const baseUrl = getApiBaseUrl();
-		const url = `${baseUrl}/api/v1/apps/${appId}/board/${boardId}/invoke`;
-
-		const headers: Record<string, string> = {
-			"Content-Type": "application/json",
-			[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
-		};
-		if (this.backend.auth?.user?.access_token) {
-			headers.Authorization = `Bearer ${this.backend.auth.user.access_token}`;
-		}
-
-		console.log("[OAuth] Sending execution with tokens:", {
-			hasOAuthTokens: !!oauthTokens,
-			tokenProviders: oauthTokens ? Object.keys(oauthTokens) : [],
+		const hub = getApiOrigin();
+		const invokePath = `apps/${appId}/board/${boardId}/invoke`;
+		const url = `${getApiBaseUrl()}/api/v1/${invokePath}`;
+		const session = await prepareSessionRequest(
+			{
+				"Content-Type": "application/json",
+				[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
+			},
+			this.backend.auth,
+		);
+		const body = JSON.stringify({
+			node_id: payload.id,
+			version: payload.version,
+			payload: payload.payload,
+			stream_state: streamState ?? true,
+			oauth_tokens: oauthTokens,
+			runtime_variables: payload.runtime_variables,
+			profile_id: this.backend.profile?.id,
 		});
-
-		let executionFinished = false;
+		const taskId = crypto.randomUUID();
+		const metadata = getExecutionMetadata(payload) ?? {
+			taskId,
+			streamId: taskId,
+			scope: JSON.stringify([
+				getApiOrigin(this.backend.profile),
+				this.backend.profile?.id ?? "",
+				this.backend.auth?.user?.profile?.sub ?? "local",
+			]),
+			appId,
+			eventId: "",
+			title: "Workflow",
+			startedAt: new Date().toISOString(),
+		};
+		const runtime = await getExecutionRuntime(metadata.scope);
 		try {
-			const response = await fetch(url, {
-				method: "POST",
-				headers,
-				body: JSON.stringify({
-					node_id: payload.id,
-					version: payload.version,
-					payload: payload.payload,
-					stream_state: streamState ?? true,
-					oauth_tokens: oauthTokens,
-					runtime_variables: payload.runtime_variables,
-					profile_id: this.backend.profile?.id,
-				}),
-			});
-
-			if (!response.ok) {
-				const body = await response.text().catch(() => "");
-				throw apiResponseError(response, body, url);
-			}
-
-			let foundRunId = false;
-
-			if (response.body) {
-				const reader = response.body.getReader();
-				const decoder = new TextDecoder();
-				let buffer = "";
-
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
-
-					buffer += decoder.decode(value, { stream: true });
-
-					// Parse SSE events properly - they're separated by double newlines
-					const parts = buffer.split("\n\n");
-					buffer = parts.pop() ?? "";
-
-					for (const part of parts) {
-						if (!part.trim()) continue;
-
-						// Parse SSE format: "event: xxx\ndata: {...}"
-						let eventName = "message";
-						const dataLines: string[] = [];
-
-						for (const line of part.split("\n")) {
-							if (line.startsWith("event:")) {
-								eventName = line.slice(6).trim();
-							} else if (line.startsWith("data:")) {
-								dataLines.push(line.slice(5).trim());
-							}
-						}
-
-						const eventData = dataLines.join("\n");
-
-						if (!eventData || eventData === "keep-alive") continue;
-
-						try {
-							const event = JSON.parse(eventData) as IIntercomEvent;
-
-							// Handle run_initiated event to get run ID
-							if (
-								!foundRunId &&
-								eventId &&
-								event.event_type === "run_initiated"
-							) {
-								const runId = event.payload?.run_id;
-								if (runId) {
-									eventId(runId);
-									foundRunId = true;
+			return await runtime.execute(
+				metadata,
+				{
+					url,
+					headers: Object.fromEntries(session.headers.entries()),
+					body,
+					cancelUrl: `${getApiBaseUrl()}/api/v1/execution/run/{runId}`,
+					timeoutMs: requestTimeoutMs(invokePath, "POST", body.length),
+					realtime:
+						this.backend.auth?.isAuthenticated &&
+						this.backend.auth.user?.profile.sub
+							? {
+									scope: JSON.stringify([
+										hub,
+										this.backend.auth.user.profile.iss,
+										this.backend.auth.user.profile.sub,
+									]),
+									url: `${getApiBaseUrl()}/api/v1/realtime/poll`,
+									headers: Object.fromEntries(session.headers.entries()),
 								}
-							}
-
-							// Handle toast events globally
-							dispatchPaymentRequest(event);
-							if (event.event_type === "toast") {
-								handleToastEvent(event);
-							}
-
-							// Handle progress events globally
-							if (event.event_type === "progress") {
-								handleProgressEvent(event);
-							}
-
-							// Forward event to callback as array (consistent with local execution)
-							if (cb) cb([event]);
-
-							// Completion can share a network chunk with trailing output or usage.
-							// Keep delivering the rest of the decoded batch.
-							if (
-								eventName === "done" ||
-								eventName === "completed" ||
-								event.event_type === "completed"
-							) {
-								executionFinished = true;
-								finishAllProgressToasts(true);
-							} else if (event.event_type === "error") {
-								executionFinished = true;
-								finishAllProgressToasts(false);
-							}
-						} catch {
-							// Ignore parse errors
-						}
-					}
-				}
-			}
-
-			// Ensure progress toasts are finished when stream ends
-			if (!executionFinished) {
-				finishAllProgressToasts(true);
-			}
-
-			// Full metadata will be fetched separately by the caller
-			return undefined;
-		} catch (error) {
-			finishAllProgressToasts(false);
-			throw error;
+							: undefined,
+				},
+				{
+					onExecutionStart: eventId,
+					onEvents: cb,
+					onUnauthorized: session.onUnauthorized,
+				},
+			);
+		} catch (cause) {
+			if (endedWithOutcome(runtime.getTask(metadata.taskId), cause))
+				return undefined;
+			const response = cause as {
+				status?: number;
+				statusText?: string;
+				headers?: Record<string, string>;
+				body?: string;
+			};
+			if (response?.status === 401) session.onRejected?.();
+			if (typeof response?.status === "number")
+				throw apiResponseError(
+					{
+						status: response.status,
+						statusText: response.statusText ?? "",
+						headers: new Headers(response.headers),
+					},
+					response.body ?? "",
+					url,
+				);
+			throw cause;
 		}
 	}
 

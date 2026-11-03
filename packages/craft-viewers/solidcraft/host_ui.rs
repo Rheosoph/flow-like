@@ -22,6 +22,27 @@ fn clear_input(ctx: &egui::Context) {
 }
 
 impl SolveApp {
+    pub fn host_open_staged(
+        &mut self,
+        path: &str,
+    ) -> Result<std::sync::mpsc::Receiver<serde_json::Value>, String> {
+        let (reply, receiver) = std::sync::mpsc::channel();
+        let mut request = crate::file_load::Request::new(path, crate::file_load::Kind::Open);
+        request.reply = Some(reply);
+        crate::file_load::begin_request(self, request)?;
+        Ok(receiver)
+    }
+
+    pub fn host_tick_load(&mut self, ctx: &egui::Context) -> (usize, usize) {
+        crate::file_load::tick(self, ctx);
+        self.file_load.features().unwrap_or_default()
+    }
+
+    pub fn host_loading(&mut self, ui: &mut egui::Ui) {
+        self.host_preview(ui);
+        crate::file_load::show(self, ui.ctx());
+    }
+
     pub fn host_preview(&mut self, ui: &mut egui::Ui) {
         PREVIEW.set(true);
         crate::viewport::show(self, ui);

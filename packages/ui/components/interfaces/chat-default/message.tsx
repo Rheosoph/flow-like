@@ -27,6 +27,7 @@ import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
 import { observeResize } from "../../../lib/observe-resize";
 import { IRole } from "../../../lib/schema/llm/history";
 import { cn } from "../../../lib/utils";
+import { ChatApprovalCard } from "../../bots-tab/approval-card";
 import { ThinkingStamp } from "../../thinking/thinking-stamp";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
@@ -1103,6 +1104,9 @@ export const MessageComponent = memo(
 								snapshots={widgetSnapshots}
 							/>
 						)}
+						{message.approval && (
+							<ChatApprovalCard approval={message.approval} />
+						)}
 						{trailingContent?.map((entry) => (
 							<AnchoredContentBlock key={entry.key} entry={entry} />
 						))}
@@ -1270,6 +1274,7 @@ export const MessageComponent = memo(
 			prev.message.app_refs === next.message.app_refs &&
 			prev.message.widgets === next.message.widgets &&
 			prev.message.error === next.message.error &&
+			prev.message.approval === next.message.approval &&
 			prev.appId === next.appId &&
 			prev.boardId === next.boardId &&
 			prev.eventId === next.eventId &&

@@ -21,6 +21,7 @@ use teloxide::types::{
 
 use crate::utils::UiEmitTarget;
 
+use super::bot_vault;
 use super::manager::DbConnection;
 use super::{EventRegistration, EventSink};
 
@@ -121,13 +122,14 @@ impl TelegramClientManager {
         config: &TelegramSink,
     ) -> Result<()> {
         let token = config.bot_token.clone();
+        let key = bot_vault::reference(Provider::Telegram, &token);
 
         let handler = EventHandler {
             app_id: registration.app_id.clone(),
             spec: config.spec(&registration.event_id),
         };
 
-        if let Some(bot_instance) = self.bots.get(&token) {
+        if let Some(bot_instance) = self.bots.get(&key) {
             let mut bot = bot_instance.lock().await;
             bot.handlers.insert(registration.event_id.clone(), handler);
             tracing::info!(
@@ -139,15 +141,14 @@ impl TelegramClientManager {
             handlers.insert(registration.event_id.clone(), handler);
 
             let bot_instance = BotInstance {
-                token: token.clone(),
+                token: key.clone(),
                 handlers,
             };
 
             let bot_arc = Arc::new(flow_like_types::tokio::sync::Mutex::new(bot_instance));
-            self.bots.insert(token.clone(), bot_arc.clone());
+            self.bots.insert(key.clone(), bot_arc.clone());
 
-            self.start_bot(app_handle, db, token.clone(), bot_arc)
-                .await?;
+            self.start_bot(app_handle, db, token, key, bot_arc).await?;
         }
 
         Ok(())
@@ -158,11 +159,11 @@ impl TelegramClientManager {
         app_handle: &AppHandle,
         db: &DbConnection,
         token: String,
+        key: String,
         bot_instance: Arc<flow_like_types::tokio::sync::Mutex<BotInstance>>,
     ) -> Result<()> {
         let app_handle = app_handle.clone();
         let db = db.clone();
-        let token_key = token.clone();
 
         let join_handle = flow_like_types::tokio::spawn(async move {
             if let Err(e) = run_telegram_bot(app_handle, db, token, bot_instance).await {
@@ -170,30 +171,30 @@ impl TelegramClientManager {
             }
         });
 
-        self.running_clients.insert(token_key, join_handle);
+        self.running_clients.insert(key, join_handle);
         tracing::info!("Started Telegram bot client");
 
         Ok(())
     }
 
-    async fn remove_handler(&mut self, token: &str, event_id: &str) -> Result<()> {
-        if let Some(bot_instance) = self.bots.get(token) {
+    async fn remove_handler(&mut self, key: &str, event_id: &str) -> Result<()> {
+        if let Some(bot_instance) = self.bots.get(key) {
             let mut bot = bot_instance.lock().await;
             bot.handlers.remove(event_id);
 
             if bot.handlers.is_empty() {
                 drop(bot);
-                self.stop_bot(token).await?;
+                self.stop_bot(key).await?;
             }
         }
 
         Ok(())
     }
 
-    async fn stop_bot(&mut self, token: &str) -> Result<()> {
-        self.bots.remove(token);
+    async fn stop_bot(&mut self, key: &str) -> Result<()> {
+        self.bots.remove(key);
 
-        if let Some(handle) = self.running_clients.remove(token) {
+        if let Some(handle) = self.running_clients.remove(key) {
             handle.abort();
             tracing::info!("Stopped Telegram bot client");
         }
@@ -992,24 +993,33 @@ impl TelegramSink {
             [],
         )?;
 
+        bot_vault::move_plaintext_tokens(
+            &conn,
+            Provider::Telegram,
+            "telegram_bots",
+            "telegram_handlers",
+            "bot_name, bot_description, created_at",
+        )?;
+
         Ok(())
     }
 
     /// Updates the bot's row in place: replacing it would delete, through `ON DELETE CASCADE`,
-    /// the stored handlers of every other event on the same bot.
-    fn upsert_bot(conn: &rusqlite::Connection, config: &TelegramSink, now: i64) -> Result<()> {
+    /// the stored handlers of every other event on the same bot. `token` is the bot's reference
+    /// in the keychain.
+    fn upsert_bot(
+        conn: &rusqlite::Connection,
+        token: &str,
+        config: &TelegramSink,
+        now: i64,
+    ) -> Result<()> {
         conn.execute(
             "INSERT INTO telegram_bots (token, bot_name, bot_description, created_at)
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(token) DO UPDATE SET
                  bot_name = excluded.bot_name,
                  bot_description = excluded.bot_description",
-            params![
-                config.bot_token,
-                config.bot_name,
-                config.bot_description,
-                now
-            ],
+            params![token, config.bot_name, config.bot_description, now],
         )?;
 
         Ok(())
@@ -1021,6 +1031,7 @@ impl TelegramSink {
         config: &TelegramSink,
     ) -> Result<()> {
         let conn = db.lock().unwrap();
+        let token = bot_vault::keep(Provider::Telegram, &config.bot_token)?;
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -1038,7 +1049,7 @@ impl TelegramSink {
             .map(serde_json::to_string)
             .transpose()?;
 
-        Self::upsert_bot(&conn, config, now)?;
+        Self::upsert_bot(&conn, &token, config, now)?;
 
         conn.execute(
             "INSERT OR REPLACE INTO telegram_handlers
@@ -1046,7 +1057,7 @@ impl TelegramSink {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 registration.event_id,
-                config.bot_token,
+                token,
                 chat_whitelist_json,
                 chat_blacklist_json,
                 config.respond_to_mentions as i32,
@@ -1059,10 +1070,12 @@ impl TelegramSink {
         Ok(())
     }
 
+    /// Removes the handler of `event_id`, and the bot with its token once no handler uses it.
+    /// Returns the key the bot runs under.
     fn remove_handler(db: &DbConnection, event_id: &str) -> Result<String> {
         let conn = db.lock().unwrap();
 
-        let token: String = conn.query_row(
+        let stored: String = conn.query_row(
             "SELECT bot_token FROM telegram_handlers WHERE event_id = ?1",
             params![event_id],
             |row| row.get(0),
@@ -1073,7 +1086,20 @@ impl TelegramSink {
             params![event_id],
         )?;
 
-        Ok(token)
+        let remaining: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM telegram_handlers WHERE bot_token = ?1",
+            params![&stored],
+            |row| row.get(0),
+        )?;
+        if remaining == 0 {
+            conn.execute(
+                "DELETE FROM telegram_bots WHERE token = ?1",
+                params![&stored],
+            )?;
+            bot_vault::forget(&stored);
+        }
+
+        Ok(bot_vault::key_of(Provider::Telegram, &stored))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1154,7 +1180,7 @@ impl TelegramSink {
         for result in results {
             let (
                 event_id,
-                token,
+                stored_token,
                 bot_name,
                 bot_description,
                 chat_whitelist_json,
@@ -1163,6 +1189,18 @@ impl TelegramSink {
                 respond_to_private,
                 command_prefix,
             ) = result?;
+
+            let token = match bot_vault::token_of(&stored_token) {
+                Ok(token) => token,
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        event_id = %event_id,
+                        "The bot token of a Telegram event cannot be read; save the event again to register its bot"
+                    );
+                    continue;
+                }
+            };
 
             let config = Self::parse_telegram_config(
                 token,
@@ -1267,12 +1305,10 @@ impl EventSink for TelegramSink {
         registration: &EventRegistration,
         db: DbConnection,
     ) -> Result<()> {
-        let token = Self::remove_handler(&db, &registration.event_id)?;
+        let key = Self::remove_handler(&db, &registration.event_id)?;
 
         let mut manager = TELEGRAM_MANAGER.lock().await;
-        manager
-            .remove_handler(&token, &registration.event_id)
-            .await?;
+        manager.remove_handler(&key, &registration.event_id).await?;
 
         tracing::info!("Unregistered Telegram handler: {}", registration.event_id);
 
@@ -1605,5 +1641,161 @@ mod tests {
 
         TelegramSink::remove_handler(&db, "evt_slash").expect("a removed handler");
         assert_eq!(restore(&db).await, [mentions.spec("evt_mentions")]);
+    }
+
+    /// Every text value of the sink's tables.
+    fn stored_text(db: &DbConnection) -> String {
+        let conn = db.lock().unwrap();
+        let mut text = String::new();
+        for query in [
+            "SELECT token || ' ' || COALESCE(bot_name, '') FROM telegram_bots",
+            "SELECT bot_token FROM telegram_handlers",
+        ] {
+            let mut statement = conn.prepare(query).unwrap();
+            for row in statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+            {
+                text.push_str(&row.unwrap());
+                text.push('\n');
+            }
+        }
+        text
+    }
+
+    fn vault_holds(reference_of: &str) -> bool {
+        bot_vault::memory::VAULT.holds(&bot_vault::reference(Provider::Telegram, reference_of))
+    }
+
+    #[tokio::test]
+    async fn a_registered_bot_keeps_its_token_in_the_keychain_and_not_in_the_database() {
+        let db = database();
+        store(
+            &db,
+            "evt_vault",
+            json!({"bot_token": "700:secret-vault-token"}),
+        );
+
+        let text = stored_text(&db);
+        assert!(!text.contains("secret-vault-token"), "{text}");
+        assert!(text.contains("kc1:telegram:"));
+        assert!(vault_holds("700:secret-vault-token"));
+        let stored = TelegramSink::load_handlers_from_db(&db).await.unwrap();
+        assert_eq!(stored[0].1.bot_token, "700:secret-vault-token");
+    }
+
+    #[tokio::test]
+    async fn a_token_saved_in_plain_text_moves_to_the_keychain_on_first_read() {
+        let db = database();
+        {
+            let conn = db.lock().unwrap();
+            conn.execute_batch(
+                "INSERT INTO telegram_bots (token, bot_name, created_at)
+                     VALUES ('701:legacy-plain-token', 'Old Bot', 1);
+                 INSERT INTO telegram_handlers
+                     (event_id, bot_token, respond_to_mentions, respond_to_private, command_prefix, created_at)
+                     VALUES ('evt_a', '701:legacy-plain-token', 1, 1, '', 1),
+                            ('evt_b', '701:legacy-plain-token', 1, 1, '/', 1);",
+            )
+            .unwrap();
+        }
+
+        TelegramSink::init_tables(&db).unwrap();
+        TelegramSink::init_tables(&db).unwrap();
+
+        let text = stored_text(&db);
+        assert!(!text.contains("legacy-plain-token"), "{text}");
+        assert!(text.contains("Old Bot"));
+        assert!(vault_holds("701:legacy-plain-token"));
+        let stored = TelegramSink::load_handlers_from_db(&db).await.unwrap();
+        assert_eq!(stored.len(), 2, "both handlers of the bot survive the move");
+        assert!(
+            stored
+                .iter()
+                .all(|(_, config)| config.bot_token == "701:legacy-plain-token")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_token_the_keychain_refuses_keeps_its_bot_running_from_the_old_row() {
+        let token = "702:refused-by-keychain";
+        bot_vault::memory::VAULT.refuse(&bot_vault::reference(Provider::Telegram, token));
+        let db = database();
+        {
+            let conn = db.lock().unwrap();
+            conn.execute_batch(&format!(
+                "INSERT INTO telegram_bots (token, created_at) VALUES ('{token}', 1);
+                 INSERT INTO telegram_handlers
+                     (event_id, bot_token, respond_to_mentions, respond_to_private, command_prefix, created_at)
+                     VALUES ('evt_old', '{token}', 1, 1, '', 1);"
+            ))
+            .unwrap();
+        }
+
+        TelegramSink::init_tables(&db).unwrap();
+
+        let stored = TelegramSink::load_handlers_from_db(&db).await.unwrap();
+        assert_eq!(stored[0].1.bot_token, token);
+        assert!(!vault_holds(token));
+    }
+
+    #[test]
+    fn a_new_registration_is_refused_rather_than_stored_in_plain_text() {
+        let token = "703:keychain-locked";
+        bot_vault::memory::VAULT.refuse(&bot_vault::reference(Provider::Telegram, token));
+        let db = database();
+        let config = sink(json!({"bot_token": token}));
+        let registration =
+            TelegramSink::create_event_registration("evt_locked".into(), config.clone());
+
+        assert!(TelegramSink::add_bot_and_handler(&db, &registration, &config).is_err());
+
+        let text = stored_text(&db);
+        assert!(!text.contains("keychain-locked"), "{text}");
+        assert!(text.trim().is_empty(), "nothing is stored: {text}");
+    }
+
+    #[test]
+    fn a_registration_without_a_token_is_refused() {
+        let db = database();
+        let config = sink(json!({"bot_token": "  "}));
+        let registration =
+            TelegramSink::create_event_registration("evt_blank".into(), config.clone());
+
+        assert!(TelegramSink::add_bot_and_handler(&db, &registration, &config).is_err());
+    }
+
+    #[tokio::test]
+    async fn the_token_leaves_the_keychain_with_the_last_event_of_its_bot() {
+        let db = database();
+        let shared =
+            |settings: Value| with(json!({"bot_token": "704:shared-vault-token"}), settings);
+        store(&db, "evt_one", shared(json!({})));
+        store(&db, "evt_two", shared(json!({})));
+
+        let key = TelegramSink::remove_handler(&db, "evt_one").unwrap();
+        assert!(
+            vault_holds("704:shared-vault-token"),
+            "another event still uses the bot"
+        );
+        assert_eq!(
+            key,
+            bot_vault::reference(Provider::Telegram, "704:shared-vault-token")
+        );
+        assert_eq!(restore(&db).await.len(), 1);
+
+        TelegramSink::remove_handler(&db, "evt_two").unwrap();
+        assert!(!vault_holds("704:shared-vault-token"));
+        assert!(stored_text(&db).trim().is_empty());
+    }
+
+    #[test]
+    fn a_running_bot_has_one_key_whichever_way_its_token_is_stored() {
+        let token = "705:key-token";
+        let reference = bot_vault::reference(Provider::Telegram, token);
+        assert_eq!(bot_vault::key_of(Provider::Telegram, token), reference);
+        assert_eq!(bot_vault::key_of(Provider::Telegram, &reference), reference);
+        assert!(!reference.contains("key-token"));
+        assert_ne!(reference, bot_vault::reference(Provider::Discord, token));
     }
 }

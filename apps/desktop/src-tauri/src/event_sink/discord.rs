@@ -17,6 +17,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::utils::UiEmitTarget;
 
+use super::bot_vault;
 use super::manager::DbConnection;
 use super::{EventRegistration, EventSink};
 
@@ -162,6 +163,7 @@ impl DiscordClientManager {
         config: &DiscordSink,
     ) -> Result<()> {
         let token = config.token.clone();
+        let key = bot_vault::reference(Provider::Discord, &token);
 
         // Parse intents
         let intents = if let Some(intent_list) = &config.intents {
@@ -179,7 +181,7 @@ impl DiscordClientManager {
         };
 
         // Check if bot already exists
-        if let Some(bot_instance) = self.bots.get(&token) {
+        if let Some(bot_instance) = self.bots.get(&key) {
             // Update existing bot with new handler
             let mut bot = bot_instance.lock().await;
             bot.handlers.insert(registration.event_id.clone(), handler);
@@ -199,11 +201,10 @@ impl DiscordClientManager {
             };
 
             let bot_arc = Arc::new(flow_like_types::tokio::sync::Mutex::new(bot_instance));
-            self.bots.insert(token.clone(), bot_arc.clone());
+            self.bots.insert(key.clone(), bot_arc.clone());
 
             // Start the Discord client
-            self.start_bot(app_handle, db, token.clone(), bot_arc)
-                .await?;
+            self.start_bot(app_handle, db, token, key, bot_arc).await?;
         }
 
         Ok(())
@@ -214,11 +215,11 @@ impl DiscordClientManager {
         app_handle: &AppHandle,
         db: &DbConnection,
         token: String,
+        key: String,
         bot_instance: Arc<flow_like_types::tokio::sync::Mutex<BotInstance>>,
     ) -> Result<()> {
         let app_handle = app_handle.clone();
         let db = db.clone();
-        let token_key = token.clone();
 
         // Get intents from bot instance
         let intents = {
@@ -232,7 +233,7 @@ impl DiscordClientManager {
             }
         });
 
-        self.running_clients.insert(token_key, join_handle);
+        self.running_clients.insert(key, join_handle);
         tracing::info!("Started Discord bot client");
 
         Ok(())
@@ -270,27 +271,27 @@ impl DiscordClientManager {
         Ok(token)
     }
 
-    async fn remove_handler(&mut self, token: &str, event_id: &str) -> Result<()> {
-        if let Some(bot_instance) = self.bots.get(token) {
+    async fn remove_handler(&mut self, key: &str, event_id: &str) -> Result<()> {
+        if let Some(bot_instance) = self.bots.get(key) {
             let mut bot = bot_instance.lock().await;
             bot.handlers.remove(event_id);
 
             // If no more handlers, stop the bot
             if bot.handlers.is_empty() {
                 drop(bot); // Release lock before stopping
-                self.stop_bot(token).await?;
+                self.stop_bot(key).await?;
             }
         }
 
         Ok(())
     }
 
-    async fn stop_bot(&mut self, token: &str) -> Result<()> {
+    async fn stop_bot(&mut self, key: &str) -> Result<()> {
         // Remove bot instance
-        self.bots.remove(token);
+        self.bots.remove(key);
 
         // Stop the running client
-        if let Some(handle) = self.running_clients.remove(token) {
+        if let Some(handle) = self.running_clients.remove(key) {
             handle.abort();
             tracing::info!("Stopped Discord bot client");
         }
@@ -1015,12 +1016,26 @@ impl DiscordSink {
             [],
         )?;
 
+        bot_vault::move_plaintext_tokens(
+            &conn,
+            Provider::Discord,
+            "discord_bots",
+            "discord_handlers",
+            "bot_name, bot_description, intents, created_at",
+        )?;
+
         Ok(())
     }
 
     /// Updates the bot's row in place: replacing it would delete, through `ON DELETE CASCADE`,
     /// the stored handlers of every other event on the same bot.
-    fn upsert_bot(conn: &rusqlite::Connection, config: &DiscordSink, now: i64) -> Result<()> {
+    /// `token` is the bot's reference in the keychain.
+    fn upsert_bot(
+        conn: &rusqlite::Connection,
+        token: &str,
+        config: &DiscordSink,
+        now: i64,
+    ) -> Result<()> {
         let intents_json = config
             .intents
             .as_ref()
@@ -1035,7 +1050,7 @@ impl DiscordSink {
                  bot_description = excluded.bot_description,
                  intents = excluded.intents",
             params![
-                config.token,
+                token,
                 config.bot_name,
                 config.bot_description,
                 intents_json,
@@ -1052,6 +1067,7 @@ impl DiscordSink {
         config: &DiscordSink,
     ) -> Result<()> {
         let conn = db.lock().unwrap();
+        let token = bot_vault::keep(Provider::Discord, &config.token)?;
 
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -1069,7 +1085,7 @@ impl DiscordSink {
             .map(serde_json::to_string)
             .transpose()?;
 
-        Self::upsert_bot(&conn, config, now)?;
+        Self::upsert_bot(&conn, &token, config, now)?;
 
         conn.execute(
             "INSERT OR REPLACE INTO discord_handlers
@@ -1077,7 +1093,7 @@ impl DiscordSink {
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 registration.event_id,
-                config.token,
+                token,
                 channel_whitelist_json,
                 channel_blacklist_json,
                 config.respond_to_mentions as i32,
@@ -1090,11 +1106,12 @@ impl DiscordSink {
         Ok(())
     }
 
+    /// Removes the handler of `event_id`, and the bot with its token once no handler uses it.
+    /// Returns the key the bot runs under.
     fn remove_handler(db: &DbConnection, event_id: &str) -> Result<String> {
         let conn = db.lock().unwrap();
 
-        // Get the token before deleting
-        let token: String = conn.query_row(
+        let stored: String = conn.query_row(
             "SELECT bot_token FROM discord_handlers WHERE event_id = ?1",
             params![event_id],
             |row| row.get(0),
@@ -1105,7 +1122,20 @@ impl DiscordSink {
             params![event_id],
         )?;
 
-        Ok(token)
+        let remaining: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM discord_handlers WHERE bot_token = ?1",
+            params![&stored],
+            |row| row.get(0),
+        )?;
+        if remaining == 0 {
+            conn.execute(
+                "DELETE FROM discord_bots WHERE token = ?1",
+                params![&stored],
+            )?;
+            bot_vault::forget(&stored);
+        }
+
+        Ok(bot_vault::key_of(Provider::Discord, &stored))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1193,7 +1223,7 @@ impl DiscordSink {
         for result in results {
             let (
                 event_id,
-                token,
+                stored_token,
                 bot_name,
                 bot_description,
                 intents_json,
@@ -1203,6 +1233,18 @@ impl DiscordSink {
                 respond_to_dms,
                 command_prefix,
             ) = result?;
+
+            let token = match bot_vault::token_of(&stored_token) {
+                Ok(token) => token,
+                Err(error) => {
+                    tracing::error!(
+                        %error,
+                        event_id = %event_id,
+                        "The bot token of a Discord event cannot be read; save the event again to register its bot"
+                    );
+                    continue;
+                }
+            };
 
             let config = Self::parse_discord_config(
                 event_id.clone(),
@@ -1304,12 +1346,10 @@ impl EventSink for DiscordSink {
         registration: &EventRegistration,
         db: DbConnection,
     ) -> Result<()> {
-        let token = Self::remove_handler(&db, &registration.event_id)?;
+        let key = Self::remove_handler(&db, &registration.event_id)?;
 
         let mut manager = DISCORD_MANAGER.lock().await;
-        manager
-            .remove_handler(&token, &registration.event_id)
-            .await?;
+        manager.remove_handler(&key, &registration.event_id).await?;
 
         tracing::info!("Unregistered Discord handler: {}", registration.event_id);
 
@@ -1612,5 +1652,110 @@ mod tests {
 
         DiscordSink::remove_handler(&db, "evt_bang").expect("a removed handler");
         assert_eq!(restore(&db).await, [mentions.spec("evt_mentions")]);
+    }
+
+    /// Every text value of the sink's tables.
+    fn stored_text(db: &DbConnection) -> String {
+        let conn = db.lock().unwrap();
+        let mut text = String::new();
+        for query in [
+            "SELECT token || ' ' || COALESCE(bot_name, '') || ' ' || COALESCE(intents, '') FROM discord_bots",
+            "SELECT bot_token FROM discord_handlers",
+        ] {
+            let mut statement = conn.prepare(query).unwrap();
+            for row in statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .unwrap()
+            {
+                text.push_str(&row.unwrap());
+                text.push('\n');
+            }
+        }
+        text
+    }
+
+    fn vault_holds(token: &str) -> bool {
+        bot_vault::memory::VAULT.holds(&bot_vault::reference(Provider::Discord, token))
+    }
+
+    #[tokio::test]
+    async fn a_registered_bot_keeps_its_token_in_the_keychain_and_not_in_the_database() {
+        let db = database();
+        store(
+            &db,
+            "evt_vault",
+            json!({"token": "discord.secret-vault-token"}),
+        );
+
+        let text = stored_text(&db);
+        assert!(!text.contains("secret-vault-token"), "{text}");
+        assert!(text.contains("kc1:discord:"));
+        assert!(vault_holds("discord.secret-vault-token"));
+        let stored = DiscordSink::load_handlers_from_db(&db).await.unwrap();
+        assert_eq!(stored[0].1.token, "discord.secret-vault-token");
+    }
+
+    #[tokio::test]
+    async fn a_token_saved_in_plain_text_moves_to_the_keychain_on_first_read() {
+        let db = database();
+        {
+            let conn = db.lock().unwrap();
+            conn.execute_batch(
+                "INSERT INTO discord_bots (token, bot_name, intents, created_at)
+                     VALUES ('discord.legacy-plain-token', 'Old Bot', '[\"Guilds\"]', 1);
+                 INSERT INTO discord_handlers
+                     (event_id, bot_token, respond_to_mentions, respond_to_dms, command_prefix, created_at)
+                     VALUES ('evt_a', 'discord.legacy-plain-token', 1, 1, '', 1),
+                            ('evt_b', 'discord.legacy-plain-token', 1, 1, '!', 1);",
+            )
+            .unwrap();
+        }
+
+        DiscordSink::init_tables(&db).unwrap();
+        DiscordSink::init_tables(&db).unwrap();
+
+        let text = stored_text(&db);
+        assert!(!text.contains("legacy-plain-token"), "{text}");
+        assert!(text.contains("Old Bot"));
+        assert!(vault_holds("discord.legacy-plain-token"));
+        let stored = DiscordSink::load_handlers_from_db(&db).await.unwrap();
+        assert_eq!(stored.len(), 2, "both handlers of the bot survive the move");
+        assert!(stored.iter().all(|(_, config)| {
+            config.token == "discord.legacy-plain-token"
+                && config.intents.as_deref() == Some(&["Guilds".to_string()][..])
+        }));
+    }
+
+    #[test]
+    fn a_new_registration_is_refused_rather_than_stored_in_plain_text() {
+        let token = "discord.keychain-locked";
+        bot_vault::memory::VAULT.refuse(&bot_vault::reference(Provider::Discord, token));
+        let db = database();
+        let config = sink(json!({"token": token}));
+        let registration =
+            DiscordSink::create_event_registration("evt_locked".into(), config.clone());
+
+        assert!(DiscordSink::add_bot_and_handler(&db, &registration, &config).is_err());
+        assert!(stored_text(&db).trim().is_empty());
+    }
+
+    #[test]
+    fn the_token_leaves_the_keychain_with_the_last_event_of_its_bot() {
+        let db = database();
+        let shared =
+            |settings: Value| with(json!({"token": "discord.shared-vault-token"}), settings);
+        store(&db, "evt_one", shared(json!({})));
+        store(&db, "evt_two", shared(json!({})));
+
+        DiscordSink::remove_handler(&db, "evt_one").unwrap();
+        assert!(vault_holds("discord.shared-vault-token"));
+
+        let key = DiscordSink::remove_handler(&db, "evt_two").unwrap();
+        assert!(!vault_holds("discord.shared-vault-token"));
+        assert_eq!(
+            key,
+            bot_vault::reference(Provider::Discord, "discord.shared-vault-token")
+        );
+        assert!(stored_text(&db).trim().is_empty());
     }
 }

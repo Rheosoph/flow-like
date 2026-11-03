@@ -32,6 +32,22 @@ pub const RESERVED_CLAIMS: &[&str] = &[
     "user_id",
 ];
 
+/// A refreshed Firebase ID token retains this fixed deadline; refresh cannot extend it.
+pub fn realtime_claims(scope: &str, expires_at: i64) -> flow_like_types::Result<Value> {
+    if scope.len() != 64 || !scope.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(anyhow!("invalid realtime scope"));
+    }
+    if expires_at <= now_unix() || expires_at > now_unix() + MAX_CUSTOM_TOKEN_TTL_SECS {
+        return Err(anyhow!(
+            "realtime credential deadline must be within the next hour"
+        ));
+    }
+    Ok(serde_json::json!({
+        "role": "realtime", "realtime_scope": scope,
+        "realtime_until": expires_at * 1000,
+    }))
+}
+
 #[derive(Serialize)]
 struct CustomTokenClaims<'a> {
     iss: &'a str,
@@ -247,5 +263,35 @@ mod tests {
         let err =
             custom_token(EMAIL, "-----BEGIN NOPE-----", None, "u", Value::Null, 60).unwrap_err();
         assert!(err.to_string().contains("RSA PEM"), "{err}");
+    }
+
+    #[test]
+    fn realtime_claims_and_rules_confine_reads_without_channel_authority() {
+        let scope = "a".repeat(64);
+        let deadline = now_unix() + 900;
+        let claims = realtime_claims(&scope, deadline).unwrap();
+        assert_eq!(claims["role"], "realtime");
+        assert_eq!(claims["realtime_scope"], scope);
+        assert_eq!(claims["realtime_until"], deadline * 1000);
+        assert!(claims.get("run_id").is_none());
+        assert!(realtime_claims("other/../account", deadline).is_err());
+        assert!(realtime_claims(&scope, now_unix()).is_err());
+        let rules: Value = serde_json::from_str(super::super::DATABASE_RULES).unwrap();
+        let root = &rules["rules"];
+        assert_eq!(root[".read"], false);
+        assert_eq!(root[".write"], false);
+        let realtime = &root["realtime"];
+        assert!(realtime.get(".read").is_none());
+        assert!(realtime.get(".write").is_none());
+        let account = &realtime["$scope"];
+        assert!(account.get(".read").is_none());
+        assert!(account.get(".write").is_none());
+        let wake = &account["wake"];
+        assert_eq!(wake[".write"], false);
+        assert_eq!(
+            wake[".read"],
+            "auth != null && auth.token.role === 'realtime' && auth.token.realtime_scope === $scope && auth.token.realtime_until > now"
+        );
+        assert_eq!(wake.as_object().unwrap().len(), 2);
     }
 }

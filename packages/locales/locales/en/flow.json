@@ -1759,6 +1759,7 @@
 	"stepBefore": "Step Before",
 	"sticky": "Sticky",
 	"stickyHeader": "Sticky Header",
+	"stopExecutionFailed": "Couldn't stop the execution. {{reason}}",
 	"stopExposing": "Stop exposing",
 	"stopFollowing": "Stop following",
 	"stopFollowingName": "Stop following {{name}}",

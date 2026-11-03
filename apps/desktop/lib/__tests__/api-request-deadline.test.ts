@@ -299,6 +299,78 @@ describe("POST streams", () => {
 		vi.restoreAllMocks();
 	});
 
+	test("hands an accepted JSON run to its consumer and awaits completion", async () => {
+		const receipt = {
+			run_id: "queued-run",
+			status: "pending",
+			poll_token: "run-token",
+		};
+		mocks.fetch.mockResolvedValue(
+			new Response(JSON.stringify(receipt), {
+				status: 202,
+				headers: { "content-type": "application/json; charset=utf-8" },
+			}),
+		);
+		let finish!: () => void;
+		const accepted = vi.fn(
+			() =>
+				new Promise<void>((resolve) => {
+					finish = resolve;
+				}),
+		);
+		const onMessage = vi.fn();
+		let settled = false;
+		const running = streamFetcher(
+			profile,
+			"apps/app-1/events/ev-1/invoke",
+			{ method: "POST", body: "{}" },
+			auth,
+			onMessage,
+			accepted,
+		).then(() => {
+			settled = true;
+		});
+		await vi.advanceTimersByTimeAsync(0);
+		expect(accepted).toHaveBeenCalledWith(receipt);
+		expect(onMessage).not.toHaveBeenCalled();
+		expect(settled).toBe(false);
+		finish();
+		await running;
+		expect(settled).toBe(true);
+		expect(vi.getTimerCount()).toBe(0);
+	});
+
+	test("does not silently complete an unhandled JSON run receipt", async () => {
+		mocks.fetch.mockResolvedValue(
+			new Response('{"run_id":"queued-run"}', {
+				headers: { "content-type": "application/json" },
+			}),
+		);
+		await expect(stream("apps/app-1/events/ev-1/invoke")).rejects.toThrow(
+			"Expected an event stream",
+		);
+	});
+
+	test("bounds JSON receipts before passing them to a run consumer", async () => {
+		mocks.fetch.mockResolvedValue(
+			new Response(JSON.stringify({ value: "x".repeat(64 * 1024) }), {
+				headers: { "content-type": "application/json" },
+			}),
+		);
+		const accepted = vi.fn();
+		await expect(
+			streamFetcher(
+				profile,
+				"apps/app-1/events/ev-1/invoke",
+				{ method: "POST" },
+				auth,
+				vi.fn(),
+				accepted,
+			),
+		).rejects.toThrow("receipt exceeds the size limit");
+		expect(accepted).not.toHaveBeenCalled();
+	});
+
 	test.each([
 		"apps/app-1/events/ev-1/invoke",
 		"apps/app-1/board/board-1/invoke",

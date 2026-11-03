@@ -158,6 +158,9 @@ use Methods as M;
 /// 2026-09-14 09:00Z to 2026-09-15 16:00Z.
 const RULES: &[Rule] = &[
     rule(M::POST, "/api/v1/execution/events", Data),
+    rule(M::POST, "/api/v1/execution/apps/{app_id}/bots/ask", Data),
+    rule(M::POST, "/api/v1/bots/hooks/{hook_id}", Data),
+    rule(M::POST, "/api/v1/bots/{bot_id}/ask", Data),
     rule(M::POST, "/api/v1/execution/apps/{app_id}/teams/send", Data),
     rule(
         M::POST,
@@ -195,6 +198,8 @@ const RULES: &[Rule] = &[
     rule(M::POST, "/api/v1/chat/completions", Ai),
     rule(M::POST, "/api/v1/responses", Ai),
     rule(M::POST, "/api/v1/systemone", Ai),
+    rule(M::POST, "/api/v1/images/generations", Ai),
+    rule(M::POST, "/api/v1/instances/images/generations", Ai),
     // The executor relay for private model Bits makes the same provider calls.
     rule(
         M::POST,
@@ -654,6 +659,8 @@ mod tests {
         ("GET", "/api/v1/chat/usage", Read, None),
         ("POST", "/api/v1/responses", Ai, None),
         ("POST", "/api/v1/systemone", Ai, None),
+        ("POST", "/api/v1/images/generations", Ai, None),
+        ("POST", "/api/v1/instances/images/generations", Ai, None),
         (
             "POST",
             "/api/v1/execution/apps/{app_id}/models/chat/completions",
@@ -1059,6 +1066,14 @@ mod tests {
             None,
         ),
         ("GET", "/api/v1/audit/verify", Data, None),
+        (
+            "POST",
+            "/api/v1/execution/apps/{app_id}/bots/ask",
+            Data,
+            None,
+        ),
+        ("POST", "/api/v1/bots/hooks/{hook_id}", Data, None),
+        ("POST", "/api/v1/bots/{bot_id}/ask", Data, None),
         ("GET", "/api/v1/audit/verify/epochs", Data, None),
         ("GET", "/api/v1/audit/records", Read, None),
         ("POST", "/api/v1/oauth/token/{provider_id}", Data, None),

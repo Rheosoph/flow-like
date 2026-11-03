@@ -1,0 +1,39 @@
+/// A bot's mail thread: one inbox conversation owned by the bot with its owner as member. `id`
+/// is that conversation's id. The owner's Mail tab lists these rows.
+model BotMailThread {
+  id            String           @id
+  botId         String
+  bot           Bot              @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId       String
+  subject       String
+  /// JSON array of correspondent addresses, lowercase, at most 50.
+  participants  String
+  lastMessageAt DateTime         @db.Timestamptz(3)
+  lastSnippet   String?
+  messageCount  Int              @default(0)
+  createdAt     DateTime         @default(now()) @db.Timestamptz(3)
+  messages      BotMailMessage[]
+
+  @@index([botId, lastMessageAt])
+  @@index([ownerId])
+}
+
+/// One mail of a thread by its RFC 5322 `Message-ID`, which later mails reach through
+/// `In-Reply-To` and `References`. A repeated delivery of the same `Message-ID` is dropped.
+model BotMailMessage {
+  id             String        @id
+  threadId       String
+  thread         BotMailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  botId          String
+  bot            Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
+  /// Without angle brackets, lowercase.
+  messageId      String
+  /// IN | OUT
+  direction      String
+  /// The `message_id` of the inbox entry that records the mail.
+  entryMessageId String
+  createdAt      DateTime      @default(now()) @db.Timestamptz(3)
+
+  @@unique([botId, messageId])
+  @@index([threadId])
+}

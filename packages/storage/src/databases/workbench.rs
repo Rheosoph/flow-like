@@ -3,15 +3,21 @@
 //! composable saved views. Execution reuses the same read-only validation,
 //! concurrency semaphore, and adapter construction as the graph SQL surface.
 
+pub mod cross_app;
 pub mod saved_query;
 pub mod source_access;
+
+pub use cross_app::{
+    CrossAppQueryResult, WorkbenchLimits, WorkbenchSchema, execute_readonly_sql_across_apps,
+};
 
 use crate::arrow_utils::record_batch_to_value;
 use crate::databases::graph::lancegraph::{
     CypherSafetyConfig, GraphOverlayDef, global_query_semaphore, open_table_adapter,
     validate_readonly_sql,
 };
-use datafusion::prelude::SessionContext;
+use datafusion::common::ParamValues;
+use datafusion::prelude::{DataFrame, SessionContext};
 use flow_like_storage_contracts::column_metadata::ColumnReader;
 use flow_like_types::{Result, Value, anyhow};
 use lancedb::Connection;
@@ -272,9 +278,7 @@ pub async fn execute_readonly_sql(
     reader: &ColumnReader,
 ) -> Result<SqlQueryResult> {
     let safety = CypherSafetyConfig::default();
-    let limit = limit
-        .unwrap_or(DEFAULT_WORKBENCH_LIMIT)
-        .min(safety.max_limit);
+    let limit = row_limit(limit, &safety);
     let semaphore = global_query_semaphore(safety.max_concurrent);
     let _permit = semaphore
         .acquire()
@@ -283,18 +287,43 @@ pub async fn execute_readonly_sql(
 
     validate_readonly_sql(sql)?;
     let param_values = bind_params(params)?;
-    let timeout = std::time::Duration::from_millis(safety.timeout_ms);
 
     let ctx = build_context(connection, &surface, &views, reader).await?;
+    let df = plan_bounded(&ctx, sql, param_values, limit, &safety).await?;
+    collect_bounded(df, limit, &safety).await
+}
 
-    let df = tokio::time::timeout(timeout, ctx.sql(sql))
+fn row_limit(limit: Option<usize>, safety: &CypherSafetyConfig) -> usize {
+    limit
+        .unwrap_or(DEFAULT_WORKBENCH_LIMIT)
+        .min(safety.max_limit)
+}
+
+fn query_timeout(safety: &CypherSafetyConfig) -> std::time::Duration {
+    std::time::Duration::from_millis(safety.timeout_ms)
+}
+
+async fn plan_bounded(
+    ctx: &SessionContext,
+    sql: &str,
+    param_values: ParamValues,
+    limit: usize,
+    safety: &CypherSafetyConfig,
+) -> Result<DataFrame> {
+    Ok(tokio::time::timeout(query_timeout(safety), ctx.sql(sql))
         .await
         .map_err(|_| anyhow!("SQL planning timed out after {}ms", safety.timeout_ms))??
         .with_param_values(param_values)?
         // Fetch one sentinel row beyond the caller's cap so an exact-size
         // result is not falsely reported as truncated.
-        .limit(0, Some(limit.saturating_add(1)))?;
+        .limit(0, Some(limit.saturating_add(1)))?)
+}
 
+async fn collect_bounded(
+    df: DataFrame,
+    limit: usize,
+    safety: &CypherSafetyConfig,
+) -> Result<SqlQueryResult> {
     let columns: Vec<SqlColumn> = df
         .schema()
         .fields()
@@ -308,7 +337,7 @@ pub async fn execute_readonly_sql(
         })
         .collect();
 
-    let batches = tokio::time::timeout(timeout, df.collect())
+    let batches = tokio::time::timeout(query_timeout(safety), df.collect())
         .await
         .map_err(|_| anyhow!("SQL query timed out after {}ms", safety.timeout_ms))??;
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { resolveModelSelection } from "./model-selection";
+import { resolveModelSelection, selectedModelLabel } from "./model-selection";
 
 const fallbackModels = [{ id: "default" }];
 const liveModels = [{ id: "gpt-5.6-terra" }, { id: "gpt-5.6-sol" }];
@@ -47,5 +47,26 @@ describe("resolveModelSelection", () => {
 				canReplaceInvalidSelection: true,
 			}),
 		).toBe("gpt-5.6-terra");
+	});
+});
+
+describe("selectedModelLabel", () => {
+	const models = [
+		{ id: "bit-sonnet", name: "Claude Sonnet" },
+		{ id: "gpt-5.6-sol", name: "" },
+	];
+
+	test("is the selected model's name", () => {
+		expect(selectedModelLabel(models, "bit-sonnet")).toBe("Claude Sonnet");
+	});
+
+	test("falls back to the id of a model without a name", () => {
+		expect(selectedModelLabel(models, "gpt-5.6-sol")).toBe("gpt-5.6-sol");
+	});
+
+	test("is null with nothing selected or a selection the catalog doesn't hold yet", () => {
+		expect(selectedModelLabel(models, "")).toBeNull();
+		expect(selectedModelLabel(models, "bit-retired")).toBeNull();
+		expect(selectedModelLabel([], "bit-sonnet")).toBeNull();
 	});
 });

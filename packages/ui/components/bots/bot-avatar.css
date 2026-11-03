@@ -1,0 +1,581 @@
+@import "./crew-motion.css";
+
+.fl-bot {
+	position: relative;
+	display: inline-block;
+	flex: 0 0 auto;
+	width: var(--bot-size);
+	height: var(--bot-size);
+	vertical-align: middle;
+	isolation: isolate;
+}
+.fl-bot-svg {
+	display: block;
+	width: 100%;
+	height: 100%;
+	overflow: visible;
+}
+.fl-bot-pupils {
+	transform: translate(var(--bot-gaze-x), var(--bot-gaze-y));
+}
+.fl-bot-face {
+	transform: translate(var(--bot-face-x), var(--bot-face-y));
+}
+.fl-bot-pupils,
+.fl-bot-face {
+	transition: transform var(--bot-gazeMs) cubic-bezier(0.3, 0, 0.2, 1);
+}
+.fl-bot-hop {
+	transform-origin: 50px 86px;
+}
+.fl-bot-hop[data-hopping="true"] {
+	animation: fl-bot-hop var(--bot-hopMs) ease-in-out both;
+}
+.fl-bot-hop[data-reaction] {
+	animation-duration: var(--bot-reactionMs);
+	animation-timing-function: cubic-bezier(0.22, 0.7, 0.3, 1);
+	animation-fill-mode: both;
+}
+.fl-bot-hop[data-reaction="happy"] {
+	animation-name: fl-bot-react-happy;
+}
+.fl-bot-hop[data-reaction="love"] {
+	animation-name: fl-bot-react-love;
+}
+.fl-bot-hop[data-reaction="wink"] {
+	animation-name: fl-bot-react-wink;
+}
+.fl-bot-hop[data-reaction="curious"] {
+	animation-name: fl-bot-react-curious;
+}
+.fl-bot-hop[data-reaction="surprised"] {
+	animation-name: fl-bot-react-surprised;
+}
+.fl-bot-hop[data-reaction="sad"] {
+	animation-name: fl-bot-react-sad;
+}
+.fl-bot-hop[data-reaction="concerned"] {
+	animation-name: fl-bot-react-concerned;
+}
+.fl-bot-hop[data-reaction="angry"] {
+	animation-name: fl-bot-react-angry;
+}
+.fl-bot-hop[data-reaction="oops"] {
+	animation-name: fl-bot-react-oops;
+}
+.fl-bot-emote {
+	transform-origin: 80px 24px;
+	opacity: 0;
+	transform: scale(0);
+}
+.fl-bot-emote[data-visible="true"] {
+	opacity: 1;
+	transform: scale(1);
+	animation: fl-bot-pop var(--bot-emotePopMs) ease-out both;
+}
+.fl-bot-skin[data-variant="holo"] {
+	animation: fl-bot-holo var(--bot-holoMs) linear infinite;
+}
+.fl-bot-paint-stop {
+	animation: fl-bot-paint-shift var(--bot-holoMs) linear infinite;
+}
+.fl-bot[data-pose="sleep"] .fl-bot-paint-stop {
+	animation-play-state: paused;
+}
+@keyframes fl-bot-paint-shift {
+	0%,
+	100% {
+		stop-color: var(--bot-paint-stop-0);
+	}
+	25% {
+		stop-color: var(--bot-paint-stop-1);
+	}
+	50% {
+		stop-color: var(--bot-paint-stop-2);
+	}
+	75% {
+		stop-color: var(--bot-paint-stop-3);
+	}
+}
+.fl-bot-waves {
+	animation: fl-bot-wave var(--bot-wavesMs) linear infinite;
+}
+.fl-bot-rays {
+	transform-origin: 50px 50px;
+	animation: fl-bot-spin var(--bot-raysMs) linear infinite;
+}
+.fl-bot-star {
+	animation: fl-bot-twinkle var(--bot-starsMs) ease-in-out infinite;
+}
+.fl-bot-star-1 {
+	animation-delay: calc(var(--bot-starsMs) / -2);
+}
+.fl-bot-halo {
+	position: absolute;
+	inset: -3%;
+	border-radius: var(--bot-radius);
+	pointer-events: none;
+	overflow: hidden;
+	padding: max(1px, calc(var(--bot-size) * 0.015));
+}
+.fl-bot-halo::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border-radius: inherit;
+	border: max(1px, calc(var(--bot-size) * 0.015)) solid transparent;
+}
+.fl-bot-halo {
+	mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+	mask-composite: exclude;
+}
+.fl-bot-halo-spin {
+	position: absolute;
+	inset: -30%;
+	background: conic-gradient(#8b5cf6, #22d3ee, #fbbf24, #fb7185, #8b5cf6);
+	animation: fl-bot-spin var(--bot-haloFlowMs) linear infinite;
+}
+.fl-bot-halo[data-halo="gold"] .fl-bot-halo-spin {
+	background: conic-gradient(#b97a16, #fff3b0, #dba634, #fff3b0, #b97a16);
+	animation-duration: var(--bot-haloGoldMs);
+}
+.fl-bot-halo[data-halo="aurora"] .fl-bot-halo-spin {
+	background: conic-gradient(#a78bfa, #67e8f9, #34d399, #a78bfa);
+	animation-duration: var(--bot-haloAuroraMs);
+}
+.fl-bot-halo[data-halo="pulse"] {
+	animation: fl-bot-pulse var(--bot-haloPulseMs) ease-out infinite;
+}
+.fl-bot-halo[data-halo="pulse"] .fl-bot-halo-spin {
+	background: #a78bfa;
+}
+.fl-bot-halo[data-halo="orbit"] .fl-bot-halo-spin {
+	background: repeating-conic-gradient(
+		#8b5cf6 0deg 5deg,
+		transparent 5deg 18deg
+	);
+	animation-duration: var(--bot-haloOrbitMs);
+}
+.fl-bot-badges {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+}
+.fl-bot-badge {
+	position: absolute;
+	display: grid;
+	place-items: center;
+	width: max(12px, calc(var(--bot-size) * 0.21));
+	height: max(12px, calc(var(--bot-size) * 0.21));
+	border: max(1px, calc(var(--bot-size) * 0.012)) solid var(--bot-badge-ring);
+	border-radius: 50%;
+	transform: translate(-50%, -50%);
+	color: #fff;
+	font-family: ui-sans-serif, system-ui, sans-serif;
+	font-size: max(7px, calc(var(--bot-size) * 0.078));
+	font-weight: 700;
+	line-height: 1;
+}
+.fl-bot[data-effect="offline"] .fl-bot-svg,
+.fl-bot[data-effect="offline"] .fl-bot-halo,
+.fl-bot[data-effect="offline"] .fl-bot-badges {
+	filter: grayscale(1);
+	opacity: 0.65;
+}
+.fl-bot[data-motion="off"] *,
+.fl-bot[data-motion="off"] *::after {
+	animation: none !important;
+	transition: none !important;
+}
+.fl-bot[data-motion="off"] .fl-bot-emote[data-visible="true"] {
+	transform: scale(1);
+	opacity: 1;
+}
+@keyframes fl-bot-hop {
+	0%,
+	100% {
+		transform: translateY(0) scale(1);
+	}
+	12% {
+		transform: scale(1.04, 0.96);
+	}
+	30% {
+		transform: translateY(-6px) scale(0.98, 1.02);
+	}
+	48% {
+		transform: translateY(0) scale(1.03, 0.97);
+	}
+	65% {
+		transform: translateY(-3px);
+	}
+	82% {
+		transform: translateY(0);
+	}
+}
+@keyframes fl-bot-react-happy {
+	0%,
+	100% {
+		transform: translateY(0) scale(1);
+	}
+	20% {
+		transform: scale(1.025, 0.975);
+	}
+	45% {
+		transform: translateY(-4px) scale(0.99, 1.02);
+	}
+	75% {
+		transform: scale(1.015, 0.985);
+	}
+}
+@keyframes fl-bot-react-love {
+	0%,
+	100% {
+		transform: translateY(0) rotate(0);
+	}
+	35% {
+		transform: translateY(-2px) rotate(-3deg);
+	}
+	70% {
+		transform: translateY(-1px) rotate(2deg);
+	}
+}
+@keyframes fl-bot-react-wink {
+	0%,
+	100% {
+		transform: rotate(0);
+	}
+	40% {
+		transform: rotate(-4deg);
+	}
+}
+@keyframes fl-bot-react-curious {
+	0%,
+	100% {
+		transform: rotate(0);
+	}
+	40%,
+	65% {
+		transform: rotate(4deg);
+	}
+}
+@keyframes fl-bot-react-surprised {
+	0%,
+	100% {
+		transform: translateY(0) scale(1);
+	}
+	35% {
+		transform: translateY(-2px) scale(1.05);
+	}
+}
+@keyframes fl-bot-react-sad {
+	0%,
+	100% {
+		transform: translateY(0) scale(1);
+	}
+	45% {
+		transform: translateY(2px) scale(0.99);
+	}
+}
+@keyframes fl-bot-react-concerned {
+	0%,
+	100% {
+		transform: translateY(0) rotate(0);
+	}
+	45% {
+		transform: translateY(1px) rotate(-2deg);
+	}
+}
+@keyframes fl-bot-react-angry {
+	0%,
+	100% {
+		transform: translateX(0);
+	}
+	25%,
+	55% {
+		transform: translateX(-1.4px);
+	}
+	40%,
+	70% {
+		transform: translateX(1.4px);
+	}
+}
+@keyframes fl-bot-react-oops {
+	0%,
+	100% {
+		transform: rotate(0);
+	}
+	25%,
+	55% {
+		transform: rotate(-3deg);
+	}
+	40%,
+	70% {
+		transform: rotate(3deg);
+	}
+}
+@keyframes fl-bot-pop {
+	0% {
+		transform: scale(0);
+		opacity: 0;
+	}
+	70% {
+		transform: scale(1.12);
+		opacity: 1;
+	}
+	100% {
+		transform: scale(1);
+		opacity: 1;
+	}
+}
+@keyframes fl-bot-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+@keyframes fl-bot-holo {
+	to {
+		filter: hue-rotate(360deg);
+	}
+}
+@keyframes fl-bot-wave {
+	to {
+		transform: translateX(40px);
+	}
+}
+@keyframes fl-bot-twinkle {
+	0%,
+	100% {
+		opacity: 0.25;
+	}
+	50% {
+		opacity: 1;
+	}
+}
+@keyframes fl-bot-pulse {
+	0% {
+		transform: scale(1);
+		opacity: 1;
+	}
+	100% {
+		transform: scale(1.13);
+		opacity: 0;
+	}
+}
+@media (prefers-reduced-motion: reduce) {
+	.fl-bot *,
+	.fl-bot *::after {
+		animation: none !important;
+		transition: none !important;
+	}
+}
+
+.fl-bot-eyes[data-blinking="true"] {
+	transform-origin: 50px var(--bot-eye-center);
+	animation: fl-bot-blink var(--bot-blinkMs) ease-in-out;
+}
+.fl-bot-body[data-body-motion="rotate"] {
+	transform-origin: var(--bot-body-center);
+	animation: fl-bot-spin var(--bot-shapeRotationMs) linear infinite;
+}
+.fl-bot-character[data-character-motion="float"] {
+	animation: fl-bot-float var(--bot-lavaFloatMs) ease-in-out infinite;
+}
+@keyframes fl-bot-blink {
+	0%,
+	100% {
+		transform: scaleY(1);
+	}
+	50% {
+		transform: scaleY(0.1);
+	}
+}
+@keyframes fl-bot-float {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(-3px);
+	}
+}
+.fl-bot-gold-sparkle {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: fl-bot-sparkle var(--bot-goldSparkleMs) ease-in-out infinite;
+}
+@keyframes fl-bot-sparkle {
+	0%,
+	100% {
+		opacity: 0.2;
+		transform: scale(0.55);
+	}
+	50% {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+.fl-bot-lava-bubble {
+	animation: fl-bot-lava var(--bot-lavaFloatMs) ease-in-out infinite;
+}
+.fl-bot-lava-bubble:nth-child(2n) {
+	animation-delay: calc(var(--bot-lavaFloatMs) / -2);
+}
+@keyframes fl-bot-lava {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(-12px);
+	}
+}
+.fl-bot-hop[data-sleeping="true"] {
+	animation: fl-bot-breathe var(--bot-sleepBreathMs) ease-in-out infinite;
+}
+.fl-bot[data-pose="sleep"] .fl-bot-body,
+.fl-bot[data-pose="sleep"] .fl-bot-character,
+.fl-bot[data-pose="sleep"] .fl-bot-lava-bubble,
+.fl-bot[data-pose="sleep"] .fl-bot-detail,
+.fl-bot[data-pose="sleep"] .fl-bot-star,
+.fl-bot[data-pose="sleep"] .fl-bot-gold-sparkle {
+	animation-play-state: paused;
+}
+@keyframes fl-bot-breathe {
+	0%,
+	100% {
+		transform: translateY(0) scale(1);
+	}
+	50% {
+		transform: translateY(-.6px) scale(1.008, 1.012);
+	}
+}
+
+.fl-bot-detail {
+	transform-box: view-box;
+	animation-duration: var(--bot-detail-duration);
+	animation-delay: var(--bot-detail-delay);
+	animation-timing-function: ease-in-out;
+	animation-iteration-count: infinite;
+}
+.fl-bot-detail[data-detail-motion="sway"],
+.fl-bot-detail[data-detail-motion="pendulum"] {
+	animation-name: fl-bot-detail-sway;
+}
+.fl-bot-detail[data-detail-motion="flutter"] {
+	animation-name: fl-bot-detail-flutter;
+}
+.fl-bot-detail[data-detail-motion="spin"] {
+	animation-name: fl-bot-spin;
+	animation-timing-function: linear;
+}
+.fl-bot-detail[data-detail-motion="bob"] {
+	animation-name: fl-bot-detail-bob;
+}
+.fl-bot-detail[data-detail-motion="pulse"] {
+	animation-name: fl-bot-detail-pulse;
+}
+.fl-bot-detail[data-detail-motion="rise"] {
+	animation-name: fl-bot-detail-rise;
+}
+.fl-bot-detail[data-detail-motion="flicker"] {
+	animation-name: fl-bot-detail-flicker;
+}
+@keyframes fl-bot-detail-sway {
+	0%,
+	100% {
+		transform: rotate(calc(-1 * var(--bot-detail-angle)));
+	}
+	50% {
+		transform: rotate(var(--bot-detail-angle));
+	}
+}
+@keyframes fl-bot-detail-flutter {
+	0%,
+	60%,
+	100% {
+		transform: rotate(0deg);
+	}
+	20% {
+		transform: rotate(var(--bot-detail-angle));
+	}
+	40% {
+		transform: rotate(calc(-1 * var(--bot-detail-angle)));
+	}
+}
+@keyframes fl-bot-detail-bob {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(calc(-1 * var(--bot-detail-distance)));
+	}
+}
+@keyframes fl-bot-detail-pulse {
+	0%,
+	100% {
+		transform: scale(1);
+	}
+	50% {
+		transform: scale(var(--bot-detail-scale));
+	}
+}
+@keyframes fl-bot-detail-rise {
+	0% {
+		transform: translateY(2px);
+		opacity: 0;
+	}
+	25%,
+	60% {
+		opacity: 0.7;
+	}
+	100% {
+		transform: translateY(calc(-1 * var(--bot-detail-distance)));
+		opacity: 0;
+	}
+}
+@keyframes fl-bot-detail-flicker {
+	0%,
+	100% {
+		transform: scale(1);
+		opacity: 0.6;
+	}
+	40% {
+		transform: scale(var(--bot-detail-scale));
+		opacity: 0.9;
+	}
+	70% {
+		transform: scale(1);
+		opacity: 0.7;
+	}
+}
+
+.fl-bot-orbit-plane {
+	transform-origin: 50px 65px;
+	transform: rotate(-15deg);
+	animation: fl-bot-orbit-tilt 8s ease-in-out infinite;
+}
+.fl-bot-orbit-moon {
+	offset-path: path("M90 65a40 11 0 1 1 -80 0a40 11 0 1 1 80 0");
+	offset-distance: 0%;
+	offset-rotate: 0deg;
+	animation: fl-bot-orbit-travel 6s linear infinite;
+}
+.fl-bot[data-pose="sleep"] .fl-bot-orbit-plane,
+.fl-bot[data-pose="sleep"] .fl-bot-orbit-moon {
+	animation-play-state: paused;
+}
+@keyframes fl-bot-orbit-tilt {
+	0%,
+	100% {
+		transform: rotate(-15deg);
+	}
+	50% {
+		transform: rotate(-9deg);
+	}
+}
+@keyframes fl-bot-orbit-travel {
+	to {
+		offset-distance: 100%;
+	}
+}

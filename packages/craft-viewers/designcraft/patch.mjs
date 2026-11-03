@@ -9,30 +9,38 @@ export default function prepare({
 	write,
 	replaceOnce,
 }) {
-	const uiPath = "crates/ui-egui/src/lib.rs";
+	const uiPath = "crates/ui-egui/src/services.rs";
 	let ui = original(uiPath);
 	ui = replaceOnce(
 		ui,
 		"pub struct Services {",
-		"pub struct Services {\n    pub host_command: Option<Box<dyn FnMut(&str) -> Option<Result<Value, String>>>>,",
+		"pub struct Services {\n    pub host_command: Option<Box<dyn FnMut(&str) -> Option<Result<serde_json::Value, String>>>>,",
 		"host services",
 	);
+	write(uiPath, ui);
+	const commandsPath = "crates/ui-egui/src/app/commands.rs";
 	const run =
 		"    pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {";
-	ui = replaceOnce(
-		ui,
-		run,
-		`${run}\n        if let Some(result) = self.services.host_command.as_mut().and_then(|hook| hook(id)) { return result; }`,
-		"command guard",
+	write(
+		commandsPath,
+		replaceOnce(
+			original(commandsPath),
+			run,
+			`${run}\n        if let Some(result) = self.services.host_command.as_mut().and_then(|hook| hook(id)) { return result; }`,
+			"command guard",
+		),
 	);
-	ui = replaceOnce(
-		ui,
-		"            chrome::app_bar(self, ui);",
-		'            egui::Panel::top("flows-design-menu").show(ui, |ui| { ui.horizontal(|ui| menus::menu_bar(self, ui)); });',
-		"embedded menu bar",
+	const appPath = "crates/ui-egui/src/app.rs";
+	write(
+		appPath,
+		replaceOnce(
+			original(appPath),
+			"            chrome::app_bar(self, ui);",
+			'            egui::Panel::top("flows-design-menu").show(ui, |ui| { ui.horizontal(|ui| { menus::menu_bar(self, ui); }); });',
+			"embedded menu bar",
+		),
 	);
-	write(uiPath, ui);
-	const menusPath = "crates/ui-egui/src/menus.rs";
+	const menusPath = "crates/ui-egui/src/menus/bar.rs";
 	let menus = original(menusPath);
 	menus = replaceOnce(
 		menus,
@@ -40,6 +48,9 @@ export default function prepare({
 		'    for (menu, entries) in menus.into_iter().filter(|(menu, _)| !matches!(*menu, "File" | "Help")) {',
 		"embedded menus",
 	);
+	write(menusPath, menus);
+	const invokePath = "crates/ui-egui/src/menus/invoke.rs";
+	menus = original(invokePath);
 	const activate =
 		"pub fn activate(app: &mut DesignApp, id: &str, params: &Value) {";
 	menus = replaceOnce(
@@ -56,8 +67,8 @@ export default function prepare({
 		`${close}\n    if app.services.host_command.is_some() { app.status("Use the file controls above the editor."); return; }`,
 		"tab close guard",
 	);
-	write(menusPath, menus);
-	const chromePath = "crates/ui-egui/src/chrome.rs";
+	write(invokePath, menus);
+	const chromePath = "crates/ui-egui/src/chrome/start_screen.rs";
 	let chrome = original(chromePath).replaceAll("DesignCraft", "Flows Design");
 	chrome = replaceOnce(
 		chrome,

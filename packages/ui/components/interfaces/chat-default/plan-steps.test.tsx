@@ -82,7 +82,7 @@ afterAll(() => {
 
 async function renderSteps(
 	steps: IPlanStep[],
-	interact?: (container: HTMLElement) => void,
+	...interactions: ((container: HTMLElement) => void)[]
 ) {
 	const window = new Window();
 	Object.assign(window, { SyntaxError, TypeError });
@@ -107,7 +107,9 @@ async function renderSteps(
 	await act(async () => {
 		root.render(<InlineStepGroup steps={steps} />);
 	});
-	if (interact) await act(async () => interact(container));
+	for (const interact of interactions) {
+		await act(async () => interact(container));
+	}
 	const text = container.textContent ?? "";
 	const html = container.innerHTML;
 	await act(async () => root.unmount());
@@ -516,6 +518,14 @@ describe("research trail", () => {
 		},
 	});
 
+	const clickButton = (container: HTMLElement, label: string) => {
+		const button = [...container.querySelectorAll("button")].find(
+			(candidate) => candidate.textContent === label,
+		);
+		if (!button) throw new Error(`Button not found: ${label}`);
+		button.click();
+	};
+
 	test("keeps every query and URL while distinguishing discovery, reads and failures", async () => {
 		const { text } = await renderSteps(
 			[
@@ -542,14 +552,17 @@ describe("research trail", () => {
 				expect(
 					container.querySelectorAll("[data-research-activity]"),
 				).toHaveLength(1);
-				expect(
-					container.querySelectorAll("[data-research-source]"),
-				).toHaveLength(8);
 				const cards = container.querySelectorAll("[data-research-source]");
+				expect(cards).toHaveLength(4);
 				expect(cards[0].textContent).toContain("Read");
 				expect(cards[1].textContent).toContain("Reading");
 				expect(cards[2].textContent).toContain("Unavailable");
 				expect(cards[3].textContent).toContain("Checked");
+				clickButton(container, "Show all 8 pages");
+			},
+			(container) => {
+				const cards = container.querySelectorAll("[data-research-source]");
+				expect(cards).toHaveLength(8);
 				expect(cards[5].textContent).toContain("Unavailable");
 				expect(cards[6].textContent).toContain("Checking");
 				expect(cards[7].textContent).toContain("Review 7");
@@ -590,16 +603,82 @@ describe("research trail", () => {
 				},
 			],
 			(container) => {
+				const research = container.querySelector("[data-research-activity]");
 				expect(
 					container.querySelectorAll("[data-research-source]"),
-				).toHaveLength(8);
+				).toHaveLength(4);
+				expect(research?.textContent).toContain("Show all 8 pages");
 				expect(
 					container.querySelectorAll("[data-research-query]"),
 				).toHaveLength(2);
+				expect(research?.textContent).not.toContain("Sending an HTTP request");
+				expect(container.textContent).toContain("Sending an HTTP request");
+			},
+		);
+	});
+
+	test("summarises sites with a few icons, counting subdomains of one site once", async () => {
+		const hosts = [
+			"www.adac.de",
+			"adac.de",
+			"de.wikipedia.org",
+			"en.wikipedia.org",
+			"www.autocar.co.uk",
+			"autocar.co.uk",
+			...Array.from({ length: 6 }, (_, index) => `www.site${index}.com`),
+		];
+		await renderSteps(
+			[
+				{
+					...search,
+					detail: {
+						...search.detail,
+						sources: hosts.map((hostname) => ({
+							url: `https://${hostname}/page`,
+							hostname,
+							path: "/page",
+						})),
+					},
+				} as IPlanStep,
+			],
+			(container) => {
+				const sites = container.querySelectorAll("[data-activity-site]");
+				expect(sites).toHaveLength(4);
+				expect(sites[0].parentElement?.parentElement?.textContent).toBe(
+					"9 websites",
+				);
 				expect(
 					container.querySelector("[data-research-activity]")?.textContent,
-				).not.toContain("Sending an HTTP request");
-				expect(container.textContent).toContain("Sending an HTTP request");
+				).toContain("9 websites");
+			},
+		);
+	});
+
+	test("folds earlier searches instead of scrolling them, keeping their numbering", async () => {
+		const queries = Array.from({ length: 6 }, (_, index) => `query ${index}`);
+		await renderSteps(
+			[{ ...search, detail: { ...search.detail, queries } } as IPlanStep],
+			(container) => {
+				const rows = container.querySelectorAll("[data-research-query]");
+				expect(rows).toHaveLength(4);
+				expect(rows[0].textContent).toContain("03");
+				expect(rows[0].textContent).toContain("query 2");
+				expect(rows[3].textContent).toContain("query 5");
+				expect(
+					container.querySelector('[aria-label="Search queries"][tabindex]'),
+				).toBeNull();
+				clickButton(container, "Show 2 earlier searches");
+			},
+			(container) => {
+				const rows = container.querySelectorAll("[data-research-query]");
+				expect(rows).toHaveLength(6);
+				expect(rows[0].textContent).toContain("query 0");
+				clickButton(container, "Hide earlier searches");
+			},
+			(container) => {
+				expect(
+					container.querySelectorAll("[data-research-query]"),
+				).toHaveLength(4);
 			},
 		);
 	});

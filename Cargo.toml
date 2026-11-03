@@ -17,6 +17,10 @@ members = [
     "packages/device-protocol",
     "packages/offline-writes",
     "packages/bots",
+    "packages/local-bots",
+    "packages/bot-memory",
+    "packages/bot-tools",
+    "packages/bot-tools-host",
     "apps/desktop/src-tauri",
     "apps/backend/local/api",
     "apps/backend/local/runtime",
@@ -194,6 +198,7 @@ flow-like-catalog-data = { path = "packages/catalog/data" }
 flow-like-catalog-web = { path = "packages/catalog/web" }
 flow-like-catalog-media = { path = "packages/catalog/media" }
 flow-like-catalog-ml = { path = "packages/catalog/ml" }
+flow-like-catalog-code-interpreter = { path = "libs/nodes/code-interpreter", default-features = false }
 flow-like-catalog-industrial = { path = "packages/catalog/industrial", default-features = false }
 flow-like-industrial = { path = "packages/industrial", default-features = false }
 flow-like-ml-core = { path = "packages/ml/core" }
@@ -225,6 +230,10 @@ flow-like-db = { path = "packages/db" }
 flow-like-device-protocol = { path = "packages/device-protocol" }
 flow-like-offline-writes = { path = "packages/offline-writes" }
 flow-like-bots = { path = "packages/bots", default-features = false }
+flow-like-local-bots = { path = "packages/local-bots" }
+flow-like-bot-memory = { path = "packages/bot-memory" }
+flow-like-bot-tools = { path = "packages/bot-tools" }
+flow-like-bot-tools-host = { path = "packages/bot-tools-host" }
 flow-like-device-crypto = { path = "packages/device-crypto" }
 flow-like-azure-data = { path = "packages/azure-data" }
 flow-like-gcp-data = { path = "packages/gcp-data" }
@@ -258,6 +267,7 @@ futures-util = "0.3.31"
 moka = { version = "0.12.11", features = ["sync"] }
 bitflags = "2.9.4"
 blake3 = "1.8.2"
+sha2 = "0.10"
 constant_time_eq = "0.4.2"
 lambda_runtime = "0.14.2"
 aws-config = "1.11.0"
@@ -456,6 +466,14 @@ strip = "none"
 debug = false
 opt-level = 0
 
+# These crates compile guest WASM during desktop startup. Unoptimized builds
+# spend minutes in code generation and register allocation for large packages.
+[profile.dev.package.cranelift-codegen]
+opt-level = 1
+
+[profile.dev.package.regalloc2]
+opt-level = 1
+
 [profile.dev-run]
 inherits = "dev"
 
@@ -470,6 +488,13 @@ incremental = false
 
 [profile.ci.package."*"]
 debug = false
+opt-level = 0
+
+# Keep CI's existing optimization settings when inheriting the dev profile.
+[profile.ci.package.cranelift-codegen]
+opt-level = 0
+
+[profile.ci.package.regalloc2]
 opt-level = 0
 
 [profile.release-fast]

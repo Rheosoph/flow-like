@@ -119,6 +119,7 @@ fn required_permission(method: &str, path: &str) -> PatPermission {
         && matches!(
             parts.as_slice(),
             ["user", "lookup"]
+                | ["realtime", "poll" | "connect"]
                 | ["auth", "userinfo"]
                 | ["apps", _, "data", "list" | "download"]
                 | ["apps", _, "data", "user", "list" | "download"]
@@ -216,6 +217,8 @@ mod tests {
     fn post_read_exceptions_are_exact_and_do_not_include_sql() {
         for path in [
             "/user/lookup",
+            "/realtime/poll",
+            "/realtime/connect",
             "/apps/a/data/list",
             "/apps/a/data/download",
             "/apps/a/data/user/list",

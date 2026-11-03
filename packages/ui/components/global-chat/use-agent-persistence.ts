@@ -9,7 +9,7 @@ import {
 } from "../../state/global-chat/global-chat-store";
 import type { AIProvider } from "../flowpilot/types";
 
-// Restored once per session rather than per surface: the hero, /chat and the
+// Restored once per session rather than per surface: the hero, the Bots tab and the
 // docked overlay all share one store, so whichever mounts first hydrates it.
 let hydrated = false;
 

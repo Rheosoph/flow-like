@@ -4,6 +4,7 @@ import type {
 	IMessage,
 	ISession,
 } from "../../components/interfaces/chat-default/chat-db";
+import { isBotConversation } from "./global-chat-bots";
 
 export type { IChatRunContext, IMessage, ISession };
 
@@ -24,6 +25,12 @@ export interface IGlobalChatSession extends ISession {
 	pinnedAt?: number;
 }
 
+/** A fixed-size flag that must outlive conversation pruning, e.g. "this bot's old chat was imported". */
+export interface IGlobalChatMarker {
+	key: string;
+	at: number;
+}
+
 /**
  * Frontend-only history for the global FlowPilot assistant. Mirrors the chat-default schema but is a
  * separate Dexie database so global conversations never mix with per-app chat history. Cloud sync is
@@ -32,6 +39,7 @@ export interface IGlobalChatSession extends ISession {
 const globalChatDb = new Dexie("Global-Chat-History") as Dexie & {
 	sessions: EntityTable<IGlobalChatSession, "id">;
 	messages: EntityTable<IMessage, "id">;
+	markers: EntityTable<IGlobalChatMarker, "key">;
 };
 
 globalChatDb.version(1).stores({
@@ -49,4 +57,40 @@ globalChatDb.version(3).stores({
 	messages: "id, sessionId, timestamp",
 });
 
+globalChatDb.version(4).stores({
+	sessions: "id, updatedAt, boardId, mode, pinnedAt",
+	messages: "id, sessionId, timestamp",
+	markers: "key",
+});
+
 export { globalChatDb };
+
+/** A row of Flux's own history: the bots' one conversation each stays out of it. */
+export function isFluxHistorySession(session: IGlobalChatSession): boolean {
+	return session.appId === GLOBAL_CHAT_APP_ID && !isBotConversation(session.id);
+}
+
+/**
+ * Flux's conversations for the history list: every pinned one, then the most recent others up to
+ * `limit`. Two reads rather than one `limit()`, so pinned rows never take recency slots and old
+ * pinned rows are never cut.
+ */
+export async function listFluxChatSessions(
+	limit: number,
+): Promise<IGlobalChatSession[]> {
+	const [pinned, recent] = await Promise.all([
+		globalChatDb.sessions
+			.where("pinnedAt")
+			.above(0)
+			.filter(isFluxHistorySession)
+			.toArray(),
+		globalChatDb.sessions
+			.orderBy("updatedAt")
+			.reverse()
+			.filter(isFluxHistorySession)
+			.limit(limit)
+			.toArray(),
+	]);
+	const pinnedIds = new Set(pinned.map((session) => session.id));
+	return [...pinned, ...recent.filter((session) => !pinnedIds.has(session.id))];
+}

@@ -9,36 +9,38 @@ export default function prepare({
 	write,
 	replaceOnce,
 }) {
-	const uiPath = "crates/ui-egui/src/lib.rs";
+	const uiPath = "crates/ui-egui/src/services.rs";
 	let ui = original(uiPath);
 	ui = replaceOnce(
 		ui,
 		"pub struct Services {",
-		"pub struct Services {\n    pub host_command: Option<Box<dyn FnMut(&str) -> ResultHostCommand>>,",
+		"pub struct Services {\n    pub host_command: Option<Box<dyn FnMut(&str) -> Option<Result<serde_json::Value, String>>>>,",
 		"host services",
 	);
-	ui = replaceOnce(
-		ui,
-		"#[derive(Default)]\npub struct Services",
-		"pub type ResultHostCommand = Option<Result<Value, String>>;\n\n#[derive(Default)]\npub struct Services",
-		"host result",
-	);
+	write(uiPath, ui);
+	const commandsPath = "crates/ui-egui/src/app/commands.rs";
 	const run =
 		"    pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {";
-	ui = replaceOnce(
-		ui,
-		run,
-		`${run}\n        if let Some(result) = self.services.host_command.as_mut().and_then(|hook| hook(id)) { return result; }`,
-		"command guard",
+	write(
+		commandsPath,
+		replaceOnce(
+			original(commandsPath),
+			run,
+			`${run}\n        if let Some(result) = self.services.host_command.as_mut().and_then(|hook| hook(id)) { return result; }`,
+			"command guard",
+		),
 	);
-	ui = replaceOnce(
-		ui,
-		"            chrome::app_bar(self, ui);",
-		'            egui::Panel::top("flows-vector-menu").show(ui, |ui| { menus::menu_bar(self, ui); });',
-		"embedded menu bar",
+	const appPath = "crates/ui-egui/src/app.rs";
+	write(
+		appPath,
+		replaceOnce(
+			original(appPath),
+			"            chrome::app_bar(self, ui);",
+			'            egui::Panel::top("flows-vector-menu").show(ui, |ui| { ui.horizontal(|ui| { menus::menu_bar(self, ui); }); });',
+			"embedded menu bar",
+		),
 	);
-	write(uiPath, ui);
-	const menusPath = "crates/ui-egui/src/menus.rs";
+	const menusPath = "crates/ui-egui/src/menus/bar.rs";
 	let menus = original(menusPath);
 	menus = replaceOnce(
 		menus,
@@ -64,6 +66,11 @@ export default function prepare({
 			"VectorCraft",
 			"Flows Vector",
 		),
+	);
+	// The embedded host supplies the app identity, including in hidden dialogs.
+	write(
+		"crates/ui-egui/src/brand.rs",
+		"pub fn paint_mark(_ui: &egui::Ui, _rect: egui::Rect) {}\n",
 	);
 	const cargoPath = "apps/vectorcraft-web/Cargo.toml";
 	write(

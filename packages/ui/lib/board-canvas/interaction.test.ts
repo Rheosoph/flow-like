@@ -3,6 +3,7 @@ import type { Connection } from "@xyflow/react";
 import {
 	BoardHitIndex,
 	ConnectionGesture,
+	type WorldPin,
 	boundsInPolygon,
 	connectionFor,
 	edgePoints,
@@ -159,6 +160,87 @@ describe("native canvas connection gestures", () => {
 			connection: expectedConnection("d", "b"),
 			oldEdgeId: "a-b",
 		});
+	});
+
+	test("panning a fixed endpoint offscreen preserves new and reconnected wires in both directions", () => {
+		const graph = scene();
+		for (const node of graph.nodes) {
+			if (node.id === "c" || node.id === "d") node.x = 4000;
+			if (node.id === "d") node.y = 400;
+		}
+		const index = new BoardHitIndex(graph);
+		const cases = [
+			{
+				anchor: endpoint("a", "out"),
+				target: pin(index, "c", "in"),
+				expected: expectedConnection("a", "c"),
+			},
+			{
+				anchor: endpoint("c", "in"),
+				target: pin(index, "a", "out"),
+				expected: expectedConnection("a", "c"),
+			},
+			{
+				anchor: endpoint("a", "out"),
+				target: pin(index, "c", "in"),
+				expected: expectedConnection("a", "c"),
+				reconnect: { edgeId: "a-b", end: "target" as const },
+			},
+			{
+				anchor: endpoint("b", "in"),
+				target: pin(index, "d", "out"),
+				expected: expectedConnection("d", "b"),
+				reconnect: { edgeId: "a-b", end: "source" as const },
+			},
+		];
+		for (const { anchor, target, expected, reconnect } of cases) {
+			const fixed = index.pin(anchor);
+			if (!fixed) throw new Error("Missing fixture endpoint");
+			let viewportX = 400 - fixed.x;
+			const exposed = (pin: WorldPin) =>
+				pin.x + viewportX >= 0 && pin.x + viewportX <= 800;
+			const hidden = new Set<string>();
+			let covered = false;
+			const validatedPins: string[] = [];
+			const validate = (connection: Connection, hovered: WorldPin) => {
+				if (!hovered) return false;
+				validatedPins.push(hovered.id);
+				return (
+					[connection.source, connection.target].every(
+						(id) => !hidden.has(id),
+					) &&
+					!covered &&
+					exposed(hovered)
+				);
+			};
+			const gesture = new ConnectionGesture(anchor, reconnect);
+			expect(exposed(fixed)).toBe(true);
+			expect(exposed(target)).toBe(false);
+			gesture.resolve(index, fixed, 1, validate);
+			viewportX = 400 - target.x;
+			expect(exposed(fixed)).toBe(false);
+			expect(gesture.drop(index, target, 1, validate)).toEqual({
+				kind: "connect",
+				connection: expected,
+				oldEdgeId: reconnect?.edgeId,
+			});
+			expect(validatedPins).toContain(target.id);
+			expect(validatedPins).not.toContain(fixed.id);
+			viewportX = 400 - fixed.x;
+			expect(gesture.drop(index, target, 1, validate)).toEqual({
+				kind: "cancel",
+			});
+			viewportX = 400 - target.x;
+			covered = true;
+			expect(gesture.drop(index, target, 1, validate)).toEqual({
+				kind: "cancel",
+			});
+			covered = false;
+			hidden.add(anchor.nodeId);
+			expect(gesture.drop(index, target, 1, validate)).toEqual({
+				kind: "cancel",
+			});
+		}
 	});
 
 	test("returning either reconnect handle to its existing endpoint is a no-op", () => {

@@ -58,6 +58,12 @@ pub fn routes() -> Router<AppState> {
                 ))
                 .layer(from_fn(embedding_headers)),
         )
+        .route(
+            "/images/generations",
+            post(generate_image)
+                .layer(DefaultBodyLimit::max(32 * 1024))
+                .layer(from_fn(embedding_headers)),
+        )
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(from_fn(no_store))
 }
@@ -65,6 +71,22 @@ pub fn routes() -> Router<AppState> {
 async fn embedding_headers(request: Request, next: Next) -> Result<Response, ApiError> {
     instances::validate_model_request_headers(request.headers())?;
     Ok(next.run(request).await)
+}
+
+async fn generate_image(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<flow_like::flow_like_model_provider::image_generation::HostedImageRequest>,
+) -> Result<Response, ApiError> {
+    let instance = instances::authenticate_model_request(
+        &state,
+        &headers,
+        "POST",
+        "/instances/images/generations",
+        &payload.model,
+    )
+    .await?;
+    crate::routes::images::generate_instance_image(state, payload, instance).await
 }
 
 /// Takes the raw request so the device proof is verified before the body is buffered.
@@ -162,14 +184,17 @@ mod embedding_media_tests {
 
     #[tokio::test]
     async fn invalid_instance_credentials_reject_media_before_reading_the_body() {
-        for authorization in [None, Some("DPoP invalid-token")] {
+        for (path, authorization) in [
+            ("/embeddings/embed", None),
+            ("/embeddings/embed", Some("DPoP invalid-token")),
+            ("/images/generations", None),
+            ("/images/generations", Some("DPoP invalid-token")),
+        ] {
             let app = Router::new().route(
-                "/embeddings/embed",
+                path,
                 post(|| async { StatusCode::NO_CONTENT }).layer(from_fn(embedding_headers)),
             );
-            let mut request = axum::http::Request::builder()
-                .method("POST")
-                .uri("/embeddings/embed");
+            let mut request = axum::http::Request::builder().method("POST").uri(path);
             if let Some(authorization) = authorization {
                 request = request
                     .header("authorization", authorization)

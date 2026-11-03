@@ -1,23 +1,149 @@
 use super::{
-    ACK_TIMEOUT, Acknowledgement, Envelope, MAX_PAYLOAD_BYTES, Role, mint_user_token, subject_for,
+    ACK_TIMEOUT, API_MAX_RECONNECTS, Acknowledgement, CONNECT_TIMEOUT, Envelope, MAX_PAYLOAD_BYTES,
+    Role, connect_with, mint_realtime_publisher_token, mint_user_token, subject_for,
     valid_delivery_id, validate_account_seed, validate_url,
 };
-use crate::ChannelForwarder;
+use crate::{ChannelForwardError, ChannelForwarder};
 use flow_like_types::channel::{ChannelPush, new_request_id};
 use flow_like_types::{Result, anyhow, async_trait, bail};
 use futures_util::StreamExt;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
+use tokio::sync::OwnedMutexGuard;
+
+const REALTIME_TOKEN_TTL_SECS: i64 = 900;
+/// Connecting and publishing stay well inside the API's two-second wakeup budget.
+const REALTIME_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
+const REALTIME_PUBLISH_TIMEOUT: Duration = Duration::from_millis(500);
+/// After a failure, wakeups fail fast instead of each waiting on a degraded broker.
+const REALTIME_RETRY_DELAY: Duration = Duration::from_secs(5);
+
+#[derive(Default)]
+struct RealtimePublisher {
+    client: Option<Arc<async_nats::Client>>,
+    retry_at: Option<Instant>,
+}
 
 pub struct NatsForwarder {
     url: String,
     account_seed: String,
+    realtime: Arc<Mutex<RealtimePublisher>>,
+    connecting: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl NatsForwarder {
     pub fn new(url: String, account_seed: String) -> Result<Self> {
         validate_url(&url)?;
         validate_account_seed(&account_seed)?;
-        Ok(Self { url, account_seed })
+        Ok(Self {
+            url,
+            account_seed,
+            realtime: Arc::default(),
+            connecting: Arc::default(),
+        })
     }
+
+    /// Best-effort wakeups share one API connection, without channel reply acknowledgements.
+    pub async fn publish_realtime(&self, scope: &str, payload: &[u8]) -> Result<()> {
+        let subject = super::realtime_subject(scope)?;
+        if payload.len() > flow_like_types::realtime::MAX_REALTIME_WAKEUP_BYTES {
+            bail!("realtime wakeup exceeds the size limit");
+        }
+        let client = self.realtime_client().await?;
+        let published = tokio::time::timeout(REALTIME_PUBLISH_TIMEOUT, async {
+            client
+                .publish(subject, payload.to_vec().into())
+                .await
+                .ok()?;
+            client.flush().await.ok()
+        })
+        .await;
+        let error = match published {
+            Ok(Some(())) => return Ok(()),
+            Ok(None) => anyhow!("NATS realtime publication failed"),
+            Err(_) => anyhow!("NATS realtime publication timed out"),
+        };
+        self.discard_realtime(&client);
+        Err(error)
+    }
+
+    /// One background connect at a time; callers wait for it only as long as it may take.
+    async fn realtime_client(&self) -> Result<Arc<async_nats::Client>> {
+        if let Some(client) = self.ready_realtime()? {
+            return Ok(client);
+        }
+        if let Ok(gate) = self.connecting.clone().try_lock_owned() {
+            if let Some(client) = self.ready_realtime()? {
+                return Ok(client);
+            }
+            tokio::spawn(connect_realtime(
+                self.url.clone(),
+                self.account_seed.clone(),
+                self.realtime.clone(),
+                gate,
+            ));
+        }
+        let _ = tokio::time::timeout(REALTIME_CONNECT_TIMEOUT, self.connecting.lock()).await;
+        self.ready_realtime()?
+            .ok_or_else(|| anyhow!("NATS realtime publisher is not connected"))
+    }
+
+    fn ready_realtime(&self) -> Result<Option<Arc<async_nats::Client>>> {
+        let state = lock(&self.realtime);
+        if let Some(client) = &state.client {
+            return Ok(Some(client.clone()));
+        }
+        if state.retry_at.is_some_and(|at| Instant::now() < at) {
+            bail!("NATS realtime publisher is unavailable after a recent failure");
+        }
+        Ok(None)
+    }
+
+    fn discard_realtime(&self, client: &Arc<async_nats::Client>) {
+        let mut state = lock(&self.realtime);
+        if !state
+            .client
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, client))
+        {
+            return;
+        }
+        state.client = None;
+        state.retry_at = Some(Instant::now() + REALTIME_RETRY_DELAY);
+        drop(state);
+        let client = client.clone();
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(Duration::from_secs(1), client.drain()).await;
+        });
+    }
+}
+
+/// Holds `_gate` until the outcome is recorded, so waiters observe it.
+async fn connect_realtime(
+    url: String,
+    account_seed: String,
+    state: Arc<Mutex<RealtimePublisher>>,
+    _gate: OwnedMutexGuard<()>,
+) {
+    let connected = connect_with(
+        &url,
+        API_MAX_RECONNECTS,
+        REALTIME_CONNECT_TIMEOUT,
+        move || mint_realtime_publisher_token(&account_seed, REALTIME_TOKEN_TTL_SECS),
+    )
+    .await;
+    let mut state = lock(&state);
+    match connected {
+        Ok(client) => {
+            state.client = Some(Arc::new(client));
+            state.retry_at = None;
+        }
+        Err(_) => state.retry_at = Some(Instant::now() + REALTIME_RETRY_DELAY),
+    }
+}
+
+fn lock(state: &Mutex<RealtimePublisher>) -> MutexGuard<'_, RealtimePublisher> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[async_trait]
@@ -29,10 +155,14 @@ impl ChannelForwarder for NatsForwarder {
         self.forward_with_id(push, &new_request_id()).await
     }
     async fn forward_with_id(&self, push: &ChannelPush, id: &str) -> Result<()> {
-        let token = mint_user_token(&self.account_seed, &push.channel_id, Role::Client, 30)?;
-        let client = super::connect(&self.url, &token).await?;
-        let result = publish_confirmed(&client, &subject_for(&push.channel_id)?, push, id).await;
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), client.drain()).await;
+        let subject = subject_for(&push.channel_id)?;
+        let (account_seed, channel_id) = (self.account_seed.clone(), push.channel_id.clone());
+        let client = connect_with(&self.url, API_MAX_RECONNECTS, CONNECT_TIMEOUT, move || {
+            mint_user_token(&account_seed, &channel_id, Role::Client, 30)
+        })
+        .await?;
+        let result = publish_confirmed(&client, &subject, push, id).await;
+        let _ = tokio::time::timeout(Duration::from_secs(1), client.drain()).await;
         result
     }
 }
@@ -76,18 +206,14 @@ pub async fn publish_confirmed(
             match tokio::time::timeout(ACK_TIMEOUT, acknowledgements.next()).await {
                 Ok(Some(message)) => {
                     if message.status == Some(async_nats::StatusCode::NO_RESPONDERS) {
-                        bail!("NATS channel has no connected waiter");
+                        return Err(ChannelForwardError::NoListener.into());
                     }
                     let ack: Acknowledgement = serde_json::from_slice(&message.payload)
                         .map_err(|_| anyhow!("invalid NATS delivery acknowledgement"))?;
                     if ack.accepted {
                         return Ok(());
                     }
-                    bail!(
-                        "{}",
-                        ack.error
-                            .unwrap_or_else(|| "NATS waiter rejected the message".into())
-                    );
+                    return Err(ack.rejection().into());
                 }
                 Ok(None) => bail!("NATS acknowledgement subscription closed"),
                 Err(_) => {}

@@ -1,5 +1,5 @@
-//! Mints channel credentials: the HTTP responder token every transport falls back to and, for
-//! the configured cloud transport, the maximally downscoped client / executor grants.
+//! Mints channel credentials: clients push through the API using a responder token, while
+//! executors receive scoped grants for the configured provider.
 
 use std::sync::Arc;
 
@@ -7,12 +7,51 @@ use flow_like_channels::ChannelForwarder;
 use flow_like_types::channel::{
     ChannelClientDescriptor, ChannelExecutorGrant, ChannelGrant, ChannelHandle, clamp_ttl, now_unix,
 };
+use flow_like_types::tokio::{spawn, time::timeout};
 use flow_like_types::{Result, anyhow};
-use std::time::Duration;
+use futures_util::future::BoxFuture;
+use std::time::{Duration, Instant};
 
 use crate::execution::{ChannelJwtParams, sign_channel_responder};
 
-use super::{ChannelBackend, api_base_url, push_url};
+use super::{ChannelBackend, api_base_url, push_url, redact_provider_error};
+
+/// Per account, intermediate run wakeups go out at most once per window.
+const REALTIME_WINDOW: Duration = Duration::from_millis(500);
+/// How long a request waits for its wakeup; a slower publication finishes detached.
+const REALTIME_PUBLISH_WAIT: Duration = Duration::from_millis(250);
+const REALTIME_PUBLISH_TIMEOUT: Duration = Duration::from_secs(2);
+/// A provider outage fails every account's wakeups at once; the transport warns once per window.
+const FAILURE_LOG_WINDOW: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+struct RealtimeAccount {
+    published_at: Option<Instant>,
+}
+
+type RealtimeAccountState = Arc<parking_lot::Mutex<RealtimeAccount>>;
+
+#[derive(Default)]
+struct FailureWindow {
+    warned_at: Option<Instant>,
+    suppressed: u64,
+}
+
+/// Wakeup failure warnings for the issuer's transport, shared by all accounts.
+#[derive(Default)]
+struct FailureLog(parking_lot::Mutex<FailureWindow>);
+
+impl FailureLog {
+    /// When this failure may warn, the number of failures suppressed since the last warning.
+    fn claim(&self, now: Instant) -> Option<u64> {
+        let mut window = self.0.lock();
+        if !claim_window(&mut window.warned_at, now, FAILURE_LOG_WINDOW) {
+            window.suppressed += 1;
+            return None;
+        }
+        Some(std::mem::take(&mut window.suppressed))
+    }
+}
 
 /// Everything the API needs to hand a run and its client a channel. Held on `State.channels`
 /// and by the dispatcher.
@@ -20,14 +59,17 @@ pub struct ChannelIssuer {
     api_base_url: String,
     backend: ChannelBackend,
     forwarder: Option<Arc<dyn ChannelForwarder>>,
+    realtime_accounts: moka::sync::Cache<String, RealtimeAccountState>,
+    realtime_failures: Arc<FailureLog>,
+    on_lambda: bool,
     #[cfg(feature = "channel-aws")]
-    aws: Option<super::aws::AwsChannelRuntime>,
+    aws: Option<Arc<super::aws::AwsChannelRuntime>>,
     #[cfg(feature = "channel-azure")]
-    azure: Option<super::azure::AzureChannelRuntime>,
+    azure: Option<Arc<super::azure::AzureChannelRuntime>>,
     #[cfg(feature = "channel-gcp")]
-    gcp: Option<super::gcp::GcpChannelRuntime>,
+    gcp: Option<Arc<super::gcp::GcpChannelRuntime>>,
     #[cfg(feature = "channel-nats")]
-    nats: Option<super::nats::NatsChannelRuntime>,
+    nats: Option<Arc<super::nats::NatsChannelRuntime>>,
 }
 
 /// One side of a cloud grant: the descriptor plus when its credential stops working.
@@ -48,6 +90,12 @@ impl ChannelIssuer {
             api_base_url: api_base_url.into(),
             backend: ChannelBackend::Http,
             forwarder: None,
+            realtime_accounts: moka::sync::Cache::builder()
+                .max_capacity(10_000)
+                .time_to_idle(Duration::from_secs(60))
+                .build(),
+            realtime_failures: Arc::default(),
+            on_lambda: std::env::var_os("AWS_LAMBDA_FUNCTION_NAME").is_some(),
             #[cfg(feature = "channel-aws")]
             aws: None,
             #[cfg(feature = "channel-azure")]
@@ -63,7 +111,7 @@ impl ChannelIssuer {
     /// transport that fails to configure logs the reason and degrades to HTTP; cloud binaries
     /// validate the same variables at boot so this only happens on hosts that opted out of
     /// that validation.
-    #[allow(unused_variables)]
+    #[allow(unused_variables, unused_mut)]
     pub async fn from_env(
         secrets: &flow_like_secrets::SecretStore,
         #[cfg(feature = "aws")] aws_config: Arc<aws_config::SdkConfig>,
@@ -77,7 +125,7 @@ impl ChannelIssuer {
                 match super::nats::NatsChannelRuntime::from_env(secrets).await {
                     Ok(runtime) => {
                         issuer.forwarder = Some(runtime.forwarder());
-                        issuer.nats = Some(runtime);
+                        issuer.nats = Some(Arc::new(runtime));
                         issuer.backend = backend;
                     }
                     Err(error) => {
@@ -90,7 +138,7 @@ impl ChannelIssuer {
                 match super::aws::AwsChannelRuntime::from_env(aws_config).await {
                     Ok(runtime) => {
                         issuer.forwarder = Some(runtime.forwarder());
-                        issuer.aws = Some(runtime);
+                        issuer.aws = Some(Arc::new(runtime));
                         issuer.backend = backend;
                     }
                     Err(error) => {
@@ -103,7 +151,7 @@ impl ChannelIssuer {
                 match super::azure::AzureChannelRuntime::from_env(secrets).await {
                     Ok(runtime) => {
                         issuer.forwarder = Some(runtime.forwarder());
-                        issuer.azure = Some(runtime);
+                        issuer.azure = Some(Arc::new(runtime));
                         issuer.backend = backend;
                     }
                     Err(error) => {
@@ -116,7 +164,7 @@ impl ChannelIssuer {
                 match super::gcp::GcpChannelRuntime::from_env(secrets).await {
                     Ok(runtime) => {
                         issuer.forwarder = Some(runtime.forwarder());
-                        issuer.gcp = Some(runtime);
+                        issuer.gcp = Some(Arc::new(runtime));
                         issuer.backend = backend;
                     }
                     Err(error) => {
@@ -141,50 +189,178 @@ impl ChannelIssuer {
         self.forwarder.as_ref()
     }
 
-    /// Refresh only the client's transport. Reuse the responder token to preserve its deadline.
+    /// Mint reception rights only. The authenticated account supplies the scope.
+    #[allow(unused_variables)]
+    pub async fn realtime_connect(
+        &self,
+        sub: &str,
+        prefer_http: bool,
+    ) -> Result<flow_like_types::realtime::RealtimeConnectResponse> {
+        use flow_like_types::realtime::{
+            REALTIME_PROTOCOL_VERSION, RealtimeConnectResponse, RealtimeTransport,
+        };
+        let ttl = 15 * 60;
+        let expires_at = now_unix() + ttl;
+        let scope = realtime_scope(sub);
+        let transport = if prefer_http {
+            RealtimeTransport::Http {}
+        } else {
+            match self.backend {
+                ChannelBackend::Http => RealtimeTransport::Http {},
+                #[cfg(feature = "channel-nats")]
+                ChannelBackend::Nats => self
+                    .nats
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("NATS unavailable"))?
+                    .realtime(&scope, ttl)?,
+                #[cfg(feature = "channel-azure")]
+                ChannelBackend::AzureWebPubSub => self
+                    .azure
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Azure Web PubSub unavailable"))?
+                    .realtime(&scope, ttl)?,
+                #[cfg(feature = "channel-gcp")]
+                ChannelBackend::GcpFirebaseRtdb => self
+                    .gcp
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("Firebase unavailable"))?
+                    .realtime(&scope, ttl)?,
+                #[cfg(feature = "channel-aws")]
+                ChannelBackend::AwsMqtt => {
+                    self.aws
+                        .as_ref()
+                        .ok_or_else(|| anyhow!("AWS IoT unavailable"))?
+                        .realtime(&scope, ttl)
+                        .await?
+                }
+            }
+        };
+        let expires_at = match &transport {
+            RealtimeTransport::AwsMqtt { credentials, .. } => {
+                credentials.expiration.min(expires_at)
+            }
+            _ => expires_at,
+        };
+        Ok(RealtimeConnectResponse {
+            protocol_version: REALTIME_PROTOCOL_VERSION,
+            expires_at,
+            expires_in: None,
+            max_poll_wait_ms: flow_like_types::realtime::MAX_REALTIME_TIMEOUT_MS,
+            transport,
+        })
+    }
+
+    /// Wakeups contain no event data and never determine whether a durable write succeeds.
+    pub async fn publish_realtime_invalidation(&self, sub: &str) {
+        self.publish_realtime_for_user(sub, false).await;
+    }
+
+    /// Intermediate run batches share a short throttle window. Terminal state bypasses it.
+    pub async fn publish_realtime_run_invalidation(&self, sub: &str) {
+        self.publish_realtime_for_user(sub, true).await;
+    }
+
+    async fn publish_realtime_for_user(&self, sub: &str, throttle: bool) {
+        use flow_like_types::realtime::{REALTIME_PROTOCOL_VERSION, RealtimeWakeup};
+        if matches!(self.backend, ChannelBackend::Http) || sub.is_empty() {
+            return;
+        }
+        let scope = realtime_scope(sub);
+        let account = self
+            .realtime_accounts
+            .get_with(scope.clone(), Default::default);
+        if !admit(&account, throttle, Instant::now()) {
+            return;
+        }
+        let wakeup = RealtimeWakeup {
+            protocol_version: REALTIME_PROTOCOL_VERSION,
+            kind: "invalidate".into(),
+            nonce: flow_like_types::channel::new_request_id(),
+        };
+        let Ok(payload) = serde_json::to_vec(&wakeup) else {
+            return;
+        };
+        send_wakeup(
+            self.realtime_publication(scope, payload),
+            self.realtime_failures.clone(),
+            self.transport(),
+            publish_wait(throttle, self.on_lambda),
+        )
+        .await;
+    }
+
+    /// The provider call owns its inputs so it can outlive the request that started it.
+    #[allow(unused_variables)]
+    fn realtime_publication(
+        &self,
+        scope: String,
+        payload: Vec<u8>,
+    ) -> BoxFuture<'static, Result<()>> {
+        match self.backend {
+            ChannelBackend::Http => Box::pin(async { Ok(()) }),
+            #[cfg(feature = "channel-nats")]
+            ChannelBackend::Nats => {
+                let nats = self.nats.clone();
+                Box::pin(async move {
+                    nats.ok_or_else(|| anyhow!("NATS unavailable"))?
+                        .publish_realtime(&scope, &payload)
+                        .await
+                })
+            }
+            #[cfg(feature = "channel-azure")]
+            ChannelBackend::AzureWebPubSub => {
+                let azure = self.azure.clone();
+                Box::pin(async move {
+                    azure
+                        .ok_or_else(|| anyhow!("Azure Web PubSub unavailable"))?
+                        .publish_realtime(&scope, &payload)
+                        .await
+                })
+            }
+            #[cfg(feature = "channel-gcp")]
+            ChannelBackend::GcpFirebaseRtdb => {
+                let gcp = self.gcp.clone();
+                Box::pin(async move {
+                    gcp.ok_or_else(|| anyhow!("Firebase unavailable"))?
+                        .publish_realtime(&scope, &payload)
+                        .await
+                })
+            }
+            #[cfg(feature = "channel-aws")]
+            ChannelBackend::AwsMqtt => {
+                let aws = self.aws.clone();
+                Box::pin(async move {
+                    aws.ok_or_else(|| anyhow!("AWS IoT unavailable"))?
+                        .publish_realtime(&scope, &payload)
+                        .await
+                })
+            }
+        }
+    }
+
+    /// Refresh the API endpoint while retaining the responder token and its original deadline.
     pub async fn refresh_client_handle(
         &self,
         claims: &crate::execution::ChannelClaims,
         responder_token: &str,
     ) -> Result<ChannelHandle> {
-        let remaining = claims.exp - now_unix();
-        if remaining <= 0 {
+        if claims.exp <= now_unix() {
             return Err(anyhow!("channel has expired"));
         }
-        let http = ChannelClientDescriptor::Http {
-            push_url: push_url(&self.api_base_url, &claims.channel_id),
-            token: responder_token.to_owned(),
-        };
-        let (transport, fallback, expires_at) = if claims.transport == "http" {
-            (http, None, claims.exp)
-        } else {
-            if claims.transport != self.transport() {
-                return Err(anyhow!("channel transport no longer matches this API"));
-            }
-            let minted = match &self.backend {
-                #[cfg(feature = "channel-nats")]
-                ChannelBackend::Nats => self
-                    .nats
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("nats channel transport is not configured"))?
-                    .client_until(&claims.channel_id, claims.exp)?,
-                _ => self
-                    .mint_client(&claims.channel_id, &claims.sub, remaining)
-                    .await?
-                    .ok_or_else(|| anyhow!("channel transport is not configured"))?,
-            };
-            (
-                minted.descriptor,
-                Some(http),
-                minted.expires_at.min(claims.exp),
-            )
-        };
+        if claims.transport != ChannelBackend::Http.transport()
+            && claims.transport != self.transport()
+        {
+            return Err(anyhow!("channel transport no longer matches this API"));
+        }
         Ok(ChannelHandle {
             channel_id: claims.channel_id.clone(),
             request_id: None,
-            expires_at,
-            transport,
-            fallback,
+            expires_at: claims.exp,
+            transport: ChannelClientDescriptor::Http {
+                push_url: push_url(&self.api_base_url, &claims.channel_id),
+                token: responder_token.to_owned(),
+            },
+            fallback: None,
         })
     }
 
@@ -267,65 +443,6 @@ impl ChannelIssuer {
         })
     }
 
-    /// The push endpoint as fallback for a cloud handle: its token names the cloud transport
-    /// so a push landing there is forwarded to the waiter's connection.
-    fn fallback_descriptor(
-        &self,
-        channel_id: &str,
-        sub: &str,
-        app_id: Option<&str>,
-        ttl_secs: i64,
-    ) -> Result<ChannelClientDescriptor> {
-        self.http_descriptor(channel_id, sub, app_id, self.transport(), ttl_secs)
-    }
-
-    #[allow(unused_variables)]
-    async fn mint_client(
-        &self,
-        channel_id: &str,
-        sub: &str,
-        ttl_secs: i64,
-    ) -> Result<Option<MintedDescriptor>> {
-        match &self.backend {
-            ChannelBackend::Http => Ok(None),
-            #[cfg(feature = "channel-nats")]
-            ChannelBackend::Nats => self
-                .nats
-                .as_ref()
-                .ok_or_else(|| anyhow!("nats channel transport is selected but not configured"))?
-                .client(channel_id, ttl_secs)
-                .map(Some),
-            #[cfg(feature = "channel-aws")]
-            ChannelBackend::AwsMqtt => self
-                .aws
-                .as_ref()
-                .ok_or_else(|| {
-                    anyhow!("aws_mqtt channel transport is selected but not configured")
-                })?
-                .client(channel_id, sub, ttl_secs)
-                .await
-                .map(Some),
-            #[cfg(feature = "channel-azure")]
-            ChannelBackend::AzureWebPubSub => self
-                .azure
-                .as_ref()
-                .ok_or_else(|| {
-                    anyhow!("azure_web_pubsub channel transport is selected but not configured")
-                })?
-                .client(channel_id, sub, ttl_secs)
-                .map(Some),
-            #[cfg(feature = "channel-gcp")]
-            ChannelBackend::GcpFirebaseRtdb => self
-                .gcp
-                .as_ref()
-                .ok_or_else(|| {
-                    anyhow!("gcp_firebase_rtdb channel transport is selected but not configured")
-                })?
-                .client(channel_id, sub, ttl_secs)
-                .map(Some),
-        }
-    }
-
     #[allow(unused_variables)]
     async fn mint_executor(
         &self,
@@ -374,8 +491,8 @@ impl ChannelIssuer {
         }
     }
 
-    /// Client handle for the configured transport (HTTP handle when that is the transport),
-    /// with the push endpoint as fallback.
+    /// Every remote client pushes through the API. The signed transport claim routes the
+    /// push to the configured waiter without exposing provider write credentials.
     pub async fn client_handle(
         &self,
         channel_id: &str,
@@ -384,23 +501,17 @@ impl ChannelIssuer {
         ttl_secs: i64,
     ) -> Result<ChannelHandle> {
         let ttl_secs = Self::ttl(ttl_secs);
-        let Some(minted) = self.mint_client(channel_id, sub, ttl_secs).await? else {
-            return self.http_handle(channel_id, sub, app_id, ttl_secs);
-        };
-        let fallback = self.fallback_descriptor(channel_id, sub, app_id, ttl_secs)?;
         Ok(ChannelHandle {
             channel_id: channel_id.to_string(),
             request_id: None,
-            expires_at: minted.expires_at.min(now_unix() + ttl_secs),
-            transport: minted.descriptor,
-            fallback: Some(fallback),
+            expires_at: now_unix() + ttl_secs,
+            transport: self.http_descriptor(channel_id, sub, app_id, self.transport(), ttl_secs)?,
+            fallback: None,
         })
     }
 
-    /// Full grant for the configured transport: executor credentials plus the client handle
-    /// forwarded inside every request. `expires_at` is the earliest credential expiry. Both
-    /// sides are minted concurrently — every dispatch pays this latency, and on AWS each side is
-    /// its own `sts:AssumeRole`.
+    /// Keep the executor on its configured provider and give the client an API capability.
+    /// The handle and grant share the earliest deadline, including executor credential expiry.
     pub async fn grant(
         &self,
         channel_id: &str,
@@ -430,11 +541,203 @@ impl ChannelIssuer {
     }
 }
 
+fn realtime_scope(sub: &str) -> String {
+    let mut hash = blake3::Hasher::new_derive_key("flow-like realtime account scope v1");
+    hash.update(sub.as_bytes());
+    hash.finalize().to_hex().to_string()
+}
+
+/// Intermediate run batches share the account window and are dropped inside it; terminal and
+/// notification wakeups always go out.
+fn admit(account: &RealtimeAccountState, throttle: bool, now: Instant) -> bool {
+    !throttle || claim_window(&mut account.lock().published_at, now, REALTIME_WINDOW)
+}
+
+fn claim_window(slot: &mut Option<Instant>, now: Instant, window: Duration) -> bool {
+    if slot.is_some_and(|at| now.saturating_duration_since(at) < window) {
+        return false;
+    }
+    *slot = Some(now);
+    true
+}
+
+/// How long a request holds for its wakeup; `None` until the publication finishes. Lambda
+/// freezes detached work with the invocation, so there terminal and notification wakeups
+/// finish inside the request. Intermediate ones, and every wakeup elsewhere, get a short head
+/// start and finish detached; clients recover dropped wakeups through HTTP replay.
+fn publish_wait(throttle: bool, on_lambda: bool) -> Option<Duration> {
+    (throttle || !on_lambda).then_some(REALTIME_PUBLISH_WAIT)
+}
+
+async fn send_wakeup(
+    publication: BoxFuture<'static, Result<()>>,
+    failures: Arc<FailureLog>,
+    transport: &'static str,
+    wait: Option<Duration>,
+) {
+    let task = spawn(async move {
+        let error = match timeout(REALTIME_PUBLISH_TIMEOUT, publication).await {
+            Ok(Ok(())) => return,
+            Ok(Err(error)) => redact_provider_error(&error),
+            Err(_) => format!("no answer within {REALTIME_PUBLISH_TIMEOUT:?}"),
+        };
+        match failures.claim(Instant::now()) {
+            Some(suppressed) => tracing::warn!(
+                transport,
+                %error,
+                suppressed,
+                "Realtime wakeup failed; clients recover through HTTP replay"
+            ),
+            None => tracing::debug!(transport, %error, "Realtime wakeup failed"),
+        }
+    });
+    match wait {
+        Some(wait) => {
+            let _ = timeout(wait, task).await;
+        }
+        None => {
+            let _ = task.await;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::execution::verify_channel_responder;
     use flow_like_types::channel::CHANNEL_TRANSPORT_HTTP;
+
+    #[test]
+    fn realtime_topics_cannot_be_selected_through_account_identifiers() {
+        let normal = realtime_scope("user-a");
+        assert_eq!(normal, realtime_scope("user-a"));
+        assert_ne!(normal, realtime_scope("user-b"));
+        for sub in ["user-a", "other.*.>", "../other/#", "üser@example.test"] {
+            let scope = realtime_scope(sub);
+            assert_eq!(scope.len(), 64);
+            assert!(scope.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        }
+    }
+
+    #[tokio::test]
+    async fn http_realtime_grant_has_no_publish_credentials() {
+        let issuer = ChannelIssuer::http_only("https://api.example.test");
+        let grant = issuer.realtime_connect("user-a", false).await.unwrap();
+        assert_eq!(grant.protocol_version, 1);
+        assert!(matches!(
+            grant.transport,
+            flow_like_types::realtime::RealtimeTransport::Http {}
+        ));
+        assert!(grant.expires_at > now_unix());
+        issuer.publish_realtime_invalidation("user-a").await;
+        assert_eq!(issuer.realtime_accounts.entry_count(), 0);
+    }
+
+    #[test]
+    fn intermediate_wakeups_share_a_window_and_terminal_ones_never_wait() {
+        let account = RealtimeAccountState::default();
+        let start = Instant::now();
+        assert!(admit(&account, true, start));
+        assert!(!admit(&account, true, start + Duration::from_millis(100)));
+        assert!(admit(&account, false, start + Duration::from_millis(100)));
+        assert!(admit(&account, false, start + Duration::from_millis(101)));
+        assert!(!admit(&account, true, start + Duration::from_millis(499)));
+        assert!(admit(&account, true, start + REALTIME_WINDOW));
+        assert!(admit(&RealtimeAccountState::default(), true, start));
+    }
+
+    #[tokio::test]
+    async fn a_hanging_provider_holds_the_request_only_for_the_wait_bound() {
+        let started = Instant::now();
+        send_wakeup(
+            Box::pin(std::future::pending()),
+            Arc::default(),
+            "test",
+            publish_wait(false, false),
+        )
+        .await;
+        let waited = started.elapsed();
+        assert!(
+            waited >= REALTIME_PUBLISH_WAIT && waited < REALTIME_PUBLISH_TIMEOUT / 2,
+            "{waited:?}"
+        );
+    }
+
+    #[test]
+    fn lambda_holds_only_terminal_and_notification_wakeups_to_the_end() {
+        assert_eq!(publish_wait(false, true), None);
+        for (throttle, on_lambda) in [(true, true), (false, false), (true, false)] {
+            assert_eq!(
+                publish_wait(throttle, on_lambda),
+                Some(REALTIME_PUBLISH_WAIT),
+                "throttle {throttle}, lambda {on_lambda}"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_lambda_request_finishes_a_slow_wakeup_before_it_responds() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let slow = |published: Arc<AtomicBool>| {
+            Box::pin(async move {
+                flow_like_types::tokio::time::sleep(Duration::from_millis(600)).await;
+                published.store(true, Ordering::SeqCst);
+                Ok::<(), flow_like_types::Error>(())
+            })
+        };
+        for (on_lambda, finished) in [(true, true), (false, false)] {
+            let published = Arc::new(AtomicBool::new(false));
+            send_wakeup(
+                slow(published.clone()),
+                Arc::default(),
+                "test",
+                publish_wait(false, on_lambda),
+            )
+            .await;
+            assert_eq!(published.load(Ordering::SeqCst), finished, "{on_lambda}");
+        }
+
+        let started = flow_like_types::tokio::time::Instant::now();
+        send_wakeup(
+            Box::pin(std::future::pending()),
+            Arc::default(),
+            "test",
+            publish_wait(false, true),
+        )
+        .await;
+        let waited = started.elapsed();
+        assert!(
+            waited >= REALTIME_PUBLISH_TIMEOUT
+                && waited < REALTIME_PUBLISH_TIMEOUT + Duration::from_millis(10),
+            "{waited:?}"
+        );
+    }
+
+    #[test]
+    fn a_warning_counts_the_failures_suppressed_since_the_last_one() {
+        let failures = FailureLog::default();
+        let start = Instant::now();
+        assert_eq!(failures.claim(start), Some(0));
+        assert_eq!(failures.claim(start + Duration::from_millis(10)), None);
+        assert_eq!(failures.claim(start + Duration::from_millis(999)), None);
+        assert_eq!(failures.claim(start + FAILURE_LOG_WINDOW), Some(2));
+        assert_eq!(failures.claim(start + FAILURE_LOG_WINDOW * 3), Some(0));
+    }
+
+    #[tokio::test]
+    async fn every_account_shares_one_failure_warning_window() {
+        let failures = Arc::new(FailureLog::default());
+        let wait = publish_wait(false, true);
+        send_wakeup(Box::pin(async { Ok(()) }), failures.clone(), "test", wait).await;
+        assert!(failures.0.lock().warned_at.is_none());
+        for _account in 0..3 {
+            let failing = Box::pin(async { Err::<(), _>(anyhow!("provider unavailable")) });
+            send_wakeup(failing, failures.clone(), "test", wait).await;
+        }
+        let window = failures.0.lock();
+        assert!(window.warned_at.is_some());
+        assert_eq!(window.suppressed, 2);
+    }
 
     #[tokio::test]
     async fn http_grant_carries_a_bound_responder_token() {
@@ -501,5 +804,66 @@ mod tests {
         let mut expired = claims;
         expired.exp = now_unix() - 1;
         assert!(issuer.refresh_client_handle(&expired, token).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn every_remote_client_uses_api_push_without_provider_credentials() {
+        crate::backend_jwt::init_for_tests();
+        for transport in [
+            "http",
+            "aws_mqtt",
+            "azure_web_pubsub",
+            "gcp_firebase_rtdb",
+            "nats",
+        ] {
+            let Ok(backend) = ChannelBackend::parse(Some(transport)) else {
+                continue;
+            };
+            // Provider runtimes deliberately remain absent. Client issuance must not need
+            // STS, a Firebase key, a Web PubSub key, or a NATS account signer.
+            let mut issuer = ChannelIssuer::http_only("https://api.test");
+            issuer.backend = backend;
+            let client = issuer
+                .client_handle("run-1", "user-1", Some("app-1"), 120)
+                .await
+                .unwrap();
+            let ChannelClientDescriptor::Http { push_url, token } = &client.transport else {
+                panic!("remote clients must use the API");
+            };
+            assert_eq!(push_url, "https://api.test/api/v1/channels/run-1/push");
+            assert!(client.fallback.is_none());
+            let claims = verify_channel_responder(token).unwrap();
+            assert_eq!(claims.transport, transport);
+            assert_eq!(claims.channel_id, "run-1");
+            assert_eq!(claims.sub, "user-1");
+            assert_eq!(claims.app_id.as_deref(), Some("app-1"));
+            assert!(client.expires_at <= claims.exp);
+
+            let deadline = now_unix() + 30;
+            let request = client.for_request("request-1", deadline);
+            assert_eq!(request.request_id.as_deref(), Some("request-1"));
+            assert_eq!(request.expires_at, deadline);
+            assert_eq!(request.transport, client.transport);
+
+            // A legacy provider handle's HTTP fallback carries this same capability.
+            // Refreshing it retains identity and expiry, without renewing provider grants.
+            let refreshed = issuer.refresh_client_handle(&claims, token).await.unwrap();
+            assert_eq!(refreshed.transport, client.transport);
+            assert_eq!(refreshed.channel_id, client.channel_id);
+            assert_eq!(refreshed.expires_at, claims.exp);
+            assert!(refreshed.fallback.is_none());
+            assert!(refreshed.request_id.is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn refresh_cannot_redirect_a_provider_capability_to_an_http_waiter() {
+        crate::backend_jwt::init_for_tests();
+        let issuer = ChannelIssuer::http_only("https://api.test");
+        let token = issuer
+            .responder_token("run-1", "user-1", Some("app-1"), "nats", 60)
+            .unwrap();
+        let claims = verify_channel_responder(&token).unwrap();
+        assert!(issuer.refresh_client_handle(&claims, &token).await.is_err());
     }
 }

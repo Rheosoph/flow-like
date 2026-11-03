@@ -8,12 +8,14 @@ import {
 	type IBackendState,
 	type IBitState,
 	type IBoardState,
+	type IBotState,
 	type ICapabilities,
 	type IDatabaseState,
 	type IEventState,
 	type IGenericCommand,
 	type IGraphState,
 	type IHelperState,
+	type IInboxState,
 	type ILockedStorageState,
 	type IPageState,
 	type IProfile,
@@ -70,6 +72,8 @@ import {
 } from "../lib/web-states";
 import { WebAnalyticsState } from "../lib/web-states/analytics-state";
 import type { WebBackendRef } from "../lib/web-states/api-utils";
+import { WebBotState } from "../lib/web-states/bot-state";
+import { WebInboxState } from "../lib/web-states/inbox-state";
 import { WebSalesState } from "../lib/web-states/sales-state";
 
 export class WebBackend implements IBackendState {
@@ -96,6 +100,8 @@ export class WebBackend implements IBackendState {
 	registryState: IRegistryState;
 	sinkState: ISinkState;
 	salesState: ISalesState;
+	botState: IBotState;
+	inboxState: IInboxState;
 	usageState: IUsageState;
 	analyticsState: IAnalyticsState;
 
@@ -132,6 +138,8 @@ export class WebBackend implements IBackendState {
 		this.registryState = new WebRegistryState(this.backendRef);
 		this.sinkState = new WebSinkState(this.backendRef);
 		this.salesState = new WebSalesState(this.backendRef);
+		this.botState = new WebBotState(this.backendRef);
+		this.inboxState = new WebInboxState(this.backendRef);
 		this.usageState = new WebUsageState(this.backendRef);
 		this.analyticsState = new WebAnalyticsState(this.backendRef);
 	}

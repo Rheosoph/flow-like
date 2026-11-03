@@ -39,6 +39,10 @@ import { userDisplayName } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { IInvite, INotification } from "../../state/backend-state/types";
+import {
+	BotNotificationAvatar,
+	notificationBotId,
+} from "../notifications/bot-notification-avatar";
 import { NotificationIcon } from "../notifications/notification-icon";
 import {
 	Badge,
@@ -997,6 +1001,7 @@ function NotificationCard({
 	}, [notification, onMarkRead, router]);
 
 	const hasLink = Boolean(notification.link);
+	const botId = notificationBotId(notification.link);
 
 	const handleCardKeyDown = useCallback(
 		(event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -1040,11 +1045,15 @@ function NotificationCard({
 								: "border-primary/20 bg-primary/8",
 						)}
 					>
-						<NotificationIcon
-							icon={notification.icon}
-							appId={notification.app_id}
-							read={notification.read}
-						/>
+						{botId ? (
+							<BotNotificationAvatar botId={botId} className="size-6" />
+						) : (
+							<NotificationIcon
+								icon={notification.icon}
+								appId={notification.app_id}
+								read={notification.read}
+							/>
+						)}
 					</div>
 
 					<div className="min-w-0 flex-1">

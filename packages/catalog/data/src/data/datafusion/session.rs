@@ -169,7 +169,7 @@ impl NodeLogic for CreateDataFusionSessionNode {
                 collect_statistics,
             );
 
-            let ctx = create_session_context(config, context.execution_environment());
+            let ctx = create_session_context(config, context.execution_environment(), None);
 
             let cached = CachedDataFusionSession::new(ctx);
             let cacheable: Arc<dyn Cacheable> = Arc::new(cached);
@@ -331,7 +331,7 @@ mod tests {
     #[cfg(all(feature = "execute", feature = "federation"))]
     #[test]
     fn test_create_session_context_uses_federated_query_planner() {
-        let ctx = create_session_context(SessionConfig::new(), ExecutionEnvironment::Local);
+        let ctx = create_session_context(SessionConfig::new(), ExecutionEnvironment::Local, None);
         let planner = format!("{:?}", ctx.state().query_planner());
 
         assert!(
@@ -378,7 +378,7 @@ mod tests {
         );
         let table_provider = table.create_federated_table_provider().unwrap();
 
-        let ctx = create_session_context(SessionConfig::new(), ExecutionEnvironment::Local);
+        let ctx = create_session_context(SessionConfig::new(), ExecutionEnvironment::Local, None);
         ctx.register_table("customers", Arc::new(table_provider))
             .unwrap();
 

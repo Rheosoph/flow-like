@@ -3,9 +3,9 @@
 //!
 //! Four optional fields travel under the same names on the executor's
 //! terminal progress update, the streaming `completed` event and the
-//! desktop's run report. They land in the `eventVersion`, `nodes` and
-//! `logsCount` columns of `ExecutionRun` (`logLevel` already had one). NULL
-//! means "never reported" — an older sender — never "empty".
+//! desktop's run report. Event dispatch stamps `eventVersion` before the
+//! executor starts; a summary can also supply it. Missing summary fields
+//! leave stored values untouched. NULL node lists and log counts mean "unknown".
 
 use flow_like::flow::execution::LogMeta;
 use flow_like::flow::execution::rejection::REJECTION_OPERATION_PREFIX;

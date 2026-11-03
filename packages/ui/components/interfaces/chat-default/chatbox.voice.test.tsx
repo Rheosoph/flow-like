@@ -499,6 +499,34 @@ describe("ChatBox voice regressions", () => {
 });
 
 describe("ChatBox imperative handle", () => {
+	test("keeps an IME confirmation in the draft instead of submitting it", async () => {
+		const browser = installVoiceBrowser();
+		const sent: string[] = [];
+		const view = await renderChatBox(browser.window, {
+			onSendMessage: async (text) => {
+				sent.push(text);
+			},
+		});
+		try {
+			await act(async () => view.ref.current?.setInput("こんにちは"));
+			const input = view.container.querySelector("textarea");
+			expect(input).not.toBeNull();
+			await act(async () => {
+				input?.dispatchEvent(
+					new browser.window.KeyboardEvent("keydown", {
+						key: "Enter",
+						bubbles: true,
+						isComposing: true,
+					}) as unknown as Event,
+				);
+			});
+			expect(sent).toEqual([]);
+			expect(view.ref.current?.getInput()).toBe("こんにちは");
+		} finally {
+			await view.close();
+		}
+	});
+
 	test("getInput returns text set after mount", async () => {
 		const browser = installVoiceBrowser();
 		const view = await renderChatBox(browser.window);

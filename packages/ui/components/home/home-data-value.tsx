@@ -2,13 +2,15 @@
 
 import { useQueries } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { userLookupQueryOptions } from "../../hooks/use-user-lookup";
+import {
+	useLookupDisplayName,
+	userLookupQueryOptions,
+} from "../../hooks/use-user-lookup";
 import {
 	formatAbsoluteDateTime,
 	formatCalendarDate,
 	formatRelativeTime,
 } from "../../lib/date";
-import { userDisplayName } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";
 import type { ExecuteSqlResult } from "../../state/backend-state/query-state";
@@ -43,13 +45,12 @@ export function useHomeDataUserNames(
 	ids: readonly string[],
 ): ReadonlyMap<string, string> {
 	const backend = useBackend();
+	const displayName = useLookupDisplayName();
 	const results = useQueries({
 		queries: ids.map((id) => userLookupQueryOptions(backend.userState, id)),
 	});
 	const signature = JSON.stringify(
-		results.map((result) =>
-			result.data ? userDisplayName(result.data, "") : "",
-		),
+		results.map((result) => (result.data ? displayName(result.data, "") : "")),
 	);
 	return useMemo(() => {
 		const names = JSON.parse(signature) as string[];

@@ -7,7 +7,7 @@
 
 use flow_like_types::{Result, anyhow};
 
-use calamine::{Data, Range, Reader, Sheets, open_workbook_auto_from_rs};
+use calamine::{Data, Range, Reader, SheetVisible, Sheets, open_workbook_auto_from_rs};
 use chrono::NaiveDateTime;
 use std::io::Cursor;
 
@@ -332,6 +332,16 @@ impl Workbook {
 
     pub fn sheet_names(&self) -> Vec<String> {
         self.sheets.sheet_names().to_vec()
+    }
+
+    /// Sheets a user cannot see in Excel's tab bar (hidden or very hidden).
+    pub fn hidden_sheet_names(&self) -> Vec<String> {
+        self.sheets
+            .sheets_metadata()
+            .iter()
+            .filter(|sheet| sheet.visible != SheetVisible::Visible)
+            .map(|sheet| sheet.name.clone())
+            .collect()
     }
 
     /// Reads one worksheet into a typed grid, including merges (xlsx only).

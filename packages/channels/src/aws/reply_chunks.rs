@@ -1,15 +1,18 @@
-//! AWS-only reply framing. The normal HTTP fallback receives the complete `ChannelPush`;
-//! its AWS forwarder uses the same frames as the browser. Older waiters reject `reply_chunk`
-//! as an unknown kind instead of delivering a partial reply, so deploy waiters before clients.
+//! AWS-only reply framing. The API's forwarder splits a large reply into these frames and the
+//! executor's router reassembles them. Older waiters reject `reply_chunk` as an unknown kind
+//! instead of delivering a partial reply, so deploy waiters before the API.
 
 use std::time::{Duration, Instant};
 
 use flow_like_types::base64::{Engine, engine::general_purpose::STANDARD};
-use flow_like_types::channel::{ChannelPush, ChannelPushKind, new_request_id};
+#[cfg(any(feature = "aws", test))]
+use flow_like_types::channel::new_request_id;
+use flow_like_types::channel::{ChannelPush, ChannelPushKind};
 use flow_like_types::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-// Keep these limits and wire fields in sync with ui/lib/channel/aws-reply-chunks.ts.
+// The forwarder splits replies with these limits and the router reassembles them. The API's push
+// limits in packages/api/src/channel/forward.rs must stay within them.
 pub(crate) const MAX_PAYLOAD_BYTES: usize = 128 * 1024;
 pub(crate) const CHUNK_BYTES: usize = 64 * 1024;
 pub(crate) const MAX_REPLY_BYTES: usize = 2 * 1024 * 1024;
@@ -37,6 +40,7 @@ pub(crate) struct ReplyChunk {
 }
 
 /// Validate the complete message budget before publishing any frames.
+#[cfg(any(feature = "aws", test))]
 pub(crate) fn reply_payloads(push: &ChannelPush) -> Result<Vec<Vec<u8>>> {
     let body = serde_json::to_vec(push)?;
     if body.len() <= MAX_PAYLOAD_BYTES {

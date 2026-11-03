@@ -7,10 +7,13 @@ import { useCallback, useMemo, useState } from "react";
 import { useIsMobile } from "../../hooks/use-mobile";
 import { cn } from "../../lib/utils";
 import {
-	GLOBAL_CHAT_APP_ID,
 	globalChatDb,
+	listFluxChatSessions,
 } from "../../state/global-chat/global-chat-db";
-import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
+import {
+	selectActiveBotId,
+	useGlobalChatStore,
+} from "../../state/global-chat/global-chat-store";
 import {
 	deleteGlobalChatConversation,
 	renameGlobalChatSession,
@@ -38,15 +41,19 @@ interface GlobalChatHistoryProps {
 	className?: string;
 }
 
+/** Flux's New chat and history. A bot keeps one continuous conversation, so its chat has neither. */
+export function GlobalChatHistory(props: Readonly<GlobalChatHistoryProps>) {
+	const botChat = useGlobalChatStore((s) => selectActiveBotId(s) !== null);
+	return botChat ? null : <FluxChatHistory {...props} />;
+}
+
 /**
- * Global chat history: a New-chat action plus a searchable, pinnable conversation list.
+ * Flux's chat history: a New-chat action plus a searchable, pinnable conversation list.
  *
  * The list renders in a Popover on pointer devices and a bottom Sheet on touch, since a 320px
  * popover anchored to a header button is unusable with a thumb.
  */
-export function GlobalChatHistory({
-	className,
-}: Readonly<GlobalChatHistoryProps>) {
+function FluxChatHistory({ className }: Readonly<GlobalChatHistoryProps>) {
 	const { t } = useTranslation("chat");
 	const [open, setOpen] = useState(false);
 	const isMobile = useIsMobile();
@@ -67,34 +74,7 @@ export function GlobalChatHistory({
 			.join(","),
 	);
 
-	// Two queries rather than one: a single `limit()` would be applied before the appId filter (so
-	// migrated board/ui rows eat slots) and would drop pinned-but-old conversations entirely.
-	const pinnedSessions = useLiveQuery(
-		() => globalChatDb.sessions.where("pinnedAt").above(0).toArray(),
-		[],
-	);
-	const recentSessions = useLiveQuery(
-		() =>
-			globalChatDb.sessions
-				.orderBy("updatedAt")
-				.reverse()
-				.filter((session) => session.appId === GLOBAL_CHAT_APP_ID)
-				.limit(RECENT_LIMIT)
-				.toArray(),
-		[],
-	);
-
-	const sessions = useMemo(() => {
-		if (!pinnedSessions || !recentSessions) return undefined;
-		const pinned = pinnedSessions.filter(
-			(session) => session.appId === GLOBAL_CHAT_APP_ID,
-		);
-		const pinnedIds = new Set(pinned.map((session) => session.id));
-		return [
-			...pinned,
-			...recentSessions.filter((session) => !pinnedIds.has(session.id)),
-		];
-	}, [pinnedSessions, recentSessions]);
+	const sessions = useLiveQuery(() => listFluxChatSessions(RECENT_LIMIT), []);
 
 	const sessionIds = useMemo(
 		() => (sessions ?? []).map((session) => session.id),

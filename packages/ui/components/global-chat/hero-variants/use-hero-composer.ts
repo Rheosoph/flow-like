@@ -4,6 +4,13 @@ import { useTranslation } from "@flow-like/locales";
 import { useRouter } from "next/navigation";
 import { useCallback, useMemo, useRef, useState } from "react";
 import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
+import {
+	dockRoute,
+	dockSelectionForChatBot,
+} from "../../bots-tab/dock-selection";
+
+/** FlowPilot answers the hero composer, so it opens Flux's chat. */
+const FLUX_CHAT_ROUTE = dockRoute(dockSelectionForChatBot(null));
 
 /** English source order; `useHeroSuggestions` renders the localized labels. */
 export const HERO_SUGGESTIONS = [
@@ -45,7 +52,7 @@ export function useHeroComposer() {
 				prompt: trimmed,
 				files: files.length > 0 ? files : undefined,
 			});
-			router.push("/chat");
+			router.push(FLUX_CHAT_ROUTE);
 		},
 		[files, router, setDraft],
 	);

@@ -39,7 +39,7 @@ pub struct AddConnectionRequest {
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "App or role not found"),
-        (status = 409, description = "Connection already exists")
+        (status = 409, description = "Connection already exists; BOT_WORKSPACE_LOCKED: either app is a bot's workspace, which is never shared")
     ),
     security(
         ("bearer_auth" = []),
@@ -67,6 +67,8 @@ pub async fn add_connection(
         .one(&state.db)
         .await?
         .ok_or_else(|| ApiError::not_found("Source app not found"))?;
+    crate::routes::bots::workspace::refuse_workspaces(&state.db, [&app_id, &payload.source_app_id])
+        .await?;
 
     validate_connection_role(&state, &app_id, &payload.role_id).await?;
 

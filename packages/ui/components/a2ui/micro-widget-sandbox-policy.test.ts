@@ -60,7 +60,10 @@ describe("describeMicroWidgetSandbox", () => {
 		expect([...described.csp.map((row) => row.directive), "sandbox"]).toEqual(
 			directiveNames(baseline.expected),
 		);
-		expect(described.sandbox).toEqual([{ token: "allow-scripts" }]);
+		expect(described.sandbox).toEqual([
+			{ token: "allow-scripts" },
+			{ token: "allow-forms" },
+		]);
 	});
 
 	test("serializes exactly like the backend for every well-formed fixture case", () => {
@@ -133,6 +136,7 @@ describe("describeMicroWidgetSandbox", () => {
 		});
 		expect(describeMicroWidgetSandbox({ downloads: true }).sandbox).toEqual([
 			{ token: "allow-scripts" },
+			{ token: "allow-forms" },
 			{ token: "allow-downloads", grantedBy: "downloads" },
 		]);
 		expect(describeMicroWidgetSandbox({ microphone: true })).toEqual(

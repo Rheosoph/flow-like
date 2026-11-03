@@ -62,12 +62,12 @@ while the editor stays open.
 | Flows PDF | PDF | Browser reading, PDF editing and saving |
 | Flows Slides | PPTX, POTX, PPSX | Saves PPTX; templates and slide shows convert to PPTX |
 | Flows Sheets | XLSX, XLSM, XLTX, XLTM, CSV, TSV, TAB; imports XLS, XLT, XLSB, ODS | Saves supported modern formats; older workbooks and ODS convert to XLSX |
-| Flows Vector | SVG, SVGZ, PDF-compatible AI, EPS, EMF, WMF, VectorCraft projects and templates | Saves matching formats; imported DrawCraft and Affinity designs convert to VectorCraft |
-| Flows Photo | PNG, JPEG, TIFF, BMP, PSD, PSB, OpenRaster, PhotoCraft and other supported raster formats; imports RAW, KRA and PDN | Saves matching raster formats; import-only files and animated formats save as PhotoCraft projects |
+| Flows Vector | SVG, SVGZ, PDF-compatible AI, EPS, EMF, WMF, JPEG 2000, VectorCraft projects and templates | Saves matching formats; imported DrawCraft, Affinity and JPEG 2000 files convert to VectorCraft |
+| Flows Photo | PNG, JPEG, TIFF, BMP, PSD, PSB, OpenRaster, PhotoCraft, DDS, DPX, Cineon and IFF; imports RAW, KRA, PDN, XCF, XPM and DICOM | Saves matching raster formats; import-only files and animated formats save as PhotoCraft projects |
 | Flows Audio | WAV, AIFF, FLAC, MIDI, SoundCraft; imports MP3, OGG, M4A, AAC and other supported audio | Saves WAV, AIFF, FLAC, MIDI or bundled SoundCraft sessions; compressed audio converts to WAV |
 | Flows Video | MP4, MOV, WebM, MKV, AVI and other supported video containers | Saves MP4 |
-| Flows CAD | SolidCraft projects; imports STEP, STP, IGES, IGS, STL, OBJ, 3MF, GLB and glTF; DXF through CADCraft | Saves SolidCraft projects; DXF saves DXF |
-| Flows Design | IDML, DesignCraft | Saves the selected layout format |
+| Flows CAD | SolidCraft projects; imports STEP, STP, IGES, IGS, STL, OBJ, 3MF, GLB, glTF, FreeCAD and Rhino; DXF through CADCraft | Saves SolidCraft projects; DXF saves DXF |
+| Flows Design | IDML, DesignCraft; imports InDesign INDD and INDT | Saves IDML or DesignCraft; InDesign files convert to DesignCraft |
 
 These editors are available in the shared **Storage** configuration tab on web
 and desktop. They run in the browser and send saved bytes through the existing
@@ -80,23 +80,29 @@ project that retains modeling edits and leaves the original file available.
 GLB and glTF files must embed their geometry buffers; the viewer cannot load
 separate `.bin` files beside the selected file. Textures are not rendered.
 Existing DXF drawings continue to open in CADCraft and save as DXF.
+FreeCAD `.FCStd` and Rhino `.3dm` imports convert geometry to a STEP base feature;
+they do not retain the source application's feature history. Review the import
+warnings for omitted content. Saved projects use SolidCraft format 47 and require
+SolidCraft 0.30 or later. Keep an original copy when working with older versions.
+SolidCraft projects and STEP models load in stages. The editor displays progress
+and lets you cancel while it builds the model.
 
 Editing is experimental. Unsupported formatting, layers, animation or document
 features may change when saved. Import warnings appear above the editor. Some
 RAW and layered image formats open an embedded preview rather than their full
 source data. Animated images currently open a single frame, so their Save action
-creates a PhotoCraft project. IDML support omits some structures, including
-tables, footnotes, anchored objects and hyperlinks. Layout files that reference
-external graphics need those assets embedded to be self-contained. Review
+creates a PhotoCraft project. InDesign imports convert the document into the
+layout editor's model; review the conversion warnings and resulting pages.
+Layout files that reference external graphics need those assets embedded to be
+self-contained. Review
 important files in their original application after saving.
 
 Word, presentation, spreadsheet, vector, photo and layout editors accept files
 up to 50 MiB. Audio and CAD accept 100 MiB; PDF and video accept 200 MiB.
-Legacy `.doc` and `.ppt`, OpenDocument presentations, InDesign `.indd` and
-After Effects `.aep` files are not supported. Native FreeCAD `.FCStd`, Rhino
-`.3dm` and DWG files are not supported by these browser editors. Export models
-to STEP or another supported format before uploading. TypeScript `.ts` files retain their
-code preview. LightCraft catalogs and EffectCraft projects depend on separate
+Legacy `.doc` and `.ppt`, OpenDocument presentations, DWG and After Effects
+`.aep` files are not supported. Export DWG drawings to DXF before uploading.
+TypeScript `.ts` files retain their code preview. LightCraft catalogs and
+EffectCraft projects depend on separate
 media libraries, so they do not open as standalone storage files.
 
 ## Control an open editor with an agent

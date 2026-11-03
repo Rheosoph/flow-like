@@ -1,0 +1,232 @@
+.fl-bot .fl-bot-ember-core {
+	transform-origin: 50px 100px;
+	animation: fl-bot-ember-flicker 2.4s ease-in-out infinite;
+}
+.fl-bot .fl-bot-ember-glow {
+	transform-origin: 50px 100px;
+	animation: fl-bot-ember-glow 3.1s ease-in-out infinite;
+}
+.fl-bot .fl-bot-ember-speck {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: fl-bot-ember-rise 3.9s ease-out infinite;
+}
+.fl-bot .fl-bot-magma-puddle {
+	transform-box: fill-box;
+	transform-origin: center;
+	animation: fl-bot-magma-puddle 5.4s ease-in-out infinite;
+}
+.fl-bot .fl-bot-magma-bubble {
+	animation: fl-bot-magma-bubble 3.6s ease-in-out infinite;
+}
+.fl-bot .fl-bot-magma-drip {
+	transform-box: fill-box;
+	transform-origin: center top;
+	animation: fl-bot-magma-drip 5.4s ease-in infinite;
+}
+.fl-bot .fl-bot-piyo-shell {
+	transform-origin: 50px 48px;
+	animation: fl-bot-piyo-wobble 6.8s ease-in-out infinite;
+}
+.fl-bot .fl-bot-floppy-shutter {
+	animation: fl-bot-floppy-slide 6.2s cubic-bezier(0.3, 0, 0.2, 1) infinite;
+}
+.fl-bot .fl-bot-chip-spark {
+	animation: fl-bot-chip-current 7.2s ease-in-out infinite;
+}
+.fl-bot .fl-bot-bit-antenna {
+	transform-origin: 50px 38px;
+	animation: fl-bot-bit-spring 5.8s ease-in-out infinite;
+}
+.fl-bot .fl-bot-bit-signal {
+	transform-origin: 50px 22px;
+	animation: fl-bot-bit-broadcast 5.8s ease-out infinite;
+}
+.fl-bot[data-pose="sleep"] .fl-bot-crew-motion {
+	animation-play-state: paused;
+}
+
+@keyframes fl-bot-ember-flicker {
+	0%,
+	100% {
+		transform: scale(1);
+	}
+	24% {
+		transform: scale(0.94, 1.09) skewX(-2deg);
+	}
+	48% {
+		transform: scale(1.05, 0.96) skewX(1.5deg);
+	}
+	76% {
+		transform: scale(0.97, 1.05);
+	}
+}
+@keyframes fl-bot-ember-glow {
+	0%,
+	100% {
+		transform: scale(0.9, 0.95);
+		opacity: 0.2;
+	}
+	40% {
+		transform: scale(1.08, 1.12);
+		opacity: 0.42;
+	}
+	72% {
+		transform: scale(0.96, 1.04);
+		opacity: 0.3;
+	}
+}
+@keyframes fl-bot-ember-rise {
+	0%,
+	12% {
+		transform: translate(0, 3px) scale(0.65);
+		opacity: 0;
+	}
+	26% {
+		opacity: 0.85;
+	}
+	64% {
+		opacity: 0.55;
+	}
+	86%,
+	100% {
+		transform: translate(3px, -12px) scale(0.25);
+		opacity: 0;
+	}
+}
+@keyframes fl-bot-magma-puddle {
+	0%,
+	100% {
+		transform: scaleX(1);
+		opacity: 0.3;
+	}
+	52% {
+		transform: scaleX(1.09);
+		opacity: 0.2;
+	}
+	72% {
+		transform: scaleX(0.98);
+		opacity: 0.32;
+	}
+}
+@keyframes fl-bot-magma-bubble {
+	0%,
+	100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(-3px);
+	}
+}
+@keyframes fl-bot-magma-drip {
+	0%,
+	30%,
+	100% {
+		transform: translateY(0) scale(0.8, 0.9);
+		opacity: 0;
+	}
+	34% {
+		transform: translateY(0) scale(0.85, 1.25);
+		opacity: 1;
+	}
+	45% {
+		transform: translateY(4px) scale(0.75, 1.25);
+		opacity: 1;
+	}
+	56% {
+		transform: translateY(10px) scale(1, 0.6);
+		opacity: 0;
+	}
+}
+@keyframes fl-bot-piyo-wobble {
+	0%,
+	58%,
+	100% {
+		transform: translateY(0) rotate(0);
+	}
+	64% {
+		transform: translateY(-1.5px) rotate(-3deg);
+	}
+	70% {
+		transform: translateY(-.6px) rotate(2.4deg);
+	}
+	76% {
+		transform: translateY(-1px) rotate(-1.3deg);
+	}
+	83% {
+		transform: translateY(0) rotate(.5deg);
+	}
+	88% {
+		transform: translateY(0) rotate(0);
+	}
+}
+@keyframes fl-bot-floppy-slide {
+	0%,
+	62%,
+	100% {
+		transform: translateX(0);
+	}
+	70%,
+	81% {
+		transform: translateX(8px);
+	}
+	89% {
+		transform: translateX(0);
+	}
+}
+@keyframes fl-bot-chip-current {
+	0%,
+	8%,
+	29%,
+	100% {
+		opacity: 0;
+	}
+	14% {
+		opacity: 0.75;
+	}
+	19% {
+		opacity: 1;
+	}
+	24% {
+		opacity: 0.35;
+	}
+}
+@keyframes fl-bot-bit-spring {
+	0%,
+	52%,
+	100% {
+		transform: rotate(0);
+	}
+	58% {
+		transform: rotate(-7deg);
+	}
+	64% {
+		transform: rotate(5deg);
+	}
+	70% {
+		transform: rotate(-3deg);
+	}
+	76% {
+		transform: rotate(1deg);
+	}
+	82% {
+		transform: rotate(0);
+	}
+}
+@keyframes fl-bot-bit-broadcast {
+	0%,
+	56%,
+	88%,
+	100% {
+		transform: scale(0.85);
+		opacity: 0;
+	}
+	65% {
+		transform: scale(1);
+		opacity: 0.7;
+	}
+	82% {
+		transform: scale(1.15);
+		opacity: 0;
+	}
+}

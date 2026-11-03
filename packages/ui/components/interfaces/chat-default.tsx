@@ -7,7 +7,6 @@ import {
 	ChevronDownIcon,
 	HistoryIcon,
 	HomeIcon,
-	Loader2Icon,
 	SquarePenIcon,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -70,9 +69,8 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 } from "../ui";
-import { ChatAppearance } from "./chat-default/appearance";
 import { fileToAttachment } from "./chat-default/attachment";
-import { Chat, type IChatRef } from "./chat-default/chat";
+import type { IChatRef } from "./chat-default/chat";
 import {
 	completeAppChatTurn,
 	createAppChatActivityWriter,
@@ -95,15 +93,13 @@ import {
 	createMessageReference,
 	historyMessageForModel,
 } from "./chat-default/chat-message-interaction";
+import { ChatSurface } from "./chat-default/chat-surface";
 import {
 	type IChatTurn,
 	type IStreamLiveState,
 	createChatTurn,
 } from "./chat-default/chat-turn";
-import {
-	ChatWidgetExecutionProvider,
-	type RunWidgetAction,
-} from "./chat-default/chat-widget-execution";
+import type { RunWidgetAction } from "./chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "./chat-default/chatbox";
 import { processChatEvents } from "./chat-default/event-processor";
 import { ChatHistory } from "./chat-default/history";
@@ -117,13 +113,12 @@ import {
 	updateSessionInteractions,
 	useSessionInteractions,
 } from "./chat-default/session-interactions";
+import { useChatModel } from "./chat-default/use-chat-model";
+import { useChatThinking } from "./chat-default/use-chat-thinking";
 import {
 	persistWorkflowReactions,
 	putChatDraftsWithReactions,
 } from "./chat-default/workflow-reactions";
-import { useChatModel } from "./chat-default/use-chat-model";
-import { useChatThinking } from "./chat-default/use-chat-thinking";
-import { ChatWelcome } from "./chat-default/welcome";
 import type { IUseInterfaceProps } from "./interfaces";
 
 function extractErrorMessage(err: unknown): string {
@@ -140,6 +135,46 @@ function extractErrorMessage(err: unknown): string {
 		}
 	}
 	return String(err);
+}
+
+function hasErrorFlag(
+	err: unknown,
+	flag: "isActiveStreamError" | "isOAuthError" | "isUnacceptedChatInteraction",
+) {
+	return Boolean((err as Record<string, unknown> | null)?.[flag]);
+}
+
+/**
+ * Reports a send that failed. The active-stream guard already toasted, and OAuth or a detached run
+ * is no failure. A reaction's caller still sees a send that was refused or never accepted.
+ */
+function settleSendFailure(
+	error: unknown,
+	interaction: IChatMessageInteraction | undefined,
+) {
+	const activeStream = hasErrorFlag(error, "isActiveStreamError");
+	if (
+		!activeStream &&
+		!hasErrorFlag(error, "isOAuthError") &&
+		!isDetachedReply(error)
+	) {
+		console.error("Error sending message:", error);
+		captureTelemetryError(error, {
+			culprit: "chat.send_message",
+		});
+		toast.error(`Failed to send message: ${extractErrorMessage(error)}`);
+	}
+	if (
+		interaction &&
+		(activeStream || hasErrorFlag(error, "isUnacceptedChatInteraction"))
+	) {
+		throw error;
+	}
+}
+
+/** The run continues on the server, and its saved reply already says so. */
+function isDetachedReply(err: unknown): boolean {
+	return (err as { name?: unknown } | null)?.name === "ExecutionDetachedError";
 }
 
 /** A missing consent is no failure: the OAuth flow re-sends the message once it is granted. */
@@ -638,18 +673,6 @@ async function handleStreamCompletion({
 	}
 }
 
-function ConversationLoading() {
-	const { t } = useTranslation("interfaces");
-	return (
-		<div className="flex h-full flex-col items-center justify-center gap-3">
-			<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
-			<p className="text-sm text-muted-foreground">
-				{t("loadingConversation", "Loading conversation...")}
-			</p>
-		</div>
-	);
-}
-
 /**
  * Periodic checkpoint of the streaming message, written to `drafts` so the session's message query
  * stays quiet until the turn settles. Recovery only: the live bubble renders from React state, and
@@ -719,7 +742,6 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const processedCompletedStreams = useRef<Set<string>>(new Set());
 	const reconnectSubscribed = useRef<Set<string>>(new Set());
 	const pendingSendSessions = useRef<Set<string>>(new Set());
-	const [isSendingFromWelcome, setIsSendingFromWelcome] = useState(false);
 	const [isStreamActive, setIsStreamActive] = useState(false);
 	const [runtimeReady, setRuntimeReady] = useState(
 		() => executionEngine.isRuntimeReady?.() ?? true,
@@ -1199,6 +1221,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	}, [toolbarElements, navElements, sidebarContent, toolbarRef, sidebarRef]);
 
 	// Reconnect to active stream or process completed stream when component mounts or session changes
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a stream that starts after mount (another view sent) must re-run the reconnect, though the body asks the engine directly.
 	useEffect(() => {
 		if (!sessionIdParameter) return;
 		// Wait for messages to be loaded from IndexedDB
@@ -1837,6 +1860,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				pending.interaction,
 				true, // skipConsentCheck
 			).catch((err) => {
+				if (isDetachedReply(err)) return;
 				console.error("Failed to retry chat message after OAuth:", err);
 				captureTelemetryError(err, {
 					culprit: "chat.oauth_retry_send",
@@ -1886,15 +1910,6 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				return;
 			}
 
-			// Show loading state if sending from welcome screen
-			const hasFiles = (filesAttached && filesAttached.length > 0) || audioFile;
-			if (
-				hasFiles &&
-				(!messagesRef.current || messagesRef.current.length === 0)
-			) {
-				setIsSendingFromWelcome(true);
-			}
-
 			try {
 				await executeChatMessage(
 					content,
@@ -1904,32 +1919,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					interaction,
 				);
 			} catch (error) {
-				// Active stream errors and OAuth errors are handled separately
-				if (
-					(error as { isActiveStreamError?: unknown } | null)
-						?.isActiveStreamError
-				) {
-					// Already shown a toast in executeChatMessage guard
-				} else if (
-					!(error as { isOAuthError?: unknown } | null)?.isOAuthError
-				) {
-					console.error("Error sending message:", error);
-					captureTelemetryError(error, {
-						culprit: "chat.send_message",
-					});
-					toast.error(`Failed to send message: ${extractErrorMessage(error)}`);
-				}
-				if (
-					interaction &&
-					((error as { isActiveStreamError?: unknown } | null)
-						?.isActiveStreamError ||
-						(error as { isUnacceptedChatInteraction?: unknown } | null)
-							?.isUnacceptedChatInteraction)
-				) {
-					throw error;
-				}
-			} finally {
-				setIsSendingFromWelcome(false);
+				settleSendFailure(error, interaction);
 			}
 		},
 		[sessionIdParameter, executeChatMessage],
@@ -2177,47 +2167,31 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	return (
 		<>
-			<ChatAppearance
-				appId={appId}
-				eventId={event.id}
+			<ChatSurface
+				chatRef={chatRef}
+				loading={!messagesLoaded}
+				welcome={
+					showWelcome
+						? { title: event.name, description: event.description }
+						: undefined
+				}
+				runWidgetAction={runWidgetAction}
+				sessionId={sessionIdParameter}
+				messages={messages}
+				onSendMessage={handleSendMessage}
+				onMessageUpdate={onMessageUpdate}
+				onMessageReaction={handleMessageReaction}
 				config={config}
-				fallback={<ConversationLoading />}
-			>
-				{!messagesLoaded ? (
-					<ConversationLoading />
-				) : showWelcome ? (
-					<ChatWelcome
-						onSendMessage={handleSendMessage}
-						event={event}
-						config={config}
-						isSending={isSendingFromWelcome}
-						appId={appId}
-						thinking={thinking.picker}
-						model={model.picker}
-					/>
-				) : (
-					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
-						<Chat
-							ref={chatRef}
-							sessionId={sessionIdParameter}
-							messages={messages}
-							onSendMessage={handleSendMessage}
-							onMessageUpdate={onMessageUpdate}
-							onMessageReaction={handleMessageReaction}
-							config={config}
-							isStreamActive={isStreamActive}
-							activeInteractions={activeInteractions}
-							onRespondToInteraction={handleRespondToInteraction}
-							appId={appId}
-							boardId={event.board_id}
-							eventId={event.id}
-							showAiDisclosure
-							thinking={thinking.picker}
-							model={model.picker}
-						/>
-					</ChatWidgetExecutionProvider>
-				)}
-			</ChatAppearance>
+				isStreamActive={isStreamActive}
+				activeInteractions={activeInteractions}
+				onRespondToInteraction={handleRespondToInteraction}
+				appId={appId}
+				boardId={event.board_id}
+				eventId={event.id}
+				showAiDisclosure
+				thinking={thinking.picker}
+				model={model.picker}
+			/>
 			<AlertDialog
 				open={showPrefilledConfirm}
 				onOpenChange={(open) => {

@@ -65,6 +65,8 @@ The bundler reads `csp` statically, so every group must be an object literal and
 
 No other directive can be extended. That includes `default-src`, `script-src`, `worker-src`, `child-src`, `frame-src`, `object-src`, `manifest-src`, `base-uri`, `form-action` and the `sandbox` flags. Remote scripts would replace reviewed bundle code at runtime. An approved third-party frame would get its own network context outside the widget's policy. Workers, WebAssembly, audio playback, microphone, downloads and uploads stay under `capabilities`.
 
+Every widget gets `allow-scripts` and `allow-forms` on both iframe elements and in the wrapper and widget document CSPs. `allow-forms` lets a `<form>` fire its `submit` event, including Enter-to-submit. Call `event.preventDefault()` in the listener or framework `onSubmit` handler to keep the widget on screen, then send the result through the widget bridge. Both CSPs keep `form-action 'none'`, which blocks form submissions to any destination. An uncancelled submission can display a browser error page. `allow-downloads` is added only when approved. The sandbox does not grant `allow-same-origin`, `allow-popups` or `allow-top-navigation`.
+
 | Limit | Value |
 | --- | --- |
 | Purpose groups | 1–8 |
@@ -293,7 +295,7 @@ worker-src [blob: B if workers]                    ('none' when empty);
 media-src data: blob: [B if media] [mediaSrc];
 frame-src 'none'; child-src 'none'; object-src 'none'; manifest-src 'none';
 base-uri 'none'; form-action 'none';
-sandbox allow-scripts [allow-downloads]
+sandbox allow-scripts allow-forms [allow-downloads]
 ```
 
 `[connectSrc]` and the other lists are the declared sources of all groups plus the approved runtime addresses. `B` is the widget's own bundle prefix and never `'self'`:

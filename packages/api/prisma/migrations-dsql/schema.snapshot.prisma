@@ -455,8 +455,12 @@ model App {
   forkedFrom   String?
   /// For forked apps: when the fork happened.
   forkedAt     DateTime? @db.Timestamptz(3)
+  /// Set on a bot's workspace: the bot's id, kept as a free-form string like `forkedFrom`.
+  /// One workspace per bot; apps lists hide workspaces with `"botId" IS NULL`.
+  botId        String?   @unique
 
   technicalUsers TechnicalUser[]
+  botApps        BotApp[]
 
   outgoingAppConnections AppConnection[]  @relation("outgoingAppConnections")
   incomingAppConnections AppConnection[]  @relation("incomingAppConnections")
@@ -1545,6 +1549,229 @@ model AuditWorkerLease {
   updatedAt DateTime  @default(now()) @db.Timestamptz(3)
 }
 
+// ---- bot.prisma
+/// A person's bot. `id` (`bot_` + cuid) is the bot's sub: records of what the bot did
+/// store it. A bot acts for its owner and never holds more than the owner's current role
+/// in an app. Soft-deleted so past actions keep rendering as that bot.
+model Bot {
+  id              String                @id
+  ownerId         String
+  owner           User                  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  /// "general" | "flux"; null for custom bots. One row per owner and key.
+  systemKey       String?
+  presetId        String?
+  /// Null on an untouched system bot: the client shows the localized default.
+  name            String?
+  description     String?
+  instructions    String?
+  appearance      Json
+  /// { primary: string | null, fallbacks: string[] }
+  modelPolicy     Json                  @default("{}")
+  /// DataClassification, lowercase.
+  classification  String?
+  pii             Boolean               @default(false)
+  /// Capability ids; every capability is off until the owner switches it on.
+  capabilities    Json                  @default("[]")
+  profileId       String?
+  /// SERVER | DESKTOP | DEVICE
+  location        String                @default("SERVER")
+  deviceId        String?
+  apps            BotApp[]
+  secrets         BotSecret[]
+  createdAt       DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime              @updatedAt @db.Timestamptz(3)
+  deletedAt       DateTime?             @db.Timestamptz(3)
+  /// The id a moved bot had on the device: an import key per owner (NULLs distinct), never an id.
+  importKey       String?
+  /// Bit id of the embedding model its memory uses; null lets the host choose.
+  embeddingModel  String?
+  permissionsFrom BotPermission[]       @relation("BotPermissionFrom")
+  permissionsTo   BotPermission[]       @relation("BotPermissionTo")
+  hostHeartbeats  BotHostHeartbeat[]
+  turns           BotTurn[]
+  toolGrants      BotToolGrant[]
+  mailThreads     BotMailThread[]
+  mailMessages    BotMailMessage[]
+  webhooks        BotWebhook[]
+  tasks           BotTask[]
+  segments        ConversationSegment[]
+
+  @@unique([ownerId, systemKey])
+  @@unique([ownerId, importKey])
+  @@index([ownerId, deletedAt])
+}
+
+/// An app a bot may use under `selected_apps`, attached by the owner without the app
+/// approving. The bot's rights there are the owner's current role.
+model BotApp {
+  botId   String
+  bot     Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  appId   String
+  app     App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  addedAt DateTime @default(now()) @db.Timestamptz(3)
+  /// The most the bot may hold in this app, as `RolePermissions` bits; null keeps the owner's
+  /// full role minus the bits a bot never holds.
+  permissionMask BigInt?
+  /// `BotScopes` JSON: folder prefixes, table, event and board allow-lists.
+  scopes         Json     @default("{}")
+
+  @@id([botId, appId])
+  @@index([appId])
+}
+
+/// A bot's encrypted credential. Write-only for people: no route returns a value.
+/// SERVER: AES-256-GCM under a per-bot key, `v1:` + base64(nonce || ciphertext).
+/// SEALED: an envelope sealed to the bot's inbox key that only the host opens.
+model BotSecret {
+  botId       String
+  bot         Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  name        String
+  /// SERVER | SEALED
+  encryption  String
+  ciphertext  String
+  description String?
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  lastUsedAt  DateTime? @db.Timestamptz(3)
+
+  @@id([botId, name])
+}
+
+/// A standing grant: bot `fromBotId` may ask bot `toBotId` without asking the owner again.
+/// Directional; revoking deletes the row. A bot's grants go with it in both directions.
+model BotPermission {
+  id        String   @id
+  /// The owner of `fromBotId`, whose list of grants this row is in.
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  fromBotId String
+  fromBot   Bot      @relation("BotPermissionFrom", fields: [fromBotId], references: [id], onDelete: Cascade)
+  toBotId   String
+  toBot     Bot      @relation("BotPermissionTo", fields: [toBotId], references: [id], onDelete: Cascade)
+  grantedAt DateTime @default(now()) @db.Timestamptz(3)
+  /// The person who granted it.
+  grantedBy String
+
+  @@unique([fromBotId, toBotId])
+  @@index([ownerId])
+  @@index([toBotId])
+}
+
+/// A standing approval: the owner allowed `tool` for `scope` and chose not to be asked again, so
+/// the bot runs it without asking on every host. `scope` is `app:<id>`, `host:<h>`,
+/// `connection:<key>`, `table:<name>`, `documents.expensive` or `*` (the whole tool).
+/// Revoking deletes the row.
+model BotToolGrant {
+  id        String   @id
+  botId     String
+  bot       Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId   String
+  tool      String
+  scope     String
+  grantedAt DateTime @default(now()) @db.Timestamptz(3)
+  /// The person who granted it.
+  grantedBy String
+
+  @@unique([botId, tool, scope])
+}
+
+/// A public URL that wakes a bot: `POST /bots/hooks/{id}` with the secret (or an HMAC signature
+/// keyed by its hash) writes a `trigger` entry with `instruction` and the payload into the bot's
+/// conversation with its owner. The secret is shown once; only its hash is stored.
+model BotWebhook {
+  id           String    @id
+  botId        String
+  bot          Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  name         String
+  /// blake3 of the secret, lowercase hex.
+  secretHash   String
+  /// What the bot should do with a call.
+  instruction  String    @default("")
+  enabled      Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  lastCalledAt DateTime? @db.Timestamptz(3)
+
+  @@index([botId])
+}
+
+/// A task a bot runs for its owner at a time: once (`runAt`) or on a cron schedule in a time
+/// zone. A maintenance sweep claims due tasks with a compare-and-set on `nextRunAt` and writes a
+/// `trigger` entry (source `schedule`) into the bot's conversation with its owner.
+model BotTask {
+  id          String    @id
+  botId       String
+  bot         Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId     String
+  /// ONCE | CRON
+  kind        String
+  runAt       DateTime? @db.Timestamptz(3)
+  cron        String?
+  timezone    String?
+  /// What the bot should do when the task fires.
+  instruction String
+  title       String
+  nextRunAt   DateTime? @db.Timestamptz(3)
+  lastRunAt   DateTime? @db.Timestamptz(3)
+  enabled     Boolean   @default(true)
+  /// BOT | OWNER
+  createdBy   String
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@index([botId])
+  @@index([enabled, nextRunAt])
+}
+
+/// A host that runs the bot and said so recently. Presence reads the newest `lastSeenAt`.
+model BotHostHeartbeat {
+  botId      String
+  bot        Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  hostId     String
+  /// SERVER | DESKTOP | DEVICE
+  hostKind   String
+  lastSeenAt DateTime @db.Timestamptz(3)
+
+  @@id([botId, hostId])
+}
+
+/// Headless bot work: the bot's turn to answer `triggerMessageId` in `conversationId`, claimed by
+/// one host at a time under a lease. `id` is `bt_` + blake3(botId ‖ triggerMessageId), so a
+/// repeated trigger finds its turn.
+model BotTurn {
+  id               String       @id
+  botId            String
+  bot              Bot          @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId          String
+  owner            User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  conversationId   String
+  conversation     Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  triggerMessageId String
+  /// SERVER | DESKTOP | DEVICE: the kind of host that runs it.
+  hostKind         String
+  /// QUEUED | RUNNING | DONE | FAILED | CANCELLED
+  status           String       @default("QUEUED")
+  attempts         Int          @default(0)
+  /// The host holding the claim.
+  hostId           String?
+  leaseUntil       DateTime?    @db.Timestamptz(3)
+  operationId      String?
+  replyMessageId   String?
+  errorCode        String?
+  /// Bot-to-bot hops that led to the trigger.
+  hops             Int          @default(0)
+  /// The person or bot whose message woke the turn; null on turns from before the column existed.
+  requesterId      String?
+  /// OWNER | ROOM: an owner-only conversation, or a room shared with other people.
+  audience         String       @default("OWNER")
+  createdAt        DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime     @updatedAt @db.Timestamptz(3)
+
+  @@unique([botId, triggerMessageId])
+  @@index([status, leaseUntil])
+  @@index([ownerId, status])
+  @@index([botId, requesterId, createdAt])
+}
+
 // ---- capacity.prisma
 /// Current occupancy, separate from monthly runtime and AI allowances.
 model AccountCapacity {
@@ -2453,6 +2680,126 @@ model MailAutomationQuota {
   expiresAt BigInt
 
   @@index([expiresAt])
+}
+
+// ---- inbox.prisma
+/// A conversation between principals (user subs and bot ids). DIRECT holds exactly two
+/// principals, deduplicated by `directKey`; GROUP has a title and at most 50 active members,
+/// so one fan-out stays far below DSQL's 3,000-row transaction cap.
+model Conversation {
+  id             String                @id
+  /// DIRECT | GROUP
+  kind           String
+  title          String?
+  /// PLAIN | E2E
+  encryption     String                @default("PLAIN")
+  /// Order-independent key of the two principals of a DIRECT conversation.
+  directKey      String?               @unique
+  createdBy      String
+  lastActivityAt DateTime              @db.Timestamptz(3)
+  members        ConversationMember[]
+  createdAt      DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime              @updatedAt @db.Timestamptz(3)
+  /// The id a moved conversation had on the device: an import key per creator (NULLs distinct).
+  importKey      String?
+  /// The newest `InboxEntry.seq` handed out, allocated under the conversation's lock; null is 0.
+  lastSeq        BigInt?
+  segments       ConversationSegment[]
+  botTurns       BotTurn[]
+
+  @@unique([createdBy, importKey])
+}
+
+/// A principal in a conversation. Rows stay after leaving (`leftAt`) so history keeps its
+/// members; only active members read and receive.
+model ConversationMember {
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// A user sub or a bot id; no foreign key, bots and users share this column.
+  principalId    String
+  /// USER | BOT
+  principalKind  String
+  addedBy        String?
+  joinedAt       DateTime     @db.Timestamptz(3)
+  leftAt         DateTime?    @db.Timestamptz(3)
+  lastReadAt     DateTime?    @db.Timestamptz(3)
+  /// ACTIVE | PENDING | DECLINED. Only ACTIVE members read, receive and count; an invitee is PENDING until they accept.
+  status         String       @default("ACTIVE")
+  /// A bot's room limits (`BotRoomLimits`), set by the bot's owner when accepting; null for people and unlimited bots.
+  limits         Json?
+  invitedBy      String?
+  invitedAt      DateTime?    @db.Timestamptz(3)
+  acceptedAt     DateTime?    @db.Timestamptz(3)
+
+  @@id([conversationId, principalId])
+  @@index([principalId, leftAt])
+  @@index([principalId, status])
+}
+
+/// One principal's copy of one conversation event. Pages are ordered by (createdAt, id).
+model InboxEntry {
+  id             String   @id
+  /// The principal that owns this copy.
+  inboxId        String
+  conversationId String
+  /// Shared by every copy of one event; chosen by the sender so a retried send is idempotent.
+  messageId      String
+  senderId       String
+  /// MESSAGE | REACTION | EDIT | DELETE | MEMBER
+  kind           String
+  /// Envelope v1: plain { v, enc: "none", body } or sealed to this inbox's key.
+  envelope       Json
+  createdAt      DateTime @db.Timestamptz(3)
+  /// The event's position in its conversation, the same in every copy and never reused. Null
+  /// on events written before positions existed.
+  seq            BigInt?
+
+  @@unique([inboxId, messageId])
+  /// Reads by position (`seq BETWEEN …`) in one copy; a position appears once per copy. NULLs
+  /// are distinct.
+  @@unique([inboxId, conversationId, seq])
+  @@index([inboxId, conversationId, createdAt])
+  @@index([inboxId, createdAt])
+}
+
+/// One bot's summary of a conversation's history: the events `seqFrom..=seqTo` (level 0), or at
+/// level 1 a summary of its older segments that keeps their range. Written once and never
+/// rewritten; a changed summary is a new `version`. Two bots in one conversation each keep their
+/// own.
+model ConversationSegment {
+  id             String       @id
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// The bot whose host wrote the summary.
+  authorId       String
+  author         Bot          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  level          Int
+  seqFrom        BigInt
+  seqTo          BigInt
+  tFrom          DateTime     @db.Timestamptz(3)
+  tTo            DateTime     @db.Timestamptz(3)
+  title          String?
+  summary        String
+  /// The level-1 segment that merged this one.
+  parentId       String?
+  version        Int
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([conversationId, authorId, level, seqFrom])
+  @@index([authorId])
+}
+
+/// A public key others seal envelopes to. People register their own; owners register their
+/// bots' keys. Anyone signed in may read active keys.
+model InboxKey {
+  principalId String
+  keyId       String
+  algorithm   String
+  publicKey   String
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  revokedAt   DateTime? @db.Timestamptz(3)
+
+  @@id([principalId, keyId])
 }
 
 // ---- jobs.prisma
@@ -4285,6 +4632,9 @@ model User {
   technicalUsersCreated       TechnicalUser[]          @relation("TechnicalUserCreator")
   eventSinksRunAs             EventSink[]              @relation("EventSinkRunAs")
   regressionSuiteRunsStarted  RegressionSuiteRun[]     @relation("RegressionSuiteRunActor")
+  bots                        Bot[]
+  botPermissions              BotPermission[]
+  botTurns                    BotTurn[]
 
   status String @default("ACTIVE")
   tier   String @default("FREE")
@@ -5060,4 +5410,44 @@ model WasmPackagePurchase {
   @@index([packageId, completedAt])
   @@index([stripeSessionId])
   @@index([paymentOrderId])
+}
+
+/// A bot's mail thread: one inbox conversation owned by the bot with its owner as member. `id`
+/// is that conversation's id. The owner's Mail tab lists these rows.
+model BotMailThread {
+  id            String           @id
+  botId         String
+  bot           Bot              @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId       String
+  subject       String
+  /// JSON array of correspondent addresses, lowercase, at most 50.
+  participants  String
+  lastMessageAt DateTime         @db.Timestamptz(3)
+  lastSnippet   String?
+  messageCount  Int              @default(0)
+  createdAt     DateTime         @default(now()) @db.Timestamptz(3)
+  messages      BotMailMessage[]
+
+  @@index([botId, lastMessageAt])
+  @@index([ownerId])
+}
+
+/// One mail of a thread by its RFC 5322 `Message-ID`, which later mails reach through
+/// `In-Reply-To` and `References`. A repeated delivery of the same `Message-ID` is dropped.
+model BotMailMessage {
+  id             String        @id
+  threadId       String
+  thread         BotMailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  botId          String
+  bot            Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
+  /// Without angle brackets, lowercase.
+  messageId      String
+  /// IN | OUT
+  direction      String
+  /// The `message_id` of the inbox entry that records the mail.
+  entryMessageId String
+  createdAt      DateTime      @default(now()) @db.Timestamptz(3)
+
+  @@unique([botId, messageId])
+  @@index([threadId])
 }

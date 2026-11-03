@@ -53,7 +53,7 @@ window.renderFixture=(mode='preview')=>{
   if(id==='input') return <textarea id='input' aria-label='Instructions' className='h-[70px] shrink-0 rounded-md border p-3' defaultValue='Describe the changes to the model'/>;
   if(id==='button') return <button id='button' className='h-[70px] shrink-0 rounded-md bg-primary text-primary-foreground'>Apply changes</button>;
   if(mode==='setup'||mode==='editor') return <A2UIFileEditor {...base} elementRef={el=>el&&(el.id='preview')} style={mode==='setup'?undefined:fileStyle} component={{id:'preview',type:'fileEditor',editor:str('solidcraft'),...(mode==='editor'?{eventHandlers:{save:[{name:'workflow_event',context:{nodeId:'save'}}]}}:{})}}/>;
-  return <A2UIFilePreview {...base} elementRef={el=>el&&(el.id='preview')} style={fileStyle} component={{id:'preview',type:'filePreview',src:str('/fixture.solidcraft'),...(['fixed','component-height'].includes(mode)?{height:str('280px')}:{})}}/>;
+  return <A2UIFilePreview {...base} elementRef={el=>el&&(el.id='preview')} style={fileStyle} component={{id:'preview',type:'filePreview',src:str(mode==='loading'?'/loading.solidcraft':'/fixture.solidcraft'),...(['fixed','component-height'].includes(mode)?{height:str('280px')}:{})}}/>;
  };
  app.render(<TooltipProvider><A2UICard {...base} componentId='card' elementRef={el=>el&&(el.id='card')} style={{className:'h-full'}} component={{type:'card',title:str('CAD review'),children:{explicitList:['column']}}} renderChild={renderChild}/></TooltipProvider>);
 };
@@ -153,7 +153,11 @@ addEventListener('message',event=>{
  if(!isCraftHostSender(event.source,window)||event.origin!==location.origin)return;
  const message=validateCommand(event.data,session,{extensions:['solidcraft'],maxBytes:1024});
  if(!message)return;
- if(message.type==='open'||message.type==='create'){post('opened');if(!message.readOnly)post('dirty',{dirty:true})}
+ if(message.type==='open'&&message.name==='loading.solidcraft'){
+  document.body.innerHTML='<button id="cancel">Cancel loading</button>';
+  document.getElementById('cancel').onclick=()=>post('error',{error:'Opening the document was cancelled.'});
+  post('loading',{interactive:true,completed:2,total:10});
+ }else if(message.type==='open'||message.type==='create'){post('opened');if(!message.readOnly)post('dirty',{dirty:true})}
  if(message.type==='export'){const bytes=new TextEncoder().encode('saved draft').buffer;post('exported',{requestId:message.requestId,bytes,revision:1},[bytes])}
  if(message.type==='saved'){window.savedRevision=message.revision;post('dirty',{dirty:false})}
  if(message.type==='mcp-request')post('mcp-response',{requestId:message.requestId,response:{jsonrpc:'2.0',id:message.message.id,result:{tools:[]}}});
@@ -187,6 +191,7 @@ const server = Bun.serve({
 			});
 		if (
 			url.pathname === "/fixture.solidcraft" ||
+			url.pathname === "/loading.solidcraft" ||
 			url.pathname === "/fixture.docx"
 		)
 			return new Response("{}", {
@@ -526,6 +531,23 @@ try {
 	await verifyResponsiveEditor(responsiveFrame, "wordcraft");
 	await refreshStyles();
 	await page.screenshot({ path: join(directory, "word-responsive.png") });
+	await page.evaluate(() =>
+		(window as unknown as { renderFixture(mode: string): void }).renderFixture(
+			"loading",
+		),
+	);
+	const loadingElement = await page.waitForSelector("#preview iframe");
+	const loadingFrame = await loadingElement?.contentFrame();
+	assert.ok(loadingFrame);
+	await loadingFrame.waitForSelector("#cancel");
+	await refreshStyles();
+	await page.waitForSelector("#preview output.sr-only");
+	// A real pointer click must reach the iframe through the host's loading state.
+	await loadingFrame.click("#cancel");
+	await page.waitForFunction(() =>
+		document.body.textContent?.includes("Opening the document was cancelled."),
+	);
+	assert.equal(await page.$("#preview iframe"), null);
 	assert.deepEqual(errors, []);
 	console.log(
 		JSON.stringify({

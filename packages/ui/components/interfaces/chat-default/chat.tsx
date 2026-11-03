@@ -206,6 +206,7 @@ export interface IChatProps {
 	/** Thinking level picker in the composer; omitted when the chat does not offer one. */
 	thinking?: ChatBoxThinking;
 	model?: ChatBoxModel;
+	composerActions?: React.ReactNode;
 }
 
 export interface IChatRef {
@@ -242,6 +243,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			onDraftChange,
 			thinking,
 			model,
+			composerActions,
 		},
 		ref,
 	) => {
@@ -982,6 +984,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										onContentChange={onDraftChange}
 										thinking={thinking}
 										model={model}
+										actions={composerActions}
 										fileUpload={config?.allow_file_upload ?? false}
 										audioInput={voiceEnabled}
 										voiceMode={voiceConfig.mode === "stt" ? "stt" : "record"}

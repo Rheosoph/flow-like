@@ -1134,6 +1134,178 @@ eventsSimple callReport() {
     assert_round_trips(&board);
 }
 
+/// Drop the section whose header line contains `header`, with the decorator lines above it.
+fn without_section(text: &str, header: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let header_line = lines
+        .iter()
+        .position(|line| line.contains(header))
+        .unwrap_or_else(|| panic!("no line contains {header:?}:\n{text}"));
+    let start = lines[..header_line]
+        .iter()
+        .rposition(|line| !line.starts_with('@'))
+        .map_or(0, |index| index + 1);
+    let end = header_line
+        + lines[header_line..]
+            .iter()
+            .position(|line| *line == "}")
+            .expect("the section closes");
+    lines[..start]
+        .iter()
+        .chain(&lines[end + 1..])
+        .map(|line| format!("{line}\n"))
+        .collect()
+}
+
+fn branch_node(board: &Board) -> &Node {
+    all_nodes(board)
+        .into_iter()
+        .find(|node| node.name == "control_branch")
+        .expect("the board has a Branch")
+}
+
+fn exec_edge(
+    connect: bool,
+    (from_node, from_pin): (&str, &str),
+    (to_node, to_pin): (&str, &str),
+) -> BoardCommand {
+    let (from_node, from_pin) = (from_node.to_string(), from_pin.to_string());
+    let (to_node, to_pin) = (to_node.to_string(), to_pin.to_string());
+    if connect {
+        BoardCommand::ConnectPins {
+            from_node,
+            from_pin,
+            to_node,
+            to_pin,
+            summary: None,
+        }
+    } else {
+        BoardCommand::DisconnectPins {
+            from_node,
+            from_pin,
+            to_node,
+            to_pin,
+            summary: None,
+        }
+    }
+}
+
+/// Run `function`'s only `if` straight from its entry: the `skipped` statement written before it
+/// keeps its line, but nothing runs it any more. Returns the entry pin's id.
+async fn enter_function_at_its_if(board: &mut Board, function: &str, skipped: &str) -> String {
+    let (layer, entry_pin, entry_id) = board
+        .layers
+        .values()
+        .find(|layer| layer.name == function)
+        .and_then(|layer| {
+            let pin = layer.pins.values().find(|pin| {
+                pin.pin_type == PinType::Input && pin.data_type == VariableType::Execution
+            })?;
+            Some((layer.id.clone(), pin.name.clone(), pin.id.clone()))
+        })
+        .unwrap_or_else(|| panic!("function {function} has an entry"));
+    let node = info(board, skipped);
+    let (node_id, node_in, node_out) = (
+        node.id.clone(),
+        exec_pin(node, PinType::Input).name.clone(),
+        exec_pin(node, PinType::Output).name.clone(),
+    );
+    let branch = branch_node(board);
+    let (branch_id, branch_in) = (
+        branch.id.clone(),
+        exec_pin(branch, PinType::Input).name.clone(),
+    );
+    let commands = vec![
+        exec_edge(false, (&layer, &entry_pin), (&node_id, &node_in)),
+        exec_edge(false, (&node_id, &node_out), (&branch_id, &branch_in)),
+        exec_edge(true, (&layer, &entry_pin), (&branch_id, &branch_in)),
+    ];
+    apply_commands(board, commands).await;
+    entry_id
+}
+
+/// Applying `text` without consent to delete answers with the deletion review and nothing else.
+async fn assert_apply_asks_to_review_deletions(board: &mut Board, text: &str) {
+    let result = apply_flowscript_to_board(
+        board,
+        text,
+        &CATALOG.nodes,
+        catalog_state().await,
+        None,
+        false,
+    )
+    .await
+    .expect("the gated apply answers");
+    assert!(
+        result.commands.is_empty()
+            && result.diagnostics.len() == 1
+            && result.diagnostics[0].starts_with("FlowScript edit would delete "),
+        "{:?}",
+        result.diagnostics
+    );
+}
+
+const UNREACHED_AHEAD_OF_IF: &str = r#"function refresh() {
+    log::info({ message: "unreached", toast: false })
+    if (1 > 0) {
+        log::info({ message: "yes", toast: false })
+    }
+}
+
+eventsSimple callRefresh() {
+    refresh()
+}
+
+eventsSimple stale() {
+    log::info({ message: "gone", toast: false })
+}
+"#;
+
+/// "1 error — nothing was applied: the new statement order leaves `Branch` with no execution
+/// predecessor": a Function's entry skipped the statement the text writes first and ran its `if`
+/// directly. Deleting an unrelated event re-joined that entry to the unreached statement, which
+/// orphaned the `if`, and the refusal hid the deletion review.
+#[tokio::test(flavor = "multi_thread")]
+async fn deleting_an_event_leaves_an_unreached_statement_elsewhere_alone() {
+    let mut board = board_from(UNREACHED_AHEAD_OF_IF).await;
+    let entry = enter_function_at_its_if(&mut board, "refresh", "unreached").await;
+    let unreached = info(&board, "unreached").id.clone();
+    let gone = info(&board, "gone").id.clone();
+    let text = anchored(&board);
+    let line_of = |needle: &str| {
+        text.lines()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no line contains {needle:?}:\n{text}"))
+    };
+    assert!(
+        line_of("\"unreached\"") < line_of("if ("),
+        "the unreached statement still renders first:\n{text}"
+    );
+    assert_round_trips(&board);
+
+    let edited = without_section(&text, "eventsSimple stale(");
+    assert_apply_asks_to_review_deletions(&mut board, &edited).await;
+    let applied = apply_edit(&mut board, &edited).await;
+    assert!(!applied.board_commands.iter().any(|command| matches!(
+        command,
+        BoardCommand::ConnectPins { to_node, .. } if *to_node == unreached
+    )));
+    assert!(
+        exec_pin(info(&board, "unreached"), PinType::Input)
+            .depends_on
+            .is_empty(),
+        "nothing new runs the unreached statement"
+    );
+    assert!(
+        exec_pin(branch_node(&board), PinType::Input)
+            .depends_on
+            .contains(&entry),
+        "the entry still runs the if"
+    );
+    assert!(!all_nodes(&board).iter().any(|node| node.id == gone));
+    assert_round_trips(&board);
+}
+
 /// `tools:` is only a function-reference list when the callee has no `tools` input. On a node that
 /// has one, a computed `[tool]` is an `array_push` that needs the function's execution chain.
 #[tokio::test(flavor = "multi_thread")]

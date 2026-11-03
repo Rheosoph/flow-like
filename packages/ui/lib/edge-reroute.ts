@@ -51,6 +51,9 @@ export function buildEdgeRerouteCommands({
 		pin.data_type = fromPin.data_type;
 		pin.value_type = fromPin.value_type;
 		pin.schema = fromPin.schema;
+		pin.options = fromPin.options
+			? structuredClone(fromPin.options)
+			: undefined;
 		pin.connected_to = [];
 		pin.depends_on = [];
 	}

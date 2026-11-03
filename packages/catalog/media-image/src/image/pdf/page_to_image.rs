@@ -1,5 +1,5 @@
 #[cfg(feature = "execute")]
-use crate::image::pdf::{load_pdf_from_flowpath, render_page, resolve_page_index, validate_scale};
+use crate::image::pdf::{PageBackground, RenderOptions, render_pages};
 use flow_like::flow::execution::context::ExecutionContext;
 use flow_like::flow::node::{Node, NodeLogic};
 use flow_like::flow::pin::PinOptions;
@@ -7,8 +7,6 @@ use flow_like::flow::variable::VariableType;
 use flow_like_catalog_core::FlowPath;
 use flow_like_catalog_core::NodeImage;
 use flow_like_types::{async_trait, json::json};
-#[cfg(feature = "execute")]
-use hayro::RenderCache;
 
 #[crate::register_node]
 #[derive(Default)]
@@ -113,12 +111,16 @@ async fn render_pdf_page(
     pdf_path: &FlowPath,
     page_number: i64,
     scale: f32,
-    bg_color_hex: &str,
+    bg_color: &str,
 ) -> flow_like_types::Result<NodeImage> {
-    validate_scale(scale)?;
-    let pdf = load_pdf_from_flowpath(context, pdf_path).await?;
-    let pages = pdf.pages();
-    let index = resolve_page_index(page_number, pages.len())?;
-    let image = render_page(&pages[index], &RenderCache::new(), scale, bg_color_hex)?;
-    Ok(NodeImage::new(context, image).await)
+    let options = RenderOptions {
+        scale,
+        background: PageBackground::from_name(bg_color),
+        max_pixels: None,
+    };
+    let page = usize::try_from(page_number).unwrap_or(0);
+    let rendered = render_pages(pdf_path.get(context, false).await?, Some(&[page]), &options)?
+        .pop()
+        .ok_or_else(|| flow_like_types::anyhow!("Page {page_number} rendered no image"))?;
+    Ok(NodeImage::new(context, rendered.image).await)
 }

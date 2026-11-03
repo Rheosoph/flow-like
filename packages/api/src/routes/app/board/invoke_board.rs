@@ -136,11 +136,13 @@ pub async fn invoke_board(
 ) -> Result<Response, ApiError> {
     super::ensure_connected_app_board_invoke_denied(&user)?;
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteBoards);
-    let sub = permission.effective_user_id().map_err(|_| {
+    let sub = permission.run_user_id().map_err(|_| {
         crate::error::ApiError::forbidden(
             "Invoking requires a caller that is linked to a user account",
         )
     })?;
+    let bot_run =
+        crate::bot_flow::BotFlowRun::admit_board(&user, &app_id, &state, &board_id).await?;
     state
         .master_board_shared(&app_id, &board_id, &state, params.version)
         .await?;
@@ -316,11 +318,12 @@ pub async fn invoke_board(
     // Resolve independent dispatch inputs concurrently: STS scoped
     // credentials, user profile, and WASM package URLs do not depend on each
     // other and are all on the hot invoke path.
-    let access = get_credentials_access();
+    let (credential_sub, access) =
+        crate::bot_flow::credential_target(bot_run.as_ref(), &sub, get_credentials_access());
     let (credentials_result, (profile, custom_bit_owner), wasm_packages) = {
         use flow_like_types::tokio;
         tokio::join!(
-            state.scoped_credentials(&sub, &app_id, access),
+            state.scoped_credentials(&credential_sub, &app_id, access),
             caller_dispatch_profile(&state, &user, &sub, params.profile_id.as_deref(), &app_id),
             resolve_wasm_packages(&state, &app_id),
         )
@@ -353,6 +356,7 @@ pub async fn invoke_board(
         tracing::error!(error = %e, "Failed to sign executor JWT");
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
     })?;
+    let executor_jwt = crate::bot_flow::bind_executor(bot_run.as_ref(), executor_jwt)?;
 
     let executor_jwt = match &user {
         AppUser::OpenID(oidc) if !query.isolated => {
@@ -360,6 +364,30 @@ pub async fn invoke_board(
                 .map_err(|error| ApiError::internal_error(anyhow!(error)))?
         }
         _ => executor_jwt,
+    };
+
+    let isolated_poll_token = if query.isolated {
+        Some(
+            sign_execution_jwt(ExecutionJwtParams {
+                user_id: sub.clone(),
+                technical_user_id: technical_user_id.clone(),
+                run_id: run_id.clone(),
+                app_id: app_id.clone(),
+                board_id: board_id.clone(),
+                event_id: None,
+                app_chain: caller_app_chain.clone(),
+                correlation: None,
+                callback_url: String::new(),
+                token_type: TokenType::User,
+                ttl_seconds: Some(60 * 60),
+                shadow: None,
+            })
+            .map_err(|error| {
+                ApiError::internal_error(anyhow!("Failed to sign user JWT: {error}"))
+            })?,
+        )
+    } else {
+        None
     };
 
     let request = DispatchRequest {
@@ -421,7 +449,7 @@ pub async fn invoke_board(
             run_id,
             status: response.status,
             message: Some(format!("Job dispatched via {} backend", response.backend)),
-            poll_token: None,
+            poll_token: isolated_poll_token,
         })
         .into_response());
     }

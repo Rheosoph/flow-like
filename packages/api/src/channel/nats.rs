@@ -48,6 +48,26 @@ fn endpoint(value: &str, browser: bool) -> Result<String> {
 }
 
 impl NatsChannelRuntime {
+    pub fn realtime(
+        &self,
+        scope: &str,
+        ttl_secs: i64,
+    ) -> Result<flow_like_types::realtime::RealtimeTransport> {
+        Ok(flow_like_types::realtime::RealtimeTransport::Nats {
+            url: self.ws_url.clone(),
+            subject: flow_like_channels::nats::realtime_subject(scope)?,
+            token: flow_like_channels::nats::mint_realtime_subscriber_token(
+                &self.account_seed,
+                scope,
+                ttl_secs,
+            )?,
+        })
+    }
+
+    pub async fn publish_realtime(&self, scope: &str, payload: &[u8]) -> Result<()> {
+        self.forwarder.publish_realtime(scope, payload).await
+    }
+
     pub async fn from_env(secrets: &SecretStore) -> Result<Self> {
         let required = |name| {
             std::env::var(name)

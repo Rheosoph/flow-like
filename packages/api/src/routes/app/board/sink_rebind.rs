@@ -167,6 +167,7 @@ fn human_editor(user: &AppUser) -> Option<&str> {
         AppUser::APIKey(_)
         | AppUser::Executor(_)
         | AppUser::ConnectedApp(_)
+        | AppUser::Bot(_)
         | AppUser::Unauthorized => None,
     }
 }
@@ -389,6 +390,7 @@ mod tests {
                 creator_user_id: person(),
             }),
             AppUser::Executor(ExecutorUser {
+                bot: None,
                 sub: "person".to_string(),
                 app_id: "app".to_string(),
                 run_id: "run".to_string(),

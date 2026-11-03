@@ -45,6 +45,34 @@ test("unpriced hosted models warn admins without inventing rates", () => {
 	}
 });
 
+test("hosted image editors use image providers and per-image prices", () => {
+	const cloudflare = renderEditor({
+		bitType: IBitTypes.ImageGeneration,
+		provider: "hosted:cloudflare",
+		pricing: { request_micro_usd: 2500 },
+	});
+	expect(cloudflare).toContain("Cloudflare Workers AI");
+	expect(cloudflare).toContain("USD per image");
+	expect(cloudflare).toContain('value="0.0025"');
+	expect(cloudflare).toContain("HOSTED_CLOUDFLARE_ACCOUNT_ID");
+	expect(cloudflare).toContain("Access tier");
+	expect(cloudflare).not.toContain("API surface");
+	expect(cloudflare).not.toContain("USD per 1M");
+	const openrouter = renderEditor({
+		bitType: IBitTypes.ImageGeneration,
+		provider: "hosted:openrouter",
+		pricing: { request_micro_usd: 0 },
+	});
+	expect(openrouter).toContain("Maximum USD per image");
+	expect(openrouter).toContain("cost reported by OpenRouter");
+	expect(openrouter).toContain("OPENROUTER_API_KEY");
+	for (const props of [
+		{ bitType: IBitTypes.VideoGeneration },
+		{ bitType: IBitTypes.ImageGeneration, provider: "local:stablediffusion" },
+	])
+		expect(renderEditor(props)).not.toContain("Hosted image generation");
+});
+
 test("custom HTTP models expose request parameters while subscription and local models do not", () => {
 	for (const provider of [
 		"custom:anthropic",

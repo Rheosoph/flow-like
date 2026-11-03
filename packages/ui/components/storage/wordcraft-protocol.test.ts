@@ -64,6 +64,37 @@ describe("WordCraft message boundary", () => {
 		expect(read({ type: "dirty", dirty: "false" })).toBeNull();
 	});
 
+	it("accepts bounded loading progress with an interactive editor", () => {
+		for (const [completed, total] of [
+			[0, 0],
+			[2, 10],
+			[10, 10],
+		]) {
+			const message = { type: "loading", interactive: true, completed, total };
+			expect(read(message)).toEqual(message);
+		}
+	});
+
+	it.each([
+		{ interactive: "true" },
+		{ completed: -1 },
+		{ completed: 11 },
+		{ completed: 0.5 },
+		{ total: Number.POSITIVE_INFINITY },
+		{ total: Number.MAX_SAFE_INTEGER + 1 },
+		{ total: -1 },
+	])("rejects malformed loading progress: %j", (overrides) => {
+		expect(
+			read({
+				type: "loading",
+				interactive: true,
+				completed: 0,
+				total: 10,
+				...overrides,
+			}),
+		).toBeNull();
+	});
+
 	it("keeps the binary export and revision together", () => {
 		const bytes = new Uint8Array([80, 75, 3, 4]).buffer;
 		expect(

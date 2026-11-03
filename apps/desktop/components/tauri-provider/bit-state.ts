@@ -243,7 +243,8 @@ export class BitState implements IBitState {
 	async listCustomBits(): Promise<IBit[]> {
 		const local = await invoke<IBit[]>("get_custom_bits");
 		const profile = this.backend.profile;
-		if (!profile) return local;
+		// Expired sessions can still renew in the API client; absent sessions stay local.
+		if (!profile || !this.backend.auth?.user?.access_token) return local;
 
 		// The local library answers at once; an unreachable hub only delays the merge.
 		this.backend.backgroundTaskHandler(
@@ -288,7 +289,7 @@ export class BitState implements IBitState {
 
 		try {
 			const profile = this.backend.profile;
-			if (profile) {
+			if (profile && this.backend.auth?.user?.access_token) {
 				await this.backend.apiState.put(profile, `user/bits/${bit.id}`, {
 					bit,
 					secrets,
@@ -309,7 +310,7 @@ export class BitState implements IBitState {
 
 		try {
 			const profile = this.backend.profile;
-			if (profile) {
+			if (profile && this.backend.auth?.user?.access_token) {
 				await this.backend.apiState.del(profile, `user/bits/${bitId}`);
 			}
 		} catch (error) {

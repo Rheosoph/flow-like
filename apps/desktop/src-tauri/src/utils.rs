@@ -43,17 +43,14 @@ fn should_emit(key: &str, min_interval: Duration) -> bool {
     }
 }
 
-/// Schedule a frontend emission on Tauri's main thread and return without waiting for it.
+/// Schedule a frontend emission on Tauri's main thread.
 ///
-/// `Emitter::emit` holds Tauri's process-wide `webviews_lock` for the whole emission while
-/// `Webview::eval` blocks on the main run loop. The main thread takes that same lock from
-/// `AppManager::get_webview` while servicing a WebKit URL-scheme task — which is how every IPC
-/// message arrives. Emitting from a Tokio worker therefore deadlocks the desktop process: the
-/// worker holds the lock and waits for the main loop, the main loop waits for the lock. Emitting
-/// on the main thread instead serializes the emission with those URL-scheme handlers.
+/// `Emitter::emit` holds Tauri's `webviews_lock` while delivering events. With Tauri's
+/// `tracing` feature, `Webview::eval` waits for the main run loop. An IPC handler on that
+/// loop can be waiting for the same lock, deadlocking both threads. Main-thread emission
+/// serializes these operations and also works when tracing is enabled for diagnostics.
 ///
-/// `run_on_main_thread` executes the job inline when the caller already is the main thread, so
-/// this is the correct call from every thread and never blocks the caller.
+/// Worker callers return after queuing the job. Calls already on the main thread run inline.
 fn emit_on_main_thread<F>(app: &AppHandle, event: &str, emit: F)
 where
     F: FnOnce(&AppHandle) + Send + 'static,
@@ -67,7 +64,7 @@ where
 /// Emit an event to every frontend target from any thread.
 ///
 /// This is the only supported way to reach the frontend from backend code; calling
-/// `Emitter::emit` directly off the main thread deadlocks the process. See
+/// `Emitter::emit` directly off the main thread can deadlock with tracing enabled. See
 /// [`emit_on_main_thread`] for the mechanism.
 pub fn emit_to_ui<T>(app: &AppHandle, event: &str, payload: T)
 where
@@ -255,12 +252,36 @@ fn flush_pending_event_batch(app: &AppHandle, key: &str) {
 mod tests {
     use std::path::{Path, PathBuf};
 
-    /// Files allowed to call `Emitter::emit` directly, because every emission in them already
-    /// runs inside a `run_on_main_thread` job: this module, and the FlowPilot bridge, which owns
-    /// its own bounded main-thread dispatch.
-    const MAIN_THREAD_EMIT_OWNERS: [&str; 2] = ["utils.rs", "functions/ai/frontend_tool_bridge.rs"];
-
     const EMIT_CALLS: [&str; 4] = [".emit(", ".emit_to(", ".emit_filter(", ".emit_str("];
+
+    fn direct_emit_lines(relative: &str, contents: &str) -> Vec<usize> {
+        if relative == "utils.rs" {
+            return Vec::new();
+        }
+
+        let mut in_main_thread_helper = false;
+        let mut offenders = Vec::new();
+        for (index, line) in contents.lines().enumerate() {
+            // The bridge has a bounded dispatch with its own result channel. Only its
+            // module-level helper runs exclusively inside those main-thread jobs.
+            if relative == "functions/ai/frontend_tool_bridge.rs"
+                && line.starts_with("fn emit_to_owner<")
+            {
+                in_main_thread_helper = true;
+            }
+            if in_main_thread_helper {
+                if line == "}" {
+                    in_main_thread_helper = false;
+                }
+                continue;
+            }
+            let code = line.split_once("//").map_or(line, |(code, _)| code);
+            if EMIT_CALLS.iter().any(|call| code.contains(call)) {
+                offenders.push(index + 1);
+            }
+        }
+        offenders
+    }
 
     fn collect_rust_sources(directory: &Path, sources: &mut Vec<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(directory) else {
@@ -294,25 +315,36 @@ mod tests {
                 .unwrap_or(&path)
                 .to_string_lossy()
                 .replace('\\', "/");
-            if MAIN_THREAD_EMIT_OWNERS.contains(&relative.as_str()) {
-                continue;
-            }
             let Ok(contents) = std::fs::read_to_string(&path) else {
                 continue;
             };
-            for (index, line) in contents.lines().enumerate() {
-                let code = line.split_once("//").map_or(line, |(code, _)| code);
-                if EMIT_CALLS.iter().any(|call| code.contains(call)) {
-                    offenders.push(format!("{relative}:{}", index + 1));
-                }
+            for line in direct_emit_lines(&relative, &contents) {
+                offenders.push(format!("{relative}:{line}"));
             }
         }
 
         assert!(
             offenders.is_empty(),
-            "Emitter::emit must never run on a Tokio worker: it holds Tauri's webviews_lock while \
-             Webview::eval waits for the main run loop, deadlocking against the WebKit URL-scheme \
-             handler that takes the same lock. Use crate::utils::emit_to_ui instead. Offenders: {offenders:?}"
+            "Emitter::emit must run on the main thread: with tracing enabled, it holds Tauri's \
+             webviews_lock while Webview::eval waits for that thread, which may need the same lock \
+             to handle IPC. Use crate::utils::emit_to_ui instead. Offenders: {offenders:?}"
         );
+    }
+
+    #[test]
+    fn bridge_exemption_does_not_cover_background_notifications() {
+        let source = concat!(
+            "fn emit_to_owner<S>(app: &AppHandle, payload: S) {\n",
+            "    app.emit(\"request\", payload);\n",
+            "}\n",
+            "async fn notify(app: &AppHandle) {\n",
+            "    app.emit(\"completed\", ());\n",
+            "}\n",
+        );
+        assert_eq!(
+            direct_emit_lines("functions/ai/frontend_tool_bridge.rs", source),
+            vec![5],
+        );
+        assert_eq!(direct_emit_lines("native_auth.rs", source), vec![2, 5]);
     }
 }

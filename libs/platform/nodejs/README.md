@@ -163,7 +163,7 @@ const logs = await client.getRunLogs("app-id", "board-id", "run-id", {
 });
 ```
 
-Polling sends the run-specific poll token as a bearer token. Status and event fields follow the backend names (`run_id`, `event_type`, `payload`); `lastSequence` is derived from the returned events. Start at `-1` so sequence zero is included.
+Polling sends the run-specific poll token as a bearer token. Status and event fields follow the backend names (`run_id`, `event_type`, `payload`); `lastSequence` is derived from the returned events. Start at `-1` so sequence zero is included. Keep polling while `has_more` is true: a finished run reports its final status only on its last page of events.
 
 ### Chat completions
 

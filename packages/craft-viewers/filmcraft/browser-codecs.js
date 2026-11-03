@@ -8,6 +8,179 @@ const MAX_BYTES = 200 * 1024 * 1024;
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const reason = (error) => error?.message || String(error);
 
+// Apple readers need roll groups alongside AAC edit lists. The shared upstream
+// muxer does not write them; preserve fast-start sample offsets when adding them.
+export function addAacRollGroups(input) {
+	const invalid = () =>
+		new Error("The exported MP4 has invalid sample tables.");
+	const kind = (bytes, at) =>
+		String.fromCharCode(...bytes.subarray(at, at + 4));
+	const view = (bytes) =>
+		new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	const boxes = (bytes, start = 0) => {
+		const result = [];
+		for (let at = start; at < bytes.length; ) {
+			if (at + 8 > bytes.length) throw invalid();
+			const size = view(bytes).getUint32(at);
+			if (size < 8 || size > bytes.length - at) throw invalid();
+			result.push({ at, end: at + size, type: kind(bytes, at + 4) });
+			at += size;
+		}
+		return result;
+	};
+	const combine = (parts) => {
+		const size = parts.reduce((total, part) => total + part.length, 0);
+		if (size > MAX_BYTES)
+			throw new Error("The exported video exceeds 200 MiB.");
+		const result = new Uint8Array(size);
+		let at = 0;
+		for (const part of parts) {
+			result.set(part, at);
+			at += part.length;
+		}
+		return result;
+	};
+	const containers = new Set(["moov", "trak", "mdia", "minf", "stbl"]);
+	const rewrite = (box) => {
+		const type = kind(box, 4);
+		if (!containers.has(type)) return box;
+		const children = boxes(box, 8);
+		const parts = [
+			box.subarray(0, 8),
+			...children.map(({ at, end }) => rewrite(box.subarray(at, end))),
+		];
+		if (type === "stbl") {
+			const stsd = children.find((child) => child.type === "stsd");
+			if (
+				stsd &&
+				stsd.end - stsd.at >= 24 &&
+				kind(box, stsd.at + 20) === "mp4a"
+			) {
+				const groups = children.filter(
+					({ at, end, type }) =>
+						(type === "sgpd" || type === "sbgp") &&
+						end - at >= 16 &&
+						kind(box, at + 12) === "roll",
+				);
+				if (
+					groups.length &&
+					(groups.length !== 2 || groups[0].type === groups[1].type)
+				)
+					throw invalid();
+				if (!groups.length) {
+					const stsz = children.find((child) => child.type === "stsz");
+					if (!stsz || stsz.end - stsz.at < 20) throw invalid();
+					const count = view(box).getUint32(stsz.at + 16);
+					if (count) {
+						const groups = Uint8Array.of(
+							0,
+							0,
+							0,
+							26,
+							115,
+							103,
+							112,
+							100,
+							1,
+							0,
+							0,
+							0,
+							114,
+							111,
+							108,
+							108,
+							0,
+							0,
+							0,
+							2,
+							0,
+							0,
+							0,
+							1,
+							255,
+							255,
+							0,
+							0,
+							0,
+							28,
+							115,
+							98,
+							103,
+							112,
+							0,
+							0,
+							0,
+							0,
+							114,
+							111,
+							108,
+							108,
+							0,
+							0,
+							0,
+							1,
+							0,
+							0,
+							0,
+							0,
+							0,
+							0,
+							0,
+							1,
+						);
+						view(groups).setUint32(46, count);
+						parts.push(groups);
+					}
+				}
+			}
+		}
+		const result = combine(parts);
+		view(result).setUint32(0, result.length);
+		return result;
+	};
+	if (!(input instanceof Uint8Array) || input.length > MAX_BYTES)
+		throw invalid();
+	const top = boxes(input);
+	const movies = top.filter((box) => box.type === "moov");
+	if (movies.length !== 1) throw invalid();
+	const movie = movies[0];
+	const moov = rewrite(input.subarray(movie.at, movie.end));
+	const delta = moov.length - (movie.end - movie.at);
+	// Returning to Rust may grow WASM memory and detach the borrowed input view.
+	if (!delta) return new Uint8Array(input);
+	const relocate = (box) => {
+		const type = kind(box, 4);
+		if (containers.has(type)) {
+			for (const { at, end } of boxes(box, 8)) relocate(box.subarray(at, end));
+		} else if (type === "stco" || type === "co64") {
+			if (box.length < 16) throw invalid();
+			const data = view(box);
+			const width = type === "stco" ? 4 : 8;
+			const count = data.getUint32(12);
+			if (count > (box.length - 16) / width) throw invalid();
+			for (let index = 0; index < count; index++) {
+				const at = 16 + index * width;
+				const old =
+					width === 4 ? BigInt(data.getUint32(at)) : data.getBigUint64(at);
+				if (old >= BigInt(movie.at) && old < BigInt(movie.end)) throw invalid();
+				if (old >= BigInt(movie.end)) {
+					const next = old + BigInt(delta);
+					if (next > (width === 4 ? 0xffffffffn : 0xffffffffffffffffn))
+						throw invalid();
+					if (width === 4) data.setUint32(at, Number(next));
+					else data.setBigUint64(at, next);
+				}
+			}
+		}
+	};
+	relocate(moov);
+	return combine([
+		input.subarray(0, movie.at),
+		moov,
+		input.subarray(movie.end),
+	]);
+}
+
 export function onSourceReady(callback) {
 	sourceReady = callback;
 }

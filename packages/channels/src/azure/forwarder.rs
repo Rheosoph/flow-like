@@ -53,6 +53,37 @@ impl AzureWebPubSubForwarder {
     pub fn send_url(&self, group: &str) -> String {
         send_to_group_url(&self.endpoint, &self.hub, group)
     }
+
+    /// Only the API's service credential can publish account invalidations.
+    pub async fn publish_realtime(
+        &self,
+        scope: &str,
+        payload: &[u8],
+    ) -> flow_like_types::Result<()> {
+        if scope.len() != 64 || !scope.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            flow_like_types::bail!("invalid realtime scope");
+        }
+        if payload.len() > flow_like_types::realtime::MAX_REALTIME_WAKEUP_BYTES {
+            flow_like_types::bail!("realtime wakeup exceeds the size limit");
+        }
+        let url = self.send_url(&format!("realtime:{scope}"));
+        let token = rest_token(&self.access_key, &url, REST_TOKEN_TTL_SECS)?;
+        let response = self
+            .client
+            .post(url)
+            .bearer_auth(token)
+            .header(CONTENT_TYPE, "application/json")
+            .body(payload.to_vec())
+            .send()
+            .await
+            .map_err(|error| {
+                flow_like_types::anyhow!("realtime publish failed: {}", error.without_url())
+            })?;
+        if !response.status().is_success() {
+            flow_like_types::bail!("realtime publish returned {}", response.status());
+        }
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -75,8 +106,9 @@ impl ChannelForwarder for AzureWebPubSubForwarder {
             .await
             .map_err(|e| {
                 flow_like_types::anyhow!(
-                    "channel {}: Azure Web PubSub send to group {group} failed: {e}",
-                    push.channel_id
+                    "channel {}: Azure Web PubSub send to group {group} failed: {}",
+                    push.channel_id,
+                    e.without_url()
                 )
             })?;
         let status = response.status();

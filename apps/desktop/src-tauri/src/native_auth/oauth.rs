@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     sync::{Arc, LazyLock, Weak},
 };
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 use tokio::sync::Mutex;
 
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -528,7 +528,8 @@ pub(crate) async fn resolve(
         return Err("The authentication session changed".into());
     }
     if !missing.is_empty() {
-        let _ = app.emit(
+        crate::utils::emit_to_ui(
+            app,
             "flowpilot://oauth-required",
             json!({"profileId":binding.profile_id,"appId":app_id,"providerIds":missing}),
         );

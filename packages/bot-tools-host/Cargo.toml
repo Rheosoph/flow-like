@@ -1,0 +1,22 @@
+[package]
+name = "flow-like-bot-tools-host"
+version = "0.1.0"
+edition = "2024"
+description = "Server-side host for the bot tools: the tool job wire format and a ToolEnv over per-app stores, shared by the API and the executor"
+
+[dependencies]
+async-trait.workspace = true
+blake3.workspace = true
+flow-like-bot-tools.workspace = true
+flow-like-model-provider.workspace = true
+flow-like-runtime = { workspace = true, features = ["model"] }
+flow-like-storage = { workspace = true, features = ["database-runtime"] }
+flow-like-types.workspace = true
+futures.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+flow-like-bot-tools = { workspace = true, features = ["data"] }

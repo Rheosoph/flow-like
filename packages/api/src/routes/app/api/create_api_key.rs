@@ -65,7 +65,7 @@ pub async fn create_api_key(
     Json(input): Json<ApiKeyInput>,
 ) -> Result<Json<ApiKeyOut>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::Admin);
-    let creator_user_id = permission.effective_user_id()?;
+    let creator_user_id = permission.person_user_id()?;
     let creator_membership = membership::Entity::find()
         .filter(
             membership::Column::UserId

@@ -14,5 +14,7 @@ export interface ILogMetadata {
 	version: string;
 	error_message?: string | null;
 	is_remote?: boolean;
+	/** Set when a bot, not a person, started the run. */
+	actor?: { kind: "bot"; id: string; name?: string | null } | null;
 	[property: string]: any;
 }

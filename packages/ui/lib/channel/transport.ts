@@ -1,20 +1,13 @@
-// Client half of Channels: deliver a reply / cancel / steer to the waiter behind a run through the
-// transport its handle names, falling back to the API push endpoint when the transport fails.
+// Remote replies use the API push capability. The API forwards to the execution's
+// scoped transport, so a client never holds provider write credentials.
 
 import type {
 	IChannelClientDescriptor,
 	IChannelHandle,
 	IChannelPush,
 } from "../schema/channel";
-import { pushAwsMqtt } from "./aws-mqtt";
-import {
-	pushAzureWebPubSub,
-	resetAzureWebPubSubConnections,
-} from "./azure-web-pubsub";
-import { pushFirebaseRtdb, resetFirebaseSessions } from "./gcp-firebase-rtdb";
 import { isScopedHttpChannel, pushHttp } from "./http";
 import { pushInProcess } from "./in-process";
-import { pushNats, resetNatsConnections } from "./nats";
 import { type ChannelPushOptions, errorMessage } from "./util";
 
 export { isChannelHandle } from "./handle";
@@ -30,37 +23,40 @@ function deliver(
 			return pushHttp(descriptor, push, options);
 		case "in_process":
 			return pushInProcess(push);
-		case "aws_mqtt":
-			return pushAwsMqtt(descriptor, push, options);
-		case "azure_web_pubsub":
-			return pushAzureWebPubSub(descriptor, push, options);
-		case "gcp_firebase_rtdb":
-			return pushFirebaseRtdb(descriptor, push, options);
-		case "nats":
-			return pushNats(descriptor, push, options);
 		default:
 			return Promise.reject(
 				new Error(
-					`Unknown channel transport '${(descriptor as { type?: unknown }).type}' for channel '${push.channel_id}'.`,
+					`Channel '${push.channel_id}' names the '${(descriptor as { type?: unknown }).type}' transport without an API push capability.`,
 				),
 			);
 	}
 }
 
 /**
- * Deliver one push through `handle.transport`; on any transport error retry once through
- * `handle.fallback` (the API push endpoint) when the handle carries one.
+ * Provider handles from older APIs carry the API capability as their fallback; it is the
+ * only path a reply takes, so replying needs no frontend provider connection.
  */
 export async function rawPushChannel(
 	handle: IChannelHandle,
 	push: Omit<IChannelPush, "channel_id">,
 	options: ChannelPushOptions = {},
 ): Promise<void> {
+	if (options.signal?.aborted)
+		throw options.signal.reason ?? new Error("Channel push was aborted.");
 	const body: IChannelPush = { ...push, channel_id: handle.channel_id };
 	const deliveryOptions =
-		handle.transport.type === "nats"
+		handle.transport.type !== "in_process" &&
+		!isScopedHttpChannel(handle.transport)
 			? { ...options, deliveryId: options.deliveryId ?? crypto.randomUUID() }
 			: options;
+	if (
+		handle.transport.type !== "http" &&
+		handle.transport.type !== "in_process" &&
+		handle.fallback?.type === "http"
+	) {
+		// A failed API push remains retryable through the same authority.
+		return pushHttp(handle.fallback, body, deliveryOptions);
+	}
 	try {
 		await deliver(handle.transport, body, deliveryOptions);
 	} catch (primary) {
@@ -82,11 +78,4 @@ export async function rawPushChannel(
 			);
 		}
 	}
-}
-
-/** Drop cached transport sessions when the execution runtime retires. */
-export function resetChannelClientCaches(): void {
-	resetAzureWebPubSubConnections();
-	resetFirebaseSessions();
-	resetNatsConnections();
 }

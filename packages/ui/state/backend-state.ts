@@ -29,6 +29,7 @@ import type {
 	IFlowScriptDiagnostic,
 	IScopedFlowScriptResponse,
 } from "./backend-state/board-state";
+import type { IBotState } from "./backend-state/bot-state";
 import type { IDatabaseState } from "./backend-state/db-state";
 import {
 	EmptyAIState,
@@ -59,6 +60,7 @@ import type {
 	ITemporaryUploadExecutionTarget,
 	ITemporaryUploadedFile,
 } from "./backend-state/helper-state";
+import type { IInboxState } from "./backend-state/inbox-state";
 import type { ILockedStorageState } from "./backend-state/locked-storage-state";
 import type { IOfflineWritesState } from "./backend-state/offline-writes-state";
 import type { IPageState } from "./backend-state/page-state";
@@ -90,7 +92,9 @@ import type { IWidgetState } from "./backend-state/widget-state";
 export * from "./backend-state/api-key-state";
 export * from "./backend-state/api-key-state";
 export * from "./backend-state/api-state";
+export * from "./backend-state/bot-state";
 export * from "./backend-state/empty-states/index";
+export * from "./backend-state/inbox-state";
 export * from "./backend-state/registry-state";
 export * from "./backend-state/idb-route-state";
 export * from "./backend-state/locked-storage-state";
@@ -285,6 +289,10 @@ export interface IBackendState {
 	analyticsState?: IAnalyticsState;
 	/** Offline write buffering for online projects (desktop only) */
 	offlineWritesState?: IOfflineWritesState;
+	/** The signed-in account's bots; absent without a hub account */
+	botState?: IBotState;
+	/** Conversations between people and bots; absent without a hub account */
+	inboxState?: IInboxState;
 
 	/** Optional runtime profile (desktop/mobile providers populate this). */
 	profile?: IProfile;

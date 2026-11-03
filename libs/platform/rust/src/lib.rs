@@ -3,16 +3,20 @@
 //! Credentials stay on platform requests. Poll tokens and signed storage transfers use
 //! their own authorization. Dropping a request future or event stream cancels its I/O.
 
+mod bots;
 mod client;
 mod endpoints;
 mod execution;
 mod files;
+mod inbox;
 mod models;
 mod stream;
 mod types;
 
+pub use bots::*;
 pub use bytes::Bytes;
 pub use client::{Auth, Client, ClientBuilder, Error, RequestOptions, Result};
+pub use inbox::*;
 pub use reqwest::{Method, header};
 pub use serde_json::{Value, json};
 pub use stream::{EventStream, SseEvent};

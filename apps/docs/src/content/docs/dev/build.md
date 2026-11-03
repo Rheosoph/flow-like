@@ -96,6 +96,23 @@ database, storage, identity, and signing configuration. Then run:
 mise run dev:desktop:local
 ```
 
+### Enable native devtools
+
+The native devtools plugin is excluded from default builds. To use it, enable
+both the `devtools` Cargo feature and the runtime flag. For example, on macOS
+ARM:
+
+```bash
+FLOW_LIKE_ENABLE_DEVTOOLS_PLUGIN=1 mise exec -- bun run --cwd apps/desktop dev:mac:arm --features devtools
+```
+
+The Cargo feature enables Tauri tracing, including synchronous dispatch to the
+UI thread. Backend events must use `utils::emit_to_ui` or the existing helpers
+that schedule delivery on the main thread. Direct background calls to Tauri's
+event emitter can deadlock against incoming IPC. The runtime flag alone does
+not compile the plugin into the app. Use the matching `dev:*` script from
+`apps/desktop/package.json` for other platforms.
+
 ## Build a release bundle
 
 ```bash

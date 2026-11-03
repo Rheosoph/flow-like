@@ -43,6 +43,28 @@ for source handling and optional custom compiled defaults. A default compiled
 through a BuildKit secret is still embedded in the binary and must contain no
 credentials.
 
+## Shared realtime invalidations
+
+With `CHANNEL_TRANSPORT=gcp_firebase_rtdb`, the shared account connection reuses
+`CHANNEL_FIREBASE_DATABASE_URL`, `CHANNEL_FIREBASE_API_KEY`,
+`CHANNEL_FIREBASE_PROJECT_ID` and the `CHANNEL_FIREBASE_SERVICE_ACCOUNT` secret.
+Deploy `packages/channels/src/gcp/database.rules.json` to that Realtime Database
+before enabling the connection. The rules include both existing run channels
+and the new account wakeup location.
+
+The API overwrites `/realtime/{account-scope}/wake` with a small invalidation
+message. Receivers may read only their own marker and cannot write it. Event
+payloads remain in the authorized HTTP replay response, and active HTTP
+execution streams continue to carry their own output.
+
+Receiver grants include a fixed `realtime_until` deadline checked against the
+database server's `now`. This check matters because Firebase sessions can
+outlive the custom token used to sign in. Renewing an ID token cannot extend
+the grant; clients request another grant from the API. See Firebase's
+[custom token lifecycle](https://firebase.google.com/docs/auth/admin/create-custom-tokens)
+and [database rule variables](https://firebase.google.com/docs/reference/security/database).
+Grant issuance or connection failures fall back to HTTP replay.
+
 ## Deploy the audit worker separately
 
 The API records pending audit events. A separate Cloud Run Job seals and signs them,

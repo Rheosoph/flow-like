@@ -74,6 +74,12 @@ pub struct Model {
     #[sea_orm(column_type = "Text")]
     pub tier: crate::sea_orm_active_enums::UserTier,
     #[sea_orm(has_many)]
+    pub bots: HasMany<super::bot::Entity>,
+    #[sea_orm(has_many)]
+    pub bot_permissions: HasMany<super::bot_permission::Entity>,
+    #[sea_orm(has_many)]
+    pub bot_turns: HasMany<super::bot_turn::Entity>,
+    #[sea_orm(has_many)]
     pub comments: HasMany<super::comment::Entity>,
     #[sea_orm(has_many)]
     pub embedding_usage_trackings: HasMany<super::embedding_usage_tracking::Entity>,

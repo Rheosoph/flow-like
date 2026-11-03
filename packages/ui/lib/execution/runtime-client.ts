@@ -1,6 +1,7 @@
 import { RequestTimeoutError } from "../request-deadline";
 import type { IChannelHandle } from "../schema/channel";
 import type { ILogMetadata } from "../schema/flow/log-metadata";
+import type { ExecutionChatSeed } from "./chat-persistence";
 import { attachExecutionTransportOwner } from "./owners";
 import { channelRequestKey, executionChannels } from "./runtime";
 import {
@@ -8,6 +9,7 @@ import {
 	type ExecutionCallbacks,
 	type ExecutionCancelOptions,
 	type ExecutionCommand,
+	ExecutionDetachedError,
 	type ExecutionMessage,
 	type ExecutionMetadata,
 	type ExecutionTask,
@@ -37,13 +39,45 @@ type CommandInput = ExecutionCommand extends infer Command
 
 const channelOwners = new Map<string, ExecutionRuntimeClient>();
 
+/** A detached run's open requests outlive its released events. */
+function taskChannels(task: ExecutionTask): IChannelHandle[] {
+	return [
+		...executionChannels(task.events),
+		...task.pendingInteractions.flatMap((request) =>
+			request.channel ? [request.channel] : [],
+		),
+	];
+}
+
+/** The runtime saves a detached reply by itself, possibly with no tab open, and has no translations. */
+async function withDetachedNotice(
+	chat: ExecutionChatSeed,
+): Promise<ExecutionChatSeed> {
+	const { i18n } = await import("@flow-like/locales");
+	return {
+		...chat,
+		detachedNotice: {
+			title: i18n.t("chat:detachedReplyTitle", "Still running on the server"),
+			message: i18n.t(
+				"chat:detachedReplyMessage",
+				"Live updates for this reply stopped, so it may be incomplete. The run continues on the server; you can stop it from Activity.",
+			),
+		},
+	};
+}
+
 /** One scoped connection. Closing it releases a tab, never the worker's executions. */
 export class ExecutionRuntimeClient {
 	private readonly tasks = new Map<string, ExecutionTask>();
 	private readonly listeners = new Set<() => void>();
 	private readonly pending = new Map<
 		string,
-		{ resolve: (value: unknown) => void; reject: (error: Error) => void }
+		{
+			resolve: (value: unknown) => void;
+			reject: (error: Error) => void;
+			/** Set for executions: losing the session detaches from the run, never fails it. */
+			taskId?: string;
+		}
 	>();
 	private readonly observers = new Map<string, Observer>();
 	private readonly cancelAuthorizers = new Map<
@@ -72,6 +106,10 @@ export class ExecutionRuntimeClient {
 	}
 	getTask(taskId: string): ExecutionTask | undefined {
 		return this.tasks.get(taskId);
+	}
+	/** True while the caller that started the task in this tab receives its events. */
+	isObserving(taskId: string): boolean {
+		return this.observers.has(taskId);
 	}
 	subscribe(listener: () => void): () => void {
 		this.listeners.add(listener);
@@ -123,7 +161,9 @@ export class ExecutionRuntimeClient {
 						? new RequestTimeoutError(data.url ?? "", data.timeoutMs ?? 900_000)
 						: data.name === "TypeError"
 							? new TypeError(data.message)
-							: new Error(data.message);
+							: data.name === "ExecutionDetachedError"
+								? new ExecutionDetachedError(data.runId, data.message)
+								: new Error(data.message);
 				pending.reject(Object.assign(error, data));
 			} else pending.resolve(message.value);
 			return;
@@ -168,7 +208,7 @@ export class ExecutionRuntimeClient {
 			for (const task of message.tasks)
 				if (task.scope === this.scope) {
 					this.tasks.set(task.taskId, task);
-					for (const handle of executionChannels(task.events))
+					for (const handle of taskChannels(task))
 						this.channels.add(channelRequestKey(handle));
 				}
 		} else {
@@ -189,7 +229,7 @@ export class ExecutionRuntimeClient {
 					...message.task.events,
 				],
 			});
-			for (const handle of executionChannels(message.task.events))
+			for (const handle of taskChannels(message.task))
 				this.channels.add(channelRequestKey(handle));
 		}
 		for (const key of this.channels) channelOwners.set(key, this);
@@ -198,12 +238,12 @@ export class ExecutionRuntimeClient {
 		for (const task of this.tasks.values()) this.updateObserver(task);
 	}
 
-	private command(command: CommandInput): Promise<unknown> {
+	private command(command: CommandInput, taskId?: string): Promise<unknown> {
 		if (this.closed)
 			return Promise.reject(new Error("Execution session is disconnected"));
 		const id = crypto.randomUUID();
 		return new Promise((resolve, reject) => {
-			this.pending.set(id, { resolve, reject });
+			this.pending.set(id, { resolve, reject, taskId });
 			try {
 				this.port.postMessage({ ...command, id } as ExecutionCommand);
 			} catch (error) {
@@ -219,14 +259,20 @@ export class ExecutionRuntimeClient {
 		callbacks: ExecutionCallbacks = {},
 	): Promise<ILogMetadata | undefined> {
 		await this.ready;
+		const chat = metadata.chat && (await withDetachedNotice(metadata.chat));
 		if (metadata.scope !== this.scope)
 			throw new Error("Execution scope changed before dispatch");
 		attachExecutionTransportOwner(metadata.taskId, this);
 		this.observers.set(metadata.taskId, { callbacks, seen: 0 });
 		try {
-			return (await this.command({ type: "execute", metadata, request })) as
-				| ILogMetadata
-				| undefined;
+			return (await this.command(
+				{
+					type: "execute",
+					metadata: chat ? { ...metadata, chat } : metadata,
+					request,
+				},
+				metadata.taskId,
+			)) as ILogMetadata | undefined;
 		} finally {
 			this.observers.delete(metadata.taskId);
 		}
@@ -273,8 +319,7 @@ export class ExecutionRuntimeClient {
 			}
 		}
 		this.notify();
-		for (const pending of this.pending.values()) pending.reject(error);
-		this.pending.clear();
+		this.abandon(error);
 		this.close();
 	}
 
@@ -287,12 +332,25 @@ export class ExecutionRuntimeClient {
 		}
 		this.closed = true;
 		this.port.close?.();
-		for (const pending of this.pending.values())
-			pending.reject(new Error("Execution session changed"));
-		this.pending.clear();
+		this.abandon(new Error("Execution session changed"));
 		this.observers.clear();
 		this.listeners.clear();
 		evictClient(this);
+	}
+
+	/** Runs outlive this session on the server, so their callers learn they were detached. */
+	private abandon(reason: Error) {
+		for (const { reject, taskId } of this.pending.values())
+			reject(
+				taskId === undefined
+					? reason
+					: new ExecutionDetachedError(
+							this.observers.get(taskId)?.runId ??
+								this.tasks.get(taskId)?.runId,
+							reason.message,
+						),
+			);
+		this.pending.clear();
 	}
 }
 
@@ -318,11 +376,18 @@ async function fallback(scope: string): Promise<ExecutionRuntimeClient> {
 			import("./runtime"),
 			import("../channel/transport"),
 			import("./chat-persistence"),
+			import("../realtime/runtime-client"),
 		]).then(
-			([{ ExecutionRuntime }, { rawPushChannel }, { persistExecutionChat }]) =>
+			([
+				{ ExecutionRuntime },
+				{ rawPushChannel },
+				{ persistExecutionChat },
+				{ getRealtimeClient },
+			]) =>
 				new ExecutionRuntime({
 					push: rawPushChannel,
 					persist: persistExecutionChat,
+					realtime: getRealtimeClient,
 				}),
 		);
 	const runtime = await fallbackRuntime;
@@ -353,8 +418,8 @@ async function connect(scope: string): Promise<ExecutionRuntimeClient> {
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			const worker = new SharedWorker(
-				new URL("./runtime.shared-worker.ts", import.meta.url),
-				{ type: "module", name: "flow-like-executions-v1" },
+				new URL("../realtime/runtime.shared-worker.ts", import.meta.url),
+				{ type: "module", name: "flow-like-realtime-executions-v2" },
 			);
 			workerClient = new ExecutionRuntimeClient(
 				scope,

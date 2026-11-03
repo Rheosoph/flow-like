@@ -3,14 +3,14 @@ mod live_mcp;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use designcraft_engine::{DocState, Session};
+use designcraft_engine::Session;
 use designcraft_ui_egui::{DesignApp, Services};
 use serde_json::json;
 use wasm_bindgen::prelude::*;
 
 const MAX_BYTES: usize = 50 * 1024 * 1024;
-const INPUTS: &[&str] = &["designcraft", "idml"];
-const IDML_WARNING: &str = "IDML import and export supports a subset of InDesign. Tables, footnotes, anchored objects, hyperlinks, and other unsupported data are not retained. Linked assets outside this file are unavailable; use embedded graphics.";
+const INPUTS: &[&str] = &["designcraft", "idml", "indd", "indt"];
+const IDML_WARNING: &str = "InDesign import and IDML export may change unsupported layout features. Review the import warnings before saving. Linked assets outside this file are unavailable; use embedded graphics.";
 
 #[wasm_bindgen]
 extern "C" {
@@ -202,22 +202,27 @@ impl Host {
                     return Err("Files must be between 1 byte and 50 MiB.".into());
                 }
                 let bytes = bytes.to_vec();
-                let (document, mut warnings) = if extension(&name) == "idml" {
-                    let imported = designcraft_idml::import_idml_report(&bytes, &|_| None)
-                        .map_err(|e| e.to_string())?;
-                    (imported.document, imported.warnings)
-                } else {
-                    (
-                        designcraft_format::load(&bytes).map_err(|e| e.to_string())?,
-                        Vec::new(),
+                let opened = self
+                    .app
+                    .session
+                    .execute(
+                        "file.openBytes",
+                        &json!({
+                            "name": name,
+                            "base64": designcraft_engine::cmd::base64_encode(&bytes),
+                        }),
                     )
-                };
-                if extension(&name) == "idml" {
+                    .map_err(|error| error.to_string())?;
+                let mut warnings: Vec<String> = opened
+                    .get("warnings")
+                    .and_then(|value| value.as_array())
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|value| value.as_str().map(str::to_owned))
+                    .collect();
+                if extension(&name) != "designcraft" {
                     warnings.insert(0, IDML_WARNING.into());
                 }
-                self.app
-                    .session
-                    .add_document(DocState::new(document, Some(name.clone())));
                 self.app.after_engine();
 
                 self.document_id = self.app.session.active().map(|state| state.uid);
@@ -253,9 +258,12 @@ impl Host {
                 let request = field(&message, "requestId")
                     .as_string()
                     .ok_or("A save request identifier is required.")?;
-                let format = field(&message, "format")
-                    .as_string()
-                    .unwrap_or_else(|| extension(&self.name));
+                let format = field(&message, "format").as_string().unwrap_or_else(|| {
+                    match extension(&self.name).as_str() {
+                        "indd" | "indt" => "designcraft".into(),
+                        format => format.to_owned(),
+                    }
+                });
                 if !matches!(format.as_str(), "designcraft" | "idml") {
                     return Err("This layout export format is unsupported.".into());
                 }
@@ -411,13 +419,13 @@ impl eframe::App for Host {
         }
         self.report_dirty();
     }
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         raw.dropped_files.clear();
         if self.read_only {
             self.app.host_cancel_synthetic();
         }
         if !self.read_only {
-            self.app.raw_input_hook(raw);
+            self.app.raw_input_hook(ctx, raw);
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

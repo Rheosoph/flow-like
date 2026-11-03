@@ -1,0 +1,60 @@
+[package]
+name = "flow-like-bot-tools"
+version = "0.1.0"
+edition = "2024"
+description = "Bot tools that run headless on every host through one entry: files and knowledge indexes today, code, data and documents next"
+
+[features]
+default = []
+code = [
+    "dep:flow-like-catalog-code-interpreter",
+    "flow-like-catalog-code-interpreter/execute",
+]
+documents = [
+    "dep:flow-like-catalog-processing",
+    "dep:flow-like-catalog-llm",
+    "dep:flow-like-catalog-media-image",
+    "dep:flow-like-catalog-data",
+    "flow-like-catalog-data/execute",
+    "flow-like-catalog-processing/execute",
+    "flow-like-catalog-llm/execute",
+    "flow-like-catalog-media-image/execute",
+]
+data = ["flow-like-storage/graph"]
+connectors = [
+    "data",
+    "dep:flow-like-catalog-data",
+    "dep:flow-like-runtime",
+    "flow-like-catalog-data/execute",
+    "flow-like-catalog-data/postgres",
+    "flow-like-catalog-data/mysql",
+    "flow-like-catalog-data/clickhouse",
+]
+odbc = []
+
+[dependencies]
+async-trait.workspace = true
+blake3.workspace = true
+chrono.workspace = true
+flow-like-bot-memory.workspace = true
+flow-like-catalog-code-interpreter = { workspace = true, optional = true }
+flow-like-catalog-data = { workspace = true, optional = true }
+flow-like-catalog-llm = { workspace = true, optional = true }
+flow-like-catalog-media-image = { workspace = true, optional = true }
+flow-like-catalog-processing = { workspace = true, optional = true }
+flow-like-model-provider.workspace = true
+flow-like-runtime = { workspace = true, optional = true }
+flow-like-storage = { workspace = true, features = ["database-runtime"] }
+flow-like-types.workspace = true
+pulldown-cmark = "0.13.1"
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

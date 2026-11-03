@@ -13,6 +13,7 @@ import SquareIcon from "lucide-react/dist/esm/icons/square.js";
 import WrenchIcon from "lucide-react/dist/esm/icons/wrench.js";
 import X from "lucide-react/dist/esm/icons/x.js";
 import {
+	type ReactNode,
 	forwardRef,
 	useCallback,
 	useEffect,
@@ -75,6 +76,8 @@ interface ChatBoxProps {
 	/** Thinking level picker; omitted when the chat does not offer one. */
 	thinking?: ChatBoxThinking;
 	model?: ChatBoxModel;
+	/** Additional controls alongside the thinking picker. */
+	actions?: ReactNode;
 }
 
 export interface ChatBoxThinking {
@@ -118,10 +121,12 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			onInterrupt,
 			thinking,
 			model,
+			actions,
 		}: Readonly<ChatBoxProps>,
 		ref,
 	) => {
 		const [input, setInput] = useState("");
+		const [composing, setComposing] = useState(false);
 		const [activeTools, setActiveTools] =
 			useState<string[]>(defaultActiveTools);
 		const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -367,6 +372,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		};
 
 		const handleKeyDown = (e: React.KeyboardEvent) => {
+			if (e.nativeEvent.isComposing || composing) return;
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
 				void handleSubmit(e);
@@ -608,10 +614,12 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 								ref={chatboxRef}
 								value={input}
 								onChange={(e) => setInput(e.target.value)}
+								onCompositionStart={() => setComposing(true)}
+								onCompositionEnd={() => setComposing(false)}
 								onKeyDown={handleKeyDown}
 								onPaste={handlePaste}
 								placeholder={i18next.t("typeAMessage", "Type a message...")}
-								className="border-0 focus:ring-0 resize-none bg-transparent! placeholder:text-muted-foreground text-[16px] sm:text-sm leading-relaxed min-h-[44px] max-h-[180px] overflow-y-auto w-full"
+								className="min-w-0 border-0 focus:ring-0 resize-none bg-transparent! placeholder:text-muted-foreground text-[16px] sm:text-sm leading-relaxed min-h-[44px] max-h-[180px] overflow-y-auto w-full"
 								rows={Math.min(5, Math.max(1, input.split("\n").length))}
 								style={{
 									boxShadow: "none",
@@ -629,7 +637,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						{/* Tool bar and settings */}
 						<div className="flex w-full items-center justify-between rounded-b-xl">
 							{/* Left side buttons */}
-							<div className="flex items-center gap-1 p-2 pt-0">
+							<div className="flex min-w-0 flex-wrap items-center gap-1 p-2 pt-0">
 								{/* File Upload Button */}
 								{fileUpload && (
 									<Popover>
@@ -699,6 +707,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										className="h-11 w-11 sm:h-8 sm:w-8"
 									/>
 								)}
+
+								{actions}
 
 								{/* Tools Settings Button with Active Tools Badge */}
 								{(availableTools?.length ?? 0) > 0 && (

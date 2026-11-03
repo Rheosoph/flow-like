@@ -4,6 +4,7 @@ import {
 	isIdpHandle,
 	isPrivateRelayEmail,
 	looksLikeAccountId,
+	looksLikeBotSub,
 	looksLikeUserColumnName,
 	userAvatarUrl,
 	userDisplayName,
@@ -310,6 +311,20 @@ describe("looksLikeAccountId", () => {
 		expect(looksLikeAccountId(" 42c52474-5081-70d7-2b23-4bd8c38d8fb0 ")).toBe(
 			true,
 		);
+	});
+
+	test("tells bot-shaped ids apart without vouching for them", () => {
+		expect(looksLikeBotSub("bot_tz4a98xxat96iws9zmbrgj3a")).toBe(true);
+		expect(looksLikeBotSub(" bot_tz4a98xxat96iws9zmbrgj3a ")).toBe(true);
+		expect(looksLikeBotSub("42c52474-5081-70d7-2b23-4bd8c38d8fb0")).toBe(false);
+		expect(looksLikeBotSub("bot_builder")).toBe(false);
+		expect(looksLikeBotSub(undefined)).toBe(false);
+	});
+
+	test("claims bot subs, which the directory answers for too", () => {
+		expect(looksLikeAccountId("bot_tz4a98xxat96iws9zmbrgj3a")).toBe(true);
+		expect(looksLikeAccountId("bot_builder")).toBe(false);
+		expect(looksLikeAccountId("bot_sales_assistant_eu")).toBe(false);
 	});
 
 	test("leaves readable values as the text they are", () => {

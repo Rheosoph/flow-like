@@ -74,7 +74,7 @@ fn caller_id(extensions: &Extensions) -> Option<String> {
         AppUser::PAT(user) => Some(user.sub.clone()),
         AppUser::Executor(user) => Some(user.sub.clone()),
         AppUser::ConnectedApp(user) => user.sub.clone(),
-        AppUser::APIKey(_) | AppUser::Unauthorized => None,
+        AppUser::APIKey(_) | AppUser::Bot(_) | AppUser::Unauthorized => None,
     })
 }
 

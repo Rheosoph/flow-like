@@ -52,6 +52,7 @@ mod runtime_config_tests {
     fn replays_cannot_refresh_oauth_handles() {
         let executor = |shadow| {
             AppUser::Executor(crate::middleware::jwt::ExecutorUser {
+                bot: None,
                 sub: "user-1".into(),
                 app_id: "app-1".into(),
                 run_id: "run-1".into(),

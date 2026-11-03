@@ -90,6 +90,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.clone(),
         flow_like_api::deletion::DeletionWorkerConfig::from_env(),
     );
+    let _bot_turn_worker = flow_like_api::bot_host::spawn_worker(
+        state.clone(),
+        flow_like_api::bot_host::WorkerConfig::from_env(),
+    );
     let _package_license_sweeper = flow_like_api::package_license::spawn_sweeper(state.clone());
     let _device_certificate_sweeper =
         flow_like_api::spawn_device_certificate_sweeper(state.clone());

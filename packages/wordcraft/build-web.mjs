@@ -207,47 +207,51 @@ if (!cached()) {
 
 	// Keep the adapter in this package. Upgrades only change upstream.json; changed
 	// integration seams fail here or during compilation instead of silently applying.
-	const uiPath = "crates/ui-egui/src/lib.rs";
-	let ui = original(uiPath);
-	ui = replaceOnce(
-		ui,
+	const patch = (path, search, replacement, label) =>
+		writeFileSync(
+			join(source, path),
+			replaceOnce(original(path), search, replacement, label),
+		);
+	patch(
+		"crates/ui-egui/src/services.rs",
 		"pub struct Services {",
-		"pub struct Services {\n    pub host_command: Option<Box<dyn Fn(&str) -> Option<Result<Value, String>>>>,",
+		"pub struct Services {\n    pub host_command: Option<Box<dyn Fn(&str) -> Option<Result<serde_json::Value, String>>>>,",
 		"Services",
 	);
+	const commandsPath = "crates/ui-egui/src/app/commands.rs";
+	let commands = original(commandsPath);
 	for (const method of ["run", "execute"]) {
 		const signature = `pub fn ${method}(&mut self, id: &str, params: Value) -> Result<Value, String> {`;
-		ui = replaceOnce(
-			ui,
+		commands = replaceOnce(
+			commands,
 			signature,
-			`${signature}\n        if let Some(filter) = &self.services.host_command {\n            if let Some(result) = filter(id) { return result; }\n        }`,
+			`${signature}\n        if let Some(result) = self.services.host_command.as_ref().and_then(|filter| filter(id)) { return result; }`,
 			`WordApp::${method}`,
 		);
 	}
-	ui = replaceOnce(
-		ui,
-		"            chrome::title_bar(self, ui);",
-		"            if self.services.host_command.is_none() { chrome::title_bar(self, ui); }",
-		"title bar",
+	writeFileSync(join(source, commandsPath), commands);
+	const framePath = "crates/ui-egui/src/app/frame.rs";
+	let frame = original(framePath);
+	if (frame.split("chrome::title_bar(self, ui);").length !== 3)
+		throw new Error("Review WordCraft title bars.");
+	frame = frame.replaceAll(
+		"chrome::title_bar(self, ui);",
+		"if self.services.host_command.is_none() { chrome::title_bar(self, ui); }",
 	);
-	ui = replaceOnce(
-		ui,
-		'format!("{}{} - WordCraft", self.title_stem(), if self.session.dirty { " •" } else { "" })',
-		'format!("{}{} - Flows Word", self.title_stem(), if self.session.dirty { " •" } else { "" })',
-		"browser title",
+	writeFileSync(join(source, framePath), frame);
+	writeFileSync(
+		join(source, "crates/ui-egui/src/windows.rs"),
+		original("crates/ui-egui/src/windows.rs")
+			.replaceAll(" - WordCraft", " - Flows Word")
+			.replaceAll('"WordCraft"', '"Flows Word"'),
 	);
-	writeFileSync(join(source, uiPath), ui);
-	const dialogsPath = "crates/ui-egui/src/dialogs.rs";
+	writeFileSync(
+		join(source, "crates/ui-egui/src/lib.rs"),
+		`${original("crates/ui-egui/src/lib.rs")}\nimpl WordApp {\n    pub fn host_has_drafts(&self) -> bool { panes::has_comment_drafts(self) }\n    pub fn host_flush_drafts(&mut self) -> Result<(), String> { panes::flush_comment_drafts(self) }\n}\n`,
+	);
+	const dialogsPath = "crates/ui-egui/src/dialogs/dispatch.rs";
 	let dialogs = original(dialogsPath);
 	for (const [search, replacement] of [
-		[
-			'Dialog::About { .. } => "About WordCraft",',
-			'Dialog::About { .. } => "About Flows Word",',
-		],
-		[
-			'Dialog::SaveChanges { .. } => "WordCraft",',
-			'Dialog::SaveChanges { .. } => "Flows Word",',
-		],
 		[
 			'egui::RichText::new(tl!("WordCraft")).font(semibold(22.0))',
 			'egui::RichText::new("Flows Word").font(semibold(22.0))',
@@ -269,17 +273,22 @@ if (!cached()) {
 		"File tab",
 	);
 	writeFileSync(join(source, ribbonPath), ribbon);
-	const canvasPath = "crates/ui-egui/src/canvas.rs";
+	let dialogChrome = original("crates/ui-egui/src/dialogs/chrome.rs");
+	dialogChrome = replaceOnce(
+		dialogChrome,
+		'Dialog::About { .. } => "About WordCraft",',
+		'Dialog::About { .. } => "About Flows Word",',
+		"About title",
+	);
+	dialogChrome = replaceOnce(
+		dialogChrome,
+		'Dialog::SaveChanges { .. } => "WordCraft",',
+		'Dialog::SaveChanges { .. } => "Flows Word",',
+		"Save title",
+	);
 	writeFileSync(
-		join(source, canvasPath),
-		replaceOnce(
-			original(canvasPath),
-			"                let px = img.to_straight();\n                let ci = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &px);",
-			// The rasterizer already returns premultiplied RGBA. Reuse those pixels
-			// without copying and converting the entire page through straight alpha.
-			"                let ci = egui::ColorImage::from_rgba_premultiplied([img.width as usize, img.height as usize], &img.pixels);",
-			"page texture upload",
-		),
+		join(source, "crates/ui-egui/src/dialogs/chrome.rs"),
+		dialogChrome,
 	);
 	const manifestPath = "apps/wordcraft-web/Cargo.toml";
 	writeFileSync(

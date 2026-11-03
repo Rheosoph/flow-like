@@ -54,6 +54,53 @@ fn remember_created_app(context: Option<&FrontendToolContext>, app_id: &str) {
     }
 }
 
+static RUN_WORKSPACES: std::sync::LazyLock<dashmap::DashMap<String, String>> =
+    std::sync::LazyLock::new(dashmap::DashMap::new);
+
+/// Run `run_id` may use its bot's workspace, an app no profile lists, while this lives.
+pub(crate) struct RunWorkspace {
+    run_id: String,
+    app_id: String,
+}
+
+impl RunWorkspace {
+    pub(crate) fn admit(run_id: &str, app_id: &str) -> Self {
+        RUN_WORKSPACES.insert(run_id.into(), app_id.into());
+        Self {
+            run_id: run_id.into(),
+            app_id: app_id.into(),
+        }
+    }
+}
+
+impl Drop for RunWorkspace {
+    fn drop(&mut self) {
+        RUN_WORKSPACES.remove_if(&self.run_id, |_, app_id| *app_id == self.app_id);
+    }
+}
+
+fn run_workspace(context: Option<&FrontendToolContext>) -> Option<String> {
+    let run_id = context.and_then(|context| context.run_id.as_deref())?;
+    RUN_WORKSPACES
+        .get(run_id)
+        .map(|entry| entry.value().clone())
+}
+
+/// An app the run created, its bot's workspace, or an app of the profile; no other.
+pub(crate) fn visible_to_run(
+    context: Option<&FrontendToolContext>,
+    profile: &Profile,
+    app_id: &str,
+) -> bool {
+    created_app_for_run(context).as_deref() == Some(app_id)
+        || run_workspace(context).as_deref() == Some(app_id)
+        || profile
+            .apps
+            .iter()
+            .flatten()
+            .any(|entry| entry.app_id == app_id)
+}
+
 pub(super) fn supports(tool: &str, args: &Value) -> bool {
     match tool {
         "list_apps"
@@ -219,14 +266,7 @@ impl NativePlatformSession {
     }
 
     pub(crate) fn require_visible(&self, app_id: &str) -> Result<(), String> {
-        if created_app_for_run(self.context.as_ref()).as_deref() == Some(app_id)
-            || self
-                .profile
-                .apps
-                .iter()
-                .flatten()
-                .any(|entry| entry.app_id == app_id)
-        {
+        if visible_to_run(self.context.as_ref(), &self.profile, app_id) {
             Ok(())
         } else {
             Err(format!(
@@ -496,6 +536,36 @@ mod tests {
             "https://hub.test/api/v1/apps/a/db?user_scoped=true"
         );
     }
+    #[test]
+    fn a_run_sees_its_bots_workspace_but_no_other_hidden_app() {
+        let context = |run_id: &str| FrontendToolContext {
+            run_id: Some(run_id.into()),
+            ..Default::default()
+        };
+        let (run, other_run) = (
+            context("run-sees-its-workspace"),
+            context("run-sees-another-workspace"),
+        );
+        let profile = Profile {
+            apps: Some(vec![flow_like::profile::ProfileApp::new(
+                "app-profile".into(),
+            )]),
+            ..Profile::default()
+        };
+        assert!(!visible_to_run(Some(&run), &profile, "app-workspace"));
+
+        let admitted = RunWorkspace::admit("run-sees-its-workspace", "app-workspace");
+        assert!(visible_to_run(Some(&run), &profile, "app-workspace"));
+        assert!(visible_to_run(Some(&run), &profile, "app-profile"));
+        assert!(!visible_to_run(Some(&run), &profile, "app-other-workspace"));
+        assert!(!visible_to_run(Some(&other_run), &profile, "app-workspace"));
+        assert!(!visible_to_run(None, &profile, "app-workspace"));
+
+        drop(admitted);
+        assert!(!visible_to_run(Some(&run), &profile, "app-workspace"));
+        assert!(visible_to_run(Some(&run), &profile, "app-profile"));
+    }
+
     #[test]
     fn tool_limits_match_web_defaults_and_caps() {
         for value in [json!(0), json!(-1), json!("20"), Value::Null] {

@@ -8,7 +8,7 @@
 //! the DynamoDB and Cosmos backends run. Aurora DSQL rejects any text or jsonb
 //! value over 1 MiB, and an execution payload has no upper bound.
 
-use super::types::*;
+use super::{replay::replay_prefix, types::*};
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
 use flow_like_storage::object_store::ObjectStoreExt;
@@ -1150,6 +1150,15 @@ impl ExecutionStateStore for PostgresStateStore {
         }
 
         Ok(records)
+    }
+
+    /// Ordered chunk inserts on one primary: a reader sees a prefix of every write.
+    async fn replay_events(
+        &self,
+        run_id: &str,
+        cursor: ReplayCursor,
+    ) -> Result<EventReplay, StateStoreError> {
+        replay_prefix(self, run_id, cursor).await
     }
 
     async fn get_max_sequence(&self, run_id: &str) -> Result<i32, StateStoreError> {

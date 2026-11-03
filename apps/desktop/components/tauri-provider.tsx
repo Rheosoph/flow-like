@@ -14,12 +14,14 @@ import {
 	type IBit,
 	type IBitState,
 	type IBoardState,
+	type IBotState,
 	type ICapabilities,
 	type IDatabaseState,
 	type IEventState,
 	type IGenericCommand,
 	type IGraphState,
 	type IHelperState,
+	type IInboxState,
 	type ILockedStorageState,
 	type IPageState,
 	type IProfile,
@@ -63,8 +65,6 @@ import { useCallback, useEffect, useRef, useTransition } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 import { type IShortcut, appsDB } from "../lib/apps-db";
 import { installNativeDeviceAdapter } from "../lib/device-adapter";
-import { installNativeHomeAdapter, syncNativeHomeSnapshot } from "./native-home-adapter";
-import { installNativeWidgetAdapter, syncNativeWidgetSnapshot } from "./native-widget-adapter";
 import { ExecutionAuthBridge } from "../lib/execution-auth";
 import {
 	authForHub,
@@ -88,6 +88,14 @@ import {
 	requestTimeoutMs,
 	withRequestDeadline,
 } from "../lib/request-deadline";
+import {
+	installNativeHomeAdapter,
+	syncNativeHomeSnapshot,
+} from "./native-home-adapter";
+import {
+	installNativeWidgetAdapter,
+	syncNativeWidgetSnapshot,
+} from "./native-widget-adapter";
 import { AiState } from "./tauri-provider/ai-state";
 import { AnalyticsState } from "./tauri-provider/analytics-state";
 import { ApiKeyState } from "./tauri-provider/api-key-state";
@@ -95,11 +103,13 @@ import { TauriApiState, readApiJson } from "./tauri-provider/api-state";
 import { AppState } from "./tauri-provider/app-state";
 import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
+import { BotState } from "./tauri-provider/bot-state";
 import type { CommandSyncRemoteIdentity } from "./tauri-provider/command-sync";
 import { DatabaseState } from "./tauri-provider/db-state";
 import { EventState } from "./tauri-provider/event-state";
 import { GraphState } from "./tauri-provider/graph-state";
 import { HelperState } from "./tauri-provider/helper-state";
+import { InboxState } from "./tauri-provider/inbox-state";
 import { LockedStorageState } from "./tauri-provider/locked-storage-state";
 import { OfflineWritesState } from "./tauri-provider/offline-writes-state";
 import { PageState } from "./tauri-provider/page-state";
@@ -178,6 +188,8 @@ export class TauriBackend implements IBackendState {
 	registryState: IRegistryState;
 	sinkState: ISinkState;
 	salesState: ISalesState;
+	botState: IBotState;
+	inboxState: IInboxState;
 	usageState: IUsageState;
 	analyticsState: IAnalyticsState;
 	offlineWritesState: IOfflineWritesState;
@@ -229,6 +241,8 @@ export class TauriBackend implements IBackendState {
 		this.registryState = new RegistryState(this);
 		this.sinkState = new SinkState();
 		this.salesState = new SalesState(this);
+		this.botState = new BotState(this);
+		this.inboxState = new InboxState(this);
 		this.usageState = new UsageState(this);
 		this.analyticsState = new AnalyticsState(this);
 		this.offlineWritesState = new OfflineWritesState(this);

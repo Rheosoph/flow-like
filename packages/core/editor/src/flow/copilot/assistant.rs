@@ -110,6 +110,8 @@ pub enum WebResearchCapability {
     Inline,
     /// The root agent's CLI (Codex, Claude Code) runs its built-in web search and fetch.
     Native,
+    /// No public-web access: no research tool and no web playbook (a bot without `internet`).
+    Disabled,
 }
 
 const FLOWPILOT_CORE: &str = r#"You are FlowPilot, Flow-Like's platform assistant. Complete requests using the current profile's tools and apps. Prefer acting over describing steps.
@@ -209,7 +211,14 @@ const NATIVE_ROUTING_INTRO: &str = SEALED_ROUTING_INTRO;
 
 const NATIVE_PUBLIC_WEB_ROUTE: &str = "4. Use built-in web search and page fetch only after `list_apps` returns no suitable app/interface or local research yields no usable answer. Partial inventories do not prove absence. A call the user declined is still a stop. Queries and fetched URLs leave the device: include only public subject matter, never app record contents, internal IDs, file contents, credentials, personal data, or anything the user shared privately.";
 
-const CHAT_REPLY_FORMATTING: &str = r#"## CHAT REPLY FORMATTING
+const DISABLED_ROUTING_INTRO: &str = "## EXISTING APPS, EVENTS, AND DATA
+
+Local apps are the only source: this run has no public-web access.";
+
+const DISABLED_PUBLIC_WEB_ROUTE: &str =
+    "4. When no app answers, say what could not be checked instead of guessing.";
+
+pub(super) const CHAT_REPLY_FORMATTING: &str = r#"## CHAT REPLY FORMATTING
 
 Lead with the result. Default to short paragraphs; brief replies need no headings or widgets. Choose richer formats when they clarify the answer. Specialist ownership still applies; preserve returned chart/query/step-log blocks and verified source links.
 
@@ -293,6 +302,7 @@ pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> 
             NATIVE_PUBLIC_WEB_ROUTE,
             NATIVE_WEB_PLAYBOOK,
         ),
+        WebResearchCapability::Disabled => (DISABLED_ROUTING_INTRO, DISABLED_PUBLIC_WEB_ROUTE, ""),
     };
     let routing = TASK_ROUTING_PLAYBOOK
         .replace("{routing_intro}", routing_intro)
@@ -310,6 +320,9 @@ pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> 
         chat_ui.as_str(),
         CHAT_REPLY_CLOSING,
     ]
+    .into_iter()
+    .filter(|section| !section.is_empty())
+    .collect::<Vec<_>>()
     .join("\n\n")
 }
 /// Render the open-board section injected into the assistant context. Kept separate so the wording
@@ -486,28 +499,36 @@ pub fn attachments_section(entries: &[AttachmentManifestEntry]) -> String {
         "These files belong to this message. You may inspect images directly. To hand files to an app chat, set `forward_files` to the exact relevant names, or `[]` for none; never forward unrelated files.".to_string(),
         "To load a GeoJSON file (FeatureCollection, Feature or Feature array) into an app's tables, call `data_studio_agent` with `forward_files` naming it and ask for `import_geojson`; no other attachment format can be imported.".to_string(),
     ];
-    for entry in entries {
-        let name = entry
-            .name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("(unnamed file)");
-        let mime = entry
-            .mime_type
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let size = entry.size.map(format_attachment_size);
-        let meta = match (mime, size) {
-            (Some(mime), Some(size)) => format!(" ({mime}, {size})"),
-            (Some(mime), None) => format!(" ({mime})"),
-            (None, Some(size)) => format!(" ({size})"),
-            (None, None) => String::new(),
-        };
-        lines.push(format!("- {name}{meta}"));
-    }
+    lines.extend(attachment_lines(entries));
     lines.join("\n")
+}
+
+/// One `- name (type, size)` line per attached file.
+pub(super) fn attachment_lines(entries: &[AttachmentManifestEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| {
+            let name = entry
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("(unnamed file)");
+            let mime = entry
+                .mime_type
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let size = entry.size.map(format_attachment_size);
+            let meta = match (mime, size) {
+                (Some(mime), Some(size)) => format!(" ({mime}, {size})"),
+                (Some(mime), None) => format!(" ({mime})"),
+                (None, Some(size)) => format!(" ({size})"),
+                (None, None) => String::new(),
+            };
+            format!("- {name}{meta}")
+        })
+        .collect()
 }
 
 /// Collect the self-awareness context for the global assistant: the signed-in user, the active
@@ -599,6 +620,11 @@ pub async fn run_platform_chat<F>(
 where
     F: Fn(String) + Send + Sync + 'static,
 {
+    if let Some(error) =
+        super::bot_run::flowpilot_memory_error(memory.as_deref().map(AssistantMemory::scope))
+    {
+        return Err(flow_like_types::anyhow!(error));
+    }
     // This wrapper always drives the rig/Bits loop, whose host executes the sealed researcher
     // locally instead of delegating it through a frontend-managed specialist scope.
     let base_prompt = global_assistant_system_prompt_for(WebResearchCapability::Inline);

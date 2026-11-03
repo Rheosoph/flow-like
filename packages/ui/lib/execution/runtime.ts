@@ -1,9 +1,17 @@
 import { isChannelHandle } from "../channel/handle";
+import type { RealtimeRunSnapshot } from "../realtime/types";
 import type { IChannelHandle, IChannelPush } from "../schema/channel";
 import type { IIntercomEvent } from "../schema/events/intercom-event";
 import {
+	type ExecutionRealtimeClientFactory,
+	followRealtimeExecution,
+	readExecutionReceipt,
+	realtimeExecutionEvent,
+} from "./realtime";
+import {
 	type ExecutionAuthorization,
 	type ExecutionCommand,
+	ExecutionDetachedError,
 	type ExecutionErrorData,
 	type ExecutionMetadata,
 	type ExecutionPort,
@@ -13,9 +21,13 @@ import {
 	isExecutionFinished,
 } from "./types";
 
+const RETAINED_FINISHED_RUNS = 50;
+const RETAINED_UNDELIVERED_EVENT_BYTES = 8 * 1024 * 1024;
+
 interface RuntimeOptions {
 	fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 	persist?: (task: ExecutionTask, final: boolean) => Promise<void>;
+	realtime?: ExecutionRealtimeClientFactory;
 	push: (
 		handle: IChannelHandle,
 		push: Omit<IChannelPush, "channel_id">,
@@ -42,6 +54,12 @@ interface Run {
 	cancelHeaders?: Record<string, string>;
 	cancellation?: Promise<void>;
 	cancelConfirmed?: boolean;
+	/** The server accepted a stop, but the run has not reported its end yet. */
+	stopAccepted?: boolean;
+	replaying?: boolean;
+	endedAt?: number;
+	/** Event bytes kept for a tab that has not yet received this finished run. */
+	retainedBytes: number;
 }
 
 export function channelRequestKey(handle: IChannelHandle): string {
@@ -112,7 +130,9 @@ export class ExecutionRuntime {
 	private readonly fetcher: NonNullable<RuntimeOptions["fetch"]>;
 
 	constructor(private readonly options: RuntimeOptions) {
-		this.fetcher = options.fetch ?? ((...args) => globalThis.fetch(...args));
+		// WebIDL fetch rejects any receiver except the global ("Illegal invocation").
+		this.fetcher = (input, init) =>
+			(options.fetch ?? globalThis.fetch)(input, init);
 	}
 
 	private key(scope: string, taskId: string) {
@@ -141,8 +161,24 @@ export class ExecutionRuntime {
 		}
 	}
 
+	private connected(scope: string): boolean {
+		return [...this.ports.values()].includes(scope);
+	}
+
 	private disconnect(port: ExecutionPort) {
+		const scope = this.ports.get(port);
 		this.ports.delete(port);
+		// Replay authorizes through a connected tab of its account; without one it detaches.
+		if (scope !== undefined && !this.connected(scope)) {
+			for (const run of this.runs.values())
+				if (run.task.scope === scope && run.replaying && !run.finished)
+					run.controller.abort(
+						new ExecutionDetachedError(
+							run.task.runId,
+							"No tab of this account follows the run any more; it continues on the server.",
+						),
+					);
+		}
 		// A claimed device action may already have run when its tab disconnects. Keep the claim
 		// rather than repeat a side effect whose result was lost with that tab.
 		for (const [id, authorization] of this.authorizations) {
@@ -172,12 +208,14 @@ export class ExecutionRuntime {
 			if (command.type === "connect") {
 				this.disconnect(port);
 				this.ports.set(port, command.scope);
+				const runs = [...this.runs.values()].filter(
+					(run) => run.task.scope === command.scope,
+				);
 				this.send(port, {
 					type: "snapshot",
-					tasks: [...this.runs.values()]
-						.filter((run) => run.task.scope === command.scope)
-						.map((run) => snapshot(run.task)),
+					tasks: runs.map((run) => snapshot(run.task)),
 				});
+				for (const run of runs) if (run.retainedBytes) this.release(run);
 				this.send(port, { type: "result", id: command.id });
 				return;
 			}
@@ -195,7 +233,7 @@ export class ExecutionRuntime {
 				value = await this.start(port, command.metadata, command.request);
 			} else if (command.type === "claim-event") {
 				const run = this.findRun(scope, command.taskId);
-				if (!run || !run.seen.has(command.eventId))
+				if (!run || (!run.finished && !run.seen.has(command.eventId)))
 					throw new Error("Execution event is no longer available");
 				value = !run.claimedEvents.has(command.eventId);
 				if (value) run.claimedEvents.add(command.eventId);
@@ -209,15 +247,8 @@ export class ExecutionRuntime {
 				} else {
 					if (!run.finished)
 						throw new Error("Only finished executions can be dismissed");
-					this.runs.delete(this.key(scope, run.task.taskId));
-					for (const [target, owner] of this.ports)
-						if (owner === scope)
-							this.send(target, {
-								type: "snapshot",
-								tasks: [...this.runs.values()]
-									.filter((item) => item.task.scope === scope)
-									.map((item) => snapshot(item.task)),
-							});
+					this.drop(run);
+					this.publishScope(scope);
 				}
 			} else {
 				const key = channelRequestKey(command.handle);
@@ -234,7 +265,7 @@ export class ExecutionRuntime {
 					throw new Error("The channel does not identify a request");
 				if (command.type === "claim") {
 					if (
-						run.finished ||
+						isExecutionFinished(run.task) ||
 						handle.expires_at * 1_000 <= Date.now() ||
 						run.replies.has(key) ||
 						run.claims.has(key)
@@ -306,6 +337,7 @@ export class ExecutionRuntime {
 			lastSave: 0,
 			finished: false,
 			promise: Promise.resolve(),
+			retainedBytes: 0,
 		};
 		this.runs.set(this.key(metadata.scope, metadata.taskId), run);
 		this.broadcast(run, 0);
@@ -317,6 +349,7 @@ export class ExecutionRuntime {
 		port: ExecutionPort,
 		run: Run,
 		headers = run.request.headers,
+		rejectedToken?: string,
 	): Promise<Record<string, string> | undefined> {
 		const id = `${run.task.taskId}:auth:${crypto.randomUUID()}`;
 		let timer: ReturnType<typeof setTimeout> | undefined;
@@ -331,7 +364,7 @@ export class ExecutionRuntime {
 					type: "unauthorized",
 					id,
 					taskId: run.task.taskId,
-					rejectedToken: auth?.replace(/^Bearer\s+/i, ""),
+					rejectedToken: rejectedToken ?? auth?.replace(/^Bearer\s+/i, ""),
 				});
 			});
 		} finally {
@@ -352,9 +385,17 @@ export class ExecutionRuntime {
 
 	private async drive(port: ExecutionPort, run: Run): Promise<unknown> {
 		let terminal = false;
+		let replay: RealtimeRunSnapshot | undefined;
 		let lastError: string | undefined;
 		let hasError = false;
 		let deadline: ReturnType<typeof setTimeout> | undefined;
+		const observe = (event: IIntercomEvent) => {
+			this.acceptEvent(run, event);
+			if (event.event_type === "error") {
+				hasError = true;
+				lastError = messageText(event.payload) ?? lastError;
+			}
+		};
 		try {
 			const timeoutMs = run.request.timeoutMs ?? 900_000;
 			const deadlineFailure = new Promise<never>((_, reject) => {
@@ -410,65 +451,137 @@ export class ExecutionRuntime {
 				this.send(port, { type: "response", taskId: run.task.taskId });
 			run.task.status = "running";
 			this.broadcast(run);
-			const reader = response.body.getReader();
-			const decoder = new TextDecoder();
-			let buffer = "";
-			const frame = (raw: string) => {
-				let name = "message";
-				const data: string[] = [];
-				for (const line of raw.split(/\r?\n/)) {
-					if (line.startsWith("event:")) name = line.slice(6).trim();
-					if (line.startsWith("data:"))
-						data.push(line.slice(5).replace(/^ /, ""));
-				}
-				if (data.length === 0 || data.join("\n") === "keep-alive") return;
-				let event: IIntercomEvent;
-				try {
-					event = JSON.parse(data.join("\n"));
-				} catch {
-					throw new Error("The execution stream contained an invalid event.");
-				}
-				if (!event || typeof event.event_type !== "string")
-					throw new Error("The execution stream contained an invalid event.");
-				if (!event.event_id)
-					event.event_id = `${run.task.taskId}:${run.task.events.length}`;
-				this.acceptEvent(run, event);
-				if (event.event_type === "error") {
-					hasError = true;
-					lastError = messageText(event.payload);
-				}
+			if (
+				response.headers
+					.get("Content-Type")
+					?.toLowerCase()
+					.includes("application/json")
+			) {
+				deadline = setTimeout(
+					() => run.controller.abort(new Error("Execution receipt timed out")),
+					15_000,
+				);
+				const receipt = await readExecutionReceipt(response);
+				clearTimeout(deadline);
+				run.replaying = true;
+				// The run id is known before replay starts, so a detached run can still be stopped.
+				observe({
+					event_id: `${receipt.run_id}:receipt`,
+					event_type: "run_initiated",
+					payload: { run_id: receipt.run_id },
+					timestamp: {
+						secs_since_epoch: Math.floor(Date.now() / 1_000),
+						nanos_since_epoch: 0,
+					},
+				});
+				const realtime = run.request.realtime;
+				if (!this.options.realtime || !realtime)
+					throw new ExecutionDetachedError(
+						receipt.run_id,
+						"This execution was queued without an account replay session; it continues on the server.",
+					);
+				if (!this.connected(run.task.scope))
+					throw new ExecutionDetachedError(receipt.run_id);
+				replay = await followRealtimeExecution({
+					createClient: this.options.realtime,
+					session: {
+						...realtime,
+						headers: run.request.headers ?? realtime.headers,
+					},
+					receipt,
+					signal: run.controller.signal,
+					onUnauthorized: async (rejectedToken) => {
+						for (const [candidate, scope] of this.ports) {
+							if (scope !== run.task.scope) continue;
+							const headers = await this.authorize(
+								candidate,
+								run,
+								run.request.headers,
+								rejectedToken,
+							);
+							if (headers) {
+								run.request.headers = headers;
+								return headers;
+							}
+						}
+					},
+					onRun: (update) => {
+						for (const event of update.events)
+							observe(realtimeExecutionEvent(update.run_id, event));
+					},
+				});
+				terminal = true;
 				if (
-					name === "done" ||
-					name === "completed" ||
-					event.event_type === "completed" ||
-					event.event_type === "execution_complete"
+					!run.task.events.some((event) =>
+						["completed", "execution_complete"].includes(event.event_type),
+					)
 				)
-					terminal = true;
-			};
-			const drain = () => {
-				while (true) {
-					const separator = /\r?\n\r?\n/.exec(buffer);
-					if (!separator) break;
-					const raw = buffer.slice(0, separator.index);
-					buffer = buffer.slice(separator.index + separator[0].length);
-					frame(raw);
-				}
-			};
-			try {
-				while (true) {
-					const { value, done } = await reader.read();
-					buffer += done
-						? decoder.decode()
-						: decoder.decode(value, { stream: true });
-					drain();
-					if (done || terminal) {
-						if (buffer.trim()) frame(buffer);
-						break;
+					observe({
+						event_id: `${receipt.run_id}:terminal`,
+						event_type: "completed",
+						payload: { status: replay.status, error_message: replay.error },
+						timestamp: {
+							secs_since_epoch: Math.floor(Date.now() / 1_000),
+							nanos_since_epoch: 0,
+						},
+					});
+			} else {
+				const reader = response.body.getReader();
+				const decoder = new TextDecoder();
+				let buffer = "";
+				const frame = (raw: string) => {
+					let name = "message";
+					const data: string[] = [];
+					for (const line of raw.split(/\r?\n/)) {
+						if (line.startsWith("event:")) name = line.slice(6).trim();
+						if (line.startsWith("data:"))
+							data.push(line.slice(5).replace(/^ /, ""));
 					}
+					if (data.length === 0 || data.join("\n") === "keep-alive") return;
+					let event: IIntercomEvent;
+					try {
+						event = JSON.parse(data.join("\n"));
+					} catch {
+						throw new Error("The execution stream contained an invalid event.");
+					}
+					if (!event || typeof event.event_type !== "string")
+						throw new Error("The execution stream contained an invalid event.");
+					if (!event.event_id)
+						event.event_id = `${run.task.taskId}:${run.task.events.length}`;
+					observe(event);
+					if (
+						name === "done" ||
+						name === "completed" ||
+						event.event_type === "completed" ||
+						event.event_type === "execution_complete"
+					)
+						terminal = true;
+				};
+				const drain = () => {
+					while (true) {
+						const separator = /\r?\n\r?\n/.exec(buffer);
+						if (!separator) break;
+						const raw = buffer.slice(0, separator.index);
+						buffer = buffer.slice(separator.index + separator[0].length);
+						frame(raw);
+					}
+				};
+				try {
+					while (true) {
+						const { value, done } = await reader.read();
+						buffer += done
+							? decoder.decode()
+							: decoder.decode(value, { stream: true });
+						drain();
+						if (done || terminal) {
+							if (buffer.trim()) frame(buffer);
+							break;
+						}
+					}
+				} finally {
+					await reader.cancel().catch(() => undefined);
+					reader.releaseLock();
 				}
-			} finally {
-				await reader.cancel().catch(() => undefined);
-				reader.releaseLock();
 			}
 			if (run.cancelConfirmed) throw abortError();
 			if (!terminal)
@@ -482,51 +595,80 @@ export class ExecutionRuntime {
 						event.event_type === "completed" ||
 						event.event_type === "execution_complete",
 				);
-			const status = String(completed?.payload?.status ?? "").toLowerCase();
+			const status = String(
+				replay?.status ?? completed?.payload?.status ?? "",
+			).toLowerCase();
 			if (status === "cancelled" || status === "canceled") throw abortError();
 			const succeeded = ["completed", "success", "succeeded"].includes(status);
+			const timedOut = status === "timeout" || status === "timed_out";
 			if (
 				!succeeded &&
-				(["failed", "timeout", "timed_out"].includes(status) ||
+				(status === "failed" ||
+					timedOut ||
 					completed?.payload?.error_message ||
 					hasError ||
 					(completed?.payload?.log_level ?? 0) >= 3)
 			) {
 				throw new Error(
-					messageText(completed?.payload) ??
-						lastError ??
-						"The workflow failed.",
+					replay?.error?.trim() ||
+						messageText(completed?.payload) ||
+						lastError ||
+						(timedOut ? "The workflow timed out." : "The workflow failed."),
 				);
 			}
 			run.task.status = "completed";
 			run.task.error = undefined;
 		} catch (error) {
-			run.failure = executionError(run.cancelConfirmed ? abortError() : error);
-			run.task.status =
-				run.failure.name === "AbortError" ? "cancelled" : "failed";
-			run.task.error = run.failure.message;
+			const detached = error instanceof ExecutionDetachedError;
+			// Nothing replays a detached run's end, so a stop the server already accepted is its outcome.
+			const stopped = run.cancelConfirmed || (detached && run.stopAccepted);
+			run.failure = executionError(stopped ? abortError() : error);
+			if (detached && !stopped) run.task.detached = true;
+			else {
+				run.task.status =
+					run.failure.name === "AbortError" ? "cancelled" : "failed";
+				run.task.error = run.failure.message;
+			}
 		} finally {
 			clearTimeout(deadline);
-			clearTimeout(run.expiryTimer);
-			run.task.completedAt = Date.now();
-			for (const request of run.task.pendingInteractions)
-				if (request.status === "pending") request.status = "cancelled";
+			// A detached run keeps waiting on the server: its questions stay answerable until they expire,
+			// and its reply stays incomplete until a stop saves it again.
+			if (!run.task.detached) this.conclude(run);
 			try {
-				await this.save(run, true);
+				await this.save(run, !run.task.detached);
 			} catch (error) {
-				run.failure = executionError(error);
-				run.task.status = "failed";
-				run.task.error = `The reply could not be saved: ${run.failure.message}`;
+				if (!run.task.detached) {
+					run.failure = executionError(error);
+					run.task.status = "failed";
+					run.task.error = `The reply could not be saved: ${run.failure.message}`;
+				}
 			}
 			run.finished = true;
+			run.endedAt = Date.now();
 			this.broadcast(run);
-			// Prepared requests contain OAuth and account tokens. Terminal tasks only retain display data.
-			run.request = { url: "", body: null };
-			this.pruneFinished(run.task.scope);
+			// Prepared requests contain OAuth and account tokens. Finished tasks keep display data,
+			// and a detached run keeps only what stopping it needs.
+			run.request = run.task.detached
+				? {
+						url: "",
+						body: null,
+						cancelUrl: run.request.cancelUrl,
+						credentials: run.request.credentials,
+					}
+				: { url: "", body: null };
+			this.retain(run);
 		}
 		if (run.failure)
 			throw Object.assign(new Error(run.failure.message), run.failure);
 		return run.task.result;
+	}
+
+	/** Terminal state: nothing can answer the run's open questions any more. */
+	private conclude(run: Run) {
+		clearTimeout(run.expiryTimer);
+		run.task.completedAt = Date.now();
+		for (const request of run.task.pendingInteractions)
+			if (request.status === "pending") request.status = "cancelled";
 	}
 
 	private acceptEvent(run: Run, event: IIntercomEvent) {
@@ -612,38 +754,81 @@ export class ExecutionRuntime {
 		}
 	}
 
-	private pruneFinished(scope: string) {
-		const finished = [...this.runs.values()]
-			.filter((run) => run.finished && run.task.scope === scope)
-			.sort((a, b) => (b.task.completedAt ?? 0) - (a.task.completedAt ?? 0));
-		if (finished.length <= 50) return;
-		for (const run of finished.slice(50))
-			this.runs.delete(this.key(scope, run.task.taskId));
+	private publishScope(scope: string) {
+		const tasks = [...this.runs.values()]
+			.filter((run) => run.task.scope === scope)
+			.map((run) => snapshot(run.task));
 		for (const [port, owner] of this.ports)
-			if (owner === scope)
-				this.send(port, {
-					type: "snapshot",
-					tasks: [...this.runs.values()]
-						.filter((run) => run.task.scope === scope)
-						.map((run) => snapshot(run.task)),
-				});
+			if (owner === scope) this.send(port, { type: "snapshot", tasks });
+	}
+
+	private drop(run: Run) {
+		clearTimeout(run.expiryTimer);
+		this.runs.delete(this.key(run.task.scope, run.task.taskId));
+		// A detached run nobody stopped gets no other last save to release its reply.
+		if (run.task.detached && !isExecutionFinished(run.task))
+			void this.save(run, true).catch(() => undefined);
+	}
+
+	/**
+	 * Finished runs stay listed so a tab that attaches later (reload, new tab, worker fallback)
+	 * still learns their outcome. Its events only matter to a tab that has not seen the finish:
+	 * chat replies are saved before it is published. Once a connected tab received it, the
+	 * summary is enough; undelivered events share a byte budget, oldest released first.
+	 */
+	private retain(run: Run) {
+		if (this.connected(run.task.scope)) this.release(run);
+		else run.retainedBytes = JSON.stringify(run.task.events).length;
+		const scope = run.task.scope;
+		const finished = [...this.runs.values()]
+			.filter((item) => item.finished && item.task.scope === scope)
+			.sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0));
+		for (const item of finished.slice(RETAINED_FINISHED_RUNS)) this.drop(item);
+		let bytes = 0;
+		for (const item of [...this.runs.values()]
+			.filter((candidate) => candidate.retainedBytes)
+			.sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0))) {
+			bytes += item.retainedBytes;
+			if (bytes > RETAINED_UNDELIVERED_EVENT_BYTES) this.release(item);
+		}
+		if (finished.length > RETAINED_FINISHED_RUNS) this.publishScope(scope);
+	}
+
+	private release(run: Run) {
+		run.task.events = [];
+		run.seen.clear();
+		run.retainedBytes = 0;
 	}
 
 	private async cancel(run: Run) {
 		if (run.cancellation) return run.cancellation;
-		if (run.finished) return;
+		if (run.finished && !run.task.detached) return;
+		if (isExecutionFinished(run.task)) return;
 		run.task.cancellationRequested = true;
 		this.broadcast(run);
 		// Keep the dispatch alive until its run id arrives so cancellation can reach the server.
 		if (!run.task.runId) return;
-		run.cancellation = this.cancelRemote(run).catch((error) => {
-			run.cancellation = undefined;
-			run.task.cancellationRequested = false;
-			if (!run.finished)
-				run.task.error = `Stop could not be confirmed: ${executionError(error).message}`;
-			this.broadcast(run);
-			throw error;
-		});
+		run.cancellation = this.cancelRemote(run).then(
+			async () => {
+				run.stopAccepted = true;
+				// Nothing replays a detached run's end; the accepted stop is its outcome here.
+				if (!run.task.detached) return;
+				run.task.status = "cancelled";
+				run.task.error = undefined;
+				this.conclude(run);
+				await this.save(run, true).catch(() => undefined);
+				this.broadcast(run);
+				this.retain(run);
+			},
+			(error) => {
+				run.cancellation = undefined;
+				run.task.cancellationRequested = false;
+				if (!run.finished || run.task.detached)
+					run.task.error = `Stop could not be confirmed: ${executionError(error).message}`;
+				this.broadcast(run);
+				throw error;
+			},
+		);
 		return run.cancellation;
 	}
 
@@ -757,7 +942,7 @@ export class ExecutionRuntime {
 		const key = channelRequestKey(handle);
 		const previous = run.replies.get(key);
 		if (previous) return previous;
-		if (run.finished)
+		if (isExecutionFinished(run.task))
 			return Promise.reject(new Error("The execution has already finished"));
 		const request = run.task.pendingInteractions.find(
 			(candidate) => candidate.requestId === handle.request_id,

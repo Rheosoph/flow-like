@@ -1,0 +1,1025 @@
+{
+	"capabilities": {
+		"browser_use": {
+			"description": "Einen Webbrowser auf seinem Desktop oder Gerät steuern",
+			"label": "Browser"
+		},
+		"channels": {
+			"label": "",
+			"description": ""
+		},
+		"code_execution": {
+			"description": "Code in einer Sandbox schreiben und ausführen",
+			"label": "Code ausführen"
+		},
+		"command_line": {
+			"description": "Befehle in einem Terminal auf seinem Desktop oder Gerät ausführen",
+			"label": "Befehlszeile"
+		},
+		"computer_use": {
+			"description": "Den Bildschirm sehen und Maus und Tastatur auf seinem Desktop oder Gerät bedienen",
+			"label": "Computersteuerung"
+		},
+		"connectors": {
+			"description": "",
+			"label": ""
+		},
+		"data_connections": {
+			"description": "",
+			"label": ""
+		},
+		"data_studio": {
+			"description": "Tabellen speichern und abfragen, wie im Data Studio einer App",
+			"label": "Data Studio"
+		},
+		"delegation": {
+			"description": "",
+			"label": ""
+		},
+		"documents": {
+			"description": "",
+			"label": ""
+		},
+		"email": {
+			"description": "Eine eigene flow-like.me-Adresse zum Senden und Empfangen von E-Mails",
+			"label": "E-Mail"
+		},
+		"encryption": {
+			"description": "Seine Nachrichten und Secrets sind nur für dich und den Host des Bots lesbar",
+			"label": "Ende-zu-Ende-Verschlüsselung"
+		},
+		"flowpilot": {
+			"description": "Baut, bearbeitet und debuggt deine Apps und Flows, inklusive FlowScript",
+			"label": "FlowPilot"
+		},
+		"image_generation": {
+			"description": "",
+			"label": ""
+		},
+		"internet": {
+			"description": "Im Web suchen, Seiten lesen und Web-APIs aufrufen",
+			"label": "Internet"
+		},
+		"knowledge": {
+			"description": "",
+			"label": ""
+		},
+		"memory": {
+			"description": "",
+			"label": ""
+		},
+		"profile_apps": {
+			"description": "Alle Apps in einem deiner Profile nutzen, jeweils mit deiner Rolle",
+			"label": "Alle Apps eines Profils"
+		},
+		"push_notifications": {
+			"description": "Push-Benachrichtigungen an deine Geräte senden",
+			"label": "Dich benachrichtigen"
+		},
+		"scheduling": {
+			"description": "Nach Zeitplan laufen oder einmalig zu einem festen Zeitpunkt",
+			"label": "Zeitplanung"
+		},
+		"selected_apps": {
+			"description": "Nur die Apps nutzen, die du hinzufügst, jeweils mit deiner Rolle",
+			"label": "Ausgewählte Apps"
+		},
+		"skills": {
+			"description": "",
+			"label": ""
+		},
+		"storage": {
+			"description": "Dateien aufbewahren, wie im Speicher einer App",
+			"label": "Dateien"
+		},
+		"webhook": {
+			"description": "Eine URL, die den Bot weckt, wenn etwas sie aufruft",
+			"label": "Webhook"
+		}
+	},
+	"chat": {
+		"defaultModelHint": "",
+		"modelHint": "In den Einstellungen von {{name}} gewählt"
+	},
+	"computer": {
+		"alt": "",
+		"asleep": "",
+		"asleepHint": "",
+		"browser": "",
+		"failed": "",
+		"screen": "",
+		"stop": ""
+	},
+	"crew": {
+		"approval": {
+			"always": "",
+			"answeredAlways": "",
+			"answeredDeny": "",
+			"answeredOnce": "",
+			"askEveryTime": "",
+			"botFallback": "",
+			"deny": "",
+			"failed": "",
+			"label": "",
+			"once": "",
+			"title": "",
+			"triggeredBy": "",
+			"triggeredByInRoom": ""
+		},
+		"botSettings": "Einstellungen für {{name}}",
+		"botTag": "Bot",
+		"builtIn": "Integriert",
+		"cancel": "Abbrechen",
+		"composer": {
+			"encrypted": "In Ende-zu-Ende-verschlüsselten Chats kannst du in dieser App noch nicht schreiben.",
+			"placeholder": "Nachricht an {{name}}",
+			"send": "Senden",
+			"to": "An {{name}}"
+		},
+		"directMessage": "Direktnachricht",
+		"dock": {
+			"back": "Zurück zu deiner Crew",
+			"botUnavailable": "Dieser Bot ist nicht in deiner Crew. Vielleicht wurde er gelöscht.",
+			"botUnavailableTitle": "Bot nicht verfügbar",
+			"close": "Chat schließen",
+			"conversationUnavailable": "Diese Unterhaltung ist nicht verfügbar. Vielleicht hast du sie verlassen, oder sie existiert nicht mehr.",
+			"groupSubtitle": "Gruppe · {{people}}, {{bots}}",
+			"groupSubtitlePeople": "Gruppe · {{people}}",
+			"label": "Unterhaltung",
+			"loadFailed": "",
+			"loadFailedTitle": "",
+			"loading": "Wird geladen …",
+			"resize": "",
+			"resizeHint": "",
+			"signInForBots": "Melde dich an, um deine Bots zu sehen.",
+			"signInForConversations": "Melde dich an, um deine Unterhaltungen zu sehen.",
+			"unavailableTitle": "Unterhaltung nicht verfügbar",
+			"width": ""
+		},
+		"encrypted": "Ende-zu-Ende-verschlüsselt",
+		"eyebrow": "Bots",
+		"greeting": {
+			"afternoon": "Guten Tag, {{name}}",
+			"afternoonAnonymous": "Guten Tag",
+			"evening": "Guten Abend, {{name}}",
+			"eveningAnonymous": "Guten Abend",
+			"morning": "Guten Morgen, {{name}}",
+			"morningAnonymous": "Guten Morgen"
+		},
+		"intro": {
+			"capabilities": "Was er tun darf",
+			"noCapabilities": "Noch keine Fähigkeiten eingeschaltet"
+		},
+		"invitations": {
+			"aBot": "",
+			"accept": "",
+			"acceptBot": "",
+			"botMeta": "",
+			"botTitle": "",
+			"decline": "",
+			"failed": "",
+			"groupChat": "",
+			"meta": "",
+			"review": "",
+			"title": ""
+		},
+		"loadFailed": "Deine Bots konnten nicht geladen werden. Assistent und Flux funktionieren weiterhin.",
+		"loadFailedFlux": "",
+		"members": {
+			"added": "{{by}}: {{name}} hinzugefügt",
+			"joined": "Neu dabei: {{name}}",
+			"left": "Nicht mehr dabei: {{name}}",
+			"removed": "{{by}}: {{name}} entfernt"
+		},
+		"mentions": {
+			"bot": "",
+			"label": ""
+		},
+		"messages": {
+			"actionFailed": "Das hat nicht geklappt. Versuche es erneut.",
+			"delete": "Löschen",
+			"deleteDescription": "Die Nachricht verschwindet für alle in dieser Unterhaltung.",
+			"deleteTitle": "Diese Nachricht löschen?",
+			"discard": "Verwerfen",
+			"edit": "Bearbeiten",
+			"editLabel": "Nachricht bearbeiten",
+			"edited": "(bearbeitet)",
+			"empty": "Noch keine Nachrichten. Sag Hallo.",
+			"encrypted": "Verschlüsselte Nachricht",
+			"label": "Nachrichten",
+			"loadFailed": "Diese Nachrichten konnten nicht geladen werden.",
+			"loadOlder": "Ältere Nachrichten laden",
+			"loadingOlder": "Wird geladen …",
+			"more": "Weitere Aktionen",
+			"notSent": "Nicht gesendet",
+			"reactionLabel": "Mit {{emoji}} reagiert: {{names}}",
+			"retry": "Erneut versuchen",
+			"save": "Speichern",
+			"sending": "Wird gesendet …",
+			"unsupported": "Nachricht, die diese App nicht anzeigen kann"
+		},
+		"mute": {
+			"mute": "",
+			"unmute": ""
+		},
+		"needs": {
+			"approvalMeta": "",
+			"assistantMeta": "Pausiert, bis du entscheidest",
+			"assistantTitle": "Wartet auf deine Antwort",
+			"assistantWhere": "Dein Chat",
+			"meta_one": "{{count}} neue Nachricht · {{time}}",
+			"meta_other": "{{count}} neue Nachrichten · {{time}}",
+			"title": "Wartet auf dich"
+		},
+		"newBot": "Neuer Bot",
+		"newBotHint": "Beschreibe, was er tun soll, oder starte mit einer Vorlage",
+		"newMessage": "Neue Nachricht",
+		"newMessageDialog": {
+			"description": "Schreib einer Person oder einem deiner Bots.",
+			"failed": "Die Unterhaltung konnte nicht gestartet werden.",
+			"title": "Neue Nachricht"
+		},
+		"newRoom": "Neuer Raum",
+		"newRoomDialog": {
+			"create": "Raum erstellen",
+			"createInvite": "",
+			"description": "Bring Menschen und deine Bots in einer Unterhaltung zusammen.",
+			"failed": "Der Raum konnte nicht erstellt werden.",
+			"full_one": "Ein Raum fasst bis zu {{count}} Mitglied.",
+			"full_other": "Ein Raum fasst bis zu {{count}} Mitglieder.",
+			"invitesNote": "",
+			"invitesNote_one": "",
+			"invitesNote_other": "",
+			"members": "Mitglieder",
+			"name": "Name",
+			"namePlaceholder": "z. B. Q4-Launch",
+			"remove": "{{name}} entfernen",
+			"title": "Neuer Raum"
+		},
+		"openChat": "Chat öffnen",
+		"picker": {
+			"alreadyInvited": "",
+			"bots": "Deine Bots",
+			"hint": "Gib einen Namen oder eine E-Mail-Adresse ein, um Personen zu finden, die eine App mit dir teilen.",
+			"invite": "",
+			"noMatches": "Keine passenden Bots oder Personen.",
+			"ownerAccepts": "",
+			"people": "Personen",
+			"searchFailed": "Die Suche nach Personen ist fehlgeschlagen.",
+			"searchLabel": "Deine Bots und Personen durchsuchen",
+			"theirBots": ""
+		},
+		"requests": {
+			"acceptBot": "",
+			"block": "",
+			"botTitle": "",
+			"meta": "",
+			"pendingHint": "",
+			"title": "",
+			"where": ""
+		},
+		"retry": "Erneut versuchen",
+		"rooms": {
+			"bots_one": "{{count}} Bot",
+			"bots_other": "{{count}} Bots",
+			"composition": "{{people}} · {{bots}}",
+			"empty": "Noch keine Unterhaltungen. Starte eine mit einer Person oder einem deiner Bots.",
+			"justYou": "Nur du",
+			"loadFailed": "Deine Unterhaltungen konnten nicht geladen werden.",
+			"namesAndMore_one": "{{names}} und {{count}} weiteres Mitglied",
+			"namesAndMore_other": "{{names}} und {{count}} weitere Mitglieder",
+			"noMessages": "Noch keine Nachrichten",
+			"people_one": "{{count}} Person",
+			"people_other": "{{count}} Personen",
+			"title": "Räume und Personen",
+			"youWrote": "Du: {{text}}"
+		},
+		"search": {
+			"empty": "Nichts passt zu „{{query}}“.",
+			"label": "Bots, Personen und Chats durchsuchen",
+			"placeholder": "Bots, Personen, Chats durchsuchen"
+		},
+		"showChat": "Chat anzeigen",
+		"status": {
+			"desktop": "Läuft in der Desktop-App",
+			"device": "Läuft auf einem verwalteten Gerät",
+			"ready": "Bereit",
+			"server": "Läuft in der Cloud"
+		},
+		"summary": {
+			"bots_one": "{{count}} Bot",
+			"bots_other": "{{count}} Bots",
+			"line": "{{needs}} · {{bots}}",
+			"needsYou_one": "{{count}} Sache wartet auf dich",
+			"needsYou_other": "{{count}} Sachen warten auf dich",
+			"nothingNeedsYou": "Nichts wartet auf dich",
+			"signedOut": "Melde dich an, um Bots zu erstellen und mit anderen zu chatten. Assistent und Flux funktionieren auch ohne Konto."
+		},
+		"time": {
+			"today": "Heute",
+			"yesterday": "Gestern"
+		},
+		"trigger": {
+			"email": "",
+			"event": "",
+			"schedule": "",
+			"webhook": ""
+		},
+		"unknownMember": "Jemand",
+		"unread_one": "{{count}} ungelesen",
+		"unread_other": "{{count}} ungelesen",
+		"you": "Du",
+		"youObject": "dich",
+		"yourCrew": "Deine Crew"
+	},
+	"editor": {
+		"abilities": {
+			"appsCount_one": "{{count}} App ausgewählt",
+			"appsCount_other": "{{count}} Apps ausgewählt",
+			"appsEmpty": "Noch keine Apps. Apps, in denen du Mitglied bist, erscheinen hier.",
+			"appsFailed": "Die App konnte nicht aktualisiert werden.",
+			"appsLeft": "Du bist kein Mitglied mehr",
+			"appsNoMatch": "Keine Apps passen zu deiner Suche.",
+			"appsRole": "Deine Rolle: {{role}}",
+			"appsSearch": "Apps durchsuchen",
+			"appsUntitled": "Unbenannte App",
+			"flowpilot": {
+				"badge": "Immer an",
+				"subtitle": "Er arbeitet mit dem kompletten Werkzeugkasten von FlowPilot, deshalb lassen sich seine Fähigkeiten nicht ändern.",
+				"title": "Was er kann"
+			},
+			"groups": {
+				"apps": "Apps",
+				"hands": "Hände",
+				"memory": "Gedächtnis & Daten",
+				"security": "Sicherheit",
+				"talk": "Kommunikation",
+				"web": "Web"
+			},
+			"needsLocal": "Braucht die Desktop-App oder ein Gerät. Ändere, wo er läuft, um das einzuschalten.",
+			"profile": "Profil",
+			"profileApps_one": "{{count}} App",
+			"profileApps_other": "{{count}} Apps",
+			"profileEmpty": "Keine Profile gefunden.",
+			"profilePlaceholder": "Wähle ein Profil",
+			"runtime": "Kommt mit der Bot-Laufzeitumgebung",
+			"subtitle": "Anfangs ist alles ausgeschaltet. In einer App hat der Bot nie mehr Rechte als du.",
+			"subtitleMemoryOn": "",
+			"title": "Wähle, was er tun darf"
+		},
+		"actions": {
+			"back": "Zurück",
+			"cancel": "Abbrechen",
+			"create": "Bot erstellen",
+			"creating": "Wird erstellt …",
+			"delete": "Bot löschen",
+			"deleting": "Wird gelöscht …",
+			"duplicate": "Duplizieren",
+			"duplicating": "Wird dupliziert …",
+			"next": "Weiter",
+			"save": "Änderungen speichern",
+			"saving": "Wird gespeichert …"
+		},
+		"appsAttachFailed_one": "{{count}} App konnte nicht hinzugefügt werden. Füge sie in den Einstellungen des Bots erneut hinzu.",
+		"appsAttachFailed_other": "{{count}} Apps konnten nicht hinzugefügt werden. Füge sie in den Einstellungen des Bots erneut hinzu.",
+		"brain": {
+			"addFallback": "Fallback hinzufügen",
+			"automatic": "Automatisch",
+			"automaticHint": "Flow-Like wählt ein passendes Modell",
+			"fallbackLabel": "Fallback {{position}}",
+			"fallbackLimit": "Bis zu {{max}} Fallbacks",
+			"fallbacks": "Fallbacks",
+			"fallbacksHint": "Werden der Reihe nach genutzt, wenn das erste Modell nicht laufen kann, zum Beispiel ein lokales Modell, während der Bot in der Cloud läuft.",
+			"free": "Kostenlos",
+			"instructions": "Anweisungen",
+			"instructionsCount": "{{length, number}} / {{max, number}}",
+			"instructionsPlaceholder": "Wie soll er arbeiten, worauf soll er sich konzentrieren und was soll er nie tun?",
+			"local": "Lokal",
+			"localOnServer": "Dieses Modell läuft auf deiner eigenen Hardware, deshalb kann ein Bot in der Cloud es nicht nutzen. Füge einen Fallback hinzu, der in der Cloud läuft.",
+			"memoryHint": "Das Embedding-Modell, mit dem er seine Erinnerungen speichert und wiederfindet.",
+			"memoryHost": "Den Host wählen lassen",
+			"memoryHostHint": "Die App oder der Server, auf dem er läuft, wählt eines aus",
+			"memoryModel": "Gedächtnismodell",
+			"memoryNone": "Füge deinem Profil ein Embedding-Modell hinzu, um hier eines zu wählen.",
+			"moveDown": "Nach unten verschieben",
+			"moveUp": "Nach oben verschieben",
+			"noModels": "Keine passenden Modelle.",
+			"primary": "Modell",
+			"remove": "Entfernen",
+			"searchModels": "Modelle suchen",
+			"subtitle": "Sag ihm, wie er arbeiten soll, und wähle die Modelle, mit denen er denkt.",
+			"title": "Anweisungen und Modelle",
+			"unknownModel": "Unbekanntes Modell ({{id}})"
+		},
+		"delete": {
+			"action": "Löschen",
+			"confirm": "{{name}} löschen? Seine bisherigen Nachrichten bleiben erhalten und zeigen ihn als gelöschten Bot."
+		},
+		"deleted": "{{name}} wurde gelöscht",
+		"describe": {
+			"applied": "Als {{preset}} eingerichtet. Du kannst in den nächsten Schritten alles ändern.",
+			"bestMatch": "Bester Treffer",
+			"bestMatches": "Beste Treffer",
+			"hint": "Schreib, was er tun soll, oder wähle unten eine Vorlage.",
+			"nextUses": "„Weiter“ richtet ihn als {{preset}} ein. Wähle eine andere Vorlage, wenn sie besser passt.",
+			"noMatch": "Noch passt keine Vorlage. Beschreib weiter, wähle selbst eine aus oder starte ohne Vorlage.",
+			"placeholder": "Zum Beispiel: Schau jeden Morgen nach, was unsere Wettbewerber angekündigt haben, und schick mir eine kurze Zusammenfassung.",
+			"presets": "Vorlagen",
+			"scratch": "Ohne Vorlage starten",
+			"selected": "Ausgewählt",
+			"showAll": "Alle Vorlagen anzeigen",
+			"showFewer": "Weniger anzeigen",
+			"subtitle": "Sag in deinen eigenen Worten, was er tun soll. Die passendste Vorlage richtet ihn ein, und du kannst danach alles ändern.",
+			"title": "Beschreibe den Bot, den du dir wünschst"
+		},
+		"discard": {
+			"confirm": "Verwerfen",
+			"keep": "Weiter bearbeiten",
+			"prompt": "Änderungen verwerfen?"
+		},
+		"duplicate": {
+			"unsaved": "Speichere oder verwirf deine Änderungen, um den gespeicherten Bot zu duplizieren."
+		},
+		"duplicated": "Als {{name}} dupliziert",
+		"errors": {
+			"appLimit": "Dieser Bot nutzt bereits die maximale Anzahl von 200 ausgewählten Apps.",
+			"capabilityLocation": "Computersteuerung, Browser und Befehlszeile brauchen die Desktop-App oder ein Gerät. Schalte sie aus oder ändere, wo der Bot läuft.",
+			"createFailed": "Der Bot konnte nicht erstellt werden.",
+			"deleteFailed": "Der Bot konnte nicht gelöscht werden.",
+			"duplicateFailed": "Der Bot konnte nicht dupliziert werden.",
+			"fluxCapabilities": "Die Fähigkeiten von Flux lassen sich nicht ändern.",
+			"limitReached": "Du hast die maximale Anzahl an Bots erreicht. Lösche einen, um einen neuen zu erstellen.",
+			"saveFailed": "Die Änderungen konnten nicht gespeichert werden.",
+			"secretLimit": "Dieser Bot hat bereits die maximale Anzahl an Secrets.",
+			"serverLimitFact": "",
+			"serverLimitReached": "",
+			"systemUndeletable": "Integrierte Bots können nicht gelöscht werden."
+		},
+		"loadFailed": "Dieser Bot konnte nicht geladen werden.",
+		"loading": "Bot wird geladen …",
+		"location": {
+			"device": "Gerät",
+			"deviceEmpty": "Du hast noch keine verwalteten Geräte. Füge eins unter „Geräte“ hinzu.",
+			"deviceFailed": "Deine Geräte konnten nicht geladen werden.",
+			"devicePlaceholder": "Wähle ein Gerät",
+			"subtitle": "Ein Bot lebt auf genau einem Host. Wähle den, der alles bietet, was er braucht.",
+			"title": "Wähle, wo er läuft",
+			"turnedBackOn": "Wieder eingeschaltet, weil dieser Host einen Bildschirm und eine Shell hat: {{capabilities}}.",
+			"turnedOff": "Ausgeschaltet, weil die Cloud keinen Bildschirm und keine Shell hat: {{capabilities}}."
+		},
+		"preview": {
+			"blank": "Ohne Vorlage",
+			"defaultHint": "Lass den Namen leer, um „{{name}}“ zu verwenden.",
+			"description": "Beschreibung",
+			"descriptionPlaceholder": "Wofür ist er da?",
+			"eyebrow": "Dein Bot",
+			"label": "Bot-Vorschau",
+			"name": "Name",
+			"namePlaceholder": "Gib deinem Bot einen Namen",
+			"noCapabilities": "Noch keine Fähigkeiten",
+			"unnamed": "Neuer Bot"
+		},
+		"problems": {
+			"descriptionTooLong": "Kürze die Beschreibung auf {{max, number}} Zeichen.",
+			"deviceRequired": "Wähle das Gerät, auf dem er läuft.",
+			"fix": "Beheben",
+			"instructionsTooLong": "Kürze die Anweisungen auf {{max, number}} Zeichen.",
+			"lookInvalid": "Entferne Teile, die nicht mehr verfügbar sind: {{items}}.",
+			"lookLocked": "Das Aussehen nutzt Teile aus Paketen, die du noch nicht besitzt: {{items}}.",
+			"nameRequired": "Gib deinem Bot einen Namen.",
+			"nameTooLong": "Kürze den Namen auf {{max, number}} Zeichen.",
+			"profileRequired": "Wähle das Profil, dessen Apps er nutzen darf."
+		},
+		"safety": {
+			"encryptionHint": "Wenn sie eingeschaltet ist, sind seine Nachrichten und Secrets nur für dich und den Host des Bots lesbar. Bots auf einem Gerät kommunizieren ohnehin über einen verschlüsselten Tunnel.",
+			"handles": "Was er verarbeiten darf",
+			"privacy": "Privatsphäre",
+			"subtitle": "Kennzeichne die sensibelsten Daten, mit denen er arbeiten darf, und entscheide, wer seine Nachrichten lesen kann.",
+			"title": "Schütze seine Daten"
+		},
+		"secrets": {
+			"add": "Secret hinzufügen",
+			"delete": "Löschen",
+			"deleteConfirm": "{{name}} löschen?",
+			"deleted": "{{name}} gelöscht",
+			"deleteFailed": "Das Secret konnte nicht gelöscht werden.",
+			"description": "Beschreibung (optional)",
+			"descriptionPlaceholder": "Wofür es da ist",
+			"empty": "Noch keine Secrets.",
+			"lastUsed": "zuletzt genutzt",
+			"limit": "Ein Bot kann höchstens {{max}} Secrets speichern.",
+			"loadFailed": "Secrets konnten nicht geladen werden.",
+			"name": "Name",
+			"nameHint": "Großbuchstaben, Ziffern und Unterstriche, beginnend mit einem Buchstaben.",
+			"nameInvalid": "Beginne mit einem Großbuchstaben und verwende nur A–Z, 0–9 und _, höchstens 64 Zeichen.",
+			"nameSealed": "{{name}} ist für den Host des Bots versiegelt. Lösche es und füge es erneut hinzu, um über Flow-Like einen neuen Wert zu speichern.",
+			"nameTaken": "{{name}} existiert bereits. Beim Speichern wird der Wert ersetzt.",
+			"neverUsed": "nie genutzt",
+			"replaceValue": "Ersetzen",
+			"save": "Secret speichern",
+			"saved": "{{name}} gespeichert",
+			"saveFailed": "Das Secret konnte nicht gespeichert werden.",
+			"sealed": "Versiegelt",
+			"sealedHint": "Für den Host des Bots versiegelt. Lösche es und füge es erneut hinzu, um über Flow-Like einen neuen Wert zu speichern.",
+			"subtitle": "API-Schlüssel, Tokens und Passwörter, die der Bot nutzen darf.",
+			"title": "Zugangsdaten sicher aufbewahren",
+			"updated": "Aktualisiert",
+			"value": "Wert",
+			"valueHint": "Wird vor dem Speichern verschlüsselt.",
+			"valuePlaceholder": "Secret einfügen",
+			"valueTooLarge": "Werte dürfen höchstens {{max}} KB groß sein.",
+			"writeOnly": "Werte werden verschlüsselt und können nicht wieder ausgelesen werden."
+		},
+		"stepNeedsAttention": "Benötigt Aufmerksamkeit",
+		"steps": {
+			"abilities": "Fähigkeiten",
+			"brain": "Gehirn",
+			"describe": "Beschreiben",
+			"location": "Läuft auf",
+			"look": "Aussehen",
+			"safety": "Daten & Sicherheit",
+			"secrets": "Secrets"
+		},
+		"stepsLabel": "Schritte der Bot-Einrichtung",
+		"subtitle": {
+			"create": "Beschreibe ihn, gib ihm ein Aussehen und wähle, was er tun darf.",
+			"edit": "Ändere, wie {{name}} aussieht, denkt und arbeitet."
+		},
+		"title": {
+			"create": "Neuer Bot",
+			"edit": "Bot-Einstellungen"
+		},
+		"unavailable": "Für Bots musst du mit einem Flow-Like-Konto angemeldet sein."
+	},
+	"exchange": {
+		"answered": "",
+		"answeredBy": "",
+		"denied": "",
+		"error": "",
+		"none": "",
+		"open": "",
+		"pending": "",
+		"readOnly": "",
+		"thisBot": "",
+		"title": "",
+		"waiting": "",
+		"with": ""
+	},
+	"grants": {
+		"app": "",
+		"browser": "",
+		"command": "",
+		"computer": "",
+		"connection": "",
+		"documents": "",
+		"email": "",
+		"event": "",
+		"host": "",
+		"other": "",
+		"page": "",
+		"table": "",
+		"tool": ""
+	},
+	"history": {
+		"busy": "",
+		"empty": "",
+		"latest": "",
+		"loading": "",
+		"newTopic": "",
+		"newTopicAction": "",
+		"title": "",
+		"topicStarted": "",
+		"untitled": ""
+	},
+	"identity": {
+		"bot": "Bot",
+		"botId": "Bot-ID",
+		"botOf": "Bot von {{owner}}",
+		"deleted": "Gelöschter Bot",
+		"yourBot": "Dein Bot"
+	},
+	"local": {
+		"badge": "Auf diesem Gerät",
+		"badgeHint": "Lebt nur auf diesem Computer, bis du ihn in ein Konto verschiebst.",
+		"conversationHint": "Dieser Chat liegt nur auf diesem Computer.",
+		"conversationSubtitle": "{{subtitle}} · Auf diesem Gerät",
+		"location": {
+			"description": "Läuft in der Desktop-App auf diesem Computer, solange die App geöffnet ist",
+			"label": "Dieser Computer",
+			"note": "Bots auf dem Server oder einem Gerät brauchen ein Konto."
+		},
+		"mixedRoom": "Bots auf diesem Gerät können nur mit dir und deinen anderen Bots auf diesem Gerät sprechen.",
+		"picker": {
+			"hint": "Ohne Anmeldung sprichst du mit deinen Bots auf diesem Computer. Melde dich an, um mit Menschen zu sprechen.",
+			"searchLabel": "Deine Bots durchsuchen"
+		},
+		"roomsEmpty": "Noch keine Unterhaltungen. Starte eine mit einem deiner Bots.",
+		"summary": "Deine Bots und Chats bleiben auf diesem Computer. Melde dich an, um mit Menschen zu sprechen."
+	},
+	"locations": {
+		"desktop": {
+			"description": "Läuft in der Desktop-App, solange sie geöffnet ist",
+			"label": "Desktop-App"
+		},
+		"device": {
+			"description": "Läuft auf einem deiner verwalteten Geräte",
+			"label": "Gerät"
+		},
+		"server": {
+			"description": "Läuft rund um die Uhr auf den Servern von Flow-Like",
+			"label": "Cloud"
+		}
+	},
+	"memory": {
+		"clearFailed": "Erinnerungen konnten nicht gelöscht werden",
+		"cleared": "Alle Erinnerungen gelöscht",
+		"count_one": "{{count}} Erinnerung",
+		"count_other": "{{count}} Erinnerungen",
+		"deleteFailed": "Erinnerung konnte nicht gelöscht werden",
+		"factsEmpty": "",
+		"factsFailed": "",
+		"forget": "",
+		"justNow": "gerade eben",
+		"loadFailed": "Erinnerungen konnten nicht geladen werden",
+		"off": "Erinnerungen sind aus. Wähle in den Bot-Einstellungen ein Embedding-Modell, damit Erinnerungen abgerufen und gespeichert werden. Gespeicherte Erinnerungen kannst du hier trotzdem ansehen und löschen."
+	},
+	"move": {
+		"account": "Angemeldet als {{account}}",
+		"action_one": "{{count}} Bot verschieben",
+		"action_other": "{{count}} Bots verschieben",
+		"banner": {
+			"action": "Prüfen",
+			"description": "Verschiebe sie in dein Konto, dann hast du sie samt ihrer Chats überall, wo du dich anmeldest.",
+			"label": "Bots auf diesem Computer",
+			"title_one": "{{count}} Bot lebt nur auf diesem Computer",
+			"title_other": "{{count}} Bots leben nur auf diesem Computer"
+		},
+		"checkFailed": "Dieser Bot konnte nicht geprüft werden.",
+		"close": "Schließen",
+		"description": "Bots, die du ohne Anmeldung erstellt hast, leben nur auf diesem Computer. Beim Verschieben kommen ihre Apps, Secrets und Chats in dein Konto, danach werden sie hier entfernt. Bots mit offenen Problemen bleiben hier und funktionieren weiter.",
+		"empty": "Keine Bots leben nur auf diesem Computer.",
+		"fix": {
+			"automaticModel": "Den Host wählen lassen",
+			"dropFallback": "Fallback entfernen",
+			"dropProfileApps": "Profil-Apps ausschalten",
+			"failed": "Das hat nicht geklappt. Versuche es erneut.",
+			"openSettings": "Einstellungen öffnen",
+			"removeApp": "Aus dem Bot entfernen",
+			"removeSecret": "Secret entfernen",
+			"useProfile": "Aktuelles Profil verwenden"
+		},
+		"intro": {
+			"action": "In dein Konto verschieben"
+		},
+		"issues": {
+			"appLimit": "Er nutzt mehr Apps, als ein Bot in einem Konto darf.",
+			"appUnavailable": "{{app}} ist für dein Konto nicht verfügbar.",
+			"capabilityLocation": "Eine seiner Fähigkeiten passt nicht dazu, wo er läuft.",
+			"deviceUnavailable": "Das Gerät, auf dem er läuft, ist nicht in deinem Konto.",
+			"fallbackUnavailable": "Sein Fallback-Modell {{model}} ist für dein Konto nicht verfügbar.",
+			"idInvalid": "Seine ID lässt sich in einem Konto nicht verwenden.",
+			"idTaken": "Ein anderer Bot verwendet seine ID bereits.",
+			"invalid": "Einige seiner Einstellungen passen nicht zu einem Bot in einem Konto: {{message}}",
+			"limitReached": "Dein Konto hat bereits so viele Bots, wie es haben kann.",
+			"localChanged": "Er hat sich beim Verschieben auf diesem Computer ständig verändert. Versuche es gleich noch einmal.",
+			"lookNotOwned": "Sein Aussehen nutzt Teile, die dein Konto nicht besitzt: {{items}}.",
+			"modelUnavailable": "Sein Modell {{model}} ist für dein Konto nicht verfügbar.",
+			"profileUnavailable": "Das Profil, aus dem seine Apps stammen, ist nicht in deinem Konto.",
+			"secretKey": "Der Schlüsselbund dieses Computers ist gesperrt oder verweigert den Zugriff auf die Secrets des Bots. Entsperre ihn und versuch es noch mal.",
+			"secretUnreadable": "Sein Secret {{name}} lässt sich auf diesem Computer nicht mehr lesen. Entferne es hier und füge es wieder hinzu, sobald der Bot verschoben ist.",
+			"serverLimitReached": "",
+			"unknown": "Etwas an ihm passt nicht zu deinem Konto."
+		},
+		"parts": {
+			"apps_one": "{{count}} App",
+			"apps_other": "{{count}} Apps",
+			"chats_one": "{{count}} Chat mit {{messages}}",
+			"chats_other": "{{count}} Chats mit {{messages}}",
+			"label": "Kommt mit",
+			"messages_one": "{{count}} Nachricht",
+			"messages_other": "{{count}} Nachrichten",
+			"nothing": "Nur der Bot selbst",
+			"secrets_one": "{{count}} Secret, verschlüsselt in deinem Konto gespeichert",
+			"secrets_other": "{{count}} Secrets, verschlüsselt in deinem Konto gespeichert",
+			"skipped_one": "{{count}} Nachricht von einem Bot, der seinen Chat verlassen hat, kommt nicht mit",
+			"skipped_other": "{{count}} Nachrichten von Bots, die diese Chats verlassen haben, kommen nicht mit",
+			"waiting_one": "{{count}} Chat folgt, sobald die anderen Bots darin umziehen",
+			"waiting_other": "{{count}} Chats folgen, sobald die anderen Bots darin umziehen"
+		},
+		"progress": "{{current}} von {{total}} wird verschoben …",
+		"recheck": "Erneut prüfen",
+		"result": {
+			"failed": "Nicht verschoben, er bleibt also auf diesem Computer. {{error}}",
+			"unknownError": "Etwas ist schiefgelaufen.",
+			"warnings_one": "",
+			"warnings_other": ""
+		},
+		"status": {
+			"checking": "Wird geprüft …",
+			"issues_one": "{{count}} Problem",
+			"issues_other": "{{count}} Probleme",
+			"moved": "Verschoben",
+			"moving": "Wird verschoben …",
+			"notChecked": "Nicht geprüft",
+			"ready": "Bereit"
+		},
+		"staysHere": "Er bleibt auf diesem Computer und funktioniert weiter.",
+		"steps": {
+			"apps": "",
+			"check": "",
+			"conversations": "",
+			"done": "",
+			"forget_bot": "",
+			"forget_conversations": "",
+			"forget_workspace": "",
+			"import_bot": "",
+			"rebind": "",
+			"secrets": "",
+			"segments": "",
+			"update_bot": "",
+			"verify": "",
+			"workspace": ""
+		},
+		"title": "Bots in dein Konto verschieben",
+		"toast": {
+			"action": "Prüfen",
+			"title_one": "{{count}} Bot lebt nur auf diesem Computer",
+			"title_other": "{{count}} Bots leben nur auf diesem Computer"
+		}
+	},
+	"panel": {
+		"back": "",
+		"cancelTurn": "",
+		"close": "",
+		"details": {
+			"abilities": "",
+			"edit": "",
+			"fallbacks_one": "",
+			"fallbacks_other": "",
+			"runs": "",
+			"status": ""
+		},
+		"encryption": {
+			"fingerprint": "",
+			"host": "",
+			"label": "",
+			"on": "",
+			"rotate": "",
+			"rotated": "",
+			"rotateFailed": "",
+			"unpublished": "",
+			"waiting": ""
+		},
+		"grants": {
+			"none": "",
+			"revoke": "",
+			"title": ""
+		},
+		"hide": "",
+		"label": "",
+		"mail": {
+			"addressTitle": "",
+			"afterSave": "",
+			"aliasLabel": "",
+			"aliasPlaceholder": "",
+			"aliasRules": "",
+			"available": "",
+			"back": "",
+			"change": "",
+			"checking": "",
+			"claim": "",
+			"claimed": "",
+			"empty": "",
+			"emptyNoAddress": "",
+			"localNote": "",
+			"noAddress": "",
+			"received": "",
+			"release": "",
+			"sent": "",
+			"taken": "",
+			"unverified": ""
+		},
+		"notifications": {
+			"failed": "",
+			"hint": "",
+			"label": "",
+			"off": "",
+			"on": ""
+		},
+		"openFull": "",
+		"permissions": {
+			"granted": "",
+			"none": "",
+			"received": "",
+			"revoke": "",
+			"title": ""
+		},
+		"show": "",
+		"tabs": "",
+		"tasks": {
+			"at": "",
+			"create": "",
+			"cron": "",
+			"cronLabel": "",
+			"delete": "",
+			"done": "",
+			"full": "",
+			"full_one": "",
+			"full_other": "",
+			"instruction": "",
+			"instructionLabel": "",
+			"name": "",
+			"nameLabel": "",
+			"next": "",
+			"none": "",
+			"once": "",
+			"pause": "",
+			"paused": "",
+			"repeat": "",
+			"resume": "",
+			"title": "",
+			"tz": ""
+		},
+		"waitingForYou": "",
+		"webhooks": {
+			"copied": "",
+			"copy": "",
+			"create": "",
+			"delete": "",
+			"done": "",
+			"instruction": "",
+			"instructionLabel": "",
+			"issued": "",
+			"lastCalled": "",
+			"name": "",
+			"nameLabel": "",
+			"neverCalled": "",
+			"none": "",
+			"once": "",
+			"rotate": "",
+			"secret": "",
+			"signingKey": "",
+			"title": "",
+			"url": ""
+		},
+		"working": ""
+	},
+	"presence": {
+		"lastSeen": "",
+		"offline": "",
+		"online": "",
+		"unknown": ""
+	},
+	"presets": {
+		"coder": {
+			"description": "Schreibt Code, führt ihn aus und nutzt die Befehlszeile auf deinem Computer.",
+			"instructions": "Du bist mein Programmierpartner. Lies den Code, bevor du ihn änderst, halte Änderungen klein und führe die Tests und Befehle aus, die nötig sind, um deine Arbeit zu prüfen. Frag mich, bevor du Dateien löschst oder etwas ausführst, das sich nicht rückgängig machen lässt.",
+			"name": "Coder"
+		},
+		"data_analyst": {
+			"description": "Pflegt Tabellen, führt Analysen durch und erklärt die Zahlen.",
+			"instructions": "Du bist mein Datenanalyst. Halte die Tabellen, die ich dir gebe, in Ordnung, beantworte Fragen mit Abfragen und Code und erkläre Ergebnisse in einfachen Worten, mit den Zahlen, die sie belegen. Sag es, wenn die Daten zu dünn für eine Aussage sind.",
+			"name": "Datenanalyst"
+		},
+		"everyday_helper": {
+			"description": "Beantwortet Fragen, hilft dir beim Schreiben und Planen und schlägt Dinge nach.",
+			"instructions": "Du bist mein Alltagshelfer. Beantworte Fragen klar, hilf mir beim Schreiben und Planen und schlag Dinge nach, wenn du dir nicht sicher bist. Halte Antworten kurz, außer ich bitte um Details.",
+			"name": "Alltagshelfer"
+		},
+		"inbox_triage": {
+			"description": "Sortiert deine E-Mails, markiert Dringendes und entwirft Antworten, die du prüfen kannst.",
+			"instructions": "Du sortierst meine E-Mails. Ordne neue Mails danach, was meine Aufmerksamkeit braucht, was warten kann und was unwichtig ist, markiere dringende Nachrichten und entwirf kurze Antworten, die ich prüfe. Sende nie eine Antwort ohne meine Freigabe.",
+			"name": "Posteingangs-Triage"
+		},
+		"ops_watcher": {
+			"description": "Überwacht die Runs deiner Apps und sagt dir, wenn etwas fehlschlägt.",
+			"instructions": "Du überwachst meine Apps. Behalte ihre Runs im Blick, benachrichtige mich, wenn etwas fehlschlägt oder langsamer wird, und sag, was fehlgeschlagen ist, seit wann und was die wahrscheinliche Ursache ist. Fasse wiederholte Warnungen zusammen, statt jede einzeln zu senden.",
+			"name": "Ops-Wächter"
+		},
+		"research_digest": {
+			"description": "Verfolgt Themen, Wettbewerber und Nachrichten im Web und schickt dir kurze Zusammenfassungen.",
+			"instructions": "Du hältst mich auf dem Laufenden. Verfolge die Themen, Wettbewerber und Quellen, die ich nenne, such im Web nach dem, was sich geändert hat, und schick mir eine kurze Zusammenfassung mit Links. Sag, was neu ist, warum es wichtig ist und wie sicher du dir bist.",
+			"name": "Recherche-Überblick"
+		},
+		"secretary": {
+			"description": "Hält deinen Kalender in Ordnung: findet freie Zeitfenster, bucht Meetings und erinnert dich.",
+			"instructions": "Du bist mein Sekretär. Halte meinen Kalender in Ordnung: Finde freie Zeitfenster, buche und verschiebe Meetings in den Kalender-Apps, die ich dir gebe, und erinnere mich an das, was ansteht. Frag mich, bevor du in meinem Namen etwas annimmst, ablehnst oder absagst.",
+			"name": "Sekretär"
+		},
+		"web_tester": {
+			"description": "Klickt sich in einem echten Browser durch deine Websites und meldet, was nicht funktioniert.",
+			"instructions": "Du testest Websites in einem echten Browser. Folge den Abläufen, die ich beschreibe, klick dich so durch, wie es ein Mensch tun würde, und melde, was nicht funktioniert, mit den Schritten zum Nachstellen und einem Screenshot. Gib nie echte Zahlungsdaten ein.",
+			"name": "Web-Tester"
+		}
+	},
+	"restrictions": {
+		"advanced": "",
+		"all": "",
+		"everyChat": "",
+		"failed": "",
+		"folderAdd": "",
+		"folderPlaceholder": "",
+		"foldersAll": "",
+		"foldersOnly": "",
+		"groups": {
+			"boards": "",
+			"events": "",
+			"files": "",
+			"other": "",
+			"tables": ""
+		},
+		"limit": "",
+		"limitedTo": "",
+		"nothingToPick": "",
+		"permissions": {
+			"execute_boards": "",
+			"execute_events": "",
+			"invoke_api": "",
+			"list_events": "",
+			"read_boards": "",
+			"read_config": "",
+			"read_courses": "",
+			"read_database": "",
+			"read_events": "",
+			"read_files": "",
+			"read_logs": "",
+			"read_team": "",
+			"read_templates": "",
+			"read_widgets": "",
+			"write_boards": "",
+			"write_courses": "",
+			"write_database": "",
+			"write_events": "",
+			"write_files": "",
+			"write_templates": "",
+			"write_widgets": ""
+		},
+		"preset": "",
+		"presets": {
+			"custom": "",
+			"full": "",
+			"read_and_call_events": "",
+			"read_only": ""
+		},
+		"readOnlyFiles": "",
+		"removeFolder": "",
+		"title": ""
+	},
+	"roomLimits": {
+		"apps": "",
+		"description": "",
+		"failed": "",
+		"title": ""
+	},
+	"roomMembers": {
+		"bot": "",
+		"cancel": "",
+		"cancelFailed": "",
+		"declined": "",
+		"description": "",
+		"invite": "",
+		"inviteFailed": "",
+		"limits": "",
+		"members": "",
+		"open": "",
+		"pending": "",
+		"saveLimits": "",
+		"send": "",
+		"send_one": "",
+		"send_other": "",
+		"sent": "",
+		"thisRoom": "",
+		"title": "",
+		"waiting": "",
+		"waitingOwner": ""
+	},
+	"system": {
+		"flux": {
+			"description": "Baut und repariert deine Apps und Workflows",
+			"name": "Flux"
+		},
+		"general": {
+			"description": "Dein Alltagshelfer",
+			"name": "Assistent"
+		}
+	},
+	"workspace": {
+		"failed": "Der Arbeitsbereich von {{name}} konnte nicht eingerichtet werden.",
+		"filesTitle": "Dateien von {{name}}",
+		"memoryEmpty": "{{name}} merkt sich hier Fakten, Vorlieben und Entscheidungen, während du chattest.",
+		"memoryFailed": "Die Erinnerungen von {{name}} konnten nicht geladen werden.",
+		"preparing": "Arbeitsbereich von {{name}} wird eingerichtet …",
+		"refused": "{{name}} kann noch keine eigenen Dateien und Daten speichern.",
+		"tabs": {
+			"chat": "Chat",
+			"computer": "",
+			"data": "Daten",
+			"details": "",
+			"files": "Dateien",
+			"label": "Chat und Arbeitsbereich von {{name}}",
+			"mail": "",
+			"memory": "Erinnerungen"
+		},
+		"unsupported": "Dateien und Daten von {{name}} sind hier noch nicht verfügbar."
+	}
+}

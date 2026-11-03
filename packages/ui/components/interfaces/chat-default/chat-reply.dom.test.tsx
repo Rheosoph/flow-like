@@ -58,7 +58,10 @@ vi.mock("./chatbox", () => ({
 			{
 				onSendMessage,
 				defaultActiveTools,
-			}: { onSendMessage: ISendMessageFunction; defaultActiveTools: string[] },
+			}: {
+				onSendMessage: ISendMessageFunction;
+				defaultActiveTools: string[];
+			},
 			ref,
 		) => {
 			state.send = onSendMessage;

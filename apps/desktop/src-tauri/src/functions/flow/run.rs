@@ -437,6 +437,7 @@ struct ExecutionOverrides {
     execution_hub: Option<String>,
     execution_session_id: Option<String>,
     execution_webview: Option<String>,
+    local_bot: Option<crate::execution_identity::LocalBotRun>,
 }
 
 /// Update the last_node_update timestamp for a run when we see run events
@@ -990,15 +991,28 @@ async fn execute_prepared(
 
     // Offline apps are owner-equivalent; hosted apps must run under the role
     // the hub grants, so the same board gates identically here and in the cloud.
-    crate::execution_identity::apply_local_run_identity(
-        &mut internal_run,
-        &app.visibility,
-        &app_id,
-        identity_token.as_deref(),
-        &profile.hub_profile.hub,
-        &flow_like_state,
-    )
-    .await;
+    let bot_identity = match &overrides.local_bot {
+        Some(bot) => {
+            crate::execution_identity::apply_local_bot_run_identity(
+                &mut internal_run,
+                &app.visibility,
+                bot,
+            )
+            .await
+        }
+        None => false,
+    };
+    if !bot_identity {
+        crate::execution_identity::apply_local_run_identity(
+            &mut internal_run,
+            &app.visibility,
+            &app_id,
+            identity_token.as_deref(),
+            &profile.hub_profile.hub,
+            &flow_like_state,
+        )
+        .await;
+    }
 
     if overrides.log_flush_interval.is_some() || overrides.log_batch_size.is_some() {
         internal_run
@@ -1354,6 +1368,7 @@ pub(crate) async fn execute_daemon_event(
                 execution_hub,
                 execution_session_id: None,
                 execution_webview: None,
+                local_bot: None,
             },
         ),
     )

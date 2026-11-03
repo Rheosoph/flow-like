@@ -994,7 +994,7 @@ pub async fn prerun_ontology_action(
     }
     // Loading the board used to require an effective user; principals without
     // one stay rejected until that is decided on purpose.
-    permission.effective_user_id()?;
+    permission.person_user_id()?;
     let credentials = state.master_credentials().await?;
     let connection = credentials.to_db(&app_id).await?.execute().await?;
     let ontology = lancegraph::load_overlay(&connection, &ontology_id)

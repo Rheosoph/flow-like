@@ -111,6 +111,10 @@ async fn serve(config: &config::Config) -> Result<(), bootstrap::BootstrapError>
         None
     };
     let _payments_worker = flow_like_api::payments::worker::spawn(api.state.clone());
+    let _bot_turn_worker = flow_like_api::bot_host::spawn_worker(
+        api.state.clone(),
+        flow_like_api::bot_host::WorkerConfig::from_env(),
+    );
     let router = match cors {
         Some(cors) => construct_router_with_cors(api.state, cors),
         None => construct_router(api.state),

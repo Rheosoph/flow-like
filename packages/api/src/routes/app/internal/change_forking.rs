@@ -84,7 +84,8 @@ pub async fn get_forking(
         (status = 400, description = "Nothing to update"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 404, description = "Application not found")
+        (status = 404, description = "Application not found"),
+        (status = 409, description = "BOT_WORKSPACE_LOCKED: the app is a bot's workspace, which others never fork")
     )
 )]
 #[tracing::instrument(
@@ -110,6 +111,9 @@ pub async fn change_forking(
         .one(&state.db)
         .await?
         .ok_or(ApiError::NOT_FOUND)?;
+    if app_row.bot_id.is_some() {
+        return Err(crate::routes::bots::workspace::locked(&app_id));
+    }
 
     let allow_changed = body
         .allow_forking

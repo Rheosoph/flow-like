@@ -28,6 +28,7 @@ use google_cloud_auth::credentials::{self as google_credentials, CacheableResour
 use http::{Extensions, header::AUTHORIZATION};
 use schemars::JsonSchema;
 
+mod hosted;
 pub mod stablediffusion;
 pub use stablediffusion::{
     BuildStableDiffusionImageNode, MakeStableDiffusionImageOptionsNode, StableDiffusionImageOptions,
@@ -2604,13 +2605,20 @@ impl NodeLogic for GenerateImageNode {
         )
         .await?;
         crate::ensure_vertex_credentials_explicit(context, &provider)?;
-        let generated = generate_with_provider(
-            context.execution_environment(),
-            &provider,
-            &request,
-            &typed_provider_options,
-        )
-        .await?;
+        let generated =
+            if flow_like_model_provider::provider::is_hosted_provider_name(&provider.provider_name)
+            {
+                hosted::generate(context, &bit, &provider, &request, &typed_provider_options)
+                    .await?
+            } else {
+                generate_with_provider(
+                    context.execution_environment(),
+                    &provider,
+                    &request,
+                    &typed_provider_options,
+                )
+                .await?
+            };
         let total = generated.len();
         if total == 0 {
             bail!("Image provider returned no generated images");

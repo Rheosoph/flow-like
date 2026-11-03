@@ -971,23 +971,14 @@ pub async fn execute_tool_call(
             .collect(),
     );
 
-    // Look up the function's layer to get proper variable isolation and layer
-    // pin overrides — mirroring how CallFunctionNode invokes functions.
     let board = context.get_board().await?;
     let layer_id = {
         let node_guard = referenced_node.node.lock().await;
         node_guard.layer.clone()
     };
-    let function_variables = layer_id
-        .as_ref()
-        .and_then(|id| board.layers.get(id))
-        .map(|layer| layer.variables.clone())
-        .unwrap_or_default();
-
-    // Use create_function_context to get a fresh override map and isolated
-    // local variables, matching the behaviour of CallFunctionNode.
+    // Tools in the active function share its locals across calls, with separate arguments.
     let mut sub_context = context
-        .create_function_context(referenced_node, &function_variables)
+        .create_reference_context(referenced_node, &board)
         .await;
     sub_context.delegated = true;
 
@@ -3095,11 +3086,19 @@ async fn embed_memory_document(
 mod tests {
     use super::*;
     use ahash::AHashMap;
-    use flow_like::flow::{
-        execution::internal_pin::InternalPin,
-        node::{Node, NodeLogic},
-        pin::PinOptions,
+    use flow_like::{
+        flow::{
+            board::{Board, ExecutionStage, Layer, LayerType},
+            execution::{InternalRun, RunPayload, internal_pin::InternalPin},
+            node::{Node, NodeLogic},
+            pin::PinOptions,
+            variable::Variable,
+        },
+        profile::Profile,
+        state::{FlowLikeConfig, FlowLikeState},
+        utils::http::HTTPClient,
     };
+    use flow_like_types::sync::RwLock;
 
     struct NoopLogic;
 
@@ -3201,5 +3200,165 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(tool.function.parameters.required, None);
+    }
+
+    struct LocalSummaryTool {
+        writes: bool,
+    }
+
+    #[async_trait]
+    impl NodeLogic for LocalSummaryTool {
+        fn get_node(&self) -> Node {
+            let name = if self.writes {
+                "test_write_summaries"
+            } else {
+                "test_read_summary"
+            };
+            let mut node = Node::new(name, name, "", "Tests");
+            node.set_start(true);
+            node.add_output_pin("argument", "Argument", "", VariableType::Generic);
+            node
+        }
+
+        async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+            let argument = context.evaluate_pin_raw("argument").await?;
+            if self.writes {
+                context.set_variable_value("summaries", argument).await?;
+            } else {
+                let key = argument.as_str().unwrap();
+                let (summaries, _) = context.get_variable_value_ref("summaries").await?;
+                let summary = summaries
+                    .lock()
+                    .await
+                    .get(key)
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                context
+                    .set_variable_value("summary", summary.clone())
+                    .await?;
+                context.set_result(summary);
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn tools_in_one_function_share_locals_across_agent_calls() {
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let writer: Arc<dyn NodeLogic> = Arc::new(LocalSummaryTool { writes: true });
+        let reader: Arc<dyn NodeLogic> = Arc::new(LocalSummaryTool { writes: false });
+        for logic in [
+            Arc::new(NoopLogic) as Arc<dyn NodeLogic>,
+            writer.clone(),
+            reader.clone(),
+        ] {
+            state.node_registry().write().await.push_node(logic);
+        }
+
+        let mut layer = Layer::new(
+            "function".into(),
+            "Summarize files".into(),
+            LayerType::Function,
+        );
+        for (id, name, value_type, default) in [
+            (
+                "summaries",
+                "Summaries",
+                ValueType::HashMap,
+                json::json!({}),
+            ),
+            ("summary", "Summary", ValueType::Normal, json::json!("")),
+        ] {
+            let mut variable = Variable::new(name, VariableType::String, value_type);
+            variable.id = id.into();
+            variable.set_default_value(default);
+            layer.variables.insert(variable.id.clone(), variable);
+        }
+        let mut agent = NoopLogic.get_node();
+        agent.id = "agent".into();
+        agent.set_start(true);
+        let mut write = writer.get_node();
+        write.id = "write".into();
+        let mut read = reader.get_node();
+        read.id = "read".into();
+        for mut node in [agent, write, read] {
+            node.layer = Some(layer.id.clone());
+            layer.nodes.insert(node.id.clone(), node);
+        }
+        let mut board = Board::new_detached(Some("agent-local-tools".into()), Default::default());
+        board.layers.insert(layer.id.clone(), layer);
+        let run = InternalRun::new(
+            "test-app",
+            Arc::new(board),
+            None,
+            &state,
+            &Profile::default(),
+            &RunPayload {
+                id: "agent".into(),
+                payload: None,
+                runtime_variables: None,
+                filter_secrets: None,
+            },
+            false,
+            None,
+            None,
+            None,
+            HashMap::new(),
+        )
+        .await
+        .unwrap();
+        let parent = ExecutionContext::new(
+            run.nodes.clone(),
+            &Arc::downgrade(&run.run),
+            &state,
+            &run.nodes["agent"],
+            &run.variables,
+            &run.cache,
+            LogLevel::Debug,
+            ExecutionStage::Dev,
+            run.profile.clone(),
+            None,
+            Arc::new(RwLock::new(Vec::new())),
+            None,
+            None,
+            run.oauth_tokens.clone(),
+            Some(run.channel.clone()),
+        )
+        .await;
+        let mut agent = parent
+            .create_function_context(&run.nodes["agent"], &run.board.layers["function"].variables)
+            .await;
+
+        execute_tool_call(
+            &mut agent,
+            &run.nodes["write"],
+            "store_summaries",
+            &json::json!({ "argument": { "report.txt": "The report summary" } }),
+        )
+        .await
+        .unwrap();
+        let result = execute_tool_call(
+            &mut agent,
+            &run.nodes["read"],
+            "find_summary",
+            &json::json!({ "argument": "report.txt" }),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result, json::json!("The report summary"));
+        assert_eq!(
+            *agent
+                .get_variable("summary")
+                .await
+                .unwrap()
+                .value
+                .lock()
+                .await,
+            result
+        );
     }
 }

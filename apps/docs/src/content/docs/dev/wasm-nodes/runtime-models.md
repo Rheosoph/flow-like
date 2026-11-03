@@ -47,9 +47,10 @@ the explicit `allow_wasi_network` override enables all three. Socket address
 checks also apply the execution configuration's host allowlist and block
 server-side destinations covered by the execution environment's egress policy.
 The desktop loader for installed packages copies the manifest's
-`allowed_hosts` into the node's execution configuration; the server executor
-does not. The Flow-Like HTTP host function does not consult the list, so
-enforce destination restrictions at the executor or network-policy layer.
+`allowed_hosts` into the node's execution configuration, and the server executor
+does the same with the permissions the API sends. The Flow-Like HTTP host
+function, WebSocket connects and WASI sockets check the list; enforce
+destination restrictions at the executor or network-policy layer as well.
 
 An enabled network category is not blanket filesystem or process access.
 

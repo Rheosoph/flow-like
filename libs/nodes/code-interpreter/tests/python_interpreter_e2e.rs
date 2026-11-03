@@ -125,7 +125,8 @@ async fn get_nodes_returns_both_nodes() {
         names.contains(&"python_project"),
         "missing python_project node"
     );
-    assert_eq!(defs.len(), 2);
+    assert!(names.contains(&"code_agent"), "missing code_agent node");
+    assert_eq!(defs.len(), 3);
 }
 
 #[tokio::test]
@@ -407,7 +408,9 @@ outputs['factorial'] = math.factorial(10)
     assert!(result.error.is_none(), "error: {:?}", result.error);
     let parsed: serde_json::Value =
         serde_json::from_str(result.outputs["result"].as_str().unwrap()).unwrap();
-    assert_eq!(parsed["pi"], 3.14159);
+    #[allow(clippy::approx_constant)]
+    let expected_pi = 3.14159;
+    assert_eq!(parsed["pi"], expected_pi);
     assert_eq!(parsed["sqrt"], 12.0);
     assert_eq!(parsed["factorial"], 3628800);
 }
@@ -741,8 +744,9 @@ async fn bundled_pydantic() {
     };
     let mut instance = new_instance(&engine, &component).await;
 
-    // pydantic may fail if pydantic-core (C extension) is not bundled,
-    // but basic validation should work if the pure-Python fallback path exists.
+    // pydantic-core is a Rust extension that is not bundled, so `import pydantic`
+    // raises ImportError. Requesting it via `packages` would trigger a PyPI
+    // lookup for a package that can never load, so it is imported directly.
     let code = r#"
 try:
     from pydantic import BaseModel
@@ -759,7 +763,7 @@ except Exception as e:
     outputs['pydantic_ok'] = False
     outputs['pydantic_error'] = str(e)
 "#;
-    let exec = eval_input_with_data(code, "{}", r#"["pydantic"]"#);
+    let exec = eval_input_with_data(code, "{}", "[]");
     let result = instance.call_run(&exec).await.expect("run failed");
 
     assert!(result.error.is_none(), "error: {:?}", result.error);

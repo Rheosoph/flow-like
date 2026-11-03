@@ -18,7 +18,6 @@ import {
 	AnimatedPackageIcon,
 	AnimatedSettingsIcon,
 	AnimatedSidebarIcon,
-	AnimatedSparklesIcon,
 	AnimatedStudyHatIcon,
 	AnimatedThemeIcon,
 	Button,
@@ -64,7 +63,8 @@ import {
 } from "@flow-like/flow-like-ui";
 import { AccountMenu } from "@flow-like/flow-like-ui/components/account/account-menu";
 import { AccountMenuProvider } from "@flow-like/flow-like-ui/components/account/account-menu-context";
-import { ChatActivityBadge } from "@flow-like/flow-like-ui/components/global-chat/chat-activity";
+import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
+import { BotsNavBadge } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-badge";
 import { ProfileAvatar } from "@flow-like/flow-like-ui/components/profile/profile-avatar";
 import {
 	flushCachedProfileDraft,
@@ -87,6 +87,7 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { motion } from "framer-motion";
 import {
+	BotIcon,
 	Check,
 	ChevronRight,
 	ChevronsUpDown,
@@ -120,7 +121,7 @@ import { useTauriInvoke } from "./useInvoke";
 
 /** Labels are rebuilt per render so a language switch relabels the sidebar. */
 function useNavData() {
-	const { t } = useTranslation(["common", "settings"]);
+	const { t } = useTranslation(["common", "settings", "nav"]);
 	return useMemo(
 		() => ({
 			navMain: [
@@ -133,9 +134,9 @@ function useNavData() {
 					items: [],
 				},
 				{
-					title: t("flowpilot", "FlowPilot"),
-					url: "/chat",
-					icon: AnimatedSparklesIcon,
+					title: t("nav:bots", "Bots"),
+					url: BOTS_ROUTE,
+					icon: BotIcon,
 					isActive: false,
 					permission: false,
 					items: [],
@@ -832,7 +833,7 @@ function NavFlatItem({
 				asChild
 				isActive={active}
 				tooltip={item.title}
-				className={item.url === "/chat" ? "pr-9" : undefined}
+				className={item.url === BOTS_ROUTE ? "pr-9" : undefined}
 			>
 				<MotionLink
 					href={item.url}
@@ -848,8 +849,8 @@ function NavFlatItem({
 					<span>{item.title}</span>
 				</MotionLink>
 			</SidebarMenuButton>
-			{item.url === "/chat" && (
-				<ChatActivityBadge className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 group-data-[collapsible=icon]:right-0 group-data-[collapsible=icon]:top-0 group-data-[collapsible=icon]:translate-y-0" />
+			{item.url === BOTS_ROUTE && (
+				<BotsNavBadge className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 group-data-[collapsible=icon]:right-0 group-data-[collapsible=icon]:top-0 group-data-[collapsible=icon]:translate-y-0" />
 			)}
 		</SidebarMenuItem>
 	);

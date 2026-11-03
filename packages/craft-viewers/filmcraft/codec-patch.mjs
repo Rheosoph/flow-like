@@ -30,36 +30,6 @@ export default function prepareBrowserCodecs({
 		"browser export compositor dependencies",
 	);
 	write("apps/filmcraft-web/Cargo.toml", webCargo);
-	let mux = original("crates/isobmff/src/mux.rs");
-	mux = replaceOnce(
-		mux,
-		'    let tb = &t.t;\n    let m = b.start_full(b"stts", 0, 0);',
-		`    let tb = &t.t;
-    // Apple readers need roll groups to interpret AAC edits as explicit priming.
-    // https://developer.apple.com/documentation/quicktime-file-format/using_track_structures_to_represent_encode_delay_explictly
-    if matches!(&t.cfg.entry.codec, CodecConfig::Aac(config) if config.object_type == 2)
-        && !edits.is_empty()
-        && tb.sample_count > 0
-    {
-        let sample_count = u32::try_from(tb.sample_count)
-            .map_err(|_| Error::Mux("AAC sample count exceeds roll group capacity".into()))?;
-        let group = b.start_full(b"sgpd", 1, 0);
-        b.bytes(b"roll");
-        b.u32(2);
-        b.u32(1);
-        b.i16(-1);
-        b.end(group);
-        let mapping = b.start_full(b"sbgp", 0, 0);
-        b.bytes(b"roll");
-        b.u32(1);
-        b.u32(sample_count);
-        b.u32(1);
-        b.end(mapping);
-    }
-    let m = b.start_full(b"stts", 0, 0);`,
-		"explicit AAC priming sample groups",
-	);
-	write("crates/isobmff/src/mux.rs", mux);
 	// The replacement registry has no decoder implementation dependencies.
 	write("crates/codecs/src/lib.rs", local("browser-registry.rs"));
 	let codecsCargo = original("crates/codecs/Cargo.toml");
@@ -94,41 +64,58 @@ export default function prepareBrowserCodecs({
 		);
 	}
 	write("crates/export/Cargo.toml", exportCargo);
-	let exp = original("crates/export/src/lib.rs");
-	exp = between(
-		exp,
+	let encoders = original("crates/export/src/encoders.rs");
+	encoders = between(
+		encoders,
 		"/// AAC-LC (our encoder),",
 		"/// FLAC (our encoder)",
 		"",
 		"remove AAC implementation",
 	);
-	exp = between(
-		exp,
-		"fn aac_factory(",
-		"/// The range to export",
-		"",
-		"remove software video encoder implementations",
+	const software = encoders.indexOf("pub(crate) fn aac_factory(");
+	if (software < 0) throw new Error("Film software encoder boundary changed.");
+	write("crates/export/src/encoders.rs", encoders.slice(0, software));
+	write(
+		"crates/export/src/lib.rs",
+		replaceOnce(
+			original("crates/export/src/lib.rs"),
+			"pub use encoders::{apv_profile, dnx_profile, prores_profile};",
+			"",
+			"software encoder profile exports",
+		),
 	);
-	exp = exp.replaceAll("filmcraft_h264enc::PassStats", "()");
-	exp = replaceOnce(
-		exp,
+	let registry = original("crates/export/src/registry.rs");
+	registry = replaceOnce(
+		registry,
+		"use super::encoders::{aac_factory, apv_factory, dnx_factory, h264_factory, mjpeg_factory, prores_factory};",
+		"use super::encoders::mjpeg_factory;",
+		"software encoder imports",
+	);
+	registry = registry.replaceAll("filmcraft_h264enc::PassStats", "()");
+	registry = replaceOnce(
+		registry,
 		"vec![h264_factory, prores_factory, dnx_factory, apv_factory, mjpeg_factory]",
 		"vec![mjpeg_factory]",
 		"native encoder registry",
 	);
-	exp = replaceOnce(
-		exp,
+	registry = replaceOnce(
+		registry,
 		"vec![aac_factory]",
 		"Vec::new()",
 		"native audio encoder registry",
 	);
-	exp = replaceOnce(
-		exp,
+	write("crates/export/src/registry.rs", registry);
+	let format = original("crates/export/src/format.rs").replaceAll(
+		"filmcraft_h264enc::PassStats",
+		"()",
+	);
+	format = replaceOnce(
+		format,
 		"!matches!(self, Format::Hevc | Format::Av1)",
 		"!matches!(self, Format::H264 | Format::Hevc | Format::Av1 | Format::Aac | Format::ProRes | Format::DnxHr | Format::Apv | Format::MxfOp1a | Format::MxfOpAtom)",
 		"unsupported export formats",
 	);
-	write("crates/export/src/lib.rs", exp);
+	write("crates/export/src/format.rs", format);
 	let settings = original("crates/export/src/settings.rs");
 	settings = replaceOnce(
 		settings,

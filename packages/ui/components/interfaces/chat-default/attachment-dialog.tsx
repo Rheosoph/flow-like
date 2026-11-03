@@ -1,4 +1,5 @@
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
+import SortAscIcon from "lucide-react/dist/esm/icons/arrow-up-narrow-wide.js";
 import CheckIcon from "lucide-react/dist/esm/icons/check.js";
 import ChevronLeftIcon from "lucide-react/dist/esm/icons/chevron-left.js";
 import Download from "lucide-react/dist/esm/icons/download.js";
@@ -13,7 +14,6 @@ import MaximizeIcon from "lucide-react/dist/esm/icons/maximize.js";
 import MinimizeIcon from "lucide-react/dist/esm/icons/minimize.js";
 import Music from "lucide-react/dist/esm/icons/music.js";
 import SearchIcon from "lucide-react/dist/esm/icons/search.js";
-import SortAscIcon from "lucide-react/dist/esm/icons/arrow-up-narrow-wide.js";
 import VideoIcon from "lucide-react/dist/esm/icons/video.js";
 import XIcon from "lucide-react/dist/esm/icons/x.js";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -38,6 +38,13 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../../ui/dropdown-menu";
+import {
+	FilePreviewer,
+	PdfFrame,
+	canPreview,
+	isCode,
+	isText,
+} from "../../ui/file-previewer";
 import { Input } from "../../ui/input";
 import {
 	ResizableHandle,
@@ -51,13 +58,6 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "../../ui/tooltip";
-import {
-	FilePreviewer,
-	PdfFrame,
-	canPreview,
-	isCode,
-	isText,
-} from "../../ui/file-previewer";
 import { type ProcessedAttachment, getDisplayFileName } from "./attachment";
 
 type SortKey = "name" | "type" | "size";

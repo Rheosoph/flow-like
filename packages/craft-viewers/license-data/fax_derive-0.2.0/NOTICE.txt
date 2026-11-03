@@ -1,0 +1,16 @@
+fax_derive 0.2.0
+
+The published crate declares the MIT license and the following package metadata.
+Its pinned repository revision contains no separate license or copyright file.
+The accompanying spdx/MIT.txt contains the MIT license text.
+
+Source: https://github.com/pdf-rs/fax/blob/40b226eb97b391355e971fd95a8dd532a4c127a0/derive/Cargo.toml
+
+[package]
+name = "fax_derive"
+version = "0.2.0"
+authors = ["Sebastian K <s3bk@protonmail.com>"]
+edition = "2018"
+description = "Bitstream matcher for the fax crate"
+license = "MIT"
+repository = "https://github.com/pdf-rs/fax"

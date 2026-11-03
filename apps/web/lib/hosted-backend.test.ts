@@ -62,6 +62,31 @@ describe("hosted shared execution transport", () => {
 			onRunId,
 		);
 
+	it("shares the signed-in inbox scope and does not attach an account bus to anonymous visits", async () => {
+		const auth = {
+			isAuthenticated: true,
+			user: {
+				access_token: "viewer-token",
+				profile: { sub: "viewer", iss: "issuer" },
+			},
+		} as unknown as AuthContextProps;
+		const signedIn = await createHostedRequest(
+			target,
+			"viewer-token",
+			auth,
+		).prepareExecution("{}");
+		expect(
+			JSON.parse(signedIn.request.realtime?.scope ?? "null").slice(1),
+		).toEqual(["issuer", "viewer"]);
+		expect(signedIn.request.realtime?.url).toEndWith("/api/v1/realtime/poll");
+		const anonymous = await createHostedRequest(
+			target,
+			undefined,
+			auth,
+		).prepareExecution("{}");
+		expect(anonymous.request.realtime).toBeUndefined();
+	});
+
 	it("prepares a renewed request without fetching its stream in the page", async () => {
 		const auth = {
 			user: {

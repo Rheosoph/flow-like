@@ -113,6 +113,24 @@ pub fn deeplink_replay_pending(app_handle: AppHandle) {
     }
 }
 
+/// Dev builds are not registered as the OS handler for `flow-like://` or the app's universal
+/// links, so a pasted callback URL is routed through the same dispatcher a real deep link uses.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub async fn deeplink_debug_dispatch(app_handle: AppHandle, url: String) -> Result<(), String> {
+    let url = Url::parse(url.trim()).map_err(|error| format!("Invalid deep link URL: {error}"))?;
+    if matches!(
+        classify(&url),
+        DeepLinkIntent::Auth | DeepLinkIntent::Logout
+    ) {
+        // Return the completed exchange result to the dev console. Dispatching in the
+        // background would acknowledge a failed login before its result is known.
+        return process_auth_callback(&app_handle, url.as_str()).await;
+    }
+    dispatch_deep_links(&app_handle, &vec![url], false);
+    Ok(())
+}
+
 fn emit(app_handle: &AppHandle, event: &str, payload: serde_json::Value) {
     crate::utils::emit_to_ui(app_handle, event, payload);
 }
@@ -267,20 +285,24 @@ fn handle_auth(app_handle: &AppHandle, url: &str) {
     let app_handle = app_handle.clone();
     let url = url.to_owned();
     tauri::async_runtime::spawn(async move {
-        match crate::native_auth::handle_callback(&app_handle, &url).await {
-            Ok(true) => {}
-            Ok(false) => emit(&app_handle, "oidc/url", json::json!({ "url": url })),
-            Err(_) => {
-                // Never include a callback URL, code, or provider error body in diagnostics.
-                tracing::warn!("Native sign-in callback was refused");
-                emit(
-                    &app_handle,
-                    "native-auth-error",
-                    json::json!({"message":"Sign-in could not be completed. Start a new sign-in request."}),
-                );
-            }
+        if process_auth_callback(&app_handle, &url).await.is_err() {
+            // Never include a callback URL, code, or provider error body in diagnostics.
+            tracing::warn!("Native sign-in callback was refused");
+            emit(
+                &app_handle,
+                "native-auth-error",
+                json::json!({"message":"Sign-in could not be completed. Start a new sign-in request."}),
+            );
         }
     });
+}
+
+async fn process_auth_callback(app_handle: &AppHandle, url: &str) -> Result<(), String> {
+    // Native auth returns application-owned messages, without callback secrets or provider bodies.
+    if !crate::native_auth::handle_callback(app_handle, url).await? {
+        emit(app_handle, "oidc/url", json::json!({ "url": url }));
+    }
+    Ok(())
 }
 
 fn handle_thirdparty_callback(app_handle: &AppHandle, url: &Url) {

@@ -1043,6 +1043,7 @@ pub(crate) fn allowed_model_request(base: &str, method: &str, url: &str) -> bool
             "/instances/responses",
             "/instances/systemone",
             "/instances/embeddings/embed",
+            "/instances/images/generations",
         ]
         .iter()
         .any(|path| endpoint_url(base, path).is_ok_and(|target| target == url))
@@ -2782,6 +2783,16 @@ mod tests {
         assert!(allowed_model_request(
             base,
             "POST",
+            "https://api.example/api/v1/instances/images/generations"
+        ));
+        assert!(!allowed_model_request(
+            base,
+            "GET",
+            "https://api.example/api/v1/instances/images/generations"
+        ));
+        assert!(allowed_model_request(
+            base,
+            "POST",
             "https://api.example/api/v1/instances/systemone"
         ));
         assert!(!allowed_model_request(
@@ -2805,6 +2816,8 @@ mod tests {
             "https://api.example/api/v1/instances/../responses",
             "https://api.example/api/v1/chat/completions",
             "https://api.example/api/v1/instances/embeddings/embed/",
+            "https://api.example/api/v1/instances/images/generations?model=other",
+            "https://api.example/api/v1/images/generations",
             "https://api.example/api/v1/instances/responses#x",
         ] {
             assert!(!allowed_model_request(base, "POST", url));

@@ -24,6 +24,7 @@ import { currentRelativeUrl, saveReturnUrl } from "../lib/return-url";
 import { SignInRequired } from "./sign-in-required";
 import { useSessionRecovery } from "./use-session-recovery";
 import { WebBackend } from "./web-provider";
+import { WebRealtimeBridge } from "./web-realtime-bridge";
 
 const PUBLIC_PATHS = [
 	"/payments/return",
@@ -487,6 +488,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 
 	return (
 		<OAuthCallbackReadyContext.Provider value={oauthCallbackReady}>
+			<WebRealtimeBridge enabled={auth.isAuthenticated && profileLoaded} />
 			{children}
 		</OAuthCallbackReadyContext.Provider>
 	);

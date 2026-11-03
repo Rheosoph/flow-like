@@ -24,7 +24,7 @@ export default function prepare({
 	const audio = original("crates/audio-io/src/lib.rs");
 	assertReviewedModules(
 		audio,
-		["aiff", "buffer", "flac", "pcm", "peaks", "symph", "wav"],
+		["aiff", "buffer", "caf", "flac", "mp4", "pcm", "peaks", "symph", "wav"],
 		"SoundCraft audio",
 	);
 	// Keep software compressed codecs outside the selected WASM dependency graph.
@@ -58,14 +58,23 @@ pub fn decoded_audio_byte_length(bytes: &[u8], ext: Option<&str>) -> Result<u64>
     Ok(info.frames.saturating_mul(u64::from(info.channels)).saturating_mul(4))
 }
 `;
-	engineIo = replaceOnce(
-		engineIo,
-		"fn read_bundle(bytes: &[u8]) -> Result<(String, std::collections::HashMap<String, Vec<u8>>)> {",
-		"pub fn read_bundle(bytes: &[u8]) -> Result<(String, std::collections::HashMap<String, Vec<u8>>)> {",
-		"browser session audio preparation",
+	engineIo += `
+/// Unpack browser media using the same limits as the session importer.
+pub fn read_host_bundle(bytes: &[u8]) -> Result<(String, std::collections::HashMap<String, Vec<u8>>)> {
+    read_bundle(bytes, bundle::BUNDLE_LIMITS)
+}
+pub use bundle::open_session_bytes_with_audio;
+`;
+	write("crates/engine/src/io.rs", engineIo);
+	let bundle = original("crates/engine/src/io/bundle.rs");
+	bundle = replaceOnce(
+		bundle,
+		"const BUNDLE_LIMITS:",
+		"pub(super) const BUNDLE_LIMITS:",
+		"host bundle limits",
 	);
-	engineIo = replaceOnce(
-		engineIo,
+	bundle = replaceOnce(
+		bundle,
 		"pub fn open_session_bytes(e: &mut Engine, name: &str, bytes: &[u8]) -> Result<Vec<String>> {",
 		`pub fn open_session_bytes(e: &mut Engine, name: &str, bytes: &[u8]) -> Result<Vec<String>> {
     open_session_bytes_with_audio(e, name, bytes, std::collections::HashMap::new())
@@ -75,28 +84,19 @@ pub fn decoded_audio_byte_length(bytes: &[u8], ext: Option<&str>) -> Result<u64>
 pub fn open_session_bytes_with_audio(e: &mut Engine, name: &str, bytes: &[u8], decoded: std::collections::HashMap<String, Vec<u8>>) -> Result<Vec<String>> {`,
 		"browser-decoded session audio",
 	);
-	engineIo = replaceOnce(
-		engineIo,
+	bundle = replaceOnce(
+		bundle,
 		'    let mut s = Session::from_json(&text).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;\n    let mut missing = Vec::new();',
 		'    files.extend(decoded);\n    let mut s = Session::from_json(&text).map_err(|err| EngineError::Io(format!("{name}: {err}")))?;\n    let mut missing = Vec::new();',
 		"prepared session media",
 	);
-	write("crates/engine/src/io.rs", engineIo);
+	write("crates/engine/src/io/bundle.rs", bundle);
 	// Audio does not expose video import. Exclude the copied H.264/ProRes code,
 	// including synthetic encoders, instead of leaving unreachable codecs linked.
 	let video = original("crates/video/src/lib.rs");
 	assertReviewedModules(
 		video,
-		[
-			"bitstream",
-			"convert",
-			"h264",
-			"isobmff",
-			"movie",
-			"prores",
-			"synth",
-			"tests",
-		],
+		["convert", "h264", "movie", "prores", "synth", "tests"],
 		"SoundCraft video",
 	);
 	for (const module of ["h264", "prores", "synth"]) {
@@ -126,7 +126,7 @@ pub fn open_session_bytes_with_audio(e: &mut Engine, name: &str, bytes: &[u8], d
 	let movieTypes = movie.slice(0, movie.indexOf(marker));
 	for (const [search, replacement] of [
 		[
-			"use crate::convert::{Matrix, planar_to_rgba, scale_rgba};",
+			"use crate::convert::{Matrix, Planes, planar_to_rgba, scale_rgba};",
 			"use crate::convert::scale_rgba;",
 		],
 		[
@@ -135,7 +135,7 @@ pub fn open_session_bytes_with_audio(e: &mut Engine, name: &str, bytes: &[u8], d
 		],
 		["use std::collections::VecDeque;\n", ""],
 		[
-			"/// Largest picture we decode (bounds every allocation derived from the file).\nconst MAX_PIXELS: u64 = 8192 * 8192;\n",
+			"/// Largest picture we decode (bounds every allocation derived from the file).\npub(crate) const MAX_PIXELS: u64 = 8192 * 8192;\n",
 			"",
 		],
 	])
@@ -157,20 +157,22 @@ pub fn open_session_bytes_with_audio(e: &mut Engine, name: &str, bytes: &[u8], d
 		"apps/soundcraft-web/src/web.rs",
 		readFileSync(join(directory, "host.rs"), "utf8"),
 	);
-	let ui = original("crates/ui-egui/src/lib.rs");
-	ui = replaceOnce(
-		ui,
+	let services = original("crates/ui-egui/src/services.rs");
+	services = replaceOnce(
+		services,
 		"pub struct Services {",
-		"pub struct Services {\n    pub host_command: Option<Box<dyn Fn(&str) -> Option<Result<Value, String>>>>,",
+		"pub struct Services {\n    pub host_command: Option<Box<dyn Fn(&str) -> Option<Result<serde_json::Value, String>>>>,",
 		"host services",
 	);
+	write("crates/ui-egui/src/services.rs", services);
+	let ui = original("crates/ui-egui/src/app/commands.rs");
 	ui = replaceOnce(
 		ui,
 		"pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {",
 		"pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {\n        if let Some(result) = self.services.host_command.as_ref().and_then(|hook| hook(id)) { return result; }",
 		"command interception",
 	);
-	write("crates/ui-egui/src/lib.rs", ui);
+	write("crates/ui-egui/src/app/commands.rs", ui);
 	write(
 		"crates/ui-egui/src/menus.rs",
 		original("crates/ui-egui/src/menus.rs")
@@ -178,8 +180,8 @@ pub fn open_session_bytes_with_audio(e: &mut Engine, name: &str, bytes: &[u8], d
 			.replaceAll('"SoundCraft"', '"Flows Audio"'),
 	);
 	write(
-		"crates/ui-egui/src/panels.rs",
-		original("crates/ui-egui/src/panels.rs")
+		"crates/ui-egui/src/panels/about.rs",
+		original("crates/ui-egui/src/panels/about.rs")
 			.replaceAll('"About SoundCraft"', '"About Flows Audio"')
 			.replaceAll('"SoundCraft"', '"Flows Audio"')
 			.replace(

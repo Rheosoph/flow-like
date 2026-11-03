@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	fetcher: vi.fn(),
 	streamFetcher: vi.fn(),
 	dispatchPaymentRequest: vi.fn(),
+	followNativeExecution: vi.fn(),
 }));
 
 vi.mock("@flow-like/flow-like-ui/components/payments/payment-events", () => ({
@@ -30,6 +31,9 @@ vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
 vi.mock("../../../lib/api", () => ({
 	fetcher: mocks.fetcher,
 	streamFetcher: mocks.streamFetcher,
+}));
+vi.mock("../../../lib/native-execution-realtime", () => ({
+	followNativeExecution: mocks.followNativeExecution,
 }));
 
 vi.mock("../../../lib/oauth-db", () => ({
@@ -71,6 +75,7 @@ if (typeof globalThis.localStorage?.clear !== "function") {
 	});
 }
 
+import { BoardState } from "../board-state";
 import { EventState, mergeLocalAndRemoteEvents } from "../event-state";
 
 const APP = "app-1";
@@ -102,7 +107,12 @@ function fakeBackend(overrides: { localOnly?: boolean } = {}) {
 		isOffline: vi.fn().mockResolvedValue(true),
 		isLocalOnly: vi.fn().mockResolvedValue(overrides.localOnly ?? false),
 		profile: { id: "profile-1", hub: "hub-1" },
-		auth: { user: { access_token: "token-1", profile: { sub: "user-1" } } },
+		auth: {
+			user: {
+				access_token: "token-1",
+				profile: { sub: "user-1", iss: "https://issuer.test" },
+			},
+		},
 		prepareExecutionAuth: vi.fn().mockResolvedValue("https://hub-1"),
 		executionSessionId: "native-window-session",
 		queryClient: { setQueryData: vi.fn(), invalidateQueries: vi.fn() },
@@ -196,6 +206,7 @@ beforeEach(() => {
 	mocks.fetcher.mockReset();
 	mocks.streamFetcher.mockReset();
 	mocks.dispatchPaymentRequest.mockReset();
+	mocks.followNativeExecution.mockReset();
 	localStorage.clear();
 	resetPageContractDrift();
 });
@@ -311,6 +322,285 @@ describe("event snapshot freshness", () => {
  * that was always going to happen elsewhere.
  */
 describe("an event pinned to Remote execution", () => {
+	test.each(["event", "board"] as const)(
+		"%s accepted runs use the native shared bus and remain cancellable",
+		async (kind) => {
+			const receipt = {
+				run_id: "queued/run",
+				status: "pending",
+				poll_token: "run-capability",
+			};
+			mocks.streamFetcher.mockImplementation(
+				async (_profile, _path, _options, _auth, _onEvent, onJson) =>
+					onJson(receipt),
+			);
+			let deliver: (event: unknown) => void = () => {};
+			mocks.followNativeExecution.mockImplementation(
+				(options) =>
+					new Promise<void>((_resolve, reject) => {
+						deliver = options.onEvent;
+						options.signal.addEventListener("abort", () =>
+							reject(new DOMException("Cancelled", "AbortError")),
+						);
+					}),
+			);
+			mocks.fetcher.mockRejectedValueOnce(
+				new Error("Cancellation unavailable"),
+			);
+			const backend = fakeBackend();
+			const events = new EventState(backend as never);
+			const onRunId = vi.fn();
+			const cb = vi.fn();
+			const payload = { id: EVENT, payload: {} } as never;
+			const running =
+				kind === "event"
+					? events.executeEventRemote(APP, EVENT, payload, false, onRunId, cb)
+					: new BoardState(backend as never).executeBoardRemote(
+							APP,
+							BOARD,
+							payload,
+							false,
+							onRunId,
+							cb,
+						);
+			await vi.waitFor(() =>
+				expect(mocks.followNativeExecution).toHaveBeenCalledOnce(),
+			);
+			expect(mocks.followNativeExecution.mock.calls[0][0]).toMatchObject({
+				profileId: "profile-1",
+				subject: "user-1",
+				issuer: "https://issuer.test",
+				run: {
+					run_id: "queued/run",
+					poll_token: "run-capability",
+					after_sequence: -1,
+				},
+			});
+			expect(onRunId).toHaveBeenCalledWith("queued/run");
+			expect(cb.mock.calls[0][0][0]).toMatchObject({
+				event_id: "queued/run:receipt",
+				event_type: "run_initiated",
+			});
+			const update = {
+				event_type: "chat_out",
+				payload: { text: "queued output" },
+			};
+			deliver(update);
+			expect(cb).toHaveBeenCalledWith([update]);
+			expect(mocks.dispatchPaymentRequest).toHaveBeenCalledWith(update);
+			await expect(events.cancelExecution("queued/run")).rejects.toThrow(
+				"Cancellation unavailable",
+			);
+			expect(mocks.followNativeExecution.mock.calls[0][0].signal.aborted).toBe(
+				true,
+			);
+			await expect(running).resolves.toBeUndefined();
+			expect(mocks.fetcher).toHaveBeenCalledWith(
+				backend.profile,
+				"execution/run/queued%2Frun",
+				{ method: "DELETE" },
+				backend.auth,
+			);
+			const delivered = cb.mock.calls.length;
+			deliver(update);
+			expect(cb).toHaveBeenCalledTimes(delivered);
+			expect(mocks.invoke).not.toHaveBeenCalledWith(
+				"cancel_execution",
+				expect.anything(),
+			);
+		},
+	);
+
+	test.each([
+		["event", "fails"],
+		["board", "fails"],
+		["event", "is only recorded"],
+	] as const)(
+		"Stop detaches a streamed %s run when its cancellation %s",
+		async (kind, answer) => {
+			if (answer === "fails")
+				mocks.fetcher.mockRejectedValueOnce(
+					new Error("Cancellation unavailable"),
+				);
+			else
+				mocks.fetcher.mockResolvedValueOnce({
+					cancelled: false,
+					status: "cancellation_requested",
+				});
+			let emit: (event: unknown) => void = () => {};
+			let signal: AbortSignal | undefined;
+			mocks.streamFetcher.mockImplementation(
+				(
+					_profile: unknown,
+					_path: string,
+					options: RequestInit,
+					_auth: unknown,
+					onMessage: (event: unknown) => void,
+				) =>
+					new Promise<void>((_, reject) => {
+						emit = onMessage;
+						signal = options.signal ?? undefined;
+						signal?.addEventListener("abort", () =>
+							reject(new DOMException("Execution cancelled", "AbortError")),
+						);
+					}),
+			);
+			const backend = fakeBackend();
+			const events = new EventState(backend as never);
+			const onRunId = vi.fn();
+			const cb = vi.fn();
+			const payload = { id: EVENT, payload: {} } as never;
+			const running =
+				kind === "event"
+					? events.executeEventRemote(APP, EVENT, payload, false, onRunId, cb)
+					: new BoardState(backend as never).executeBoardRemote(
+							APP,
+							BOARD,
+							payload,
+							false,
+							onRunId,
+							cb,
+						);
+			await vi.waitFor(() => expect(mocks.streamFetcher).toHaveBeenCalled());
+			emit({ event_type: "run_initiated", payload: { run_id: "server/run" } });
+			expect(onRunId).toHaveBeenCalledWith("server/run");
+
+			const stopping = events.cancelExecution("server/run");
+			if (answer === "fails")
+				await expect(stopping).rejects.toThrow("Cancellation unavailable");
+			else await stopping;
+
+			expect(signal?.aborted).toBe(true);
+			await expect(running).resolves.toBeUndefined();
+			expect(mocks.fetcher).toHaveBeenCalledWith(
+				backend.profile,
+				"execution/run/server%2Frun",
+				{ method: "DELETE" },
+				backend.auth,
+			);
+			const delivered = cb.mock.calls.length;
+			emit({ event_type: "chat_out", payload: { text: "late output" } });
+			expect(cb).toHaveBeenCalledTimes(delivered);
+			expect(mocks.invoke).not.toHaveBeenCalledWith(
+				"cancel_execution",
+				expect.anything(),
+			);
+		},
+	);
+
+	test.each(["event", "board"] as const)(
+		"a failed queued %s run ends like a streamed one once its outcome arrived",
+		async (kind) => {
+			mocks.streamFetcher.mockImplementation(
+				async (_profile, _path, _options, _auth, _onEvent, onJson) =>
+					onJson({
+						run_id: "queued/run",
+						status: "pending",
+						poll_token: "run-capability",
+					}),
+			);
+			const outcome = {
+				event_id: "queued/run:terminal",
+				event_type: "completed",
+				payload: { run_id: "queued/run", status: "failed", error: "Boom" },
+			};
+			mocks.followNativeExecution.mockImplementation(async (options) => {
+				await options.onEvent(outcome);
+				throw new Error("Boom");
+			});
+			const backend = fakeBackend();
+			const cb = vi.fn();
+			const payload = { id: EVENT, payload: {} } as never;
+			const running =
+				kind === "event"
+					? new EventState(backend as never).executeEventRemote(
+							APP,
+							EVENT,
+							payload,
+							false,
+							undefined,
+							cb,
+						)
+					: new BoardState(backend as never).executeBoardRemote(
+							APP,
+							BOARD,
+							payload,
+							false,
+							undefined,
+							cb,
+						);
+
+			await expect(running).resolves.toBeUndefined();
+			expect(cb).toHaveBeenCalledWith([outcome]);
+		},
+	);
+
+	test("a queued run whose updates fail before its outcome still rejects", async () => {
+		mocks.streamFetcher.mockImplementation(
+			async (_profile, _path, _options, _auth, _onEvent, onJson) =>
+				onJson({
+					run_id: "queued/run",
+					status: "pending",
+					poll_token: "run-capability",
+				}),
+		);
+		mocks.followNativeExecution.mockRejectedValue(
+			new Error("Execution updates are unavailable (not_found)"),
+		);
+		const state = new EventState(fakeBackend() as never);
+
+		await expect(
+			state.executeEventRemote(APP, EVENT, { id: EVENT, payload: {} } as never),
+		).rejects.toThrow("Execution updates are unavailable (not_found)");
+	});
+
+	test("does not start a native subscription for a malformed accepted receipt", async () => {
+		mocks.streamFetcher.mockImplementation(
+			async (_profile, _path, _options, _auth, _onEvent, onJson) =>
+				onJson({ run_id: "run", status: "pending" }),
+		);
+		const state = new EventState(fakeBackend() as never);
+		await expect(
+			state.executeEventRemote(APP, EVENT, { id: EVENT, payload: {} } as never),
+		).rejects.toThrow("Invalid background execution receipt");
+		expect(mocks.followNativeExecution).not.toHaveBeenCalled();
+	});
+
+	test("does not start a native subscription without a profile id", async () => {
+		mocks.streamFetcher.mockImplementation(
+			async (_profile, _path, _options, _auth, _onEvent, onJson) =>
+				onJson({ run_id: "run", status: "pending", poll_token: "capability" }),
+		);
+		const backend = fakeBackend();
+		backend.profile = { hub: "hub-1" } as typeof backend.profile;
+		await expect(
+			new EventState(backend as never).executeEventRemote(APP, EVENT, {
+				id: EVENT,
+				payload: {},
+			} as never),
+		).rejects.toThrow("Select a profile");
+		expect(mocks.followNativeExecution).not.toHaveBeenCalled();
+	});
+
+	test("rejects a delayed receipt after its account changed", async () => {
+		const backend = fakeBackend();
+		mocks.streamFetcher.mockImplementation(
+			async (_profile, _path, _options, _auth, _onEvent, onJson) => {
+				backend.auth.user.profile.sub = "another-user";
+				await onJson({
+					run_id: "run",
+					status: "pending",
+					poll_token: "capability",
+				});
+			},
+		);
+		const state = new EventState(backend as never);
+		await expect(
+			state.executeEventRemote(APP, EVENT, { id: EVENT, payload: {} } as never),
+		).rejects.toThrow("Hub account changed");
+		expect(mocks.followNativeExecution).not.toHaveBeenCalled();
+	});
+
 	test("executes on the server without reading a local board", async () => {
 		mocks.invoke.mockImplementation(async (command: string) => {
 			if (command === "get_event") return remoteEvent();
@@ -324,6 +614,7 @@ describe("an event pinned to Remote execution", () => {
 		await state.executeEvent(APP, EVENT, { id: EVENT, payload: {} } as never);
 
 		expect(mocks.streamFetcher).toHaveBeenCalledTimes(1);
+		expect(mocks.followNativeExecution).not.toHaveBeenCalled();
 		expect(mocks.streamFetcher.mock.calls[0][1]).toBe(
 			`apps/${APP}/events/${EVENT}/invoke`,
 		);

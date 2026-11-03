@@ -1,10 +1,12 @@
 //! Global chat runs, stream recovery, steering, and assistant memory.
 
+mod bot_chat;
+mod bot_talk;
+
 use super::attachments::resolve_attachment_images;
 use super::backend_types::{
     FlowPilotAgentBackendKind, FlowPilotChatBackend, FlowPilotModelSelection,
 };
-use super::backends::agent_backend;
 use super::chat::{
     build_global_agent_context, copilot_profile_for, with_reasoning_effort_fallback,
 };
@@ -27,10 +29,11 @@ use flow_like::{
         ChatImage, CopilotScope, UnifiedChatMessage, UnifiedCopilotResponse, flowpilot_thinking,
     },
     flow::copilot::{
-        AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext,
-        memory::{AssistantMemory, MemoryEntry, MemoryStatus},
+        AttachmentManifestEntry, BotToolHost, GlobalDataStudioContext, GlobalOpenBoardContext,
+        PlatformContextInput, bot_platform_context,
+        memory::{AssistantMemory, MemoryEntry, MemoryScope, MemoryStatus},
         platform::PlatformToolBridge,
-        run_platform_chat,
+        run_bot_chat_with_talk, run_platform_chat,
     },
     models::llm::ModelUsageContext,
 };
@@ -413,8 +416,33 @@ pub async fn global_chat(
     channel: Channel<String>,
     auto_approve: Option<bool>,
     conversation_id: Option<String>,
+    // The bot this conversation belongs to: a bot id, `general`, or `flux` (Flux with its account
+    // row's edits). Omitted runs FlowPilot as it is.
+    bot_id: Option<String>,
+    // The message this window wrote to the bot's inbox: the reply is stored there as the bot and
+    // the bot's memory reads and extends that conversation.
+    interactive: Option<crate::bot_host::interactive::InteractiveArgs>,
 ) -> Result<UnifiedCopilotResponse, String> {
-    global_chat_native(
+    let mut finish = None;
+    let mut bot_memory = None;
+    if let (Some(args), Some(bot)) = (interactive, bot_id.as_deref())
+        && let Some(run) = crate::bot_host::interactive::open_for_app(&app_handle, bot, args).await
+    {
+        let guard = crate::bot_host::interactive::begin(
+            Some(&app_handle),
+            bot,
+            run.conversation_id(),
+        );
+        bot_memory = run.memory().await;
+        let hold = run.hold();
+        finish = Some(crate::bot_host::interactive::Finish {
+            memory: bot_memory.clone(),
+            run,
+            guard,
+            hold,
+        });
+    }
+    let result = global_chat_native(
         app_handle,
         Some(webview.label().to_owned()),
         state,
@@ -440,10 +468,19 @@ pub async fn global_chat(
             auto_approve: auto_approve.unwrap_or(false),
             interaction_mode:
                 crate::functions::ai::native_tool_bridge::NativeInteractionMode::Interactive,
+            bot_memory,
             ..Default::default()
         },
+        bot_id,
     )
-    .await
+    .await;
+    if let Some(finish) = finish {
+        match &result {
+            Ok(response) => finish.end(&response.message, None).await,
+            Err(error) => finish.end(error, Some("BOT_TURN_INTERACTIVE_FAILED")).await,
+        }
+    }
+    result
 }
 
 pub async fn global_chat_native(
@@ -471,9 +508,16 @@ pub async fn global_chat_native(
     run_id: Option<String>,
     channel: Channel<String>,
     options: crate::functions::ai::native_tool_bridge::NativeRunOptions,
+    // A bot id, `general` or `flux` runs the turn as that bot (`flux` signed out is FlowPilot);
+    // `None` is FlowPilot.
+    bot_id: Option<String>,
 ) -> Result<UnifiedCopilotResponse, String> {
     // Keep model selection, memory and delegated tools on the profile that owns this run.
     let mut options = options;
+    let nested_talk = options.bot_talk.take();
+    let bot_memory = options.bot_memory.take();
+    let requester = options.requester.take();
+    let approval_gate = options.approval_gate.clone();
     options.attachments = attachments_manifest.clone().unwrap_or_default();
     let conversation_id = options.conversation_id.clone();
     let run_id = Some(run_id.unwrap_or_else(flow_like_types::create_id));
@@ -534,17 +578,126 @@ pub async fn global_chat_native(
     };
     let model_state = Arc::new(model_state);
     let model_selection = FlowPilotModelSelection::parse(model_id);
-    let history = history.unwrap_or_default();
-    let attachments_manifest = attachments_manifest.unwrap_or_default();
-    let context = build_global_agent_context(
+    // Without a webview nobody can answer questions or see inline pages, so a bot gets only the
+    // tools this desktop runs natively.
+    let tool_host = match webview {
+        Some(_) => BotToolHost::Chat,
+        None => BotToolHost::Native,
+    };
+    let mut bot = bot_chat::load_bot(
         &app_handle,
+        bot_id.as_deref(),
+        identity.as_ref(),
         profile.as_deref(),
-        user_context.as_deref(),
-        board_context.as_ref(),
-        data_studio_context.as_ref(),
-        &attachments_manifest,
+        tool_host,
     )
-    .await;
+    .await?;
+    if let (Some(bot), Some(requester)) = (bot.as_mut(), requester) {
+        std::sync::Arc::make_mut(&mut bot.context).requester = Some(requester);
+    }
+    let talk = match bot.as_ref() {
+        Some(bot) => {
+            bot_talk::talk_for(
+                &app_handle,
+                &bot.context,
+                nested_talk,
+                approval_gate,
+                profile_id,
+                run_id.as_deref().unwrap_or_default(),
+            )
+            .await
+        }
+        None => None,
+    };
+    let _workspace = bot
+        .as_ref()
+        .and_then(|bot| bot.admit_workspace(run_id.as_deref().expect("native run id")));
+    // A capabilities bot always runs on the Bits path, on the model its policy and this desktop
+    // allow. Flux runs on its own model when it has a runnable one, else on the chat's selection.
+    let bot_model = match (&bot, &profile) {
+        (Some(bot), Some(profile)) if bot.runs_flowpilot() => {
+            bot_chat::own_model(&model_state, profile, bot).await
+        }
+        (Some(bot), Some(profile)) => Some(
+            bot_chat::bot_model(
+                &model_state,
+                profile,
+                bot,
+                bot_chat::chat_bits_model(&model_selection),
+            )
+            .await?,
+        ),
+        _ => None,
+    };
+    let mut history = history.unwrap_or_default();
+    let mut user_prompt = user_prompt;
+    let mut user_context = user_context;
+    let headless_memory = match (bot.as_mut(), profile.as_deref(), bot_memory) {
+        (Some(bot), Some(profile), Some(source)) => {
+            flow_like::flow::copilot::memory_open::open_for_run(
+                &model_state,
+                profile,
+                &mut bot.context,
+                bot_model.as_deref(),
+                source,
+                embedding_model_id.as_deref(),
+                token.clone(),
+                run_id.as_deref(),
+            )
+            .await
+        }
+        _ => None,
+    };
+    if let Some(memory) = &headless_memory {
+        history = memory
+            .prepared()
+            .history
+            .iter()
+            .map(|message| UnifiedChatMessage {
+                role: if message.role == flow_like_bot_memory::model::Role::Assistant {
+                    flow_like::flow::copilot::ChatRole::Assistant
+                } else {
+                    flow_like::flow::copilot::ChatRole::User
+                },
+                content: message.text.clone(),
+                images: None,
+            })
+            .collect();
+        user_prompt = memory.prompt().to_string();
+        user_context = Some(
+            match user_context.filter(|context| !context.trim().is_empty()) {
+                Some(context) => format!("{context}\n\n{}", memory.context()),
+                None => memory.context().to_string(),
+            },
+        );
+    }
+    let attachments_manifest = attachments_manifest.unwrap_or_default();
+    let context = match &bot {
+        Some(bot) if !bot.runs_flowpilot() => bot_platform_context(
+            &bot.context,
+            PlatformContextInput {
+                user_context: user_context.as_deref(),
+                active_profile: profile
+                    .as_deref()
+                    .map(|profile| (profile.name.as_str(), profile.id.as_str())),
+                switchable_profiles: &[],
+                open_board: board_context.as_ref(),
+                open_data_studio: data_studio_context.as_ref(),
+                attachments: &attachments_manifest,
+            },
+        ),
+        _ => {
+            build_global_agent_context(
+                &app_handle,
+                profile.as_deref(),
+                user_context.as_deref(),
+                board_context.as_ref(),
+                data_studio_context.as_ref(),
+                &attachments_manifest,
+            )
+            .await
+        }
+    };
 
     // Attachments arrive as URLs (local tmp files / presigned uploads, like the simple chat) and
     // are resolved to base64 images here, right before the model call.
@@ -558,7 +711,17 @@ pub async fn global_chat_native(
 
     // Profile-scoped semantic memory, enabled only when the user selected an embedding model.
     // Shared by every backend so recall and the memory tools behave identically regardless of
-    // the selected model.
+    // the selected model. A bot remembers only with `memory` (FlowPilot bots always), on its own
+    // embedding model when it has one.
+    let chat_embedding_model_id = embedding_model_id.clone();
+    let embedding_model_id = match &bot {
+        Some(bot) => bot
+            .context
+            .memory_model(embedding_model_id.as_deref())
+            .map(str::to_string),
+        None => embedding_model_id,
+    };
+    let embedding_model_id = embedding_model_id.filter(|_| headless_memory.is_none());
     let memory =
         if let (Some(profile_arc), Some(embedding_id)) = (&profile, embedding_model_id.as_ref()) {
             match profile_arc
@@ -571,10 +734,15 @@ pub async fn global_chat_native(
                         run_id: Some(run_id.clone()),
                         api_base_url: None,
                     });
+                    // A bot keeps its own memory; FlowPilot (and Flux, for now) the profile's.
+                    let memory_scope = match &bot {
+                        Some(bot) => bot.context.memory_scope(&profile_arc.id),
+                        None => MemoryScope::Profile(profile_arc.id.clone()),
+                    };
                     match AssistantMemory::open(
                         model_state.clone(),
                         None,
-                        &profile_arc.id,
+                        &memory_scope,
                         &bit,
                         token.clone(),
                         usage_context,
@@ -623,11 +791,11 @@ pub async fn global_chat_native(
             completed: false,
         });
     if let (Some(run_id), Some(run)) = (run_id.as_ref(), run.as_ref()) {
-        let _ = forward_channel_cancel_to_run(
+        drop(forward_channel_cancel_to_run(
             run_id.clone(),
             chat_channel.clone(),
             run.done_rx.clone(),
-        );
+        ));
         if webview.is_some() {
             crate::utils::emit_to_ui(
                 &app_handle,
@@ -654,16 +822,40 @@ pub async fn global_chat_native(
         source_user_prompt.clone(),
     );
     global_tool_context.conversation_id = conversation_id;
+    global_tool_context.bot = bot.as_ref().map(|bot| {
+        Arc::new(crate::functions::ai::native_bot_tools::BotToolRuntime {
+            context: bot.context.clone(),
+            state: model_state.clone(),
+            profile: profile.clone(),
+            token: token.clone(),
+            model_id: bot_model.clone().or_else(|| model_selection.model_id.clone()),
+            embedding_model_id: bot
+                .context
+                .embedding_model
+                .clone()
+                .or(chat_embedding_model_id),
+            run_id: run_id.clone(),
+        })
+    });
 
+    let backend = match &bot {
+        Some(bot) if !bot.runs_flowpilot() || bot_model.is_some() => FlowPilotChatBackend::Bits,
+        _ => model_selection.backend,
+    };
     let result = async {
-        match model_selection.backend {
+        match backend {
             FlowPilotChatBackend::Agent(FlowPilotAgentBackendKind::GithubCopilot) => {
                 let model_id = model_selection
                     .model_id
                     .as_deref()
                     .filter(|model_id| !model_id.trim().is_empty())
                     .ok_or_else(|| "GitHub Copilot backend requires a model id".to_string())?;
-                let context = context_with_memory(context, memory.as_ref(), &user_prompt).await;
+                let context = context_with_memory(
+                    bot_chat::agent_context(context, bot.as_ref()),
+                    memory.as_ref(),
+                    &user_prompt,
+                )
+                .await;
 
                 instrumented_agent_stage(
                     &app_handle,
@@ -706,7 +898,12 @@ pub async fn global_chat_native(
                     .model_id
                     .clone()
                     .unwrap_or_else(|| "default".to_string());
-                let context = context_with_memory(context, memory.as_ref(), &user_prompt).await;
+                let context = context_with_memory(
+                    bot_chat::agent_context(context, bot.as_ref()),
+                    memory.as_ref(),
+                    &user_prompt,
+                )
+                .await;
 
                 instrumented_agent_stage(
                     &app_handle,
@@ -752,7 +949,7 @@ pub async fn global_chat_native(
                 // The whole loop lives in core (`run_platform_chat`); the desktop only supplies the
                 // Tauri-backed tool bridge and token sink. Memory recall happens inside the loop.
                 let (run_cancellation, _run_registration) = register_copilot_run(run_id.as_deref());
-                let bridge: Arc<dyn PlatformToolBridge> = Arc::new(DesktopPlatformBridge {
+                let desktop_bridge = DesktopPlatformBridge {
                     bridge: crate::functions::ai::frontend_tool_bridge::FrontendToolBridge::new_with_event(
                         app_handle.clone(),
                         crate::functions::ai::frontend_tool_bridge::GLOBAL_FRONTEND_TOOL_EVENT,
@@ -763,7 +960,13 @@ pub async fn global_chat_native(
                     cancellation: run_cancellation.clone(),
                     // Lets the core loop drain this run's channel inbox between tool rounds.
                     steerable: true,
-                });
+                };
+                let bridge: Arc<dyn PlatformToolBridge> = match &bot {
+                    Some(bot) if !bot.runs_flowpilot() => {
+                        Arc::new(bot_chat::BotDesktopBridge(desktop_bridge))
+                    }
+                    _ => Arc::new(desktop_bridge),
+                };
 
                 let board_history: Vec<flow_like::flow::copilot::ChatMessage> = history
                     .into_iter()
@@ -778,20 +981,47 @@ pub async fn global_chat_native(
                     let _ = sink.send(token);
                 };
 
-                let platform_chat = run_platform_chat(
-                    model_state.clone(),
-                    profile,
-                    context,
-                    user_prompt,
-                    current_images,
-                    board_history,
-                    model_selection.model_id,
-                    Some(flowpilot_thinking(reasoning_effort.as_deref())),
-                    token,
-                    bridge,
-                    memory,
-                    Some(on_token),
-                );
+                let thinking = Some(flowpilot_thinking(reasoning_effort.as_deref()));
+                let platform_chat = async {
+                    match bot {
+                        Some(bot) => {
+                            run_bot_chat_with_talk(
+                                model_state.clone(),
+                                profile,
+                                bot.context,
+                                context,
+                                user_prompt,
+                                current_images,
+                                board_history,
+                                bot_model.or(model_selection.model_id),
+                                thinking,
+                                token,
+                                bridge,
+                                memory,
+                                Some(on_token),
+                                talk,
+                            )
+                            .await
+                        }
+                        None => {
+                            run_platform_chat(
+                                model_state.clone(),
+                                profile,
+                                context,
+                                user_prompt,
+                                current_images,
+                                board_history,
+                                model_selection.model_id,
+                                thinking,
+                                token,
+                                bridge,
+                                memory,
+                                Some(on_token),
+                            )
+                            .await
+                        }
+                    }
+                };
                 let message = tokio::select! {
                     result = platform_chat => result.map_err(|error| error.to_string())?,
                     _ = run_cancellation.cancelled() => {
@@ -838,36 +1068,48 @@ async fn context_with_memory(
     }
 }
 
-/// Stored-memory count for a profile + the embedding model that produced them, so the UI can warn
-/// before switching to an incompatible embedding model.
+/// Stored-memory count + the embedding model that produced them, so the UI can warn before
+/// switching to an incompatible embedding model. `bot_id` reads the memory that bot's chat uses:
+/// its own, or for Flux (`flux` or its row) FlowPilot's memory of the profile, as without one.
 #[tauri::command]
 pub async fn global_chat_memory_status(
+    app_handle: AppHandle,
     state: State<'_, TauriFlowLikeState>,
     profile_id: String,
+    bot_id: Option<String>,
 ) -> Result<MemoryStatus, String> {
-    AssistantMemory::status(state.0.clone(), None, &profile_id)
+    let scope = bot_chat::resolved_memory_scope(&app_handle, profile_id, bot_id.as_deref()).await?;
+    AssistantMemory::status(state.0.clone(), None, &scope)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// Delete all memories for a profile (used when the user switches the embedding model).
+/// Delete all memories of FlowPilot in a profile, or of one bot (used when the user switches the
+/// embedding model).
 #[tauri::command]
 pub async fn global_chat_clear_memory(
+    app_handle: AppHandle,
     state: State<'_, TauriFlowLikeState>,
     profile_id: String,
+    bot_id: Option<String>,
 ) -> Result<(), String> {
-    AssistantMemory::clear(state.0.clone(), None, &profile_id)
+    let scope = bot_chat::resolved_memory_scope(&app_handle, profile_id, bot_id.as_deref()).await?;
+    AssistantMemory::clear(state.0.clone(), None, &scope)
         .await
         .map_err(|e| e.to_string())
 }
 
-/// List a profile's saved memories (newest first) so the UI can review and manage them.
+/// List saved memories (newest first) of FlowPilot in a profile, or of one bot, so the UI can
+/// review and manage them.
 #[tauri::command]
 pub async fn global_chat_list_memories(
+    app_handle: AppHandle,
     state: State<'_, TauriFlowLikeState>,
     profile_id: String,
+    bot_id: Option<String>,
 ) -> Result<Vec<MemoryEntry>, String> {
-    AssistantMemory::list(state.0.clone(), None, &profile_id)
+    let scope = bot_chat::resolved_memory_scope(&app_handle, profile_id, bot_id.as_deref()).await?;
+    AssistantMemory::list(state.0.clone(), None, &scope)
         .await
         .map_err(|e| e.to_string())
 }
@@ -875,11 +1117,14 @@ pub async fn global_chat_list_memories(
 /// Delete a single saved memory by id.
 #[tauri::command]
 pub async fn global_chat_delete_memory(
+    app_handle: AppHandle,
     state: State<'_, TauriFlowLikeState>,
     profile_id: String,
     id: String,
+    bot_id: Option<String>,
 ) -> Result<(), String> {
-    AssistantMemory::delete_entry(state.0.clone(), None, &profile_id, &id)
+    let scope = bot_chat::resolved_memory_scope(&app_handle, profile_id, bot_id.as_deref()).await?;
+    AssistantMemory::delete_entry(state.0.clone(), None, &scope, &id)
         .await
         .map_err(|e| e.to_string())
 }

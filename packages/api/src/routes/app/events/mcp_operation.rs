@@ -86,7 +86,7 @@ pub async fn invoke_mcp_operation(
 ) -> Result<Json<Value>, ApiError> {
     ensure_member_caller(&user)?;
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
-    let user_id = permission.effective_user_id().map_err(|_| {
+    let user_id = permission.person_user_id().map_err(|_| {
         ApiError::forbidden("Invoking requires a caller that is linked to a user account")
     })?;
     let params = operation_params(&body.method, body.params)?;

@@ -1,7 +1,8 @@
-// Profile-scoped assistant-memory operations, abstracted across platforms so the shared global-chat
-// UI works on desktop and web. Desktop calls the Tauri commands (local LanceDB); web calls the
-// server endpoints under `/api/v1/ai/global-chat/memory` (user-scoped storage). Mirrors the
-// `use-copilot-sdk` pattern: `isTauri()` picks the path and Tauri is imported lazily.
+// Assistant-memory operations, abstracted across platforms so the shared global-chat UI works on
+// desktop and web. Flux remembers per profile; every bot keeps its own memory. Desktop calls the
+// Tauri commands (local LanceDB); web calls the server endpoints under
+// `/api/v1/ai/global-chat/memory` (user-scoped storage). Mirrors the `use-copilot-sdk` pattern:
+// `isTauri()` picks the path and Tauri is imported lazily.
 
 import { getApiUrl } from "../../lib/api-url";
 import { isTauri } from "../../lib/platform";
@@ -16,6 +17,12 @@ export interface MemoryEntry {
 	content: string;
 	role: string;
 	timestamp: number;
+}
+
+/** Whose memory: Flux's in a profile (`botId` null), or one bot's. */
+export interface MemoryOwner {
+	profileId: string;
+	botId: string | null;
 }
 
 async function tauriInvoke<T>(
@@ -33,52 +40,60 @@ function apiHeaders(token?: string): Record<string, string> {
 	};
 }
 
-function memoryUrl(profileId: string, suffix = ""): string {
-	return `${getApiUrl(null, `ai/global-chat/memory${suffix}`)}?profile_id=${encodeURIComponent(profileId)}`;
+function ownerArgs({ profileId, botId }: MemoryOwner) {
+	return botId ? { profileId, botId } : { profileId };
+}
+
+function memoryUrl({ profileId, botId }: MemoryOwner, suffix = ""): string {
+	const query = new URLSearchParams({ profile_id: profileId });
+	if (botId) query.set("bot_id", botId);
+	return `${getApiUrl(null, `ai/global-chat/memory${suffix}`)}?${query}`;
 }
 
 /** Stored-memory count + the embedding model that produced it, for warning before a model switch. */
 export async function globalChatMemoryStatus(
-	profileId: string,
+	owner: MemoryOwner,
 	token?: string,
 ): Promise<MemoryStatus> {
 	if (isTauri()) {
-		return tauriInvoke<MemoryStatus>("global_chat_memory_status", {
-			profileId,
-		});
+		return tauriInvoke<MemoryStatus>(
+			"global_chat_memory_status",
+			ownerArgs(owner),
+		);
 	}
-	const res = await fetch(memoryUrl(profileId), { headers: apiHeaders(token) });
+	const res = await fetch(memoryUrl(owner), { headers: apiHeaders(token) });
 	if (!res.ok) throw new Error(`memory status failed: ${res.status}`);
 	return res.json();
 }
 
-/** Drop the whole memory table for a profile (used when the embedding model changes). */
+/** Drop the whole memory table of its owner (used when the embedding model changes). */
 export async function clearGlobalChatMemory(
-	profileId: string,
+	owner: MemoryOwner,
 	token?: string,
 ): Promise<void> {
 	if (isTauri()) {
-		await tauriInvoke("global_chat_clear_memory", { profileId });
+		await tauriInvoke("global_chat_clear_memory", ownerArgs(owner));
 		return;
 	}
-	const res = await fetch(memoryUrl(profileId), {
+	const res = await fetch(memoryUrl(owner), {
 		method: "DELETE",
 		headers: apiHeaders(token),
 	});
 	if (!res.ok) throw new Error(`clear memory failed: ${res.status}`);
 }
 
-/** List a profile's stored observations, newest first, for review/management in the UI. */
+/** List the owner's stored observations, newest first, for review/management in the UI. */
 export async function listGlobalChatMemories(
-	profileId: string,
+	owner: MemoryOwner,
 	token?: string,
 ): Promise<MemoryEntry[]> {
 	if (isTauri()) {
-		return tauriInvoke<MemoryEntry[]>("global_chat_list_memories", {
-			profileId,
-		});
+		return tauriInvoke<MemoryEntry[]>(
+			"global_chat_list_memories",
+			ownerArgs(owner),
+		);
 	}
-	const res = await fetch(memoryUrl(profileId, "/entries"), {
+	const res = await fetch(memoryUrl(owner, "/entries"), {
 		headers: apiHeaders(token),
 	});
 	if (!res.ok) throw new Error(`list memories failed: ${res.status}`);
@@ -91,17 +106,17 @@ export async function listGlobalChatMemories(
 
 /** Delete a single stored observation by id. */
 export async function deleteGlobalChatMemory(
-	profileId: string,
+	owner: MemoryOwner,
 	id: string,
 	token?: string,
 ): Promise<void> {
 	if (isTauri()) {
-		await tauriInvoke("global_chat_delete_memory", { profileId, id });
+		await tauriInvoke("global_chat_delete_memory", { ...ownerArgs(owner), id });
 		return;
 	}
-	const res = await fetch(
-		`${getApiUrl(null, `ai/global-chat/memory/${encodeURIComponent(id)}`)}?profile_id=${encodeURIComponent(profileId)}`,
-		{ method: "DELETE", headers: apiHeaders(token) },
-	);
+	const res = await fetch(memoryUrl(owner, `/${encodeURIComponent(id)}`), {
+		method: "DELETE",
+		headers: apiHeaders(token),
+	});
 	if (!res.ok) throw new Error(`delete memory failed: ${res.status}`);
 }

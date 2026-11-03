@@ -1217,7 +1217,7 @@ describe("micro widget consent and grants", () => {
 		expect(frameSrc()).toEndWith(frameUrl(GRANT_A));
 		expect(frameSrc()).not.toContain("?");
 		expect(frame()?.getAttribute("sandbox")).toBe(
-			"allow-scripts allow-downloads",
+			"allow-scripts allow-forms allow-downloads",
 		);
 		expect(findButton("Allow this time")).toBeNull();
 	});
@@ -1236,7 +1236,7 @@ describe("micro widget consent and grants", () => {
 
 		await click("Don't allow");
 		expect(frameSrc()).toEndWith(frameUrl("0"));
-		expect(frame()?.getAttribute("sandbox")).toBe("allow-scripts");
+		expect(frame()?.getAttribute("sandbox")).toBe("allow-scripts allow-forms");
 		expect(host.textContent).toContain(
 			"Permission declined: File downloads and network access to 2 sites",
 		);
@@ -1248,7 +1248,7 @@ describe("micro widget consent and grants", () => {
 		await click("Allow this time");
 		expect(calls.mint).toHaveLength(1);
 		expect(frame()?.getAttribute("sandbox")).toBe(
-			"allow-scripts allow-downloads",
+			"allow-scripts allow-forms allow-downloads",
 		);
 	});
 
@@ -1533,7 +1533,7 @@ describe("micro widget consent and grants", () => {
 		await renderWidget(component(), { router: {} });
 		expect(findButton("Allow this time")).toBeNull();
 		expect(frameSrc()).toEndWith(frameUrl("0"));
-		expect(frame()?.getAttribute("sandbox")).toBe("allow-scripts");
+		expect(frame()?.getAttribute("sandbox")).toBe("allow-scripts allow-forms");
 		expect(calls.mint).toEqual([]);
 	});
 
@@ -1569,7 +1569,7 @@ describe("micro widget consent and grants", () => {
 			`/com.example.sales/${BUNDLE_HASH}/frame/chart?downloads=1`,
 		);
 		expect(frame()?.getAttribute("sandbox")).toBe(
-			"allow-scripts allow-downloads",
+			"allow-scripts allow-forms allow-downloads",
 		);
 	});
 

@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::anyhow;
 use sea_orm::sea_query::{DynIden, Expr, ExprTrait, Keyword, Order, Query, ValueTuple};
-use sea_orm::{ConnectionTrait, DatabaseConnection, QueryResult, Value};
+use sea_orm::{ConnectionTrait, QueryResult, Value};
 
 use super::graph::{PkColumn, PkKind, TableMeta};
 use super::job;
@@ -253,8 +253,8 @@ fn decode_key(row: &QueryResult, primary_key: &[PkColumn]) -> Result<Vec<Value>,
 }
 
 /// The next page of primary keys of `table` matching `predicate`.
-pub async fn select_page(
-    db: &DatabaseConnection,
+pub async fn select_page<C: ConnectionTrait>(
+    db: &C,
     table: &TableMeta,
     predicate: &Predicate,
     root_id: &str,
@@ -295,6 +295,21 @@ fn write_condition(
     root_id: &str,
 ) -> Expr {
     key_filter(table, keys).and(predicate_expr(predicate, root_id))
+}
+
+/// Deletes exactly `keys` of `table` that still match `predicate`, in one statement.
+pub async fn delete_page<C: ConnectionTrait>(
+    db: &C,
+    table: &TableMeta,
+    keys: &[Vec<Value>],
+    predicate: &Predicate,
+    root_id: &str,
+) -> Result<u64, ApiError> {
+    let statement = Query::delete()
+        .from_table(iden(&table.name))
+        .and_where(write_condition(table, keys, predicate, root_id))
+        .take();
+    Ok(db.execute(&statement).await?.rows_affected())
 }
 
 /// Apply `op` to exactly `keys` in one retried transaction.

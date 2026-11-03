@@ -454,7 +454,7 @@ pub async fn resolve_page_trigger(
             "Page execution requires Event runtime permission",
         ));
     }
-    let subject = permission.effective_user_id().map_err(|_| {
+    let subject = permission.person_user_id().map_err(|_| {
         ApiError::forbidden("Page execution requires a caller linked to a user account")
     })?;
     resolve_authorized_page_trigger(

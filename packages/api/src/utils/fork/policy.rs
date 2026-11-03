@@ -227,6 +227,7 @@ mod tests {
             forked_at: None,
             forked_from: None,
             app_type: None,
+            bot_id: None,
         }
     }
 

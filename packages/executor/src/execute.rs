@@ -670,6 +670,16 @@ pub(crate) fn check_execution_deadline(config: &ExecutorConfig) -> Result<(), Ex
     Ok(())
 }
 
+pub(crate) fn parse_event(event_json: Option<&str>) -> Result<Option<Event>, ExecutorError> {
+    event_json
+        .map(|json| {
+            serde_json::from_str(json).map_err(|error| {
+                ExecutorError::InvalidRequest(format!("Invalid event_json: {error}"))
+            })
+        })
+        .transpose()
+}
+
 async fn execute_inner(
     request: ExecutionRequest,
     config: ExecutorConfig,
@@ -686,10 +696,7 @@ async fn execute_inner(
         return Err(error);
     }
 
-    let event: Option<Event> = request
-        .event_json
-        .as_ref()
-        .and_then(|json| serde_json::from_str(json).ok());
+    let event = parse_event(request.event_json.as_deref())?;
     let teams_callbacks = event
         .as_ref()
         .is_some_and(|event| event.event_type == "teams");
@@ -1115,14 +1122,13 @@ async fn execute_inner(
                     token.cancel();
                     // Let the run join its flush task and close resources before
                     // the runtime decides whether its cleanup grace is exhausted.
-                    let _ = execution.await;
-                    Err(())
+                    Err(execution.await)
                 }
             }
         } else {
             tokio::time::timeout(runtime_timeout, run.execute(state.clone()))
                 .await
-                .map_err(|_| ())
+                .map_err(|_| None)
         }
     });
     let mut lease_failure = None;
@@ -1242,7 +1248,12 @@ async fn execute_inner(
                 ExecutionStatus::Failed | ExecutionStatus::Running => (
                     EventType::Error,
                     "Execution failed",
-                    Some("Execution failed".to_string()),
+                    Some(
+                        log_meta
+                            .as_ref()
+                            .and_then(|meta| meta.error_message.clone())
+                            .unwrap_or_else(|| "Execution failed".to_string()),
+                    ),
                 ),
             };
             send_event(
@@ -1254,7 +1265,7 @@ async fn execute_inner(
             );
             (status, None, error, summary)
         }
-        Err(_) => {
+        Err(log_meta) => {
             send_event(
                 &event_tx,
                 &sequence,
@@ -1268,7 +1279,7 @@ async fn execute_inner(
                 Some("Execution timeout".to_string()),
                 RunSummary {
                     log_level: Some(LogLevel::Fatal.to_u8()),
-                    ..RunSummary::default()
+                    ..log_meta.as_ref().map(RunSummary::from).unwrap_or_default()
                 },
             )
         }
@@ -2017,6 +2028,45 @@ fn ensure_terminal_acknowledgement(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod event_parsing_tests {
+    use super::*;
+
+    #[test]
+    fn supplied_invalid_event_is_rejected_instead_of_running_without_it() {
+        for json in ["{", "{}", "null"] {
+            let error = parse_event(Some(json)).expect_err("invalid event must fail");
+            assert!(matches!(error, ExecutorError::InvalidRequest(_)));
+            assert!(error.to_string().contains("Invalid event_json"));
+        }
+        assert!(parse_event(None).expect("direct board execution").is_none());
+    }
+
+    #[test]
+    fn supplied_event_keeps_its_version() {
+        let json = serde_json::json!({
+            "id": "event-1",
+            "name": "Page load",
+            "description": "",
+            "board_id": "board-1",
+            "node_id": "entry-1",
+            "variables": {},
+            "config": [],
+            "active": true,
+            "priority": 0,
+            "event_type": "page",
+            "event_version": [1, 2, 3],
+            "created_at": {"secs_since_epoch": 0, "nanos_since_epoch": 0},
+            "updated_at": {"secs_since_epoch": 0, "nanos_since_epoch": 0}
+        });
+        let event = parse_event(Some(&json.to_string()))
+            .expect("valid event")
+            .expect("provided event");
+        assert_eq!(event.event_version, (1, 2, 3));
+        assert_eq!(event.id, "event-1");
+    }
 }
 
 #[cfg(test)]
@@ -2919,6 +2969,7 @@ mod page_request_binding_tests {
                 wasm_url: "https://example.invalid/package.wasm".into(),
                 cwasm_url: "https://example.invalid/package.cwasm".into(),
                 cwasm_checksum: "cwasm-checksum".into(),
+                permissions: None,
             },
         )]);
         assert!(validate_page_request_binding(

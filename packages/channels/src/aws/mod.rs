@@ -18,13 +18,15 @@
 //! ```
 
 mod channel;
+#[cfg(feature = "aws")]
 mod forwarder;
 mod policy;
-mod presign;
+pub(crate) mod presign;
 mod reply_chunks;
 mod router;
 
 pub use channel::AwsIotChannel;
+#[cfg(feature = "aws")]
 pub use forwarder::{AwsIotForwarder, DIRECT_MESSAGE_TIMEOUT_SECS};
 pub use policy::{
     EXECUTOR_CLIENT_ID_PREFIX, client_session_policy, executor_client_id, executor_session_policy,

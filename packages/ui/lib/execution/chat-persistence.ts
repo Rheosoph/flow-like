@@ -16,17 +16,44 @@ import {
 	persistWorkflowReactions,
 	preserveWorkflowReactionState,
 } from "../../components/interfaces/chat-default/workflow-reactions";
+import type { IChatMessageError } from "../flowpilot/chat-error";
 import type { ExecutionTask } from "./types";
 
 export interface ExecutionChatSeed {
 	responseMessage: IMessage;
 	tmpLocalState?: ILocalChatState | null;
 	tmpGlobalState?: IGlobalState | null;
+	/** In the sender's language: the runtime saves a detached reply without translations or a tab. */
+	detachedNotice?: Pick<IChatMessageError, "title" | "message">;
 }
 
 const turns = new Map<string, IChatTurn>();
 
-/** The runtime writes one ordered transcript, regardless of how many tabs render it. */
+/** Why a saved reply ends where it does. */
+function replyCard(task: ExecutionTask): IChatMessageError | undefined {
+	if (task.status === "cancelled")
+		return {
+			kind: "cancelled",
+			title: "Stopped",
+			message: task.error || "You stopped this run.",
+			retryable: true,
+		};
+	if (task.status === "failed")
+		return {
+			kind: "generic",
+			title: "Run interrupted",
+			message: task.error || "The run ended before its reply was complete.",
+			retryable: true,
+		};
+	const notice = task.detached ? task.chat?.detachedNotice : undefined;
+	// The neutral hourglass card: the run did not fail, it is still going.
+	return notice && { kind: "rate-limit", ...notice, retryable: false };
+}
+
+/**
+ * The runtime writes one ordered transcript, regardless of how many tabs render it. A detached
+ * run's reply is saved as incomplete; a stop saves it once more, so only a final save drops its fold.
+ */
 export async function persistExecutionChat(
 	task: ExecutionTask,
 	final: boolean,
@@ -48,22 +75,16 @@ export async function persistExecutionChat(
 		turns.set(task.taskId, turn);
 	}
 	turn.catchUp(task.events);
+	const settled = final || task.detached === true;
+	// The last save of a detached run comes later and folds nothing new: its state must not
+	// overwrite what a newer run in the conversation wrote meanwhile.
+	const writesState = !(final && task.detached);
 	const messages = structuredClone(turn.responseMessages);
-	if (final) {
+	if (settled) {
 		for (const message of messages) finalizePlanSteps(message);
 		const last = messages.at(-1);
-		if (last && (task.status === "failed" || task.status === "cancelled")) {
-			last.error = {
-				kind: task.status === "cancelled" ? "cancelled" : "generic",
-				title: task.status === "cancelled" ? "Stopped" : "Run interrupted",
-				message:
-					task.error ||
-					(task.status === "cancelled"
-						? "You stopped this run."
-						: "The run ended before its reply was complete."),
-				retryable: true,
-			};
-		}
+		const card = replyCard(task);
+		if (last && card) last.error = card;
 	}
 	const live = turn.live();
 	await chatDb.transaction(
@@ -80,7 +101,7 @@ export async function persistExecutionChat(
 			const session = await chatDb.sessions.get(sessionId);
 			if (!session || session.appId !== task.appId) return;
 			for (const message of messages) {
-				if (final && isReactionOnlyResponse(message, task.events)) {
+				if (settled && isReactionOnlyResponse(message, task.events)) {
 					await chatDb.messages.delete(message.id);
 					await chatDb.drafts.delete(message.id);
 					continue;
@@ -104,20 +125,21 @@ export async function persistExecutionChat(
 				const row = encodeMessageRow(message);
 				await chatDb.messages.put({
 					...row,
-					...(!final ? { streaming: true } : {}),
+					...(!settled ? { streaming: true } : {}),
 				});
-				if (!final) await chatDb.drafts.put(row);
+				if (!settled) await chatDb.drafts.put(row);
 			}
 			await persistWorkflowReactions(task.events, {
 				appId: task.appId,
 				sessionId,
 				triggerMessageId: seed.responseMessage.trigger_message_id,
 			});
-			if (live.tmpLocalState) await chatDb.localStage.put(live.tmpLocalState);
-			if (live.tmpGlobalState)
+			if (writesState && live.tmpLocalState)
+				await chatDb.localStage.put(live.tmpLocalState);
+			if (writesState && live.tmpGlobalState)
 				await chatDb.globalState.put(live.tmpGlobalState);
 			await chatDb.sessions.update(sessionId, { updatedAt: Date.now() });
-			if (final) {
+			if (settled) {
 				const rootId =
 					seed.responseMessage.stream_root_id ?? seed.responseMessage.id;
 				const drafts = await chatDb.drafts

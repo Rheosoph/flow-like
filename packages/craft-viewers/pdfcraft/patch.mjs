@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 export default function prepare({ directory, original, write, replaceOnce }) {
-	const uiPath = "crates/ui-egui/src/lib.rs";
+	const uiPath = "crates/ui-egui/src/app.rs";
 	let ui = original(uiPath);
 	ui = replaceOnce(
 		ui,
@@ -12,12 +12,15 @@ export default function prepare({ directory, original, write, replaceOnce }) {
 	);
 	ui = replaceOnce(
 		ui,
-		'.map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name} — PdfCraft"));',
-		'.map_or_else(|| "Flows PDF".to_owned(), |name| format!("{name} - Flows PDF"));',
+		'.map_or_else(|| "PdfCraft".to_owned(), |name| format!("{name}{mark} — PdfCraft"))',
+		'.map_or_else(|| "Flows PDF".to_owned(), |name| format!("{name}{mark} - Flows PDF"))',
 		"window title",
 	);
+	write(uiPath, ui);
+	const filesPath = "crates/ui-egui/src/app/files.rs";
+	ui = original(filesPath);
 	const open =
-		"fn open_bytes_with_focus(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>, activate: bool) -> Result<(), String> {";
+		"pub(super) fn open_bytes_with_focus(&mut self, name: &str, path: Option<String>, bytes: Vec<u8>, activate: bool) -> Result<(), String> {";
 	ui = replaceOnce(
 		ui,
 		open,
@@ -35,7 +38,7 @@ export default function prepare({ directory, original, write, replaceOnce }) {
 			"host file controls",
 		);
 	}
-	write(uiPath, ui);
+	write(filesPath, ui);
 	const commandsPath = "crates/ui-egui/src/commands.rs";
 	const execute = "pub fn execute(&mut self, id: &str) -> bool {";
 	write(
@@ -47,8 +50,8 @@ export default function prepare({ directory, original, write, replaceOnce }) {
 			"host commands",
 		),
 	);
-	const editingPath = "crates/ui-egui/src/editing.rs";
-	const createPath = "crates/ui-egui/src/create_ui.rs";
+	const editingPath = "crates/ui-egui/src/editing/save.rs";
+	const createPath = "crates/ui-egui/src/workflows/create_ui.rs";
 	write(
 		createPath,
 		replaceOnce(
@@ -67,17 +70,21 @@ export default function prepare({ directory, original, write, replaceOnce }) {
 		`${save}\n        if let Some(save) = &self.host_save {\n            let _ = save("document.pdf", &[], matches!(target, SaveTarget::As));\n            return false;\n        }`,
 		"asynchronous host save",
 	);
-	editing += `\n${readFileSync(join(directory, "host-methods.rs"), "utf8")}`;
-	write(editingPath, editing);
-	const chromePath = "crates/ui-egui/src/chrome.rs";
-	let chrome = original(chromePath);
-	chrome = replaceOnce(
-		chrome,
-		'        ui.menu_button(tl!("File"), |ui| crate::commands::registry_menu(app, ui, "File"));',
-		'        if app.host_save.is_none() { ui.menu_button(tl!("File"), |ui| crate::commands::registry_menu(app, ui, "File")); }',
-		"File menu",
+	write(
+		"crates/ui-egui/src/editing.rs",
+		`${original("crates/ui-egui/src/editing.rs")}\n${readFileSync(join(directory, "host-methods.rs"), "utf8")}`,
 	);
-	write(chromePath, chrome);
+	write(editingPath, editing);
+	const menusPath = "crates/ui-egui/src/menus.rs";
+	write(
+		menusPath,
+		replaceOnce(
+			original(menusPath),
+			'        bar.tag_item(&CommandRef::new("help.about"), ItemRole::About);',
+			'        if self.host_save.is_some() { bar.menus.remove(0); }\n        bar.tag_item(&CommandRef::new("help.about"), ItemRole::About);',
+			"host File menu",
+		),
+	);
 	const dialogsPath = "crates/ui-egui/src/dialogs.rs";
 	let dialogs = original(dialogsPath);
 	for (const [search, replacement] of [
@@ -122,8 +129,8 @@ export default function prepare({ directory, original, write, replaceOnce }) {
 		manifest,
 		replaceOnce(
 			original(manifest),
-			"\negui = { workspace = true }",
-			'\negui = { workspace = true }\nserde_json = { workspace = true }\nwasm-bindgen = "0.2"',
+			'\negui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }',
+			'\negui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }\nserde_json = { workspace = true }\nwasm-bindgen = "0.2"',
 			"bridge dependencies",
 		),
 	);
@@ -161,34 +168,35 @@ export default function prepare({ directory, original, write, replaceOnce }) {
 	);
 	automation = replaceOnce(
 		automation,
-		"Self { session: Session::new(),",
-		"Self { live_read_only: None, session: Session::new(),",
+		"            session: Session::new(),",
+		"            live_read_only: None,\n            session: Session::new(),",
 		"live MCP initialization",
-	);
-	const call =
-		"pub fn call(&mut self, name: &str, args: &Value) -> Result<Vec<Content>> {";
-	automation = replaceOnce(
-		automation,
-		call,
-		`${call}
-        if let Some(read_only) = self.live_read_only {
-            if !live_tool_allowed(name) { return Err(failed("Use the document controls above the editor for file operations.")); }
-            if read_only && !tools::find(name).is_some_and(|tool| tool.read_only) { return Err(failed("Enable editing before changing the document.")); }
-        }`,
-		"live MCP tool guard",
-	);
-	const resolve =
-		"fn resolve(&self, path: &str, for_write: bool) -> Result<PathBuf> {";
-	automation = replaceOnce(
-		automation,
-		resolve,
-		`${resolve}
-        if self.live_read_only.is_some() { return Err(failed("File paths are unavailable in the live editor.")); }`,
-		"live MCP file guard",
 	);
 	write(
 		automationPath,
 		`${automation}\n${readFileSync(join(directory, "mcp-policy.rs"), "utf8")}`,
+	);
+	const call =
+		"pub fn call(&mut self, name: &str, args: &Value) -> Result<Vec<Content>> {";
+	write(
+		"crates/automation/src/dispatch.rs",
+		replaceOnce(
+			original("crates/automation/src/dispatch.rs"),
+			call,
+			`${call}\n        if let Some(read_only) = self.live_read_only {\n            if !crate::live_tool_allowed(name) { return Err(failed("Use the document controls above the editor for file operations.")); }\n            if read_only && !tools::find(name).is_some_and(|tool| tool.read_only) { return Err(failed("Enable editing before changing the document.")); }\n        }`,
+			"live MCP tool guard",
+		),
+	);
+	const resolve =
+		"pub(crate) fn resolve(&self, path: &str, for_write: bool) -> Result<PathBuf> {";
+	write(
+		"crates/automation/src/paths.rs",
+		replaceOnce(
+			original("crates/automation/src/paths.rs"),
+			resolve,
+			`${resolve}\n        if self.live_read_only.is_some() { return Err(failed("File paths are unavailable in the live editor.")); }`,
+			"live MCP file guard",
+		),
 	);
 	write(
 		"crates/automation/src/mcp.rs",

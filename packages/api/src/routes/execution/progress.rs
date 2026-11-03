@@ -4,7 +4,7 @@
 //! 1. **Executor → API**: Report progress/events (executor JWT)
 //! 2. **User → API**: Long poll for status/events (user JWT)
 //!
-//! Events are stored with TTL and deleted after delivery.
+//! Events expire after their retention period. Cursor-based consumers replay them independently.
 
 use crate::{
     entity::{execution_usage_tracking, sea_orm_active_enums::ExecutionStatus},
@@ -13,18 +13,19 @@ use crate::{
         ExecutionClaims, PageActionSealingContext,
         run_summary::{RunSummary, apply_run_summary},
         state::{
-            CreateEventInput, EventQuery, ExecutionRunRecord, ExecutionStateStore,
-            PostgresStateStore, RunLeaseClaim, RunMode as StateRunMode,
-            RunStatus as StateRunStatus, StateStoreError, UpdateRunInput,
+            CreateEventInput, EventQuery, EventReplay, ExecutionEventRecord, ExecutionRunRecord,
+            ExecutionStateStore, PostgresStateStore, ReplayCursor, RunLeaseClaim,
+            RunMode as StateRunMode, RunStatus as StateRunStatus, StateStoreError, UpdateRunInput,
         },
         subject::account_user_id,
         verify_execution_jwt, verify_user_jwt,
     },
+    middleware::jwt::AppUser,
     routes::app::prerun_shared::load_exact_prerun_manifest,
     state::AppState,
 };
 use axum::{
-    Json,
+    Extension, Json,
     extract::{Query, State},
     http::HeaderMap,
 };
@@ -175,6 +176,7 @@ pub async fn report_progress(
         return Ok(Json(match claim {
             RunLeaseClaim::Acquired { run, expires_at } => {
                 mirror_run_update_to_sql(&state, store.as_ref(), &run).await?;
+                notify_realtime_run(&state, &claims, run.status.is_terminal()).await;
                 ProgressUpdateResponse {
                     accepted: true,
                     status: format!("{:?}", run.status),
@@ -329,12 +331,37 @@ pub async fn report_progress(
         }
     }
 
+    notify_realtime_run(&state, &claims, updated.status.is_terminal()).await;
     Ok(Json(ProgressUpdateResponse {
         accepted: true,
         status: format!("{:?}", updated.status),
         lease_acquired: lease_identity.map(|_| true),
         lease_expires_at: None,
     }))
+}
+
+/// The one account `can_read_run` lets replay this run: the run's user. Every
+/// dispatch stores the account its signed subject names as that user, whether a
+/// person, an API key's creator or the user a sink or replay runs as. A visitor's
+/// pseudonym or a run placeholder names no account and wakes nobody.
+fn realtime_recipient(claims: &ExecutionClaims) -> Option<&str> {
+    account_user_id(&claims.sub)
+}
+
+async fn notify_realtime_run(state: &AppState, claims: &ExecutionClaims, terminal: bool) {
+    // Only persisted executor callbacks enter this path. HTTP/SSE output keeps
+    // its existing delivery path and does not publish a second copy.
+    let Some(user_id) = realtime_recipient(claims) else {
+        return;
+    };
+    if terminal {
+        state.channels.publish_realtime_invalidation(user_id).await;
+    } else {
+        state
+            .channels
+            .publish_realtime_run_invalidation(user_id)
+            .await;
+    }
 }
 
 /// Best-effort: a quota finish may already have closed the row, and a failed
@@ -481,6 +508,9 @@ pub async fn push_events(
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to push events: {}", e)))?;
 
+    if accepted > 0 {
+        notify_realtime_run(&state, &claims, false).await;
+    }
     crate::teams::runtime::output(&state, &claims, &body.events).await?;
 
     Ok(Json(PushEventsResponse {
@@ -530,6 +560,8 @@ pub struct PollParams {
 #[derive(Clone, Debug, Serialize, ToSchema)]
 pub struct PollResponse {
     pub run_id: String,
+    /// A finished run reports its final status, error and completion time only
+    /// on the page that ends its events. Until then it reads as running.
     pub status: String,
     pub progress: i32,
     pub current_step: Option<String>,
@@ -537,6 +569,30 @@ pub struct PollResponse {
     pub events: Vec<ExecutionEventOutput>,
     pub started_at: Option<String>,
     pub completed_at: Option<String>,
+    /// More events follow this page: poll again with the last returned sequence.
+    pub has_more: bool,
+}
+
+impl PollResponse {
+    /// A poller that stops at a final status has then received every event.
+    fn new(run: ExecutionRunRecord, page: EventReplay) -> Self {
+        let (status, error, completed_at) = if run.status.is_terminal() && page.has_more {
+            (StateRunStatus::Running, None, None)
+        } else {
+            (run.status, run.error_message, run.completed_at)
+        };
+        Self {
+            run_id: run.id,
+            status: format!("{status:?}"),
+            progress: run.progress,
+            current_step: run.current_step,
+            error,
+            events: page.events.into_iter().map(Into::into).collect(),
+            started_at: run.started_at.and_then(rfc3339),
+            completed_at: completed_at.and_then(rfc3339),
+            has_more: page.has_more,
+        }
+    }
 }
 
 /// Event output for users
@@ -547,6 +603,24 @@ pub struct ExecutionEventOutput {
     pub payload: serde_json::Value,
     pub created_at: String,
 }
+
+impl From<ExecutionEventRecord> for ExecutionEventOutput {
+    fn from(event: ExecutionEventRecord) -> Self {
+        Self {
+            sequence: event.sequence,
+            event_type: event.event_type,
+            payload: event.payload,
+            created_at: rfc3339(event.created_at).unwrap_or_default(),
+        }
+    }
+}
+
+fn rfc3339(unix_ms: i64) -> Option<String> {
+    chrono::DateTime::from_timestamp_millis(unix_ms).map(|time| time.to_rfc3339())
+}
+
+/// The most events one poll returns.
+const POLL_EVENT_LIMIT: usize = 100;
 
 fn poll_after_sequence(after_sequence: Option<i32>) -> i32 {
     // Redis and DynamoDB turn this exclusive cursor into an inclusive lower
@@ -559,6 +633,88 @@ fn cursor_manages_delivery(after_sequence: Option<i32>) -> bool {
     after_sequence.is_some()
 }
 
+/// The page after the caller's cursor. The caller acknowledges every event it
+/// receives, so the page runs on without gaps. Callers without a cursor get the
+/// events not yet delivered instead, and those are marked delivered.
+async fn poll_page(
+    store: &dyn ExecutionStateStore,
+    run: &ExecutionRunRecord,
+    after_sequence: Option<i32>,
+) -> Result<EventReplay, StateStoreError> {
+    if cursor_manages_delivery(after_sequence) {
+        let cursor = ReplayCursor {
+            after_sequence: poll_after_sequence(after_sequence),
+            limit: POLL_EVENT_LIMIT,
+            terminal: run.status.is_terminal(),
+        };
+        return store.replay_events(&run.id, cursor).await;
+    }
+    let mut events = store
+        .get_events(EventQuery {
+            run_id: run.id.clone(),
+            after_sequence: Some(poll_after_sequence(None)),
+            only_undelivered: true,
+            limit: Some(POLL_EVENT_LIMIT as i32 + 1),
+        })
+        .await?;
+    let has_more = events.len() > POLL_EVENT_LIMIT;
+    events.truncate(POLL_EVENT_LIMIT);
+    // Marking one delivered retires it for good, which is only safe because
+    // `get_events` fails the poll rather than handing back an event whose staged
+    // payload it could not read for a transient reason. Only a payload the store
+    // reports as gone comes through, marked, and it would not come back on a
+    // retry either.
+    if !events.is_empty() {
+        let event_ids: Vec<String> = events.iter().map(|event| event.id.clone()).collect();
+        let _ = store.mark_events_delivered(&run.id, &event_ids).await;
+    }
+    Ok(EventReplay { events, has_more })
+}
+
+/// A finished run whose remaining events cannot be read yet waits like a running
+/// one, so pollers waiting for its final status do not spin.
+fn page_answers_poll(run: &ExecutionRunRecord, page: &EventReplay) -> bool {
+    !page.events.is_empty() || (run.status.is_terminal() && !page.has_more)
+}
+
+/// The run and its next page, read once per long-poll round.
+async fn read_poll(
+    store: &dyn ExecutionStateStore,
+    claims: &ExecutionClaims,
+    caller: &AppUser,
+    after_sequence: Option<i32>,
+) -> Result<(ExecutionRunRecord, EventReplay), ApiError> {
+    let run = store
+        .get_run_for_app(&claims.run_id, &claims.app_id)
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to get run: {}", e)))?
+        .ok_or(ApiError::NOT_FOUND)?;
+    ensure_poll_token_holder(&run, claims, caller)?;
+    let page = poll_page(store, &run, after_sequence)
+        .await
+        .map_err(|e| ApiError::internal_error(anyhow!("Failed to get events: {}", e)))?;
+    Ok((run, page))
+}
+
+/// Receipts of isolated invokes carry a poll token for `/realtime/poll`, which
+/// also requires the account that started the run. Here that token would stand
+/// alone, so it needs the same account; tokens of async invokes stand alone.
+fn ensure_poll_token_holder(
+    run: &ExecutionRunRecord,
+    claims: &ExecutionClaims,
+    caller: &AppUser,
+) -> Result<(), ApiError> {
+    if run.mode != StateRunMode::KubernetesIsolated {
+        return Ok(());
+    }
+    match caller.sub() {
+        Ok(sub) if sub == claims.sub => Ok(()),
+        _ => Err(ApiError::forbidden(
+            "Replay this run through /realtime/poll with the account that started it",
+        )),
+    }
+}
+
 /// GET /execution/poll
 ///
 /// Long poll for run status and events. Requires user JWT in Authorization header.
@@ -569,8 +725,9 @@ fn cursor_manages_delivery(after_sequence: Option<i32>) -> bool {
     tag = "execution",
     params(PollParams),
     responses(
-        (status = 200, description = "Run status and events", body = PollResponse),
+        (status = 200, description = "Run status and the next page of events. Events continue without gaps from after_sequence. A finished run reports its final status only on the page with has_more false; until then it reads as running.", body = PollResponse),
         (status = 400, description = "Invalid request or JWT"),
+        (status = 403, description = "The token comes from an isolated invoke; replay that run through /realtime/poll with the account that started it"),
         (status = 404, description = "Run not found")
     ),
     security(
@@ -580,6 +737,7 @@ fn cursor_manages_delivery(after_sequence: Option<i32>) -> bool {
 #[tracing::instrument(name = "GET /execution/poll", skip_all)]
 pub async fn poll_status(
     State(state): State<AppState>,
+    Extension(caller): Extension<AppUser>,
     headers: HeaderMap,
     Query(params): Query<PollParams>,
 ) -> Result<Json<PollResponse>, ApiError> {
@@ -591,75 +749,15 @@ pub async fn poll_status(
     let store = get_state_store(&state).await?;
 
     let timeout = params.timeout.unwrap_or(10).min(30);
-    let after_seq = poll_after_sequence(params.after_sequence);
-    let cursor_manages_delivery = cursor_manages_delivery(params.after_sequence);
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout);
 
     loop {
-        // Get run status
-        let run = store
-            .get_run_for_app(&claims.run_id, &claims.app_id)
-            .await
-            .map_err(|e| ApiError::internal_error(anyhow!("Failed to get run: {}", e)))?
-            .ok_or(ApiError::NOT_FOUND)?;
-
-        // Get events after the client's acknowledged sequence.
-        let events = store
-            .get_events(EventQuery {
-                run_id: claims.run_id.clone(),
-                after_sequence: Some(after_seq),
-                // Cursor-aware clients advance only after receiving the
-                // response. Returning previously delivered events after the
-                // cursor makes a dropped Lambda response safely replayable.
-                only_undelivered: !cursor_manages_delivery,
-                limit: Some(100),
-            })
-            .await
-            .map_err(|e| ApiError::internal_error(anyhow!("Failed to get events: {}", e)))?;
-
-        // Return immediately if terminal state or we have events
-        let is_terminal = run.status.is_terminal();
-        if is_terminal || !events.is_empty() || std::time::Instant::now() >= deadline {
-            // Legacy clients have no cursor, so retain their delivery marker.
-            // Marking one delivered retires it for good, which is only safe
-            // because `get_events` fails the poll rather than handing back an
-            // event whose staged payload it could not read for a transient
-            // reason. Only a payload the store reports as gone comes through,
-            // marked, and it would not come back on a retry either.
-            if !events.is_empty() && !cursor_manages_delivery {
-                let event_ids: Vec<String> = events.iter().map(|e| e.id.clone()).collect();
-                let _ = store
-                    .mark_events_delivered(&claims.run_id, &event_ids)
-                    .await;
-            }
-
-            return Ok(Json(PollResponse {
-                run_id: run.id,
-                status: format!("{:?}", run.status),
-                progress: run.progress,
-                current_step: run.current_step,
-                error: run.error_message,
-                events: events
-                    .into_iter()
-                    .map(|e| ExecutionEventOutput {
-                        sequence: e.sequence,
-                        event_type: e.event_type,
-                        payload: e.payload,
-                        created_at: chrono::DateTime::from_timestamp_millis(e.created_at)
-                            .map(|dt| dt.to_rfc3339())
-                            .unwrap_or_default(),
-                    })
-                    .collect(),
-                started_at: run.started_at.and_then(|t| {
-                    chrono::DateTime::from_timestamp_millis(t).map(|dt| dt.to_rfc3339())
-                }),
-                completed_at: run.completed_at.and_then(|t| {
-                    chrono::DateTime::from_timestamp_millis(t).map(|dt| dt.to_rfc3339())
-                }),
-            }));
+        let (run, page) =
+            read_poll(store.as_ref(), &claims, &caller, params.after_sequence).await?;
+        if page_answers_poll(&run, &page) || std::time::Instant::now() >= deadline {
+            return Ok(Json(PollResponse::new(run, page)));
         }
 
-        // Wait a bit before polling again
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 }
@@ -716,15 +814,9 @@ pub async fn get_run_status(
         error: run.error_message,
         input_payload_len: run.input_payload_len,
         output_payload_len: run.output_payload_len,
-        started_at: run
-            .started_at
-            .and_then(|t| chrono::DateTime::from_timestamp_millis(t).map(|dt| dt.to_rfc3339())),
-        completed_at: run
-            .completed_at
-            .and_then(|t| chrono::DateTime::from_timestamp_millis(t).map(|dt| dt.to_rfc3339())),
-        created_at: chrono::DateTime::from_timestamp_millis(run.created_at)
-            .map(|dt| dt.to_rfc3339())
-            .unwrap_or_default(),
+        started_at: run.started_at.and_then(rfc3339),
+        completed_at: run.completed_at.and_then(rfc3339),
+        created_at: rfc3339(run.created_at).unwrap_or_default(),
     }))
 }
 
@@ -1367,6 +1459,332 @@ mod page_action_delivery_tests {
                 .get("pageAction")
                 .is_none()
         );
+    }
+}
+
+#[cfg(test)]
+mod realtime_delivery_tests {
+    use super::*;
+    use crate::{execution::state::RunVariant, middleware::jwt::OpenIDUser};
+
+    fn claims(changes: serde_json::Value) -> ExecutionClaims {
+        let mut claims = serde_json::json!({
+            "sub": "user-a", "run_id": "run-a", "app_id": "app-a", "board_id": "board-a",
+            "callback_url": "", "typ": "user", "iss": "test", "aud": "test",
+            "iat": 1, "nbf": 1, "exp": 4_102_444_800_i64, "jti": "test-token"
+        });
+        for (field, value) in changes.as_object().unwrap() {
+            claims[field] = value.clone();
+        }
+        serde_json::from_value(claims).unwrap()
+    }
+
+    fn run(mode: StateRunMode) -> ExecutionRunRecord {
+        ExecutionRunRecord {
+            id: "run-a".into(),
+            board_id: "board-a".into(),
+            version: None,
+            event_id: None,
+            status: StateRunStatus::Running,
+            mode,
+            run_variant: RunVariant::Primary,
+            variant_name: None,
+            shadow_of_run_id: None,
+            regression_run_id: None,
+            input_payload_len: 0,
+            output_payload_len: 0,
+            error_message: None,
+            progress: 0,
+            current_step: None,
+            started_at: None,
+            completed_at: None,
+            expires_at: None,
+            user_id: Some("user-a".into()),
+            technical_user_id: None,
+            app_id: "app-a".into(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
+
+    fn account(sub: &str) -> AppUser {
+        AppUser::OpenID(OpenIDUser {
+            sub: sub.into(),
+            access_token: "token".into(),
+        })
+    }
+
+    /// Each dispatch's executor claims next to the user it stores on the run, the
+    /// one account `can_read_run` lets subscribe.
+    #[test]
+    fn wakeups_reach_exactly_the_runs_user() {
+        for (dispatch, run_user) in [
+            (serde_json::json!({}), Some("user-a")),
+            (
+                serde_json::json!({"technical_user_id": "api-key"}),
+                Some("user-a"),
+            ),
+            (serde_json::json!({"unattended": true}), Some("user-a")),
+            (serde_json::json!({"shadow": true}), Some("user-a")),
+            (
+                serde_json::json!({"sub": "frontend:event-1:anonymous-session-1"}),
+                None,
+            ),
+            (
+                serde_json::json!({"sub": "sink:sink-1", "unattended": true}),
+                None,
+            ),
+            (
+                serde_json::json!({"sub": "inbound:event-1", "unattended": true}),
+                None,
+            ),
+            (
+                serde_json::json!({"sub": "regression:suite-1", "shadow": true}),
+                None,
+            ),
+        ] {
+            assert_eq!(
+                realtime_recipient(&claims(dispatch.clone())),
+                run_user,
+                "{dispatch}"
+            );
+        }
+    }
+
+    fn event(sequence: i32) -> ExecutionEventRecord {
+        ExecutionEventRecord {
+            id: format!("event-{sequence}"),
+            run_id: "run-a".into(),
+            sequence,
+            event_type: "chunk".into(),
+            payload: serde_json::json!(sequence),
+            delivered: false,
+            expires_at: 4_102_444_800_000,
+            created_at: 1_000,
+        }
+    }
+
+    fn page(sequences: std::ops::Range<i32>, has_more: bool) -> EventReplay {
+        EventReplay {
+            events: sequences.map(event).collect(),
+            has_more,
+        }
+    }
+
+    fn finished(status: StateRunStatus) -> ExecutionRunRecord {
+        ExecutionRunRecord {
+            status,
+            error_message: Some("broken".into()),
+            completed_at: Some(2_000),
+            progress: 100,
+            ..run(StateRunMode::Http)
+        }
+    }
+
+    /// `replay_events` answers with its canned page; `get_events` holds what is undelivered.
+    #[derive(Debug, Default)]
+    struct Store {
+        replay: EventReplay,
+        undelivered: Vec<ExecutionEventRecord>,
+        cursors: std::sync::Mutex<Vec<ReplayCursor>>,
+        queries: std::sync::Mutex<Vec<EventQuery>>,
+        delivered: std::sync::Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ExecutionStateStore for Store {
+        fn backend_name(&self) -> &'static str {
+            "test"
+        }
+
+        async fn create_run(
+            &self,
+            _input: crate::execution::state::CreateRunInput,
+        ) -> Result<ExecutionRunRecord, StateStoreError> {
+            unimplemented!()
+        }
+
+        async fn get_run(
+            &self,
+            _run_id: &str,
+        ) -> Result<Option<ExecutionRunRecord>, StateStoreError> {
+            unimplemented!()
+        }
+
+        async fn get_run_for_app(
+            &self,
+            _run_id: &str,
+            _app_id: &str,
+        ) -> Result<Option<ExecutionRunRecord>, StateStoreError> {
+            unimplemented!()
+        }
+
+        async fn update_run(
+            &self,
+            _run_id: &str,
+            _input: UpdateRunInput,
+        ) -> Result<ExecutionRunRecord, StateStoreError> {
+            unimplemented!()
+        }
+
+        async fn list_runs_for_app(
+            &self,
+            _app_id: &str,
+            _limit: i32,
+            _cursor: Option<&str>,
+        ) -> Result<Vec<ExecutionRunRecord>, StateStoreError> {
+            unimplemented!()
+        }
+
+        async fn delete_expired_runs(&self) -> Result<i64, StateStoreError> {
+            unimplemented!()
+        }
+
+        async fn push_events(
+            &self,
+            _events: Vec<CreateEventInput>,
+        ) -> Result<i32, StateStoreError> {
+            unimplemented!()
+        }
+
+        async fn get_events(
+            &self,
+            query: EventQuery,
+        ) -> Result<Vec<ExecutionEventRecord>, StateStoreError> {
+            let limit = query.limit.map_or(usize::MAX, |limit| limit as usize);
+            self.queries.lock().unwrap().push(query);
+            Ok(self.undelivered.iter().take(limit).cloned().collect())
+        }
+
+        async fn replay_events(
+            &self,
+            _run_id: &str,
+            cursor: ReplayCursor,
+        ) -> Result<EventReplay, StateStoreError> {
+            self.cursors.lock().unwrap().push(cursor);
+            Ok(self.replay.clone())
+        }
+
+        async fn get_max_sequence(&self, _run_id: &str) -> Result<i32, StateStoreError> {
+            unimplemented!()
+        }
+
+        async fn mark_events_delivered(
+            &self,
+            _run_id: &str,
+            event_ids: &[String],
+        ) -> Result<(), StateStoreError> {
+            self.delivered.lock().unwrap().extend_from_slice(event_ids);
+            Ok(())
+        }
+
+        async fn delete_expired_events(&self) -> Result<i64, StateStoreError> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn cursor_polls_page_through_the_contiguous_replay() {
+        let store = Store {
+            replay: page(5..7, true),
+            undelivered: vec![event(9)],
+            ..Default::default()
+        };
+        let running = run(StateRunMode::Http);
+        let replayed = poll_page(&store, &running, Some(4)).await.unwrap();
+        let replayed: Vec<i32> = replayed.events.iter().map(|event| event.sequence).collect();
+        assert_eq!(replayed, [5, 6]);
+        poll_page(&store, &finished(StateRunStatus::Completed), Some(i32::MIN))
+            .await
+            .unwrap();
+
+        let cursors = store.cursors.lock().unwrap();
+        assert_eq!(
+            cursors
+                .iter()
+                .map(|cursor| (cursor.after_sequence, cursor.limit, cursor.terminal))
+                .collect::<Vec<_>>(),
+            [(4, POLL_EVENT_LIMIT, false), (-1, POLL_EVENT_LIMIT, true)]
+        );
+        assert!(store.queries.lock().unwrap().is_empty());
+        assert!(store.delivered.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn polls_without_a_cursor_take_and_mark_one_page_of_undelivered_events() {
+        let store = Store {
+            undelivered: (0..POLL_EVENT_LIMIT as i32 + 5).map(event).collect(),
+            ..Default::default()
+        };
+        let legacy = poll_page(&store, &run(StateRunMode::Http), None)
+            .await
+            .unwrap();
+        assert_eq!(legacy.events.len(), POLL_EVENT_LIMIT);
+        assert!(legacy.has_more);
+        assert_eq!(
+            *store.delivered.lock().unwrap(),
+            (0..POLL_EVENT_LIMIT as i32)
+                .map(|sequence| format!("event-{sequence}"))
+                .collect::<Vec<_>>()
+        );
+        let queries = store.queries.lock().unwrap();
+        assert_eq!(queries[0].after_sequence, Some(-1));
+        assert_eq!(queries[0].limit, Some(POLL_EVENT_LIMIT as i32 + 1));
+        assert!(queries[0].only_undelivered);
+        assert!(store.cursors.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_finished_run_reads_as_running_until_its_last_page() {
+        for status in [StateRunStatus::Completed, StateRunStatus::Failed] {
+            let pending = PollResponse::new(finished(status.clone()), page(0..100, true));
+            assert_eq!(pending.status, "Running");
+            assert_eq!((pending.error, pending.completed_at), (None, None));
+            assert!(pending.has_more);
+            assert_eq!(pending.events.len(), 100);
+
+            let last = PollResponse::new(finished(status.clone()), page(100..102, false));
+            assert_eq!(last.status, format!("{status:?}"));
+            assert_eq!(last.error.as_deref(), Some("broken"));
+            assert!(last.completed_at.is_some());
+            assert!(!last.has_more);
+        }
+        let running = PollResponse::new(run(StateRunMode::Http), page(0..1, true));
+        assert_eq!(running.status, "Running");
+        assert!(running.has_more);
+    }
+
+    #[test]
+    fn a_poll_answers_with_events_or_a_finished_runs_last_page() {
+        let running = run(StateRunMode::Http);
+        let done = finished(StateRunStatus::Completed);
+        assert!(page_answers_poll(&running, &page(0..1, false)));
+        assert!(page_answers_poll(&done, &page(0..0, false)));
+        assert!(page_answers_poll(&done, &page(0..1, true)));
+        assert!(!page_answers_poll(&running, &page(0..0, false)));
+        assert!(!page_answers_poll(&running, &page(0..0, true)));
+        assert!(
+            !page_answers_poll(&done, &page(0..0, true)),
+            "events of a finished run that cannot be read yet are waited for"
+        );
+    }
+
+    #[test]
+    fn isolated_receipt_tokens_need_the_account_that_started_the_run() {
+        let token = claims(serde_json::json!({}));
+        let isolated = run(StateRunMode::KubernetesIsolated);
+        assert!(ensure_poll_token_holder(&isolated, &token, &account("user-a")).is_ok());
+        for caller in [AppUser::Unauthorized, account("user-b")] {
+            assert_eq!(
+                ensure_poll_token_holder(&isolated, &token, &caller)
+                    .unwrap_err()
+                    .status(),
+                403
+            );
+        }
+        for mode in [StateRunMode::Queue, StateRunMode::Local, StateRunMode::Http] {
+            assert!(ensure_poll_token_holder(&run(mode), &token, &AppUser::Unauthorized).is_ok());
+        }
     }
 }
 

@@ -134,7 +134,8 @@ print(status.status)
 poll = client.poll_execution("poll-token", after_sequence=-1, timeout=30)
 for event in poll.events:
     print(event)
-# Pass poll.next_sequence as after_sequence on the next poll.
+# Pass poll.next_sequence as after_sequence on the next poll. A finished run is
+# poll.done only on its last page; poll.has_more says more events follow.
 
 runs = client.list_runs("app-id", "board-id", limit=20)
 logs = client.get_run_logs("app-id", "board-id", "run-id", query={"levels": [2, 3, 4]})

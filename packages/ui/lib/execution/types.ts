@@ -1,3 +1,4 @@
+import type { RealtimeConnectionSession } from "../realtime/types";
 import type { IChannelHandle } from "../schema/channel";
 import type { IIntercomEvent } from "../schema/events/intercom-event";
 import type { ILogMetadata } from "../schema/flow/log-metadata";
@@ -42,6 +43,8 @@ export interface PreparedExecutionRequest {
 	/** Bounds dispatch until response headers, never the lifetime of the SSE stream. */
 	timeoutMs?: number;
 	credentials?: RequestCredentials;
+	/** Account bus used when dispatch returns a queued run receipt instead of SSE. */
+	realtime?: RealtimeConnectionSession;
 }
 
 export type ExecutionTaskStatus =
@@ -73,6 +76,8 @@ export interface ExecutionTask extends ExecutionMetadata {
 	/** Only remote tasks whose events and chat writes belong to this runtime. */
 	persistenceManaged?: boolean;
 	cancellationRequested?: boolean;
+	/** The run continues on the server, but this runtime no longer receives its updates. */
+	detached?: boolean;
 }
 
 export function isExecutionFinished(
@@ -83,6 +88,13 @@ export function isExecutionFinished(
 		task.status === "failed" ||
 		task.status === "cancelled"
 	);
+}
+
+/** No further update of the run arrives: it finished, or it continues on the server detached. */
+export function isExecutionSettled(
+	task: Pick<ExecutionTask, "status" | "detached">,
+): boolean {
+	return isExecutionFinished(task) || task.detached === true;
 }
 
 export interface ExecutionCallbacks {
@@ -108,6 +120,22 @@ export interface ExecutionErrorData {
 	statusText?: string;
 	headers?: Record<string, string>;
 	timeoutMs?: number;
+	runId?: string;
+}
+
+/**
+ * This client stopped following the run (tab, account or replay connection went away). The
+ * run itself continues on the server, so this is not a run failure; it can still be stopped.
+ */
+export class ExecutionDetachedError extends Error {
+	override readonly name = "ExecutionDetachedError";
+
+	constructor(
+		readonly runId?: string,
+		message = "This run continues on the server, but its live updates stopped.",
+	) {
+		super(message);
+	}
 }
 
 export function executionError(error: unknown): ExecutionErrorData {
@@ -126,6 +154,7 @@ export function executionError(error: unknown): ExecutionErrorData {
 		...(typeof source?.timeoutMs === "number"
 			? { timeoutMs: source.timeoutMs }
 			: {}),
+		...(typeof source?.runId === "string" ? { runId: source.runId } : {}),
 	};
 }
 

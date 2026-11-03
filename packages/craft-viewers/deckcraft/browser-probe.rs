@@ -62,3 +62,8 @@ pub fn probe(bytes: &Bytes) -> Result<MediaInfo> {
         }),
     })
 }
+
+// Browser probing reads metadata without decoding the full stream.
+pub fn probe_headers(bytes: &Bytes) -> Result<MediaInfo> {
+    probe(bytes)
+}

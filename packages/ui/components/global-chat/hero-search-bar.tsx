@@ -6,6 +6,10 @@ import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { Button, Textarea } from "../../index";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
+import { dockRoute, dockSelectionForChatBot } from "../bots-tab/dock-selection";
+
+/** FlowPilot answers the hero bar, so it opens Flux's chat. */
+const FLUX_CHAT_ROUTE = dockRoute(dockSelectionForChatBot(null));
 
 const SUGGESTIONS = [
 	"Create a new app",
@@ -26,7 +30,7 @@ export function HeroSearchBar() {
 		const trimmed = prompt.trim();
 		if (!trimmed && files.length === 0) return;
 		setDraft({ prompt: trimmed, files: files.length > 0 ? files : undefined });
-		router.push("/chat");
+		router.push(FLUX_CHAT_ROUTE);
 	};
 
 	return (

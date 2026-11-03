@@ -54,6 +54,7 @@ impl FirebaseRtdbChannel {
         let inbox_url = json_url(&root, &path_segments(inbox_path))?;
         let inbound_url = json_url(&root, &path_segments(inbound_path))?;
         let client = reqwest::Client::builder()
+            .redirect(super::redirect_policy(root.host_str().unwrap_or_default()))
             .build()
             .map_err(|err| anyhow!("channel {}: http client: {err}", grant.channel_id))?;
         let auth = Arc::new(FirebaseAuth::new(

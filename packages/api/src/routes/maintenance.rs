@@ -319,6 +319,9 @@ async fn run_sweep(state: &AppState) -> Result<RunSweepMaintenanceResult, ApiErr
         crate::routes::chat::hosted_worker::recover_queued(state)
     )
     .await?;
+    if let Err(error) = traced!("maintenance.bot_turns", crate::bot_host::recover(state)).await {
+        tracing::warn!(error = %error, "Bot turn recovery incomplete");
+    }
     traced!(
         "maintenance.rolling_usage",
         crate::rolling_usage::maintain(state)

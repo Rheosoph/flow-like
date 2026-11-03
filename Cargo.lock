@@ -9127,6 +9127,7 @@ name = "docker-compose-sink-services"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "base64 0.22.1",
  "chrono",
  "cron",
  "futures 0.3.32",
@@ -10641,6 +10642,9 @@ dependencies = [
  "flow-like-api-entity",
  "flow-like-aws-data",
  "flow-like-azure-data",
+ "flow-like-bot-memory",
+ "flow-like-bot-tools",
+ "flow-like-bot-tools-host",
  "flow-like-catalog",
  "flow-like-catalog-core",
  "flow-like-catalog-data",
@@ -10779,6 +10783,70 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid 1.27.0",
+]
+
+[[package]]
+name = "flow-like-bot-memory"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "chrono",
+ "chrono-tz",
+ "flow-like-model-provider",
+ "flow-like-storage",
+ "flow-like-types",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "flow-like-bot-tools"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "chrono",
+ "flow-like-bot-memory",
+ "flow-like-catalog-code-interpreter",
+ "flow-like-catalog-data",
+ "flow-like-catalog-llm",
+ "flow-like-catalog-media-image",
+ "flow-like-catalog-processing",
+ "flow-like-model-provider",
+ "flow-like-runtime",
+ "flow-like-storage",
+ "flow-like-types",
+ "libc",
+ "pulldown-cmark 0.13.5",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
+name = "flow-like-bot-tools-host"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "blake3",
+ "flow-like-bot-tools",
+ "flow-like-model-provider",
+ "flow-like-runtime",
+ "flow-like-storage",
+ "flow-like-types",
+ "futures 0.3.32",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
@@ -10936,12 +11004,14 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
  "tokio",
  "tracing",
  "wasmtime",
  "wasmtime-wasi",
  "wat",
+ "zip",
 ]
 
 [[package]]
@@ -11813,17 +11883,24 @@ dependencies = [
  "dirs-next",
  "enigo",
  "flow-like",
+ "flow-like-bot-memory",
+ "flow-like-bot-tools",
  "flow-like-bots",
  "flow-like-browser",
  "flow-like-catalog",
+ "flow-like-catalog-automation",
+ "flow-like-catalog-code-interpreter",
  "flow-like-catalog-ml",
+ "flow-like-channels",
  "flow-like-device-client",
  "flow-like-device-crypto",
  "flow-like-device-protocol",
+ "flow-like-local-bots",
  "flow-like-offline-writes",
  "flow-like-types",
  "flow-like-wasm",
  "futures 0.3.32",
+ "iana-time-zone",
  "icu_collator",
  "image",
  "jsonschema",
@@ -11987,6 +12064,8 @@ dependencies = [
  "blake3",
  "chrono",
  "flow-like-ast",
+ "flow-like-bot-memory",
+ "flow-like-bot-tools",
  "flow-like-core-contracts",
  "flow-like-editor-contracts",
  "flow-like-model-provider",
@@ -12004,6 +12083,7 @@ dependencies = [
  "strsim",
  "thiserror 2.0.18",
  "tokio",
+ "tracing",
  "url",
 ]
 
@@ -12065,11 +12145,15 @@ dependencies = [
 name = "flow-like-executor"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "axum 0.8.8",
  "base64 0.22.1",
  "blake3",
  "chrono",
+ "flow-like-bot-tools",
+ "flow-like-bot-tools-host",
  "flow-like-catalog",
+ "flow-like-catalog-code-interpreter",
  "flow-like-catalog-data",
  "flow-like-catalog-std-ui",
  "flow-like-channels",
@@ -12168,6 +12252,21 @@ dependencies = [
  "tracing",
  "windows-sys 0.61.2",
  "zenoh",
+ "zeroize",
+]
+
+[[package]]
+name = "flow-like-local-bots"
+version = "0.1.0"
+dependencies = [
+ "chacha20poly1305",
+ "chrono",
+ "flow-like-types",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
  "zeroize",
 ]
 
@@ -12691,6 +12790,9 @@ name = "flow-like-types-contracts"
 version = "0.1.0"
 dependencies = [
  "blake3",
+ "chrono",
+ "chrono-tz",
+ "cron",
  "schemars 1.2.1",
  "serde",
  "serde_json",

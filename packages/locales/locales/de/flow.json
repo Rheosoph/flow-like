@@ -1753,6 +1753,7 @@
 	"stepBefore": "Schritt vor",
 	"sticky": "Fixiert",
 	"stickyHeader": "Fixierte Kopfzeile",
+	"stopExecutionFailed": "",
 	"stopExposing": "Freigabe aufheben",
 	"stopFollowing": "Nicht mehr folgen",
 	"stopFollowingName": "{{name}} nicht mehr folgen",

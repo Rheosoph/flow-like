@@ -88,10 +88,12 @@ fn scalar(select: SelectStatement) -> Expr {
     Expr::SubQuery(None, Box::new(select.into()))
 }
 
+/// Public, active apps; a bot's workspace never counts, whatever its row says.
 pub fn public_app_condition() -> Condition {
     Condition::all()
         .add(app::Column::Visibility.is_in([Visibility::Public, Visibility::PublicRequestAccess]))
         .add(app::Column::Status.eq(Status::Active))
+        .add(app::Column::BotId.is_null())
 }
 
 /// Public, active packages. Applied to every direct `WasmPackage` query before ORDER, LIMIT and COUNT, so ranked
@@ -797,7 +799,7 @@ pub(crate) mod test_database {
 
     const TABLES: &[&str] = &[
         r#"CREATE TABLE "MutationLock" (id BIGINT PRIMARY KEY, "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now())"#,
-        r#"CREATE TABLE "App" (id TEXT PRIMARY KEY, visibility TEXT NOT NULL, status TEXT NOT NULL, "primaryCategory" TEXT, "secondaryCategory" TEXT, "appType" TEXT, price BIGINT NOT NULL DEFAULT 0, "downloadCount" BIGINT NOT NULL DEFAULT 0, "ratingSum" BIGINT NOT NULL DEFAULT 0, "ratingCount" BIGINT NOT NULL DEFAULT 0, "avgRating" DOUBLE PRECISION, "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(), "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now())"#,
+        r#"CREATE TABLE "App" (id TEXT PRIMARY KEY, visibility TEXT NOT NULL, status TEXT NOT NULL, "primaryCategory" TEXT, "secondaryCategory" TEXT, "appType" TEXT, price BIGINT NOT NULL DEFAULT 0, "downloadCount" BIGINT NOT NULL DEFAULT 0, "ratingSum" BIGINT NOT NULL DEFAULT 0, "ratingCount" BIGINT NOT NULL DEFAULT 0, "avgRating" DOUBLE PRECISION, "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(), "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now(), "botId" TEXT)"#,
         r#"CREATE TABLE "Meta" (id TEXT PRIMARY KEY, lang TEXT NOT NULL, name TEXT NOT NULL, description TEXT, "appId" TEXT)"#,
     ];
 

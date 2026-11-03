@@ -934,6 +934,54 @@ impl ExecutionContext {
         context
     }
 
+    /// Invoke an event tool in its enclosing function's active local scope.
+    /// Calls into another function get fresh locals. Each call starts with an empty pin override map.
+    pub async fn create_reference_context(
+        &self,
+        node: &Arc<InternalNode>,
+        board: &Board,
+    ) -> ExecutionContext {
+        let mut context = self
+            .create_sub_context_with_pin_overrides(node, Some(BTreeMap::new()))
+            .await;
+        let target_layer = Self::reference_function_layer(node, board).await;
+        let caller_layer = Self::reference_function_layer(&self.node, board).await;
+        let same_function = target_layer
+            .zip(caller_layer)
+            .is_some_and(|(target, caller)| target.id == caller.id);
+
+        context.local_variables = match (target_layer, &self.local_variables) {
+            (Some(_), Some(locals)) if same_function => Some(locals.clone()),
+            (Some(layer), _) => Some(fresh_local_variable_scope(&layer.variables)),
+            (None, _) => None,
+        };
+        context
+    }
+
+    async fn reference_function_layer<'a>(
+        node: &InternalNode,
+        board: &'a Board,
+    ) -> Option<&'a crate::flow::board::Layer> {
+        if let Some(id) = node.function_layer_id() {
+            return board.layers.get(id);
+        }
+
+        // Detached contexts lack compiled ownership metadata. Walk their enclosing layers.
+        let mut layer_id = node.node.lock().await.layer.clone();
+        let mut seen = AHashSet::new();
+        while let Some(id) = layer_id {
+            if !seen.insert(id.clone()) {
+                return None;
+            }
+            let layer = board.layers.get(&id)?;
+            if matches!(layer.r#type, crate::flow::board::LayerType::Function) {
+                return Some(layer);
+            }
+            layer_id = layer.parent_id.clone();
+        }
+        None
+    }
+
     pub async fn get_variable(&self, variable_id: &str) -> flow_like_types::Result<Variable> {
         // Check local (function-scoped) variables first
         if let Some(local) = &self.local_variables
@@ -2430,6 +2478,165 @@ mod tests {
                 "outer".to_string(),
                 Arc::new(json!("parent"))
             )]))
+        );
+    }
+
+    fn reference_node(
+        id: &str,
+        layer: Option<&str>,
+        compiled_owner: Option<&str>,
+    ) -> Arc<InternalNode> {
+        use super::super::internal_node::{NodeMeta, NodePinLookup};
+
+        let mut node = Node::new("reference", id, "", "Tests");
+        node.id = id.into();
+        node.layer = layer.map(String::from);
+        let mut meta = NodeMeta::from_node(&node);
+        meta.function_layer_id = compiled_owner.map(Arc::from);
+        Arc::new(InternalNode::from_parts(
+            Arc::new(Mutex::new(node)),
+            meta,
+            Box::new([]),
+            Arc::new(NodePinLookup::default()),
+            Arc::new(NoopLogic),
+        ))
+    }
+
+    async fn reference_local_value(context: &ExecutionContext, id: &str) -> Value {
+        context
+            .get_variable(id)
+            .await
+            .unwrap()
+            .value
+            .lock()
+            .await
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn reference_contexts_share_function_locals_without_sharing_call_arguments() {
+        use crate::flow::board::{Layer, LayerType};
+
+        for compiled in [false, true] {
+            let mut board = Board::new_detached(Some("references".into()), Path::default());
+            let mut function =
+                Layer::new("function".into(), "Function".into(), LayerType::Function);
+            let mut summaries =
+                Variable::new("Summaries", VariableType::String, ValueType::HashMap);
+            summaries.set_default_value(json!({}));
+            let variable_id = summaries.id.clone();
+            function.variables.insert(variable_id.clone(), summaries);
+            for id in ["writer_group", "reader_group"] {
+                let mut group = Layer::new(id.into(), id.into(), LayerType::Collapsed);
+                group.parent_id = Some(function.id.clone());
+                board.layers.insert(id.into(), group);
+            }
+            board.layers.insert(function.id.clone(), function);
+            let agent = reference_node(
+                "agent",
+                (!compiled).then_some("function"),
+                compiled.then_some("function"),
+            );
+            let writer = reference_node(
+                "writer",
+                (!compiled).then_some("writer_group"),
+                compiled.then_some("function"),
+            );
+            let reader = reference_node(
+                "reader",
+                (!compiled).then_some("reader_group"),
+                compiled.then_some("function"),
+            );
+            let parent = byte_context(None).await;
+            let variables = &board.layers["function"].variables;
+            let mut first = parent.create_function_context(&agent, variables).await;
+            let second = parent.create_function_context(&agent, variables).await;
+            first.override_pin_value("outer_argument", json!("outer"));
+
+            let mut write = first.create_reference_context(&writer, &board).await;
+            assert_eq!(write.context_pin_overrides, Some(BTreeMap::new()));
+            assert!(Arc::ptr_eq(
+                write.local_variables.as_ref().unwrap(),
+                first.local_variables.as_ref().unwrap(),
+            ));
+            let expected = json!({"report.txt": "Report summary"});
+            write
+                .set_variable_value(&variable_id, expected.clone())
+                .await
+                .unwrap();
+            write.override_pin_value("tool_argument", json!("writer"));
+            first.push_sub_context(&mut write);
+
+            let read = first.create_reference_context(&reader, &board).await;
+            assert_eq!(read.context_pin_overrides, Some(BTreeMap::new()));
+            assert_eq!(reference_local_value(&read, &variable_id).await, expected,);
+            assert_eq!(reference_local_value(&first, &variable_id).await, expected,);
+            let other_read = second.create_reference_context(&reader, &board).await;
+            assert_eq!(
+                reference_local_value(&other_read, &variable_id).await,
+                json!({}),
+            );
+            let recursive = first.create_function_context(&agent, variables).await;
+            assert_eq!(
+                reference_local_value(&recursive, &variable_id).await,
+                json!({}),
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn reference_contexts_initialize_other_functions_and_exclude_caller_locals() {
+        use crate::flow::board::{Layer, LayerType};
+
+        let mut board = Board::new_detached(Some("references".into()), Path::default());
+        let mut outer = Layer::new("outer".into(), "Outer".into(), LayerType::Function);
+        let mut variable = Variable::new("Summary", VariableType::String, ValueType::Normal);
+        variable.set_default_value(json!("default"));
+        let variable_id = variable.id.clone();
+        outer
+            .variables
+            .insert(variable_id.clone(), variable.clone());
+        let mut other = Layer::new("other".into(), "Other".into(), LayerType::Function);
+        other.variables.insert(variable_id.clone(), variable);
+        board.layers.insert(outer.id.clone(), outer);
+        board.layers.insert(other.id.clone(), other);
+        let agent = reference_node("agent", None, Some("outer"));
+        let external = reference_node("external", None, Some("other"));
+        let root = reference_node("root", None, None);
+        let parent = byte_context(None).await;
+        let caller = parent
+            .create_function_context(&agent, &board.layers["outer"].variables)
+            .await;
+        caller
+            .set_variable_value(&variable_id, json!("updated"))
+            .await
+            .unwrap();
+
+        let first = caller.create_reference_context(&external, &board).await;
+        assert_eq!(
+            reference_local_value(&first, &variable_id).await,
+            json!("default"),
+        );
+        first
+            .set_variable_value(&variable_id, json!("other update"))
+            .await
+            .unwrap();
+        let second = caller.create_reference_context(&external, &board).await;
+        assert_eq!(
+            reference_local_value(&second, &variable_id).await,
+            json!("default"),
+        );
+        assert_eq!(
+            reference_local_value(&caller, &variable_id).await,
+            json!("updated"),
+        );
+        let unscoped = caller.create_reference_context(&root, &board).await;
+        assert!(unscoped.local_variables.is_none());
+        assert!(unscoped.get_variable(&variable_id).await.is_err());
+        let entered = parent.create_reference_context(&agent, &board).await;
+        assert_eq!(
+            reference_local_value(&entered, &variable_id).await,
+            json!("default"),
         );
     }
 

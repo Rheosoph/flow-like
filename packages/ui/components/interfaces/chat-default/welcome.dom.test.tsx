@@ -3,7 +3,6 @@
 import { act } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import type { IEvent } from "../../../lib/schema/flow/event";
 import type { IEventPayloadChat } from "../../../lib/schema/flow/event-payload-chat";
 import { ChatWelcome } from "./welcome";
 
@@ -47,7 +46,6 @@ vi.mock("./chatbox", async () => {
 	};
 });
 
-const event = { id: "grove", name: "Persona Grove" } as IEvent;
 const sendMessage = vi.fn(async () => {});
 let container: HTMLDivElement;
 let root: Root;
@@ -69,7 +67,11 @@ afterEach(async () => {
 async function render(config?: Partial<IEventPayloadChat>) {
 	await act(async () => {
 		root.render(
-			<ChatWelcome event={event} config={config} onSendMessage={sendMessage} />,
+			<ChatWelcome
+				greeting={{ title: "Persona Grove" }}
+				config={config}
+				onSendMessage={sendMessage}
+			/>,
 		);
 	});
 }

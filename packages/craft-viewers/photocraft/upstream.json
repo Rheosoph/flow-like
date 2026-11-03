@@ -1,7 +1,7 @@
 {
 	"repository": "https://github.com/storytold/photocraft.git",
-	"revision": "8d49ecf50d59885fb2dcf38a203d62b314565726",
-	"version": "0.8.0",
+	"revision": "2df9f807702a935184041355a86405380bda8274",
+	"version": "0.19.0",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "photocraft-web",
 	"label": "Flows Photo",
@@ -54,7 +54,18 @@
 		"orf",
 		"rw2",
 		"raf",
-		"afphoto"
+		"afphoto",
+		"xcf",
+		"xpm",
+		"dds",
+		"dpx",
+		"cin",
+		"dcm",
+		"dicom",
+		"dc3",
+		"iff",
+		"lbm",
+		"ilbm"
 	],
 	"maxBytes": 52428800
 }

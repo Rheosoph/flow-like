@@ -337,7 +337,7 @@ fn socket_config() -> WebSocketConfig {
         .max_frame_size(Some(MAX_MESSAGE_BYTES))
 }
 
-fn host_allowed(allowed_hosts: Option<&[String]>, host: &str) -> bool {
+pub(crate) fn host_allowed(allowed_hosts: Option<&[String]>, host: &str) -> bool {
     allowed_hosts.is_none_or(|hosts| {
         hosts
             .iter()

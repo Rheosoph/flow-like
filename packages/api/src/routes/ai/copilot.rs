@@ -537,6 +537,7 @@ pub(crate) fn user_access_token(user: &AppUser) -> Option<String> {
         AppUser::APIKey(_k) => None,
         AppUser::Executor(_e) => None,
         AppUser::ConnectedApp(_a) => None,
+        AppUser::Bot(_) => None,
         AppUser::Unauthorized => None,
     }
 }

@@ -1,0 +1,31 @@
+@media (prefers-reduced-motion: no-preference) {
+	.fl-bot[data-motion="on"]
+		.fl-bot-emote[data-visible="true"]
+		.fl-bot-emote-dot {
+		animation-name: fl-bot-loading-dot;
+		animation-duration: 1.4s;
+		animation-timing-function: ease-in-out;
+		animation-iteration-count: infinite;
+	}
+
+	.fl-bot-emote-dot[data-loading-dot="1"] {
+		animation-delay: 0.16s;
+	}
+
+	.fl-bot-emote-dot[data-loading-dot="2"] {
+		animation-delay: 0.32s;
+	}
+}
+
+@keyframes fl-bot-loading-dot {
+	0%,
+	60%,
+	100% {
+		transform: translateY(0);
+		opacity: 0.55;
+	}
+	30% {
+		transform: translateY(-1.5px);
+		opacity: 1;
+	}
+}

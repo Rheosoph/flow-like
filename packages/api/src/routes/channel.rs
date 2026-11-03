@@ -18,7 +18,7 @@ use axum::{
 use flow_like_types::Value;
 use flow_like_types::channel::{CHANNEL_TRANSPORT_HTTP, ChannelPush, ChannelPushKind, now_unix};
 use sea_orm::sea_query::Expr;
-use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
@@ -414,7 +414,7 @@ fn decide_reply(
     post,
     path = "/channels/{channel_id}/push",
     tag = "channels",
-    description = "Client → run delivery: answer a request (first reply wins), queue an unsolicited message, or cancel the run. Forwarded onto the cloud transport when the channel uses one.",
+    description = "Client → run delivery: answer a request (first reply wins), queue an unsolicited message, or cancel the run. Forwarded onto the cloud transport when the channel uses one, within that transport's message size limit and the channel's deadline.",
     params(("channel_id" = String, Path, description = "Channel (run) id")),
     request_body(content = Object, description = "`ChannelPush`: `{ channel_id, request_id?, kind: reply|inbound|cancel, value }`"),
     responses(
@@ -422,8 +422,10 @@ fn decide_reply(
         (status = 401, description = "Missing or invalid channel responder token"),
         (status = 403, description = "Token, path and body disagree on the channel, or the request belongs to another subject"),
         (status = 404, description = "No such pending request"),
-        (status = 410, description = "The request expired"),
+        (status = 410, description = "The request or the channel expired"),
+        (status = 413, description = "The message exceeds the channel transport's size limit"),
         (status = 429, description = "Too many unsolicited messages are queued"),
+        (status = 502, description = "The channel transport did not accept the message; retry"),
         (status = 503, description = "The channel uses a cloud transport this API cannot forward to"),
     ),
     security(("channel_responder_jwt" = []))
@@ -469,9 +471,13 @@ pub async fn push_channel(
             return Err(ApiError::bad_request("Invalid channel delivery id"));
         }
         return Ok(
-            match forward_push_with_id(state.channels.forwarder(), &body, delivery_id).await? {
+            match forward_push_with_id(state.channels.forwarder(), &body, delivery_id, claims.exp)
+                .await?
+            {
                 ForwardOutcome::Delivered => PushResponse::accepted(),
-                ForwardOutcome::Undeliverable(message) => PushResponse::rejected(message),
+                ForwardOutcome::Undeliverable => {
+                    PushResponse::rejected("The run is no longer listening on this channel")
+                }
             },
         );
     }
@@ -578,12 +584,12 @@ async fn inbound(
     Ok(PushResponse::accepted())
 }
 
-/// Refresh client transport credentials within the original channel deadline.
+/// Refresh the client's API endpoint within the original channel deadline.
 #[utoipa::path(
     get,
     path = "/channels/{channel_id}/grant",
     tag = "channels",
-    description = "Refresh the client handle (`side=client`). Client credentials cannot request executor grants.",
+    description = "Return an HTTP API push handle (`side=client`) with the original responder capability and deadline. Its signed transport claim routes pushes to the existing waiter. Client credentials cannot request executor grants.",
     params(
         ("channel_id" = String, Path, description = "Channel (run) id"),
         GrantQuery,

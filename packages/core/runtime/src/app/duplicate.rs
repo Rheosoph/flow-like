@@ -729,6 +729,7 @@ impl Duplication {
         manifest.interaction_count = 0;
         manifest.avg_rating = None;
         manifest.relevance_score = None;
+        manifest.bot_id = None;
 
         self.write_proto("manifest.app", &manifest).await
     }

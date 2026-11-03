@@ -5,10 +5,17 @@ import Check from "lucide-react/dist/esm/icons/check.js";
 import CircleMinus from "lucide-react/dist/esm/icons/circle-minus.js";
 import Loader2 from "lucide-react/dist/esm/icons/loader-2.js";
 import Search from "lucide-react/dist/esm/icons/search.js";
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { cn } from "../../../lib/utils";
 import type { IPlanStep, PlanStepStatus } from "./chat-db";
-import { type ActivitySource, WebsiteIcon } from "./tool-activity";
+import { type ActivitySource, WebsiteIcon, siteKey } from "./tool-activity";
+
+/**
+ * The trail renders inside the chat transcript, so it never scrolls on its own: a nested scroller
+ * swallows the wheel and touch gestures meant for the conversation. Long lists fold instead.
+ */
+const QUERY_PREVIEW_COUNT = 4;
+const SOURCE_PREVIEW_COUNT = 4;
 
 const SEARCH_TOOLS = new Set(["internet_search", "web_search", "websearch"]);
 const READ_TOOLS = new Set([
@@ -204,13 +211,55 @@ function SourceCard({ source }: { source: ResearchSource }) {
 	);
 }
 
+function scrollContainerOf(element: HTMLElement): Element | null {
+	for (let node = element.parentElement; node; node = node.parentElement) {
+		if (
+			/(auto|scroll|overlay)/.test(getComputedStyle(node).overflowY) &&
+			node.scrollHeight > node.clientHeight
+		)
+			return node;
+	}
+	return document.scrollingElement;
+}
+
+/**
+ * Folding a long list pulls its toggle up and out of view, dropping the reader somewhere further
+ * down the answer. Scroll by the same distance so the toggle stays where it was clicked.
+ */
+function useFoldAnchor(expanded: boolean) {
+	const anchorRef = useRef<HTMLButtonElement>(null);
+	const topBeforeFold = useRef<number | null>(null);
+	useLayoutEffect(() => {
+		const before = topBeforeFold.current;
+		topBeforeFold.current = null;
+		const anchor = anchorRef.current;
+		if (expanded || before === null || !anchor) return;
+		const shift = anchor.getBoundingClientRect().top - before;
+		if (shift)
+			scrollContainerOf(anchor)?.scrollBy({ top: shift, behavior: "instant" });
+	}, [expanded]);
+	const markFold = () => {
+		topBeforeFold.current =
+			anchorRef.current?.getBoundingClientRect().top ?? null;
+	};
+	return { anchorRef, markFold };
+}
+
 export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
+	const [showAllQueries, setShowAllQueries] = useState(false);
 	const [showAllSources, setShowAllSources] = useState(false);
+	const sourceFold = useFoldAnchor(showAllSources);
 	const { queries, sources } = collectResearch(steps);
+	const earlierQueries = Math.max(0, queries.length - QUERY_PREVIEW_COUNT);
+	const queryOffset = showAllQueries ? 0 : earlierQueries;
+	const visibleSources = showAllSources
+		? sources
+		: sources.slice(0, SOURCE_PREVIEW_COUNT);
 	const running = steps.some(
 		(step) => step.status === "progress" || step.status === "planned",
 	);
-	const websites = new Set(sources.map((source) => source.hostname)).size;
+	const websites = new Set(sources.map((source) => siteKey(source.hostname)))
+		.size;
 	const activeRead = sources.findLast((source) => source.state === "reading");
 	const activeQuery = queries.findLast((query) => query.status === "progress");
 	const summary = activeRead
@@ -290,23 +339,36 @@ export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
 			</div>
 			{queries.length > 0 && (
 				<div className="px-4 pt-3">
-					<h4 className="mb-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-						Searches
-					</h4>
+					<div className="mb-2 flex items-center justify-between gap-2">
+						<h4 className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+							Searches
+						</h4>
+						{earlierQueries > 0 && (
+							<button
+								type="button"
+								onClick={() => setShowAllQueries(!showAllQueries)}
+								aria-expanded={showAllQueries}
+								className="rounded px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+							>
+								{showAllQueries
+									? "Hide earlier searches"
+									: `Show ${earlierQueries} earlier ${earlierQueries === 1 ? "search" : "searches"}`}
+							</button>
+						)}
+					</div>
 					<ol
 						aria-label="Search queries"
-						// biome-ignore lint/a11y/noNoninteractiveTabindex: Makes the scrollable search history keyboard accessible.
-						tabIndex={0}
-						className="max-h-44 space-y-1 overflow-y-auto overscroll-contain rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
+						start={queryOffset + 1}
+						className="space-y-1"
 					>
-						{queries.map((query, index) => (
+						{queries.slice(queryOffset).map((query, index) => (
 							<li
 								key={query.id}
 								data-research-query
 								className="flex items-start gap-2.5 rounded-md bg-muted/30 px-2.5 py-2 text-xs"
 							>
 								<span className="mt-px shrink-0 font-mono text-[10px] tabular-nums text-muted-foreground/55">
-									{String(index + 1).padStart(2, "0")}
+									{String(queryOffset + index + 1).padStart(2, "0")}
 								</span>
 								<span className="min-w-0 flex-1 break-words leading-relaxed text-foreground/85">
 									{query.text}
@@ -348,26 +410,25 @@ export function ResearchActivity({ steps }: { steps: IPlanStep[] }) {
 					</div>
 					<section
 						aria-label="Sources"
-						// biome-ignore lint/a11y/noNoninteractiveTabindex: Makes the scrollable source list keyboard accessible.
-						tabIndex={0}
-						className={cn(
-							"grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-2 overflow-y-auto overscroll-contain rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40",
-							!showAllSources && "max-h-80",
-						)}
+						className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,14rem),1fr))] gap-2"
 					>
-						{sources.map((source) => (
+						{visibleSources.map((source) => (
 							<SourceCard key={source.url} source={source} />
 						))}
 					</section>
-					{sources.length > 2 && (
+					{sources.length > SOURCE_PREVIEW_COUNT && (
 						<button
+							ref={sourceFold.anchorRef}
 							type="button"
-							onClick={() => setShowAllSources(!showAllSources)}
+							onClick={() => {
+								if (showAllSources) sourceFold.markFold();
+								setShowAllSources(!showAllSources);
+							}}
 							aria-expanded={showAllSources}
 							className="mt-2 w-full rounded-md py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40"
 						>
 							{showAllSources
-								? "Show compact view"
+								? "Show fewer pages"
 								: `Show all ${sources.length} pages`}
 						</button>
 					)}

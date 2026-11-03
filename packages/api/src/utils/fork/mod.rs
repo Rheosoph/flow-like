@@ -891,6 +891,7 @@ pub async fn compute_offline_fork_bundle(
     manifest_proto.interaction_count = 0;
     manifest_proto.avg_rating = None;
     manifest_proto.relevance_score = None;
+    manifest_proto.bot_id = None;
 
     let manifest_bytes = encode_proto(&manifest_proto).await?;
     blobs.push(MetaBlob {

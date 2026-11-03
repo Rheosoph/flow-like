@@ -258,10 +258,17 @@ pub struct ExecutorUser {
     /// No person triggered the run; `sub` is the user the event runs as or a placeholder,
     /// never someone app connections may pass on as a person.
     pub unattended: bool,
+    /// The bot turn this executor serves; app authority is the bot's, `sub` stays the payer.
+    pub bot: Option<BotUser>,
 }
 
 impl From<crate::execution::ExecutionClaims> for ExecutorUser {
     fn from(claims: crate::execution::ExecutionClaims) -> Self {
+        let bot = claims.bot_id.map(|bot_id| BotUser {
+            bot_id,
+            turn_id: claims.run_id.clone(),
+            conv_id: claims.conv_id,
+        });
         Self {
             sub: claims.sub,
             app_id: claims.app_id,
@@ -274,6 +281,7 @@ impl From<crate::execution::ExecutionClaims> for ExecutorUser {
             event_id: claims.event_id,
             custom_bits_owner: claims.custom_bits_owner,
             unattended: claims.unattended,
+            bot,
         }
     }
 }
@@ -342,6 +350,15 @@ impl ConnectedAppUser {
     }
 }
 
+/// A bot turn calling the API as the bot. The token names the bot, its turn and the room, never
+/// the owner or a permission; both are read from the database on every call.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BotUser {
+    pub bot_id: String,
+    pub turn_id: String,
+    pub conv_id: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub enum AppUser {
     OpenID(OpenIDUser),
@@ -349,6 +366,7 @@ pub enum AppUser {
     APIKey(ApiKey),
     Executor(ExecutorUser),
     ConnectedApp(ConnectedAppUser),
+    Bot(BotUser),
     Unauthorized,
 }
 
@@ -385,6 +403,24 @@ impl AppPermissionResponse {
 
     pub fn technical_user_id(&self) -> Option<&str> {
         self.technical_user_id.as_deref()
+    }
+
+    /// [`Self::effective_user_id`] for routes that go on to act as that person (credentials,
+    /// runs, keys): a bot's owner is attribution there, never an identity the bot may borrow.
+    pub fn person_user_id(&self) -> Result<String> {
+        if self.principal == ExecutionPrincipal::Bot {
+            return Err(anyhow!("A bot cannot act as its owner"));
+        }
+        self.effective_user_id()
+    }
+
+    /// The user a flow run is paid for and attributed to. For a bot that is its owner: the run
+    /// itself carries the bot's identity and credentials, so the owner is never acted as.
+    pub fn run_user_id(&self) -> Result<String> {
+        if self.principal == ExecutionPrincipal::Bot {
+            return self.effective_user_id();
+        }
+        self.person_user_id()
     }
 
     /// Either returns the sub if available or in case of API keys it returns the key ID.
@@ -447,6 +483,9 @@ fn user_context_from_parts(
         ExecutionPrincipal::ConnectedApp => {
             UserExecutionContext::connected_app(origin_app_id, role).with_on_behalf_of(on_behalf_of)
         }
+        ExecutionPrincipal::Bot => {
+            UserExecutionContext::bot(key_id, role).with_on_behalf_of(on_behalf_of)
+        }
     }
 }
 
@@ -492,6 +531,7 @@ impl AppUser {
             AppUser::ConnectedApp(_) => Err(ApiError::forbidden(
                 "Connected app is not allowed on this endpoint",
             )),
+            AppUser::Bot(_) => Err(ApiError::forbidden("Bot is not allowed on this endpoint")),
             AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }
@@ -509,6 +549,7 @@ impl AppUser {
             AppUser::ConnectedApp(_) => Err(ApiError::forbidden(
                 "Connected app is not allowed on this endpoint",
             )),
+            AppUser::Bot(_) => Err(ApiError::forbidden("Bot is not allowed on this endpoint")),
             AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }
@@ -520,6 +561,7 @@ impl AppUser {
             AppUser::APIKey(api_key) => Ok(AppUser::APIKey(api_key.clone())),
             AppUser::Executor(executor) => Ok(AppUser::Executor(executor.clone())),
             AppUser::ConnectedApp(app) => Ok(AppUser::ConnectedApp(app.clone())),
+            AppUser::Bot(bot) => Ok(AppUser::Bot(bot.clone())),
             AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }
@@ -539,6 +581,7 @@ impl AppUser {
             AppUser::APIKey(api_key) => Some(api_key.key_id.as_str()),
             AppUser::Executor(executor) => executor.technical_user_id.as_deref(),
             AppUser::ConnectedApp(app) => app.technical_user_id.as_deref(),
+            AppUser::Bot(bot) => Some(bot.bot_id.as_str()),
             _ => None,
         }
     }
@@ -560,6 +603,7 @@ impl AppUser {
             AppUser::ConnectedApp(_) => Err(ApiError::forbidden(
                 "App connection tokens cannot act as the initiating user",
             )),
+            AppUser::Bot(_) => Err(ApiError::forbidden("Bot tokens cannot act as their owner")),
             AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }
@@ -575,6 +619,7 @@ impl AppUser {
                 .sub
                 .clone()
                 .unwrap_or_else(|| app_connection_cache_sub(&app.origin_app_id)),
+            AppUser::Bot(bot) => bot.bot_id.clone(),
             _ => self.effective_user_id()?,
         };
         let method = match self {
@@ -583,6 +628,7 @@ impl AppUser {
             AppUser::APIKey(_) => "api_key",
             AppUser::Executor(_) => "executor",
             AppUser::ConnectedApp(_) => "app_connection",
+            AppUser::Bot(_) => "bot",
             AppUser::Unauthorized => "unauthorized",
         };
         let method_id = match self {
@@ -591,6 +637,7 @@ impl AppUser {
             AppUser::APIKey(api_key) => Some(api_key.key_id.clone()),
             AppUser::Executor(executor) => Some(executor.run_id.clone()),
             AppUser::ConnectedApp(app) => Some(app.origin_app_id.clone()),
+            AppUser::Bot(bot) => Some(bot.turn_id.clone()),
             AppUser::Unauthorized => None,
         };
         Ok(format!(
@@ -636,6 +683,7 @@ impl AppUser {
             AppUser::ConnectedApp(_) => {
                 return Err(anyhow!("Connected app does not have user info"));
             }
+            AppUser::Bot(_) => return Err(anyhow!("Bot does not have user info")),
             AppUser::Unauthorized => {
                 return Err(anyhow!("Unauthorized user does not have user info"));
             }
@@ -720,6 +768,10 @@ impl AppUser {
             return user_app_permission_uncached(&sub, app_id, state).await;
         }
 
+        if let AppUser::Bot(bot) = self {
+            return crate::bot_permission::bot_app_permission(bot, app_id, state).await;
+        }
+
         if let AppUser::ConnectedApp(connected_app) = self {
             return connected_app_permission(connected_app, app_id, state).await;
         }
@@ -780,6 +832,9 @@ impl AppUser {
                 // joined to the freshly revalidated technical user.
                 self.app_permission(app_id, state).await
             }
+            AppUser::Bot(bot) => {
+                crate::bot_permission::bot_app_permission(bot, app_id, state).await
+            }
             AppUser::Executor(_) | AppUser::Unauthorized => {
                 self.app_permission(app_id, state).await
             }
@@ -806,6 +861,14 @@ impl AppUser {
                 return Err(ApiError::FORBIDDEN);
             }
             executor_use.admit(self)?;
+
+            let chained = executor
+                .app_chain
+                .as_ref()
+                .is_some_and(|chain| !chain.is_empty());
+            if let Some(bot) = executor.bot.as_ref().filter(|_| !chained) {
+                return crate::bot_permission::bot_app_permission(bot, app_id, state).await;
+            }
 
             // Runs initiated through an app connection are bounded by the
             // connection role and, when the run acts as a person, by what that
@@ -894,13 +957,13 @@ impl Grantee {
     }
 }
 
-fn role_permissions(role: &role::Model) -> Result<RolePermissions, ApiError> {
+pub(crate) fn role_permissions(role: &role::Model) -> Result<RolePermissions, ApiError> {
     Ok(RolePermissions::from_bits(role.permissions)
         .ok_or_else(|| anyhow!("Invalid role permission bits"))?)
 }
 
 /// The role `user_id` holds in `app_id` through a membership.
-async fn member_role<C: sea_orm::ConnectionTrait>(
+pub(crate) async fn member_role<C: sea_orm::ConnectionTrait>(
     db: &C,
     user_id: &str,
     app_id: &str,
@@ -1300,7 +1363,7 @@ fn role_query_span() -> tracing::Span {
     )
 }
 
-async fn user_app_permission_uncached(
+pub(crate) async fn user_app_permission_uncached(
     sub: &str,
     app_id: &str,
     state: &AppState,
@@ -1356,6 +1419,30 @@ async fn connected_app_permission_uncached(
 /// keeping only the permissions and column attributes the person it passed through also
 /// holds when there is one.
 async fn connected_app_role<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    connected_app: &ConnectedAppUser,
+    app_id: &str,
+) -> Result<role::Model, ApiError> {
+    let role = connected_person_role(db, connected_app, app_id).await?;
+    let Some(bot) = connected_app
+        .technical_user_id
+        .as_deref()
+        .and_then(crate::bot_flow::bot_from_technical_id)
+    else {
+        return Ok(role);
+    };
+    let grant = crate::bot_permission::bot_grant_in(db, &bot, app_id).await?;
+    let permissions = role_permissions(&role)? & grant.permissions;
+    if permissions.is_empty() {
+        return Err(ApiError::FORBIDDEN);
+    }
+    Ok(role::Model {
+        permissions: permissions.bits(),
+        ..role
+    })
+}
+
+async fn connected_person_role<C: sea_orm::ConnectionTrait>(
     db: &C,
     connected_app: &ConnectedAppUser,
     app_id: &str,
@@ -1781,6 +1868,17 @@ async fn authenticate_request(
             request.extensions_mut().insert::<AppUser>(user);
             return Ok(request);
         }
+
+        if let Ok(claims) = crate::bot_permission::verify_bot_token(token) {
+            request
+                .extensions_mut()
+                .insert::<AppUser>(AppUser::Bot(BotUser {
+                    bot_id: claims.bot_id,
+                    turn_id: claims.turn_id,
+                    conv_id: claims.conv_id,
+                }));
+            return Ok(request);
+        }
     }
 
     // Try PAT auth
@@ -2161,6 +2259,55 @@ mod tests {
         assert_eq!(context.origin_app_id(), None);
     }
 
+    fn bot_user() -> AppUser {
+        AppUser::Bot(BotUser {
+            bot_id: "bot_a".into(),
+            turn_id: "turn-1".into(),
+            conv_id: None,
+        })
+    }
+
+    #[test]
+    fn bots_report_themselves_and_keep_the_owner_as_attribution_only() {
+        let context = user_context_from_parts(
+            ExecutionPrincipal::Bot,
+            None,
+            Some("owner-user"),
+            "bot_a",
+            "",
+            role(),
+        );
+
+        assert_eq!(context.principal, ExecutionPrincipal::Bot);
+        assert!(context.is_bot() && context.is_technical());
+        assert_eq!(context.sub, "bot_a");
+        assert_eq!(context.get_key_id(), None);
+        assert_eq!(context.on_behalf_of(), Some("owner-user"));
+    }
+
+    #[test]
+    fn a_bot_token_has_no_sub_and_cannot_act_as_its_owner() {
+        let user = bot_user();
+        for refusal in [
+            user.sub().unwrap_err(),
+            user.executor_scoped_sub().unwrap_err(),
+            user.effective_user_id().unwrap_err(),
+        ] {
+            assert_eq!(refusal.status(), StatusCode::FORBIDDEN);
+        }
+        assert_eq!(user.technical_user_id(), Some("bot_a"));
+        assert!(!user.is_connected_app());
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn a_bot_is_audited_as_the_bot_and_its_turn() {
+        assert_eq!(bot_user().audit_id().await.unwrap(), "bot:bot_a:turn-1");
+        assert_eq!(
+            crate::audit::actor_type_from_user(&bot_user()),
+            crate::entity::sea_orm_active_enums::AuditActorType::TechnicalUser
+        );
+    }
+
     /// An app calling through a connection used to be indistinguishable from an
     /// API key, down to a fabricated `app-connection::…` key id.
     #[test]
@@ -2233,6 +2380,7 @@ mod tests {
 
     fn executor_user(shadow: bool) -> AppUser {
         AppUser::Executor(ExecutorUser {
+            bot: None,
             sub: "user-id".to_string(),
             app_id: "app-id".to_string(),
             run_id: "run-id".to_string(),
@@ -2286,6 +2434,7 @@ mod tests {
         assert_eq!(
             executor,
             ExecutorUser {
+                bot: None,
                 sub: "user-1".into(),
                 app_id: "app-1".into(),
                 run_id: "run-1".into(),
@@ -3158,6 +3307,7 @@ mod tests {
 
         fn hosted_run(visitor: &str, event_id: &str) -> ExecutorUser {
             ExecutorUser {
+                bot: None,
                 sub: visitor.into(),
                 app_id: "app".into(),
                 run_id: "run".into(),

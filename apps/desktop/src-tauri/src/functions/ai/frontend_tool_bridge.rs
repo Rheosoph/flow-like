@@ -321,6 +321,9 @@ pub struct FrontendToolContext {
     /// Bounded database/UI/storage context gathered once by the host before board generation.
     /// Kept transport-neutral so Bits, GitHub Copilot, Codex, and Claude receive one schema.
     pub board_context_manifest: Option<serde_json::Value>,
+    /// The bot whose turn owns this tool tree; it scopes the shared bot tools. Never serialized.
+    #[serde(skip)]
+    pub bot: Option<Arc<super::native_bot_tools::BotToolRuntime>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -933,10 +936,19 @@ impl FrontendToolBridge {
                         &arguments,
                     )
                     .await;
-                if matches!(approval.kind.as_str(), "mutating" | "execute")
-                    && !super::native_tool_bridge::run_options(self.context.as_ref()).auto_approve
-                    && !cached_schema
-                {
+                let options = super::native_tool_bridge::run_options(self.context.as_ref());
+                let asks = matches!(approval.kind.as_str(), "mutating" | "execute")
+                    && !options.auto_approve
+                    && !cached_schema;
+                if asks && let Some(gate) = &options.approval_gate {
+                    let context_app = self.context.as_ref().and_then(|context| context.app_id.as_deref());
+                    if let Err(answer) = gate
+                        .clear(&tool_name, &arguments, context_app, &approval.description)
+                        .await
+                    {
+                        return answer;
+                    }
+                } else if asks {
                     let answer = self
                         .dispatch_to_frontend(
                             tool_name.clone(),
@@ -974,9 +986,13 @@ impl FrontendToolBridge {
                     Ok(result) => {
                         // Clients refresh their views after durable native mutations. Delivery is
                         // best effort and never part of the operation's success boundary.
-                        let _ = self.app_handle.emit("flowpilot://native-tool-completed", json!({
-                            "toolName": tool_name, "runId": self.context.as_ref().and_then(|context| context.run_id.as_deref()),
-                        }));
+                        crate::utils::emit_to_ui(
+                            &self.app_handle,
+                            "flowpilot://native-tool-completed",
+                            json!({
+                                "toolName": tool_name, "runId": self.context.as_ref().and_then(|context| context.run_id.as_deref()),
+                            }),
+                        );
                         result
                     }
                     Err(error)
@@ -1545,6 +1561,7 @@ fn safe_request_context(context: &FrontendToolSafeContext) -> Option<FrontendToo
         conversation_id: None,
         source_user_prompt: None,
         board_context_manifest: None,
+        bot: None,
     })
 }
 
@@ -2467,6 +2484,7 @@ mod tests {
             conversation_id: None,
             source_user_prompt: None,
             board_context_manifest: None,
+            bot: None,
         };
 
         apply_tool_context("database_tool", &mut arguments, Some(&context));
@@ -2653,6 +2671,7 @@ mod tests {
             conversation_id: None,
             source_user_prompt: None,
             board_context_manifest: None,
+            bot: None,
         };
         let approval = FrontendToolApproval::mutating(
             "Apply board",

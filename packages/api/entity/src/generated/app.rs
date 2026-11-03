@@ -58,6 +58,8 @@ pub struct Model {
     pub bits: Option<crate::json_types::StringList>,
     #[sea_orm(column_name = "appType", column_type = "Text", nullable)]
     pub app_type: Option<crate::sea_orm_active_enums::AppType>,
+    #[sea_orm(column_name = "botId", column_type = "Text", nullable, unique)]
+    pub bot_id: Option<String>,
     #[sea_orm(has_many)]
     pub ai_act_assessments: HasMany<super::ai_act_assessment::Entity>,
     #[sea_orm(has_many)]
@@ -154,6 +156,8 @@ pub struct Model {
     pub templates: HasMany<super::template::Entity>,
     #[sea_orm(has_many)]
     pub widgets: HasMany<super::widget::Entity>,
+    #[sea_orm(has_many, via = "bot_app")]
+    pub bots: HasMany<super::bot::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

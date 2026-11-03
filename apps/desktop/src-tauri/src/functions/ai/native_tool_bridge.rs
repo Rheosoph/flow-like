@@ -50,6 +50,17 @@ pub struct NativeRunOptions {
     /// Native hosts default to returning unavailable for unanswered interactions.
     /// An explicit interaction handler takes precedence over this fallback policy.
     pub interaction_mode: NativeInteractionMode,
+    /// Set when another bot's `ask_bot` started this run: that ask's side of bot talk, so the
+    /// run answers as the asked bot and its own asks count against the same limits.
+    pub bot_talk: Option<Arc<flow_like::flow::copilot::bot_talk::BotTalk>>,
+    /// A headless bot turn's conversation: when the bot remembers, its memory replaces the last
+    /// entries as the turn's history.
+    pub bot_memory: Option<flow_like::flow::copilot::MemoryTurnSource>,
+    /// A headless bot turn's approval gate: a call that asks the owner runs under a standing
+    /// grant and otherwise parks the turn behind an approval card.
+    pub approval_gate: Option<Arc<crate::bot_host::ApprovalGate>>,
+    /// Whose message woke a headless bot turn and who reads the answer.
+    pub requester: Option<flow_like::flow::copilot::TurnRequester>,
 }
 
 impl NativeRunOptions {
@@ -493,6 +504,7 @@ pub(crate) fn emit_run_frame(context: Option<&FrontendToolContext>, frame: Strin
 
 pub fn supports(tool: &str, args: &Value) -> bool {
     tool == "http_request"
+        || super::native_bot_tools::supports(tool)
         || super::native_app_build_tools::supports(tool)
         || super::native_platform_tools::supports(tool, args)
         || super::native_runtime_tools::supports(tool)
@@ -566,6 +578,9 @@ async fn execute_inner(
                 serde_json::json!({"status":"error","code":"created_app_target_mismatch","created_app_id":run.created_app,"requested_app_id":target,"message":"Continue this build on the exact app_id returned by create_app."}),
             );
         }
+    }
+    if super::native_bot_tools::supports(tool) {
+        return super::native_bot_tools::execute(app, context, tool, args).await;
     }
     if super::native_app_build_tools::supports(tool) {
         return super::native_app_build_tools::execute(app, tool, args, context, request_id)

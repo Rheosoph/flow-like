@@ -27,6 +27,7 @@
 //! * [`drain`] — page selects and per-chunk transactions.
 //! * [`job`] — `DeletionJob` rows: enqueue, lease, cursor, outcome.
 //! * [`external`] — object stores, schedulers, cache backends.
+//! * [`retired_bot`] — the rows a soft-deleted bot leaves outside its inbox.
 //! * [`worker`] — the in-process ticker; `POST /maintenance/run` drives the
 //!   same [`run_queue`] on Lambda and cron deployments.
 //!
@@ -81,6 +82,7 @@ pub mod job;
 pub mod overrides;
 pub mod plan;
 pub mod request;
+pub mod retired_bot;
 pub mod worker;
 
 use std::time::Instant;

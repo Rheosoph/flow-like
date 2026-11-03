@@ -1,0 +1,478 @@
+//! One bot's memory on one host: the engine, its models and the inbox as the source of truth for
+//! segments. A headless turn calls [`MemorySession::prepare`] (Hard compaction, then the prompt
+//! from summaries, state block, verbatim tail and recalled facts) and, once the reply is stored,
+//! [`MemorySession::after_turn`] in the background (Soft compaction, fact mining, deletions).
+//! Memory never fails a turn on its own: every step that goes wrong is logged and skipped.
+
+use std::collections::HashSet;
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
+use chrono_tz::Tz;
+use flow_like_storage::lancedb::Connection;
+use flow_like_storage::lancedb::table::WriteOptions;
+use flow_like_types::tokio::sync::Mutex;
+use flow_like_types::{Result, anyhow};
+
+use super::models::{SwitchEmbedder, SwitchLlm};
+use super::publish::{SegmentSink, publish_summaries};
+use crate::compaction::{CompactionConfig, TurnPhase};
+use crate::engine::{CompactionInput, DeletionReport, MemoryBusy, MemoryEngine};
+use crate::llm::{Embedder, MemoryLlm};
+use crate::model::{HistoryItem, Role, Seq};
+use crate::prompt::{
+    BudgetReport, ModelBudget, PromptInput, SectionKind, assemble, render_tail_item,
+};
+use crate::store::MemoryStores;
+use crate::tools::HistoryReader;
+
+const DELETIONS_PER_SWEEP: usize = 200;
+const MAX_COMPACTION_ATTEMPTS: usize = 2;
+
+#[derive(Debug, Clone)]
+pub struct SessionOptions {
+    pub budget: ModelBudget,
+    pub config: CompactionConfig,
+    pub timezone: Tz,
+    /// Tokens of the tool definitions sent next to the prompt.
+    pub tool_tokens: u32,
+    /// Messages after the last mined one that make a turn's background work mine facts.
+    pub mine_after: u64,
+    /// The model summaries are written with, recorded next to them.
+    pub model: Option<String>,
+}
+
+impl SessionOptions {
+    pub fn new(budget: ModelBudget, timezone: Tz) -> Self {
+        Self {
+            budget,
+            config: CompactionConfig::default(),
+            timezone,
+            tool_tokens: 0,
+            mine_after: 6,
+            model: None,
+        }
+    }
+}
+
+/// What the turn needs to know besides the history.
+#[derive(Debug, Clone)]
+pub struct TurnRequest<'a> {
+    /// The message the turn answers.
+    pub trigger_seq: Seq,
+    /// Open tasks, approvals and running jobs, rendered from the host's records.
+    pub state_block: &'a str,
+    pub about_you: &'a str,
+    /// The open task's user messages, which stay verbatim.
+    pub open_task_seqs: &'a [Seq],
+    pub now: DateTime<Utc>,
+}
+
+/// One message of the verbatim tail, as chat history.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnMessage {
+    pub role: Role,
+    pub text: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PreparedTurn {
+    /// About-you, summaries and state: goes after the system prompt, cache-stable.
+    pub context: String,
+    /// The verbatim tail before the trigger, oldest first.
+    pub history: Vec<TurnMessage>,
+    /// The recalled facts and the message the turn answers.
+    pub prompt: String,
+    /// The message the turn answers.
+    pub trigger: HistoryItem,
+    pub report: BudgetReport,
+    /// A Hard compaction ran before the call.
+    pub compacted: bool,
+}
+
+/// What a turn's background work did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AfterTurn {
+    pub compacted: bool,
+    pub mined: bool,
+    pub rewrote: bool,
+    pub deletions: usize,
+    pub published: usize,
+    /// Another engine holds the memory's lease; the rest waits for the next turn.
+    pub busy: bool,
+}
+
+pub struct MemorySession {
+    engine: MemoryEngine,
+    llm: Arc<SwitchLlm>,
+    embedder: Arc<SwitchEmbedder>,
+    sink: Arc<dyn SegmentSink>,
+    options: SessionOptions,
+    published: Mutex<Option<HashSet<String>>>,
+}
+
+fn is_busy(error: &flow_like_types::Error) -> bool {
+    error.is::<MemoryBusy>()
+}
+
+impl MemorySession {
+    pub fn new(
+        stores: MemoryStores,
+        llm: Arc<SwitchLlm>,
+        embedder: Arc<SwitchEmbedder>,
+        sink: Arc<dyn SegmentSink>,
+        options: SessionOptions,
+    ) -> Self {
+        Self {
+            engine: MemoryEngine::new(
+                stores,
+                llm.clone(),
+                options.config.clone(),
+                options.timezone,
+            ),
+            llm,
+            embedder,
+            sink,
+            options,
+            published: Mutex::new(None),
+        }
+    }
+
+    /// The session on the bot workspace's LanceDB connection.
+    pub async fn open(
+        connection: Connection,
+        write_options: Option<WriteOptions>,
+        llm: Arc<dyn MemoryLlm>,
+        embedder: Arc<dyn Embedder>,
+        sink: Arc<dyn SegmentSink>,
+        options: SessionOptions,
+    ) -> Self {
+        let llm = Arc::new(SwitchLlm::new(llm));
+        let embedder = Arc::new(SwitchEmbedder::new(embedder));
+        let stores = MemoryStores::open(connection, embedder.clone(), write_options).await;
+        Self::new(stores, llm, embedder, sink, options)
+    }
+
+    pub fn engine(&self) -> &MemoryEngine {
+        &self.engine
+    }
+
+    pub fn options(&self) -> &SessionOptions {
+        &self.options
+    }
+
+    pub fn embedder_model(&self) -> &str {
+        self.embedder.model_id()
+    }
+
+    /// Gives the next turn's models (fresh credentials) to the same engine. The embedder is
+    /// swapped only for the same model; returns whether it was.
+    pub fn refresh(&self, llm: Arc<dyn MemoryLlm>, embedder: Arc<dyn Embedder>) -> bool {
+        self.llm.set(llm);
+        self.embedder.set(embedder)
+    }
+
+    fn window(&self) -> u32 {
+        self.options.budget.history_window()
+    }
+
+    /// Writes the summaries the inbox does not have yet; failures are logged, the next call
+    /// tries again.
+    pub async fn publish(&self) -> usize {
+        let summaries = match self.engine.stores().segments.all().await {
+            Ok(summaries) => summaries,
+            Err(error) => {
+                tracing::warn!("Reading the summaries to publish failed: {error:#}");
+                return 0;
+            }
+        };
+        let mut guard = self.published.lock().await;
+        if guard.is_none() {
+            match self.sink.published().await {
+                Ok(known) => *guard = Some(known),
+                Err(error) => {
+                    tracing::warn!("Listing the published summaries failed: {error:#}");
+                    return 0;
+                }
+            }
+        }
+        let known = guard.get_or_insert_with(HashSet::new);
+        let (written, error) =
+            publish_summaries(&summaries, self.options.timezone, self.sink.as_ref(), known).await;
+        if let Some(error) = error {
+            tracing::warn!("Publishing a summary to the inbox failed: {error:#}");
+        }
+        written
+    }
+
+    /// Follows deletions the history recorded since the last sweep. Returns how many messages.
+    pub async fn sweep_deletions(
+        &self,
+        reader: &dyn HistoryReader,
+        now: DateTime<Utc>,
+    ) -> Result<(usize, DeletionReport)> {
+        let state = self.engine.stores().state.load().await?;
+        let from = state.deletions_through.unwrap_or(0);
+        let deleted = reader.deleted_since(from, DELETIONS_PER_SWEEP).await?;
+        if deleted.seqs.is_empty() && deleted.through <= from {
+            return Ok((0, DeletionReport::default()));
+        }
+        let report = self
+            .engine
+            .follow_deletions(
+                &deleted.seqs,
+                Some(deleted.through),
+                reader,
+                self.window(),
+                now,
+            )
+            .await?;
+        self.publish().await;
+        Ok((deleted.seqs.len(), report))
+    }
+
+    async fn compact(
+        &self,
+        reader: &dyn HistoryReader,
+        trigger_seq: Seq,
+        request: &TurnRequest<'_>,
+        phase: TurnPhase,
+    ) -> Result<bool> {
+        for _ in 0..MAX_COMPACTION_ATTEMPTS {
+            let state = self.engine.stores().state.load().await?;
+            let items = self.engine.live_items(reader, &state, trigger_seq).await?;
+            if let Err(error) = self.engine.index(&items).await {
+                tracing::warn!("Indexing the history failed; history_search lags: {error:#}");
+            }
+            let plan = self
+                .engine
+                .plan(&items, &state, self.window(), request.open_task_seqs, phase)
+                .await?;
+            let Some(compaction) = plan.compaction else {
+                return Ok(false);
+            };
+            let preceding = reader
+                .before(
+                    compaction.evict.from,
+                    self.options.config.preceding_messages,
+                )
+                .await?;
+            let outcome = self
+                .engine
+                .compact(CompactionInput {
+                    plan: &compaction,
+                    items: &items,
+                    preceding: &preceding,
+                    state_block: request.state_block,
+                    history_window: self.window(),
+                    now: request.now,
+                    model: self.options.model.clone(),
+                })
+                .await?;
+            if outcome.stale {
+                continue;
+            }
+            self.publish().await;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// Before the model call: sweeps deletions, runs the Hard compaction when one is due and
+    /// assembles the prompt. `Err` only when the history cannot be read; the host then answers
+    /// the way it did before memory.
+    pub async fn prepare(
+        &self,
+        reader: &dyn HistoryReader,
+        request: &TurnRequest<'_>,
+    ) -> Result<PreparedTurn> {
+        let trigger = reader
+            .message(request.trigger_seq)
+            .await?
+            .filter(|item| !item.deleted)
+            .ok_or_else(|| anyhow!("The message #{} is gone", request.trigger_seq))?;
+        if let Err(error) = self.sweep_deletions(reader, request.now).await
+            && !is_busy(&error)
+        {
+            tracing::warn!("Following deletions failed: {error:#}");
+        }
+        let compacted = match self
+            .compact(reader, request.trigger_seq, request, TurnPhase::BeforeCall)
+            .await
+        {
+            Ok(ran) => ran,
+            Err(error) => {
+                if !is_busy(&error) {
+                    tracing::warn!("The Hard compaction failed; answering uncompacted: {error:#}");
+                }
+                false
+            }
+        };
+        let state = self.engine.stores().state.load().await?;
+        let mut items = self
+            .engine
+            .live_items(reader, &state, request.trigger_seq)
+            .await?;
+        items.retain(|item| item.seq != request.trigger_seq);
+        let plan = self
+            .engine
+            .plan(
+                &items,
+                &state,
+                self.window(),
+                request.open_task_seqs,
+                TurnPhase::BeforeCall,
+            )
+            .await?;
+        let summaries = self.engine.stores().segments.active().await?;
+        let facts = self
+            .engine
+            .recall(&trigger.text, &self.options.budget, request.now)
+            .await
+            .unwrap_or_else(|error| {
+                tracing::warn!("Recalling facts failed: {error:#}");
+                Vec::new()
+            });
+        let assembled = assemble(
+            &PromptInput {
+                system_and_tools: "",
+                tool_tokens: self.options.tool_tokens,
+                about_you: request.about_you,
+                summaries: &summaries,
+                now_block: state.now.as_ref(),
+                state_block: request.state_block,
+                tail: &items,
+                open_task_seqs: request.open_task_seqs,
+                masking: &plan.masking,
+                facts: &facts,
+                user_message: &trigger.text,
+                timezone: self.options.timezone,
+            },
+            &self.options.budget,
+        );
+        let text = |kind: SectionKind| {
+            assembled
+                .section(kind)
+                .map(|section| section.text.trim().to_string())
+                .filter(|text| !text.is_empty())
+        };
+        let context = [
+            SectionKind::AboutYou,
+            SectionKind::Summaries,
+            SectionKind::State,
+        ]
+        .into_iter()
+        .filter_map(text)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+        let prompt = [SectionKind::Memory, SectionKind::UserMessage]
+            .into_iter()
+            .filter_map(text)
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let history = assembled
+            .tail_seqs
+            .iter()
+            .filter_map(|seq| items.iter().find(|item| item.seq == *seq))
+            .map(|item| TurnMessage {
+                role: if item.role == Role::Assistant {
+                    Role::Assistant
+                } else {
+                    Role::User
+                },
+                text: render_message(item, &plan.masking, self.options.timezone),
+            })
+            .collect();
+        Ok(PreparedTurn {
+            context,
+            history,
+            prompt,
+            trigger,
+            report: assembled.report,
+            compacted,
+        })
+    }
+
+    /// After the reply is stored: the Soft compaction, fact mining of what the compactions did
+    /// not cover, summaries that wait for a rewrite, deletions, and publishing. Runs under the
+    /// engine's lease; another engine's work (`MemoryBusy`) defers the rest to the next turn.
+    pub async fn after_turn(
+        &self,
+        reader: &dyn HistoryReader,
+        request: &TurnRequest<'_>,
+    ) -> AfterTurn {
+        let latest = reader
+            .latest()
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(request.trigger_seq)
+            .max(request.trigger_seq);
+        let mut done = AfterTurn::default();
+        macro_rules! step {
+            ($what:literal, $result:expr) => {
+                match $result {
+                    Ok(value) => Some(value),
+                    Err(error) if is_busy(&error) => {
+                        done.busy = true;
+                        done.published += self.publish().await;
+                        return done;
+                    }
+                    Err(error) => {
+                        tracing::warn!(concat!($what, " failed: {:#}"), error);
+                        None
+                    }
+                }
+            };
+        }
+        if let Some((count, _)) = step!(
+            "Following deletions",
+            self.sweep_deletions(reader, request.now).await
+        ) {
+            done.deletions = count;
+        }
+        done.compacted = step!(
+            "The background compaction",
+            self.compact(reader, latest, request, TurnPhase::AfterTurn)
+                .await
+        )
+        .unwrap_or(false);
+        let state = step!(
+            "Loading the memory state",
+            self.engine.stores().state.load().await
+        );
+        if let Some(state) = state {
+            let behind = latest.saturating_sub(state.mined_through.unwrap_or(0));
+            if behind >= self.options.mine_after || !state.unmined.is_empty() {
+                done.mined = step!(
+                    "Mining facts",
+                    self.engine.mine_idle(reader, latest, request.now).await
+                )
+                .is_some();
+            }
+            if !state.pending_rewrites.is_empty() {
+                done.rewrote = step!(
+                    "Rewriting summaries",
+                    self.engine
+                        .rewrite_pending(reader, self.window(), request.now)
+                        .await
+                )
+                .is_some();
+            }
+        }
+        done.published += self.publish().await;
+        done
+    }
+}
+
+fn render_message(item: &HistoryItem, masking: &crate::compaction::Masking, tz: Tz) -> String {
+    let rendered = render_tail_item(item, masking, tz);
+    let mut lines = rendered.lines();
+    let _header = lines.next();
+    let mut text = format!("#{} {}", item.seq, item.text);
+    for line in lines {
+        text.push('\n');
+        text.push_str(line);
+    }
+    text
+}

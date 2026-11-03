@@ -4,6 +4,7 @@ import type { IHistoryMessage } from "../../../lib/schema/llm/history";
 import { installRuntimeHistoryGuard } from "../../../lib/service-runtime/history-guard";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
 import type { FlowScriptWorkspaceCandidate } from "../../flowpilot/flowscript-workspace-candidates";
+import type { BotExchangeView } from "../../global-chat/bot-exchange";
 import { finalizePlanSteps } from "./chat-event-fold";
 import type { IChatMessageInteraction } from "./chat-message-interaction";
 
@@ -112,8 +113,18 @@ export interface IToolActivityDetail {
 		| "files"
 		| "database"
 		| "workflow"
+		| "terminal"
 		| "tool";
 	label: string;
+	/** A command run on this device: shown as a collapsed terminal card. */
+	terminal?: {
+		command: string;
+		exitCode?: number | null;
+		output?: string;
+		timedOut?: boolean;
+	};
+	/** An `ask_bot` call: shown as the exchange card between the two bots. */
+	exchange?: BotExchangeView;
 	target?: string;
 	query?: string;
 	/** All queries issued by this tool call, retained across progress updates. */
@@ -228,7 +239,22 @@ export interface IChatRunContext {
 	resumed?: boolean;
 }
 
+/** A bot's approval request in its chat; the card answers it and shows the answer. */
+export interface IMessageApproval {
+	id: string;
+	botId: string;
+	turnId: string;
+	tool: string;
+	summary: string;
+	scopes: string[];
+	requesterName?: string;
+	room?: string;
+	answer?: "once" | "always" | "deny";
+}
+
 export interface IMessage {
+	/** Set on a bot's approval card: the message renders as the card, not as text. */
+	approval?: IMessageApproval;
 	id: string;
 	/** Original response slot, shared by every message emitted in one run. */
 	stream_root_id?: string;

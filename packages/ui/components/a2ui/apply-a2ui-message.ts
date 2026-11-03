@@ -398,6 +398,8 @@ export function applyElementUpdate(
 				| { explicitList?: string[] }
 				| undefined;
 			const existing = childrenData?.explicitList || [];
+			// A child id is its React key, so a replayed push must not add a second copy.
+			if (existing.includes(childId)) return component;
 			return withComponentData(component, {
 				...data,
 				children: { explicitList: [...existing, childId] },
@@ -410,6 +412,7 @@ export function applyElementUpdate(
 				| { explicitList?: string[] }
 				| undefined;
 			const existing = [...(childrenData?.explicitList || [])];
+			if (existing.includes(childId)) return component;
 			const insertIndex = Math.max(0, Math.min(index, existing.length));
 			existing.splice(insertIndex, 0, childId);
 			return withComponentData(component, {

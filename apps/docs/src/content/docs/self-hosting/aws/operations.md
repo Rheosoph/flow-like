@@ -33,6 +33,43 @@ PostgreSQL or CockroachDB deployment. The
 [database environment contract](/self-hosting/aws/database/#environment-contract)
 lists the DSQL settings, forbidden password sources, and IAM permissions.
 
+## Shared realtime invalidations
+
+With `CHANNEL_TRANSPORT=aws_mqtt`, `/api/v1/realtime/connect` can issue a
+receive-only grant for the signed-in account. The connection receives small
+invalidation messages; clients fetch authorized data through HTTP replay.
+Active HTTP execution streams continue to carry their own output.
+
+The existing `CHANNEL_IOT_ENDPOINT`, `CHANNEL_IOT_ROLE_ARN`, region and account
+settings also configure this connection. Extend deployment IAM before enabling
+it. With the default `CHANNEL_IOT_TOPIC_PREFIX=runs`, the required resources are:
+
+| Identity | Action | IoT resource suffix |
+| --- | --- | --- |
+| Assumed channel role | `iot:Connect` | `client/realtime-*` |
+| Assumed channel role | `iot:Subscribe` | `topicfilter/runs/realtime/*/wake` |
+| Assumed channel role | `iot:Receive` | `topic/runs/realtime/*/wake` |
+| API execution role | `iot:Publish` | `topic/runs/realtime/*/wake` |
+
+Prefix these suffixes with `arn:<partition>:iot:<region>:<account>:` and replace
+`runs` when using a custom topic prefix. The API's STS session policy narrows
+each receiver to one generated client ID and one account topic. Receivers get
+no publish permission. Account topics use a digest of the authenticated account
+ID, and each device gets a different MQTT client ID so connections coexist.
+Existing channel `iot:SendDirectMessage` permissions do not grant this broadcast
+publish action. See the [AWS IoT action reference](https://docs.aws.amazon.com/iot/latest/developerguide/iot-policy-actions.html)
+for the resource types.
+
+Grants expire after 15 minutes. A failed grant request returns an HTTP fallback
+that retries the grant after 5 minutes; failed wakeups are recovered by HTTP
+replay.
+
+`REALTIME_POLL_MAX_WAIT_MS` caps how long `/api/v1/realtime/poll` holds a
+request open. On Lambda it defaults to `0`: the endpoint answers at once, and
+clients without a live connection poll every 2 seconds while following a run
+and every 30 seconds otherwise, so open tabs do not each keep an execution
+environment busy. Elsewhere it defaults to `20000`, a 20-second long poll.
+
 ## Hosted Bedrock models
 
 The API can proxy Bedrock models using its Lambda execution role or ECS task

@@ -96,31 +96,18 @@ selects the database-backed polling transport instead.
 
 ### Test the channel transport
 
-From the repository root, install the workspace JavaScript dependencies and
-make `nats-server` available on `PATH`. The browser suite uses Puppeteer's
-Chromium; `CHROME_PATH` selects an existing Chrome executable.
+Browsers no longer publish to the broker: replies, steering and cancellation go
+to the API, which forwards them onto NATS. To test the broker side, make
+`nats-server` available on `PATH` and run from the repository root:
 
 ```bash
-cargo build -p flow-like-channels --features nats --example nats-channel-worker
-python3 tests/nats-channels-browser/run.py
 NATS_SERVER_BIN="$(command -v nats-server)" cargo test -p flow-like-channels \
   --features nats real_broker_reply_steer_cancel_forwarder_permissions_and_expiry \
   -- --include-ignored
 ```
 
-The browser runner starts a fresh authenticated broker and exercises replies,
-steering, cancellation, duplicate delivery, HTTP forwarding, channel isolation
-and expiry. `NATS_SERVER_BIN` and `NATS_WORKER_BIN` can select custom binaries.
-To exercise the actual execution gateway too, build
-`cargo build -p flow-like-execution-manager --bin execution-gateway` and run
-with `NATS_GATEWAY_BIN=target/debug/execution-gateway`.
-
-To test an already running Compose or Kubernetes broker, run
-`bun tests/nats-channels-browser/verify.ts --config /private/path/fixture.json`.
-The private JSON file must contain `url`, `ws_url`, `account_seed` and
-`channel_id`. Set `NATS_E2E_BROWSER_PORT` to a free local port and include
-`http://127.0.0.1:<port>` in that test broker's origin list. Use an isolated test
-deployment and remove its credentials after testing.
+The test starts a fresh authenticated broker and exercises replies, steering,
+cancellation, the API forwarder's permissions, channel isolation and expiry.
 
 ## Images
 
@@ -432,6 +419,34 @@ configuration. Preserve the encryption key while stored sink credentials use it.
 Model-provider keys and endpoint variables are listed in `.env.example`.
 Populate only the providers your installation uses, and keep their secrets out
 of hub JSON.
+
+### Hosted image providers
+
+Install the provider credentials on the API before registering a hosted
+**ImageGeneration** Bit. Image generation reuses these existing server secrets:
+
+| Provider | Required secrets | Supported models |
+| --- | --- | --- |
+| `hosted:cloudflare` | `HOSTED_CLOUDFLARE_API_TOKEN`, `HOSTED_CLOUDFLARE_ACCOUNT_ID` | `@cf/black-forest-labs/flux-1-schnell`, `@cf/stabilityai/stable-diffusion-xl-base-1.0` |
+| `hosted:openrouter` | `OPENROUTER_API_KEY` | Raster image models served by OpenRouter's `/api/v1/images` endpoint |
+
+The Bit stores its upstream ID in `parameters.provider.model_id` and its access
+tier in `parameters.provider.params.tier`. An omitted tier uses `ENTERPRISE`.
+Credentials and endpoint overrides are not accepted in hosted image Bits.
+
+Set `parameters.pricing.request_micro_usd` to a nonnegative integer in micro-USD.
+For Cloudflare this is the provider tariff for one image at the fixed step
+count. For OpenRouter it is the maximum provider cost reserved before a call;
+settlement uses the reported cost. Include the most expensive permitted
+settings and routed provider when choosing that maximum. Serving charges also
+apply. A zero reservation does not make a paid OpenRouter request free.
+
+Runners call `POST /api/v1/images/generations` with the catalog Bit ID. Device
+instances use `/api/v1/instances/images/generations` and their approved model
+and spending grants. The API resolves the official catalog entry before
+dispatch; a private Bit cannot authorize use of server credentials. See
+[hosted image generation](/topics/genai/models/#hosted-image-generation) for
+workflow inputs and request limits.
 
 ### Hosted embedding providers
 

@@ -855,7 +855,7 @@ function EventConfiguration({
 		backend.boardState.getBoard,
 		backend.boardState,
 		[appId, formData.board_id, normalizeBoardVersion(formData.board_version)],
-		!!formData.board_id && !isPageTargetEvent && canReadBoards,
+		!!formData.board_id && canReadBoards,
 	);
 
 	useEffect(() => {
@@ -2865,9 +2865,12 @@ function EventConfiguration({
 
 						{activeSection === "history" && (
 							<EventHistory
+								key={`${appId}/${event.id}`}
 								appId={appId}
 								eventId={event.id}
+								eventName={event.name}
 								nodes={board.data?.nodes}
+								onNavigateToFlow={onNavigateToFlow}
 							/>
 						)}
 

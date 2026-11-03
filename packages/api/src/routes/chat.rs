@@ -11,7 +11,10 @@ mod hosted_bit_policy;
 mod hosted_connection;
 pub(crate) mod hosted_worker;
 mod relay;
-pub(crate) use relay::{UsageRequestContext, current_instance_model_tier, track_llm_usage};
+pub(crate) use relay::{
+    UsageRequestContext, current_instance_model_tier, enforce_tier, required_model_tier,
+    resolve_usage_context, track_llm_usage,
+};
 pub mod responses;
 pub mod systemone;
 pub mod usage;

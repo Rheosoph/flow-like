@@ -3,10 +3,10 @@
 import { useQueries } from "@tanstack/react-query";
 import { useMemo } from "react";
 import {
+	useLookupDisplayName,
 	useUserIdentity,
 	userLookupQueryOptions,
 } from "../../../hooks/use-user-lookup";
-import { userDisplayName } from "../../../lib/user-display";
 import { useBackend } from "../../../state/backend-state";
 import type {
 	GraphOverlay,
@@ -53,6 +53,7 @@ export function useGraphAccountLabels(
 	overlay: GraphOverlay,
 ): ReadonlyMap<string, string> {
 	const { userState } = useBackend();
+	const displayName = useLookupDisplayName();
 	const accounts = useMemo(
 		() =>
 			(nodes ?? []).flatMap((node) => {
@@ -71,7 +72,7 @@ export function useGraphAccountLabels(
 			JSON.stringify(
 				results.map((result, index) =>
 					result.data
-						? userDisplayName(
+						? displayName(
 								result.data,
 								resolveAccountId(result.data.id, ids[index]) ?? ids[index],
 							)

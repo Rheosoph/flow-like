@@ -136,6 +136,53 @@ test("a removed conversation is not recreated by a late runtime save", async () 
 	expect(await chatDb.drafts.count()).toBe(0);
 });
 
+test("a detached reply is saved as incomplete until a stop saves it again, without overwriting newer chat state", async () => {
+	const local = {
+		id: "local",
+		appId: "app",
+		eventId: "chat",
+		sessionId: "session",
+		localState: { step: 1 },
+	};
+	const run = task();
+	run.chat = {
+		responseMessage: message(),
+		tmpLocalState: local,
+		detachedNotice: {
+			title: "Still running on the server",
+			message: "Live updates stopped.",
+		},
+	};
+	await persistExecutionChat(run, false);
+	expect(await chatDb.drafts.count()).toBe(1);
+	run.detached = true;
+	await persistExecutionChat(run, false);
+	const detached = await savedRow();
+	expect(detached.streaming).toBeUndefined();
+	expect(await chatDb.drafts.count()).toBe(0);
+	expect(decodeMessageRow(detached)).toMatchObject({
+		inner: { content: "First update" },
+		error: {
+			kind: "rate-limit",
+			title: "Still running on the server",
+			message: "Live updates stopped.",
+			retryable: false,
+		},
+	});
+	await chatDb.localStage.put({ ...local, localState: { step: 2 } });
+	run.events = [];
+	run.status = "cancelled";
+	await persistExecutionChat(run, true);
+	expect(decodeMessageRow(await savedRow())).toMatchObject({
+		inner: { content: "First update" },
+		error: { kind: "cancelled", title: "Stopped" },
+	});
+	expect((await chatDb.localStage.get("session"))?.localState).toEqual({
+		step: 2,
+	});
+	expect(await chatDb.messages.count()).toBe(1);
+});
+
 test("cancellation preserves partial text with a stopped state", async () => {
 	const run = task();
 	run.status = "cancelled";

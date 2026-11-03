@@ -21,6 +21,7 @@ import { useAuth } from "react-oidc-context";
 import { cn } from "../../../lib/utils";
 import { useBackend } from "../../../state/backend-state";
 import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
+import { BOTS_ROUTE } from "../../bots-tab/dock-selection";
 import {
 	homeActivityCoverage,
 	homeActivityDays,
@@ -332,7 +333,7 @@ export function HomeWorkspacePulse({ widget, editing }: HomeContentProps) {
 								setDraft({
 									prompt: "Help me turn a task I do often into a useful app.",
 								});
-								router.push("/chat");
+								router.push(BOTS_ROUTE);
 							}}
 							className={cn(actionClass, "disabled:opacity-50")}
 						>

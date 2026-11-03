@@ -588,7 +588,7 @@ async fn copy_one(
 }
 
 /// Lists `(relative_path, size)` for every object below `prefix`.
-async fn summarize_store_prefix(
+pub(crate) async fn summarize_store_prefix(
     store: &Arc<dyn ObjectStore>,
     prefix: &Path,
 ) -> flow_like_types::Result<Vec<(String, u64)>> {
@@ -629,7 +629,7 @@ fn is_content_blob_path(relative_path: &str) -> bool {
 
 /// What an offline → online fork uploads. Shared by the summary and the
 /// upload so the server's cap check measures exactly what arrives.
-fn is_uploaded_content_path(relative_path: &str) -> bool {
+pub(crate) fn is_uploaded_content_path(relative_path: &str) -> bool {
     is_content_blob_path(relative_path) && !is_device_local_path(relative_path)
 }
 
@@ -667,7 +667,7 @@ fn is_missing_prefix_error(error: &impl std::fmt::Display) -> bool {
 
 /// The content prefix the API handed us is already an object-store key, so it
 /// is normalized rather than encoded a second time.
-fn parse_storage_path(raw: &str) -> Path {
+pub(crate) fn parse_storage_path(raw: &str) -> Path {
     normalize_object_path(raw)
 }
 

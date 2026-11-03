@@ -71,6 +71,13 @@ pub struct ExecutionClaims {
     /// Optional technical user/API key that initiated the execution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub technical_user_id: Option<String>,
+    /// The bot whose turn this executor serves: app callbacks resolve as the bot (the owner's
+    /// role narrowed by the bot's restrictions), while `sub` stays the owner as payer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
+    /// The room the bot's turn answers in, when it is not the owner's direct chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conv_id: Option<String>,
     /// The run ID (unique per execution)
     pub run_id: String,
     /// The application ID
@@ -199,6 +206,8 @@ fn sign_inner(
         custom_bits_owner: None,
         unattended,
         technical_user_id: params.technical_user_id,
+        bot_id: None,
+        conv_id: None,
         run_id: params.run_id,
         app_id: params.app_id,
         board_id: params.board_id,
@@ -292,6 +301,25 @@ pub(super) fn bind_dispatch(token: &str, hash: String) -> Result<String, Executi
             "per-run dispatch cannot outlive cancellation retention (24 hours)".into(),
         ));
     }
+    claims.dispatch_hash = Some(hash);
+    backend_jwt::sign(&claims)
+}
+
+/// Marks an executor token as serving one bot turn.
+pub(crate) fn bind_bot_identity(
+    token: &str,
+    bot_id: &str,
+    conv_id: Option<&str>,
+) -> Result<String, ExecutionJwtError> {
+    let mut claims = verify(token)?;
+    claims.bot_id = Some(bot_id.to_owned());
+    claims.conv_id = conv_id.map(str::to_owned);
+    backend_jwt::sign(&claims)
+}
+
+/// Binds an unattended executor token to one bot tool job.
+pub(crate) fn bind_tool_job(token: &str, hash: String) -> Result<String, ExecutionJwtError> {
+    let mut claims = verify(token)?;
     claims.dispatch_hash = Some(hash);
     backend_jwt::sign(&claims)
 }

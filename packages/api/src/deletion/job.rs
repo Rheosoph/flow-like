@@ -193,73 +193,81 @@ pub async fn enqueue(
     root_id: &str,
     requested_by: Option<&str>,
 ) -> Result<Model, ApiError> {
-    plan_for(root)?;
-    let root_kind = root.kind().to_owned();
     let root_id = root_id.to_owned();
     let requested_by = requested_by.map(str::to_owned);
     state
         .transaction(move |txn| {
-            let root_kind = root_kind.clone();
             let root_id = root_id.clone();
             let requested_by = requested_by.clone();
-            Box::pin(async move {
-                let existing = find_by_root(txn, &root_kind, &root_id).await?;
-                let job = match existing {
-                    Some(job) if job.status == STATUS_FAILED => {
-                        let now = now();
-                        deletion_job::ActiveModel {
-                            id: Set(job.id.clone()),
-                            status: Set(STATUS_QUEUED.to_owned()),
-                            phase: Set(0),
-                            cursor: Set(None),
-                            attempts: Set(0),
-                            lease_until: Set(None),
-                            last_error: Set(None),
-                            requested_by: Set(requested_by.clone().or(job.requested_by)),
-                            updated_at: Set(now),
-                            ..Default::default()
-                        }
-                        .update(txn)
-                        .await?
-                    }
-                    Some(job) => job,
-                    None => {
-                        let now = now();
-                        Entity::insert(ActiveModel {
-                            id: Set(create_id()),
-                            root_kind: Set(root_kind.clone()),
-                            root_id: Set(root_id.clone()),
-                            status: Set(STATUS_QUEUED.to_owned()),
-                            phase: Set(0),
-                            cursor: Set(None),
-                            attempts: Set(0),
-                            lease_until: Set(None),
-                            last_error: Set(None),
-                            requested_by: Set(requested_by.clone()),
-                            created_at: Set(now),
-                            updated_at: Set(now),
-                        })
-                        .on_conflict(
-                            OnConflict::columns([Column::RootKind, Column::RootId])
-                                .do_nothing()
-                                .to_owned(),
-                        )
-                        .exec_without_returning(txn)
-                        .await?;
-                        find_by_root(txn, &root_kind, &root_id)
-                            .await?
-                            .ok_or_else(|| {
-                                sea_orm::DbErr::RecordNotFound(format!(
-                                    "DeletionJob {root_kind}/{root_id} vanished after insert"
-                                ))
-                            })?
-                    }
-                };
-                tombstone(txn, root, &root_id).await?;
-                Ok::<_, ApiError>(job)
-            })
+            Box::pin(async move { enqueue_in(txn, root, &root_id, requested_by.as_deref()).await })
         })
         .await
+}
+
+/// [`enqueue`] inside the caller's transaction, so the job commits (or not) with the change
+/// that asked for it, e.g. a deleted bot's workspace with the bot.
+pub async fn enqueue_in(
+    txn: &DatabaseTransaction,
+    root: DeletionRoot,
+    root_id: &str,
+    requested_by: Option<&str>,
+) -> Result<Model, ApiError> {
+    plan_for(root)?;
+    let root_kind = root.kind();
+    let existing = find_by_root(txn, root_kind, root_id).await?;
+    let job = match existing {
+        Some(job) if job.status == STATUS_FAILED => {
+            let now = now();
+            deletion_job::ActiveModel {
+                id: Set(job.id.clone()),
+                status: Set(STATUS_QUEUED.to_owned()),
+                phase: Set(0),
+                cursor: Set(None),
+                attempts: Set(0),
+                lease_until: Set(None),
+                last_error: Set(None),
+                requested_by: Set(requested_by.map(str::to_owned).or(job.requested_by)),
+                updated_at: Set(now),
+                ..Default::default()
+            }
+            .update(txn)
+            .await?
+        }
+        Some(job) => job,
+        None => {
+            let now = now();
+            Entity::insert(ActiveModel {
+                id: Set(create_id()),
+                root_kind: Set(root_kind.to_owned()),
+                root_id: Set(root_id.to_owned()),
+                status: Set(STATUS_QUEUED.to_owned()),
+                phase: Set(0),
+                cursor: Set(None),
+                attempts: Set(0),
+                lease_until: Set(None),
+                last_error: Set(None),
+                requested_by: Set(requested_by.map(str::to_owned)),
+                created_at: Set(now),
+                updated_at: Set(now),
+            })
+            .on_conflict(
+                OnConflict::columns([Column::RootKind, Column::RootId])
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec_without_returning(txn)
+            .await?;
+            find_by_root(txn, root_kind, root_id)
+                .await?
+                .ok_or_else(|| {
+                    sea_orm::DbErr::RecordNotFound(format!(
+                        "DeletionJob {root_kind}/{root_id} vanished after insert"
+                    ))
+                })?
+        }
+    };
+    tombstone(txn, root, root_id).await?;
+    Ok(job)
 }
 
 async fn find_by_root(

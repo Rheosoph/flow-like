@@ -32,11 +32,13 @@ use crate::data::excel::grid::{
     SheetGrid, Workbook, normalize_table_name, parse_a1_range, truncate_chars, unique_table_name,
 };
 #[cfg(feature = "execute")]
-use crate::data::excel::sheet_compressor::{
-    EncodeOptions, encode_inverted_index, encode_sheet_compact, render_range,
+use crate::data::excel::inspect::{
+    MAX_INSPECT_ROWS, StyleFilter, find_styled_cells, inspect_range, value_index,
 };
 #[cfg(feature = "execute")]
-use crate::data::excel::styles::{SheetStyles, color_matches, load_workbook_styles};
+use crate::data::excel::sheet_compressor::{EncodeOptions, encode_sheet_compact};
+#[cfg(feature = "execute")]
+use crate::data::excel::styles::{SheetStyles, load_workbook_styles};
 #[cfg(feature = "execute")]
 use crate::data::excel::table_detect::{
     BuildOverrides, DetectedTable, ExtractConfig, Rect, build_table_from_rect,
@@ -68,8 +70,6 @@ use std::sync::Arc;
 
 #[cfg(feature = "execute")]
 const MAX_HEADER_ROWS_AI: usize = 5;
-#[cfg(feature = "execute")]
-const MAX_INSPECT_ROWS: usize = 60;
 #[cfg(feature = "execute")]
 const MAX_QUERY_RESULT_ROWS: usize = 50;
 #[cfg(feature = "execute")]
@@ -169,28 +169,6 @@ struct SheetToolbox {
 
 #[cfg(feature = "execute")]
 impl SheetToolbox {
-    fn abs_range_to_rect(&self, range: &str) -> Result<Rect, String> {
-        let (ar0, ac0, ar1, ac1) =
-            parse_a1_range(range).ok_or_else(|| format!("'{range}' is not a valid A1 range"))?;
-        let g = &self.grid;
-        let r0 = ar0
-            .saturating_sub(g.start_row)
-            .min(g.height.saturating_sub(1));
-        let c0 = ac0
-            .saturating_sub(g.start_col)
-            .min(g.width.saturating_sub(1));
-        let r1 = ar1
-            .saturating_sub(g.start_row)
-            .min(g.height.saturating_sub(1));
-        let c1 = ac1
-            .saturating_sub(g.start_col)
-            .min(g.width.saturating_sub(1));
-        if r1 < r0 || c1 < c0 {
-            return Err(format!("Range '{range}' lies outside the used range"));
-        }
-        Ok(Rect { r0, c0, r1, c1 })
-    }
-
     async fn get_styles(&self) -> Option<Arc<SheetStyles>> {
         let mut guard = self.styles.lock().await;
         if let Some(cached) = &*guard {
@@ -215,59 +193,19 @@ impl SheetToolbox {
     }
 
     async fn inspect_range(&self, range: &str, max_rows: Option<usize>) -> String {
-        let rect = match self.abs_range_to_rect(range) {
-            Ok(r) => r,
-            Err(e) => return e,
-        };
         let styles = self.get_styles().await;
-        let cap = max_rows.unwrap_or(MAX_INSPECT_ROWS).min(MAX_INSPECT_ROWS);
-        render_range(&self.grid, styles.as_deref(), &rect, cap, &self.encode_opts)
+        inspect_range(
+            &self.grid,
+            styles.as_deref(),
+            range,
+            max_rows,
+            &self.encode_opts,
+        )
     }
 
-    async fn find_styled_cells(
-        &self,
-        bold: Option<bool>,
-        italic: Option<bool>,
-        fill_color: Option<String>,
-        font_color: Option<String>,
-    ) -> String {
-        let Some(styles) = self.get_styles().await else {
-            return "No style information available (styles require xlsx format).".to_string();
-        };
-        if styles.is_empty() {
-            return "The sheet has no styled cells.".to_string();
-        }
-        if bold.is_none() && italic.is_none() && fill_color.is_none() && font_color.is_none() {
-            return format!("Styling on this sheet: {}", styles.summarize(12));
-        }
-        let matches = styles.find(|s| {
-            bold.is_none_or(|b| s.bold == b)
-                && italic.is_none_or(|i| s.italic == i)
-                && fill_color
-                    .as_deref()
-                    .is_none_or(|q| color_matches(q, s.fill_color_name()))
-                && font_color
-                    .as_deref()
-                    .is_none_or(|q| color_matches(q, s.font_color_name()))
-        });
-        if matches.is_empty() {
-            return format!(
-                "No cells match. Styling present on this sheet: {}",
-                styles.summarize(12)
-            );
-        }
-        let addrs: Vec<String> = matches
-            .iter()
-            .take(100)
-            .map(|&(r, c, _)| format!("{}{}", crate::data::excel::grid::col_to_letters(c), r + 1))
-            .collect();
-        let suffix = if matches.len() > 100 { ", …" } else { "" };
-        format!(
-            "{} matching cells: {}{}",
-            matches.len(),
-            addrs.join(", "),
-            suffix
-        )
+    async fn find_styled_cells(&self, filter: StyleFilter) -> String {
+        let styles = self.get_styles().await;
+        find_styled_cells(styles.as_deref(), &filter)
     }
 
     async fn query_data(&self, sql: &str) -> String {
@@ -279,6 +217,7 @@ impl SheetToolbox {
                 let ctx = Arc::new(create_session_context(
                     SessionConfig::new(),
                     self.execution_environment,
+                    None,
                 ));
                 let mut registered: Vec<String> = Vec::new();
                 let tables: Vec<(String, DetectedTable)> = if self.candidates.is_empty() {
@@ -498,6 +437,18 @@ struct FindStyledCellsArgs {
 }
 
 #[cfg(feature = "execute")]
+impl From<FindStyledCellsArgs> for StyleFilter {
+    fn from(args: FindStyledCellsArgs) -> Self {
+        Self {
+            bold: args.bold,
+            italic: args.italic,
+            fill_color: args.fill_color,
+            font_color: args.font_color,
+        }
+    }
+}
+
+#[cfg(feature = "execute")]
 struct FindStyledCellsTool {
     toolbox: Arc<SheetToolbox>,
 }
@@ -527,10 +478,7 @@ impl Tool for FindStyledCellsTool {
     }
 
     async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        Ok(self
-            .toolbox
-            .find_styled_cells(args.bold, args.italic, args.fill_color, args.font_color)
-            .await)
+        Ok(self.toolbox.find_styled_cells(args.into()).await)
     }
 
     fn name(&self) -> String {
@@ -571,11 +519,7 @@ impl Tool for ValueIndexTool {
     }
 
     async fn call(&self, args: Self::Args) -> std::result::Result<Self::Output, Self::Error> {
-        Ok(encode_inverted_index(
-            &self.toolbox.grid,
-            300,
-            args.contains.as_deref(),
-        ))
+        Ok(value_index(&self.toolbox.grid, args.contains.as_deref()))
     }
 
     fn name(&self) -> String {
@@ -1009,16 +953,7 @@ impl NodeLogic for ExtractExcelTablesAINode {
                     FindStyledCellsTool::NAME => {
                         let result =
                             match flow_like_types::json::from_value::<FindStyledCellsArgs>(args) {
-                                Ok(a) => {
-                                    toolbox
-                                        .find_styled_cells(
-                                            a.bold,
-                                            a.italic,
-                                            a.fill_color,
-                                            a.font_color,
-                                        )
-                                        .await
-                                }
+                                Ok(a) => toolbox.find_styled_cells(a.into()).await,
                                 Err(e) => format!("Invalid arguments: {e}"),
                             };
                         next = tool_result(result);
@@ -1026,9 +961,7 @@ impl NodeLogic for ExtractExcelTablesAINode {
                     ValueIndexTool::NAME => {
                         let result = match flow_like_types::json::from_value::<ValueIndexArgs>(args)
                         {
-                            Ok(a) => {
-                                encode_inverted_index(&toolbox.grid, 300, a.contains.as_deref())
-                            }
+                            Ok(a) => value_index(&toolbox.grid, a.contains.as_deref()),
                             Err(e) => format!("Invalid arguments: {e}"),
                         };
                         next = tool_result(result);

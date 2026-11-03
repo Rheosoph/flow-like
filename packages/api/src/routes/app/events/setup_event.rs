@@ -539,7 +539,7 @@ pub(crate) async fn run_event_setup(
         app_id: Set(app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),
-        event_version: Set(None),
+        event_version: Set(Some(event_version.clone())),
         nodes: Set(None),
         logs_count: Set(None),
     };

@@ -23,6 +23,7 @@ function validExportBytes(
 
 export type WordcraftMessage =
 	| { type: "ready" }
+	| { type: "loading"; interactive: boolean; completed: number; total: number }
 	| { type: "opened"; warnings?: string[]; previewOnly?: boolean }
 	| { type: "save-request" }
 	| { type: "dirty"; dirty: boolean }
@@ -73,6 +74,21 @@ export function readWordcraftMessage(
 				type: "opened",
 				...(warnings?.length ? { warnings } : {}),
 				...(data.previewOnly === true ? { previewOnly: true } : {}),
+			};
+		case "loading":
+			if (
+				typeof data.interactive !== "boolean" ||
+				!Number.isSafeInteger(data.completed) ||
+				!Number.isSafeInteger(data.total) ||
+				data.completed < 0 ||
+				data.total < data.completed
+			)
+				return null;
+			return {
+				type: "loading",
+				interactive: data.interactive,
+				completed: data.completed,
+				total: data.total,
 			};
 		case "dirty":
 			return typeof data.dirty === "boolean"

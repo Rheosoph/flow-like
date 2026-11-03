@@ -12,7 +12,8 @@ const INPUTS: &[&str] = &[
     "pcraft", "ora", "psd", "psb", "psdt", "png", "apng", "jpg", "jpeg", "jpe", "jfif", "tif",
     "tiff", "webp", "gif", "bmp", "dib", "tga", "icb", "vda", "vst", "ico", "qoi", "exr", "hdr",
     "pnm", "pbm", "pgm", "ppm", "pam", "pfm", "fits", "fit", "fts", "pdn", "pcx", "kra", "dng",
-    "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "afphoto",
+    "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "afphoto", "xcf", "xpm", "dds",
+    "dpx", "cin", "dcm", "dicom", "dc3", "iff", "lbm", "ilbm",
 ];
 
 #[wasm_bindgen]
@@ -270,6 +271,12 @@ impl Host {
                         | "fits"
                         | "fit"
                         | "fts"
+                        | "dds"
+                        | "dpx"
+                        | "cin"
+                        | "iff"
+                        | "lbm"
+                        | "ilbm"
                 ) {
                     return Err(
                         "This image format is import-only. Save a new PCraft, PSD, or PNG file."
@@ -382,6 +389,9 @@ impl eframe::App for Host {
     }
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         raw.dropped_files.clear();
+        if self.read_only {
+            self.app.cancel_synthetic("The editor is read-only.");
+        }
         if !self.read_only {
             self.app.raw_input_hook(ctx, raw);
         }

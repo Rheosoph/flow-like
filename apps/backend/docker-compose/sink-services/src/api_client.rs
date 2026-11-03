@@ -129,10 +129,9 @@ impl ApiClient {
         }
     }
 
-    /// Get bot configurations grouped by token
-    /// Returns bots with their tokens and associated event handlers
+    /// Active events of a bot sink type, grouped into one bot per token.
     pub async fn get_bot_configs(&self, sink_type: &str) -> Result<Vec<BotConfig>, ApiError> {
-        let url = format!("{}/api/v1/sink/bots?sink_type={}", self.base_url, sink_type);
+        let url = sink_configs_url(&self.base_url, sink_type);
 
         let response = self
             .client
@@ -143,11 +142,11 @@ impl ApiClient {
             .map_err(|e| ApiError::Request(e.to_string()))?;
 
         if response.status().is_success() {
-            let configs: Vec<BotConfig> = response
+            let sinks: Vec<SinkConfigInfo> = response
                 .json()
                 .await
                 .map_err(|e| ApiError::Parse(e.to_string()))?;
-            Ok(configs)
+            Ok(group_bots(sink_type, sinks))
         } else {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
@@ -157,6 +156,66 @@ impl ApiClient {
             })
         }
     }
+}
+
+const SINK_CONFIGS_PATH: &str = "/api/v1/sink/configs";
+
+fn sink_configs_url(base_url: &str, sink_type: &str) -> String {
+    format!("{base_url}{SINK_CONFIGS_PATH}?sink_type={sink_type}")
+}
+
+/// One row of `GET /sink/configs`: the event's config is stored as `{"base64": <config bytes>}`.
+#[derive(Debug, Deserialize)]
+struct SinkConfigInfo {
+    event_id: String,
+    #[serde(default)]
+    active: bool,
+    #[serde(default)]
+    config: Option<serde_json::Value>,
+}
+
+impl SinkConfigInfo {
+    fn settings(&self) -> Option<serde_json::Map<String, serde_json::Value>> {
+        use base64::Engine as _;
+        let encoded = self.config.as_ref()?.get("base64")?.as_str()?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .ok()?;
+        match serde_json::from_slice(&bytes).ok()? {
+            serde_json::Value::Object(settings) => Some(settings),
+            _ => None,
+        }
+    }
+}
+
+/// Events that share a bot token share one bot. Events without a readable token are left out.
+fn group_bots(sink_type: &str, sinks: Vec<SinkConfigInfo>) -> Vec<BotConfig> {
+    let mut bots: std::collections::BTreeMap<String, BotConfig> = Default::default();
+    for sink in sinks.into_iter().filter(|sink| sink.active) {
+        let Some(mut settings) = sink.settings() else {
+            continue;
+        };
+        let Some(token) = settings
+            .remove("bot_token")
+            .and_then(|token| token.as_str().map(|token| token.trim().to_owned()))
+            .filter(|token| !token.is_empty())
+        else {
+            continue;
+        };
+        bots.entry(token.clone())
+            .or_insert_with(|| BotConfig {
+                bot_id: crate::storage::RedisStorage::hash_token(&token),
+                token,
+                sink_type: sink_type.to_owned(),
+                handlers: Vec::new(),
+            })
+            .handlers
+            .push(BotHandler {
+                event_id: sink.event_id,
+                config: serde_json::Value::Object(settings),
+            });
+    }
+    bots.into_values().collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -193,3 +252,93 @@ impl std::fmt::Display for ApiError {
 }
 
 impl std::error::Error for ApiError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine as _;
+    use serde_json::json;
+
+    fn sink(event_id: &str, active: bool, settings: serde_json::Value) -> SinkConfigInfo {
+        let encoded = base64::engine::general_purpose::STANDARD
+            .encode(serde_json::to_vec(&settings).unwrap());
+        SinkConfigInfo {
+            event_id: event_id.into(),
+            active,
+            config: Some(json!({ "base64": encoded })),
+        }
+    }
+
+    #[test]
+    fn bots_are_read_from_the_route_the_api_serves() {
+        assert_eq!(
+            sink_configs_url("http://api:8080", "telegram"),
+            "http://api:8080/api/v1/sink/configs?sink_type=telegram"
+        );
+        let routes = include_str!("../../../../../packages/api/src/routes/sink/mod.rs");
+        assert!(routes.contains(".route(\"/configs\", get(trigger::get_sink_configs))"));
+        assert!(!routes.contains("\"/bots\""));
+    }
+
+    #[test]
+    fn events_on_one_token_share_one_bot() {
+        let bots = group_bots(
+            "telegram",
+            vec![
+                sink("evt_a", true, json!({"bot_token": "1:abc", "chat_id": 7})),
+                sink(
+                    "evt_b",
+                    true,
+                    json!({"bot_token": " 1:abc ", "command": "/go"}),
+                ),
+                sink("evt_c", true, json!({"bot_token": "2:def"})),
+            ],
+        );
+        assert_eq!(bots.len(), 2);
+        let shared = bots.iter().find(|bot| bot.token == "1:abc").unwrap();
+        assert_eq!(shared.sink_type, "telegram");
+        assert_eq!(
+            shared
+                .handlers
+                .iter()
+                .map(|handler| handler.event_id.as_str())
+                .collect::<Vec<_>>(),
+            ["evt_a", "evt_b"]
+        );
+        assert_eq!(shared.handlers[0].config, json!({"chat_id": 7}));
+        assert_ne!(
+            shared.bot_id,
+            bots.iter().find(|bot| bot.token == "2:def").unwrap().bot_id
+        );
+    }
+
+    #[test]
+    fn a_bot_id_is_stable_and_never_the_token() {
+        let rows = || vec![sink("evt_a", true, json!({"bot_token": "1:abc"}))];
+        let first = group_bots("telegram", rows());
+        let again = group_bots("telegram", rows());
+        assert_eq!(first[0].bot_id, again[0].bot_id);
+        assert!(!first[0].bot_id.contains("abc"));
+    }
+
+    #[test]
+    fn inactive_events_and_events_without_a_token_start_no_bot() {
+        let mut unreadable = sink("evt_d", true, json!({}));
+        unreadable.config = Some(json!({"base64": "***"}));
+        let bots = group_bots(
+            "discord",
+            vec![
+                sink("evt_a", false, json!({"bot_token": "tok"})),
+                sink("evt_b", true, json!({"bot_token": "  "})),
+                sink("evt_c", true, json!({"chat_id": 1})),
+                unreadable,
+                SinkConfigInfo {
+                    event_id: "evt_e".into(),
+                    active: true,
+                    config: None,
+                },
+            ],
+        );
+        assert!(bots.is_empty());
+    }
+}

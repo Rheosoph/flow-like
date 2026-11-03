@@ -1267,7 +1267,7 @@ mod tests {
         assert!(csp.contains(&format!(
             "frame-src https://api.flow-like.com/api/v1/registry/package/com.example.maps/widget-sandbox/1.2.0/widgets/live-map/index.{JWT}.html;"
         )));
-        assert!(csp.ends_with("sandbox allow-scripts allow-downloads"));
+        assert!(csp.ends_with("sandbox allow-scripts allow-forms allow-downloads"));
         assert!(!csp.contains("'self'"));
 
         let html = body(response).await;
@@ -1281,7 +1281,7 @@ mod tests {
         let baseline = frame_response("../", &sources, WIDGET, "0", false).unwrap();
         let csp = header(&baseline, header::CONTENT_SECURITY_POLICY).to_string();
         assert!(csp.contains("/widgets/live-map/index.0.html;"));
-        assert!(csp.ends_with("sandbox allow-scripts"));
+        assert!(csp.ends_with("sandbox allow-scripts allow-forms"));
         assert!(
             body(baseline)
                 .await
@@ -1354,7 +1354,7 @@ mod tests {
         assert!(csp.contains(
             "frame-src https://api.flow-like.com/api/v1/registry/package/com.example.maps/widget-sandbox/1.2.0/widgets/live-map/index.0.html;"
         ));
-        assert!(csp.ends_with("sandbox allow-scripts"));
+        assert!(csp.ends_with("sandbox allow-scripts allow-forms"));
         assert!(
             body(response)
                 .await
@@ -1397,7 +1397,7 @@ mod tests {
         assert_eq!(csp, widget_document_csp(&sources, &policy, true, true));
         assert!(csp.contains("https://tiles.example-maps.com"));
         assert!(csp.contains("media-src data: blob: "));
-        assert!(csp.ends_with("sandbox allow-scripts allow-downloads"));
+        assert!(csp.ends_with("sandbox allow-scripts allow-forms allow-downloads"));
 
         let html = body(response).await;
         assert!(html.starts_with("<!doctype html><meta http-equiv=\"Content-Security-Policy\""));
@@ -1408,7 +1408,7 @@ mod tests {
         let csp = header(&baseline, header::CONTENT_SECURITY_POLICY).to_string();
         assert!(csp.contains("connect-src data: blob:;"));
         assert!(csp.contains("media-src data: blob:;"));
-        assert!(csp.ends_with("sandbox allow-scripts"));
+        assert!(csp.ends_with("sandbox allow-scripts allow-forms"));
         assert!(header(&baseline, header::VARY).eq_ignore_ascii_case("user-agent"));
 
         let gated = document_response(&sources, &WidgetPolicy::default(), entry, false);

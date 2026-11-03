@@ -278,30 +278,42 @@ pub fn build_session_config(
 /// can. Server-side, only explicitly registered stores (`flowlike://`, mounted
 /// object stores) exist; a `file://` URL then fails with DataFusion's own
 /// "No suitable object store found" error.
+///
+/// `memory_limit` caps the bytes all operators of a query may hold at once:
+/// sorts and aggregations spill beyond it, and operators that cannot spill fail
+/// with "Resources exhausted" instead of growing the process.
 #[cfg(feature = "execute")]
-fn create_runtime_env(environment: ExecutionEnvironment) -> Arc<RuntimeEnv> {
+fn create_runtime_env(
+    environment: ExecutionEnvironment,
+    memory_limit: Option<usize>,
+) -> Arc<RuntimeEnv> {
     let registry = DefaultObjectStoreRegistry::new();
     if environment == ExecutionEnvironment::Server
         && let Ok(file_scheme) = Url::parse("file:///")
     {
         let _ = registry.deregister_store(&file_scheme);
     }
-    RuntimeEnvBuilder::new()
-        .with_object_store_registry(Arc::new(registry))
+    let mut builder = RuntimeEnvBuilder::new().with_object_store_registry(Arc::new(registry));
+    if let Some(bytes) = memory_limit {
+        builder = builder.with_memory_limit(bytes, 1.0);
+    }
+    builder
         .build_arc()
-        .expect("RuntimeEnv without disk spill or memory limits cannot fail to build")
+        .expect("a RuntimeEnv with the default disk manager builds without I/O and cannot fail")
 }
 
 /// Every DataFusion session in this crate must be built through here so the
-/// server-side `file://` restriction applies to all SQL entry points.
+/// server-side `file://` restriction applies to all SQL entry points. Sessions
+/// without a `memory_limit` keep DataFusion's unbounded memory pool.
 #[cfg(all(feature = "execute", feature = "federation"))]
 pub fn create_session_context(
     config: SessionConfig,
     environment: ExecutionEnvironment,
+    memory_limit: Option<usize>,
 ) -> SessionContext {
     let state = SessionStateBuilder::new()
         .with_config(config)
-        .with_runtime_env(create_runtime_env(environment))
+        .with_runtime_env(create_runtime_env(environment, memory_limit))
         .with_optimizer_rules(default_optimizer_rules())
         .with_query_planner(Arc::new(FederatedQueryPlanner::new()))
         .with_default_features()
@@ -315,16 +327,93 @@ pub fn create_session_context(
 }
 
 /// Every DataFusion session in this crate must be built through here so the
-/// server-side `file://` restriction applies to all SQL entry points.
+/// server-side `file://` restriction applies to all SQL entry points. Sessions
+/// without a `memory_limit` keep DataFusion's unbounded memory pool.
 #[cfg(all(feature = "execute", not(feature = "federation")))]
 pub fn create_session_context(
     config: SessionConfig,
     environment: ExecutionEnvironment,
+    memory_limit: Option<usize>,
 ) -> SessionContext {
-    let state = SessionContext::new_with_config_rt(config, create_runtime_env(environment)).state();
+    let state =
+        SessionContext::new_with_config_rt(config, create_runtime_env(environment, memory_limit))
+            .state();
     let context = SessionContext::new_with_state(
         flow_like_storage::databases::df_provider::with_lance_order_pushdown(state),
     );
     flow_like_storage::databases::register_sql_functions(&context);
     context
+}
+
+#[cfg(all(test, feature = "execute"))]
+mod tests {
+    use super::*;
+    use flow_like_storage::datafusion::execution::memory_pool::MemoryLimit;
+    use flow_like_types::tokio;
+
+    const MILLION_ROW_JOIN: &str = "SELECT COUNT(*) AS n FROM generate_series(1, 1000000) a \
+                                    JOIN generate_series(1, 1000000) b ON a.value = b.value";
+
+    #[test]
+    fn the_memory_pool_carries_the_limit() {
+        let bounded = create_session_context(
+            SessionConfig::new(),
+            ExecutionEnvironment::Server,
+            Some(64 << 20),
+        );
+        assert!(matches!(
+            bounded.runtime_env().memory_pool.memory_limit(),
+            MemoryLimit::Finite(bytes) if bytes == 64 << 20
+        ));
+
+        let unbounded =
+            create_session_context(SessionConfig::new(), ExecutionEnvironment::Local, None);
+        assert!(matches!(
+            unbounded.runtime_env().memory_pool.memory_limit(),
+            MemoryLimit::Infinite
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_bounded_session_refuses_operators_beyond_the_limit() {
+        let unbounded =
+            create_session_context(SessionConfig::new(), ExecutionEnvironment::Local, None);
+        let batches = unbounded
+            .sql(MILLION_ROW_JOIN)
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let rows: usize = batches.iter().map(|batch| batch.num_rows()).sum();
+        assert_eq!(rows, 1);
+
+        let bounded = create_session_context(
+            SessionConfig::new(),
+            ExecutionEnvironment::Local,
+            Some(1 << 20),
+        );
+        let error = bounded
+            .sql(MILLION_ROW_JOIN)
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .expect_err("a 1 MiB pool cannot hold a million-row hash table");
+        assert!(error.to_string().contains("Resources exhausted"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn server_sessions_cannot_reach_the_host_filesystem() {
+        let server =
+            create_session_context(SessionConfig::new(), ExecutionEnvironment::Server, None);
+        let error = server
+            .sql("CREATE EXTERNAL TABLE leak STORED AS CSV LOCATION 'file:///etc/hosts'")
+            .await
+            .expect_err("file:// is deregistered server-side");
+        assert!(
+            error.to_string().contains("No suitable object store"),
+            "{error}"
+        );
+    }
 }
