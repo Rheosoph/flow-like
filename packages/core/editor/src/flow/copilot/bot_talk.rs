@@ -2251,14 +2251,18 @@ mod tests {
     fn pending() -> TurnFn {
         Arc::new(|_: NestedBotTurn| -> TurnFuture {
             Box::pin(async {
-                Err(PendingAnswer("Ledger is offline; the question waits in its inbox.".into()).into())
+                Err(
+                    PendingAnswer("Ledger is offline; the question waits in its inbox.".into())
+                        .into(),
+                )
             })
         })
     }
 
     #[tokio::test]
     async fn a_late_or_offline_callee_is_pending_not_a_failure() {
-        let host = Arc::new(FakeHost::new(crew(), pending()).granting(&[("bot_scout", "bot_ledger")]));
+        let host =
+            Arc::new(FakeHost::new(crew(), pending()).granting(&[("bot_scout", "bot_ledger")]));
         let result = parsed(
             &talk(&host, false)
                 .ask(&question("Total?"), Owner::absent().as_ref())
@@ -2275,21 +2279,40 @@ mod tests {
     async fn a_headless_ask_without_a_grant_follows_the_hosts_verdict() {
         let owner = Owner::absent();
         for (verdict, code, status) in [
-            (HeadlessPermission::Parked, "bot_talk_waiting_for_owner", "waiting"),
+            (
+                HeadlessPermission::Parked,
+                "bot_talk_waiting_for_owner",
+                "waiting",
+            ),
             (HeadlessPermission::Denied, "bot_talk_denied", "denied"),
-            (HeadlessPermission::Unavailable, "bot_talk_needs_permission", "error"),
+            (
+                HeadlessPermission::Unavailable,
+                "bot_talk_needs_permission",
+                "error",
+            ),
         ] {
             let host = Arc::new(FakeHost::new(crew(), answering("42")));
             *host.headless.lock().unwrap() = verdict;
-            let result = parsed(&talk(&host, false).ask(&question("Total?"), owner.as_ref()).await);
+            let result = parsed(
+                &talk(&host, false)
+                    .ask(&question("Total?"), owner.as_ref())
+                    .await,
+            );
             assert_eq!(result["code"], code);
             assert_eq!(result["status"], status);
             assert!(host.turns().is_empty(), "nothing runs without permission");
-            assert!(host.messages().is_empty(), "nothing is recorded without permission");
+            assert!(
+                host.messages().is_empty(),
+                "nothing is recorded without permission"
+            );
         }
         let host = Arc::new(FakeHost::new(crew(), answering("42")));
         *host.headless.lock().unwrap() = HeadlessPermission::Allowed;
-        let result = parsed(&talk(&host, false).ask(&question("Total?"), owner.as_ref()).await);
+        let result = parsed(
+            &talk(&host, false)
+                .ask(&question("Total?"), owner.as_ref())
+                .await,
+        );
         assert_eq!(result["status"], "ok");
         assert_eq!(result["exchange"]["answer"], "42");
     }
@@ -2304,10 +2327,18 @@ mod tests {
         let owner = Owner::absent();
         let ask = |bot: &str| json!({ "bot": bot, "message": "Pass it on." });
 
-        let second = BotTalk::resumed(host.clone(), ledger(), vec![scout()], DataSensitivity::default());
+        let second = BotTalk::resumed(
+            host.clone(),
+            ledger(),
+            vec![scout()],
+            DataSensitivity::default(),
+        );
         assert!(second.is_nested());
         let cycle = parsed(&second.ask(&ask("bot_scout"), owner.as_ref()).await);
-        assert_eq!(cycle["code"], "bot_talk_cycle", "the asker already waits on this ask");
+        assert_eq!(
+            cycle["code"], "bot_talk_cycle",
+            "the asker already waits on this ask"
+        );
         assert!(host.turns().is_empty());
 
         let chain = vec![scout(), digest(), flux()];

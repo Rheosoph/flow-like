@@ -4,9 +4,7 @@
 
 use super::owned_bot;
 use crate::{
-    bot_host::talk::{
-        AnsweredAsk, ServerTalkHost, answered_ask, bot_name, crew_member, roster_in,
-    },
+    bot_host::talk::{AnsweredAsk, ServerTalkHost, answered_ask, bot_name, crew_member, roster_in},
     entity::bot_turn,
     error::ApiError,
     middleware::jwt::AppUser,
@@ -139,7 +137,10 @@ pub async fn talk_exchange(
     if body.callee_id == bot_id {
         return Err(ApiError::bad_request("A bot can't ask itself"));
     }
-    let caller = crew_member(&owned_bot(&state.db, &sub, &bot_id).await?, BotPresence::Online);
+    let caller = crew_member(
+        &owned_bot(&state.db, &sub, &bot_id).await?,
+        BotPresence::Online,
+    );
     let callee = crew_member(
         &owned_bot(&state.db, &sub, &body.callee_id).await?,
         BotPresence::Unknown,
@@ -183,12 +184,17 @@ pub async fn talk(
         )));
     }
     if body.run_id.trim().is_empty() {
-        return Err(ApiError::bad_request("Asking a bot needs the run_id of the asking run"));
+        return Err(ApiError::bad_request(
+            "Asking a bot needs the run_id of the asking run",
+        ));
     }
     if body.callee_id == bot_id {
         return Err(ApiError::bad_request("A bot can't ask itself"));
     }
-    let caller = crew_member(&owned_bot(&state.db, &sub, &bot_id).await?, BotPresence::Online);
+    let caller = crew_member(
+        &owned_bot(&state.db, &sub, &bot_id).await?,
+        BotPresence::Online,
+    );
     let callee_row = owned_bot(&state.db, &sub, &body.callee_id).await?;
     let presence = roster_in(&state.db, &sub, &bot_id, now_millis())
         .await?
@@ -233,7 +239,10 @@ pub async fn talk(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "GET /bots/{bot_id}/turns/{turn_id}/ask-result", skip(state, user))]
+#[tracing::instrument(
+    name = "GET /bots/{bot_id}/turns/{turn_id}/ask-result",
+    skip(state, user)
+)]
 pub async fn turn_ask_result(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

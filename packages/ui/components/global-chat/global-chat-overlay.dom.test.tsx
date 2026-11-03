@@ -121,6 +121,7 @@ beforeEach(async () => {
 	useAuthStatusStore.setState({ signedIn: true });
 	useBackendStore.setState({
 		backend: {
+			appState: { getApps: async () => [] },
 			botState: {
 				listBots: async () => [scout, pebble],
 				cloneBot,
@@ -313,6 +314,25 @@ test("a bot on this computer moves through the Bots tab's review", async () => {
 	await show("bot:bot_pebble");
 	await click(pill());
 	expect(panel()?.textContent).toContain("On this device");
+	await click(panelButton("Move to your account"));
+	expect(controls.push).toHaveBeenLastCalledWith(
+		"/bots?bot=bot_pebble&move=local",
+	);
+});
+
+test("the mounted overlay updates move actions when signing out and back in", async () => {
+	await act(async () => useAuthStatusStore.setState({ signedIn: undefined }));
+	await show("bot:bot_pebble");
+	await click(pill());
+	expect(panelButton("Move to your account")).toBeDefined();
+
+	await act(async () => useAuthStatusStore.setState({ signedIn: false }));
+	expect(pillShows().name).toBe("Pebble");
+	expect(panel()?.querySelector("h2")?.textContent).toBe("Pebble");
+	expect(panelButton("Move to your account")).toBeUndefined();
+
+	await act(async () => useAuthStatusStore.setState({ signedIn: true }));
+	expect(pillShows().name).toBe("Pebble");
 	await click(panelButton("Move to your account"));
 	expect(controls.push).toHaveBeenLastCalledWith(
 		"/bots?bot=bot_pebble&move=local",

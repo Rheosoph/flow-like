@@ -1211,7 +1211,10 @@ pub fn bot_persona_section(bot: &BotRunContext) -> Option<String> {
 /// what is switched on but not available yet, the data classification, and then the chat's
 /// rendering rules (the same `a2ui` section the "Enable Interactive UI" agent node adds).
 pub fn bot_system_prompt(bot: &BotRunContext) -> String {
-    let who = bot.requester.as_ref().and_then(TurnRequester::prompt_section);
+    let who = bot
+        .requester
+        .as_ref()
+        .and_then(TurnRequester::prompt_section);
     if bot.toolset == BotToolset::FlowPilot {
         let flowpilot = global_assistant_system_prompt_for(WebResearchCapability::Inline);
         let extras: Vec<String> = bot_persona_section(bot).into_iter().chain(who).collect();
@@ -1572,9 +1575,17 @@ mod tests {
     #[test]
     fn a_member_in_a_room_keeps_every_tool_and_the_prompt_names_who_speaks() {
         let member = requested_by("member", TurnAudience::Room);
-        assert_eq!(names(&member, true), names(&bot(&[BotCapability::Internet, BotCapability::SelectedApps]), true));
+        assert_eq!(
+            names(&member, true),
+            names(
+                &bot(&[BotCapability::Internet, BotCapability::SelectedApps]),
+                true
+            )
+        );
         let prompt = bot_system_prompt(&member);
-        assert!(prompt.contains("Launch crew") && prompt.contains("Mia (a member, not your owner)"));
+        assert!(
+            prompt.contains("Launch crew") && prompt.contains("Mia (a member, not your owner)")
+        );
         assert!(prompt.contains("Olga is your owner"));
         assert_eq!(member.permissions, EffectivePermissions::unrestricted());
     }

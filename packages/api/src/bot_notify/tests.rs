@@ -121,7 +121,9 @@ async fn mute(db: &DatabaseConnection) {
 async fn a_reply_to_a_person_message_is_asked_for_and_does_not_notify() {
     let (db, sink) = setup().await;
     turn(&db, "t1", "MESSAGE", 0).await;
-    let sent = notify_for_reply(&db, &sink, &reply("t1", "re-1", "Done")).await.unwrap();
+    let sent = notify_for_reply(&db, &sink, &reply("t1", "re-1", "Done"))
+        .await
+        .unwrap();
     assert!(!sent);
     assert_eq!(sink.count(), 0);
 }
@@ -160,11 +162,23 @@ async fn a_reply_to_another_bots_message_notifies() {
 async fn the_same_reply_notifies_once() {
     let (db, sink) = setup().await;
     turn(&db, "t1", "TRIGGER", 0).await;
-    assert!(notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi")).await.unwrap());
-    assert!(!notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi")).await.unwrap());
+    assert!(
+        notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi"))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi"))
+            .await
+            .unwrap()
+    );
     assert_eq!(sink.count(), 1);
     turn(&db, "t2", "TRIGGER", 0).await;
-    assert!(notify_for_reply(&db, &sink, &reply("t2", "re-2", "Hi")).await.unwrap());
+    assert!(
+        notify_for_reply(&db, &sink, &reply("t2", "re-2", "Hi"))
+            .await
+            .unwrap()
+    );
     assert_eq!(sink.count(), 2);
 }
 
@@ -173,11 +187,19 @@ async fn a_muted_or_deleted_bot_stays_quiet() {
     let (db, sink) = setup().await;
     turn(&db, "t1", "TRIGGER", 0).await;
     mute(&db).await;
-    assert!(!notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi")).await.unwrap());
+    assert!(
+        !notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi"))
+            .await
+            .unwrap()
+    );
     let (db, sink) = setup().await;
     turn(&db, "t1", "TRIGGER", 0).await;
     delete_bot(&db, "bot_1").await;
-    assert!(!notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi")).await.unwrap());
+    assert!(
+        !notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi"))
+            .await
+            .unwrap()
+    );
     assert_eq!(sink.count(), 0);
 }
 
@@ -185,7 +207,11 @@ async fn a_muted_or_deleted_bot_stays_quiet() {
 async fn failure_reports_and_foreign_turns_do_not_notify() {
     let (db, sink) = setup().await;
     turn(&db, "t1", "TRIGGER", 0).await;
-    assert!(!notify_for_reply(&db, &sink, &reply("t1", "rf-1", "I couldn't")).await.unwrap());
+    assert!(
+        !notify_for_reply(&db, &sink, &reply("t1", "rf-1", "I couldn't"))
+            .await
+            .unwrap()
+    );
     let other = Reply {
         bot_id: "bot_2",
         ..reply("t1", "re-1", "Hi")
@@ -198,7 +224,9 @@ async fn failure_reports_and_foreign_turns_do_not_notify() {
 async fn an_empty_reply_still_has_a_body() {
     let (db, sink) = setup().await;
     turn(&db, "t1", "TRIGGER", 0).await;
-    notify_for_reply(&db, &sink, &reply("t1", "re-1", "  ")).await.unwrap();
+    notify_for_reply(&db, &sink, &reply("t1", "re-1", "  "))
+        .await
+        .unwrap();
     let input = sink.sent.lock().unwrap()[0].1.clone();
     assert_eq!(input.description.as_deref(), Some(NO_PREVIEW));
 }
@@ -207,7 +235,10 @@ async fn an_empty_reply_still_has_a_body() {
 fn the_text_comes_from_a_plain_envelope_only() {
     let plain = json!({ "v": 1, "enc": "none", "body": { "text": "Hello" } });
     assert_eq!(text_of(Some(&plain)), "Hello");
-    assert_eq!(text_of(Some(&json!({ "v": 1, "enc": "x25519", "ct": "…" }))), "");
+    assert_eq!(
+        text_of(Some(&json!({ "v": 1, "enc": "x25519", "ct": "…" }))),
+        ""
+    );
     assert_eq!(text_of(None), "");
 }
 
@@ -219,8 +250,12 @@ async fn tool_notices_are_grouped_counted_and_respect_the_mute() {
         body: "Look".into(),
         link: link.map(str::to_string),
     };
-    let first = deliver_tool_notice(&db, &sink, "bot_1", notice(None)).await.unwrap();
-    let second = deliver_tool_notice(&db, &sink, "bot_1", notice(Some("/store"))).await.unwrap();
+    let first = deliver_tool_notice(&db, &sink, "bot_1", notice(None))
+        .await
+        .unwrap();
+    let second = deliver_tool_notice(&db, &sink, "bot_1", notice(Some("/store")))
+        .await
+        .unwrap();
     assert!(!first.muted && first.id != second.id);
     let sent = sink.sent.lock().unwrap().clone();
     assert_eq!(sent[0].1.title, "bot_1");
@@ -229,13 +264,30 @@ async fn tool_notices_are_grouped_counted_and_respect_the_mute() {
     assert_eq!(sent[1].1.link.as_deref(), Some("/store"));
     assert_eq!(sent[0].1.source_run_id.as_deref(), Some("bot:bot_1"));
     let hour_ago = chrono::Utc::now().timestamp_millis() - 3_600_000;
-    assert_eq!(count_tool_notices(&db, "user-a", "bot_1", hour_ago).await.unwrap(), 2);
-    assert_eq!(count_tool_notices(&db, "user-b", "bot_1", hour_ago).await.unwrap(), 0);
+    assert_eq!(
+        count_tool_notices(&db, "user-a", "bot_1", hour_ago)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        count_tool_notices(&db, "user-b", "bot_1", hour_ago)
+            .await
+            .unwrap(),
+        0
+    );
     let later = chrono::Utc::now().timestamp_millis() + 60_000;
-    assert_eq!(count_tool_notices(&db, "user-a", "bot_1", later).await.unwrap(), 0);
+    assert_eq!(
+        count_tool_notices(&db, "user-a", "bot_1", later)
+            .await
+            .unwrap(),
+        0
+    );
 
     mute(&db).await;
-    let muted = deliver_tool_notice(&db, &sink, "bot_1", notice(None)).await.unwrap();
+    let muted = deliver_tool_notice(&db, &sink, "bot_1", notice(None))
+        .await
+        .unwrap();
     assert!(muted.muted);
     assert_eq!(sink.count(), 2);
 }
@@ -244,16 +296,27 @@ async fn tool_notices_are_grouped_counted_and_respect_the_mute() {
 async fn reply_notifications_do_not_count_against_the_tool_limit() {
     let (db, sink) = setup().await;
     turn(&db, "t1", "TRIGGER", 0).await;
-    notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi")).await.unwrap();
+    notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi"))
+        .await
+        .unwrap();
     let hour_ago = chrono::Utc::now().timestamp_millis() - 3_600_000;
-    assert_eq!(count_tool_notices(&db, "user-a", "bot_1", hour_ago).await.unwrap(), 0);
+    assert_eq!(
+        count_tool_notices(&db, "user-a", "bot_1", hour_ago)
+            .await
+            .unwrap(),
+        0
+    );
 }
 
 #[tokio::test]
 async fn a_resumed_turn_notifies_even_when_a_person_asked() {
     let (db, sink) = setup().await;
     turn(&db, "t1", "MESSAGE", 0).await;
-    assert!(!notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi")).await.unwrap());
+    assert!(
+        !notify_for_reply(&db, &sink, &reply("t1", "re-1", "Hi"))
+            .await
+            .unwrap()
+    );
     let resumed = Reply {
         resumed: true,
         ..reply("t1", "re-2", "Done")

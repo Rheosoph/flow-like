@@ -38,7 +38,8 @@ use flow_like_types::{
     bot_turn::is_interactive_host,
     inbox::{
         ConversationEncryption, ConversationKind, EntryCursor, EnvelopeKind, InboxEntryKind,
-        MAX_CONVERSATION_MEMBERS, TopicBody, TriggerBody, body_target, check_envelope, is_valid_message_id,
+        MAX_CONVERSATION_MEMBERS, TopicBody, TriggerBody, body_target, check_envelope,
+        is_valid_message_id,
     },
 };
 use sea_orm::{
@@ -562,8 +563,7 @@ async fn deliver<'e, C: ConnectionTrait>(
         seq: event.seq,
         recipients: recipients_of(txn, event, bots, outgoing, hops).await?,
     };
-    let answers_an_approval =
-        matches!(&outgoing.content, Content::Plain(envelope) if super::approvals::is_approval_response(envelope));
+    let answers_an_approval = matches!(&outgoing.content, Content::Plain(envelope) if super::approvals::is_approval_response(envelope));
     if answers_an_approval {
         return Ok(Vec::new());
     }
@@ -667,14 +667,22 @@ fn room_content(
     let is_room = ConversationKind::parse(&conversation.kind) == Some(ConversationKind::Group)
         && members
             .iter()
-            .filter(|member| PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::User))
+            .filter(|member| {
+                PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::User)
+            })
             .count()
             > 1;
     let from_bot = members.iter().any(|member| {
         member.principal_id == sender
             && PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::Bot)
     });
-    if !is_room || !from_bot || !matches!(outgoing.kind, InboxEntryKind::Message | InboxEntryKind::Edit) {
+    if !is_room
+        || !from_bot
+        || !matches!(
+            outgoing.kind,
+            InboxEntryKind::Message | InboxEntryKind::Edit
+        )
+    {
         return None;
     }
     flow_like_types::bot_message::without_tool_details(envelope).map(Content::Plain)
@@ -995,7 +1003,9 @@ pub(crate) async fn answer_origin<C: ConnectionTrait>(
     else {
         return Ok(None);
     };
-    if outgoing.message_id != flow_like_types::bot_turn::reply_message_id(bot_id, &turn.trigger_message_id) {
+    if outgoing.message_id
+        != flow_like_types::bot_turn::reply_message_id(bot_id, &turn.trigger_message_id)
+    {
         return Ok(None);
     }
     let answered = crate::bot_host::talk::answered_ask(db, &turn).await?;

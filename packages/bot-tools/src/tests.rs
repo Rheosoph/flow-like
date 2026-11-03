@@ -2735,7 +2735,12 @@ mod code {
             error: None,
             files: files
                 .into_iter()
-                .map(|(path, bytes)| (path.to_string(), flow_like_types::Bytes::copy_from_slice(bytes)))
+                .map(|(path, bytes)| {
+                    (
+                        path.to_string(),
+                        flow_like_types::Bytes::copy_from_slice(bytes),
+                    )
+                })
                 .collect(),
             truncated: false,
             duration_ms: 1,
@@ -2766,13 +2771,21 @@ mod code {
             .collect();
         assert_eq!(
             shown,
-            [("out/plot.png", "image/png"), ("out/photo.JPG", "image/jpeg")]
+            [
+                ("out/plot.png", "image/png"),
+                ("out/photo.JPG", "image/jpeg")
+            ]
         );
         let mimes: Vec<&str> = outcome.saved.iter().map(|h| h.mime.as_str()).collect();
         for expected in ["image/png", "image/svg+xml", "text/csv", "application/json"] {
             assert!(mimes.contains(&expected), "{expected} in {mimes:?}");
         }
-        assert!(outcome.saved.iter().any(|h| h.path.ends_with("out/table.csv")));
+        assert!(
+            outcome
+                .saved
+                .iter()
+                .any(|h| h.path.ends_with("out/table.csv"))
+        );
         assert!(outcome.warnings.iter().any(|w| w.contains("SVG")));
     }
 
@@ -2785,7 +2798,10 @@ mod code {
             .collect();
         files.push(("out/big.png".to_string(), big));
         *env.sandbox().reply.lock().expect("reply") = Some(run_with_files(
-            files.iter().map(|(p, b)| (p.as_str(), b.as_slice())).collect(),
+            files
+                .iter()
+                .map(|(p, b)| (p.as_str(), b.as_slice()))
+                .collect(),
         ));
         let outcome = call(
             &env,
@@ -2795,7 +2811,12 @@ mod code {
         .await;
         ok(&outcome);
         assert_eq!(outcome.images.len(), 4);
-        assert!(outcome.warnings.iter().any(|w| w.contains("3 image(s) were not shown")));
+        assert!(
+            outcome
+                .warnings
+                .iter()
+                .any(|w| w.contains("3 image(s) were not shown"))
+        );
         assert_eq!(outcome.saved.len(), 1 + 7);
     }
 
@@ -2897,7 +2918,12 @@ mod real_sandbox {
         ok(&outcome);
         assert_eq!(outcome.result["language"], "javascript");
         assert_eq!(outcome.result["outputs"]["ok"], true);
-        assert!(outcome.saved.iter().any(|h| h.path.ends_with("out/o.json") && h.mime == "application/json"));
+        assert!(
+            outcome
+                .saved
+                .iter()
+                .any(|h| h.path.ends_with("out/o.json") && h.mime == "application/json")
+        );
         assert!(outcome.saved.iter().any(|h| h.path.ends_with("script.js")));
     }
 
@@ -2913,8 +2939,18 @@ mod real_sandbox {
         assert_eq!(outcome.images.len(), 1);
         assert_eq!(outcome.images[0].mime, "image/png");
         assert_eq!(&outcome.images[0].data[1..4], b"PNG");
-        assert!(outcome.saved.iter().any(|h| h.path.ends_with("out/dot.png") && h.mime == "image/png"));
-        assert!(outcome.saved.iter().any(|h| h.path.ends_with("out/t.csv") && h.mime == "text/csv"));
+        assert!(
+            outcome
+                .saved
+                .iter()
+                .any(|h| h.path.ends_with("out/dot.png") && h.mime == "image/png")
+        );
+        assert!(
+            outcome
+                .saved
+                .iter()
+                .any(|h| h.path.ends_with("out/t.csv") && h.mime == "text/csv")
+        );
     }
 
     #[tokio::test]

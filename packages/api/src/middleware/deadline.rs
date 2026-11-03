@@ -1066,7 +1066,12 @@ mod tests {
             None,
         ),
         ("GET", "/api/v1/audit/verify", Data, None),
-        ("POST", "/api/v1/execution/apps/{app_id}/bots/ask", Data, None),
+        (
+            "POST",
+            "/api/v1/execution/apps/{app_id}/bots/ask",
+            Data,
+            None,
+        ),
         ("POST", "/api/v1/bots/hooks/{hook_id}", Data, None),
         ("POST", "/api/v1/bots/{bot_id}/ask", Data, None),
         ("GET", "/api/v1/audit/verify/epochs", Data, None),

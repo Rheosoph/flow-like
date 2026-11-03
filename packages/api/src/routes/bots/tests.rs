@@ -1,6 +1,7 @@
 use super::{
     apps::{
-        BOT_APP_LIMIT_REACHED, BotApp, MAX_APPS_PER_BOT, attach_in, attached_apps, store_restrictions, unrestricted_row,
+        BOT_APP_LIMIT_REACHED, BotApp, MAX_APPS_PER_BOT, attach_in, attached_apps,
+        store_restrictions, unrestricted_row,
     },
     bots_by_id,
     clone::{Cloned, clone_in, copy_name},
@@ -20,6 +21,7 @@ use crate::{
 };
 use axum::http::StatusCode;
 use chrono::{DateTime, FixedOffset};
+use flow_like_types::bot_restrictions::{BotPreset, BotRestrictions};
 use flow_like_types::{
     bot::{BotCapability, BotLocation, BotModelPolicy, BotSystemKind},
     data_classification::{DataClassification, DataSensitivity},
@@ -28,7 +30,6 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
     DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Schema, sea_query::Table,
 };
-use flow_like_types::bot_restrictions::{BotPreset, BotRestrictions};
 use serde_json::json;
 
 async fn database() -> DatabaseConnection {
@@ -234,9 +235,9 @@ async fn attached_apps_carry_the_owner_role_until_the_owner_leaves() {
     seed_memberships(&db).await;
     for (app_id, added) in [("app-2", at(20)), ("app-1", at(10))] {
         unrestricted_row(&row.id, app_id, added)
-        .insert(&db)
-        .await
-        .unwrap();
+            .insert(&db)
+            .await
+            .unwrap();
     }
 
     let apps = attached_apps(&db, "owner", &row.id).await.unwrap();
@@ -617,9 +618,9 @@ async fn a_duplicate_copies_the_settings_and_the_apps_the_owner_still_uses() {
     let source = row.insert(&db).await.unwrap();
     for (app_id, added) in [("app-2", at(1)), ("app-1", at(2))] {
         unrestricted_row(&source.id, app_id, added)
-        .insert(&db)
-        .await
-        .unwrap();
+            .insert(&db)
+            .await
+            .unwrap();
     }
     bot_secret::ActiveModel {
         bot_id: Set(source.id.clone()),
@@ -689,9 +690,15 @@ async fn restrictions_are_owner_only_listed_and_copied_by_a_duplicate() {
     let listed = attached_apps(&db, "owner", &row.id).await.unwrap();
     assert_eq!(listed[0].restrictions, restrictions);
 
-    let stranger = store_restrictions(&db, "mallory", &row.id, "app-1", &BotRestrictions::default())
-        .await
-        .unwrap_err();
+    let stranger = store_restrictions(
+        &db,
+        "mallory",
+        &row.id,
+        "app-1",
+        &BotRestrictions::default(),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(stranger.status(), StatusCode::NOT_FOUND);
     let unattached = store_restrictions(&db, "owner", &row.id, "app-2", &restrictions)
         .await
@@ -738,7 +745,10 @@ fn contract_permission_bits_match_role_permissions() {
         (BotPermission::ReadLogs, RolePermissions::ReadLogs),
         (BotPermission::ReadConfig, RolePermissions::ReadConfig),
         (BotPermission::ReadTemplates, RolePermissions::ReadTemplates),
-        (BotPermission::WriteTemplates, RolePermissions::WriteTemplates),
+        (
+            BotPermission::WriteTemplates,
+            RolePermissions::WriteTemplates,
+        ),
         (BotPermission::ReadCourses, RolePermissions::ReadCourses),
         (BotPermission::WriteCourses, RolePermissions::WriteCourses),
         (BotPermission::ReadWidgets, RolePermissions::ReadWidgets),

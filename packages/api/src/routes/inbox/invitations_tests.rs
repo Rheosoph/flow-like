@@ -10,7 +10,10 @@ use super::{
     },
     view::conversations_for,
 };
-use crate::{bot_permission::room_limits, entity::{conversation_member, membership}};
+use crate::{
+    bot_permission::room_limits,
+    entity::{conversation_member, membership},
+};
 use axum::http::StatusCode;
 use flow_like_types::{
     bot_effective::BotRoomLimits,
@@ -51,7 +54,11 @@ async fn insert_user(db: &DatabaseConnection, id: &str, name: &str) {
 /// user-a's, bot_b user-b's, bot_c user-c's.
 async fn world() -> DatabaseConnection {
     let db = database().await;
-    for (id, owner) in [("bot_a", "user-a"), ("bot_b", "user-b"), ("bot_c", "user-c")] {
+    for (id, owner) in [
+        ("bot_a", "user-a"),
+        ("bot_b", "user-b"),
+        ("bot_c", "user-c"),
+    ] {
         insert_bot(&db, id, owner, "SERVER").await;
     }
     share_app(&db, "user-a", "app-1").await;
@@ -65,14 +72,18 @@ async fn world() -> DatabaseConnection {
         members: Vec::new(),
         encryption: ConversationEncryption::Plain,
     };
-    start_group(&db, "room", "user-a", &plan, &[], at(0)).await.unwrap();
+    start_group(&db, "room", "user-a", &plan, &[], at(0))
+        .await
+        .unwrap();
     db
 }
 
 async fn invite(db: &DatabaseConnection, who: &[&str]) -> super::invitations::InviteOutcome {
     let ids: Vec<String> = who.iter().map(|id| id.to_string()).collect();
     let invitees = classify(db, "user-a", &ids).await.unwrap();
-    invite_in(db, "room", "user-a", &invitees, &NO_LIMITS, at(10)).await.unwrap()
+    invite_in(db, "room", "user-a", &invitees, &NO_LIMITS, at(10))
+        .await
+        .unwrap()
 }
 
 async fn status_of(db: &DatabaseConnection, principal: &str) -> Option<String> {
@@ -84,7 +95,11 @@ async fn status_of(db: &DatabaseConnection, principal: &str) -> Option<String> {
 }
 
 async fn inbox_ids(db: &DatabaseConnection, message_id: &str) -> Vec<String> {
-    copies(db, message_id).await.into_iter().map(|copy| copy.inbox_id).collect()
+    copies(db, message_id)
+        .await
+        .into_iter()
+        .map(|copy| copy.inbox_id)
+        .collect()
 }
 
 #[tokio::test]
@@ -93,23 +108,39 @@ async fn an_invited_person_receives_nothing_until_they_accept() {
     let outcome = invite(&db, &["user-b"]).await;
     assert_eq!(outcome.invited.len(), 1);
     assert!(outcome.added.is_empty());
-    assert_eq!(status_of(&db, "user-b").await.as_deref(), Some(MEMBER_PENDING));
+    assert_eq!(
+        status_of(&db, "user-b").await.as_deref(),
+        Some(MEMBER_PENDING)
+    );
 
-    send_in(&db, "room", "user-a", &text("before"), at(11)).await.unwrap();
+    send_in(&db, "room", "user-a", &text("before"), at(11))
+        .await
+        .unwrap();
     assert_eq!(inbox_ids(&db, "before").await, ["user-a"]);
-    let listed = conversations_for(&db, &Reader::own("user-b"), None).await.unwrap();
+    let listed = conversations_for(&db, &Reader::own("user-b"), None)
+        .await
+        .unwrap();
     assert!(listed.is_empty(), "a pending invitee reads no conversation");
-    let seen = conversations_for(&db, &Reader::own("user-a"), Some("room")).await.unwrap();
+    let seen = conversations_for(&db, &Reader::own("user-a"), Some("room"))
+        .await
+        .unwrap();
     assert_eq!(seen[0].members.len(), 1);
     assert_eq!(seen[0].pending.len(), 1);
     assert_eq!(seen[0].pending[0].principal_id, "user-b");
 
-    let woken = accept_in(&db, "room", "user-b", "user-b", None, at(20)).await.unwrap();
+    let woken = accept_in(&db, "room", "user-b", "user-b", None, at(20))
+        .await
+        .unwrap();
     assert_eq!(woken, ["user-a", "user-b"]);
-    assert_eq!(status_of(&db, "user-b").await.as_deref(), Some(MEMBER_ACTIVE));
+    assert_eq!(
+        status_of(&db, "user-b").await.as_deref(),
+        Some(MEMBER_ACTIVE)
+    );
     let joins: Vec<_> = conversation_member_events(&db, "user-b").await;
     assert_eq!(joins, ["user-b"], "the join entry reaches the new member");
-    send_in(&db, "room", "user-a", &text("after"), at(21)).await.unwrap();
+    send_in(&db, "room", "user-a", &text("after"), at(21))
+        .await
+        .unwrap();
     assert_eq!(inbox_ids(&db, "after").await, ["user-a", "user-b"]);
     assert!(invitations_for(&db, "user-b").await.unwrap().is_empty());
 }
@@ -123,7 +154,12 @@ async fn conversation_member_events(db: &DatabaseConnection, inbox: &str) -> Vec
         .await
         .unwrap()
         .into_iter()
-        .map(|entry| entry.envelope["body"]["principal_id"].as_str().unwrap().to_string())
+        .map(|entry| {
+            entry.envelope["body"]["principal_id"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
         .collect()
 }
 
@@ -141,22 +177,46 @@ async fn only_the_invitee_answers_and_declining_stops_delivery() {
     let db = world().await;
     invite(&db, &["user-b"]).await;
     for stranger in ["user-a", "user-c"] {
-        let error = accept_in(&db, "room", "user-b", stranger, None, at(20)).await.unwrap_err();
+        let error = accept_in(&db, "room", "user-b", stranger, None, at(20))
+            .await
+            .unwrap_err();
         assert_eq!(error.status(), StatusCode::NOT_FOUND, "{stranger} accepts");
-        let error = decline_in(&db, "room", "user-b", stranger).await.unwrap_err();
+        let error = decline_in(&db, "room", "user-b", stranger)
+            .await
+            .unwrap_err();
         assert_eq!(error.status(), StatusCode::NOT_FOUND, "{stranger} declines");
     }
-    assert_eq!(status_of(&db, "user-b").await.as_deref(), Some(MEMBER_PENDING));
+    assert_eq!(
+        status_of(&db, "user-b").await.as_deref(),
+        Some(MEMBER_PENDING)
+    );
 
-    assert_eq!(decline_in(&db, "room", "user-b", "user-b").await.unwrap(), ["user-a"]);
-    assert_eq!(status_of(&db, "user-b").await.as_deref(), Some(MEMBER_DECLINED));
-    send_in(&db, "room", "user-a", &text("m"), at(21)).await.unwrap();
+    assert_eq!(
+        decline_in(&db, "room", "user-b", "user-b").await.unwrap(),
+        ["user-a"]
+    );
+    assert_eq!(
+        status_of(&db, "user-b").await.as_deref(),
+        Some(MEMBER_DECLINED)
+    );
+    send_in(&db, "room", "user-a", &text("m"), at(21))
+        .await
+        .unwrap();
     assert_eq!(inbox_ids(&db, "m").await, ["user-a"]);
-    let again = accept_in(&db, "room", "user-b", "user-b", None, at(22)).await.unwrap_err();
-    assert_eq!(again.status(), StatusCode::NOT_FOUND, "a declined invitation can't be accepted");
+    let again = accept_in(&db, "room", "user-b", "user-b", None, at(22))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        again.status(),
+        StatusCode::NOT_FOUND,
+        "a declined invitation can't be accepted"
+    );
 
     invite(&db, &["user-b"]).await;
-    assert_eq!(status_of(&db, "user-b").await.as_deref(), Some(MEMBER_PENDING));
+    assert_eq!(
+        status_of(&db, "user-b").await.as_deref(),
+        Some(MEMBER_PENDING)
+    );
 }
 
 #[tokio::test]
@@ -169,14 +229,28 @@ async fn the_inviter_or_the_creator_cancels() {
         members: Vec::new(),
         encryption: ConversationEncryption::Plain,
     };
-    start_group(&db, "other", "user-d", &plan, &[user("user-a")], at(1)).await.unwrap();
-    let invitees = classify(&db, "user-a", &["user-b".to_string()]).await.unwrap();
-    invite_in(&db, "other", "user-a", &invitees, &NO_LIMITS, at(10)).await.unwrap();
+    start_group(&db, "other", "user-d", &plan, &[user("user-a")], at(1))
+        .await
+        .unwrap();
+    let invitees = classify(&db, "user-a", &["user-b".to_string()])
+        .await
+        .unwrap();
+    invite_in(&db, "other", "user-a", &invitees, &NO_LIMITS, at(10))
+        .await
+        .unwrap();
 
-    let by_stranger = cancel_in(&db, "other", "user-b", "user-c").await.unwrap_err();
-    assert_code(&by_stranger, StatusCode::FORBIDDEN, INBOX_INVITE_NOT_ALLOWED);
+    let by_stranger = cancel_in(&db, "other", "user-b", "user-c")
+        .await
+        .unwrap_err();
+    assert_code(
+        &by_stranger,
+        StatusCode::FORBIDDEN,
+        INBOX_INVITE_NOT_ALLOWED,
+    );
     cancel_in(&db, "other", "user-b", "user-d").await.unwrap();
-    let gone = cancel_in(&db, "other", "user-b", "user-d").await.unwrap_err();
+    let gone = cancel_in(&db, "other", "user-b", "user-d")
+        .await
+        .unwrap_err();
     assert_eq!(gone.status(), StatusCode::NOT_FOUND);
 
     invite(&db, &["user-b"]).await;
@@ -188,37 +262,73 @@ async fn the_inviter_or_the_creator_cancels() {
 async fn another_persons_bot_joins_only_when_its_owner_accepts_with_limits() {
     let db = world().await;
     invite(&db, &["bot_b"]).await;
-    assert_eq!(status_of(&db, "bot_b").await.as_deref(), Some(MEMBER_PENDING));
-    assert!(room_limits(&db, "bot_b", "room").await.is_err(), "pending grants nothing");
+    assert_eq!(
+        status_of(&db, "bot_b").await.as_deref(),
+        Some(MEMBER_PENDING)
+    );
+    assert!(
+        room_limits(&db, "bot_b", "room").await.is_err(),
+        "pending grants nothing"
+    );
     let mine = invitations_for(&db, "user-b").await.unwrap();
     assert_eq!(
-        (mine.len(), mine[0].principal_id.as_str(), mine[0].kind.as_str()),
+        (
+            mine.len(),
+            mine[0].principal_id.as_str(),
+            mine[0].kind.as_str()
+        ),
         (1, "bot_b", "bot")
     );
     assert!(invitations_for(&db, "user-a").await.unwrap().is_empty());
 
     for not_owner in ["user-a", "user-c", "bot_b"] {
-        let error = accept_in(&db, "room", "bot_b", not_owner, None, at(20)).await.unwrap_err();
+        let error = accept_in(&db, "room", "bot_b", not_owner, None, at(20))
+            .await
+            .unwrap_err();
         assert_eq!(error.status(), StatusCode::NOT_FOUND, "{not_owner}");
     }
-    assert_eq!(status_of(&db, "bot_b").await.as_deref(), Some(MEMBER_PENDING));
+    assert_eq!(
+        status_of(&db, "bot_b").await.as_deref(),
+        Some(MEMBER_PENDING)
+    );
 
     let limits = BotRoomLimits {
         mask: Some(1),
         apps: Some(vec!["app-1".into()]),
         ..Default::default()
     };
-    accept_in(&db, "room", "bot_b", "user-b", Some(&limits), at(20)).await.unwrap();
-    assert_eq!(status_of(&db, "bot_b").await.as_deref(), Some(MEMBER_ACTIVE));
+    accept_in(&db, "room", "bot_b", "user-b", Some(&limits), at(20))
+        .await
+        .unwrap();
+    assert_eq!(
+        status_of(&db, "bot_b").await.as_deref(),
+        Some(MEMBER_ACTIVE)
+    );
     assert_eq!(room_limits(&db, "bot_b", "room").await.unwrap(), limits);
 
-    let own = conversations_for(&db, &Reader::own("user-b"), None).await.unwrap();
-    assert!(own.is_empty(), "the owner is not a member just because the bot is");
-    let seen_by_owner = conversations_for(&db, &Reader::own("user-a"), Some("room")).await.unwrap();
-    assert!(seen_by_owner[0].members.iter().all(|member| member.limits.is_none()));
+    let own = conversations_for(&db, &Reader::own("user-b"), None)
+        .await
+        .unwrap();
+    assert!(
+        own.is_empty(),
+        "the owner is not a member just because the bot is"
+    );
+    let seen_by_owner = conversations_for(&db, &Reader::own("user-a"), Some("room"))
+        .await
+        .unwrap();
+    assert!(
+        seen_by_owner[0]
+            .members
+            .iter()
+            .all(|member| member.limits.is_none())
+    );
     let as_bot = super::reader(&db, "user-b", Some("bot_b")).await.unwrap();
     let owners_view = conversations_for(&db, &as_bot, Some("room")).await.unwrap();
-    let bot = owners_view[0].members.iter().find(|m| m.principal_id == "bot_b").unwrap();
+    let bot = owners_view[0]
+        .members
+        .iter()
+        .find(|m| m.principal_id == "bot_b")
+        .unwrap();
     assert!(bot.limits.is_some(), "the bot's owner sees the limits");
 }
 
@@ -226,23 +336,54 @@ async fn another_persons_bot_joins_only_when_its_owner_accepts_with_limits() {
 async fn limits_are_edited_by_the_bots_owner_and_apply_next_call() {
     let db = world().await;
     invite(&db, &["bot_b"]).await;
-    accept_in(&db, "room", "bot_b", "user-b", None, at(20)).await.unwrap();
-    assert_eq!(room_limits(&db, "bot_b", "room").await.unwrap(), BotRoomLimits::default());
+    accept_in(&db, "room", "bot_b", "user-b", None, at(20))
+        .await
+        .unwrap();
+    assert_eq!(
+        room_limits(&db, "bot_b", "room").await.unwrap(),
+        BotRoomLimits::default()
+    );
 
-    let narrow = BotRoomLimits { mask: Some(0), ..Default::default() };
-    let refused = set_limits_in(&db, "room", "bot_b", "user-a", Some(&narrow)).await.unwrap_err();
+    let narrow = BotRoomLimits {
+        mask: Some(0),
+        ..Default::default()
+    };
+    let refused = set_limits_in(&db, "room", "bot_b", "user-a", Some(&narrow))
+        .await
+        .unwrap_err();
     assert_eq!(refused.status(), StatusCode::NOT_FOUND);
-    assert_eq!(room_limits(&db, "bot_b", "room").await.unwrap(), BotRoomLimits::default());
+    assert_eq!(
+        room_limits(&db, "bot_b", "room").await.unwrap(),
+        BotRoomLimits::default()
+    );
 
-    set_limits_in(&db, "room", "bot_b", "user-b", Some(&narrow)).await.unwrap();
+    set_limits_in(&db, "room", "bot_b", "user-b", Some(&narrow))
+        .await
+        .unwrap();
     assert_eq!(room_limits(&db, "bot_b", "room").await.unwrap(), narrow);
-    set_limits_in(&db, "room", "bot_b", "user-b", None).await.unwrap();
-    assert_eq!(room_limits(&db, "bot_b", "room").await.unwrap(), BotRoomLimits::default());
+    set_limits_in(&db, "room", "bot_b", "user-b", None)
+        .await
+        .unwrap();
+    assert_eq!(
+        room_limits(&db, "bot_b", "room").await.unwrap(),
+        BotRoomLimits::default()
+    );
 
-    let absent = set_limits_in(&db, "room", "bot_a", "user-a", Some(&narrow)).await.unwrap_err();
-    assert_eq!(absent.status(), StatusCode::NOT_FOUND, "a bot that isn't in the room");
-    let negative = BotRoomLimits { mask: Some(-1), ..Default::default() };
-    let bad = set_limits_in(&db, "room", "bot_b", "user-b", Some(&negative)).await.unwrap_err();
+    let absent = set_limits_in(&db, "room", "bot_a", "user-a", Some(&narrow))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        absent.status(),
+        StatusCode::NOT_FOUND,
+        "a bot that isn't in the room"
+    );
+    let negative = BotRoomLimits {
+        mask: Some(-1),
+        ..Default::default()
+    };
+    let bad = set_limits_in(&db, "room", "bot_b", "user-b", Some(&negative))
+        .await
+        .unwrap_err();
     assert_eq!(bad.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -250,21 +391,32 @@ async fn limits_are_edited_by_the_bots_owner_and_apply_next_call() {
 async fn a_persons_invitation_takes_no_limits_and_own_bots_join_at_once() {
     let db = world().await;
     invite(&db, &["user-b"]).await;
-    let limits = BotRoomLimits { mask: Some(1), ..Default::default() };
-    let error = accept_in(&db, "room", "user-b", "user-b", Some(&limits), at(20)).await.unwrap_err();
+    let limits = BotRoomLimits {
+        mask: Some(1),
+        ..Default::default()
+    };
+    let error = accept_in(&db, "room", "user-b", "user-b", Some(&limits), at(20))
+        .await
+        .unwrap_err();
     assert_eq!(error.status(), StatusCode::BAD_REQUEST);
 
     let ids = vec!["bot_a".to_string()];
     let invitees = classify(&db, "user-a", &ids).await.unwrap();
     assert_eq!(invitees[0].mode, InviteMode::AddNow);
     let up_front = BTreeMap::from([("bot_a".to_string(), limits.clone())]);
-    let outcome = invite_in(&db, "room", "user-a", &invitees, &up_front, at(12)).await.unwrap();
+    let outcome = invite_in(&db, "room", "user-a", &invitees, &up_front, at(12))
+        .await
+        .unwrap();
     assert_eq!(outcome.added, ["bot_a"]);
     assert_eq!(room_limits(&db, "bot_a", "room").await.unwrap(), limits);
 
     let stray = BTreeMap::from([("bot_b".to_string(), limits)]);
-    let invitees = classify(&db, "user-a", &["bot_b".to_string()]).await.unwrap();
-    let error = invite_in(&db, "room", "user-a", &invitees, &stray, at(13)).await.unwrap_err();
+    let invitees = classify(&db, "user-a", &["bot_b".to_string()])
+        .await
+        .unwrap();
+    let error = invite_in(&db, "room", "user-a", &invitees, &stray, at(13))
+        .await
+        .unwrap_err();
     assert_eq!(error.status(), StatusCode::BAD_REQUEST);
 }
 
@@ -293,7 +445,9 @@ async fn invitable_is_exactly_what_the_server_accepts() {
         assert_eq!(accepted[0].mode, entry.mode, "{}", entry.principal_id);
     }
     for refused in ["user-c", "bot_c", "bot_gone", "nobody"] {
-        let error = classify(&db, "user-a", &[refused.to_string()]).await.unwrap_err();
+        let error = classify(&db, "user-a", &[refused.to_string()])
+            .await
+            .unwrap_err();
         assert_code(&error, StatusCode::FORBIDDEN, INBOX_MEMBER_NOT_ALLOWED);
         assert!(says(&error, refused));
     }
@@ -304,7 +458,14 @@ async fn invitable_is_exactly_what_the_server_accepts() {
 
     invite(&db, &["user-b"]).await;
     let marked = invitable(&db, "user-a", None, Some("room")).await.unwrap();
-    let state = |id: &str| marked.iter().find(|e| e.principal_id == id).unwrap().state.clone();
+    let state = |id: &str| {
+        marked
+            .iter()
+            .find(|e| e.principal_id == id)
+            .unwrap()
+            .state
+            .clone()
+    };
     assert_eq!(state("user-b").as_deref(), Some("invited"));
     assert_eq!(state("bot_b"), None);
 }
@@ -317,19 +478,32 @@ async fn a_conversation_holds_at_most_fifty_pending_invitations() {
         share_app(&db, id, "app-1").await;
     }
     let invitees = classify(&db, "user-a", &ids[..50]).await.unwrap();
-    invite_in(&db, "room", "user-a", &invitees, &NO_LIMITS, at(10)).await.unwrap();
+    invite_in(&db, "room", "user-a", &invitees, &NO_LIMITS, at(10))
+        .await
+        .unwrap();
     let more = classify(&db, "user-a", &ids[50..]).await.unwrap();
-    let error = invite_in(&db, "room", "user-a", &more, &NO_LIMITS, at(11)).await.unwrap_err();
+    let error = invite_in(&db, "room", "user-a", &more, &NO_LIMITS, at(11))
+        .await
+        .unwrap_err();
     assert_code(&error, StatusCode::CONFLICT, INBOX_INVITE_LIMIT);
-    let again = invite_in(&db, "room", "user-a", &invitees, &NO_LIMITS, at(12)).await.unwrap();
-    assert!(again.invited.is_empty(), "invitations already pending are skipped");
+    let again = invite_in(&db, "room", "user-a", &invitees, &NO_LIMITS, at(12))
+        .await
+        .unwrap();
+    assert!(
+        again.invited.is_empty(),
+        "invitations already pending are skipped"
+    );
 }
 
 #[tokio::test]
 async fn only_members_invite() {
     let db = world().await;
     share_app(&db, "user-d", "app-1").await;
-    let invitees = classify(&db, "user-d", &["user-b".to_string()]).await.unwrap();
-    let error = invite_in(&db, "room", "user-d", &invitees, &NO_LIMITS, at(10)).await.unwrap_err();
+    let invitees = classify(&db, "user-d", &["user-b".to_string()])
+        .await
+        .unwrap();
+    let error = invite_in(&db, "room", "user-d", &invitees, &NO_LIMITS, at(10))
+        .await
+        .unwrap_err();
     assert_eq!(error.status(), StatusCode::NOT_FOUND);
 }

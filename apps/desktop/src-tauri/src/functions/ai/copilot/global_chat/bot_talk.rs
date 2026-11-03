@@ -10,7 +10,9 @@ use flow_like::{
     copilot::{CopilotScope, UnifiedChatMessage},
     flow::copilot::{
         BotRunContext, ChatRole, FLUX_BOT_NAME, GENERAL_BOT_DESCRIPTION, GENERAL_BOT_NAME,
-        bot_talk::{BotPresence, BotTalk, BotTalkHost, CrewMember, NestedBotTurn},
+        bot_talk::{
+            BotPresence, BotTalk, BotTalkHost, CrewMember, HeadlessPermission, NestedBotTurn,
+        },
     },
 };
 use flow_like_local_bots::{
@@ -27,6 +29,10 @@ use serde_json::json;
 use tauri::{AppHandle, Manager, ipc::Channel};
 
 use crate::{
+    bot_host::{
+        ApprovalGate,
+        gate::{ASK_BOT_TOOL, ask_bot_scope},
+    },
     functions::{
         ai::native_tool_bridge::{NativeRunOptions, with_execution_profile},
         local_bots::{LocalBots, on_store},
@@ -45,6 +51,7 @@ pub(super) async fn talk_for(
     app: &AppHandle,
     bot: &BotRunContext,
     nested: Option<Arc<BotTalk>>,
+    gate: Option<Arc<ApprovalGate>>,
     profile_id: &str,
     run_id: &str,
 ) -> Option<Arc<BotTalk>> {
@@ -55,6 +62,7 @@ pub(super) async fn talk_for(
         Arc::new(DesktopTalkHost {
             app: app.clone(),
             profile_id: profile_id.to_string(),
+            gate,
         })
     } else {
         Arc::new(crate::bot_host::talk::AccountTalkHost::new(app.clone(), run_id))
@@ -82,6 +90,7 @@ async fn is_local(app: &AppHandle, bot: &BotRunContext) -> bool {
 struct DesktopTalkHost {
     app: AppHandle,
     profile_id: String,
+    gate: Option<Arc<ApprovalGate>>,
 }
 
 impl DesktopTalkHost {
@@ -100,6 +109,27 @@ impl DesktopTalkHost {
     }
 }
 
+impl DesktopTalkHost {
+    /// The owner's "Always allow" on an ask card becomes the stored permission between the two
+    /// bots, and the card's grant is spent.
+    async fn settle_card_answer(
+        &self,
+        from: &CrewMember,
+        to: &CrewMember,
+    ) -> flow_like_types::Result<bool> {
+        let Some(gate) = &self.gate else {
+            return Ok(false);
+        };
+        let scope = ask_bot_scope(&to.id);
+        if !gate.grants().has(ASK_BOT_TOOL, &scope).await.unwrap_or(false) {
+            return Ok(false);
+        }
+        self.store_grant(from, to).await?;
+        gate.grants().delete(ASK_BOT_TOOL, &scope).await?;
+        Ok(true)
+    }
+}
+
 fn unknown_bot(member: &CrewMember) -> flow_like_types::Error {
     anyhow!("'{}' is not a bot on this computer", member.name)
 }
@@ -114,12 +144,29 @@ impl BotTalkHost for DesktopTalkHost {
     }
 
     async fn has_grant(&self, from: &CrewMember, to: &CrewMember) -> flow_like_types::Result<bool> {
-        let (from, to) = (from.clone(), to.clone());
-        self.store(move |store| match rows(store, &from, &to)? {
-            Some((from, to)) => store.has_permission(&from, &to),
-            None => Ok(false),
-        })
-        .await
+        let (from_member, to_member) = (from.clone(), to.clone());
+        let stored = self
+            .store(move |store| match rows(store, &from_member, &to_member)? {
+                Some((from, to)) => store.has_permission(&from, &to),
+                None => Ok(false),
+            })
+            .await?;
+        if stored {
+            return Ok(true);
+        }
+        self.settle_card_answer(from, to).await
+    }
+
+    async fn headless_permission(
+        &self,
+        caller: &CrewMember,
+        callee: &CrewMember,
+        question: &str,
+    ) -> HeadlessPermission {
+        match &self.gate {
+            Some(gate) => gate.ask_bot(caller, callee, question).await,
+            None => HeadlessPermission::Unavailable,
+        }
     }
 
     async fn store_grant(&self, from: &CrewMember, to: &CrewMember) -> flow_like_types::Result<()> {
@@ -169,46 +216,74 @@ impl BotTalkHost for DesktopTalkHost {
         let history = self
             .store(move |store| history_before(store, &conversation_id, &question_id, &callee))
             .await?;
-        let state = self
-            .app
-            .try_state::<TauriFlowLikeState>()
-            .ok_or_else(|| anyhow!("The desktop is still starting"))?;
-        let run_id = format!("bot-talk-{}", create_id());
-        let options = NativeRunOptions {
-            profile_id: Some(self.profile_id.clone()),
-            conversation_id: Some(run_id.clone()),
-            bot_talk: Some(turn.talk.clone()),
-            ..Default::default()
-        };
-        let response = with_execution_profile(
+        let callee_name = turn.callee.name.clone();
+        let task = tokio::spawn(answer_turn(
+            self.app.clone(),
             self.profile_id.clone(),
-            Box::pin(crate::functions::ai::copilot::global_chat_native(
-                self.app.clone(),
-                None,
-                state,
-                CopilotScope::Both,
-                turn.question.clone(),
-                None,
-                Some(history),
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                None,
-                Some(run_id),
-                Channel::<String>::new(|_| Ok(())),
-                options,
-                Some(turn.callee.id.clone()),
-            )),
-        )
-        .await
-        .map_err(|error| anyhow!("{error}"))?;
-        Ok(response.message)
+            turn,
+            history,
+        ));
+        let _abort = AbortOnDrop(task.abort_handle());
+        task.await
+            .map_err(|error| anyhow!("{callee_name}'s turn ended without an answer: {error}"))?
     }
+}
+
+struct AbortOnDrop(tokio::task::AbortHandle);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// The callee's turn, spawned so it starts on a fresh stack: polled inline it stacks a whole
+/// second chat turn on the asker's, which overflows the worker's 2 MiB (a debug build already on
+/// the first ask, any build once enough bots ask down the chain).
+async fn answer_turn(
+    app: AppHandle,
+    profile_id: String,
+    turn: NestedBotTurn,
+    history: Vec<UnifiedChatMessage>,
+) -> flow_like_types::Result<String> {
+    let state = app
+        .try_state::<TauriFlowLikeState>()
+        .ok_or_else(|| anyhow!("The desktop is still starting"))?;
+    let run_id = format!("bot-talk-{}", create_id());
+    let options = NativeRunOptions {
+        profile_id: Some(profile_id.clone()),
+        conversation_id: Some(run_id.clone()),
+        bot_talk: Some(turn.talk),
+        ..Default::default()
+    };
+    let response = with_execution_profile(
+        profile_id,
+        Box::pin(crate::functions::ai::copilot::global_chat_native(
+            app.clone(),
+            None,
+            state,
+            CopilotScope::Both,
+            turn.question,
+            None,
+            Some(history),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(run_id),
+            Channel::<String>::new(|_| Ok(())),
+            options,
+            Some(turn.callee.id),
+        )),
+    )
+    .await
+    .map_err(|error| anyhow!("{error}"))?;
+    Ok(response.message)
 }
 
 fn default_name(system: Option<BotSystemKind>, id: &str) -> String {

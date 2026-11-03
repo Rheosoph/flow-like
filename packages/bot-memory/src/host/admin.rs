@@ -4,8 +4,7 @@
 //! because none of these calls embeds or summarises.
 
 use crate::{
-    CompactionConfig, Embedder, Fact, LlmRequest, MemoryEngine, MemoryLlm, MemoryStores,
-    WriteGate,
+    CompactionConfig, Embedder, Fact, LlmRequest, MemoryEngine, MemoryLlm, MemoryStores, WriteGate,
     store::FactFilter,
     tools::{MemoryForgetArgs, WriteOutcome, memory_forget},
 };

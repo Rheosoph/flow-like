@@ -259,6 +259,25 @@ export function useBotPermissions(botId?: string | null) {
 	});
 }
 
+/** Lets one bot ask another without asking the owner; every bot's grants are read again. */
+export function useGrantBotPermission() {
+	const state = useBackend().botState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			fromBotId,
+			toBotId,
+		}: {
+			fromBotId: string;
+			toBotId: string;
+		}) => requireBotState(state).grantPermission(fromBotId, toBotId),
+		onSettled: () =>
+			queryClient.invalidateQueries({
+				queryKey: [...botKeys.all, "permissions"],
+			}),
+	});
+}
+
 /** Takes back a grant; every bot's grants are read again since the other side shows it too. */
 export function useRevokeBotPermission() {
 	const state = useBackend().botState;

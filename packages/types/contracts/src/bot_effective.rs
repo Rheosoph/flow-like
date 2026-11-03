@@ -195,12 +195,37 @@ mod tests {
         let editor = bits(&[ReadFiles, WriteFiles, ReadBoards, ExecuteEvents]);
         let cases: [(&str, i64, Option<i64>, i64); 8] = [
             ("editor, no mask", editor, None, editor),
-            ("editor, read mask", editor, Some(bits(&[ReadFiles])), bits(&[ReadFiles])),
-            ("mask wider than role", bits(&[ReadFiles]), Some(editor), bits(&[ReadFiles])),
-            ("disjoint mask", bits(&[ReadFiles]), Some(bits(&[WriteFiles])), 0),
+            (
+                "editor, read mask",
+                editor,
+                Some(bits(&[ReadFiles])),
+                bits(&[ReadFiles]),
+            ),
+            (
+                "mask wider than role",
+                bits(&[ReadFiles]),
+                Some(editor),
+                bits(&[ReadFiles]),
+            ),
+            (
+                "disjoint mask",
+                bits(&[ReadFiles]),
+                Some(bits(&[WriteFiles])),
+                0,
+            ),
             ("empty mask", editor, Some(0), 0),
-            ("admin, no mask is every grantable bit", ADMIN, None, ALL_ROLE_BITS & !BOT_NEVER_BITS),
-            ("owner, read mask", OWNER, Some(bits(&[ReadFiles])), bits(&[ReadFiles])),
+            (
+                "admin, no mask is every grantable bit",
+                ADMIN,
+                None,
+                ALL_ROLE_BITS & !BOT_NEVER_BITS,
+            ),
+            (
+                "owner, read mask",
+                OWNER,
+                Some(bits(&[ReadFiles])),
+                bits(&[ReadFiles]),
+            ),
             ("no role bits", 0, None, 0),
         ];
         for (name, owner, mask, expected) in cases {
@@ -219,7 +244,10 @@ mod tests {
             mask: Some(ALL_ROLE_BITS),
             ..Default::default()
         };
-        assert_eq!(resolve(ALL_ROLE_BITS, None, Some(&wide)) & BOT_NEVER_BITS, 0);
+        assert_eq!(
+            resolve(ALL_ROLE_BITS, None, Some(&wide)) & BOT_NEVER_BITS,
+            0
+        );
     }
 
     #[test]
@@ -234,27 +262,46 @@ mod tests {
         let read = Some(bits(&[ReadFiles]));
         let cases: [(&str, BotRoomLimits, i64); 5] = [
             ("no limit", BotRoomLimits::default(), owner),
-            ("room mask", BotRoomLimits { mask: read, ..Default::default() }, bits(&[ReadFiles])),
+            (
+                "room mask",
+                BotRoomLimits {
+                    mask: read,
+                    ..Default::default()
+                },
+                bits(&[ReadFiles]),
+            ),
             (
                 "room mask wider than the bot",
-                BotRoomLimits { mask: Some(ALL_ROLE_BITS), ..Default::default() },
+                BotRoomLimits {
+                    mask: Some(ALL_ROLE_BITS),
+                    ..Default::default()
+                },
                 owner,
             ),
             (
                 "app not in room list",
-                BotRoomLimits { apps: Some(vec!["other".into()]), ..Default::default() },
+                BotRoomLimits {
+                    apps: Some(vec!["other".into()]),
+                    ..Default::default()
+                },
                 0,
             ),
             (
                 "app in room list",
-                BotRoomLimits { apps: Some(vec!["app".into()]), ..Default::default() },
+                BotRoomLimits {
+                    apps: Some(vec!["app".into()]),
+                    ..Default::default()
+                },
                 owner,
             ),
         ];
         for (name, room, expected) in cases {
             assert_eq!(resolve(owner, None, Some(&room)), expected, "{name}");
         }
-        let both = BotRoomLimits { mask: read, ..Default::default() };
+        let both = BotRoomLimits {
+            mask: read,
+            ..Default::default()
+        };
         assert_eq!(resolve(owner, Some(bits(&[WriteFiles])), Some(&both)), 0);
     }
 
@@ -270,7 +317,8 @@ mod tests {
 
     #[test]
     fn scopes_intersect() {
-        let (merged, disjoint) = intersect_scopes(&files(&["a/b", "c"], false), &files(&["a"], true));
+        let (merged, disjoint) =
+            intersect_scopes(&files(&["a/b", "c"], false), &files(&["a"], true));
         assert_eq!(merged.files.prefixes, vec!["a/b".to_string()]);
         assert!(merged.files.read_only && !disjoint);
 
@@ -279,11 +327,22 @@ mod tests {
         assert!(!disjoint);
 
         let (_, disjoint) = intersect_scopes(&files(&["ab"], false), &files(&["a"], false));
-        assert!(disjoint, "a sibling with a shared string prefix is not under it");
+        assert!(
+            disjoint,
+            "a sibling with a shared string prefix is not under it"
+        );
 
         let some = |v: &[&str]| Some(v.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-        let a = BotScopes { tables: some(&["t1", "t2"]), events: None, ..Default::default() };
-        let b = BotScopes { tables: some(&["t2", "t3"]), events: some(&["e"]), ..Default::default() };
+        let a = BotScopes {
+            tables: some(&["t1", "t2"]),
+            events: None,
+            ..Default::default()
+        };
+        let b = BotScopes {
+            tables: some(&["t2", "t3"]),
+            events: some(&["e"]),
+            ..Default::default()
+        };
         let (merged, _) = intersect_scopes(&a, &b);
         assert_eq!(merged.tables, some(&["t2"]));
         assert_eq!(merged.events, some(&["e"]));
@@ -291,11 +350,20 @@ mod tests {
 
     #[test]
     fn scopes_close_the_matching_permissions() {
-        let owner = bits(&[ReadFiles, WriteFiles, ReadDatabase, ExecuteEvents, ReadBoards]);
+        let owner = bits(&[
+            ReadFiles,
+            WriteFiles,
+            ReadDatabase,
+            ExecuteEvents,
+            ReadBoards,
+        ]);
         let scopes = BotScopes {
             tables: Some(vec![]),
             events: Some(vec![]),
-            files: BotFileScope { prefixes: vec![], read_only: true },
+            files: BotFileScope {
+                prefixes: vec![],
+                read_only: true,
+            },
             ..Default::default()
         };
         let resolved = resolve_bot_permissions(owner, "app", None, &scopes, None);
@@ -305,7 +373,8 @@ mod tests {
             scopes: [("app".to_string(), files(&["b"], false))].into(),
             ..Default::default()
         };
-        let disjoint = resolve_bot_permissions(owner, "app", None, &files(&["a"], false), Some(&room));
+        let disjoint =
+            resolve_bot_permissions(owner, "app", None, &files(&["a"], false), Some(&room));
         assert_eq!(disjoint.role_bits & bits(&[ReadFiles, WriteFiles]), 0);
         assert_ne!(disjoint.role_bits & bits(&[ReadBoards]), 0);
     }

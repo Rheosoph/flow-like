@@ -9,7 +9,8 @@ use super::{
     delivery::people_to_wake,
     insert_copies, lock_conversation,
     members::{
-        Principal, add_in, ensure_room, group_members, join_copies, lock_live_bots, requested_members,
+        Principal, add_in, ensure_room, group_members, join_copies, lock_live_bots,
+        requested_members,
     },
     model::Conversation,
     now_millis, stored,
@@ -147,11 +148,21 @@ pub(crate) async fn classify<C: ConnectionTrait>(
     candidates
         .iter()
         .map(|id| match bots.get(id) {
-            Some(owner) if owner == caller => Ok(invitee(id, PrincipalKind::Bot, InviteMode::AddNow, Some(owner))),
-            Some(owner) if sharing.contains(owner) => {
-                Ok(invitee(id, PrincipalKind::Bot, InviteMode::Invite, Some(owner)))
+            Some(owner) if owner == caller => Ok(invitee(
+                id,
+                PrincipalKind::Bot,
+                InviteMode::AddNow,
+                Some(owner),
+            )),
+            Some(owner) if sharing.contains(owner) => Ok(invitee(
+                id,
+                PrincipalKind::Bot,
+                InviteMode::Invite,
+                Some(owner),
+            )),
+            None if sharing.contains(id) => {
+                Ok(invitee(id, PrincipalKind::User, InviteMode::Invite, None))
             }
-            None if sharing.contains(id) => Ok(invitee(id, PrincipalKind::User, InviteMode::Invite, None)),
             _ => Err(cannot_invite(id)),
         })
         .collect()
@@ -170,9 +181,15 @@ fn invitee(id: &str, kind: PrincipalKind, mode: InviteMode, owner: Option<&Strin
 
 fn validate_limits(limits: &BotRoomLimits) -> Result<(), ApiError> {
     if limits.mask.is_some_and(|mask| mask < 0) {
-        return Err(ApiError::bad_request("Room limits: the permission mask can't be negative"));
+        return Err(ApiError::bad_request(
+            "Room limits: the permission mask can't be negative",
+        ));
     }
-    let apps = limits.apps.as_ref().map_or(0, Vec::len).max(limits.scopes.len());
+    let apps = limits
+        .apps
+        .as_ref()
+        .map_or(0, Vec::len)
+        .max(limits.scopes.len());
     if apps > MAX_LIMIT_APPS {
         return Err(ApiError::bad_request(format!(
             "Room limits name at most {MAX_LIMIT_APPS} apps; got {apps}"
@@ -352,7 +369,10 @@ pub(crate) async fn invite_in<C: ConnectionTrait>(
     )
     .exec_without_returning(txn)
     .await?;
-    let principals: Vec<Principal> = asked.iter().map(|invitee| invitee.principal.clone()).collect();
+    let principals: Vec<Principal> = asked
+        .iter()
+        .map(|invitee| invitee.principal.clone())
+        .collect();
     outcome.wake.extend(people_to_wake(txn, &principals).await?);
     outcome.invited = asked.into_iter().cloned().collect();
     outcome.wake.sort();
@@ -418,11 +438,20 @@ pub(crate) async fn accept_in<C: ConnectionTrait>(
         .clone()
         .unwrap_or_else(|| principal_id.to_string());
     let updated = conversation_member::Entity::update_many()
-        .col_expr(conversation_member::Column::Status, Expr::value(MEMBER_ACTIVE))
+        .col_expr(
+            conversation_member::Column::Status,
+            Expr::value(MEMBER_ACTIVE),
+        )
         .col_expr(conversation_member::Column::AcceptedAt, Expr::value(now))
         .col_expr(conversation_member::Column::JoinedAt, Expr::value(now))
-        .col_expr(conversation_member::Column::AddedBy, Expr::value(by.clone()))
-        .col_expr(conversation_member::Column::Limits, Expr::value(stored_limits))
+        .col_expr(
+            conversation_member::Column::AddedBy,
+            Expr::value(by.clone()),
+        )
+        .col_expr(
+            conversation_member::Column::Limits,
+            Expr::value(stored_limits),
+        )
         .filter(conversation_member::Column::ConversationId.eq(conversation_id))
         .filter(conversation_member::Column::PrincipalId.eq(principal_id))
         .filter(conversation_member::Column::Status.eq(MEMBER_PENDING))
@@ -462,7 +491,10 @@ pub(crate) async fn decline_in<C: ConnectionTrait>(
     let member = pending_member(txn, conversation_id, principal_id).await?;
     ensure_may_answer(txn, &member, actor).await?;
     let updated = conversation_member::Entity::update_many()
-        .col_expr(conversation_member::Column::Status, Expr::value(MEMBER_DECLINED))
+        .col_expr(
+            conversation_member::Column::Status,
+            Expr::value(MEMBER_DECLINED),
+        )
         .filter(conversation_member::Column::ConversationId.eq(conversation_id))
         .filter(conversation_member::Column::PrincipalId.eq(principal_id))
         .filter(conversation_member::Column::Status.eq(MEMBER_PENDING))
@@ -486,16 +518,18 @@ pub(crate) async fn cancel_in<C: ConnectionTrait>(
     let open = Condition::any()
         .add(conversation_member::Column::Status.eq(MEMBER_PENDING))
         .add(conversation_member::Column::Status.eq(MEMBER_DECLINED));
-    let member =
-        conversation_member::Entity::find_by_id((conversation_id.to_string(), principal_id.to_string()))
-            .filter(open.clone())
-            .one(txn)
-            .await?
-            .ok_or_else(|| {
-                ApiError::not_found(format!(
-                    "No invitation for '{principal_id}' in conversation '{conversation_id}'"
-                ))
-            })?;
+    let member = conversation_member::Entity::find_by_id((
+        conversation_id.to_string(),
+        principal_id.to_string(),
+    ))
+    .filter(open.clone())
+    .one(txn)
+    .await?
+    .ok_or_else(|| {
+        ApiError::not_found(format!(
+            "No invitation for '{principal_id}' in conversation '{conversation_id}'"
+        ))
+    })?;
     let creator = conversation::Entity::find_by_id(conversation_id)
         .one(txn)
         .await?
@@ -676,7 +710,12 @@ pub(crate) async fn invitable<C: ConnectionTrait>(
     conversation_id: Option<&str>,
 ) -> Result<Vec<InvitableEntry>, DbErr> {
     let needle = q.map(str::trim).filter(|q| !q.is_empty());
-    let own = bot_page(db, Condition::all().add(bot::Column::OwnerId.eq(caller)), needle).await?;
+    let own = bot_page(
+        db,
+        Condition::all().add(bot::Column::OwnerId.eq(caller)),
+        needle,
+    )
+    .await?;
     let shared = bot_page(
         db,
         Condition::all().add(bot::Column::OwnerId.in_subquery(co_members(caller))),
@@ -707,16 +746,24 @@ pub(crate) async fn invitable<C: ConnectionTrait>(
     let mut entries: Vec<InvitableEntry> = own
         .into_iter()
         .map(|row| bot_entry(row, InviteMode::AddNow))
-        .chain(people.into_iter().map(|(id, name, preferred, username)| InvitableEntry {
-            name: name.or(preferred).or(username),
-            principal_id: id,
-            kind: "user".into(),
-            description: None,
-            owner_id: None,
-            mode: InviteMode::Invite,
-            state: None,
-        }))
-        .chain(shared.into_iter().map(|row| bot_entry(row, InviteMode::Invite)))
+        .chain(
+            people
+                .into_iter()
+                .map(|(id, name, preferred, username)| InvitableEntry {
+                    name: name.or(preferred).or(username),
+                    principal_id: id,
+                    kind: "user".into(),
+                    description: None,
+                    owner_id: None,
+                    mode: InviteMode::Invite,
+                    state: None,
+                }),
+        )
+        .chain(
+            shared
+                .into_iter()
+                .map(|row| bot_entry(row, InviteMode::Invite)),
+        )
         .collect();
     if let Some(conversation_id) = conversation_id {
         let states = member_states(db, conversation_id, &entries).await?;
@@ -977,7 +1024,8 @@ pub async fn invite(
     let sub = user.sub()?;
     let candidates = requested_members(&sub, body.principal_ids);
     let invitees = classify(&state.db, &sub, &candidates).await?;
-    let outcome = invite_and_notify(&state, &sub, &conversation_id, invitees, body.bot_limits).await?;
+    let outcome =
+        invite_and_notify(&state, &sub, &conversation_id, invitees, body.bot_limits).await?;
     Ok(Json(InviteResponse {
         added: outcome.added,
         invited: outcome
@@ -1026,7 +1074,10 @@ pub async fn list_invitations(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "POST /inbox/invitations/{invitation_id}/accept", skip(state, user, body))]
+#[tracing::instrument(
+    name = "POST /inbox/invitations/{invitation_id}/accept",
+    skip(state, user, body)
+)]
 pub async fn accept_invitation(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -1078,7 +1129,10 @@ pub async fn accept_invitation(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "POST /inbox/invitations/{invitation_id}/decline", skip(state, user))]
+#[tracing::instrument(
+    name = "POST /inbox/invitations/{invitation_id}/decline",
+    skip(state, user)
+)]
 pub async fn decline_invitation(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
@@ -1206,7 +1260,11 @@ pub async fn list_invitable(
     Query(query): Query<InvitableQuery>,
 ) -> Result<Json<InvitableList>, ApiError> {
     let sub = user.sub()?;
-    let conversation_id = query.conversation_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
+    let conversation_id = query
+        .conversation_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty());
     if let Some(id) = conversation_id {
         super::member_conversation(&state.db, id, &sub).await?;
     }

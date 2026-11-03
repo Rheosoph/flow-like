@@ -43,10 +43,10 @@ use flow_like::{
     copilot::flowpilot_thinking,
     flow::copilot::{
         BotToolHost, HeadlessMemory, PlatformContextInput, bot_platform_context,
+        bot_talk::{BotPresence, BotTalk},
         find_bot_tool_spec,
         memory::{AssistantMemory, MemoryScope},
         platform::PlatformToolBridge,
-        bot_talk::{BotPresence, BotTalk},
         run_bot_chat_with_talk,
         tool_grants::{GrantStore, clear_tokens, resume_note},
         tool_spec::{MEMORY_STORE_TOOL, ToolEffect},
@@ -59,7 +59,10 @@ use flow_like_types::{
     Value,
     bot::BotLocation,
     bot_message::ApprovalRequest,
-    bot_turn::{HEARTBEAT_SECS, MAX_ATTEMPTS, TurnAudience, TurnHostKind, failure_message_id, reply_message_id},
+    bot_turn::{
+        HEARTBEAT_SECS, MAX_ATTEMPTS, TurnAudience, TurnHostKind, failure_message_id,
+        reply_message_id,
+    },
     inbox::{ConversationEncryption, ConversationKind, InboxEntryKind, plain_envelope},
     tokio::{
         self,
@@ -960,8 +963,14 @@ async fn finish(
             );
             let posted = match super::talk::answered_ask(&state.db, turn).await {
                 Ok(Some(answered)) => {
-                    post_reply_in_origin(state, turn, host_id, &answered.origin_conversation, request)
-                        .await
+                    post_reply_in_origin(
+                        state,
+                        turn,
+                        host_id,
+                        &answered.origin_conversation,
+                        request,
+                    )
+                    .await
                 }
                 _ => post_reply(state, turn, host_id, request, None, resumed).await,
             };
@@ -996,7 +1005,8 @@ async fn finish(
                 &failure.text,
                 Some(failure.code),
             );
-            if let Err(error) = post_reply(state, turn, host_id, request, Some(failure.code), false).await
+            if let Err(error) =
+                post_reply(state, turn, host_id, request, Some(failure.code), false).await
             {
                 tracing::warn!(%error, turn_id = %turn.id, "Bot turn: the failure report was refused");
                 record_failure(state, turn, host_id, failure.code, now).await;

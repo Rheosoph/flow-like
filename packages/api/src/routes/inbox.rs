@@ -54,11 +54,11 @@ pub(crate) mod fixture;
 #[cfg(test)]
 mod history_tests;
 #[cfg(test)]
+mod import_tests;
+#[cfg(test)]
 mod invitations_tests;
 #[cfg(test)]
 mod mail_threads_tests;
-#[cfg(test)]
-mod import_tests;
 #[cfg(test)]
 mod tests;
 

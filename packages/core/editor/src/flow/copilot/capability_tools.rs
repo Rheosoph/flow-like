@@ -28,7 +28,10 @@ fn email_ask_message(args: &Value) -> String {
         .filter_map(Value::as_str)
         .collect::<Vec<_>>()
         .join(", ");
-    let subject = args.get("subject").and_then(Value::as_str).unwrap_or_default();
+    let subject = args
+        .get("subject")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     format!("The bot wants to email {recipients} with the subject '{subject}'.")
 }
 
@@ -377,10 +380,18 @@ mod tests {
             "browser_screenshot",
             "browser_close",
         ] {
-            assert_eq!(tool_capability(name), Some(BotCapability::BrowserUse), "{name}");
+            assert_eq!(
+                tool_capability(name),
+                Some(BotCapability::BrowserUse),
+                "{name}"
+            );
         }
         for name in ["computer_screenshot", "computer_act", "computer_wait"] {
-            assert_eq!(tool_capability(name), Some(BotCapability::ComputerUse), "{name}");
+            assert_eq!(
+                tool_capability(name),
+                Some(BotCapability::ComputerUse),
+                "{name}"
+            );
         }
     }
 

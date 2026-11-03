@@ -119,7 +119,9 @@ pub fn is_grant_scope(scope: &str) -> bool {
 fn is_token(scope: &str) -> bool {
     is_token_scope(scope)
         && scope.chars().count() <= MAX_KEY_CHARS
-        && !scope.chars().any(|char| char.is_control() || char.is_whitespace())
+        && !scope
+            .chars()
+            .any(|char| char.is_control() || char.is_whitespace())
 }
 
 /// Tokens are internal rows beside the grants; they are never listed or granted by hand.

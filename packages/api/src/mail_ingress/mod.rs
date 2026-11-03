@@ -1,7 +1,7 @@
 //! Durable inbound mail acceptance and asynchronous event dispatch.
 pub mod address;
-pub mod bot_address;
 mod bot;
+pub mod bot_address;
 #[cfg(test)]
 mod bot_tests;
 pub(crate) mod limits;

@@ -6,7 +6,7 @@ import type {
 	ExecutionCommand,
 } from "../execution/types";
 import { RealtimeRuntime } from "./runtime";
-import { getRealtimeClientForRuntime } from "./runtime-client";
+import { getRealtimeClientForRuntime } from "./runtime-port-client";
 import type { RealtimeCommand } from "./types";
 
 const runtime = new RealtimeRuntime();

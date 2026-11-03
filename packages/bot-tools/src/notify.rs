@@ -198,7 +198,9 @@ mod tests {
     #[tokio::test]
     async fn the_tenth_notice_of_an_hour_passes_and_the_eleventh_is_refused() {
         let notifier = Arc::new(FakeNotifier::default());
-        notifier.prior.store(TOOL_MAX_PER_WINDOW - 1, Ordering::SeqCst);
+        notifier
+            .prior
+            .store(TOOL_MAX_PER_WINDOW - 1, Ordering::SeqCst);
         let env = env_with(notifier.clone()).await;
         let tenth = call(&env, json!({ "title": "t", "body": "b" })).await;
         assert_eq!(tenth.status, crate::Status::Ok);

@@ -19,7 +19,7 @@ pub(crate) mod commands;
 pub(crate) mod grant_commands;
 mod e2e;
 mod e2e_vault;
-mod gate;
+pub(crate) mod gate;
 mod host;
 mod hub;
 pub(crate) mod interactive;

@@ -178,9 +178,16 @@ async fn the_transcript_holds_the_last_entries_only() {
         )
         .await;
     }
-    let transcript = transcript(&db, "bot_1", "c1", "m40", ConversationKind::Direct, "user-a")
-        .await
-        .unwrap();
+    let transcript = transcript(
+        &db,
+        "bot_1",
+        "c1",
+        "m40",
+        ConversationKind::Direct,
+        "user-a",
+    )
+    .await
+    .unwrap();
     assert_eq!(transcript.history.len() as u64, HISTORY_ENTRIES - 1);
     assert_eq!(transcript.history[0].content, "t9");
     assert_eq!(transcript.prompt, "t40");
@@ -191,7 +198,15 @@ async fn a_missing_deleted_sealed_or_own_trigger_is_unreadable() {
     let db = database().await;
     lone_message_history(&db).await;
     assert!(matches!(
-        transcript(&db, "bot_1", "c1", "nope", ConversationKind::Direct, "user-a").await,
+        transcript(
+            &db,
+            "bot_1",
+            "c1",
+            "nope",
+            ConversationKind::Direct,
+            "user-a"
+        )
+        .await,
         Err(HistoryError::TriggerMissing)
     ));
     assert!(matches!(

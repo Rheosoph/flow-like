@@ -32,9 +32,9 @@ pub mod public_web;
 mod search;
 pub mod session;
 pub mod stream;
+pub mod tool_grants;
 #[cfg(test)]
 mod tool_schema_tests;
-pub mod tool_grants;
 pub mod tool_spec;
 mod tools;
 mod typed_ir_parse;
@@ -52,12 +52,11 @@ pub use behavioral_evaluation::*;
 pub use behavioral_state::*;
 pub use benchmark_cases::workflow_benchmark_cases;
 pub use bot_run::{
-    BotRunContext, BotToolHost, BotToolset, EffectivePermissions, FLUX_BOT_ID, FLUX_BOT_NAME, GENERAL_BOT_DESCRIPTION,
-    GENERAL_BOT_ID, GENERAL_BOT_NAME, bot_persona_section, bot_platform_context, bot_system_prompt,
-    find_bot_tool_spec, resolve_bot_model, resolve_host_completion_model, run_bot_chat,
-    run_bot_chat_with_talk, runnable_completion_model, TurnRequester,
+    BotRunContext, BotToolHost, BotToolset, EffectivePermissions, FLUX_BOT_ID, FLUX_BOT_NAME,
+    GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, TurnRequester, bot_persona_section,
+    bot_platform_context, bot_system_prompt, find_bot_tool_spec, resolve_bot_model,
+    resolve_host_completion_model, run_bot_chat, run_bot_chat_with_talk, runnable_completion_model,
 };
-pub use memory_tools::{HeadlessMemory, MemoryHandle, MemoryTurnSource, memory_tool_specs};
 pub use capability_tools::{HostTools, bot_tool_spec, linked_tool_names, tool_outcome_output};
 pub use context::{
     BoardLayoutContext, EdgeContext, GraphContext, LayerCacheContext, LayerContext, NodeContext,
@@ -99,6 +98,7 @@ pub use manifest::{
     ManifestCatalogNode, ManifestCatalogPin, ManifestError, ManifestSource, ManifestSourceStatus,
     default_flowscript_module_templates,
 };
+pub use memory_tools::{HeadlessMemory, MemoryHandle, MemoryTurnSource, memory_tool_specs};
 pub use provider::{CatalogProvider, node_to_metadata, pin_to_metadata};
 /// Re-export of the rig tool trait so non-rig adapter crates can bound on it (e.g. to derive
 /// backend-native tools from the shared rig definitions) without depending on rig directly.
@@ -1943,8 +1943,7 @@ impl Copilot {
                     if let (Some(callback), Some(frame_id)) = (&on_token, frame_ids.get(i)) {
                         let terminal_status = stream::tool_result_terminal_status(tool_output);
                         let result_summary = stream::tool_result_summary(tool_output);
-                        let result_preview =
-                            stream::safe_tool_activity_result_preview(tool_output);
+                        let result_preview = stream::safe_tool_activity_result_preview(tool_output);
                         callback(stream::detailed_tool_end_frame(
                             frame_id,
                             name,

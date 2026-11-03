@@ -1045,6 +1045,9 @@ fn room_limits_live_on_a_bots_membership_and_pending_members_do_not_count() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(member_ids(&f.visible(&group.id)), ids(&["local", &scout.id]));
+    assert_eq!(
+        member_ids(&f.visible(&group.id)),
+        ids(&["local", &scout.id])
+    );
     assert!(f.store.member_limits(&group.id, &ranger.id).is_err());
 }

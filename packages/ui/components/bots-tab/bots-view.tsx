@@ -243,8 +243,8 @@ function CrewLayout(data: Readonly<CrewData>) {
 		openDock,
 	} = useDockSelection();
 	const resolved = useMemo(
-		() => resolveDockSelection(selection, bots),
-		[selection, bots],
+		() => resolveDockSelection(selection, bots, conversations, me),
+		[selection, bots, conversations, me],
 	);
 	const selectedKey = dockOpen ? dockSelectionKey(resolved) : null;
 	const [panelLayout, setPanelLayout] = useState<DockPanelLayout>("sheet");
@@ -377,8 +377,8 @@ function CrewLayout(data: Readonly<CrewData>) {
 			me,
 			myBotIds,
 			openConversationId:
-				dockOpen && resolved.type === "conversation"
-					? resolved.conversationId
+				dockOpen && selection.type === "conversation"
+					? selection.conversationId
 					: null,
 		}).map(conversationNeed);
 		const invited = (invitations.data ?? []).map<NeedsYouItem>(
@@ -397,7 +397,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 		me,
 		myBotIds,
 		promptNeed,
-		resolved,
+		selection,
 	]);
 
 	const query = search.trim();

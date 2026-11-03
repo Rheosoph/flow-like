@@ -471,7 +471,10 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
             bot_turn::Column::LeaseUntil,
             Expr::value(None::<DateTime<FixedOffset>>),
         )
-        .col_expr(bot_turn::Column::ReplyMessageId, Expr::value(None::<String>))
+        .col_expr(
+            bot_turn::Column::ReplyMessageId,
+            Expr::value(None::<String>),
+        )
         .col_expr(bot_turn::Column::UpdatedAt, Expr::value(now))
         .filter(bot_turn::Column::Id.eq(turn.id.as_str()))
         .filter(bot_turn::Column::Status.eq(STORED_WAITING))

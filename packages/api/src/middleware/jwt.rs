@@ -513,9 +513,7 @@ impl AppUser {
             AppUser::ConnectedApp(_) => Err(ApiError::forbidden(
                 "Connected app is not allowed on this endpoint",
             )),
-            AppUser::Bot(_) => Err(ApiError::forbidden(
-                "Bot is not allowed on this endpoint",
-            )),
+            AppUser::Bot(_) => Err(ApiError::forbidden("Bot is not allowed on this endpoint")),
             AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }
@@ -533,9 +531,7 @@ impl AppUser {
             AppUser::ConnectedApp(_) => Err(ApiError::forbidden(
                 "Connected app is not allowed on this endpoint",
             )),
-            AppUser::Bot(_) => Err(ApiError::forbidden(
-                "Bot is not allowed on this endpoint",
-            )),
+            AppUser::Bot(_) => Err(ApiError::forbidden("Bot is not allowed on this endpoint")),
             AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }
@@ -589,9 +585,7 @@ impl AppUser {
             AppUser::ConnectedApp(_) => Err(ApiError::forbidden(
                 "App connection tokens cannot act as the initiating user",
             )),
-            AppUser::Bot(_) => Err(ApiError::forbidden(
-                "Bot tokens cannot act as their owner",
-            )),
+            AppUser::Bot(_) => Err(ApiError::forbidden("Bot tokens cannot act as their owner")),
             AppUser::Unauthorized => Err(ApiError::UNAUTHORIZED),
         }
     }

@@ -82,9 +82,13 @@ mod tests {
 
     #[test]
     fn mute_reads_a_boolean_only() {
-        assert!(notifications_muted(&json!({ "kind": "pip", "mute_notifications": true })));
+        assert!(notifications_muted(
+            &json!({ "kind": "pip", "mute_notifications": true })
+        ));
         assert!(!notifications_muted(&json!({ "kind": "pip" })));
-        assert!(!notifications_muted(&json!({ "mute_notifications": "yes" })));
+        assert!(!notifications_muted(
+            &json!({ "mute_notifications": "yes" })
+        ));
     }
 
     #[test]

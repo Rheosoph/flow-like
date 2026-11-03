@@ -99,7 +99,8 @@ function useOverlayPanelActions(
 	const router = useRouter();
 	const closeOverlay = useGlobalChatStore((s) => s.closeOverlay);
 	const signedIn = useSignedIn();
-	const movable = signedIn && Boolean(useBackend().botState?.local);
+	const backend = useBackend();
+	const movable = signedIn && Boolean(backend.botState?.local);
 	return useMemo(() => {
 		const goTo = (href: string) => {
 			router.push(href);

@@ -4,10 +4,7 @@
 //! rules live in `flow_like_types::bot_notify`; the desktop host applies the same ones.
 
 use crate::{
-    entity::{
-        bot, bot_turn, inbox_entry, notification,
-        sea_orm_active_enums::NotificationType,
-    },
+    entity::{bot, bot_turn, inbox_entry, notification, sea_orm_active_enums::NotificationType},
     push_notifications::{DispatchNotificationInput, dispatch_notification_idempotent},
     state::AppState,
 };
@@ -16,8 +13,7 @@ use flow_like_bot_tools::{NoticeReceipt, OwnerNotice, OwnerNotifier};
 use flow_like_types::{
     Result, anyhow,
     bot_notify::{
-        TOOL_SOURCE, chat_link, group_key, notifications_muted,
-        preview, reply_is_proactive,
+        TOOL_SOURCE, chat_link, group_key, notifications_muted, preview, reply_is_proactive,
     },
     create_id,
     inbox::InboxEntryKind,
@@ -85,7 +81,12 @@ fn stable_id(bot_id: &str, key: &str) -> String {
     format!("bn-{}", &digest[..32])
 }
 
-fn input_for(bot: &bot::Model, body: String, link: Option<String>, node: String) -> DispatchNotificationInput {
+fn input_for(
+    bot: &bot::Model,
+    body: String,
+    link: Option<String>,
+    node: String,
+) -> DispatchNotificationInput {
     DispatchNotificationInput {
         user_id: bot.owner_id.clone(),
         app_id: None,
@@ -149,7 +150,11 @@ pub(crate) async fn notify_for_reply<C: ConnectionTrait>(
         return Ok(false);
     }
     let id = stable_id(&bot.id, reply.message_id);
-    if notification::Entity::find_by_id(id.as_str()).one(db).await?.is_some() {
+    if notification::Entity::find_by_id(id.as_str())
+        .one(db)
+        .await?
+        .is_some()
+    {
         return Ok(false);
     }
     let body = Some(preview(reply.text))
@@ -234,7 +239,12 @@ impl OwnerNotifier for ServerNotifier {
     }
 
     async fn deliver(&self, notice: OwnerNotice) -> Result<NoticeReceipt> {
-        deliver_tool_notice(&self.state.db, &StateSink(&self.state), &self.bot_id, notice).await
+        deliver_tool_notice(
+            &self.state.db,
+            &StateSink(&self.state),
+            &self.bot_id,
+            notice,
+        )
+        .await
     }
 }
-

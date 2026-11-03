@@ -367,12 +367,14 @@ fn app_not_attached(bot_id: &str, app_id: &str) -> Error {
 }
 
 fn attached_restrictions(db: &Connection, bot_id: &str, app_id: &str) -> Result<BotRestrictions> {
-    db.prepare_cached("SELECT permission_mask, scopes FROM bot_apps WHERE bot_id = ?1 AND app_id = ?2")?
-        .query_row(params![bot_id, app_id], |row| {
-            Ok(restrictions_of(row.get(0)?, &row.get::<_, String>(1)?))
-        })
-        .optional()?
-        .ok_or_else(|| app_not_attached(bot_id, app_id))
+    db.prepare_cached(
+        "SELECT permission_mask, scopes FROM bot_apps WHERE bot_id = ?1 AND app_id = ?2",
+    )?
+    .query_row(params![bot_id, app_id], |row| {
+        Ok(restrictions_of(row.get(0)?, &row.get::<_, String>(1)?))
+    })
+    .optional()?
+    .ok_or_else(|| app_not_attached(bot_id, app_id))
 }
 
 fn attached_apps(db: &Connection, bot_id: &str) -> Result<Vec<BotApp>> {
@@ -385,7 +387,10 @@ fn attached_apps(db: &Connection, bot_id: &str) -> Result<Vec<BotApp>> {
                 app_id: row.get("app_id")?,
                 added_at: timestamp(row.get("added_at")?),
                 owner_role: Some(OWNER_ROLE.to_string()),
-                restrictions: restrictions_of(row.get("permission_mask")?, &row.get::<_, String>("scopes")?),
+                restrictions: restrictions_of(
+                    row.get("permission_mask")?,
+                    &row.get::<_, String>("scopes")?,
+                ),
             })
         })?
         .collect::<rusqlite::Result<_>>()?;

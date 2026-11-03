@@ -57,8 +57,8 @@ use flow_like::flow::copilot::tool_spec::{
 use flow_like::flow::copilot::{
     AttachmentManifestEntry, BotToolset, ChatMessage, GlobalDataStudioContext,
     GlobalOpenBoardContext, PlatformContextInput, PlatformSpecialist, bot_platform_context,
-    build_platform_context, find_bot_tool_spec, run_bot_chat_with_talk, run_platform_chat,
-    bot_talk::BotTalk,
+    bot_talk::BotTalk, build_platform_context, find_bot_tool_spec, run_bot_chat_with_talk,
+    run_platform_chat,
 };
 use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
@@ -853,7 +853,10 @@ mod specialist_tool_spec_tests {
         let insert = json!({ "operation": "insert", "app_id": "app" });
         assert_eq!(resolve_tool_approval(&database_spec, &insert).kind, "none");
         let drop_table = json!({ "operation": "delete_table", "app_id": "app" });
-        assert_ne!(resolve_tool_approval(&database_spec, &drop_table).kind, "none");
+        assert_ne!(
+            resolve_tool_approval(&database_spec, &drop_table).kind,
+            "none"
+        );
         for tool_name in [
             "flowpilot_board",
             "create_app",
@@ -1559,7 +1562,11 @@ pub(crate) async fn run_global_chat(
 
     // Profile-scoped semantic memory, enabled only when the client selected an embedding model.
     // User-scoped by `sub` so tenants never share a namespace. Failures degrade to no memory.
-    let memory = match payload.embedding_model_id.as_deref().filter(|_| memory_turn.is_none()) {
+    let memory = match payload
+        .embedding_model_id
+        .as_deref()
+        .filter(|_| memory_turn.is_none())
+    {
         Some(embedding_id) if !embedding_id.trim().is_empty() => {
             match profile
                 .find_bit(embedding_id, flow_like_state.http_client.clone())
@@ -1647,11 +1654,7 @@ pub(crate) async fn run_global_chat(
                 &flow_like_state,
                 &selected_model,
                 token.clone(),
-                crate::routes::bots::tool_grants::rows_for_owner(
-                    &state,
-                    &bot.context.bot_id,
-                    &sub,
-                ),
+                crate::routes::bots::tool_grants::rows_for_owner(&state, &bot.context.bot_id, &sub),
                 None,
             )
             .await;

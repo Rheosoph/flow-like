@@ -243,9 +243,15 @@ pub(crate) async fn reply_interactive_in<C: ConnectionTrait>(
     if let Some(sent) = repeat_of(txn, conversation_id, bot_id, &outgoing.message_id).await? {
         return Ok(sent);
     }
-    let hops =
-        complete_interactive_in(txn, claim, bot_id, conversation_id, &outgoing.message_id, now)
-            .await?;
+    let hops = complete_interactive_in(
+        txn,
+        claim,
+        bot_id,
+        conversation_id,
+        &outgoing.message_id,
+        now,
+    )
+    .await?;
     fan_out(
         txn,
         conversation_id,

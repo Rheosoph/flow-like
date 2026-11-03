@@ -280,7 +280,11 @@ pub(super) async fn group_members<C: ConnectionTrait>(
     Ok((conversation, members))
 }
 
-pub(super) fn ensure_room(conversation_id: &str, current: usize, joining: usize) -> Result<(), ApiError> {
+pub(super) fn ensure_room(
+    conversation_id: &str,
+    current: usize,
+    joining: usize,
+) -> Result<(), ApiError> {
     let total = current + joining;
     if total <= MAX_CONVERSATION_MEMBERS {
         return Ok(());
@@ -506,8 +510,14 @@ pub async fn add_members(
         ));
     }
     let invitees = super::invitations::classify(&state.db, &sub, &candidates).await?;
-    super::invitations::invite_and_notify(&state, &sub, &conversation_id, invitees, Default::default())
-        .await?;
+    super::invitations::invite_and_notify(
+        &state,
+        &sub,
+        &conversation_id,
+        invitees,
+        Default::default(),
+    )
+    .await?;
     Ok(Json(
         visible_conversation(&state.db, &Reader::own(&sub), &conversation_id).await?,
     ))

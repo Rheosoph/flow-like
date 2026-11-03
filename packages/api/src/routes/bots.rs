@@ -27,9 +27,9 @@ pub(crate) mod runtime;
 pub mod runtime_token;
 mod secret_cipher;
 pub mod secrets;
-pub mod tool_grants;
 pub mod talk;
 pub mod tasks;
+pub mod tool_grants;
 pub mod turns;
 mod validation;
 pub mod webhooks;
@@ -81,7 +81,10 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/{bot_id}/memory", delete(memory::reset_memory))
         .route("/{bot_id}/memory/facts", get(memory::list_facts))
-        .route("/{bot_id}/memory/facts/{fact_id}", delete(memory::forget_fact))
+        .route(
+            "/{bot_id}/memory/facts/{fact_id}",
+            delete(memory::forget_fact),
+        )
         .route(
             "/{bot_id}/email-address",
             get(crate::mail_ingress::bot_address::get_bot_address)
@@ -101,7 +104,10 @@ pub fn routes() -> Router<AppState> {
             )),
         )
         .route("/{bot_id}/mail/threads", get(mail::list_mail_threads))
-        .route("/{bot_id}/mail/threads/{thread_id}", get(mail::get_mail_thread))
+        .route(
+            "/{bot_id}/mail/threads/{thread_id}",
+            get(mail::get_mail_thread),
+        )
         .route(
             "/{bot_id}/email-address/check/{alias}",
             get(crate::mail_ingress::bot_address::check_bot_address),
@@ -110,15 +116,17 @@ pub fn routes() -> Router<AppState> {
         .route("/{bot_id}/talk", post(talk::talk))
         .route("/{bot_id}/talk/exchange", post(talk::talk_exchange))
         .route("/{bot_id}/talk/roster", get(talk::talk_roster))
-        .route("/{bot_id}/turns/{turn_id}/ask-result", get(talk::turn_ask_result))
+        .route(
+            "/{bot_id}/turns/{turn_id}/ask-result",
+            get(talk::turn_ask_result),
+        )
         .route(
             "/{bot_id}/webhooks",
             get(webhooks::list_bot_webhooks).post(webhooks::create_bot_webhook),
         )
         .route(
             "/{bot_id}/webhooks/{hook_id}",
-            axum::routing::patch(webhooks::update_bot_webhook)
-                .delete(webhooks::delete_bot_webhook),
+            axum::routing::patch(webhooks::update_bot_webhook).delete(webhooks::delete_bot_webhook),
         )
         .route(
             "/{bot_id}/webhooks/{hook_id}/rotate",

@@ -367,18 +367,12 @@ describe("BotsView signed out on the desktop", () => {
 		).toBe("Assistant");
 	});
 
-	test("opens a chat on this computer, your messages on your side", async () => {
+	test("a bot's direct message opens as the bot's own chat on this computer", async () => {
 		await click(buttonContaining("Scout", "You: Hi Scout"));
 		const dock = dockText();
-		expect(dock).toContain("Direct message · On this device");
-		expect(dock).toContain("Hi Scout");
-		expect(dock).toContain("Hello! I live on this computer.");
-		expect(dock).toContain("Your bot");
-		const bubbles = Array.from(
-			container.querySelectorAll("aside [role='log'] .bg-secondary"),
-		).map((bubble) => bubble.textContent);
-		expect(bubbles).toEqual(["Hi Scout"]);
-		expect(markRead).toHaveBeenCalled();
+		expect(dock).toContain("Scout");
+		expect(dock).toContain("On this device");
+		expect(dock).not.toContain("Direct message");
 		await click(
 			container.querySelector<HTMLElement>(
 				"aside button[aria-label='Close chat']",

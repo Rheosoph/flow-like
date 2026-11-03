@@ -62,7 +62,11 @@ pub async fn notify_owner(
 ) -> Result<Json<NotifyOwnerResponse>, ApiError> {
     let sub = user.sub()?;
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
-    if !bot.capabilities.iter().any(|id| id.as_str() == PUSH_CAPABILITY) {
+    if !bot
+        .capabilities
+        .iter()
+        .any(|id| id.as_str() == PUSH_CAPABILITY)
+    {
         return Err(ApiError::bad_request(format!(
             "Bot '{bot_id}' does not have the {PUSH_CAPABILITY} capability"
         )));

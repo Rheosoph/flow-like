@@ -270,5 +270,8 @@ fn a_trigger_is_idempotent_by_message_id() {
         "trigger",
         json!({}),
     );
-    assert!(malformed.is_err(), "a trigger needs a source, a ref and a title");
+    assert!(
+        malformed.is_err(),
+        "a trigger needs a source, a ref and a title"
+    );
 }

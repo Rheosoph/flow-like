@@ -278,7 +278,9 @@ fn decode_attachment(attachment: MailAttachment) -> Result<EmailAttachment, ApiE
     })
 }
 
-pub(crate) fn decode_attachments(attachments: Vec<MailAttachment>) -> Result<Vec<EmailAttachment>, ApiError> {
+pub(crate) fn decode_attachments(
+    attachments: Vec<MailAttachment>,
+) -> Result<Vec<EmailAttachment>, ApiError> {
     if attachments.len() > MAX_MAIL_ATTACHMENTS {
         return Err(ApiError::bad_request(format!(
             "A message can carry at most {MAX_MAIL_ATTACHMENTS} attachments"

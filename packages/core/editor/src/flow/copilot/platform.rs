@@ -746,7 +746,9 @@ impl PlatformCopilot {
             system_prompt.push_str(&memory.prompt_sections(&user_prompt).await);
         }
 
-        let max_tool_rounds = self.tool_rounds.unwrap_or_else(|| surface.max_tool_rounds());
+        let max_tool_rounds = self
+            .tool_rounds
+            .unwrap_or_else(|| surface.max_tool_rounds());
         let tool_specs = self
             .tool_specs
             .clone()

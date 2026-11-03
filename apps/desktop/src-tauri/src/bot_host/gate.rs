@@ -2,9 +2,10 @@
 //! grant (or the owner's one-time answer) and otherwise parks the turn behind an approval card.
 //! Tools consult it where an open chat would show a prompt; once it parks, it stops the run.
 
+use flow_like::flow::copilot::bot_talk::{CrewMember, HeadlessPermission};
 use flow_like::flow::copilot::tool_grants::{
-    GrantStore, HeadlessAnswer, documents_expensive_granted, expensive_documents_request,
-    headless_answer, take_once,
+    GrantCheck, GrantStore, HeadlessAnswer, approval_request, check_call,
+    documents_expensive_granted, expensive_documents_request, headless_answer, take_once,
 };
 use flow_like_types::bot_message::ApprovalRequest;
 use serde_json::{Value, json};
@@ -12,6 +13,12 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 pub const CODE_WAITING: &str = "bot_tool_waiting_for_approval";
 pub const CODE_REFUSED: &str = "bot_tool_refused_by_owner";
+pub const ASK_BOT_TOOL: &str = "ask_bot";
+const QUESTION_PREVIEW_CHARS: usize = 300;
+
+pub fn ask_bot_scope(callee_id: &str) -> String {
+    format!("bot:{callee_id}")
+}
 
 pub struct ApprovalGate {
     grants: Arc<dyn GrantStore>,
@@ -95,6 +102,39 @@ impl ApprovalGate {
             HeadlessAnswer::Run => Ok(()),
             HeadlessAnswer::Refuse(message) => Err(result(tool, CODE_REFUSED, &message)),
             HeadlessAnswer::Park(card) => Err(self.park(tool, card)),
+        }
+    }
+
+    /// A first ask of `callee` by a headless bot: the owner's earlier answer decides, else the
+    /// turn parks behind a "<caller> wants to ask <callee>" card. The answer is per callee, so
+    /// a rephrased question after "Allow once" still finds it.
+    pub async fn ask_bot(
+        &self,
+        caller: &CrewMember,
+        callee: &CrewMember,
+        question: &str,
+    ) -> HeadlessPermission {
+        if self.parked().is_some() {
+            return HeadlessPermission::Parked;
+        }
+        let args = json!({ "bot": callee.id });
+        let scope = ask_bot_scope(&callee.id);
+        if self.grants.has(ASK_BOT_TOOL, &scope).await.unwrap_or(false) {
+            return HeadlessPermission::Allowed;
+        }
+        match check_call(self.grants.as_ref(), ASK_BOT_TOOL, &args, None).await {
+            Ok(check) if check.runs() => HeadlessPermission::Allowed,
+            Ok(GrantCheck::Denied) => HeadlessPermission::Denied,
+            Ok(_) => {
+                let preview: String = question.chars().take(QUESTION_PREVIEW_CHARS).collect();
+                let summary = format!("{} wants to ask {}: {preview}", caller.name, callee.name);
+                let mut card =
+                    approval_request(&self.turn_id, ASK_BOT_TOOL, &args, None, &summary);
+                card.scope = scope;
+                self.park(ASK_BOT_TOOL, card);
+                HeadlessPermission::Parked
+            }
+            Err(_) => HeadlessPermission::Unavailable,
         }
     }
 

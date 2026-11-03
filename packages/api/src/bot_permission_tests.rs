@@ -95,7 +95,11 @@ async fn attach(db: &DatabaseConnection, app_id: &str, mask: Option<i64>, scopes
 }
 
 async fn join_room(db: &DatabaseConnection, left: bool) {
-    let left = if left { "'2023-11-15T00:00:00+00:00'" } else { "NULL" };
+    let left = if left {
+        "'2023-11-15T00:00:00+00:00'"
+    } else {
+        "NULL"
+    };
     db.execute_unprepared(&format!(
         r#"INSERT INTO public."ConversationMember"
         ("conversationId","principalId","principalKind","joinedAt","leftAt")
@@ -114,7 +118,9 @@ fn bot_user(conv_id: Option<&str>) -> BotUser {
 }
 
 async fn bits(db: &DatabaseConnection, user: &BotUser) -> Result<i64, ApiError> {
-    bot_grant_in(db, user, APP).await.map(|g| g.permissions.bits())
+    bot_grant_in(db, user, APP)
+        .await
+        .map(|g| g.permissions.bits())
 }
 
 fn edit_bits() -> i64 {
@@ -199,12 +205,16 @@ async fn a_deleted_bot_gets_nothing() {
 async fn an_unattached_app_is_closed_but_the_workspace_is_open() {
     let db = world(edit_bits(), None).await;
     owner_role(&db, OWNER, "app-2", edit_bits()).await;
-    let other = bot_grant_in(&db, &bot_user(None), "app-2").await.unwrap_err();
+    let other = bot_grant_in(&db, &bot_user(None), "app-2")
+        .await
+        .unwrap_err();
     assert_eq!(other.status(), StatusCode::FORBIDDEN);
 
-    db.execute_unprepared(r#"INSERT INTO public."App" ("id", "botId") VALUES ('workspace', 'bot_a')"#)
-        .await
-        .unwrap();
+    db.execute_unprepared(
+        r#"INSERT INTO public."App" ("id", "botId") VALUES ('workspace', 'bot_a')"#,
+    )
+    .await
+    .unwrap();
     owner_role(&db, OWNER, "workspace", edit_bits()).await;
     let workspace = bot_grant_in(&db, &bot_user(None), "workspace").await;
     assert_eq!(workspace.unwrap().permissions.bits(), edit_bits());
@@ -277,14 +287,26 @@ async fn the_runtime_token_binds_the_owners_own_turn_and_pins_a_room() {
     turn(&db, "t-foreign", "someone-else", "OWNER").await;
 
     let direct = bot_user_for_turn(&db, OWNER, BOT, "t-owner").await.unwrap();
-    assert_eq!((direct.turn_id.as_str(), direct.conv_id.clone()), ("t-owner", None));
+    assert_eq!(
+        (direct.turn_id.as_str(), direct.conv_id.clone()),
+        ("t-owner", None)
+    );
     let room = bot_user_for_turn(&db, OWNER, BOT, "t-room").await.unwrap();
     assert_eq!(room.conv_id.as_deref(), Some(ROOM));
 
-    for (caller, turn_id) in [(OWNER, "t-foreign"), (OWNER, "missing"), ("someone-else", "t-owner")]
-    {
-        let refusal = bot_user_for_turn(&db, caller, BOT, turn_id).await.unwrap_err();
-        assert_eq!(refusal.status(), StatusCode::NOT_FOUND, "{caller} {turn_id}");
+    for (caller, turn_id) in [
+        (OWNER, "t-foreign"),
+        (OWNER, "missing"),
+        ("someone-else", "t-owner"),
+    ] {
+        let refusal = bot_user_for_turn(&db, caller, BOT, turn_id)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refusal.status(),
+            StatusCode::NOT_FOUND,
+            "{caller} {turn_id}"
+        );
     }
 }
 
@@ -295,24 +317,29 @@ fn tokens_round_trip_without_a_sub_and_reject_other_token_types() {
     let signed = sign_bot_token(&user, None).unwrap();
     let claims = verify_bot_token(&signed.token).unwrap();
     assert_eq!(
-        (claims.bot_id.as_str(), claims.turn_id.as_str(), claims.conv_id.as_deref()),
+        (
+            claims.bot_id.as_str(),
+            claims.turn_id.as_str(),
+            claims.conv_id.as_deref()
+        ),
         (BOT, "turn-1", Some(ROOM))
     );
     let payload: serde_json::Value = serde_json::to_value(&claims).unwrap();
     assert!(payload.get("sub").is_none());
     assert!(payload.get("owner").is_none());
 
-    let connection = crate::app_connection_jwt::sign(crate::app_connection_jwt::AppConnectionJwtParams {
-        sub: Some("user".into()),
-        origin_app_id: "a".into(),
-        target_app_id: "b".into(),
-        app_chain: vec![],
-        technical_user_id: None,
-        run_id: None,
-        correlation: None,
-        ttl_seconds: None,
-    })
-    .unwrap();
+    let connection =
+        crate::app_connection_jwt::sign(crate::app_connection_jwt::AppConnectionJwtParams {
+            sub: Some("user".into()),
+            origin_app_id: "a".into(),
+            target_app_id: "b".into(),
+            app_chain: vec![],
+            technical_user_id: None,
+            run_id: None,
+            correlation: None,
+            ttl_seconds: None,
+        })
+        .unwrap();
     assert!(verify_bot_token(&connection).is_err());
     assert!(crate::app_connection_jwt::verify(&signed.token).is_err());
 }
@@ -365,23 +392,26 @@ async fn unreadable_room_limits_fail_closed() {
 
 fn executor_token_of_bot(conv_id: Option<&str>) -> crate::middleware::jwt::ExecutorUser {
     crate::backend_jwt::init_for_tests();
-    let token = crate::execution::sign_unattended_execution_jwt(crate::execution::ExecutionJwtParams {
-        user_id: OWNER.into(),
-        technical_user_id: None,
-        run_id: "turn-1".into(),
-        app_id: APP.into(),
-        board_id: String::new(),
-        event_id: None,
-        app_chain: None,
-        correlation: None,
-        callback_url: "https://api.example".into(),
-        token_type: crate::execution::TokenType::Executor,
-        ttl_seconds: Some(300),
-        shadow: None,
-    })
-    .unwrap();
+    let token =
+        crate::execution::sign_unattended_execution_jwt(crate::execution::ExecutionJwtParams {
+            user_id: OWNER.into(),
+            technical_user_id: None,
+            run_id: "turn-1".into(),
+            app_id: APP.into(),
+            board_id: String::new(),
+            event_id: None,
+            app_chain: None,
+            correlation: None,
+            callback_url: "https://api.example".into(),
+            token_type: crate::execution::TokenType::Executor,
+            ttl_seconds: Some(300),
+            shadow: None,
+        })
+        .unwrap();
     let token = crate::execution::bind_bot_identity(&token, BOT, conv_id).unwrap();
-    crate::middleware::jwt::ExecutorUser::from(crate::execution::verify_execution_jwt(&token).unwrap())
+    crate::middleware::jwt::ExecutorUser::from(
+        crate::execution::verify_execution_jwt(&token).unwrap(),
+    )
 }
 
 #[tokio::test]

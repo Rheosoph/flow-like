@@ -1,6 +1,8 @@
 import type { BotSystemKey, IBot } from "../../state/backend-state/bot-state";
+import type { IConversation } from "../../state/backend-state/inbox-state";
 import { ASSISTANT_BOT_ID } from "../../state/global-chat/global-chat-bots";
 import { type BotPanelTab, isBotPanelTab } from "./bot-panel-tabs";
+import { directPartnerId, isSelfPrincipal } from "./crew-model";
 
 /** The Bots tab. Its dock shows the global conversation, so the docked overlay stays closed there. */
 export const BOTS_ROUTE = "/bots";
@@ -125,10 +127,35 @@ export function withoutMoveRequest(current: string | URLSearchParams): string {
 export function resolveDockSelection(
 	selection: DockSelection,
 	bots: readonly IBot[] | undefined,
+	conversations?: readonly IConversation[],
+	me?: string | null,
 ): DockSelection {
+	if (selection.type === "conversation") {
+		const bot = ownBotOfDirectConversation(
+			conversations?.find((item) => item.id === selection.conversationId),
+			bots,
+			me,
+		);
+		return bot ? dockSelectionForBot(bot, bots) : selection;
+	}
 	if (selection.type !== "bot") return selection;
 	const bot = bots?.find((item) => item.id === selection.botId);
 	return bot ? dockSelectionForBot(bot, bots) : selection;
+}
+
+/** The owner's bot on the other end of a direct conversation, which opens as that bot's chat. */
+function ownBotOfDirectConversation(
+	conversation: IConversation | undefined,
+	bots: readonly IBot[] | undefined,
+	me?: string | null,
+): IBot | undefined {
+	if (!conversation) return undefined;
+	const partner = directPartnerId(conversation, me);
+	if (!partner) return undefined;
+	return bots?.find(
+		(bot) =>
+			bot.id === partner && (bot.local || isSelfPrincipal(bot.owner_id, me)),
+	);
 }
 
 export function dockSelectionForBot(

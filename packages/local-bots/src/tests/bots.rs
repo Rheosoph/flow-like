@@ -411,7 +411,10 @@ fn app_restrictions_are_stored_validated_and_copied_by_a_duplicate() {
         codes::INVALID
     );
     assert_eq!(
-        code(f.store.set_app_restrictions(&bot.id, "app-9", custom.clone())),
+        code(
+            f.store
+                .set_app_restrictions(&bot.id, "app-9", custom.clone())
+        ),
         codes::NOT_FOUND
     );
     assert_eq!(

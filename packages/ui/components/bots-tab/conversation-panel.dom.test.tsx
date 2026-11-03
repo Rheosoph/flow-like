@@ -176,6 +176,8 @@ function pageOf(entries: readonly IInboxEntry[], query: IInboxEntriesQuery) {
 }
 
 const backend = {
+	eventState: { alwaysRemote: () => false },
+	boardState: {},
 	inboxState: {
 		getConversation: async (id: string) => roomOf(id).conversation,
 		listEntries: async (id: string, query: IInboxEntriesQuery = {}) => {
@@ -408,6 +410,81 @@ describe("ConversationPanel", () => {
 		});
 		expect(c1Panel.text()).toContain("Thanks, Scout!");
 		expect(c1Panel.text()).not.toContain("Sending…");
+	});
+});
+
+describe("message bodies", () => {
+	const markdown = [
+		"**Bold claim** with a [link](https://example.com)",
+		"",
+		"- first item",
+		"- second item",
+		"",
+		"`inline code` and",
+		"",
+		"```ts",
+		"const answer = 42;",
+		"```",
+		"",
+		"```a2ui",
+		'{"id":"root","type":"text","text":"Hello"}',
+		"```",
+	].join("\n");
+
+	test("render through the chat markdown renderer, not as raw text", async () => {
+		room("md", [entry("message", "bot_scout", { text: markdown }, 0)]);
+		const panel = await mountPanel("md");
+		const host = panel.host;
+		expect(host.querySelector("strong")?.textContent).toBe("Bold claim");
+		expect(
+			host.querySelector("a[data-slate-url='https://example.com']"),
+		).not.toBeNull();
+		expect(host.querySelectorAll("li").length).toBe(2);
+		expect(host.querySelector("code")?.textContent).toContain("inline code");
+		expect(host.textContent).not.toContain("**Bold claim**");
+		expect(host.textContent).not.toContain("```");
+		expect(
+			host.querySelector(
+				"[data-fl-a2ui-fence], [data-slot='a2ui-fence-skeleton']",
+			),
+		).not.toBeNull();
+		await panel.unmount();
+	});
+
+	test("reactions still toggle on a rendered row", async () => {
+		const before = c1.sent.length;
+		await click(
+			c1Panel.host.querySelector(
+				"button[aria-pressed='true'][aria-label^='👍']",
+			) ?? undefined,
+		);
+		const reaction = c1.sent
+			.slice(before)
+			.find((item) => item.kind === "reaction");
+		expect(reaction?.envelope?.body).toMatchObject({
+			target: "s2",
+			emoji: "👍",
+			op: "remove",
+		});
+	});
+
+	test("no stale footer about the bot answering elsewhere", async () => {
+		const dm = room("dm", [entry("message", "bot_scout", { text: "Hi" }, 0)], {
+			kind: "direct",
+			members: [
+				{ principal_id: "me", kind: "user", added_by: null, joined_at: "" },
+				{
+					principal_id: "bot_scout",
+					kind: "bot",
+					added_by: "me",
+					joined_at: "",
+				},
+			],
+		});
+		expect(dm.conversation.kind).toBe("direct");
+		const panel = await mountPanel("dm");
+		expect(panel.text()).not.toContain("answers in its own chat");
+		await panel.unmount();
 	});
 });
 

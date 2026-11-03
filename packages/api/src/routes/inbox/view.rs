@@ -3,8 +3,7 @@
 //! message ids, one for the active members, one for the newest messages.
 
 use super::{
-    Reader, active_members, conversation_not_found,
-    MEMBER_DECLINED, MEMBER_PENDING,
+    MEMBER_DECLINED, MEMBER_PENDING, Reader, active_members, conversation_not_found,
     model::{Conversation, ConversationMember, InboxEntry, PendingMember},
     stored,
 };

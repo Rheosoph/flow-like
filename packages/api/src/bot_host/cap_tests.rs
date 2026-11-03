@@ -159,15 +159,49 @@ async fn a_turn_records_who_woke_it_and_whether_the_conversation_is_shared() {
     insert_bot(&db, "bot_2", "user-a", "SERVER").await;
     let now = at(100_000);
     let asks = [
-        ("user-c", "from-member", ConversationKind::Group, "user-c", "ROOM"),
-        ("user-a", "from-owner", ConversationKind::Group, "user-a", "ROOM"),
-        ("user-a", "direct", ConversationKind::Direct, "user-a", "OWNER"),
-        ("bot_2", "own-bot", ConversationKind::Direct, "user-a", "OWNER"),
-        ("bot_2", "bot-in-room", ConversationKind::Group, "bot_2", "ROOM"),
+        (
+            "user-c",
+            "from-member",
+            ConversationKind::Group,
+            "user-c",
+            "ROOM",
+        ),
+        (
+            "user-a",
+            "from-owner",
+            ConversationKind::Group,
+            "user-a",
+            "ROOM",
+        ),
+        (
+            "user-a",
+            "direct",
+            ConversationKind::Direct,
+            "user-a",
+            "OWNER",
+        ),
+        (
+            "bot_2",
+            "own-bot",
+            ConversationKind::Direct,
+            "user-a",
+            "OWNER",
+        ),
+        (
+            "bot_2",
+            "bot-in-room",
+            ConversationKind::Group,
+            "bot_2",
+            "ROOM",
+        ),
     ];
     for (sender, trigger, kind, requester, audience) in asks {
         let request = room_request(sender, trigger, kind);
-        assert_eq!(enqueue_in(&db, &request, now).await.unwrap(), 1, "{trigger}");
+        assert_eq!(
+            enqueue_in(&db, &request, now).await.unwrap(),
+            1,
+            "{trigger}"
+        );
         let stored = turn_of(&db, trigger).await;
         assert_eq!(stored.requester_id.as_deref(), Some(requester), "{trigger}");
         assert_eq!(stored.audience, audience, "{trigger}");
@@ -194,11 +228,9 @@ async fn a_requester_who_is_not_the_owner_has_a_daily_limit_and_the_room_is_told
             .is_none()
     );
     let notice = crate::entity::inbox_entry::Entity::find()
-        .filter(
-            crate::entity::inbox_entry::Column::MessageId.eq(
-                flow_like_types::bot_turn::rate_limit_message_id("bot_1", "c-over"),
-            ),
-        )
+        .filter(crate::entity::inbox_entry::Column::MessageId.eq(
+            flow_like_types::bot_turn::rate_limit_message_id("bot_1", "c-over"),
+        ))
         .filter(crate::entity::inbox_entry::Column::InboxId.eq("user-c"))
         .one(&db)
         .await

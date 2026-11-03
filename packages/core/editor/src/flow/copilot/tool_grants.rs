@@ -162,11 +162,9 @@ pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Opti
             })
         }
         "data_sources" => one(connection_scope(args)),
-        "browser_open" => one(
-            clean(arg(args, "url", "url"))
-                .and_then(|url| tools::browser::site_of(&url))
-                .map(|site| format!("browser:{site}")),
-        ),
+        "browser_open" => one(clean(arg(args, "url", "url"))
+            .and_then(|url| tools::browser::site_of(&url))
+            .map(|site| format!("browser:{site}"))),
         "computer_screenshot" | "computer_act" => Some(vec!["computer:session".to_string()]),
         "email_send" => flow_like_bot_tools::email::grant_scopes(args),
         "shell_run" => one(flow_like_bot_tools::shell::grant_scope(args).and_then(|s| clean(&s))),
@@ -534,7 +532,11 @@ mod tests {
     #[test]
     fn a_browser_grant_is_one_site_and_the_computer_grant_is_the_session() {
         assert_eq!(
-            grant_scopes("browser_open", &json!({"url": "https://www.Shop.example/cart?x=1"}), None),
+            grant_scopes(
+                "browser_open",
+                &json!({"url": "https://www.Shop.example/cart?x=1"}),
+                None
+            ),
             Some(vec!["browser:shop.example".into()])
         );
         assert_eq!(
@@ -731,7 +733,10 @@ mod tests {
         else {
             panic!("expected a park");
         };
-        assert_eq!((card.tool.as_str(), card.scope.as_str()), ("shell_run", "command:git"));
+        assert_eq!(
+            (card.tool.as_str(), card.scope.as_str()),
+            ("shell_run", "command:git")
+        );
         store.put("shell_run", "command:git").await.unwrap();
         assert_eq!(
             headless_answer(&store, "bt_1", "shell_run", &git, None, "").await,

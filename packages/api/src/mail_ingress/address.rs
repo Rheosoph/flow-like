@@ -310,7 +310,8 @@ pub async fn update_alias(
 
 /// Marks addresses whose event no longer exists; they stay reserved during the quarantine.
 pub(super) async fn quarantine_orphans(state: &AppState, timestamp: i64) -> Result<u64, ApiError> {
-    let bots = super::bot_address::quarantine_gone_bots(state, timestamp, HOUSEKEEPING_BATCH).await?;
+    let bots =
+        super::bot_address::quarantine_gone_bots(state, timestamp, HOUSEKEEPING_BATCH).await?;
     Ok(bots + state
         .db
         .execute_raw(statement(

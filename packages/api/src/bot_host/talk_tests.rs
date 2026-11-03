@@ -3,9 +3,9 @@ use super::{
     fixture::{at, database, insert_bot},
     ledger::{self, enqueue_in, next_head, recover_in},
     talk::{
-        ERROR_ASK_ANSWERED, ERROR_ASK_EXPIRED, ERROR_ASK_QUEUED, Question, REPLY_BY_DAYS, WAIT_SECS,
-        answer_from, answered_ask, ask_body, ask_result_transcript, asked_by, end_lapsed_in,
-        granted_in, grant_scope, headless_verdict, roster_in,
+        ERROR_ASK_ANSWERED, ERROR_ASK_EXPIRED, ERROR_ASK_QUEUED, Question, REPLY_BY_DAYS,
+        WAIT_SECS, answer_from, answered_ask, ask_body, ask_result_transcript, asked_by,
+        end_lapsed_in, grant_scope, granted_in, headless_verdict, roster_in,
     },
 };
 use crate::{
@@ -19,7 +19,7 @@ use crate::{
         },
     },
 };
-use chrono::{Duration, FixedOffset, DateTime};
+use chrono::{DateTime, Duration, FixedOffset};
 use flow_like::flow::copilot::{
     bot_talk::{BotPresence, CrewMember, HeadlessPermission, PendingAnswer},
     tool_grants::{GrantStore, record_card_answer},
@@ -131,23 +131,42 @@ async fn the_roster_lists_the_other_bots_with_their_presence() {
         .collect();
     assert_eq!(
         presence,
-        [("bot_dev", BotPresence::Offline), (LEDGER, BotPresence::Online)]
+        [
+            ("bot_dev", BotPresence::Offline),
+            (LEDGER, BotPresence::Online)
+        ]
     );
 }
 
 #[tokio::test]
 async fn a_card_answer_becomes_a_stored_permission() {
     let (db, _) = pair("SERVER", "SERVER").await;
-    assert!(!granted_in(&db, OWNER, SCOUT, LEDGER, now_millis()).await.unwrap());
+    assert!(
+        !granted_in(&db, OWNER, SCOUT, LEDGER, now_millis())
+            .await
+            .unwrap()
+    );
     GrantRows::new(&db, SCOUT, OWNER)
         .put("ask_bot", &grant_scope(LEDGER))
         .await
         .unwrap();
-    assert!(granted_in(&db, OWNER, SCOUT, LEDGER, now_millis()).await.unwrap());
+    assert!(
+        granted_in(&db, OWNER, SCOUT, LEDGER, now_millis())
+            .await
+            .unwrap()
+    );
     let left = GrantRows::new(&db, SCOUT, OWNER).list().await.unwrap();
     assert!(left.is_empty());
-    assert!(!granted_in(&db, OWNER, LEDGER, SCOUT, now_millis()).await.unwrap());
-    assert!(granted_in(&db, OWNER, SCOUT, LEDGER, now_millis()).await.unwrap());
+    assert!(
+        !granted_in(&db, OWNER, LEDGER, SCOUT, now_millis())
+            .await
+            .unwrap()
+    );
+    assert!(
+        granted_in(&db, OWNER, SCOUT, LEDGER, now_millis())
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -163,29 +182,48 @@ async fn a_headless_ask_parks_then_runs_on_the_owners_answer() {
     let card = card.unwrap();
     assert_eq!(card.tool, "ask_bot");
     assert_eq!(card.scope, "bot:bot_ledger");
-    assert_eq!(card.summary, "Scout wants to ask Ledger: What is the total?");
+    assert_eq!(
+        card.summary,
+        "Scout wants to ask Ledger: What is the total?"
+    );
 
-    record_card_answer(&store, &card, ApprovalDecision::Once).await.unwrap();
+    record_card_answer(&store, &card, ApprovalDecision::Once)
+        .await
+        .unwrap();
     let (verdict, _) =
         headless_verdict(&store, "bt_1", &scout, &ledger_bot, "What is the total?").await;
     assert_eq!(verdict, HeadlessPermission::Allowed);
     let (again, _) =
         headless_verdict(&store, "bt_1", &scout, &ledger_bot, "What is the total?").await;
-    assert_eq!(again, HeadlessPermission::Parked, "a one-time answer is spent");
+    assert_eq!(
+        again,
+        HeadlessPermission::Parked,
+        "a one-time answer is spent"
+    );
 
-    record_card_answer(&store, &card, ApprovalDecision::Deny).await.unwrap();
+    record_card_answer(&store, &card, ApprovalDecision::Deny)
+        .await
+        .unwrap();
     let (verdict, _) =
         headless_verdict(&store, "bt_1", &scout, &ledger_bot, "What is the total?").await;
     assert_eq!(verdict, HeadlessPermission::Denied);
 
-    record_card_answer(&store, &card, ApprovalDecision::Always).await.unwrap();
-    assert!(granted_in(&db, OWNER, SCOUT, LEDGER, now_millis()).await.unwrap());
+    record_card_answer(&store, &card, ApprovalDecision::Always)
+        .await
+        .unwrap();
+    assert!(
+        granted_in(&db, OWNER, SCOUT, LEDGER, now_millis())
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
 async fn one_pair_has_one_exchange() {
     let (db, id) = pair("SERVER", "SERVER").await;
-    let again = start_exchange(&db, OWNER, LEDGER, SCOUT, None, at(5)).await.unwrap();
+    let again = start_exchange(&db, OWNER, LEDGER, SCOUT, None, at(5))
+        .await
+        .unwrap();
     assert_eq!(id, again);
 }
 
@@ -199,17 +237,46 @@ async fn a_server_to_server_ask_queues_the_callees_turn_and_its_answer_reaches_t
     assert_eq!(queued.error_code.as_deref(), Some(ERROR_ASK_QUEUED));
     assert_eq!(queued.host_kind, "SERVER");
     let chain = asked_by(&db, &queued).await.unwrap();
-    assert_eq!(chain.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), [SCOUT]);
+    assert_eq!(
+        chain.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        [SCOUT]
+    );
 
     let reply = answer(&db, &conversation, "ask-1", 2).await;
-    let follow_up = turn(&db, SCOUT, &reply).await.expect("asker follow-up turn");
+    let follow_up = turn(&db, SCOUT, &reply)
+        .await
+        .expect("asker follow-up turn");
     let held = follow_up.lease_until.expect("held while the asker waits");
     assert!(held > now_millis() + Duration::seconds(i64::from(WAIT_SECS) - 5));
-    assert!(next_head(&db, SCOUT, &conversation, flow_like_types::bot_turn::TurnHostKind::Server, now_millis()).await.unwrap().is_none());
+    assert!(
+        next_head(
+            &db,
+            SCOUT,
+            &conversation,
+            flow_like_types::bot_turn::TurnHostKind::Server,
+            now_millis()
+        )
+        .await
+        .unwrap()
+        .is_none()
+    );
     let later = now_millis() + Duration::seconds(i64::from(WAIT_SECS) + 30);
-    assert!(next_head(&db, SCOUT, &conversation, flow_like_types::bot_turn::TurnHostKind::Server, later).await.unwrap().is_some());
+    assert!(
+        next_head(
+            &db,
+            SCOUT,
+            &conversation,
+            flow_like_types::bot_turn::TurnHostKind::Server,
+            later
+        )
+        .await
+        .unwrap()
+        .is_some()
+    );
 
-    ledger::cancel_in(&db, &follow_up.id, ERROR_ASK_ANSWERED, now_millis()).await.unwrap();
+    ledger::cancel_in(&db, &follow_up.id, ERROR_ASK_ANSWERED, now_millis())
+        .await
+        .unwrap();
     let settled = turn(&db, SCOUT, &reply).await.unwrap();
     assert_eq!(settled.status, STORED_CANCELLED);
 }
@@ -221,7 +288,10 @@ async fn a_late_answer_wakes_the_asker_in_the_conversation_it_asked_from() {
     let reply = answer(&db, &conversation, "ask-2", 2).await;
     let follow_up = turn(&db, SCOUT, &reply).await.expect("follow-up");
     assert_eq!(follow_up.host_kind, "DESKTOP");
-    let answered = answered_ask(&db, &follow_up).await.unwrap().expect("answers an ask");
+    let answered = answered_ask(&db, &follow_up)
+        .await
+        .unwrap()
+        .expect("answers an ask");
     assert_eq!(answered.origin_conversation, "origin");
     assert_eq!(answered.question, "What is the total?");
     assert_eq!(answered.answer, "42");
@@ -266,7 +336,12 @@ async fn a_desktop_hosts_reply_to_a_late_answer_turn_goes_to_the_origin_conversa
         SCOUT,
         &follow_up.trigger_message_id,
     ));
-    assert!(answer_origin(&db, SCOUT, &claim, &failure).await.unwrap().is_none());
+    assert!(
+        answer_origin(&db, SCOUT, &claim, &failure)
+            .await
+            .unwrap()
+            .is_none()
+    );
 
     let plain = turn(&db, LEDGER, "ask-4").await.unwrap();
     let plain_claim = TurnClaim {
@@ -277,7 +352,12 @@ async fn a_desktop_hosts_reply_to_a_late_answer_turn_goes_to_the_origin_conversa
         LEDGER,
         &plain.trigger_message_id,
     ));
-    assert!(answer_origin(&db, LEDGER, &plain_claim, &plain_reply).await.unwrap().is_none());
+    assert!(
+        answer_origin(&db, LEDGER, &plain_claim, &plain_reply)
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -286,13 +366,19 @@ async fn an_offline_callee_leaves_no_hold_and_its_question_waits_seven_days() {
     ask(&db, &conversation, "ask-3", 1, 0).await;
     let reply = answer(&db, &conversation, "ask-3", 2).await;
     let follow_up = turn(&db, SCOUT, &reply).await.unwrap();
-    assert!(follow_up.lease_until.is_none(), "an asker that did not wait is woken at once");
+    assert!(
+        follow_up.lease_until.is_none(),
+        "an asker that did not wait is woken at once"
+    );
 
     let queued = turn(&db, LEDGER, "ask-3").await.unwrap();
     assert_eq!(queued.status, STORED_QUEUED);
     let after_a_day = now_millis() + Duration::days(1);
     recover_in(&db, after_a_day).await.unwrap();
-    assert_eq!(turn(&db, LEDGER, "ask-3").await.unwrap().status, STORED_QUEUED);
+    assert_eq!(
+        turn(&db, LEDGER, "ask-3").await.unwrap().status,
+        STORED_QUEUED
+    );
     assert!(end_lapsed_in(&db, after_a_day).await.unwrap().is_empty());
 
     let after_eight = now_millis() + Duration::days(REPLY_BY_DAYS + 1);
@@ -336,8 +422,11 @@ fn a_settled_turn_answers_and_an_unsettled_one_is_pending() {
     assert!(pending.downcast_ref::<PendingAnswer>().is_some());
     let running = answer_from(&fired("running", None, None), &callee).unwrap_err();
     assert!(running.downcast_ref::<PendingAnswer>().is_some());
-    let failed = answer_from(&fired("failed", Some("sorry"), Some("BOT_TURN_FAILED")), &callee)
-        .unwrap_err();
+    let failed = answer_from(
+        &fired("failed", Some("sorry"), Some("BOT_TURN_FAILED")),
+        &callee,
+    )
+    .unwrap_err();
     assert!(failed.downcast_ref::<PendingAnswer>().is_none());
     let cancelled = answer_from(&fired("cancelled", None, Some("BOT_ASK_EXPIRED")), &callee);
     assert!(cancelled.is_err());
@@ -360,6 +449,12 @@ fn the_ask_body_carries_the_chain_and_only_waits_when_asked_to() {
     assert_eq!(body["ask"]["chain"], json!(["a", "b"]));
     assert!(body["ask"].get("wait_secs").is_none());
     assert_eq!(body["ask"]["hops"], 2);
-    let waiting = ask_body(&Question { wait_secs: 90, ..question }, at(0));
+    let waiting = ask_body(
+        &Question {
+            wait_secs: 90,
+            ..question
+        },
+        at(0),
+    );
     assert_eq!(waiting["ask"]["wait_secs"], 90);
 }

@@ -6,10 +6,7 @@ use super::{
 use crate::{
     entity::{bot_turn, inbox_entry},
     routes::inbox::{
-        BOT_TURN_NOT_CLAIMED,
-        delivery::is_interactive,
-        entries::validate_send,
-        model::TurnClaim,
+        BOT_TURN_NOT_CLAIMED, delivery::is_interactive, entries::validate_send, model::TurnClaim,
         turns::reply_interactive_in,
     },
 };
@@ -30,7 +27,16 @@ use serde_json::json;
 async fn chat(db: &DatabaseConnection) {
     insert_bot(db, "bot_1", "user-a", "SERVER").await;
     conversation(db, "c1", "DIRECT", "PLAIN", &["user-a", "bot_1"]).await;
-    message(db, "c1", "m1", "user-a", 1, json!({ "text": "hi" }), &["user-a", "bot_1"]).await;
+    message(
+        db,
+        "c1",
+        "m1",
+        "user-a",
+        1,
+        json!({ "text": "hi" }),
+        &["user-a", "bot_1"],
+    )
+    .await;
     db.execute_unprepared(r#"UPDATE public."Conversation" SET "lastSeq" = 1"#)
         .await
         .unwrap();
@@ -41,9 +47,13 @@ use sea_orm::ConnectionTrait;
 async fn queue(db: &DatabaseConnection, interactive: bool, now: DateTime<FixedOffset>) {
     let mut recipient = recipient("bot_1", "user-a", BotLocation::Server);
     recipient.interactive = interactive;
-    enqueue_in(db, &delivery(ConversationKind::Direct, vec![recipient]), now)
-        .await
-        .unwrap();
+    enqueue_in(
+        db,
+        &delivery(ConversationKind::Direct, vec![recipient]),
+        now,
+    )
+    .await
+    .unwrap();
 }
 
 fn claim(host: &str, now: DateTime<FixedOffset>) -> ClaimRequest {
@@ -86,8 +96,18 @@ fn only_a_body_with_a_run_id_is_marked_interactive() {
     assert!(is_interactive(&marked));
     assert!(!is_interactive(&plain));
     assert!(!is_interactive(&empty));
-    assert!(MessageBody::parse(&marked["body"]).unwrap().interactive.is_some());
-    assert!(MessageBody::parse(&json!({ "text": "x", "interactive": { "client_run_id": "has space" } })).is_err());
+    assert!(
+        MessageBody::parse(&marked["body"])
+            .unwrap()
+            .interactive
+            .is_some()
+    );
+    assert!(
+        MessageBody::parse(
+            &json!({ "text": "x", "interactive": { "client_run_id": "has space" } })
+        )
+        .is_err()
+    );
 }
 
 #[tokio::test]
@@ -131,15 +151,24 @@ async fn holding_pushes_the_grace_on_until_a_host_claims() {
     let id = turn_id("bot_1", "m1");
 
     assert!(hold_in(&db, &id, "user-a", at(200)).await.unwrap());
-    assert_eq!(turn(&db).await.lease_until, Some(at(200 + INTERACTIVE_GRACE_SECS)));
+    assert_eq!(
+        turn(&db).await.lease_until,
+        Some(at(200 + INTERACTIVE_GRACE_SECS))
+    );
     assert_eq!(waiting(&db, at(100 + INTERACTIVE_GRACE_SECS + 1)).await, 0);
-    assert!(!hold_in(&db, &id, "user-b", at(210)).await.unwrap(), "only the owner holds");
+    assert!(
+        !hold_in(&db, &id, "user-b", at(210)).await.unwrap(),
+        "only the owner holds"
+    );
 
     claim_in(&db, &claim("host", at(200 + INTERACTIVE_GRACE_SECS + 1)))
         .await
         .unwrap()
         .unwrap();
-    assert!(!hold_in(&db, &id, "user-a", at(400)).await.unwrap(), "a claimed turn is no longer held");
+    assert!(
+        !hold_in(&db, &id, "user-a", at(400)).await.unwrap(),
+        "a claimed turn is no longer held"
+    );
 }
 
 #[tokio::test]
@@ -169,8 +198,13 @@ async fn the_chat_stores_its_reply_as_the_bot_and_ends_the_turn() {
     assert!(done.lease_until.is_none());
     assert_eq!(waiting(&db, at(1_000)).await, 0, "no host answers it again");
     assert_eq!(
-        claim_in(&db, &claim("host", at(1_000))).await.unwrap().err(),
-        Some(Refusal::NotQueued(flow_like_types::bot_turn::TurnStatus::Done))
+        claim_in(&db, &claim("host", at(1_000)))
+            .await
+            .unwrap()
+            .err(),
+        Some(Refusal::NotQueued(
+            flow_like_types::bot_turn::TurnStatus::Done
+        ))
     );
 }
 
@@ -217,8 +251,12 @@ async fn the_reply_id_is_the_hosts_so_a_repeat_returns_the_first_copy() {
     };
     let first = validate_send(chat_turn.request("one", None)).unwrap();
     let again = validate_send(chat_turn.request("two", None)).unwrap();
-    let stored = reply_interactive_in(&db, "c1", "bot_1", &claim_row, &first, at(130)).await.unwrap();
-    let repeat = reply_interactive_in(&db, "c1", "bot_1", &claim_row, &again, at(131)).await.unwrap();
+    let stored = reply_interactive_in(&db, "c1", "bot_1", &claim_row, &first, at(130))
+        .await
+        .unwrap();
+    let repeat = reply_interactive_in(&db, "c1", "bot_1", &claim_row, &again, at(131))
+        .await
+        .unwrap();
     assert_eq!(stored.entry.id, repeat.entry.id);
     assert_eq!(repeat.entry.envelope["body"]["text"], json!("one"));
     let _ = ledger::LIST_LIMIT;

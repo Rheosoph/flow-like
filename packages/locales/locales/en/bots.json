@@ -131,7 +131,6 @@
 		"builtIn": "Built in",
 		"cancel": "Cancel",
 		"composer": {
-			"botAnswersInChat": "{{name}} answers in its own chat for now. What you send here waits in its inbox.",
 			"encrypted": "Writing in end-to-end encrypted chats isn't available in this app yet.",
 			"placeholder": "Message {{name}}",
 			"send": "Send",
@@ -792,6 +791,7 @@
 		},
 		"openFull": "Open full view",
 		"permissions": {
+			"allow": "Allow {{name}} to ask…",
 			"granted": "{{name}} can ask",
 			"none": "No standing permissions. {{name}} checks with you before asking another bot.",
 			"received": "Can ask {{name}}",

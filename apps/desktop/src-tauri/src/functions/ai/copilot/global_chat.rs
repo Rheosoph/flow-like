@@ -517,6 +517,7 @@ pub async fn global_chat_native(
     let nested_talk = options.bot_talk.take();
     let bot_memory = options.bot_memory.take();
     let requester = options.requester.take();
+    let approval_gate = options.approval_gate.clone();
     options.attachments = attachments_manifest.clone().unwrap_or_default();
     let conversation_id = options.conversation_id.clone();
     let run_id = Some(run_id.unwrap_or_else(flow_like_types::create_id));
@@ -600,6 +601,7 @@ pub async fn global_chat_native(
                 &app_handle,
                 &bot.context,
                 nested_talk,
+                approval_gate,
                 profile_id,
                 run_id.as_deref().unwrap_or_default(),
             )

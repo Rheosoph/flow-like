@@ -1,12 +1,13 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Loader2Icon, XIcon } from "lucide-react";
+import { Loader2Icon, PlusIcon, XIcon } from "lucide-react";
 import { useCallback, useMemo } from "react";
 import {
 	useBotLabels,
 	useBotPermissions,
 	useBots,
+	useGrantBotPermission,
 	useRevokeBotPermission,
 } from "../../hooks/use-bots";
 import { useConversations } from "../../hooks/use-inbox";
@@ -15,6 +16,12 @@ import { BotAvatar } from "../bots/bot-avatar";
 import { exchangesOfBot } from "../global-chat/bot-exchange";
 import { BotExchangeList } from "../global-chat/bot-exchange-card";
 import { Button } from "../ui/button";
+import {
+	DropdownMenu,
+	DropdownMenuContent,
+	DropdownMenuItem,
+	DropdownMenuTrigger,
+} from "../ui/dropdown-menu";
 
 type BotNames = (botId: string) => { name: string; bot?: IBot };
 
@@ -95,6 +102,64 @@ function GrantRow({
 				)}
 			</Button>
 		</li>
+	);
+}
+
+function GrantPicker({
+	bot,
+	name,
+	taken,
+	names,
+}: Readonly<{
+	bot: IBot;
+	name: string;
+	taken: ReadonlySet<string>;
+	names: BotNames;
+}>) {
+	const { t } = useTranslation("bots");
+	const bots = useBots().data;
+	const { mutate: grant, isPending } = useGrantBotPermission();
+	const candidates = (bots ?? []).filter(
+		(other) => other.id !== bot.id && !taken.has(other.id),
+	);
+	if (candidates.length === 0) return null;
+	return (
+		<DropdownMenu>
+			<DropdownMenuTrigger asChild>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					className="self-start"
+					disabled={isPending}
+				>
+					{isPending ? (
+						<Loader2Icon className="animate-spin" aria-hidden />
+					) : (
+						<PlusIcon aria-hidden />
+					)}
+					{t("panel.permissions.allow", "Allow {{name}} to ask…", { name })}
+				</Button>
+			</DropdownMenuTrigger>
+			<DropdownMenuContent align="start">
+				{candidates.map((other) => (
+					<DropdownMenuItem
+						key={other.id}
+						onSelect={() => grant({ fromBotId: bot.id, toBotId: other.id })}
+					>
+						<span className="flex size-5 shrink-0 items-end justify-center overflow-hidden rounded bg-muted">
+							<BotAvatar
+								appearance={other.appearance}
+								size={20}
+								animated={false}
+								decorative
+							/>
+						</span>
+						{names(other.id).name}
+					</DropdownMenuItem>
+				))}
+			</DropdownMenuContent>
+		</DropdownMenu>
 	);
 }
 
@@ -199,6 +264,12 @@ export function BotPermissions({
 					/>
 				</>
 			)}
+			<GrantPicker
+				bot={bot}
+				name={name}
+				names={names}
+				taken={new Set(granted.map((grant) => grant.to_bot_id))}
+			/>
 		</section>
 	);
 }

@@ -12,17 +12,15 @@ use crate::{
 };
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration, FixedOffset};
-use flow_like::flow::copilot::tool_grants::{
-    GrantStore, approval_request, check_call, GrantCheck,
-};
+use flow_like::flow::copilot::tool_grants::{GrantCheck, GrantStore, approval_request, check_call};
 use flow_like_types::{
     bot::BotLocation,
     bot_message::ApprovalRequest,
     bot_turn::{STORED_CANCELLED, STORED_QUEUED, STORED_WAITING, TurnHostKind, turn_id},
     inbox::{ConversationKind, direct_pair_key},
     tool_grant::{
-        APPROVAL_WAIT_DAYS, ApprovalAnswer, ApprovalDecision, ERROR_APPROVAL_EXPIRED,
-        ToolGrantKey, args_hash,
+        APPROVAL_WAIT_DAYS, ApprovalAnswer, ApprovalDecision, ERROR_APPROVAL_EXPIRED, ToolGrantKey,
+        args_hash,
     },
 };
 use sea_orm::{
@@ -74,9 +72,13 @@ async fn running() -> (DatabaseConnection, bot_turn::Model) {
     let mut target = recipient(BOT, OWNER, BotLocation::Server);
     target.conversation_id = "c1".into();
     target.trigger_message_id = "m1".into();
-    enqueue_in(&db, &delivery(ConversationKind::Direct, vec![target]), at(1))
-        .await
-        .unwrap();
+    enqueue_in(
+        &db,
+        &delivery(ConversationKind::Direct, vec![target]),
+        at(1),
+    )
+    .await
+    .unwrap();
     let now = now_millis();
     claim_in(
         &db,
@@ -99,7 +101,13 @@ async fn running() -> (DatabaseConnection, bot_turn::Model) {
 }
 
 fn card(turn: &bot_turn::Model) -> ApprovalRequest {
-    approval_request(&turn.id, "knowledge_drop", &drop_args(), None, "Drops 'notes'.")
+    approval_request(
+        &turn.id,
+        "knowledge_drop",
+        &drop_args(),
+        None,
+        "Drops 'notes'.",
+    )
 }
 
 async fn parked() -> (DatabaseConnection, bot_turn::Model, ApprovalRequest) {
@@ -164,17 +172,36 @@ async fn a_grant_is_the_owners_alone_idempotent_and_listed_without_tokens() {
             StatusCode::NOT_FOUND,
             "NOT_FOUND",
         );
-        assert!(grant_in(&db, stranger, BOT, &key("code_run", "*"), at(1)).await.is_err());
-        assert!(revoke_in(&db, stranger, BOT, &key("code_run", "host:a.com")).await.is_err());
+        assert!(
+            grant_in(&db, stranger, BOT, &key("code_run", "*"), at(1))
+                .await
+                .is_err()
+        );
+        assert!(
+            revoke_in(&db, stranger, BOT, &key("code_run", "host:a.com"))
+                .await
+                .is_err()
+        );
     }
     assert!(list_grants(&db, OWNER, "bot_other", false).await.is_err());
     assert_eq!(bot_tool_grant::Entity::find().count(&db).await.unwrap(), 2);
 
-    assert!(revoke_in(&db, OWNER, BOT, &key("code_run", "host:a.com")).await.unwrap());
-    assert!(!revoke_in(&db, OWNER, BOT, &key("code_run", "host:a.com")).await.unwrap());
+    assert!(
+        revoke_in(&db, OWNER, BOT, &key("code_run", "host:a.com"))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !revoke_in(&db, OWNER, BOT, &key("code_run", "host:a.com"))
+            .await
+            .unwrap()
+    );
     for bad in [key("code run", "*"), key("code_run", "bogus")] {
         assert_eq!(
-            grant_in(&db, OWNER, BOT, &bad, at(1)).await.unwrap_err().status(),
+            grant_in(&db, OWNER, BOT, &bad, at(1))
+                .await
+                .unwrap_err()
+                .status(),
             StatusCode::BAD_REQUEST
         );
     }
@@ -186,21 +213,37 @@ async fn a_grant_covers_exactly_its_scope_for_the_core_lookup() {
     insert_bot(&db, BOT, OWNER, "SERVER").await;
     let store = rows(&db);
     assert_eq!(
-        check_call(&store, "knowledge_drop", &drop_args(), None).await.unwrap(),
+        check_call(&store, "knowledge_drop", &drop_args(), None)
+            .await
+            .unwrap(),
         GrantCheck::Missing
     );
-    grant_in(&db, OWNER, BOT, &key("knowledge_drop", "table:notes"), at(1)).await.unwrap();
+    grant_in(
+        &db,
+        OWNER,
+        BOT,
+        &key("knowledge_drop", "table:notes"),
+        at(1),
+    )
+    .await
+    .unwrap();
     assert_eq!(
-        check_call(&store, "knowledge_drop", &drop_args(), None).await.unwrap(),
+        check_call(&store, "knowledge_drop", &drop_args(), None)
+            .await
+            .unwrap(),
         GrantCheck::Granted
     );
     assert_eq!(
-        check_call(&store, "knowledge_drop", &json!({ "index": "other" }), None).await.unwrap(),
+        check_call(&store, "knowledge_drop", &json!({ "index": "other" }), None)
+            .await
+            .unwrap(),
         GrantCheck::Missing
     );
     let other_bot = GrantRows::new(Arc::new(db.clone()), "bot_x", OWNER);
     assert_eq!(
-        check_call(&other_bot, "knowledge_drop", &drop_args(), None).await.unwrap(),
+        check_call(&other_bot, "knowledge_drop", &drop_args(), None)
+            .await
+            .unwrap(),
         GrantCheck::Missing
     );
 }
@@ -209,7 +252,9 @@ async fn a_grant_covers_exactly_its_scope_for_the_core_lookup() {
 async fn parking_posts_the_card_waits_without_a_lease_and_the_host_can_do_it_once() {
     let (db, turn) = running().await;
     let card = card(&turn);
-    let sent = park_in(&db, &turn, HOST, &card, "c1", now_millis()).await.unwrap();
+    let sent = park_in(&db, &turn, HOST, &card, "c1", now_millis())
+        .await
+        .unwrap();
     assert_eq!(sent.entry.sender_id, BOT);
     let parked = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
     assert_eq!(parked.status, STORED_WAITING);
@@ -225,7 +270,9 @@ async fn parking_posts_the_card_waits_without_a_lease_and_the_host_can_do_it_onc
     assert_eq!(entry.envelope["body"]["approval"]["tool"], "knowledge_drop");
     assert_eq!(entry.envelope["body"]["approval"]["scope"], "table:notes");
     assert_code(
-        &park_in(&db, &turn, HOST, &card, "c1", now_millis()).await.unwrap_err(),
+        &park_in(&db, &turn, HOST, &card, "c1", now_millis())
+            .await
+            .unwrap_err(),
         StatusCode::CONFLICT,
         BOT_TURN_LEASE_LOST,
     );
@@ -236,7 +283,9 @@ async fn a_host_that_lost_its_lease_cannot_park() {
     let (db, turn) = running().await;
     let card = card(&turn);
     assert_code(
-        &park_in(&db, &turn, "server:other", &card, "c1", now_millis()).await.unwrap_err(),
+        &park_in(&db, &turn, "server:other", &card, "c1", now_millis())
+            .await
+            .unwrap_err(),
         StatusCode::CONFLICT,
         BOT_TURN_LEASE_LOST,
     );
@@ -248,18 +297,29 @@ async fn a_host_that_lost_its_lease_cannot_park() {
 #[tokio::test]
 async fn once_leaves_a_token_queues_the_turn_and_wakes_no_new_turn() {
     let (db, turn, card) = parked().await;
-    let queued = resolve(&db, &turn, &card, ApprovalDecision::Once).await.unwrap();
+    let queued = resolve(&db, &turn, &card, ApprovalDecision::Once)
+        .await
+        .unwrap();
     assert_eq!(queued.status, STORED_QUEUED);
     assert!(queued.reply_message_id.is_none() && queued.lease_until.is_none());
     assert_eq!(bot_turn::Entity::find().count(&db).await.unwrap(), 1);
-    assert!(list_grants(&db, OWNER, BOT, false).await.unwrap().is_empty());
+    assert!(
+        list_grants(&db, OWNER, BOT, false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let store = rows(&db);
     assert_eq!(
-        check_call(&store, "knowledge_drop", &drop_args(), None).await.unwrap(),
+        check_call(&store, "knowledge_drop", &drop_args(), None)
+            .await
+            .unwrap(),
         GrantCheck::Once
     );
     assert_eq!(
-        check_call(&store, "knowledge_drop", &drop_args(), None).await.unwrap(),
+        check_call(&store, "knowledge_drop", &drop_args(), None)
+            .await
+            .unwrap(),
         GrantCheck::Missing
     );
     let response = inbox_entry::Entity::find()
@@ -269,22 +329,32 @@ async fn once_leaves_a_token_queues_the_turn_and_wakes_no_new_turn() {
         .await
         .unwrap()
         .unwrap();
-    assert_eq!(response.envelope["body"]["approval_response"]["decision"], "once");
+    assert_eq!(
+        response.envelope["body"]["approval_response"]["decision"],
+        "once"
+    );
     assert_eq!(response.envelope["body"]["reply_to"], card.id.as_str());
 }
 
 #[tokio::test]
 async fn always_stores_a_grant_that_covers_the_next_call() {
     let (db, turn, card) = parked().await;
-    resolve(&db, &turn, &card, ApprovalDecision::Always).await.unwrap();
+    resolve(&db, &turn, &card, ApprovalDecision::Always)
+        .await
+        .unwrap();
     let grants = list_grants(&db, OWNER, BOT, false).await.unwrap();
     assert_eq!(
-        grants.iter().map(|g| (g.tool.as_str(), g.scope.as_str())).collect::<Vec<_>>(),
+        grants
+            .iter()
+            .map(|g| (g.tool.as_str(), g.scope.as_str()))
+            .collect::<Vec<_>>(),
         [("knowledge_drop", "table:notes")]
     );
     let store = rows(&db);
     assert_eq!(
-        check_call(&store, "knowledge_drop", &drop_args(), None).await.unwrap(),
+        check_call(&store, "knowledge_drop", &drop_args(), None)
+            .await
+            .unwrap(),
         GrantCheck::Granted
     );
 }
@@ -292,12 +362,21 @@ async fn always_stores_a_grant_that_covers_the_next_call() {
 #[tokio::test]
 async fn deny_leaves_a_refusal_the_resumed_run_is_told() {
     let (db, turn, card) = parked().await;
-    let queued = resolve(&db, &turn, &card, ApprovalDecision::Deny).await.unwrap();
+    let queued = resolve(&db, &turn, &card, ApprovalDecision::Deny)
+        .await
+        .unwrap();
     assert_eq!(queued.status, STORED_QUEUED);
-    assert!(list_grants(&db, OWNER, BOT, false).await.unwrap().is_empty());
+    assert!(
+        list_grants(&db, OWNER, BOT, false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let store = rows(&db);
     assert_eq!(
-        check_call(&store, "knowledge_drop", &drop_args(), None).await.unwrap(),
+        check_call(&store, "knowledge_drop", &drop_args(), None)
+            .await
+            .unwrap(),
         GrantCheck::Denied
     );
 }
@@ -309,19 +388,38 @@ async fn an_answer_needs_the_waiting_turn_its_card_and_its_owner() {
         approval_id: "ap-other".into(),
         decision: ApprovalDecision::Always,
     };
-    let refused = answer_in(&db, OWNER, BOT, &turn.id, &wrong, "c1", now_millis()).await.unwrap_err();
+    let refused = answer_in(&db, OWNER, BOT, &turn.id, &wrong, "c1", now_millis())
+        .await
+        .unwrap_err();
     assert_code(&refused, StatusCode::CONFLICT, BOT_APPROVAL_UNKNOWN);
     assert!(
-        answer_in(&db, "user-b", BOT, &turn.id, &answer(&card, ApprovalDecision::Always), "c1", now_millis())
-            .await
-            .is_err()
+        answer_in(
+            &db,
+            "user-b",
+            BOT,
+            &turn.id,
+            &answer(&card, ApprovalDecision::Always),
+            "c1",
+            now_millis()
+        )
+        .await
+        .is_err()
     );
     assert!(list_grants(&db, OWNER, BOT, true).await.unwrap().is_empty());
 
-    resolve(&db, &turn, &card, ApprovalDecision::Once).await.unwrap();
-    let again = resolve(&db, &turn, &card, ApprovalDecision::Always).await.unwrap_err();
+    resolve(&db, &turn, &card, ApprovalDecision::Once)
+        .await
+        .unwrap();
+    let again = resolve(&db, &turn, &card, ApprovalDecision::Always)
+        .await
+        .unwrap_err();
     assert_code(&again, StatusCode::CONFLICT, BOT_TURN_NOT_WAITING);
-    assert!(list_grants(&db, OWNER, BOT, false).await.unwrap().is_empty());
+    assert!(
+        list_grants(&db, OWNER, BOT, false)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]
@@ -333,9 +431,18 @@ async fn recovery_leaves_a_waiting_turn_alone_and_seven_days_cancel_it_with_a_no
     assert_eq!(waiting.status, STORED_WAITING);
 
     let now = now_millis();
-    assert!(expire_in(&db, &waiting, Some("c1"), now).await.unwrap().is_none());
+    assert!(
+        expire_in(&db, &waiting, Some("c1"), now)
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
-        ledger::find(&db, &turn.id, None).await.unwrap().unwrap().status,
+        ledger::find(&db, &turn.id, None)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
         STORED_WAITING
     );
     let eight_days_ago: DateTime<FixedOffset> = now - Duration::days(APPROVAL_WAIT_DAYS + 1);
@@ -346,8 +453,16 @@ async fn recovery_leaves_a_waiting_turn_alone_and_seven_days_cancel_it_with_a_no
         .await
         .unwrap();
     let stale = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
-    let notice = expire_in(&db, &stale, Some("c1"), now).await.unwrap().unwrap();
-    assert!(notice.entry.envelope["body"]["text"].as_str().unwrap().contains("seven days"));
+    let notice = expire_in(&db, &stale, Some("c1"), now)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        notice.entry.envelope["body"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("seven days")
+    );
     let ended = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
     assert_eq!(
         (ended.status.as_str(), ended.error_code.as_deref()),
@@ -362,7 +477,10 @@ async fn answer_tokens_older_than_a_day_are_ignored_and_swept() {
     insert_bot(&db, BOT, OWNER, "SERVER").await;
     let store = rows(&db);
     let hash = args_hash("knowledge_drop", &drop_args());
-    store.put("knowledge_drop", &format!("once:{hash}")).await.unwrap();
+    store
+        .put("knowledge_drop", &format!("once:{hash}"))
+        .await
+        .unwrap();
     store.put("knowledge_drop", "table:old").await.unwrap();
     let old: DateTime<FixedOffset> = now_millis() - Duration::hours(25);
     bot_tool_grant::Entity::update_many()
@@ -376,7 +494,9 @@ async fn answer_tokens_older_than_a_day_are_ignored_and_swept() {
         ["table:old"]
     );
     assert_eq!(
-        check_call(&store, "knowledge_drop", &drop_args(), None).await.unwrap(),
+        check_call(&store, "knowledge_drop", &drop_args(), None)
+            .await
+            .unwrap(),
         GrantCheck::Missing
     );
 }

@@ -195,6 +195,8 @@ pub(super) enum Mode {
     Blank,
     /// Calls a tool that asks the owner through the turn's approval gate.
     Ask,
+    /// Asks another bot through the turn's approval gate.
+    AskBot,
 }
 
 pub(super) struct FakeRunner {
@@ -269,6 +271,19 @@ impl TurnRunner for FakeRunner {
                 {
                     Ok(()) => Ok("ran the drop".into()),
                     Err(_) => Ok("could not run the drop".into()),
+                }
+            }
+            Mode::AskBot => {
+                use flow_like::flow::copilot::bot_talk::{CrewMember, HeadlessPermission};
+                let member = |id: &str, name: &str| CrewMember {
+                    id: id.into(),
+                    name: name.into(),
+                    ..CrewMember::default()
+                };
+                let (pip, flux) = (member(&job.bot_id, "Pip"), member("flux-id", "Flux"));
+                match job.gate.ask_bot(&pip, &flux, "what is new?").await {
+                    HeadlessPermission::Allowed => Ok("asked Flux".into()),
+                    _ => Ok("could not ask Flux".into()),
                 }
             }
             Mode::Fail => Err(RunError::Failed {
@@ -1009,6 +1024,51 @@ mod grants {
         *f.runner.mode.lock().unwrap() = Mode::Ask;
         f.start();
         f
+    }
+
+    fn asking_a_bot() -> Fixture {
+        let mut f = Fixture::open();
+        *f.runner.mode.lock().unwrap() = Mode::AskBot;
+        f.start();
+        f
+    }
+
+    #[tokio::test]
+    async fn a_headless_ask_of_another_bot_parks_with_the_ask_card() {
+        let f = asking_a_bot();
+        let bot = f.bot("Pip");
+        let chat = f.direct(&bot);
+        let card = parked(&f, &bot, &chat, "m1").await;
+        let approval = &body(&card)["approval"];
+        assert_eq!(approval["tool"], "ask_bot");
+        assert_eq!(approval["scope"], "bot:flux-id");
+        assert_eq!(approval["summary"], "Pip wants to ask Flux: what is new?");
+        assert!(f.runner.cancelled.lock().unwrap().contains(&turn_id(&bot.id, "m1")));
+    }
+
+    #[tokio::test]
+    async fn always_on_an_ask_card_lets_the_next_ask_run_without_a_card() {
+        let f = asking_a_bot();
+        let bot = f.bot("Pip");
+        let chat = f.direct(&bot);
+        let card = parked(&f, &bot, &chat, "m1").await;
+        answer(&f, &bot, "m1", &card, ApprovalDecision::Always).await;
+        until("the resumed reply", || !replies(&f, &bot, &chat).is_empty()).await;
+        f.say(&chat.id, "m2", "ask again");
+        f.host.poke(Some(&chat.id));
+        until("the second reply", || replies(&f, &bot, &chat).len() == 2).await;
+        assert_eq!(replies(&f, &bot, &chat), ["asked Flux", "asked Flux"]);
+    }
+
+    #[tokio::test]
+    async fn deny_on_an_ask_card_refuses_the_ask() {
+        let f = asking_a_bot();
+        let bot = f.bot("Pip");
+        let chat = f.direct(&bot);
+        let card = parked(&f, &bot, &chat, "m1").await;
+        answer(&f, &bot, "m1", &card, ApprovalDecision::Deny).await;
+        until("the resumed reply", || !replies(&f, &bot, &chat).is_empty()).await;
+        assert_eq!(replies(&f, &bot, &chat), ["could not ask Flux"]);
     }
 
     fn dyn_store(f: &Fixture) -> Arc<dyn HostStore> {

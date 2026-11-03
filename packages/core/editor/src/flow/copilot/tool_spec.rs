@@ -217,9 +217,7 @@ pub const BOT_DATABASE_APPROVAL_TITLE: &str = "Approve dropping a workspace tabl
 pub const BOT_ARGS_APPROVAL_TITLE: &str = "Approve outside access";
 
 fn path_is_set(args: &Value, path: &str) -> bool {
-    let value = path
-        .split('.')
-        .try_fold(args, |node, part| node.get(part));
+    let value = path.split('.').try_fold(args, |node, part| node.get(part));
     match value {
         None | Some(Value::Null) | Some(Value::Bool(false)) => false,
         Some(Value::String(text)) => !text.trim().is_empty(),

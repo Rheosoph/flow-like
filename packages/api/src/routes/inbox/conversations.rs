@@ -1,8 +1,9 @@
 use super::{
     INBOX_DIRECT_FIXED, INBOX_MEMBER_LIMIT, MEMBER_ACTIVE, Reader, allocate_seqs,
     delivery::people_to_wake,
-    insert_copies, member_conversation,
+    insert_copies,
     invitations::{self, InviteMode, Invitee},
+    member_conversation,
     members::{self, Principal, join_copies, lock_live_bots, requested_members},
     model::{
         Conversation, ConversationList, CreateConversationRequest, ReaderQuery,
@@ -430,7 +431,8 @@ async fn open_group(
                 let now = now_millis();
                 let mut wake = start_group(txn, &id, &sub, &plan, &others, now).await?;
                 let invited =
-                    invitations::invite_in(txn, &id, &sub, &asked, &Default::default(), now).await?;
+                    invitations::invite_in(txn, &id, &sub, &asked, &Default::default(), now)
+                        .await?;
                 wake.extend(invited.wake.iter().cloned());
                 Ok::<_, ApiError>((wake, invited.invited))
             })

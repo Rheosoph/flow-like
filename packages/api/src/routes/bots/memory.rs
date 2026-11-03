@@ -33,7 +33,11 @@ pub struct FactsQuery {
     pub include_superseded: Option<bool>,
 }
 
-async fn admin_for(state: &AppState, sub: &str, bot_id: &str) -> Result<Option<FactAdmin>, ApiError> {
+async fn admin_for(
+    state: &AppState,
+    sub: &str,
+    bot_id: &str,
+) -> Result<Option<FactAdmin>, ApiError> {
     let bot = owned_bot(&state.db, sub, bot_id).await?;
     let Some(workspace) = live_workspace(&state.db, sub, &bot.id).await? else {
         return Ok(None);
@@ -43,9 +47,12 @@ async fn admin_for(state: &AppState, sub: &str, bot_id: &str) -> Result<Option<F
         .await
         .map_err(|error| ApiError::internal(format!("Opening the bot's memory failed: {error}")))?;
     let flow_like_state = master_flow_like_state(state).await?;
-    let (connection, write_options) = workspace_connection(&flow_like_state, &workspace, Some(connection))
-        .await
-        .map_err(|error| ApiError::internal(format!("Opening the bot's memory failed: {error}")))?;
+    let (connection, write_options) =
+        workspace_connection(&flow_like_state, &workspace, Some(connection))
+            .await
+            .map_err(|error| {
+                ApiError::internal(format!("Opening the bot's memory failed: {error}"))
+            })?;
     Ok(Some(FactAdmin::open(connection, write_options).await))
 }
 
@@ -97,19 +104,26 @@ pub async fn list_facts(
     ),
     security(("bearer_auth" = []))
 )]
-#[tracing::instrument(name = "DELETE /bots/{bot_id}/memory/facts/{fact_id}", skip(state, user))]
+#[tracing::instrument(
+    name = "DELETE /bots/{bot_id}/memory/facts/{fact_id}",
+    skip(state, user)
+)]
 pub async fn forget_fact(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,
     Path((bot_id, fact_id)): Path<(String, String)>,
 ) -> Result<Json<FactView>, ApiError> {
     let sub = user.sub()?;
-    let admin = admin_for(&state, &sub, &bot_id)
-        .await?
-        .ok_or_else(|| ApiError::not_found(format!("Bot '{bot_id}' remembers no fact '{fact_id}'")))?;
+    let admin = admin_for(&state, &sub, &bot_id).await?.ok_or_else(|| {
+        ApiError::not_found(format!("Bot '{bot_id}' remembers no fact '{fact_id}'"))
+    })?;
     match admin.forget(&fact_id).await {
         Ok(fact) => Ok(Json(FactView::from(fact))),
-        Err(error) if error.downcast_ref::<flow_like_bot_memory::MemoryBusy>().is_some() => {
+        Err(error)
+            if error
+                .downcast_ref::<flow_like_bot_memory::MemoryBusy>()
+                .is_some() =>
+        {
             Err(ApiError::conflict(error.to_string()))
         }
         Err(error) => Err(ApiError::not_found(error.to_string())),
@@ -136,10 +150,9 @@ pub async fn reset_memory(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let sub = user.sub()?;
     if let Some(admin) = admin_for(&state, &sub, &bot_id).await? {
-        admin
-            .reset()
-            .await
-            .map_err(|error| ApiError::internal(format!("Resetting the bot's memory failed: {error}")))?;
+        admin.reset().await.map_err(|error| {
+            ApiError::internal(format!("Resetting the bot's memory failed: {error}"))
+        })?;
     }
     flow_like::flow::copilot::memory_open::forget_bot_memory(&bot_id);
     Ok(Json(serde_json::json!({ "status": "ok" })))

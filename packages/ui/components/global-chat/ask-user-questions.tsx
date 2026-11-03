@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import {
 	type AskUserDraft,
 	type AskUserForm,
@@ -83,6 +84,7 @@ function AskUserQuestionBlock({
 	autoFocus: boolean;
 	onSubmit?: () => void;
 }) {
+	const choiceIdPrefix = useId();
 	return (
 		<div className="space-y-1.5">
 			{index !== undefined && (
@@ -126,48 +128,53 @@ function AskUserQuestionBlock({
 				<div className={cn("space-y-1.5", roomy && "space-y-2")}>
 					{question.choices.map((choice, choiceIndex) => {
 						const active = draft.selected.includes(choiceIndex);
+						const choiceId = `${choiceIdPrefix}-${choiceIndex}`;
 						return (
-							<button
+							<label
 								key={`${choice.label}-${choiceIndex}`}
-								type="button"
+								htmlFor={choiceId}
 								className={cn(
-									"flex w-full items-start gap-2.5 rounded-lg border text-left transition-colors",
+									"flex w-full cursor-pointer items-start gap-2.5 rounded-lg border text-left transition-colors",
 									roomy ? "gap-3 p-3" : "p-2.5",
 									active
 										? "border-primary/50 bg-primary/10"
 										: "border-border/50 bg-background/70 hover:bg-muted/40",
 								)}
-								onClick={() =>
-									onDraftChange(
-										toggleAskUserChoice(question, draft, choiceIndex),
-									)
-								}
 							>
 								<Checkbox
+									id={choiceId}
 									checked={active}
+									onCheckedChange={() =>
+										onDraftChange(
+											toggleAskUserChoice(question, draft, choiceIndex),
+										)
+									}
 									className={cn(
-										"mt-0.5 pointer-events-none shrink-0",
+										"mt-0.5 shrink-0",
 										question.mode === "single_choice" && "rounded-full",
 									)}
 								/>
-								<div className="min-w-0">
-									<div
-										className={cn("font-medium", roomy ? "text-sm" : "text-xs")}
+								<span className="min-w-0">
+									<span
+										className={cn(
+											"block font-medium",
+											roomy ? "text-sm" : "text-xs",
+										)}
 									>
 										{choice.label}
-									</div>
+									</span>
 									{choice.description && (
-										<div
+										<span
 											className={cn(
-												"mt-0.5 text-muted-foreground",
+												"mt-0.5 block text-muted-foreground",
 												roomy ? "text-xs" : "text-[11px]",
 											)}
 										>
 											{choice.description}
-										</div>
+										</span>
 									)}
-								</div>
-							</button>
+								</span>
+							</label>
 						);
 					})}
 				</div>

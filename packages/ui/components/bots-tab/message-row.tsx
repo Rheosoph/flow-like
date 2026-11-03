@@ -23,6 +23,7 @@ import {
 	DropdownMenuItem,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { TextEditor } from "../ui/text-editor";
 import { ApprovalCard } from "./approval-card";
 import { isSelfPrincipal } from "./crew-model";
 import type { ConversationMessage, ConversationReaction } from "./fold-entries";
@@ -259,9 +260,14 @@ function MessageContent({
 	}
 	return (
 		<>
-			<span className="wrap-break-word whitespace-pre-wrap">
-				{message.content.text}
-			</span>
+			<div data-fl-chat-prose className="wrap-break-word">
+				<TextEditor
+					presentation="chat"
+					initialContent={message.content.text}
+					isMarkdown={true}
+					editable={false}
+				/>
+			</div>
 			{message.edited && (
 				<span className="ml-1.5 text-[11px] text-muted-foreground">
 					{t("crew.messages.edited", "(edited)")}

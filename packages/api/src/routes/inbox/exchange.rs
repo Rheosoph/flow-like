@@ -10,11 +10,7 @@ use super::{
     model::SendEntryRequest,
     now_millis, wake,
 };
-use crate::{
-    db::coordination::coordinate,
-    error::ApiError,
-    state::AppState,
-};
+use crate::{db::coordination::coordinate, error::ApiError, state::AppState};
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::inbox::{InboxEntryKind, plain_envelope};
 use sea_orm::{ConnectionTrait, DatabaseTransaction};
@@ -103,9 +99,9 @@ pub(crate) async fn post_as_bot(
                 bot_id.to_string(),
                 outgoing.clone(),
             );
-            Box::pin(async move {
-                post_locked(txn, &conversation_id, &bot_id, hops, &outgoing).await
-            })
+            Box::pin(
+                async move { post_locked(txn, &conversation_id, &bot_id, hops, &outgoing).await },
+            )
         })
         .await?;
     wake(state, sent.wake.clone()).await;
@@ -157,7 +153,15 @@ pub(crate) async fn reply_in_origin(
                     now,
                 )
                 .await?;
-                fan_out(txn, &origin, &turn.bot_id, hops.saturating_add(1), &outgoing, now).await
+                fan_out(
+                    txn,
+                    &origin,
+                    &turn.bot_id,
+                    hops.saturating_add(1),
+                    &outgoing,
+                    now,
+                )
+                .await
             })
         })
         .await?;

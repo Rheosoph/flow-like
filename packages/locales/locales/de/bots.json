@@ -131,7 +131,6 @@
 		"builtIn": "Integriert",
 		"cancel": "Abbrechen",
 		"composer": {
-			"botAnswersInChat": "{{name}} antwortet vorerst nur in seinem eigenen Chat. Was du hier sendest, wartet in seinem Posteingang.",
 			"encrypted": "In Ende-zu-Ende-verschlüsselten Chats kannst du in dieser App noch nicht schreiben.",
 			"placeholder": "Nachricht an {{name}}",
 			"send": "Senden",

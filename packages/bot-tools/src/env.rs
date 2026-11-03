@@ -18,8 +18,8 @@ use crate::computer::ComputerBackend;
 use crate::convert::DocumentConverter;
 use crate::data_backend::DataBackend;
 use crate::documents::DocumentBackend;
-use crate::embed::KnowledgeEmbedder;
 use crate::email::MailBackend;
+use crate::embed::KnowledgeEmbedder;
 use crate::shell::ShellBackend;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

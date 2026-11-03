@@ -12,7 +12,8 @@ use flow_like_types::bot_message::{
     MessageBody, MessagePart, ToolPart as BodyTool, WorkspaceHandle,
 };
 use flow_like_types::inbox::{
-    InboxEntryKind, PLAIN_ENCRYPTION, TopicBody, TriggerBody, TriggerSource, body_target, is_tombstone,
+    InboxEntryKind, PLAIN_ENCRYPTION, TopicBody, TriggerBody, TriggerSource, body_target,
+    is_tombstone,
 };
 use serde_json::Value;
 
@@ -453,7 +454,13 @@ mod email_trigger_tests {
 
     #[test]
     fn mail_triggers_are_external_and_other_triggers_stay_the_owners() {
-        assert_eq!(item_of(&trigger_entry("email"), "bot").unwrap().role, Role::External);
-        assert_eq!(item_of(&trigger_entry("schedule"), "bot").unwrap().role, Role::User);
+        assert_eq!(
+            item_of(&trigger_entry("email"), "bot").unwrap().role,
+            Role::External
+        );
+        assert_eq!(
+            item_of(&trigger_entry("schedule"), "bot").unwrap().role,
+            Role::User
+        );
     }
 }

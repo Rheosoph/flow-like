@@ -369,9 +369,9 @@ mod tests {
 
     async fn attach(db: &DatabaseConnection, bot_id: &str, app_id: &str) {
         crate::routes::bots::apps::unrestricted_row(bot_id, app_id, at(0))
-        .insert(db)
-        .await
-        .unwrap();
+            .insert(db)
+            .await
+            .unwrap();
     }
 
     async fn insert_profile(db: &DatabaseConnection, id: &str, user_id: &str, apps: &[&str]) {

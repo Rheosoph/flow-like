@@ -133,3 +133,53 @@ describe("the bot's panel in the URL", () => {
 		);
 	});
 });
+
+describe("a bot's direct conversation opens as the bot's chat", () => {
+	const own = bot("bot_pip", { owner_id: "me" });
+	const foreign = bot("bot_other", { owner_id: "anna" });
+	const ownFlux = bot("bot_flux", { system: "flux", owner_id: "me" });
+	const bots = [own, foreign, ownFlux, localAssistant];
+	const direct = (id: string, partner: string) =>
+		({
+			id,
+			kind: "direct",
+			members: [
+				{ principal_id: "me", kind: "user" },
+				{ principal_id: partner, kind: "bot" },
+			],
+		}) as never;
+	const conversations = [
+		direct("c_pip", "bot_pip"),
+		direct("c_other", "bot_other"),
+		direct("c_flux", "bot_flux"),
+		direct("c_local", "bot_general_here"),
+		direct("c_anna", "anna"),
+		{
+			id: "c_room",
+			kind: "group",
+			members: [
+				{ principal_id: "me", kind: "user" },
+				{ principal_id: "bot_pip", kind: "bot" },
+			],
+		} as never,
+	];
+	const resolve = (conversationId: string) =>
+		resolveDockSelection(
+			{ type: "conversation", conversationId },
+			bots,
+			conversations,
+			"me",
+		);
+
+	test("an owned bot's DM becomes its bot selection, built-ins by key", () => {
+		expect(resolve("c_pip")).toEqual({ type: "bot", botId: "bot_pip" });
+		expect(resolve("c_flux")).toEqual({ type: "system", system: "flux" });
+		expect(resolve("c_local")).toEqual({ type: "system", system: "general" });
+	});
+
+	test("people, rooms, other people's bots and unknown ids stay conversations", () => {
+		for (const id of ["c_anna", "c_room", "c_other", "missing"]) {
+			expect(resolve(id)).toEqual({ type: "conversation", conversationId: id });
+		}
+	});
+});

@@ -41,7 +41,6 @@ import {
 } from "./conversation-messages";
 import {
 	conversationComposition,
-	directPartnerId,
 	isSelfPrincipal,
 	otherMemberIds,
 } from "./crew-model";
@@ -53,8 +52,6 @@ import {
 } from "./fold-entries";
 import { useLocalPrincipals } from "./local-principals";
 import { MemberStack } from "./member-stack";
-import type { PickerSource } from "./principal-picker";
-import { RoomMembersDialog } from "./room-members-dialog";
 import { DeleteMessageDialog, type MessageActions } from "./message-row";
 import {
 	discardPendingSend,
@@ -62,11 +59,13 @@ import {
 	usePendingSendList,
 	useShowsPendingSends,
 } from "./pending-sends";
+import type { PickerSource } from "./principal-picker";
+import { RoomMembersDialog } from "./room-members-dialog";
 import {
 	type ConversationText,
 	useConversationText,
 } from "./use-conversation-text";
-import { type CrewDirectory, useCrewDirectory } from "./use-crew-directory";
+import { useCrewDirectory } from "./use-crew-directory";
 
 type PlainBody =
 	| IInboxMessageBody
@@ -215,20 +214,12 @@ function usePendingSends(
 	return { visible, send, actions };
 }
 
-/** Title, subtitle and the bot a direct conversation talks to, if any. */
+/** Title and subtitle of a conversation. */
 function useConversationHeading(
 	conversation: IConversation,
-	me: string | null | undefined,
-	directory: CrewDirectory,
 	text: ConversationText,
 ) {
 	const { t } = useTranslation("bots");
-	const partner = directPartnerId(conversation, me);
-	const partnerIsBot =
-		Boolean(partner && directory(partner).isBot) ||
-		conversation.members.some(
-			(member) => member.principal_id === partner && member.kind === "bot",
-		);
 	const { people, bots } = conversationComposition(conversation);
 	const peopleText = t("crew.rooms.people", "{{count}} people", {
 		count: people,
@@ -257,7 +248,6 @@ function useConversationHeading(
 					subtitle,
 				})
 			: subtitle,
-		botPartnerName: partner && partnerIsBot ? directory(partner).name : null,
 	};
 }
 
@@ -298,7 +288,7 @@ function ConversationView({
 	);
 	const directory = useCrewDirectory(principalIds, { me, bots });
 	const text = useConversationText(directory, me);
-	const heading = useConversationHeading(conversation, me, directory, text);
+	const heading = useConversationHeading(conversation, text);
 	const [membersOpen, setMembersOpen] = useState(false);
 	const pickerSource = useMemo<PickerSource>(
 		() => ({
@@ -425,15 +415,6 @@ function ConversationView({
 			/>
 			<ConversationComposer
 				recipient={heading.title}
-				hint={
-					heading.botPartnerName
-						? t(
-								"crew.composer.botAnswersInChat",
-								"{{name}} answers in its own chat for now. What you send here waits in its inbox.",
-								{ name: heading.botPartnerName },
-							)
-						: null
-				}
 				disabledReason={
 					encrypted
 						? t(

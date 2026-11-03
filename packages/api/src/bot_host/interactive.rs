@@ -123,8 +123,7 @@ impl InteractiveTurn {
         };
         let sent = state
             .transaction(|txn| {
-                let (turn, claim, outgoing) =
-                    (self.turn.clone(), claim.clone(), outgoing.clone());
+                let (turn, claim, outgoing) = (self.turn.clone(), claim.clone(), outgoing.clone());
                 Box::pin(async move {
                     reply_interactive_as_bot(
                         txn,

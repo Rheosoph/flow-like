@@ -335,8 +335,14 @@ mod tests {
         for audience in [TurnAudience::Owner, TurnAudience::Room] {
             assert_eq!(TurnAudience::parse(audience.stored()), Some(audience));
         }
-        assert_eq!(TurnAudience::of(ConversationKind::Direct), TurnAudience::Owner);
-        assert_eq!(TurnAudience::of(ConversationKind::Group), TurnAudience::Room);
+        assert_eq!(
+            TurnAudience::of(ConversationKind::Direct),
+            TurnAudience::Owner
+        );
+        assert_eq!(
+            TurnAudience::of(ConversationKind::Group),
+            TurnAudience::Room
+        );
     }
 
     #[test]
@@ -345,7 +351,10 @@ mod tests {
             room_message("Mia", false, "hi"),
             "Mia (member, not your owner) wrote: hi"
         );
-        assert_eq!(room_message("Ben", true, "hi"), "Ben (your owner) wrote: hi");
+        assert_eq!(
+            room_message("Ben", true, "hi"),
+            "Ben (your owner) wrote: hi"
+        );
     }
 
     #[test]

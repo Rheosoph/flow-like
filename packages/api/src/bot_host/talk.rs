@@ -324,7 +324,10 @@ impl ServerTalkHost {
     /// The card the run needs answered before its turn goes on; the worker parks the turn behind
     /// it instead of posting a reply.
     pub(crate) fn parked_card(&self) -> Option<ApprovalRequest> {
-        self.parked.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        self.parked
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
     }
 
     fn remember<T>(&self, change: impl FnOnce(&mut Asked) -> T) -> T {
@@ -372,13 +375,8 @@ impl ServerTalkHost {
 
     async fn settle_answered(&self, caller: &CrewMember, reply_id: &str) {
         let follow_up = turn_id(&caller.id, reply_id);
-        if let Err(error) = ledger::cancel_in(
-            &self.state.db,
-            &follow_up,
-            ERROR_ASK_ANSWERED,
-            now_millis(),
-        )
-        .await
+        if let Err(error) =
+            ledger::cancel_in(&self.state.db, &follow_up, ERROR_ASK_ANSWERED, now_millis()).await
         {
             tracing::warn!(%error, turn_id = %follow_up, "Bot talk: the answered ask's follow-up turn was not cancelled");
         }
@@ -425,16 +423,28 @@ impl BotTalkHost for ServerTalkHost {
     }
 
     async fn has_grant(&self, from: &CrewMember, to: &CrewMember) -> flow_like_types::Result<bool> {
-        granted_in(&self.state.db, &self.owner_id, &from.id, &to.id, now_millis())
-            .await
-            .map_err(|error| flow_like_types::anyhow!("{error}"))
+        granted_in(
+            &self.state.db,
+            &self.owner_id,
+            &from.id,
+            &to.id,
+            now_millis(),
+        )
+        .await
+        .map_err(|error| flow_like_types::anyhow!("{error}"))
     }
 
     async fn store_grant(&self, from: &CrewMember, to: &CrewMember) -> flow_like_types::Result<()> {
-        grant_in(&self.state.db, &self.owner_id, &from.id, &to.id, now_millis())
-            .await
-            .map(|_| ())
-            .map_err(|error| flow_like_types::anyhow!("{error}"))
+        grant_in(
+            &self.state.db,
+            &self.owner_id,
+            &from.id,
+            &to.id,
+            now_millis(),
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| flow_like_types::anyhow!("{error}"))
     }
 
     async fn headless_permission(
@@ -461,9 +471,15 @@ impl BotTalkHost for ServerTalkHost {
         callee: &CrewMember,
     ) -> flow_like_types::Result<String> {
         let title = format!("{} ↔ {}", caller.name, callee.name);
-        let id = open_exchange(&self.state, &self.owner_id, &caller.id, &callee.id, Some(title))
-            .await
-            .map_err(|error| flow_like_types::anyhow!("{error}"))?;
+        let id = open_exchange(
+            &self.state,
+            &self.owner_id,
+            &caller.id,
+            &callee.id,
+            Some(title),
+        )
+        .await
+        .map_err(|error| flow_like_types::anyhow!("{error}"))?;
         self.remember(|asked| asked.callee = Some(callee.clone()));
         Ok(id)
     }
@@ -500,9 +516,15 @@ impl BotTalkHost for ServerTalkHost {
         };
         let outgoing = message_outgoing(&ask_id, ask_body(&question, now))
             .map_err(|error| flow_like_types::anyhow!("{error}"))?;
-        post_as_bot(&self.state, conversation_id, &sender.id, question.hops, outgoing)
-            .await
-            .map_err(|error| flow_like_types::anyhow!("{error}"))?;
+        post_as_bot(
+            &self.state,
+            conversation_id,
+            &sender.id,
+            question.hops,
+            outgoing,
+        )
+        .await
+        .map_err(|error| flow_like_types::anyhow!("{error}"))?;
         self.remember(|asked| asked.ask_id = Some(ask_id.clone()));
         Ok(ask_id)
     }
@@ -624,7 +646,9 @@ pub(crate) async fn mark_turns<C: ConnectionTrait>(
                 .exec(db)
                 .await?;
         } else if recipient.replied_to
-            && let Some(hold) = answer_hold(db, recipient, &body).await?.filter(|at| *at > now)
+            && let Some(hold) = answer_hold(db, recipient, &body)
+                .await?
+                .filter(|at| *at > now)
         {
             bot_turn::Entity::update_many()
                 .col_expr(bot_turn::Column::LeaseUntil, Expr::value(hold))
@@ -656,8 +680,7 @@ async fn answer_hold<C: ConnectionTrait>(
         return Ok(None);
     };
     Ok(Some(
-        entry.created_at
-            + ChronoDuration::seconds(i64::from(ask.wait_secs) + ANSWER_GRACE_SECS),
+        entry.created_at + ChronoDuration::seconds(i64::from(ask.wait_secs) + ANSWER_GRACE_SECS),
     ))
 }
 
@@ -748,10 +771,7 @@ pub(crate) async fn ask_result_transcript<C: ConnectionTrait>(
 }
 
 /// The name a bot goes by in the owner's crew, or its id when the row is gone.
-pub(crate) async fn bot_name<C: ConnectionTrait>(
-    db: &C,
-    bot_id: &str,
-) -> Result<String, ApiError> {
+pub(crate) async fn bot_name<C: ConnectionTrait>(db: &C, bot_id: &str) -> Result<String, ApiError> {
     Ok(bot::Entity::find_by_id(bot_id)
         .one(db)
         .await?

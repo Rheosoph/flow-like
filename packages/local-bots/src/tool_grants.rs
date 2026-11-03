@@ -112,7 +112,14 @@ impl LocalBotStore {
                  VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT (bot_id, tool, scope) DO UPDATE SET granted_at = ?4
                  WHERE ?6",
-                params![bot_id, tool, scope, now, LOCAL_OWNER_ID, is_token_scope(scope)],
+                params![
+                    bot_id,
+                    tool,
+                    scope,
+                    now,
+                    LOCAL_OWNER_ID,
+                    is_token_scope(scope)
+                ],
             )?;
             changes.bot(bot_id);
             Ok(())
