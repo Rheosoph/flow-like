@@ -132,6 +132,7 @@ export function resolveBotAppearance(
 		effect: option(appearance.effect, BOT_OPTIONS.effect, "none"),
 		emote: option(appearance.emote, BOT_OPTIONS.emote, "none"),
 		dark: appearance.dark ?? false,
+		mute_notifications: appearance.mute_notifications ?? false,
 		skills: [...new Set(appearance.skills ?? [])].filter((id) =>
 			Object.hasOwn(catalog.skills, id),
 		),

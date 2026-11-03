@@ -15,13 +15,13 @@ mod scope;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use access::{ApiAccess, shared_credentials};
+pub(crate) use access::{ApiAccess, owner_credentials};
 pub(crate) use executor::{DispatcherExecutor, ToolExecutor};
 pub(crate) use host::{AppDirectory, BotToolsHost, TurnDeps, TurnModels};
 
 use flow_like::flow::copilot::HostTools;
 
-use crate::state::AppState;
+use crate::{middleware::jwt::BotUser, state::AppState};
 
 /// What this deployment can run for a bot: the in-process set, plus the executor's tools when
 /// an executor takes tool jobs.
@@ -48,8 +48,14 @@ pub(crate) async fn turn_host(
     chat: &flow_like::bit::Bit,
     token: Option<String>,
     grants: std::sync::Arc<dyn flow_like::flow::copilot::tool_grants::GrantStore>,
+    conv_id: Option<&str>,
 ) -> Option<std::sync::Arc<BotToolsHost>> {
     let workspace = bot.workspace_app_id.clone()?;
+    let principal = BotUser {
+        bot_id: bot.bot_id.clone(),
+        turn_id: turn_id.to_string(),
+        conv_id: conv_id.map(str::to_string),
+    };
     if bot.host_tools.is_empty() {
         return None;
     }
@@ -82,15 +88,20 @@ pub(crate) async fn turn_host(
     Some(std::sync::Arc::new(
         BotToolsHost::new(TurnDeps {
             owner: owner.to_string(),
+            bot: principal.clone(),
             turn_id: turn_id.to_string(),
             workspace: workspace.clone(),
             host_tools: bot.host_tools.clone(),
             directory: std::sync::Arc::new(directory::ApiDirectory {
                 state: state.clone(),
-                owner: owner.to_string(),
+                principal: principal.clone(),
                 bot: bot.clone(),
             }),
-            access: std::sync::Arc::new(access::ApiAccess::new(state.clone(), owner, &workspace)),
+            access: std::sync::Arc::new(access::ApiAccess::for_bot(
+                state.clone(),
+                principal,
+                &workspace,
+            )),
             models: TurnModels {
                 source,
                 chat: Some(chat.clone()),

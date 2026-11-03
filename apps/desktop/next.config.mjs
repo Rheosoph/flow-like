@@ -33,7 +33,7 @@ const nextConfig = {
 		// processes connected over sockets. Worker threads avoid the process-pool
 		// stall seen while compiling dependency CSS and keep the work parallel.
 		turbopackPluginRuntimeStrategy: "workerThreads",
-		turbopackRustReactCompiler: true,
+		turbopackRustReactCompiler: false,
 		webpackMemoryOptimizations: true,
 		preloadEntriesOnStart: false,
 		turbopackFileSystemCacheForDev: true,

@@ -25,6 +25,7 @@ model BotMailMessage {
   threadId       String
   thread         BotMailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
   botId          String
+  bot            Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
   /// Without angle brackets, lowercase.
   messageId      String
   /// IN | OUT

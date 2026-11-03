@@ -1,7 +1,8 @@
 use super::{
-    INBOX_DIRECT_FIXED, INBOX_MEMBER_LIMIT, Reader, allocate_seqs,
+    INBOX_DIRECT_FIXED, INBOX_MEMBER_LIMIT, MEMBER_ACTIVE, Reader, allocate_seqs,
     delivery::people_to_wake,
     insert_copies, member_conversation,
+    invitations::{self, InviteMode, Invitee},
     members::{self, Principal, join_copies, lock_live_bots, requested_members},
     model::{
         Conversation, ConversationList, CreateConversationRequest, ReaderQuery,
@@ -141,6 +142,11 @@ pub(super) fn member_row(
         joined_at: Set(now),
         left_at: Set(None),
         last_read_at: Set(None),
+        status: Set(MEMBER_ACTIVE.to_string()),
+        limits: Set(None),
+        invited_by: Set(None),
+        invited_at: Set(None),
+        accepted_at: Set(None),
     }
 }
 
@@ -302,6 +308,9 @@ pub(super) async fn start_group<C: ConnectionTrait>(
     }))
     .exec_without_returning(db)
     .await?;
+    if others.is_empty() {
+        return Ok(people_to_wake(db, &everyone).await?);
+    }
     let first_seq = allocate_seqs(db, id, others.len()).await?;
     insert_copies(
         db,
@@ -396,19 +405,39 @@ async fn open_group(
     sub: &str,
     plan: &NewConversation,
 ) -> Result<String, ApiError> {
-    let others = members::allowed_principals(&state.db, sub, &plan.members).await?;
+    let invitees = invitations::classify(&state.db, sub, &plan.members).await?;
+    let others: Vec<Principal> = invitees
+        .iter()
+        .filter(|invitee| invitee.mode == InviteMode::AddNow)
+        .map(|invitee| invitee.principal.clone())
+        .collect();
+    let asked: Vec<Invitee> = invitees
+        .into_iter()
+        .filter(|invitee| invitee.mode == InviteMode::Invite)
+        .collect();
     let id = create_id();
-    let people = state
+    let outcome = state
         .transaction(|txn| {
-            let (id, sub, plan, others) =
-                (id.clone(), sub.to_string(), plan.clone(), others.clone());
+            let (id, sub, plan, others, asked) = (
+                id.clone(),
+                sub.to_string(),
+                plan.clone(),
+                others.clone(),
+                asked.clone(),
+            );
             Box::pin(async move {
                 lock_live_bots(txn, &sub, &others).await?;
-                start_group(txn, &id, &sub, &plan, &others, now_millis()).await
+                let now = now_millis();
+                let mut wake = start_group(txn, &id, &sub, &plan, &others, now).await?;
+                let invited =
+                    invitations::invite_in(txn, &id, &sub, &asked, &Default::default(), now).await?;
+                wake.extend(invited.wake.iter().cloned());
+                Ok::<_, ApiError>((wake, invited.invited))
             })
         })
         .await?;
-    wake(state, people).await;
+    wake(state, outcome.0).await;
+    invitations::notify_invited(state, sub, &id, &outcome.1).await;
     Ok(id)
 }
 
@@ -421,7 +450,7 @@ async fn open_group(
         (status = 200, description = "The new conversation. A direct conversation you already have with this member is returned instead of a new one, whatever encryption you asked for.", body = Conversation),
         (status = 400, description = "A direct conversation needs exactly one other member and no title, a group at least one; or the title is too long"),
         (status = 401, description = "Not signed in"),
-        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: you can add your own bots and people who share an app with you; the message names the first id refused"),
+        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: you can add your own bots and invite people who share an app with you and their bots; the message names the first id refused"),
         (status = 409, description = "INBOX_MEMBER_LIMIT: a conversation has at most 50 members")
     ),
     security(("bearer_auth" = []))

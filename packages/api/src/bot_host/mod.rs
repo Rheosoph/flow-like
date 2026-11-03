@@ -6,7 +6,7 @@
 
 pub(crate) mod approvals;
 mod cap;
-mod history;
+pub(crate) mod history;
 pub(crate) mod interactive;
 pub(crate) mod ledger;
 pub(crate) mod memory;

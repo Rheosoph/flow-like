@@ -37,6 +37,14 @@ pub struct Model {
         on_delete = "Cascade"
     )]
     pub bot_mail_thread: BelongsTo<super::bot_mail_thread::Entity>,
+    #[sea_orm(
+        belongs_to,
+        from = "bot_id",
+        to = "id",
+        on_update = "Cascade",
+        on_delete = "Cascade"
+    )]
+    pub bot: BelongsTo<super::bot::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

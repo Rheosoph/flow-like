@@ -67,7 +67,7 @@ function useAliasAvailability(botId: string, alias: string, current?: string) {
 					if (cancelled) return;
 					setState({
 						status: result.available ? "free" : "taken",
-						reason: result.reason,
+						reason: "reason" in result ? result.reason : undefined,
 					});
 				})
 				.catch(() => !cancelled && setState({ status: "idle" }));

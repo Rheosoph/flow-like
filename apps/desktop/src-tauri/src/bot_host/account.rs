@@ -8,7 +8,7 @@
 use super::{
     host::{
         CODE_CANCELLED, CODE_MODEL, CODE_TIMEOUT, CODE_UNREADABLE, FINISHED_KEPT,
-        MAX_FAILURE_DETAIL_CHARS, MAX_REPLY_CHARS, RunError, TurnEvents, TurnInfo, TurnJob,
+        HubToken, MAX_FAILURE_DETAIL_CHARS, MAX_REPLY_CHARS, RunError, TurnEvents, TurnInfo, TurnJob,
         TurnRunner, clipped, now, reply_body,
     },
     e2e::{self, E2eHost},
@@ -18,13 +18,14 @@ use super::{
     transcript,
 };
 use flow_like::flow::copilot::{
+    TurnRequester,
     memory_open::follow_up,
     tool_grants::{GrantStore, clear_tokens, resume_note},
 };
 use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
     bot_message::ApprovalRequest,
-    bot_turn::{BotTurn, TurnStatus, failure_message_id, reply_message_id},
+    bot_turn::{BotTurn, TurnAudience, TurnStatus, failure_message_id, reply_message_id},
     inbox::{ConversationKind, plain_envelope},
 };
 use serde_json::json;
@@ -413,15 +414,16 @@ impl Inner {
                 }
             };
         }
-        let senders: HashSet<_> = entries
-            .iter()
-            .map(|entry| entry.sender_id.as_str())
-            .collect();
-        let kind = if senders.len() > 2 {
-            ConversationKind::Group
-        } else {
-            ConversationKind::Direct
+        let kind = match lead.audience {
+            TurnAudience::Room => ConversationKind::Group,
+            TurnAudience::Owner => ConversationKind::Direct,
         };
+        let names: HashMap<String, String> = lead
+            .requester_id
+            .iter()
+            .zip(lead.requester_name.iter())
+            .map(|(id, name)| (id.clone(), name.clone()))
+            .collect();
         let transcript = match self.late_answer(lead).await {
             Some(transcript) => transcript,
             None => match transcript::transcript(
@@ -429,7 +431,8 @@ impl Inner {
                 kind,
                 &lead.trigger_message_id,
                 &entries,
-                &HashMap::new(),
+                &names,
+                &lead.owner_id,
             ) {
                 Ok(transcript) => transcript,
                 Err(_) => return End::failed(CODE_UNREADABLE),
@@ -455,6 +458,14 @@ impl Inner {
             Some(note) => format!("{}\n\n{note}", transcript.prompt),
             None => transcript.prompt,
         };
+        let hub_token = match self.hub.runtime_token(bot_id, &lead.id).await {
+            Ok(token) => token.map(HubToken),
+            Err(failure) if failure.lease_lost() => return End::lease_lost(),
+            Err(failure) => {
+                tracing::debug!(%failure, "Bot host: the hub minted no bot token for the turn");
+                return End::failed(CODE_HUB);
+            }
+        };
         let (runner, stop_id) = (self.runner.clone(), lead.id.clone());
         let gate = ApprovalGate::new(grants.clone(), &lead.id, move || runner.cancel(&stop_id));
         let job = TurnJob {
@@ -466,6 +477,18 @@ impl Inner {
             history: transcript.history,
             memory: memory.clone(),
             gate: gate.clone(),
+            requester: Some(TurnRequester {
+                requester_id: lead
+                    .requester_id
+                    .clone()
+                    .unwrap_or_else(|| lead.owner_id.clone()),
+                requester_name: lead.requester_name.clone(),
+                owner_id: lead.owner_id.clone(),
+                owner_name: None,
+                audience: lead.audience,
+                room: None,
+            }),
+            hub_token,
         };
         let outcome = tokio::select! {
             biased;
@@ -534,6 +557,7 @@ impl Inner {
                 &newest.message_id,
                 &origin,
                 &HashMap::new(),
+                &lead.owner_id,
             )
             .ok()
         });
@@ -742,6 +766,8 @@ fn info_of(turn: &BotTurn, status: TurnStatus) -> TurnInfo {
         trigger_message_id: turn.trigger_message_id.clone(),
         status,
         hops: turn.hops,
+        requester_id: turn.requester_id.clone().unwrap_or_default(),
+        audience: turn.audience,
         batched: u32::try_from(turn.batched.len()).unwrap_or(u32::MAX),
         queued_at: now(),
         started_at: None,

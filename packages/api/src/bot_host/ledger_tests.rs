@@ -199,7 +199,7 @@ async fn only_messages_wake_bots() {
     for kind in InboxEntryKind::ALL
         .iter()
         .copied()
-        .filter(|kind| *kind != InboxEntryKind::Message)
+        .filter(|kind| !matches!(kind, InboxEntryKind::Message | InboxEntryKind::Trigger))
     {
         let mut event = delivery(
             ConversationKind::Direct,

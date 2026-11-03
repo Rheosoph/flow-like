@@ -42,6 +42,7 @@ beforeAll(() => {
 	installDomGlobals();
 });
 afterAll(() => {
+	mock.module("@flow-like/locales", () => actual.locales);
 	restoreDomGlobals();
 });
 

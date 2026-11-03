@@ -1652,6 +1652,7 @@ pub(crate) async fn run_global_chat(
                     &bot.context.bot_id,
                     &sub,
                 ),
+                None,
             )
             .await;
             ServerPlatformBridge::bot(channel.clone(), frames_tx.clone()).with_bot_tools(bot_tools)

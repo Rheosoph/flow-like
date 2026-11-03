@@ -36,6 +36,9 @@ pub const STORED_DONE: &str = "DONE";
 pub const STORED_FAILED: &str = "FAILED";
 pub const STORED_CANCELLED: &str = "CANCELLED";
 
+pub const STORED_AUDIENCE_OWNER: &str = "OWNER";
+pub const STORED_AUDIENCE_ROOM: &str = "ROOM";
+
 pub const STORED_SERVER: &str = "SERVER";
 pub const STORED_DESKTOP: &str = "DESKTOP";
 pub const STORED_DEVICE: &str = "DEVICE";
@@ -152,6 +155,57 @@ impl TurnStatus {
     }
 }
 
+/// Who can read the bot's reply: only its owner, or the people of a shared room.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnAudience {
+    /// A direct conversation with the owner.
+    #[default]
+    Owner,
+    /// A group conversation: other people read the answer.
+    Room,
+}
+
+impl TurnAudience {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Owner => "owner",
+            Self::Room => "room",
+        }
+    }
+
+    pub fn stored(self) -> &'static str {
+        match self {
+            Self::Owner => STORED_AUDIENCE_OWNER,
+            Self::Room => STORED_AUDIENCE_ROOM,
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        let value = value.trim();
+        [Self::Owner, Self::Room]
+            .into_iter()
+            .find(|audience| audience.as_str().eq_ignore_ascii_case(value))
+    }
+
+    /// The audience of a conversation of this kind.
+    pub fn of(kind: crate::inbox::ConversationKind) -> Self {
+        match kind {
+            crate::inbox::ConversationKind::Direct => Self::Owner,
+            crate::inbox::ConversationKind::Group => Self::Room,
+        }
+    }
+}
+
+/// How the model reads a message of someone else in a shared room.
+pub fn room_message(name: &str, is_owner: bool, text: &str) -> String {
+    if is_owner {
+        format!("{name} (your owner) wrote: {text}")
+    } else {
+        format!("{name} (member, not your owner) wrote: {text}")
+    }
+}
+
 /// A turn as hosts and watchers read it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BotTurn {
@@ -175,6 +229,16 @@ pub struct BotTurn {
     pub error_code: Option<String>,
     /// Bot turns that led to the trigger message.
     pub hops: u32,
+    #[serde(default)]
+    pub owner_id: String,
+    /// The person or bot whose message woke the turn; `None` on turns queued before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_id: Option<String>,
+    /// The requester's display name, set on a claim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_name: Option<String>,
+    #[serde(default)]
+    pub audience: TurnAudience,
     /// RFC 3339.
     pub created_at: String,
     /// RFC 3339.
@@ -214,6 +278,11 @@ pub fn reply_message_id(bot_id: &str, trigger_message_id: &str) -> String {
 /// The message id of the bot's report that its turn for `trigger_message_id` failed.
 pub fn failure_message_id(bot_id: &str, trigger_message_id: &str) -> String {
     digest("rf-", bot_id, trigger_message_id)
+}
+
+/// The message id of the bot's notice that a requester used up their turns for the day.
+pub fn rate_limit_message_id(bot_id: &str, trigger_message_id: &str) -> String {
+    digest("rl-", bot_id, trigger_message_id)
 }
 
 #[cfg(test)]
@@ -261,6 +330,25 @@ mod tests {
     }
 
     #[test]
+    fn audiences_round_trip_and_follow_the_conversation_kind() {
+        use crate::inbox::ConversationKind;
+        for audience in [TurnAudience::Owner, TurnAudience::Room] {
+            assert_eq!(TurnAudience::parse(audience.stored()), Some(audience));
+        }
+        assert_eq!(TurnAudience::of(ConversationKind::Direct), TurnAudience::Owner);
+        assert_eq!(TurnAudience::of(ConversationKind::Group), TurnAudience::Room);
+    }
+
+    #[test]
+    fn room_messages_name_their_speaker_and_whether_it_is_the_owner() {
+        assert_eq!(
+            room_message("Mia", false, "hi"),
+            "Mia (member, not your owner) wrote: hi"
+        );
+        assert_eq!(room_message("Ben", true, "hi"), "Ben (your owner) wrote: hi");
+    }
+
+    #[test]
     fn a_turn_serializes_with_lowercase_ids_and_no_empty_batch() {
         let turn = BotTurn {
             id: "bt_1".into(),
@@ -275,6 +363,10 @@ mod tests {
             reply_message_id: None,
             error_code: None,
             hops: 0,
+            owner_id: "user_a".into(),
+            requester_id: Some("user_a".into()),
+            requester_name: None,
+            audience: TurnAudience::Owner,
             created_at: "2026-11-02T09:59:00+00:00".into(),
             updated_at: "2026-11-02T09:59:30+00:00".into(),
             batched: Vec::new(),

@@ -63,6 +63,9 @@ pub struct ExecutorClaims {
     /// User whose private custom Bits this run may call through the API.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom_bits_owner: Option<String>,
+    /// The bot whose turn this token serves; its app callbacks run as the bot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
     /// Run ID for this execution
     pub run_id: String,
     /// Application ID

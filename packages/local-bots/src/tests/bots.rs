@@ -358,7 +358,7 @@ fn apps_attach_once_and_list_oldest_first() {
     assert_eq!(listed, [("app-1", Some("owner")), ("app-2", Some("owner"))]);
     assert_eq!(
         sorted_keys(&serde_json::to_value(&apps[0]).unwrap()),
-        ["added_at", "app_id", "owner_role"]
+        ["added_at", "app_id", "owner_role", "restrictions"]
     );
 
     f.store.detach_app(&bot.id, "app-1").unwrap();
@@ -377,6 +377,50 @@ fn apps_attach_once_and_list_oldest_first() {
         codes::NOT_FOUND
     );
     assert_eq!(code(f.store.bot_apps("bot_missing")), codes::NOT_FOUND);
+}
+
+#[test]
+fn app_restrictions_are_stored_validated_and_copied_by_a_duplicate() {
+    use flow_like_types::bot_restrictions::{BotPreset, BotRestrictions};
+
+    let f = fixture();
+    let bot = f.bot("Worker");
+    f.store.attach_app(&bot.id, "app-1").unwrap();
+    assert!(
+        f.store
+            .app_restrictions(&bot.id, "app-1")
+            .unwrap()
+            .is_unrestricted()
+    );
+
+    let mut custom = BotPreset::ReadAndCallEvents.restrictions();
+    custom.scopes.files.prefixes = vec!["reports".into()];
+    custom.scopes.tables = Some(vec!["sales".into()]);
+    f.changes.take();
+    f.store
+        .set_app_restrictions(&bot.id, "app-1", custom.clone())
+        .unwrap();
+    assert_eq!(f.changes.take(), [Change::Bots(Some(bot.id.clone()))]);
+    assert_eq!(f.store.app_restrictions(&bot.id, "app-1").unwrap(), custom);
+    assert_eq!(f.store.bot_apps(&bot.id).unwrap()[0].restrictions, custom);
+
+    let mut escaping = BotRestrictions::default();
+    escaping.scopes.files.prefixes = vec!["../etc".into()];
+    assert_eq!(
+        code(f.store.set_app_restrictions(&bot.id, "app-1", escaping)),
+        codes::INVALID
+    );
+    assert_eq!(
+        code(f.store.set_app_restrictions(&bot.id, "app-9", custom.clone())),
+        codes::NOT_FOUND
+    );
+    assert_eq!(
+        code(f.store.app_restrictions("bot_missing", "app-1")),
+        codes::NOT_FOUND
+    );
+
+    let copy = f.store.clone_bot(&bot.id).unwrap();
+    assert_eq!(f.store.app_restrictions(&copy.id, "app-1").unwrap(), custom);
 }
 
 #[test]

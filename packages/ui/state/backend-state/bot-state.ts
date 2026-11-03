@@ -140,11 +140,52 @@ export interface IUpdateBotRequest {
 	device_id?: string | null;
 }
 
+export type BotPermission =
+	| "read_files"
+	| "write_files"
+	| "read_database"
+	| "write_database"
+	| "invoke_api"
+	| "read_team"
+	| "read_boards"
+	| "execute_boards"
+	| "write_boards"
+	| "list_events"
+	| "read_events"
+	| "execute_events"
+	| "write_events"
+	| "read_logs"
+	| "read_config"
+	| "read_templates"
+	| "write_templates"
+	| "read_courses"
+	| "write_courses"
+	| "read_widgets"
+	| "write_widgets";
+
+export type BotRestrictionPreset = "read_only" | "read_and_call_events" | "full";
+
+/** `null` does not narrow; an empty list allows nothing. */
+export interface IBotScopes {
+	files: { prefixes: string[]; read_only: boolean };
+	tables?: string[] | null;
+	events?: string[] | null;
+	boards?: string[] | null;
+}
+
+/** What the owner lets a bot do in one app, in every chat. */
+export interface IBotRestrictions {
+	/** `null` keeps the owner's whole role. */
+	permissions: BotPermission[] | null;
+	scopes: IBotScopes;
+}
+
 export interface IBotApp {
 	app_id: string;
 	added_at: string;
 	/** The owner's current role in the app; null once the owner is no longer a member. */
 	owner_role: string | null;
+	restrictions?: IBotRestrictions;
 }
 
 /** `device`: a local bot's secret, encrypted with a key kept in this device's keychain. */
@@ -589,6 +630,11 @@ export interface IBotState {
 	/** The owner must be a member of the app; the app itself is not asked. */
 	attachBotApp(botId: string, appId: string): Promise<void>;
 	detachBotApp(botId: string, appId: string): Promise<void>;
+	setBotAppRestrictions?(
+		botId: string,
+		appId: string,
+		restrictions: IBotRestrictions,
+	): Promise<IBotRestrictions>;
 	listBotSecrets(botId: string): Promise<IBotSecretInfo[]>;
 	upsertBotSecret(
 		botId: string,

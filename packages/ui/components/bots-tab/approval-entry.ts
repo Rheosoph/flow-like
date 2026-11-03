@@ -36,6 +36,9 @@ export function approvalOf(entry: IInboxEntry): IInboxApproval | undefined {
 		summary: typeof summary === "string" ? summary : "",
 		scope: typeof scope === "string" ? scope : "",
 		args_hash: text(body.args_hash) ?? "",
+		requester_id: text(body.requester_id),
+		requester_name: text(body.requester_name),
+		room: text(body.room),
 	};
 }
 

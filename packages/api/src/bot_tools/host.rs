@@ -17,6 +17,8 @@ use flow_like_types::tokio::sync::OnceCell;
 use flow_like_types::{bot_message::ApprovalRequest, tool_grant::ApprovalDecision};
 use serde_json::{Value, json};
 
+use crate::middleware::jwt::BotUser;
+
 use super::{
     executor::ToolExecutor,
     routing::{Route, is_bot_tool, route},
@@ -42,6 +44,7 @@ pub(crate) struct TurnModels {
 
 pub(crate) struct TurnDeps {
     pub owner: String,
+    pub bot: BotUser,
     pub turn_id: String,
     pub workspace: String,
     pub host_tools: HostTools,
@@ -323,6 +326,7 @@ impl BotToolsHost {
             tool: tool.to_string(),
             args,
             owner: self.deps.owner.clone(),
+            bot_id: self.deps.bot.bot_id.clone(),
             turn_id: self.deps.turn_id.clone(),
             workspace,
             scope,
@@ -361,7 +365,7 @@ impl BotToolsHost {
         let reply = executor
             .run(
                 &self.deps.owner,
-                &self.deps.turn_id,
+                &self.deps.bot,
                 &self.deps.workspace,
                 job,
                 EXECUTOR_TIMEOUT,

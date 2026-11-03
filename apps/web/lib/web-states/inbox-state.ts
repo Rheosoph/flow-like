@@ -7,9 +7,14 @@ import type {
 	IInboxEntry,
 	IInboxImportEntry,
 	IInboxImportResult,
+	IBotRoomLimits,
 	IInboxKey,
 	IInboxSegmentsQuery,
 	IInboxState,
+	IInvitable,
+	IInvitation,
+	IInviteRequest,
+	IInviteResponse,
 	IRegisterInboxKeyRequest,
 	ISendInboxEntryRequest,
 } from "@flow-like/flow-like-ui";
@@ -245,6 +250,82 @@ export class WebInboxState implements IInboxState {
 		return expectRecord(
 			await apiPut<IInboxKey>("inbox/keys", request, this.backend.auth),
 			`register inbox key ${request.key_id}`,
+		);
+	}
+
+	async listInvitations(): Promise<IInvitation[]> {
+		const response = await apiGet<{ invitations?: IInvitation[] }>(
+			"inbox/invitations",
+			this.backend.auth,
+		);
+		return asArray(response?.invitations);
+	}
+
+	async listInvitable(
+		query: { q?: string; conversationId?: string } = {},
+	): Promise<IInvitable[]> {
+		const response = await apiGet<{ principals?: IInvitable[] }>(
+			withQuery("inbox/invitable", {
+				q: query.q,
+				conversation_id: query.conversationId,
+			}),
+			this.backend.auth,
+		);
+		return asArray(response?.principals);
+	}
+
+	async invite(
+		conversationId: string,
+		request: IInviteRequest,
+	): Promise<IInviteResponse> {
+		return expectRecord(
+			await apiPost<IInviteResponse>(
+				`${conversationPath(conversationId)}/invitations`,
+				request,
+				this.backend.auth,
+			),
+			`invite to conversation ${conversationId}`,
+		);
+	}
+
+	async acceptInvitation(
+		invitation: IInvitation,
+		limits?: IBotRoomLimits | null,
+	): Promise<void> {
+		await apiPost(
+			`inbox/invitations/${encodeURIComponent(invitation.id)}/accept`,
+			{ limits: limits ?? null },
+			this.backend.auth,
+		);
+	}
+
+	async declineInvitation(invitation: IInvitation): Promise<void> {
+		await apiPost(
+			`inbox/invitations/${encodeURIComponent(invitation.id)}/decline`,
+			{},
+			this.backend.auth,
+		);
+	}
+
+	async cancelInvitation(
+		conversationId: string,
+		principalId: string,
+	): Promise<void> {
+		await apiDelete(
+			`${conversationPath(conversationId)}/invitations/${encodeURIComponent(principalId)}`,
+			this.backend.auth,
+		);
+	}
+
+	async setMemberLimits(
+		conversationId: string,
+		botId: string,
+		limits: IBotRoomLimits | null,
+	): Promise<void> {
+		await apiPatch(
+			`${conversationPath(conversationId)}/members/${encodeURIComponent(botId)}/limits`,
+			{ limits },
+			this.backend.auth,
 		);
 	}
 

@@ -70,7 +70,7 @@ async fn turn(db: &DatabaseConnection, id: &str, trigger_kind: &str, hops: i32) 
     db.execute_unprepared(&format!(
         r#"INSERT INTO public."InboxEntry"
         ("id","inboxId","conversationId","messageId","senderId","kind","envelope","createdAt","seq")
-        VALUES ('e-{id}','user-a','c1','{trigger}','user-a','{trigger_kind}','{{}}','2023-11-14 22:13:20+00:00',1)"#
+        VALUES ('e-{id}','user-a','c1','{trigger}','user-a','{trigger_kind}','{{}}','2023-11-14 22:13:20+00:00',(SELECT COUNT(*) + 1 FROM public."InboxEntry"))"#
     ))
     .await
     .unwrap();
@@ -89,6 +89,8 @@ async fn turn(db: &DatabaseConnection, id: &str, trigger_kind: &str, hops: i32) 
         reply_message_id: Set(None),
         error_code: Set(None),
         hops: Set(hops),
+        requester_id: Set(None),
+        audience: Set("OWNER".into()),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),
     }

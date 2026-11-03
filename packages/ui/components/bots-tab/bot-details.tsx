@@ -25,6 +25,7 @@ import {
 } from "../../state/backend-state/bot-state";
 import type { GlobalChatBotView } from "../global-chat/use-global-chat-bot";
 import { Button } from "../ui/button";
+import { BotAppAccess } from "./bot-app-restrictions";
 import { BotEncryption, offersEncryption } from "./bot-encryption";
 import {
 	BOT_LOCATION_ICONS,
@@ -384,6 +385,7 @@ export function BotDetails({
 				<BotModels view={view} />
 			</dl>
 			<BotAbilities view={view} />
+			{bot && bot.system !== "flux" && <BotAppAccess botId={bot.id} />}
 			{bot && bot.system !== "flux" && (
 				<BotToolGrants bot={bot} name={view.name} />
 			)}

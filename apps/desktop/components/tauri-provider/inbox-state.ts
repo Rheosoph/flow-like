@@ -7,9 +7,14 @@ import type {
 	IInboxEntry,
 	IInboxImportEntry,
 	IInboxImportResult,
+	IBotRoomLimits,
 	IInboxKey,
 	IInboxSegmentsQuery,
 	IInboxState,
+	IInvitable,
+	IInvitation,
+	IInviteRequest,
+	IInviteResponse,
 	IRegisterInboxKeyRequest,
 	ISendInboxEntryRequest,
 } from "@flow-like/flow-like-ui";
@@ -490,6 +495,116 @@ export class InboxState implements IInboxState {
 				session.auth,
 			),
 			operation,
+		);
+	}
+
+	private invitationSession(operation: string): IAccountSession {
+		const session = accountSession(this.backend);
+		if (!session) {
+			throw new Error(
+				`Could not ${operation}: invitations need an account; sign in first`,
+			);
+		}
+		return session;
+	}
+
+	async listInvitations(): Promise<IInvitation[]> {
+		const session = accountSession(this.backend);
+		if (!session) return [];
+		const response = await get<{ invitations?: IInvitation[] }>(
+			session.profile,
+			"inbox/invitations",
+			session.auth,
+		);
+		return asArray(response?.invitations);
+	}
+
+	async listInvitable(
+		query: { q?: string; conversationId?: string } = {},
+	): Promise<IInvitable[]> {
+		const session = accountSession(this.backend);
+		if (!session) return [];
+		const response = await get<{ principals?: IInvitable[] }>(
+			session.profile,
+			withQuery("inbox/invitable", {
+				q: query.q,
+				conversation_id: query.conversationId,
+			}),
+			session.auth,
+		);
+		return asArray(response?.principals);
+	}
+
+	async invite(
+		conversationId: string,
+		request: IInviteRequest,
+	): Promise<IInviteResponse> {
+		const operation = `invite to conversation ${conversationId}`;
+		const session = this.invitationSession(operation);
+		return expectRecord(
+			await post<IInviteResponse>(
+				session.profile,
+				`${conversationPath(conversationId)}/invitations`,
+				request,
+				session.auth,
+			),
+			operation,
+		);
+	}
+
+	async acceptInvitation(
+		invitation: IInvitation,
+		limits?: IBotRoomLimits | null,
+	): Promise<void> {
+		const session = this.invitationSession(
+			`accept invitation ${invitation.id}`,
+		);
+		await post(
+			session.profile,
+			`inbox/invitations/${encodeURIComponent(invitation.id)}/accept`,
+			{ limits: limits ?? null },
+			session.auth,
+		);
+	}
+
+	async declineInvitation(invitation: IInvitation): Promise<void> {
+		const session = this.invitationSession(
+			`decline invitation ${invitation.id}`,
+		);
+		await post(
+			session.profile,
+			`inbox/invitations/${encodeURIComponent(invitation.id)}/decline`,
+			{},
+			session.auth,
+		);
+	}
+
+	async cancelInvitation(
+		conversationId: string,
+		principalId: string,
+	): Promise<void> {
+		const session = this.invitationSession(
+			`cancel the invitation of ${principalId}`,
+		);
+		await del<void>(
+			session.profile,
+			`${conversationPath(conversationId)}/invitations/${encodeURIComponent(principalId)}`,
+			undefined,
+			session.auth,
+		);
+	}
+
+	async setMemberLimits(
+		conversationId: string,
+		botId: string,
+		limits: IBotRoomLimits | null,
+	): Promise<void> {
+		const session = this.invitationSession(`set the room limits of ${botId}`);
+		await patch(
+			session.profile,
+			`${conversationPath(conversationId)}/members/${encodeURIComponent(botId)}/limits`,
+			{ limits },
+			session.auth,
 		);
 	}
 

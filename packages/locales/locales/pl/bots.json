@@ -4,6 +4,10 @@
 			"description": "",
 			"label": ""
 		},
+		"channels": {
+			"label": "",
+			"description": ""
+		},
 		"code_execution": {
 			"description": "",
 			"label": ""
@@ -16,7 +20,23 @@
 			"description": "",
 			"label": ""
 		},
+		"connectors": {
+			"description": "",
+			"label": ""
+		},
+		"data_connections": {
+			"description": "",
+			"label": ""
+		},
 		"data_studio": {
+			"description": "",
+			"label": ""
+		},
+		"delegation": {
+			"description": "",
+			"label": ""
+		},
+		"documents": {
 			"description": "",
 			"label": ""
 		},
@@ -32,7 +52,19 @@
 			"description": "",
 			"label": ""
 		},
+		"image_generation": {
+			"description": "",
+			"label": ""
+		},
 		"internet": {
+			"description": "",
+			"label": ""
+		},
+		"knowledge": {
+			"description": "",
+			"label": ""
+		},
+		"memory": {
 			"description": "",
 			"label": ""
 		},
@@ -52,6 +84,10 @@
 			"description": "",
 			"label": ""
 		},
+		"skills": {
+			"description": "",
+			"label": ""
+		},
 		"storage": {
 			"description": "",
 			"label": ""
@@ -62,10 +98,34 @@
 		}
 	},
 	"chat": {
-		"empty": "",
+		"defaultModelHint": "",
 		"modelHint": ""
 	},
+	"computer": {
+		"alt": "",
+		"asleep": "",
+		"asleepHint": "",
+		"browser": "",
+		"failed": "",
+		"screen": "",
+		"stop": ""
+	},
 	"crew": {
+		"approval": {
+			"always": "",
+			"answeredAlways": "",
+			"answeredDeny": "",
+			"answeredOnce": "",
+			"askEveryTime": "",
+			"botFallback": "",
+			"deny": "",
+			"failed": "",
+			"label": "",
+			"once": "",
+			"title": "",
+			"triggeredBy": "",
+			"triggeredByInRoom": ""
+		},
 		"botSettings": "",
 		"botTag": "",
 		"builtIn": "",
@@ -87,10 +147,15 @@
 			"groupSubtitle": "",
 			"groupSubtitlePeople": "",
 			"label": "",
+			"loadFailed": "",
+			"loadFailedTitle": "",
 			"loading": "",
+			"resize": "",
+			"resizeHint": "",
 			"signInForBots": "",
 			"signInForConversations": "",
-			"unavailableTitle": ""
+			"unavailableTitle": "",
+			"width": ""
 		},
 		"encrypted": "",
 		"eyebrow": "",
@@ -106,7 +171,21 @@
 			"capabilities": "",
 			"noCapabilities": ""
 		},
+		"invitations": {
+			"aBot": "",
+			"accept": "",
+			"acceptBot": "",
+			"botMeta": "",
+			"botTitle": "",
+			"decline": "",
+			"failed": "",
+			"groupChat": "",
+			"meta": "",
+			"review": "",
+			"title": ""
+		},
 		"loadFailed": "",
+		"loadFailedFlux": "",
 		"members": {
 			"added": "",
 			"joined": "",
@@ -137,6 +216,7 @@
 			"unsupported": ""
 		},
 		"needs": {
+			"approvalMeta": "",
 			"assistantMeta": "",
 			"assistantTitle": "",
 			"assistantWhere": "",
@@ -157,10 +237,16 @@
 		"newRoom": "",
 		"newRoomDialog": {
 			"create": "",
+			"createInvite": "",
 			"description": "",
 			"failed": "",
 			"full_one": "",
 			"full_other": "",
+			"invitesNote": "",
+			"invitesNote_one": "",
+			"invitesNote_few": "",
+			"invitesNote_many": "",
+			"invitesNote_other": "",
 			"full_few": "",
 			"full_many": "",
 			"members": "",
@@ -171,12 +257,16 @@
 		},
 		"openChat": "",
 		"picker": {
+			"alreadyInvited": "",
 			"bots": "",
 			"hint": "",
+			"invite": "",
 			"noMatches": "",
+			"ownerAccepts": "",
 			"people": "",
 			"searchFailed": "",
-			"searchLabel": ""
+			"searchLabel": "",
+			"theirBots": ""
 		},
 		"retry": "",
 		"rooms": {
@@ -229,6 +319,12 @@
 			"today": "",
 			"yesterday": ""
 		},
+		"trigger": {
+			"email": "",
+			"event": "",
+			"schedule": "",
+			"webhook": ""
+		},
 		"unknownMember": "",
 		"unread_one": "",
 		"unread_other": "",
@@ -274,6 +370,7 @@
 			"profilePlaceholder": "",
 			"runtime": "",
 			"subtitle": "",
+			"subtitleMemoryOn": "",
 			"title": ""
 		},
 		"actions": {
@@ -362,6 +459,8 @@
 			"limitReached": "",
 			"saveFailed": "",
 			"secretLimit": "",
+			"serverLimitFact": "",
+			"serverLimitReached": "",
 			"systemUndeletable": ""
 		},
 		"loadFailed": "",
@@ -460,6 +559,46 @@
 		},
 		"unavailable": ""
 	},
+	"exchange": {
+		"answered": "",
+		"answeredBy": "",
+		"denied": "",
+		"error": "",
+		"none": "",
+		"open": "",
+		"pending": "",
+		"readOnly": "",
+		"thisBot": "",
+		"title": "",
+		"waiting": "",
+		"with": ""
+	},
+	"grants": {
+		"app": "",
+		"browser": "",
+		"command": "",
+		"computer": "",
+		"connection": "",
+		"documents": "",
+		"email": "",
+		"event": "",
+		"host": "",
+		"other": "",
+		"page": "",
+		"table": "",
+		"tool": ""
+	},
+	"history": {
+		"busy": "",
+		"empty": "",
+		"latest": "",
+		"loading": "",
+		"newTopic": "",
+		"newTopicAction": "",
+		"title": "",
+		"topicStarted": "",
+		"untitled": ""
+	},
 	"identity": {
 		"bot": "",
 		"botId": "",
@@ -507,6 +646,9 @@
 		"count_few": "",
 		"count_many": "",
 		"deleteFailed": "",
+		"factsEmpty": "",
+		"factsFailed": "",
+		"forget": "",
 		"justNow": "",
 		"loadFailed": "",
 		"off": ""
@@ -557,7 +699,9 @@
 			"lookNotOwned": "",
 			"modelUnavailable": "",
 			"profileUnavailable": "",
+			"secretKey": "",
 			"secretUnreadable": "",
+			"serverLimitReached": "",
 			"unknown": ""
 		},
 		"parts": {
@@ -592,7 +736,11 @@
 		"recheck": "",
 		"result": {
 			"failed": "",
-			"unknownError": ""
+			"unknownError": "",
+			"warnings_one": "",
+			"warnings_few": "",
+			"warnings_many": "",
+			"warnings_other": ""
 		},
 		"status": {
 			"checking": "",
@@ -606,6 +754,22 @@
 			"ready": ""
 		},
 		"staysHere": "",
+		"steps": {
+			"apps": "",
+			"check": "",
+			"conversations": "",
+			"done": "",
+			"forget_bot": "",
+			"forget_conversations": "",
+			"forget_workspace": "",
+			"import_bot": "",
+			"rebind": "",
+			"secrets": "",
+			"segments": "",
+			"update_bot": "",
+			"verify": "",
+			"workspace": ""
+		},
 		"title": "",
 		"toast": {
 			"action": "",
@@ -614,6 +778,133 @@
 			"title_few": "",
 			"title_many": ""
 		}
+	},
+	"panel": {
+		"back": "",
+		"cancelTurn": "",
+		"close": "",
+		"details": {
+			"abilities": "",
+			"edit": "",
+			"fallbacks_one": "",
+			"fallbacks_few": "",
+			"fallbacks_many": "",
+			"fallbacks_other": "",
+			"runs": "",
+			"status": ""
+		},
+		"encryption": {
+			"fingerprint": "",
+			"host": "",
+			"label": "",
+			"on": "",
+			"rotate": "",
+			"rotated": "",
+			"rotateFailed": "",
+			"unpublished": "",
+			"waiting": ""
+		},
+		"grants": {
+			"none": "",
+			"revoke": "",
+			"title": ""
+		},
+		"hide": "",
+		"label": "",
+		"mail": {
+			"addressTitle": "",
+			"afterSave": "",
+			"aliasLabel": "",
+			"aliasPlaceholder": "",
+			"aliasRules": "",
+			"available": "",
+			"back": "",
+			"change": "",
+			"checking": "",
+			"claim": "",
+			"claimed": "",
+			"empty": "",
+			"emptyNoAddress": "",
+			"localNote": "",
+			"noAddress": "",
+			"received": "",
+			"release": "",
+			"sent": "",
+			"taken": "",
+			"unverified": ""
+		},
+		"notifications": {
+			"failed": "",
+			"hint": "",
+			"label": "",
+			"off": "",
+			"on": ""
+		},
+		"openFull": "",
+		"permissions": {
+			"granted": "",
+			"none": "",
+			"received": "",
+			"revoke": "",
+			"title": ""
+		},
+		"show": "",
+		"tabs": "",
+		"tasks": {
+			"at": "",
+			"create": "",
+			"cron": "",
+			"cronLabel": "",
+			"delete": "",
+			"done": "",
+			"full_one": "",
+			"full_few": "",
+			"full_many": "",
+			"full_other": "",
+			"instruction": "",
+			"instructionLabel": "",
+			"name": "",
+			"nameLabel": "",
+			"next": "",
+			"none": "",
+			"once": "",
+			"pause": "",
+			"paused": "",
+			"repeat": "",
+			"resume": "",
+			"title": "",
+			"tz": "",
+			"full": ""
+		},
+		"waitingForYou": "",
+		"webhooks": {
+			"copied": "",
+			"copy": "",
+			"create": "",
+			"delete": "",
+			"done": "",
+			"instruction": "",
+			"instructionLabel": "",
+			"issued": "",
+			"lastCalled": "",
+			"name": "",
+			"nameLabel": "",
+			"neverCalled": "",
+			"none": "",
+			"once": "",
+			"rotate": "",
+			"secret": "",
+			"signingKey": "",
+			"title": "",
+			"url": ""
+		},
+		"working": ""
+	},
+	"presence": {
+		"lastSeen": "",
+		"offline": "",
+		"online": "",
+		"unknown": ""
 	},
 	"presets": {
 		"coder": {
@@ -657,6 +948,89 @@
 			"name": ""
 		}
 	},
+	"restrictions": {
+		"advanced": "",
+		"all": "",
+		"everyChat": "",
+		"failed": "",
+		"folderAdd": "",
+		"folderPlaceholder": "",
+		"foldersAll": "",
+		"foldersOnly": "",
+		"groups": {
+			"boards": "",
+			"events": "",
+			"files": "",
+			"other": "",
+			"tables": ""
+		},
+		"limit": "",
+		"limitedTo": "",
+		"nothingToPick": "",
+		"permissions": {
+			"execute_boards": "",
+			"execute_events": "",
+			"invoke_api": "",
+			"list_events": "",
+			"read_boards": "",
+			"read_config": "",
+			"read_courses": "",
+			"read_database": "",
+			"read_events": "",
+			"read_files": "",
+			"read_logs": "",
+			"read_team": "",
+			"read_templates": "",
+			"read_widgets": "",
+			"write_boards": "",
+			"write_courses": "",
+			"write_database": "",
+			"write_events": "",
+			"write_files": "",
+			"write_templates": "",
+			"write_widgets": ""
+		},
+		"preset": "",
+		"presets": {
+			"custom": "",
+			"full": "",
+			"read_and_call_events": "",
+			"read_only": ""
+		},
+		"readOnlyFiles": "",
+		"removeFolder": "",
+		"title": ""
+	},
+	"roomLimits": {
+		"apps": "",
+		"description": "",
+		"failed": "",
+		"title": ""
+	},
+	"roomMembers": {
+		"bot": "",
+		"cancel": "",
+		"cancelFailed": "",
+		"declined": "",
+		"description": "",
+		"invite": "",
+		"inviteFailed": "",
+		"limits": "",
+		"members": "",
+		"open": "",
+		"pending": "",
+		"saveLimits": "",
+		"send_one": "",
+		"send_few": "",
+		"send_many": "",
+		"send_other": "",
+		"sent": "",
+		"thisRoom": "",
+		"title": "",
+		"waiting": "",
+		"waitingOwner": "",
+		"send": ""
+	},
 	"system": {
 		"flux": {
 			"description": "",
@@ -676,9 +1050,12 @@
 		"refused": "",
 		"tabs": {
 			"chat": "",
+			"computer": "",
 			"data": "",
+			"details": "",
 			"files": "",
 			"label": "",
+			"mail": "",
 			"memory": ""
 		},
 		"unsupported": ""

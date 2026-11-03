@@ -130,3 +130,86 @@ async fn turns_older_than_a_day_stop_counting() {
     let after = old + Duration::hours(WINDOW_HOURS) + Duration::seconds(1);
     assert_eq!(send(&db, "user-a", &["bot_1"], "after", 1, after).await, 1);
 }
+
+fn room_request(
+    sender: &str,
+    trigger: &str,
+    kind: ConversationKind,
+) -> crate::routes::inbox::delivery::BotDelivery {
+    let mut recipient = recipient("bot_1", "user-a", BotLocation::Server);
+    recipient.trigger_message_id = trigger.into();
+    recipient.mentioned = true;
+    let mut found = delivery(kind, vec![recipient]);
+    found.sender_id = sender.into();
+    found
+}
+
+async fn turn_of(db: &DatabaseConnection, trigger: &str) -> bot_turn::Model {
+    bot_turn::Entity::find_by_id(flow_like_types::bot_turn::turn_id("bot_1", trigger))
+        .one(db)
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_turn_records_who_woke_it_and_whether_the_conversation_is_shared() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    insert_bot(&db, "bot_2", "user-a", "SERVER").await;
+    let now = at(100_000);
+    let asks = [
+        ("user-c", "from-member", ConversationKind::Group, "user-c", "ROOM"),
+        ("user-a", "from-owner", ConversationKind::Group, "user-a", "ROOM"),
+        ("user-a", "direct", ConversationKind::Direct, "user-a", "OWNER"),
+        ("bot_2", "own-bot", ConversationKind::Direct, "user-a", "OWNER"),
+        ("bot_2", "bot-in-room", ConversationKind::Group, "bot_2", "ROOM"),
+    ];
+    for (sender, trigger, kind, requester, audience) in asks {
+        let request = room_request(sender, trigger, kind);
+        assert_eq!(enqueue_in(&db, &request, now).await.unwrap(), 1, "{trigger}");
+        let stored = turn_of(&db, trigger).await;
+        assert_eq!(stored.requester_id.as_deref(), Some(requester), "{trigger}");
+        assert_eq!(stored.audience, audience, "{trigger}");
+    }
+}
+
+#[tokio::test]
+async fn a_requester_who_is_not_the_owner_has_a_daily_limit_and_the_room_is_told() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    super::fixture::conversation(&db, "c1", "GROUP", "PLAIN", &["user-a", "user-c", "bot_1"]).await;
+    let now = at(100_000);
+    for index in 0..super::cap::REQUESTER_DAILY_TURNS {
+        let request = room_request("user-c", &format!("c-{index}"), ConversationKind::Group);
+        assert_eq!(enqueue_in(&db, &request, now).await.unwrap(), 1);
+    }
+    let over = room_request("user-c", "c-over", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &over, now).await.unwrap(), 0);
+    assert!(
+        bot_turn::Entity::find_by_id(flow_like_types::bot_turn::turn_id("bot_1", "c-over"))
+            .one(&db)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let notice = crate::entity::inbox_entry::Entity::find()
+        .filter(
+            crate::entity::inbox_entry::Column::MessageId.eq(
+                flow_like_types::bot_turn::rate_limit_message_id("bot_1", "c-over"),
+            ),
+        )
+        .filter(crate::entity::inbox_entry::Column::InboxId.eq("user-c"))
+        .one(&db)
+        .await
+        .unwrap();
+    assert!(notice.is_some());
+
+    let owner = room_request("user-a", "owner-asks", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &owner, now).await.unwrap(), 1);
+    let other = room_request("user-d", "d-asks", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &other, now).await.unwrap(), 1);
+    let tomorrow = now + Duration::hours(WINDOW_HOURS + 1);
+    let later = room_request("user-c", "c-later", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &later, tomorrow).await.unwrap(), 1);
+}

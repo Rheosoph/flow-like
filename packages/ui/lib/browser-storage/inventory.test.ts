@@ -55,6 +55,7 @@ beforeEach(async () => {
 		chatDb.messages.clear(),
 		globalChatDb.sessions.clear(),
 		globalChatDb.messages.clear(),
+		globalChatDb.markers.clear(),
 		offlineSyncDB.commands.clear(),
 		offlineSyncDB.discarded.clear(),
 	]);
@@ -176,6 +177,19 @@ describe("deleteBrowserStorageEntries", () => {
 		expect(await globalChatDb.messages.toCollection().primaryKeys()).toEqual([
 			"m1",
 		]);
+	});
+
+	it("counts the import markers under global chat and keeps them when it is cleared", async () => {
+		await globalChatDb.markers.put({ key: "bot-chat-imported:bot", at: 1 });
+
+		const { entries } = await scanBrowserStorage();
+		expect(entryOf(entries, "globalChat").records).toBe(1);
+		const result = await deleteBrowserStorageEntries(
+			[entryOf(entries, "globalChat")],
+			{ clearBoardHistory },
+		);
+		expect(result.failed).toEqual([]);
+		expect(await globalChatDb.markers.count()).toBe(1);
 	});
 
 	it("refuses protected entries", async () => {

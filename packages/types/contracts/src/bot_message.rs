@@ -92,6 +92,14 @@ pub struct ApprovalRequest {
     pub scope: String,
     /// Hash of the tool and its arguments; a one-time answer is good for this call only.
     pub args_hash: String,
+    /// Whose message woke the turn.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requester_name: Option<String>,
+    /// The title of the room the turn runs in; none in the direct conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room: Option<String>,
 }
 
 /// The owner's answer to an [`ApprovalRequest`].
@@ -116,7 +124,13 @@ impl ApprovalRequest {
             "body.approval.scope",
             Some(&self.scope),
             crate::tool_grant::MAX_KEY_CHARS * 4,
-        )
+        )?;
+        check_line(
+            "body.approval.requester_name",
+            self.requester_name.as_deref(),
+            MAX_NAME_CHARS,
+        )?;
+        check_line("body.approval.room", self.room.as_deref(), MAX_NAME_CHARS)
     }
 }
 
@@ -286,6 +300,33 @@ fn check_line(field: &str, value: Option<&str>, max: usize) -> Result<(), BodyEr
     refuse(format!(
         "{field} is one line of at most {max} characters; this one has {count} characters or a line break"
     ))
+}
+
+/// A copy of a plain envelope whose tool parts keep their name, arguments and a one-line summary
+/// but lose the raw result and workspace handle, for bot replies in rooms; `None` when nothing
+/// needs cutting. The owner reads the full details in the bot's own inbox copy (`?as=`).
+pub fn without_tool_details(envelope: &Value) -> Option<Value> {
+    let mut copy = envelope.clone();
+    let parts = copy.get_mut("body")?.get_mut("parts")?.as_array_mut()?;
+    let mut changed = false;
+    for part in parts
+        .iter_mut()
+        .filter(|part| part.get("kind").and_then(Value::as_str) == Some("tool"))
+    {
+        let Some(tool) = part.as_object_mut() else {
+            continue;
+        };
+        for field in ["result", "handle"] {
+            changed |= tool.remove(field).is_some();
+        }
+        if !tool.get("summary").is_some_and(Value::is_string) {
+            let name = tool.get("name").and_then(Value::as_str).unwrap_or("a tool");
+            let summary = format!("Used {name}");
+            tool.insert("summary".into(), Value::String(summary));
+            changed = true;
+        }
+    }
+    changed.then_some(copy)
 }
 
 impl MessageBody {
@@ -584,6 +625,38 @@ impl BotAsk {
             check_name("body.ask.chain", bot_id, MAX_NAME_CHARS)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tool_detail_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn tool_parts_lose_raw_results_and_keep_a_summary() {
+        let envelope = json!({ "v": 1, "enc": "none", "body": { "text": "done", "parts": [
+            { "kind": "tool", "id": "t1", "call_id": "c", "name": "database_tool",
+              "arguments": { "sql": "select secret" }, "result": { "rows": [1] }, "summary": "Read 1 row" },
+            { "kind": "tool", "id": "t2", "call_id": "d", "name": "file_read", "result": "x" },
+            { "kind": "ui", "id": "ui1", "summary": "a chart" }
+        ] } });
+        let stripped = without_tool_details(&envelope).unwrap();
+        let parts = stripped["body"]["parts"].as_array().unwrap();
+        assert_eq!(parts[0]["summary"], "Read 1 row");
+        assert_eq!(parts[1]["summary"], "Used file_read");
+        for part in &parts[..2] {
+            assert!(part.get("result").is_none());
+        }
+        assert_eq!(parts[0]["arguments"]["sql"], "select secret");
+        assert_eq!(parts[2], envelope["body"]["parts"][2]);
+        assert_eq!(stripped["body"]["text"], "done");
+    }
+
+    #[test]
+    fn nothing_to_cut_returns_none() {
+        let envelope = json!({ "v": 1, "enc": "none", "body": { "text": "hi" } });
+        assert_eq!(without_tool_details(&envelope), None);
     }
 }
 

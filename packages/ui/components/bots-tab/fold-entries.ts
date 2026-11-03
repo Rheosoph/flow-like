@@ -28,6 +28,9 @@ export interface ConversationApproval {
 	tool: string;
 	summary: string;
 	scopes: string[];
+	/** Who woke the turn, when it was not the owner alone. */
+	requesterName?: string;
+	room?: string;
 	answer?: ApprovalDecision;
 }
 
@@ -202,6 +205,9 @@ export function foldInboxEntries(
 								tool: approval.tool,
 								summary: approval.summary,
 								scopes: approval.scope.split(",").filter(Boolean),
+								requesterName:
+									approval.requester_name ?? approval.requester_id,
+								room: approval.room,
 							},
 						}
 					: {}),

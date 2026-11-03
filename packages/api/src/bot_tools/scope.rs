@@ -1,35 +1,48 @@
 use std::collections::BTreeSet;
 
-use flow_like::flow::copilot::BotRunContext;
+use flow_like::flow::copilot::{BotRunContext, EffectivePermissions};
 use flow_like_bot_tools_host::{JobApp, JobScope};
 use flow_like_storage::contracts::column_metadata::ColumnReader;
 use flow_like_types::bot::BotCapability;
+use flow_like_types::bot_restrictions::BotPermission;
 use flow_like_types::data_classification::DataClassification;
 
 use crate::{
+    bot_permission::bot_permission_with_grant,
     error::ApiError,
-    middleware::jwt::{AppPermissionResponse, user_app_permission_uncached},
-    permission::role_permission::RolePermissions,
+    middleware::jwt::{AppPermissionResponse, BotUser},
     routes::app::db::{ScopeParams, column_reader},
     state::AppState,
 };
 
-/// What the bot's owner holds in one app.
+/// What the bot holds in one app: the owner's role narrowed by the bot's restrictions and the
+/// room's limits.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct OwnerRights {
-    pub files: bool,
-    pub tables: bool,
+pub(crate) struct BotRights {
+    pub effective: EffectivePermissions,
     pub reader: ColumnReader,
 }
 
-impl OwnerRights {
-    pub(crate) fn of(permission: &AppPermissionResponse) -> Self {
-        let files = permission.has_permission(RolePermissions::ReadFiles);
+impl BotRights {
+    pub(crate) fn of(permission: &AppPermissionResponse, effective: EffectivePermissions) -> Self {
         Self {
-            files,
-            tables: files || permission.has_permission(RolePermissions::ReadDatabase),
+            effective,
             reader: column_reader(permission, &ScopeParams::default()),
         }
+    }
+
+    fn files(&self) -> bool {
+        self.effective.holds(BotPermission::ReadFiles)
+    }
+
+    fn tables(&self) -> bool {
+        let named = self
+            .effective
+            .scopes
+            .tables
+            .as_ref()
+            .is_none_or(|tables| !tables.is_empty());
+        named && (self.files() || self.effective.holds(BotPermission::ReadDatabase))
     }
 }
 
@@ -52,21 +65,25 @@ pub(crate) fn candidate_apps(bot: &BotRunContext) -> BTreeSet<String> {
         .collect()
 }
 
-/// The scope of one bot turn from what its owner holds in each candidate app. An app the owner
-/// holds nothing in is left out.
+/// The scope of one bot turn from what the bot holds in each candidate app. An app the bot holds
+/// nothing in is left out.
 pub(crate) fn scope_from(
     bot: &BotRunContext,
-    rights: impl IntoIterator<Item = (String, Option<OwnerRights>)>,
+    rights: impl IntoIterator<Item = (String, Option<BotRights>)>,
 ) -> JobScope {
     let apps = rights
         .into_iter()
         .filter_map(|(app_id, rights)| {
-            let rights = rights.filter(|rights| rights.files || rights.tables)?;
+            let rights = rights?;
+            let (files, tables) = (rights.files(), rights.tables());
+            if !files && !tables {
+                return None;
+            }
             Some(JobApp {
                 app_id,
                 alias: None,
-                files: rights.files,
-                tables: rights.tables,
+                files,
+                tables,
                 column_attributes: column_attributes(&rights.reader),
             })
         })
@@ -84,13 +101,13 @@ pub(crate) fn scope_from(
 
 pub(crate) async fn job_scope(
     state: &AppState,
-    owner: &str,
+    principal: &BotUser,
     bot: &BotRunContext,
 ) -> Result<JobScope, ApiError> {
     let mut rights = Vec::new();
     for app_id in candidate_apps(bot) {
-        let held = match user_app_permission_uncached(owner, &app_id, state).await {
-            Ok(permission) => Some(OwnerRights::of(&permission)),
+        let held = match bot_permission_with_grant(principal, &app_id, state).await {
+            Ok((permission, grant)) => Some(BotRights::of(&permission, grant.effective)),
             Err(_) => None,
         };
         rights.push((app_id, held));
@@ -101,6 +118,7 @@ pub(crate) async fn job_scope(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::permission::role_permission::RolePermissions;
 
     fn bot() -> BotRunContext {
         BotRunContext {
@@ -116,13 +134,18 @@ mod tests {
         }
     }
 
-    fn rights(files: bool, tables: bool, reader: ColumnReader) -> Option<OwnerRights> {
-        Some(OwnerRights {
-            files,
-            tables,
+    fn rights(bits: i64, reader: ColumnReader) -> Option<BotRights> {
+        Some(BotRights {
+            effective: EffectivePermissions {
+                role_mask: Some(bits),
+                ..EffectivePermissions::default()
+            },
             reader,
         })
     }
+
+    const FILES: i64 = RolePermissions::ReadFiles.bits();
+    const DATABASE: i64 = RolePermissions::ReadDatabase.bits();
 
     #[test]
     fn candidates_are_the_selected_and_profile_apps_without_the_workspace() {
@@ -138,13 +161,10 @@ mod tests {
         let scope = scope_from(
             &bot(),
             [
-                (
-                    "a".to_string(),
-                    rights(true, true, ColumnReader::Unrestricted),
-                ),
+                ("a".to_string(), rights(FILES, ColumnReader::Unrestricted)),
                 (
                     "b".to_string(),
-                    rights(false, true, ColumnReader::with_attributes(["hr"])),
+                    rights(DATABASE, ColumnReader::with_attributes(["hr"])),
                 ),
                 ("c".to_string(), None),
             ],
@@ -163,11 +183,32 @@ mod tests {
     fn an_owner_with_no_rights_in_an_app_drops_it() {
         let scope = scope_from(
             &bot(),
-            [(
-                "a".to_string(),
-                rights(false, false, ColumnReader::Unrestricted),
-            )],
+            [("a".to_string(), rights(0, ColumnReader::Unrestricted))],
         );
         assert!(scope.apps.is_empty());
+    }
+
+    #[test]
+    fn a_restricted_bot_loses_the_file_access_its_mask_does_not_grant() {
+        let scope = scope_from(
+            &bot(),
+            [
+                (
+                    "a".to_string(),
+                    rights(DATABASE, ColumnReader::Unrestricted),
+                ),
+                ("b".to_string(), rights(FILES, ColumnReader::Unrestricted)),
+            ],
+        );
+        assert!(!scope.apps[0].files && scope.apps[0].tables);
+        assert!(scope.apps[1].files && scope.apps[1].tables);
+    }
+
+    #[test]
+    fn an_empty_table_allowlist_closes_the_tables_even_with_file_access() {
+        let mut held = rights(FILES | DATABASE, ColumnReader::Unrestricted).unwrap();
+        held.effective.scopes.tables = Some(Vec::new());
+        let scope = scope_from(&bot(), [("a".to_string(), Some(held))]);
+        assert!(scope.apps[0].files && !scope.apps[0].tables);
     }
 }

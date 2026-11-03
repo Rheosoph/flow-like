@@ -5,6 +5,7 @@
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     bot::{BotCapability, BotLocation, BotModelPolicy, BotSystemKind},
+    bot_restrictions::BotRestrictions,
     data_classification::DataSensitivity,
     inbox::{ConversationEncryption, ConversationKind, InboxEntryKind, PrincipalKind},
 };
@@ -52,6 +53,7 @@ pub struct BotApp {
     pub added_at: DateTime<FixedOffset>,
     /// Always `owner`: the signed-out person owns everything on this device.
     pub owner_role: Option<String>,
+    pub restrictions: BotRestrictions,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

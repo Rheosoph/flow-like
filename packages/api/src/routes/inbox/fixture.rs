@@ -20,7 +20,7 @@ use sea_orm::{
 };
 use serde_json::{Value, json};
 
-const TABLES: [&str; 6] = [
+const TABLES: [&str; 7] = [
     r#"CREATE TABLE public."Conversation" (
         "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
         "directKey" TEXT UNIQUE, "createdBy" TEXT NOT NULL, "lastActivityAt" TEXT NOT NULL,
@@ -29,19 +29,24 @@ const TABLES: [&str; 6] = [
     r#"CREATE TABLE public."ConversationMember" (
         "conversationId" TEXT NOT NULL, "principalId" TEXT NOT NULL,
         "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
-        "leftAt" TEXT, "lastReadAt" TEXT, PRIMARY KEY ("conversationId", "principalId"))"#,
+        "leftAt" TEXT, "lastReadAt" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'ACTIVE', "limits" TEXT, "invitedBy" TEXT, "invitedAt" TEXT,
+        "acceptedAt" TEXT, PRIMARY KEY ("conversationId", "principalId"))"#,
     r#"CREATE TABLE public."InboxEntry" (
         "id" TEXT PRIMARY KEY, "inboxId" TEXT NOT NULL, "conversationId" TEXT NOT NULL,
         "messageId" TEXT NOT NULL, "senderId" TEXT NOT NULL, "kind" TEXT NOT NULL,
         "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER,
         UNIQUE ("inboxId", "messageId"), UNIQUE ("inboxId", "conversationId", "seq"))"#,
     r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE)"#,
+    r#"CREATE TABLE public."User" (
+        "id" TEXT PRIMARY KEY, "name" TEXT, "username" TEXT, "preferredUsername" TEXT)"#,
     r#"CREATE TABLE public."BotTurn" (
         "id" TEXT PRIMARY KEY, "botId" TEXT NOT NULL, "ownerId" TEXT NOT NULL,
         "conversationId" TEXT NOT NULL, "triggerMessageId" TEXT NOT NULL,
         "hostKind" TEXT NOT NULL, "status" TEXT NOT NULL, "attempts" INTEGER NOT NULL,
         "hostId" TEXT, "leaseUntil" TEXT, "operationId" TEXT, "replyMessageId" TEXT,
-        "errorCode" TEXT, "hops" INTEGER NOT NULL, "createdAt" TEXT NOT NULL,
+        "errorCode" TEXT, "hops" INTEGER NOT NULL, "requesterId" TEXT,
+        "audience" TEXT NOT NULL DEFAULT 'OWNER', "createdAt" TEXT NOT NULL,
         "updatedAt" TEXT NOT NULL, UNIQUE ("botId", "triggerMessageId"))"#,
     r#"CREATE TABLE public."ConversationSegment" (
         "id" TEXT PRIMARY KEY, "conversationId" TEXT NOT NULL, "authorId" TEXT NOT NULL,
@@ -184,6 +189,8 @@ pub(crate) async fn running_turn(
         reply_message_id: Set(None),
         error_code: Set(None),
         hops: Set(1),
+        requester_id: Set(None),
+        audience: Set("OWNER".into()),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),
     }

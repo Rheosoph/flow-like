@@ -380,3 +380,19 @@ async fn answer_tokens_older_than_a_day_are_ignored_and_swept() {
         GrantCheck::Missing
     );
 }
+
+#[tokio::test]
+async fn the_parked_card_names_who_woke_the_turn() {
+    let (db, mut turn) = running().await;
+    turn.requester_id = Some("user-c".into());
+    let card = card(&turn);
+    park_in(&db, &turn, HOST, &card, "c1", now_millis())
+        .await
+        .unwrap();
+    let posted = crate::routes::inbox::approvals::card_in(&db, OWNER, "c1", &card.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(posted.requester_id.as_deref(), Some("user-c"));
+    assert_eq!(posted.room, None);
+}

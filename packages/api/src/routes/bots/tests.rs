@@ -1,5 +1,7 @@
 use super::{
-    apps::{BOT_APP_LIMIT_REACHED, BotApp, MAX_APPS_PER_BOT, attach_in, attached_apps},
+    apps::{
+        BOT_APP_LIMIT_REACHED, BotApp, MAX_APPS_PER_BOT, attach_in, attached_apps, store_restrictions, unrestricted_row,
+    },
     bots_by_id,
     clone::{Cloned, clone_in, copy_name},
     crud::{admit_new_bot, custom_bot_count, patch_in, server_bot_count},
@@ -26,6 +28,7 @@ use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
     DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, Schema, sea_query::Table,
 };
+use flow_like_types::bot_restrictions::{BotPreset, BotRestrictions};
 use serde_json::json;
 
 async fn database() -> DatabaseConnection {
@@ -230,11 +233,7 @@ async fn attached_apps_carry_the_owner_role_until_the_owner_leaves() {
     let row = custom_bot(&db, "owner", "Scout", at(0)).await;
     seed_memberships(&db).await;
     for (app_id, added) in [("app-2", at(20)), ("app-1", at(10))] {
-        bot_app::ActiveModel {
-            bot_id: Set(row.id.clone()),
-            app_id: Set(app_id.into()),
-            added_at: Set(added),
-        }
+        unrestricted_row(&row.id, app_id, added)
         .insert(&db)
         .await
         .unwrap();
@@ -248,11 +247,13 @@ async fn attached_apps_carry_the_owner_role_until_the_owner_leaves() {
                 app_id: "app-1".into(),
                 added_at: at(10),
                 owner_role: Some("Editor".into()),
+                restrictions: BotRestrictions::default(),
             },
             BotApp {
                 app_id: "app-2".into(),
                 added_at: at(20),
                 owner_role: None,
+                restrictions: BotRestrictions::default(),
             },
         ]
     );
@@ -281,11 +282,9 @@ async fn a_bot_uses_at_most_two_hundred_apps() {
     .insert(&db)
     .await
     .unwrap();
-    bot_app::Entity::insert_many((1..MAX_APPS_PER_BOT).map(|n| bot_app::ActiveModel {
-        bot_id: Set(row.id.clone()),
-        app_id: Set(format!("app-x-{n}")),
-        added_at: Set(at(0)),
-    }))
+    bot_app::Entity::insert_many(
+        (1..MAX_APPS_PER_BOT).map(|n| unrestricted_row(&row.id, &format!("app-x-{n}"), at(0))),
+    )
     .exec_without_returning(&db)
     .await
     .unwrap();
@@ -617,11 +616,7 @@ async fn a_duplicate_copies_the_settings_and_the_apps_the_owner_still_uses() {
     row.import_key = Set(Some("bot_local".into()));
     let source = row.insert(&db).await.unwrap();
     for (app_id, added) in [("app-2", at(1)), ("app-1", at(2))] {
-        bot_app::ActiveModel {
-            bot_id: Set(source.id.clone()),
-            app_id: Set(app_id.into()),
-            added_at: Set(added),
-        }
+        unrestricted_row(&source.id, app_id, added)
         .insert(&db)
         .await
         .unwrap();
@@ -676,6 +671,91 @@ async fn a_duplicate_copies_the_settings_and_the_apps_the_owner_still_uses() {
         .await
         .unwrap();
     assert_eq!(secrets, 0, "secrets stay with the original");
+}
+
+#[tokio::test]
+async fn restrictions_are_owner_only_listed_and_copied_by_a_duplicate() {
+    let db = database().await;
+    let row = custom_bot(&db, "owner", "Scout", at(0)).await;
+    seed_memberships(&db).await;
+    attach_in(&db, "owner", &row.id, "app-1").await.unwrap();
+    let mut restrictions = BotPreset::ReadAndCallEvents.restrictions();
+    restrictions.scopes.files.prefixes = vec!["reports".into()];
+    restrictions.scopes.events = Some(vec!["event-1".into()]);
+
+    store_restrictions(&db, "owner", &row.id, "app-1", &restrictions)
+        .await
+        .unwrap();
+    let listed = attached_apps(&db, "owner", &row.id).await.unwrap();
+    assert_eq!(listed[0].restrictions, restrictions);
+
+    let stranger = store_restrictions(&db, "mallory", &row.id, "app-1", &BotRestrictions::default())
+        .await
+        .unwrap_err();
+    assert_eq!(stranger.status(), StatusCode::NOT_FOUND);
+    let unattached = store_restrictions(&db, "owner", &row.id, "app-2", &restrictions)
+        .await
+        .unwrap_err();
+    assert_eq!(unattached.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        attached_apps(&db, "owner", &row.id).await.unwrap()[0].restrictions,
+        restrictions,
+        "a refused write changes nothing"
+    );
+
+    let Cloned { bot: copy, .. } = clone_in(&db, "owner", &row.id, at(5)).await.unwrap();
+    let copied = attached_apps(&db, "owner", &copy.id).await.unwrap();
+    assert_eq!(copied[0].restrictions, restrictions);
+
+    store_restrictions(&db, "owner", &row.id, "app-1", &BotRestrictions::default())
+        .await
+        .unwrap();
+    assert!(
+        attached_apps(&db, "owner", &row.id).await.unwrap()[0]
+            .restrictions
+            .is_unrestricted()
+    );
+}
+
+#[test]
+fn contract_permission_bits_match_role_permissions() {
+    use crate::permission::role_permission::RolePermissions;
+    use flow_like_types::bot_restrictions::{BOT_NEVER_BITS, BotPermission};
+    let named = [
+        (BotPermission::ReadFiles, RolePermissions::ReadFiles),
+        (BotPermission::WriteFiles, RolePermissions::WriteFiles),
+        (BotPermission::ReadDatabase, RolePermissions::ReadDatabase),
+        (BotPermission::WriteDatabase, RolePermissions::WriteDatabase),
+        (BotPermission::InvokeApi, RolePermissions::InvokeApi),
+        (BotPermission::ReadTeam, RolePermissions::ReadTeam),
+        (BotPermission::ReadBoards, RolePermissions::ReadBoards),
+        (BotPermission::ExecuteBoards, RolePermissions::ExecuteBoards),
+        (BotPermission::WriteBoards, RolePermissions::WriteBoards),
+        (BotPermission::ListEvents, RolePermissions::ListEvents),
+        (BotPermission::ReadEvents, RolePermissions::ReadEvents),
+        (BotPermission::ExecuteEvents, RolePermissions::ExecuteEvents),
+        (BotPermission::WriteEvents, RolePermissions::WriteEvents),
+        (BotPermission::ReadLogs, RolePermissions::ReadLogs),
+        (BotPermission::ReadConfig, RolePermissions::ReadConfig),
+        (BotPermission::ReadTemplates, RolePermissions::ReadTemplates),
+        (BotPermission::WriteTemplates, RolePermissions::WriteTemplates),
+        (BotPermission::ReadCourses, RolePermissions::ReadCourses),
+        (BotPermission::WriteCourses, RolePermissions::WriteCourses),
+        (BotPermission::ReadWidgets, RolePermissions::ReadWidgets),
+        (BotPermission::WriteWidgets, RolePermissions::WriteWidgets),
+    ];
+    assert_eq!(named.len(), BotPermission::ALL.len());
+    for (permission, flag) in named {
+        assert_eq!(permission.bit(), flag.bits(), "{permission:?}");
+    }
+    let never = RolePermissions::Owner
+        | RolePermissions::Admin
+        | RolePermissions::ReadRoles
+        | RolePermissions::WriteMeta
+        | RolePermissions::ReadAnalytics
+        | RolePermissions::WriteConfig
+        | RolePermissions::WriteRoutes;
+    assert_eq!(BOT_NEVER_BITS, never.bits());
 }
 
 #[tokio::test]

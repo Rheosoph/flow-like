@@ -280,6 +280,7 @@ const botState: Record<string, unknown> = {
 };
 const backend = {
 	botState,
+	appState: { getApps: async () => [] },
 	inboxState: { listConversations: async () => [] },
 	userState: {
 		getInfo: async () => ({ id: "me", name: "Felix Schultz" }),

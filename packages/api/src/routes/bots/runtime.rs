@@ -145,6 +145,8 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             embedding_model: settings.embedding_model,
             tool_host: BotToolHost::Chat,
             host_tools: Default::default(),
+            requester: None,
+            permissions: Default::default(),
         },
         model: settings.model,
     }))
@@ -366,11 +368,7 @@ mod tests {
     }
 
     async fn attach(db: &DatabaseConnection, bot_id: &str, app_id: &str) {
-        bot_app::ActiveModel {
-            bot_id: Set(bot_id.into()),
-            app_id: Set(app_id.into()),
-            added_at: Set(at(0)),
-        }
+        crate::routes::bots::apps::unrestricted_row(bot_id, app_id, at(0))
         .insert(db)
         .await
         .unwrap();

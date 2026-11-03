@@ -19,6 +19,9 @@ pub struct ConversationMember {
     /// Who added the member; null for the person who started the conversation.
     pub added_by: Option<String>,
     pub joined_at: DateTime<FixedOffset>,
+    /// A bot's room limits; only its owner sees them.
+    #[schema(value_type = Option<Object>)]
+    pub limits: Option<Value>,
 }
 
 impl From<conversation_member::Model> for ConversationMember {
@@ -28,6 +31,33 @@ impl From<conversation_member::Model> for ConversationMember {
             kind: row.principal_kind.to_ascii_lowercase(),
             added_by: row.added_by,
             joined_at: row.joined_at,
+            limits: row.limits,
+        }
+    }
+}
+
+/// Someone invited to a group who has not joined: they read and receive nothing yet.
+#[derive(Debug, Clone, PartialEq, Serialize, ToSchema)]
+pub struct PendingMember {
+    pub principal_id: String,
+    /// `user` or `bot`.
+    #[schema(example = "user")]
+    pub kind: String,
+    pub invited_by: Option<String>,
+    pub invited_at: Option<DateTime<FixedOffset>>,
+    /// `pending`, or `declined` until the inviter withdraws it.
+    #[schema(example = "pending")]
+    pub status: String,
+}
+
+impl From<conversation_member::Model> for PendingMember {
+    fn from(row: conversation_member::Model) -> Self {
+        Self {
+            principal_id: row.principal_id,
+            kind: row.principal_kind.to_ascii_lowercase(),
+            invited_by: row.invited_by,
+            invited_at: row.invited_at,
+            status: row.status.to_ascii_lowercase(),
         }
     }
 }
@@ -91,6 +121,8 @@ pub struct Conversation {
     pub last_activity_at: DateTime<FixedOffset>,
     /// Active members only, in the order they joined.
     pub members: Vec<ConversationMember>,
+    /// Invitations that haven't been accepted, oldest first.
+    pub pending: Vec<PendingMember>,
     /// Messages from others the reader has not read yet.
     pub unread_count: u64,
     /// The newest message in the reader's inbox.

@@ -79,6 +79,20 @@ pub struct TurnJob {
     pub memory: Option<JobMemory>,
     /// Where a call that asks the owner runs under a grant or parks the turn.
     pub gate: Arc<ApprovalGate>,
+    pub requester: Option<flow_like::flow::copilot::TurnRequester>,
+    /// The bot's own token for the hub during this turn (account turns); the owner's session
+    /// is not used for what the bot does.
+    pub hub_token: Option<HubToken>,
+}
+
+/// A bot runtime token that never prints.
+#[derive(Clone)]
+pub struct HubToken(pub String);
+
+impl std::fmt::Debug for HubToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("HubToken(..)")
+    }
 }
 
 #[derive(Debug)]
@@ -110,6 +124,8 @@ pub struct TurnInfo {
     pub trigger_message_id: String,
     pub status: TurnStatus,
     pub hops: u32,
+    pub requester_id: String,
+    pub audience: flow_like_types::bot_turn::TurnAudience,
     pub batched: u32,
     pub queued_at: String,
     pub started_at: Option<String>,
@@ -489,6 +505,8 @@ impl Inner {
                         trigger_message_id: String::new(),
                         status: TurnStatus::Queued,
                         hops: 0,
+                        requester_id: String::new(),
+                        audience: Default::default(),
                         batched: 0,
                         queued_at: now(),
                         started_at: None,
@@ -559,6 +577,7 @@ impl Inner {
             &waiting.message_id,
             &oldest_first,
             &names,
+            flow_like_local_bots::LOCAL_OWNER_ID,
         ) {
             Ok(transcript) => transcript,
             Err(Unreadable::Missing | Unreadable::Deleted) => {
@@ -590,6 +609,8 @@ impl Inner {
             history: transcript.history,
             memory: memory.clone(),
             gate: gate.clone(),
+            requester: None,
+            hub_token: None,
         };
         let outcome = tokio::select! {
             biased;
@@ -808,6 +829,8 @@ fn retarget(live: &mut Live, bot_id: &str, waiting: &Waiting) {
     live.info.id = turn_id(bot_id, &waiting.message_id);
     live.info.trigger_message_id = waiting.message_id.clone();
     live.info.hops = waiting.hops;
+    live.info.requester_id.clone_from(&waiting.requester_id);
+    live.info.audience = waiting.audience;
     live.trigger_seq = waiting.seq;
 }
 

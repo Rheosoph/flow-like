@@ -13,6 +13,10 @@ pub mod data_classification;
 
 #[cfg(feature = "bot")]
 pub mod bot;
+#[cfg(feature = "bot")]
+pub mod bot_effective;
+#[cfg(feature = "bot")]
+pub mod bot_restrictions;
 
 #[cfg(feature = "inbox")]
 pub mod bot_message;

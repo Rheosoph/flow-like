@@ -365,6 +365,7 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 ),
                 keep("Conversation", "createdBy", "attribution"),
                 keep("ConversationMember", "addedBy", "attribution"),
+                keep("ConversationMember", "invitedBy", "attribution"),
                 keep(
                     "BotPermission",
                     "grantedBy",

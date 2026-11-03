@@ -13,10 +13,12 @@ import type {
 	BotApprovalDecision,
 	BotSystemKey,
 	IBot,
+	IBotRestrictions,
 	IBotState,
 	IBotWebhook,
 	ICreateBotRequest,
 	ICreateBotTaskRequest,
+	IIssuedBotWebhook,
 	IUpdateBotRequest,
 	IUpdateBotTaskRequest,
 	IUpsertBotSecretRequest,
@@ -49,6 +51,12 @@ const BOT_STALE_TIME = 30_000;
 function requireBotState(state: IBotState | undefined): IBotState {
 	if (!state) throw new Error("Bots need a signed-in Flow-Like account");
 	return state;
+}
+
+function unsupported<T>(): Promise<T> {
+	return Promise.reject(
+		new Error("This backend does not support that bot action"),
+	);
 }
 
 /** A bot's sub is also cached as a directory entry; drop it so renamed or restyled bots redraw. */
@@ -174,6 +182,29 @@ export function useSetBotApp() {
 			attached
 				? requireBotState(state).attachBotApp(botId, appId)
 				: requireBotState(state).detachBotApp(botId, appId),
+		onSettled: (_, __, { botId }) =>
+			queryClient.invalidateQueries({ queryKey: botKeys.apps(botId) }),
+	});
+}
+
+export function useSetBotAppRestrictions() {
+	const state = useBackend().botState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			botId,
+			appId,
+			restrictions,
+		}: {
+			botId: string;
+			appId: string;
+			restrictions: IBotRestrictions;
+		}) =>
+			requireBotState(state).setBotAppRestrictions?.(
+				botId,
+				appId,
+				restrictions,
+			) ?? unsupported<IBotRestrictions>(),
 		onSettled: (_, __, { botId }) =>
 			queryClient.invalidateQueries({ queryKey: botKeys.apps(botId) }),
 	});
@@ -354,7 +385,7 @@ export function useCreateBotTask() {
 			botId,
 			request,
 		}: { botId: string; request: ICreateBotTaskRequest }) =>
-			requireBotState(state).createTask?.(botId, request),
+			requireBotState(state).createTask?.(botId, request) ?? unsupported(),
 		onSettled: (_, __, { botId }) =>
 			queryClient.invalidateQueries({ queryKey: botKeys.tasks(botId) }),
 	});
@@ -369,7 +400,8 @@ export function useUpdateBotTask() {
 			taskId,
 			request,
 		}: { botId: string; taskId: string; request: IUpdateBotTaskRequest }) =>
-			requireBotState(state).updateTask?.(botId, taskId, request),
+			requireBotState(state).updateTask?.(botId, taskId, request) ??
+			unsupported(),
 		onSettled: (_, __, { botId }) =>
 			queryClient.invalidateQueries({ queryKey: botKeys.tasks(botId) }),
 	});
@@ -380,7 +412,7 @@ export function useDeleteBotTask() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: ({ botId, taskId }: { botId: string; taskId: string }) =>
-			requireBotState(state).deleteTask?.(botId, taskId),
+			requireBotState(state).deleteTask?.(botId, taskId) ?? unsupported(),
 		onSettled: (_, __, { botId }) =>
 			queryClient.invalidateQueries({ queryKey: botKeys.tasks(botId) }),
 	});
@@ -411,8 +443,15 @@ export function useIssueBotWebhook() {
 			request?: { name: string; instruction?: string };
 		}) => {
 			const bots = requireBotState(state);
-			if (hookId) return bots.rotateWebhook?.(botId, hookId);
-			return bots.createWebhook?.(botId, request ?? { name: "" });
+			if (hookId)
+				return (
+					bots.rotateWebhook?.(botId, hookId) ??
+					unsupported<IIssuedBotWebhook>()
+				);
+			return (
+				bots.createWebhook?.(botId, request ?? { name: "" }) ??
+				unsupported<IIssuedBotWebhook>()
+			);
 		},
 		gcTime: 0,
 		onSettled: (_, __, { botId }) =>
@@ -425,7 +464,7 @@ export function useDeleteBotWebhook() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: ({ botId, hookId }: { botId: string; hookId: string }) =>
-			requireBotState(state).deleteWebhook?.(botId, hookId),
+			requireBotState(state).deleteWebhook?.(botId, hookId) ?? unsupported(),
 		onSettled: (_, __, { botId }) =>
 			queryClient.invalidateQueries({ queryKey: botKeys.webhooks(botId) }),
 	});
@@ -467,7 +506,7 @@ export function useClaimBotMailAddress() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: ({ botId, alias }: { botId: string; alias: string }) =>
-			requireBotState(state).claimMailAddress?.(botId, alias),
+			requireBotState(state).claimMailAddress?.(botId, alias) ?? unsupported(),
 		onSettled: (_, __, { botId }) =>
 			queryClient.invalidateQueries({ queryKey: botKeys.mailAddress(botId) }),
 	});
@@ -478,7 +517,7 @@ export function useReleaseBotMailAddress() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: ({ botId }: { botId: string }) =>
-			requireBotState(state).releaseMailAddress?.(botId),
+			requireBotState(state).releaseMailAddress?.(botId) ?? unsupported(),
 		onSettled: (_, __, { botId }) =>
 			queryClient.invalidateQueries({ queryKey: botKeys.mailAddress(botId) }),
 	});

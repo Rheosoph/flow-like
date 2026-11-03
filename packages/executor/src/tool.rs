@@ -1,7 +1,7 @@
 //! `POST /tool`: one bot tool call for the API.
 //!
-//! The API signs an unattended executor token (sub = the bot's owner, app = the bot's workspace,
-//! run = the turn) whose `dispatch_hash` covers the exact job text, and scopes one credential per
+//! The API signs an unattended executor token (sub = the bot's owner as payer, bot_id = the bot,
+//! app = the bot's workspace, run = the turn) whose `dispatch_hash` covers the exact job text, and scopes one credential per
 //! app: read and write on the workspace, read on every app the bot may use. The executor trusts
 //! nothing in the job beyond that signature. Models go through the API with the same token.
 
@@ -65,6 +65,9 @@ pub(crate) fn authorize(
         return Err(forbidden(
             "The token belongs to a board run, not a bot turn",
         ));
+    }
+    if job.bot_id.is_empty() || claims.bot_id.as_deref() != Some(job.bot_id.as_str()) {
+        return Err(forbidden("The token does not name this bot"));
     }
     if job.owner.is_empty()
         || claims.sub != job.owner
@@ -248,6 +251,7 @@ mod tests {
 
     const OWNER: &str = "user-1";
     const TURN: &str = "turn-1";
+    const BOT: &str = "bot-1";
     const WORKSPACE: &str = "ws-bot";
 
     fn job(apps: Vec<JobApp>, credentials: &[&str]) -> ToolJob {
@@ -255,6 +259,7 @@ mod tests {
             tool: "file_read".into(),
             args: json!({ "file": "bot/a.md" }),
             owner: OWNER.into(),
+            bot_id: BOT.into(),
             turn_id: TURN.into(),
             workspace: WORKSPACE.into(),
             scope: JobScope {
@@ -287,7 +292,7 @@ mod tests {
             "sub": OWNER, "run_id": TURN, "app_id": WORKSPACE, "board_id": "",
             "callback_url": "https://api.example", "typ": "executor", "iss": "flow-like",
             "aud": "flow-like-executor", "iat": 0, "nbf": 0, "exp": 0, "jti": "j",
-            "dispatch_hash": hash,
+            "dispatch_hash": hash, "bot_id": BOT,
         }))
         .expect("claims")
     }
@@ -373,6 +378,21 @@ mod tests {
         );
         let (mut claims, envelope) = signed(&job(vec![], &[WORKSPACE]));
         claims.shadow = Some(true);
+        assert_eq!(
+            refused(authorize(&claims, &envelope)).0,
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    #[test]
+    fn the_token_must_name_the_jobs_bot() {
+        let (mut claims, envelope) = signed(&job(vec![], &[WORKSPACE]));
+        claims.bot_id = None;
+        assert_eq!(
+            refused(authorize(&claims, &envelope)).0,
+            StatusCode::FORBIDDEN
+        );
+        claims.bot_id = Some("bot-2".into());
         assert_eq!(
             refused(authorize(&claims, &envelope)).0,
             StatusCode::FORBIDDEN

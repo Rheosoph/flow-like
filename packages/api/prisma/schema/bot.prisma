@@ -39,6 +39,7 @@ model Bot {
   turns           BotTurn[]
   toolGrants      BotToolGrant[]
   mailThreads     BotMailThread[]
+  mailMessages    BotMailMessage[]
   webhooks        BotWebhook[]
   tasks           BotTask[]
   segments        ConversationSegment[]
@@ -56,6 +57,11 @@ model BotApp {
   appId   String
   app     App      @relation(fields: [appId], references: [id], onDelete: Cascade)
   addedAt DateTime @default(now()) @db.Timestamptz(3)
+  /// The most the bot may hold in this app, as `RolePermissions` bits; null keeps the owner's
+  /// full role minus the bits a bot never holds.
+  permissionMask BigInt?
+  /// `BotScopes` JSON: folder prefixes, table, event and board allow-lists.
+  scopes         Json     @default("{}")
 
   @@id([botId, appId])
   @@index([appId])
@@ -154,12 +160,17 @@ model BotTurn {
   errorCode        String?
   /// Bot-to-bot hops that led to the trigger.
   hops             Int          @default(0)
+  /// The person or bot whose message woke the turn; null on turns from before the column existed.
+  requesterId      String?
+  /// OWNER | ROOM: an owner-only conversation, or a room shared with other people.
+  audience         String       @default("OWNER")
   createdAt        DateTime     @default(now()) @db.Timestamptz(3)
   updatedAt        DateTime     @updatedAt @db.Timestamptz(3)
 
   @@unique([botId, triggerMessageId])
   @@index([status, leaseUntil])
   @@index([ownerId, status])
+  @@index([botId, requesterId, createdAt])
 }
 
 /// A public URL that wakes a bot: `POST /bots/hooks/{id}` with the secret (or an HMAC signature

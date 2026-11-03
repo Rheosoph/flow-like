@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use flow_like_types::{
     bot_message::MessageBody,
     bot_notify::reply_is_proactive,
-    bot_turn::MAX_HOPS,
+    bot_turn::{MAX_HOPS, TurnAudience},
     inbox::{ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, TriggerBody, is_tombstone},
 };
 
@@ -41,6 +41,10 @@ pub struct Waiting {
     pub hops: u32,
     /// The person did not just ask for the reply: a trigger or another bot woke the bot.
     pub proactive: bool,
+    /// Whose message woke the bot; another bot of the same owner speaks for the owner in a
+    /// direct conversation.
+    pub requester_id: String,
+    pub audience: TurnAudience,
 }
 
 struct Message<'a> {
@@ -233,7 +237,15 @@ pub fn waiting_held(
                 message,
                 message.entry.sender_id != flow_like_local_bots::LOCAL_OWNER_ID,
             );
+            let sender = message.entry.sender_id.as_str();
+            let requester_id = if kind == ConversationKind::Direct {
+                flow_like_local_bots::LOCAL_OWNER_ID
+            } else {
+                sender
+            };
             Waiting {
+                requester_id: requester_id.to_string(),
+                audience: TurnAudience::of(kind),
                 message_id: message.entry.message_id.clone(),
                 seq: message.entry.seq,
                 hops,

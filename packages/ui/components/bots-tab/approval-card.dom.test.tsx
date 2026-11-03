@@ -143,6 +143,16 @@ describe("ApprovalCard", () => {
 		expect(button("Deny")).toBeDefined();
 	});
 
+	test("names who triggered the turn and the room", async () => {
+		await show(card({ requesterName: "Mia", room: "Launch crew" } as never));
+		expect(container.textContent).toContain("Triggered by Mia in Launch crew");
+		await show(card({ requesterName: "Mia" } as never));
+		expect(container.textContent).toContain("Triggered by Mia");
+		expect(container.textContent).not.toContain("Launch crew");
+		await show(card());
+		expect(container.textContent).not.toContain("Triggered by");
+	});
+
 	test.each([
 		["Allow once", "once", "Allowed once"],
 		["Always allow", "always", "Always allowed"],

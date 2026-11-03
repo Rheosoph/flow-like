@@ -9,7 +9,7 @@ import type {
 	IInboxPlainEnvelope,
 	IInboxState,
 } from "../backend-state/inbox-state";
-import { GLOBAL_CHAT_APP_ID } from "./global-chat-db";
+import { GLOBAL_CHAT_APP_ID, globalChatDb } from "./global-chat-db";
 
 /** Hosts leave a marked message to its chat this long; the chat holds the turn while it streams. */
 export const INTERACTIVE_GRACE_MS = 120_000;
@@ -23,7 +23,7 @@ const WINDOW_AFTER = 10;
 const NEWEST = Number.MAX_SAFE_INTEGER;
 const IMPORT_CHUNK = 200;
 const MAX_IMPORT_TEXT = 48_000;
-const IMPORTED_KEY_PREFIX = "flow-like:bot-chat-imported:";
+const IMPORTED_KEY_PREFIX = "bot-chat-imported:";
 
 export interface BotHistoryTarget {
 	botId: string;
@@ -125,6 +125,8 @@ function messageOf(
 						tool: approval.tool,
 						summary: approval.summary,
 						scopes: approval.scopes,
+						requesterName: approval.requesterName,
+						room: approval.room,
 						answer: approval.answer,
 					},
 				}
@@ -289,17 +291,17 @@ function importedKey(botId: string): string {
 	return `${IMPORTED_KEY_PREFIX}${botId}`;
 }
 
-function wasImported(botId: string): boolean {
+async function wasImported(botId: string): Promise<boolean> {
 	try {
-		return localStorage.getItem(importedKey(botId)) === "1";
+		return (await globalChatDb.markers.get(importedKey(botId))) !== undefined;
 	} catch {
 		return false;
 	}
 }
 
-function markImported(botId: string) {
+async function markImported(botId: string) {
 	try {
-		localStorage.setItem(importedKey(botId), "1");
+		await globalChatDb.markers.put({ key: importedKey(botId), at: Date.now() });
 	} catch {
 		// the server skips repeats by message id, so a lost flag only costs a repeat
 	}
@@ -315,7 +317,7 @@ export async function importLegacyChat(
 	target: BotHistoryTarget,
 	legacy: readonly LegacyMessage[],
 ): Promise<number> {
-	if (wasImported(target.botId)) return 0;
+	if (await wasImported(target.botId)) return 0;
 	const entries = [...legacy]
 		.sort((a, b) => a.timestamp - b.timestamp)
 		.map(legacyImportEntry)
@@ -334,6 +336,6 @@ export async function importLegacyChat(
 			added += result.imported;
 		}
 	}
-	markImported(target.botId);
+	await markImported(target.botId);
 	return added;
 }

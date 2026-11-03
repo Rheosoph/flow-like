@@ -119,7 +119,7 @@ export function BotComputerPane({
 	bot,
 	name,
 }: Readonly<{ bot: IBot; name: string }>) {
-	const host = useBackend().botState.computer;
+	const host = useBackend().botState?.computer;
 	const query = useQuery({
 		queryKey: ["bot-computer", bot.id],
 		queryFn: () => (host ? host.view(bot.id) : Promise.resolve(undefined)),

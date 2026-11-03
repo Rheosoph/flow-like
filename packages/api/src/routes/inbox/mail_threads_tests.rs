@@ -30,6 +30,11 @@ async fn setup() -> DatabaseConnection {
         }
         db.execute(&table).await.unwrap();
     }
+    db.execute_unprepared(
+        r#"CREATE UNIQUE INDEX public."BotMailMessage_botId_messageId_key" ON "BotMailMessage"("botId", "messageId")"#,
+    )
+    .await
+    .unwrap();
     insert_bot(&db, "bot_m", "user-a", "SERVER").await;
     db
 }

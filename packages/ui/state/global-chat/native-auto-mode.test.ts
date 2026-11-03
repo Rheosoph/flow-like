@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
-	createNativeAutoModeControl,
 	type NativeAutoModeRequest,
+	createNativeAutoModeControl,
 } from "./native-auto-mode";
 
 const announcement = (revision = 0) =>

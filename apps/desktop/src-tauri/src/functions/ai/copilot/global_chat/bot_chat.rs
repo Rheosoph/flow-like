@@ -346,6 +346,8 @@ pub(super) fn desktop_bot(
         embedding_model: record.embedding_model,
         tool_host,
         host_tools: super::super::super::native_bot_tools::host_tools(),
+        requester: None,
+        permissions: Default::default(),
     };
     DesktopBot {
         context: Arc::new(context),

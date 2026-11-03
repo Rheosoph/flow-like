@@ -8,6 +8,7 @@ import {
 	QueryClient,
 	QueryClientProvider,
 } from "@flow-like/flow-like-ui";
+import { AppLocalPrincipals } from "@flow-like/flow-like-ui/components/bots-tab/app-local-principals";
 import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
@@ -188,16 +189,18 @@ export function Providers({
 																<ExecutionEngineProviderComponent>
 																	<SpotlightWrapper>
 																		<TelemetryProvider>
-																			<ThemeLoader />
-																			<Suspense fallback={null}>
-																				<NativeIntegrationProvider />
-																			</Suspense>
-																			<AppSidebar>{children}</AppSidebar>
-																			<ChatActivityProvider />
-																			<GlobalToolBridge />
-																			<GlobalChatOverlay />
-																			<FlowPilotBubbleButton />
-																			<GlobalUpgradeDialog />
+																			<AppLocalPrincipals>
+																				<ThemeLoader />
+																				<Suspense fallback={null}>
+																					<NativeIntegrationProvider />
+																				</Suspense>
+																				<AppSidebar>{children}</AppSidebar>
+																				<ChatActivityProvider />
+																				<GlobalToolBridge />
+																				<GlobalChatOverlay />
+																				<FlowPilotBubbleButton />
+																				<GlobalUpgradeDialog />
+																			</AppLocalPrincipals>
 																		</TelemetryProvider>
 																	</SpotlightWrapper>
 																</ExecutionEngineProviderComponent>

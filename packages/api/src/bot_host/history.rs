@@ -9,6 +9,7 @@ use crate::{
 use flow_like::flow::copilot::{ChatMessage, ChatRole};
 use flow_like_types::{
     bot_message::{MessageBody, MessagePart},
+    bot_turn::room_message,
     inbox::{
         ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, TriggerBody, body_target, is_tombstone,
     },
@@ -136,8 +137,8 @@ fn lines_of(window: &[inbox_entry::Model]) -> Vec<Line> {
     lines
 }
 
-/// Display names of the senders in a group, so the model can tell people apart.
-async fn sender_names<C: ConnectionTrait>(
+/// Display names of people and bots, so the model can tell people apart.
+pub(crate) async fn sender_names<C: ConnectionTrait>(
     db: &C,
     ids: &[&str],
 ) -> Result<HashMap<String, String>, DbErr> {
@@ -169,13 +170,15 @@ async fn sender_names<C: ConnectionTrait>(
 }
 
 /// The turn's transcript: the entries up to `trigger_message_id` in the bot's copy of the
-/// conversation. In a group each message of someone else starts with its sender's name.
+/// conversation. In a group each message of someone else is marked as that person's, and says
+/// whether the person is the bot's owner (`owner_id`).
 pub(crate) async fn transcript<C: ConnectionTrait>(
     db: &C,
     bot_id: &str,
     conversation_id: &str,
     trigger_message_id: &str,
     kind: ConversationKind,
+    owner_id: &str,
 ) -> Result<Transcript, HistoryError> {
     let own = |query: sea_orm::Select<inbox_entry::Entity>| {
         query
@@ -218,7 +221,7 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
             return line.text.clone();
         }
         let name = names.get(&line.sender_id).unwrap_or(&line.sender_id);
-        format!("{name}: {}", line.text)
+        room_message(name, line.sender_id == owner_id, &line.text)
     };
     let mut history: Vec<ChatMessage> = lines
         .iter()

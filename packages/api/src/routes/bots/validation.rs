@@ -500,8 +500,8 @@ mod tests {
         }))
         .unwrap_err();
         assert!(
-            error.to_string().contains("server must never read"),
-            "{error}"
+            format!("{error:?}").contains("server must never read"),
+            "{error:?}"
         );
         for location in ["desktop", "device"] {
             let bot = create(json!({

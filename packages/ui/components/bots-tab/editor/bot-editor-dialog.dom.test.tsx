@@ -188,6 +188,9 @@ function fakeBackend(
 					{ name: app.name },
 				]),
 		},
+		dbState: { listTables: async () => [] },
+		eventState: { getEvents: async () => [] },
+		boardState: { getBoards: async () => [] },
 		userState: {
 			getProfiles: async () => [],
 			getSettingsProfile: async () => ({

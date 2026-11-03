@@ -98,6 +98,22 @@ export function ApprovalCard({
 									.join(", ")}`
 							: ` · ${t("crew.approval.askEveryTime", "Always asks first")}`}
 					</p>
+					{approval.requesterName && (
+						<p
+							data-slot="approval-requester"
+							className="mt-0.5 text-xs text-muted-foreground"
+						>
+							{approval.room
+								? t(
+										"crew.approval.triggeredByInRoom",
+										"Triggered by {{name}} in {{room}}",
+										{ name: approval.requesterName, room: approval.room },
+									)
+								: t("crew.approval.triggeredBy", "Triggered by {{name}}", {
+										name: approval.requesterName,
+									})}
+						</p>
+					)}
 				</div>
 			</div>
 			{decision ? (

@@ -22,6 +22,7 @@ use crate::{
 };
 use chrono::DateTime;
 use flow_like_types::{
+    bot_effective::BotRoomLimits,
     create_id,
     inbox::{
         ConversationEncryption, ConversationKind, EntryCursor, EnvelopeKind, InboxEntryKind,
@@ -139,6 +140,12 @@ fn not_allowed(principal_id: &str) -> Error {
     )
 }
 
+fn bot_not_in_room(bot_id: &str, conversation_id: &str) -> Error {
+    Error::not_found(format!(
+        "Bot '{bot_id}' is not an active member of conversation '{conversation_id}'"
+    ))
+}
+
 fn direct_fixed() -> Error {
     Error::new(
         codes::INBOX_DIRECT_FIXED,
@@ -154,7 +161,7 @@ fn membership(
     Ok(db
         .prepare_cached(&format!(
             "SELECT {MEMBER_COLUMNS} FROM conversation_members
-             WHERE conversation_id = ?1 AND principal_id = ?2 AND left_at IS NULL"
+             WHERE conversation_id = ?1 AND principal_id = ?2 AND left_at IS NULL AND status = 'ACTIVE'"
         ))?
         .query_row(params![conversation_id, principal_id], MemberRow::read)
         .optional()?)
@@ -195,7 +202,7 @@ fn member_conversation(
 fn active_members(db: &Connection, conversation_id: &str) -> Result<Vec<MemberRow>> {
     let mut statement = db.prepare_cached(&format!(
         "SELECT {MEMBER_COLUMNS} FROM conversation_members
-         WHERE conversation_id = ?1 AND left_at IS NULL ORDER BY joined_at, principal_id"
+         WHERE conversation_id = ?1 AND left_at IS NULL AND status = 'ACTIVE' ORDER BY joined_at, principal_id"
     ))?;
     let members = statement
         .query_map([conversation_id], MemberRow::read)?
@@ -346,7 +353,7 @@ fn end_membership(
 ) -> Result<()> {
     db.prepare_cached(
         "UPDATE conversation_members SET left_at = ?3
-         WHERE conversation_id = ?1 AND principal_id = ?2 AND left_at IS NULL",
+         WHERE conversation_id = ?1 AND principal_id = ?2 AND left_at IS NULL AND status = 'ACTIVE'",
     )?
     .execute(params![conversation_id, principal_id, at])?;
     Ok(())
@@ -868,7 +875,7 @@ pub(crate) fn retire_bot(tx: &Connection, bot_id: &str, changes: &mut Changes) -
         tx,
         "SELECT c.id FROM conversations c
          JOIN conversation_members m ON m.conversation_id = c.id
-         WHERE m.principal_id = ?1 AND m.left_at IS NULL AND c.kind = ?2",
+         WHERE m.principal_id = ?1 AND m.left_at IS NULL AND m.status = 'ACTIVE' AND c.kind = ?2",
         params![bot_id, ConversationKind::Group.as_str()],
     )?;
     for conversation_id in &groups {
@@ -891,8 +898,8 @@ pub(crate) fn bot_conversations(
         "SELECT c.id FROM conversations c
          JOIN conversation_members b ON b.conversation_id = c.id
          JOIN conversation_members p ON p.conversation_id = c.id
-         WHERE b.principal_id = ?1 AND b.left_at IS NULL
-           AND p.principal_id = ?2 AND p.left_at IS NULL
+         WHERE b.principal_id = ?1 AND b.left_at IS NULL AND b.status = 'ACTIVE'
+           AND p.principal_id = ?2 AND p.left_at IS NULL AND p.status = 'ACTIVE'
          ORDER BY c.created_at, c.id",
         params![bot_id, LOCAL_OWNER_ID],
     )?;
@@ -920,7 +927,7 @@ impl LocalBotStore {
             let mut statement = db.prepare_cached(
                 "SELECT c.id FROM conversation_members m
                  JOIN conversations c ON c.id = m.conversation_id
-                 WHERE m.principal_id = ?1 AND m.left_at IS NULL
+                 WHERE m.principal_id = ?1 AND m.left_at IS NULL AND m.status = 'ACTIVE'
                  ORDER BY c.last_activity_at DESC, c.id DESC LIMIT ?2",
             )?;
             let ids: Vec<String> = statement
@@ -1027,6 +1034,61 @@ impl LocalBotStore {
             }
             changes.conversation(conversation_id);
             Ok(())
+        })
+    }
+
+    /// What the person limited the bot to in this room; `None` adds no limit. The bot must be
+    /// an active member.
+    pub fn member_limits(
+        &self,
+        conversation_id: &str,
+        bot_id: &str,
+    ) -> Result<Option<BotRoomLimits>> {
+        self.read(|db| {
+            let stored: Option<String> = db
+                .prepare_cached(
+                    "SELECT limits FROM conversation_members
+                     WHERE conversation_id = ?1 AND principal_id = ?2 AND principal_kind = ?3
+                       AND left_at IS NULL AND status = 'ACTIVE'",
+                )?
+                .query_row(
+                    params![conversation_id, bot_id, PrincipalKind::Bot.as_str()],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or_else(|| bot_not_in_room(bot_id, conversation_id))?;
+            stored
+                .map(|text| {
+                    serde_json::from_str(&text).map_err(|error| {
+                        Error::storage(format!(
+                            "The room limits of bot '{bot_id}' in '{conversation_id}' are unreadable: {error}"
+                        ))
+                    })
+                })
+                .transpose()
+        })
+    }
+
+    /// Replaces the bot's room limits; `None` removes them. They apply from its next call.
+    pub fn set_member_limits(
+        &self,
+        conversation_id: &str,
+        bot_id: &str,
+        limits: Option<BotRoomLimits>,
+    ) -> Result<Option<BotRoomLimits>> {
+        let stored = limits.as_ref().map(serde_json::to_string).transpose()?;
+        self.write(|tx, changes| {
+            let updated = tx.execute(
+                "UPDATE conversation_members SET limits = ?3
+                 WHERE conversation_id = ?1 AND principal_id = ?2 AND principal_kind = ?4
+                   AND left_at IS NULL AND status = 'ACTIVE'",
+                params![conversation_id, bot_id, stored, PrincipalKind::Bot.as_str()],
+            )?;
+            if updated == 0 {
+                return Err(bot_not_in_room(bot_id, conversation_id));
+            }
+            changes.conversation(conversation_id);
+            Ok(limits.clone())
         })
     }
 

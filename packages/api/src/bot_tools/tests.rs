@@ -24,10 +24,12 @@ use tempfile::TempDir;
 
 use super::host::{AppDirectory, BotToolsHost, TurnDeps, TurnModels};
 use super::{ToolExecutor, routing};
+use crate::middleware::jwt::BotUser;
 use crate::routes::ai::global_chat::{GlobalChatFrame, ServerPlatformBridge};
 
 const OWNER: &str = "user-1";
 const TURN: &str = "turn-1";
+const BOT: &str = "bot-1";
 const WORKSPACE: &str = "ws-bot";
 const DOCS: &str = "app-docs";
 
@@ -121,14 +123,14 @@ impl ToolExecutor for FakeExecutor {
     async fn run(
         &self,
         owner: &str,
-        turn_id: &str,
+        bot: &BotUser,
         workspace: &str,
         job: String,
         _timeout: Duration,
     ) -> Result<ToolReply, String> {
         self.jobs.lock().unwrap().push((
             owner.into(),
-            turn_id.into(),
+            bot.turn_id.clone(),
             workspace.into(),
             job.clone(),
         ));
@@ -187,6 +189,14 @@ async fn host_with(
     host_with_grants(executor, host_tools, Arc::new(MemoryGrants::default())).await
 }
 
+fn bot_user() -> BotUser {
+    BotUser {
+        bot_id: BOT.into(),
+        turn_id: TURN.into(),
+        conv_id: None,
+    }
+}
+
 async fn host_with_grants(
     executor: Option<Arc<FakeExecutor>>,
     host_tools: HostTools,
@@ -195,6 +205,7 @@ async fn host_with_grants(
     let access = Arc::new(Access::new(&[WORKSPACE, DOCS]).await);
     Arc::new(BotToolsHost::new(TurnDeps {
         owner: OWNER.into(),
+        bot: bot_user(),
         turn_id: TURN.into(),
         workspace: WORKSPACE.into(),
         host_tools,
@@ -242,6 +253,7 @@ async fn heavy_tools_become_a_job_that_carries_only_the_scoped_credentials() {
     let job: ToolJob = serde_json::from_str(text).unwrap();
     assert_eq!(job.tool, "file_write");
     assert_eq!(job.owner, OWNER);
+    assert_eq!(job.bot_id, BOT);
     let apps: Vec<_> = job.credentials.keys().cloned().collect();
     assert_eq!(apps, [DOCS, WORKSPACE]);
     assert_eq!(job.scope.apps.len(), 1);
@@ -297,10 +309,9 @@ async fn a_turn_runs_a_bounded_number_of_executor_jobs() {
     assert_eq!(executor.jobs.lock().unwrap().len(), 30);
 }
 
-const ASKING_CALLS: [(&str, &str); 3] = [
+const ASKING_CALLS: [(&str, &str); 2] = [
     ("knowledge_drop", "table:pets"),
     ("code_run", "host:example.com"),
-    ("data_sources", "connection:postgres:example.com::d"),
 ];
 
 fn asking_args(tool: &str) -> Value {
@@ -439,9 +450,11 @@ async fn a_refusal_the_owner_gave_is_told_to_the_model_and_runs_nothing() {
 fn the_job_token_binds_the_job_owner_turn_and_workspace() {
     crate::backend_jwt::init_for_tests();
     let job = r#"{"tool":"file_write"}"#;
-    let token = super::executor::mint(OWNER, TURN, WORKSPACE, job).unwrap();
+    let token = super::executor::mint(OWNER, &bot_user(), WORKSPACE, job).unwrap();
     let claims = crate::execution::verify_execution_jwt(&token).unwrap();
     assert_eq!(claims.sub, OWNER);
+    assert_eq!(claims.bot_id.as_deref(), Some(BOT));
+    assert_eq!(claims.conv_id, None);
     assert_eq!(claims.run_id, TURN);
     assert_eq!(claims.app_id, WORKSPACE);
     assert!(claims.board_id.is_empty());

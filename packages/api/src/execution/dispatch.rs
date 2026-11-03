@@ -3767,7 +3767,7 @@ fn lends_private_bits(caller: &crate::middleware::jwt::AppUser) -> bool {
     match caller {
         AppUser::OpenID(_) | AppUser::PAT(_) | AppUser::APIKey(_) => true,
         AppUser::ConnectedApp(app) => app.person().is_some(),
-        AppUser::Executor(_) | AppUser::Unauthorized => false,
+        AppUser::Executor(_) | AppUser::Bot(_) | AppUser::Unauthorized => false,
     }
 }
 

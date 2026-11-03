@@ -63,7 +63,10 @@ let container: HTMLElement;
 let root: ReturnType<typeof createRoot>;
 
 beforeAll(() => installDomGlobals());
-afterAll(() => restoreDomGlobals());
+afterAll(() => {
+	mock.module("@flow-like/locales", () => actual.locales);
+	restoreDomGlobals();
+});
 
 async function show(element: ReturnType<typeof createElement>) {
 	container = window.document.createElement("div");

@@ -221,7 +221,7 @@ function CraftSession({
 		let opened = false;
 		let sent = false;
 		let bytes: ArrayBuffer | undefined;
-		let timeout: ReturnType<typeof setTimeout>;
+		let timeout: ReturnType<typeof setTimeout> | undefined;
 		const onLoadTimeout = () => {
 			if (runtimeRequested && runtimeAvailable && !opened) {
 				controller.abort();

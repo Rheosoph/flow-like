@@ -17,6 +17,7 @@ use crate::{
 use chrono::DateTime;
 use flow_like_types::{
     bot::{BotCapability, BotLocation, BotModelPolicy, BotSystemKind},
+    bot_restrictions::BotRestrictions,
     create_id,
     data_classification::{DataClassification, DataSensitivity},
 };
@@ -354,9 +355,29 @@ fn parse_updated_at(value: &str) -> Result<i64> {
         })
 }
 
+fn restrictions_of(mask: Option<i64>, scopes: &str) -> BotRestrictions {
+    BotRestrictions::from_bits(mask, serde_json::from_str(scopes).unwrap_or_default())
+}
+
+fn app_not_attached(bot_id: &str, app_id: &str) -> Error {
+    Error::new(
+        codes::NOT_FOUND,
+        format!("Bot '{bot_id}' doesn't use app '{app_id}'"),
+    )
+}
+
+fn attached_restrictions(db: &Connection, bot_id: &str, app_id: &str) -> Result<BotRestrictions> {
+    db.prepare_cached("SELECT permission_mask, scopes FROM bot_apps WHERE bot_id = ?1 AND app_id = ?2")?
+        .query_row(params![bot_id, app_id], |row| {
+            Ok(restrictions_of(row.get(0)?, &row.get::<_, String>(1)?))
+        })
+        .optional()?
+        .ok_or_else(|| app_not_attached(bot_id, app_id))
+}
+
 fn attached_apps(db: &Connection, bot_id: &str) -> Result<Vec<BotApp>> {
     let mut statement = db.prepare_cached(
-        "SELECT app_id, added_at FROM bot_apps WHERE bot_id = ?1 ORDER BY added_at, app_id",
+        "SELECT app_id, added_at, permission_mask, scopes FROM bot_apps WHERE bot_id = ?1 ORDER BY added_at, app_id",
     )?;
     let apps = statement
         .query_map([bot_id], |row| {
@@ -364,6 +385,7 @@ fn attached_apps(db: &Connection, bot_id: &str) -> Result<Vec<BotApp>> {
                 app_id: row.get("app_id")?,
                 added_at: timestamp(row.get("added_at")?),
                 owner_role: Some(OWNER_ROLE.to_string()),
+                restrictions: restrictions_of(row.get("permission_mask")?, &row.get::<_, String>("scopes")?),
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -581,8 +603,8 @@ impl LocalBotStore {
             };
             insert_bot(tx, copy, now)?;
             tx.execute(
-                "INSERT INTO bot_apps (bot_id, app_id, added_at)
-                 SELECT ?2, app_id, ?3 FROM bot_apps WHERE bot_id = ?1",
+                "INSERT INTO bot_apps (bot_id, app_id, added_at, permission_mask, scopes)
+                 SELECT ?2, app_id, ?3, permission_mask, scopes FROM bot_apps WHERE bot_id = ?1",
                 params![bot_id, copy_id, now],
             )?;
             changes.bot(&copy_id);
@@ -689,6 +711,37 @@ impl LocalBotStore {
             touch_bot(tx, bot_id)?;
             changes.bot(bot_id);
             Ok(())
+        })
+    }
+
+    /// What the person lets the bot do in the attached app; it applies in every chat.
+    pub fn app_restrictions(&self, bot_id: &str, app_id: &str) -> Result<BotRestrictions> {
+        self.read(|db| {
+            require_bot(db, bot_id)?;
+            attached_restrictions(db, bot_id, app_id)
+        })
+    }
+
+    pub fn set_app_restrictions(
+        &self,
+        bot_id: &str,
+        app_id: &str,
+        restrictions: BotRestrictions,
+    ) -> Result<BotRestrictions> {
+        restrictions.validate().map_err(Error::invalid)?;
+        let scopes = serde_json::to_string(&restrictions.scopes)?;
+        self.write(|tx, changes| {
+            require_bot(tx, bot_id)?;
+            let updated = tx.execute(
+                "UPDATE bot_apps SET permission_mask = ?3, scopes = ?4 WHERE bot_id = ?1 AND app_id = ?2",
+                params![bot_id, app_id, restrictions.permission_bits(), scopes],
+            )?;
+            if updated == 0 {
+                return Err(app_not_attached(bot_id, app_id));
+            }
+            touch_bot(tx, bot_id)?;
+            changes.bot(bot_id);
+            Ok(restrictions.clone())
         })
     }
 

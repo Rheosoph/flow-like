@@ -21,6 +21,9 @@ fn card(turn_id: &str) -> ApprovalRequest {
         summary: "Run code that reaches example.com".into(),
         scope: "host:example.com".into(),
         args_hash: "hash1".into(),
+        requester_id: None,
+        requester_name: None,
+        room: None,
     }
 }
 
@@ -124,7 +127,7 @@ fn parking_posts_one_card_and_answering_releases_the_turn_without_waking_the_bot
     assert_eq!(fixture.store.resolve_parked(&bot.id, "bt_1", &right).unwrap(), None);
     let entries = fixture.all_entries(&direct.id);
     assert_eq!(entries.len(), 2);
-    assert_eq!(entries[1].envelope["body"]["approval_response"]["decision"], "once");
+    assert_eq!(entries[0].envelope["body"]["approval_response"]["decision"], "once");
 }
 
 #[test]
@@ -145,6 +148,6 @@ fn a_wait_older_than_seven_days_ends_with_a_notice() {
     let expired = fixture.store.expire_parked().unwrap();
     assert_eq!(expired.iter().map(|p| p.turn_id.as_str()).collect::<Vec<_>>(), ["bt_old"]);
     assert_eq!(fixture.store.parked_turns().unwrap().len(), 1);
-    let notice = fixture.all_entries(&direct.id).into_iter().last().unwrap();
+    let notice = fixture.all_entries(&direct.id).into_iter().next().unwrap();
     assert!(notice.envelope["body"]["text"].as_str().unwrap().contains("seven days"));
 }

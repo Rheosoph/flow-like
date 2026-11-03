@@ -52,7 +52,7 @@ impl From<&conversation_member::Model> for Principal {
     }
 }
 
-fn not_allowed(principal_id: &str) -> ApiError {
+pub(super) fn not_allowed(principal_id: &str) -> ApiError {
     ApiError::coded(
         StatusCode::FORBIDDEN,
         INBOX_MEMBER_NOT_ALLOWED,
@@ -267,7 +267,7 @@ pub(super) async fn add_in<C: ConnectionTrait>(
 
 /// The group `principal_id` is an active member of and its active members. Direct
 /// conversations never change members.
-async fn group_members<C: ConnectionTrait>(
+pub(super) async fn group_members<C: ConnectionTrait>(
     txn: &C,
     conversation_id: &str,
     principal_id: &str,
@@ -280,7 +280,7 @@ async fn group_members<C: ConnectionTrait>(
     Ok((conversation, members))
 }
 
-fn ensure_room(conversation_id: &str, current: usize, joining: usize) -> Result<(), ApiError> {
+pub(super) fn ensure_room(conversation_id: &str, current: usize, joining: usize) -> Result<(), ApiError> {
     let total = current + joining;
     if total <= MAX_CONVERSATION_MEMBERS {
         return Ok(());
@@ -318,6 +318,8 @@ async fn upsert_members<C: ConnectionTrait>(
             conversation_member::Column::AddedBy,
             conversation_member::Column::JoinedAt,
             conversation_member::Column::LeftAt,
+            conversation_member::Column::Status,
+            conversation_member::Column::Limits,
         ])
         .to_owned(),
     )
@@ -460,7 +462,7 @@ pub(super) async fn end_memberships<C: ConnectionTrait>(
         .col_expr(conversation_member::Column::LeftAt, Expr::value(now))
         .filter(conversation_member::Column::ConversationId.is_in(conversation_ids.iter().cloned()))
         .filter(conversation_member::Column::PrincipalId.is_in(principal_ids.iter().cloned()))
-        .filter(conversation_member::Column::LeftAt.is_null())
+        .filter(super::active_member())
         .exec(txn)
         .await
         .map(|_| ())
@@ -473,9 +475,9 @@ pub(super) async fn end_memberships<C: ConnectionTrait>(
     params(("conversation_id" = String, Path, description = "The group")),
     request_body = AddMembersRequest,
     responses(
-        (status = 200, description = "The group with its members. Everyone in it gets a join entry for each new member.", body = Conversation),
+        (status = 200, description = "The group with its members and pending invitations. Your own bots join at once and everyone gets a join entry; people and other people's bots are invited and join when they (or the bot's owner) accept.", body = Conversation),
         (status = 401, description = "Not signed in"),
-        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: you can add your own bots and people who share an app with you; the message names the first id refused"),
+        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: you can add your own bots and invite people who share an app with you and their bots; the message names the first id refused"),
         (status = 404, description = "You are not in this conversation"),
         (status = 409, description = "INBOX_MEMBER_LIMIT: a conversation has at most 50 members; INBOX_DIRECT_FIXED: a direct conversation's members don't change")
     ),
@@ -503,21 +505,9 @@ pub async fn add_members(
             ),
         ));
     }
-    let principals = allowed_principals(&state.db, &sub, &candidates).await?;
-    if !principals.is_empty() {
-        let people = state
-            .transaction(|txn| {
-                let (id, sub, principals) =
-                    (conversation_id.clone(), sub.clone(), principals.clone());
-                Box::pin(async move {
-                    lock_live_bots(txn, &sub, &principals).await?;
-                    lock_conversation(txn, &id).await?;
-                    add_in(txn, &id, &sub, &principals, now_millis()).await
-                })
-            })
-            .await?;
-        wake(&state, people).await;
-    }
+    let invitees = super::invitations::classify(&state.db, &sub, &candidates).await?;
+    super::invitations::invite_and_notify(&state, &sub, &conversation_id, invitees, Default::default())
+        .await?;
     Ok(Json(
         visible_conversation(&state.db, &Reader::own(&sub), &conversation_id).await?,
     ))

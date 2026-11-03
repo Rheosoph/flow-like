@@ -15,7 +15,7 @@ use crate::{
     db::{DbDialect, RetryPolicy, retry_transaction},
     entity::{bot, bot_turn, conversation},
     error::ApiError,
-    execution::{ExecutionJwtParams, TokenType, sign_unattended_execution_jwt},
+    execution::{ExecutionJwtParams, TokenType, bind_bot_identity, sign_unattended_execution_jwt},
     routes::{
         ai::{
             copilot::master_flow_like_state,
@@ -59,7 +59,7 @@ use flow_like_types::{
     Value,
     bot::BotLocation,
     bot_message::ApprovalRequest,
-    bot_turn::{HEARTBEAT_SECS, MAX_ATTEMPTS, TurnHostKind, failure_message_id, reply_message_id},
+    bot_turn::{HEARTBEAT_SECS, MAX_ATTEMPTS, TurnAudience, TurnHostKind, failure_message_id, reply_message_id},
     inbox::{ConversationEncryption, ConversationKind, InboxEntryKind, plain_envelope},
     tokio::{
         self,
@@ -329,12 +329,41 @@ impl PlatformToolBridge for HeadlessBridge {
     }
 }
 
+async fn turn_requester(
+    db: &DatabaseConnection,
+    turn: &bot_turn::Model,
+    room: Option<&str>,
+    kind: ConversationKind,
+) -> Result<flow_like::flow::copilot::TurnRequester, ApiError> {
+    let requester_id = turn
+        .requester_id
+        .clone()
+        .unwrap_or_else(|| turn.owner_id.clone());
+    let ids = [requester_id.as_str(), turn.owner_id.as_str()];
+    let names = history::sender_names(db, &ids).await?;
+    Ok(flow_like::flow::copilot::TurnRequester {
+        requester_name: names.get(&requester_id).cloned(),
+        owner_name: names.get(&turn.owner_id).cloned(),
+        requester_id,
+        owner_id: turn.owner_id.clone(),
+        audience: TurnAudience::of(kind),
+        room: room.map(str::to_string),
+    })
+}
+
 fn host_id() -> String {
     format!("server:{}", uuid::Uuid::new_v4())
 }
 
-fn executor_token(
+pub(crate) fn room_of(kind: ConversationKind, conversation_id: &str) -> Option<&str> {
+    matches!(kind, ConversationKind::Group).then_some(conversation_id)
+}
+
+/// The turn's executor token: the owner stays the payer (`sub`), app callbacks run as the bot.
+pub(crate) fn executor_token(
     owner_id: &str,
+    bot_id: &str,
+    conv_id: Option<&str>,
     turn_id: &str,
     workspace_app_id: Option<&str>,
     ttl_secs: i64,
@@ -355,6 +384,7 @@ fn executor_token(
         shadow: None,
     };
     sign_unattended_execution_jwt(params)
+        .and_then(|token| bind_bot_identity(&token, bot_id, conv_id))
         .map_err(|error| tracing::warn!(%error, "Bot turn runs without a model token"))
         .ok()
 }
@@ -468,6 +498,7 @@ async fn attempt(
         &turn.conversation_id,
         &turn.trigger_message_id,
         kind,
+        owner,
     )
     .await?;
     if let Some(answered) = super::talk::answered_ask(&state.db, turn).await? {
@@ -482,6 +513,8 @@ async fn attempt(
         .await?
         .ok_or_else(|| Failure::silent(CODE_BOT_GONE, "The bot was deleted"))?;
     bot.context.tool_host = BotToolHost::CoreOnly;
+    bot.context.requester =
+        Some(turn_requester(&state.db, turn, conversation.title.as_deref(), kind).await?);
     let flow_like_state = master_flow_like_state(state).await?;
     let model_id = server_bot_model(state, owner, &flow_like_state, &profile, &bot.model).await;
     if let Some(rejection) = access.rejection(model_id.as_deref()) {
@@ -552,8 +585,11 @@ async fn attempt(
     let remaining = (usage.deadline - chrono::Utc::now())
         .num_milliseconds()
         .max(1);
+    let conv_id = room_of(kind, &turn.conversation_id);
     let token = executor_token(
         owner,
+        &turn.bot_id,
+        conv_id,
         &turn.id,
         bot.context.workspace_app_id.as_deref(),
         remaining / 1_000 + 120,
@@ -634,6 +670,7 @@ async fn attempt(
         &selected,
         token.clone(),
         grants.clone(),
+        conv_id,
     )
     .await;
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(HeadlessBridge {

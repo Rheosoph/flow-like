@@ -45,7 +45,9 @@ const INBOX_TABLES: [&str; 4] = [
     r#"CREATE TABLE public."ConversationMember" (
         "conversationId" TEXT NOT NULL, "principalId" TEXT NOT NULL,
         "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
-        "leftAt" TEXT, "lastReadAt" TEXT, PRIMARY KEY ("conversationId", "principalId"))"#,
+        "leftAt" TEXT, "lastReadAt" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'ACTIVE', "limits" TEXT, "invitedBy" TEXT, "invitedAt" TEXT,
+        "acceptedAt" TEXT, PRIMARY KEY ("conversationId", "principalId"))"#,
     r#"CREATE TABLE public."InboxEntry" (
         "id" TEXT PRIMARY KEY, "inboxId" TEXT NOT NULL, "conversationId" TEXT NOT NULL,
         "messageId" TEXT NOT NULL, "senderId" TEXT NOT NULL, "kind" TEXT NOT NULL,

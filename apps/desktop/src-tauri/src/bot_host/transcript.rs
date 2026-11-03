@@ -6,6 +6,7 @@ use flow_like::{copilot::UnifiedChatMessage, flow::copilot::ChatRole};
 use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
     bot_message::{MessageBody, MessagePart},
+    bot_turn::room_message,
     inbox::{ConversationKind, InboxEntryKind, body_target, is_tombstone},
 };
 use std::collections::HashMap;
@@ -94,13 +95,14 @@ fn clipped(text: &str, max: usize) -> String {
 }
 
 /// The transcript of `entries` (oldest first) up to `trigger_message_id`, which must be the last
-/// readable message. In a group each message of someone else starts with its sender's name.
+/// readable message. In a group each message of someone else is marked as that person's, and whether they are `owner_id`.
 pub fn transcript(
     bot_id: &str,
     kind: ConversationKind,
     trigger_message_id: &str,
     entries: &[InboxEntry],
     names: &HashMap<String, String>,
+    owner_id: &str,
 ) -> Result<Transcript, Unreadable> {
     let upto = entries
         .iter()
@@ -117,7 +119,7 @@ pub fn transcript(
             return line.text.clone();
         }
         let name = names.get(&line.sender_id).unwrap_or(&line.sender_id);
-        format!("{name}: {}", line.text)
+        room_message(name, line.sender_id == owner_id, &line.text)
     };
     let prompt = clipped(&spoken(answered), MAX_PROMPT_CHARS);
     let history = lines[..lines.len() - 1]

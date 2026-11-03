@@ -241,7 +241,8 @@ function terminalActivity(
 		...(typeof exitCode === "number" || exitCode === null ? { exitCode } : {}),
 		...(result?.timed_out === true ? { timedOut: true } : {}),
 	};
-	return terminal.command ? terminal : undefined;
+	const { command: shown } = terminal;
+	return shown ? { ...terminal, command: shown } : undefined;
 }
 
 /** Extract only display context. Raw arguments, request bodies and tool results stay out. */

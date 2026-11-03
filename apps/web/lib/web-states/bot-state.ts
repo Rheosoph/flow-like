@@ -2,6 +2,7 @@ import type {
 	BotApprovalDecision,
 	IBot,
 	IBotApp,
+	IBotRestrictions,
 	IBotMailAddress,
 	IBotMailAvailability,
 	IBotMailThread,
@@ -375,6 +376,18 @@ export class WebBotState implements IBotState {
 		await apiPut(
 			`${botPath(botId)}/apps/${encodeURIComponent(appId)}`,
 			undefined,
+			this.backend.auth,
+		);
+	}
+
+	async setBotAppRestrictions(
+		botId: string,
+		appId: string,
+		restrictions: IBotRestrictions,
+	): Promise<IBotRestrictions> {
+		return apiPut<IBotRestrictions>(
+			`${botPath(botId)}/apps/${encodeURIComponent(appId)}/restrictions`,
+			restrictions,
 			this.backend.auth,
 		);
 	}

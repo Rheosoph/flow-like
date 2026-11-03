@@ -16,7 +16,10 @@ import type {
 	ICreateConversationRequest,
 	IInboxEntriesPage,
 	IInboxEntry,
+	IBotRoomLimits,
 	IInboxState,
+	IInvitation,
+	IInviteRequest,
 	ISendInboxEntryRequest,
 } from "../state/backend-state/inbox-state";
 
@@ -28,6 +31,9 @@ export const inboxKeys = {
 		[...inboxKeys.all, "conversation", conversationId, as ?? "me"] as const,
 	entries: (conversationId: string, as?: string) =>
 		[...inboxKeys.all, "entries", conversationId, as ?? "me"] as const,
+	invitations: () => [...inboxKeys.all, "invitations"] as const,
+	invitable: (q: string, conversationId?: string) =>
+		[...inboxKeys.all, "invitable", conversationId ?? "", q] as const,
 };
 
 /** Polling stands in for realtime wakeups until the inbox joins the realtime fingerprint. */
@@ -313,6 +319,127 @@ export function useRemoveConversationMember() {
 			conversationId: string;
 			principalId: string;
 		}) => requireInboxState(state).removeMember(conversationId, principalId),
+		onSettled: (_, __, { conversationId }) => {
+			queryClient.invalidateQueries({
+				queryKey: inboxKeys.conversation(conversationId),
+			});
+			queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
+		},
+	});
+}
+
+export function useInvitations() {
+	const state = useBackend().inboxState;
+	return useQuery({
+		queryKey: inboxKeys.invitations(),
+		queryFn: () => requireInboxState(state).listInvitations(),
+		enabled: Boolean(state),
+		refetchInterval: INBOX_POLL_MS.conversations,
+		refetchIntervalInBackground: false,
+	});
+}
+
+/** Who the server lets you bring into a room; `conversationId` marks who is already in it. */
+export function useInvitable(
+	q: string,
+	options: { conversationId?: string; enabled?: boolean } = {},
+) {
+	const state = useBackend().inboxState;
+	return useQuery({
+		queryKey: inboxKeys.invitable(q, options.conversationId),
+		queryFn: () =>
+			requireInboxState(state).listInvitable({
+				q: q || undefined,
+				conversationId: options.conversationId,
+			}),
+		enabled: Boolean(state) && options.enabled !== false,
+		placeholderData: (previous) => previous,
+	});
+}
+
+export function useInviteToConversation() {
+	const state = useBackend().inboxState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			conversationId,
+			request,
+		}: {
+			conversationId: string;
+			request: IInviteRequest;
+		}) => requireInboxState(state).invite(conversationId, request),
+		onSuccess: ({ conversation }) => {
+			storeConversation(queryClient, conversation);
+			queryClient.invalidateQueries({
+				queryKey: [...inboxKeys.all, "invitable"],
+			});
+		},
+	});
+}
+
+export function useAnswerInvitation() {
+	const state = useBackend().inboxState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			invitation,
+			accept,
+			limits,
+		}: {
+			invitation: IInvitation;
+			accept: boolean;
+			limits?: IBotRoomLimits | null;
+		}) => {
+			const inbox = requireInboxState(state);
+			return accept
+				? inbox.acceptInvitation(invitation, limits)
+				: inbox.declineInvitation(invitation);
+		},
+		onSettled: () => {
+			queryClient.invalidateQueries({ queryKey: inboxKeys.invitations() });
+			queryClient.invalidateQueries({
+				queryKey: [...inboxKeys.all, "conversation"],
+			});
+			queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
+		},
+	});
+}
+
+export function useCancelInvitation() {
+	const state = useBackend().inboxState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			conversationId,
+			principalId,
+		}: {
+			conversationId: string;
+			principalId: string;
+		}) =>
+			requireInboxState(state).cancelInvitation(conversationId, principalId),
+		onSettled: (_, __, { conversationId }) => {
+			queryClient.invalidateQueries({
+				queryKey: inboxKeys.conversation(conversationId),
+			});
+			queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
+		},
+	});
+}
+
+export function useSetMemberLimits() {
+	const state = useBackend().inboxState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			conversationId,
+			botId,
+			limits,
+		}: {
+			conversationId: string;
+			botId: string;
+			limits: IBotRoomLimits | null;
+		}) =>
+			requireInboxState(state).setMemberLimits(conversationId, botId, limits),
 		onSettled: (_, __, { conversationId }) => {
 			queryClient.invalidateQueries({
 				queryKey: inboxKeys.conversation(conversationId),

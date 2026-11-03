@@ -4,7 +4,11 @@ use async_trait::async_trait;
 use flow_like_bot_tools_host::{ToolJobEnvelope, ToolReply, job_hash};
 
 use crate::{
-    execution::{ExecutionJwtParams, TokenType, bind_tool_job, sign_unattended_execution_jwt},
+    execution::{
+        ExecutionJwtParams, TokenType, bind_bot_identity, bind_tool_job,
+        sign_unattended_execution_jwt,
+    },
+    middleware::jwt::BotUser,
     state::AppState,
 };
 
@@ -13,11 +17,11 @@ const TOKEN_TTL_SECS: i64 = 330;
 /// Where a bot turn's heavy tool calls run.
 #[async_trait]
 pub(crate) trait ToolExecutor: Send + Sync {
-    /// Runs `job` (JSON text) for the bot's `owner` in `workspace` during `turn_id`.
+    /// Runs `job` (JSON text) for `bot` (and its `owner`, the payer) in `workspace`.
     async fn run(
         &self,
         owner: &str,
-        turn_id: &str,
+        bot: &BotUser,
         workspace: &str,
         job: String,
         timeout: Duration,
@@ -46,18 +50,18 @@ fn callback_url() -> String {
     std::env::var("API_BASE_URL").unwrap_or_else(|_| "http://localhost:8080".to_string())
 }
 
-/// The unattended executor token of one job: sub = owner, app = workspace, run = turn, bound to
-/// the job text by its digest.
+/// The unattended executor token of one job: sub = owner (the payer), bot = the bot, app =
+/// workspace, run = turn, bound to the job text by its digest.
 pub(crate) fn mint(
     owner: &str,
-    turn_id: &str,
+    bot: &BotUser,
     workspace: &str,
     job: &str,
 ) -> Result<String, String> {
     let token = sign_unattended_execution_jwt(ExecutionJwtParams {
         user_id: owner.to_string(),
         technical_user_id: None,
-        run_id: turn_id.to_string(),
+        run_id: bot.turn_id.clone(),
         app_id: workspace.to_string(),
         board_id: String::new(),
         event_id: None,
@@ -69,6 +73,8 @@ pub(crate) fn mint(
         shadow: None,
     })
     .map_err(|error| format!("Cannot sign the tool job: {error}"))?;
+    let token = bind_bot_identity(&token, &bot.bot_id, bot.conv_id.as_deref())
+        .map_err(|error| format!("Cannot bind the bot identity: {error}"))?;
     bind_tool_job(&token, job_hash(job))
         .map_err(|error| format!("Cannot bind the tool job: {error}"))
 }
@@ -78,12 +84,12 @@ impl ToolExecutor for DispatcherExecutor {
     async fn run(
         &self,
         owner: &str,
-        turn_id: &str,
+        bot: &BotUser,
         workspace: &str,
         job: String,
         timeout: Duration,
     ) -> Result<ToolReply, String> {
-        let executor_jwt = mint(owner, turn_id, workspace, &job)?;
+        let executor_jwt = mint(owner, bot, workspace, &job)?;
         let envelope = ToolJobEnvelope { executor_jwt, job };
         self.state
             .dispatcher

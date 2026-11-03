@@ -1,3 +1,5 @@
+import type { IBotScopes } from "./bot-state";
+
 export type ConversationKind = "direct" | "group";
 export type ConversationEncryption = "plain" | "e2e";
 export type InboxPrincipalKind = "user" | "bot";
@@ -47,6 +49,9 @@ export interface IInboxApproval {
 	summary: string;
 	scope: string;
 	args_hash: string;
+	requester_id?: string;
+	requester_name?: string;
+	room?: string;
 }
 
 export interface IInboxApprovalResponse {
@@ -81,6 +86,27 @@ export interface IConversationMember {
 	kind: InboxPrincipalKind;
 	added_by: string | null;
 	joined_at: string;
+	/** A bot's room limits; only its owner sees them. */
+	limits?: IBotRoomLimits | null;
+}
+
+/** What a bot may do in one room, on top of its own restrictions; each field only narrows. */
+export interface IBotRoomLimits {
+	/** Most permissions (role bits) the bot holds in the room; omitted adds no limit. */
+	mask?: number | null;
+	/** Apps the bot may use in the room; omitted adds no limit. */
+	apps?: string[] | null;
+	/** Further scopes per app id. */
+	scopes?: Record<string, IBotScopes>;
+}
+
+/** Someone invited to a group who has not joined yet. */
+export interface IPendingMember {
+	principal_id: string;
+	kind: InboxPrincipalKind;
+	invited_by: string | null;
+	invited_at: string | null;
+	status: "pending" | "declined";
 }
 
 /** One principal's copy of one event. Every copy of the same event shares `message_id`. */
@@ -108,6 +134,8 @@ export interface IConversation {
 	last_activity_at: string;
 	/** Active members only. */
 	members: IConversationMember[];
+	/** Invitations nobody accepted yet; they read and receive nothing. */
+	pending?: IPendingMember[];
 	unread_count: number;
 	/** Newest `message` entry in the reader's inbox. */
 	last_entry: IInboxEntry | null;
@@ -218,6 +246,46 @@ export interface IRegisterInboxKeyRequest {
 	public_key: string;
 }
 
+/** An invitation to a room for you or for one of your bots. */
+export interface IInvitation {
+	/** `{conversation_id}:{principal_id}`. */
+	id: string;
+	conversation_id: string;
+	title: string | null;
+	/** You, or the bot of yours that is invited. */
+	principal_id: string;
+	kind: InboxPrincipalKind;
+	bot_name: string | null;
+	invited_by: string | null;
+	invited_at: string | null;
+}
+
+/** `add_now`: your own bot joins at once. `invite`: they (or the bot's owner) must accept. */
+export type InviteMode = "add_now" | "invite";
+
+export interface IInvitable {
+	principal_id: string;
+	kind: InboxPrincipalKind;
+	name: string | null;
+	description: string | null;
+	owner_id: string | null;
+	mode: InviteMode;
+	/** Set when the room is known and the principal is already in or invited to it. */
+	state: "member" | "invited" | null;
+}
+
+export interface IInviteRequest {
+	principal_ids: string[];
+	/** Room limits for your own bots as they join. */
+	bot_limits?: Record<string, IBotRoomLimits>;
+}
+
+export interface IInviteResponse {
+	added: string[];
+	invited: string[];
+	conversation: IConversation;
+}
+
 export interface IInboxState {
 	/** Newest activity first. `as` reads one of your bots' inboxes. */
 	listConversations(as?: string): Promise<IConversation[]>;
@@ -236,6 +304,29 @@ export interface IInboxState {
 		conversationId: string,
 		query?: IInboxEntriesQuery,
 	): Promise<IInboxEntriesPage>;
+	/** Pending invitations for you and your bots, newest first. */
+	listInvitations(): Promise<IInvitation[]>;
+	/** Exactly who the server lets you bring into a room. */
+	listInvitable(query?: {
+		q?: string;
+		conversationId?: string;
+	}): Promise<IInvitable[]>;
+	invite(
+		conversationId: string,
+		request: IInviteRequest,
+	): Promise<IInviteResponse>;
+	/** For a bot's invitation the owner sets the room's limits. */
+	acceptInvitation(
+		invitation: IInvitation,
+		limits?: IBotRoomLimits | null,
+	): Promise<void>;
+	declineInvitation(invitation: IInvitation): Promise<void>;
+	cancelInvitation(conversationId: string, principalId: string): Promise<void>;
+	setMemberLimits(
+		conversationId: string,
+		botId: string,
+		limits: IBotRoomLimits | null,
+	): Promise<void>;
 	sendEntry(
 		conversationId: string,
 		request: ISendInboxEntryRequest,

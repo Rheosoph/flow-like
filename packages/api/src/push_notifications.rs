@@ -2418,7 +2418,7 @@ mod tests {
         assert!(payload["aps"].get("mutable-content").is_none());
 
         input.app_id = None;
-        let payload = apns_payload(&input, HashMap::new(), Some(&sender())).unwrap();
+        let payload = apns_payload(&input, HashMap::new(), None).unwrap();
         assert!(payload.get("app_name").is_none());
 
         let android = fcm_message_body(

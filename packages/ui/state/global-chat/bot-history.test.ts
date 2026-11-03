@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import "fake-indexeddb/auto";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { IRole } from "../../lib/schema/llm/history";
 import type {
@@ -22,6 +23,7 @@ import {
 	startNewTopic,
 	transcriptOf,
 } from "./bot-history";
+import { globalChatDb } from "./global-chat-db";
 
 const BOT = "bot_ada";
 const CONVERSATION = "conv_1";
@@ -265,7 +267,7 @@ describe("the jump list", () => {
 });
 
 describe("the one-time import of the old IndexedDB chat", () => {
-	beforeEach(() => localStorage.clear());
+	beforeEach(() => globalChatDb.markers.clear());
 
 	const legacy = [
 		{ id: "a1", role: "user" as const, text: "Hi", timestamp: 1 },
@@ -298,7 +300,7 @@ describe("the one-time import of the old IndexedDB chat", () => {
 		expect(await importLegacyChat(inbox, target, legacy)).toBe(0);
 		expect(spy).toHaveBeenCalledTimes(1);
 
-		localStorage.clear();
+		await globalChatDb.markers.clear();
 		expect(await importLegacyChat(inbox, target, legacy)).toBe(0);
 		expect(imported.size).toBe(2);
 	});
@@ -306,8 +308,8 @@ describe("the one-time import of the old IndexedDB chat", () => {
 	test("an empty old chat still marks the bot done", async () => {
 		const { inbox } = fakeInbox(0);
 		expect(await importLegacyChat(inbox, target, [])).toBe(0);
-		expect(localStorage.getItem(`flow-like:bot-chat-imported:${BOT}`)).toBe(
-			"1",
-		);
+		expect(
+			await globalChatDb.markers.get(`bot-chat-imported:${BOT}`),
+		).toBeDefined();
 	});
 });

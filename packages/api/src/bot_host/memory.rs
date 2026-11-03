@@ -64,7 +64,7 @@ pub(crate) async fn is_owner_direct<C: ConnectionTrait>(
     }
     let members: HashSet<String> = conversation_member::Entity::find()
         .filter(conversation_member::Column::ConversationId.eq(conversation_id))
-        .filter(conversation_member::Column::LeftAt.is_null())
+        .filter(crate::routes::inbox::active_member())
         .all(db)
         .await?
         .into_iter()

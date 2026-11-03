@@ -214,7 +214,10 @@ async fn claimed_run<C: ConnectionTrait>(
         AppUser::OpenID(person) => execution_run::Column::UserId.eq(person.sub.as_str()),
         AppUser::PAT(person) => execution_run::Column::UserId.eq(person.sub.as_str()),
         AppUser::APIKey(key) => execution_run::Column::TechnicalUserId.eq(key.key_id.as_str()),
-        AppUser::Executor(_) | AppUser::ConnectedApp(_) | AppUser::Unauthorized => {
+        AppUser::Executor(_)
+        | AppUser::ConnectedApp(_)
+        | AppUser::Bot(_)
+        | AppUser::Unauthorized => {
             return Ok(None);
         }
     };
@@ -258,6 +261,7 @@ mod tests {
 
     fn run(sub: &str) -> ExecutorUser {
         ExecutorUser {
+            bot: None,
             sub: sub.into(),
             app_id: "app-1".into(),
             run_id: "run-1".into(),

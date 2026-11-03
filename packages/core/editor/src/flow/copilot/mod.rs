@@ -52,10 +52,10 @@ pub use behavioral_evaluation::*;
 pub use behavioral_state::*;
 pub use benchmark_cases::workflow_benchmark_cases;
 pub use bot_run::{
-    BotRunContext, BotToolHost, BotToolset, FLUX_BOT_ID, FLUX_BOT_NAME, GENERAL_BOT_DESCRIPTION,
+    BotRunContext, BotToolHost, BotToolset, EffectivePermissions, FLUX_BOT_ID, FLUX_BOT_NAME, GENERAL_BOT_DESCRIPTION,
     GENERAL_BOT_ID, GENERAL_BOT_NAME, bot_persona_section, bot_platform_context, bot_system_prompt,
     find_bot_tool_spec, resolve_bot_model, resolve_host_completion_model, run_bot_chat,
-    run_bot_chat_with_talk, runnable_completion_model,
+    run_bot_chat_with_talk, runnable_completion_model, TurnRequester,
 };
 pub use memory_tools::{HeadlessMemory, MemoryHandle, MemoryTurnSource, memory_tool_specs};
 pub use capability_tools::{HostTools, bot_tool_spec, linked_tool_names, tool_outcome_output};

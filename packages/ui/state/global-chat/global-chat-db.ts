@@ -25,6 +25,12 @@ export interface IGlobalChatSession extends ISession {
 	pinnedAt?: number;
 }
 
+/** A fixed-size flag that must outlive conversation pruning, e.g. "this bot's old chat was imported". */
+export interface IGlobalChatMarker {
+	key: string;
+	at: number;
+}
+
 /**
  * Frontend-only history for the global FlowPilot assistant. Mirrors the chat-default schema but is a
  * separate Dexie database so global conversations never mix with per-app chat history. Cloud sync is
@@ -33,6 +39,7 @@ export interface IGlobalChatSession extends ISession {
 const globalChatDb = new Dexie("Global-Chat-History") as Dexie & {
 	sessions: EntityTable<IGlobalChatSession, "id">;
 	messages: EntityTable<IMessage, "id">;
+	markers: EntityTable<IGlobalChatMarker, "key">;
 };
 
 globalChatDb.version(1).stores({
@@ -48,6 +55,12 @@ globalChatDb.version(2).stores({
 globalChatDb.version(3).stores({
 	sessions: "id, updatedAt, boardId, mode, pinnedAt",
 	messages: "id, sessionId, timestamp",
+});
+
+globalChatDb.version(4).stores({
+	sessions: "id, updatedAt, boardId, mode, pinnedAt",
+	messages: "id, sessionId, timestamp",
+	markers: "key",
 });
 
 export { globalChatDb };

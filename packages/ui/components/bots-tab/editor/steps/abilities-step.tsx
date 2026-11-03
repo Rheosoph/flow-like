@@ -12,13 +12,13 @@ import {
 } from "../../../../state/backend-state/bot-state";
 import { Label } from "../../../ui/label";
 import { Switch } from "../../../ui/switch";
+import { BotEmailAddress } from "../../bot-mail";
 import {
 	BOT_CAPABILITY_GROUPS,
 	BOT_CAPABILITY_ICONS,
 	BOT_RUNTIME_PENDING_CAPABILITIES,
 	type BotCapabilityGroupId,
 } from "../bot-capability-groups";
-import { BotEmailAddress } from "../../bot-mail";
 import type { BotDraft } from "../bot-draft";
 import { useBotCapabilityCopy } from "../bot-editor-copy";
 import { BotSectionHeading, BotStepPanel, BotTag } from "../bot-editor-parts";

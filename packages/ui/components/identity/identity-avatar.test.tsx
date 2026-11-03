@@ -96,13 +96,15 @@ describe("ResolvedIdentityAvatar", () => {
 		expect(ownerBadge(document)?.textContent).toBe("AW");
 	});
 
-	test("keeps the bot and drops the owner where the badge would be a speck", () => {
+	test("keeps a legible, initial-free owner badge on the smallest bot", () => {
 		const document = render(
 			<ResolvedIdentityAvatar identity={botIdentity()} size={16} />,
 		);
 
 		expect(document.querySelector(".fl-bot")).not.toBeNull();
-		expect(ownerBadge(document)).toBeNull();
+		const badge = ownerBadge(document);
+		expect(badge?.getAttribute("style")).toContain("width:10px");
+		expect(badge?.textContent).toBe("");
 	});
 
 	test("holds the bot still unless asked to move", () => {

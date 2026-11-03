@@ -3,10 +3,10 @@
 import { useTranslation } from "@flow-like/locales";
 import { AtSign, ExternalLink, IdCard, Mail, UserRound } from "lucide-react";
 import { type ReactNode, useMemo } from "react";
-import { useInvoke } from "../../../hooks/use-invoke";
 import {
 	type UserIdentity,
 	useUserIdentity,
+	useUserLookup,
 } from "../../../hooks/use-user-lookup";
 import {
 	userAvatarUrl,
@@ -16,7 +16,6 @@ import {
 	userSecondaryLabel,
 } from "../../../lib/user-display";
 import { cn } from "../../../lib/utils";
-import { useBackend } from "../../../state/backend-state";
 import type { IUserLookup } from "../../../state/backend-state/types";
 import { resolveAccountId } from "../../../state/backend-state/user-state";
 import {
@@ -127,7 +126,7 @@ function avatarSizeForVariant(
  * resolves that, so people stay on the single lookup and cost no second request.
  */
 function useBotProfile(
-	lookup: IUserLookup | undefined,
+	lookup: IUserLookup | null | undefined,
 	userId: string | undefined,
 ) {
 	const identity = useUserIdentity(lookup?.bot ? userId : undefined);
@@ -138,7 +137,7 @@ function useBotProfile(
 }
 
 function profileFields(
-	lookup: IUserLookup | undefined,
+	lookup: IUserLookup | null | undefined,
 	bot: UserIdentity | undefined,
 	resolvedUserId: string | undefined,
 	options: Readonly<{
@@ -197,7 +196,6 @@ export function A2UIUserProfile({
 	style,
 }: ComponentProps<UserProfileComponent>) {
 	const { t } = useTranslation("common");
-	const backend = useBackend();
 	const { resolve } = useData();
 	const userId = resolveString(
 		component.value as StringLikeValue,
@@ -233,12 +231,7 @@ export function A2UIUserProfile({
 		resolveBool(component.muted as StringLikeValue, resolve) ?? false;
 	const avatarSize = avatarSizeForVariant(variant, configuredSize);
 
-	const lookup = useInvoke(
-		backend.userState.lookupUser,
-		backend.userState,
-		userId ? [userId] : ["__noop__"],
-		Boolean(userId),
-	);
+	const lookup = useUserLookup(userId);
 
 	// A "local" sub means the executing user was not authenticated: the lookup
 	// resolves it to the current user, so use the account id it returns.
@@ -401,7 +394,7 @@ export function A2UIUserProfile({
 		);
 	} else {
 		const isDetailed = variant === "detailed";
-		const rowDescription = description ?? subtitle;
+		const rowDescription = bot ? subtitle : (description ?? subtitle);
 
 		content = (
 			<div
@@ -449,7 +442,12 @@ export function A2UIUserProfile({
 									{rowDescription}
 								</div>
 							)}
-							{isDetailed && !description && subtitle && (
+							{isDetailed && bot && description && (
+								<div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+									{description}
+								</div>
+							)}
+							{isDetailed && !bot && !description && subtitle && (
 								<div className="mt-1 inline-flex max-w-full items-center gap-1 text-xs text-muted-foreground">
 									<AtSign className="h-3 w-3 shrink-0" />
 									<span className="truncate">{subtitle.replace(/^@/, "")}</span>

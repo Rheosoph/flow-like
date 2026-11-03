@@ -247,6 +247,8 @@ export interface IMessageApproval {
 	tool: string;
 	summary: string;
 	scopes: string[];
+	requesterName?: string;
+	room?: string;
 	answer?: "once" | "always" | "deny";
 }
 

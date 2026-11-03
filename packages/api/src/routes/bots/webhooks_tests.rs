@@ -405,6 +405,7 @@ fn an_ask_is_an_event_trigger_and_an_empty_one_is_refused() {
 fn only_a_run_acting_as_a_person_asks_for_that_person() {
     use crate::middleware::jwt::ExecutorUser;
     let run = |sub: &str, shadow: bool, hosted_frontend: bool| ExecutorUser {
+        bot: None,
         sub: sub.into(),
         app_id: "app".into(),
         run_id: "run".into(),
@@ -440,6 +441,8 @@ async fn queued_turn(db: &DatabaseConnection, bot_id: &str, trigger: &str) -> St
         reply_message_id: Set(None),
         error_code: Set(None),
         hops: Set(0),
+        requester_id: Set(None),
+        audience: Set("OWNER".into()),
         created_at: Set(at(0)),
         updated_at: Set(at(0)),
     }

@@ -1013,3 +1013,38 @@ fn the_bundle_holds_the_bot_its_apps_secrets_and_shared_conversations() {
     assert_eq!(f.key.calls().len(), calls, "no secrets, no keychain");
     assert_eq!(code(f.store.export_bot("bot_missing")), codes::NOT_FOUND);
 }
+
+#[test]
+fn room_limits_live_on_a_bots_membership_and_pending_members_do_not_count() {
+    use flow_like_types::bot_effective::BotRoomLimits;
+    let f = fixture();
+    let (scout, ranger) = (f.bot("Scout"), f.bot("Ranger"));
+    let group = f.group(&[&scout, &ranger]);
+    assert_eq!(f.store.member_limits(&group.id, &scout.id).unwrap(), None);
+
+    let limits = BotRoomLimits {
+        mask: Some(1),
+        ..Default::default()
+    };
+    f.store
+        .set_member_limits(&group.id, &scout.id, Some(limits.clone()))
+        .unwrap();
+    assert_eq!(
+        f.store.member_limits(&group.id, &scout.id).unwrap(),
+        Some(limits)
+    );
+    assert_eq!(f.store.member_limits(&group.id, &ranger.id).unwrap(), None);
+    assert!(f.store.set_member_limits(&group.id, "local", None).is_err());
+
+    f.store
+        .write(|tx, _| {
+            tx.execute(
+                "UPDATE conversation_members SET status = 'PENDING' WHERE principal_id = ?1",
+                [&ranger.id],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(member_ids(&f.visible(&group.id)), ids(&["local", &scout.id]));
+    assert!(f.store.member_limits(&group.id, &ranger.id).is_err());
+}

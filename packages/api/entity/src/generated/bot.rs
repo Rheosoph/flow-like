@@ -62,6 +62,8 @@ pub struct Model {
     #[sea_orm(has_many)]
     pub bot_mail_threads: HasMany<super::bot_mail_thread::Entity>,
     #[sea_orm(has_many)]
+    pub bot_mail_messages: HasMany<super::bot_mail_message::Entity>,
+    #[sea_orm(has_many)]
     pub bot_secrets: HasMany<super::bot_secret::Entity>,
     #[sea_orm(has_many)]
     pub bot_tasks: HasMany<super::bot_task::Entity>,

@@ -23,6 +23,10 @@ pub struct Model {
     pub app_id: String,
     #[sea_orm(column_name = "addedAt")]
     pub added_at: DateTimeWithTimeZone,
+    #[sea_orm(column_name = "permissionMask")]
+    pub permission_mask: Option<i64>,
+    #[sea_orm(column_type = "JsonBinary")]
+    pub scopes: Json,
     #[sea_orm(
         belongs_to,
         from = "app_id",

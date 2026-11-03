@@ -77,6 +77,9 @@ pub enum TokenType {
     InstanceProject,
     /// One workload's sender-bound hosted resource authority.
     InstanceResource,
+    /// A bot turn calling the API as the bot. Carries `bot_id`, `turn_id` and an optional
+    /// `conv_id`, never an owner or a permission.
+    Bot,
 }
 
 impl TokenType {
@@ -97,6 +100,7 @@ impl TokenType {
             TokenType::DeviceSignaling => "flow-like-device-signaling",
             TokenType::InstanceProject => "flow-like-project-resources",
             TokenType::InstanceResource => "flow-like-model-proxy",
+            TokenType::Bot => "flow-like-bot",
         }
     }
 
@@ -116,6 +120,7 @@ impl TokenType {
             TokenType::DeviceSession => 10 * 60,
             TokenType::DeviceSignaling | TokenType::InstanceProject => 5 * 60,
             TokenType::InstanceResource => 5 * 60,
+            TokenType::Bot => 15 * 60,
         }
     }
 }

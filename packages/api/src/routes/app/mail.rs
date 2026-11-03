@@ -1137,6 +1137,7 @@ mod tests {
 
     fn executor(sub: &str) -> ExecutorUser {
         ExecutorUser {
+            bot: None,
             sub: sub.into(),
             app_id: "app".into(),
             run_id: "run".into(),

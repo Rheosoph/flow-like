@@ -59,6 +59,8 @@ pub struct NativeRunOptions {
     /// A headless bot turn's approval gate: a call that asks the owner runs under a standing
     /// grant and otherwise parks the turn behind an approval card.
     pub approval_gate: Option<Arc<crate::bot_host::ApprovalGate>>,
+    /// Whose message woke a headless bot turn and who reads the answer.
+    pub requester: Option<flow_like::flow::copilot::TurnRequester>,
 }
 
 impl NativeRunOptions {

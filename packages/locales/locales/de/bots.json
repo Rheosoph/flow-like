@@ -4,6 +4,10 @@
 			"description": "Einen Webbrowser auf seinem Desktop oder Gerät steuern",
 			"label": "Browser"
 		},
+		"channels": {
+			"label": "",
+			"description": ""
+		},
 		"code_execution": {
 			"description": "Code in einer Sandbox schreiben und ausführen",
 			"label": "Code ausführen"
@@ -16,9 +20,25 @@
 			"description": "Den Bildschirm sehen und Maus und Tastatur auf seinem Desktop oder Gerät bedienen",
 			"label": "Computersteuerung"
 		},
+		"connectors": {
+			"description": "",
+			"label": ""
+		},
+		"data_connections": {
+			"description": "",
+			"label": ""
+		},
 		"data_studio": {
 			"description": "Tabellen speichern und abfragen, wie im Data Studio einer App",
 			"label": "Data Studio"
+		},
+		"delegation": {
+			"description": "",
+			"label": ""
+		},
+		"documents": {
+			"description": "",
+			"label": ""
 		},
 		"email": {
 			"description": "Eine eigene flow-like.me-Adresse zum Senden und Empfangen von E-Mails",
@@ -32,9 +52,21 @@
 			"description": "Baut, bearbeitet und debuggt deine Apps und Flows, inklusive FlowScript",
 			"label": "FlowPilot"
 		},
+		"image_generation": {
+			"description": "",
+			"label": ""
+		},
 		"internet": {
 			"description": "Im Web suchen, Seiten lesen und Web-APIs aufrufen",
 			"label": "Internet"
+		},
+		"knowledge": {
+			"description": "",
+			"label": ""
+		},
+		"memory": {
+			"description": "",
+			"label": ""
 		},
 		"profile_apps": {
 			"description": "Alle Apps in einem deiner Profile nutzen, jeweils mit deiner Rolle",
@@ -52,6 +84,10 @@
 			"description": "Nur die Apps nutzen, die du hinzufügst, jeweils mit deiner Rolle",
 			"label": "Ausgewählte Apps"
 		},
+		"skills": {
+			"description": "",
+			"label": ""
+		},
 		"storage": {
 			"description": "Dateien aufbewahren, wie im Speicher einer App",
 			"label": "Dateien"
@@ -62,10 +98,34 @@
 		}
 	},
 	"chat": {
-		"empty": "Frag {{name}}, was du möchtest.",
+		"defaultModelHint": "",
 		"modelHint": "In den Einstellungen von {{name}} gewählt"
 	},
+	"computer": {
+		"alt": "",
+		"asleep": "",
+		"asleepHint": "",
+		"browser": "",
+		"failed": "",
+		"screen": "",
+		"stop": ""
+	},
 	"crew": {
+		"approval": {
+			"always": "",
+			"answeredAlways": "",
+			"answeredDeny": "",
+			"answeredOnce": "",
+			"askEveryTime": "",
+			"botFallback": "",
+			"deny": "",
+			"failed": "",
+			"label": "",
+			"once": "",
+			"title": "",
+			"triggeredBy": "",
+			"triggeredByInRoom": ""
+		},
 		"botSettings": "Einstellungen für {{name}}",
 		"botTag": "Bot",
 		"builtIn": "Integriert",
@@ -87,10 +147,15 @@
 			"groupSubtitle": "Gruppe · {{people}}, {{bots}}",
 			"groupSubtitlePeople": "Gruppe · {{people}}",
 			"label": "Unterhaltung",
+			"loadFailed": "",
+			"loadFailedTitle": "",
 			"loading": "Wird geladen …",
+			"resize": "",
+			"resizeHint": "",
 			"signInForBots": "Melde dich an, um deine Bots zu sehen.",
 			"signInForConversations": "Melde dich an, um deine Unterhaltungen zu sehen.",
-			"unavailableTitle": "Unterhaltung nicht verfügbar"
+			"unavailableTitle": "Unterhaltung nicht verfügbar",
+			"width": ""
 		},
 		"encrypted": "Ende-zu-Ende-verschlüsselt",
 		"eyebrow": "Bots",
@@ -106,7 +171,21 @@
 			"capabilities": "Was er tun darf",
 			"noCapabilities": "Noch keine Fähigkeiten eingeschaltet"
 		},
+		"invitations": {
+			"aBot": "",
+			"accept": "",
+			"acceptBot": "",
+			"botMeta": "",
+			"botTitle": "",
+			"decline": "",
+			"failed": "",
+			"groupChat": "",
+			"meta": "",
+			"review": "",
+			"title": ""
+		},
 		"loadFailed": "Deine Bots konnten nicht geladen werden. Assistent und Flux funktionieren weiterhin.",
+		"loadFailedFlux": "",
 		"members": {
 			"added": "{{by}}: {{name}} hinzugefügt",
 			"joined": "Neu dabei: {{name}}",
@@ -137,6 +216,7 @@
 			"unsupported": "Nachricht, die diese App nicht anzeigen kann"
 		},
 		"needs": {
+			"approvalMeta": "",
 			"assistantMeta": "Pausiert, bis du entscheidest",
 			"assistantTitle": "Wartet auf deine Antwort",
 			"assistantWhere": "Dein Chat",
@@ -155,10 +235,14 @@
 		"newRoom": "Neuer Raum",
 		"newRoomDialog": {
 			"create": "Raum erstellen",
+			"createInvite": "",
 			"description": "Bring Menschen und deine Bots in einer Unterhaltung zusammen.",
 			"failed": "Der Raum konnte nicht erstellt werden.",
 			"full_one": "Ein Raum fasst bis zu {{count}} Mitglied.",
 			"full_other": "Ein Raum fasst bis zu {{count}} Mitglieder.",
+			"invitesNote": "",
+			"invitesNote_one": "",
+			"invitesNote_other": "",
 			"members": "Mitglieder",
 			"name": "Name",
 			"namePlaceholder": "z. B. Q4-Launch",
@@ -167,12 +251,16 @@
 		},
 		"openChat": "Chat öffnen",
 		"picker": {
+			"alreadyInvited": "",
 			"bots": "Deine Bots",
 			"hint": "Gib einen Namen oder eine E-Mail-Adresse ein, um Personen zu finden, die eine App mit dir teilen.",
+			"invite": "",
 			"noMatches": "Keine passenden Bots oder Personen.",
+			"ownerAccepts": "",
 			"people": "Personen",
 			"searchFailed": "Die Suche nach Personen ist fehlgeschlagen.",
-			"searchLabel": "Deine Bots und Personen durchsuchen"
+			"searchLabel": "Deine Bots und Personen durchsuchen",
+			"theirBots": ""
 		},
 		"retry": "Erneut versuchen",
 		"rooms": {
@@ -215,6 +303,12 @@
 			"today": "Heute",
 			"yesterday": "Gestern"
 		},
+		"trigger": {
+			"email": "",
+			"event": "",
+			"schedule": "",
+			"webhook": ""
+		},
 		"unknownMember": "Jemand",
 		"unread_one": "{{count}} ungelesen",
 		"unread_other": "{{count}} ungelesen",
@@ -254,6 +348,7 @@
 			"profilePlaceholder": "Wähle ein Profil",
 			"runtime": "Kommt mit der Bot-Laufzeitumgebung",
 			"subtitle": "Anfangs ist alles ausgeschaltet. In einer App hat der Bot nie mehr Rechte als du.",
+			"subtitleMemoryOn": "",
 			"title": "Wähle, was er tun darf"
 		},
 		"actions": {
@@ -340,6 +435,8 @@
 			"limitReached": "Du hast die maximale Anzahl an Bots erreicht. Lösche einen, um einen neuen zu erstellen.",
 			"saveFailed": "Die Änderungen konnten nicht gespeichert werden.",
 			"secretLimit": "Dieser Bot hat bereits die maximale Anzahl an Secrets.",
+			"serverLimitFact": "",
+			"serverLimitReached": "",
 			"systemUndeletable": "Integrierte Bots können nicht gelöscht werden."
 		},
 		"loadFailed": "Dieser Bot konnte nicht geladen werden.",
@@ -438,6 +535,46 @@
 		},
 		"unavailable": "Für Bots musst du mit einem Flow-Like-Konto angemeldet sein."
 	},
+	"exchange": {
+		"answered": "",
+		"answeredBy": "",
+		"denied": "",
+		"error": "",
+		"none": "",
+		"open": "",
+		"pending": "",
+		"readOnly": "",
+		"thisBot": "",
+		"title": "",
+		"waiting": "",
+		"with": ""
+	},
+	"grants": {
+		"app": "",
+		"browser": "",
+		"command": "",
+		"computer": "",
+		"connection": "",
+		"documents": "",
+		"email": "",
+		"event": "",
+		"host": "",
+		"other": "",
+		"page": "",
+		"table": "",
+		"tool": ""
+	},
+	"history": {
+		"busy": "",
+		"empty": "",
+		"latest": "",
+		"loading": "",
+		"newTopic": "",
+		"newTopicAction": "",
+		"title": "",
+		"topicStarted": "",
+		"untitled": ""
+	},
 	"identity": {
 		"bot": "Bot",
 		"botId": "Bot-ID",
@@ -483,6 +620,9 @@
 		"count_one": "{{count}} Erinnerung",
 		"count_other": "{{count}} Erinnerungen",
 		"deleteFailed": "Erinnerung konnte nicht gelöscht werden",
+		"factsEmpty": "",
+		"factsFailed": "",
+		"forget": "",
 		"justNow": "gerade eben",
 		"loadFailed": "Erinnerungen konnten nicht geladen werden",
 		"off": "Erinnerungen sind aus. Wähle in den Bot-Einstellungen ein Embedding-Modell, damit Erinnerungen abgerufen und gespeichert werden. Gespeicherte Erinnerungen kannst du hier trotzdem ansehen und löschen."
@@ -531,6 +671,7 @@
 			"profileUnavailable": "Das Profil, aus dem seine Apps stammen, ist nicht in deinem Konto.",
 			"secretKey": "Der Schlüsselbund dieses Computers ist gesperrt oder verweigert den Zugriff auf die Secrets des Bots. Entsperre ihn und versuch es noch mal.",
 			"secretUnreadable": "Sein Secret {{name}} lässt sich auf diesem Computer nicht mehr lesen. Entferne es hier und füge es wieder hinzu, sobald der Bot verschoben ist.",
+			"serverLimitReached": "",
 			"unknown": "Etwas an ihm passt nicht zu deinem Konto."
 		},
 		"parts": {
@@ -553,7 +694,9 @@
 		"recheck": "Erneut prüfen",
 		"result": {
 			"failed": "Nicht verschoben, er bleibt also auf diesem Computer. {{error}}",
-			"unknownError": "Etwas ist schiefgelaufen."
+			"unknownError": "Etwas ist schiefgelaufen.",
+			"warnings_one": "",
+			"warnings_other": ""
 		},
 		"status": {
 			"checking": "Wird geprüft …",
@@ -565,12 +708,151 @@
 			"ready": "Bereit"
 		},
 		"staysHere": "Er bleibt auf diesem Computer und funktioniert weiter.",
+		"steps": {
+			"apps": "",
+			"check": "",
+			"conversations": "",
+			"done": "",
+			"forget_bot": "",
+			"forget_conversations": "",
+			"forget_workspace": "",
+			"import_bot": "",
+			"rebind": "",
+			"secrets": "",
+			"segments": "",
+			"update_bot": "",
+			"verify": "",
+			"workspace": ""
+		},
 		"title": "Bots in dein Konto verschieben",
 		"toast": {
 			"action": "Prüfen",
 			"title_one": "{{count}} Bot lebt nur auf diesem Computer",
 			"title_other": "{{count}} Bots leben nur auf diesem Computer"
 		}
+	},
+	"panel": {
+		"back": "",
+		"cancelTurn": "",
+		"close": "",
+		"details": {
+			"abilities": "",
+			"edit": "",
+			"fallbacks_one": "",
+			"fallbacks_other": "",
+			"runs": "",
+			"status": ""
+		},
+		"encryption": {
+			"fingerprint": "",
+			"host": "",
+			"label": "",
+			"on": "",
+			"rotate": "",
+			"rotated": "",
+			"rotateFailed": "",
+			"unpublished": "",
+			"waiting": ""
+		},
+		"grants": {
+			"none": "",
+			"revoke": "",
+			"title": ""
+		},
+		"hide": "",
+		"label": "",
+		"mail": {
+			"addressTitle": "",
+			"afterSave": "",
+			"aliasLabel": "",
+			"aliasPlaceholder": "",
+			"aliasRules": "",
+			"available": "",
+			"back": "",
+			"change": "",
+			"checking": "",
+			"claim": "",
+			"claimed": "",
+			"empty": "",
+			"emptyNoAddress": "",
+			"localNote": "",
+			"noAddress": "",
+			"received": "",
+			"release": "",
+			"sent": "",
+			"taken": "",
+			"unverified": ""
+		},
+		"notifications": {
+			"failed": "",
+			"hint": "",
+			"label": "",
+			"off": "",
+			"on": ""
+		},
+		"openFull": "",
+		"permissions": {
+			"granted": "",
+			"none": "",
+			"received": "",
+			"revoke": "",
+			"title": ""
+		},
+		"show": "",
+		"tabs": "",
+		"tasks": {
+			"at": "",
+			"create": "",
+			"cron": "",
+			"cronLabel": "",
+			"delete": "",
+			"done": "",
+			"full": "",
+			"full_one": "",
+			"full_other": "",
+			"instruction": "",
+			"instructionLabel": "",
+			"name": "",
+			"nameLabel": "",
+			"next": "",
+			"none": "",
+			"once": "",
+			"pause": "",
+			"paused": "",
+			"repeat": "",
+			"resume": "",
+			"title": "",
+			"tz": ""
+		},
+		"waitingForYou": "",
+		"webhooks": {
+			"copied": "",
+			"copy": "",
+			"create": "",
+			"delete": "",
+			"done": "",
+			"instruction": "",
+			"instructionLabel": "",
+			"issued": "",
+			"lastCalled": "",
+			"name": "",
+			"nameLabel": "",
+			"neverCalled": "",
+			"none": "",
+			"once": "",
+			"rotate": "",
+			"secret": "",
+			"signingKey": "",
+			"title": "",
+			"url": ""
+		},
+		"working": ""
+	},
+	"presence": {
+		"lastSeen": "",
+		"offline": "",
+		"online": "",
+		"unknown": ""
 	},
 	"presets": {
 		"coder": {
@@ -614,6 +896,87 @@
 			"name": "Web-Tester"
 		}
 	},
+	"restrictions": {
+		"advanced": "",
+		"all": "",
+		"everyChat": "",
+		"failed": "",
+		"folderAdd": "",
+		"folderPlaceholder": "",
+		"foldersAll": "",
+		"foldersOnly": "",
+		"groups": {
+			"boards": "",
+			"events": "",
+			"files": "",
+			"other": "",
+			"tables": ""
+		},
+		"limit": "",
+		"limitedTo": "",
+		"nothingToPick": "",
+		"permissions": {
+			"execute_boards": "",
+			"execute_events": "",
+			"invoke_api": "",
+			"list_events": "",
+			"read_boards": "",
+			"read_config": "",
+			"read_courses": "",
+			"read_database": "",
+			"read_events": "",
+			"read_files": "",
+			"read_logs": "",
+			"read_team": "",
+			"read_templates": "",
+			"read_widgets": "",
+			"write_boards": "",
+			"write_courses": "",
+			"write_database": "",
+			"write_events": "",
+			"write_files": "",
+			"write_templates": "",
+			"write_widgets": ""
+		},
+		"preset": "",
+		"presets": {
+			"custom": "",
+			"full": "",
+			"read_and_call_events": "",
+			"read_only": ""
+		},
+		"readOnlyFiles": "",
+		"removeFolder": "",
+		"title": ""
+	},
+	"roomLimits": {
+		"apps": "",
+		"description": "",
+		"failed": "",
+		"title": ""
+	},
+	"roomMembers": {
+		"bot": "",
+		"cancel": "",
+		"cancelFailed": "",
+		"declined": "",
+		"description": "",
+		"invite": "",
+		"inviteFailed": "",
+		"limits": "",
+		"members": "",
+		"open": "",
+		"pending": "",
+		"saveLimits": "",
+		"send": "",
+		"send_one": "",
+		"send_other": "",
+		"sent": "",
+		"thisRoom": "",
+		"title": "",
+		"waiting": "",
+		"waitingOwner": ""
+	},
 	"system": {
 		"flux": {
 			"description": "Baut und repariert deine Apps und Workflows",
@@ -633,9 +996,12 @@
 		"refused": "{{name}} kann noch keine eigenen Dateien und Daten speichern.",
 		"tabs": {
 			"chat": "Chat",
+			"computer": "",
 			"data": "Daten",
+			"details": "",
 			"files": "Dateien",
 			"label": "Chat und Arbeitsbereich von {{name}}",
+			"mail": "",
 			"memory": "Erinnerungen"
 		},
 		"unsupported": "Dateien und Daten von {{name}} sind hier noch nicht verfügbar."

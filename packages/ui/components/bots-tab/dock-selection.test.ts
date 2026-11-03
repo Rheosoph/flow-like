@@ -80,7 +80,9 @@ describe("the bot's panel in the URL", () => {
 		);
 		expect(parseDockPanel(new URLSearchParams("panel=files"))).toBe("files");
 		expect(parseDockPanel(new URLSearchParams("panel=memory"))).toBe("memory");
-		expect(parseDockPanel(new URLSearchParams("panel=computer"))).toBe("computer");
+		expect(parseDockPanel(new URLSearchParams("panel=computer"))).toBe(
+			"computer",
+		);
 		expect(parseDockPanel(new URLSearchParams("panel=bogus"))).toBeNull();
 		expect(parseDockPanel(new URLSearchParams("pane=files"))).toBeNull();
 		expect(parseDockPanel(new URLSearchParams())).toBeNull();

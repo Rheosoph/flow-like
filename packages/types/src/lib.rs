@@ -3,6 +3,8 @@ pub use flow_like_types_contracts::bot;
 pub use flow_like_types_contracts::bot_message;
 pub use flow_like_types_contracts::bot_notify;
 pub use flow_like_types_contracts::bot_task;
+pub use flow_like_types_contracts::bot_effective;
+pub use flow_like_types_contracts::bot_restrictions;
 pub use flow_like_types_contracts::bot_turn;
 pub use flow_like_types_contracts::tool_grant;
 pub use flow_like_types_contracts::data_classification;

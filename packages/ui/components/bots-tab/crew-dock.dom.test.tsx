@@ -166,6 +166,7 @@ async function mount(listBots: () => Promise<IBot[]>, signedIn = true) {
 	window.history.replaceState(null, "", "/bots");
 	useAuthStatusStore.getState().setSignedIn(signedIn);
 	useBackendStore.getState().setBackend({
+		appState: { getApps: async () => [] },
 		botState: {
 			listBots,
 			local: { checkMove: async () => ({}), move: async () => ({}) },

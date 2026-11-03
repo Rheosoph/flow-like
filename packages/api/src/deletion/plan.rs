@@ -1177,6 +1177,7 @@ mod tests {
             ("InboxEntry", "senderId"),
             ("Conversation", "createdBy"),
             ("ConversationMember", "addedBy"),
+            ("ConversationMember", "invitedBy"),
         ] {
             assert!(
                 overrides

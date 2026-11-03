@@ -41,6 +41,10 @@ pub struct Model {
     #[sea_orm(column_name = "errorCode", column_type = "Text", nullable)]
     pub error_code: Option<String>,
     pub hops: i32,
+    #[sea_orm(column_name = "requesterId", column_type = "Text", nullable)]
+    pub requester_id: Option<String>,
+    #[sea_orm(column_type = "Text")]
+    pub audience: String,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]

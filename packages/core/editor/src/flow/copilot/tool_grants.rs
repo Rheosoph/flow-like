@@ -332,6 +332,9 @@ pub fn approval_request(
             .map(|scopes| scopes.join(","))
             .unwrap_or_default(),
         args_hash: hash,
+        requester_id: None,
+        requester_name: None,
+        room: None,
     }
 }
 

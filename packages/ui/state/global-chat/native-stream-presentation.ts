@@ -1,9 +1,11 @@
-import { processChatEvents } from "../../components/interfaces/chat-default/event-processor";
+import { foldA2UIServerMessage } from "../../components/a2ui/fold-surfaces";
+import type { A2UIServerMessage, Surface } from "../../components/a2ui/types";
 import type {
 	IAttachment,
 	IMessage,
 	IPlanStep,
 } from "../../components/interfaces/chat-default/chat-db";
+import { processChatEvents } from "../../components/interfaces/chat-default/event-processor";
 import { Response } from "../../lib/llm/response";
 import { IRole } from "../../lib/schema/llm/history";
 import { createAgentDebugStreamRecorder } from "./agent-debug-report";
@@ -13,8 +15,6 @@ import {
 	orderedSteps,
 } from "./copilot-stream-steps";
 import { useGlobalChatStore } from "./global-chat-store";
-import { foldA2UIServerMessage } from "../../components/a2ui/fold-surfaces";
-import type { A2UIServerMessage, Surface } from "../../components/a2ui/types";
 
 /** Render native execution output inside its owning turn. No tools execute here. */
 export function createNativeStreamPresentation(runId: string) {

@@ -19,6 +19,9 @@ use serde_json::{Value, json};
 
 pub(super) async fn database() -> DatabaseConnection {
     let db = crate::routes::inbox::fixture::database().await;
+    db.execute_unprepared(r#"DROP TABLE public."User""#)
+        .await
+        .unwrap();
     let schema = Schema::new(db.get_database_backend());
     let source = schema.create_table_from_entity(crate::entity::user::Entity);
     let mut table = Table::create();
@@ -77,6 +80,11 @@ pub(super) async fn conversation(
             joined_at: Set(at(0)),
             left_at: Set(None),
             last_read_at: Set(None),
+            status: Set("ACTIVE".into()),
+            limits: Set(None),
+            invited_by: Set(None),
+            invited_at: Set(None),
+            accepted_at: Set(None),
         }
         .insert(db)
         .await

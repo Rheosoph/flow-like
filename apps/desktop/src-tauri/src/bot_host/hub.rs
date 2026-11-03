@@ -107,6 +107,15 @@ pub trait TurnHub: Send + Sync + 'static {
     async fn delete_host(&self, host_id: &str) -> Result<(), HubFailure>;
     /// The owner's cancel of a turn, whoever holds it.
     async fn cancel_turn(&self, bot_id: &str, turn_id: &str) -> Result<(), HubFailure>;
+    /// A token that acts as the bot during one of its turns, minted from the owner's session; the
+    /// hub reads the bot's rights, not the owner's, from it. `None` for a hub that mints none.
+    async fn runtime_token(
+        &self,
+        _bot_id: &str,
+        _turn_id: &str,
+    ) -> Result<Option<String>, HubFailure> {
+        Ok(None)
+    }
     /// Every grant and answer token of the account bot as `(tool, scope)`.
     async fn tool_keys(&self, _bot_id: &str) -> Result<Vec<(String, String)>, HubFailure> {
         Ok(Vec::new())
@@ -349,6 +358,25 @@ fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, HubFailure>
 
 #[async_trait]
 impl TurnHub for ProfileHub {
+    async fn runtime_token(
+        &self,
+        bot_id: &str,
+        turn_id: &str,
+    ) -> Result<Option<String>, HubFailure> {
+        let minted = self
+            .call(
+                Method::POST,
+                &format!("bots/{bot_id}/runtime-token"),
+                &[],
+                Some(json!({ "turn_id": turn_id })),
+            )
+            .await?;
+        minted["token"]
+            .as_str()
+            .map(|token| Some(token.to_owned()))
+            .ok_or_else(|| HubFailure::offline("the hub's runtime token is not in the expected shape"))
+    }
+
     async fn list(&self) -> Result<Vec<BotTurn>, HubFailure> {
         let list = self
             .call(

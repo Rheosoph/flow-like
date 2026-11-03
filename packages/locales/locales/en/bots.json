@@ -99,7 +99,6 @@
 	},
 	"chat": {
 		"defaultModelHint": "{{name}} has no model of its own, so it uses the chat's default model",
-		"empty": "Ask {{name}} anything.",
 		"modelHint": "Chosen in {{name}}'s settings"
 	},
 	"computer": {
@@ -123,7 +122,9 @@
 			"failed": "Couldn't send your answer. Try again.",
 			"label": "Approval request",
 			"once": "Allow once",
-			"title": "{{name}} wants to {{summary}}"
+			"title": "{{name}} wants to {{summary}}",
+			"triggeredBy": "Triggered by {{name}}",
+			"triggeredByInRoom": "Triggered by {{name}} in {{room}}"
 		},
 		"botSettings": "Settings for {{name}}",
 		"botTag": "Bot",
@@ -149,9 +150,12 @@
 			"loadFailed": "Their chats open once the list loads.",
 			"loadFailedTitle": "Couldn't load your bots",
 			"loading": "Loading…",
+			"resize": "Resize chat",
+			"resizeHint": "Drag to resize. Double-click to reset.",
 			"signInForBots": "Sign in to see your bots.",
 			"signInForConversations": "Sign in to see your conversations.",
-			"unavailableTitle": "Conversation unavailable"
+			"unavailableTitle": "Conversation unavailable",
+			"width": "Chat width: {{width}} pixels"
 		},
 		"encrypted": "End-to-end encrypted",
 		"eyebrow": "Bots",
@@ -166,6 +170,19 @@
 		"intro": {
 			"capabilities": "What it may do",
 			"noCapabilities": "No abilities switched on yet"
+		},
+		"invitations": {
+			"aBot": "your bot",
+			"accept": "Accept",
+			"acceptBot": "Accept and add",
+			"botMeta": "You choose what {{bot}} may do there",
+			"botTitle": "{{name}} wants to add {{bot}} to {{room}}",
+			"decline": "Decline",
+			"failed": "Couldn't answer the invitation.",
+			"groupChat": "a group chat",
+			"meta": "Join to read and write in it",
+			"review": "Review and accept",
+			"title": "{{name}} invited you to {{room}}"
 		},
 		"loadFailed": "Couldn't load your bots. Assistant and Flux still work.",
 		"loadFailedFlux": "Couldn't load your bots. Flux still works.",
@@ -182,14 +199,14 @@
 			"deleteTitle": "Delete this message?",
 			"discard": "Discard",
 			"edit": "Edit",
-			"editLabel": "Edit message",
 			"edited": "(edited)",
+			"editLabel": "Edit message",
 			"empty": "No messages yet. Say hello.",
 			"encrypted": "Encrypted message",
 			"label": "Messages",
 			"loadFailed": "Couldn't load these messages.",
-			"loadOlder": "Load older messages",
 			"loadingOlder": "Loading…",
+			"loadOlder": "Load older messages",
 			"more": "More actions",
 			"notSent": "Not sent",
 			"reactionLabel": "{{emoji}} from {{names}}",
@@ -218,10 +235,14 @@
 		"newRoom": "New room",
 		"newRoomDialog": {
 			"create": "Create room",
+			"createInvite": "Create room and invite",
 			"description": "Bring people and your bots together in one conversation.",
 			"failed": "Couldn't create the room.",
 			"full_one": "A room holds up to {{count}} members.",
 			"full_other": "A room holds up to {{count}} members.",
+			"invitesNote": "{{count}} will join once they accept; bots of other people need their owner to accept and set their limits.",
+			"invitesNote_one": "{{count}} will join once they accept; bots of other people need their owner to accept and set their limits.",
+			"invitesNote_other": "{{count}} will join once they accept; bots of other people need their owner to accept and set their limits.",
 			"members": "Members",
 			"name": "Name",
 			"namePlaceholder": "e.g. Q4 launch",
@@ -230,12 +251,16 @@
 		},
 		"openChat": "Open chat",
 		"picker": {
+			"alreadyInvited": "Already invited",
 			"bots": "Your bots",
 			"hint": "Type a name or email to find people who share an app with you.",
+			"invite": "Invite",
 			"noMatches": "No bots or people match.",
+			"ownerAccepts": "Owner accepts",
 			"people": "People",
 			"searchFailed": "Searching people failed.",
-			"searchLabel": "Search your bots and people"
+			"searchLabel": "Search your bots and people",
+			"theirBots": "Bots of people you work with"
 		},
 		"retry": "Try again",
 		"rooms": {
@@ -460,8 +485,8 @@
 			"add": "Add secret",
 			"delete": "Delete",
 			"deleteConfirm": "Delete {{name}}?",
-			"deleteFailed": "The secret couldn't be deleted.",
 			"deleted": "{{name}} deleted",
+			"deleteFailed": "The secret couldn't be deleted.",
 			"description": "Description (optional)",
 			"descriptionPlaceholder": "What it's for",
 			"empty": "No secrets yet.",
@@ -476,8 +501,8 @@
 			"neverUsed": "never used",
 			"replaceValue": "Replace",
 			"save": "Save secret",
-			"saveFailed": "The secret couldn't be saved.",
 			"saved": "{{name}} saved",
+			"saveFailed": "The secret couldn't be saved.",
 			"sealed": "Sealed",
 			"sealedHint": "Sealed for the bot's host. Delete it and add it again to store a new value through Flow-Like.",
 			"subtitle": "API keys, tokens and passwords the bot may use.",
@@ -510,6 +535,20 @@
 		},
 		"unavailable": "Bots need a signed-in Flow-Like account."
 	},
+	"exchange": {
+		"answered": "{{caller}} asked {{callee}}",
+		"answeredBy": "{{callee}} answered",
+		"denied": "{{caller}} was not allowed to ask {{callee}}",
+		"error": "{{caller}} could not ask {{callee}}",
+		"none": "This bot has not talked to your other bots yet.",
+		"open": "Open the full exchange",
+		"pending": "{{caller}} asked {{callee}} · waiting for the answer",
+		"readOnly": "Read only",
+		"thisBot": "This bot",
+		"title": "Talked with",
+		"waiting": "{{caller}} wants to ask {{callee}} · needs your permission",
+		"with": "With {{name}}"
+	},
 	"grants": {
 		"app": "Use {{tool}} in app {{app}}",
 		"browser": "Open sites on {{site}}",
@@ -524,6 +563,17 @@
 		"page": "Use page {{id}} of app {{app}}",
 		"table": "Use {{tool}} on table {{table}}",
 		"tool": "Use {{tool}}"
+	},
+	"history": {
+		"busy": "Wait for the reply to finish, then try again.",
+		"empty": "{{name}} summarises the chat into stretches you can jump to as it grows.",
+		"latest": "Back to the latest messages",
+		"loading": "Loading…",
+		"newTopic": "New topic",
+		"newTopicAction": "New topic",
+		"title": "History",
+		"topicStarted": "{{name}} starts a new topic.",
+		"untitled": "Chat of {{date}}"
 	},
 	"identity": {
 		"bot": "Bot",
@@ -565,11 +615,14 @@
 		}
 	},
 	"memory": {
-		"clearFailed": "Couldn't clear memories",
 		"cleared": "Cleared all memories",
+		"clearFailed": "Couldn't clear memories",
 		"count_one": "{{count}} memory",
 		"count_other": "{{count}} memories",
 		"deleteFailed": "Couldn't delete memory",
+		"factsEmpty": "{{name}} writes down facts, preferences and decisions here as you chat.",
+		"factsFailed": "Couldn't load {{name}}'s facts.",
+		"forget": "Forget this fact",
 		"justNow": "just now",
 		"loadFailed": "Couldn't load memories",
 		"off": "Memory is off. Choose an embedding model in bot settings to recall and save memories. You can still review and delete saved memories here."
@@ -691,15 +744,15 @@
 			"status": "Status"
 		},
 		"encryption": {
-			"label": "End-to-end encrypted chats",
-			"on": "On",
 			"fingerprint": "Key fingerprint {{fingerprint}}",
 			"host": "Key held by {{host}}",
-			"unpublished": "The key isn't published yet; it is published when the host is online.",
-			"waiting": "Waiting for the host to make the key.",
+			"label": "End-to-end encrypted chats",
+			"on": "On",
 			"rotate": "Rotate key",
 			"rotated": "New key published",
-			"rotateFailed": "The key could not be rotated"
+			"rotateFailed": "The key could not be rotated",
+			"unpublished": "The key isn't published yet; it is published when the host is online.",
+			"waiting": "Waiting for the host to make the key."
 		},
 		"grants": {
 			"none": "Nothing yet. {{name}} asks you before it acts, and you can tell it to stop asking.",
@@ -755,6 +808,8 @@
 			"delete": "Delete {{name}}",
 			"done": "Done",
 			"full": "This bot has {{count}} tasks, the most it can keep. Delete one to add another.",
+			"full_one": "This bot has {{count}} tasks, the most it can keep. Delete one to add another.",
+			"full_other": "This bot has {{count}} tasks, the most it can keep. Delete one to add another.",
 			"instruction": "What should the bot do?",
 			"instructionLabel": "Instruction",
 			"name": "Name (optional)",
@@ -840,6 +895,87 @@
 			"instructions": "You test websites in a real browser. Follow the flows I describe, click through them the way a person would, and report what breaks with the steps to reproduce it and a screenshot. Never enter real payment details.",
 			"name": "Web tester"
 		}
+	},
+	"restrictions": {
+		"advanced": "Advanced",
+		"all": "All {{what}}",
+		"everyChat": "Restrictions apply in every chat, including yours",
+		"failed": "The restrictions couldn't be saved.",
+		"folderAdd": "Add a folder",
+		"folderPlaceholder": "reports/2026",
+		"foldersAll": "All folders",
+		"foldersOnly": "Only these folders",
+		"groups": {
+			"boards": "Boards",
+			"events": "Events",
+			"files": "Files",
+			"other": "Everything else",
+			"tables": "Tables"
+		},
+		"limit": "Only some {{what}}",
+		"limitedTo": "Only these {{what}}",
+		"nothingToPick": "Nothing here yet.",
+		"permissions": {
+			"execute_boards": "Run boards",
+			"execute_events": "Call events",
+			"invoke_api": "Use the app's API",
+			"list_events": "See the list of events",
+			"read_boards": "Look at boards",
+			"read_config": "Read settings",
+			"read_courses": "Look at courses",
+			"read_database": "Look at tables",
+			"read_events": "Look at events",
+			"read_files": "Look at files",
+			"read_logs": "Read run logs",
+			"read_team": "See who is on the team",
+			"read_templates": "Look at templates",
+			"read_widgets": "Look at widgets",
+			"write_boards": "Edit boards",
+			"write_courses": "Edit courses",
+			"write_database": "Add and change table rows",
+			"write_events": "Edit events",
+			"write_files": "Add and change files",
+			"write_templates": "Edit templates",
+			"write_widgets": "Edit widgets"
+		},
+		"preset": "What the bot may do here",
+		"presets": {
+			"custom": "Custom",
+			"full": "Full (your role)",
+			"read_and_call_events": "Read + call events",
+			"read_only": "Read only"
+		},
+		"readOnlyFiles": "Never change files",
+		"removeFolder": "Remove {{folder}}",
+		"title": "What it may do in your projects"
+	},
+	"roomLimits": {
+		"apps": "Projects it may use in this room",
+		"description": "Everyone in the room can wake this bot. It may do at most this here, and never more than you allow it elsewhere.",
+		"failed": "The room limits couldn't be saved.",
+		"title": "{{bot}} in {{room}}"
+	},
+	"roomMembers": {
+		"bot": "Bot",
+		"cancel": "Withdraw invitation of {{name}}",
+		"cancelFailed": "Couldn't withdraw the invitation.",
+		"declined": "Declined",
+		"description": "Invited people and other people's bots join once they accept.",
+		"invite": "Bring someone in",
+		"inviteFailed": "Couldn't send the invitations.",
+		"limits": "Room limits",
+		"members": "Members",
+		"open": "Members and invitations",
+		"pending": "Invited",
+		"saveLimits": "Save limits",
+		"send": "Add or invite {{count}}",
+		"send_one": "Add or invite {{count}}",
+		"send_other": "Add or invite {{count}}",
+		"sent": "{{added}} added, {{invited}} invited",
+		"thisRoom": "this room",
+		"title": "Room members",
+		"waiting": "Waiting for an answer",
+		"waitingOwner": "Waiting for the bot's owner"
 	},
 	"system": {
 		"flux": {

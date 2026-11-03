@@ -36,4 +36,6 @@ CREATE UNIQUE INDEX "BotMailMessage_botId_messageId_key" ON "BotMailMessage"("bo
 
 ALTER TABLE "BotMailThread" ADD CONSTRAINT "BotMailThread_botId_fkey" FOREIGN KEY ("botId") REFERENCES "Bot"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
+ALTER TABLE "BotMailMessage" ADD CONSTRAINT "BotMailMessage_botId_fkey" FOREIGN KEY ("botId") REFERENCES "Bot"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
 ALTER TABLE "BotMailMessage" ADD CONSTRAINT "BotMailMessage_threadId_fkey" FOREIGN KEY ("threadId") REFERENCES "BotMailThread"("id") ON DELETE CASCADE ON UPDATE CASCADE;

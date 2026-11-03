@@ -41,6 +41,9 @@ function NewRoomForm({
 	const create = useCreateConversation();
 	const selected = new Set(picked.map((principal) => principal.id));
 	// A chat on this device holds you and its bots only; the account can't reach them.
+	const invites = picked.filter(
+		(principal) => principal.mode === "invite",
+	).length;
 	const mixesLocal =
 		picked.some((principal) => principal.bot?.local) &&
 		picked.some((principal) => !principal.bot?.local);
@@ -115,8 +118,18 @@ function NewRoomForm({
 				selected={selected}
 				multiple
 				full={picked.length >= MAX_OTHERS}
+				serverRule={{}}
 				onPick={toggle}
 			/>
+			{invites > 0 && (
+				<p className="text-xs text-muted-foreground">
+					{t(
+						"crew.newRoomDialog.invitesNote",
+						"{{count}} will join once they accept; bots of other people need their owner to accept and set their limits.",
+						{ count: invites },
+					)}
+				</p>
+			)}
 			{picked.length >= MAX_OTHERS && (
 				<p className="text-xs text-muted-foreground">
 					{t(
@@ -152,7 +165,9 @@ function NewRoomForm({
 					type="submit"
 					disabled={picked.length === 0 || mixesLocal || create.isPending}
 				>
-					{t("crew.newRoomDialog.create", "Create room")}
+					{invites > 0
+						? t("crew.newRoomDialog.createInvite", "Create room and invite")
+						: t("crew.newRoomDialog.create", "Create room")}
 				</Button>
 			</DialogFooter>
 		</form>

@@ -9,7 +9,7 @@ use super::{
     now, payload,
 };
 use crate::{
-    bot_tools::shared_credentials,
+    bot_tools::owner_credentials,
     entity::{app, bot, bot_mail_thread},
     error::ApiError,
     routes::inbox::{
@@ -174,7 +174,7 @@ async fn store_files(
     let Some(workspace) = workspace_of(state, &bot.id).await? else {
         return Ok(stored);
     };
-    let credentials = shared_credentials(state, &bot.owner_id, &workspace, &workspace)
+    let credentials = owner_credentials(state, &bot.owner_id, &workspace)
         .await
         .map_err(|error| ApiError::internal(format!("Bot workspace unavailable: {error}")))?;
     let store = credentials

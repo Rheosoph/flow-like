@@ -172,6 +172,7 @@ const localHost = {
 };
 
 const backend = {
+	appState: { getApps: async () => [] },
 	botState: {
 		local: localHost,
 		listBots: async () => [

@@ -191,10 +191,7 @@ export function ChatMemorySettings({
 				>
 					<SelectTrigger
 						className="w-full"
-						aria-label={t(
-							"profileMemoryEmbeddingModel",
-							"Memory embedding model",
-						)}
+						aria-label={t("memoryEmbeddingModel", "Memory embedding model")}
 					>
 						<BrainIcon className="size-3.5 mr-1 text-muted-foreground shrink-0" />
 						<SelectValue placeholder={t("memoryOff", "Memory: off")} />

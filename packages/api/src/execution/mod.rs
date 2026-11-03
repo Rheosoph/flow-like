@@ -9,7 +9,7 @@ mod dispatch;
 #[cfg(feature = "lambda")]
 pub mod dispatch_intent;
 mod jwt;
-pub(crate) use jwt::{bind_attended_payer, bind_hosted_frontend, bind_tool_job};
+pub(crate) use jwt::{bind_attended_payer, bind_bot_identity, bind_hosted_frontend, bind_tool_job};
 pub mod live_run;
 mod page_action_jwt;
 mod page_action_sealer;

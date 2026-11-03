@@ -30,6 +30,11 @@ pub fn schema_of<T: JsonSchema>() -> Value {
     if let Some(object) = schema.as_object_mut() {
         object.remove("$schema");
         object.remove("title");
+        if object.get("type").is_some_and(|kind| kind == "object") {
+            object
+                .entry("properties")
+                .or_insert_with(|| Value::Object(Default::default()));
+        }
     }
     schema
 }

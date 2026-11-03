@@ -38,6 +38,7 @@ pub mod alerting;
 pub mod audit;
 mod bit_pricing;
 pub mod bot_host;
+pub mod bot_permission;
 pub(crate) mod bot_mail;
 pub(crate) mod bot_notify;
 pub(crate) mod bot_tools;

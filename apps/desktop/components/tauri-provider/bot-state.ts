@@ -2,6 +2,7 @@ import type {
 	BotApprovalDecision,
 	IBot,
 	IBotApp,
+	IBotRestrictions,
 	IBotComputerHost,
 	IBotEncryptionHost,
 	IBotMailAddress,
@@ -315,6 +316,25 @@ export class BotState implements IBotState {
 			account.profile,
 			appPath(account.id, appId),
 			undefined,
+			account.auth,
+		);
+	}
+
+	async setBotAppRestrictions(
+		botId: string,
+		appId: string,
+		restrictions: IBotRestrictions,
+	): Promise<IBotRestrictions> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () =>
+				localBots.setAppRestrictions(botId, appId, restrictions),
+			);
+		}
+		return put<IBotRestrictions>(
+			account.profile,
+			`${appPath(account.id, appId)}/restrictions`,
+			restrictions,
 			account.auth,
 		);
 	}

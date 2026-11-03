@@ -50,10 +50,27 @@ struct FakeHub {
     reports: Mutex<Vec<(String, Vec<String>, Instant)>>,
     deleted: Mutex<Vec<String>>,
     cancelled: Mutex<Vec<(String, String)>>,
+    token_requests: Mutex<Vec<(String, String)>>,
+    token_failure: AtomicBool,
 }
 
 #[async_trait]
 impl TurnHub for FakeHub {
+    async fn runtime_token(
+        &self,
+        bot_id: &str,
+        turn_id: &str,
+    ) -> Result<Option<String>, HubFailure> {
+        self.token_requests
+            .lock()
+            .unwrap()
+            .push((bot_id.to_owned(), turn_id.to_owned()));
+        if self.token_failure.load(Ordering::SeqCst) {
+            return Err(HubFailure::offline("the hub could not be reached"));
+        }
+        Ok(Some(format!("bot-token:{bot_id}:{turn_id}")))
+    }
+
     async fn desktop_bots(&self) -> Result<Vec<String>, HubFailure> {
         if self.offline.load(Ordering::SeqCst) {
             return Err(HubFailure::answered(
@@ -188,6 +205,10 @@ fn turn(
         reply_message_id: None,
         error_code: None,
         hops,
+        owner_id: "owner".into(),
+        requester_id: Some("owner".into()),
+        requester_name: None,
+        audience: flow_like_types::bot_turn::TurnAudience::Owner,
         created_at: Utc::now().to_rfc3339(),
         updated_at: Utc::now().to_rfc3339(),
         batched: batched.iter().map(|id| (*id).to_owned()).collect(),
@@ -314,6 +335,38 @@ async fn a_claimed_turn_is_answered_with_the_turn_it_holds() {
     assert_eq!(body["reply_to"], "m1");
     assert_eq!(body["hops"], 2);
     assert_eq!(f.runner.jobs.lock().unwrap()[0].run_id, "bt_a");
+}
+
+#[tokio::test]
+async fn an_account_turn_runs_with_a_bot_runtime_token_minted_for_that_turn() {
+    let f = Fixture::start(true, config());
+    f.queue(
+        turn("bt_a", "botA", "conv", "m1", 1, &[]),
+        newest_first(&[(1, "m1", "user", "hello")]),
+    );
+    until("the reply", || f.status("botA") == Some(TurnStatus::Done)).await;
+
+    assert_eq!(
+        *f.hub.token_requests.lock().unwrap(),
+        [("botA".to_owned(), "bt_a".to_owned())]
+    );
+    let job = f.runner.jobs.lock().unwrap()[0].clone();
+    assert_eq!(
+        job.hub_token.map(|token| token.0).as_deref(),
+        Some("bot-token:botA:bt_a")
+    );
+}
+
+#[tokio::test]
+async fn a_turn_whose_bot_token_cannot_be_minted_runs_nothing() {
+    let f = Fixture::start(true, config());
+    f.hub.token_failure.store(true, Ordering::SeqCst);
+    f.queue(
+        turn("bt_a", "botA", "conv", "m1", 1, &[]),
+        newest_first(&[(1, "m1", "user", "hello")]),
+    );
+    until("the failure", || f.status("botA") == Some(TurnStatus::Failed)).await;
+    assert_eq!(f.runner.started(), 0);
 }
 
 #[tokio::test]

@@ -131,7 +131,7 @@ async fn the_roster_lists_the_other_bots_with_their_presence() {
         .collect();
     assert_eq!(
         presence,
-        [(LEDGER, BotPresence::Online), ("bot_dev", BotPresence::Offline)]
+        [("bot_dev", BotPresence::Offline), (LEDGER, BotPresence::Online)]
     );
 }
 
@@ -153,6 +153,8 @@ async fn a_card_answer_becomes_a_stored_permission() {
 #[tokio::test]
 async fn a_headless_ask_parks_then_runs_on_the_owners_answer() {
     let db = talk_db().await;
+    insert_bot(&db, SCOUT, OWNER, "SERVER").await;
+    insert_bot(&db, LEDGER, OWNER, "SERVER").await;
     let store = GrantRows::new(&db, SCOUT, OWNER);
     let (scout, ledger_bot) = (member(SCOUT, "Scout"), member(LEDGER, "Ledger"));
     let (verdict, card) =
@@ -229,7 +231,53 @@ async fn a_late_answer_wakes_the_asker_in_the_conversation_it_asked_from() {
     assert!(answered_ask(&db, &plain).await.unwrap().is_none());
     let transcript = ask_result_transcript(&db, &follow_up, &answered).await;
     let prompt = transcript.map(|t| t.prompt).unwrap_or_default();
-    assert!(prompt.contains("Ledger answered") && prompt.contains("42"), "{prompt}");
+    assert!(prompt.contains(" answered:\n42"), "{prompt}");
+}
+
+#[tokio::test]
+async fn a_desktop_hosts_reply_to_a_late_answer_turn_goes_to_the_origin_conversation() {
+    use crate::routes::inbox::{
+        entries::{Outgoing, answer_origin},
+        model::TurnClaim,
+    };
+    let (db, conversation) = pair("DESKTOP", "DESKTOP").await;
+    ask(&db, &conversation, "ask-4", 1, WAIT_SECS).await;
+    let reply = answer(&db, &conversation, "ask-4", 2).await;
+    let follow_up = turn(&db, SCOUT, &reply).await.expect("follow-up");
+    let claim = TurnClaim {
+        id: follow_up.id.clone(),
+        host_id: "h1".into(),
+    };
+    let outgoing = |message_id: String| -> Outgoing {
+        message_outgoing(&message_id, json!({ "text": "Ledger says 42", "hops": 3 })).unwrap()
+    };
+    let success = outgoing(flow_like_types::bot_turn::reply_message_id(
+        SCOUT,
+        &follow_up.trigger_message_id,
+    ));
+    let (routed, origin) = answer_origin(&db, SCOUT, &claim, &success)
+        .await
+        .unwrap()
+        .expect("a late-answer reply is redirected");
+    assert_eq!(routed.id, follow_up.id);
+    assert_eq!(origin, "origin");
+
+    let failure = outgoing(flow_like_types::bot_turn::failure_message_id(
+        SCOUT,
+        &follow_up.trigger_message_id,
+    ));
+    assert!(answer_origin(&db, SCOUT, &claim, &failure).await.unwrap().is_none());
+
+    let plain = turn(&db, LEDGER, "ask-4").await.unwrap();
+    let plain_claim = TurnClaim {
+        id: plain.id.clone(),
+        host_id: "h1".into(),
+    };
+    let plain_reply = outgoing(flow_like_types::bot_turn::reply_message_id(
+        LEDGER,
+        &plain.trigger_message_id,
+    ));
+    assert!(answer_origin(&db, LEDGER, &plain_claim, &plain_reply).await.unwrap().is_none());
 }
 
 #[tokio::test]

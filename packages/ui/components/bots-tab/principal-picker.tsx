@@ -2,12 +2,17 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { CheckIcon, Loader2Icon, SearchIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useBotLabels } from "../../hooks/use-bots";
+import { useInvitable } from "../../hooks/use-inbox";
 import { useProjectUserSearch } from "../../hooks/use-project-user-search";
 import { userDisplayName, userSecondaryLabel } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
 import type { IBot } from "../../state/backend-state/bot-state";
+import type {
+	IInvitable,
+	InviteMode,
+} from "../../state/backend-state/inbox-state";
 import { IdentityAvatar } from "../identity/identity-avatar";
 import { LocalBadge } from "./bot-labels";
 import { isSelfPrincipal, matchesSearch } from "./crew-model";
@@ -18,6 +23,8 @@ export interface PickedPrincipal {
 	kind: "bot" | "user";
 	label: string;
 	bot?: IBot;
+	/** How the server lets you bring them in; only set when picking from `/inbox/invitable`. */
+	mode?: InviteMode;
 }
 
 interface PickerRow extends PickedPrincipal {
@@ -37,6 +44,7 @@ function PickerOption({
 	disabled: boolean;
 	onPick: (row: PickerRow) => void;
 }>) {
+	const { t } = useTranslation("bots");
 	return (
 		<li>
 			<button
@@ -58,6 +66,13 @@ function PickerOption({
 						</span>
 					)}
 				</span>
+				{row.mode === "invite" && (
+					<span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+						{row.kind === "bot"
+							? t("crew.picker.ownerAccepts", "Owner accepts")
+							: t("crew.picker.invite", "Invite")}
+					</span>
+				)}
 				{multiple && (
 					<span
 						aria-hidden
@@ -108,6 +123,26 @@ function PickerGroup({
 	);
 }
 
+/** One server-approved principal as a picker row. */
+function invitableRow(entry: IInvitable): PickerRow {
+	return {
+		id: entry.principal_id,
+		kind: entry.kind,
+		label: entry.name ?? entry.principal_id,
+		detail: entry.description ?? undefined,
+		mode: entry.mode,
+	};
+}
+
+function useDebounced(value: string, delayMs: number) {
+	const [debounced, setDebounced] = useState(value);
+	useEffect(() => {
+		const timer = setTimeout(() => setDebounced(value), delayMs);
+		return () => clearTimeout(timer);
+	}, [value, delayMs]);
+	return debounced;
+}
+
 /** Who can be picked: your bots and the people you already share conversations with. */
 export interface PickerSource {
 	me?: string | null;
@@ -127,23 +162,47 @@ export function PrincipalPicker({
 	selected,
 	multiple,
 	full = false,
+	serverRule,
 	onPick,
 }: Readonly<{
 	source: PickerSource;
 	selected: ReadonlySet<string>;
 	multiple: boolean;
 	full?: boolean;
+	/**
+	 * Offer exactly what the server lets you invite (`/inbox/invitable`) instead of searching the
+	 * directory; `conversationId` hides who is already in that room.
+	 */
+	serverRule?: { conversationId?: string };
 	onPick: (principal: PickedPrincipal) => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const botLabels = useBotLabels();
 	const { me, bots, recentPeopleIds, directory, people } = source;
 	const [query, setQuery] = useState("");
-	const search = useProjectUserSearch(undefined, query, people);
+	const ruled = Boolean(serverRule) && people;
+	const search = useProjectUserSearch(undefined, query, people && !ruled);
+	const invitable = useInvitable(useDebounced(query.trim(), 250), {
+		conversationId: serverRule?.conversationId,
+		enabled: ruled,
+	});
+	const ruledRows = useMemo(
+		() =>
+			(invitable.data ?? [])
+				.filter((entry) => entry.state !== "member")
+				.map((entry) => ({
+					...invitableRow(entry),
+					detail:
+						entry.state === "invited"
+							? t("crew.picker.alreadyInvited", "Already invited")
+							: (entry.description ?? undefined),
+				})),
+		[invitable.data, t],
+	);
 
 	const botRows = useMemo<PickerRow[]>(
 		() =>
-			bots
+			(ruled ? bots.filter((bot) => bot.local) : bots)
 				.map((bot) => {
 					const labels = botLabels(bot);
 					return {
@@ -155,11 +214,11 @@ export function PrincipalPicker({
 					};
 				})
 				.filter((row) => matchesSearch(query, [row.label, row.detail])),
-		[bots, botLabels, query],
+		[bots, botLabels, query, ruled],
 	);
 
 	const peopleRows = useMemo<PickerRow[]>(() => {
-		if (!people) return [];
+		if (!people || ruled) return [];
 		const recent = recentPeopleIds
 			.filter((id) => !isSelfPrincipal(id, me))
 			.map((id) => ({
@@ -181,12 +240,22 @@ export function PrincipalPicker({
 				detail: userSecondaryLabel(user),
 			}));
 		return [...recent, ...found];
-	}, [directory, me, people, query, recentPeopleIds, search.results]);
+	}, [directory, me, people, query, recentPeopleIds, ruled, search.results]);
 
-	const nothing =
-		botRows.length === 0 &&
-		peopleRows.length === 0 &&
-		!search.isSearchingDirectory;
+	const ownRows = ruledRows.filter(
+		(row) => row.kind === "bot" && row.mode === "add_now",
+	);
+	const invitedBotRows = ruledRows.filter(
+		(row) => row.kind === "bot" && row.mode === "invite",
+	);
+	const invitedPeopleRows = ruledRows.filter((row) => row.kind === "user");
+	const nothing = ruled
+		? ownRows.length + invitedBotRows.length + invitedPeopleRows.length === 0 &&
+			botRows.length === 0 &&
+			!invitable.isFetching
+		: botRows.length === 0 &&
+			peopleRows.length === 0 &&
+			!search.isSearchingDirectory;
 	const searchLabel = people
 		? t("crew.picker.searchLabel", "Search your bots and people")
 		: t("local.picker.searchLabel", "Search your bots");
@@ -203,14 +272,14 @@ export function PrincipalPicker({
 					placeholder={searchLabel}
 					className="h-8 min-w-0 flex-1 appearance-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
 				/>
-				{search.isSearchingDirectory && (
+				{(ruled ? invitable.isFetching : search.isSearchingDirectory) && (
 					<Loader2Icon className="size-4 shrink-0 animate-spin" aria-hidden />
 				)}
 			</label>
 			<div className="flex max-h-80 min-h-0 flex-col gap-3 overflow-y-auto pr-1">
 				<PickerGroup
 					label={t("crew.picker.bots", "Your bots")}
-					rows={botRows}
+					rows={[...botRows, ...ownRows]}
 					selected={selected}
 					multiple={multiple}
 					full={full}
@@ -218,7 +287,15 @@ export function PrincipalPicker({
 				/>
 				<PickerGroup
 					label={t("crew.picker.people", "People")}
-					rows={peopleRows}
+					rows={ruled ? invitedPeopleRows : peopleRows}
+					selected={selected}
+					multiple={multiple}
+					full={full}
+					onPick={onPick}
+				/>
+				<PickerGroup
+					label={t("crew.picker.theirBots", "Bots of people you work with")}
+					rows={invitedBotRows}
 					selected={selected}
 					multiple={multiple}
 					full={full}
@@ -226,7 +303,7 @@ export function PrincipalPicker({
 				/>
 				{nothing && people && (
 					<p className="px-2 py-4 text-center text-sm text-muted-foreground">
-						{search.canSearchDirectory
+						{ruled || search.canSearchDirectory
 							? t("crew.picker.noMatches", "No bots or people match.")
 							: t(
 									"crew.picker.hint",
@@ -242,7 +319,7 @@ export function PrincipalPicker({
 						)}
 					</p>
 				)}
-				{search.directoryError && (
+				{(ruled ? invitable.isError : search.directoryError) && (
 					<p className="px-2 text-xs text-destructive">
 						{t("crew.picker.searchFailed", "Searching people failed.")}
 					</p>

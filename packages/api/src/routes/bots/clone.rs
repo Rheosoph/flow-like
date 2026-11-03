@@ -4,7 +4,7 @@
 //! copy is always a bot of their own and counts toward their limits.
 
 use super::{
-    apps::member_app_ids,
+    apps::member_apps,
     crud::admit_new_bot,
     model::{Bot, BotSettings},
     owned_bot,
@@ -70,15 +70,20 @@ pub(super) async fn clone_in<C: ConnectionTrait>(
     settings.name = Some(copy_name(source_name(&source, &settings)));
     validation::check_rules(&settings)?;
     admit_new_bot(db, owner_id, settings.location).await?;
-    let app_ids = member_app_ids(db, owner_id, bot_id).await?;
+    let apps = member_apps(db, owner_id, bot_id).await?;
+    let app_ids: Vec<String> = apps.iter().map(|(app_id, ..)| app_id.clone()).collect();
     let stored = new_bot_row(owner_id, None, source.preset_id, &settings, now)?
         .insert(db)
         .await?;
     if !app_ids.is_empty() {
-        bot_app::Entity::insert_many(app_ids.iter().map(|app_id| bot_app::ActiveModel {
-            bot_id: Set(stored.id.clone()),
-            app_id: Set(app_id.clone()),
-            added_at: Set(now),
+        bot_app::Entity::insert_many(apps.into_iter().map(|(app_id, mask, scopes)| {
+            bot_app::ActiveModel {
+                bot_id: Set(stored.id.clone()),
+                app_id: Set(app_id),
+                added_at: Set(now),
+                permission_mask: Set(mask),
+                scopes: Set(scopes),
+            }
         }))
         .exec_without_returning(db)
         .await?;

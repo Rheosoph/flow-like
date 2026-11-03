@@ -1464,6 +1464,8 @@ pub fn run() {
             functions::local_bots::local_bots_apps,
             functions::local_bots::local_bots_attach_app,
             functions::local_bots::local_bots_detach_app,
+            functions::local_bots::local_bots_app_restrictions,
+            functions::local_bots::local_bots_set_app_restrictions,
             functions::local_bots::local_bots_secrets,
             functions::local_bots::local_bots_set_secret,
             functions::local_bots::local_bots_delete_secret,

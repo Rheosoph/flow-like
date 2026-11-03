@@ -17,7 +17,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
 };
 use chrono::{DateTime, FixedOffset, Timelike};
 use flow_like_types::inbox::{InboxEntryKind, MAX_CONVERSATION_MEMBERS, MAX_ENVELOPE_BYTES};
@@ -32,6 +32,7 @@ pub mod delivery;
 pub mod entries;
 pub(crate) mod exchange;
 pub mod import;
+pub mod invitations;
 pub mod keys;
 pub(crate) mod mail_threads;
 pub mod members;
@@ -53,6 +54,8 @@ pub(crate) mod fixture;
 #[cfg(test)]
 mod history_tests;
 #[cfg(test)]
+mod invitations_tests;
+#[cfg(test)]
 mod mail_threads_tests;
 #[cfg(test)]
 mod import_tests;
@@ -72,6 +75,19 @@ pub(crate) const INBOX_KEY_LIMIT: &str = "INBOX_KEY_LIMIT";
 pub(crate) const INBOX_EDIT_LIMIT: &str = "INBOX_EDIT_LIMIT";
 pub(crate) const INBOX_HANDLE_NOT_ALLOWED: &str = "INBOX_HANDLE_NOT_ALLOWED";
 pub(crate) const BOT_TURN_NOT_CLAIMED: &str = "BOT_TURN_NOT_CLAIMED";
+pub(crate) const INBOX_INVITE_LIMIT: &str = "INBOX_INVITE_LIMIT";
+pub(crate) const INBOX_INVITE_NOT_ALLOWED: &str = "INBOX_INVITE_NOT_ALLOWED";
+
+pub(crate) const MEMBER_ACTIVE: &str = "ACTIVE";
+pub(crate) const MEMBER_PENDING: &str = "PENDING";
+pub(crate) const MEMBER_DECLINED: &str = "DECLINED";
+
+/// Rows that read, receive and count: not left and not still an invitation.
+pub(crate) fn active_member() -> Condition {
+    Condition::all()
+        .add(conversation_member::Column::LeftAt.is_null())
+        .add(conversation_member::Column::Status.eq(MEMBER_ACTIVE))
+}
 
 /// Rows per insert statement, so a 50-member join fan-out never builds one huge statement.
 const ENTRY_INSERT_CHUNK: usize = 500;
@@ -97,6 +113,28 @@ pub fn routes() -> Router<AppState> {
             "/conversations/{conversation_id}/members/{principal_id}",
             delete(members::remove_member),
         )
+        .route(
+            "/conversations/{conversation_id}/invitations",
+            post(invitations::invite),
+        )
+        .route(
+            "/conversations/{conversation_id}/invitations/{principal_id}",
+            delete(invitations::cancel_invitation),
+        )
+        .route(
+            "/conversations/{conversation_id}/members/{principal_id}/limits",
+            patch(invitations::set_limits),
+        )
+        .route("/invitations", get(invitations::list_invitations))
+        .route(
+            "/invitations/{invitation_id}/accept",
+            post(invitations::accept_invitation),
+        )
+        .route(
+            "/invitations/{invitation_id}/decline",
+            post(invitations::decline_invitation),
+        )
+        .route("/invitable", get(invitations::list_invitable))
         .route(
             "/conversations/{conversation_id}/entries",
             get(entries::list_entries)
@@ -217,7 +255,7 @@ async fn active_membership<C: ConnectionTrait>(
     principal_id: &str,
 ) -> Result<conversation_member::Model, ApiError> {
     conversation_member::Entity::find_by_id((conversation_id.to_string(), principal_id.to_string()))
-        .filter(conversation_member::Column::LeftAt.is_null())
+        .filter(active_member())
         .one(db)
         .await?
         .ok_or_else(|| conversation_not_found(conversation_id))
@@ -246,7 +284,7 @@ async fn active_members<C: ConnectionTrait>(
     }
     conversation_member::Entity::find()
         .filter(conversation_member::Column::ConversationId.is_in(conversation_ids.iter().cloned()))
-        .filter(conversation_member::Column::LeftAt.is_null())
+        .filter(active_member())
         .order_by_asc(conversation_member::Column::JoinedAt)
         .order_by_asc(conversation_member::Column::PrincipalId)
         .all(db)

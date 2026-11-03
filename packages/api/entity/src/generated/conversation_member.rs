@@ -31,6 +31,16 @@ pub struct Model {
     pub left_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "lastReadAt")]
     pub last_read_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_name = "status", column_type = "Text", default_value = "ACTIVE")]
+    pub status: String,
+    #[sea_orm(column_name = "limits", column_type = "JsonBinary", nullable)]
+    pub limits: Option<Json>,
+    #[sea_orm(column_name = "invitedBy", column_type = "Text", nullable)]
+    pub invited_by: Option<String>,
+    #[sea_orm(column_name = "invitedAt")]
+    pub invited_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_name = "acceptedAt")]
+    pub accepted_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(
         belongs_to,
         from = "conversation_id",

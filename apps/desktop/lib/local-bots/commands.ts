@@ -2,6 +2,7 @@ import type {
 	BotApprovalDecision,
 	IBot,
 	IBotApp,
+	IBotRestrictions,
 	IBotPermission,
 	IBotSecretInfo,
 	IBotTask,
@@ -170,6 +171,18 @@ export const localBots = {
 			`attach app ${appId} to local bot ${botId}`,
 			"local_bots_attach_app",
 			{ botId, appId },
+		);
+	},
+
+	async setAppRestrictions(
+		botId: string,
+		appId: string,
+		restrictions: IBotRestrictions,
+	): Promise<IBotRestrictions> {
+		return run<IBotRestrictions>(
+			`set the restrictions of app ${appId} for local bot ${botId}`,
+			"local_bots_set_app_restrictions",
+			{ botId, appId, restrictions },
 		);
 	},
 

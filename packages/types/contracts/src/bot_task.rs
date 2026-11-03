@@ -456,7 +456,7 @@ mod tests {
         let ny = cron("30 1 * * *", "America/New_York");
         let first = ny.first_run(utc("2026-11-01T00:00:00Z")).unwrap();
         let second = ny.after_fire(first).unwrap();
-        assert_eq!(second.signed_duration_since(first).num_hours() / 12, 1);
+        assert_eq!(second.signed_duration_since(first).num_hours(), 25);
         assert_eq!(
             second.date_naive(),
             utc("2026-11-02T00:00:00Z").date_naive()

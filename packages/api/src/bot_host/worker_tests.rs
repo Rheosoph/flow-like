@@ -3,7 +3,8 @@ use super::{
     history::{HISTORY_ENTRIES, HistoryError, transcript},
     ledger::{self, ClaimRequest, enqueue_in},
     worker::{
-        CODE_TIMEOUT, Failure, commit_reply_in, memory_written, refuse_tool, reply_request, retries,
+        CODE_TIMEOUT, Failure, commit_reply_in, executor_token, memory_written, refuse_tool,
+        reply_request, retries, room_of,
     },
 };
 use crate::{
@@ -67,7 +68,7 @@ async fn the_transcript_ends_at_the_answered_message_and_marks_who_spoke() {
         &["bot_1"],
     )
     .await;
-    let transcript = transcript(&db, "bot_1", "c1", "m3", ConversationKind::Direct)
+    let transcript = transcript(&db, "bot_1", "c1", "m3", ConversationKind::Direct, "user-a")
         .await
         .unwrap();
     assert_eq!(transcript.prompt, "third");
@@ -138,16 +139,26 @@ async fn a_group_transcript_names_the_senders_but_not_the_bot_itself() {
         &inboxes,
     )
     .await;
-    let transcript = transcript(&db, "bot_1", "g1", "m4", ConversationKind::Group)
+    let transcript = transcript(&db, "bot_1", "g1", "m4", ConversationKind::Group, "user-a")
         .await
         .unwrap();
-    assert_eq!(transcript.prompt, "user-a: @bot_1 summarize");
+    assert_eq!(
+        transcript.prompt,
+        "user-a (your owner) wrote: @bot_1 summarize"
+    );
     let said: Vec<_> = transcript
         .history
         .iter()
         .map(|m| m.content.as_str())
         .collect();
-    assert_eq!(said, ["user-c: hello", "hi", "bot_2: agreed"]);
+    assert_eq!(
+        said,
+        [
+            "user-c (member, not your owner) wrote: hello",
+            "hi",
+            "bot_2 (member, not your owner) wrote: agreed"
+        ]
+    );
 }
 
 #[tokio::test]
@@ -167,7 +178,7 @@ async fn the_transcript_holds_the_last_entries_only() {
         )
         .await;
     }
-    let transcript = transcript(&db, "bot_1", "c1", "m40", ConversationKind::Direct)
+    let transcript = transcript(&db, "bot_1", "c1", "m40", ConversationKind::Direct, "user-a")
         .await
         .unwrap();
     assert_eq!(transcript.history.len() as u64, HISTORY_ENTRIES - 1);
@@ -180,11 +191,11 @@ async fn a_missing_deleted_sealed_or_own_trigger_is_unreadable() {
     let db = database().await;
     lone_message_history(&db).await;
     assert!(matches!(
-        transcript(&db, "bot_1", "c1", "nope", ConversationKind::Direct).await,
+        transcript(&db, "bot_1", "c1", "nope", ConversationKind::Direct, "user-a").await,
         Err(HistoryError::TriggerMissing)
     ));
     assert!(matches!(
-        transcript(&db, "bot_1", "c1", "m2", ConversationKind::Direct).await,
+        transcript(&db, "bot_1", "c1", "m2", ConversationKind::Direct, "user-a").await,
         Err(HistoryError::TriggerUnreadable)
     ));
     inbox_entry::Entity::update_many()
@@ -197,7 +208,7 @@ async fn a_missing_deleted_sealed_or_own_trigger_is_unreadable() {
         .await
         .unwrap();
     assert!(matches!(
-        transcript(&db, "bot_1", "c1", "m3", ConversationKind::Direct).await,
+        transcript(&db, "bot_1", "c1", "m3", ConversationKind::Direct, "user-a").await,
         Err(HistoryError::TriggerUnreadable)
     ));
 }
@@ -219,6 +230,8 @@ fn a_reply_answers_the_trigger_one_hop_further_and_a_failure_names_its_code() {
         reply_message_id: None,
         error_code: None,
         hops: 2,
+        requester_id: Some("user-a".into()),
+        audience: "OWNER".into(),
         created_at: at(0),
         updated_at: at(0),
     };
@@ -507,4 +520,22 @@ fn a_changed_or_unreadable_memory_count_counts_as_a_write() {
     assert!(memory_written(Some(4), Some(5)));
     assert!(memory_written(Some(4), None));
     assert!(memory_written(None, Some(4)));
+}
+
+#[test]
+fn a_turn_token_names_the_bot_and_keeps_the_owner_as_payer() {
+    crate::backend_jwt::init_for_tests();
+    let direct = executor_token("owner", "bot-1", None, "turn-1", Some("ws"), 600).unwrap();
+    let claims = crate::execution::verify_execution_jwt(&direct).unwrap();
+    assert_eq!(claims.sub, "owner");
+    assert_eq!(claims.bot_id.as_deref(), Some("bot-1"));
+    assert_eq!(claims.conv_id, None);
+    assert_eq!(claims.run_id, "turn-1");
+    assert!(claims.unattended);
+
+    let room = room_of(ConversationKind::Group, "conv-1");
+    let token = executor_token("owner", "bot-1", room, "turn-1", Some("ws"), 600).unwrap();
+    let claims = crate::execution::verify_execution_jwt(&token).unwrap();
+    assert_eq!(claims.conv_id.as_deref(), Some("conv-1"));
+    assert_eq!(room_of(ConversationKind::Direct, "conv-1"), None);
 }

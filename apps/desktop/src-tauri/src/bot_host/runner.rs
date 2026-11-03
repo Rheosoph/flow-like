@@ -77,6 +77,7 @@ impl TurnRunner for NativeRunner {
             conversation_id: Some(job.conversation_id.clone()),
             bot_memory: job.memory.map(|memory| memory.0),
             approval_gate: Some(job.gate.clone()),
+            requester: job.requester.clone(),
             interaction_mode: NativeInteractionMode::Unavailable,
             ..Default::default()
         };

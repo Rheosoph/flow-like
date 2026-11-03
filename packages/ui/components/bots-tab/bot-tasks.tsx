@@ -77,8 +77,8 @@ function NewTask({
 						onClick={() => set({ kind })}
 					>
 						{kind === "once"
-							? t("panel.tasks.once", "Once")
-							: t("panel.tasks.repeat", "Repeat")}
+							? String(t("panel.tasks.once", "Once"))
+							: String(t("panel.tasks.repeat", "Repeat"))}
 					</Button>
 				))}
 			</div>
@@ -87,7 +87,7 @@ function NewTask({
 					type="datetime-local"
 					value={draft.at}
 					onChange={(event) => set({ at: event.target.value })}
-					aria-label={t("panel.tasks.at", "When")}
+					aria-label={String(t("panel.tasks.at", "When"))}
 				/>
 			) : (
 				<div className="flex gap-1.5">

@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { UsersIcon } from "lucide-react";
 import {
 	type ReactNode,
 	useCallback,
@@ -52,6 +53,8 @@ import {
 } from "./fold-entries";
 import { useLocalPrincipals } from "./local-principals";
 import { MemberStack } from "./member-stack";
+import type { PickerSource } from "./principal-picker";
+import { RoomMembersDialog } from "./room-members-dialog";
 import { DeleteMessageDialog, type MessageActions } from "./message-row";
 import {
 	discardPendingSend,
@@ -285,16 +288,29 @@ function ConversationView({
 	const principalIds = useMemo(
 		() => [
 			...conversation.members.map((member) => member.principal_id),
+			...(conversation.pending ?? []).map((member) => member.principal_id),
 			...entries.map((entry) => entry.sender_id),
 			...items.flatMap((item) =>
 				item.type === "member" ? [item.principalId, item.by] : [],
 			),
 		],
-		[conversation.members, entries, items],
+		[conversation.members, conversation.pending, entries, items],
 	);
 	const directory = useCrewDirectory(principalIds, { me, bots });
 	const text = useConversationText(directory, me);
 	const heading = useConversationHeading(conversation, me, directory, text);
+	const [membersOpen, setMembersOpen] = useState(false);
+	const pickerSource = useMemo<PickerSource>(
+		() => ({
+			me,
+			bots: bots ?? [],
+			recentPeopleIds: [],
+			directory,
+			people: true,
+		}),
+		[bots, directory, me],
+	);
+	const manageable = conversation.kind === "group" && !conversation.local;
 	useMarkReadWhileOpen(conversation.id, entries, me);
 
 	const sendPlain = useSendPlain(conversation.id);
@@ -366,8 +382,33 @@ function ConversationView({
 				title={heading.title}
 				subtitle={heading.subtitle}
 				encrypted={encrypted}
+				actions={
+					manageable && (
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="shrink-0 text-muted-foreground"
+							onClick={() => setMembersOpen(true)}
+							aria-label={t("roomMembers.open", "Members and invitations")}
+							title={t("roomMembers.open", "Members and invitations")}
+						>
+							<UsersIcon aria-hidden />
+						</Button>
+					)
+				}
 				onClose={onClose}
 			/>
+			{manageable && (
+				<RoomMembersDialog
+					open={membersOpen}
+					onOpenChange={setMembersOpen}
+					conversation={conversation}
+					directory={directory}
+					source={pickerSource}
+					me={me}
+				/>
+			)}
 			<ConversationMessages
 				blocks={blocks}
 				pending={pending.visible}

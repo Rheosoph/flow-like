@@ -89,6 +89,7 @@ impl NodeLogic for IsTechnicalUserNode {
                     ExecutionPrincipal::User => "user",
                     ExecutionPrincipal::ApiKey => "apiKey",
                     ExecutionPrincipal::ConnectedApp => "connectedApp",
+                    ExecutionPrincipal::Bot => "bot",
                 }
                 .to_string(),
                 uc.origin_app_id().unwrap_or("").to_string(),

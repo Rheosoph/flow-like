@@ -4,17 +4,21 @@
 
 use super::{
     Reader, active_members, conversation_not_found,
-    model::{Conversation, ConversationMember, InboxEntry},
+    MEMBER_DECLINED, MEMBER_PENDING,
+    model::{Conversation, ConversationMember, InboxEntry, PendingMember},
     stored,
 };
-use crate::{entity::inbox_entry, error::ApiError};
+use crate::{
+    entity::{bot, conversation_member, inbox_entry},
+    error::ApiError,
+};
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::inbox::InboxEntryKind;
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbErr, EntityTrait, FromQueryResult, QueryFilter, Statement,
-    Value,
+    ColumnTrait, Condition, ConnectionTrait, DbErr, EntityTrait, FromQueryResult, QueryFilter,
+    QueryOrder, QuerySelect, Statement, Value,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The most conversations one list returns.
 pub(super) const MAX_LISTED_CONVERSATIONS: u64 = 200;
@@ -65,7 +69,7 @@ FROM (
            c."lastActivityAt", m."lastReadAt"
     FROM "ConversationMember" m
     JOIN "Conversation" c ON c."id" = m."conversationId"
-    WHERE m."principalId" = $1 AND m."leftAt" IS NULL{filter}
+    WHERE m."principalId" = $1 AND m."leftAt" IS NULL AND m."status" = 'ACTIVE'{filter}
     ORDER BY c."lastActivityAt" DESC, c."id" DESC
     LIMIT {MAX_LISTED_CONVERSATIONS}
 ) p
@@ -89,11 +93,14 @@ pub(super) async fn conversations_for<C: ConnectionTrait>(
     }
     let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
     let mut members = members_by_conversation(db, &ids).await?;
+    reveal_own_bot_limits(db, reader, &mut members).await?;
+    let mut pending = pending_by_conversation(db, &ids).await?;
     let mut last_entries = entries_by_id(db, &reader.inbox, &rows).await?;
     Ok(rows
         .into_iter()
         .map(|row| Conversation {
             members: members.remove(&row.id).unwrap_or_default(),
+            pending: pending.remove(&row.id).unwrap_or_default(),
             unread_count: u64::try_from(row.unread_count).unwrap_or(0),
             last_entry: row
                 .last_entry_id
@@ -122,6 +129,66 @@ async fn members_by_conversation<C: ConnectionTrait>(
             .push(member.into());
     }
     Ok(members)
+}
+
+async fn pending_by_conversation<C: ConnectionTrait>(
+    db: &C,
+    conversation_ids: &[String],
+) -> Result<HashMap<String, Vec<PendingMember>>, DbErr> {
+    let mut pending: HashMap<String, Vec<PendingMember>> = HashMap::new();
+    for member in conversation_member::Entity::find()
+        .filter(conversation_member::Column::ConversationId.is_in(conversation_ids.iter().cloned()))
+        .filter(
+            Condition::any()
+                .add(conversation_member::Column::Status.eq(MEMBER_PENDING))
+                .add(conversation_member::Column::Status.eq(MEMBER_DECLINED)),
+        )
+        .order_by_asc(conversation_member::Column::InvitedAt)
+        .order_by_asc(conversation_member::Column::PrincipalId)
+        .all(db)
+        .await?
+    {
+        pending
+            .entry(member.conversation_id.clone())
+            .or_default()
+            .push(member.into());
+    }
+    Ok(pending)
+}
+
+/// Room limits show only to the owner of the bot they limit; everyone else sees none.
+async fn reveal_own_bot_limits<C: ConnectionTrait>(
+    db: &C,
+    reader: &Reader,
+    members: &mut HashMap<String, Vec<ConversationMember>>,
+) -> Result<(), DbErr> {
+    let owner = reader.owner.as_deref().unwrap_or(&reader.inbox);
+    let limited: Vec<String> = members
+        .values()
+        .flatten()
+        .filter(|member| member.limits.is_some())
+        .map(|member| member.principal_id.clone())
+        .collect();
+    let owned: HashSet<String> = if limited.is_empty() {
+        HashSet::new()
+    } else {
+        bot::Entity::find()
+            .select_only()
+            .column(bot::Column::Id)
+            .filter(bot::Column::Id.is_in(limited))
+            .filter(bot::Column::OwnerId.eq(owner))
+            .into_tuple::<String>()
+            .all(db)
+            .await?
+            .into_iter()
+            .collect()
+    };
+    for member in members.values_mut().flatten() {
+        if !owned.contains(&member.principal_id) {
+            member.limits = None;
+        }
+    }
+    Ok(())
 }
 
 /// The newest messages the rows name, from the reader's inbox, by entry id.

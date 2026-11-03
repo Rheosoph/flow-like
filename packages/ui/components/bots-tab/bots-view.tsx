@@ -13,7 +13,7 @@ import {
 import { useAuth } from "react-oidc-context";
 import { botPresence, useBotPresence } from "../../hooks/use-bot-presence";
 import { useBots } from "../../hooks/use-bots";
-import { useConversations } from "../../hooks/use-inbox";
+import { useConversations, useInvitations } from "../../hooks/use-inbox";
 import { LocalPrincipalsProvider } from "../../hooks/use-user-lookup";
 import { useBackend, useSignedIn } from "../../state/backend-state";
 import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
@@ -283,13 +283,19 @@ function CrewLayout(data: Readonly<CrewData>) {
 		[bots],
 	);
 	const move = useMoveReview(canMove);
+	const invitations = useInvitations();
 	const principalIds = useMemo(
-		() =>
-			conversations.flatMap((conversation) => [
+		() => [
+			...conversations.flatMap((conversation) => [
 				...conversation.members.map((member) => member.principal_id),
+				...(conversation.pending ?? []).map((member) => member.principal_id),
 				...(conversation.last_entry ? [conversation.last_entry.sender_id] : []),
 			]),
-		[conversations],
+			...(invitations.data ?? []).flatMap((invitation) =>
+				invitation.invited_by ? [invitation.invited_by] : [],
+			),
+		],
+		[conversations, invitations.data],
 	);
 	const recentPeopleIds = useMemo(
 		() => [
@@ -375,8 +381,24 @@ function CrewLayout(data: Readonly<CrewData>) {
 					? resolved.conversationId
 					: null,
 		}).map(conversationNeed);
-		return promptNeed ? [promptNeed, ...waiting] : waiting;
-	}, [conversations, dockOpen, me, myBotIds, promptNeed, resolved]);
+		const invited = (invitations.data ?? []).map<NeedsYouItem>(
+			(invitation) => ({
+				type: "invitation",
+				invitation,
+			}),
+		);
+		return promptNeed
+			? [promptNeed, ...invited, ...waiting]
+			: [...invited, ...waiting];
+	}, [
+		conversations,
+		dockOpen,
+		invitations.data,
+		me,
+		myBotIds,
+		promptNeed,
+		resolved,
+	]);
 
 	const query = search.trim();
 	const visibleCrew = crew.filter((member) =>
@@ -385,11 +407,17 @@ function CrewLayout(data: Readonly<CrewData>) {
 	const visibleNeeds = needs.filter((item) =>
 		item.type === "assistant"
 			? matchesSearch(query, [item.name])
-			: matchesSearch(query, [
-					text.title(item.conversation),
-					directory(item.conversation.last_entry?.sender_id ?? "").name,
-					text.entryText(item.conversation.last_entry),
-				]),
+			: item.type === "invitation"
+				? matchesSearch(query, [
+						item.invitation.title,
+						item.invitation.bot_name,
+						directory(item.invitation.invited_by ?? "").name,
+					])
+				: matchesSearch(query, [
+						text.title(item.conversation),
+						directory(item.conversation.last_entry?.sender_id ?? "").name,
+						text.entryText(item.conversation.last_entry),
+					]),
 	);
 	const { rooms, direct } = splitConversations(conversations);
 	const visibleRooms = rooms.filter((conversation) =>

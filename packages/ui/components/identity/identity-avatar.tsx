@@ -29,11 +29,13 @@ export interface ResolvedIdentityAvatarProps {
 	title?: string;
 }
 
-/** Below this the owner's face would be a speck, so only the bot is drawn. */
-const OWNER_BADGE_MIN_SIZE = 20;
 const OWNER_BADGE_RATIO = 0.4;
+/** Small bots keep a legible badge instead of losing the owner. */
+const OWNER_BADGE_MIN_PX = 10;
 /** Narrower badges fit one initial, not two. */
 const OWNER_BADGE_TWO_INITIALS = 20;
+/** Narrower badges are a plain disc: no initial is readable. */
+const OWNER_BADGE_ONE_INITIAL = 12;
 const BOT_MIN_SIZE = 16;
 
 /** "Scout, Felix's bot": a bot is never named without whose it is. */
@@ -143,9 +145,7 @@ function BotIdentityAvatar({
 				animated={animated}
 				decorative
 			/>
-			{size >= OWNER_BADGE_MIN_SIZE && (
-				<OwnerBadge owner={bot.owner} size={size} />
-			)}
+			<OwnerBadge owner={bot.owner} size={size} />
 		</span>
 	);
 }
@@ -154,13 +154,14 @@ function OwnerBadge({
 	owner,
 	size,
 }: Readonly<{ owner: BotOwnerIdentity; size: number }>) {
-	const badge = Math.round(size * OWNER_BADGE_RATIO);
+	const badge = Math.max(
+		OWNER_BADGE_MIN_PX,
+		Math.round(size * OWNER_BADGE_RATIO),
+	);
 	const ring = Math.max(1, Math.round(size / 32));
-	const initials = owner.isPending
-		? ""
-		: badge < OWNER_BADGE_TWO_INITIALS
-			? owner.initials.slice(0, 1)
-			: owner.initials;
+	let initials = owner.initials;
+	if (owner.isPending || badge < OWNER_BADGE_ONE_INITIAL) initials = "";
+	else if (badge < OWNER_BADGE_TWO_INITIALS) initials = initials.slice(0, 1);
 
 	return (
 		<UserAvatar

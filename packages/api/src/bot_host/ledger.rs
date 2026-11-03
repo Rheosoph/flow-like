@@ -18,6 +18,7 @@ use flow_like_types::{
     bot_turn::{
         BotTurn, ERROR_BATCHED, ERROR_BOT_DELETED, ERROR_HOST_LOST, ERROR_QUEUE_EXPIRED,
         INTERACTIVE_GRACE_SECS, LEASE_SECS, MAX_ATTEMPTS, MAX_HOPS, MAX_RUNNING_PER_OWNER, QUEUED_EXPIRY_SECS,
+        TurnAudience,
         STORED_CANCELLED, STORED_DONE, STORED_FAILED, STORED_QUEUED, STORED_RUNNING,
         STORED_WAITING, TurnHostKind, TurnStatus, reply_message_id, turn_id,
     },
@@ -76,8 +77,51 @@ pub(crate) fn queues_turn(delivery: &BotDelivery, recipient: &BotRecipient) -> b
             || recipient.replied_to)
 }
 
+/// A recipient whose turn is about to queue, with whose request it answers.
+pub(crate) struct Waking<'a> {
+    pub recipient: &'a BotRecipient,
+    pub requester_id: String,
+    pub audience: TurnAudience,
+}
+
+/// Whose request the message is: its sender, except that another bot of the owner in the owner's
+/// own conversation speaks for the owner, so it doesn't count against a requester's daily limit.
+async fn requester_of<C: ConnectionTrait>(
+    db: &C,
+    delivery: &BotDelivery,
+    owner_id: &str,
+) -> Result<String, DbErr> {
+    let sender = delivery.sender_id.as_str();
+    if sender == owner_id || delivery.conversation_kind != ConversationKind::Direct {
+        return Ok(sender.to_string());
+    }
+    let owned = bot::Entity::find_by_id(sender)
+        .filter(bot::Column::OwnerId.eq(owner_id))
+        .one(db)
+        .await?
+        .is_some();
+    Ok(if owned { owner_id } else { sender }.to_string())
+}
+
+async fn waking_of<'a, C: ConnectionTrait>(
+    db: &C,
+    delivery: &BotDelivery,
+    recipients: Vec<&'a BotRecipient>,
+) -> Result<Vec<Waking<'a>>, DbErr> {
+    let mut waking = Vec::with_capacity(recipients.len());
+    for recipient in recipients {
+        waking.push(Waking {
+            requester_id: requester_of(db, delivery, &recipient.owner_id).await?,
+            audience: TurnAudience::of(delivery.conversation_kind),
+            recipient,
+        });
+    }
+    Ok(waking)
+}
+
 /// The turn row a recipient gets for `trigger_message_id`.
-fn queued_row(recipient: &BotRecipient, now: DateTime<FixedOffset>) -> bot_turn::ActiveModel {
+fn queued_row(waking: &Waking, now: DateTime<FixedOffset>) -> bot_turn::ActiveModel {
+    let recipient = waking.recipient;
     bot_turn::ActiveModel {
         id: Set(turn_id(&recipient.bot_id, &recipient.trigger_message_id)),
         bot_id: Set(recipient.bot_id.clone()),
@@ -93,6 +137,8 @@ fn queued_row(recipient: &BotRecipient, now: DateTime<FixedOffset>) -> bot_turn:
         reply_message_id: Set(None),
         error_code: Set(None),
         hops: Set(i32::try_from(recipient.hops).unwrap_or(i32::MAX)),
+        requester_id: Set(Some(waking.requester_id.clone())),
+        audience: Set(waking.audience.stored().to_string()),
         created_at: Set(now),
         updated_at: Set(now),
     }
@@ -135,13 +181,12 @@ pub(crate) async fn enqueue_in<C: ConnectionTrait>(
         waking.retain(|recipient| host_kind_of(recipient.location) != TurnHostKind::Server);
     }
     let waking = super::cap::admit(db, waking, now).await?;
+    let waking = waking_of(db, delivery, waking).await?;
+    let waking = super::cap::admit_requesters(db, waking, now).await?;
     if waking.is_empty() {
         return Ok(0);
     }
-    let rows: Vec<_> = waking
-        .iter()
-        .map(|recipient| queued_row(recipient, now))
-        .collect();
+    let rows: Vec<_> = waking.iter().map(|item| queued_row(item, now)).collect();
     let inserted = bot_turn::Entity::insert_many(rows)
         .on_conflict(
             OnConflict::columns([bot_turn::Column::BotId, bot_turn::Column::TriggerMessageId])
@@ -150,7 +195,8 @@ pub(crate) async fn enqueue_in<C: ConnectionTrait>(
         )
         .exec_without_returning(db)
         .await?;
-    super::talk::mark_turns(db, &waking, now).await?;
+    let admitted: Vec<&BotRecipient> = waking.iter().map(|item| item.recipient).collect();
+    super::talk::mark_turns(db, &admitted, now).await?;
     Ok(inserted)
 }
 
@@ -169,6 +215,10 @@ pub(crate) fn turn_json(turn: &bot_turn::Model, batched: Vec<String>) -> BotTurn
         reply_message_id: turn.reply_message_id.clone(),
         error_code: turn.error_code.clone(),
         hops: u32::try_from(turn.hops).unwrap_or(0),
+        owner_id: turn.owner_id.clone(),
+        requester_id: turn.requester_id.clone(),
+        requester_name: None,
+        audience: TurnAudience::parse(&turn.audience).unwrap_or(TurnAudience::Room),
         created_at: turn.created_at.to_rfc3339(),
         updated_at: turn.updated_at.to_rfc3339(),
         batched,
@@ -907,7 +957,7 @@ pub(crate) async fn watched_turn<C: ConnectionTrait>(
     }
     let member =
         conversation_member::Entity::find_by_id((conversation_id.to_string(), sub.to_string()))
-            .filter(conversation_member::Column::LeftAt.is_null())
+            .filter(crate::routes::inbox::active_member())
             .count(db)
             .await?;
     Ok((member > 0).then_some(turn))

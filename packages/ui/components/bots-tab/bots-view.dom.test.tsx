@@ -193,6 +193,7 @@ const users: Record<string, IUserLookup> = {
 
 const backend = {
 	botState: { listBots: async () => bots },
+	appState: { getApps: async () => [] },
 	inboxState: {
 		listConversations: async () => conversations,
 	},

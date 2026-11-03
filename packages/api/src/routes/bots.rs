@@ -24,6 +24,7 @@ pub mod permissions;
 pub mod presence;
 mod provision;
 pub(crate) mod runtime;
+pub mod runtime_token;
 mod secret_cipher;
 pub mod secrets;
 pub mod tool_grants;
@@ -74,6 +75,10 @@ pub fn routes() -> Router<AppState> {
                 .delete(crud::delete_bot),
         )
         .route("/{bot_id}/clone", post(clone::clone_bot))
+        .route(
+            "/{bot_id}/runtime-token",
+            post(runtime_token::mint_runtime_token),
+        )
         .route("/{bot_id}/memory", delete(memory::reset_memory))
         .route("/{bot_id}/memory/facts", get(memory::list_facts))
         .route("/{bot_id}/memory/facts/{fact_id}", delete(memory::forget_fact))
@@ -153,6 +158,10 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/{bot_id}/apps/{app_id}",
             put(apps::attach_bot_app).delete(apps::detach_bot_app),
+        )
+        .route(
+            "/{bot_id}/apps/{app_id}/restrictions",
+            get(apps::get_bot_app_restrictions).put(apps::set_bot_app_restrictions),
         )
         .route("/{bot_id}/secrets", get(secrets::list_bot_secrets))
         .route(

@@ -249,6 +249,9 @@ fn secret_from(headers: &HeaderMap) -> Option<&str> {
 }
 
 fn signature_matches(secret_hash: &str, signature: &str, body: &[u8]) -> bool {
+    if secret_hash.is_empty() {
+        return false;
+    }
     let Some(hex_signature) = signature.trim().strip_prefix("sha256=") else {
         return false;
     };

@@ -5,7 +5,7 @@
 
 use super::ledger::{self, BOT_TURN_LEASE_LOST};
 use crate::{
-    entity::{bot, bot_tool_grant, bot_turn},
+    entity::{bot, bot_tool_grant, bot_turn, conversation},
     error::ApiError,
     push_notifications::{DispatchNotificationInput, dispatch_notification_idempotent},
     routes::{
@@ -109,6 +109,15 @@ where
     }
 
     async fn delete(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool> {
+        if is_token_scope(scope) {
+            bot_tool_grant::Entity::delete_many()
+                .filter(bot_tool_grant::Column::BotId.eq(self.bot_id.as_str()))
+                .filter(bot_tool_grant::Column::Tool.eq(tool))
+                .filter(bot_tool_grant::Column::Scope.eq(scope))
+                .filter(bot_tool_grant::Column::GrantedAt.lt(token_cutoff(now_millis())))
+                .exec(&*self.db)
+                .await?;
+        }
         Ok(delete_in(&*self.db, &self.bot_id, tool, scope).await?)
     }
 }
@@ -263,6 +272,28 @@ async fn park_transaction(
     park_in(txn, turn, host_id, card, &conversation, now).await
 }
 
+/// The card with whose message woke the turn and the room it runs in, so the owner knows who
+/// they are approving for.
+async fn named_requester<C: ConnectionTrait>(
+    db: &C,
+    turn: &bot_turn::Model,
+    card: &ApprovalRequest,
+) -> Result<ApprovalRequest, ApiError> {
+    let mut card = card.clone();
+    let Some(requester) = turn.requester_id.as_deref() else {
+        return Ok(card);
+    };
+    let names = super::history::sender_names(db, &[requester]).await?;
+    card.requester_id = Some(requester.to_string());
+    card.requester_name = names.get(requester).cloned();
+    card.room = conversation::Entity::find_by_id(&turn.conversation_id)
+        .one(db)
+        .await?
+        .filter(|row| row.kind.eq_ignore_ascii_case("group"))
+        .and_then(|row| row.title);
+    Ok(card)
+}
+
 /// Sets the turn `host_id` holds `WAITING` and posts the card in `conversation`, which the caller
 /// holds the lock of.
 pub(crate) async fn park_in<C: ConnectionTrait>(
@@ -273,6 +304,7 @@ pub(crate) async fn park_in<C: ConnectionTrait>(
     conversation: &str,
     now: DateTime<FixedOffset>,
 ) -> Result<Sent, ApiError> {
+    let card = &named_requester(txn, turn, card).await?;
     let parked = bot_turn::Entity::update_many()
         .col_expr(bot_turn::Column::Status, Expr::value(STORED_WAITING))
         .col_expr(bot_turn::Column::HostId, Expr::value(None::<String>))

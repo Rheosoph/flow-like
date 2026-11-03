@@ -188,6 +188,10 @@ fn turn(id: &str) -> BotTurn {
         reply_message_id: None,
         error_code: None,
         hops: 0,
+        owner_id: "owner".into(),
+        requester_id: Some("owner".into()),
+        requester_name: None,
+        audience: flow_like_types::bot_turn::TurnAudience::Owner,
         created_at: Utc::now().to_rfc3339(),
         updated_at: Utc::now().to_rfc3339(),
         batched: Vec::new(),
@@ -296,7 +300,7 @@ impl Fixture {
 
     fn bot_key(&self) -> PublicInboxKey {
         self.e2e.status(BOT).key_id.map_or_else(
-            || panic!("no key"),
+            || self.alice_key.clone(),
             |key_id| {
                 let put = self.hub.puts.lock().unwrap();
                 let found = put.iter().find(|put| put["key_id"] == key_id.as_str()).unwrap();

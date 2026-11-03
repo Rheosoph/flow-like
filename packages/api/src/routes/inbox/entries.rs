@@ -638,13 +638,46 @@ async fn checked_envelopes<C: ConnectionTrait>(
     let members = active_members(txn, &[conversation_id.to_string()]).await?;
     let encryption = ConversationEncryption::parse(&conversation.encryption)
         .unwrap_or(ConversationEncryption::E2e);
-    let envelopes = envelopes_for(&outgoing.content, encryption, &members)?;
+    let stripped = room_content(&conversation, &members, sender, outgoing);
+    let envelopes = envelopes_for(
+        stripped.as_ref().unwrap_or(&outgoing.content),
+        encryption,
+        &members,
+    )?;
     if let Content::Plain(envelope) = &outgoing.content
         && outgoing.kind.targets_message()
     {
         check_target(txn, conversation_id, sender, outgoing.kind, envelope).await?;
     }
     Ok((conversation, members, envelopes))
+}
+
+/// What a bot's message looks like in a room with other people: its tool parts cut down to a
+/// name and a summary, so its owner's arguments and results stay out of the members' copies.
+fn room_content(
+    conversation: &conversation::Model,
+    members: &[conversation_member::Model],
+    sender: &str,
+    outgoing: &Outgoing,
+) -> Option<Content> {
+    use flow_like_types::inbox::PrincipalKind;
+    let Content::Plain(envelope) = &outgoing.content else {
+        return None;
+    };
+    let is_room = ConversationKind::parse(&conversation.kind) == Some(ConversationKind::Group)
+        && members
+            .iter()
+            .filter(|member| PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::User))
+            .count()
+            > 1;
+    let from_bot = members.iter().any(|member| {
+        member.principal_id == sender
+            && PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::Bot)
+    });
+    if !is_room || !from_bot || !matches!(outgoing.kind, InboxEntryKind::Message | InboxEntryKind::Edit) {
+        return None;
+    }
+    flow_like_types::bot_message::without_tool_details(envelope).map(Content::Plain)
 }
 
 /// Messages move the conversation up the list; reactions, edits, deletions and topics don't.
@@ -736,7 +769,7 @@ async fn move_marker<C: ConnectionTrait>(
         )
         .filter(conversation_member::Column::ConversationId.eq(conversation_id))
         .filter(conversation_member::Column::PrincipalId.eq(reader))
-        .filter(conversation_member::Column::LeftAt.is_null())
+        .filter(super::active_member())
         .filter(
             Condition::any()
                 .add(conversation_member::Column::LastReadAt.is_null())
@@ -859,7 +892,7 @@ pub async fn send_entry(
         }
         SendAs::Bot { bot_id, claim } => {
             let bot = desktop_bot(&state.db, &sub, &bot_id).await?;
-            let sent = match answer_origin(&state, &bot.id, &claim, &outgoing).await? {
+            let sent = match answer_origin(&state.db, &bot.id, &claim, &outgoing).await? {
                 Some((turn, origin)) if origin != conversation_id => {
                     super::exchange::reply_in_origin(
                         &state,
@@ -949,15 +982,15 @@ async fn send_as_person(
 
 /// A desktop host's reply to a turn that a late answer woke belongs in the conversation the
 /// question was asked from: the turn and that conversation.
-async fn answer_origin(
-    state: &AppState,
+pub(crate) async fn answer_origin<C: ConnectionTrait>(
+    db: &C,
     bot_id: &str,
     claim: &TurnClaim,
     outgoing: &Outgoing,
 ) -> Result<Option<(crate::entity::bot_turn::Model, String)>, ApiError> {
     let Some(turn) = crate::entity::bot_turn::Entity::find_by_id(&claim.id)
         .filter(crate::entity::bot_turn::Column::BotId.eq(bot_id))
-        .one(&state.db)
+        .one(db)
         .await?
     else {
         return Ok(None);
@@ -965,7 +998,7 @@ async fn answer_origin(
     if outgoing.message_id != flow_like_types::bot_turn::reply_message_id(bot_id, &turn.trigger_message_id) {
         return Ok(None);
     }
-    let answered = crate::bot_host::talk::answered_ask(&state.db, &turn).await?;
+    let answered = crate::bot_host::talk::answered_ask(db, &turn).await?;
     Ok(answered.map(|answered| (turn, answered.origin_conversation)))
 }
 

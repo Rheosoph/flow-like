@@ -86,6 +86,9 @@ pub struct ToolJob {
     pub tool: String,
     pub args: Value,
     pub owner: String,
+    /// The bot the turn belongs to; the executor token must carry the same bot.
+    #[serde(default)]
+    pub bot_id: String,
     pub turn_id: String,
     pub workspace: String,
     pub scope: JobScope,

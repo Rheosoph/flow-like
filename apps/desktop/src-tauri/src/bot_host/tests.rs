@@ -256,7 +256,8 @@ impl TurnRunner for FakeRunner {
         }
         let _leave = Leave(self, key);
         self.gate.acquire().await.unwrap().forget();
-        match *self.mode.lock().unwrap() {
+        let mode = *self.mode.lock().unwrap();
+        match mode {
             Mode::Reply => Ok(format!("answer to: {}", job.prompt)),
             Mode::Blank => Ok("  ".into()),
             Mode::Ask => {
@@ -1023,6 +1024,7 @@ mod grants {
 
     async fn parked(f: &Fixture, bot: &Bot, chat: &Conversation, trigger: &str) -> InboxEntry {
         f.say(&chat.id, trigger, "drop my notes index");
+        f.host.poke(Some(&chat.id));
         until("the turn parks", || {
             f.status_of(&bot.id, trigger) == Some(TurnStatus::Waiting)
         })
@@ -1109,6 +1111,7 @@ mod grants {
             ("knowledge_drop", "table:notes")
         );
         f.say(&chat.id, "m2", "and again");
+        f.host.poke(Some(&chat.id));
         until("the second reply", || replies(&f, &bot, &chat).len() == 2).await;
         assert_eq!(replies(&f, &bot, &chat), ["ran the drop", "ran the drop"]);
     }
@@ -1270,7 +1273,7 @@ fn the_prompt_of_a_trigger_is_its_text_and_a_payload_is_marked() {
     entries.reverse();
     let names = std::collections::HashMap::new();
     let transcript =
-        super::transcript::transcript(&bot.id, chat.kind, "t1", &entries, &names).unwrap();
+        super::transcript::transcript(&bot.id, chat.kind, "t1", &entries, &names, flow_like_local_bots::LOCAL_OWNER_ID).unwrap();
     assert_eq!(
         transcript.prompt,
         "Summarize the news\n\nPayload (schedule): {\"order\":7}"

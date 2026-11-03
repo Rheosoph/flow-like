@@ -192,6 +192,17 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     ) STRICT;
     CREATE INDEX tasks_bot ON tasks (bot_id);
     CREATE INDEX tasks_due ON tasks (enabled, next_run_at);",
+    // What the person lets a bot do in one attached app: permission bits (null keeps the full
+    // role) and scopes as JSON.
+    "ALTER TABLE bot_apps ADD COLUMN permission_mask INTEGER;
+    ALTER TABLE bot_apps ADD COLUMN scopes TEXT NOT NULL DEFAULT '{}';",
+    // Room invitations mirror the API's: only ACTIVE members read and receive; a bot's room
+    // limits (`BotRoomLimits` JSON) live on its membership.
+    "ALTER TABLE conversation_members ADD COLUMN status TEXT NOT NULL DEFAULT 'ACTIVE';
+    ALTER TABLE conversation_members ADD COLUMN limits TEXT;
+    ALTER TABLE conversation_members ADD COLUMN invited_by TEXT;
+    ALTER TABLE conversation_members ADD COLUMN invited_at INTEGER;
+    ALTER TABLE conversation_members ADD COLUMN accepted_at INTEGER;",
 ];
 
 pub(crate) fn open(path: &Path) -> Result<Connection> {

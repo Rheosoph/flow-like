@@ -649,7 +649,10 @@ async fn answer_hold<C: ConnectionTrait>(
     let Some((entry, question)) = body_of(db, &recipient.bot_id, reply_to).await? else {
         return Ok(None);
     };
-    let Some(ask) = question.ask.filter(|_| entry.sender_id == recipient.bot_id) else {
+    let Some(ask) = question
+        .ask
+        .filter(|ask| entry.sender_id == recipient.bot_id && ask.wait_secs > 0)
+    else {
         return Ok(None);
     };
     Ok(Some(
@@ -724,6 +727,7 @@ pub(crate) async fn ask_result_transcript<C: ConnectionTrait>(
                 &answered.origin_conversation,
                 &entry.message_id,
                 kind,
+                &turn.owner_id,
             )
             .await?;
             (earlier.history, Some(earlier.prompt))

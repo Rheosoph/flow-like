@@ -53,6 +53,14 @@ pub struct BotTurn {
     pub error_code: Option<String>,
     /// Bot turns that led to the trigger message; at most 3 queue another.
     pub hops: u32,
+    pub owner_id: String,
+    /// The person or bot whose message woke the turn.
+    pub requester_id: Option<String>,
+    /// The requester's display name; set on a claim.
+    pub requester_name: Option<String>,
+    /// `owner` for an owner-only conversation, `room` for a shared one.
+    #[schema(value_type = String, example = "room")]
+    pub audience: contract::TurnAudience,
     pub created_at: String,
     pub updated_at: String,
     /// Older messages whose turns this one answers too. Set on a claim and on a listing.
@@ -75,6 +83,10 @@ impl From<contract::BotTurn> for BotTurn {
             reply_message_id: turn.reply_message_id,
             error_code: turn.error_code,
             hops: turn.hops,
+            owner_id: turn.owner_id,
+            requester_id: turn.requester_id,
+            requester_name: turn.requester_name,
+            audience: turn.audience,
             created_at: turn.created_at,
             updated_at: turn.updated_at,
             batched: turn.batched,
@@ -208,7 +220,13 @@ pub async fn claim_turn(
     .await?
     .map_err(|refusal| refusal.into_api(&turn_id))?;
     wake(&state, [sub]).await;
-    Ok(turn_response(&claimed.turn, claimed.batched))
+    let mut response = turn_response(&claimed.turn, claimed.batched);
+    if let Some(requester) = claimed.turn.requester_id.as_deref() {
+        response.0.requester_name = crate::bot_host::history::sender_names(&state.db, &[requester])
+            .await?
+            .remove(requester);
+    }
+    Ok(response)
 }
 
 #[utoipa::path(
@@ -399,6 +417,10 @@ mod tests {
             reply_message_id: None,
             error_code: None,
             hops: 1,
+            owner_id: "user_a".into(),
+            requester_id: Some("user_b".into()),
+            requester_name: Some("Mia".into()),
+            audience: contract::TurnAudience::Room,
             created_at: "2026-11-02T09:59:00+00:00".into(),
             updated_at: "2026-11-02T09:59:10+00:00".into(),
             batched: vec!["m1".into()],

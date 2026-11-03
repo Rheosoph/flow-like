@@ -100,6 +100,8 @@ mod tests {
             schema.create_table_from_entity(conversation_segment::Entity),
             schema.create_table_from_entity(bot_tool_grant::Entity),
             schema.create_table_from_entity(bot_webhook::Entity),
+            schema.create_table_from_entity(crate::entity::bot_mail_thread::Entity),
+            schema.create_table_from_entity(crate::entity::bot_mail_message::Entity),
         ] {
             let mut table = Table::create();
             table.table(source.get_table_name().unwrap().clone());

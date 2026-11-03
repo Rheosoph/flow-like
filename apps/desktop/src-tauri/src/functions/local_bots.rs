@@ -17,7 +17,7 @@ use flow_like_local_bots::{
     InboxEntry, KeyError, LOCAL_OWNER_ID, LocalBotBundle, LocalBotStore, MarkReadResponse,
     SecretKeyProvider, SendEntryRequest, UpdateBotRequest, codes,
 };
-use flow_like_types::bot::BotSystemKind;
+use flow_like_types::{bot::BotSystemKind, bot_restrictions::BotRestrictions};
 use hub::HubClient;
 use serde::Serialize;
 use std::{
@@ -389,6 +389,28 @@ pub async fn local_bots_detach_app(
     app_id: String,
 ) -> Result<(), CommandError> {
     with_store(state, move |store| store.detach_app(&bot_id, &app_id)).await
+}
+
+#[tauri::command]
+pub async fn local_bots_app_restrictions(
+    state: State<'_, LocalBots>,
+    bot_id: String,
+    app_id: String,
+) -> Result<BotRestrictions, CommandError> {
+    with_store(state, move |store| store.app_restrictions(&bot_id, &app_id)).await
+}
+
+#[tauri::command]
+pub async fn local_bots_set_app_restrictions(
+    state: State<'_, LocalBots>,
+    bot_id: String,
+    app_id: String,
+    restrictions: BotRestrictions,
+) -> Result<BotRestrictions, CommandError> {
+    with_store(state, move |store| {
+        store.set_app_restrictions(&bot_id, &app_id, restrictions)
+    })
+    .await
 }
 
 #[tauri::command]

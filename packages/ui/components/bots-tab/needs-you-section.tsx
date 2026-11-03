@@ -1,19 +1,28 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import type { ReactNode } from "react";
-import type { IConversation } from "../../state/backend-state/inbox-state";
+import { type ReactNode, useState } from "react";
+import { toast } from "sonner";
+import { useAnswerInvitation } from "../../hooks/use-inbox";
+import { apiErrorMessage } from "../../lib/api-error";
+import type {
+	IBotRoomLimits,
+	IConversation,
+	IInvitation,
+} from "../../state/backend-state/inbox-state";
 import { BotAvatar } from "../bots/bot-avatar";
 import type { BotAppearance } from "../bots/types";
 import { IdentityAvatar } from "../identity/identity-avatar";
 import { Button } from "../ui/button";
 import { isApprovalCard } from "./approval-entry";
 import { CrewSection, StatusDot } from "./crew-section";
+import { RoomLimitsDialog } from "./room-limits-dialog";
 import type { ConversationText } from "./use-conversation-text";
 import type { CrewDirectory } from "./use-crew-directory";
 
 export type NeedsYouItem =
 	| { type: "conversation"; conversation: IConversation }
+	| { type: "invitation"; invitation: IInvitation }
 	| {
 			type: "assistant";
 			name: string;
@@ -27,13 +36,15 @@ function NeedsYouCard({
 	title,
 	meta,
 	onOpen,
+	actions,
 }: Readonly<{
 	avatar: ReactNode;
 	name: string;
 	where: string;
 	title: string;
 	meta: string;
-	onOpen: () => void;
+	onOpen?: () => void;
+	actions?: ReactNode;
 }>) {
 	const { t } = useTranslation("bots");
 	return (
@@ -53,17 +64,119 @@ function NeedsYouCard({
 				<div className="mt-0.5 text-[13px] text-muted-foreground">{meta}</div>
 			</div>
 			<div className="mt-auto flex flex-wrap gap-2">
-				<Button
-					type="button"
-					variant="outline"
-					size="sm"
-					className="rounded-[9px]"
-					onClick={onOpen}
-				>
-					{t("crew.openChat", "Open chat")}
-				</Button>
+				{actions ?? (
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						className="rounded-[9px]"
+						onClick={onOpen}
+					>
+						{t("crew.openChat", "Open chat")}
+					</Button>
+				)}
 			</div>
 		</article>
+	);
+}
+
+function InvitationNeed({
+	invitation,
+	directory,
+}: Readonly<{ invitation: IInvitation; directory: CrewDirectory }>) {
+	const { t } = useTranslation("bots");
+	const answer = useAnswerInvitation();
+	const [limitsOpen, setLimitsOpen] = useState(false);
+	const forBot = invitation.kind === "bot";
+	const inviter = directory(invitation.invited_by ?? "").name;
+	const room =
+		invitation.title ?? t("crew.invitations.groupChat", "a group chat");
+	const botName = invitation.bot_name ?? t("crew.invitations.aBot", "your bot");
+
+	const respond = (accept: boolean, limits?: IBotRoomLimits | null) =>
+		answer
+			.mutateAsync({ invitation, accept, limits })
+			.then(() => setLimitsOpen(false))
+			.catch((error: unknown) => {
+				toast.error(
+					apiErrorMessage(
+						error,
+						t("crew.invitations.failed", "Couldn't answer the invitation."),
+					),
+				);
+			});
+
+	return (
+		<>
+			<NeedsYouCard
+				avatar={
+					<IdentityAvatar subject={invitation.invited_by ?? ""} size={36} />
+				}
+				name={inviter}
+				where={room}
+				title={
+					forBot
+						? t(
+								"crew.invitations.botTitle",
+								"{{name}} wants to add {{bot}} to {{room}}",
+								{ name: inviter, bot: botName, room },
+							)
+						: t("crew.invitations.title", "{{name}} invited you to {{room}}", {
+								name: inviter,
+								room,
+							})
+				}
+				meta={
+					forBot
+						? t(
+								"crew.invitations.botMeta",
+								"You choose what {{bot}} may do there",
+								{ bot: botName },
+							)
+						: t("crew.invitations.meta", "Join to read and write in it")
+				}
+				actions={
+					<>
+						<Button
+							type="button"
+							size="sm"
+							className="rounded-[9px]"
+							disabled={answer.isPending}
+							onClick={() =>
+								forBot ? setLimitsOpen(true) : void respond(true)
+							}
+						>
+							{forBot
+								? t("crew.invitations.review", "Review and accept")
+								: t("crew.invitations.accept", "Accept")}
+						</Button>
+						<Button
+							type="button"
+							variant="outline"
+							size="sm"
+							className="rounded-[9px]"
+							disabled={answer.isPending}
+							onClick={() => void respond(false)}
+						>
+							{t("crew.invitations.decline", "Decline")}
+						</Button>
+					</>
+				}
+			/>
+			{forBot && (
+				<RoomLimitsDialog
+					open={limitsOpen}
+					onOpenChange={setLimitsOpen}
+					botId={invitation.principal_id}
+					botName={botName}
+					roomName={room}
+					confirmLabel={t("crew.invitations.acceptBot", "Accept and add")}
+					pending={answer.isPending}
+					error={answer.error}
+					onConfirm={(limits) => void respond(true, limits)}
+				/>
+			)}
+		</>
 	);
 }
 
@@ -93,6 +206,15 @@ export function NeedsYouSection({
 		>
 			<div className="grid grid-cols-[repeat(auto-fill,minmax(min(250px,100%),1fr))] gap-3">
 				{items.map((item) => {
+					if (item.type === "invitation") {
+						return (
+							<InvitationNeed
+								key={item.invitation.id}
+								invitation={item.invitation}
+								directory={directory}
+							/>
+						);
+					}
 					if (item.type === "assistant") {
 						return (
 							<NeedsYouCard

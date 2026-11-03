@@ -199,6 +199,7 @@ mod tests {
         ("board.version", AuditLevel::Standard),
         ("bot.app.attach", AuditLevel::Minimal),
         ("bot.app.detach", AuditLevel::Minimal),
+        ("bot.app.restrict", AuditLevel::Minimal),
         ("bot.clone", AuditLevel::Minimal),
         ("bot.create", AuditLevel::Minimal),
         ("bot.delete", AuditLevel::Minimal),

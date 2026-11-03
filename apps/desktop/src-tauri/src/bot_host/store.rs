@@ -259,7 +259,7 @@ impl flow_like::flow::copilot::tool_grants::GrantStore for StoreGrants {
             .store
             .tool_keys(&self.bot_id)
             .await
-            .map_err(flow_like_types::anyhow::Error::msg)?;
+            .map_err(flow_like_types::Error::msg)?;
         Ok(keys
             .into_iter()
             .map(|(tool, scope)| GrantKey::new(tool, scope))
@@ -270,13 +270,13 @@ impl flow_like::flow::copilot::tool_grants::GrantStore for StoreGrants {
         self.store
             .put_tool_key(&self.bot_id, tool, scope)
             .await
-            .map_err(flow_like_types::anyhow::Error::msg)
+            .map_err(flow_like_types::Error::msg)
     }
 
     async fn delete(&self, tool: &str, scope: &str) -> flow_like_types::Result<bool> {
         self.store
             .delete_tool_key(&self.bot_id, tool, scope)
             .await
-            .map_err(flow_like_types::anyhow::Error::msg)
+            .map_err(flow_like_types::Error::msg)
     }
 }

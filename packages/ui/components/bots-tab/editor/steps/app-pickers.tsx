@@ -26,6 +26,7 @@ import {
 	SelectValue,
 } from "../../../ui/select";
 import { Skeleton } from "../../../ui/skeleton";
+import { BotAppAccess } from "../../bot-app-restrictions";
 import { useBotErrorMessage } from "../bot-editor-copy";
 
 interface AppOption {
@@ -195,12 +196,15 @@ export function AttachedAppPicker({ botId }: Readonly<{ botId: string }>) {
 		[botId, errorMessage, setApp, t],
 	);
 	return (
-		<AppChecklist
-			apps={apps}
-			isLoading={library.isLoading || attached.isLoading}
-			isChecked={isChecked}
-			onToggle={toggle}
-		/>
+		<div className="flex flex-col gap-4">
+			<AppChecklist
+				apps={apps}
+				isLoading={library.isLoading || attached.isLoading}
+				isChecked={isChecked}
+				onToggle={toggle}
+			/>
+			<BotAppAccess botId={botId} />
+		</div>
 	);
 }
 

@@ -1169,6 +1169,7 @@ mod tests {
 
     fn executor(app_id: &str, owner: Option<&str>, app_chain: Option<Vec<String>>) -> AppUser {
         AppUser::Executor(ExecutorUser {
+            bot: None,
             sub: "runner".into(),
             app_id: app_id.into(),
             run_id: "run-1".into(),
@@ -1242,6 +1243,7 @@ mod tests {
     #[test]
     fn only_a_run_that_acts_as_the_models_owner_is_a_person_run() {
         let run = |sub: &str| ExecutorUser {
+            bot: None,
             sub: sub.into(),
             app_id: "app-1".into(),
             run_id: "run-1".into(),

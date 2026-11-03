@@ -5,7 +5,7 @@
 //! review under the owner's lock and stores the bot only when nothing blocks it.
 
 use super::{
-    apps::{BOT_APP_LIMIT_REACHED, MAX_APPS_PER_BOT},
+    apps::{BOT_APP_LIMIT_REACHED, MAX_APPS_PER_BOT, unrestricted_row},
     crud::{custom_bot_count, server_bot_refusal},
     model::{Bot, BotSettings, CreateBotRequest},
     provision::new_bot_row,
@@ -475,11 +475,12 @@ async fn insert<C: ConnectionTrait>(
     row.updated_at = Set(now);
     let stored = row.insert(db).await?;
     if !ready.app_ids.is_empty() {
-        bot_app::Entity::insert_many(ready.app_ids.iter().map(|app_id| bot_app::ActiveModel {
-            bot_id: Set(stored.id.clone()),
-            app_id: Set(app_id.clone()),
-            added_at: Set(now),
-        }))
+        bot_app::Entity::insert_many(
+            ready
+                .app_ids
+                .iter()
+                .map(|app_id| unrestricted_row(&stored.id, app_id, now)),
+        )
         .exec_without_returning(db)
         .await?;
     }

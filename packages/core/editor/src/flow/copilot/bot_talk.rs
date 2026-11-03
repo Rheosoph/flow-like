@@ -2307,7 +2307,7 @@ mod tests {
         let second = BotTalk::resumed(host.clone(), ledger(), vec![scout()], DataSensitivity::default());
         assert!(second.is_nested());
         let cycle = parsed(&second.ask(&ask("bot_scout"), owner.as_ref()).await);
-        assert_eq!(cycle["code"], "bot_not_found", "the asker is not in the crew");
+        assert_eq!(cycle["code"], "bot_talk_cycle", "the asker already waits on this ask");
         assert!(host.turns().is_empty());
 
         let chain = vec![scout(), digest(), flux()];
@@ -2327,6 +2327,6 @@ mod tests {
         let allowed = parsed(&last.ask(&ask("bot_flux"), owner.as_ref()).await);
         assert_eq!(allowed["status"], "ok");
         let looped = parsed(&last.ask(&ask("bot_digest"), owner.as_ref()).await);
-        assert_eq!(looped["code"], "bot_not_found");
+        assert_eq!(looped["code"], "bot_talk_cycle");
     }
 }

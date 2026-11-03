@@ -485,7 +485,7 @@ fn default_author(db: &Connection, conversation_id: &str) -> Result<Option<Strin
     Ok(db
         .prepare_cached(
             "SELECT principal_id FROM conversation_members
-             WHERE conversation_id = ?1 AND principal_kind = ?2 AND left_at IS NULL
+             WHERE conversation_id = ?1 AND principal_kind = ?2 AND left_at IS NULL AND status = 'ACTIVE'
              ORDER BY joined_at, principal_id LIMIT 1",
         )?
         .query_row(

@@ -516,6 +516,7 @@ pub async fn global_chat_native(
     let mut options = options;
     let nested_talk = options.bot_talk.take();
     let bot_memory = options.bot_memory.take();
+    let requester = options.requester.take();
     options.attachments = attachments_manifest.clone().unwrap_or_default();
     let conversation_id = options.conversation_id.clone();
     let run_id = Some(run_id.unwrap_or_else(flow_like_types::create_id));
@@ -590,6 +591,9 @@ pub async fn global_chat_native(
         tool_host,
     )
     .await?;
+    if let (Some(bot), Some(requester)) = (bot.as_mut(), requester) {
+        std::sync::Arc::make_mut(&mut bot.context).requester = Some(requester);
+    }
     let talk = match bot.as_ref() {
         Some(bot) => {
             bot_talk::talk_for(

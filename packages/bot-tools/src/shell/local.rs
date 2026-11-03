@@ -221,6 +221,7 @@ impl ShellBackend for LocalShell {
     ) -> ShellResponse {
         let started = Instant::now();
         let cwd = self.root.join(&request.cwd);
+        let _ = tokio::fs::create_dir_all(&cwd).await;
         let (program, args) = command_line(&request);
         let wrapper = bubblewrap();
         let mut command = match wrapper {

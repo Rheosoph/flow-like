@@ -38,9 +38,17 @@ model ConversationMember {
   joinedAt       DateTime     @db.Timestamptz(3)
   leftAt         DateTime?    @db.Timestamptz(3)
   lastReadAt     DateTime?    @db.Timestamptz(3)
+  /// ACTIVE | PENDING | DECLINED. Only ACTIVE members read, receive and count; an invitee is PENDING until they accept.
+  status         String       @default("ACTIVE")
+  /// A bot's room limits (`BotRoomLimits`), set by the bot's owner when accepting; null for people and unlimited bots.
+  limits         Json?
+  invitedBy      String?
+  invitedAt      DateTime?    @db.Timestamptz(3)
+  acceptedAt     DateTime?    @db.Timestamptz(3)
 
   @@id([conversationId, principalId])
   @@index([principalId, leftAt])
+  @@index([principalId, status])
 }
 
 /// One principal's copy of one conversation event. Pages are ordered by (createdAt, id).

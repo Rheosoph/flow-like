@@ -1010,3 +1010,50 @@ fn positions_segments_and_sending_as_a_bot_are_documented() {
     let page = &schemas["InboxEntriesPage"]["properties"];
     assert!(page.get("next_from_seq").is_some() && page.get("next_to_seq").is_some());
 }
+
+fn tool_reply(message_id: &str) -> super::entries::Outgoing {
+    outgoing(
+        message_id,
+        InboxEntryKind::Message,
+        json!({ "text": "done", "parts": [
+            { "kind": "tool", "id": "t1", "call_id": "c1", "name": "database_tool",
+              "arguments": { "sql": "select 1" }, "result": { "rows": ["secret"] },
+              "summary": "Read 1 row" }
+        ] }),
+    )
+}
+
+#[tokio::test]
+async fn a_bots_tool_results_stay_out_of_the_copies_of_a_room_with_other_people() {
+    let db = database().await;
+    team(&db).await;
+    send_in(&db, "team", "bot_1", &tool_reply("bot_msg"), at(10))
+        .await
+        .unwrap();
+    for copy in super::fixture::copies(&db, "bot_msg").await {
+        let tool = &copy.envelope["body"]["parts"][0];
+        assert!(tool.get("result").is_none(), "{}", copy.inbox_id);
+        assert_eq!(tool["summary"], "Read 1 row");
+        assert_eq!(tool["arguments"]["sql"], "select 1");
+    }
+}
+
+#[tokio::test]
+async fn a_person_keeps_their_own_parts_and_a_private_group_is_not_cut() {
+    let db = database().await;
+    team(&db).await;
+    send_in(&db, "team", "user-a", &tool_reply("person_msg"), at(10))
+        .await
+        .unwrap();
+    for copy in super::fixture::copies(&db, "person_msg").await {
+        assert!(copy.envelope["body"]["parts"][0].get("result").is_some());
+    }
+    insert_bot(&db, "bot_2", "user-a", "DESKTOP").await;
+    group(&db, "solo", &[bot_principal("bot_2")]).await;
+    send_in(&db, "solo", "bot_2", &tool_reply("solo_msg"), at(11))
+        .await
+        .unwrap();
+    for copy in super::fixture::copies(&db, "solo_msg").await {
+        assert!(copy.envelope["body"]["parts"][0].get("result").is_some());
+    }
+}
