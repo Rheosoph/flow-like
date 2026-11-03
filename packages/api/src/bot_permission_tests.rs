@@ -454,3 +454,222 @@ async fn a_room_executor_token_needs_the_bot_to_still_be_in_the_room() {
         StatusCode::FORBIDDEN
     );
 }
+
+mod flow_runs {
+    use super::*;
+    use crate::bot_flow::{BotFlowRun, bind_executor, credential_target};
+    use crate::credentials::CredentialsAccess;
+    use crate::middleware::jwt::{AppUser, ConnectedAppUser};
+
+    const EVENTS_ONLY: &str = r#"{"events":["allowed"]}"#;
+
+    fn full_bits() -> i64 {
+        (RolePermissions::ReadFiles
+            | RolePermissions::WriteFiles
+            | RolePermissions::ReadDatabase
+            | RolePermissions::WriteDatabase
+            | RolePermissions::ExecuteEvents
+            | RolePermissions::ExecuteBoards)
+            .bits()
+    }
+
+    async fn flow_world(mask: Option<i64>, scopes: &str) -> DatabaseConnection {
+        let db = database().await;
+        insert_bot(&db, BOT, OWNER, "SERVER").await;
+        owner_role(&db, OWNER, APP, full_bits()).await;
+        attach(&db, APP, mask, scopes).await;
+        db
+    }
+
+    async fn admit(
+        db: &DatabaseConnection,
+        user: &AppUser,
+        event: &str,
+    ) -> Result<Option<BotFlowRun>, ApiError> {
+        BotFlowRun::admit_event_in(db, user, APP, event, false).await
+    }
+
+    fn token_user() -> AppUser {
+        AppUser::Bot(bot_user(None))
+    }
+
+    #[tokio::test]
+    async fn a_bot_invokes_an_allowed_event_and_pays_as_its_owner() {
+        let db = flow_world(None, EVENTS_ONLY).await;
+        let run = admit(&db, &token_user(), "allowed").await.unwrap().unwrap();
+        assert_eq!(run.owner_id(), OWNER);
+        assert_eq!(run.bot_id(), BOT);
+        let (credential_sub, mode) =
+            credential_target(Some(&run), OWNER, CredentialsAccess::ServerExecute);
+        assert_eq!(credential_sub, BOT);
+        assert!(matches!(mode, CredentialsAccess::ServerExecute));
+    }
+
+    #[tokio::test]
+    async fn a_disallowed_event_is_refused() {
+        let db = flow_world(None, EVENTS_ONLY).await;
+        let refusal = admit(&db, &token_user(), "other").await.err().unwrap();
+        assert_eq!(refusal.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn an_empty_allow_list_refuses_every_event() {
+        let db = flow_world(None, r#"{"events":[]}"#).await;
+        assert!(admit(&db, &token_user(), "allowed").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_board_allow_list_gates_board_runs() {
+        let db = flow_world(None, r#"{"boards":["b1"]}"#).await;
+        let run = BotFlowRun::resolve_in(
+            &db,
+            &token_user(),
+            APP,
+            RolePermissions::ExecuteBoards,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        run.ensure_board("b1").unwrap();
+        assert!(run.ensure_board("b2").is_err());
+    }
+
+    #[tokio::test]
+    async fn a_mask_without_execute_refuses_the_run() {
+        let db = flow_world(Some(RolePermissions::ReadFiles.bits()), "{}").await;
+        let refusal = BotFlowRun::resolve_in(
+            &db,
+            &token_user(),
+            APP,
+            RolePermissions::ExecuteEvents,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert_eq!(refusal.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_restricted_bots_flow_gets_read_only_content_credentials() {
+        let mask = (RolePermissions::ReadFiles | RolePermissions::ExecuteEvents).bits();
+        let db = flow_world(Some(mask), "{}").await;
+        let run = admit(&db, &token_user(), "any").await.unwrap().unwrap();
+        assert!(matches!(
+            run.credentials_access(),
+            CredentialsAccess::ShadowExecute
+        ));
+        let (sub, mode) = credential_target(Some(&run), OWNER, CredentialsAccess::ServerExecute);
+        assert_eq!(sub, BOT);
+        assert!(matches!(mode, CredentialsAccess::ShadowExecute));
+    }
+
+    #[tokio::test]
+    async fn a_person_is_not_a_bot_run() {
+        let db = flow_world(None, "{}").await;
+        let person = AppUser::OpenID(crate::middleware::jwt::OpenIDUser {
+            sub: OWNER.into(),
+            access_token: String::new(),
+        });
+        assert!(admit(&db, &person, "any").await.unwrap().is_none());
+    }
+
+    fn connection_of_bot(target: &str) -> AppUser {
+        AppUser::ConnectedApp(ConnectedAppUser {
+            sub: Some(OWNER.into()),
+            origin_app_id: "origin".into(),
+            target_app_id: target.into(),
+            app_chain: vec!["origin".into()],
+            technical_user_id: Some(BOT.into()),
+            run_id: Some("run-1".into()),
+            correlation: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn the_cross_app_call_is_intersected_with_the_bots_grant_in_the_target() {
+        let db = flow_world(None, EVENTS_ONLY).await;
+        let call = connection_of_bot(APP);
+        assert!(admit(&db, &call, "allowed").await.unwrap().is_some());
+        assert!(admit(&db, &call, "other").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_cross_app_call_is_refused_where_the_bot_is_not_attached() {
+        let db = database().await;
+        insert_bot(&db, BOT, OWNER, "SERVER").await;
+        owner_role(&db, OWNER, APP, full_bits()).await;
+        let refusal = admit(&db, &connection_of_bot(APP), "any").await.err().unwrap();
+        assert_eq!(refusal.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_bot_cannot_trigger_a_page_action() {
+        let db = flow_world(None, "{}").await;
+        for user in [token_user(), connection_of_bot(APP)] {
+            let refusal = BotFlowRun::admit_event_in(&db, &user, APP, "any", true)
+                .await
+                .err()
+                .unwrap();
+            assert_eq!(refusal.status(), StatusCode::FORBIDDEN);
+        }
+    }
+
+    fn signed_executor_token() -> String {
+        crate::backend_jwt::init_for_tests();
+        crate::execution::sign_execution_jwt(crate::execution::ExecutionJwtParams {
+            user_id: OWNER.into(),
+            technical_user_id: Some(BOT.into()),
+            run_id: "run-1".into(),
+            app_id: APP.into(),
+            board_id: "board".into(),
+            event_id: Some("allowed".into()),
+            app_chain: None,
+            correlation: None,
+            callback_url: "https://api.example".into(),
+            token_type: crate::execution::TokenType::Executor,
+            ttl_seconds: Some(300),
+            shadow: None,
+        })
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_run_carries_the_bot_on_its_executor_token_and_bills_the_owner() {
+        let db = flow_world(None, EVENTS_ONLY).await;
+        join_room(&db, false).await;
+        let room = Some(ROOM);
+        let run = admit(&db, &AppUser::Bot(bot_user(room)), "allowed")
+            .await
+            .unwrap();
+        let token = bind_executor(run.as_ref(), signed_executor_token()).unwrap();
+        let claims = crate::execution::verify_execution_jwt(&token).unwrap();
+        assert_eq!(claims.sub, OWNER);
+        assert_eq!(claims.bot_id.as_deref(), Some(BOT));
+        assert_eq!(claims.conv_id.as_deref(), room);
+        assert_eq!(claims.technical_user_id.as_deref(), Some(BOT));
+        let executor = crate::middleware::jwt::ExecutorUser::from(claims);
+        assert_eq!(
+            executor.bot,
+            Some(BotUser {
+                turn_id: "run-1".into(),
+                ..bot_user(room)
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_bot_behind_a_connection_stays_on_the_connection_path() {
+        let db = flow_world(None, "{}").await;
+        let run = admit(&db, &connection_of_bot(APP), "any").await.unwrap();
+        let token = bind_executor(run.as_ref(), signed_executor_token()).unwrap();
+        let claims = crate::execution::verify_execution_jwt(&token).unwrap();
+        assert!(claims.bot_id.is_none());
+        assert_eq!(claims.technical_user_id.as_deref(), Some(BOT));
+    }
+
+    #[test]
+    fn a_person_run_token_is_not_bound() {
+        let original = signed_executor_token();
+        assert_eq!(bind_executor(None, original.clone()).unwrap(), original);
+    }
+}

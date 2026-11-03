@@ -35,6 +35,8 @@ export type IInboxEnvelope = IInboxPlainEnvelope | IInboxSealedEnvelope;
 export interface IInboxMessageBody {
 	text: string;
 	reply_to?: string;
+	/** People and bots the message names; a mentioned bot in the room wakes. */
+	mentions?: string[];
 	/** Set by a chat that answers this message itself; hosts leave it alone meanwhile. */
 	interactive?: { client_run_id: string };
 	approval?: IInboxApproval;
@@ -137,6 +139,8 @@ export interface IConversation {
 	/** Invitations nobody accepted yet; they read and receive nothing. */
 	pending?: IPendingMember[];
 	unread_count: number;
+	/** You muted it: messages arrive and count as unread, but send no push. */
+	muted?: boolean;
 	/** Newest `message` entry in the reader's inbox. */
 	last_entry: IInboxEntry | null;
 	/** Lives only on this device, between you and local bots, until it moves to an account. */
@@ -258,6 +262,18 @@ export interface IInvitation {
 	bot_name: string | null;
 	invited_by: string | null;
 	invited_at: string | null;
+	/** `direct` is a message request, `group` a room invitation. */
+	conversation_kind?: ConversationKind;
+	/** A request's messages held for you: how many, and the newest few. */
+	held_count?: number;
+	held?: IHeldMessage[];
+}
+
+/** A message a request holds until you answer it. */
+export interface IHeldMessage {
+	message_id: string;
+	created_at: string;
+	envelope: IInboxPlainEnvelope;
 }
 
 /** `add_now`: your own bot joins at once. `invite`: they (or the bot's owner) must accept. */
@@ -321,6 +337,9 @@ export interface IInboxState {
 		limits?: IBotRoomLimits | null,
 	): Promise<void>;
 	declineInvitation(invitation: IInvitation): Promise<void>;
+	/** Declines a message request and hides every other invitation from the same person. */
+	blockInvitation(invitation: IInvitation): Promise<void>;
+	setConversationMuted(conversationId: string, muted: boolean): Promise<void>;
 	cancelInvitation(conversationId: string, principalId: string): Promise<void>;
 	setMemberLimits(
 		conversationId: string,

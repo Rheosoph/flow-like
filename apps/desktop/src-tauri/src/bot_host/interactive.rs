@@ -171,7 +171,7 @@ impl InteractiveRun {
                     .await
                     .ok()?;
                 let seq = trigger_of(entries, &self.args.trigger_message_id)?.seq;
-                hub_source_for(hub, &self.bot_id, &self.args.conversation_id, seq).await
+                hub_source_for(hub, hub, &self.bot_id, &self.args.conversation_id, seq).await
             }
         }
     }

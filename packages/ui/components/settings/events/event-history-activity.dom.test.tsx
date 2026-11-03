@@ -171,6 +171,23 @@ test("runs with the same entry node expose distinct run IDs and independent open
 	expect(onOpenRun).toHaveBeenCalledTimes(1);
 });
 
+test("a run started by a bot is labelled with the bot and a person run is not", async () => {
+	const { container } = await mount(
+		<HistoryRuns
+			{...runsProps}
+			runs={[
+				run({
+					run_id: "bot-run",
+					actor: { kind: "bot", id: "bot_1", name: "Ada" },
+				}),
+				run({ run_id: "person-run" }),
+			]}
+			onOpenRun={() => {}}
+		/>,
+	);
+	expect(container.textContent?.match(/by Ada/g)).toHaveLength(1);
+});
+
 test("visible warning runs load the first problem and expose it with the severity", async () => {
 	const meta = run({ log_level: 2 });
 	const queryRunLogs = mock(async () => [warning("The connection timed out")]);

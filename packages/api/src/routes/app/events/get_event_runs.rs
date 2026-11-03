@@ -9,7 +9,9 @@ use serde::Serialize;
 use utoipa::ToSchema;
 
 use crate::{
-    ensure_permission, entity::execution_run, error::ApiError,
+    bot_flow::bot_from_technical_id,
+    ensure_permission,
+    entity::{bot, execution_run}, error::ApiError,
     execution::run_summary::log_meta_from_run, middleware::jwt::AppUser,
     permission::role_permission::RolePermissions, state::AppState,
 };
@@ -27,9 +29,58 @@ pub struct EventRunsResponse {
     /// `event_version` is dotted `MAJOR.MINOR.PATCH`, matching the timeline's
     /// `version_key`.
     #[schema(value_type = Vec<Object>)]
-    pub runs: Vec<LogMeta>,
+    pub runs: Vec<RunRow>,
     /// Boards the listing covered.
     pub boards_queried: Vec<String>,
+}
+
+/// Who started a run when it was not a person: today a bot, acting for its owner.
+#[derive(Serialize, ToSchema, Debug, Clone, PartialEq, Eq)]
+pub struct RunActor {
+    pub kind: &'static str,
+    pub id: String,
+    pub name: Option<String>,
+}
+
+#[derive(Serialize, Debug)]
+pub struct RunRow {
+    #[serde(flatten)]
+    pub meta: LogMeta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub actor: Option<RunActor>,
+}
+
+pub(crate) fn run_actor(
+    technical_user_id: Option<&str>,
+    names: &std::collections::HashMap<String, Option<String>>,
+) -> Option<RunActor> {
+    let bot = bot_from_technical_id(technical_user_id?)?;
+    Some(RunActor {
+        kind: "bot",
+        name: names.get(&bot.bot_id).cloned().flatten(),
+        id: bot.bot_id,
+    })
+}
+
+async fn bot_names(
+    state: &AppState,
+    runs: &[execution_run::Model],
+) -> Result<std::collections::HashMap<String, Option<String>>, ApiError> {
+    let ids: std::collections::BTreeSet<String> = runs
+        .iter()
+        .filter_map(|run| bot_from_technical_id(run.technical_user_id.as_deref()?))
+        .map(|bot| bot.bot_id)
+        .collect();
+    if ids.is_empty() {
+        return Ok(Default::default());
+    }
+    Ok(bot::Entity::find()
+        .filter(bot::Column::Id.is_in(ids))
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|bot| (bot.id, bot.name))
+        .collect())
 }
 
 /// Board, event and run ids end up in storage paths and log filters, so only
@@ -159,8 +210,54 @@ pub async fn get_event_runs(
         .await
         .map_err(|e| ApiError::internal_error(anyhow!("Failed to query event runs: {e}")))?;
 
+    let names = bot_names(&state, &runs).await?;
     Ok(Json(EventRunsResponse {
-        runs: runs.iter().map(log_meta_from_run).collect(),
+        runs: runs
+            .iter()
+            .map(|run| RunRow {
+                meta: log_meta_from_run(run),
+                actor: run_actor(run.technical_user_id.as_deref(), &names),
+            })
+            .collect(),
         boards_queried: board_ids,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_bot_started_run_names_the_bot_and_a_key_run_names_nobody() {
+        let names = [("bot_1".to_string(), Some("Ada".to_string()))].into();
+        let actor = run_actor(Some("bot_1"), &names).unwrap();
+        assert_eq!(actor.kind, "bot");
+        assert_eq!(actor.name.as_deref(), Some("Ada"));
+        assert!(run_actor(Some("key-1"), &names).is_none());
+        assert!(run_actor(None, &names).is_none());
+    }
+
+    #[test]
+    fn a_retired_bot_keeps_its_id_without_a_name() {
+        let actor = run_actor(Some("bot_gone"), &Default::default()).unwrap();
+        assert_eq!(actor.id, "bot_gone");
+        assert!(actor.name.is_none());
+    }
+
+    #[test]
+    fn the_row_flattens_the_actor_next_to_the_run_summary() {
+        let run = serde_json::json!({
+            "app_id": "a", "run_id": "r", "board_id": "b", "start": 1, "end": 2,
+            "log_level": 0, "version": "", "nodes": null, "logs": null, "node_id": "",
+            "event_version": null, "event_id": "e", "payload": []
+        });
+        let meta: LogMeta = serde_json::from_value(run).unwrap();
+        let row = RunRow {
+            meta,
+            actor: run_actor(Some("bot_1"), &Default::default()),
+        };
+        let value = serde_json::to_value(row).unwrap();
+        assert_eq!(value["run_id"], "r");
+        assert_eq!(value["actor"]["kind"], "bot");
+    }
 }

@@ -21,6 +21,7 @@ import type { CrewDirectory } from "./use-crew-directory";
 export interface PendingSend {
 	messageId: string;
 	text: string;
+	mentions?: readonly string[];
 	failed: boolean;
 }
 

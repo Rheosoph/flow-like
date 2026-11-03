@@ -58,6 +58,32 @@ export function conversationComposition(
 	return { people: conversation.members.length - bots, bots };
 }
 
+/** A direct conversation whose other side hasn't accepted your message request yet. */
+export function awaitingAnswer(
+	conversation: Pick<IConversation, "kind" | "pending">,
+): boolean {
+	return (
+		conversation.kind === "direct" && (conversation.pending?.length ?? 0) > 0
+	);
+}
+
+/** What the nav badge counts: unread messages of person chats you are an active member of. */
+export function personUnreadTotal(
+	conversations: readonly Pick<
+		IConversation,
+		"members" | "unread_count" | "local"
+	>[],
+): number {
+	return conversations
+		.filter(
+			(conversation) =>
+				!conversation.local &&
+				conversation.members.filter((member) => member.kind === "user").length >
+					1,
+		)
+		.reduce((total, conversation) => total + conversation.unread_count, 0);
+}
+
 /**
  * Conversations waiting on the reader: unread, and the newest message came from a bot. A bot's
  * approval card stays here, read or not, until an answer becomes the newest message.

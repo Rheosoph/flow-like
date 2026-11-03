@@ -3,9 +3,9 @@
 //! message ids, one for the active members, one for the newest messages.
 
 use super::{
-    MEMBER_DECLINED, MEMBER_PENDING, Reader, active_members, conversation_not_found,
+    MEMBER_BLOCKED, MEMBER_DECLINED, MEMBER_PENDING, Reader, active_members, conversation_not_found,
     model::{Conversation, ConversationMember, InboxEntry, PendingMember},
-    stored,
+    requests, stored,
 };
 use crate::{
     entity::{bot, conversation_member, inbox_entry},
@@ -92,6 +92,7 @@ pub(super) async fn conversations_for<C: ConnectionTrait>(
     }
     let ids: Vec<String> = rows.iter().map(|row| row.id.clone()).collect();
     let mut members = members_by_conversation(db, &ids).await?;
+    let muted = muted_conversations(reader, &members);
     reveal_own_bot_limits(db, reader, &mut members).await?;
     let mut pending = pending_by_conversation(db, &ids).await?;
     let mut last_entries = entries_by_id(db, &reader.inbox, &rows).await?;
@@ -99,7 +100,17 @@ pub(super) async fn conversations_for<C: ConnectionTrait>(
         .into_iter()
         .map(|row| Conversation {
             members: members.remove(&row.id).unwrap_or_default(),
-            pending: pending.remove(&row.id).unwrap_or_default(),
+            pending: pending
+                .remove(&row.id)
+                .map(|pending| {
+                    if row.kind.eq_ignore_ascii_case("direct") {
+                        requests::masked(pending)
+                    } else {
+                        pending
+                    }
+                })
+                .unwrap_or_default(),
+            muted: muted.contains(&row.id),
             unread_count: u64::try_from(row.unread_count).unwrap_or(0),
             last_entry: row
                 .last_entry_id
@@ -114,6 +125,25 @@ pub(super) async fn conversations_for<C: ConnectionTrait>(
             last_activity_at: row.last_activity_at,
         })
         .collect())
+}
+
+fn muted_conversations(
+    reader: &Reader,
+    members: &HashMap<String, Vec<ConversationMember>>,
+) -> HashSet<String> {
+    if reader.owner.is_some() {
+        return HashSet::new();
+    }
+    members
+        .iter()
+        .filter(|(_, members)| {
+            members.iter().any(|member| {
+                member.principal_id == reader.inbox
+                    && super::person_push::is_muted(member.limits.as_ref())
+            })
+        })
+        .map(|(id, _)| id.clone())
+        .collect()
 }
 
 async fn members_by_conversation<C: ConnectionTrait>(
@@ -140,7 +170,8 @@ async fn pending_by_conversation<C: ConnectionTrait>(
         .filter(
             Condition::any()
                 .add(conversation_member::Column::Status.eq(MEMBER_PENDING))
-                .add(conversation_member::Column::Status.eq(MEMBER_DECLINED)),
+                .add(conversation_member::Column::Status.eq(MEMBER_DECLINED))
+                .add(conversation_member::Column::Status.eq(MEMBER_BLOCKED)),
         )
         .order_by_asc(conversation_member::Column::InvitedAt)
         .order_by_asc(conversation_member::Column::PrincipalId)

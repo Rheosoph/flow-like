@@ -125,6 +125,8 @@ pub struct Conversation {
     pub pending: Vec<PendingMember>,
     /// Messages from others the reader has not read yet.
     pub unread_count: u64,
+    /// The reader muted this conversation: its messages send no push.
+    pub muted: bool,
     /// The newest message in the reader's inbox.
     pub last_entry: Option<InboxEntry>,
 }

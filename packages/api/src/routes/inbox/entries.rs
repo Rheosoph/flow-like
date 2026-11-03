@@ -13,13 +13,14 @@ use super::{
     },
     now_millis,
     positions::{PositionRead, entries_by_position, position_read},
-    reader, reader_membership,
+    acting_reader, reader_membership,
     targets::{check_target, edits_of, tombstone},
     trimmed,
     turns::{desktop_bot, reply_as_bot, reply_interactive_as_bot},
     wake,
 };
 use crate::{
+    bot_caller,
     entity::{app, bot, conversation, conversation_member, inbox_entry},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -501,6 +502,7 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
 ) -> Result<Sent, ApiError> {
     let (conversation, members, envelopes) =
         checked_envelopes(txn, conversation_id, sender, outgoing).await?;
+    super::requests::ensure_request_room(txn, &conversation, sender, outgoing.kind).await?;
     check_workspace_files(txn, &[(sender, &outgoing.links.workspace_apps)]).await?;
     let event = Event {
         conversation_id,
@@ -815,10 +817,15 @@ pub async fn list_entries(
     Path(conversation_id): Path<String>,
     Query(query): Query<EntriesQuery>,
 ) -> Result<Json<InboxEntriesPage>, ApiError> {
-    let sub = user.sub()?;
     let by_position = position_read(&query, page_limit(&query))?;
     let bounds = page_bounds(&query)?;
-    let reader = reader(&state.db, &sub, query.as_bot.as_deref()).await?;
+    let reader = acting_reader(
+        &state.db,
+        &user,
+        query.as_bot.as_deref(),
+        &conversation_id,
+    )
+    .await?;
     reader_membership(&state.db, &conversation_id, &reader).await?;
     Ok(Json(
         read_entries(
@@ -878,8 +885,14 @@ pub async fn send_entry(
     Query(query): Query<SendQuery>,
     Json(body): Json<SendEntryRequest>,
 ) -> Result<Json<InboxEntry>, ApiError> {
-    let sub = user.sub()?;
+    let names = bot_caller::Names {
+        as_bot: query.as_bot.as_deref(),
+        conversation: Some(&conversation_id),
+        turn: None,
+    };
+    let sub = bot_caller::acting_owner(&state.db, &user, &names).await?;
     let sending = send_as(query.as_bot.as_deref(), body.turn.clone())?;
+    ensure_bot_sends_own_turn(&user, &sending)?;
     let notify_turn = match &sending {
         SendAs::Bot { bot_id, claim } if !is_interactive_host(&claim.host_id) => {
             Some((bot_id.clone(), claim.id.clone()))
@@ -916,6 +929,7 @@ pub async fn send_entry(
             (bot.id, sent)
         }
     };
+    let person_sent = sender == sub;
     let sent = first_copy_on_race(
         &state,
         sent,
@@ -925,7 +939,11 @@ pub async fn send_entry(
     )
     .await?;
     tracing::Span::current().record("bot_deliveries", sent.bots.len());
+    let first_send = !sent.wake.is_empty();
     wake(&state, sent.wake).await;
+    if person_sent && first_send {
+        super::person_push::after_person_send(&state, &sent.entry).await;
+    }
     crate::bot_host::dispatch(&state, &sent.bots).await;
     if let Some((bot_id, turn_id)) = notify_turn {
         crate::bot_notify::after_reply(
@@ -941,6 +959,21 @@ pub async fn send_entry(
         .await;
     }
     Ok(Json(sent.entry))
+}
+
+/// A bot token sends only as the bot, and only the reply to the turn it was minted for.
+pub(super) fn ensure_bot_sends_own_turn(user: &AppUser, sending: &SendAs) -> Result<(), ApiError> {
+    let AppUser::Bot(bot) = user else {
+        return Ok(());
+    };
+    match sending {
+        SendAs::Bot { bot_id, claim } if *bot_id == bot.bot_id => {
+            bot_caller::ensure_turn(bot, &claim.id)
+        }
+        _ => Err(ApiError::forbidden(
+            "A bot token sends only as its own bot, answering its own turn",
+        )),
+    }
 }
 
 /// Who a send comes from: the caller, or one of their bots answering the turn its host claimed.

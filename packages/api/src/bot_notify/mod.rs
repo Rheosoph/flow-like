@@ -30,7 +30,7 @@ pub(crate) trait NoticeSink: Send + Sync {
     async fn send(&self, id: &str, input: DispatchNotificationInput) -> Result<()>;
 }
 
-struct StateSink<'a>(&'a AppState);
+pub(crate) struct StateSink<'a>(pub(crate) &'a AppState);
 
 #[async_trait]
 impl NoticeSink for StateSink<'_> {

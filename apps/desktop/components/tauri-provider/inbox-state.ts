@@ -1,4 +1,5 @@
 import type {
+	IBotRoomLimits,
 	IConversation,
 	IConversationSegmentList,
 	ICreateConversationRequest,
@@ -7,7 +8,6 @@ import type {
 	IInboxEntry,
 	IInboxImportEntry,
 	IInboxImportResult,
-	IBotRoomLimits,
 	IInboxKey,
 	IInboxSegmentsQuery,
 	IInboxState,
@@ -575,6 +575,29 @@ export class InboxState implements IInboxState {
 			session.profile,
 			`inbox/invitations/${encodeURIComponent(invitation.id)}/decline`,
 			{},
+			session.auth,
+		);
+	}
+
+	async blockInvitation(invitation: IInvitation): Promise<void> {
+		const session = this.invitationSession(`block invitation ${invitation.id}`);
+		await post(
+			session.profile,
+			`inbox/invitations/${encodeURIComponent(invitation.id)}/block`,
+			{},
+			session.auth,
+		);
+	}
+
+	async setConversationMuted(
+		conversationId: string,
+		muted: boolean,
+	): Promise<void> {
+		const session = this.invitationSession(`mute ${conversationId}`);
+		await patch(
+			session.profile,
+			`${conversationPath(conversationId)}/mute`,
+			{ muted },
 			session.auth,
 		);
 	}

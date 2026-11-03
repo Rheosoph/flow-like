@@ -15,7 +15,7 @@ use std::{
 
 use flow_like::{
     app::AppVisibility,
-    flow::execution::{InternalRun, UserExecutionContext, extract_sub_from_jwt},
+    flow::execution::{InternalRun, RoleContext, UserExecutionContext, extract_sub_from_jwt},
     hub::Hub,
     state::FlowLikeState,
 };
@@ -77,6 +77,42 @@ pub async fn apply_local_run_identity(
         LocalIdentity::Hosted(context) => run.set_resolved_user_context(*context).await,
         LocalIdentity::Unresolved => run.set_unresolved_user_context().await,
     }
+}
+
+/// A bot on this device triggering a local run of an offline app. The role bits are the bot's
+/// own restrictions as the device knows them; the device enforces them advisorily.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBotRun {
+    pub bot_id: String,
+    pub owner_id: String,
+    pub role_bits: i64,
+}
+
+fn local_bot_context(bot: &LocalBotRun) -> UserExecutionContext {
+    let role = RoleContext {
+        id: format!("bot-role-{}", bot.bot_id),
+        name: "Bot".to_string(),
+        permissions: bot.role_bits,
+        attributes: Vec::new(),
+        custom_attributes: HashMap::new(),
+    };
+    UserExecutionContext::bot(bot.bot_id.clone(), role)
+        .with_on_behalf_of(Some(bot.owner_id.clone()))
+}
+
+/// Offline apps have no server role to ask, so a bot run carries the bot principal with the
+/// bot's own mask instead of owner-equivalence. Hosted apps keep resolving through the hub with
+/// the bot's runtime token (see [`apply_local_run_identity`]).
+pub async fn apply_local_bot_run_identity(
+    run: &mut InternalRun,
+    visibility: &AppVisibility,
+    bot: &LocalBotRun,
+) -> bool {
+    if !matches!(visibility, AppVisibility::Offline) {
+        return false;
+    }
+    run.set_resolved_user_context(local_bot_context(bot)).await;
+    true
 }
 
 /// Authorize the narrower local path used by governed Page actions.
@@ -459,6 +495,26 @@ fn store(key: &str, context: &UserExecutionContext) {
 mod tests {
     use super::*;
     use flow_like::flow::execution::RoleContext;
+
+    #[test]
+    fn a_local_bot_run_carries_the_bot_principal_with_its_own_mask() {
+        let bot = LocalBotRun {
+            bot_id: "bot_1".into(),
+            owner_id: "owner".into(),
+            role_bits: 0x2000,
+        };
+        let context = local_bot_context(&bot);
+        assert_eq!(
+            context.principal,
+            flow_like::flow::execution::ExecutionPrincipal::Bot
+        );
+        assert!(context.is_technical());
+        assert_eq!(context.sub, "bot_1");
+        assert_eq!(context.on_behalf_of(), Some("owner"));
+        assert!(context.has_permission(0x2000));
+        assert!(!context.has_permission(0x10));
+        assert!(!context.is_offline());
+    }
 
     #[test]
     fn cache_key_separates_apps_and_tokens() {

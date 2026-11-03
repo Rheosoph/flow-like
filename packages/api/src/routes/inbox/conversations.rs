@@ -3,8 +3,9 @@ use super::{
     delivery::people_to_wake,
     insert_copies,
     invitations::{self, InviteMode, Invitee},
-    member_conversation,
-    members::{self, Principal, join_copies, lock_live_bots, requested_members},
+    lock_conversation, member_conversation,
+    members::{Principal, join_copies, lock_live_bots, requested_members},
+    requests,
     model::{
         Conversation, ConversationList, CreateConversationRequest, ReaderQuery,
         RenameConversationRequest,
@@ -160,6 +161,19 @@ pub(crate) async fn start_direct<C: ConnectionTrait>(
     encryption: ConversationEncryption,
     now: DateTime<FixedOffset>,
 ) -> Result<String, ApiError> {
+    start_direct_as(db, creator, other, encryption, false, now).await
+}
+
+/// [`start_direct`]; as a request the other member is pending until they accept and receives
+/// nothing meanwhile.
+pub(crate) async fn start_direct_as<C: ConnectionTrait>(
+    db: &C,
+    creator: &str,
+    other: &Principal,
+    encryption: ConversationEncryption,
+    request: bool,
+    now: DateTime<FixedOffset>,
+) -> Result<String, ApiError> {
     let key = direct_pair_key(creator, &other.id);
     let plan = NewConversation {
         kind: ConversationKind::Direct,
@@ -187,9 +201,14 @@ pub(crate) async fn start_direct<C: ConnectionTrait>(
             id: creator.to_string(),
             kind: PrincipalKind::User,
         };
+        let recipient = if request {
+            invitations::pending_row(&id, other, &creator.id, now)
+        } else {
+            member_row(&id, other, Some(&creator.id), now)
+        };
         conversation_member::Entity::insert_many([
             member_row(&id, &creator, None, now),
-            member_row(&id, other, Some(&creator.id), now),
+            recipient,
         ])
         .exec_without_returning(db)
         .await?;
@@ -377,28 +396,49 @@ pub async fn get_conversation(
     ))
 }
 
-/// The pair's direct conversation: the existing one, which the creator is always in, or a new
-/// one once the other member passes the member rules.
+/// The pair's direct conversation: the existing one, which writing answers if you hold a
+/// request in it, or a new one once the other member passes the member rules. Whoever isn't
+/// one of your own bots receives it as a request. Returns the id and the people to wake.
 async fn open_direct(
     state: &AppState,
     sub: &str,
     plan: &NewConversation,
 ) -> Result<String, ApiError> {
-    if let Some(id) =
-        direct_conversation_id(&state.db, &direct_pair_key(sub, &plan.members[0])).await?
-    {
+    let key = direct_pair_key(sub, &plan.members[0]);
+    if let Some(id) = direct_conversation_id(&state.db, &key).await? {
+        let people = state
+            .transaction(|txn| {
+                let (id, sub) = (id.clone(), sub.to_string());
+                Box::pin(async move {
+                    lock_conversation(txn, &id).await?;
+                    requests::answer_by_writing(txn, &id, &sub, now_millis()).await
+                })
+            })
+            .await?;
+        wake(state, people).await;
         return Ok(id);
     }
-    let others = members::allowed_principals(&state.db, sub, &plan.members).await?;
-    state
+    let direct = requests::plan_direct(&state.db, sub, &plan.members[0], plan.encryption).await?;
+    let id = state
         .transaction(|txn| {
-            let (sub, other, encryption) = (sub.to_string(), others[0].clone(), plan.encryption);
+            let (sub, direct, encryption) = (sub.to_string(), direct.clone(), plan.encryption);
             Box::pin(async move {
-                lock_live_bots(txn, &sub, std::slice::from_ref(&other)).await?;
-                start_direct(txn, &sub, &other, encryption, now_millis()).await
+                if !direct.request {
+                    lock_live_bots(txn, &sub, std::slice::from_ref(&direct.other)).await?;
+                }
+                start_direct_as(txn, &sub, &direct.other, encryption, direct.request, now_millis())
+                    .await
             })
         })
-        .await
+        .await?;
+    if direct.request {
+        wake(
+            state,
+            people_to_wake(&state.db, std::slice::from_ref(&direct.other)).await?,
+        )
+        .await;
+    }
+    Ok(id)
 }
 
 async fn open_group(

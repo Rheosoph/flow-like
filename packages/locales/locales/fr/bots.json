@@ -191,6 +191,10 @@
 			"left": "",
 			"removed": ""
 		},
+		"mentions": {
+			"bot": "",
+			"label": ""
+		},
 		"messages": {
 			"actionFailed": "",
 			"delete": "",
@@ -213,6 +217,10 @@
 			"save": "",
 			"sending": "",
 			"unsupported": ""
+		},
+		"mute": {
+			"mute": "",
+			"unmute": ""
 		},
 		"needs": {
 			"approvalMeta": "",
@@ -263,6 +271,15 @@
 			"searchFailed": "",
 			"searchLabel": "",
 			"theirBots": ""
+		},
+		"requests": {
+			"acceptBot": "",
+			"block": "",
+			"botTitle": "",
+			"meta": "",
+			"pendingHint": "",
+			"title": "",
+			"where": ""
 		},
 		"retry": "",
 		"rooms": {

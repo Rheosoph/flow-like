@@ -6,6 +6,7 @@ import type {
 } from "../../state/backend-state/inbox-state";
 import {
 	activityTimeKind,
+	awaitingAnswer,
 	conversationComposition,
 	crewSummaryLine,
 	directPartnerId,
@@ -13,6 +14,7 @@ import {
 	isSelfPrincipal,
 	matchesSearch,
 	otherMemberIds,
+	personUnreadTotal,
 	selectNeedsYou,
 	splitConversations,
 } from "./crew-model";
@@ -338,5 +340,42 @@ describe("dock selection", () => {
 		expect(
 			dockSelectionQuery({ type: "bot", botId: "bot_1" }, "move=local"),
 		).toBe("move=local&bot=bot_1");
+	});
+});
+
+describe("person chat badge and pending state", () => {
+	const person = (unread: number, users: number, local = false) => ({
+		members: Array.from({ length: users }, () => ({
+			kind: "user" as const,
+		})) as never,
+		unread_count: unread,
+		local,
+	});
+
+	test("counts unread of person chats only", () => {
+		expect(
+			personUnreadTotal([
+				person(2, 2),
+				person(3, 3),
+				person(5, 1),
+				person(7, 2, true),
+			]),
+		).toBe(5);
+	});
+
+	test("a direct chat with a pending recipient awaits an answer", () => {
+		expect(
+			awaitingAnswer({
+				kind: "direct",
+				pending: [{ status: "pending" } as never],
+			}),
+		).toBe(true);
+		expect(awaitingAnswer({ kind: "direct", pending: [] })).toBe(false);
+		expect(
+			awaitingAnswer({
+				kind: "group",
+				pending: [{ status: "pending" } as never],
+			}),
+		).toBe(false);
 	});
 });

@@ -41,9 +41,10 @@ struct FakeHub {
     claims: Mutex<Vec<(String, String)>>,
     lease_lost_from: Mutex<Option<usize>>,
     heartbeats: Mutex<Vec<(String, String)>>,
-    entries: Mutex<Vec<InboxEntry>>,
-    send_failures: Mutex<VecDeque<HubFailure>>,
-    sent: Mutex<Vec<Sent>>,
+    entries: Arc<Mutex<Vec<InboxEntry>>>,
+    send_failures: Arc<Mutex<VecDeque<HubFailure>>>,
+    sent: Arc<Mutex<Vec<Sent>>>,
+    calls: Arc<Mutex<Vec<(String, &'static str)>>>,
     lists: Mutex<Vec<Instant>>,
     offline: AtomicBool,
     bots: Mutex<Vec<String>>,
@@ -54,8 +55,84 @@ struct FakeHub {
     token_failure: AtomicBool,
 }
 
+struct BotView {
+    token: String,
+    entries: Arc<Mutex<Vec<InboxEntry>>>,
+    sent: Arc<Mutex<Vec<Sent>>>,
+    send_failures: Arc<Mutex<VecDeque<HubFailure>>>,
+    calls: Arc<Mutex<Vec<(String, &'static str)>>>,
+}
+
+#[async_trait]
+impl TurnHub for BotView {
+    async fn list(&self) -> Result<Vec<BotTurn>, HubFailure> {
+        Err(HubFailure::answered(403, None, "a bot token lists no turns"))
+    }
+
+    async fn claim(&self, _turn_id: &str, _host_id: &str) -> Result<BotTurn, HubFailure> {
+        Err(HubFailure::answered(403, None, "a bot token claims no turns"))
+    }
+
+    async fn heartbeat(&self, _turn_id: &str, _host_id: &str) -> Result<BotTurn, HubFailure> {
+        Err(HubFailure::answered(403, None, "a bot token keeps no lease"))
+    }
+
+    async fn desktop_bots(&self) -> Result<Vec<String>, HubFailure> {
+        Err(HubFailure::answered(403, None, "a bot token lists no bots"))
+    }
+
+    async fn report_host(&self, _: &str, _: &[String]) -> Result<Vec<String>, HubFailure> {
+        Err(HubFailure::answered(403, None, "a bot token reports no host"))
+    }
+
+    async fn delete_host(&self, _: &str) -> Result<(), HubFailure> {
+        Err(HubFailure::answered(403, None, "a bot token reports no host"))
+    }
+
+    async fn cancel_turn(&self, _: &str, _: &str) -> Result<(), HubFailure> {
+        Err(HubFailure::answered(403, None, "a bot token cancels no turns"))
+    }
+
+    async fn entries(&self, _: &str, _: &str) -> Result<Vec<InboxEntry>, HubFailure> {
+        self.calls.lock().unwrap().push((self.token.clone(), "entries"));
+        Ok(self.entries.lock().unwrap().clone())
+    }
+
+    async fn send(
+        &self,
+        bot_id: &str,
+        conversation_id: &str,
+        message: Value,
+        turn_id: &str,
+        host_id: &str,
+    ) -> Result<(), HubFailure> {
+        if let Some(failure) = self.send_failures.lock().unwrap().pop_front() {
+            return Err(failure);
+        }
+        self.calls.lock().unwrap().push((self.token.clone(), "send"));
+        self.sent.lock().unwrap().push(Sent {
+            bot_id: bot_id.to_owned(),
+            conversation_id: conversation_id.to_owned(),
+            message,
+            turn_id: turn_id.to_owned(),
+            host_id: host_id.to_owned(),
+        });
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl TurnHub for FakeHub {
+    fn with_runtime_token(&self, token: &str) -> Option<Arc<dyn TurnHub>> {
+        Some(Arc::new(BotView {
+            token: token.to_owned(),
+            entries: self.entries.clone(),
+            sent: self.sent.clone(),
+            send_failures: self.send_failures.clone(),
+            calls: self.calls.clone(),
+        }))
+    }
+
     async fn runtime_token(
         &self,
         bot_id: &str,
@@ -159,6 +236,7 @@ impl TurnHub for FakeHub {
         _bot: &str,
         _conversation: &str,
     ) -> Result<Vec<InboxEntry>, HubFailure> {
+        self.calls.lock().unwrap().push(("owner".into(), "entries"));
         Ok(self.entries.lock().unwrap().clone())
     }
 
@@ -173,6 +251,7 @@ impl TurnHub for FakeHub {
         if let Some(failure) = self.send_failures.lock().unwrap().pop_front() {
             return Err(failure);
         }
+        self.calls.lock().unwrap().push(("owner".into(), "send"));
         self.sent.lock().unwrap().push(Sent {
             bot_id: bot_id.to_owned(),
             conversation_id: conversation_id.to_owned(),
@@ -355,6 +434,25 @@ async fn an_account_turn_runs_with_a_bot_runtime_token_minted_for_that_turn() {
         job.hub_token.map(|token| token.0).as_deref(),
         Some("bot-token:botA:bt_a")
     );
+}
+
+#[tokio::test]
+async fn an_account_turn_reads_and_answers_with_only_the_runtime_token() {
+    let f = Fixture::start(true, config());
+    f.queue(
+        turn("bt_a", "botA", "conv", "m1", 1, &[]),
+        newest_first(&[(1, "m1", "user", "hello")]),
+    );
+    until("the reply", || f.status("botA") == Some(TurnStatus::Done)).await;
+
+    let calls = f.hub.calls.lock().unwrap().clone();
+    let token = "bot-token:botA:bt_a".to_owned();
+    assert_eq!(
+        calls,
+        [(token.clone(), "entries"), (token, "send")],
+        "the owner's session made no in-turn read or send"
+    );
+    assert_eq!(f.hub.sent.lock().unwrap().len(), 1);
 }
 
 #[tokio::test]

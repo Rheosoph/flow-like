@@ -204,16 +204,16 @@ fn limits_json(limits: &BotRoomLimits) -> Result<flow_like_types::Value, ApiErro
         .map_err(|error| ApiError::bad_request(format!("Room limits are not valid: {error}")))
 }
 
-fn pending_row(
+pub(super) fn pending_row(
     conversation_id: &str,
-    invitee: &Invitee,
+    principal: &Principal,
     inviter: &str,
     now: DateTime<FixedOffset>,
 ) -> conversation_member::ActiveModel {
     conversation_member::ActiveModel {
         conversation_id: Set(conversation_id.to_string()),
-        principal_id: Set(invitee.principal.id.clone()),
-        principal_kind: Set(stored(invitee.principal.kind.as_str())),
+        principal_id: Set(principal.id.clone()),
+        principal_kind: Set(stored(principal.kind.as_str())),
         added_by: Set(Some(inviter.to_string())),
         joined_at: Set(now),
         left_at: Set(None),
@@ -320,9 +320,16 @@ pub(crate) async fn invite_in<C: ConnectionTrait>(
         .into_iter()
         .map(|member| member.principal_id)
         .collect();
+    let asked_ids: Vec<String> = asked
+        .iter()
+        .map(|invitee| invitee.principal.id.clone())
+        .collect();
+    let blocked = super::requests::blocked_by(txn, inviter, &asked_ids).await?;
     let asked: Vec<&Invitee> = asked
         .into_iter()
-        .filter(|invitee| !already.contains(&invitee.principal.id))
+        .filter(|invitee| {
+            !already.contains(&invitee.principal.id) && !blocked.contains(&invitee.principal.id)
+        })
         .collect();
     if asked.is_empty() {
         outcome.wake.sort();
@@ -347,7 +354,7 @@ pub(crate) async fn invite_in<C: ConnectionTrait>(
     conversation_member::Entity::insert_many(
         asked
             .iter()
-            .map(|invitee| pending_row(conversation_id, invitee, inviter, now)),
+            .map(|invitee| pending_row(conversation_id, &invitee.principal, inviter, now)),
     )
     .on_conflict(
         OnConflict::columns([
@@ -380,7 +387,7 @@ pub(crate) async fn invite_in<C: ConnectionTrait>(
     Ok(outcome)
 }
 
-async fn pending_member<C: ConnectionTrait>(
+pub(super) async fn pending_member<C: ConnectionTrait>(
     db: &C,
     conversation_id: &str,
     principal_id: &str,
@@ -394,7 +401,7 @@ async fn pending_member<C: ConnectionTrait>(
 
 /// Only the invited person, or the invited bot's live owner, answers an invitation; anyone else
 /// sees it as missing.
-async fn ensure_may_answer<C: ConnectionTrait>(
+pub(super) async fn ensure_may_answer<C: ConnectionTrait>(
     db: &C,
     member: &conversation_member::Model,
     actor: &str,
@@ -461,6 +468,9 @@ pub(crate) async fn accept_in<C: ConnectionTrait>(
     if updated != 1 {
         return Err(invitation_not_found(conversation_id));
     }
+    if super::requests::is_direct(txn, conversation_id).await? {
+        return super::requests::backfill_held(txn, conversation_id, &member, &by).await;
+    }
     let joining = Principal::from(&member);
     let mut everyone: Vec<Principal> = current.iter().map(Principal::from).collect();
     everyone.push(joining.clone());
@@ -503,6 +513,9 @@ pub(crate) async fn decline_in<C: ConnectionTrait>(
         .rows_affected;
     if updated != 1 {
         return Err(invitation_not_found(conversation_id));
+    }
+    if super::requests::is_direct(txn, conversation_id).await? {
+        return Ok(Vec::new());
     }
     Ok(member.invited_by.into_iter().collect())
 }
@@ -583,6 +596,11 @@ pub struct Invitation {
     pub bot_name: Option<String>,
     pub invited_by: Option<String>,
     pub invited_at: Option<DateTime<FixedOffset>>,
+    /// `direct` for a message request, `group` for a room invitation.
+    pub conversation_kind: String,
+    /// A request's messages held for you: how many, and the newest few.
+    pub held_count: u64,
+    pub held: Vec<super::requests::HeldMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -615,40 +633,60 @@ pub(crate) async fn invitations_for<C: ConnectionTrait>(
         .limit(200)
         .all(db)
         .await?;
-    let titles: HashMap<String, Option<String>> = if rows.is_empty() {
+    let described: HashMap<String, (Option<String>, String)> = if rows.is_empty() {
         HashMap::new()
     } else {
         conversation::Entity::find()
             .select_only()
             .column(conversation::Column::Id)
             .column(conversation::Column::Title)
+            .column(conversation::Column::Kind)
             .filter(
                 conversation::Column::Id.is_in(rows.iter().map(|row| row.conversation_id.clone())),
             )
-            .into_tuple::<(String, Option<String>)>()
+            .into_tuple::<(String, Option<String>, String)>()
             .all(db)
             .await?
             .into_iter()
+            .map(|(id, title, kind)| (id, (title, kind.to_ascii_lowercase())))
             .collect()
     };
+    let direct_requests: Vec<(String, String)> = rows
+        .iter()
+        .filter(|row| {
+            described
+                .get(&row.conversation_id)
+                .is_some_and(|(_, kind)| kind == "direct")
+        })
+        .filter_map(|row| Some((row.conversation_id.clone(), row.invited_by.clone()?)))
+        .collect();
+    let mut held = super::requests::held_for(db, &direct_requests).await?;
     Ok(rows
         .into_iter()
-        .map(|row| Invitation {
+        .map(|row| {
+            let (count, messages) = held.remove(&row.conversation_id).unwrap_or_default();
+            Invitation {
             id: format!("{}:{}", row.conversation_id, row.principal_id),
-            title: titles.get(&row.conversation_id).cloned().flatten(),
+            title: described.get(&row.conversation_id).and_then(|(title, _)| title.clone()),
+            conversation_kind: described
+                .get(&row.conversation_id)
+                .map_or_else(|| "group".to_string(), |(_, kind)| kind.clone()),
+            held_count: count,
+            held: messages,
             bot_name: bots.get(&row.principal_id).cloned().flatten(),
             kind: row.principal_kind.to_ascii_lowercase(),
             conversation_id: row.conversation_id,
             principal_id: row.principal_id,
             invited_by: row.invited_by,
             invited_at: row.invited_at,
+            }
         })
         .collect())
 }
 
 /// `{conversation_id}:{principal_id}`; the principal may contain colons, the conversation id
 /// does not.
-fn split_invitation_id(id: &str) -> Result<(&str, &str), ApiError> {
+pub(super) fn split_invitation_id(id: &str) -> Result<(&str, &str), ApiError> {
     id.split_once(':')
         .filter(|(conversation, principal)| !conversation.is_empty() && !principal.is_empty())
         .ok_or_else(|| ApiError::bad_request(format!("'{id}' is not an invitation id")))
@@ -1087,7 +1125,7 @@ pub async fn accept_invitation(
     let sub = user.sub()?;
     let (conversation_id, principal_id) = split_invitation_id(&invitation_id)?;
     let (conversation_id, principal_id) = (conversation_id.to_string(), principal_id.to_string());
-    let people = state
+    let (people, answering) = state
         .transaction(|txn| {
             let (conversation_id, principal_id, sub, limits) = (
                 conversation_id.clone(),
@@ -1097,7 +1135,7 @@ pub async fn accept_invitation(
             );
             Box::pin(async move {
                 lock_conversation(txn, &conversation_id).await?;
-                accept_in(
+                let people = accept_in(
                     txn,
                     &conversation_id,
                     &principal_id,
@@ -1105,11 +1143,15 @@ pub async fn accept_invitation(
                     limits.as_ref(),
                     now_millis(),
                 )
-                .await
+                .await?;
+                let answering =
+                    super::requests::deliver_held_in(txn, &conversation_id, &principal_id).await?;
+                Ok::<_, ApiError>((people, answering))
             })
         })
         .await?;
     wake(&state, people).await;
+    crate::bot_host::dispatch(&state, &answering).await;
     Ok(Json(InvitationAnswer {
         conversation_id,
         principal_id,

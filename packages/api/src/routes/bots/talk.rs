@@ -4,6 +4,7 @@
 
 use super::owned_bot;
 use crate::{
+    bot_caller,
     bot_host::talk::{AnsweredAsk, ServerTalkHost, answered_ask, bot_name, crew_member, roster_in},
     entity::bot_turn,
     error::ApiError,
@@ -248,7 +249,12 @@ pub async fn turn_ask_result(
     Extension(user): Extension<AppUser>,
     Path((bot_id, turn_id)): Path<(String, String)>,
 ) -> Result<Json<AskResult>, ApiError> {
-    let sub = user.sub()?;
+    let names = bot_caller::Names {
+        as_bot: Some(&bot_id),
+        turn: Some(&turn_id),
+        ..Default::default()
+    };
+    let sub = bot_caller::acting_owner(&state.db, &user, &names).await?;
     owned_bot(&state.db, &sub, &bot_id).await?;
     let turn = bot_turn::Entity::find_by_id(&turn_id)
         .filter(bot_turn::Column::BotId.eq(bot_id.as_str()))

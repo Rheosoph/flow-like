@@ -1556,6 +1556,7 @@
 	"openFlow": "Open Flow",
 	"openFlowAndNode": "Open Flow and Node",
 	"openHistoryRun": "Open run {{id}}",
+	"runByBot": "by {{name}}",
 	"openInFlow": "Open in flow",
 	"openMarkdownEditor": "Open Markdown editor",
 	"openMarkdownEditor2": "Open Markdown Editor",

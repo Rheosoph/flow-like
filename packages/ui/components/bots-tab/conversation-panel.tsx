@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { UsersIcon } from "lucide-react";
+import { BellIcon, BellOffIcon, UsersIcon } from "lucide-react";
 import {
 	type ReactNode,
 	useCallback,
@@ -19,6 +19,7 @@ import {
 	useInboxEntries,
 	useMarkConversationRead,
 	useSendInboxEntry,
+	useSetConversationMuted,
 } from "../../hooks/use-inbox";
 import { LocalPrincipalsProvider } from "../../hooks/use-user-lookup";
 import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
@@ -40,6 +41,7 @@ import {
 	type ThreadContext,
 } from "./conversation-messages";
 import {
+	awaitingAnswer,
 	conversationComposition,
 	isSelfPrincipal,
 	otherMemberIds,
@@ -52,6 +54,7 @@ import {
 } from "./fold-entries";
 import { useLocalPrincipals } from "./local-principals";
 import { MemberStack } from "./member-stack";
+import { mentionablesOf } from "./mentions";
 import { DeleteMessageDialog, type MessageActions } from "./message-row";
 import {
 	discardPendingSend,
@@ -188,11 +191,20 @@ function usePendingSends(
 	const pending = usePendingSendList(conversationId);
 
 	const send = useCallback(
-		(text: string, messageId = newInboxMessageId()) =>
+		(
+			text: string,
+			mentions: readonly string[] = [],
+			messageId = newInboxMessageId(),
+		) =>
 			sendPendingMessage(
 				conversationId,
-				{ messageId, text },
-				() => sendPlain("message", { text }, messageId),
+				{ messageId, text, mentions },
+				() =>
+					sendPlain(
+						"message",
+						mentions.length > 0 ? { text, mentions: [...mentions] } : { text },
+						messageId,
+					),
 				onFailedUnseen,
 			),
 		[conversationId, sendPlain, onFailedUnseen],
@@ -200,7 +212,7 @@ function usePendingSends(
 
 	const actions = useMemo<PendingSendActions>(
 		() => ({
-			retry: (item) => void send(item.text, item.messageId),
+			retry: (item) => void send(item.text, item.mentions, item.messageId),
 			discard: (item) => discardPendingSend(conversationId, item.messageId),
 		}),
 		[conversationId, send],
@@ -249,6 +261,32 @@ function useConversationHeading(
 				})
 			: subtitle,
 	};
+}
+
+function MuteButton({
+	conversationId,
+	muted,
+}: Readonly<{ conversationId: string; muted: boolean }>) {
+	const { t } = useTranslation("bots");
+	const { mutate, isPending } = useSetConversationMuted();
+	const label = muted
+		? t("crew.mute.unmute", "Unmute notifications")
+		: t("crew.mute.mute", "Mute notifications");
+	return (
+		<Button
+			type="button"
+			variant="ghost"
+			size="icon"
+			className="shrink-0 text-muted-foreground"
+			disabled={isPending}
+			aria-pressed={muted}
+			onClick={() => mutate({ conversationId, muted: !muted })}
+			aria-label={label}
+			title={label}
+		>
+			{muted ? <BellOffIcon aria-hidden /> : <BellIcon aria-hidden />}
+		</Button>
+	);
 }
 
 function ConversationView({
@@ -301,7 +339,21 @@ function ConversationView({
 		[bots, directory, me],
 	);
 	const manageable = conversation.kind === "group" && !conversation.local;
+	const personChat =
+		!conversation.local &&
+		conversation.members.filter((member) => member.kind === "user").length > 1;
 	useMarkReadWhileOpen(conversation.id, entries, me);
+
+	const mentionables = useMemo(
+		() => mentionablesOf(conversation, directory, me),
+		[conversation, directory, me],
+	);
+	const requestHint = awaitingAnswer(conversation)
+		? t(
+				"crew.requests.pendingHint",
+				"Pending: they haven't accepted your message yet",
+			)
+		: null;
 
 	const sendPlain = useSendPlain(conversation.id);
 	const notifyUnseenFailure = useCallback(
@@ -373,19 +425,27 @@ function ConversationView({
 				subtitle={heading.subtitle}
 				encrypted={encrypted}
 				actions={
-					manageable && (
-						<Button
-							type="button"
-							variant="ghost"
-							size="icon"
-							className="shrink-0 text-muted-foreground"
-							onClick={() => setMembersOpen(true)}
-							aria-label={t("roomMembers.open", "Members and invitations")}
-							title={t("roomMembers.open", "Members and invitations")}
-						>
-							<UsersIcon aria-hidden />
-						</Button>
-					)
+					<>
+						{personChat && (
+							<MuteButton
+								conversationId={conversation.id}
+								muted={Boolean(conversation.muted)}
+							/>
+						)}
+						{manageable && (
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon"
+								className="shrink-0 text-muted-foreground"
+								onClick={() => setMembersOpen(true)}
+								aria-label={t("roomMembers.open", "Members and invitations")}
+								title={t("roomMembers.open", "Members and invitations")}
+							>
+								<UsersIcon aria-hidden />
+							</Button>
+						)}
+					</>
 				}
 				onClose={onClose}
 			/>
@@ -423,7 +483,9 @@ function ConversationView({
 							)
 						: null
 				}
-				onSend={(body) => void pending.send(body)}
+				mentionables={mentionables}
+				hint={requestHint}
+				onSend={(body, mentions) => void pending.send(body, mentions)}
 			/>
 			<DeleteMessageDialog
 				open={deleteTarget !== null}

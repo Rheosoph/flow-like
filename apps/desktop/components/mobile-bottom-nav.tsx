@@ -2,7 +2,7 @@
 
 import { cn, useSidebar } from "@flow-like/flow-like-ui";
 import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
-import { ChatActivityBadge } from "@flow-like/flow-like-ui/components/global-chat/chat-activity";
+import { BotsNavBadge } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-badge";
 import { useTranslation } from "@flow-like/locales";
 import {
 	BotIcon,
@@ -98,7 +98,7 @@ export function MobileBottomNav() {
 						)}
 					>
 						<BotIcon className="size-5" strokeWidth={2.2} aria-hidden />
-						<ChatActivityBadge className="absolute -right-1 -top-1" />
+						<BotsNavBadge className="absolute -right-1 -top-1" />
 					</span>
 					<span
 						className={cn(

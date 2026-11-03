@@ -64,7 +64,7 @@ import {
 import { AccountMenu } from "@flow-like/flow-like-ui/components/account/account-menu";
 import { AccountMenuProvider } from "@flow-like/flow-like-ui/components/account/account-menu-context";
 import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
-import { ChatActivityBadge } from "@flow-like/flow-like-ui/components/global-chat/chat-activity";
+import { BotsNavBadge } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-badge";
 import { ProfileAvatar } from "@flow-like/flow-like-ui/components/profile/profile-avatar";
 import {
 	flushCachedProfileDraft,
@@ -850,7 +850,7 @@ function NavFlatItem({
 				</MotionLink>
 			</SidebarMenuButton>
 			{item.url === BOTS_ROUTE && (
-				<ChatActivityBadge className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 group-data-[collapsible=icon]:right-0 group-data-[collapsible=icon]:top-0 group-data-[collapsible=icon]:translate-y-0" />
+				<BotsNavBadge className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 group-data-[collapsible=icon]:right-0 group-data-[collapsible=icon]:top-0 group-data-[collapsible=icon]:translate-y-0" />
 			)}
 		</SidebarMenuItem>
 	);

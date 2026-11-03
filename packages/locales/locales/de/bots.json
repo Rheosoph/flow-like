@@ -191,6 +191,10 @@
 			"left": "Nicht mehr dabei: {{name}}",
 			"removed": "{{by}}: {{name}} entfernt"
 		},
+		"mentions": {
+			"bot": "",
+			"label": ""
+		},
 		"messages": {
 			"actionFailed": "Das hat nicht geklappt. Versuche es erneut.",
 			"delete": "Löschen",
@@ -213,6 +217,10 @@
 			"save": "Speichern",
 			"sending": "Wird gesendet …",
 			"unsupported": "Nachricht, die diese App nicht anzeigen kann"
+		},
+		"mute": {
+			"mute": "",
+			"unmute": ""
 		},
 		"needs": {
 			"approvalMeta": "",
@@ -260,6 +268,15 @@
 			"searchFailed": "Die Suche nach Personen ist fehlgeschlagen.",
 			"searchLabel": "Deine Bots und Personen durchsuchen",
 			"theirBots": ""
+		},
+		"requests": {
+			"acceptBot": "",
+			"block": "",
+			"botTitle": "",
+			"meta": "",
+			"pendingHint": "",
+			"title": "",
+			"where": ""
 		},
 		"retry": "Erneut versuchen",
 		"rooms": {

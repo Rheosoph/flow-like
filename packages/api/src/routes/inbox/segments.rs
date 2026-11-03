@@ -5,14 +5,15 @@
 //! who reads the conversation reads its segments.
 
 use super::{
-    Reader, active_members, lock_conversation, member_conversation,
+    Reader, acting_reader, active_members, lock_conversation, member_conversation,
     model::{
         ConversationSegment, ConversationSegmentList, SegmentsQuery, WriteSegmentQuery,
         WriteSegmentRequest,
     },
-    now_millis, reader, trimmed,
+    now_millis, trimmed,
 };
 use crate::{
+    bot_caller,
     entity::{conversation, conversation_segment, inbox_entry},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -557,9 +558,14 @@ pub async fn list_segments(
     Path(conversation_id): Path<String>,
     Query(query): Query<SegmentsQuery>,
 ) -> Result<Json<ConversationSegmentList>, ApiError> {
-    let sub = user.sub()?;
     let page = segment_page(&query)?;
-    let reader = reader(&state.db, &sub, query.as_bot.as_deref()).await?;
+    let reader = acting_reader(
+        &state.db,
+        &user,
+        query.as_bot.as_deref(),
+        &conversation_id,
+    )
+    .await?;
     let conversation = member_conversation(&state.db, &conversation_id, &reader.inbox).await?;
     let author = match trimmed(query.author.as_deref()) {
         Some(author) => Some(author.to_string()),
@@ -601,9 +607,14 @@ pub async fn write_segment(
     Query(query): Query<WriteSegmentQuery>,
     Json(body): Json<WriteSegmentRequest>,
 ) -> Result<Json<ConversationSegment>, ApiError> {
-    let sub = user.sub()?;
+    let names = bot_caller::Names {
+        as_bot: query.as_bot.as_deref(),
+        conversation: Some(&conversation_id),
+        turn: None,
+    };
+    let sub = bot_caller::acting_owner(&state.db, &user, &names).await?;
     let segment = Arc::new(validate_segment(body)?);
-    let bot_id = trimmed(query.as_bot.as_deref()).ok_or_else(|| {
+    let bot_id = bot_caller::bot_named(&user, query.as_bot.as_deref()).ok_or_else(|| {
         ApiError::bad_request("A bot's host writes its summaries: send as=<bot id>")
     })?;
     let bot = owned_bot(&state.db, &sub, bot_id).await?;

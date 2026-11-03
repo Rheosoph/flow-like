@@ -5,6 +5,7 @@ import { LockIcon, MoreHorizontalIcon } from "lucide-react";
 import { useRef, useState } from "react";
 import { useUserIdentity } from "../../hooks/use-user-lookup";
 import { cn } from "../../lib/utils";
+import { IdentityAvatar } from "../identity/identity-avatar";
 import { MessageReactionPicker } from "../interfaces/chat-default/message-reactions";
 import {
 	AlertDialog,
@@ -239,9 +240,29 @@ function MessageToolbar({
 	);
 }
 
+function MentionChips({
+	ids,
+	directory,
+}: Readonly<{ ids: readonly string[]; directory: CrewDirectory }>) {
+	return (
+		<ul className="mb-1 flex flex-wrap gap-1">
+			{ids.map((id) => (
+				<li
+					key={id}
+					className="inline-flex items-center gap-1 rounded-full bg-primary/10 py-0.5 pr-2 pl-0.5 text-xs font-medium text-primary"
+				>
+					<IdentityAvatar subject={id} size={16} />
+					<span className="max-w-32 truncate">@{directory(id).name}</span>
+				</li>
+			))}
+		</ul>
+	);
+}
+
 function MessageContent({
 	message,
-}: Readonly<{ message: ConversationMessage }>) {
+	directory,
+}: Readonly<{ message: ConversationMessage; directory: CrewDirectory }>) {
 	const { t } = useTranslation("bots");
 	if (message.content.kind === "sealed") {
 		return (
@@ -260,6 +281,9 @@ function MessageContent({
 	}
 	return (
 		<>
+			{message.mentions.length > 0 && (
+				<MentionChips ids={message.mentions} directory={directory} />
+			)}
 			<div data-fl-chat-prose className="wrap-break-word">
 				<TextEditor
 					presentation="chat"
@@ -326,7 +350,7 @@ export function MessageRow({
 							"max-w-[85%] rounded-[14px] rounded-br-sm bg-secondary px-3 py-2 text-secondary-foreground",
 					)}
 				>
-					<MessageContent message={message} />
+					<MessageContent message={message} directory={directory} />
 				</div>
 			)}
 			<ReactionChips

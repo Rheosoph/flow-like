@@ -191,6 +191,10 @@
 			"left": "{{name}} left",
 			"removed": "{{by}} removed {{name}}"
 		},
+		"mentions": {
+			"bot": "Bot",
+			"label": "Mention someone"
+		},
 		"messages": {
 			"actionFailed": "That didn't go through. Try again.",
 			"delete": "Delete",
@@ -213,6 +217,10 @@
 			"save": "Save",
 			"sending": "Sending…",
 			"unsupported": "Message this app can't show"
+		},
+		"mute": {
+			"mute": "Mute notifications",
+			"unmute": "Unmute notifications"
 		},
 		"needs": {
 			"approvalMeta": "Waiting for you · {{time}}",
@@ -260,6 +268,15 @@
 			"searchFailed": "Searching people failed.",
 			"searchLabel": "Search your bots and people",
 			"theirBots": "Bots of people you work with"
+		},
+		"requests": {
+			"acceptBot": "Accept and allow",
+			"block": "Block",
+			"botTitle": "{{name}} wants to talk to {{bot}}",
+			"meta": "Messages waiting: {{n}}",
+			"pendingHint": "Pending: they haven't accepted your message yet",
+			"title": "{{name}} wants to message you",
+			"where": "Message request"
 		},
 		"retry": "Try again",
 		"rooms": {

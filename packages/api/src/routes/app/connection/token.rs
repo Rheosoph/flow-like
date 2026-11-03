@@ -95,6 +95,19 @@ pub async fn create_app_connection_token(
         return Err(ApiError::FORBIDDEN);
     }
 
+    if let AppUser::Executor(executor) = &user
+        && let Some(bot) = &executor.bot
+    {
+        let grant = crate::bot_permission::bot_grant_in(&state.db, bot, &target_app_id).await?;
+        if !grant.permissions.intersects(
+            RolePermissions::ExecuteBoards | RolePermissions::ExecuteEvents,
+        ) {
+            return Err(ApiError::forbidden(
+                "The bot holds no execute permission in the target app",
+            ));
+        }
+    }
+
     let connection = app_connection::Entity::find()
         .filter(
             app_connection::Column::SourceAppId

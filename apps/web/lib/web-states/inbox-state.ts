@@ -1,4 +1,5 @@
 import type {
+	IBotRoomLimits,
 	IConversation,
 	IConversationSegmentList,
 	ICreateConversationRequest,
@@ -7,7 +8,6 @@ import type {
 	IInboxEntry,
 	IInboxImportEntry,
 	IInboxImportResult,
-	IBotRoomLimits,
 	IInboxKey,
 	IInboxSegmentsQuery,
 	IInboxState,
@@ -303,6 +303,25 @@ export class WebInboxState implements IInboxState {
 		await apiPost(
 			`inbox/invitations/${encodeURIComponent(invitation.id)}/decline`,
 			{},
+			this.backend.auth,
+		);
+	}
+
+	async blockInvitation(invitation: IInvitation): Promise<void> {
+		await apiPost(
+			`inbox/invitations/${encodeURIComponent(invitation.id)}/block`,
+			{},
+			this.backend.auth,
+		);
+	}
+
+	async setConversationMuted(
+		conversationId: string,
+		muted: boolean,
+	): Promise<void> {
+		await apiPatch(
+			`${conversationPath(conversationId)}/mute`,
+			{ muted },
 			this.backend.auth,
 		);
 	}

@@ -480,13 +480,14 @@ pub fn hub_owner_direct(conversation: &Value, bot_id: &str) -> bool {
 /// The memory source of an account bot's turn on this desktop, `None` unless the turn answers
 /// the bot's direct conversation with its owner.
 pub async fn hub_source_for(
+    owner_hub: &Arc<dyn TurnHub>,
     hub: &Arc<dyn TurnHub>,
     bot_id: &str,
     conversation_id: &str,
     trigger_seq: Option<i64>,
 ) -> Option<MemoryTurnSource> {
     let trigger_seq = Seq::try_from(trigger_seq?).ok()?;
-    let conversation = hub
+    let conversation = owner_hub
         .read(
             &format!("inbox/conversations/{conversation_id}"),
             Vec::new(),

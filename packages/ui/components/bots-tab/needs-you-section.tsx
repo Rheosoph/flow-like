@@ -80,6 +80,12 @@ function NeedsYouCard({
 	);
 }
 
+export function heldPreview(invitation: IInvitation): string {
+	const newest = invitation.held?.at(-1)?.envelope.body;
+	const text = (newest as { text?: unknown } | undefined)?.text;
+	return typeof text === "string" ? text.trim() : "";
+}
+
 function InvitationNeed({
 	invitation,
 	directory,
@@ -92,10 +98,16 @@ function InvitationNeed({
 	const room =
 		invitation.title ?? t("crew.invitations.groupChat", "a group chat");
 	const botName = invitation.bot_name ?? t("crew.invitations.aBot", "your bot");
+	const isRequest = invitation.conversation_kind === "direct";
+	const held = heldPreview(invitation);
 
-	const respond = (accept: boolean, limits?: IBotRoomLimits | null) =>
+	const respond = (
+		accept: boolean,
+		limits?: IBotRoomLimits | null,
+		block?: boolean,
+	) =>
 		answer
-			.mutateAsync({ invitation, accept, limits })
+			.mutateAsync({ invitation, accept, limits, block })
 			.then(() => setLimitsOpen(false))
 			.catch((error: unknown) => {
 				toast.error(
@@ -113,27 +125,46 @@ function InvitationNeed({
 					<IdentityAvatar subject={invitation.invited_by ?? ""} size={36} />
 				}
 				name={inviter}
-				where={room}
+				where={isRequest ? t("crew.requests.where", "Message request") : room}
 				title={
-					forBot
-						? t(
-								"crew.invitations.botTitle",
-								"{{name}} wants to add {{bot}} to {{room}}",
-								{ name: inviter, bot: botName, room },
-							)
-						: t("crew.invitations.title", "{{name}} invited you to {{room}}", {
-								name: inviter,
-								room,
-							})
+					isRequest
+						? forBot
+							? t(
+									"crew.requests.botTitle",
+									"{{name}} wants to talk to {{bot}}",
+									{ name: inviter, bot: botName },
+								)
+							: t("crew.requests.title", "{{name}} wants to message you", {
+									name: inviter,
+								})
+						: forBot
+							? t(
+									"crew.invitations.botTitle",
+									"{{name}} wants to add {{bot}} to {{room}}",
+									{ name: inviter, bot: botName, room },
+								)
+							: t(
+									"crew.invitations.title",
+									"{{name}} invited you to {{room}}",
+									{
+										name: inviter,
+										room,
+									},
+								)
 				}
 				meta={
-					forBot
-						? t(
-								"crew.invitations.botMeta",
-								"You choose what {{bot}} may do there",
-								{ bot: botName },
-							)
-						: t("crew.invitations.meta", "Join to read and write in it")
+					isRequest
+						? held ||
+							t("crew.requests.meta", "Messages waiting: {{n}}", {
+								n: invitation.held_count ?? 0,
+							})
+						: forBot
+							? t(
+									"crew.invitations.botMeta",
+									"You choose what {{bot}} may do there",
+									{ bot: botName },
+								)
+							: t("crew.invitations.meta", "Join to read and write in it")
 				}
 				actions={
 					<>
@@ -160,6 +191,18 @@ function InvitationNeed({
 						>
 							{t("crew.invitations.decline", "Decline")}
 						</Button>
+						{isRequest && (
+							<Button
+								type="button"
+								variant="ghost"
+								size="sm"
+								className="rounded-[9px] text-destructive"
+								disabled={answer.isPending}
+								onClick={() => void respond(false, undefined, true)}
+							>
+								{t("crew.requests.block", "Block")}
+							</Button>
+						)}
 					</>
 				}
 			/>
@@ -169,8 +212,12 @@ function InvitationNeed({
 					onOpenChange={setLimitsOpen}
 					botId={invitation.principal_id}
 					botName={botName}
-					roomName={room}
-					confirmLabel={t("crew.invitations.acceptBot", "Accept and add")}
+					roomName={isRequest ? inviter : room}
+					confirmLabel={
+						isRequest
+							? t("crew.requests.acceptBot", "Accept and allow")
+							: t("crew.invitations.acceptBot", "Accept and add")
+					}
 					pending={answer.isPending}
 					error={answer.error}
 					onConfirm={(limits) => void respond(true, limits)}

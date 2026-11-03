@@ -116,6 +116,11 @@ pub trait TurnHub: Send + Sync + 'static {
     ) -> Result<Option<String>, HubFailure> {
         Ok(None)
     }
+    /// The same hub with every call made as the bot by `token`, for what the bot does during its
+    /// turn; `None` for a hub that has no such identity. Owner-only calls keep `self`.
+    fn with_runtime_token(&self, _token: &str) -> Option<Arc<dyn TurnHub>> {
+        None
+    }
     /// Every grant and answer token of the account bot as `(tool, scope)`.
     async fn tool_keys(&self, _bot_id: &str) -> Result<Vec<(String, String)>, HubFailure> {
         Ok(Vec::new())
@@ -239,6 +244,7 @@ pub struct AskResult {
 pub struct ProfileHub {
     app: AppHandle,
     client: reqwest::Client,
+    bearer: Option<String>,
 }
 
 impl ProfileHub {
@@ -249,7 +255,11 @@ impl ProfileHub {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .unwrap_or_default();
-        Self { app, client }
+        Self {
+            app,
+            client,
+            bearer: None,
+        }
     }
 
     /// Asks the hub to notify the account's owner as `bot_id`; it groups, mutes and limits.
@@ -282,18 +292,22 @@ impl ProfileHub {
         let identity = identity(&self.app, None)
             .await
             .map_err(HubFailure::offline)?;
-        let auth = identity.auth.as_ref().ok_or_else(|| {
-            HubFailure::answered(
-                401,
-                Some(CODE_SIGNED_OUT),
-                "Sign in to run account bots here",
-            )
-        })?;
         let url = format!("{}/api/v1/{path}", identity.hub.trim_end_matches('/'));
-        let mut token = auth
-            .cached_access_token()
-            .await
-            .map_err(HubFailure::offline)?;
+        let mut token = match (&self.bearer, identity.auth.as_ref()) {
+            (Some(bearer), _) => bearer.clone(),
+            (None, Some(auth)) => auth
+                .cached_access_token()
+                .await
+                .map_err(HubFailure::offline)?,
+            (None, None) => {
+                return Err(HubFailure::answered(
+                    401,
+                    Some(CODE_SIGNED_OUT),
+                    "Sign in to run account bots here",
+                ));
+            }
+        };
+        let session = identity.auth.as_ref().filter(|_| self.bearer.is_none());
         for attempt in 0..2 {
             let mut request = self
                 .client
@@ -308,7 +322,10 @@ impl ProfileHub {
                 .await
                 .map_err(|_| HubFailure::offline("the hub could not be reached"))?;
             let status = response.status().as_u16();
-            if status == 401 && attempt == 0 {
+            if status == 401
+                && attempt == 0
+                && let Some(auth) = session
+            {
                 token = auth
                     .access_token(Some(&token))
                     .await
@@ -358,6 +375,14 @@ fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T, HubFailure>
 
 #[async_trait]
 impl TurnHub for ProfileHub {
+    fn with_runtime_token(&self, token: &str) -> Option<Arc<dyn TurnHub>> {
+        Some(Arc::new(ProfileHub {
+            app: self.app.clone(),
+            client: self.client.clone(),
+            bearer: Some(token.to_owned()),
+        }))
+    }
+
     async fn runtime_token(
         &self,
         bot_id: &str,

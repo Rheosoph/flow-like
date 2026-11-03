@@ -34,6 +34,13 @@ export interface ConversationApproval {
 	answer?: ApprovalDecision;
 }
 
+function mentionsOf(entry: IInboxEntry): string[] {
+	const mentions = plainBody(entry)?.mentions;
+	return Array.isArray(mentions)
+		? mentions.filter((id): id is string => typeof id === "string")
+		: [];
+}
+
 export interface ConversationMessage {
 	type: "message";
 	/** The event's `message_id`, which edits, deletes and reactions target. */
@@ -44,6 +51,7 @@ export interface ConversationMessage {
 	time: number;
 	content: ConversationMessageContent;
 	replyTo?: string;
+	mentions: string[];
 	approval?: ConversationApproval;
 	edited: boolean;
 	reactions: ConversationReaction[];
@@ -196,6 +204,7 @@ export function foldInboxEntries(
 				createdAt: entry.created_at,
 				time: entryTime(entry),
 				content: inboxMessageContent(entry),
+				mentions: mentionsOf(entry),
 				...(replyTo ? { replyTo } : {}),
 				...(approval
 					? {
@@ -205,8 +214,7 @@ export function foldInboxEntries(
 								tool: approval.tool,
 								summary: approval.summary,
 								scopes: approval.scope.split(",").filter(Boolean),
-								requesterName:
-									approval.requester_name ?? approval.requester_id,
+								requesterName: approval.requester_name ?? approval.requester_id,
 								room: approval.room,
 							},
 						}

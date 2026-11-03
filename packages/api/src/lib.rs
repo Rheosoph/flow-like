@@ -40,6 +40,8 @@ mod bit_pricing;
 pub mod bot_host;
 pub(crate) mod bot_mail;
 pub(crate) mod bot_notify;
+pub(crate) mod bot_caller;
+pub(crate) mod bot_flow;
 pub mod bot_permission;
 pub(crate) mod bot_tools;
 pub mod cache;

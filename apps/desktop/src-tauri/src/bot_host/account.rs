@@ -393,7 +393,19 @@ impl Inner {
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
         let (bot_id, conversation_id) = key;
-        let mut entries = match self.hub.entries(bot_id, conversation_id).await {
+        let hub_token = match self.hub.runtime_token(bot_id, &lead.id).await {
+            Ok(token) => token.map(HubToken),
+            Err(failure) if failure.lease_lost() => return End::lease_lost(),
+            Err(failure) => {
+                tracing::debug!(%failure, "Bot host: the hub minted no bot token for the turn");
+                return End::failed(CODE_HUB);
+            }
+        };
+        let hub = hub_token
+            .as_ref()
+            .and_then(|token| self.hub.with_runtime_token(&token.0))
+            .unwrap_or_else(|| self.hub.clone());
+        let mut entries = match hub.entries(bot_id, conversation_id).await {
             Ok(entries) => entries,
             Err(failure) if failure.lease_lost() => return End::lease_lost(),
             Err(failure) => {
@@ -424,7 +436,7 @@ impl Inner {
             .zip(lead.requester_name.iter())
             .map(|(id, name)| (id.clone(), name.clone()))
             .collect();
-        let transcript = match self.late_answer(lead).await {
+        let transcript = match self.late_answer(lead, &hub).await {
             Some(transcript) => transcript,
             None => match transcript::transcript(
                 bot_id,
@@ -445,7 +457,7 @@ impl Inner {
         let memory = if sealed {
             None
         } else {
-            memory::hub_source_for(&self.hub, bot_id, conversation_id, trigger_seq)
+            memory::hub_source_for(&self.hub, &hub, bot_id, conversation_id, trigger_seq)
                 .await
                 .map(JobMemory)
         };
@@ -457,14 +469,6 @@ impl Inner {
         let prompt = match resume_note(grants.as_ref()).await {
             Some(note) => format!("{}\n\n{note}", transcript.prompt),
             None => transcript.prompt,
-        };
-        let hub_token = match self.hub.runtime_token(bot_id, &lead.id).await {
-            Ok(token) => token.map(HubToken),
-            Err(failure) if failure.lease_lost() => return End::lease_lost(),
-            Err(failure) => {
-                tracing::debug!(%failure, "Bot host: the hub minted no bot token for the turn");
-                return End::failed(CODE_HUB);
-            }
         };
         let (runner, stop_id) = (self.runner.clone(), lead.id.clone());
         let gate = ApprovalGate::new(grants.clone(), &lead.id, move || runner.cancel(&stop_id));
@@ -499,12 +503,12 @@ impl Inner {
             outcome = tokio::time::timeout(self.config.deadline, self.runner.run(job)) => outcome,
         };
         if let Some(card) = gate.parked() {
-            return self.park(key, lead, &card, sealed, cancel).await;
+            return self.park(key, lead, &hub, &card, sealed, cancel).await;
         }
         match outcome {
             Ok(Ok(text)) if !text.trim().is_empty() => {
                 let end = self
-                    .post(key, lead, &clipped(&text, MAX_REPLY_CHARS), None, sealed, cancel)
+                    .post(key, lead, &hub, &clipped(&text, MAX_REPLY_CHARS), None, sealed, cancel)
                     .await;
                 if end.status == TurnStatus::Done {
                     clear_tokens(grants.as_ref(), &seen).await;
@@ -516,7 +520,7 @@ impl Inner {
             }
             Ok(Ok(_)) => {
                 let text = "The language model returned no answer. You can ask again.";
-                self.post(key, lead, text, Some(CODE_MODEL), sealed, cancel).await
+                self.post(key, lead, &hub, text, Some(CODE_MODEL), sealed, cancel).await
             }
             Ok(Err(RunError::SessionChanged)) => End::dropped(super::host::CODE_SESSION_CHANGED),
             Ok(Err(RunError::Failed { code, message })) => {
@@ -524,28 +528,31 @@ impl Inner {
                     "I couldn't answer this: {}",
                     clipped(&message, MAX_FAILURE_DETAIL_CHARS)
                 );
-                self.post(key, lead, &text, Some(&code), sealed, cancel).await
+                self.post(key, lead, &hub, &text, Some(&code), sealed, cancel).await
             }
             Err(_) => {
                 self.runner.cancel(&lead.id);
                 let text = "I ran out of time before I could answer. You can ask again.";
-                self.post(key, lead, text, Some(CODE_TIMEOUT), sealed, cancel).await
+                self.post(key, lead, &hub, text, Some(CODE_TIMEOUT), sealed, cancel).await
             }
         }
     }
 
     /// The turn a late answer woke reads the conversation the question was asked from, with the
     /// answer on top; `None` for any other turn.
-    async fn late_answer(&self, lead: &BotTurn) -> Option<transcript::Transcript> {
-        let asked = match self.hub.ask_result(&lead.bot_id, &lead.id).await {
+    async fn late_answer(
+        &self,
+        lead: &BotTurn,
+        hub: &Arc<dyn TurnHub>,
+    ) -> Option<transcript::Transcript> {
+        let asked = match hub.ask_result(&lead.bot_id, &lead.id).await {
             Ok(asked) => asked?,
             Err(failure) => {
                 tracing::debug!(%failure, "Bot host: the hub could not say whether an answer woke this turn");
                 return None;
             }
         };
-        let mut origin = self
-            .hub
+        let mut origin = hub
             .entries(&lead.bot_id, &asked.origin_conversation)
             .await
             .unwrap_or_default();
@@ -583,6 +590,7 @@ impl Inner {
         &self,
         key: &Key,
         lead: &BotTurn,
+        hub: &Arc<dyn TurnHub>,
         card: &ApprovalRequest,
         sealed: bool,
         cancel: &mut watch::Receiver<Option<Cancel>>,
@@ -590,7 +598,7 @@ impl Inner {
         if let Some(reason) = *cancel.borrow() {
             return End::by(reason);
         }
-        match self.hub.park(&lead.id, &self.config.host_id, card).await {
+        match hub.park(&lead.id, &self.config.host_id, card).await {
             Ok(()) => End {
                 status: TurnStatus::Waiting,
                 error_code: String::new(),
@@ -604,7 +612,7 @@ impl Inner {
                     card.tool,
                     clipped(&failure.message, MAX_FAILURE_DETAIL_CHARS)
                 );
-                self.post(key, lead, &text, Some(CODE_SETUP), sealed, cancel)
+                self.post(key, lead, hub, &text, Some(CODE_SETUP), sealed, cancel)
                     .await
             }
         }
@@ -614,6 +622,7 @@ impl Inner {
         &self,
         key: &Key,
         lead: &BotTurn,
+        hub: &Arc<dyn TurnHub>,
         text: &str,
         failure: Option<&str>,
         sealed: bool,
@@ -651,8 +660,7 @@ impl Inner {
             })
         };
         for attempt in 0..=self.config.send_retries {
-            let sent = self
-                .hub
+            let sent = hub
                 .send(
                     &lead.bot_id,
                     &lead.conversation_id,

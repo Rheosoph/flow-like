@@ -332,6 +332,13 @@ function HistoryRunRow({
 									: t("unversioned", "Unversioned")}
 							</small>
 							<small className="text-muted-foreground">{run.version}</small>
+							{run.actor?.kind === "bot" && (
+								<small className="text-muted-foreground">
+									{t("runByBot", "by {{name}}", {
+										name: run.actor.name || run.actor.id,
+									})}
+								</small>
+							)}
 						</span>
 						<span className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
 							<time

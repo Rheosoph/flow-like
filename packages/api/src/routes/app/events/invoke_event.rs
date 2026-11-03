@@ -692,16 +692,24 @@ async fn invoke_event_impl(
                 _ => None,
             };
             let actor_user_id = account_user_id(subject).map(ToOwned::to_owned);
-            return Ok((subject.to_string(), None, user_context, actor_user_id));
+            return Ok((subject.to_string(), None, user_context, actor_user_id, None));
         }
         let permission = if params.page_trigger.is_some() {
             ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
         } else {
             ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
         };
-        let sub = permission.effective_user_id().map_err(|_| {
+        let sub = permission.run_user_id().map_err(|_| {
             ApiError::forbidden("Invoking requires a caller that is linked to a user account")
         })?;
+        let bot_run = crate::bot_flow::BotFlowRun::admit_event(
+            &user,
+            &app_id,
+            &state,
+            &event_id,
+            params.page_trigger.is_some(),
+        )
+        .await?;
         let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
         let actor_user_id = account_user_id(&sub).map(ToOwned::to_owned);
         Ok((
@@ -709,6 +717,7 @@ async fn invoke_event_impl(
             technical_user_id,
             Some(permission.to_user_context()),
             actor_user_id,
+            bot_run,
         ))
     };
     // A pre-resolved event is accepted only from another crate-private,
@@ -731,11 +740,12 @@ async fn invoke_event_impl(
     };
     let (caller, event) =
         flow_like_types::tokio::join!(caller.instrument(invoke_span!("invoke.authorize")), event);
-    let (sub, technical_user_id, user_context, actor_user_id): (
+    let (sub, technical_user_id, user_context, actor_user_id, bot_run): (
         String,
         Option<String>,
         Option<UserExecutionContext>,
         Option<String>,
+        Option<crate::bot_flow::BotFlowRun>,
     ) = caller?;
     let event = event?;
     // If invoked through an app connection, keep the caller app chain so the
@@ -894,9 +904,14 @@ async fn invoke_event_impl(
         .instrument(invoke_span!("invoke.store_payload")),
         async {
             if remote {
+                let (credential_sub, mode) = crate::bot_flow::credential_target(
+                    bot_run.as_ref(),
+                    &sub,
+                    get_credentials_access(),
+                );
                 Some(
                     state
-                        .scoped_credentials(&sub, &app_id, get_credentials_access())
+                        .scoped_credentials(&credential_sub, &app_id, mode)
                         .await,
                 )
             } else {
@@ -1190,6 +1205,7 @@ async fn invoke_event_impl(
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
     })?;
 
+    let executor_jwt = crate::bot_flow::bind_executor(bot_run.as_ref(), executor_jwt)?;
     let executor_jwt = if hosted {
         crate::execution::bind_hosted_frontend(&executor_jwt)
             .map_err(|error| ApiError::internal_error(anyhow!(error)))?

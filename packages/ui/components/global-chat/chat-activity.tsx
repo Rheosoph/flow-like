@@ -147,8 +147,10 @@ export function ChatActivityProvider() {
 
 export function ChatActivityBadge({
 	className,
-}: Readonly<{ className?: string }>) {
-	const count = useChatActivityStore((state) => state.entries.length);
+	extra = 0,
+}: Readonly<{ className?: string; extra?: number }>) {
+	const entries = useChatActivityStore((state) => state.entries.length);
+	const count = entries + extra;
 	const { t } = useTranslation("chat");
 	if (count === 0) return null;
 	return (

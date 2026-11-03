@@ -10,13 +10,14 @@ import {
 	useQueryClient,
 } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
+import { personUnreadTotal } from "../components/bots-tab/crew-model";
 import { useBackend } from "../state/backend-state";
 import type {
+	IBotRoomLimits,
 	IConversation,
 	ICreateConversationRequest,
 	IInboxEntriesPage,
 	IInboxEntry,
-	IBotRoomLimits,
 	IInboxState,
 	IInvitation,
 	IInviteRequest,
@@ -175,6 +176,12 @@ export function useConversations(
 			options.poll === false ? false : INBOX_POLL_MS.conversations,
 		refetchIntervalInBackground: false,
 	});
+}
+
+/** Unread messages across your person chats; pending requests and bot chats don't count. */
+export function usePersonUnreadTotal(): number {
+	const { data } = useConversations();
+	return useMemo(() => personUnreadTotal(data ?? []), [data]);
 }
 
 export function useConversation(conversationId?: string | null, as?: string) {
@@ -385,20 +392,43 @@ export function useAnswerInvitation() {
 			invitation,
 			accept,
 			limits,
+			block,
 		}: {
 			invitation: IInvitation;
 			accept: boolean;
 			limits?: IBotRoomLimits | null;
+			block?: boolean;
 		}) => {
 			const inbox = requireInboxState(state);
-			return accept
-				? inbox.acceptInvitation(invitation, limits)
+			if (accept) return inbox.acceptInvitation(invitation, limits);
+			return block
+				? inbox.blockInvitation(invitation)
 				: inbox.declineInvitation(invitation);
 		},
 		onSettled: () => {
 			queryClient.invalidateQueries({ queryKey: inboxKeys.invitations() });
 			queryClient.invalidateQueries({
 				queryKey: [...inboxKeys.all, "conversation"],
+			});
+			queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
+		},
+	});
+}
+
+export function useSetConversationMuted() {
+	const state = useBackend().inboxState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			conversationId,
+			muted,
+		}: {
+			conversationId: string;
+			muted: boolean;
+		}) => requireInboxState(state).setConversationMuted(conversationId, muted),
+		onSettled: (_, __, { conversationId }) => {
+			queryClient.invalidateQueries({
+				queryKey: inboxKeys.conversation(conversationId),
 			});
 			queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
 		},

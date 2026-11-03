@@ -405,6 +405,24 @@ impl AppPermissionResponse {
         self.technical_user_id.as_deref()
     }
 
+    /// [`Self::effective_user_id`] for routes that go on to act as that person (credentials,
+    /// runs, keys): a bot's owner is attribution there, never an identity the bot may borrow.
+    pub fn person_user_id(&self) -> Result<String> {
+        if self.principal == ExecutionPrincipal::Bot {
+            return Err(anyhow!("A bot cannot act as its owner"));
+        }
+        self.effective_user_id()
+    }
+
+    /// The user a flow run is paid for and attributed to. For a bot that is its owner: the run
+    /// itself carries the bot's identity and credentials, so the owner is never acted as.
+    pub fn run_user_id(&self) -> Result<String> {
+        if self.principal == ExecutionPrincipal::Bot {
+            return self.effective_user_id();
+        }
+        self.person_user_id()
+    }
+
     /// Either returns the sub if available or in case of API keys it returns the key ID.
     /// This is useful for identifying the user in logs or other contexts where a unique identifier is needed.
     pub fn identifier(&self) -> String {
@@ -844,7 +862,11 @@ impl AppUser {
             }
             executor_use.admit(self)?;
 
-            if let Some(bot) = &executor.bot {
+            let chained = executor
+                .app_chain
+                .as_ref()
+                .is_some_and(|chain| !chain.is_empty());
+            if let Some(bot) = executor.bot.as_ref().filter(|_| !chained) {
                 return crate::bot_permission::bot_app_permission(bot, app_id, state).await;
             }
 
@@ -1397,6 +1419,30 @@ async fn connected_app_permission_uncached(
 /// keeping only the permissions and column attributes the person it passed through also
 /// holds when there is one.
 async fn connected_app_role<C: sea_orm::ConnectionTrait>(
+    db: &C,
+    connected_app: &ConnectedAppUser,
+    app_id: &str,
+) -> Result<role::Model, ApiError> {
+    let role = connected_person_role(db, connected_app, app_id).await?;
+    let Some(bot) = connected_app
+        .technical_user_id
+        .as_deref()
+        .and_then(crate::bot_flow::bot_from_technical_id)
+    else {
+        return Ok(role);
+    };
+    let grant = crate::bot_permission::bot_grant_in(db, &bot, app_id).await?;
+    let permissions = role_permissions(&role)? & grant.permissions;
+    if permissions.is_empty() {
+        return Err(ApiError::FORBIDDEN);
+    }
+    Ok(role::Model {
+        permissions: permissions.bits(),
+        ..role
+    })
+}
+
+async fn connected_person_role<C: sea_orm::ConnectionTrait>(
     db: &C,
     connected_app: &ConnectedAppUser,
     app_id: &str,

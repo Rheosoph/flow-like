@@ -9,7 +9,9 @@
 use crate::{
     db::coordination::coordinate,
     entity::{bot, conversation, conversation_member, inbox_entry},
+    bot_caller,
     error::ApiError,
+    middleware::jwt::AppUser,
     routes::bots::owned_bot,
     state::AppState,
 };
@@ -37,7 +39,9 @@ pub mod keys;
 pub(crate) mod mail_threads;
 pub mod members;
 pub mod model;
+pub(crate) mod person_push;
 mod positions;
+pub(crate) mod requests;
 pub mod retirement;
 pub mod segments;
 mod targets;
@@ -47,6 +51,8 @@ mod view;
 
 #[cfg(test)]
 mod bot_tests;
+#[cfg(test)]
+mod bot_token_tests;
 #[cfg(all(test, feature = "db-chaos"))]
 mod concurrency_tests;
 #[cfg(test)]
@@ -59,6 +65,8 @@ mod import_tests;
 mod invitations_tests;
 #[cfg(test)]
 mod mail_threads_tests;
+#[cfg(test)]
+mod requests_tests;
 #[cfg(test)]
 mod tests;
 
@@ -77,10 +85,12 @@ pub(crate) const INBOX_HANDLE_NOT_ALLOWED: &str = "INBOX_HANDLE_NOT_ALLOWED";
 pub(crate) const BOT_TURN_NOT_CLAIMED: &str = "BOT_TURN_NOT_CLAIMED";
 pub(crate) const INBOX_INVITE_LIMIT: &str = "INBOX_INVITE_LIMIT";
 pub(crate) const INBOX_INVITE_NOT_ALLOWED: &str = "INBOX_INVITE_NOT_ALLOWED";
+pub(crate) const INBOX_REQUEST_LIMIT: &str = "INBOX_REQUEST_LIMIT";
 
 pub(crate) const MEMBER_ACTIVE: &str = "ACTIVE";
 pub(crate) const MEMBER_PENDING: &str = "PENDING";
 pub(crate) const MEMBER_DECLINED: &str = "DECLINED";
+pub(crate) const MEMBER_BLOCKED: &str = "BLOCKED";
 
 /// Rows that read, receive and count: not left and not still an invitation.
 pub(crate) fn active_member() -> Condition {
@@ -133,6 +143,14 @@ pub fn routes() -> Router<AppState> {
         .route(
             "/invitations/{invitation_id}/decline",
             post(invitations::decline_invitation),
+        )
+        .route(
+            "/invitations/{invitation_id}/block",
+            post(requests::block_invitation),
+        )
+        .route(
+            "/conversations/{conversation_id}/mute",
+            patch(person_push::set_mute),
         )
         .route("/invitable", get(invitations::list_invitable))
         .route(
@@ -220,6 +238,30 @@ async fn reader<C: ConnectionTrait>(
             inbox: owned_bot(db, sub, bot_id).await?.id,
             owner: Some(sub.to_string()),
         }),
+    }
+}
+
+/// [`reader`] for a person; a bot token reads only its own inbox, and in the one room it was minted for.
+async fn acting_reader<C: ConnectionTrait>(
+    db: &C,
+    user: &AppUser,
+    as_bot: Option<&str>,
+    conversation_id: &str,
+) -> Result<Reader, ApiError> {
+    match user {
+        AppUser::Bot(bot) => {
+            let names = bot_caller::Names {
+                as_bot,
+                conversation: Some(conversation_id),
+                turn: None,
+            };
+            bot_caller::check(bot, &names)?;
+            Ok(Reader {
+                inbox: bot.bot_id.clone(),
+                owner: Some(bot_caller::live_owner(db, &bot.bot_id).await?),
+            })
+        }
+        _ => reader(db, &user.sub()?, as_bot).await,
     }
 }
 

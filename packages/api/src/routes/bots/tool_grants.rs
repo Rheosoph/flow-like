@@ -5,7 +5,7 @@
 
 use super::owned_bot;
 use crate::{
-    audit,
+    audit, bot_caller,
     bot_host::{
         approvals::{self, GrantRows},
         ledger,
@@ -276,7 +276,11 @@ pub async fn park_turn(
     Path(turn_id): Path<String>,
     Json(body): Json<ParkTurnRequest>,
 ) -> Result<Json<BotTurn>, ApiError> {
-    let sub = user.sub()?;
+    let names = bot_caller::Names {
+        turn: Some(&turn_id),
+        ..Default::default()
+    };
+    let sub = bot_caller::acting_owner(&state.db, &user, &names).await?;
     let host_id = checked_host_id(TurnHostRequest {
         host_id: body.host_id,
     })?;
