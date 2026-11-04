@@ -15,8 +15,9 @@ On iOS, **Open Bot**, **Ask Bot**, and **Run Bot Task** use the bots in that
 profile. **Ask Bot** opens the app and returns the answer as Text to Shortcuts;
 the response wait ends after 90 seconds. **Run Bot Task** sends the task's
 current instructions once without changing its schedule. Deleted or paused
-tasks cannot run through an old shortcut. Android provides bot widgets,
-launcher shortcuts, and Direct Share targets.
+tasks cannot run through an old shortcut. Android provides configurable widgets,
+launcher shortcuts, Direct Share targets, and Quick Settings tiles for bots,
+Events, FlowPilot, and notifications.
 
 Choose Flow-Like in another app's share sheet, then select the destination bot.
 Bot notifications open the exact conversation. Eligible notifications also
@@ -27,7 +28,9 @@ in your current workspace.
 Running turns appear in iOS Live Activities and Android status notifications.
 Their status comes from the bot host. iOS background refresh and Android
 WorkManager can retry explicit plain-text notification replies and approval
-decisions using the saved account session. Delivery remains queued through
+decisions using the saved account session. Android renews that session through
+the same credential store used by foreground sign-in, including after the app
+process has stopped. Delivery remains queued through
 temporary connection failures for up to 24 hours. Expired sign-in or a terminal
 failure requires opening the app. Device scheduling and suspension can delay
 delivery; use a server or active desktop host for continuous bot work.
@@ -37,6 +40,11 @@ delivery; use a server or active desktop host for continuous bot work.
 In a bot's chat actions, choose dictation, document scanning, or a photo.
 Review the text and attachments before pressing **Send to bot**. Capture
 availability depends on the device; unavailable controls are hidden.
+
+Android recognizes text from photos and scanned or selected PDF documents on
+the device. The review screen includes that editable text and the original
+attachments. Recognition is bounded to ten files, ten pages per PDF, and one
+minute per request. An unreadable page leaves its attachment available.
 
 Supported builds also offer **Summarize on this device** and **Extract details
 on this device**. These actions process up to 8 KiB of UTF-8 text locally and
@@ -48,14 +56,14 @@ download a model before processing.
 For Android builds, the Gradle property `enableBotLocalAi=true` includes the
 optional ML Kit libraries and raises the minimum Android SDK to 26.
 `enableBotAppFunctions=true` includes the experimental AppFunctions service
-and requires compile SDK 37. AppFunctions can list or open bots, prepare a
-message for explicit review, and read cached task status. Both properties
+and requires compile SDK 37. AppFunctions can list or open bots, read cached
+task status, and open the automation review screen described below. Both properties
 default to `false`; ordinary bot sharing, notifications, and capture do not
 require them.
 
 ## Enable native entry points
 
-In the iOS and macOS apps, open an Event's **Identity** settings and enable
+In the native app, open an Event's **Identity** settings and enable
 **Native integrations**. Choose its system surfaces, then save and activate the
 Event. Page and Chat launchers open their existing interface. Quick Actions,
 forms, and API Events can run with their configured input defaults. Your current
@@ -63,7 +71,59 @@ access and the saved Event settings are checked again each time.
 The Shortcuts **Input** accepts a JSON object keyed by Event input names and
 overrides those defaults. For an Event with one String input, plain text also
 works. Unknown inputs or values with the wrong type stop the run.
-Siri and Shortcuts share one action catalog and are enabled together.
+The **Automations** setting enables Siri, Shortcuts, and Android automation
+entry points together. The **Search** setting covers Spotlight and Android
+system search on supported launchers.
+
+## Return a result to an Android automation
+
+An Android caller can launch the `com.flow_like.app.AUTOMATE` intent with an
+Activity result contract. Flow-Like opens a review screen where the user
+chooses **Ask Bot**, **Ask FlowPilot**, **Ask App Chat**, **Run Event Text**,
+**Run Event JSON**, or **Run Bot Task**, supplies the input, and presses **Run**.
+The app returns the completed answer or Event output to the caller. A queued
+request alone is not a successful result.
+
+For an integration that already knows the target, supply `action_json` with
+the native action object and `response_mode` set to `text` or `result`.
+For example, `{"kind":"ask_bot","botId":"BOT_ID","prompt":"Summarize my open tasks"}`
+prepares a bot question for review. Event actions use `kind: "run_event"`,
+`appId`, `eventId`, and optional `text` input. The returned Intent contains
+`status` and, when present, `text`, `json`, or `error`. Status is `success`,
+`error`, or `interaction_required`. The same 256 KiB response limit described
+below applies.
+
+Android keeps the caller's request for up to 90 seconds. Cancelling the
+automation stops its active local run, removes queued input, and rejects late
+results. It cannot undo work a remote service already performed. Switching
+account or workspace invalidates the request. Optional AppFunctions entries
+open this same review screen; the Activity result contract is the interface
+for callers that need a returned answer.
+
+## Location Events and private copies on Android
+
+**Get Current Location** uses native Android location services. Location Events
+can monitor up to 100 regions with precise location permission. Background
+regions also require **Allow all the time** in Android settings. Registrations
+are restored after restart. Supported remote Events can receive crossings
+without opening the app; local Events wait for the native engine to run.
+Android scheduling can delay delivery. Remote crossings are retained for
+14 minutes, and locally queued crossings for one hour.
+
+In a bot's chat actions, choose **Private clipboard** to save text inside the
+current workspace or paste a saved item for review. Private copies are encrypted
+on the device and unavailable after their expiry or an account change. Workflow
+clipboard nodes also support **Private clipboard** for text, HTML, and PNG
+images, with a 3 MiB encoded item limit. Set **Expire after** to choose a
+lifetime; private copies default to 30 minutes. HTML and images paste as
+attachments. Sending the reviewed content follows the bot's normal delivery path.
+
+Private copies stay inside Flow-Like. Android system clipboard writes still
+work for ordinary copy and paste. A system clipboard request for strict expiry
+returns an unsupported-options error. **Keep on device** requires an Android
+version that can exclude remote clipboard sharing; otherwise the request fails
+without copying the content. Choose **Private clipboard** when those guarantees
+are required on older devices.
 
 ## Use an answer in another Shortcut action
 

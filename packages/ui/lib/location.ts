@@ -47,7 +47,7 @@ export const UNSUPPORTED_GEOFENCE_STATUS: GeofencePermissionStatus = {
 	error: {
 		code: "unsupported",
 		message:
-			"Native geofence monitoring is unavailable on this platform. Use an iOS or macOS app to register this Event.",
+			"Native geofence monitoring is unavailable on this platform. Use an iOS, Android, or macOS app to register this Event.",
 	},
 };
 

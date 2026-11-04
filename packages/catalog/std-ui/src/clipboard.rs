@@ -36,7 +36,7 @@ fn clipboard_node(image: bool) -> Node {
         },
     );
     node.add_icon("/flow/icons/computer.svg");
-    node.set_version(1);
+    node.set_version(2);
     node.set_scores(
         NodeScores::new()
             .set_privacy(2)
@@ -78,8 +78,11 @@ fn clipboard_node(image: bool) -> Node {
         VariableType::Boolean,
     )
     .set_default_value(Some(json!(false)));
-    node.add_input_pin("expires_in_seconds", "Expire after", "Seconds before content expires; zero leaves it on the clipboard. Requires platform support", VariableType::Integer)
+    node.add_input_pin("expires_in_seconds", "Expire after", "Seconds before content expires. Zero uses the platform default, or 30 minutes for the private Android clipboard", VariableType::Integer)
         .set_default_value(Some(json!(0)));
+    node.add_input_pin("app_private", "Private clipboard", "Store in Flow Like's account-scoped Android clipboard instead of the system clipboard. Supports strict expiration; paste using Private clipboard in the app", VariableType::Boolean)
+        .set_default_value(Some(json!(false)))
+        .set_options(PinOptions::new().set_optional(true).build());
     node.add_input_pin(
         "timeout_seconds",
         "Client timeout",
@@ -122,14 +125,21 @@ async fn write(context: &mut ExecutionContext, image: bool) -> flow_like_types::
         .await
         .unwrap_or(Value::Null);
     context.set_pin_value("session_out", session).await?;
-    let local_only = context
-        .evaluate_pin::<bool>("local_only")
-        .await
-        .unwrap_or(false);
-    let expires = context
-        .evaluate_pin::<i64>("expires_in_seconds")
-        .await
-        .unwrap_or(0);
+    let local_only = if context.get_pin_by_name("local_only").await.is_ok() {
+        context.evaluate_pin::<bool>("local_only").await?
+    } else {
+        false
+    };
+    let app_private = if context.get_pin_by_name("app_private").await.is_ok() {
+        context.evaluate_pin::<bool>("app_private").await?
+    } else {
+        false
+    };
+    let expires = if context.get_pin_by_name("expires_in_seconds").await.is_ok() {
+        context.evaluate_pin::<i64>("expires_in_seconds").await?
+    } else {
+        0
+    };
     let timeout = context
         .evaluate_pin::<i64>("timeout_seconds")
         .await
@@ -164,6 +174,7 @@ async fn write(context: &mut ExecutionContext, image: bool) -> flow_like_types::
         }
     };
     args["localOnly"] = json!(local_only);
+    args["appPrivate"] = json!(app_private);
     if expires > 0 {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
@@ -226,7 +237,7 @@ async fn write_local(
             if cancellation.is_cancelled() || args["requestDeadline"].as_u64().is_some_and(|deadline| deadline <= now) {
                 return Ok(json!({"ok":false,"error":{"code":"cancelled","message":"Clipboard request ended before writing"}}));
             }
-            if args["localOnly"] == true || args.get("expiresAt").is_some() {
+            if args["localOnly"] == true || args.get("expiresAt").is_some() || args["appPrivate"] == true {
                 return Ok(json!({"ok":false,"error":{"code":"unsupported_options","message":"This clipboard host does not support local-only content or expiration"}}));
             }
             let mut clipboard = arboard::Clipboard::new()?;
@@ -366,11 +377,12 @@ mod tests {
             board.cleanup();
 
             let migrated = &board.nodes[&node_id];
-            assert_eq!(migrated.version, Some(1));
+            assert_eq!(migrated.version, Some(2));
             assert!(!migrated.only_offline);
             assert!(migrated.get_pin_by_name("error").is_some());
             assert!(migrated.get_pin_by_name("timeout_seconds").is_some());
             assert!(migrated.get_pin_by_name("local_only").is_some());
+            assert!(migrated.get_pin_by_name("app_private").is_some());
             assert!(migrated.get_pin_by_name("session").unwrap().is_optional());
             assert_eq!(migrated.get_pin_by_name("session").unwrap().id, input);
             assert_eq!(migrated.get_pin_by_name("session_out").unwrap().id, output);
@@ -396,7 +408,7 @@ mod tests {
             ),
         ] {
             assert_eq!(node.name, name);
-            assert_eq!(node.version, Some(1));
+            assert_eq!(node.version, Some(2));
             assert!(!node.only_offline);
             assert!(node.get_pin_by_name("session").unwrap().is_optional());
             assert!(node.get_pin_by_name("exec_error").is_some());

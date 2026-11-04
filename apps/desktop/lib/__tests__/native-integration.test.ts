@@ -19,6 +19,7 @@ import {
 	nativeNavigationRequest,
 	nativeQuickActionPayload,
 	nativeWebOrigin,
+	resumePageAction,
 	withNativeActivePage,
 	withNativeActiveRuns,
 } from "../native-integration";
@@ -108,6 +109,93 @@ function context(backend: IBackendState): NativeDispatchContext {
 		isCurrent: () => true,
 	};
 }
+describe("scoped device continuation", () => {
+	const origin = "https://app.test";
+	const link = (scope: string, url: string) =>
+		`flow-like://continue?${new URLSearchParams({ scope, url })}`;
+	test("requires the selected account and only resumes the configured HTTPS origin", () => {
+		expect(
+			nativeNavigationRequest(
+				link("other-account", `${origin}/bots`),
+				"account-a",
+			),
+		).toBeUndefined();
+		expect(
+			nativeNavigationRequest(
+				`${link("account-a", `${origin}/bots`)}&scope=account-a`,
+				"account-a",
+			),
+		).toBeUndefined();
+		for (const url of [
+			"http://app.test/bots",
+			"https://evil.test/bots",
+			"https://user@app.test/bots",
+			`${origin}/bots#secret`,
+			`${origin}/bots?conversation=one&conversation=two`,
+			`${origin}/settings`,
+		])
+			expect(resumePageAction(url, origin)).toBeUndefined();
+		expect(
+			resumePageAction(`${origin}/bots?bot=bot&conversation=room`, origin),
+		).toEqual({
+			kind: "open_conversation",
+			botId: "bot",
+			conversationId: "room",
+		});
+	});
+	test("preserves app-owned query values and rechecks the active Event route", async () => {
+		const backend = fixture([event({ route: "/orders/123" })]);
+		const ctx = { ...context(backend), getWebOrigin: async () => origin };
+		const source = new URL(
+			appRouteUrl(
+				"app",
+				parseAppRouteTarget("/orders/123", [
+					{ name: "id", value: "client-value" },
+					{ name: "tag", value: "A&B + 東京" },
+				]),
+			),
+			origin,
+		);
+		const target = new URL(pathUseUrl(source), origin).href;
+		const request = nativeNavigationRequest(link(ctx.scope, target), ctx.scope);
+		expect(request).toBeDefined();
+		if (!request) throw new Error("Missing continuation request");
+		await dispatchNativeAction(request, ctx);
+		expect(backend.routeState.getRouteByPathAuthoritative).toHaveBeenCalledWith(
+			"app",
+			"/orders/123",
+		);
+		const opened = new URL(vi.mocked(ctx.navigate).mock.calls[0][0], origin);
+		expect(appQueryContext(opened.search)._query_params).toMatchObject({
+			id: "client-value",
+			tag: "A&B + 東京",
+		});
+		expect(ctx.execute).not.toHaveBeenCalled();
+		vi.mocked(backend.userState.getProfile).mockResolvedValueOnce({
+			apps: [],
+		} as never);
+		await expect(dispatchNativeAction(request, ctx)).rejects.toThrow(
+			"selected workspace",
+		);
+	});
+	test("does not navigate when the account changes during origin lookup", async () => {
+		const ctx = context(fixture());
+		const originLookup = Promise.withResolvers<string>();
+		ctx.getWebOrigin = () => originLookup.promise;
+		const pending = dispatchNativeAction(
+			{
+				id: "continue",
+				scope: ctx.scope,
+				action: { kind: "resume_page", url: `${origin}/bots` },
+			},
+			ctx,
+		);
+		ctx.isCurrent = () => false;
+		originLookup.resolve(origin);
+		await pending;
+		expect(ctx.navigate).not.toHaveBeenCalled();
+	});
+});
 describe("native app paths", () => {
 	test("opens the exported use page with an app route and structured query values", async () => {
 		const backend = fixture([event({ route: "/orders/123" })]);
@@ -1259,7 +1347,7 @@ describe("typed Shortcut dispatch", () => {
 				},
 				ctx,
 			),
-		).rejects.toThrow("no longer available to Siri and Shortcuts");
+		).rejects.toThrow("no longer available to device automations");
 		expect(ctx.callEvent).not.toHaveBeenCalled();
 	});
 

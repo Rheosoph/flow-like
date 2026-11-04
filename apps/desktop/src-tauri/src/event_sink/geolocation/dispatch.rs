@@ -263,6 +263,41 @@ fn hub_sign_ins(
         .collect()
 }
 
+/// Only the native registration bridge receives these secrets. Android keeps the record in Keystore-backed storage.
+#[cfg(target_os = "android")]
+pub(super) fn android_delivery(
+    registration: &EventRegistration,
+    scope: &Scope,
+) -> Result<super::model::AndroidDelivery> {
+    ensure!(
+        registration.remote && registration_matches_scope(registration, scope),
+        "The location trigger account changed"
+    );
+    ensure!(
+        registration.pat_owner_sub.as_deref() == Some(scope.subject.as_str())
+            && registration.hub_origin.as_deref() == Some(scope.origin.as_str()),
+        UNVERIFIED_TOKEN
+    );
+    let token = registration
+        .personal_access_token
+        .as_deref()
+        .filter(|token| has_token(Some(*token)))
+        .ok_or_else(|| anyhow!("Missing Event authentication"))?;
+    ensure!(
+        scope.origin.starts_with("https://"),
+        "Background remote location Events require HTTPS"
+    );
+    Ok(super::model::AndroidDelivery {
+        endpoint: format!(
+            "{}/api/v1/sink/trigger/geofence/{}",
+            scope.origin,
+            urlencoding::encode(&registration.event_id)
+        ),
+        authorization: authorization(token),
+        oauth_tokens: serde_json::to_value(hub_sign_ins(scope, &registration.oauth_tokens))?,
+    })
+}
+
 fn event_matches(event: &Event, registration: &EventRegistration, scope: &Scope) -> Result<()> {
     require!(
         event.id == registration.event_id && event.active && event.event_type == "geolocation",

@@ -65,8 +65,8 @@ export function NativeEventSettingsCard({
 				<CardDescription>
 					{supported
 						? t(
-								"nativeEventDescription",
-								"Make this Event available in Siri, Shortcuts and native widgets. Access and current Event settings are checked when it opens or runs.",
+								"nativeEventMobileDescription",
+								"Make this Event available in device automations, widgets and system search. Access and current Event settings are checked when it opens or runs.",
 							)
 						: t(
 								"nativeEventUnsupported",
@@ -182,10 +182,10 @@ export function NativeEventSettingsCard({
 										<span>
 											{
 												{
-													siri: "Siri and Shortcuts",
-													shortcuts: "Shortcuts",
+													siri: "Automations (Siri, Shortcuts, Android)",
+													shortcuts: "Automations",
 													widget: "Widgets",
-													spotlight: "Spotlight",
+													spotlight: "Search (Spotlight, Android)",
 												}[surface]
 											}
 										</span>
@@ -211,8 +211,8 @@ export function NativeEventSettingsCard({
 						</label>
 						<p className="text-xs text-muted-foreground">
 							{t(
-								"nativeEventCacheDescription",
-								"The device shares the Event name, app name and app icon with these system surfaces. Shortcuts can receive the Event response. Supply required inputs in the Shortcut or open the app to complete its form.",
+								"nativeEventMobileCacheDescription",
+								"The device shares the Event name, app name and app icon with these system surfaces. Automations can receive the Event response. Supply required inputs in the automation or open the app to complete its form.",
 							)}
 						</p>
 					</>

@@ -73,40 +73,19 @@ internal object BotStatusSync {
         val snapshot = store.snapshot() ?: run { cancel(context); BotSurfaces.clearProgress(context); return Outcome.COMPLETE }
         val scope = snapshot.getString("scope")
         val base = BotDeliveryPolicy.apiBase(scope) ?: run { cancel(context); return Outcome.COMPLETE }
-        val token = BotDeliveryPolicy.accessToken(scope, BotSecureStore(context)) ?: run { cancel(context); BotSurfaces.clearProgress(context); return Outcome.COMPLETE }
         if (store.snapshot()?.optString("scope") != scope) return Outcome.COMPLETE
-        val connection = URI("$base/bots/mobile-status").toURL().openConnection() as HttpsURLConnection
-        try {
-            connection.instanceFollowRedirects = false
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 10000
-            connection.readTimeout = 10000
-            connection.setRequestProperty("Authorization", "Bearer $token")
-            connection.setRequestProperty("Accept", "application/json")
-            return when (connection.responseCode) {
+        val response = BotHttp(context, scope).request("GET", "bots/mobile-status")
+            return when (response.status) {
                 200 -> {
-                    val body = connection.inputStream.use { it.readBytesBounded(512 * 1024) }
-                    val turns = JSONObject(body.toString(Charsets.UTF_8)).getJSONArray("turns")
+                    val turns = response.body?.getJSONArray("turns") ?: return Outcome.RETRY
                     if (store.mergeStatus(scope, turns)) BotSurfaces.refresh(context)
                     Outcome.COMPLETE
                 }
-                401, 403 -> { cancel(context); BotSurfaces.clearProgress(context); Outcome.COMPLETE }
+                401 -> Outcome.RETRY
+                403 -> { BotSurfaces.clearProgress(context); Outcome.COMPLETE }
                 408, 429, in 500..599 -> Outcome.RETRY
                 else -> Outcome.COMPLETE
             }
-        } finally { connection.disconnect() }
-    }
-
-    private fun java.io.InputStream.readBytesBounded(limit: Int): ByteArray {
-        val output = java.io.ByteArrayOutputStream()
-        val buffer = ByteArray(8192)
-        while (true) {
-            val count = read(buffer)
-            if (count < 0) break
-            require(output.size() + count <= limit) { "Bot status response is too large" }
-            output.write(buffer, 0, count)
-        }
-        return output.toByteArray()
     }
 }
 

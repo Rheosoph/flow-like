@@ -230,7 +230,9 @@ pub async fn native_geofence_permission(mode: String) -> Result<Value, String> {
     }
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::geofence_permission(mode);
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::geofence_permission(mode).await;
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     Ok(
         json!({"authorization":"not_determined","accuracyAuthorization":"reduced","backgroundSupported":false,
         "monitoredRegionCount":0,"maxMonitoredRegions":20,"error":{"code":"unsupported","message":"Native geofencing is unavailable on this platform"}}),
@@ -351,6 +353,12 @@ pub async fn native_write_clipboard(app: AppHandle, payload: Value) -> Result<Va
     if payload.to_string().len() > 24 * 1024 * 1024 {
         return Err("Clipboard payload exceeds 24 MiB".into());
     }
+    #[cfg(not(target_os = "android"))]
+    if payload["appPrivate"] == true {
+        return Ok(
+            json!({"ok":false,"error":{"code":"unsupported_options","message":"Flow Like's private clipboard is available in the Android app"}}),
+        );
+    }
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
         let (tx, rx) = tokio::sync::oneshot::channel();
@@ -363,7 +371,12 @@ pub async fn native_write_clipboard(app: AppHandle, payload: Value) -> Result<Va
         .map_err(|e| e.to_string())?;
         return rx.await.map_err(|e| e.to_string())?;
     }
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        return crate::android_mobile::write_clipboard(payload).await;
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     {
         if let Some(deadline) = payload.get("requestDeadline").and_then(Value::as_u64) {
             let now = std::time::SystemTime::now()
@@ -420,5 +433,26 @@ pub async fn native_write_clipboard(app: AppHandle, payload: Value) -> Result<Va
                 json!({"ok":false,"error":{"code":"clipboard_failed","message":message}})
             }
         })
+    }
+}
+
+#[tauri::command]
+pub async fn native_read_private_clipboard() -> Result<Value, String> {
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::read_private_clipboard().await;
+    #[cfg(not(target_os = "android"))]
+    Ok(
+        json!({"ok":false,"error":{"code":"unsupported","message":"Private clipboard is unavailable on this platform"}}),
+    )
+}
+
+#[tauri::command]
+pub async fn native_automation_current(id: String, scope: String) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::automation_current(&id, &scope);
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (id, scope);
+        Ok(true)
     }
 }

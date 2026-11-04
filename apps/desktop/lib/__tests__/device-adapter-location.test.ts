@@ -91,61 +91,67 @@ describe("native location adapter", () => {
 		});
 		expect(native.invoke).not.toHaveBeenCalled();
 	});
-	test("Apple requests carry an ID and deadline and return the unwrapped geometry fix", async () => {
-		platform("iPhone");
-		native.invoke.mockImplementation(async (command) =>
-			command === "native_get_location" ? fix() : undefined,
-		);
-		const result = await executeDeviceCommand(
-			"location.current",
-			{ highAccuracy: true, timeoutMs: 2000 },
-			context,
-		);
-		expect(result).toMatchObject({
-			geometry: { type: "Point", coordinates: [13.4, 52.5] },
-		});
-		expect(native.invoke).toHaveBeenCalledWith("native_get_location", {
-			requestId: expect.any(String),
-			options: expect.objectContaining({
-				highAccuracy: true,
-				timeoutMs: 2000,
-				maximumAgeMs: 0,
-				requestDeadline: expect.any(Number),
-			}),
-		});
-	});
-	test("aborting the shared context cancels the exact Apple native request", async () => {
-		platform("Macintosh");
-		let finish!: () => void;
-		native.invoke.mockImplementation((command) =>
-			command === "native_get_location"
-				? new Promise((resolve) => {
-						finish = () => resolve(fix());
-					})
-				: Promise.resolve(),
-		);
-		const controller = new AbortController();
-		const pending = executeDeviceCommand(
-			"location.current",
-			{},
-			{ ...context, signal: controller.signal },
-		);
-		await vi.waitFor(() =>
-			expect(native.invoke).toHaveBeenCalledWith(
-				"native_get_location",
-				expect.anything(),
-			),
-		);
-		const requestId = native.invoke.mock.calls.find(
-			([command]) => command === "native_get_location",
-		)![1].requestId;
-		controller.abort();
-		await expect(pending).rejects.toMatchObject({ code: "cancelled" });
-		expect(native.invoke).toHaveBeenCalledWith("native_cancel_location", {
-			requestId,
-		});
-		finish();
-	});
+	test.each(["iPhone", "Android"])(
+		"%s requests carry an ID and deadline and return the unwrapped geometry fix",
+		async (userAgent) => {
+			platform(userAgent);
+			native.invoke.mockImplementation(async (command) =>
+				command === "native_get_location" ? fix() : undefined,
+			);
+			const result = await executeDeviceCommand(
+				"location.current",
+				{ highAccuracy: true, timeoutMs: 2000 },
+				context,
+			);
+			expect(result).toMatchObject({
+				geometry: { type: "Point", coordinates: [13.4, 52.5] },
+			});
+			expect(native.invoke).toHaveBeenCalledWith("native_get_location", {
+				requestId: expect.any(String),
+				options: expect.objectContaining({
+					highAccuracy: true,
+					timeoutMs: 2000,
+					maximumAgeMs: 0,
+					requestDeadline: expect.any(Number),
+				}),
+			});
+		},
+	);
+	test.each(["Macintosh", "Android"])(
+		"aborting the shared context cancels the exact %s native request",
+		async (userAgent) => {
+			platform(userAgent);
+			let finish!: () => void;
+			native.invoke.mockImplementation((command) =>
+				command === "native_get_location"
+					? new Promise((resolve) => {
+							finish = () => resolve(fix());
+						})
+					: Promise.resolve(),
+			);
+			const controller = new AbortController();
+			const pending = executeDeviceCommand(
+				"location.current",
+				{},
+				{ ...context, signal: controller.signal },
+			);
+			await vi.waitFor(() =>
+				expect(native.invoke).toHaveBeenCalledWith(
+					"native_get_location",
+					expect.anything(),
+				),
+			);
+			const requestId = native.invoke.mock.calls.find(
+				([command]) => command === "native_get_location",
+			)?.[1].requestId;
+			controller.abort();
+			await expect(pending).rejects.toMatchObject({ code: "cancelled" });
+			expect(native.invoke).toHaveBeenCalledWith("native_cancel_location", {
+				requestId,
+			});
+			finish();
+		},
+	);
 	test("preserves native permission errors without falling back to another sensor provider", async () => {
 		platform("iPhone");
 		native.invoke.mockRejectedValue(

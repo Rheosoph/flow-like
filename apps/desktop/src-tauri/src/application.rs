@@ -29,6 +29,8 @@ mod logging;
 mod native_auth;
 #[cfg(target_os = "android")]
 mod android_mobile;
+#[cfg(target_os = "android")]
+mod android_bot_runtime;
 mod offline_writes;
 mod profile;
 mod realtime;
@@ -1151,6 +1153,8 @@ pub fn run() {
             functions::native::native_complete_action,
             functions::native::native_read_shared_file,
             functions::native::native_write_clipboard,
+            functions::native::native_read_private_clipboard,
+            functions::native::native_automation_current,
             functions::native::native_get_location,
             functions::native::native_cancel_location,
             functions::native::native_geofence_permission,

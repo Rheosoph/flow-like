@@ -126,6 +126,11 @@ export function validateClipboard(args: Record<string, unknown>): void {
 			"invalid_arguments",
 			"Keep on device must be a boolean",
 		);
+	if (args.appPrivate !== undefined && typeof args.appPrivate !== "boolean")
+		throw new DeviceError(
+			"invalid_arguments",
+			"Private clipboard must be a boolean",
+		);
 }
 
 async function browserClipboard(
@@ -133,7 +138,11 @@ async function browserClipboard(
 	context: DeviceContext,
 ): Promise<unknown> {
 	validateClipboard(args);
-	if (args.localOnly === true || args.expiresAt !== undefined)
+	if (
+		args.localOnly === true ||
+		args.expiresAt !== undefined ||
+		args.appPrivate === true
+	)
 		throw new DeviceError(
 			"unsupported_options",
 			"This browser cannot enforce clipboard expiration or local-only sharing",

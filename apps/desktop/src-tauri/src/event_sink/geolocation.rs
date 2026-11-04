@@ -22,6 +22,10 @@ static WAKE: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::
 static SYNC: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 static WORKER: Mutex<Option<CancellationToken>> = Mutex::new(None);
 static ACTIVE: Mutex<Option<(String, CancellationToken)>> = Mutex::new(None);
+#[cfg(target_os = "android")]
+const MAX_MONITORED_REGIONS: usize = 100;
+#[cfg(not(target_os = "android"))]
+const MAX_MONITORED_REGIONS: usize = 20;
 
 const NOT_CLEARED: &str =
     "This location trigger was not cleared with the hub before registering; save the event again";
@@ -138,6 +142,18 @@ impl GeofenceClearance {
 pub(crate) fn notify() {
     WAKE.notify_one();
 }
+#[cfg(target_os = "android")]
+pub(crate) fn notify_if_ready() -> bool {
+    let ready = WORKER
+        .lock()
+        .unwrap()
+        .as_ref()
+        .is_some_and(|token| !token.is_cancelled());
+    if ready {
+        notify();
+    }
+    ready
+}
 pub(crate) fn expire() {
     if let Some((_, token)) = ACTIVE.lock().unwrap().as_ref() {
         token.cancel();
@@ -169,6 +185,14 @@ fn registrations(db: &DbConnection, scope: &Scope) -> Result<Vec<NativeRegistrat
         }
         let registration = config.registration(&scope.raw, &row.app_id, &row.event_id);
         if inbox::binding(&conn, &row.event_id, &scope.raw)?.as_deref() == Some(&registration.id) {
+            #[cfg(target_os = "android")]
+            let registration = {
+                let mut registration = registration;
+                if row.remote {
+                    registration.delivery = Some(dispatch::android_delivery(&row, scope)?);
+                }
+                registration
+            };
             current.push(registration);
         }
     }
@@ -181,8 +205,8 @@ async fn sync_native(app: &AppHandle, db: &DbConnection) -> Result<Scope> {
     inbox::prune(&db.lock().unwrap(), Some(&scope.raw), now_ms())?;
     let current = registrations(db, &scope)?;
     ensure!(
-        current.len() <= 20,
-        "Apple supports at most 20 monitored geofences per app; disable another Location Event first"
+        current.len() <= MAX_MONITORED_REGIONS,
+        "This device's monitored region limit is reached; disable another Location Event first"
     );
     native::sync(&scope.raw, &current)?;
     Ok(scope)
@@ -297,8 +321,8 @@ impl GeoLocationSink {
             .filter(|watched| watched.event_id != registration.event_id)
             .count();
         ensure!(
-            others < 20,
-            "Apple supports at most 20 monitored geofences per app"
+            others < MAX_MONITORED_REGIONS,
+            "This device's monitored region limit is reached"
         );
         inbox::bind(
             &db.lock().unwrap(),
@@ -423,9 +447,9 @@ async fn process(app: &AppHandle, db: &DbConnection) -> Result<()> {
 #[async_trait::async_trait]
 impl EventSink for GeoLocationSink {
     async fn start(&self, app: &AppHandle, db: DbConnection) -> Result<()> {
-        #[cfg(not(any(target_os = "ios", target_os = "macos")))]
-        anyhow::bail!("Native geofences require iOS or macOS");
-        #[cfg(any(target_os = "ios", target_os = "macos"))]
+        #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
+        anyhow::bail!("Native geofences require iOS, Android, or macOS");
+        #[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
         {
             inbox::initialize(&db.lock().unwrap())?;
             let token = {

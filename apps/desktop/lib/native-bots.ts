@@ -343,6 +343,7 @@ export const NATIVE_BOT_ACTIONS = new Set([
 	"capture_bot_voice",
 	"capture_bot_document",
 	"local_bot_summary",
+	"private_bot_clipboard",
 ]);
 
 function required(value: string | undefined, name: string): string {

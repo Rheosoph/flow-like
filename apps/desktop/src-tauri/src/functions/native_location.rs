@@ -193,10 +193,68 @@ mod apple {
     }
 }
 
+#[cfg(target_os = "android")]
+mod android {
+    use super::*;
+    use std::{
+        collections::HashMap,
+        sync::{Mutex, OnceLock},
+    };
+    static PENDING: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    fn pending() -> std::sync::MutexGuard<'static, HashMap<String, String>> {
+        PENDING
+            .get_or_init(|| Mutex::new(HashMap::new()))
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+    pub fn cancel(id: &str) {
+        if let Some(native) = pending().remove(id) {
+            let _ = crate::android_mobile::location_cancel(&native);
+        }
+    }
+    struct Cancel(String);
+    impl Drop for Cancel {
+        fn drop(&mut self) {
+            cancel(&self.0);
+        }
+    }
+    pub async fn get(id: String, options: Value) -> Result<Value, String> {
+        let timeout = location_timeout(&options)?;
+        if id.is_empty()
+            || id.len() > 128
+            || !id
+                .bytes()
+                .all(|value| value.is_ascii_alphanumeric() || matches!(value, b'-' | b'_'))
+        {
+            return Err("invalid_input: Invalid location request identifier".into());
+        }
+        let native = uuid::Uuid::new_v4().to_string();
+        {
+            let mut pending = pending();
+            if pending.len() >= 16 || pending.contains_key(&id) {
+                return Err("busy: Too many pending location requests".into());
+            }
+            pending.insert(id.clone(), native.clone());
+        }
+        let _cancel = Cancel(id);
+        tokio::time::timeout(
+            timeout,
+            crate::android_mobile::location_request(native, options),
+        )
+        .await
+        .map_err(|_| "timeout: The location request timed out".to_owned())?
+    }
+}
+
 pub async fn get(app: AppHandle, request_id: String, options: Value) -> Result<Value, String> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::get(app, request_id, options).await;
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        return android::get(request_id, options).await;
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     {
         let _ = (app, request_id);
         location_timeout(&options)?;
@@ -207,7 +265,9 @@ pub async fn get(app: AppHandle, request_id: String, options: Value) -> Result<V
 pub fn cancel(request_id: &str) {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     apple::cancel(request_id);
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    android::cancel(request_id);
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     let _ = request_id;
 }
 

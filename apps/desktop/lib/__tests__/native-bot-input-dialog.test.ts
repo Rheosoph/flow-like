@@ -125,6 +125,90 @@ async function edit(value: string) {
 	});
 }
 
+test("private clipboard loads only on request and requires review before sending", async () => {
+	mocks.invoke.mockResolvedValue({
+		ok: true,
+		value: {
+			format: "text",
+			text: "Private notes",
+			appPrivate: true,
+			expiresAt: Date.now() + 60_000,
+		},
+	});
+	const { onSend } = await mount({
+		input: { ...input, operation: "private_clipboard" },
+	});
+	expect(mocks.invoke).not.toHaveBeenCalled();
+	await click("Paste private copy");
+	expect(mocks.invoke).toHaveBeenCalledExactlyOnceWith(
+		"native_read_private_clipboard",
+	);
+	expect(textarea().value).toBe("Private notes");
+	expect(onSend).not.toHaveBeenCalled();
+	await edit("Reviewed notes");
+	await click("Save text privately");
+	expect(mocks.invoke).toHaveBeenLastCalledWith("native_write_clipboard", {
+		payload: expect.objectContaining({
+			scope: input.scope,
+			appPrivate: true,
+			format: "text",
+			text: "Reviewed notes",
+			expiresAt: expect.any(Number),
+		}),
+	});
+	expect(onSend).not.toHaveBeenCalled();
+	await click("Send to bot");
+	expect(onSend).toHaveBeenCalledWith({ text: "Reviewed notes", files: [] });
+});
+
+test("an expired private copy is rejected without replacing the draft", async () => {
+	mocks.invoke.mockResolvedValue({
+		ok: true,
+		value: {
+			format: "text",
+			text: "Expired",
+			appPrivate: true,
+			expiresAt: Date.now() - 1,
+		},
+	});
+	const { onSend } = await mount({
+		input: { ...input, operation: "private_clipboard", text: "Current draft" },
+	});
+	await click("Paste private copy");
+	expect(textarea().value).toBe("Current draft");
+	expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+		"expired",
+	);
+	expect(onSend).not.toHaveBeenCalled();
+});
+
+test("private HTML is an attachment and never rendered as active dialog content", async () => {
+	mocks.invoke.mockResolvedValue({
+		ok: true,
+		value: {
+			format: "html",
+			html: '<img src="https://tracker.test/private" onload="alert(1)">',
+			text: "HTML summary",
+			appPrivate: true,
+			expiresAt: Date.now() + 60_000,
+		},
+	});
+	const { onSend } = await mount({
+		input: { ...input, operation: "private_clipboard" },
+	});
+	await click("Paste private copy");
+	expect(host.querySelector("img")).toBeNull();
+	expect(host.textContent).toContain("private-copy.html");
+	await click("Send to bot");
+	expect(onSend).toHaveBeenCalledWith({
+		text: "HTML summary",
+		files: [],
+		attachments: [
+			expect.objectContaining({ name: "private-copy.html", type: "text/html" }),
+		],
+	});
+});
+
 test("dictation stages editable text and sends only after explicit confirmation", async () => {
 	mocks.invoke.mockResolvedValue({ text: "Captured words" });
 	const { onSend, onClose } = await mount();

@@ -11,6 +11,7 @@ interface Capabilities {
 	localAiAvailable?: boolean;
 	localSummarizationAvailable?: boolean;
 	localExtractionAvailable?: boolean;
+	privateClipboard?: boolean;
 }
 
 export function BotCaptureActions({ botId }: { botId?: string | null }) {
@@ -32,6 +33,7 @@ export function BotCaptureActions({ botId }: { botId?: string | null }) {
 		["voice", "Dictate a message", capabilities.voice],
 		["document", "Scan a document", capabilities.document],
 		["photo", "Take a photo", capabilities.photo],
+		["private_clipboard", "Private clipboard", capabilities.privateClipboard],
 		[
 			"summarize",
 			"Summarize on this device",

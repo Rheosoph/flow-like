@@ -8,13 +8,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProvider
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.os.Build
 import android.os.Bundle
-import android.widget.RemoteViews
 import android.widget.EditText
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
@@ -82,6 +80,7 @@ internal object BotSurfaces {
         ShortcutManagerCompat.setDynamicShortcuts(context, shortcuts)
         updateWidgets(context)
         updateProgress(context, snapshot)
+        NativeSearchIndex.refresh(context)
     }
 
     private fun updateProgress(context: Context, snapshot: JSONObject?) {
@@ -99,8 +98,8 @@ internal object BotSurfaces {
                 if (!item.optBoolean("live")) continue
                 val tag = "flow-bot:progress:" + item.getString("id")
                 activeTags.add(tag)
-                val launch = PendingIntent.getActivity(context, tag.hashCode(), Intent(context, MainActivity::class.java),
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                val launch = NativeSurfaceLauncher.pending(context,
+                    NativeSurfaceChoice("bot_tasks", title = "Bot tasks"), snapshot.getString("scope"), item.getString("id"))
                 val progress = item.optDouble("progress", Double.NaN)
                 val notification = NotificationCompat.Builder(context, CHANNEL).setSmallIcon(R.drawable.ic_notification)
                     .setContentTitle(item.optString("title", "Bot task"))
@@ -130,41 +129,12 @@ internal object BotSurfaces {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.activeNotifications.filter { it.tag?.startsWith("flow-bot:") == true }.forEach { manager.cancel(it.tag, it.id) }
         BotAvatars.clear(context)
+        NativeSurfaceStore(context).clear()
+        NativeSearchIndex.clear(context)
         updateWidgets(context)
     }
 
-    fun updateWidgets(context: Context) {
-        val manager = AppWidgetManager.getInstance(context)
-        val snapshot = BotNativeStore(context).snapshot()
-        val views = RemoteViews(context.packageName, R.layout.bot_widget)
-        val sections = snapshot?.optJSONArray("sections")
-        var count = 0
-        var active = 0
-        if (sections != null) for (index in 0 until sections.length()) {
-            val section = sections.getJSONObject(index)
-            if (section.optString("kind") == "bot_approvals") count = section.optJSONArray("items")?.length() ?: 0
-            if (section.optString("kind") == "bot_tasks" && (!section.has("expiresAt") || !BotNativeStore.expired(section.getString("expiresAt")))) {
-                val tasks = section.optJSONArray("items") ?: continue
-                active += (0 until tasks.length()).count { tasks.getJSONObject(it).optBoolean("live") }
-            }
-        }
-        views.setTextViewText(R.id.bot_widget_status, when {
-            snapshot == null -> "Open Flow-Like to refresh"
-            count > 0 && active > 0 -> "$active active, $count awaiting approval"
-            count > 0 -> "$count waiting for approval"
-            active > 0 -> "$active active bot tasks"
-            else -> "Your bots"
-        })
-        views.setOnClickPendingIntent(R.id.bot_widget_root, PendingIntent.getActivity(context, 0,
-            Intent(context, MainActivity::class.java), PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-        val bot = snapshot?.optJSONArray("bots")?.optJSONObject(0)
-        views.setTextViewText(R.id.bot_widget_action, bot?.optString("title") ?: "Open bots")
-        if (bot != null) views.setOnClickPendingIntent(R.id.bot_widget_action, PendingIntent.getActivity(context, 1,
-            Intent(context, MainActivity::class.java).setAction(OPEN_SHORTCUT)
-                .putExtra("bot_id", bot.getString("id")).putExtra("scope", snapshot.getString("scope")),
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE))
-        manager.updateAppWidget(ComponentName(context, BotWidgetProvider::class.java), views)
-    }
+    fun updateWidgets(context: Context) = NativeWidgets.update(context)
 
     fun actionIntent(context: Context, id: String, reply: Boolean = false): PendingIntent {
         val intent = Intent(context, BotActionActivity::class.java).setAction("bot-action:$id").putExtra("action_id", id)
@@ -289,6 +259,13 @@ internal object BotSurfaces {
 class BotWidgetProvider : AppWidgetProvider() {
     override fun onUpdate(context: Context, manager: AppWidgetManager, ids: IntArray) {
         try { BotSurfaces.updateWidgets(context) } catch (_: Exception) { }
+    }
+    override fun onAppWidgetOptionsChanged(context: Context, manager: AppWidgetManager, id: Int, options: Bundle) {
+        try { BotSurfaces.updateWidgets(context) } catch (_: Exception) { }
+    }
+    override fun onDeleted(context: Context, ids: IntArray) {
+        val store = NativeSurfaceStore(context)
+        store.delete(ids)
     }
 }
 

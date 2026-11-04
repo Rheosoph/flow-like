@@ -38,7 +38,7 @@ abstract class BotAppFunctions : AppFunctionService() {
         return try {
             val snapshot = BotNativeStore(this).snapshot() ?: throw AppFunctionElementNotFoundException("Open Flow-Like to select a workspace")
             val scope = snapshot.getString("scope")
-            if (BotNativeStore.subject(scope) != "local" && BotDeliveryPolicy.accessToken(scope, BotSecureStore(this)) == null)
+            if (BotNativeStore.subject(scope) != "local" && BotCredentialBroker.accessToken(this, scope) == null)
                 throw AppFunctionElementNotFoundException("Open Flow-Like to refresh sign-in")
             snapshot
         } catch (error: androidx.appfunctions.AppFunctionException) { throw error }
@@ -105,5 +105,56 @@ abstract class BotAppFunctions : AppFunctionService() {
             .firstOrNull { it.optString("id") == taskId && it.optString("botId") == botId }
             ?: throw AppFunctionElementNotFoundException("The task is not in the current snapshot")
         BotFunctionTaskStatus(taskId, task.getString("title"), task.optString("status", "unknown"), snapshot.getString("generatedAt"))
+    }
+
+    private fun automation(action: JSONObject, mode: String): PendingIntent {
+        val snapshot = snapshot()
+        try { BotAutomationPolicy.validate(snapshot, action, mode) }
+        catch (_: Exception) { throw AppFunctionInvalidArgumentException("The automation input or selected item is unavailable") }
+        return BotAutomation.pendingIntent(this, action, mode)
+    }
+
+    /** Opens confirmation, runs the question in Flow Like, and displays the actual answer text. */
+    @AppFunctionDeclaration(isDescribedByKDoc = true)
+    suspend fun askBot(botId: String, question: String): PendingIntent = withContext(Dispatchers.IO) {
+        automation(JSONObject().put("kind","ask_bot").put("botId",botId).put("prompt",question),"text")
+    }
+
+    /** Opens confirmation for an enabled task and returns its actual bot response in the result screen. */
+    @AppFunctionDeclaration(isDescribedByKDoc = true)
+    suspend fun runBotTask(botId: String, taskId: String): PendingIntent = withContext(Dispatchers.IO) {
+        automation(JSONObject().put("kind","run_bot_task").put("botId",botId).put("taskId",taskId),"text")
+    }
+
+    private fun eventAction(appId: String, eventId: String, input: String, chatOnly: Boolean = false): JSONObject {
+        val events = snapshot().optJSONArray("events")
+        val event = (0 until (events?.length() ?: 0)).map { events!!.getJSONObject(it) }.firstOrNull {
+            it.optString("appId") == appId && it.optString("eventId") == eventId && (!chatOnly || it.optString("eventType") == "simple_chat")
+        } ?: throw AppFunctionElementNotFoundException("The Event is unavailable")
+        return JSONObject(event.getJSONObject("action").toString()).put("text",input)
+    }
+
+    /** Opens confirmation for an exposed Event and displays the completed text result. */
+    @AppFunctionDeclaration(isDescribedByKDoc = true)
+    suspend fun runEventText(appId: String, eventId: String, input: String): PendingIntent = withContext(Dispatchers.IO) {
+        automation(eventAction(appId,eventId,input),"text")
+    }
+
+    /** Opens confirmation for an exposed Event and displays its completed structured JSON result. */
+    @AppFunctionDeclaration(isDescribedByKDoc = true)
+    suspend fun runEventJson(appId: String, eventId: String, input: String): PendingIntent = withContext(Dispatchers.IO) {
+        automation(eventAction(appId,eventId,input),"result")
+    }
+
+    /** Opens an exposed app chat, asks the confirmed question, and displays its answer text. */
+    @AppFunctionDeclaration(isDescribedByKDoc = true)
+    suspend fun askAppChat(appId: String, eventId: String, question: String): PendingIntent = withContext(Dispatchers.IO) {
+        automation(eventAction(appId,eventId,question,true),"text")
+    }
+
+    /** Opens confirmation for FlowPilot and displays its completed answer text. */
+    @AppFunctionDeclaration(isDescribedByKDoc = true)
+    suspend fun askFlowPilot(question: String): PendingIntent = withContext(Dispatchers.IO) {
+        automation(JSONObject().put("kind","flowpilot").put("prompt",question),"text")
     }
 }

@@ -3,7 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
-	<array><string>com.flow-like.app.bot-refresh</string></array>
+	<array>
+		<string>com.flow-like.app.bot-refresh</string>
+	</array>
 	<key>FirebaseAppDelegateProxyEnabled</key>
 	<false/>
 	<key>NSLocationWhenInUseUsageDescription</key>
@@ -76,7 +78,7 @@
 		</dict>
 	</array>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Flow Like needs Screen Recording access to capture screenshots for visual element matching in your automation workflows.</string>
+	<string>Flow Like captures your screen when you choose to share it in a call or use screenshots in an automation workflow.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

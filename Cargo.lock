@@ -11903,6 +11903,7 @@ dependencies = [
  "iana-time-zone",
  "icu_collator",
  "image",
+ "jni 0.21.1",
  "jsonschema",
  "jsonwebtoken",
  "keyring",
