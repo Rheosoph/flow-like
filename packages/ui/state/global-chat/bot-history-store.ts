@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { compareInboxCursors } from "../../lib/inbox-cursor";
 import type { TranscriptPage } from "./bot-history";
 
 /** Where the bot chat on screen sits in the bot's history. */
@@ -8,6 +9,8 @@ export interface BotHistoryView {
 	/** True when the screen shows a window around a jump, not the newest messages. */
 	windowed: boolean;
 	seqs: Record<string, number>;
+	/** Cursor of the newest entry loaded, where pushed entries continue. */
+	cursor: string | null;
 }
 
 /** A "New topic" marker written in this session, listed before its summary exists. */
@@ -24,6 +27,7 @@ interface BotHistoryState {
 	show: (botId: string, page: TranscriptPage, windowed: boolean) => void;
 	prepend: (botId: string, page: TranscriptPage) => void;
 	note: (botId: string, messageId: string, seq: number) => void;
+	advance: (botId: string, cursor: string) => void;
 }
 
 export const useBotHistoryStore = create<BotHistoryState>((set) => ({
@@ -40,7 +44,12 @@ export const useBotHistoryStore = create<BotHistoryState>((set) => ({
 		set((state) => ({
 			views: {
 				...state.views,
-				[botId]: { olderTo: page.olderTo, windowed, seqs: page.seqs },
+				[botId]: {
+					olderTo: page.olderTo,
+					windowed,
+					seqs: page.seqs,
+					cursor: page.newestCursor,
+				},
 			},
 		})),
 	prepend: (botId, page) =>
@@ -53,6 +62,7 @@ export const useBotHistoryStore = create<BotHistoryState>((set) => ({
 						olderTo: page.olderTo,
 						windowed: view?.windowed ?? false,
 						seqs: { ...page.seqs, ...view?.seqs },
+						cursor: view?.cursor ?? page.newestCursor,
 					},
 				},
 			};
@@ -66,6 +76,18 @@ export const useBotHistoryStore = create<BotHistoryState>((set) => ({
 					...state.views,
 					[botId]: { ...view, seqs: { ...view.seqs, [messageId]: seq } },
 				},
+			};
+		}),
+	advance: (botId, cursor) =>
+		set((state) => {
+			const view = state.views[botId];
+			if (
+				!view ||
+				(view.cursor && compareInboxCursors(cursor, view.cursor) <= 0)
+			)
+				return state;
+			return {
+				views: { ...state.views, [botId]: { ...view, cursor } },
 			};
 		}),
 }));

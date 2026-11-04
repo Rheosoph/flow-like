@@ -141,8 +141,30 @@ export async function verifyWardrobe(page, { origin, output }) {
 		items.length > 400,
 		"The expanded wardrobe should offer over four hundred items",
 	);
-	for (const kind of ["mochi", "ruler", "orbi", "drip", "bambu"]) {
+	for (const kind of ["mochi", "ruler", "orbi", "drip", "bambu", "kero"]) {
 		await page.select('[aria-label="Wardrobe character"]', kind);
+		await page.waitForFunction(
+			(value) =>
+				document.querySelector("[data-wardrobe-kind]")?.dataset.wardrobeKind ===
+				value,
+			{},
+			kind,
+		);
+		const counts = await page.$eval("[data-wardrobe-kind]", (element) => ({
+			compatible: Number(element.dataset.compatibleEquipment),
+			excluded: Number(element.dataset.excludedEquipment),
+			shown: element.querySelectorAll("[data-equipment-id]").length,
+		}));
+		assert.equal(
+			counts.shown,
+			counts.compatible,
+			`${kind}: wardrobe should show only compatible items`,
+		);
+		if (kind === "kero")
+			assert.ok(
+				counts.excluded > 0,
+				"Raised eyes require some headwear exclusions",
+			);
 		const failures = await page.$$eval("[data-equipment-id]", (figures) => {
 			const failures = [];
 			for (const figure of figures) {

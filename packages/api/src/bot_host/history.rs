@@ -6,12 +6,13 @@ use crate::{
     entity::{bot, inbox_entry, user},
     error::ApiError,
 };
-use flow_like::flow::copilot::{ChatMessage, ChatRole};
+use flow_like::flow::copilot::{ChatMessage, ChatRole, ReactionNote};
 use flow_like_types::{
     bot_message::{MessageBody, MessagePart},
     bot_turn::room_message,
     inbox::{
-        ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, TriggerBody, body_target, is_tombstone,
+        ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, ReactionEvent, TranscriptBody,
+        TriggerBody, body_target, is_tombstone, net_reactions,
     },
 };
 use sea_orm::{
@@ -29,6 +30,9 @@ pub(crate) const MAX_HISTORY_MESSAGE_CHARS: usize = 8_000;
 pub(crate) struct Transcript {
     pub prompt: String,
     pub history: Vec<ChatMessage>,
+    /// Something since the bot's last message names it or replies to it, or the conversation is
+    /// direct; otherwise the bot reads along.
+    pub addressed: bool,
 }
 
 #[derive(Debug)]
@@ -52,6 +56,27 @@ struct Line {
     message_id: String,
     sender_id: String,
     text: String,
+    mentions: Vec<String>,
+    reply_to: Option<String>,
+    from_trigger: bool,
+}
+
+/// Whether a line since the bot's own last line names the bot, replies to one of its lines, or
+/// is a trigger for it.
+fn addressed_to(lines: &[Line], bot_id: &str) -> bool {
+    let since = lines
+        .iter()
+        .rposition(|line| line.sender_id == bot_id)
+        .map_or(0, |last| last + 1);
+    lines[since..].iter().any(|line| {
+        line.from_trigger
+            || line.mentions.iter().any(|mention| mention == bot_id)
+            || line.reply_to.as_deref().is_some_and(|target| {
+                lines
+                    .iter()
+                    .any(|own| own.message_id == target && own.sender_id == bot_id)
+            })
+    })
 }
 
 fn plain_body(envelope: &serde_json::Value) -> Option<&serde_json::Value> {
@@ -69,7 +94,7 @@ fn render(body: &MessageBody) -> String {
                 .summary
                 .as_deref()
                 .map(|summary| format!("[UI: {summary}]")),
-            MessagePart::Attachment(file) => Some(format!("[file: {}]", file.name)),
+            MessagePart::Attachment(file) => Some(file.note()),
             MessagePart::Tool(_) => None,
         };
         if let Some(note) = note {
@@ -108,6 +133,9 @@ fn lines_of(window: &[inbox_entry::Model]) -> Vec<Line> {
                         message_id: entry.message_id.clone(),
                         sender_id: entry.sender_id.clone(),
                         text: render(&parsed),
+                        mentions: parsed.mentions.clone(),
+                        reply_to: parsed.reply_to.clone(),
+                        from_trigger: false,
                     });
                 }
             }
@@ -117,6 +145,21 @@ fn lines_of(window: &[inbox_entry::Model]) -> Vec<Line> {
                         message_id: entry.message_id.clone(),
                         sender_id: entry.sender_id.clone(),
                         text: parsed.render(),
+                        mentions: Vec::new(),
+                        reply_to: None,
+                        from_trigger: true,
+                    });
+                }
+            }
+            InboxEntryKind::Transcript => {
+                if let Ok(parsed) = TranscriptBody::parse(body) {
+                    lines.push(Line {
+                        message_id: entry.message_id.clone(),
+                        sender_id: entry.sender_id.clone(),
+                        text: parsed.render(),
+                        mentions: parsed.mentions,
+                        reply_to: None,
+                        from_trigger: false,
                     });
                 }
             }
@@ -239,6 +282,151 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
     Ok(Transcript {
         prompt: clipped(&spoken(&answered), MAX_PROMPT_CHARS),
         history,
+        addressed: kind != ConversationKind::Group || addressed_to(&lines, bot_id),
+    })
+}
+
+/// What a turn woken by reactions reads: the conversation's recent messages, and the reactions in
+/// place on the bot's own messages among the entries the turn answers.
+#[derive(Debug, Clone)]
+pub(crate) struct ReactionTurn {
+    pub transcript: Transcript,
+    pub reactions: Vec<ReactionNote>,
+}
+
+const EXCERPT_CHARS: usize = 120;
+
+/// What kind of entry the bot's copy holds under `message_id`.
+pub(crate) async fn entry_kind<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    conversation_id: &str,
+    message_id: &str,
+) -> Result<Option<InboxEntryKind>, DbErr> {
+    Ok(inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(bot_id))
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(inbox_entry::Column::MessageId.eq(message_id))
+        .one(db)
+        .await?
+        .and_then(|entry| InboxEntryKind::parse(&entry.kind)))
+}
+
+/// Whether the entry is a reaction event, parsed.
+fn reaction_of(entry: &inbox_entry::Model) -> Option<ReactionEvent> {
+    (InboxEntryKind::parse(&entry.kind) == Some(InboxEntryKind::Reaction)
+        && !is_tombstone(&entry.envelope)
+        && plain_body(&entry.envelope).is_some())
+    .then(|| ReactionEvent::parse(&entry.message_id, &entry.sender_id, &entry.envelope))
+    .flatten()
+}
+
+/// The reactions in place among `answered` (the turn's entry ids) on messages `bot_id` sent,
+/// from the newest entries of its copy, oldest first. Later removals count even when they came
+/// after the turn's trigger.
+pub(crate) async fn reaction_turn<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    conversation_id: &str,
+    answered: &[String],
+    kind: ConversationKind,
+    owner_id: &str,
+) -> Result<ReactionTurn, HistoryError> {
+    let mut window = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(bot_id))
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .order_by_desc(inbox_entry::Column::Seq)
+        .order_by_desc(inbox_entry::Column::CreatedAt)
+        .order_by_desc(inbox_entry::Column::Id)
+        .limit(HISTORY_ENTRIES)
+        .all(db)
+        .await?;
+    window.reverse();
+    let lines = lines_of(&window);
+    let events: Vec<ReactionEvent> = window.iter().filter_map(reaction_of).collect();
+    let in_place: Vec<ReactionEvent> = net_reactions(&events)
+        .into_iter()
+        .filter(|event| answered.contains(&event.message_id))
+        .collect();
+    let ids: Vec<&str> = in_place
+        .iter()
+        .map(|event| event.sender_id.as_str())
+        .chain(lines.iter().map(|line| line.sender_id.as_str()))
+        .collect();
+    let names = sender_names(db, &ids).await?;
+    let reactions: Vec<ReactionNote> = in_place
+        .iter()
+        .filter_map(|event| {
+            let own = lines
+                .iter()
+                .find(|line| line.message_id == event.target && line.sender_id == bot_id)?;
+            Some(ReactionNote {
+                by: names
+                    .get(&event.sender_id)
+                    .cloned()
+                    .unwrap_or_else(|| event.sender_id.clone()),
+                emoji: event.emoji.clone(),
+                excerpt: clipped(&own.text.replace('\n', " "), EXCERPT_CHARS),
+            })
+        })
+        .collect();
+    let spoken = |line: &Line| {
+        if line.sender_id == bot_id || kind != ConversationKind::Group {
+            return line.text.clone();
+        }
+        let name = names.get(&line.sender_id).unwrap_or(&line.sender_id);
+        room_message(name, line.sender_id == owner_id, &line.text)
+    };
+    let fresh = lines
+        .iter()
+        .rposition(|line| line.sender_id == bot_id)
+        .map_or(lines.len(), |last| lines.len() - last - 1);
+    let reaction_text = reactions
+        .iter()
+        .map(|note| {
+            format!(
+                "{} reacted {} to your message: \"{}\"",
+                note.by, note.emoji, note.excerpt
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let addressed = fresh == 0 || kind != ConversationKind::Group || addressed_to(&lines, bot_id);
+    let as_history = |line: &Line| ChatMessage {
+        role: if line.sender_id == bot_id {
+            ChatRole::Assistant
+        } else {
+            ChatRole::User
+        },
+        content: clipped(&spoken(line), MAX_HISTORY_MESSAGE_CHARS),
+        images: None,
+    };
+    let (prompt, history, reactions) = match lines.split_last() {
+        Some((last, earlier)) if fresh > 0 => {
+            let prompt = if reaction_text.is_empty() {
+                clipped(&spoken(last), MAX_PROMPT_CHARS)
+            } else {
+                clipped(
+                    &format!("{}\n\n{reaction_text}", spoken(last)),
+                    MAX_PROMPT_CHARS,
+                )
+            };
+            let kept = if addressed { Vec::new() } else { reactions };
+            (prompt, earlier.iter().map(as_history).collect(), kept)
+        }
+        _ => (
+            reaction_text,
+            lines.iter().map(as_history).collect(),
+            reactions,
+        ),
+    };
+    Ok(ReactionTurn {
+        transcript: Transcript {
+            prompt,
+            history,
+            addressed,
+        },
+        reactions,
     })
 }
 
@@ -284,6 +472,41 @@ mod tests {
         let lines = lines_of(&window);
         let texts: Vec<_> = lines.iter().map(|line| line.text.as_str()).collect();
         assert_eq!(texts, ["first, fixed", "answer", "last"]);
+    }
+
+    #[test]
+    fn a_line_addresses_the_bot_by_mention_or_reply_only_since_the_bots_last_line() {
+        let line = |id: &str, sender: &str, mentions: &[&str], reply_to: Option<&str>| Line {
+            message_id: id.into(),
+            sender_id: sender.into(),
+            text: String::new(),
+            mentions: mentions.iter().map(|m| m.to_string()).collect(),
+            reply_to: reply_to.map(str::to_string),
+            from_trigger: false,
+        };
+        let quiet = [
+            line("m1", "user-a", &[], None),
+            line("m2", "user-b", &["bot_b"], None),
+        ];
+        assert!(!addressed_to(&quiet, "bot_a"));
+        assert!(addressed_to(&quiet, "bot_b"));
+        let answered = [
+            line("m1", "user-a", &["bot_a"], None),
+            line("a1", "bot_a", &[], Some("m1")),
+            line("m2", "user-a", &[], None),
+        ];
+        assert!(!addressed_to(&answered, "bot_a"));
+        let replied = [
+            line("a1", "bot_a", &[], None),
+            line("m2", "user-a", &[], Some("a1")),
+        ];
+        assert!(addressed_to(&replied, "bot_a"));
+        let batched = [
+            line("a1", "bot_a", &[], None),
+            line("m2", "user-a", &["bot_a"], None),
+            line("m3", "user-a", &[], None),
+        ];
+        assert!(addressed_to(&batched, "bot_a"));
     }
 
     #[test]

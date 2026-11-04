@@ -9,6 +9,13 @@ public enum NativeSystemIntegration {
     @MainActor private static var handoff: NSUserActivity?
     @MainActor public static var refreshAppShortcuts: (() -> Void)?
 
+    @MainActor static func refreshBotStatus() {
+        WidgetCenter.shared.reloadAllTimelines()
+        #if os(iOS)
+        Task { await FlowBotActivities.refresh(NativeStore.shared.snapshot()) }
+        #endif
+    }
+
     @MainActor public static func refresh() {
         // Read after hopping to the main actor so delayed refreshes cannot
         // restore a snapshot that was cleared or replaced in the meantime.
@@ -27,14 +34,17 @@ public enum NativeSystemIntegration {
             handoff = activity
         }
         #if os(iOS)
-        Task { await FlowRunActivities.refresh(snapshot) }
+        Task {
+            await FlowRunActivities.refresh(snapshot)
+            await FlowBotActivities.refresh(snapshot)
+        }
         #endif
     }
 
     static func handoffActivity(_ snapshot: NativeSnapshot) -> NSUserActivity? {
         guard snapshot.isCurrent, let page = snapshot.activePage, let url = URL(string: page.url),
               let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              NativeActivityBridge.isUsePathname(parts.percentEncodedPath),
+              (NativeActivityBridge.isUsePathname(parts.percentEncodedPath) || parts.percentEncodedPath == "/bots"),
               url.user == nil, url.password == nil, url.fragment == nil,
               NativeActivityBridge.origin(url) == snapshot.webOrigin else { return nil }
         let activity = NSUserActivity(activityType: activityType)
@@ -59,6 +69,9 @@ public enum NativeSystemIntegration {
         else if identifier.hasPrefix("flow-like:event:"), let event = snapshot?.events.first(where: {
             $0.id == String(identifier.dropFirst("flow-like:event:".count)) && $0.surfaces.contains("spotlight")
         }) { action = event.action }
+        else if identifier.hasPrefix("flow-like:bot:"), let bot = snapshot?.bots?.first(where: {
+            $0.id == String(identifier.dropFirst("flow-like:bot:".count)) && $0.exposes("spotlight")
+        }) { action = NativeAction(kind: "open_bot", botId: bot.id) }
         else { return nil }
         guard let request = try? store.enqueue(action, expectedScope: snapshot?.scope) else { return nil }
         return NativeStore.actionURL(request)
@@ -98,6 +111,9 @@ private actor NativeSpotlightIndexer {
             }
             items += snapshot.events.filter { $0.surfaces.contains("spotlight") }.map {
                 item("flow-like:event:\($0.id)", $0.title, $0.subtitle, ["Flow Like", "Event", $0.eventType])
+            }
+            items += (snapshot.bots ?? []).filter { $0.exposes("spotlight") }.map {
+                item("flow-like:bot:\($0.id)", $0.title, "Open bot in Flow Like", ["Flow Like", "bot", "assistant"])
             }
             await withCheckedContinuation { continuation in
                 index.indexSearchableItems(items) { _ in continuation.resume() }

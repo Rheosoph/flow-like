@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
+import { strFromU8, strToU8, unzipSync, zipSync } from "fflate";
 import { Window } from "happy-dom";
-import { strToU8, unzipSync, strFromU8, zipSync } from "fflate";
 import { exportDocx, importDocx } from "./docx";
 
 const window = new Window();

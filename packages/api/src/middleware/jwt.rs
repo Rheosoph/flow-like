@@ -286,6 +286,14 @@ impl From<crate::execution::ExecutionClaims> for ExecutorUser {
     }
 }
 
+impl ExecutorUser {
+    /// The app usage is charged to; `None` for a run outside any app (a bot turn without a
+    /// workspace), which its `sub` pays for.
+    pub fn usage_app_id(&self) -> Option<String> {
+        Some(self.app_id.clone()).filter(|app_id| !app_id.is_empty())
+    }
+}
+
 /// What a route does with an executor's app authority. Shadow and regression
 /// replays may read, but every `Write` is refused for them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2393,6 +2401,16 @@ mod tests {
             custom_bits_owner: None,
             unattended: false,
         })
+    }
+
+    #[test]
+    fn a_run_outside_any_app_charges_its_payer_not_an_empty_app() {
+        let AppUser::Executor(mut executor) = executor_user(false) else {
+            unreachable!()
+        };
+        assert_eq!(executor.usage_app_id().as_deref(), Some("app-id"));
+        executor.app_id.clear();
+        assert_eq!(executor.usage_app_id(), None);
     }
 
     #[test]

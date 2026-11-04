@@ -321,8 +321,142 @@ describe("trigger entries", () => {
 		expect(blocks.map((block) => block.type)).toEqual([
 			"day",
 			"group",
-			"trigger",
+			"note",
 			"group",
+		]);
+	});
+
+	test("a trigger keeps what the details show: text, payload, file and bot", () => {
+		const handle = {
+			app_id: "ws_1",
+			path: "webhooks/hook_1/1.json",
+			bytes: 2048,
+			sha256: "ab",
+			mime: "application/json",
+		};
+		const [card] = foldInboxEntries(
+			[
+				trigger(0, {
+					source: "webhook",
+					ref_id: "hook_1",
+					title: "New order",
+					text: "Check the order",
+					payload: { content_type: "application/json", body: { id: 7 } },
+					payload_handle: handle,
+					bot_id: "bot_1",
+				}),
+			],
+			"me",
+		);
+		expect(card).toMatchObject({
+			type: "trigger",
+			refId: "hook_1",
+			text: "Check the order",
+			payload: { content_type: "application/json", body: { id: 7 } },
+			payloadFile: handle,
+			botId: "bot_1",
+		});
+	});
+});
+
+describe("bot ask activities", () => {
+	const ask = {
+		type: "bot_ask",
+		ask_id: "ask-1",
+		asker_id: "bot_scout",
+		callee_id: "bot_pebble",
+		exchange_id: "conv_x",
+		question: "Which issues are open?",
+	};
+
+	test("an activity folds into a note between the messages", () => {
+		const items = foldInboxEntries(
+			[
+				entry("message", "bot_scout", { text: "Let me ask Pebble" }, 0),
+				entry("activity", "bot_scout", ask, 1),
+				entry("message", "bot_scout", { text: "Pebble says two" }, 2),
+			],
+			"me",
+		);
+		expect(items.map((item) => item.type)).toEqual([
+			"message",
+			"bot_ask",
+			"message",
+		]);
+		expect(items[1]).toMatchObject({
+			askerId: "bot_scout",
+			calleeId: "bot_pebble",
+			exchangeId: "conv_x",
+			question: "Which issues are open?",
+		});
+		const blocks = groupConversationItems(items, { dayKey: () => "day" });
+		expect(blocks.map((block) => block.type)).toEqual([
+			"day",
+			"group",
+			"note",
+			"group",
+		]);
+	});
+
+	test("an activity of another type or without its bots is not shown", () => {
+		const items = foldInboxEntries(
+			[
+				entry("activity", "bot_scout", { ...ask, type: "teleport" }, 0),
+				entry("activity", "bot_scout", { ...ask, callee_id: "" }, 1),
+			],
+			"me",
+		);
+		expect(items).toEqual([]);
+	});
+});
+
+describe("sent mail", () => {
+	test("a message recording a sent mail names its To and Cc recipients", () => {
+		const [mail, chat] = messages(
+			foldInboxEntries([
+				entry(
+					"message",
+					"bot_a",
+					{
+						text: "Hallo Felix",
+						mail: {
+							direction: "out",
+							from: "joerg@flow-like.me",
+							to: ["felix@example.com"],
+							cc: ["team@example.com"],
+							subject: "Testmail",
+						},
+					},
+					0,
+				),
+				entry("message", "bot_a", { text: "Done" }, 1),
+			]),
+		);
+		expect(mail.mailedTo).toEqual(["felix@example.com", "team@example.com"]);
+		expect(texts([mail])).toEqual(["Hallo Felix"]);
+		expect(chat.mailedTo).toBeUndefined();
+	});
+
+	test("an inbound or unreadable mail record is not shown as sent", () => {
+		const items = messages(
+			foldInboxEntries([
+				entry(
+					"message",
+					"bot_a",
+					{ text: "a", mail: { direction: "in", to: ["x@example.com"] } },
+					0,
+				),
+				entry(
+					"message",
+					"bot_a",
+					{ text: "b", mail: { direction: "out", to: "x@example.com" } },
+					1,
+				),
+			]),
+		);
+		expect(items.map((message) => message.mailedTo)).toEqual([
+			undefined,
+			undefined,
 		]);
 	});
 });
@@ -407,5 +541,224 @@ describe("approval cards", () => {
 			]),
 		);
 		expect(card.approval?.scopes).toEqual([]);
+	});
+
+	describe("secret requests", () => {
+		const secretCard = (secret: unknown) =>
+			messages(
+				foldInboxEntries([
+					entry(
+						"message",
+						"bot_a",
+						{
+							text: "x",
+							approval: {
+								...approval,
+								tool: "secret_request",
+								scope: "",
+								secret,
+							},
+						},
+						0,
+						"ap-1",
+					),
+				]),
+			)[0].approval;
+
+		test("a valid secret rides along on the card", () => {
+			expect(
+				secretCard({
+					name: "API_KEY",
+					description: "For the API",
+					replace: true,
+				})?.secret,
+			).toEqual({ name: "API_KEY", description: "For the API", replace: true });
+		});
+
+		test("replace is omitted unless true", () => {
+			expect(
+				secretCard({ name: "API_KEY", description: "x", replace: false })
+					?.secret,
+			).toEqual({ name: "API_KEY", description: "x" });
+		});
+
+		test.each([
+			["a lower-case name", { name: "api_key", description: "x" }],
+			[
+				"a name over 64 characters",
+				{ name: `A${"B".repeat(64)}`, description: "x" },
+			],
+			["a missing description", { name: "API_KEY" }],
+			["a non-string description", { name: "API_KEY", description: 3 }],
+			["a non-object", "API_KEY"],
+		])("%s is treated as no secret", (_, secret) => {
+			const card = secretCard(secret);
+			expect(card).toBeDefined();
+			expect(card?.secret).toBeUndefined();
+		});
+	});
+});
+
+describe("call entries", () => {
+	test("a started call becomes a call block that its ended entry closes", () => {
+		const items = foldInboxEntries([
+			entry("call", "anna", { op: "started" }, 0, "call_1"),
+			entry("message", "anna", { text: "hi" }, 1),
+			entry(
+				"call",
+				"paul",
+				{ op: "ended", call: "call_1", duration_ms: 720_000 },
+				12,
+			),
+		]);
+		const call = items.find((item) => item.type === "call");
+		expect(call).toMatchObject({
+			id: "call_1",
+			senderId: "anna",
+			durationMs: 720_000,
+		});
+		expect(items.filter((item) => item.type === "call")).toHaveLength(1);
+		const blocks = groupConversationItems(items);
+		expect(blocks.map((block) => block.type)).toEqual(["day", "call", "group"]);
+	});
+
+	test("a live call has no duration yet", () => {
+		const [call] = foldInboxEntries([
+			entry("call", "anna", { op: "started" }, 0, "call_1"),
+		]);
+		expect(call).toMatchObject({ type: "call", id: "call_1" });
+		expect((call as { durationMs?: number }).durationMs).toBeUndefined();
+	});
+
+	test("ignores an ended entry for an unknown call and bodies it cannot read", () => {
+		const items = foldInboxEntries([
+			entry("call", "anna", { op: "ended", call: "nope", duration_ms: 5 }, 0),
+			entry("call", "anna", { op: "ring" }, 1),
+			entry("call", "anna", { op: "started" }, 2, "call_2"),
+			entry(
+				"call",
+				"anna",
+				{ op: "ended", call: "call_2", duration_ms: -4 },
+				3,
+			),
+		]);
+		expect(items).toHaveLength(1);
+		expect(items[0]).toMatchObject({ id: "call_2", durationMs: 0 });
+	});
+
+	test("the first ended entry wins", () => {
+		const [call] = foldInboxEntries([
+			entry("call", "anna", { op: "started" }, 0, "call_1"),
+			entry(
+				"call",
+				"anna",
+				{ op: "ended", call: "call_1", duration_ms: 60_000 },
+				1,
+			),
+			entry(
+				"call",
+				"paul",
+				{ op: "ended", call: "call_1", duration_ms: 90_000 },
+				2,
+			),
+		]);
+		expect((call as { durationMs?: number }).durationMs).toBe(60_000);
+	});
+});
+
+describe("transcript entries", () => {
+	const spoken = (
+		sender: string,
+		text: string,
+		minute: number,
+		extra: Record<string, unknown> = {},
+	) =>
+		entry(
+			"transcript",
+			sender,
+			{
+				call: "call_1",
+				text,
+				offset_ms: 1000,
+				duration_ms: 900,
+				mentions: [],
+				...extra,
+			},
+			minute,
+		);
+
+	test("folds a line with its call, offset and mentions", () => {
+		const items = foldInboxEntries(
+			[spoken("anna", "hey momo", 0, { mentions: ["bot_momo"] })],
+			"me",
+		);
+		expect(items).toHaveLength(1);
+		expect(items[0]).toMatchObject({
+			type: "transcript",
+			senderId: "anna",
+			call: "call_1",
+			text: "hey momo",
+			offsetMs: 1000,
+			mentions: ["bot_momo"],
+			mine: false,
+		});
+	});
+
+	test("drops empty, sealed and malformed lines", () => {
+		expect(
+			foldInboxEntries([
+				spoken("anna", "   ", 0),
+				entry("transcript", "anna", { call: "c" }, 1),
+				{
+					...spoken("anna", "x", 2),
+					envelope: { v: 1, enc: "x25519", sealed: "..." },
+				} as unknown as IInboxEntry,
+			]),
+		).toEqual([]);
+	});
+
+	test("one speaker's consecutive lines share a spoken block", () => {
+		const blocks = groupConversationItems(
+			foldInboxEntries([
+				spoken("anna", "one", 0),
+				spoken("anna", "two", 1),
+				spoken("paul", "three", 2),
+			]),
+		);
+		const spokenBlocks = blocks.filter((b) => b.type === "spoken");
+		expect(spokenBlocks).toHaveLength(2);
+		expect(
+			spokenBlocks[0].type === "spoken" &&
+				spokenBlocks[0].lines.map((l) => l.text),
+		).toEqual(["one", "two"]);
+	});
+
+	test("a chat message between lines splits them and starts its own run", () => {
+		const blocks = groupConversationItems(
+			foldInboxEntries([
+				spoken("anna", "one", 0),
+				entry("message", "anna", { text: "typed" }, 1),
+				entry("message", "anna", { text: "typed too" }, 2),
+				spoken("anna", "two", 3),
+			]),
+		);
+		expect(blocks.filter((b) => b.type !== "day").map((b) => b.type)).toEqual([
+			"spoken",
+			"group",
+			"spoken",
+		]);
+		const group = blocks.find((b) => b.type === "group");
+		expect(group?.type === "group" && group.messages).toHaveLength(2);
+	});
+
+	test("a spoken block ends the message run before it", () => {
+		const blocks = groupConversationItems(
+			foldInboxEntries([
+				entry("message", "anna", { text: "a" }, 0),
+				spoken("anna", "said", 1),
+				entry("message", "anna", { text: "b" }, 2),
+			]),
+		);
+		expect(blocks.filter((b) => b.type === "group")).toHaveLength(2);
 	});
 });

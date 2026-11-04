@@ -11,6 +11,7 @@ import {
 import "./preview.css";
 import { ColorProbes } from "./color-probes";
 import { BotEffects } from "./effects";
+import { BotEquipmentFit } from "./equipment-fit";
 import { BotFitReview } from "./fit-review";
 import { BotGallery } from "./gallery";
 import { BotMoods } from "./moods";
@@ -65,6 +66,8 @@ function App() {
 		return <ColorProbes paused={parameters.has("paused")} />;
 	if (parameters.has("gallery")) return <BotGallery parameters={parameters} />;
 	if (parameters.has("effects")) return <BotEffects parameters={parameters} />;
+	if (parameters.has("equipment-fit"))
+		return <BotEquipmentFit parameters={parameters} />;
 	if (parameters.has("fit")) return <BotFitReview parameters={parameters} />;
 	if (parameters.has("moods")) return <BotMoods parameters={parameters} />;
 	if (parameters.has("wardrobe"))

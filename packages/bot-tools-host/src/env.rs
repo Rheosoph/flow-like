@@ -4,7 +4,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use flow_like_bot_tools::{
     AppTables, Attachment, Environment, FileData, FileEntry, FileMeta, KnowledgeEmbedder, Limits,
-    ModelRole, Scope, SessionCache, ToolEnv,
+    ModelRole, Scope, SecretInfo, SessionCache, ToolEnv,
 };
 use flow_like_model_provider::llm::ModelLogic;
 use flow_like_storage::Path;
@@ -13,6 +13,7 @@ use flow_like_storage::files::store::FlowLikeStore;
 use flow_like_storage::lancedb::Connection;
 use flow_like_storage::object_store::{ObjectStoreExt, PutPayload};
 use flow_like_storage::{display_object_path, join_object_path};
+use flow_like_types::bot_message::{CONVERSATION_FILE_APP_PREFIX, WorkspaceHandle};
 use flow_like_types::{Bytes, Result, anyhow};
 use futures::TryStreamExt;
 
@@ -25,6 +26,14 @@ use crate::wire::{JobApp, JobScope};
 pub trait AppAccess: Send + Sync {
     async fn store(&self, app_id: &str) -> Result<FlowLikeStore>;
     async fn connection(&self, app_id: &str) -> Result<Connection>;
+}
+
+/// The bot's secret store as a host reaches it: values for the tools that fill them in, names
+/// and descriptions for the model.
+#[async_trait]
+pub trait SecretSource: Send + Sync {
+    async fn secret(&self, name: &str) -> Result<Option<String>>;
+    async fn list(&self) -> Result<Vec<SecretInfo>>;
 }
 
 #[derive(Debug, Clone)]
@@ -61,8 +70,18 @@ pub struct HostEnv {
     allow_expensive_documents: bool,
     object_writes: bool,
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
+    people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
+    secrets: Option<Arc<dyn SecretSource>>,
+}
+
+fn conversation_of_app(app_id: &str) -> Option<&str> {
+    app_id.strip_prefix(CONVERSATION_FILE_APP_PREFIX)
+}
+
+fn is_conversation_app(app_id: &str) -> bool {
+    conversation_of_app(app_id).is_some()
 }
 
 impl HostEnv {
@@ -87,9 +106,17 @@ impl HostEnv {
             allow_expensive_documents: false,
             object_writes: true,
             notifier: None,
+            people: None,
             scheduler: None,
             mail: None,
+            secrets: None,
         }
+    }
+
+    /// Without a source the bot has no secrets here.
+    pub fn with_secrets(mut self, secrets: Arc<dyn SecretSource>) -> Self {
+        self.secrets = Some(secrets);
+        self
     }
 
     pub fn with_sessions(mut self, sessions: Arc<dyn SessionCache>) -> Self {
@@ -106,6 +133,11 @@ impl HostEnv {
     /// process turns it off; the tools that need it fail with a plain error.
     pub fn with_object_writes(mut self, allowed: bool) -> Self {
         self.object_writes = allowed;
+        self
+    }
+
+    pub fn with_people(mut self, people: Arc<dyn flow_like_bot_tools::PeopleBackend>) -> Self {
+        self.people = Some(people);
         self
     }
 
@@ -134,7 +166,7 @@ impl HostEnv {
     }
 
     fn files_allowed(&self, app_id: &str) -> Result<()> {
-        if self.is_workspace(app_id) || self.rights.get(app_id).is_some_and(|rights| rights.files) {
+        if self.is_workspace(app_id) || is_conversation_app(app_id) || self.rights.get(app_id).is_some_and(|rights| rights.files) {
             return Ok(());
         }
         Err(anyhow!(
@@ -160,7 +192,10 @@ impl HostEnv {
     async fn base(&self, app_id: &str) -> Result<(FlowLikeStore, Path)> {
         self.files_allowed(app_id)?;
         let store = self.access.store(app_id).await?;
-        let base = store.construct_upload(app_id, "").await?;
+        let base = match conversation_of_app(app_id) {
+            Some(conversation_id) => Path::from(format!("conversations/{conversation_id}")),
+            None => store.construct_upload(app_id, "").await?,
+        };
         Ok((store, base))
     }
 }
@@ -193,6 +228,10 @@ impl ToolEnv for HostEnv {
 
     fn notifier(&self) -> Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>> {
         self.notifier.clone()
+    }
+
+    fn people(&self) -> Option<Arc<dyn flow_like_bot_tools::PeopleBackend>> {
+        self.people.clone()
     }
 
     fn allow_expensive_documents(&self) -> bool {
@@ -281,6 +320,10 @@ impl ToolEnv for HostEnv {
         Ok(None)
     }
 
+    fn handle_granted(&self, handle: &WorkspaceHandle) -> bool {
+        handle.is_conversation_file()
+    }
+
     async fn app_tables(&self, app_id: &str) -> Result<AppTables> {
         let rights = self.tables_rights(app_id)?;
         Ok(AppTables {
@@ -298,8 +341,18 @@ impl ToolEnv for HostEnv {
         self.models.embedder().await
     }
 
-    async fn secret(&self, _name: &str) -> Result<Option<String>> {
-        Ok(None)
+    async fn secret(&self, name: &str) -> Result<Option<String>> {
+        match &self.secrets {
+            Some(source) => source.secret(name).await,
+            None => Ok(None),
+        }
+    }
+
+    async fn secrets(&self) -> Result<Vec<SecretInfo>> {
+        match &self.secrets {
+            Some(source) => source.list().await,
+            None => Ok(Vec::new()),
+        }
     }
 }
 

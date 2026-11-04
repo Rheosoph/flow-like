@@ -437,6 +437,12 @@ fn main() {
             "_flow_like_native_geofence_foreground",
             "_flow_like_native_take_geofence_events",
             "_flow_like_native_ack_geofence_events",
+            "_flow_like_native_bot_request",
+            "_flow_like_native_bot_cancel",
+            "_flow_like_native_bot_activity_tokens",
+            "_flow_like_native_set_bot_refresh_callback",
+            "_flow_like_native_bot_refresh_active",
+            "_flow_like_native_complete_bot_refresh",
         ] {
             println!("cargo:rustc-link-arg-cdylib=-Wl,-U,{symbol}");
         }

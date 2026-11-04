@@ -19,7 +19,7 @@ import {
 	UploadIcon,
 	XIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import {
 	Suspense,
 	lazy,
@@ -44,6 +44,7 @@ import {
 } from "../..";
 import { asArray } from "../../lib/response-shape";
 import { normalizeStorageLocation } from "../../lib/storage-tree";
+import { cn } from "../../lib/utils";
 import type { ILockedItem } from "../../state/backend-state/locked-storage-state";
 import {
 	Badge,
@@ -135,6 +136,23 @@ interface StorageOperationResult {
 
 const NO_VIRTUAL_FOLDERS: string[] = [];
 
+const NARROW_CONTAINER_PX = 720;
+
+function useNarrowContainer(ref: RefObject<HTMLElement | null>) {
+	const [narrow, setNarrow] = useState(false);
+	useEffect(() => {
+		const element = ref.current;
+		if (!element || typeof ResizeObserver === "undefined") return;
+		const observer = new ResizeObserver(([entry]) => {
+			const width = entry?.contentRect.width ?? 0;
+			setNarrow(width > 0 && width < NARROW_CONTAINER_PX);
+		});
+		observer.observe(element);
+		return () => observer.disconnect();
+	}, [ref]);
+	return narrow;
+}
+
 /**
  * File list.
  *
@@ -157,7 +175,7 @@ function StorageItemGrid({
 	return (
 		<div className="flex-1 min-h-0 overflow-y-auto">
 			<div
-				className={`grid gap-2 ${viewMode === "grid" ? "grid-cols-2 md:grid-cols-3 lg:grid-cols-4" : "grid-cols-1"}`}
+				className={`grid gap-2 ${viewMode === "grid" ? "grid-cols-1 @xl/storage:grid-cols-2 @3xl/storage:grid-cols-3 @5xl/storage:grid-cols-4" : "grid-cols-1"}`}
 			>
 				{items.map((file) => (
 					<div
@@ -260,7 +278,10 @@ export function StorageSystem({
 		}, []);
 		return isSmall;
 	};
-	const isSmallScreen = useIsSmallScreen();
+	const viewportSmall = useIsSmallScreen();
+	const rootRef = useRef<HTMLDivElement>(null);
+	const narrowContainer = useNarrowContainer(rootRef);
+	const isSmallScreen = viewportSmall || narrowContainer;
 	const { t } = useTranslation("common");
 	const fileReference = useRef<HTMLInputElement>(null);
 	const folderReference = useRef<HTMLInputElement>(null);
@@ -1314,7 +1335,10 @@ export function StorageSystem({
 	const folderCount = filesWithVirtual?.filter((f) => f.is_dir).length ?? 0;
 
 	return (
-		<div className="flex flex-col w-full h-full max-h-full overflow-hidden">
+		<div
+			ref={rootRef}
+			className="@container/storage relative flex flex-col w-full h-full max-h-full overflow-hidden"
+		>
 			{activeRename && (
 				<Dialog
 					open
@@ -1434,11 +1458,13 @@ export function StorageSystem({
 
 			{/* Header Section */}
 			<div className="flex flex-col gap-4 px-4 pt-4 shrink-0">
-				<div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-					<h2 className="text-2xl font-semibold tracking-tight">{title}</h2>
-					<div className="flex items-center gap-2 flex-wrap justify-end">
-						<div className="hidden sm:flex items-center gap-2">
-							<div className="flex items-center gap-1 text-sm text-muted-foreground">
+				<div className="flex flex-col @3xl/storage:flex-row @3xl/storage:items-center @3xl/storage:justify-between gap-2">
+					<h2 className="min-w-0 truncate text-2xl font-semibold tracking-tight">
+						{title}
+					</h2>
+					<div className="flex items-center gap-2 flex-wrap @3xl/storage:justify-end">
+						<div className="flex items-center gap-2">
+							<div className="hidden @3xl/storage:flex items-center gap-1 text-sm text-muted-foreground">
 								<span>Sort by:</span>
 								<span className="font-medium text-foreground capitalize">
 									{sortBy === "date" ? "Date modified" : sortBy}
@@ -1572,7 +1598,7 @@ export function StorageSystem({
 									onClick={() => setCreatingFolder((v) => !v)}
 								>
 									<FolderPlusIcon className="h-4 w-4" />
-									<span className="hidden sm:inline">New Folder</span>
+									<span className="hidden @3xl/storage:inline">New Folder</span>
 								</Button>
 							</TooltipTrigger>
 							<TooltipContent>
@@ -1588,7 +1614,9 @@ export function StorageSystem({
 									onClick={() => fileReference.current?.click()}
 								>
 									<UploadIcon className="h-4 w-4" />
-									<span className="hidden sm:inline">Upload Files</span>
+									<span className="hidden @3xl/storage:inline">
+										Upload Files
+									</span>
 								</Button>
 							</TooltipTrigger>
 							<TooltipContent>Upload files to current folder</TooltipContent>
@@ -1603,7 +1631,7 @@ export function StorageSystem({
 										onClick={() => locked.openUpload()}
 									>
 										<LockIcon className="h-4 w-4" />
-										<span className="hidden sm:inline">
+										<span className="hidden @3xl/storage:inline">
 											{t("lockedStorage.uploadLocked", "Upload Locked")}
 										</span>
 									</Button>
@@ -1625,7 +1653,9 @@ export function StorageSystem({
 									onClick={() => folderReference.current?.click()}
 								>
 									<FolderPlusIcon className="h-4 w-4" />
-									<span className="hidden sm:inline">Upload Folder</span>
+									<span className="hidden @3xl/storage:inline">
+										Upload Folder
+									</span>
 								</Button>
 							</TooltipTrigger>
 							<TooltipContent>Upload entire folder</TooltipContent>
@@ -1633,8 +1663,8 @@ export function StorageSystem({
 					</div>
 				</div>
 
-				<div className="flex flex-col sm:flex-row sm:items-end gap-2 mt-2 sm:justify-between">
-					<div className="overflow-x-auto whitespace-nowrap max-w-full">
+				<div className="flex flex-col @xl/storage:flex-row @xl/storage:items-end gap-2 mt-2 @xl/storage:justify-between">
+					<div className="min-w-0 max-w-full">
 						<StorageBreadcrumbs
 							appId={appId}
 							prefix={prefix}
@@ -1642,7 +1672,7 @@ export function StorageSystem({
 						/>
 					</div>
 					{(filesWithVirtual.length ?? 0) > 0 && (
-						<div className="relative w-full sm:w-auto">
+						<div className="relative w-full @xl/storage:w-auto">
 							<SearchIcon className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
 							<Input
 								placeholder="Search files and folders..."
@@ -1802,7 +1832,12 @@ export function StorageSystem({
 					{preview.url !== "" && !isEditorPreview && (
 						<>
 							{(isSmallScreen || isPreviewMaximized) && (
-								<div className="fixed inset-0 z-50 bg-background">
+								<div
+									className={cn(
+										"inset-0 z-50 bg-background",
+										viewportSmall || isPreviewMaximized ? "fixed" : "absolute",
+									)}
+								>
 									<div className="flex flex-col h-full w-full">
 										<div className="p-4 border-b bg-background flex items-center justify-between shrink-0">
 											<h3 className="font-medium text-lg">
@@ -1908,7 +1943,7 @@ export function StorageSystem({
 						</>
 					)}
 					{(preview.url === "" || isEditorPreview) && (
-						<div className="flex flex-col flex-1 min-h-0 border rounded-lg p-3 sm:p-4 bg-background">
+						<div className="flex flex-col flex-1 min-h-0 border rounded-lg p-3 @xl/storage:p-4 bg-background">
 							<div className="flex items-center gap-2 mb-2 shrink-0">
 								<h3 className="font-medium text-sm text-muted-foreground">
 									Files & Folders

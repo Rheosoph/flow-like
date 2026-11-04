@@ -64,7 +64,7 @@ export function useEditorAssetUrl(url: string | undefined): string | undefined {
 					30_000,
 					Math.min(
 						25 * 60_000,
-						expiry ? expiry - Date.now() - 60_000 : Infinity,
+						expiry ? expiry - Date.now() - 60_000 : Number.POSITIVE_INFINITY,
 					),
 				);
 				timer = setTimeout(refresh, delay);

@@ -20,7 +20,8 @@ export function globalChatModelInput(
 		history: history
 			.filter(
 				(item) =>
-					!item.error || Boolean(joinContentText(item.inner.content).trim()),
+					(!item.error && !item.notice) ||
+					Boolean(joinContentText(item.inner.content).trim()),
 			)
 			.map((item) => ({
 				role: item.inner.role === IRole.Assistant ? "Assistant" : "User",

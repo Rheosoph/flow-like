@@ -32,6 +32,8 @@ pub mod codes {
     pub const INBOX_NOT_YOUR_MESSAGE: &str = "INBOX_NOT_YOUR_MESSAGE";
     /// A message takes at most 40 edits, so a conversation stays small enough to move.
     pub const INBOX_EDIT_LIMIT: &str = "INBOX_EDIT_LIMIT";
+    /// A conversation holds at most 50 pinned messages.
+    pub const INBOX_PIN_LIMIT: &str = "INBOX_PIN_LIMIT";
     /// Only a bot attaches workspace files, and only from its own workspace.
     pub const INBOX_HANDLE_NOT_ALLOWED: &str = "INBOX_HANDLE_NOT_ALLOWED";
     /// A segment id was written with other content.

@@ -2,11 +2,13 @@
 
 import { useTranslation } from "@flow-like/locales";
 import {
+	CodeIcon,
 	CopyIcon,
 	Loader2Icon,
 	PlusIcon,
 	RefreshCwIcon,
 	Trash2Icon,
+	XIcon,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -25,6 +27,10 @@ import type {
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import {
+	authenticatedWebhookUrl,
+	webhookCurlExamples,
+} from "./bot-webhook-examples";
 
 type Issued = IIssuedBotWebhook & { url: string };
 
@@ -36,7 +42,8 @@ export function offersWebhooks(bot: IBot): boolean {
 function CopyField({
 	label,
 	value,
-}: Readonly<{ label: string; value: string }>) {
+	multiline = false,
+}: Readonly<{ label: string; value: string; multiline?: boolean }>) {
 	const { t } = useTranslation("bots");
 	const copy = () => {
 		void navigator.clipboard
@@ -46,8 +53,19 @@ function CopyField({
 	return (
 		<div className="flex flex-col gap-1">
 			<span className="text-xs text-muted-foreground">{label}</span>
-			<div className="flex items-center gap-1.5">
-				<Input readOnly value={value} className="h-8 font-mono text-xs" />
+			<div className="flex items-start gap-1.5">
+				{multiline ? (
+					<pre className="min-w-0 flex-1 overflow-x-auto rounded-md border bg-background p-2 text-xs">
+						<code>{value}</code>
+					</pre>
+				) : (
+					<Input
+						readOnly
+						aria-label={label}
+						value={value}
+						className="h-8 font-mono text-xs"
+					/>
+				)}
 				<Button
 					type="button"
 					variant="ghost"
@@ -63,7 +81,52 @@ function CopyField({
 	);
 }
 
-function IssuedCredentials({
+export function WebhookExamples({
+	url,
+	secret,
+}: Readonly<{ url: string; secret?: string }>) {
+	const { t } = useTranslation("bots");
+	const examples = webhookCurlExamples(url, secret ?? "YOUR_WEBHOOK_SECRET");
+	return (
+		<div
+			className="flex min-w-0 flex-col gap-2.5"
+			data-slot="bot-webhook-examples"
+		>
+			<p className="text-xs leading-relaxed text-muted-foreground">
+				{t(
+					"panel.webhooks.authenticationHint",
+					"Send the secret in a header or in the URL. HMAC signing is optional.",
+				)}
+			</p>
+			{!secret && (
+				<p className="text-xs leading-relaxed text-muted-foreground">
+					{t(
+						"panel.webhooks.placeholderHint",
+						"Replace YOUR_WEBHOOK_SECRET with your saved secret. Rotate the secret if you lost it.",
+					)}
+				</p>
+			)}
+			<CopyField
+				label={t("panel.webhooks.headerExample", "Secret in a header")}
+				value={examples.header}
+				multiline
+			/>
+			<CopyField
+				label={t("panel.webhooks.urlExample", "Secret in the URL")}
+				value={examples.url}
+				multiline
+			/>
+			<p className="text-xs leading-relaxed text-muted-foreground">
+				{t(
+					"panel.webhooks.responseHint",
+					"Without wait, the request returns 202 with the turn state. Add ?wait=30 to the URL, or &wait=30 if it already has a query, to wait up to 30 seconds for a reply.",
+				)}
+			</p>
+		</div>
+	);
+}
+
+export function IssuedCredentials({
 	issued,
 	onDone,
 }: Readonly<{ issued: Issued; onDone: () => void }>) {
@@ -71,7 +134,7 @@ function IssuedCredentials({
 	return (
 		<div
 			data-slot="bot-webhook-issued"
-			className="flex flex-col gap-2.5 rounded-lg border bg-muted/40 p-3"
+			className="flex min-w-0 flex-col gap-2.5 rounded-lg border bg-muted/40 p-3"
 		>
 			<p className="text-sm font-medium">
 				{t("panel.webhooks.issued", "{{name}} is ready", {
@@ -90,9 +153,36 @@ function IssuedCredentials({
 				value={issued.secret}
 			/>
 			<CopyField
-				label={t("panel.webhooks.signingKey", "Signing key (HMAC-SHA256)")}
-				value={issued.signing_key}
+				label={t("panel.webhooks.authenticatedUrl", "URL with secret")}
+				value={authenticatedWebhookUrl(issued.url, issued.secret)}
 			/>
+			<p className="text-xs leading-relaxed text-muted-foreground">
+				{t(
+					"panel.webhooks.authenticatedUrlHint",
+					"For services that only accept a destination URL, use this URL. Anyone with it can call the bot, so keep it private.",
+				)}
+			</p>
+			<h4 className="text-sm font-medium">
+				{t("panel.webhooks.examples", "curl examples")}
+			</h4>
+			<WebhookExamples url={issued.url} secret={issued.secret} />
+			<details className="min-w-0 text-xs">
+				<summary className="cursor-pointer py-1 font-medium">
+					{t("panel.webhooks.optionalSigning", "Optional HMAC signing")}
+				</summary>
+				<div className="flex flex-col gap-2 pt-2">
+					<p className="leading-relaxed text-muted-foreground">
+						{t(
+							"panel.webhooks.signingHint",
+							"Use the signing key as text to sign the exact request body with HMAC-SHA256. Send the lowercase hex digest in X-Flow-Like-Signature: sha256=<hex>. No secret header or URL parameter is needed when signing.",
+						)}
+					</p>
+					<CopyField
+						label={t("panel.webhooks.signingKey", "Signing key (HMAC-SHA256)")}
+						value={issued.signing_key}
+					/>
+				</div>
+			</details>
 			<Button type="button" size="sm" className="self-end" onClick={onDone}>
 				{t("panel.webhooks.done", "I saved it")}
 			</Button>
@@ -158,11 +248,13 @@ function NewWebhook({
 function WebhookRow({
 	webhook,
 	busy,
+	onExamples,
 	onRotate,
 	onDelete,
 }: Readonly<{
 	webhook: IBotWebhook;
 	busy: boolean;
+	onExamples: (webhook: IBotWebhook) => void;
 	onRotate: (webhook: IBotWebhook) => void;
 	onDelete: (webhook: IBotWebhook) => void;
 }>) {
@@ -178,6 +270,16 @@ function WebhookRow({
 				<p className="truncate text-sm font-medium">{webhook.name}</p>
 				<p className="truncate text-xs text-muted-foreground">{lastCalled}</p>
 			</div>
+			<Button
+				type="button"
+				variant="ghost"
+				size="icon"
+				className="size-7 shrink-0 text-muted-foreground"
+				aria-label={t("panel.webhooks.examples", "curl examples")}
+				onClick={() => onExamples(webhook)}
+			>
+				<CodeIcon aria-hidden />
+			</Button>
 			<Button
 				type="button"
 				variant="ghost"
@@ -220,9 +322,14 @@ export function BotWebhooks({ bot }: Readonly<{ bot: IBot }>) {
 	const remove = useDeleteBotWebhook();
 	const urlOf = useBotWebhookUrl();
 	const [issued, setIssued] = useState<Issued | null>(null);
+	const [example, setExample] = useState<{
+		webhook: IBotWebhook;
+		url: string;
+	} | null>(null);
 	const show = async (result?: IIssuedBotWebhook) => {
 		if (!result) return;
 		setIssued({ ...result, url: await urlOf(bot.id, result.webhook) });
+		setExample(null);
 	};
 	const onError = (error: Error) => toast.error(error.message);
 	return (
@@ -233,12 +340,42 @@ export function BotWebhooks({ bot }: Readonly<{ bot: IBot }>) {
 			{issued && (
 				<IssuedCredentials issued={issued} onDone={() => setIssued(null)} />
 			)}
+			{example && (
+				<div className="flex min-w-0 flex-col gap-2.5 rounded-lg border p-3">
+					<div className="flex items-center justify-between gap-2">
+						<h4 className="text-sm font-medium">
+							{example.webhook.name}:{" "}
+							{t("panel.webhooks.examples", "curl examples")}
+						</h4>
+						<Button
+							type="button"
+							variant="ghost"
+							size="icon"
+							className="size-7 shrink-0"
+							aria-label={t("panel.webhooks.closeExamples", "Close examples")}
+							onClick={() => setExample(null)}
+						>
+							<XIcon aria-hidden />
+						</Button>
+					</div>
+					<WebhookExamples url={example.url} />
+				</div>
+			)}
 			<ul className="flex flex-col gap-1.5">
 				{(webhooks.data ?? []).map((webhook) => (
 					<WebhookRow
 						key={webhook.id}
 						webhook={webhook}
 						busy={issue.isPending || remove.isPending}
+						onExamples={(webhook) => {
+							if (example?.webhook.id === webhook.id) {
+								setExample(null);
+								return;
+							}
+							void urlOf(bot.id, webhook)
+								.then((url) => setExample({ webhook, url }))
+								.catch(onError);
+						}}
 						onRotate={(hook) =>
 							issue.mutate(
 								{ botId: bot.id, hookId: hook.id },
@@ -246,7 +383,20 @@ export function BotWebhooks({ bot }: Readonly<{ bot: IBot }>) {
 							)
 						}
 						onDelete={(hook) =>
-							remove.mutate({ botId: bot.id, hookId: hook.id }, { onError })
+							remove.mutate(
+								{ botId: bot.id, hookId: hook.id },
+								{
+									onError,
+									onSuccess: () => {
+										setExample((current) =>
+											current?.webhook.id === hook.id ? null : current,
+										);
+										setIssued((current) =>
+											current?.webhook.id === hook.id ? null : current,
+										);
+									},
+								},
+							)
 						}
 					/>
 				))}

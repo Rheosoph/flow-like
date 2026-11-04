@@ -1,4 +1,5 @@
 import { isRecord } from "../../lib/response-shape";
+import { BOT_SECRET_NAME_PATTERN } from "../../state/backend-state/bot-state";
 import type {
 	IInboxApproval,
 	IInboxApprovalResponse,
@@ -39,6 +40,21 @@ export function approvalOf(entry: IInboxEntry): IInboxApproval | undefined {
 		requester_id: text(body.requester_id),
 		requester_name: text(body.requester_name),
 		room: text(body.room),
+		...secretField(body.secret),
+	};
+}
+
+function secretField(value: unknown): Pick<IInboxApproval, "secret"> {
+	if (!isRecord(value)) return {};
+	const { name, description, replace } = value;
+	if (
+		typeof name !== "string" ||
+		!BOT_SECRET_NAME_PATTERN.test(name) ||
+		typeof description !== "string"
+	)
+		return {};
+	return {
+		secret: { name, description, ...(replace === true ? { replace } : {}) },
 	};
 }
 

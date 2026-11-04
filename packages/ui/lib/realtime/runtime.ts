@@ -1,6 +1,9 @@
+import { compareInboxCursors } from "../inbox-cursor";
 import { RealtimeProviderSession, backoff, jitter } from "./provider-session";
 import type { RealtimeProviderOpener } from "./providers";
 import {
+	MAX_REALTIME_CONVERSATIONS,
+	MAX_REALTIME_CONVERSATION_ENTRIES,
 	MAX_REALTIME_EVENTS,
 	MAX_REALTIME_RESPONSE_BYTES,
 	MAX_REALTIME_RUNS,
@@ -9,6 +12,7 @@ import {
 	type RealtimeCommand,
 	type RealtimeConnectionSession,
 	type RealtimeConnectionState,
+	type RealtimeConversationSubscription,
 	type RealtimeNotificationSnapshot,
 	type RealtimePollRequest,
 	type RealtimePollResponse,
@@ -32,6 +36,9 @@ interface PortRun extends RealtimeRunSubscription {
 	has_more?: boolean;
 }
 
+/** The newest entry cursor a tab accepted; unset while it holds none. */
+type PortConversation = RealtimeConversationSubscription;
+
 interface PortState {
 	id: string;
 	port: RealtimePort;
@@ -43,6 +50,7 @@ interface PortState {
 	notificationRevision?: string;
 	subscriptionVersion?: number;
 	runs: Map<string, PortRun>;
+	conversations: Map<string, PortConversation>;
 	pending?: { id: string; snapshot: RealtimePollResponse; sent: number };
 	/** A poll went out without this tab's subscriptions while its last batch was unacknowledged. */
 	skipped?: boolean;
@@ -107,6 +115,22 @@ const emptyResponse = (): RealtimePollResponse => ({
 	errors: [],
 });
 
+function conversationKey(item: {
+	conversation_id: string;
+	as?: string;
+}): string {
+	return JSON.stringify([
+		"conversation",
+		item.conversation_id,
+		item.as ?? null,
+	]);
+}
+
+function newerCursor(a: string | undefined, b: string | undefined) {
+	if (a === undefined || b === undefined) return a ?? b;
+	return compareInboxCursors(a, b) >= 0 ? a : b;
+}
+
 /** One connection per account and API; a changed hub URL is a different connection. */
 function scopeKey(session: RealtimeConnectionSession): string {
 	return JSON.stringify([session.scope, session.url]);
@@ -122,7 +146,9 @@ function hasPollChanges(response: RealtimePollResponse): boolean {
 	return (
 		response.notifications !== undefined ||
 		response.runs.length > 0 ||
-		response.errors.length > 0
+		response.errors.length > 0 ||
+		(response.conversations?.length ?? 0) > 0 ||
+		(response.conversation_errors?.length ?? 0) > 0
 	);
 }
 
@@ -168,6 +194,24 @@ export function validRealtimeSubscription(
 			return false;
 		seen.add(run.run_id);
 	}
+	const conversations = value.conversations ?? [];
+	if (
+		!Array.isArray(conversations) ||
+		conversations.length > MAX_REALTIME_CONVERSATIONS
+	)
+		return false;
+	const watched = new Set<string>();
+	for (const item of conversations) {
+		const id = conversationKey(item);
+		if (
+			!validText(item.conversation_id, 256) ||
+			(item.as !== undefined && !validText(item.as, 256)) ||
+			(item.after !== undefined && !validText(item.after, 512)) ||
+			watched.has(id)
+		)
+			return false;
+		watched.add(id);
+	}
 	return true;
 }
 
@@ -209,6 +253,57 @@ async function readResponse(response: Response): Promise<unknown> {
 		}
 	} finally {
 		reader.releaseLock();
+	}
+}
+
+function parseConversationSections(value: Record<string, unknown>): void {
+	const { conversations, conversation_errors: errors } = value;
+	if (conversations !== undefined) {
+		if (
+			!Array.isArray(conversations) ||
+			conversations.length > MAX_REALTIME_CONVERSATIONS
+		)
+			throw new RealtimeProtocolError("Invalid realtime conversation updates");
+		const seen = new Set<string>();
+		for (const item of conversations) {
+			if (
+				!record(item) ||
+				typeof item.conversation_id !== "string" ||
+				(item.as !== undefined && typeof item.as !== "string") ||
+				typeof item.has_more !== "boolean" ||
+				!Array.isArray(item.entries) ||
+				item.entries.length > MAX_REALTIME_CONVERSATION_ENTRIES ||
+				seen.has(conversationKey(item as { conversation_id: string }))
+			)
+				throw new RealtimeProtocolError("Invalid realtime conversation update");
+			seen.add(conversationKey(item as { conversation_id: string }));
+			let previous: string | undefined;
+			for (const entry of item.entries) {
+				if (
+					!record(entry) ||
+					typeof entry.cursor !== "string" ||
+					typeof entry.message_id !== "string" ||
+					(previous !== undefined &&
+						compareInboxCursors(previous, entry.cursor) >= 0)
+				)
+					throw new RealtimeProtocolError(
+						"Invalid realtime conversation entry",
+					);
+				previous = entry.cursor;
+			}
+		}
+	}
+	if (errors !== undefined) {
+		if (!Array.isArray(errors) || errors.length > MAX_REALTIME_CONVERSATIONS)
+			throw new RealtimeProtocolError("Invalid realtime conversation errors");
+		for (const error of errors)
+			if (
+				!record(error) ||
+				typeof error.conversation_id !== "string" ||
+				(error.as !== undefined && typeof error.as !== "string") ||
+				typeof error.code !== "string"
+			)
+				throw new RealtimeProtocolError("Invalid realtime conversation error");
 	}
 }
 
@@ -283,6 +378,7 @@ export function parseRealtimeResponse(value: unknown): RealtimePollResponse {
 			typeof error.code !== "string"
 		)
 			throw new RealtimeProtocolError("Invalid realtime subscription error");
+	parseConversationSections(value);
 	return value as unknown as RealtimePollResponse;
 }
 
@@ -346,6 +442,7 @@ export class RealtimeRuntime {
 				notifications: false,
 				transport: command.session.transport ?? "configured",
 				runs: new Map(),
+				conversations: new Map(),
 			};
 			this.ports.set(command.id, connected);
 			scope.ports.add(connected);
@@ -442,6 +539,20 @@ export class RealtimeRuntime {
 					);
 				}
 				connected.runs = runs;
+				const conversations = new Map<string, PortConversation>();
+				for (const item of desired.conversations ?? []) {
+					const id = conversationKey(item);
+					const old = connected.conversations.get(id);
+					conversations.set(
+						id,
+						old?.after !== undefined &&
+							(item.after === undefined ||
+								compareInboxCursors(old.after, item.after) >= 0)
+							? old
+							: { ...item },
+					);
+				}
+				connected.conversations = conversations;
 				connected.subscriptionVersion = command.subscription_version;
 				connected.notifications = desired.notifications;
 				connected.pending = undefined;
@@ -473,6 +584,19 @@ export class RealtimeRuntime {
 				for (const error of pending.snapshot.errors)
 					if (error.code !== REALTIME_ERROR_UNAVAILABLE)
 						connected.runs.delete(error.run_id);
+				for (const update of pending.snapshot.conversations ?? []) {
+					const id = conversationKey(update);
+					const current = connected.conversations.get(id);
+					const newest = update.entries.at(-1)?.cursor;
+					if (current && newest)
+						connected.conversations.set(id, {
+							...current,
+							after: newerCursor(current.after, newest),
+						});
+				}
+				for (const error of pending.snapshot.conversation_errors ?? [])
+					if (error.code !== REALTIME_ERROR_UNAVAILABLE)
+						connected.conversations.delete(conversationKey(error));
 				if (this.offerNotification(connected)) return;
 				const skipped = connected.skipped;
 				connected.skipped = false;
@@ -512,6 +636,7 @@ export class RealtimeRuntime {
 		if (!this.ports.delete(port.id)) return;
 		port.scope.ports.delete(port);
 		port.runs.clear();
+		port.conversations.clear();
 		port.pending = undefined;
 		for (const [id, pending] of this.authorizations) {
 			if (pending.port !== port) continue;
@@ -633,7 +758,8 @@ export class RealtimeRuntime {
 		const active = scope.blocked
 			? []
 			: this.activePorts(scope).filter(
-					(port) => port.notifications || port.runs.size,
+					(port) =>
+						port.notifications || port.runs.size || port.conversations.size,
 				);
 		if (!active.length) {
 			if (scope.blocked) scope.provider?.close();
@@ -678,13 +804,18 @@ export class RealtimeRuntime {
 		if (!online.length) return;
 		const now = Date.now();
 		const subscribed = new Set(
-			[...scope.ports].flatMap((port) =>
-				[...port.runs.values()].map(capabilityKey),
-			),
+			[...scope.ports].flatMap((port) => [
+				...[...port.runs.values()].map(capabilityKey),
+				...port.conversations.keys(),
+			]),
 		);
 		for (const id of scope.unavailable.keys())
 			if (!subscribed.has(id)) scope.unavailable.delete(id);
 		const runs = new Map<string, RealtimeRunSubscription>();
+		const conversations = new Map<
+			string,
+			{ item: RealtimeConversationSubscription; withoutCursor: boolean }
+		>();
 		const unacknowledged: PortState[] = [];
 		let notifications = false;
 		for (const port of online) {
@@ -693,6 +824,25 @@ export class RealtimeRuntime {
 				continue;
 			}
 			notifications ||= port.notifications;
+			for (const [id, item] of port.conversations) {
+				if ((scope.unavailable.get(id)?.retryAt ?? 0) > now) continue;
+				const current = conversations.get(id);
+				if (!current)
+					conversations.set(id, {
+						item: { ...item },
+						withoutCursor: item.after === undefined,
+					});
+				else if (!current.withoutCursor) {
+					if (item.after === undefined) {
+						current.withoutCursor = true;
+						current.item.after = undefined;
+					} else if (
+						current.item.after !== undefined &&
+						compareInboxCursors(item.after, current.item.after) < 0
+					)
+						current.item.after = item.after;
+				}
+			}
 			for (const run of port.runs.values()) {
 				const id = capabilityKey(run);
 				if ((scope.unavailable.get(id)?.retryAt ?? 0) > now) continue;
@@ -717,7 +867,10 @@ export class RealtimeRuntime {
 			}
 		}
 		const deferred = unacknowledged.filter(
-			(port) => port.runs.size > 0 || (port.notifications && !notifications),
+			(port) =>
+				port.runs.size > 0 ||
+				port.conversations.size > 0 ||
+				(port.notifications && !notifications),
 		);
 		for (const port of deferred) port.skipped = true;
 		const all = [...runs.values()];
@@ -731,7 +884,11 @@ export class RealtimeRuntime {
 			if (selected.length === MAX_REALTIME_RUNS) break;
 		}
 		scope.rotation = offset + 1;
-		if (!notifications && !selected.length) return;
+		const selectedConversations = [...conversations.values()]
+			.slice(0, MAX_REALTIME_CONVERSATIONS)
+			.map(({ item }) => item);
+		if (!notifications && !selected.length && !selectedConversations.length)
+			return;
 		const timeout = scope.provider?.connected ? 0 : this.pollWaitMs(scope);
 		scope.deferred = deferred.length > 0 && timeout > 0;
 		return {
@@ -739,6 +896,9 @@ export class RealtimeRuntime {
 				? { notifications: { revision: scope.notification?.revision } }
 				: {}),
 			runs: selected,
+			...(selectedConversations.length
+				? { conversations: selectedConversations }
+				: {}),
 			timeout_ms: timeout,
 		};
 	}
@@ -762,9 +922,23 @@ export class RealtimeRuntime {
 				.filter((error) => error.code === REALTIME_ERROR_UNAVAILABLE)
 				.map((error) => error.run_id),
 		);
-		for (const run of request.runs) {
-			const id = capabilityKey(run);
-			if (!unavailable.has(run.run_id)) {
+		const unavailableConversations = new Set(
+			(response.conversation_errors ?? [])
+				.filter((error) => error.code === REALTIME_ERROR_UNAVAILABLE)
+				.map(conversationKey),
+		);
+		const requested = [
+			...request.runs.map((run) => ({
+				id: capabilityKey(run),
+				failed: unavailable.has(run.run_id),
+			})),
+			...(request.conversations ?? []).map((item) => ({
+				id: conversationKey(item),
+				failed: unavailableConversations.has(conversationKey(item)),
+			})),
+		];
+		for (const { id, failed } of requested) {
+			if (!failed) {
 				scope.unavailable.delete(id);
 				continue;
 			}
@@ -792,7 +966,11 @@ export class RealtimeRuntime {
 		response: RealtimePollResponse,
 		elapsedMs: number,
 	): number {
-		if (response.runs.some((run) => run.has_more)) return 50;
+		if (
+			response.runs.some((run) => run.has_more) ||
+			response.conversations?.some((item) => item.has_more)
+		)
+			return 50;
 		const runs = [...scope.ports].some(
 			(port) => port.activity.online && port.runs.size > 0,
 		);
@@ -831,7 +1009,9 @@ export class RealtimeRuntime {
 			port.pending ||
 			(!snapshot.notifications &&
 				!snapshot.runs.length &&
-				!snapshot.errors.length)
+				!snapshot.errors.length &&
+				!snapshot.conversations?.length &&
+				!snapshot.conversation_errors?.length)
 		)
 			return;
 		const id = crypto.randomUUID();
@@ -850,6 +1030,9 @@ export class RealtimeRuntime {
 		request: RealtimePollRequest,
 	): void {
 		const requested = new Map(request.runs.map((run) => [run.run_id, run]));
+		const requestedConversations = new Set(
+			(request.conversations ?? []).map(conversationKey),
+		);
 		if (request.notifications && response.notifications)
 			scope.notification = response.notifications;
 		for (const port of scope.ports) {
@@ -893,6 +1076,25 @@ export class RealtimeRuntime {
 					requested.get(error.run_id)?.poll_token ===
 						port.runs.get(error.run_id)?.poll_token,
 			);
+			const conversations = (response.conversations ?? []).flatMap((update) => {
+				const id = conversationKey(update);
+				const subscribed = port.conversations.get(id);
+				if (!subscribed || !requestedConversations.has(id)) return [];
+				const entries = update.entries.filter(
+					(entry) =>
+						subscribed.after === undefined ||
+						compareInboxCursors(entry.cursor, subscribed.after) > 0,
+				);
+				return entries.length ? [{ ...update, entries }] : [];
+			});
+			if (conversations.length) snapshot.conversations = conversations;
+			const conversationErrors = (response.conversation_errors ?? []).filter(
+				(error) =>
+					requestedConversations.has(conversationKey(error)) &&
+					port.conversations.has(conversationKey(error)),
+			);
+			if (conversationErrors.length)
+				snapshot.conversation_errors = conversationErrors;
 			this.deliver(port, snapshot);
 		}
 	}

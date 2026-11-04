@@ -176,6 +176,8 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	const [authPushed, setAuthPushed] = useState(false);
 
 	const isPublicPath =
+		pathname === "/meeting" ||
+		pathname === "/meeting/" ||
 		pathname === "/debug/markdown" ||
 		pathname === "/debug/upgrade" ||
 		PUBLIC_PATHS.some((path) => pathname?.startsWith(path));

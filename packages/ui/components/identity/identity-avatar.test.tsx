@@ -107,6 +107,22 @@ describe("ResolvedIdentityAvatar", () => {
 		expect(badge?.textContent).toBe("");
 	});
 
+	test("rounds the bot's box like its frame, so a ring around it follows the face", () => {
+		const radius = (frame?: "squircle" | "square") =>
+			render(
+				<ResolvedIdentityAvatar
+					identity={botIdentity({ appearance: { kind: "mochi", frame } })}
+					size={32}
+				/>,
+			)
+				.querySelector('[role="img"]')
+				?.getAttribute("style");
+
+		expect(radius()).toContain("border-radius:50%");
+		expect(radius("squircle")).toContain("border-radius:28%");
+		expect(radius("square")).toContain("border-radius:0%");
+	});
+
 	test("holds the bot still unless asked to move", () => {
 		const document = render(
 			<ResolvedIdentityAvatar identity={botIdentity()} size={32} />,

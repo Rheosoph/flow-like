@@ -13,6 +13,7 @@ import type {
 import { BotAvatar } from "../bots/bot-avatar";
 import type { BotAppearance } from "../bots/types";
 import { IdentityAvatar } from "../identity/identity-avatar";
+import { IdentityHoverCard } from "../identity/identity-hover-card";
 import { Button } from "../ui/button";
 import { isApprovalCard } from "./approval-entry";
 import { CrewSection, StatusDot } from "./crew-section";
@@ -122,7 +123,9 @@ function InvitationNeed({
 		<>
 			<NeedsYouCard
 				avatar={
-					<IdentityAvatar subject={invitation.invited_by ?? ""} size={36} />
+					<IdentityHoverCard subject={invitation.invited_by ?? ""}>
+						<IdentityAvatar subject={invitation.invited_by ?? ""} size={36} />
+					</IdentityHoverCard>
 				}
 				name={inviter}
 				where={isRequest ? t("crew.requests.where", "Message request") : room}
@@ -228,12 +231,15 @@ function InvitationNeed({
 }
 
 export function NeedsYouSection({
+	title,
 	items,
 	directory,
 	text,
 	onOpenConversation,
 	onOpenAssistant,
 }: Readonly<{
+	/** Replaces "Needs you" where the section stands on its own. */
+	title?: ReactNode;
 	items: readonly NeedsYouItem[];
 	directory: CrewDirectory;
 	text: ConversationText;
@@ -244,7 +250,7 @@ export function NeedsYouSection({
 	if (items.length === 0) return null;
 	return (
 		<CrewSection
-			title={t("crew.needs.title", "Needs you")}
+			title={title ?? t("crew.needs.title", "Needs you")}
 			aside={
 				<span className="inline-flex h-5 min-w-5 items-center justify-center self-center rounded-full bg-primary/15 px-1.5 text-xs font-semibold text-primary">
 					{items.length}
@@ -299,7 +305,11 @@ export function NeedsYouSection({
 					return (
 						<NeedsYouCard
 							key={conversation.id}
-							avatar={<IdentityAvatar subject={sender} size={36} />}
+							avatar={
+								<IdentityHoverCard subject={sender}>
+									<IdentityAvatar subject={sender} size={36} />
+								</IdentityHoverCard>
+							}
 							name={directory(sender).name}
 							where={
 								conversation.kind === "group"

@@ -12,7 +12,7 @@ use super::{
 use crate::{
     entity::{bot, bot_turn},
     error::ApiError,
-    routes::bots::owned_bot,
+    routes::bots::{model::hands_off_to_desktop, owned_bot},
 };
 use axum::http::StatusCode;
 use chrono::{DateTime, FixedOffset};
@@ -43,8 +43,10 @@ fn not_claimed(bot_id: &str, claim: &TurnClaim, reason: &str) -> ApiError {
     )
 }
 
-/// One of the caller's bots that runs on their desktop: only its desktop host sends as it here.
-/// Server bots reply in-process and device bots through their device.
+/// One of the caller's bots whose turns their desktop answers: only its desktop host sends as it
+/// here. That is a desktop bot, or a server bot that hands off to the desktop; the fenced
+/// completion still requires a turn this host claimed. Other server bots reply in-process and
+/// device bots through their device.
 pub(super) async fn desktop_bot<C: ConnectionTrait>(
     db: &C,
     sub: &str,
@@ -53,6 +55,7 @@ pub(super) async fn desktop_bot<C: ConnectionTrait>(
     let bot = owned_bot(db, sub, bot_id).await?;
     let host = match BotLocation::parse(&bot.location).unwrap_or_default() {
         BotLocation::Desktop => return Ok(bot),
+        BotLocation::Server if hands_off_to_desktop(&bot) => return Ok(bot),
         BotLocation::Server => "the server, which answers its turns itself",
         BotLocation::Device => "a device, which answers its turns itself",
     };

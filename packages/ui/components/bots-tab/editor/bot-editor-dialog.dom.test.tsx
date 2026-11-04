@@ -75,6 +75,7 @@ interface Calls {
 	openChanges: boolean[];
 	appChanges: AppChange[];
 	secrets: { name: string; request: IUpsertBotSecretRequest }[];
+	workspaces: string[];
 }
 
 interface Fixture {
@@ -130,6 +131,10 @@ function fakeBackend(
 		getBot: async () => {
 			if (!existing) throw new Error("No bot");
 			return existing;
+		},
+		getWorkspace: async (botId) => {
+			calls.workspaces.push(botId);
+			return { app_id: `workspace_${botId}` };
 		},
 		createBot: async (request) => {
 			if (refuseWith) throw refuseWith;
@@ -212,6 +217,14 @@ function fakeBackend(
 					meta: { en: { name: "BGE Small" } },
 				},
 				{ id: "llm_1", type: "Llm", meta: { en: { name: "Chat model" } } },
+				{ id: "stt_1", type: "Stt", meta: { en: { name: "Whisper Small" } } },
+				{ id: "tts_1", type: "Tts", meta: { en: { name: "Kokoro" } } },
+				{
+					id: "image_1",
+					type: "ImageGeneration",
+					meta: { en: { name: "Flux Schnell" } },
+				},
+				{ id: "vlm_1", type: "Vlm", meta: { en: { name: "Sight model" } } },
 			],
 		},
 		capabilities: () => ({}),
@@ -257,6 +270,7 @@ function noCalls() {
 		openChanges: [],
 		appChanges: [],
 		secrets: [],
+		workspaces: [],
 	};
 	return calls;
 }
@@ -870,9 +884,9 @@ describe("BotEditorDialog chat settings", () => {
 		expect(view.body.textContent).toContain("Unknown model (chat_model)");
 		expect(
 			view.body.querySelector(
-				'[role="combobox"][aria-label="Profile memory embedding model"]',
+				'[role="combobox"][aria-label="Memory embedding model"]',
 			),
-		).not.toBeNull();
+		).toBeNull();
 		expect(view.button("Review & manage saved memories")).toBeDefined();
 		expect(view.body.textContent).not.toContain("Default chat model");
 	});
@@ -1022,6 +1036,84 @@ describe("BotEditorDialog built-in bots", () => {
 	});
 });
 
+describe("BotEditorDialog model pins", () => {
+	const pinField = (body: HTMLElement, label: string) => {
+		const found = body.querySelector<HTMLButtonElement>(
+			`button[aria-label^='${label}:']`,
+		);
+		if (!found) throw new Error(`No ${label} field`);
+		return found;
+	};
+
+	test("Brain pins speech, image and vision models by Bit type and saves only the changes", async () => {
+		const view = await renderDialog({ existing: bot() });
+		await view.settle();
+		await view.click("Brain");
+		await view.settle();
+		expect(
+			pinField(view.body, "Speech to text").getAttribute("aria-label"),
+		).toBe("Speech to text: Let the host choose");
+
+		await view.press(pinField(view.body, "Speech to text"));
+		const listed = view.body.querySelector("fieldset")?.textContent;
+		expect(listed).toContain("Whisper Small");
+		expect(listed).not.toContain("Kokoro");
+		expect(listed).not.toContain("Sight model");
+		await view.click("Whisper Small");
+		await view.settle();
+
+		await view.press(pinField(view.body, "Vision"));
+		await view.click("Sight model");
+		await view.settle();
+
+		await view.press(pinField(view.body, "Image generation"));
+		await view.click("Flux Schnell");
+		await view.settle();
+		await view.press(pinField(view.body, "Text to speech"));
+		await view.click("Kokoro");
+		await view.settle();
+
+		await view.click("Save changes");
+		await view.settle();
+		expect(view.calls.updated).toEqual([
+			{
+				botId: "bot_1",
+				request: {
+					stt_model: "stt_1",
+					tts_model: "tts_1",
+					image_model: "image_1",
+					vision_model: "vlm_1",
+				},
+			},
+		]);
+	});
+
+	test("a pinned model is shown and cleared back to the host", async () => {
+		const view = await renderDialog({
+			existing: bot({ stt_model: "stt_1" }),
+		});
+		await view.settle();
+		await view.click("Brain");
+		await view.settle();
+		expect(
+			pinField(view.body, "Speech to text").getAttribute("aria-label"),
+		).toBe("Speech to text: Whisper Small");
+		await view.press(pinField(view.body, "Speech to text"));
+		const host = Array.from(
+			view.body.querySelectorAll<HTMLButtonElement>("fieldset button"),
+		).find((choice) =>
+			choice.textContent?.includes("The app or server it runs on picks one"),
+		);
+		if (!host) throw new Error("No host choice");
+		await view.press(host);
+		await view.click("Save changes");
+		await view.settle();
+		expect(view.calls.updated).toEqual([
+			{ botId: "bot_1", request: { stt_model: null } },
+		]);
+	});
+});
+
 describe("BotEditorDialog memory", () => {
 	const findMemoryField = (body: HTMLElement) =>
 		body.querySelector<HTMLButtonElement>(
@@ -1037,12 +1129,12 @@ describe("BotEditorDialog memory", () => {
 	};
 	const remembers = () => bot({ capabilities: ["memory"] });
 
-	test("the memory model sits in the Memory card, and a picked one is saved", async () => {
+	test("Brain and the Memory card edit the same saved memory model", async () => {
 		const view = await renderDialog({ existing: remembers() });
 		await view.settle();
 		await view.click("Brain");
 		await view.settle();
-		expect(showsMemoryField(view.body)).toBe(false);
+		expect(showsMemoryField(view.body)).toBe(true);
 
 		await view.click("Abilities");
 		await view.settle();
@@ -1058,6 +1150,8 @@ describe("BotEditorDialog memory", () => {
 		await view.press(memoryField(view.body));
 		expect(() => view.button("Chat model")).toThrow();
 		await view.click("Nomic Embed");
+		await view.click("Brain");
+		await view.settle();
 		expect(memoryField(view.body).getAttribute("aria-label")).toBe(
 			"Memory model: Nomic Embed",
 		);
@@ -1066,6 +1160,106 @@ describe("BotEditorDialog memory", () => {
 		expect(view.calls.updated).toEqual([
 			{ botId: "bot_1", request: { embedding_model: "embedding_1" } },
 		]);
+	});
+
+	test("the Assistant saves a memory model selected in Brain without changing the chat default", async () => {
+		const { useGlobalChatStore } = await import(
+			"../../../state/global-chat/global-chat-store"
+		);
+		const chatEmbeddingModel = useGlobalChatStore.getState().embeddingModelId;
+		const view = await renderDialog({
+			existing: bot({
+				id: "bot_general",
+				system: "general",
+				name: null,
+				capabilities: ["internet", "memory"],
+			}),
+		});
+		await view.settle();
+		await view.click("Brain");
+		await view.settle();
+		expect(view.button("Save changes").disabled).toBe(true);
+		expect(
+			view.body.querySelector('[aria-label="Memory embedding model"]'),
+		).toBeNull();
+		await view.press(memoryField(view.body));
+		await view.click("Nomic Embed");
+		expect(view.button("Save changes").disabled).toBe(false);
+		expect(useGlobalChatStore.getState().embeddingModelId).toBe(
+			chatEmbeddingModel,
+		);
+		expect(view.calls.updated).toEqual([]);
+		await view.click("Save changes");
+		await view.settle();
+		expect(view.calls.updated).toEqual([
+			{ botId: "bot_general", request: { embedding_model: "embedding_1" } },
+		]);
+		expect(view.calls.saved[0]?.embedding_model).toBe("embedding_1");
+	});
+
+	test.each([
+		bot({ id: "account_assistant", system: "general", name: null }),
+		bot({ id: "custom_bot" }),
+	])("Brain reviews workspace facts for $id", async (existing) => {
+		const facts = await import("../../../state/global-chat/bot-memory-facts");
+		const memories = await import(
+			"../../../state/global-chat/global-chat-memory"
+		);
+		const listFacts = spyOn(facts, "listBotFacts").mockResolvedValue([]);
+		const listMemories = spyOn(
+			memories,
+			"listGlobalChatMemories",
+		).mockResolvedValue([]);
+		try {
+			const view = await renderDialog({ existing });
+			await view.settle();
+			await view.click("Brain");
+			await view.settle();
+			expect(view.calls.workspaces).toEqual([]);
+			await view.click("Review & manage saved memories");
+			await view.settle();
+			expect(view.calls.workspaces).toEqual([existing.id]);
+			expect(listFacts).toHaveBeenCalledWith({
+				botId: existing.id,
+				appId: `workspace_${existing.id}`,
+				token: undefined,
+			});
+			expect(listMemories).not.toHaveBeenCalled();
+		} finally {
+			listFacts.mockRestore();
+			listMemories.mockRestore();
+		}
+	});
+
+	test.each([
+		bot({ id: "bot_flux", system: "flux", name: null }),
+		bot({ id: "local_assistant", system: "general", local: true }),
+	])("Brain keeps the existing memory store for $id", async (existing) => {
+		const memories = await import(
+			"../../../state/global-chat/global-chat-memory"
+		);
+		const listMemories = spyOn(
+			memories,
+			"listGlobalChatMemories",
+		).mockResolvedValue([]);
+		try {
+			const view = await renderDialog({ existing });
+			await view.settle();
+			await view.click("Brain");
+			await view.settle();
+			await view.click("Review & manage saved memories");
+			await view.settle();
+			expect(view.calls.workspaces).toEqual([]);
+			expect(listMemories).toHaveBeenCalledWith(
+				{
+					profileId: "profile_1",
+					botId: existing.system === "flux" ? null : existing.id,
+				},
+				undefined,
+			);
+		} finally {
+			listMemories.mockRestore();
+		}
 	});
 
 	test("letting the host choose clears it", async () => {
@@ -1097,6 +1291,9 @@ describe("BotEditorDialog memory", () => {
 		await view.click("Abilities");
 		await view.settle();
 		await view.press(switchFor(view.body, "Memory"));
+		expect(showsMemoryField(view.body)).toBe(false);
+		await view.click("Brain");
+		await view.settle();
 		expect(showsMemoryField(view.body)).toBe(false);
 		await view.click("Save changes");
 		await view.settle();

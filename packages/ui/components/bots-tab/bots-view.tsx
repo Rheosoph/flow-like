@@ -12,27 +12,26 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { botPresence, useBotPresence } from "../../hooks/use-bot-presence";
-import { useBots } from "../../hooks/use-bots";
-import { useConversations, useInvitations } from "../../hooks/use-inbox";
-import { LocalPrincipalsProvider } from "../../hooks/use-user-lookup";
-import { useBackend, useSignedIn } from "../../state/backend-state";
-import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
-import type { IConversation } from "../../state/backend-state/inbox-state";
-import { conversationBotId } from "../../state/global-chat/global-chat-bots";
+import { useBackend } from "../../state/backend-state";
+import type { IBot } from "../../state/backend-state/bot-state";
 import {
 	selectActiveBotId,
-	selectToolPromptConversationId,
-	selectToolPromptHere,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
-import { restoreGlobalChatConversation } from "../../state/global-chat/global-chat-stream";
 import { ChatBotReactionProvider } from "../global-chat/chat-bot-reaction";
-import { useGlobalChatBot } from "../global-chat/use-global-chat-bot";
 import { useHomeScope } from "../home/home-content/shared";
 import { homeGreetingName } from "../home/home-greeting";
 import { Button } from "../ui/button";
 import type { BotPanelActions } from "./bot-details";
 import type { BotPanelTab } from "./bot-panel-tabs";
+import {
+	type CrewData,
+	CrewDataScope,
+	revealPromptChat,
+	useBotIds,
+	useCrewPickerSource,
+	useNeedsYou,
+} from "./crew-data";
 import { CrewDock } from "./crew-dock";
 import {
 	CREW_GRID_CLASS,
@@ -44,12 +43,11 @@ import {
 } from "./crew-grid";
 import { CrewHeader } from "./crew-header";
 import {
-	type CrewMode,
+	crewPrincipalIds,
 	crewSummaryLine,
-	isSelfPrincipal,
+	hasBotsHostedElsewhere,
 	matchesSearch,
 	otherMemberIds,
-	selectNeedsYou,
 	splitConversations,
 } from "./crew-model";
 import { CrewSection } from "./crew-section";
@@ -63,12 +61,12 @@ import {
 } from "./dock-selection";
 import { BotEditorDialog } from "./editor";
 import { LocalBotsBanner } from "./local-bots-banner";
-import { useCrewLocalPrincipals } from "./local-principals";
+import { requestMessageJump } from "./message-jump";
+import { StarredMessagesDialog } from "./message-marks";
 import { MoveLocalBotsDialog } from "./move-local-bots-dialog";
-import { type NeedsYouItem, NeedsYouSection } from "./needs-you-section";
+import { NeedsYouSection } from "./needs-you-section";
 import { NewMessageDialog } from "./new-message-dialog";
 import { NewRoomDialog } from "./new-room-dialog";
-import type { PickerSource } from "./principal-picker";
 import { RoomsSection } from "./rooms-section";
 import { useConversationText } from "./use-conversation-text";
 import { useCrewDirectory } from "./use-crew-directory";
@@ -76,26 +74,7 @@ import { useDockSelection } from "./use-dock-selection";
 import { moveCheckKeys } from "./use-local-bot-moves";
 import { useMoveRequest } from "./use-move-request";
 
-interface CrewData {
-	me: string | null;
-	mode: CrewMode;
-	bots?: IBot[];
-	botsLoading: boolean;
-	botsFailed: boolean;
-	retryBots: () => void;
-	conversations: readonly IConversation[];
-	conversationsLoading: boolean;
-	conversationsFailed: boolean;
-	retryConversations: () => void;
-}
-
-const NO_CONVERSATIONS: readonly IConversation[] = [];
 const NO_BOTS: readonly IBot[] = [];
-const noop = () => undefined;
-
-function conversationNeed(conversation: IConversation): NeedsYouItem {
-	return { type: "conversation", conversation };
-}
 
 function useGreetingName(): string | undefined {
 	const auth = useAuth();
@@ -127,38 +106,6 @@ function useRevealGlobalChat(reveal: () => void) {
 		seen.current = revealRequest;
 		reveal();
 	}, [revealRequest, reveal]);
-}
-
-/** The chat whose run waits for an answer; a prompt no run owns stays with the open chat. */
-function selectPromptChat(
-	state: ReturnType<typeof useGlobalChatStore.getState>,
-) {
-	return state.toolPrompt
-		? (selectToolPromptConversationId(state) ?? state.activeConversationId)
-		: null;
-}
-
-/**
- * The card for a run waiting for an answer, named after the bot that asks. The prompt itself shows
- * only in the asking chat, so there's no card while the dock shows that very chat.
- */
-function usePromptNeed(showingGlobalChat: boolean): NeedsYouItem | null {
-	const promptChat = useGlobalChatStore(selectPromptChat);
-	const askingBot = useGlobalChatBot(promptChat ?? undefined);
-	const askingChatOnScreen = useGlobalChatStore(selectToolPromptHere);
-	const hidden =
-		promptChat === null || (showingGlobalChat && askingChatOnScreen);
-	return useMemo(
-		() =>
-			hidden
-				? null
-				: {
-						type: "assistant",
-						name: askingBot.name,
-						appearance: askingBot.appearance,
-					},
-		[askingBot.appearance, askingBot.name, hidden],
-	);
 }
 
 function CrewNotice({
@@ -264,81 +211,78 @@ function CrewLayout(data: Readonly<CrewData>) {
 	);
 	const [newRoomOpen, setNewRoomOpen] = useState(false);
 	const [newMessageOpen, setNewMessageOpen] = useState(false);
+	const [starredOpen, setStarredOpen] = useState(false);
 
 	const crew = useCrewMembers(bots);
-	const hostedElsewhere = useMemo(
-		() =>
-			bots?.some(
-				(bot) => !bot.local && !bot.system && bot.location !== "server",
-			) ?? false,
-		[bots],
-	);
-	const presence = useBotPresence(hostedElsewhere).data;
-	const myBotIds = useMemo(
-		() => new Set((bots ?? []).map((bot) => bot.id)),
-		[bots],
-	);
+	const presence = useBotPresence(hasBotsHostedElsewhere(bots)).data;
+	const myBotIds = useBotIds(bots);
 	const localBots = useMemo(
 		() => bots?.filter((bot) => bot.local) ?? NO_BOTS,
 		[bots],
 	);
 	const move = useMoveReview(canMove);
-	const invitations = useInvitations();
+	const { items: needs, invitations } = useNeedsYou(conversations, {
+		me,
+		myBotIds,
+		openConversationId:
+			dockOpen && resolved.type === "conversation"
+				? resolved.conversationId
+				: null,
+		showingGlobalChat,
+	});
 	const principalIds = useMemo(
-		() => [
-			...conversations.flatMap((conversation) => [
-				...conversation.members.map((member) => member.principal_id),
-				...(conversation.pending ?? []).map((member) => member.principal_id),
-				...(conversation.last_entry ? [conversation.last_entry.sender_id] : []),
-			]),
-			...(invitations.data ?? []).flatMap((invitation) =>
-				invitation.invited_by ? [invitation.invited_by] : [],
-			),
-		],
-		[conversations, invitations.data],
-	);
-	const recentPeopleIds = useMemo(
-		() => [
-			...new Set(
-				conversations.flatMap((conversation) =>
-					conversation.members
-						.filter(
-							(member) =>
-								member.kind === "user" &&
-								!isSelfPrincipal(member.principal_id, me),
-						)
-						.map((member) => member.principal_id),
-				),
-			),
-		],
-		[conversations, me],
+		() => crewPrincipalIds(conversations, invitations),
+		[conversations, invitations],
 	);
 	const directory = useCrewDirectory(principalIds, { me, bots });
 	const text = useConversationText(directory, me);
-	const pickerSource = useMemo<PickerSource>(
-		() => ({
-			me,
-			bots: bots ?? NO_BOTS,
-			recentPeopleIds,
-			directory,
-			people: signedIn,
-		}),
-		[bots, directory, me, recentPeopleIds, signedIn],
-	);
+	const pickerSource = useCrewPickerSource(data, directory);
 	const greetingName = useGreetingName();
 
 	const openConversation = useCallback(
-		(conversationId: string) =>
-			select({ type: "conversation", conversationId }),
-		[select],
+		(conversationId: string) => {
+			if (
+				selection.type === "conversation" &&
+				selection.conversationId === conversationId &&
+				panelCoversChat
+			) {
+				selectPanel(null);
+				return;
+			}
+			select({ type: "conversation", conversationId });
+		},
+		[panelCoversChat, select, selectPanel, selection],
+	);
+	const openStarred = useCallback(
+		(conversationId: string, messageId: string) => {
+			requestMessageJump(conversationId, messageId);
+			openConversation(conversationId);
+		},
+		[openConversation],
 	);
 	/** Opens the dock on a bot's chat, writing the URL only when that changes what it shows. */
 	const showChatOf = useCallback(
 		(botId: string | null) => {
 			const target = resolveDockSelection(dockSelectionForChatBot(botId), bots);
-			if (dockSelectionKey(target) !== dockSelectionKey(resolved))
+			if (dockSelectionKey(target) !== dockSelectionKey(resolved)) {
 				select(target);
-			else if (panelCoversChat) selectPanel(null);
+				return;
+			}
+			// Activity can restore another Flux session while the dock is closed. Keep that
+			// session in the URL before the reopened dock reads its bookmark.
+			const state = useGlobalChatStore.getState();
+			if (botId === null && selectActiveBotId(state) === null) {
+				const url = new URL(window.location.href);
+				if (url.searchParams.get("session") !== state.activeConversationId) {
+					url.searchParams.set("session", state.activeConversationId);
+					window.history.replaceState(
+						null,
+						"",
+						`${url.pathname}${url.search}${url.hash}`,
+					);
+				}
+			}
+			if (panelCoversChat) selectPanel(null);
 			else openDock();
 		},
 		[bots, openDock, panelCoversChat, resolved, select, selectPanel],
@@ -348,57 +292,18 @@ function CrewLayout(data: Readonly<CrewData>) {
 		if (panelCoversChat) selectPanel(null);
 		else openDock();
 	}, [openDock, panelCoversChat, selectPanel]);
-	/** The asking chat itself, which for Flux may be another of its chats than the last one. */
-	const openPromptChat = useCallback(() => {
-		const state = useGlobalChatStore.getState();
-		const promptChat = selectPromptChat(state);
-		if (promptChat === null) return;
-		const botId = conversationBotId(promptChat);
-		if (promptChat === state.activeConversationId) {
-			showChatOf(botId);
-			return;
-		}
-		void restoreGlobalChatConversation(promptChat)
-			.catch(() => false)
-			.then((shown) => {
-				if (shown) showChatOf(botId);
-			});
-	}, [showChatOf]);
-	// Drafts come from FlowPilot entry points (hero bar, board surfaces, native requests): Flux's.
+	const openPromptChat = useCallback(
+		() => revealPromptChat(showChatOf),
+		[showChatOf],
+	);
+	// A draft names the bot it was written to; FlowPilot entry points leave it to Flux.
 	const revealGlobalChat = useCallback(() => {
 		const state = useGlobalChatStore.getState();
-		showChatOf(state.draft ? null : selectActiveBotId(state));
+		showChatOf(
+			state.draft ? (state.draft.botId ?? null) : selectActiveBotId(state),
+		);
 	}, [showChatOf]);
 	useRevealGlobalChat(revealGlobalChat);
-
-	const promptNeed = usePromptNeed(showingGlobalChat);
-	const needs = useMemo<NeedsYouItem[]>(() => {
-		const waiting = selectNeedsYou(conversations, {
-			me,
-			myBotIds,
-			openConversationId:
-				dockOpen && selection.type === "conversation"
-					? selection.conversationId
-					: null,
-		}).map(conversationNeed);
-		const invited = (invitations.data ?? []).map<NeedsYouItem>(
-			(invitation) => ({
-				type: "invitation",
-				invitation,
-			}),
-		);
-		return promptNeed
-			? [promptNeed, ...invited, ...waiting]
-			: [...invited, ...waiting];
-	}, [
-		conversations,
-		dockOpen,
-		invitations.data,
-		me,
-		myBotIds,
-		promptNeed,
-		selection,
-	]);
 
 	const query = search.trim();
 	const visibleCrew = crew.filter((member) =>
@@ -514,6 +419,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 					dockOpen ? (
 						<CrewDock
 							selection={resolved}
+							sourceSelection={selection}
 							account={{
 								me,
 								mode,
@@ -640,6 +546,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 							}}
 							onNewRoom={() => setNewRoomOpen(true)}
 							onNewMessage={() => setNewMessageOpen(true)}
+							onShowStarred={() => setStarredOpen(true)}
 						/>
 					)}
 					{nothingFound && (
@@ -672,6 +579,13 @@ function CrewLayout(data: Readonly<CrewData>) {
 						source={pickerSource}
 						onPicked={openPicked}
 					/>
+					<StarredMessagesDialog
+						open={starredOpen}
+						onOpenChange={setStarredOpen}
+						conversations={conversations}
+						text={text}
+						onOpen={openStarred}
+					/>
 				</>
 			)}
 			{canMove && (
@@ -690,82 +604,18 @@ function CrewLayout(data: Readonly<CrewData>) {
 	);
 }
 
-/** Bots and conversations from the routed states; local ones resolve without the directory. */
-function ConnectedCrew({
-	me,
-	mode,
-}: Readonly<{ me: string | null; mode: Exclude<CrewMode, "guest"> }>) {
-	const bots = useBots();
-	const conversations = useConversations();
-	const list = conversations.data ?? NO_CONVERSATIONS;
-	const resolveLocal = useCrewLocalPrincipals(bots.data, list);
-	return (
-		<LocalPrincipalsProvider value={resolveLocal}>
-			<CrewLayout
-				me={me}
-				mode={mode}
-				bots={bots.data}
-				botsLoading={bots.isPending && bots.fetchStatus !== "idle"}
-				botsFailed={bots.isError && !bots.data}
-				retryBots={() => void bots.refetch()}
-				conversations={list}
-				conversationsLoading={
-					conversations.isPending && conversations.fetchStatus !== "idle"
-				}
-				conversationsFailed={conversations.isError && !conversations.data}
-				retryConversations={() => void conversations.refetch()}
-			/>
-		</LocalPrincipalsProvider>
-	);
-}
-
-function AccountCrew() {
-	const auth = useAuth();
-	return <ConnectedCrew me={auth.user?.profile.sub ?? null} mode="account" />;
-}
-
-/** Signed out on the desktop: Assistant, Flux, and the bots and chats on this computer. */
-function LocalCrew() {
-	return <ConnectedCrew me={LOCAL_OWNER_ID} mode="local" />;
-}
-
-/** Signed out where bots can't live on the device: Assistant and Flux only. */
-function GuestCrew() {
-	return (
-		<CrewLayout
-			me={null}
-			mode="guest"
-			botsLoading={false}
-			botsFailed={false}
-			retryBots={noop}
-			conversations={NO_CONVERSATIONS}
-			conversationsLoading={false}
-			conversationsFailed={false}
-			retryConversations={noop}
-		/>
-	);
-}
-
 /**
  * The Bots tab at `/bots`: your crew, what needs you, rooms and people, and a dock that holds
  * one conversation. The global chat overlay closes while it is open, so no chat shows twice.
  */
 export function BotsView() {
-	const signedIn = useSignedIn();
-	const keepsLocalBots = Boolean(useBackend().botState?.local);
 	const closeOverlay = useGlobalChatStore((s) => s.closeOverlay);
 	useEffect(() => {
 		closeOverlay();
 	}, [closeOverlay]);
 	return (
 		<ChatBotReactionProvider>
-			{signedIn ? (
-				<AccountCrew />
-			) : keepsLocalBots ? (
-				<LocalCrew />
-			) : (
-				<GuestCrew />
-			)}
+			<CrewDataScope>{(data) => <CrewLayout {...data} />}</CrewDataScope>
 		</ChatBotReactionProvider>
 	);
 }

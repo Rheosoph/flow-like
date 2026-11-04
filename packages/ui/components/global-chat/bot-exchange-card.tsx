@@ -8,6 +8,13 @@ import {
 	ShieldQuestionIcon,
 	XCircleIcon,
 } from "lucide-react";
+import {
+	RequestCard,
+	RequestCardBody,
+	RequestCardHeader,
+	RequestMark,
+	type RequestTone,
+} from "../interfaces/chat-default/request-card";
 import type { BotExchangeEntry, BotExchangeView } from "./bot-exchange";
 
 const ICONS = {
@@ -17,6 +24,14 @@ const ICONS = {
 	denied: XCircleIcon,
 	error: XCircleIcon,
 } as const;
+
+const TONES: Record<BotExchangeView["state"], RequestTone> = {
+	answered: "muted",
+	pending: "primary",
+	waiting: "warning",
+	denied: "critical",
+	error: "critical",
+};
 
 function ExchangeLink({
 	conversationId,
@@ -30,7 +45,7 @@ function ExchangeLink({
 		<button
 			type="button"
 			onClick={() => onOpen(conversationId)}
-			className="inline-flex items-center gap-1 text-xs text-primary underline-offset-2 hover:underline"
+			className="inline-flex items-center gap-1.5 rounded text-xs font-medium text-primary underline-offset-2 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-primary/40"
 		>
 			<ExternalLinkIcon className="size-3" aria-hidden />
 			{t("exchange.open", "Open the full exchange")}
@@ -71,39 +86,58 @@ export function BotExchangeCard({
 		),
 		error: t("exchange.error", "{{caller}} could not ask {{callee}}", vars),
 	}[exchange.state];
+	const tone = TONES[exchange.state];
+	const hasBody = Boolean(
+		exchange.question ||
+			exchange.answer ||
+			exchange.note ||
+			(exchange.conversationId && onOpen),
+	);
 	return (
-		<section
+		<RequestCard
 			aria-label={headline}
 			data-state={exchange.state}
-			className="my-2 flex flex-col gap-2 rounded-xl border bg-card p-3 text-sm"
+			tone={tone}
+			live={exchange.state === "pending" || exchange.state === "waiting"}
+			className="my-2 text-sm"
 		>
-			<header className="flex items-center gap-2 font-medium">
-				<Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
-				<span className="min-w-0 truncate">{headline}</span>
-			</header>
-			{exchange.question && (
-				<p className="line-clamp-3 text-muted-foreground">
-					{exchange.question}
-				</p>
+			<RequestCardHeader
+				dense
+				mark={<RequestMark icon={Icon} tone={tone} size="sm" />}
+				title={headline}
+				className={hasBody ? undefined : "pb-3"}
+			/>
+			{hasBody && (
+				<RequestCardBody dense>
+					{exchange.question && (
+						<p className="line-clamp-3 rounded-lg bg-muted/50 px-3 py-2 text-[13px] leading-relaxed text-muted-foreground">
+							{exchange.question}
+						</p>
+					)}
+					{exchange.answer && (
+						<div className="space-y-1 border-l-2 border-primary/40 pl-3">
+							<span className="block text-xs font-medium text-muted-foreground">
+								{t("exchange.answeredBy", "{{callee}} answered", vars)}
+							</span>
+							<p className="whitespace-pre-wrap leading-relaxed">
+								{exchange.answer}
+							</p>
+						</div>
+					)}
+					{exchange.note && (
+						<p className="text-xs leading-relaxed text-muted-foreground">
+							{exchange.note}
+						</p>
+					)}
+					{exchange.conversationId && onOpen && (
+						<ExchangeLink
+							conversationId={exchange.conversationId}
+							onOpen={onOpen}
+						/>
+					)}
+				</RequestCardBody>
 			)}
-			{exchange.answer && (
-				<div className="flex flex-col gap-1 border-l-2 pl-3">
-					<span className="text-xs text-muted-foreground">
-						{t("exchange.answeredBy", "{{callee}} answered", vars)}
-					</span>
-					<p className="whitespace-pre-wrap">{exchange.answer}</p>
-				</div>
-			)}
-			{exchange.note && (
-				<p className="text-xs text-muted-foreground">{exchange.note}</p>
-			)}
-			{exchange.conversationId && onOpen && (
-				<ExchangeLink
-					conversationId={exchange.conversationId}
-					onOpen={onOpen}
-				/>
-			)}
-		</section>
+		</RequestCard>
 	);
 }
 

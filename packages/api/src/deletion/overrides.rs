@@ -190,8 +190,12 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 sweep_via("Bot", "InboxEntry", "inboxId"),
                 sweep_via("Bot", "InboxKey", "principalId"),
                 sweep("ConversationMember", "principalId"),
+                sweep("Meeting", "hostId"),
+                sweep("MeetingParticipant", "userId"),
                 sweep("InboxEntry", "inboxId"),
                 sweep("InboxKey", "principalId"),
+                sweep("PinnedConversation", "principalId"),
+                sweep("StarredMessage", "principalId"),
                 sweep("QuotaWarningState", "payerId"),
             ],
             restrict_as_cascade: vec![
@@ -364,8 +368,18 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                     "messages stay in their recipients' inboxes and show a deleted account",
                 ),
                 keep("Conversation", "createdBy", "attribution"),
+                keep(
+                    "ConversationFile",
+                    "uploaderId",
+                    "a file belongs to its conversation and stays readable for the members who remain",
+                ),
                 keep("ConversationMember", "addedBy", "attribution"),
                 keep("ConversationMember", "invitedBy", "attribution"),
+                keep(
+                    "PinnedMessage",
+                    "pinnedBy",
+                    "a pin belongs to its conversation and stays for the members who remain",
+                ),
                 keep(
                     "BotPermission",
                     "grantedBy",

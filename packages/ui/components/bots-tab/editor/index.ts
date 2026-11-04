@@ -17,7 +17,6 @@ export {
 } from "./bot-editor-copy";
 export { hasFixedLocation, hasFlowPilot } from "./bot-draft";
 export {
-	BOT_OWNED_PACK_IDS,
 	describeBotLookRequirement,
 	getBotLookRequirements,
 } from "./bot-look";

@@ -1,7 +1,7 @@
 "use client";
 
-import { useContext } from "react";
 import { PlateElement, type PlateElementProps } from "platejs/react";
+import { useContext } from "react";
 import {
 	type FootnoteElement,
 	footnoteDomId,

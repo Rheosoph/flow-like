@@ -128,6 +128,18 @@ impl ToolHost for TestHost {
     async fn secret(&self, name: &str) -> Result<Option<String>> {
         Ok(self.secrets.lock().unwrap().get(name).cloned())
     }
+
+    async fn secrets(&self) -> Result<Vec<flow_like_bot_tools::SecretInfo>> {
+        let mut names: Vec<String> = self.secrets.lock().unwrap().keys().cloned().collect();
+        names.sort();
+        Ok(names
+            .into_iter()
+            .map(|name| flow_like_bot_tools::SecretInfo {
+                name,
+                description: None,
+            })
+            .collect())
+    }
 }
 
 fn bot(capabilities: &[BotCapability]) -> BotRunContext {
@@ -323,6 +335,14 @@ async fn secrets_come_from_the_host_and_missing_ones_are_none() {
     let env = env_for(&host, &bot(&[BotCapability::DataConnections]));
     assert_eq!(env.secret("db").await.unwrap().as_deref(), Some("pw"));
     assert!(env.secret("other").await.unwrap().is_none());
+    let listed: Vec<String> = env
+        .secrets()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|secret| secret.name)
+        .collect();
+    assert_eq!(listed, ["db"]);
 }
 
 #[tokio::test]

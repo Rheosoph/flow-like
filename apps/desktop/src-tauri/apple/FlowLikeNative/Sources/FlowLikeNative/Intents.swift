@@ -354,6 +354,186 @@ public struct OpenNativeItemIntent: AppIntent {
     }
 }
 
+public struct FlowBotEntity: AppEntity {
+    public static let typeDisplayRepresentation: TypeDisplayRepresentation = "Bot"
+    public static let defaultQuery = FlowBotQuery()
+    public var id: String
+    public var sourceId: String
+    public var scope: String
+    @Property(title: "Name") public var title: String
+    public var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(title)", image: .init(systemName: "bubble.left.and.text.bubble.right"))
+    }
+    public init(_ bot: NativeBot, scope: String) {
+        id = "\(scope.utf8.count):\(scope)\(bot.id)"
+        sourceId = bot.id
+        self.scope = scope
+        title = bot.title
+    }
+}
+
+public struct FlowBotQuery: EntityStringQuery {
+    public init() {}
+    private var entities: [FlowBotEntity] {
+        guard let snapshot = NativeStore.shared.catalog() else { return [] }
+        return (snapshot.bots ?? []).filter { $0.exposes("siri") || $0.exposes("shortcuts") }
+            .map { FlowBotEntity($0, scope: snapshot.scope) }
+    }
+    public func entities(for identifiers: [String]) async throws -> [FlowBotEntity] { entities.filter { identifiers.contains($0.id) } }
+    public func entities(matching string: String) async throws -> [FlowBotEntity] { entities.filter { $0.title.localizedStandardContains(string) } }
+    public func suggestedEntities() async throws -> [FlowBotEntity] { entities }
+}
+
+private func checkedBot(_ bot: FlowBotEntity, store: NativeStore) throws -> NativeBot {
+    guard let snapshot = store.catalog(), snapshot.scope == bot.scope,
+          let current = snapshot.bots?.first(where: { $0.id == bot.sourceId }),
+          current.exposes("siri") || current.exposes("shortcuts") else { throw NativeIntegrationError.invalidAction }
+    return current
+}
+
+public struct OpenFlowBotIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Open Bot"
+    public static let openAppWhenRun = true
+    public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+    @Parameter(title: "Bot") public var bot: FlowBotEntity
+    public static var parameterSummary: some ParameterSummary { Summary("Open \(\.$bot)") }
+    public init() {}
+    public func perform() async throws -> some IntentResult {
+        _ = try checkedBot(bot, store: .shared)
+        _ = try NativeStore.shared.enqueue(NativeAction(kind: "open_bot", botId: bot.sourceId), expectedScope: bot.scope)
+        return .result()
+    }
+}
+
+public struct AskFlowBotIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Ask Bot"
+    public static let description = IntentDescription("Ask a selected bot and return its reply. Flow Like opens so you can review any requested approval.")
+    public static let openAppWhenRun = true
+    public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+    @Parameter(title: "Bot") public var bot: FlowBotEntity
+    @Parameter(title: "Question") public var question: String
+    public static var parameterSummary: some ParameterSummary { Summary("Ask \(\.$bot) \(\.$question)") }
+    public init() {}
+    public func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
+        let request = try enqueue(in: .shared)
+        let result = try await NativeStore.shared.waitForActionResult(request)
+        let text = result.text ?? ""
+        return .result(value: text, dialog: "\(String(text.prefix(4000)))")
+    }
+    func enqueue(in store: NativeStore) throws -> NativeActionRequest {
+        _ = try checkedBot(bot, store: store)
+        let prompt = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty else { throw $question.needsValueError("What would you like to ask this bot?") }
+        return try store.enqueue(NativeAction(kind: "ask_bot", prompt: prompt, botId: bot.sourceId),
+                                 expectedScope: bot.scope, responseMode: "text")
+    }
+}
+
+public struct FlowBotTaskEntity: AppEntity {
+    public static let typeDisplayRepresentation: TypeDisplayRepresentation = "Bot task"
+    public static let defaultQuery = FlowBotTaskQuery()
+    public var id: String
+    public var sourceId: String
+    public var botId: String
+    public var scope: String
+    @Property(title: "Name") public var title: String
+    public var displayRepresentation: DisplayRepresentation {
+        DisplayRepresentation(title: "\(title)", image: .init(systemName: "checklist"))
+    }
+    public init(_ task: NativeBotTask, scope: String) {
+        id = "\(scope.utf8.count):\(scope)\(task.botId.utf8.count):\(task.botId)\(task.id)"
+        sourceId = task.id
+        botId = task.botId
+        self.scope = scope
+        title = task.title
+    }
+}
+
+public struct FlowBotTaskQuery: EntityStringQuery {
+    public init() {}
+    private var entities: [FlowBotTaskEntity] {
+        guard let snapshot = NativeStore.shared.catalog() else { return [] }
+        let bots = Set((snapshot.bots ?? []).filter { $0.exposes("siri") || $0.exposes("shortcuts") }.map(\.id))
+        return (snapshot.botTasks ?? []).filter { $0.enabled != false && bots.contains($0.botId) }
+            .map { FlowBotTaskEntity($0, scope: snapshot.scope) }
+    }
+    public func entities(for identifiers: [String]) async throws -> [FlowBotTaskEntity] { entities.filter { identifiers.contains($0.id) } }
+    public func entities(matching string: String) async throws -> [FlowBotTaskEntity] { entities.filter { $0.title.localizedStandardContains(string) } }
+    public func suggestedEntities() async throws -> [FlowBotTaskEntity] { entities }
+}
+
+public struct RunFlowBotTaskIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Run Bot Task"
+    public static let openAppWhenRun = true
+    public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+    @Parameter(title: "Task") public var task: FlowBotTaskEntity
+    public static var parameterSummary: some ParameterSummary { Summary("Run \(\.$task)") }
+    public init() {}
+    public func perform() async throws -> some IntentResult {
+        _ = try enqueue(in: .shared)
+        return .result()
+    }
+    func enqueue(in store: NativeStore) throws -> NativeActionRequest {
+        guard let snapshot = store.catalog(), snapshot.scope == task.scope,
+              snapshot.bots?.contains(where: { $0.id == task.botId && ($0.exposes("siri") || $0.exposes("shortcuts")) }) == true else {
+            throw NativeIntegrationError.invalidAction
+        }
+        return try store.enqueue(NativeAction(kind: "run_bot_task", botId: task.botId, taskId: task.sourceId), expectedScope: task.scope)
+    }
+}
+
+public struct SpeakToFlowBotIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Speak to Bot"
+    public static let openAppWhenRun = true
+    public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+    @Parameter(title: "Bot") public var bot: FlowBotEntity
+    public init() {}
+    public func perform() async throws -> some IntentResult {
+        _ = try checkedBot(bot, store: .shared)
+        _ = try NativeStore.shared.enqueue(NativeAction(kind: "capture_bot_voice", botId: bot.sourceId), expectedScope: bot.scope)
+        return .result()
+    }
+}
+
+public struct ScanForFlowBotIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Scan Document for Bot"
+    public static let openAppWhenRun = true
+    public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+    @Parameter(title: "Bot") public var bot: FlowBotEntity
+    public init() {}
+    public func perform() async throws -> some IntentResult {
+        _ = try checkedBot(bot, store: .shared)
+        _ = try NativeStore.shared.enqueue(NativeAction(kind: "capture_bot_document", botId: bot.sourceId), expectedScope: bot.scope)
+        return .result()
+    }
+}
+
+public struct RespondBotApprovalIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Respond to Bot Approval"
+    public static let isDiscoverable = false
+    public static let openAppWhenRun = true
+    public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+    @Parameter(title: "Approval") public var approvalId: String
+    @Parameter(title: "Workspace") public var scope: String
+    @Parameter(title: "Allow once", default: false) public var allowOnce: Bool
+    public init() {}
+    public init(approvalId: String, scope: String, allowOnce: Bool) {
+        self.approvalId = approvalId
+        self.scope = scope
+        self.allowOnce = allowOnce
+    }
+    public func perform() async throws -> some IntentResult {
+        guard let snapshot = NativeStore.shared.snapshot(), snapshot.scope == scope,
+              let approval = snapshot.botApprovals?.first(where: { $0.id == approvalId }), approval.isPending() else {
+            throw NativeIntegrationError.invalidAction
+        }
+        _ = try NativeStore.shared.enqueue(NativeAction(kind: "respond_bot_approval", botId: approval.botId,
+            conversationId: approval.conversationId, turnId: approval.turnId, approvalId: approval.id,
+            decision: allowOnce ? "once" : "deny"), expectedScope: scope)
+        return .result()
+    }
+}
+
 #if !os(iOS) || FLOW_LIKE_SHORTCUTS_HOST
 public struct FlowLikeShortcuts: AppShortcutsProvider {
     public static var appShortcuts: [AppShortcut] {
@@ -378,6 +558,15 @@ public struct FlowLikeShortcuts: AppShortcutsProvider {
         AppShortcut(intent: OpenFlowHomeIntent(), phrases: [
             "Open my workspace in \(.applicationName)"
         ], shortTitle: "Workspace", systemImageName: "square.grid.2x2")
+        AppShortcut(intent: OpenFlowBotIntent(), phrases: [
+            "Open \(\.$bot) in \(.applicationName)"
+        ], shortTitle: "Open Bot", systemImageName: "bubble.left.and.text.bubble.right")
+        AppShortcut(intent: AskFlowBotIntent(), phrases: [
+            "Ask \(\.$bot) in \(.applicationName)"
+        ], shortTitle: "Ask Bot", systemImageName: "bubble.left")
+        AppShortcut(intent: RunFlowBotTaskIntent(), phrases: [
+            "Run \(\.$task) in \(.applicationName)"
+        ], shortTitle: "Run Bot Task", systemImageName: "checklist")
     }
 }
 #endif
@@ -424,6 +613,33 @@ public struct FlowEventControlConfiguration: ControlConfigurationIntent {
     public static let title: LocalizedStringResource = "Event"
     @Parameter(title: "Event") public var event: WidgetFlowEventEntity?
     public init() {}
+}
+
+@available(iOS 18.0, macOS 26.0, *)
+public struct FlowBotControlConfiguration: ControlConfigurationIntent {
+    public static let title: LocalizedStringResource = "Bot"
+    @Parameter(title: "Bot") public var bot: FlowBotEntity?
+    @Parameter(title: "Start voice input", default: false) public var voice: Bool
+    public init() {}
+}
+
+public struct OpenWidgetFlowBotIntent: AppIntent {
+    public static let title: LocalizedStringResource = "Open Bot"
+    public static let isDiscoverable = false
+    public static let openAppWhenRun = true
+    public static let authenticationPolicy: IntentAuthenticationPolicy = .requiresLocalDeviceAuthentication
+    @Parameter(title: "Bot") public var bot: FlowBotEntity?
+    @Parameter(title: "Start voice input", default: false) public var voice: Bool
+    public init() {}
+    public init(bot: FlowBotEntity?, voice: Bool = false) { self.bot = bot; self.voice = voice }
+    public func perform() async throws -> some IntentResult {
+        guard let bot, let snapshot = NativeStore.shared.catalog(), snapshot.scope == bot.scope,
+              snapshot.bots?.contains(where: { $0.id == bot.sourceId && $0.exposes("widget") }) == true else {
+            throw NativeIntegrationError.invalidAction
+        }
+        _ = try NativeStore.shared.enqueue(NativeAction(kind: voice ? "capture_bot_voice" : "open_bot", botId: bot.sourceId), expectedScope: bot.scope)
+        return .result()
+    }
 }
 
 public struct RunWidgetFlowEventIntent: AppIntent {

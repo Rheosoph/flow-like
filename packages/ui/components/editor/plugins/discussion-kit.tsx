@@ -1,13 +1,13 @@
 "use client";
 
-import { createPlatePlugin, type PlateEditor } from "platejs/react";
+import { type PlateEditor, createPlatePlugin } from "platejs/react";
 
 import { BlockDiscussion } from "../ui/block-discussion";
 
 import type {
 	EditorUser,
-	ReviewDiscussion,
 	PlateDocument,
+	ReviewDiscussion,
 } from "../../../lib/plate-document";
 
 export type TDiscussion = ReviewDiscussion;

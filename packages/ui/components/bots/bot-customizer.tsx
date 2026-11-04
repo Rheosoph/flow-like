@@ -1,6 +1,13 @@
 "use client";
 
-import { type ReactNode, useEffect, useId, useRef, useState } from "react";
+import {
+	type ReactNode,
+	memo,
+	useEffect,
+	useId,
+	useRef,
+	useState,
+} from "react";
 import { BOT_OPTIONS, resolveBotAppearance } from "./appearance";
 import { BotAvatar } from "./bot-avatar";
 import { BotColorPicker } from "./bot-color-picker";
@@ -11,6 +18,7 @@ import {
 	normalizeBotColorSelection,
 } from "./colors";
 import { BOT_EFFECTS, BOT_EFFECT_GROUPS } from "./effects";
+import { isBotEquipmentCompatible } from "./equipment-fit";
 import {
 	canUseBotEquipment,
 	canUseBotShape,
@@ -18,6 +26,7 @@ import {
 	getBotPackContents,
 	getBotShapePacks,
 } from "./packs";
+import { randomizeBotColors } from "./random-colors";
 import { getBotSaveEligibility } from "./save-eligibility";
 import { BOT_AGENT_STATES, BOT_MOODS } from "./states";
 import {
@@ -48,7 +57,7 @@ export interface BotCustomizerProps {
 	catalog?: BotCatalog;
 	className?: string;
 	previewSize?: number;
-	/** Controls save eligibility. Every catalog item remains available to preview. */
+	/** Optional ownership restrictions. Omit to make the full catalog available. */
 	ownedPackIds?: readonly string[];
 	/** The host opens pack details or its purchase flow. */
 	onRequestPack?: (pack: BotPackDefinition) => void;
@@ -150,6 +159,31 @@ const PREVIEW_POSES: readonly (readonly [BotPose, string])[] = [
 function randomItem<T>(items: readonly T[]): T {
 	return items[Math.floor(Math.random() * items.length)];
 }
+
+// Keep the crew's SVG artwork stable while the selected bot changes.
+const CharacterThumbnail = memo(function CharacterThumbnail({
+	kind,
+	catalog,
+	expression,
+	size,
+}: {
+	kind: string;
+	catalog: BotCatalog;
+	expression: BotExpression;
+	size: number;
+}) {
+	return (
+		<BotAvatar
+			appearance={{ kind }}
+			catalog={catalog}
+			size={size}
+			expression={expression}
+			pose="center"
+			animated={false}
+			decorative
+		/>
+	);
+});
 
 function Tile({
 	label,
@@ -303,9 +337,7 @@ export function BotCustomizer({
 		).values(),
 	];
 	const availableEquipment = Object.values(catalog.equipment).filter(
-		(item) =>
-			item.slot === slot &&
-			(!item.kinds || item.kinds.includes(appearance.kind)),
+		(item) => item.slot === slot && isBotEquipmentCompatible(item, shape),
 	);
 	const outfitPacks = packs.filter((pack) => pack.equipmentIds?.length);
 	const outfitCollection =
@@ -429,24 +461,54 @@ export function BotCustomizer({
 			? randomItem(candidates).id
 			: catalog.defaultKind;
 		const equipment: NonNullable<BotAppearance["equipment"]> = {};
-		for (const equipmentSlot of BOT_EQUIPMENT_SLOTS) {
+		const accessorySlots = BOT_EQUIPMENT_SLOTS.filter(
+			(slot) =>
+				slot !== "neck" &&
+				Object.values(catalog.equipment).some(
+					(item) =>
+						item.slot === slot &&
+						isBotEquipmentCompatible(item, catalog.shapes[kind]) &&
+						canUseBotEquipment(item.id, catalog, ownedPackIds),
+				),
+		);
+		// One outfit and one accessory keep the face readable without crowding the character.
+		const chosenSlots: BotEquipmentSlot[] = ["neck"];
+		if (accessorySlots.length) chosenSlots.push(randomItem(accessorySlots));
+		for (const equipmentSlot of chosenSlots) {
 			const items = Object.values(catalog.equipment).filter(
 				(item) =>
 					item.slot === equipmentSlot &&
-					(!item.kinds || item.kinds.includes(kind)) &&
+					isBotEquipmentCompatible(item, catalog.shapes[kind]) &&
 					canUseBotEquipment(item.id, catalog, ownedPackIds),
 			);
 			if (items.length && (equipmentSlot === "neck" || Math.random() >= 0.25))
 				equipment[equipmentSlot] = randomItem(items).id;
 		}
+		const colors = randomizeBotColors({
+			shape: catalog.shapes[kind],
+			catalog,
+			ownedPackIds,
+			effect: value.effect,
+		});
+		const textured = Object.values(colors).some(
+			(selection) =>
+				selection?.kind === "swatch" &&
+				catalog.colors[selection.colorId].paint.kind !== "solid",
+		);
+		// Give a texture, backdrop or halo room to stand on its own.
+		const decoration = textured ? 0 : Math.random();
 		replaceAppearance({
 			kind,
 			equipment,
+			colors,
 			frame: randomItem(BOT_OPTIONS.frame),
-			backdrop: randomItem(BOT_OPTIONS.backdrop),
-			halo: randomItem(BOT_OPTIONS.halo),
+			backdrop: decoration >= 0.88 ? randomItem(BOT_OPTIONS.backdrop) : "none",
+			halo:
+				decoration >= 0.78 && decoration < 0.88
+					? randomItem(BOT_OPTIONS.halo)
+					: "none",
 			effect: value.effect,
-			emote: randomItem(BOT_OPTIONS.emote),
+			emote: Math.random() < 0.75 ? "none" : randomItem(BOT_OPTIONS.emote),
 		});
 	}
 
@@ -484,7 +546,7 @@ export function BotCustomizer({
 			if (
 				!item ||
 				item.slot !== equipmentSlot ||
-				(item.kinds && !item.kinds.includes(kind))
+				!isBotEquipmentCompatible(item, catalog.shapes[kind])
 			)
 				delete equipment[equipmentSlot];
 		}
@@ -496,11 +558,7 @@ export function BotCustomizer({
 			const item = Object.hasOwn(catalog.equipment, itemId)
 				? catalog.equipment[itemId]
 				: undefined;
-			if (
-				!item ||
-				item.slot !== slot ||
-				(item.kinds && !item.kinds.includes(appearance.kind))
-			)
+			if (!item || item.slot !== slot || !isBotEquipmentCompatible(item, shape))
 				return;
 		}
 		const equipment = { ...value.equipment };
@@ -605,7 +663,12 @@ export function BotCustomizer({
 				locked={!canUseBotShape(item.id, catalog, ownedPackIds)}
 				onClick={() => selectKind(item.id)}
 			>
-				{thumbnail({ kind: item.id })}
+				<CharacterThumbnail
+					kind={item.id}
+					catalog={catalog}
+					expression={expression}
+					size={68}
+				/>
 			</Tile>
 		);
 	}
@@ -622,14 +685,11 @@ export function BotCustomizer({
 			>
 				<header className="fl-bot-studio-pack-heading">
 					<div className="fl-bot-studio-pack-cover" aria-hidden="true">
-						<BotAvatar
-							appearance={{ kind: pack.coverKind }}
+						<CharacterThumbnail
+							kind={pack.coverKind}
 							catalog={catalog}
 							size={42}
 							expression={expression}
-							pose="center"
-							animated={false}
-							decorative
 						/>
 					</div>
 					<div className="fl-bot-studio-pack-title">

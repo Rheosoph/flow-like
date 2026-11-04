@@ -795,6 +795,48 @@ export async function post<T>(
 	);
 }
 
+/** POST JSON and read the response as binary, for routes that answer with a file. */
+export async function postBlob(
+	profile: IProfile,
+	path: string,
+	data: unknown,
+	auth?: AuthContextProps,
+): Promise<Blob> {
+	const scopedAuth = authForHub(profile, auth);
+	const route = normalizeApiPath("POST", path);
+	const body = JSON.stringify(data);
+	try {
+		return await withRequestDeadline<Blob>(
+			route,
+			async (deadline) => {
+				const response = await withHubAuth(profile, scopedAuth, (token) =>
+					tauriFetch(constructUrl(profile, path), {
+						method: "POST",
+						body,
+						headers: hubAuthHeaders(
+							{
+								"Content-Type": "application/json",
+								[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
+							},
+							token,
+						),
+						connectTimeout: DEFAULT_CONNECT_TIMEOUT_MS,
+						signal: deadline.signal,
+					}),
+				);
+				if (!response.ok) {
+					throw apiResponseError(response, await response.text(), path);
+				}
+				return response.blob();
+			},
+			{ timeoutMs: requestTimeoutMs(cleanApiPath(path), "POST", body.length) },
+		);
+	} catch (error) {
+		if (error instanceof ApiResponseError) throw error;
+		throw requestFailure(error, route);
+	}
+}
+
 export async function get<T>(
 	profile: IProfile,
 	path: string,

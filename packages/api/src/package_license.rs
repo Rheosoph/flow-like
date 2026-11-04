@@ -508,6 +508,7 @@ async fn notify_stage(
             state,
             &id,
             DispatchNotificationInput {
+                bot_context: None,
                 user_id,
                 app_id: Some(app_id.to_string()),
                 title: title.clone(),

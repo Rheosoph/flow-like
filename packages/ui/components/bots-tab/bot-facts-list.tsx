@@ -90,11 +90,14 @@ export function BotFactsList({
 	botId,
 	appId,
 	name,
+	memoryOff = false,
 	onJump,
 }: Readonly<{
 	botId: string;
 	appId: string;
 	name: string;
+	/** Memory is off for this bot, so an empty list isn't "as you chat". */
+	memoryOff?: boolean;
 	onJump: (seq: number) => void;
 }>) {
 	const { t } = useTranslation("bots");
@@ -143,11 +146,13 @@ export function BotFactsList({
 	if (facts.data.length === 0) {
 		return (
 			<p className="px-4 py-3 text-xs text-muted-foreground">
-				{t(
-					"memory.factsEmpty",
-					"{{name}} writes down facts, preferences and decisions here as you chat.",
-					{ name },
-				)}
+				{memoryOff
+					? t("memory.factsEmptyOff", "Nothing is saved while memory is off.")
+					: t(
+							"memory.factsEmpty",
+							"{{name}} writes down facts, preferences and decisions here as you chat.",
+							{ name },
+						)}
 			</p>
 		);
 	}

@@ -1,4 +1,5 @@
 import { APP_CATEGORY_ORDER } from "../../../../../lib/category-meta";
+import { HOME_BOT_MESSAGE_FILTERS } from "../../../../home/home-content/config";
 import { HOME_DATA_WIDGET_CONFIG_CONTRACT } from "./data";
 
 import {
@@ -177,6 +178,50 @@ export const HOME_WIDGET_CONFIG_CONTRACTS = {
 				any_non_empty: ["appId", "appIds"],
 			},
 		],
+	},
+	"bot-chat": {
+		description:
+			"A composer that sends a message to one of the reader's bots and opens its chat.",
+		additional_properties: false,
+		fields: {
+			mode: text("Composer presentation.", {
+				default: "hero",
+				enum: ["hero", "bar"],
+			}),
+			botId: text(
+				"Bot the composer talks to first: general (the Assistant), flux, or a bot id. Empty is the Assistant.",
+			),
+			crew: boolean(
+				"Show the reader's bots to switch to before sending.",
+				true,
+			),
+			limit: count(6, 12),
+			placeholder: text("Prompt input placeholder."),
+		},
+	},
+	"bot-crew": {
+		description: "The reader's bots as cards that open their chats.",
+		additional_properties: false,
+		fields: {
+			limit: count(8),
+			newBot: boolean("Show the tile that creates a bot.", true),
+		},
+	},
+	"bot-messages": {
+		description:
+			"The reader's conversations with people and bots: newest, unread, direct, rooms, or only what needs an answer.",
+		additional_properties: false,
+		fields: {
+			filter: text("Which conversations to show.", {
+				default: "all",
+				enum: HOME_BOT_MESSAGE_FILTERS,
+			}),
+			limit: count(6),
+			needsYou: boolean(
+				"Pin approvals, invitations and waiting bots on top. Ignored for rooms.",
+				true,
+			),
+		},
 	},
 	categories: {
 		description: "App category chips or tiles.",

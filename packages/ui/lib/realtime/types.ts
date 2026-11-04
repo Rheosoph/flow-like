@@ -1,3 +1,5 @@
+import type { IInboxEntry } from "../../state/backend-state/inbox-state";
+
 export interface IRealtimeIceServer {
 	urls: string | string[];
 	username?: string;
@@ -33,6 +35,8 @@ export interface IJwks {
 
 export const REALTIME_PROTOCOL_VERSION = 1;
 export const MAX_REALTIME_RUNS = 16;
+export const MAX_REALTIME_CONVERSATIONS = 8;
+export const MAX_REALTIME_CONVERSATION_ENTRIES = 50;
 export const MAX_REALTIME_EVENTS = 100;
 export const MAX_REALTIME_RESPONSE_BYTES = 4 * 1024 * 1024;
 export const MAX_REALTIME_TIMEOUT_MS = 20_000;
@@ -62,9 +66,18 @@ export interface RealtimeRunSubscription {
 	revision?: string;
 }
 
+export interface RealtimeConversationSubscription {
+	conversation_id: string;
+	/** An `IInboxEntry.cursor`; omitted only while no entries are held. */
+	after?: string;
+	/** Read as one of my bots. */
+	as?: string;
+}
+
 export interface RealtimePollRequest {
 	notifications?: { revision?: string };
 	runs: RealtimeRunSubscription[];
+	conversations?: RealtimeConversationSubscription[];
 	timeout_ms: number;
 }
 
@@ -97,11 +110,27 @@ export interface RealtimeRunSnapshot {
 	has_more: boolean;
 }
 
+export interface RealtimeConversationUpdate {
+	conversation_id: string;
+	as?: string;
+	/** Oldest first. */
+	entries: IInboxEntry[];
+	has_more: boolean;
+}
+
+export interface RealtimeConversationError {
+	conversation_id: string;
+	as?: string;
+	code: string;
+}
+
 export interface RealtimePollResponse {
 	protocol_version: 1;
 	notifications?: RealtimeNotificationSnapshot;
 	runs: RealtimeRunSnapshot[];
 	errors: { run_id: string; code: string }[];
+	conversations?: RealtimeConversationUpdate[];
+	conversation_errors?: RealtimeConversationError[];
 }
 
 export type RealtimeConnectionState =
@@ -116,6 +145,7 @@ export type RealtimeConnectionState =
 export interface RealtimeSubscription {
 	notifications: boolean;
 	runs: RealtimeRunSubscription[];
+	conversations?: RealtimeConversationSubscription[];
 }
 
 export interface RealtimeConnectionSession {

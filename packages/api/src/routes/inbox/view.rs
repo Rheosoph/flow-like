@@ -32,13 +32,16 @@ struct ConversationRow {
     created_by: String,
     created_at: DateTime<FixedOffset>,
     last_activity_at: DateTime<FixedOffset>,
+    pinned_at: Option<DateTime<FixedOffset>>,
     unread_count: i64,
     last_entry_id: Option<String>,
 }
 
-/// The reader's conversations, newest activity first; with `only`, just that one if the reader
-/// is an active member. The correlated counts run on the at most 200 rows the inner query keeps,
-/// each a range scan of the `(inboxId, conversationId, createdAt)` index.
+/// The reader's conversations: pinned ones first, newest pin first, then newest activity first,
+/// so a pinned conversation never falls off the limit; with `only`, just that one if the reader
+/// is an active member. Only people pin, so a bot's inbox lists no pins. The correlated counts
+/// run on the at most 200 rows the inner query keeps, each a range scan of the `(inboxId,
+/// conversationId, createdAt)` index.
 fn conversations_statement(
     db: &impl ConnectionTrait,
     reader: &Reader,
@@ -56,7 +59,7 @@ fn conversations_statement(
     let sql = format!(
         r#"SELECT p."id" AS id, p."kind" AS kind, p."title" AS title, p."encryption" AS encryption,
        p."createdBy" AS created_by, p."createdAt" AS created_at,
-       p."lastActivityAt" AS last_activity_at,
+       p."lastActivityAt" AS last_activity_at, p."pinnedAt" AS pinned_at,
        (SELECT COUNT(*) FROM "InboxEntry" e
          WHERE e."inboxId" = $1 AND e."conversationId" = p."id" AND e."kind" = $2
            AND e."senderId" <> $1
@@ -66,14 +69,16 @@ fn conversations_statement(
          ORDER BY e."createdAt" DESC, e."id" DESC LIMIT 1) AS last_entry_id
 FROM (
     SELECT c."id", c."kind", c."title", c."encryption", c."createdBy", c."createdAt",
-           c."lastActivityAt", m."lastReadAt"
+           c."lastActivityAt", m."lastReadAt", pc."pinnedAt"
     FROM "ConversationMember" m
     JOIN "Conversation" c ON c."id" = m."conversationId"
+    LEFT JOIN "PinnedConversation" pc
+      ON pc."principalId" = $1 AND pc."conversationId" = c."id"
     WHERE m."principalId" = $1 AND m."leftAt" IS NULL AND m."status" = 'ACTIVE'{filter}
-    ORDER BY c."lastActivityAt" DESC, c."id" DESC
+    ORDER BY (pc."pinnedAt" IS NULL), pc."pinnedAt" DESC, c."lastActivityAt" DESC, c."id" DESC
     LIMIT {MAX_LISTED_CONVERSATIONS}
 ) p
-ORDER BY p."lastActivityAt" DESC, p."id" DESC"#
+ORDER BY (p."pinnedAt" IS NULL), p."pinnedAt" DESC, p."lastActivityAt" DESC, p."id" DESC"#
     );
     Statement::from_sql_and_values(db.get_database_backend(), sql, values)
 }
@@ -112,6 +117,7 @@ pub(super) async fn conversations_for<C: ConnectionTrait>(
                 })
                 .unwrap_or_default(),
             muted: muted.contains(&row.id),
+            pinned_at: row.pinned_at,
             unread_count: u64::try_from(row.unread_count).unwrap_or(0),
             last_entry: row
                 .last_entry_id

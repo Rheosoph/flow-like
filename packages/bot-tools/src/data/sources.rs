@@ -328,7 +328,7 @@ async fn read_network_tables(
 ) -> ToolResult<Vec<SourceTable>> {
     let password = env.secret(&connection.secret).await?.ok_or_else(|| {
         ToolError::not_found(format!(
-            "The bot has no secret named '{}'; add it in the bot's secrets, then attach again",
+            "The bot has no secret named '{}'; call secret_list for the stored names, or secret_request to ask the owner for it, then attach again",
             connection.secret
         ))
     })?;

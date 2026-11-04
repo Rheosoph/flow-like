@@ -42,6 +42,11 @@ import {
 	useMobileHeader,
 } from "@flow-like/flow-like-ui";
 import {
+	BotWorkspaceAvatar,
+	BotWorkspaceBlock,
+	useWorkspaceBot,
+} from "@flow-like/flow-like-ui/components/identity/bot-workspace-brand";
+import {
 	ConfigNavRow,
 	PermissionLockDialog,
 	SectionLockedPanel,
@@ -120,6 +125,8 @@ export default function Id({
 		[id ?? ""],
 		typeof id === "string",
 	);
+
+	const workspaceBot = useWorkspaceBot(app.data);
 
 	const [cardMaximized, setCardMaximized] = useState(false);
 	// The deploy wizard opens maximized; its toggle is a choice of its own, so
@@ -512,6 +519,9 @@ export default function Id({
 									<BreadcrumbSeparator />
 									<BreadcrumbItem>
 										<BreadcrumbPage className="font-medium flex flex-row items-center gap-2">
+											{workspaceBot && (
+												<BotWorkspaceAvatar bot={workspaceBot} size={22} />
+											)}
 											{metadata.isFetching ? (
 												<Skeleton className="h-4 w-24" />
 											) : (
@@ -806,6 +816,12 @@ export default function Id({
 						<Card className="h-full max-h-full overflow-hidden py-2 hidden md:flex md:flex-col md:flex-grow order-2 md:order-1">
 							<CardContent className="flex-1 p-0 overflow-hidden">
 								<ScrollArea className="h-full px-3 flex-1">
+									{workspaceBot && (
+										<BotWorkspaceBlock
+											bot={workspaceBot}
+											onNavigate={(href) => router.push(href)}
+										/>
+									)}
 									<nav
 										className="flex flex-col gap-0.5 py-3"
 										key={id + (effectiveVisibility ?? "")}

@@ -2,6 +2,7 @@ import {
 	Activity,
 	AlertCircle,
 	Bell,
+	Bot,
 	Brain,
 	CalendarDays,
 	ChartColumn,
@@ -29,6 +30,7 @@ import {
 	Star,
 	Sun,
 	Table2,
+	Users,
 	Zap,
 } from "lucide-react";
 
@@ -36,6 +38,7 @@ const icons = {
 	activity: Activity,
 	attention: AlertCircle,
 	bell: Bell,
+	bot: Bot,
 	brain: Brain,
 	calendar: CalendarDays,
 	bar: ChartColumn,
@@ -64,6 +67,7 @@ const icons = {
 	sun: Sun,
 	table: Table2,
 	trending: ChartNoAxesCombined,
+	users: Users,
 	zap: Zap,
 };
 

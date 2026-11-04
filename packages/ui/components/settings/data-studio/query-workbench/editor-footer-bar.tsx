@@ -84,7 +84,7 @@ export function EditorFooterBar({
 			)}
 
 			{tables.length > 0 && (
-				<span className="hidden min-w-0 items-center gap-1 truncate md:flex">
+				<span className="hidden min-w-0 items-center gap-1 truncate @3xl/ds:flex">
 					<span className="shrink-0">{t("tables", "tables:")}</span>
 					<span className="truncate font-mono">{tables.join(", ")}</span>
 				</span>
@@ -92,7 +92,7 @@ export function EditorFooterBar({
 
 			<span className="ml-auto flex shrink-0 items-center gap-3">
 				{cursor && (
-					<span className="hidden tabular-nums sm:inline">
+					<span className="hidden tabular-nums @xl/ds:inline">
 						{t("lnLineColColumn", "Ln {{line}}, Col {{column}}", {
 							line: cursor.line,
 							column: cursor.column,

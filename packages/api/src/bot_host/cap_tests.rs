@@ -245,3 +245,31 @@ async fn a_requester_who_is_not_the_owner_has_a_daily_limit_and_the_room_is_told
     let later = room_request("user-c", "c-later", ConversationKind::Group);
     assert_eq!(enqueue_in(&db, &later, tomorrow).await.unwrap(), 1);
 }
+
+#[tokio::test]
+async fn reading_along_over_the_requesters_limit_stops_quietly_while_a_mention_is_still_told() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    super::fixture::conversation(&db, "c1", "GROUP", "PLAIN", &["user-a", "user-c", "bot_1"]).await;
+    let now = at(100_000);
+    for index in 0..super::cap::REQUESTER_DAILY_TURNS {
+        let request = room_request("user-c", &format!("c-{index}"), ConversationKind::Group);
+        assert_eq!(enqueue_in(&db, &request, now).await.unwrap(), 1);
+    }
+    let mut unaddressed = room_request("user-c", "c-read", ConversationKind::Group);
+    unaddressed.recipients[0].mentioned = false;
+    unaddressed.recipients[0].read_along = true;
+    assert_eq!(enqueue_in(&db, &unaddressed, now).await.unwrap(), 0);
+    let notice = |trigger: &'static str| {
+        crate::entity::inbox_entry::Entity::find()
+            .filter(crate::entity::inbox_entry::Column::MessageId.eq(
+                flow_like_types::bot_turn::rate_limit_message_id("bot_1", trigger),
+            ))
+            .one(&db)
+    };
+    assert!(notice("c-read").await.unwrap().is_none());
+
+    let named = room_request("user-c", "c-named", ConversationKind::Group);
+    assert_eq!(enqueue_in(&db, &named, now).await.unwrap(), 0);
+    assert!(notice("c-named").await.unwrap().is_some());
+}

@@ -5,6 +5,7 @@ import { BotMotion } from "./motion";
 export const arcadeShapes: readonly BotShapeDefinition[] = [
 	crewShape({
 		id: "pixel",
+		faceColor: "sclera",
 		label: "Pixel",
 		series: "arcade",
 		description: "A lavender handheld console with a mint screen.",

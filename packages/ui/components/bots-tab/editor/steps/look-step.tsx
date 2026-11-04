@@ -9,7 +9,6 @@ import type { BotAppearance } from "../../../bots/types";
 import { Input } from "../../../ui/input";
 import { Label } from "../../../ui/label";
 import type { BotDraft } from "../bot-draft";
-import { BOT_OWNED_PACK_IDS } from "../bot-look";
 import type { BotIdentityChange } from "../bot-preview-panel";
 
 /** The look studio as it is, with the bot's name and description above it. */
@@ -58,11 +57,7 @@ export function LookStep({
 					/>
 				</div>
 			</div>
-			<BotCustomizer
-				value={draft.appearance}
-				onChange={onAppearanceChange}
-				ownedPackIds={BOT_OWNED_PACK_IDS}
-			/>
+			<BotCustomizer value={draft.appearance} onChange={onAppearanceChange} />
 		</div>
 	);
 }

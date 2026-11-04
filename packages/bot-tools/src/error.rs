@@ -23,6 +23,7 @@ pub mod code {
     pub const SHELL_UNAVAILABLE: &str = "shell_unavailable";
     pub const CANCELLED: &str = "cancelled";
     pub const RATE_LIMITED: &str = "rate_limited";
+    pub const ALREADY_HERE: &str = "already_here";
     pub const FAILED: &str = "failed";
 }
 

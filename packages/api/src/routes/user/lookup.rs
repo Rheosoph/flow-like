@@ -849,6 +849,10 @@ mod tests {
             deleted_at: Some(created),
             import_key: None,
             embedding_model: None,
+            stt_model: None,
+            tts_model: None,
+            image_model: None,
+            vision_model: None,
         }
     }
 

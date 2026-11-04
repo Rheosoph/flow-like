@@ -36,6 +36,7 @@ export interface BotColorPickerProps {
 	shape: BotShapeDefinition;
 	catalog: BotCatalog;
 	value?: BotAppearance["colors"];
+	/** Omit to make every color available for saving. */
 	ownedPackIds?: readonly string[];
 	onChange: (
 		slot: BotColorSlot,
@@ -237,6 +238,7 @@ export function BotColorPicker({
 						!!selected && !canUseBotColor(selected, catalog, ownedPackIds);
 					const expanded = activeSlot === slot;
 					const packOwned =
+						ownedPackIds === undefined ||
 						activePack?.access === "included" ||
 						!!(activePack && ownedPackIds?.includes(activePack.id));
 					const hasAvailableColors = activePack?.colorIds.some((colorId) =>
@@ -321,7 +323,8 @@ export function BotColorPicker({
 													<span>
 														<strong>{pack.label}</strong>
 														<small>
-															{pack.access === "included"
+															{ownedPackIds === undefined ||
+															pack.access === "included"
 																? "Included"
 																: owned
 																	? "Owned"

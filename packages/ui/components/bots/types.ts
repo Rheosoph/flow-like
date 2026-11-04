@@ -228,6 +228,10 @@ export interface BotShapeDefinition {
 	clothingClip?: string;
 	bodyMotion?: "rotate" | "float";
 	bodyOrigin?: readonly [number, number];
+	/** Painted surface behind the eyes and mouth for color contrast checks. */
+	faceColor?: "body" | "accent" | "clothing" | "sclera";
+	/** Colors used by exposed details, such as leaves, that must stand out from the background. */
+	backgroundDetailColors?: readonly BotColorSlot[];
 	eyeStyle?: "round" | "dots" | "light" | "sleepy";
 	/** Closed lids may need a lighter stroke over dark eye patches. */
 	closedEyeColor?: keyof BotPalette;
@@ -252,6 +256,8 @@ export interface BotEquipmentDefinition {
 	compactSkill?: string;
 	/** Omit to support every shape. */
 	kinds?: readonly string[];
+	/** Shapes whose anatomy conflicts with this item. These exclusions take precedence over kinds. */
+	excludedKinds?: readonly string[];
 	render: (context: BotRenderContext) => ReactNode;
 }
 

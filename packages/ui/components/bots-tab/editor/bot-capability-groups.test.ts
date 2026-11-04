@@ -34,7 +34,7 @@ function rustWireNames(): string[] {
 
 describe("capability list", () => {
 	test("matches the Rust contracts in wire name and order", () => {
-		expect([...BOT_CAPABILITIES]).toEqual(rustWireNames());
+		expect([...BOT_CAPABILITIES] as string[]).toEqual(rustWireNames());
 	});
 
 	test("puts the new capabilities right after memory", () => {

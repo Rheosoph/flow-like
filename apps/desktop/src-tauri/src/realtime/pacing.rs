@@ -53,7 +53,14 @@ fn terminal(status: &str) -> bool {
 
 /// The API answers a held poll early only with one of these.
 fn changed(response: &RealtimePollResponse) -> bool {
-    response.notifications.is_some() || !response.runs.is_empty() || !response.errors.is_empty()
+    response.notifications.is_some()
+        || !response.runs.is_empty()
+        || !response.errors.is_empty()
+        || !response.conversations.is_empty()
+        || response
+            .conversation_errors
+            .iter()
+            .any(|error| error.code != REALTIME_ERROR_UNAVAILABLE)
 }
 
 /// Without a live provider the server holds a poll for at most `max_wait_ms`.
@@ -112,7 +119,10 @@ impl Pacing {
                 .get(&run.run_id)
                 .is_none_or(|(_, until)| *until <= now)
         });
-        (request.notifications.is_some() || !request.runs.is_empty()).then_some(request)
+        (request.notifications.is_some()
+            || !request.runs.is_empty()
+            || !request.conversations.is_empty())
+        .then_some(request)
     }
 
     pub fn retry_at(&self, now: Instant) -> Option<Instant> {
@@ -179,7 +189,9 @@ impl Pacing {
         elapsed: Duration,
         now: Instant,
     ) -> Option<Instant> {
-        if response.runs.iter().any(|run| run.has_more) {
+        if response.runs.iter().any(|run| run.has_more)
+            || response.conversations.iter().any(|update| update.has_more)
+        {
             return None;
         }
         let runs = !polled.runs.is_empty();
@@ -237,6 +249,7 @@ mod tests {
                     revision: None,
                 })
                 .collect(),
+            conversations: Vec::new(),
             timeout_ms: 0,
         }
     }
@@ -433,6 +446,45 @@ mod tests {
             pacing.due(&polled(&[], true), &idle, true, 20_000, Duration::ZERO, now),
             Some(now + Duration::from_secs(30))
         );
+    }
+
+    #[test]
+    fn more_conversation_entries_are_chased_but_unavailable_conversations_are_not() {
+        use flow_like_types::realtime::{RealtimeConversationError, RealtimeConversationUpdate};
+        let pacing = Pacing::default();
+        let now = Instant::now();
+        let request = RealtimePollRequest {
+            conversations: vec![
+                flow_like_types::realtime::RealtimeConversationSubscription {
+                    conversation_id: "c".into(),
+                    after: None,
+                    as_principal: None,
+                },
+            ],
+            ..Default::default()
+        };
+        let due = |response: &RealtimePollResponse| {
+            pacing.due(&request, response, false, 20_000, Duration::ZERO, now)
+        };
+        let more = RealtimePollResponse {
+            conversations: vec![RealtimeConversationUpdate {
+                conversation_id: "c".into(),
+                as_principal: None,
+                entries: Vec::new(),
+                has_more: true,
+            }],
+            ..Default::default()
+        };
+        assert!(due(&more).is_none());
+        let unavailable = RealtimePollResponse {
+            conversation_errors: vec![RealtimeConversationError {
+                conversation_id: "c".into(),
+                as_principal: None,
+                code: REALTIME_ERROR_UNAVAILABLE.into(),
+            }],
+            ..Default::default()
+        };
+        assert!(due(&unavailable).is_some());
     }
 
     #[test]

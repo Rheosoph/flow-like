@@ -41,6 +41,10 @@ export function useDockPanelLayout(): DockPanelLayout {
 /**
  * Keeps the conversation mounted as its divider moves or the window changes size. An open panel
  * beside the chat widens the dock at the crew's expense; the divider still sizes the chat.
+ *
+ * Only the columns scroll. `container-type` does not contain positioned descendants in WebKit, so
+ * the root and the crew column are positioned and the root clips: otherwise anything absolute in the
+ * crew list lands in the app shell's scroller, and a wheel over a short chat shifts the whole tab.
  */
 export function CrewSplitLayout({
 	children,
@@ -112,13 +116,13 @@ export function CrewSplitLayout({
 		<div
 			ref={container}
 			className={cn(
-				"@container/bots flex h-full min-h-0 w-full flex-1 overflow-hidden",
+				"@container/bots relative flex h-full min-h-0 w-full flex-1 overflow-clip",
 				dragging && "cursor-col-resize select-none",
 			)}
 		>
 			<div
 				className={cn(
-					"@container/crew min-w-0 flex-1 overflow-y-auto",
+					"@container/crew relative min-w-0 flex-1 overflow-y-auto",
 					dock && "@max-[820px]/bots:hidden",
 				)}
 			>

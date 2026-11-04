@@ -46,6 +46,8 @@ pub const STORED_DEVICE: &str = "DEVICE";
 /// The `error_code` of a turn that an earlier turn of the same bot in the same conversation
 /// answered together with it: `reply_message_id` names that answer.
 pub const ERROR_BATCHED: &str = "BATCHED";
+/// The turn finished `DONE` without a reply: the bot read along and chose to stay silent.
+pub const ERROR_SILENT: &str = "SILENT";
 /// The bot was deleted while the turn waited or ran.
 pub const ERROR_BOT_DELETED: &str = "BOT_DELETED";
 /// The turn waited for a host longer than [`QUEUED_EXPIRY_SECS`].

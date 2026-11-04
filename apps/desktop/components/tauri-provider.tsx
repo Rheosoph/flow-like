@@ -10,6 +10,7 @@ import {
 	type IAppRouteState,
 	type IAppState,
 	IAppVisibility,
+	type IAudioState,
 	type IBackendState,
 	type IBit,
 	type IBitState,
@@ -54,6 +55,7 @@ import type {
 } from "@flow-like/flow-like-ui/lib";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { requiresInteractiveSignIn } from "@flow-like/flow-like-ui/lib/auth/oidc-renewal";
+import type { MeetingClient } from "@flow-like/flow-like-ui/lib/meetings/types";
 import { completeMediaUpload } from "@flow-like/flow-like-ui/lib/profile-media-upload";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import type { IAIState } from "@flow-like/flow-like-ui/state/backend-state/ai-state";
@@ -101,6 +103,7 @@ import { AnalyticsState } from "./tauri-provider/analytics-state";
 import { ApiKeyState } from "./tauri-provider/api-key-state";
 import { TauriApiState, readApiJson } from "./tauri-provider/api-state";
 import { AppState } from "./tauri-provider/app-state";
+import { AudioState } from "./tauri-provider/audio-state";
 import { BitState } from "./tauri-provider/bit-state";
 import { BoardState } from "./tauri-provider/board-state";
 import { BotState } from "./tauri-provider/bot-state";
@@ -111,6 +114,7 @@ import { GraphState } from "./tauri-provider/graph-state";
 import { HelperState } from "./tauri-provider/helper-state";
 import { InboxState } from "./tauri-provider/inbox-state";
 import { LockedStorageState } from "./tauri-provider/locked-storage-state";
+import { createNativeMeetingClient } from "./tauri-provider/meeting-client";
 import { OfflineWritesState } from "./tauri-provider/offline-writes-state";
 import { PageState } from "./tauri-provider/page-state";
 import { QueryState } from "./tauri-provider/query-state";
@@ -190,7 +194,9 @@ export class TauriBackend implements IBackendState {
 	salesState: ISalesState;
 	botState: IBotState;
 	inboxState: IInboxState;
+	meetingClient: MeetingClient;
 	usageState: IUsageState;
+	audioState: IAudioState;
 	analyticsState: IAnalyticsState;
 	offlineWritesState: IOfflineWritesState;
 
@@ -243,7 +249,9 @@ export class TauriBackend implements IBackendState {
 		this.salesState = new SalesState(this);
 		this.botState = new BotState(this);
 		this.inboxState = new InboxState(this);
+		this.meetingClient = createNativeMeetingClient(this);
 		this.usageState = new UsageState(this);
+		this.audioState = new AudioState(this);
 		this.analyticsState = new AnalyticsState(this);
 		this.offlineWritesState = new OfflineWritesState(this);
 	}

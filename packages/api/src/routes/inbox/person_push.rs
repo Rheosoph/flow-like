@@ -19,7 +19,7 @@ use axum::{
 use flow_like_types::{
     Result, Value,
     bot_notify::preview,
-    inbox::{ConversationKind, InboxEntryKind, PrincipalKind},
+    inbox::{CallBody, ConversationKind, InboxEntryKind, PrincipalKind},
     json::json,
 };
 use sea_orm::{
@@ -30,6 +30,7 @@ use utoipa::ToSchema;
 
 const MUTE_KEY: &str = "muted";
 const NO_PREVIEW: &str = "Sent you a message";
+const CALL_STARTED: &str = "Started a call";
 
 pub(crate) fn is_muted(limits: Option<&Value>) -> bool {
     limits
@@ -80,16 +81,34 @@ async fn sender_name<C: ConnectionTrait>(db: &C, sender: &str) -> Result<String>
         .unwrap_or_else(|| "Someone".to_string()))
 }
 
-/// Pushes a person's message to the other active, unmuted people of its conversation. A repeat
-/// of the same message notifies once. Returns how many people were told.
+fn push_body(entry: &InboxEntry) -> Option<String> {
+    match InboxEntryKind::parse(&entry.kind)? {
+        InboxEntryKind::Message => {
+            let text = preview(&text_of(Some(&entry.envelope)));
+            Some(if text.is_empty() {
+                NO_PREVIEW.to_string()
+            } else {
+                text
+            })
+        }
+        InboxEntryKind::Call => {
+            let body = entry.envelope.get("body")?;
+            (CallBody::parse(body) == Ok(CallBody::Started)).then(|| CALL_STARTED.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// Pushes a person's message, or the start of their call, to the other active, unmuted people of
+/// its conversation. A repeat of the same entry notifies once. Returns how many people were told.
 pub(crate) async fn notify_message<C: ConnectionTrait>(
     db: &C,
     sink: &dyn NoticeSink,
     entry: &InboxEntry,
 ) -> Result<usize> {
-    if InboxEntryKind::parse(&entry.kind) != Some(InboxEntryKind::Message) {
+    let Some(body) = push_body(entry) else {
         return Ok(0);
-    }
+    };
     let members = conversation_member::Entity::find()
         .filter(conversation_member::Column::ConversationId.eq(entry.conversation_id.as_str()))
         .all(db)
@@ -112,16 +131,11 @@ pub(crate) async fn notify_message<C: ConnectionTrait>(
         Some(room) => format!("{name} in {room}"),
         None => name,
     };
-    let text = preview(&text_of(Some(&entry.envelope)));
-    let body = if text.is_empty() {
-        NO_PREVIEW.to_string()
-    } else {
-        text
-    };
     for recipient in &targets {
         sink.send(
             &stable_id(recipient, &entry.message_id),
             DispatchNotificationInput {
+                bot_context: None,
                 user_id: recipient.clone(),
                 app_id: None,
                 title: title.clone(),

@@ -1,11 +1,57 @@
 ---
-title: Siri, Shortcuts, and Handoff
-description: Open Apps and Events, return workflow results to Shortcuts, and continue on another device.
+title: Bots, Siri, and native actions
+description: Reach bots from mobile notifications and sharing, return answers to Shortcuts, and continue on another device.
 ---
 
-Use native integrations in the iOS and macOS apps to reach existing Flow-Like
-entry points. The available system surfaces depend on the operating-system and
-client version. For Home Screen and desktop content, use [Native widgets](/apps/native-widgets/).
+Use native integrations to reach bots, Apps, and Events from your device's
+notifications, share sheet, and shortcuts. Available surfaces depend on the
+operating system and client build. For Home Screen and desktop content, use
+[Native widgets](/apps/native-widgets/).
+
+## Reach a bot on mobile
+
+Open Flow-Like and select your profile before adding a bot widget or shortcut.
+On iOS, **Open Bot**, **Ask Bot**, and **Run Bot Task** use the bots in that
+profile. **Ask Bot** opens the app and returns the answer as Text to Shortcuts;
+the response wait ends after 90 seconds. **Run Bot Task** sends the task's
+current instructions once without changing its schedule. Deleted or paused
+tasks cannot run through an old shortcut. Android provides bot widgets,
+launcher shortcuts, and Direct Share targets.
+
+Choose Flow-Like in another app's share sheet, then select the destination bot.
+Bot notifications open the exact conversation. Eligible notifications also
+offer a text reply, **Allow once**, or **Deny**. Requests for secret values open
+the app for review. A notification from another account or profile cannot act
+in your current workspace.
+
+Running turns appear in iOS Live Activities and Android status notifications.
+Their status comes from the bot host. iOS background refresh and Android
+WorkManager can retry explicit plain-text notification replies and approval
+decisions using the saved account session. Delivery remains queued through
+temporary connection failures for up to 24 hours. Expired sign-in or a terminal
+failure requires opening the app. Device scheduling and suspension can delay
+delivery; use a server or active desktop host for continuous bot work.
+
+## Capture and process bot input
+
+In a bot's chat actions, choose dictation, document scanning, or a photo.
+Review the text and attachments before pressing **Send to bot**. Capture
+availability depends on the device; unavailable controls are hidden.
+
+Supported builds also offer **Summarize on this device** and **Extract details
+on this device**. These actions process up to 8 KiB of UTF-8 text locally and
+return editable output. They do not fall back to a cloud model. Sending the
+reviewed result uses the selected bot's normal delivery path. Apple devices
+require an available Foundation Models system model. Android may ask to
+download a model before processing.
+
+For Android builds, the Gradle property `enableBotLocalAi=true` includes the
+optional ML Kit libraries and raises the minimum Android SDK to 26.
+`enableBotAppFunctions=true` includes the experimental AppFunctions service
+and requires compile SDK 37. AppFunctions can list or open bots, prepare a
+message for explicit review, and read cached task status. Both properties
+default to `false`; ordinary bot sharing, notifications, and capture do not
+require them.
 
 ## Enable native entry points
 

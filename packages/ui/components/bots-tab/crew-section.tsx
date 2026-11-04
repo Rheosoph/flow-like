@@ -54,7 +54,7 @@ export function UnreadBadge({
 		<span
 			title={label}
 			className={cn(
-				"inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-bold text-primary-foreground",
+				"inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-bold leading-5 text-primary-foreground",
 				className,
 			)}
 		>

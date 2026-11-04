@@ -238,6 +238,36 @@ describe("bot catalog", () => {
 		}
 	});
 
+	it("copies exposed detail color roles and rejects invalid background relationships", () => {
+		const backgroundDetailColors: NonNullable<
+			BotShapeDefinition["backgroundDetailColors"]
+		>[number][] = ["accent"];
+		const catalog = createBotCatalog({
+			shapes: [{ ...customShape(), backgroundDetailColors }],
+		});
+		backgroundDetailColors.push("clothing");
+		expect(catalog.shapes["test-pebble"].backgroundDetailColors).toEqual([
+			"accent",
+		]);
+		expect(
+			Object.isFrozen(catalog.shapes["test-pebble"].backgroundDetailColors),
+		).toBe(true);
+		expect(Object.isFrozen(backgroundDetailColors)).toBe(false);
+		for (const role of ["background", "not-a-role"])
+			expect(() =>
+				createBotCatalog({
+					shapes: [
+						{
+							...customShape(),
+							backgroundDetailColors: [
+								role,
+							] as BotShapeDefinition["backgroundDetailColors"],
+						},
+					],
+				}),
+			).toThrow("Invalid background detail color");
+	});
+
 	it("rejects empty IDs and missing default shapes", () => {
 		expect(() =>
 			createBotCatalog({ shapes: [{ ...customShape(), id: " " }] }),
@@ -287,6 +317,23 @@ describe("bot catalog", () => {
 				}),
 			).toThrow("Unknown shape");
 		}
+	});
+
+	it("copies equipment exclusions and rejects unknown excluded shapes", () => {
+		const excludedKinds = ["fern"];
+		const catalog = createBotCatalog({
+			equipment: [{ ...customEquipment(), excludedKinds }],
+		});
+		excludedKinds.push("mochi");
+		expect(catalog.equipment.book.excludedKinds).toEqual(["fern"]);
+		expect(Object.isFrozen(catalog.equipment.book.excludedKinds)).toBe(true);
+		expect(Object.isFrozen(excludedKinds)).toBe(false);
+		for (const kind of ["missing", "toString", "__proto__"])
+			expect(() =>
+				createBotCatalog({
+					equipment: [{ ...customEquipment(), excludedKinds: [kind] }],
+				}),
+			).toThrow("Unknown shape");
 	});
 
 	it("stores prototype-like IDs as own catalog entries", () => {

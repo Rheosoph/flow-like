@@ -9,10 +9,13 @@ use std::collections::HashSet;
 use std::fmt;
 
 use crate::channel::AwsTemporaryCredentials;
+use crate::inbox::EntryCursor;
 
 pub const REALTIME_PROTOCOL_VERSION: u8 = 1;
 pub const MAX_REALTIME_RUNS: usize = 16;
 pub const MAX_REALTIME_EVENTS: usize = 100;
+pub const MAX_REALTIME_CONVERSATIONS: usize = 8;
+pub const MAX_REALTIME_CONVERSATION_ENTRIES: usize = 50;
 pub const MAX_REALTIME_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_REALTIME_TIMEOUT_MS: u64 = 20_000;
 pub const MAX_REALTIME_WAKEUP_BYTES: usize = 4096;
@@ -162,6 +165,34 @@ impl fmt::Debug for RealtimeRunSubscription {
     }
 }
 
+/// An open inbox conversation whose new entries ride on the poll a wakeup causes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RealtimeConversationSubscription {
+    pub conversation_id: String,
+    /// Cursor of the newest entry the client holds (the `cursor` of an inbox entry); only
+    /// later entries come back, oldest first. Absent: the newest
+    /// [`MAX_REALTIME_CONVERSATION_ENTRIES`] entries come back once, for a client that holds
+    /// none (an empty conversation); it then continues from the last cursor it received.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<String>,
+    /// Read as one of the caller's bots, like `?as=` on the inbox routes.
+    #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
+    pub as_principal: Option<String>,
+}
+
+impl RealtimeConversationSubscription {
+    pub fn key(&self) -> (&str, Option<&str>) {
+        (&self.conversation_id, self.as_principal.as_deref())
+    }
+
+    pub fn after_cursor(&self) -> Option<EntryCursor> {
+        self.after
+            .as_deref()
+            .and_then(|after| EntryCursor::parse(after).ok())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RealtimePollRequest {
@@ -169,6 +200,8 @@ pub struct RealtimePollRequest {
     pub notifications: Option<RealtimeNotificationSubscription>,
     #[serde(default)]
     pub runs: Vec<RealtimeRunSubscription>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conversations: Vec<RealtimeConversationSubscription>,
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
 }
@@ -178,6 +211,7 @@ impl Default for RealtimePollRequest {
         Self {
             notifications: None,
             runs: Vec::new(),
+            conversations: Vec::new(),
             timeout_ms: default_timeout(),
         }
     }
@@ -185,11 +219,14 @@ impl Default for RealtimePollRequest {
 
 impl RealtimePollRequest {
     pub fn validate(&self) -> Result<(), &'static str> {
-        if self.notifications.is_none() && self.runs.is_empty() {
+        if self.notifications.is_none() && self.runs.is_empty() && self.conversations.is_empty() {
             return Err("At least one realtime subscription is required");
         }
         if self.runs.len() > MAX_REALTIME_RUNS {
             return Err("Too many realtime run subscriptions");
+        }
+        if self.conversations.len() > MAX_REALTIME_CONVERSATIONS {
+            return Err("Too many realtime conversation subscriptions");
         }
         if self.timeout_ms > MAX_REALTIME_TIMEOUT_MS {
             return Err("Realtime timeout exceeds the supported limit");
@@ -229,6 +266,30 @@ impl RealtimePollRequest {
             }
             if !valid_revision(&run.revision) {
                 return Err("Invalid run revision");
+            }
+        }
+        let mut seen_conversations = HashSet::new();
+        for conversation in &self.conversations {
+            let id = &conversation.conversation_id;
+            if id.is_empty() || id.len() > 256 || id.chars().any(char::is_control) {
+                return Err("Invalid realtime conversation identifier");
+            }
+            if conversation.as_principal.as_ref().is_some_and(|principal| {
+                principal.is_empty()
+                    || principal.len() > 256
+                    || principal.chars().any(char::is_control)
+            }) {
+                return Err("Invalid realtime conversation reader");
+            }
+            if conversation
+                .after
+                .as_deref()
+                .is_some_and(|after| EntryCursor::parse(after).is_err())
+            {
+                return Err("Invalid realtime conversation cursor");
+            }
+            if !seen_conversations.insert(conversation.key()) {
+                return Err("Duplicate realtime conversation subscription");
             }
         }
         Ok(())
@@ -283,6 +344,29 @@ pub struct RealtimeSubscriptionError {
     pub code: String,
 }
 
+/// New entries of one subscribed conversation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct RealtimeConversationUpdate {
+    pub conversation_id: String,
+    #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
+    pub as_principal: Option<String>,
+    /// The first entries after the subscription's `after`, oldest first, each exactly as
+    /// `GET /inbox/conversations/{id}/entries` returns it.
+    pub entries: Vec<Value>,
+    /// More entries follow the last one returned; poll again with its cursor.
+    pub has_more: bool,
+}
+
+/// A failed conversation subscription. `code` is [`REALTIME_ERROR_UNAVAILABLE`] or
+/// [`REALTIME_ERROR_NOT_FOUND`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RealtimeConversationError {
+    pub conversation_id: String,
+    #[serde(default, rename = "as", skip_serializing_if = "Option::is_none")]
+    pub as_principal: Option<String>,
+    pub code: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct RealtimePollResponse {
     pub protocol_version: u8,
@@ -292,6 +376,10 @@ pub struct RealtimePollResponse {
     pub runs: Vec<RealtimeRunUpdate>,
     #[serde(default)]
     pub errors: Vec<RealtimeSubscriptionError>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conversations: Vec<RealtimeConversationUpdate>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conversation_errors: Vec<RealtimeConversationError>,
 }
 
 impl Default for RealtimePollResponse {
@@ -301,6 +389,8 @@ impl Default for RealtimePollResponse {
             notifications: None,
             runs: Vec::new(),
             errors: Vec::new(),
+            conversations: Vec::new(),
+            conversation_errors: Vec::new(),
         }
     }
 }
@@ -482,6 +572,104 @@ mod tests {
             }))
             .is_err()
         );
+    }
+
+    fn conversation(id: &str) -> serde_json::Value {
+        json!({"conversation_id": id})
+    }
+
+    #[test]
+    fn conversation_subscriptions_count_as_a_subscription_and_are_bounded() {
+        let request: RealtimePollRequest =
+            serde_json::from_value(json!({"conversations": [conversation("c-a")]})).unwrap();
+        assert!(request.validate().is_ok());
+        let too_many: RealtimePollRequest = serde_json::from_value(json!({
+            "conversations": (0..=MAX_REALTIME_CONVERSATIONS)
+                .map(|id| conversation(&id.to_string())).collect::<Vec<_>>()
+        }))
+        .unwrap();
+        assert!(too_many.validate().is_err());
+    }
+
+    #[test]
+    fn invalid_conversation_subscriptions_are_rejected() {
+        let long = "x".repeat(257);
+        for subscriptions in [
+            json!([conversation("")]),
+            json!([conversation(&long)]),
+            json!([conversation("a\nb")]),
+            json!([conversation("a"), conversation("a")]),
+            json!([{"conversation_id": "a", "as": ""}]),
+            json!([{"conversation_id": "a", "after": "not-a-cursor"}]),
+            json!([{"conversation_id": "a", "after": "12:"}]),
+        ] {
+            let request: RealtimePollRequest =
+                serde_json::from_value(json!({"conversations": subscriptions})).unwrap();
+            assert!(request.validate().is_err(), "{request:?}");
+        }
+        assert!(
+            serde_json::from_value::<RealtimePollRequest>(json!({
+                "conversations": [{"conversation_id": "a", "user_id": "b"}]
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn one_conversation_may_be_read_as_the_caller_and_as_each_bot() {
+        let request: RealtimePollRequest = serde_json::from_value(json!({
+            "conversations": [
+                {"conversation_id": "a", "after": "1800000000123000:e1"},
+                {"conversation_id": "a", "as": "bot-1"},
+                {"conversation_id": "a", "as": "bot-2"},
+            ]
+        }))
+        .unwrap();
+        assert!(request.validate().is_ok());
+        assert_eq!(
+            request.conversations[0].after_cursor(),
+            Some(EntryCursor::new(1_800_000_000_123_000, "e1"))
+        );
+        assert_eq!(request.conversations[1].key(), ("a", Some("bot-1")));
+        assert_eq!(request.conversations[1].after_cursor(), None);
+    }
+
+    #[test]
+    fn conversation_sections_are_omitted_when_empty() {
+        let request = RealtimePollRequest {
+            notifications: Some(RealtimeNotificationSubscription::default()),
+            ..Default::default()
+        };
+        assert!(
+            serde_json::to_value(&request)
+                .unwrap()
+                .get("conversations")
+                .is_none()
+        );
+        let response = serde_json::to_value(RealtimePollResponse::default()).unwrap();
+        assert!(response.get("conversations").is_none());
+        assert!(response.get("conversation_errors").is_none());
+
+        let response = RealtimePollResponse {
+            conversations: vec![RealtimeConversationUpdate {
+                conversation_id: "c-a".into(),
+                as_principal: Some("bot-1".into()),
+                entries: vec![json!({"cursor": "1:e"})],
+                has_more: true,
+            }],
+            conversation_errors: vec![RealtimeConversationError {
+                conversation_id: "c-b".into(),
+                as_principal: None,
+                code: REALTIME_ERROR_NOT_FOUND.into(),
+            }],
+            ..Default::default()
+        };
+        let encoded = serde_json::to_value(&response).unwrap();
+        assert_eq!(encoded["conversations"][0]["as"], "bot-1");
+        assert_eq!(encoded["conversations"][0]["has_more"], true);
+        assert!(encoded["conversation_errors"][0].get("as").is_none());
+        let decoded: RealtimePollResponse = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded, response);
     }
 
     #[test]

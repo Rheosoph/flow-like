@@ -57,6 +57,14 @@ pub struct Model {
     pub import_key: Option<String>,
     #[sea_orm(column_name = "embeddingModel", column_type = "Text", nullable)]
     pub embedding_model: Option<String>,
+    #[sea_orm(column_name = "sttModel", column_type = "Text", nullable)]
+    pub stt_model: Option<String>,
+    #[sea_orm(column_name = "ttsModel", column_type = "Text", nullable)]
+    pub tts_model: Option<String>,
+    #[sea_orm(column_name = "imageModel", column_type = "Text", nullable)]
+    pub image_model: Option<String>,
+    #[sea_orm(column_name = "visionModel", column_type = "Text", nullable)]
+    pub vision_model: Option<String>,
     #[sea_orm(has_many)]
     pub bot_host_heartbeats: HasMany<super::bot_host_heartbeat::Entity>,
     #[sea_orm(has_many)]

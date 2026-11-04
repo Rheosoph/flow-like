@@ -45,11 +45,13 @@ export interface RoomLimitsDraft {
 	restrictions: IBotRestrictions;
 	/** `null` keeps every app the bot has. */
 	apps: string[] | null;
+	mentionedOnly: boolean;
 }
 
 export const NO_ROOM_LIMITS: RoomLimitsDraft = {
 	restrictions: { permissions: null, scopes: EMPTY_SCOPES },
 	apps: null,
+	mentionedOnly: false,
 };
 
 export function draftFromLimits(
@@ -64,6 +66,7 @@ export function draftFromLimits(
 			scopes: EMPTY_SCOPES,
 		},
 		apps: limits?.apps ?? null,
+		mentionedOnly: limits?.mentioned_only === true,
 	};
 }
 
@@ -77,6 +80,7 @@ export function limitsFromDraft(
 		limits.mask = maskFromPermissions(draft.restrictions.permissions);
 	}
 	if (draft.apps !== null) limits.apps = draft.apps;
+	if (draft.mentionedOnly) limits.mentioned_only = true;
 	if (previous?.scopes && Object.keys(previous.scopes).length > 0) {
 		limits.scopes = previous.scopes;
 	}

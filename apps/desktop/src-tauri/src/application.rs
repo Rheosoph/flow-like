@@ -27,6 +27,8 @@ mod local_page_actions;
 #[cfg(any(test, not(debug_assertions)))]
 mod logging;
 mod native_auth;
+#[cfg(target_os = "android")]
+mod android_mobile;
 mod offline_writes;
 mod profile;
 mod realtime;
@@ -658,6 +660,11 @@ pub fn run() {
 
     builder = widget_protocol::register(builder);
 
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(android_mobile::init());
+    }
+
     builder = builder
         .manage(state::TauriSettingsState(settings_state.clone()))
         .manage(state::TauriFlowLikeState(state_ref.clone()))
@@ -1132,6 +1139,10 @@ pub fn run() {
             #[cfg(debug_assertions)]
             deeplink::deeplink_debug_dispatch,
             functions::native::native_publish_snapshot,
+            functions::native_bot_input::native_bot_request,
+            functions::native_bot_input::native_bot_capabilities,
+            functions::native_bot_input::native_bot_cancel_request,
+            functions::native_bot_input::native_bot_activity_tokens,
             functions::native::native_clear_snapshot,
             functions::native::native_take_actions,
             functions::native::native_pending_actions,
@@ -1286,6 +1297,7 @@ pub fn run() {
             functions::tmp::stage_form_file,
             functions::bit::get_bit,
             functions::bit::is_bit_installed,
+            functions::speech::speech_transcribe,
             functions::bit::get_bit_size,
             functions::bit::get_pack_from_bit,
             functions::bit::search_bits,
@@ -1488,7 +1500,16 @@ pub fn run() {
             functions::local_bots::local_inbox_remove_member,
             functions::local_bots::local_inbox_entries,
             functions::local_bots::local_inbox_send,
+            functions::local_bots::local_inbox_upload_file,
+            functions::local_bots::local_inbox_read_file,
             functions::local_bots::local_inbox_mark_read,
+            functions::local_bots::local_inbox_set_pinned,
+            functions::local_bots::local_inbox_pins,
+            functions::local_bots::local_inbox_pin_message,
+            functions::local_bots::local_inbox_unpin_message,
+            functions::local_bots::local_inbox_star,
+            functions::local_bots::local_inbox_unstar,
+            functions::local_bots::local_inbox_stars,
             functions::local_bots::local_inbox_forget,
             functions::local_bots::history::local_inbox_entries_by_position,
             functions::local_bots::history::local_inbox_topic,

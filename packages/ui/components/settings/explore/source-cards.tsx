@@ -587,7 +587,7 @@ export const SourceGrid: React.FC<SourceGridProps> = ({
 
 	if (!entries.length && searchQuery) {
 		return (
-			<div className="rounded-lg border bg-card p-8 text-center">
+			<div className="rounded-lg border bg-card p-5 text-center @xl/ds:p-8">
 				<Search className="mx-auto mb-4 size-10 text-muted-foreground" />
 				<h3 className="mb-2 text-lg font-semibold">
 					{t("noMatchesFound", "No matches found")}
@@ -603,7 +603,7 @@ export const SourceGrid: React.FC<SourceGridProps> = ({
 
 	if (!entries.length) {
 		return (
-			<div className="flex flex-col items-center justify-center rounded-lg border border-dashed bg-muted/20 p-10 text-center">
+			<div className="flex flex-col items-center justify-center rounded-lg border border-dashed bg-muted/20 p-5 text-center @xl/ds:p-10">
 				<div className="mb-4 rounded-2xl bg-primary/10 p-3 text-primary">
 					<Database className="size-6" />
 				</div>
@@ -622,7 +622,7 @@ export const SourceGrid: React.FC<SourceGridProps> = ({
 	}
 
 	return (
-		<div className="grid grid-cols-1 gap-3.5 sm:grid-cols-2 xl:grid-cols-3">
+		<div className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,18rem),1fr))] gap-3.5">
 			{entries.map((entry) => (
 				<SourceCard
 					key={`${entry.userScoped ? "user:" : ""}${entry.name}`}

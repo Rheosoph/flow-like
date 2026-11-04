@@ -433,3 +433,30 @@ async fn a_host_without_object_writes_refuses_workspace_files_but_keeps_tables()
     assert!(!refused.is_ok());
     assert!(env.app_tables(WORKSPACE).await.expect("tables").writable);
 }
+
+#[tokio::test]
+async fn job_secrets_travel_in_the_job_open_in_the_env_and_never_print() {
+    let secrets = JobSecrets(
+        [("PG_SALES".to_string(), "pa55word".to_string())]
+            .into_iter()
+            .collect(),
+    );
+    let printed = format!("{secrets:?}");
+    assert!(printed.contains("PG_SALES") && !printed.contains("pa55word"));
+    let wire = serde_json::to_value(&secrets).unwrap();
+    assert_eq!(wire, json!({ "PG_SALES": "pa55word" }));
+    assert_eq!(serde_json::from_value::<JobSecrets>(wire).unwrap(), secrets);
+
+    let (env, _) = env(false, vec![]).await;
+    assert_eq!(env.secret("PG_SALES").await.unwrap(), None);
+    assert!(env.secrets().await.unwrap().is_empty());
+    let env = env.with_secrets(Arc::new(secrets));
+    assert_eq!(
+        env.secret("PG_SALES").await.unwrap().as_deref(),
+        Some("pa55word")
+    );
+    let listed = call(&env, "secret_list", json!({})).await;
+    assert!(listed.is_ok());
+    let text = listed.result.to_string();
+    assert!(text.contains("PG_SALES") && !text.contains("pa55word"));
+}

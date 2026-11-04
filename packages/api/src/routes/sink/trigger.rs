@@ -3615,6 +3615,12 @@ pub async fn trigger_service(
         )));
     }
 
+    if let Some(task_id) = crate::bot_host::task_schedules::task_of(&request.event_id) {
+        return fire_bot_task(&state, &claims, &request, task_id)
+            .await
+            .map(Json);
+    }
+
     // On or off: only a missing sink is the 404 that makes the AWS scheduler delete the
     // schedule, so a paused sink keeps its schedule for when it is turned back on.
     let sink = event_sink::Entity::find()
@@ -3847,6 +3853,37 @@ pub async fn trigger_service(
     }
 
     Ok(Json(response))
+}
+
+/// A bot task's schedule calling: only a cron token for every app may fire one. A task that is
+/// gone answers the 404 that makes the AWS scheduler delete its schedule.
+async fn fire_bot_task(
+    state: &AppState,
+    claims: &SinkTriggerClaims,
+    request: &ServiceTriggerRequest,
+    task_id: &str,
+) -> Result<ServiceTriggerResponse, ApiError> {
+    use crate::bot_host::task_schedules::{ScheduledFire, fire_scheduled};
+
+    if request.sink_type != sink_types::CRON || claims.app_ids.is_some() {
+        return Err(ApiError::forbidden(
+            "Token not authorized to fire bot tasks",
+        ));
+    }
+    match fire_scheduled(state, task_id).await? {
+        ScheduledFire::Missing => Err(ApiError::not_found(format!(
+            "No active sink found for event {}",
+            request.event_id
+        ))),
+        ScheduledFire::Fired => Ok(ServiceTriggerResponse {
+            success: true,
+            run_id: None,
+            error: None,
+            duplicate: false,
+            skipped: None,
+        }),
+        ScheduledFire::Skipped => Ok(ServiceTriggerResponse::inactive()),
+    }
 }
 
 /// GET /sink/schedules

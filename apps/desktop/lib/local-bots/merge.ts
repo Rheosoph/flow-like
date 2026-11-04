@@ -1,4 +1,5 @@
 import type { IBot, IConversation } from "@flow-like/flow-like-ui";
+import { compareConversations } from "@flow-like/flow-like-ui/state/backend-state/inbox-state";
 
 /** An id in both lists is shown once, as the local copy every call about it is routed to. */
 function withoutLocal<T extends { id: string }>(
@@ -37,17 +38,10 @@ export function mergeBots(
 	return [...withoutLocal(remote, shown), ...shown];
 }
 
-function activityTime(conversation: IConversation): number {
-	const time = Date.parse(conversation.last_activity_at);
-	return Number.isNaN(time) ? 0 : time;
-}
-
-/** Newest activity first across the account and this computer. */
+/** Pinned first, newest pin first, then newest activity first across the account and this computer. */
 export function mergeConversations(
 	remote: readonly IConversation[],
 	local: readonly IConversation[],
 ): IConversation[] {
-	return [...withoutLocal(remote, local), ...local].sort(
-		(a, b) => activityTime(b) - activityTime(a),
-	);
+	return [...withoutLocal(remote, local), ...local].sort(compareConversations);
 }

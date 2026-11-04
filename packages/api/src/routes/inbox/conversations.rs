@@ -107,7 +107,7 @@ pub(super) fn validate_new_conversation(
     })
 }
 
-fn conversation_row(
+pub(super) fn conversation_row(
     id: &str,
     creator: &str,
     plan: &NewConversation,

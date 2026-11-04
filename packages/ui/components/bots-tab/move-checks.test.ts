@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { IBot, IBotMoveIssue } from "../../state/backend-state/bot-state";
+import { defaultBotCatalog } from "../bots/catalog";
 import {
 	BOT_LOOK_NOT_OWNED,
 	BOT_MODEL_UNAVAILABLE,
@@ -53,15 +54,48 @@ describe("clientMoveIssues", () => {
 		]);
 	});
 
-	test("an automatic model and owned looks pass", () => {
+	test("an automatic model and valid looks pass", () => {
 		const automatic = bot({ model: { primary: null, fallbacks: [] } });
 		expect(clientMoveIssues(automatic, new Set())).toEqual([]);
 	});
 
-	test("a look from a pack the account doesn't own blocks the move", () => {
+	test("every catalog character can move without purchases", () => {
+		for (const kind of Object.keys(defaultBotCatalog.shapes)) {
+			expect(
+				clientMoveIssues(
+					bot({
+						appearance: { kind },
+						model: { primary: null, fallbacks: [] },
+					}),
+					new Set(),
+				),
+			).toEqual([]);
+		}
+	});
+
+	test("packed equipment and premium colors can move without purchases", () => {
+		expect(
+			clientMoveIssues(
+				bot({
+					appearance: {
+						kind: "lava",
+						equipment: { head: "crown" },
+						colors: {
+							body: { kind: "swatch", colorId: "holo-aurora" },
+							accent: { kind: "hex", value: "#123456", packId: "color-lab" },
+						},
+					},
+					model: { primary: null, fallbacks: [] },
+				}),
+				new Set(),
+			),
+		).toEqual([]);
+	});
+
+	test("an unavailable look still blocks the move", () => {
 		const issues = clientMoveIssues(
 			bot({
-				appearance: { kind: "lava" },
+				appearance: { kind: "missing-character" },
 				model: { primary: null, fallbacks: [] },
 			}),
 			new Set(),

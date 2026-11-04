@@ -4,7 +4,11 @@ import type {
 	IInboxEntriesPage,
 	IInboxEntry,
 } from "../state/backend-state/inbox-state";
-import { compareInboxCursors, mergeNewestEntries } from "./use-inbox";
+import {
+	compareInboxCursors,
+	mergeNewestEntries,
+	unwatchedInboxPredicate,
+} from "./use-inbox";
 
 function entry(cursor: string): IInboxEntry {
 	const [micros = "0", id = cursor] = cursor.split(":");
@@ -82,5 +86,19 @@ describe("mergeNewestEntries", () => {
 			pages,
 		);
 		expect(mergeNewestEntries(undefined, [entry("6:a")])).toBeUndefined();
+	});
+});
+
+describe("unwatchedInboxPredicate", () => {
+	const matches = unwatchedInboxPredicate(
+		(id, as) => id === "c1" && as === undefined,
+	);
+
+	test("skips only the entries of watched conversations", () => {
+		expect(matches({ queryKey: ["inbox", "entries", "c1", "me"] })).toBe(false);
+		expect(matches({ queryKey: ["inbox", "entries", "c1", "bot"] })).toBe(true);
+		expect(matches({ queryKey: ["inbox", "entries", "c2", "me"] })).toBe(true);
+		expect(matches({ queryKey: ["inbox", "conversations", "me"] })).toBe(true);
+		expect(matches({ queryKey: ["bots"] })).toBe(false);
 	});
 });

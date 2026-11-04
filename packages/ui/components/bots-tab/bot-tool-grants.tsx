@@ -16,8 +16,10 @@ export function BotToolGrants({
 	name,
 }: Readonly<{ bot: IBot; name: string }>) {
 	const { t } = useTranslation("bots");
-	const grantLabel = useGrantLabel();
 	const grants = useBotToolGrants(bot.id);
+	const grantLabel = useGrantLabel(
+		grants.data?.map((grant) => grant.scope) ?? [],
+	);
 	const { mutate: revoke, variables, isPending } = useRevokeBotToolGrant();
 	if (!grants.data) return null;
 	const standing = grants.data.filter(isStanding);

@@ -2,21 +2,74 @@
 
 import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
 import { botKeys } from "@flow-like/flow-like-ui/hooks/use-bots";
-import { inboxKeys } from "@flow-like/flow-like-ui/hooks/use-inbox";
+import {
+	inboxKeys,
+	unwatchedInboxPredicate,
+} from "@flow-like/flow-like-ui/hooks/use-inbox";
 import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
+import { compareInboxCursors } from "@flow-like/flow-like-ui/lib/inbox-cursor";
+import { registerConversationFeed } from "@flow-like/flow-like-ui/lib/realtime/conversation-feed";
 import { useBackend } from "@flow-like/flow-like-ui/state/backend-state";
 import { useTranslation } from "@flow-like/locales";
-import { useQueryClient } from "@tanstack/react-query";
+import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef } from "react";
 import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
-import { localBots } from "../lib/local-bots/commands";
+import { desktopConversationFeed } from "../lib/desktop-conversation-feed";
+import { localBots, localInbox } from "../lib/local-bots/commands";
 import { botsToMove } from "../lib/local-bots/merge";
 import { SessionWatch, sessionSnapshot } from "../lib/local-bots/session-watch";
 import { TauriBackend } from "./tauri-provider";
 
 const MOVE_TOAST_ID = "local-bots-move";
+const LOCAL_FEED_PAGE = 50;
+
+/** Hands watchers of a local conversation its new entries straight from the store; a gap reloads the entries. */
+async function pushLocalEntries(
+	queryClient: QueryClient,
+	conversationId: string,
+): Promise<void> {
+	const watched = desktopConversationFeed
+		.targets()
+		.filter((target) => target.conversationId === conversationId);
+	if (watched.length === 0) return;
+	const after = watched.some((target) => target.after === undefined)
+		? undefined
+		: watched
+				.map((target) => target.after as string)
+				.sort(compareInboxCursors)[0];
+	const page = await localInbox.entries(conversationId, {
+		after,
+		limit: LOCAL_FEED_PAGE,
+	});
+	desktopConversationFeed.deliver(conversationId, [...page.entries].reverse());
+	if (page.next_before !== null)
+		void queryClient.invalidateQueries({
+			queryKey: inboxKeys.entries(conversationId),
+		});
+}
+
+function refreshInbox(
+	queryClient: QueryClient,
+	conversationId: string | null | undefined,
+): void {
+	if (!conversationId) {
+		void queryClient.invalidateQueries({ queryKey: inboxKeys.all });
+		return;
+	}
+	void queryClient.invalidateQueries({
+		predicate: unwatchedInboxPredicate((id) =>
+			desktopConversationFeed.isWatched(id),
+		),
+	});
+	pushLocalEntries(queryClient, conversationId).catch((error) => {
+		console.warn("[LocalBots] Could not read new local entries:", error);
+		void queryClient.invalidateQueries({
+			queryKey: inboxKeys.entries(conversationId),
+		});
+	});
+}
 
 /**
  * Refreshes bot and inbox queries when this computer's store changes or the
@@ -36,11 +89,14 @@ export function LocalBotsBridge() {
 			listen("local-bots-changed", () => {
 				void queryClient.invalidateQueries({ queryKey: botKeys.all });
 			}),
-			listen("local-inbox-changed", () => {
-				void queryClient.invalidateQueries({ queryKey: inboxKeys.all });
-			}),
+			listen<{ conversation_id?: string | null } | undefined>(
+				"local-inbox-changed",
+				(event) => refreshInbox(queryClient, event?.payload?.conversation_id),
+			),
 		];
+		registerConversationFeed(desktopConversationFeed);
 		return () => {
+			registerConversationFeed(null);
 			for (const subscription of subscriptions) {
 				void subscription.then(
 					(unlisten) => unlisten(),

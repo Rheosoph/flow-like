@@ -11,13 +11,26 @@ import {
 } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import { personUnreadTotal } from "../components/bots-tab/crew-model";
+import {
+	attachmentParts,
+	conversationFileId,
+	inBatches,
+} from "../lib/conversation-files";
+import { compareInboxCursors } from "../lib/inbox-cursor";
+import {
+	hasConversationFeed,
+	watchConversation,
+} from "../lib/realtime/conversation-feed";
 import { useBackend } from "../state/backend-state";
 import type {
 	IBotRoomLimits,
 	IConversation,
+	IConversationFileDownload,
 	ICreateConversationRequest,
 	IInboxEntriesPage,
 	IInboxEntry,
+	IInboxFileHandle,
+	IInboxMessageBody,
 	IInboxState,
 	IInvitation,
 	IInviteRequest,
@@ -32,16 +45,37 @@ export const inboxKeys = {
 		[...inboxKeys.all, "conversation", conversationId, as ?? "me"] as const,
 	entries: (conversationId: string, as?: string) =>
 		[...inboxKeys.all, "entries", conversationId, as ?? "me"] as const,
+	turns: (conversationId: string) =>
+		[...inboxKeys.all, "turns", conversationId] as const,
 	invitations: () => [...inboxKeys.all, "invitations"] as const,
 	invitable: (q: string, conversationId?: string) =>
 		[...inboxKeys.all, "invitable", conversationId ?? "", q] as const,
 };
 
-/** Polling stands in for realtime wakeups until the inbox joins the realtime fingerprint. */
+/**
+ * Open conversations receive new entries through the realtime feed when one is registered;
+ * `openConversation` polls without it, `openConversationSafety` backs the feed up.
+ */
 export const INBOX_POLL_MS = {
 	conversations: 15_000,
 	openConversation: 4_000,
+	openConversationSafety: 30_000,
 } as const;
+
+/** Matches inbox queries other than the entries of conversations the realtime feed keeps current. */
+export function unwatchedInboxPredicate(
+	isWatched: (conversationId: string, as?: string) => boolean,
+) {
+	return ({ queryKey }: { queryKey: QueryKey }) => {
+		if (queryKey[0] !== inboxKeys.all[0]) return false;
+		if (queryKey[1] !== "entries") return true;
+		const as = queryKey[3];
+		return !isWatched(
+			String(queryKey[2]),
+			as === "me" ? undefined : String(as),
+		);
+	};
+}
 
 const PAGE_SIZE = 50;
 
@@ -56,23 +90,7 @@ export function newInboxMessageId(): string {
 	return `msg_${crypto.randomUUID().replaceAll("-", "")}`;
 }
 
-function cursorParts(cursor: string): readonly [number, string] {
-	const split = cursor.indexOf(":");
-	const micros = split < 0 ? Number.NaN : Number(cursor.slice(0, split));
-	return [
-		Number.isFinite(micros) ? micros : Number.NEGATIVE_INFINITY,
-		cursor.slice(split + 1),
-	];
-}
-
-/** Server order of `<createdAt epoch micros>:<entry id>` cursors: micros numerically, then ids by code unit. */
-export function compareInboxCursors(a: string, b: string): number {
-	const [microsA, idA] = cursorParts(a);
-	const [microsB, idB] = cursorParts(b);
-	if (microsA !== microsB) return microsA < microsB ? -1 : 1;
-	if (idA === idB) return 0;
-	return idA < idB ? -1 : 1;
-}
+export { compareInboxCursors };
 
 interface EntryPage extends IInboxEntriesPage {
 	/**
@@ -201,7 +219,8 @@ export function useConversation(conversationId?: string | null, as?: string) {
 
 /**
  * Pages of one conversation, newest first. While `live`, entries newer than the newest one a
- * server read returned are fetched on an interval and merged into the first page.
+ * server read returned are pushed by the realtime feed (polled on an interval as fallback) and
+ * merged into the first page.
  */
 export function useInboxEntries(
 	conversationId?: string | null,
@@ -265,9 +284,37 @@ export function useInboxEntries(
 				polling = false;
 			}
 		};
-		const timer = window.setInterval(tick, INBOX_POLL_MS.openConversation);
+		let lastPoll = Date.now();
+		const due = () =>
+			hasConversationFeed()
+				? Date.now() - lastPoll >= INBOX_POLL_MS.openConversationSafety
+				: true;
+		const timer = window.setInterval(() => {
+			if (!due()) return;
+			lastPoll = Date.now();
+			void tick();
+		}, INBOX_POLL_MS.openConversation);
+		const unwatch = watchConversation(
+			{ conversationId, as, after: tail() },
+			(entries) => {
+				if (cancelled) return;
+				const newest = entries.at(-1)?.cursor;
+				if (!newest) return;
+				let fresh = false;
+				queryClient.setQueryData<EntryPages>(key, (pages) => {
+					const merged = mergeNewestEntries(pages, entries);
+					fresh = merged !== pages;
+					return withTail(merged, newest);
+				});
+				if (fresh)
+					void queryClient.invalidateQueries({
+						queryKey: inboxKeys.conversations(as),
+					});
+			},
+		);
 		return () => {
 			cancelled = true;
+			unwatch();
 			window.clearInterval(timer);
 		};
 	}, [live, state, conversationId, as, queryClient, key]);
@@ -500,6 +547,82 @@ export function useSendInboxEntry() {
 	});
 }
 
+export interface SendMessageWithFilesInput {
+	conversationId: string;
+	/** The message; `parts` it already carries stay and the uploads follow them. */
+	body: IInboxMessageBody;
+	/** The files `ChatBox` hands to `onSendMessage`. */
+	files?: readonly File[];
+	/** A client-chosen id makes a retried send idempotent. */
+	messageId?: string;
+}
+
+/**
+ * Uploads the files into the conversation, then sends one message carrying them as attachments.
+ * Nothing is sent when an upload fails, and the files already uploaded lapse after a day.
+ */
+export function useSendMessageWithFiles() {
+	const state = useBackend().inboxState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async ({
+			conversationId,
+			body,
+			files = [],
+			messageId = newInboxMessageId(),
+		}: SendMessageWithFilesInput) => {
+			const inbox = requireInboxState(state);
+			const uploaded = await inBatches(files, (file) =>
+				inbox.uploadConversationFile(conversationId, file),
+			);
+			const existing = body.parts ?? [];
+			const parts = [...existing, ...attachmentParts(uploaded, existing)];
+			return inbox.sendEntry(conversationId, {
+				message_id: messageId,
+				kind: "message",
+				envelope: {
+					v: 1,
+					enc: "none",
+					body: parts.length > 0 ? { ...body, parts } : body,
+				},
+			});
+		},
+		onSuccess: (entry) => {
+			queryClient.setQueryData<EntryPages>(
+				inboxKeys.entries(entry.conversation_id),
+				(pages) => mergeNewestEntries(pages, [entry]),
+			);
+			queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
+		},
+	});
+}
+
+/** A fresh link to an attachment of a conversation, for rendering or downloading it. */
+export function useConversationFileUrl(
+	conversationId: string | undefined,
+	handle: Pick<IInboxFileHandle, "path" | "mime"> | undefined,
+	as?: string,
+) {
+	const state = useBackend().inboxState;
+	return useQuery<IConversationFileDownload>({
+		queryKey: [
+			...inboxKeys.all,
+			"file",
+			conversationId ?? "",
+			handle ? conversationFileId(handle.path) : "",
+			as ?? "me",
+		],
+		queryFn: () =>
+			requireInboxState(state).conversationFileDownload(
+				conversationId as string,
+				handle as Pick<IInboxFileHandle, "path" | "mime">,
+				as,
+			),
+		enabled: Boolean(state && conversationId && handle),
+		staleTime: 4 * 60_000,
+	});
+}
+
 export function useMarkConversationRead() {
 	const state = useBackend().inboxState;
 	const queryClient = useQueryClient();
@@ -511,9 +634,13 @@ export function useMarkConversationRead() {
 			conversationId: string;
 			upTo?: string;
 		}) => requireInboxState(state).markRead(conversationId, upTo),
-		onSuccess: (_, { conversationId }) => {
+		onSuccess: (_, { conversationId, upTo }) => {
+			// A message received during the request stays unread until its own cursor is shown.
 			const read = (conversation: IConversation) =>
-				conversation.id === conversationId
+				conversation.id === conversationId &&
+				(!upTo ||
+					!conversation.last_entry ||
+					compareInboxCursors(conversation.last_entry.cursor, upTo) <= 0)
 					? { ...conversation, unread_count: 0 }
 					: conversation;
 			queryClient.setQueryData<IConversation[]>(

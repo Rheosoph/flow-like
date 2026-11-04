@@ -26,7 +26,10 @@ vi.mock("@flow-like/locales", () => ({
 }));
 vi.mock("./VoiceMode", () => ({ VoiceMode: () => null }));
 vi.mock("./ai-disclosure", () => ({ ChatAiDisclosure: () => null }));
-vi.mock("./chat-run-controls", () => ({ ChatRunControls: () => null }));
+vi.mock("./chat-run-controls", () => ({
+	ChatRunStatus: () => null,
+	useRunStop: () => undefined,
+}));
 vi.mock("./interaction", () => ({
 	Interaction: () => null,
 	InteractionGroup: () => null,

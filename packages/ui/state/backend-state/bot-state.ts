@@ -97,6 +97,11 @@ export interface IBot {
 	model: IBotModelPolicy;
 	/** Bit id of the embedding model its memory uses; unset lets the host choose. */
 	embedding_model?: string | null;
+	/** Bit ids of the speech-to-text, text-to-speech, image generation and vision models it pins; unset lets the host choose. */
+	stt_model?: string | null;
+	tts_model?: string | null;
+	image_model?: string | null;
+	vision_model?: string | null;
 	classification: IDataSensitivity;
 	capabilities: BotCapability[];
 	/** The profile whose apps `profile_apps` covers. */
@@ -118,6 +123,10 @@ export interface ICreateBotRequest {
 	appearance: BotAppearance;
 	model?: IBotModelPolicy;
 	embedding_model?: string | null;
+	stt_model?: string | null;
+	tts_model?: string | null;
+	image_model?: string | null;
+	vision_model?: string | null;
 	classification?: IDataSensitivity;
 	capabilities?: BotCapability[];
 	profile_id?: string | null;
@@ -133,6 +142,10 @@ export interface IUpdateBotRequest {
 	appearance?: BotAppearance;
 	model?: IBotModelPolicy;
 	embedding_model?: string | null;
+	stt_model?: string | null;
+	tts_model?: string | null;
+	image_model?: string | null;
+	vision_model?: string | null;
 	classification?: IDataSensitivity;
 	capabilities?: BotCapability[];
 	profile_id?: string | null;
@@ -163,7 +176,10 @@ export type BotPermission =
 	| "read_widgets"
 	| "write_widgets";
 
-export type BotRestrictionPreset = "read_only" | "read_and_call_events" | "full";
+export type BotRestrictionPreset =
+	| "read_only"
+	| "read_and_call_events"
+	| "full";
 
 /** `null` does not narrow; an empty list allows nothing. */
 export interface IBotScopes {
@@ -367,6 +383,7 @@ export interface IBotTurn {
 	error_code?: string | null;
 	/** The approval card a `waiting` turn sleeps on. */
 	reply_message_id?: string | null;
+	updated_at?: string;
 }
 
 /** Desktop only: the turns the bot host works on, for bots on this computer and account bots that run here. */
@@ -419,7 +436,13 @@ export interface IBotWorkspace {
 	app_id: string;
 }
 
-/** A public URL that wakes a bot; the secret is never part of it. */
+/** The picture of a bot's current look, which push notifications show as its avatar. */
+export interface IBotAvatar {
+	/** Null until a picture of the current look was uploaded. */
+	url: string | null;
+}
+
+/** A bot webhook's metadata; its stored path does not contain the secret. */
 export interface IBotWebhook {
 	id: string;
 	bot_id: string;
@@ -436,8 +459,9 @@ export interface IBotWebhook {
 /** A new or rotated webhook with the only copy of its credentials. */
 export interface IIssuedBotWebhook {
 	webhook: IBotWebhook;
+	/** Send in X-Flow-Like-Webhook-Secret, as a bearer token, or in the secret URL parameter. */
 	secret: string;
-	/** Key for `X-Flow-Like-Signature: sha256=<hmac of the body>`. */
+	/** Optional key for `X-Flow-Like-Signature: sha256=<hmac of the body>`. */
 	signing_key: string;
 }
 
@@ -549,6 +573,8 @@ export interface IUpdateBotTaskRequest {
 }
 
 export interface IBotState {
+	/** Recent turns across this person's hosts, for mobile status surfaces. */
+	getMobileStatus?(): Promise<IBotTurn[]>;
 	/** Present where bots can also live on this device (desktop). Signed out, every bot is local. */
 	readonly local?: ILocalBotHost;
 	/** Present on the desktop, which runs bots without a chat window. */
@@ -614,6 +640,14 @@ export interface IBotState {
 	webhookUrl?(botId: string, webhook: IBotWebhook): Promise<string>;
 	/** Creates the workspace on first use; repeating it returns the same app. Refused for Flux for now. */
 	getWorkspace?(botId: string): Promise<IBotWorkspace>;
+	/** The picture of an account bot's current look; absent where nothing pushes notifications. */
+	getAvatar?(botId: string): Promise<IBotAvatar>;
+	/** Uploads `image`, a data URL of `appearance`; refused when the bot looks different now. */
+	putAvatar?(
+		botId: string,
+		appearance: BotAppearance,
+		image: string,
+	): Promise<IBotAvatar>;
 	/**
 	 * A new custom bot with the same name (marked as a copy), look, texts, model, classification,
 	 * abilities, location and attached apps. Never secrets, workspace, memory or history.

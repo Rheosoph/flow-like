@@ -55,7 +55,10 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from "../../ui/select";
-import { type GeometryFieldProps, GeometryJsonField } from "./geometry-json-field";
+import {
+	type GeometryFieldProps,
+	GeometryJsonField,
+} from "./geometry-json-field";
 
 const GeometryEditorMap = lazy(() => import("../../ui/geometry-editor-map"));
 
@@ -226,10 +229,7 @@ export function GeometryEditor({
 	return (
 		<div className="grid w-full gap-3">
 			<div className="flex flex-wrap items-center gap-2">
-				<Label
-					htmlFor={`${id}-kind`}
-					className="text-xs text-muted-foreground"
-				>
+				<Label htmlFor={`${id}-kind`} className="text-xs text-muted-foreground">
 					{t("geometryType", "Type")}
 				</Label>
 				<Select
@@ -246,7 +246,9 @@ export function GeometryEditor({
 								{kind}
 							</SelectItem>
 						))}
-						<SelectItem value="GeometryCollection">GeometryCollection</SelectItem>
+						<SelectItem value="GeometryCollection">
+							GeometryCollection
+						</SelectItem>
 					</SelectContent>
 				</Select>
 				{count > 0 && (

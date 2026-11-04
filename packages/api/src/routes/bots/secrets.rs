@@ -1,31 +1,39 @@
 //! A bot's secret store. Write-only for people: they list names and metadata, set or replace a
-//! value and delete it. No route returns a value, and values never reach a log.
+//! value and delete it. Only the bot reads a value: the server for its own turns, and a desktop
+//! host through the bot's runtime token for a live turn. Values never reach a log.
 
 use super::{lock_bot, owned_bot, secret_cipher};
 use crate::{
-    audit, entity::bot_secret, error::ApiError, middleware::jwt::AppUser,
-    routes::profile::deserialize_nullable, state::AppState,
+    audit, bot_caller,
+    bot_host::ledger::BOT_TURN_LEASE_LOST,
+    entity::{bot_secret, bot_turn},
+    error::ApiError,
+    middleware::jwt::AppUser,
+    routes::{inbox::now_millis, profile::deserialize_nullable},
+    state::AppState,
 };
 use axum::{
     Extension, Json,
     extract::{Path, State},
-    http::StatusCode,
+    http::{StatusCode, header},
 };
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::Value;
+use flow_like_types::bot_message::is_secret_name;
+use flow_like_types::bot_turn::{STORED_QUEUED, STORED_RUNNING};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr,
-    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-const NAME_MAX_LEN: usize = 64;
 const MAX_SECRETS_PER_BOT: u64 = 50;
 const VALUE_MAX_BYTES: usize = 16 * 1024;
 const SEALED_MAX_BYTES: usize = 32 * 1024;
 const DESCRIPTION_MAX_CHARS: usize = 2_000;
 const BOT_SECRET_LIMIT_REACHED: &str = "BOT_SECRET_LIMIT_REACHED";
+const BOT_SECRET_SEALED: &str = "BOT_SECRET_SEALED";
 
 /// How a secret is stored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
@@ -202,8 +210,53 @@ async fn store_secret(
     }
 }
 
+/// Opens secret `name` for the bot's own use and records the read; `None` when the bot has no
+/// such secret. A SEALED secret opens only on a host holding the bot's key, never here.
+pub(crate) async fn open_for_bot<C: ConnectionTrait>(
+    db: &C,
+    master: &[u8; 32],
+    bot_id: &str,
+    name: &str,
+) -> Result<Option<String>, ApiError> {
+    let Some(row) = bot_secret::Entity::find_by_id((bot_id.to_string(), name.to_string()))
+        .one(db)
+        .await?
+    else {
+        return Ok(None);
+    };
+    match BotSecretEncryption::from_column(&row.encryption) {
+        Some(BotSecretEncryption::Server) => {}
+        Some(BotSecretEncryption::Sealed) => {
+            return Err(ApiError::coded(
+                StatusCode::CONFLICT,
+                BOT_SECRET_SEALED,
+                format!(
+                    "Secret '{name}' of bot '{bot_id}' is sealed to the bot's own key; only a host holding that key opens it"
+                ),
+            ));
+        }
+        None => {
+            return Err(ApiError::internal(format!(
+                "Bot secret '{name}' of bot '{bot_id}' was stored with an unknown encryption"
+            )));
+        }
+    }
+    let value = secret_cipher::decrypt(master, bot_id, name, &row.ciphertext)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    bot_secret::Entity::update_many()
+        .col_expr(
+            bot_secret::Column::LastUsedAt,
+            Expr::value(chrono::Utc::now().fixed_offset()),
+        )
+        .filter(bot_secret::Column::BotId.eq(bot_id))
+        .filter(bot_secret::Column::Name.eq(name))
+        .exec(db)
+        .await?;
+    Ok(Some(value))
+}
+
 /// Metadata of a bot's secrets; the ciphertexts are never selected.
-async fn secret_infos<C: ConnectionTrait>(
+pub(crate) async fn secret_infos<C: ConnectionTrait>(
     db: &C,
     bot_id: &str,
 ) -> Result<Vec<BotSecretInfo>, DbErr> {
@@ -226,11 +279,7 @@ async fn secret_infos<C: ConnectionTrait>(
 }
 
 fn validate_name(name: &str) -> Result<(), ApiError> {
-    let mut bytes = name.bytes();
-    let valid = name.len() <= NAME_MAX_LEN
-        && bytes.next().is_some_and(|first| first.is_ascii_uppercase())
-        && bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_');
-    if valid {
+    if is_secret_name(name) {
         return Ok(());
     }
     Err(ApiError::bad_request(format!(
@@ -444,6 +493,80 @@ pub async fn delete_bot_secret(
         );
     }
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// A secret's value for the bot running a turn.
+#[derive(Serialize, ToSchema)]
+pub struct BotTurnSecret {
+    pub name: String,
+    /// Use it in this turn only; never store, print or log it.
+    pub value: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/bots/turns/{turn_id}/secrets/{name}",
+    tag = "Bots",
+    params(
+        ("turn_id" = String, Path, description = "The turn your bot token was issued for"),
+        ("name" = String, Path, description = "Secret name")
+    ),
+    responses(
+        (status = 200, description = "The secret's value for the bot running this turn. Only a bot runtime token reads values, and only while its turn runs or an open chat holds it; people only write secrets.", body = BotTurnSecret),
+        (status = 400, description = "The name breaks the naming rule"),
+        (status = 401, description = "Not signed in"),
+        (status = 403, description = "Not a bot runtime token, or a token for another turn"),
+        (status = 404, description = "The bot has no secret with this name"),
+        (status = 409, description = "BOT_TURN_LEASE_LOST: the turn is not running or held; BOT_SECRET_SEALED: the secret is sealed to the bot's own key")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "POST /bots/turns/{turn_id}/secrets/{name}", skip(state, user))]
+pub async fn read_turn_secret(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path((turn_id, name)): Path<(String, String)>,
+) -> Result<([(header::HeaderName, &'static str); 1], Json<BotTurnSecret>), ApiError> {
+    let AppUser::Bot(bot) = &user else {
+        return Err(ApiError::forbidden(
+            "Only a bot's runtime token reads a secret value; people only write secrets",
+        ));
+    };
+    bot_caller::ensure_turn(bot, &turn_id)?;
+    validate_name(&name)?;
+    let owner = bot_caller::live_owner(&state.db, &bot.bot_id).await?;
+    let live = bot_turn::Entity::find_by_id(turn_id.as_str())
+        .filter(bot_turn::Column::BotId.eq(&bot.bot_id))
+        .filter(bot_turn::Column::OwnerId.eq(&owner))
+        .filter(bot_turn::Column::Status.is_in([STORED_RUNNING, STORED_QUEUED]))
+        .filter(bot_turn::Column::LeaseUntil.gt(now_millis()))
+        .count(&state.db)
+        .await?
+        > 0;
+    if !live {
+        return Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            BOT_TURN_LEASE_LOST,
+            format!("Turn '{turn_id}' is neither running nor held, so its bot reads no secrets"),
+        ));
+    }
+    let value = open_for_bot(&state.db, &state.encryption_key, &bot.bot_id, &name)
+        .await?
+        .ok_or_else(|| {
+            ApiError::not_found(format!("Bot '{}' has no secret named '{name}'", bot.bot_id))
+        })?;
+    audit!(
+        state,
+        user,
+        "bot.secret.read",
+        "Bot",
+        bot.bot_id.clone(),
+        serde_json::json!({ "name": name, "turn_id": turn_id })
+    );
+    Ok((
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(BotTurnSecret { name, value }),
+    ))
 }
 
 #[cfg(test)]

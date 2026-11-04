@@ -160,7 +160,7 @@ const CATEGORIES: { id: HomeWidgetCategory | "all"; name: string }[] = [
 	{ id: "data", name: "Data" },
 	{ id: "content", name: "Content" },
 	{ id: "activity", name: "Activity" },
-	{ id: "assistant", name: "FlowPilot" },
+	{ id: "assistant", name: "Bots" },
 ];
 
 // Drafts survive reloads and profile changes in this browser tab.
@@ -833,6 +833,7 @@ export function HomeEditor({
 			}
 		};
 	}, [admin, profileId, getHomeSnapshot, stageHomeLayout]);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the snapshot inputs are the trigger; FlowPilot rereads the snapshot on each event.
 	useEffect(() => {
 		if (!admin && profileId) {
 			window.dispatchEvent(new Event("flowpilot:home-snapshot-changed"));
@@ -1969,6 +1970,9 @@ function HomeWidgetFrame({
 		"section-heading",
 		"greeting",
 		"flowpilot",
+		"bot-chat",
+		"bot-crew",
+		"bot-messages",
 		"app-embed",
 		"quick-actions",
 		"app-spotlight",
@@ -2392,11 +2396,15 @@ function WidgetInspector({
 		contentSuppliesTitle ||
 		["greeting", "quick-actions"].includes(widget.type) ||
 		(widget.type === "workspace-pulse" && widget.config.mode === "strip") ||
-		(widget.type === "flowpilot" && widget.config.mode === "bar");
+		(widget.type === "flowpilot" && widget.config.mode === "bar") ||
+		(widget.type === "bot-chat" && widget.config.mode === "bar");
 	const supportsDescription = ![
 		"greeting",
 		"quick-actions",
 		"flowpilot",
+		"bot-chat",
+		"bot-crew",
+		"bot-messages",
 		"workspace-pulse",
 		"app-embed",
 	].includes(widget.type);

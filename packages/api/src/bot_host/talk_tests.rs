@@ -5,14 +5,16 @@ use super::{
     talk::{
         ERROR_ASK_ANSWERED, ERROR_ASK_EXPIRED, ERROR_ASK_QUEUED, Question, REPLY_BY_DAYS,
         WAIT_SECS, answer_from, answered_ask, ask_body, ask_result_transcript, asked_by,
-        end_lapsed_in, grant_scope, granted_in, headless_verdict, roster_in,
+        end_lapsed_in, grant_scope, granted_in, headless_verdict, roster_in, turn_conversation,
     },
 };
 use crate::{
-    entity::bot_turn,
+    entity::{bot_turn, inbox_entry},
     routes::{
         bots::fire::{FiredTurn, TurnReply},
         inbox::{
+            activity::{activity_message_id, bot_ask_targets, write_activity_in},
+            approvals::open_conversation,
             conversations::start_exchange,
             exchange::{message_outgoing, post_as_bot_in},
             now_millis,
@@ -26,9 +28,10 @@ use flow_like::flow::copilot::{
 };
 use flow_like_types::{
     bot_turn::{STORED_CANCELLED, STORED_QUEUED, turn_id},
+    inbox::{ActivityBody, InboxEntryKind},
     tool_grant::ApprovalDecision,
 };
-use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait};
+use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde_json::json;
 
 const OWNER: &str = "user-a";
@@ -84,6 +87,17 @@ async fn pair(scout: &str, ledger_location: &str) -> (DatabaseConnection, String
 }
 
 async fn ask(db: &DatabaseConnection, conversation: &str, ask_id: &str, hops: u32, wait: u32) {
+    ask_round(db, conversation, ask_id, hops, wait, 0).await;
+}
+
+async fn ask_round(
+    db: &DatabaseConnection,
+    conversation: &str,
+    ask_id: &str,
+    hops: u32,
+    wait: u32,
+    round: u32,
+) {
     let chain = vec![SCOUT.to_string()];
     let question = Question {
         text: "What is the total?",
@@ -93,6 +107,7 @@ async fn ask(db: &DatabaseConnection, conversation: &str, ask_id: &str, hops: u3
         hops,
         chain: &chain,
         wait_secs: wait,
+        round,
     };
     let outgoing = message_outgoing(ask_id, ask_body(&question, now_millis())).unwrap();
     post_as_bot_in(db, conversation, SCOUT, hops, &outgoing, now_millis())
@@ -443,18 +458,182 @@ fn the_ask_body_carries_the_chain_and_only_waits_when_asked_to() {
         hops: 2,
         chain: &chain,
         wait_secs: 0,
+        round: 0,
     };
     let body = ask_body(&question, at(0));
     assert_eq!(body["mentions"], json!(["c"]));
     assert_eq!(body["ask"]["chain"], json!(["a", "b"]));
     assert!(body["ask"].get("wait_secs").is_none());
+    assert!(body["ask"].get("round").is_none());
     assert_eq!(body["ask"]["hops"], 2);
     let waiting = ask_body(
         &Question {
             wait_secs: 90,
+            round: 3,
             ..question
         },
         at(0),
     );
     assert_eq!(waiting["ask"]["wait_secs"], 90);
+    assert_eq!(waiting["ask"]["round"], 3);
+}
+
+#[tokio::test]
+async fn an_answer_to_a_counted_question_wakes_the_asker_at_its_own_hops() {
+    let (db, conversation) = pair("SERVER", "SERVER").await;
+    ask_round(&db, &conversation, "ask-r1", 1, WAIT_SECS, 1).await;
+    let reply = answer(&db, &conversation, "ask-r1", 2).await;
+    let woken = turn(&db, SCOUT, &reply)
+        .await
+        .expect("asker follow-up turn");
+    assert_eq!(woken.hops, 1);
+    let answered = answered_ask(&db, &woken)
+        .await
+        .unwrap()
+        .expect("answered ask");
+    assert_eq!(answered.round, 1);
+    assert_eq!(answered.callee_id, LEDGER);
+
+    ask_round(&db, &conversation, "ask-r2", 3, WAIT_SECS, 2).await;
+    let deep = answer(&db, &conversation, "ask-r2", 4).await;
+    let woken = turn(&db, SCOUT, &deep)
+        .await
+        .expect("a follow-up past the hop limit still reaches the asker");
+    assert_eq!(woken.hops, 2);
+}
+
+#[tokio::test]
+async fn an_answer_to_a_question_without_a_round_counts_its_hops_as_before() {
+    let (db, conversation) = pair("SERVER", "SERVER").await;
+    ask(&db, &conversation, "ask-l1", 1, WAIT_SECS).await;
+    let reply = answer(&db, &conversation, "ask-l1", 2).await;
+    let woken = turn(&db, SCOUT, &reply)
+        .await
+        .expect("asker follow-up turn");
+    assert_eq!(woken.hops, 2);
+    assert_eq!(answered_ask(&db, &woken).await.unwrap().unwrap().round, 0);
+
+    ask(&db, &conversation, "ask-l2", 3, WAIT_SECS).await;
+    let past = answer(&db, &conversation, "ask-l2", 4).await;
+    assert!(turn(&db, SCOUT, &past).await.is_none());
+}
+
+#[tokio::test]
+async fn a_desktop_turns_late_answer_returns_to_the_conversation_the_turn_runs_in() {
+    let (db, conversation) = pair("DESKTOP", "DESKTOP").await;
+    ask(&db, &conversation, "ask-7", 1, WAIT_SECS).await;
+    let queued = turn(&db, LEDGER, "ask-7").await.expect("queued turn");
+    assert_eq!(
+        turn_conversation(&db, OWNER, LEDGER, &queued.id)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some(conversation.as_str())
+    );
+    for (owner, bot, run) in [
+        ("someone-else", LEDGER, queued.id.as_str()),
+        (OWNER, SCOUT, queued.id.as_str()),
+        (OWNER, LEDGER, "a-chat-run"),
+        (OWNER, LEDGER, ""),
+    ] {
+        assert_eq!(
+            turn_conversation(&db, owner, bot, run).await.unwrap(),
+            None,
+            "{owner} {bot} {run}"
+        );
+    }
+}
+
+async fn activity_rows(db: &DatabaseConnection, inbox: &str) -> Vec<inbox_entry::Model> {
+    inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(inbox))
+        .filter(inbox_entry::Column::Kind.eq(crate::routes::inbox::stored(
+            InboxEntryKind::Activity.as_str(),
+        )))
+        .all(db)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn an_ask_leaves_one_activity_in_the_askers_chat_and_the_callees_chat_and_wakes_no_bot() {
+    let (db, exchange) = pair("SERVER", "SERVER").await;
+    let scout_chat = open_conversation(&db, OWNER, SCOUT, "", now_millis())
+        .await
+        .unwrap()
+        .unwrap();
+    let ledger_chat = open_conversation(&db, OWNER, LEDGER, "", now_millis())
+        .await
+        .unwrap()
+        .unwrap();
+    let question = "q".repeat(500);
+    let body = ActivityBody::bot_ask("ask-9", SCOUT, LEDGER, &exchange, &question);
+
+    for _ in 0..2 {
+        let targets = bot_ask_targets(&db, OWNER, &scout_chat, &body)
+            .await
+            .unwrap();
+        assert_eq!(
+            targets,
+            [
+                (scout_chat.clone(), SCOUT.to_string()),
+                (ledger_chat.clone(), LEDGER.to_string())
+            ]
+        );
+        for (conversation, sender) in targets {
+            let id = activity_message_id("ask-9", &conversation);
+            let sent = write_activity_in(&db, &conversation, &sender, &id, &body, now_millis())
+                .await
+                .unwrap();
+            assert!(sent.bots.is_empty());
+        }
+    }
+
+    for (chat, sender) in [(&scout_chat, SCOUT), (&ledger_chat, LEDGER)] {
+        let rows = activity_rows(&db, OWNER).await;
+        let row = rows
+            .iter()
+            .find(|row| &row.conversation_id == chat)
+            .unwrap();
+        assert_eq!(row.sender_id, sender);
+        assert_eq!(row.message_id, activity_message_id("ask-9", chat));
+        let parsed = ActivityBody::parse(&row.envelope["body"]).unwrap();
+        assert_eq!(parsed, body);
+        let ActivityBody::BotAsk { question, .. } = parsed;
+        assert_eq!(question.chars().count(), 300);
+        assert_eq!(activity_rows(&db, sender).await.len(), 1);
+    }
+    assert_eq!(activity_rows(&db, OWNER).await.len(), 2);
+    assert!(
+        turn(&db, LEDGER, &activity_message_id("ask-9", &ledger_chat))
+            .await
+            .is_none()
+    );
+    assert!(
+        turn(&db, SCOUT, &activity_message_id("ask-9", &scout_chat))
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn an_ask_does_not_start_the_callees_chat_and_writes_once_when_both_chats_are_one() {
+    let (db, exchange) = pair("SERVER", "SERVER").await;
+    let scout_chat = open_conversation(&db, OWNER, SCOUT, "", now_millis())
+        .await
+        .unwrap()
+        .unwrap();
+    let body = ActivityBody::bot_ask("ask-8", SCOUT, LEDGER, &exchange, "hi");
+    let targets = bot_ask_targets(&db, OWNER, &scout_chat, &body)
+        .await
+        .unwrap();
+    assert_eq!(targets, [(scout_chat, SCOUT.to_string())]);
+    let ledger_chat = open_conversation(&db, OWNER, LEDGER, "", now_millis())
+        .await
+        .unwrap()
+        .unwrap();
+    let from_ledger_chat = bot_ask_targets(&db, OWNER, &ledger_chat, &body)
+        .await
+        .unwrap();
+    assert_eq!(from_ledger_chat.len(), 1);
 }

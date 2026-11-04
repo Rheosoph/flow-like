@@ -5,8 +5,8 @@
 			"label": "Browser"
 		},
 		"channels": {
-			"label": "",
-			"description": ""
+			"description": "",
+			"label": ""
 		},
 		"code_execution": {
 			"description": "Code in einer Sandbox schreiben und ausführen",
@@ -98,8 +98,7 @@
 		}
 	},
 	"chat": {
-		"defaultModelHint": "",
-		"modelHint": "In den Einstellungen von {{name}} gewählt"
+		"defaultModelHint": ""
 	},
 	"computer": {
 		"alt": "",
@@ -111,6 +110,14 @@
 		"stop": ""
 	},
 	"crew": {
+		"activity": {
+			"queued": "",
+			"running": "",
+			"typingMany": "",
+			"typingOne": "",
+			"typingTwo": "",
+			"waiting": ""
+		},
 		"approval": {
 			"always": "",
 			"answeredAlways": "",
@@ -122,6 +129,21 @@
 			"failed": "",
 			"label": "",
 			"once": "",
+			"secret": {
+				"decline": "",
+				"declined": "",
+				"eyebrow": "",
+				"failed": "",
+				"hint": "",
+				"placeholder": "",
+				"replaceHint": "",
+				"save": "",
+				"saved": "",
+				"saving": "",
+				"title": "",
+				"tooLarge": "",
+				"valueLabel": ""
+			},
 			"title": "",
 			"triggeredBy": "",
 			"triggeredByInRoom": ""
@@ -129,12 +151,41 @@
 		"botSettings": "Einstellungen für {{name}}",
 		"botTag": "Bot",
 		"builtIn": "Integriert",
+		"call": {
+			"durationHours": "",
+			"durationMinutes": "",
+			"durationShort": "",
+			"ended": "",
+			"error": {
+				"denied": "",
+				"failed": "",
+				"full": "",
+				"unavailable": ""
+			},
+			"join": "",
+			"leave": "",
+			"listen": "",
+			"listenHint": "",
+			"listenNeedsModel": "",
+			"live": "",
+			"mute": "",
+			"mutedPerson": "",
+			"speaking": "",
+			"start": "",
+			"started": "",
+			"startedYou": "",
+			"transcribedPerson": "",
+			"unmute": ""
+		},
 		"cancel": "Abbrechen",
 		"composer": {
 			"encrypted": "In Ende-zu-Ende-verschlüsselten Chats kannst du in dieser App noch nicht schreiben.",
+			"mentionHint": "Bots hier antworten, wenn du sie mit @ erwähnst",
 			"placeholder": "Nachricht an {{name}}",
-			"send": "Senden",
 			"to": "An {{name}}"
+		},
+		"conversationMenu": {
+			"open": "Optionen der Unterhaltung"
 		},
 		"directMessage": "Direktnachricht",
 		"dock": {
@@ -185,6 +236,30 @@
 		},
 		"loadFailed": "Deine Bots konnten nicht geladen werden. Assistent und Flux funktionieren weiterhin.",
 		"loadFailedFlux": "",
+		"marks": {
+			"beforeYouJoined": "Eine Nachricht aus der Zeit, bevor du dieser Unterhaltung beigetreten bist",
+			"jump": "In der Unterhaltung zeigen",
+			"loadFailed": "Deine markierten Nachrichten konnten nicht geladen werden.",
+			"loadMore": "Mehr anzeigen",
+			"noStars": "Noch nichts markiert. Markiere eine Nachricht über ihr Menü, um sie hier wiederzufinden.",
+			"notFound": "Diese Nachricht ist nicht mehr im Verlauf dieser Unterhaltung.",
+			"pinConversation": "Oben anheften",
+			"pinLimit": "In dieser Unterhaltung sind schon {{max}} Nachrichten angeheftet. Löse zuerst eine.",
+			"pinMessage": "Für alle anheften",
+			"pinnedBy": "Angeheftet von {{name}}",
+			"pinnedConversation": "Angeheftet",
+			"pinnedCount_one": "{{count}} angeheftet",
+			"pinnedCount_other": "{{count}} angeheftet",
+			"pinnedTitle": "Angeheftete Nachrichten",
+			"star": "Mit Stern markieren",
+			"starred": "Mit Stern markiert",
+			"starredDescription": "Nur du siehst, was du mit einem Stern markierst.",
+			"starredShort": "Markiert",
+			"starredTitle": "Markierte Nachrichten",
+			"unpinConversation": "Nicht mehr oben anheften",
+			"unpinMessage": "Für alle lösen",
+			"unstar": "Stern entfernen"
+		},
 		"members": {
 			"added": "{{by}}: {{name}} hinzugefügt",
 			"joined": "Neu dabei: {{name}}",
@@ -216,6 +291,7 @@
 			"retry": "Erneut versuchen",
 			"save": "Speichern",
 			"sending": "Wird gesendet …",
+			"sentByEmail": "",
 			"unsupported": "Nachricht, die diese App nicht anzeigen kann"
 		},
 		"mute": {
@@ -256,6 +332,38 @@
 			"remove": "{{name}} entfernen",
 			"title": "Neuer Raum"
 		},
+		"note": {
+			"asked": "",
+			"askedBy": "",
+			"body": "",
+			"bodyOfType": "",
+			"clickForDetails": "",
+			"copied": "",
+			"copy": "",
+			"from": "",
+			"instruction": "",
+			"mail": {
+				"attachments": "",
+				"body": "",
+				"cc": "",
+				"from": "",
+				"notKept": "",
+				"to": "",
+				"unverified": "",
+				"verified": ""
+			},
+			"messaged": "",
+			"messagedPrefix": "",
+			"payload": "",
+			"payloadFile": "",
+			"source": {
+				"email": "",
+				"event": "",
+				"schedule": "",
+				"webhook": ""
+			},
+			"untitled": ""
+		},
 		"openChat": "Chat öffnen",
 		"picker": {
 			"alreadyInvited": "",
@@ -279,6 +387,7 @@
 			"where": ""
 		},
 		"retry": "Erneut versuchen",
+		"roomTag": "Raum",
 		"rooms": {
 			"bots_one": "{{count}} Bot",
 			"bots_other": "{{count}} Bots",
@@ -291,6 +400,7 @@
 			"noMessages": "Noch keine Nachrichten",
 			"people_one": "{{count}} Person",
 			"people_other": "{{count}} Personen",
+			"theyWrote": "{{name}}: {{text}}",
 			"title": "Räume und Personen",
 			"youWrote": "Du: {{text}}"
 		},
@@ -319,8 +429,12 @@
 			"today": "Heute",
 			"yesterday": "Gestern"
 		},
+		"transcript": {
+			"said": ""
+		},
 		"trigger": {
 			"email": "",
+			"emailFrom": "",
 			"event": "",
 			"schedule": "",
 			"webhook": ""
@@ -404,6 +518,21 @@
 			"moveDown": "Nach unten verschieben",
 			"moveUp": "Nach oben verschieben",
 			"noModels": "Keine passenden Modelle.",
+			"pins": {
+				"hint": "",
+				"host": "",
+				"hostHint": "",
+				"image": "",
+				"imageHint": "",
+				"none": "",
+				"stt": "",
+				"sttHint": "",
+				"title": "",
+				"tts": "",
+				"ttsHint": "",
+				"vision": "",
+				"visionHint": ""
+			},
 			"primary": "Modell",
 			"remove": "Entfernen",
 			"searchModels": "Modelle suchen",
@@ -501,8 +630,8 @@
 			"add": "Secret hinzufügen",
 			"delete": "Löschen",
 			"deleteConfirm": "{{name}} löschen?",
-			"deleted": "{{name}} gelöscht",
 			"deleteFailed": "Das Secret konnte nicht gelöscht werden.",
+			"deleted": "{{name}} gelöscht",
 			"description": "Beschreibung (optional)",
 			"descriptionPlaceholder": "Wofür es da ist",
 			"empty": "Noch keine Secrets.",
@@ -517,8 +646,8 @@
 			"neverUsed": "nie genutzt",
 			"replaceValue": "Ersetzen",
 			"save": "Secret speichern",
-			"saved": "{{name}} gespeichert",
 			"saveFailed": "Das Secret konnte nicht gespeichert werden.",
+			"saved": "{{name}} gespeichert",
 			"sealed": "Versiegelt",
 			"sealedHint": "Für den Host des Bots versiegelt. Lösche es und füge es erneut hinzu, um über Flow-Like einen neuen Wert zu speichern.",
 			"subtitle": "API-Schlüssel, Tokens und Passwörter, die der Bot nutzen darf.",
@@ -577,6 +706,8 @@
 		"host": "",
 		"other": "",
 		"page": "",
+		"person": "",
+		"personUnknown": "",
 		"table": "",
 		"tool": ""
 	},
@@ -591,7 +722,30 @@
 		"topicStarted": "",
 		"untitled": ""
 	},
+	"home": {
+		"chat": {
+			"heading": "Woran arbeiten wir?",
+			"message": "Nachricht an {{name}}",
+			"pickBot": "Wem du schreibst",
+			"placeholder": "Nachricht an {{name}} …",
+			"send": "An {{name}} senden"
+		},
+		"messages": {
+			"caughtUp": "Du bist auf dem neuesten Stand.",
+			"signIn": "Melde dich an, um Personen zu schreiben und Räume mit deinen Bots zu teilen.",
+			"title": "Nachrichten"
+		},
+		"needs": {
+			"empty": "Gerade wartet nichts auf dich."
+		},
+		"openBots": "Bots öffnen",
+		"rooms": {
+			"empty": "Noch keine Räume. Bring Personen und Bots in einem Raum zusammen.",
+			"title": "Räume"
+		}
+	},
 	"identity": {
+		"actsFor": "Handelt für",
 		"bot": "Bot",
 		"botId": "Bot-ID",
 		"botOf": "Bot von {{owner}}",
@@ -637,11 +791,16 @@
 		"count_other": "{{count}} Erinnerungen",
 		"deleteFailed": "Erinnerung konnte nicht gelöscht werden",
 		"factsEmpty": "",
+		"factsEmptyOff": "",
 		"factsFailed": "",
 		"forget": "",
 		"justNow": "gerade eben",
 		"loadFailed": "Erinnerungen konnten nicht geladen werden",
-		"off": "Erinnerungen sind aus. Wähle in den Bot-Einstellungen ein Embedding-Modell, damit Erinnerungen abgerufen und gespeichert werden. Gespeicherte Erinnerungen kannst du hier trotzdem ansehen und löschen."
+		"noticeCapability": "",
+		"noticeModel": "",
+		"off": "Erinnerungen sind aus. Wähle in den Bot-Einstellungen ein Embedding-Modell, damit Erinnerungen abgerufen und gespeichert werden. Gespeicherte Erinnerungen kannst du hier trotzdem ansehen und löschen.",
+		"turnOn": "",
+		"turnOnFailed": ""
 	},
 	"move": {
 		"account": "Angemeldet als {{account}}",
@@ -765,8 +924,8 @@
 			"label": "",
 			"on": "",
 			"rotate": "",
-			"rotated": "",
 			"rotateFailed": "",
+			"rotated": "",
 			"unpublished": "",
 			"waiting": ""
 		},
@@ -807,6 +966,7 @@
 			"on": ""
 		},
 		"openFull": "",
+		"openWorkspace": "",
 		"permissions": {
 			"granted": "",
 			"none": "",
@@ -842,11 +1002,17 @@
 		},
 		"waitingForYou": "",
 		"webhooks": {
+			"authenticatedUrl": "",
+			"authenticatedUrlHint": "",
+			"authenticationHint": "",
+			"closeExamples": "",
 			"copied": "",
 			"copy": "",
 			"create": "",
 			"delete": "",
 			"done": "",
+			"examples": "",
+			"headerExample": "",
 			"instruction": "",
 			"instructionLabel": "",
 			"issued": "",
@@ -856,11 +1022,16 @@
 			"neverCalled": "",
 			"none": "",
 			"once": "",
+			"optionalSigning": "",
+			"placeholderHint": "",
+			"responseHint": "",
 			"rotate": "",
 			"secret": "",
+			"signingHint": "",
 			"signingKey": "",
 			"title": "",
-			"url": ""
+			"url": "",
+			"urlExample": ""
 		},
 		"working": ""
 	},

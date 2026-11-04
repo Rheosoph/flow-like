@@ -11,6 +11,7 @@ pub(crate) mod interactive;
 pub(crate) mod ledger;
 pub(crate) mod memory;
 pub(crate) mod talk;
+pub(crate) mod task_schedules;
 pub(crate) mod tasks;
 mod worker;
 
@@ -124,6 +125,19 @@ pub async fn recover(state: &AppState) -> Result<Recovered, ApiError> {
         tracing::warn!(%error, "Bot task sweep incomplete");
     }
     let recovered = ledger::recover_in(&state.db, now).await?;
+    match ledger::hand_back_in(&state.db, now).await {
+        Ok(handed_back) if !handed_back.is_empty() => {
+            tracing::info!(
+                turns = handed_back.len(),
+                "Bot turns no desktop claimed went back to the server"
+            );
+            dispatch_turns(state, handed_back).await;
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(%error, "Bot turns handed off to a desktop were not taken back")
+        }
+    }
     if let Err(error) = talk::expire_asks(state, now).await {
         tracing::warn!(%error, "Bot talk: lapsed questions were not ended");
     }
@@ -160,5 +174,6 @@ pub async fn recover(state: &AppState) -> Result<Recovered, ApiError> {
     } else {
         kick();
     }
+    crate::routes::bots::live_activities::sweep(state).await;
     Ok(recovered)
 }

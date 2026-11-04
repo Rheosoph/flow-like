@@ -3,6 +3,7 @@ import type { IChatMessageError } from "../../../lib/flowpilot/chat-error";
 import type { IHistoryMessage } from "../../../lib/schema/llm/history";
 import { installRuntimeHistoryGuard } from "../../../lib/service-runtime/history-guard";
 import type { IAgentDebugReport } from "../../../state/global-chat/agent-debug-report";
+import type { ConversationNote } from "../../bots-tab/fold-entries";
 import type { FlowScriptWorkspaceCandidate } from "../../flowpilot/flowscript-workspace-candidates";
 import type { BotExchangeView } from "../../global-chat/bot-exchange";
 import { finalizePlanSteps } from "./chat-event-fold";
@@ -249,12 +250,27 @@ export interface IMessageApproval {
 	scopes: string[];
 	requesterName?: string;
 	room?: string;
+	secret?: { name: string; description: string; replace?: boolean };
 	answer?: "once" | "always" | "deny";
+}
+
+export interface IReactionSummary {
+	count: number;
+	names: readonly string[];
+}
+
+/** What woke a bot, or one bot asking another, in the bot's chat. */
+export interface IMessageNotice {
+	note: ConversationNote;
+	/** The bot whose chat shows it. */
+	botId?: string;
 }
 
 export interface IMessage {
 	/** Set on a bot's approval card: the message renders as the card, not as text. */
 	approval?: IMessageApproval;
+	/** Set on a line between messages: the message renders as a pill, without actions. */
+	notice?: IMessageNotice;
 	id: string;
 	/** Original response slot, shared by every message emitted in one run. */
 	stream_root_id?: string;
@@ -274,6 +290,10 @@ export interface IMessage {
 	explicit_name?: string;
 	/** Emoji reactions selected by the user in this chat. */
 	reactions?: string[];
+	/** Who reacted with each emoji, for chats with several people; absent in a 1:1 chat. */
+	reactionSummary?: Record<string, IReactionSummary>;
+	/** The text as written, when the shown content is a rendering of it (inline mentions, notes). */
+	source_text?: string;
 	/** Emoji reactions added by the workflow, independent of the user's choices. */
 	workflowReactions?: string[];
 	/** Applied workflow events, retained so replay cannot undo later reactions. */

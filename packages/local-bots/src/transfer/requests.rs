@@ -40,6 +40,10 @@ pub(crate) struct ImportBotRequest<'a> {
     appearance: &'a Value,
     model: &'a BotModelPolicy,
     embedding_model: Option<&'a str>,
+    stt_model: Option<&'a str>,
+    tts_model: Option<&'a str>,
+    image_model: Option<&'a str>,
+    vision_model: Option<&'a str>,
     classification: &'a DataSensitivity,
     capabilities: &'a [BotCapability],
     profile_id: Option<&'a str>,
@@ -61,6 +65,10 @@ impl<'a> ImportBotRequest<'a> {
             appearance: &bot.appearance,
             model: &bot.model,
             embedding_model: bot.embedding_model.as_deref(),
+            stt_model: bot.stt_model.as_deref(),
+            tts_model: bot.tts_model.as_deref(),
+            image_model: bot.image_model.as_deref(),
+            vision_model: bot.vision_model.as_deref(),
             classification: &bot.classification,
             capabilities: &bot.capabilities,
             profile_id: bot.profile_id.as_deref(),
@@ -82,6 +90,10 @@ pub(crate) struct BotSettingsRequest<'a> {
     appearance: &'a Value,
     model: &'a BotModelPolicy,
     embedding_model: Option<&'a str>,
+    stt_model: Option<&'a str>,
+    tts_model: Option<&'a str>,
+    image_model: Option<&'a str>,
+    vision_model: Option<&'a str>,
     classification: &'a DataSensitivity,
     capabilities: &'a [BotCapability],
     profile_id: Option<&'a str>,
@@ -98,6 +110,10 @@ impl<'a> BotSettingsRequest<'a> {
             appearance: &bot.appearance,
             model: &bot.model,
             embedding_model: bot.embedding_model.as_deref(),
+            stt_model: bot.stt_model.as_deref(),
+            tts_model: bot.tts_model.as_deref(),
+            image_model: bot.image_model.as_deref(),
+            vision_model: bot.vision_model.as_deref(),
             classification: &bot.classification,
             capabilities: &bot.capabilities,
             profile_id: bot.profile_id.as_deref(),
@@ -195,11 +211,14 @@ pub(crate) fn split_conversations<'a>(
     ConversationSplit { movable, waiting }
 }
 
-/// Join and leave events are the server's to write, and an edit of a deleted message lost the
+/// Join and leave events are the server's to write, an activity points into a local exchange
+/// that stays behind, and an edit of a deleted message lost the
 /// message it edited, which the account's deletion scrubs from the edits it imports anyway.
 fn is_imported(entry: &InboxEntry) -> bool {
-    entry.kind != InboxEntryKind::Member
-        && !(entry.kind == InboxEntryKind::Edit && is_tombstone(&entry.envelope))
+    !matches!(
+        entry.kind,
+        InboxEntryKind::Member | InboxEntryKind::Activity
+    ) && !(entry.kind == InboxEntryKind::Edit && is_tombstone(&entry.envelope))
 }
 
 /// What the account takes of the entry's content. It refuses the `deleted` body of a tombstone,

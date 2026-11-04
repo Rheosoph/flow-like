@@ -103,6 +103,10 @@ impl ToolEnv for CapEnv {
     async fn secret(&self, name: &str) -> Result<Option<String>> {
         self.inner.secret(name).await
     }
+
+    async fn secrets(&self) -> Result<Vec<crate::secrets::SecretInfo>> {
+        self.inner.secrets().await
+    }
 }
 
 struct Page {

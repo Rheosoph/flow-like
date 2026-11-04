@@ -68,6 +68,7 @@ fn bots_serialize_like_the_api_plus_local() {
             "device_id",
             "embedding_model",
             "id",
+            "image_model",
             "instructions",
             "local",
             "location",
@@ -76,8 +77,11 @@ fn bots_serialize_like_the_api_plus_local() {
             "owner_id",
             "preset_id",
             "profile_id",
+            "stt_model",
             "system",
-            "updated_at"
+            "tts_model",
+            "updated_at",
+            "vision_model"
         ]
     );
     assert_eq!(wire["owner_id"], "local");
@@ -661,6 +665,10 @@ fn flowpilot_stays_with_the_bots_that_hold_it() {
         appearance: json!({ "kind": "flux" }),
         model: Default::default(),
         embedding_model: None,
+        stt_model: None,
+        tts_model: None,
+        image_model: None,
+        vision_model: None,
         classification: Default::default(),
         capabilities: vec![BotCapability::Flowpilot],
         profile_id: None,
@@ -1016,6 +1024,68 @@ fn the_embedding_model_is_kept_cleared_and_checked() {
         f.store.clone_bot(&kept.id).unwrap().embedding_model,
         None,
         "the copy takes the current setting"
+    );
+}
+
+#[test]
+fn the_model_pins_are_kept_cleared_checked_and_stored() {
+    let f = fixture();
+    let bot = f
+        .store
+        .create_bot(create(json!({
+            "name": "Pinned",
+            "appearance": { "kind": "pip" },
+            "stt_model": " bit-stt ",
+            "tts_model": "bit-tts",
+            "image_model": "bit-image",
+            "vision_model": "bit-vision",
+        })))
+        .unwrap();
+    assert_eq!(bot.stt_model.as_deref(), Some("bit-stt"));
+    let wire = serde_json::to_value(&bot).unwrap();
+    assert_eq!(wire["tts_model"], "bit-tts");
+    assert_eq!(wire["image_model"], "bit-image");
+    assert_eq!(wire["vision_model"], "bit-vision");
+
+    let kept = f
+        .store
+        .update_bot(&bot.id, patch(json!({ "description": "Pinned" })))
+        .unwrap();
+    assert_eq!(kept.stt_model.as_deref(), Some("bit-stt"));
+    assert_eq!(kept.vision_model.as_deref(), Some("bit-vision"));
+
+    let changed = f
+        .store
+        .update_bot(
+            &bot.id,
+            patch(json!({ "tts_model": "bit-tts-2", "image_model": null })),
+        )
+        .unwrap();
+    assert_eq!(changed.tts_model.as_deref(), Some("bit-tts-2"));
+    assert_eq!(changed.image_model, None);
+    assert_eq!(changed.stt_model.as_deref(), Some("bit-stt"));
+
+    let stored = f.store.get_bot(&bot.id).unwrap().unwrap();
+    assert_eq!(
+        (
+            stored.stt_model.as_deref(),
+            stored.tts_model.as_deref(),
+            stored.image_model.as_deref(),
+            stored.vision_model.as_deref(),
+        ),
+        (Some("bit-stt"), Some("bit-tts-2"), None, Some("bit-vision"))
+    );
+
+    for field in ["stt_model", "tts_model", "image_model", "vision_model"] {
+        let long = f
+            .store
+            .update_bot(&bot.id, patch(json!({ field: "m".repeat(257) })));
+        assert_eq!(code(long), codes::INVALID, "{field}");
+    }
+    assert_eq!(
+        f.store.clone_bot(&bot.id).unwrap().vision_model.as_deref(),
+        Some("bit-vision"),
+        "the copy takes the current pins"
     );
 }
 

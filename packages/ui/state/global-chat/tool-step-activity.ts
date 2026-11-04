@@ -52,6 +52,8 @@ const TOOL_ACTIVITIES: Record<
 	get_declarations: ["search", "Looking up node definitions"],
 	search_by_pin: ["search", "Finding compatible nodes"],
 	ask_user: ["tool", "Requesting your input"],
+	secret_request: ["tool", "Asking for a secret"],
+	secret_list: ["tool", "Checking stored secrets"],
 	shell_run: ["terminal", "Running a command"],
 	ask_bot: ["tool", "Asking another bot"],
 };

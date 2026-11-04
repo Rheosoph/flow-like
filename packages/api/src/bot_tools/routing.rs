@@ -2,8 +2,12 @@ use flow_like::flow::copilot::HostTools;
 use serde_json::Value;
 
 /// Tools the API runs itself: they touch Lance tables and read objects, nothing heavy.
-const IN_PROCESS: [&str; 15] = [
-    "notify_owner",
+const IN_PROCESS: [&str; 19] = [
+    "secret_list",
+    "secret_request",
+    "message_owner",
+    "list_people",
+    "message_person",
     "schedule_task",
     "list_tasks",
     "cancel_task",

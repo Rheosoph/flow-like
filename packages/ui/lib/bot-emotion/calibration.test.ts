@@ -8,7 +8,7 @@ import { EmotionScorer, chooseExpression, expressionScores } from "./scoring";
 
 // Relevant raw probabilities captured with the pinned q8 model in a browser.
 // The original implementation chose neutral for both hostile German drafts.
-const EXAMPLES = [
+const EXAMPLES: { text: string; expression: string; raw: EmotionScores }[] = [
 	{
 		text: "I am sad 😊",
 		expression: "sad",
@@ -102,7 +102,7 @@ const EXAMPLES = [
 			desire: 0.012828567065298557,
 		},
 	},
-] satisfies { text: string; expression: string; raw: EmotionScores }[];
+];
 
 describe("pinned emotion calibration", () => {
 	it("uses thresholds from the same revision as the inference model", () => {

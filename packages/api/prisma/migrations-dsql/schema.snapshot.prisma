@@ -1585,6 +1585,11 @@ model Bot {
   importKey       String?
   /// Bit id of the embedding model its memory uses; null lets the host choose.
   embeddingModel  String?
+  /// Bit ids of the speech-to-text, text-to-speech, image generation and vision models the bot pins; null lets the host choose.
+  sttModel        String?
+  ttsModel        String?
+  imageModel      String?
+  visionModel     String?
   permissionsFrom BotPermission[]       @relation("BotPermissionFrom")
   permissionsTo   BotPermission[]       @relation("BotPermissionTo")
   hostHeartbeats  BotHostHeartbeat[]
@@ -2705,9 +2710,58 @@ model Conversation {
   /// The newest `InboxEntry.seq` handed out, allocated under the conversation's lock; null is 0.
   lastSeq        BigInt?
   segments       ConversationSegment[]
+  files          ConversationFile[]
   botTurns       BotTurn[]
+  pinnedFor      PinnedConversation[]
+  pinnedMessages PinnedMessage[]
+  stars          StarredMessage[]
+  meetings       Meeting[]
 
   @@unique([createdBy, importKey])
+}
+
+/// A conversation a person pinned to the top of their list. A member who leaves keeps the row;
+/// lists only show conversations they are still an active member of.
+model PinnedConversation {
+  /// A user sub; no foreign key, like `ConversationMember.principalId`.
+  principalId    String
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  pinnedAt       DateTime     @db.Timestamptz(3)
+
+  @@id([principalId, conversationId])
+  @@index([conversationId])
+}
+
+/// A message pinned to its conversation for every member, at most 50 per conversation. Deleting
+/// the message removes its pin.
+model PinnedMessage {
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// The pinned message's `InboxEntry.messageId`, the same in every copy.
+  messageId      String
+  /// The person who pinned it; no foreign key.
+  pinnedBy       String
+  pinnedAt       DateTime     @db.Timestamptz(3)
+
+  @@id([conversationId, messageId])
+  @@index([pinnedBy])
+}
+
+/// A message a person starred, kept for them across conversations. Deleting the message removes
+/// every star of it.
+model StarredMessage {
+  /// A user sub; no foreign key.
+  principalId    String
+  messageId      String
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  starredAt      DateTime     @db.Timestamptz(3)
+
+  @@id([principalId, messageId])
+  @@index([principalId, starredAt])
+  @@index([principalId, conversationId, starredAt])
+  @@index([conversationId, messageId])
 }
 
 /// A principal in a conversation. Rows stay after leaving (`leftAt`) so history keeps its
@@ -2787,6 +2841,31 @@ model ConversationSegment {
 
   @@index([conversationId, authorId, level, seqFrom])
   @@index([authorId])
+}
+
+/// A file a conversation member uploaded into a conversation: platform storage under
+/// `conversations/<conversationId>/`, not an app. `messageId` is set when a message carries it;
+/// deleting that message sets `deletedAt` and the sweep removes the object and the row.
+model ConversationFile {
+  id             String       @id
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// A user sub or a bot id; no foreign key.
+  uploaderId     String
+  name           String
+  mime           String
+  bytes          BigInt
+  sha256         String?
+  /// PENDING | READY
+  status         String       @default("PENDING")
+  messageId      String?
+  deletedAt      DateTime?    @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([conversationId, messageId])
+  @@index([uploaderId])
+  @@index([deletedAt])
+  @@index([status, createdAt])
 }
 
 /// A public key others seal envelopes to. People register their own; owners register their
@@ -3239,6 +3318,58 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+// ---- meeting.prisma
+/// A scheduled call with its own participants and chat. Room history is never exposed to guests.
+model Meeting {
+  id             String               @id
+  conversationId String
+  conversation   Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  hostId         String
+  title          String
+  startsAt       DateTime             @db.Timestamptz(3)
+  endsAt         DateTime             @db.Timestamptz(3)
+  endedAt        DateTime?            @db.Timestamptz(3)
+  guestsAllowed  Boolean              @default(true)
+  inviteNonce    String
+  roomEpoch      Int                  @default(0)
+  createdAt      DateTime             @default(now()) @db.Timestamptz(3)
+  participants   MeetingParticipant[]
+  messages       MeetingMessage[]
+
+  @@index([conversationId, startsAt])
+  @@index([hostId])
+}
+
+model MeetingParticipant {
+  id          String   @id
+  meetingId   String
+  meeting     Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  /// Null for guests; an account has one participant per meeting.
+  userId      String?
+  displayName String
+  /// WAITING | ADMITTED | LEFT | REMOVED
+  status      String
+  sessionHash String
+  lastSeenAt  DateTime @db.Timestamptz(3)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([meetingId, userId])
+  @@index([meetingId, status])
+  @@index([userId])
+}
+
+model MeetingMessage {
+  id            String   @id
+  meetingId     String
+  meeting       Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  participantId String
+  displayName   String
+  body          String
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([meetingId, createdAt, id])
 }
 
 // ---- metadata.prisma

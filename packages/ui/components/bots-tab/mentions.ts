@@ -55,14 +55,49 @@ export function filterMentionables(
 		.slice(0, MAX_SUGGESTIONS);
 }
 
-/** The picked principals whose `@Name` is still in the text, in the order picked. */
-export function mentionsIn(
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The principals whose `@Name` stands in the text as a whole word, picked from the menu or typed
+ * out, so "@Scout" names Scout and "@Scouting" doesn't.
+ */
+export function mentionedIn(
 	text: string,
-	picked: ReadonlyMap<string, string>,
+	options: readonly Mentionable[],
 ): string[] {
-	return [...picked]
-		.filter(([, name]) => text.includes(`@${name}`))
-		.map(([id]) => id);
+	return options
+		.filter(
+			(option) =>
+				option.name &&
+				new RegExp(
+					`(^|\\s)@${escapeRegExp(option.name)}(?=$|[\\s.,!?;:)])`,
+					"u",
+				).test(text),
+		)
+		.map((option) => option.id);
+}
+
+/**
+ * The bots whose name is spoken as a whole word, in any case ("hey momo" names Momo, "momos"
+ * doesn't). People are never matched: a spoken name in a call is just conversation.
+ */
+export function spokenMentions(
+	text: string,
+	options: readonly Mentionable[],
+): string[] {
+	return options
+		.filter(
+			(option) =>
+				option.kind === "bot" &&
+				option.name.trim() &&
+				new RegExp(
+					`(?<![\\p{L}\\p{N}_])${escapeRegExp(option.name.trim())}(?![\\p{L}\\p{N}_])`,
+					"iu",
+				).test(text),
+		)
+		.map((option) => option.id);
 }
 
 /** Who a room's composer suggests: its active members other than you, people and bots. */
@@ -79,4 +114,35 @@ export function mentionablesOf(
 			name: directory(member.principal_id).name,
 			kind: member.kind,
 		}));
+}
+
+export interface MentionTarget {
+	id: string;
+	name: string;
+}
+
+/**
+ * Turns `@Name` into a link the chat renderer shows as a highlighted name; a mentioned principal
+ * the text doesn't spell out leads the first line instead.
+ */
+export function inlineMentions(
+	text: string,
+	targets: readonly MentionTarget[],
+): string {
+	let body = text;
+	const missing: string[] = [];
+	for (const { id, name } of targets) {
+		if (!name) continue;
+		const link = `[@${name}](mention://${encodeURIComponent(id)})`;
+		const pattern = new RegExp(
+			`(^|\\s)@${escapeRegExp(name)}(?=$|[\\s.,!?;:)])`,
+			"gu",
+		);
+		if (pattern.test(body)) {
+			body = body.replace(pattern, (_, lead: string) => `${lead}${link}`);
+		} else {
+			missing.push(link);
+		}
+	}
+	return missing.length > 0 ? `${missing.join(" ")} ${body}` : body;
 }

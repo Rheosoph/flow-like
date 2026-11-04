@@ -51,9 +51,9 @@ afterAll(() => {
 });
 
 async function show(onConfirm: (limits: unknown) => void, initial?: unknown) {
-	container = window.document.createElement("div");
-	window.document.body.appendChild(container);
-	root = createRoot(container as unknown as Element);
+	container = window.document.createElement("div") as unknown as HTMLElement;
+	window.document.body.appendChild(container as never);
+	root = createRoot(container);
 	await act(async () =>
 		root.render(
 			createElement(RoomLimitsDialog, {
@@ -72,7 +72,7 @@ async function show(onConfirm: (limits: unknown) => void, initial?: unknown) {
 const body = () => window.document.body;
 const find = (selector: string) =>
 	body().querySelector(selector) as unknown as HTMLElement;
-const click = (element: Element | null | undefined) =>
+const click = (element: unknown) =>
 	act(async () => (element as HTMLElement).click());
 const confirmButton = () =>
 	[...body().querySelectorAll("button")].find((b) =>
@@ -109,10 +109,20 @@ describe("the room limits dialog", () => {
 		const onConfirm = mock((_limits: unknown) => {});
 		await show(onConfirm);
 		const boxes = body().querySelectorAll('button[role="checkbox"]');
-		expect(boxes.length).toBe(2);
-		await click(boxes[0]);
+		expect(boxes.length).toBe(3);
+		await click(boxes[1]);
 		await click(confirmButton());
 		expect(onConfirm).toHaveBeenCalledWith({ apps: ["app-2"] });
+		await act(async () => root.unmount());
+	});
+
+	test("ticking answer-only-when-mentioned stores that limit", async () => {
+		const onConfirm = mock((_limits: unknown) => {});
+		await show(onConfirm);
+		expect(body().textContent).toContain("Answer only when mentioned");
+		await click(body().querySelector('button[role="checkbox"]'));
+		await click(confirmButton());
+		expect(onConfirm).toHaveBeenCalledWith({ mentioned_only: true });
 		await act(async () => root.unmount());
 	});
 

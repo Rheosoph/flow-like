@@ -35,6 +35,13 @@ mock.module("../../hooks/use-inbox", () => ({
 	}),
 }));
 
+const actualHoverCard = {
+	...(await import("../identity/identity-hover-card")),
+};
+mock.module("../identity/identity-hover-card", () => ({
+	IdentityHoverCard: ({ children }: { children: unknown }) => children,
+}));
+
 const actualAvatar = { ...(await import("../identity/identity-avatar")) };
 mock.module("../identity/identity-avatar", () => ({
 	IdentityAvatar: ({ subject }: { subject: string }) =>
@@ -64,15 +71,8 @@ mock.module("./room-limits-dialog", () => ({
 			: null,
 }));
 
-const actualEditor = { ...(await import("../ui/text-editor")) };
-mock.module("../ui/text-editor", () => ({
-	TextEditor: ({ initialContent }: { initialContent: string }) =>
-		createElement("span", null, initialContent),
-}));
-
 const { createRoot } = await import("react-dom/client");
 const { NeedsYouSection } = await import("./needs-you-section");
-const { MessageRow } = await import("./message-row");
 
 let container: HTMLElement;
 let root: ReturnType<typeof createRoot>;
@@ -83,7 +83,7 @@ afterAll(() => {
 	mock.module("../../hooks/use-inbox", () => actualInbox);
 	mock.module("./room-limits-dialog", () => actualDialog);
 	mock.module("../identity/identity-avatar", () => actualAvatar);
-	mock.module("../ui/text-editor", () => actualEditor);
+	mock.module("../identity/identity-hover-card", () => actualHoverCard);
 	restoreDomGlobals();
 });
 
@@ -203,55 +203,6 @@ describe("message requests in Needs you", () => {
 			request({ conversation_kind: "group", title: "Launch", held: [] }),
 		);
 		expect(button("Block")).toBeUndefined();
-		await hide();
-	});
-});
-
-describe("mention chips", () => {
-	const actions = {
-		react: () => {},
-		edit: async () => {},
-		requestDelete: () => {},
-	};
-	const message = (mentions: string[]) => ({
-		type: "message" as const,
-		id: "m1",
-		senderId: "user-a",
-		mine: false,
-		createdAt: "2026-11-03T10:00:00Z",
-		time: 0,
-		content: { kind: "text" as const, text: "hi @Scout" },
-		mentions,
-		edited: false,
-		reactions: [],
-	});
-
-	test("a mentioned principal renders as a chip with its avatar", async () => {
-		await mount(
-			createElement(MessageRow, {
-				message: message(["bot-1"]),
-				directory: ((id: string) => ({
-					name: id === "bot-1" ? "Scout" : id,
-				})) as never,
-				actions: actions as never,
-				readOnly: true,
-			}),
-		);
-		expect(container.querySelector("li")?.textContent).toBe("@Scout");
-		expect(container.querySelector('li [data-avatar="bot-1"]')).not.toBeNull();
-		await hide();
-	});
-
-	test("no mentions, no chips", async () => {
-		await mount(
-			createElement(MessageRow, {
-				message: message([]),
-				directory,
-				actions: actions as never,
-				readOnly: true,
-			}),
-		);
-		expect(container.querySelector("li")).toBeNull();
 		await hide();
 	});
 });

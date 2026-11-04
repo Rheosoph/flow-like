@@ -5,6 +5,7 @@ import { BotMotion } from "./motion";
 export const musicShapes: readonly BotShapeDefinition[] = [
 	crewShape({
 		id: "tempo",
+		faceColor: "sclera",
 		label: "Tempo",
 		series: "music",
 		description: "A wooden metronome keeping time with a golden pendulum.",
@@ -48,6 +49,7 @@ export const musicShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "vinyl",
+		faceColor: "accent",
 		label: "Vinyl",
 		series: "music",
 		description: "A record with a peach label and concentric grooves.",

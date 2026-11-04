@@ -5,6 +5,7 @@ import { BotMotion } from "./motion";
 export const gardenShapes: readonly BotShapeDefinition[] = [
 	crewShape({
 		id: "prickles",
+		backgroundDetailColors: ["accent"],
 		label: "Prickles",
 		series: "garden",
 		description: "A cactus with raised arms and a pink flower.",
@@ -92,6 +93,7 @@ export const gardenShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "fern",
+		backgroundDetailColors: ["accent"],
 		label: "Fern",
 		series: "garden",
 		description: "A terracotta plant pot with arching fern leaves.",
@@ -130,6 +132,7 @@ export const gardenShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "acorn",
+		backgroundDetailColors: ["accent"],
 		label: "Acorn",
 		series: "garden",
 		description: "A honey-brown acorn wearing a textured woodland cap.",
@@ -176,6 +179,7 @@ export const gardenShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "clover",
+		backgroundDetailColors: ["clothing"],
 		label: "Clover",
 		series: "garden",
 		description:
@@ -216,6 +220,7 @@ export const gardenShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "berry",
+		backgroundDetailColors: ["accent"],
 		label: "Berry",
 		series: "garden",
 		description: "A red strawberry with a leafy crown and golden seeds.",

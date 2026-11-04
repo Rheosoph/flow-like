@@ -166,7 +166,9 @@ export function minimumHomeWidgetRows(widget: IHomeWidget): number {
 		(widget.type === "workspace-pulse" && widget.config.mode === "strip")
 	)
 		return 1;
-	return ["greeting", "flowpilot", "quick-actions"].includes(widget.type)
+	return ["greeting", "flowpilot", "bot-chat", "quick-actions"].includes(
+		widget.type,
+	)
 		? 1
 		: 2;
 }

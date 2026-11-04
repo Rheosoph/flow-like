@@ -85,6 +85,20 @@ import UserNotifications
         check(intent?.content == "Build finished\nAll green", "Intent keeps title and body")
         check(NotificationService.messageIntent(for: plainContent(title: "System", body: "Update"), avatar: nil) == nil, "Flow Like notifications have no sender")
 
+        let botMessage = UNMutableNotificationContent()
+        botMessage.title = "Joerg"
+        botMessage.body = "The webhook fired"
+        botMessage.threadIdentifier = "bot:bot_1"
+        botMessage.userInfo = ["app_name": "Joerg"]
+        let botIntent = NotificationService.messageIntent(for: botMessage, avatar: encodedImage(.png, width: 64))
+        check(botIntent?.conversationIdentifier == "bot:bot_1", "One conversation per bot")
+        check(botIntent?.sender?.displayName == "Joerg", "Bot is the sender")
+        check(botIntent?.sender?.image != nil, "Bot avatar")
+        check(botIntent?.content == "The webhook fired", "Bot name is not repeated in the body")
+        let unthreaded = UNMutableNotificationContent()
+        unthreaded.userInfo = ["app_name": "Joerg"]
+        check(NotificationService.messageIntent(for: unthreaded, avatar: nil)?.conversationIdentifier == "Joerg", "Sender name without a stack")
+
         let senderService = NotificationService()
         var senderCallbacks = 0
         var senderResult: UNNotificationContent?

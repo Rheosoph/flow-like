@@ -2,8 +2,10 @@ use super::{
     INBOX_REQUEST_LIMIT, MEMBER_ACTIVE, MEMBER_BLOCKED, MEMBER_DECLINED, MEMBER_PENDING, Reader,
     conversations::{NewConversation, start_direct_as, start_group},
     entries::send_in,
-    fixture::{assert_code, at, bot_principal, copies, database, insert_bot, outgoing, text, user},
-    invitations::{accept_in, classify, decline_in, invitations_for, invite_in},
+    fixture::{
+        assert_code, at, bot_principal, copies, database, insert_bot, outgoing, says, text, user,
+    },
+    invitations::{accept_in, classify, decline_in, invitations_for, invite_in, set_limits_in},
     model::InboxEntry,
     person_push::{is_muted, notify_message, push_targets, set_muted_in},
     requests::{MAX_HELD_MESSAGES, answer_by_writing, block_in, deliver_held_in, plan_direct},
@@ -18,6 +20,7 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use flow_like_types::{
     Result,
+    bot_effective::BotRoomLimits,
     inbox::{ConversationEncryption, ConversationKind, InboxEntryKind},
 };
 use sea_orm::{
@@ -505,7 +508,7 @@ async fn rooms_push_with_the_room_title_and_skip_bots_and_the_sender() {
 }
 
 #[tokio::test]
-async fn a_bot_wakes_on_a_mention_in_a_room_and_not_on_plain_chatter() {
+async fn a_mentioned_only_bot_wakes_on_a_mention_in_a_room_and_not_on_plain_chatter() {
     let db = world().await;
     let plan = NewConversation {
         kind: ConversationKind::Group,
@@ -523,6 +526,13 @@ async fn a_bot_wakes_on_a_mention_in_a_room_and_not_on_plain_chatter() {
     )
     .await
     .unwrap();
+    let mentioned_only = BotRoomLimits {
+        mentioned_only: true,
+        ..Default::default()
+    };
+    set_limits_in(&db, "room", "bot_a", "user-a", Some(&mentioned_only))
+        .await
+        .unwrap();
     let quiet = send_in(&db, "room", "user-b", &text("chatter"), at(2))
         .await
         .unwrap();
@@ -560,4 +570,169 @@ async fn a_bot_that_is_not_a_member_is_not_woken_by_a_mention() {
     let sent = send_in(&db, "room", "user-b", &ping, at(2)).await.unwrap();
     assert!(sent.bots.is_empty());
     assert_eq!(turns(&db).await, 0);
+}
+
+async fn launch_room(db: &DatabaseConnection) {
+    let plan = NewConversation {
+        kind: ConversationKind::Group,
+        title: Some("Launch".into()),
+        members: Vec::new(),
+        encryption: ConversationEncryption::Plain,
+    };
+    start_group(
+        db,
+        "room",
+        "user-a",
+        &plan,
+        &[user("user-b"), bot_principal("bot_a")],
+        at(1),
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_started_call_pushes_once_and_neither_call_entry_counts_as_unread() {
+    let db = world().await;
+    launch_room(&db).await;
+    let started = outgoing("call_1", InboxEntryKind::Call, json!({ "op": "started" }));
+    send_in(&db, "room", "user-a", &started, at(2))
+        .await
+        .unwrap();
+    let ended = outgoing(
+        "end_1",
+        InboxEntryKind::Call,
+        json!({ "op": "ended", "call": "call_1", "duration_ms": 61_000 }),
+    );
+    send_in(&db, "room", "user-a", &ended, at(3)).await.unwrap();
+
+    let sink = Recorder::default();
+    let told = notify_message(&db, &sink, &entry(&db, "call_1", "user-a").await)
+        .await
+        .unwrap();
+    assert_eq!(told, 1);
+    let (_, input) = &sink.sent()[0];
+    assert_eq!(input.user_id, "user-b");
+    assert_eq!(input.title, "Ada in Launch");
+    assert_eq!(input.description.as_deref(), Some("Started a call"));
+    assert_eq!(input.link.as_deref(), Some("/bots?conversation=room"));
+
+    let told = notify_message(&db, &sink, &entry(&db, "end_1", "user-a").await)
+        .await
+        .unwrap();
+    assert_eq!(told, 0, "an ended call sends no push");
+    assert_eq!(sink.sent().len(), 1);
+
+    let theirs = conversations_for(&db, &Reader::own("user-b"), None)
+        .await
+        .unwrap();
+    assert_eq!(theirs[0].unread_count, 0);
+    assert!(theirs[0].last_entry.is_none());
+    assert_eq!(turns(&db).await, 0, "a call wakes no bot");
+}
+
+#[tokio::test]
+async fn a_muted_member_gets_no_call_push() {
+    let db = world().await;
+    launch_room(&db).await;
+    set_muted_in(&db, "room", "user-b", true).await.unwrap();
+    let started = outgoing("call_1", InboxEntryKind::Call, json!({ "op": "started" }));
+    send_in(&db, "room", "user-a", &started, at(2))
+        .await
+        .unwrap();
+    let sink = Recorder::default();
+    let told = notify_message(&db, &sink, &entry(&db, "call_1", "user-a").await)
+        .await
+        .unwrap();
+    assert_eq!(told, 0);
+    assert!(sink.sent().is_empty());
+}
+
+#[tokio::test]
+async fn a_transcript_wakes_only_the_bots_it_mentions_and_counts_as_no_unread() {
+    let db = world().await;
+    launch_room(&db).await;
+    let line = |id: &str, mentions: Vec<&str>| {
+        outgoing(
+            id,
+            InboxEntryKind::Transcript,
+            json!({
+                "call": "call_1",
+                "text": "what is the plan",
+                "offset_ms": 4_000,
+                "duration_ms": 2_500,
+                "mentions": mentions,
+            }),
+        )
+    };
+    let quiet = send_in(&db, "room", "user-a", &line("t_1", vec![]), at(2))
+        .await
+        .unwrap();
+    assert!(quiet.bots.iter().all(|bot| !bot.mentioned));
+    assert_eq!(turns(&db).await, 0, "no mention, no turn");
+
+    let named = send_in(&db, "room", "user-a", &line("t_2", vec!["bot_a"]), at(3))
+        .await
+        .unwrap();
+    assert!(named.bots[0].mentioned);
+    assert_eq!(turns(&db).await, 1);
+
+    let sink = Recorder::default();
+    let told = notify_message(&db, &sink, &entry(&db, "t_2", "user-a").await)
+        .await
+        .unwrap();
+    assert_eq!(told, 0, "a transcript sends no push");
+    let theirs = conversations_for(&db, &Reader::own("user-b"), None)
+        .await
+        .unwrap();
+    assert_eq!(theirs[0].unread_count, 0);
+}
+
+#[tokio::test]
+async fn a_transcript_naming_a_stranger_is_refused() {
+    let db = world().await;
+    launch_room(&db).await;
+    let line = outgoing(
+        "t_1",
+        InboxEntryKind::Transcript,
+        json!({
+            "call": "call_1",
+            "text": "hello",
+            "offset_ms": 0,
+            "duration_ms": 900,
+            "mentions": ["bot_b"],
+        }),
+    );
+    let error = send_in(&db, "room", "user-a", &line, at(2))
+        .await
+        .unwrap_err();
+    assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+    assert!(says(&error, "bot_b"), "{error:?}");
+    assert!(copies(&db, "t_1").await.is_empty());
+}
+
+#[tokio::test]
+async fn calls_are_refused_in_end_to_end_encrypted_conversations() {
+    let db = world().await;
+    launch_room(&db).await;
+    db.execute_unprepared(
+        r#"UPDATE public."Conversation" SET "encryption" = 'E2E' WHERE "id" = 'room'"#,
+    )
+    .await
+    .unwrap();
+    for sent in [
+        outgoing("call_1", InboxEntryKind::Call, json!({ "op": "started" })),
+        outgoing(
+            "t_1",
+            InboxEntryKind::Transcript,
+            json!({ "call": "call_1", "text": "hi", "offset_ms": 0, "duration_ms": 10 }),
+        ),
+    ] {
+        let error = send_in(&db, "room", "user-a", &sent, at(2))
+            .await
+            .unwrap_err();
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        assert!(says(&error, "end-to-end"), "{error:?}");
+    }
+    assert!(copies(&db, "call_1").await.is_empty());
 }

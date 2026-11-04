@@ -39,11 +39,21 @@ pub struct Model {
     #[sea_orm(column_name = "lastSeq")]
     pub last_seq: Option<i64>,
     #[sea_orm(has_many)]
+    pub meetings: HasMany<super::meeting::Entity>,
+    #[sea_orm(has_many)]
     pub bot_turns: HasMany<super::bot_turn::Entity>,
+    #[sea_orm(has_many)]
+    pub conversation_files: HasMany<super::conversation_file::Entity>,
     #[sea_orm(has_many)]
     pub conversation_members: HasMany<super::conversation_member::Entity>,
     #[sea_orm(has_many)]
     pub conversation_segments: HasMany<super::conversation_segment::Entity>,
+    #[sea_orm(has_many)]
+    pub pinned_conversations: HasMany<super::pinned_conversation::Entity>,
+    #[sea_orm(has_many)]
+    pub pinned_messages: HasMany<super::pinned_message::Entity>,
+    #[sea_orm(has_many)]
+    pub starred_messages: HasMany<super::starred_message::Entity>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

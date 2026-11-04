@@ -53,6 +53,7 @@ struct FakeHub {
     cancelled: Mutex<Vec<(String, String)>>,
     token_requests: Mutex<Vec<(String, String)>>,
     token_failure: AtomicBool,
+    silenced: Mutex<Vec<(String, String)>>,
 }
 
 struct BotView {
@@ -173,6 +174,14 @@ impl TurnHub for FakeHub {
 
     async fn delete_host(&self, host_id: &str) -> Result<(), HubFailure> {
         self.deleted.lock().unwrap().push(host_id.to_owned());
+        Ok(())
+    }
+
+    async fn silent(&self, turn_id: &str, host_id: &str) -> Result<(), HubFailure> {
+        self.silenced
+            .lock()
+            .unwrap()
+            .push((turn_id.to_owned(), host_id.to_owned()));
         Ok(())
     }
 
@@ -713,4 +722,74 @@ async fn cancelling_a_turn_goes_through_the_hubs_cancel_endpoint() {
     );
     assert!(f.hub.sent.lock().unwrap().is_empty());
     assert!(!f.host.cancel("bt_a").await);
+}
+
+fn room_turn(id: &str, trigger: &str) -> BotTurn {
+    BotTurn {
+        audience: flow_like_types::bot_turn::TurnAudience::Room,
+        requester_id: Some("user".into()),
+        ..turn(id, "botA", "conv", trigger, 0, &[])
+    }
+}
+
+fn mentioning(seq: i64, message_id: &str, text: &str, mentions: &[&str]) -> InboxEntry {
+    InboxEntry {
+        envelope: plain_envelope(json!({ "text": text, "mentions": mentions })),
+        ..entry(seq, message_id, "user", text)
+    }
+}
+
+#[tokio::test]
+async fn a_bot_that_reads_along_and_stays_silent_posts_nothing_and_ends_done() {
+    let f = Fixture::start(true, config());
+    *f.runner.mode.lock().unwrap() = Mode::Silent;
+    f.queue(
+        room_turn("bt_a", "m1"),
+        newest_first(&[(1, "m1", "user", "lunch anyone?")]),
+    );
+    until("the silent end", || f.status("botA") == Some(TurnStatus::Done)).await;
+
+    assert!(f.hub.sent.lock().unwrap().is_empty());
+    assert_eq!(
+        *f.hub.silenced.lock().unwrap(),
+        [("bt_a".to_owned(), HOST.to_owned())]
+    );
+    let info = f.info("botA");
+    assert_eq!(
+        info.error_code.as_deref(),
+        Some(flow_like_types::bot_turn::ERROR_SILENT)
+    );
+    assert!(info.reply_message_id.is_none());
+    let job = f.runner.jobs.lock().unwrap()[0].clone();
+    assert!(!job.requester.unwrap().addressed);
+}
+
+#[tokio::test]
+async fn a_mentioned_bot_always_answers_even_with_the_silent_reply() {
+    let f = Fixture::start(true, config());
+    *f.runner.mode.lock().unwrap() = Mode::Silent;
+    f.queue(
+        room_turn("bt_a", "m1"),
+        vec![mentioning(1, "m1", "botA, lunch?", &["botA"])],
+    );
+    until("the reply", || f.status("botA") == Some(TurnStatus::Done)).await;
+
+    assert!(f.hub.silenced.lock().unwrap().is_empty());
+    let sent = f.hub.sent.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].message["envelope"]["body"]["text"], "NO_REPLY");
+    let job = f.runner.jobs.lock().unwrap()[0].clone();
+    assert!(job.requester.unwrap().addressed);
+}
+
+#[tokio::test]
+async fn a_failed_read_along_turn_is_not_reported_to_the_room() {
+    let f = Fixture::start(true, config());
+    *f.runner.mode.lock().unwrap() = Mode::Fail;
+    f.queue(
+        room_turn("bt_a", "m1"),
+        newest_first(&[(1, "m1", "user", "lunch anyone?")]),
+    );
+    until("the silent end", || f.status("botA") == Some(TurnStatus::Done)).await;
+    assert!(f.hub.sent.lock().unwrap().is_empty());
 }

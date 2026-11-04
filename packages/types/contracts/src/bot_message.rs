@@ -29,6 +29,12 @@ pub const MAX_CODE_CHARS: usize = 64;
 pub const MAX_ASK_CHAIN: usize = 8;
 /// A question's `reply_by` time has at most this many characters.
 const MAX_TIME_CHARS: usize = 64;
+/// A file a person or bot puts into a conversation has at most this many bytes, the size the 1:1
+/// chat's temporary uploads allow.
+pub const MAX_CONVERSATION_FILE_BYTES: u64 = 35 * 1024 * 1024;
+/// A conversation file's handle names the conversation as `conversation_<id>` in `app_id`: the
+/// file lives in platform storage under the conversation, not in an app.
+pub const CONVERSATION_FILE_APP_PREFIX: &str = "conversation_";
 
 fn is_false(value: &bool) -> bool {
     !*value
@@ -100,6 +106,51 @@ pub struct ApprovalRequest {
     /// The title of the room the turn runs in; none in the direct conversation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room: Option<String>,
+    /// Set on a `secret_request` card: the owner stores the value in the bot's secret store, then
+    /// answers `once` (or `deny`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret: Option<SecretAsk>,
+}
+
+/// A secret name has at most this many characters.
+pub const MAX_SECRET_NAME_CHARS: usize = 64;
+
+/// The tool a bot asks its owner for a secret with.
+pub const SECRET_REQUEST_TOOL: &str = "secret_request";
+
+/// `A-Z` first, then up to 63 of `A-Z`, `0-9` or `_`: the rule every secret store keeps.
+pub fn is_secret_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    name.len() <= MAX_SECRET_NAME_CHARS
+        && bytes.next().is_some_and(|first| first.is_ascii_uppercase())
+        && bytes.all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+/// The secret a bot asks its owner for. The value never travels in a message.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SecretAsk {
+    pub name: String,
+    /// What the bot needs it for, in its own words.
+    pub description: String,
+    /// The stored value was rejected; the owner enters a new one.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub replace: bool,
+}
+
+impl SecretAsk {
+    fn check(&self) -> Result<(), BodyError> {
+        if !is_secret_name(&self.name) {
+            return refuse(format!(
+                "body.approval.secret.name '{}' must start with A-Z and continue with up to 63 of A-Z, 0-9 or _",
+                clipped(&self.name)
+            ));
+        }
+        check_line(
+            "body.approval.secret.description",
+            Some(&self.description),
+            MAX_SUMMARY_CHARS,
+        )
+    }
 }
 
 /// The owner's answer to an [`ApprovalRequest`].
@@ -130,7 +181,8 @@ impl ApprovalRequest {
             self.requester_name.as_deref(),
             MAX_NAME_CHARS,
         )?;
-        check_line("body.approval.room", self.room.as_deref(), MAX_NAME_CHARS)
+        check_line("body.approval.room", self.room.as_deref(), MAX_NAME_CHARS)?;
+        self.secret.as_ref().map_or(Ok(()), SecretAsk::check)
     }
 }
 
@@ -196,7 +248,7 @@ pub struct UiPart {
     pub handle: Option<WorkspaceHandle>,
 }
 
-/// A file from the sending bot's workspace.
+/// A file from the sending bot's workspace, or a conversation file any member sent.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct AttachmentPart {
     /// `a1`, `a2` …
@@ -206,10 +258,26 @@ pub struct AttachmentPart {
     pub handle: WorkspaceHandle,
 }
 
+impl AttachmentPart {
+    /// The line a model reads for the file. A conversation file carries its whole handle, which
+    /// the file tools take as the `file` argument.
+    pub fn note(&self) -> String {
+        if !self.handle.is_conversation_file() {
+            return format!("[file: {}]", self.name);
+        }
+        let handle = serde_json::to_string(&self.handle).unwrap_or_default();
+        format!(
+            "[file: {} ({}, {} bytes); read it with the file tools, file = {handle}]",
+            self.name, self.handle.mime, self.handle.bytes
+        )
+    }
+}
+
 /// A file in a bot's workspace app, for content too large for the envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct WorkspaceHandle {
-    /// The sending bot's workspace app; the server refuses any other.
+    /// The sending bot's workspace app; the server refuses any other. A conversation file
+    /// (`conversation_<conversation id>`) instead names the conversation it was uploaded to.
     pub app_id: String,
     /// Relative to the app's storage, `/`-separated, without `.` or `..` segments.
     pub path: String,
@@ -244,6 +312,20 @@ pub struct BotAsk {
     /// a new turn in `origin_conversation`. 0 or absent: it doesn't wait.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub wait_secs: u32,
+    /// Which of the asker's questions to this callee for the same trigger this is, from 1. Its
+    /// answer wakes the asker at the asker's own hops, so follow-ups don't add up to the hop
+    /// limit; the asker's round limit ends them instead. 0 or absent (hosts that predate rounds):
+    /// the answer counts its hops as before.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub round: u32,
+}
+
+impl BotAsk {
+    /// The hops the asker's turn gets when this question's answer wakes it: the asker's own, at
+    /// least 1 because a bot woke it. `None` for a question without a round.
+    pub fn answer_wakes_at(&self) -> Option<u32> {
+        (self.round > 0).then(|| self.hops.saturating_sub(1).max(1))
+    }
 }
 
 fn is_zero(value: &u32) -> bool {
@@ -393,9 +475,20 @@ impl MessageBody {
         self.parts.iter().find(|part| part.id() == id)
     }
 
-    /// Every workspace file the parts point to.
+    /// Every file the parts point to, workspace and conversation files alike.
     pub fn handles(&self) -> impl Iterator<Item = &WorkspaceHandle> {
         self.parts.iter().filter_map(MessagePart::handle)
+    }
+
+    /// The conversation files the parts point to.
+    pub fn conversation_files(&self) -> impl Iterator<Item = ConversationFileRef<'_>> {
+        self.handles().filter_map(|handle| {
+            Some(ConversationFileRef {
+                conversation_id: handle.conversation_id()?,
+                file_id: handle.file_id()?,
+                handle,
+            })
+        })
     }
 }
 
@@ -478,7 +571,14 @@ impl MessagePart {
             }
         }
         match self.handle() {
-            Some(handle) => handle.check(&format!("{field}.handle")),
+            Some(handle) => {
+                if handle.is_conversation_file() && !matches!(self, Self::Attachment(_)) {
+                    return refuse(format!(
+                        "{field}.handle is a conversation file; only attachments point at one"
+                    ));
+                }
+                handle.check(&format!("{field}.handle"))
+            }
             None => Ok(()),
         }
     }
@@ -535,7 +635,7 @@ pub fn ask_result_prompt(
         .map(|text| format!("\n\nThe last thing in your conversation with your owner: {text}"))
         .unwrap_or_default();
     format!(
-        "Earlier you asked {callee}: \"{question}\" and stopped waiting for the answer. It has arrived.\n\n{outcome}{latest}\n\nContinue from here: tell your owner what you learned, or finish what you were doing with it."
+        "Earlier you asked {callee}: \"{question}\" and stopped waiting for the answer. It has arrived.\n\n{outcome}{latest}\n\nContinue from here: tell your owner what you learned, ask {callee} a follow-up when its answer leaves something open, or finish what you were doing with it."
     )
 }
 
@@ -545,6 +645,12 @@ pub fn is_mime(value: &str) -> bool {
         && value
             .split_once('/')
             .is_some_and(|(kind, subtype)| is_mime_token(kind) && is_mime_token(subtype))
+}
+
+fn conversation_of_app(app_id: &str) -> Option<&str> {
+    app_id
+        .strip_prefix(CONVERSATION_FILE_APP_PREFIX)
+        .filter(|id| is_valid_message_id(id))
 }
 
 /// A relative, `/`-separated path without empty, `.` or `..` segments.
@@ -557,14 +663,96 @@ pub fn is_workspace_path(path: &str) -> bool {
             .all(|segment| !segment.is_empty() && segment != "." && segment != "..")
 }
 
+/// A conversation file a message points at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConversationFileRef<'a> {
+    pub conversation_id: &'a str,
+    pub file_id: &'a str,
+    pub handle: &'a WorkspaceHandle,
+}
+
+/// `<file id>` or `<file id>.<ext>`: the one path segment of a conversation file.
+pub fn is_conversation_file_path(path: &str) -> bool {
+    let (id, extension) = match path.split_once('.') {
+        Some((id, extension)) => (id, Some(extension)),
+        None => (path, None),
+    };
+    is_valid_message_id(id)
+        && extension.is_none_or(|extension| {
+            (1..=16).contains(&extension.len())
+                && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        })
+}
+
 impl WorkspaceHandle {
+    /// The handle of a file uploaded to `conversation_id`, stored as `file_name` (`<id>.<ext>`).
+    pub fn conversation_file(
+        conversation_id: &str,
+        file_name: &str,
+        bytes: u64,
+        sha256: &str,
+        mime: &str,
+    ) -> Self {
+        Self {
+            app_id: format!("{CONVERSATION_FILE_APP_PREFIX}{conversation_id}"),
+            path: file_name.to_string(),
+            bytes,
+            sha256: sha256.to_string(),
+            mime: mime.to_string(),
+        }
+    }
+
+    /// The conversation a conversation file was uploaded to; `None` for a workspace file.
+    pub fn conversation_id(&self) -> Option<&str> {
+        conversation_of_app(&self.app_id)
+    }
+
+    pub fn is_conversation_file(&self) -> bool {
+        self.app_id.starts_with(CONVERSATION_FILE_APP_PREFIX)
+    }
+
+    /// The file's id: its path without the extension.
+    pub fn file_id(&self) -> Option<&str> {
+        self.conversation_id()?;
+        Some(self.path.split_once('.').map_or(self.path.as_str(), |(id, _)| id))
+    }
+
     fn check(&self, field: &str) -> Result<(), BodyError> {
+        if self.is_conversation_file() {
+            return self.check_conversation_file(field);
+        }
         if !is_valid_message_id(&self.app_id) {
             return refuse(format!(
                 "{field}.app_id '{}' is not an app id",
                 clipped(&self.app_id)
             ));
         }
+        self.check_file(field)
+    }
+
+    fn check_conversation_file(&self, field: &str) -> Result<(), BodyError> {
+        if self.conversation_id().is_none() {
+            return refuse(format!(
+                "{field}.app_id '{}' must be '{CONVERSATION_FILE_APP_PREFIX}' followed by a conversation id",
+                clipped(&self.app_id)
+            ));
+        }
+        if !is_conversation_file_path(&self.path) {
+            return refuse(format!(
+                "{field}.path '{}' must be a conversation file id with an optional extension",
+                clipped(&self.path)
+            ));
+        }
+        if self.bytes > MAX_CONVERSATION_FILE_BYTES {
+            return refuse(format!(
+                "{field}.bytes is {}; a conversation file has at most {MAX_CONVERSATION_FILE_BYTES} bytes",
+                self.bytes
+            ));
+        }
+        self.check_file(field)
+    }
+
+    fn check_file(&self, field: &str) -> Result<(), BodyError> {
         if !is_workspace_path(&self.path) {
             return refuse(format!(
                 "{field}.path '{}' must be a relative path of 1 to {MAX_PATH_CHARS} characters without '.', '..' or empty segments",
@@ -848,5 +1036,135 @@ mod tests {
         let failed = ask_result_prompt("Ledger", "Total?", "offline", true, None);
         assert!(failed.contains("Ledger could not answer:\noffline"));
         assert!(!failed.contains("The last thing"));
+        assert!(answered.contains("ask Ledger a follow-up"));
+    }
+
+    #[test]
+    fn an_answer_wakes_the_asker_at_its_own_hops_only_for_questions_with_a_round() {
+        let ask = |hops, round| BotAsk {
+            id: "ask_1".into(),
+            origin_conversation: "conv_a".into(),
+            hops,
+            reply_by: "2026-11-11T00:00:00Z".into(),
+            chain: Vec::new(),
+            wait_secs: 90,
+            round,
+        };
+        assert_eq!(ask(1, 1).answer_wakes_at(), Some(1));
+        assert_eq!(ask(2, 3).answer_wakes_at(), Some(1));
+        assert_eq!(ask(3, 1).answer_wakes_at(), Some(2));
+        assert_eq!(ask(2, 0).answer_wakes_at(), None);
+        let legacy: BotAsk = serde_json::from_value(serde_json::json!({
+            "id": "ask_1", "origin_conversation": "conv_a", "hops": 1, "reply_by": "x"
+        }))
+        .unwrap();
+        assert_eq!(legacy.round, 0);
+        assert!(
+            serde_json::to_value(&legacy)
+                .unwrap()
+                .get("round")
+                .is_none()
+        );
+    }
+}
+
+#[cfg(test)]
+mod conversation_file_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn file_body(handle: Value) -> Value {
+        json!({ "text": "see file", "parts": [
+            { "kind": "attachment", "id": "a1", "name": "Übersicht (2)#1.pdf", "handle": handle }
+        ] })
+    }
+
+    fn handle() -> WorkspaceHandle {
+        WorkspaceHandle::conversation_file("conv9", "file_1.pdf", 2048, &"b".repeat(64), "application/pdf")
+    }
+
+    #[test]
+    fn a_conversation_file_is_an_attachment_with_a_conversation_handle() {
+        let body = MessageBody::parse(&file_body(serde_json::to_value(handle()).unwrap())).unwrap();
+        let files: Vec<_> = body.conversation_files().collect();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].conversation_id, "conv9");
+        assert_eq!(files[0].file_id, "file_1");
+        assert!(files[0].handle.is_conversation_file());
+    }
+
+    #[test]
+    fn workspace_handles_are_not_conversation_files() {
+        let workspace = json!({ "app_id": "app_ws", "path": "files/a.pdf", "bytes": 1,
+            "sha256": "a".repeat(64), "mime": "application/pdf" });
+        let body = MessageBody::parse(&file_body(workspace)).unwrap();
+        assert_eq!(body.conversation_files().count(), 0);
+    }
+
+    #[test]
+    fn conversation_handles_are_checked_for_shape_and_size() {
+        for (field, value) in [
+            ("app_id", json!("conversation_")),
+            ("app_id", json!("conversation_a b")),
+            ("path", json!("files/file_1.pdf")),
+            ("path", json!("file_1.pdf.exe")),
+            ("path", json!("..")),
+            ("bytes", json!(MAX_CONVERSATION_FILE_BYTES + 1)),
+        ] {
+            let mut raw = serde_json::to_value(handle()).unwrap();
+            raw[field] = value.clone();
+            let error = MessageBody::parse(&file_body(raw)).unwrap_err().to_string();
+            assert!(error.contains(field), "{field}={value}: {error}");
+        }
+    }
+
+    #[test]
+    fn only_attachments_point_at_conversation_files() {
+        let raw = serde_json::to_value(handle()).unwrap();
+        let tool = json!({ "parts": [{ "kind": "tool", "id": "t1", "call_id": "c", "name": "x", "handle": raw }] });
+        let error = MessageBody::parse(&tool).unwrap_err().to_string();
+        assert!(error.contains("only attachments"), "{error}");
+    }
+
+    fn secret_card(secret: Value) -> Value {
+        json!({ "approval": {
+            "id": "ap-1", "turn_id": "bt_1", "tool": SECRET_REQUEST_TOOL,
+            "summary": "Wants GITHUB_TOKEN", "scope": "", "args_hash": "h", "secret": secret,
+        } })
+    }
+
+    #[test]
+    fn a_secret_card_names_the_secret_and_never_carries_a_value() {
+        let body = MessageBody::parse(&secret_card(
+            json!({ "name": "GITHUB_TOKEN", "description": "Open PRs" }),
+        ))
+        .unwrap();
+        let secret = body.approval.unwrap().secret.unwrap();
+        assert_eq!(secret.name, "GITHUB_TOKEN");
+        assert!(!secret.replace);
+        let written = serde_json::to_value(&secret).unwrap();
+        assert!(written.get("replace").is_none());
+        for name in ["github_token", "1KEY", "A B", "", &"A".repeat(65)] {
+            let error =
+                MessageBody::parse(&secret_card(json!({ "name": name, "description": "x" })))
+                    .unwrap_err()
+                    .to_string();
+            assert!(error.contains("secret.name"), "{name}: {error}");
+        }
+        let long = MessageBody::parse(&secret_card(
+            json!({ "name": "KEY", "description": "d".repeat(MAX_SUMMARY_CHARS + 1) }),
+        ));
+        assert!(long.is_err());
+    }
+
+    #[test]
+    fn secret_names_follow_the_store_rule() {
+        assert!(is_secret_name("A"));
+        assert!(is_secret_name("API_KEY_2"));
+        assert!(is_secret_name(&format!("A{}", "B".repeat(63))));
+        for bad in ["", "a", "_A", "A-B", "A.B", "Ä"] {
+            assert!(!is_secret_name(bad), "{bad}");
+        }
+        assert!(!is_secret_name(&"A".repeat(65)));
     }
 }

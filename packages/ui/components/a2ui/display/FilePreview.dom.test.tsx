@@ -1,3 +1,5 @@
+// @vitest-environment happy-dom
+
 import { type JsonSchema, validateSchema } from "@flow-like/widget-sdk";
 import { type ComponentProps, act, useEffect, useState } from "react";
 import { type Root, createRoot } from "react-dom/client";

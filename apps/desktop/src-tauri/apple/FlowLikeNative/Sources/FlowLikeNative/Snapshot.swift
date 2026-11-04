@@ -100,11 +100,19 @@ public struct NativeAction: Codable, Sendable, Equatable {
     public var files: [String]?
     public var path: String?
     public var queryParams: [NativeQueryParameter]?
+    public var botId: String?
+    public var conversationId: String?
+    public var taskId: String?
+    public var turnId: String?
+    public var approvalId: String?
+    public var decision: String?
 
     public init(kind: String, appId: String? = nil, eventId: String? = nil,
                 runId: String? = nil, prompt: String? = nil, voice: Bool? = nil,
                 operation: String? = nil, text: String? = nil, files: [String]? = nil,
-                path: String? = nil, queryParams: [NativeQueryParameter]? = nil) {
+                path: String? = nil, queryParams: [NativeQueryParameter]? = nil,
+                botId: String? = nil, conversationId: String? = nil, taskId: String? = nil,
+                turnId: String? = nil, approvalId: String? = nil, decision: String? = nil) {
         self.kind = kind
         self.appId = appId
         self.eventId = eventId
@@ -116,6 +124,12 @@ public struct NativeAction: Codable, Sendable, Equatable {
         self.files = files
         self.path = path
         self.queryParams = queryParams
+        self.botId = botId
+        self.conversationId = conversationId
+        self.taskId = taskId
+        self.turnId = turnId
+        self.approvalId = approvalId
+        self.decision = decision
     }
 }
 
@@ -127,13 +141,22 @@ public struct NativeActionRequest: Codable, Sendable {
     public var responseMode: String?
     public var responseDeadline: String?
     public var executionMode: String? = nil
+    public var backgroundDelivery: Bool? = nil
+    public var backgroundError: String? = nil
 
     public var isBackground: Bool { executionMode == "background" }
+
+    public var allowsBackgroundDelivery: Bool {
+        backgroundDelivery == true && responseMode == nil && !isBackground &&
+        ["ask_bot", "respond_bot_approval"].contains(action.kind) && action.voice != true &&
+        action.files?.isEmpty != false
+    }
 
     public var isCurrent: Bool {
         guard executionMode == nil || executionMode == "foreground" || isBackground else { return false }
         guard let createdAt, let date = NativeSnapshot.date(createdAt) else { return false }
-        guard date <= Date().addingTimeInterval(60) && date > Date().addingTimeInterval(-300) else { return false }
+        let lifetime: TimeInterval = allowsBackgroundDelivery ? 86_400 : 300
+        guard date <= Date().addingTimeInterval(60) && date > Date().addingTimeInterval(-lifetime) else { return false }
         if let responseMode {
             guard ["text", "result"].contains(responseMode), let responseDeadline,
                   let deadline = NativeSnapshot.date(responseDeadline), deadline > Date() else { return false }
@@ -151,6 +174,7 @@ public struct NativeItem: Codable, Sendable, Identifiable {
     public var status: String?
     public var progress: Double?
     public var startedAt: String?
+    public var updatedAt: String? = nil
     public var icon: NativeNotificationIcon? = nil
     /// A run the app is executing right now, not an entry read from run history.
     public var live: Bool? = nil
@@ -214,6 +238,54 @@ public struct NativePage: Codable, Sendable {
     public var url: String
 }
 
+public struct NativeBot: Codable, Sendable, Identifiable {
+    public var id: String
+    public var title: String
+    public var subtitle: String?
+    public var local: Bool?
+    public var encrypted: Bool?
+    public var enabled: Bool?
+    public var surfaces: [String]?
+    public var action: NativeAction?
+
+    public func exposes(_ surface: String) -> Bool {
+        enabled != false && surfaces?.contains(surface) == true
+    }
+}
+
+public struct NativeBotConversation: Codable, Sendable, Identifiable {
+    public var id: String
+    public var botId: String?
+    public var title: String
+    public var action: NativeAction?
+}
+
+public struct NativeBotTask: Codable, Sendable, Identifiable {
+    public var id: String
+    public var botId: String
+    public var title: String
+    public var enabled: Bool?
+    public var status: String?
+    public var action: NativeAction?
+}
+
+public struct NativeBotApproval: Codable, Sendable, Identifiable {
+    public var id: String
+    public var botId: String
+    public var conversationId: String?
+    public var turnId: String
+    public var title: String
+    public var status: String
+    public var expiresAt: String?
+    public var action: NativeAction?
+
+    public func isPending(at date: Date = Date()) -> Bool {
+        guard ["pending", "waiting"].contains(status) else { return false }
+        guard let expiresAt else { return true }
+        return NativeSnapshot.date(expiresAt).map { $0 > date } ?? false
+    }
+}
+
 public struct NativeSnapshot: Codable, Sendable {
     public var version: Int
     public var scope: String
@@ -228,6 +300,11 @@ public struct NativeSnapshot: Codable, Sendable {
     public var activePage: NativePage?
     public var webOrigin: String?
     public var customWidgets: [NativeCustomWidget]? = nil
+    public var userId: String? = nil
+    public var bots: [NativeBot]? = nil
+    public var conversations: [NativeBotConversation]? = nil
+    public var botTasks: [NativeBotTask]? = nil
+    public var botApprovals: [NativeBotApproval]? = nil
     // Failed reads the app reports so publishing keeps the previous values.
     public var appsUnavailable: Bool? = nil
     public var eventsUnavailable: [String]? = nil
@@ -300,5 +377,51 @@ public struct NativeSnapshot: Codable, Sendable {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+}
+
+extension NativeSnapshot {
+    func validateBotAction(_ action: NativeAction, now: Date = Date()) throws {
+        let kinds = ["open_bot", "ask_bot", "open_conversation", "run_bot_task", "respond_bot_approval",
+                     "capture_bot_voice", "capture_bot_document", "local_bot_summary"]
+        guard kinds.contains(action.kind) || (action.kind == "share" && action.botId != nil) else { return }
+        func validId(_ id: String?) -> Bool {
+            guard let id else { return false }
+            return !id.isEmpty && id.utf8.count <= 512 && !id.unicodeScalars.contains { $0.properties.generalCategory == .control }
+        }
+        guard validId(action.botId), let bot = bots?.first(where: { $0.id == action.botId }), bot.enabled != false else {
+            throw NativeIntegrationError.invalidAction
+        }
+        if let conversationId = action.conversationId {
+            guard validId(conversationId) else { throw NativeIntegrationError.invalidAction }
+            // The host authorizes newly received conversations; cached conversations must agree on the bot.
+            if let conversation = conversations?.first(where: { $0.id == conversationId }), let owner = conversation.botId, owner != bot.id {
+                throw NativeIntegrationError.invalidAction
+            }
+        }
+        if action.kind == "open_conversation", !validId(action.conversationId) { throw NativeIntegrationError.invalidAction }
+        if action.kind == "ask_bot" {
+            guard let prompt = action.prompt, !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  prompt.utf8.count <= 65_536 else { throw NativeIntegrationError.invalidAction }
+        }
+        if action.kind == "share", !bot.exposes("share") { throw NativeIntegrationError.invalidAction }
+        if action.kind == "run_bot_task" {
+            guard validId(action.taskId), botTasks?.contains(where: {
+                $0.id == action.taskId && $0.botId == bot.id && $0.enabled != false
+            }) == true else { throw NativeIntegrationError.invalidAction }
+        }
+        if action.kind == "respond_bot_approval" {
+            guard validId(action.turnId), validId(action.approvalId), ["once", "deny"].contains(action.decision ?? "") else {
+                throw NativeIntegrationError.invalidAction
+            }
+            // The authenticated host resolves the request again before recording a decision.
+            if let approval = botApprovals?.first(where: { $0.id == action.approvalId }) {
+                guard approval.botId == bot.id, approval.turnId == action.turnId, approval.isPending(at: now) else {
+                    throw NativeIntegrationError.invalidAction
+                }
+            }
+        } else if action.decision != nil {
+            throw NativeIntegrationError.invalidAction
+        }
     }
 }

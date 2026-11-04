@@ -6,12 +6,12 @@ import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useBotApps, useSetBotAppRestrictions } from "../../hooks/use-bots";
 import { useInvoke } from "../../hooks/use-invoke";
+import { useBackend } from "../../state/backend-state";
 import type {
 	BotPermission,
 	BotRestrictionPreset,
 	IBotRestrictions,
 } from "../../state/backend-state/bot-state";
-import { useBackend } from "../../state/backend-state";
 import { Button } from "../ui/button";
 import { Checkbox } from "../ui/checkbox";
 import {

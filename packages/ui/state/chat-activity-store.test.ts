@@ -276,4 +276,25 @@ describe("chat activity", () => {
 		expect(entries[0].title).toHaveLength(120);
 		expect(entries[0].preview).toHaveLength(200);
 	});
+
+	test("keeps a markdown reply's text without its syntax, also in saved entries", () => {
+		const { tracker, saved, makeTracker } = harness();
+		tracker.record({
+			...reply(),
+			preview:
+				"## Build brief\n\n| a | b |\n|---|---|\n- **App:** *new* app\n```ts\nconst x = 1;\n```\nIt is ready.\n> Shall I start?",
+		});
+		expect(tracker.store.getState().entries[0].preview).toBe(
+			"Build brief · App: new app · It is ready. Shall I start?",
+		);
+		const [key, raw] = [...saved][0];
+		const data = JSON.parse(raw);
+		data.entries[0].preview = "## Build-Brief: Wetter-App - **App:** neue App";
+		saved.set(key, JSON.stringify(data));
+		const restored = makeTracker();
+		restored.initialize();
+		expect(restored.store.getState().entries[0].preview).toBe(
+			"Build-Brief: Wetter-App - App: neue App",
+		);
+	});
 });

@@ -171,7 +171,9 @@ describe("UserIdentityCard", () => {
 
 		identity = bot();
 		const card = renderToStaticMarkup(<UserIdentityCard userId={BOT} />);
-		expect(card).toContain("Felix Schultz&#x27;s bot");
+		expect(card).toContain('data-slot="bot-identity-card"');
+		expect(card).toContain("Acts for");
+		expect(card).toContain("Felix Schultz");
 		expect(card).toContain("fl-bot");
 		expect(card).toContain(BOT);
 		expect(card).not.toContain("View profile");

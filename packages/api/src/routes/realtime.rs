@@ -21,7 +21,10 @@ use crate::{
         pat_permission::PatPermission,
         role_permission::{RolePermissions, has_role_permission},
     },
-    routes::{execution::progress::get_state_store, registry::users::pending_package_invitations},
+    routes::{
+        execution::progress::get_state_store, inbox::entries::entries_following,
+        registry::users::pending_package_invitations,
+    },
     state::AppState,
 };
 use axum::{
@@ -34,18 +37,19 @@ use flow_like_types::{
     anyhow,
     channel::now_unix,
     realtime::{
-        MAX_REALTIME_EVENTS, MAX_REALTIME_RESPONSE_BYTES, MAX_REALTIME_RUNS,
-        MAX_REALTIME_TIMEOUT_MS, REALTIME_ERROR_NOT_FOUND, REALTIME_ERROR_UNAVAILABLE,
-        RealtimeConnectRequest, RealtimeConnectResponse, RealtimeNotificationOverview,
-        RealtimeNotificationUpdate, RealtimePollRequest, RealtimePollResponse, RealtimeRunEvent,
-        RealtimeRunSubscription, RealtimeRunUpdate, RealtimeSubscriptionError,
-        RealtimeTransportPreference,
+        MAX_REALTIME_CONVERSATION_ENTRIES, MAX_REALTIME_EVENTS, MAX_REALTIME_RESPONSE_BYTES,
+        MAX_REALTIME_RUNS, MAX_REALTIME_TIMEOUT_MS, REALTIME_ERROR_NOT_FOUND,
+        REALTIME_ERROR_UNAVAILABLE, RealtimeConnectRequest, RealtimeConnectResponse,
+        RealtimeConversationError, RealtimeConversationSubscription, RealtimeConversationUpdate,
+        RealtimeNotificationOverview, RealtimeNotificationUpdate, RealtimePollRequest,
+        RealtimePollResponse, RealtimeRunEvent, RealtimeRunSubscription, RealtimeRunUpdate,
+        RealtimeSubscriptionError, RealtimeTransportPreference,
     },
     tokio::time::{Duration, Instant, sleep_until, timeout},
 };
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter, QuerySelect,
-    QueryTrait,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, FromQueryResult, QueryFilter,
+    QuerySelect, QueryTrait,
     prelude::DateTimeWithTimeZone,
     sea_query::{Alias, Expr, Query, SelectStatement},
 };
@@ -62,6 +66,10 @@ const MAX_RUN_UPDATE_BYTES: usize = 256 * 1024;
 const MAX_STATUS_TEXT_BYTES: usize = 8 * 1024;
 const MAX_RUN_METADATA_BYTES: usize = 2 * MAX_STATUS_TEXT_BYTES + 1024;
 const ERROR_RESERVE_BYTES: usize = MAX_REALTIME_RUNS * 1024;
+/// Per subscribed conversation: its update's envelope and a possible error.
+const CONVERSATION_RESERVE_BYTES: usize = 2 * 1024;
+/// Conversation entries never take more than this of a response, so runs keep room.
+const MAX_CONVERSATION_SECTION_BYTES: usize = MAX_REALTIME_RESPONSE_BYTES / 4;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// Clients renew a grant when it expires, and every renewal asks the provider
 /// again (an STS AssumeRole on AWS).
@@ -168,9 +176,9 @@ fn with_poll_limits(
     post,
     path = "/realtime/poll",
     tag = "realtime",
-    request_body(content = Object, description = "RealtimePollRequest: optional notifications revision, up to 16 run subscriptions with independent after_sequence and revision, and timeout_ms up to 20000, held at most for the max_poll_wait_ms of the connect response. Runs require current ReadBoards and ReadLogs access, or the invocation's poll_token bound to this account and run; an expired or foreign poll_token falls back to the account's access. Capability subscriptions exclude technical-user runs. PATs additionally require current ReadWrite or Admin access for runs; ReadOnly PATs can subscribe to notifications."),
+    request_body(content = Object, description = "RealtimePollRequest: optional notifications revision, up to 16 run subscriptions with independent after_sequence and revision, and timeout_ms up to 20000, held at most for the max_poll_wait_ms of the connect response. Runs require current ReadBoards and ReadLogs access, or the invocation's poll_token bound to this account and run; an expired or foreign poll_token falls back to the account's access. Capability subscriptions exclude technical-user runs. Open conversations: up to 8 conversation subscriptions, each with the cursor of the newest entry you hold (after) and optionally as, one of your bots to read as; you must be an active member of the conversation. PATs additionally require current ReadWrite or Admin access for runs; ReadOnly PATs can subscribe to notifications."),
     responses(
-        (status = 200, description = "Versioned notification invalidation and run replay batches. Events continue without gaps from after_sequence, and a finished run reports has_more false only after its last event. A run that does not fit this response comes back without events and with has_more true. Runs that cannot be read right now are reported as unavailable (try again later); missing runs and runs this account cannot read as not_found. Notification revisions fingerprint the inbox, not a durable change log.", body = Object),
+        (status = 200, description = "Versioned notification invalidation and run replay batches. Events continue without gaps from after_sequence, and a finished run reports has_more false only after its last event. A run that does not fit this response comes back without events and with has_more true. Runs that cannot be read right now are reported as unavailable (try again later); missing runs and runs this account cannot read as not_found. Notification revisions fingerprint the inbox, not a durable change log. Subscribed conversations come back with up to 50 new entries after your cursor, oldest first, in the shape of the inbox entries route, and has_more when more follow; without a cursor the newest entries come back once. Conversations you are not in (or cannot read as the named bot) are reported as not_found, those that cannot be read right now as unavailable.", body = Object),
         (status = 400, description = "Invalid or unbounded subscriptions"),
         (status = 401, description = "Authentication required"),
         (status = 403, description = "An account credential is required")
@@ -245,6 +253,7 @@ async fn collect<R: AppRoles>(
             response.notifications = Some(update);
         }
     }
+    read_conversations(db, readers.sub, &request.conversations, &mut response).await;
     replay_runs(store, readers, &request.runs, &mut response).await;
     Ok(response)
 }
@@ -395,6 +404,104 @@ async fn replay_run<R: AppRoles>(
         .await
         .map_err(|error| unavailable(&run.id, error))?;
     run_update(&run, subscription, replay, budget).map_err(|error| unavailable(&run.id, error))
+}
+
+/// New entries of each subscribed conversation, read like `GET /inbox/conversations/{id}/entries`
+/// (own inbox, or one of the caller's bots with `as`). Missing and forbidden conversations share
+/// `not_found`; a conversation without new entries adds nothing.
+async fn read_conversations<C: ConnectionTrait>(
+    db: &C,
+    sub: &str,
+    subscriptions: &[RealtimeConversationSubscription],
+    response: &mut RealtimePollResponse,
+) {
+    if subscriptions.is_empty() {
+        return;
+    }
+    let mut budget = ResponseBudget::new(response, 0)
+        .reserve(subscriptions.len() * CONVERSATION_RESERVE_BYTES)
+        .limit(MAX_CONVERSATION_SECTION_BYTES);
+    for subscription in subscriptions {
+        match conversation_update(db, sub, subscription, &mut budget).await {
+            Ok(Some(update)) => response.conversations.push(update),
+            Ok(None) => {}
+            Err(code) => response
+                .conversation_errors
+                .push(RealtimeConversationError {
+                    conversation_id: subscription.conversation_id.clone(),
+                    as_principal: subscription.as_principal.clone(),
+                    code: code.to_owned(),
+                }),
+        }
+    }
+}
+
+async fn conversation_update<C: ConnectionTrait>(
+    db: &C,
+    sub: &str,
+    subscription: &RealtimeConversationSubscription,
+    budget: &mut ResponseBudget,
+) -> Result<Option<RealtimeConversationUpdate>, &'static str> {
+    let failed = |error: ApiError| {
+        if error.status().is_client_error() {
+            REALTIME_ERROR_NOT_FOUND
+        } else {
+            tracing::warn!(
+                conversation_id = %subscription.conversation_id,
+                error = ?error,
+                "Realtime conversation read is unavailable"
+            );
+            REALTIME_ERROR_UNAVAILABLE
+        }
+    };
+    let after = subscription.after_cursor();
+    let inbox = crate::routes::inbox::readable_inbox(
+        db,
+        sub,
+        subscription.as_principal.as_deref(),
+        &subscription.conversation_id,
+    )
+    .await
+    .map_err(failed)?;
+    let (entries, stored_has_more) = entries_following(
+        db,
+        &inbox,
+        &subscription.conversation_id,
+        after.as_ref(),
+        MAX_REALTIME_CONVERSATION_ENTRIES as u64,
+    )
+    .await
+    .map_err(failed)?;
+    if entries.is_empty() {
+        return Ok(None);
+    }
+    let mut update = RealtimeConversationUpdate {
+        conversation_id: subscription.conversation_id.clone(),
+        as_principal: subscription.as_principal.clone(),
+        entries: Vec::new(),
+        has_more: stored_has_more,
+    };
+    for entry in entries {
+        let entry = serde_json::to_value(entry).map_err(|error| {
+            tracing::warn!(error = %error, "Realtime conversation entry does not encode");
+            REALTIME_ERROR_UNAVAILABLE
+        })?;
+        let size = encoded_len(&entry).saturating_add(1);
+        if update.entries.is_empty() && size > budget.capacity {
+            tracing::warn!(
+                conversation_id = %subscription.conversation_id,
+                size,
+                "Realtime conversation entry exceeds the response budget"
+            );
+            return Err(REALTIME_ERROR_UNAVAILABLE);
+        }
+        if !budget.take(size) {
+            update.has_more = true;
+            break;
+        }
+        update.entries.push(entry);
+    }
+    Ok(Some(update))
 }
 
 fn unavailable(run_id: &str, error: impl std::fmt::Display) -> &'static str {
@@ -627,6 +734,18 @@ struct ResponseBudget {
 }
 
 impl ResponseBudget {
+    fn reserve(mut self, bytes: usize) -> Self {
+        self.capacity = self.capacity.saturating_sub(bytes);
+        self.remaining = self.capacity;
+        self
+    }
+
+    fn limit(mut self, bytes: usize) -> Self {
+        self.capacity = self.capacity.min(bytes);
+        self.remaining = self.capacity;
+        self
+    }
+
     fn new(envelope: &RealtimePollResponse, runs: usize) -> Self {
         let reserved = encoded_len(envelope)
             .saturating_add(ERROR_RESERVE_BYTES)
@@ -748,7 +867,11 @@ fn run_revision(
 }
 
 fn has_changes(response: &RealtimePollResponse) -> bool {
-    response.notifications.is_some() || !response.runs.is_empty() || !response.errors.is_empty()
+    response.notifications.is_some()
+        || !response.runs.is_empty()
+        || !response.errors.is_empty()
+        || !response.conversations.is_empty()
+        || !response.conversation_errors.is_empty()
 }
 
 #[cfg(test)]
@@ -759,7 +882,7 @@ mod tests {
         state::{CreateRunInput, EventQuery, RunMode, RunVariant, UpdateRunInput, replay_prefix},
     };
     use flow_like_types::realtime::RealtimeTransport;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::cell::Cell;
 
     /// axum's default `DefaultBodyLimit`, which `POST /execution/events` keeps.
@@ -1749,6 +1872,218 @@ mod tests {
             let revision = notification_update(&db, "user-a").await.unwrap().revision;
             assert!(!revisions.contains(&revision), "{mutation}");
             revisions.push(revision);
+        }
+    }
+
+    mod conversations {
+        use super::*;
+        use crate::routes::inbox::fixture::{at, database, insert_bot};
+        use flow_like_types::inbox::EntryCursor;
+        use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+
+        async fn join(db: &DatabaseConnection, conversation: &str, principal: &str) {
+            conversation_member::ActiveModel {
+                conversation_id: Set(conversation.into()),
+                principal_id: Set(principal.into()),
+                principal_kind: Set("USER".into()),
+                added_by: Set(None),
+                joined_at: Set(at(0)),
+                left_at: Set(None),
+                last_read_at: Set(None),
+                status: Set("ACTIVE".into()),
+                limits: Set(None),
+                invited_by: Set(None),
+                invited_at: Set(None),
+                accepted_at: Set(None),
+            }
+            .insert(db)
+            .await
+            .unwrap();
+        }
+
+        async fn entry(
+            db: &DatabaseConnection,
+            inbox: &str,
+            conversation: &str,
+            n: i64,
+            pad: usize,
+        ) {
+            inbox_entry::ActiveModel {
+                id: Set(format!("e{n:03}-{inbox}")),
+                inbox_id: Set(inbox.into()),
+                conversation_id: Set(conversation.into()),
+                message_id: Set(format!("m{n:03}-{inbox}")),
+                sender_id: Set("user-b".into()),
+                kind: Set("message".into()),
+                envelope: Set(json!({"v": 1, "enc": "none", "body": {"text": "x".repeat(pad)}})),
+                created_at: Set(at(n)),
+                seq: Set(Some(n)),
+            }
+            .insert(db)
+            .await
+            .unwrap();
+        }
+
+        fn watch(
+            id: &str,
+            after: Option<&Value>,
+            principal: Option<&str>,
+        ) -> RealtimeConversationSubscription {
+            RealtimeConversationSubscription {
+                conversation_id: id.into(),
+                after: after.map(|entry| entry["cursor"].as_str().unwrap().to_owned()),
+                as_principal: principal.map(str::to_owned),
+            }
+        }
+
+        async fn read(
+            db: &DatabaseConnection,
+            subscriptions: &[RealtimeConversationSubscription],
+        ) -> RealtimePollResponse {
+            let mut response = RealtimePollResponse::default();
+            read_conversations(db, "user-a", subscriptions, &mut response).await;
+            response
+        }
+
+        fn seqs(update: &RealtimeConversationUpdate) -> Vec<i64> {
+            update
+                .entries
+                .iter()
+                .map(|e| e["seq"].as_i64().unwrap())
+                .collect()
+        }
+
+        async fn seeded(count: i64) -> DatabaseConnection {
+            let db = database().await;
+            join(&db, "conv", "user-a").await;
+            for n in 1..=count {
+                entry(&db, "user-a", "conv", n, 0).await;
+                entry(&db, "user-b", "conv", n, 0).await;
+            }
+            db
+        }
+
+        #[tokio::test]
+        async fn entries_after_the_cursor_come_back_oldest_first() {
+            let db = seeded(5).await;
+            let first = read(&db, &[watch("conv", None, None)]).await;
+            assert_eq!(seqs(&first.conversations[0]), [1, 2, 3, 4, 5]);
+            assert!(!first.conversations[0].has_more);
+            let cursor = &first.conversations[0].entries[2];
+            let rest = read(&db, &[watch("conv", Some(cursor), None)]).await;
+            assert_eq!(seqs(&rest.conversations[0]), [4, 5]);
+            assert_eq!(rest.conversations[0].entries[0]["conversation_id"], "conv");
+            let newest = rest.conversations[0].entries[1].clone();
+            let none = read(&db, &[watch("conv", Some(&newest), None)]).await;
+            assert!(none.conversations.is_empty());
+            assert!(none.conversation_errors.is_empty());
+            assert!(!has_changes(&none));
+        }
+
+        #[tokio::test]
+        async fn a_long_backlog_pages_with_has_more_and_a_missing_cursor_gets_the_newest() {
+            let count = MAX_REALTIME_CONVERSATION_ENTRIES as i64 + 10;
+            let db = seeded(count).await;
+            let newest = read(&db, &[watch("conv", None, None)]).await;
+            let update = &newest.conversations[0];
+            assert_eq!(update.entries.len(), MAX_REALTIME_CONVERSATION_ENTRIES);
+            assert_eq!(seqs(update).first(), Some(&11));
+            assert!(!update.has_more);
+
+            let origin = EntryCursor::new(at(0).timestamp_micros(), "e000-user-a");
+            let from_start = RealtimeConversationSubscription {
+                after: Some(origin.to_string()),
+                ..watch("conv", None, None)
+            };
+            let page = read(&db, &[from_start]).await;
+            let update = &page.conversations[0];
+            assert_eq!(update.entries.len(), MAX_REALTIME_CONVERSATION_ENTRIES);
+            assert_eq!(seqs(update).first(), Some(&1));
+            assert!(update.has_more);
+            let last = update.entries.last().unwrap();
+            let next = read(&db, &[watch("conv", Some(last), None)]).await;
+            assert_eq!(seqs(&next.conversations[0]), (51..=60).collect::<Vec<_>>());
+            assert!(!next.conversations[0].has_more);
+        }
+
+        #[tokio::test]
+        async fn strangers_and_unknown_conversations_are_not_found() {
+            let db = seeded(1).await;
+            let mut response = RealtimePollResponse::default();
+            read_conversations(
+                &db,
+                "user-c",
+                &[watch("conv", None, None), watch("missing", None, None)],
+                &mut response,
+            )
+            .await;
+            assert!(response.conversations.is_empty());
+            let codes: Vec<_> = response
+                .conversation_errors
+                .iter()
+                .map(|e| (e.conversation_id.as_str(), e.code.as_str()))
+                .collect();
+            assert_eq!(codes, [("conv", "not_found"), ("missing", "not_found")]);
+            assert!(has_changes(&response));
+        }
+
+        #[tokio::test]
+        async fn a_bot_is_read_as_its_owner_only() {
+            let db = seeded(2).await;
+            insert_bot(&db, "bot-1", "user-a", "SERVER").await;
+            insert_bot(&db, "bot-2", "user-b", "SERVER").await;
+            join(&db, "conv", "bot-1").await;
+            entry(&db, "bot-1", "conv", 7, 0).await;
+            let response = read(
+                &db,
+                &[
+                    watch("conv", None, Some("bot-1")),
+                    watch("conv", None, Some("bot-2")),
+                ],
+            )
+            .await;
+            assert_eq!(response.conversations.len(), 1);
+            assert_eq!(
+                response.conversations[0].as_principal.as_deref(),
+                Some("bot-1")
+            );
+            assert_eq!(seqs(&response.conversations[0]), [7]);
+            assert_eq!(response.conversation_errors.len(), 1);
+            assert_eq!(response.conversation_errors[0].code, "not_found");
+            assert_eq!(
+                response.conversation_errors[0].as_principal.as_deref(),
+                Some("bot-2")
+            );
+        }
+
+        #[tokio::test]
+        async fn entries_that_do_not_fit_the_budget_are_deferred_with_has_more() {
+            let db = database().await;
+            join(&db, "conv", "user-a").await;
+            let pad = MAX_CONVERSATION_SECTION_BYTES / 3;
+            for n in 1..=3 {
+                entry(&db, "user-a", "conv", n, pad).await;
+            }
+            let origin = EntryCursor::new(at(0).timestamp_micros(), "e000").to_string();
+            let from_start = RealtimeConversationSubscription {
+                after: Some(origin),
+                ..watch("conv", None, None)
+            };
+            let response = read(&db, &[from_start]).await;
+            let update = &response.conversations[0];
+            assert!(!update.entries.is_empty() && update.entries.len() < 3);
+            assert!(update.has_more);
+            assert!(encoded_len(&response) <= MAX_REALTIME_RESPONSE_BYTES);
+        }
+
+        #[tokio::test]
+        async fn an_entry_larger_than_the_section_is_unavailable() {
+            let db = database().await;
+            join(&db, "conv", "user-a").await;
+            entry(&db, "user-a", "conv", 1, MAX_CONVERSATION_SECTION_BYTES).await;
+            let response = read(&db, &[watch("conv", None, None)]).await;
+            assert!(response.conversations.is_empty());
+            assert_eq!(response.conversation_errors[0].code, "unavailable");
         }
     }
 }

@@ -26,7 +26,7 @@ use flow_like::flow::copilot::{
     enrich_node_metadata, pin_to_metadata, run_ontology_query_chat,
     run_specialist_chat_with_access, score_catalog_metadata,
 };
-use flow_like::flow::node::{Node, NodeLogic};
+use flow_like::flow::node::Node;
 use flow_like::flow::pin::PinType;
 use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
@@ -359,7 +359,11 @@ fn validate_images(images: &[ChatImage], context: &str) -> Result<(), ApiError> 
 }
 
 struct ServerCatalogProvider {
-    catalog: Arc<Vec<Arc<dyn NodeLogic>>>,
+    /// The registry's per-container snapshot, which the hosted apply boundary also resolves
+    /// against. Never rebuild it per lookup through `NodeLogic::get_node`: these lookups do not
+    /// yield, and on the single-threaded Lambda runtime a quadratic pass over the catalog starves
+    /// the response stream until the function times out.
+    builtin_nodes: Arc<Vec<Node>>,
     /// Nodes of the WASM packages the requesting app pins. The hosted apply boundary
     /// (`apply_flowscript`, `flow_ir_commit`) already merges these, so omitting them here would
     /// let the model author only against builtins while the applier accepts strictly more —
@@ -370,15 +374,12 @@ struct ServerCatalogProvider {
 impl ServerCatalogProvider {
     /// Every node visible to this request, builtin catalog first so a package node that reuses a
     /// builtin name does not displace it in first-match lookups.
-    fn nodes(&self) -> impl Iterator<Item = Node> + '_ {
-        self.catalog
-            .iter()
-            .map(|logic| logic.get_node())
-            .chain(self.wasm_nodes.iter().cloned())
+    fn nodes(&self) -> impl Iterator<Item = &Node> {
+        self.builtin_nodes.iter().chain(self.wasm_nodes.iter())
     }
 }
 
-fn node_to_metadata(node: flow_like::flow::node::Node) -> NodeMetadata {
+fn node_to_metadata(node: &Node) -> NodeMetadata {
     let category = node
         .name
         .to_lowercase()
@@ -391,9 +392,9 @@ fn node_to_metadata(node: flow_like::flow::node::Node) -> NodeMetadata {
     let receiver = node.flowscript_receiver();
 
     enrich_node_metadata(NodeMetadata {
-        name: node.name,
-        friendly_name: node.friendly_name,
-        description: node.description,
+        name: node.name.clone(),
+        friendly_name: node.friendly_name.clone(),
+        description: node.description.clone(),
         inputs: node
             .pins
             .values()
@@ -526,7 +527,13 @@ impl CatalogProvider for ServerCatalogProvider {
     }
 
     async fn get_all_nodes(&self) -> Vec<String> {
-        self.nodes().map(|node| node.name).collect()
+        self.nodes().map(|node| node.name.clone()).collect()
+    }
+
+    /// One pass: the trait default resolves every name through `get_node_metadata`, a linear scan
+    /// per node.
+    async fn get_all_metadata(&self) -> Vec<NodeMetadata> {
+        self.nodes().map(node_to_metadata).collect()
     }
 }
 
@@ -614,7 +621,7 @@ async fn build_unified_copilot(
                 None => Vec::new(),
             };
             Some(Arc::new(ServerCatalogProvider {
-                catalog: state.catalog.clone(),
+                builtin_nodes: state.registry.get_nodes_shared(),
                 wasm_nodes: Arc::new(wasm_nodes),
             }))
         }
@@ -1368,6 +1375,42 @@ mod tests {
             request.extensions_mut().insert(user);
         }
         request
+    }
+
+    #[tokio::test]
+    async fn server_catalog_lists_every_builtin_then_package_node_in_one_pass() {
+        use flow_like::flow::copilot::CatalogProvider;
+        use flow_like::flow::node::Node;
+
+        let node = |name: &str, origin: &str| Node::new(name, name, origin, "Test");
+        let provider = super::ServerCatalogProvider {
+            builtin_nodes: Arc::new(vec![
+                node("builtin_a", "builtin"),
+                node("shared", "builtin"),
+            ]),
+            wasm_nodes: Arc::new(vec![
+                node("package_b", "package"),
+                node("shared", "package"),
+            ]),
+        };
+
+        let metadata = provider.get_all_metadata().await;
+        let names = metadata
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["builtin_a", "shared", "package_b", "shared"]);
+        assert_eq!(
+            provider.get_all_nodes().await,
+            ["builtin_a", "shared", "package_b", "shared"]
+        );
+        assert_eq!(
+            provider
+                .get_node_metadata("shared")
+                .await
+                .map(|node| node.description),
+            Some("builtin".to_string())
+        );
     }
 
     #[tokio::test]

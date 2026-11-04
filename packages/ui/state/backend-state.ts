@@ -3,6 +3,7 @@
 import { createContext, useContext } from "react";
 import { create } from "zustand";
 
+import type { MeetingClient } from "../lib/meetings/types";
 import type { IProfile } from "../types";
 import type { IAIState } from "./backend-state/ai-state";
 import type { IAnalyticsState } from "./backend-state/analytics-state";
@@ -16,6 +17,7 @@ import type {
 	UpsertAppCommentRequest,
 	UpsertAppCommentResponse,
 } from "./backend-state/app-state";
+import type { IAudioState } from "./backend-state/audio-state";
 import type { IBitState } from "./backend-state/bit-state";
 import type {
 	IApplyFlowIrCommitResponse,
@@ -92,6 +94,7 @@ import type { IWidgetState } from "./backend-state/widget-state";
 export * from "./backend-state/api-key-state";
 export * from "./backend-state/api-key-state";
 export * from "./backend-state/api-state";
+export * from "./backend-state/audio-state";
 export * from "./backend-state/bot-state";
 export * from "./backend-state/empty-states/index";
 export * from "./backend-state/inbox-state";
@@ -287,12 +290,16 @@ export interface IBackendState {
 	usageState?: IUsageState;
 	/** Analytics state for creator dashboard metrics and feedback */
 	analyticsState?: IAnalyticsState;
+	/** Speech-to-text: local bits on desktop, the hosted relay otherwise. */
+	audioState?: IAudioState;
 	/** Offline write buffering for online projects (desktop only) */
 	offlineWritesState?: IOfflineWritesState;
 	/** The signed-in account's bots; absent without a hub account */
 	botState?: IBotState;
 	/** Conversations between people and bots; absent without a hub account */
 	inboxState?: IInboxState;
+	/** Scheduled meetings with temporary participant access, separate from room membership. */
+	meetingClient?: MeetingClient;
 
 	/** Optional runtime profile (desktop/mobile providers populate this). */
 	profile?: IProfile;

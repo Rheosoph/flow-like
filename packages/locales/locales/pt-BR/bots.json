@@ -5,8 +5,8 @@
 			"label": ""
 		},
 		"channels": {
-			"label": "",
-			"description": ""
+			"description": "",
+			"label": ""
 		},
 		"code_execution": {
 			"description": "",
@@ -98,8 +98,7 @@
 		}
 	},
 	"chat": {
-		"defaultModelHint": "",
-		"modelHint": ""
+		"defaultModelHint": ""
 	},
 	"computer": {
 		"alt": "",
@@ -111,6 +110,14 @@
 		"stop": ""
 	},
 	"crew": {
+		"activity": {
+			"queued": "",
+			"running": "",
+			"typingMany": "",
+			"typingOne": "",
+			"typingTwo": "",
+			"waiting": ""
+		},
 		"approval": {
 			"always": "",
 			"answeredAlways": "",
@@ -122,6 +129,21 @@
 			"failed": "",
 			"label": "",
 			"once": "",
+			"secret": {
+				"decline": "",
+				"declined": "",
+				"eyebrow": "",
+				"failed": "",
+				"hint": "",
+				"placeholder": "",
+				"replaceHint": "",
+				"save": "",
+				"saved": "",
+				"saving": "",
+				"title": "",
+				"tooLarge": "",
+				"valueLabel": ""
+			},
 			"title": "",
 			"triggeredBy": "",
 			"triggeredByInRoom": ""
@@ -129,12 +151,41 @@
 		"botSettings": "",
 		"botTag": "",
 		"builtIn": "",
+		"call": {
+			"durationHours": "",
+			"durationMinutes": "",
+			"durationShort": "",
+			"ended": "",
+			"error": {
+				"denied": "",
+				"failed": "",
+				"full": "",
+				"unavailable": ""
+			},
+			"join": "",
+			"leave": "",
+			"listen": "",
+			"listenHint": "",
+			"listenNeedsModel": "",
+			"live": "",
+			"mute": "",
+			"mutedPerson": "",
+			"speaking": "",
+			"start": "",
+			"started": "",
+			"startedYou": "",
+			"transcribedPerson": "",
+			"unmute": ""
+		},
 		"cancel": "",
 		"composer": {
 			"encrypted": "",
+			"mentionHint": "",
 			"placeholder": "",
-			"send": "",
 			"to": ""
+		},
+		"conversationMenu": {
+			"open": ""
 		},
 		"directMessage": "",
 		"dock": {
@@ -185,6 +236,31 @@
 		},
 		"loadFailed": "",
 		"loadFailedFlux": "",
+		"marks": {
+			"beforeYouJoined": "",
+			"jump": "",
+			"loadFailed": "",
+			"loadMore": "",
+			"noStars": "",
+			"notFound": "",
+			"pinConversation": "",
+			"pinLimit": "",
+			"pinMessage": "",
+			"pinnedBy": "",
+			"pinnedConversation": "",
+			"pinnedCount_many": "",
+			"pinnedCount_one": "",
+			"pinnedCount_other": "",
+			"pinnedTitle": "",
+			"star": "",
+			"starred": "",
+			"starredDescription": "",
+			"starredShort": "",
+			"starredTitle": "",
+			"unpinConversation": "",
+			"unpinMessage": "",
+			"unstar": ""
+		},
 		"members": {
 			"added": "",
 			"joined": "",
@@ -216,6 +292,7 @@
 			"retry": "",
 			"save": "",
 			"sending": "",
+			"sentByEmail": "",
 			"unsupported": ""
 		},
 		"mute": {
@@ -227,9 +304,9 @@
 			"assistantMeta": "",
 			"assistantTitle": "",
 			"assistantWhere": "",
+			"meta_many": "",
 			"meta_one": "",
 			"meta_other": "",
-			"meta_many": "",
 			"title": ""
 		},
 		"newBot": "",
@@ -246,18 +323,50 @@
 			"createInvite": "",
 			"description": "",
 			"failed": "",
+			"full_many": "",
 			"full_one": "",
 			"full_other": "",
 			"invitesNote": "",
-			"invitesNote_one": "",
 			"invitesNote_many": "",
+			"invitesNote_one": "",
 			"invitesNote_other": "",
-			"full_many": "",
 			"members": "",
 			"name": "",
 			"namePlaceholder": "",
 			"remove": "",
 			"title": ""
+		},
+		"note": {
+			"asked": "",
+			"askedBy": "",
+			"body": "",
+			"bodyOfType": "",
+			"clickForDetails": "",
+			"copied": "",
+			"copy": "",
+			"from": "",
+			"instruction": "",
+			"mail": {
+				"attachments": "",
+				"body": "",
+				"cc": "",
+				"from": "",
+				"notKept": "",
+				"to": "",
+				"unverified": "",
+				"verified": ""
+			},
+			"messaged": "",
+			"messagedPrefix": "",
+			"payload": "",
+			"payloadFile": "",
+			"source": {
+				"email": "",
+				"event": "",
+				"schedule": "",
+				"webhook": ""
+			},
+			"untitled": ""
 		},
 		"openChat": "",
 		"picker": {
@@ -282,21 +391,23 @@
 			"where": ""
 		},
 		"retry": "",
+		"roomTag": "",
 		"rooms": {
+			"bots_many": "",
 			"bots_one": "",
 			"bots_other": "",
-			"bots_many": "",
 			"composition": "",
 			"empty": "",
 			"justYou": "",
 			"loadFailed": "",
+			"namesAndMore_many": "",
 			"namesAndMore_one": "",
 			"namesAndMore_other": "",
-			"namesAndMore_many": "",
 			"noMessages": "",
+			"people_many": "",
 			"people_one": "",
 			"people_other": "",
-			"people_many": "",
+			"theyWrote": "",
 			"title": "",
 			"youWrote": ""
 		},
@@ -313,13 +424,13 @@
 			"server": ""
 		},
 		"summary": {
+			"bots_many": "",
 			"bots_one": "",
 			"bots_other": "",
-			"bots_many": "",
 			"line": "",
+			"needsYou_many": "",
 			"needsYou_one": "",
 			"needsYou_other": "",
-			"needsYou_many": "",
 			"nothingNeedsYou": "",
 			"signedOut": ""
 		},
@@ -327,25 +438,29 @@
 			"today": "",
 			"yesterday": ""
 		},
+		"transcript": {
+			"said": ""
+		},
 		"trigger": {
 			"email": "",
+			"emailFrom": "",
 			"event": "",
 			"schedule": "",
 			"webhook": ""
 		},
 		"unknownMember": "",
+		"unread_many": "",
 		"unread_one": "",
 		"unread_other": "",
-		"unread_many": "",
 		"you": "",
 		"youObject": "",
 		"yourCrew": ""
 	},
 	"editor": {
 		"abilities": {
+			"appsCount_many": "",
 			"appsCount_one": "",
 			"appsCount_other": "",
-			"appsCount_many": "",
 			"appsEmpty": "",
 			"appsFailed": "",
 			"appsLeft": "",
@@ -368,9 +483,9 @@
 			},
 			"needsLocal": "",
 			"profile": "",
+			"profileApps_many": "",
 			"profileApps_one": "",
 			"profileApps_other": "",
-			"profileApps_many": "",
 			"profileEmpty": "",
 			"profilePlaceholder": "",
 			"runtime": "",
@@ -391,9 +506,9 @@
 			"save": "",
 			"saving": ""
 		},
+		"appsAttachFailed_many": "",
 		"appsAttachFailed_one": "",
 		"appsAttachFailed_other": "",
-		"appsAttachFailed_many": "",
 		"brain": {
 			"addFallback": "",
 			"automatic": "",
@@ -416,6 +531,21 @@
 			"moveDown": "",
 			"moveUp": "",
 			"noModels": "",
+			"pins": {
+				"hint": "",
+				"host": "",
+				"hostHint": "",
+				"image": "",
+				"imageHint": "",
+				"none": "",
+				"stt": "",
+				"sttHint": "",
+				"title": "",
+				"tts": "",
+				"ttsHint": "",
+				"vision": "",
+				"visionHint": ""
+			},
 			"primary": "",
 			"remove": "",
 			"searchModels": "",
@@ -513,8 +643,8 @@
 			"add": "",
 			"delete": "",
 			"deleteConfirm": "",
-			"deleted": "",
 			"deleteFailed": "",
+			"deleted": "",
 			"description": "",
 			"descriptionPlaceholder": "",
 			"empty": "",
@@ -529,8 +659,8 @@
 			"neverUsed": "",
 			"replaceValue": "",
 			"save": "",
-			"saved": "",
 			"saveFailed": "",
+			"saved": "",
 			"sealed": "",
 			"sealedHint": "",
 			"subtitle": "",
@@ -589,6 +719,8 @@
 		"host": "",
 		"other": "",
 		"page": "",
+		"person": "",
+		"personUnknown": "",
 		"table": "",
 		"tool": ""
 	},
@@ -603,7 +735,30 @@
 		"topicStarted": "",
 		"untitled": ""
 	},
+	"home": {
+		"chat": {
+			"heading": "",
+			"message": "",
+			"pickBot": "",
+			"placeholder": "",
+			"send": ""
+		},
+		"messages": {
+			"caughtUp": "",
+			"signIn": "",
+			"title": ""
+		},
+		"needs": {
+			"empty": ""
+		},
+		"openBots": "",
+		"rooms": {
+			"empty": "",
+			"title": ""
+		}
+	},
 	"identity": {
+		"actsFor": "",
 		"bot": "",
 		"botId": "",
 		"botOf": "",
@@ -645,29 +800,34 @@
 	"memory": {
 		"clearFailed": "",
 		"cleared": "",
+		"count_many": "",
 		"count_one": "",
 		"count_other": "",
-		"count_many": "",
 		"deleteFailed": "",
 		"factsEmpty": "",
+		"factsEmptyOff": "",
 		"factsFailed": "",
 		"forget": "",
 		"justNow": "",
 		"loadFailed": "",
-		"off": ""
+		"noticeCapability": "",
+		"noticeModel": "",
+		"off": "",
+		"turnOn": "",
+		"turnOnFailed": ""
 	},
 	"move": {
 		"account": "",
+		"action_many": "",
 		"action_one": "",
 		"action_other": "",
-		"action_many": "",
 		"banner": {
 			"action": "",
 			"description": "",
 			"label": "",
+			"title_many": "",
 			"title_one": "",
-			"title_other": "",
-			"title_many": ""
+			"title_other": ""
 		},
 		"checkFailed": "",
 		"close": "",
@@ -706,41 +866,41 @@
 			"unknown": ""
 		},
 		"parts": {
+			"apps_many": "",
 			"apps_one": "",
 			"apps_other": "",
-			"apps_many": "",
+			"chats_many": "",
 			"chats_one": "",
 			"chats_other": "",
-			"chats_many": "",
 			"label": "",
+			"messages_many": "",
 			"messages_one": "",
 			"messages_other": "",
-			"messages_many": "",
 			"nothing": "",
+			"secrets_many": "",
 			"secrets_one": "",
 			"secrets_other": "",
-			"secrets_many": "",
+			"skipped_many": "",
 			"skipped_one": "",
 			"skipped_other": "",
-			"skipped_many": "",
+			"waiting_many": "",
 			"waiting_one": "",
-			"waiting_other": "",
-			"waiting_many": ""
+			"waiting_other": ""
 		},
 		"progress": "",
 		"recheck": "",
 		"result": {
 			"failed": "",
 			"unknownError": "",
-			"warnings_one": "",
 			"warnings_many": "",
+			"warnings_one": "",
 			"warnings_other": ""
 		},
 		"status": {
 			"checking": "",
+			"issues_many": "",
 			"issues_one": "",
 			"issues_other": "",
-			"issues_many": "",
 			"moved": "",
 			"moving": "",
 			"notChecked": "",
@@ -766,9 +926,9 @@
 		"title": "",
 		"toast": {
 			"action": "",
+			"title_many": "",
 			"title_one": "",
-			"title_other": "",
-			"title_many": ""
+			"title_other": ""
 		}
 	},
 	"panel": {
@@ -778,8 +938,8 @@
 		"details": {
 			"abilities": "",
 			"edit": "",
-			"fallbacks_one": "",
 			"fallbacks_many": "",
+			"fallbacks_one": "",
 			"fallbacks_other": "",
 			"runs": "",
 			"status": ""
@@ -790,8 +950,8 @@
 			"label": "",
 			"on": "",
 			"rotate": "",
-			"rotated": "",
 			"rotateFailed": "",
+			"rotated": "",
 			"unpublished": "",
 			"waiting": ""
 		},
@@ -832,6 +992,7 @@
 			"on": ""
 		},
 		"openFull": "",
+		"openWorkspace": "",
 		"permissions": {
 			"granted": "",
 			"none": "",
@@ -848,8 +1009,9 @@
 			"cronLabel": "",
 			"delete": "",
 			"done": "",
-			"full_one": "",
+			"full": "",
 			"full_many": "",
+			"full_one": "",
 			"full_other": "",
 			"instruction": "",
 			"instructionLabel": "",
@@ -863,16 +1025,21 @@
 			"repeat": "",
 			"resume": "",
 			"title": "",
-			"tz": "",
-			"full": ""
+			"tz": ""
 		},
 		"waitingForYou": "",
 		"webhooks": {
+			"authenticatedUrl": "",
+			"authenticatedUrlHint": "",
+			"authenticationHint": "",
+			"closeExamples": "",
 			"copied": "",
 			"copy": "",
 			"create": "",
 			"delete": "",
 			"done": "",
+			"examples": "",
+			"headerExample": "",
 			"instruction": "",
 			"instructionLabel": "",
 			"issued": "",
@@ -882,11 +1049,16 @@
 			"neverCalled": "",
 			"none": "",
 			"once": "",
+			"optionalSigning": "",
+			"placeholderHint": "",
+			"responseHint": "",
 			"rotate": "",
 			"secret": "",
+			"signingHint": "",
 			"signingKey": "",
 			"title": "",
-			"url": ""
+			"url": "",
+			"urlExample": ""
 		},
 		"working": ""
 	},
@@ -1010,15 +1182,15 @@
 		"open": "",
 		"pending": "",
 		"saveLimits": "",
-		"send_one": "",
+		"send": "",
 		"send_many": "",
+		"send_one": "",
 		"send_other": "",
 		"sent": "",
 		"thisRoom": "",
 		"title": "",
 		"waiting": "",
-		"waitingOwner": "",
-		"send": ""
+		"waitingOwner": ""
 	},
 	"system": {
 		"flux": {

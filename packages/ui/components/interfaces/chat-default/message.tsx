@@ -76,6 +76,7 @@ import { PendingAskRule, PendingAskStatus } from "./pending-ask-status";
 import { InlineStepGroup, PlanSteps } from "./plan-steps";
 import { extractThinkBlocks } from "./reasoning-format";
 import { ReasoningViewer } from "./reasoning-viewer";
+import { RoomMessageActions } from "./room-message-actions";
 import { UsageStats } from "./usage-stats";
 
 /** Lines of a sent message shown before it collapses behind "Show more". */
@@ -104,6 +105,8 @@ interface MessageProps {
 		messageId: string,
 		updates: Partial<IMessage>,
 	) => void | Promise<void>;
+	/** Whether this message can be edited; answers by default, never your own asks. */
+	editable?: boolean;
 	onReply?: (message: IMessage, selectedText?: string) => void;
 	onReaction?: (
 		message: IMessage,
@@ -124,6 +127,10 @@ interface MessageProps {
 	anchoredContent?: readonly MessageInlineContent[];
 	/** A question whose answer has shown nothing yet carries the wait on its own card. */
 	pending?: PendingAsk;
+	/** `room`: your messages are a compact bubble, others' are flat, actions float on hover. */
+	layout?: "room";
+	/** Your more-menu in a room, rendered with the hover actions. */
+	renderMenu?: (message: IMessage) => ReactNode;
 }
 
 /** A node the chat host renders inside one message, at `offset` into its joined text. */
@@ -426,7 +433,8 @@ const MessageActions = ({
 	onThumbsUp: () => void;
 	onThumbsDown: () => void;
 	onFeedbackClick: () => void;
-	onEdit: () => void;
+	/** Absent when the host can't save an edit. */
+	onEdit?: () => void;
 	onCopy: () => void;
 }) => (
 	<div
@@ -480,7 +488,7 @@ const MessageActions = ({
 				</Badge>
 			</button>
 		)}
-		{!isUser && (
+		{onEdit && (
 			<MessageActionButton
 				onClick={onEdit}
 				title={i18next.t("editMessage2", "Edit message")}
@@ -502,6 +510,7 @@ export const MessageComponent = memo(
 		message,
 		loading,
 		onMessageUpdate,
+		editable,
 		onReply,
 		onReaction,
 		interactionDisabled = false,
@@ -511,10 +520,13 @@ export const MessageComponent = memo(
 		widgetSnapshots = true,
 		anchoredContent,
 		pending,
+		layout,
+		renderMenu,
 	}: Readonly<MessageProps>) {
 		const { t } = useTranslation("chat");
 		const feedbackEnabled = useContext(ChatFeedbackEnabledContext);
 		const isUser = message.inner.role === IRole.User;
+		const room = layout === "room";
 		const [isExpanded, setIsExpanded] = useState(false);
 		const [showToggle, setShowToggle] = useState(false);
 		const [fullscreenFile, setFullscreenFile] =
@@ -754,7 +766,7 @@ export const MessageComponent = memo(
 				if (!onMessageUpdate) return;
 
 				const trimmedContent = content.trim();
-				if (trimmedContent !== messageContent.text) {
+				if (trimmedContent !== (message.source_text ?? messageContent.text)) {
 					onMessageUpdate(message.id, {
 						inner: {
 							...message.inner,
@@ -764,7 +776,13 @@ export const MessageComponent = memo(
 					toast.success("Message updated successfully!");
 				}
 			},
-			[messageContent.text, message.id, message.inner, onMessageUpdate],
+			[
+				messageContent.text,
+				message.id,
+				message.inner,
+				message.source_text,
+				onMessageUpdate,
+			],
 		);
 
 		const gaveMoreFeedback = useMemo(() => {
@@ -862,10 +880,12 @@ export const MessageComponent = memo(
 			Boolean(message.interaction) ||
 			processedAttachments.length > 0 ||
 			Boolean(FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report);
-		const compactUserActions = isUser && !hasFooterContent;
-		const hasReplyAction = !isUser && Boolean(onReply);
+		const compactUserActions = !room && isUser && !hasFooterContent;
+		const hasReplyAction = !room && !isUser && Boolean(onReply);
 		const hasSelectedReactions = Boolean(
-			message.reactions?.length || message.workflowReactions?.length,
+			message.reactions?.length ||
+				message.workflowReactions?.length ||
+				Object.keys(message.reactionSummary ?? {}).length,
 		);
 		const hasCornerReactions = Boolean(onReaction || hasSelectedReactions);
 
@@ -875,7 +895,8 @@ export const MessageComponent = memo(
 					data-fl-chat-message-row
 					className={cn(
 						"flex w-full items-start gap-1.5 sm:gap-2",
-						hasCornerReactions && !hasReplyAction && "pr-4",
+						hasCornerReactions && !hasReplyAction && !room && "pr-4",
+						room && isUser && "justify-end",
 					)}
 					style={{
 						maxWidth:
@@ -885,26 +906,47 @@ export const MessageComponent = memo(
 					<div
 						className={cn(
 							"relative min-w-0 flex-1 whitespace-break-spaces transition-all duration-300 ease-in-out",
-							isUser
-								? "w-full border-l-2 py-2 pr-4 pl-3.5"
-								: "w-full max-w-full p-4 pt-2 pb-0",
+							room
+								? isUser
+									? "ml-auto mr-4 w-fit max-w-[85%] rounded-2xl rounded-br-md bg-muted px-3.5 py-2 text-foreground outline-none"
+									: "w-full max-w-full py-0 pr-4 pl-[calc(1rem+30px)]"
+								: isUser
+									? "w-full border-l-2 py-2 pr-4 pl-3.5"
+									: "w-full max-w-full p-4 pt-2 pb-0",
+							room && hasSelectedReactions && "mb-3",
 						)}
 						data-fl-chat-message={isUser ? "user" : "assistant"}
-						style={{
-							backgroundColor: isUser
-								? "var(--fl-chat-ask-background, transparent)"
-								: "var(--fl-chat-ai-message-background, var(--background))",
-							borderLeftColor: isUser ? askRuleColor(pending) : undefined,
-							borderRadius: isUser
-								? "0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0"
-								: "var(--fl-chat-message-radius, 0.75rem)",
-							color: isUser
-								? "var(--fl-chat-user-message-foreground, var(--foreground))"
-								: "var(--fl-chat-ai-message-foreground, var(--foreground))",
-							maxWidth: isUser ? "var(--fl-chat-measure, 38rem)" : undefined,
-						}}
+						tabIndex={room ? -1 : undefined}
+						style={
+							room
+								? isUser
+									? undefined
+									: {
+											backgroundColor:
+												"var(--fl-chat-ai-message-background, var(--background))",
+											color:
+												"var(--fl-chat-ai-message-foreground, var(--foreground))",
+										}
+								: {
+										backgroundColor: isUser
+											? "var(--fl-chat-ask-background, transparent)"
+											: "var(--fl-chat-ai-message-background, var(--background))",
+										borderLeftColor: isUser ? askRuleColor(pending) : undefined,
+										borderRadius: isUser
+											? "0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0"
+											: "var(--fl-chat-message-radius, 0.75rem)",
+										color: isUser
+											? "var(--fl-chat-user-message-foreground, var(--foreground))"
+											: "var(--fl-chat-ai-message-foreground, var(--foreground))",
+										maxWidth: isUser
+											? "var(--fl-chat-measure, 38rem)"
+											: undefined,
+									}
+						}
 					>
-						{isUser && pending?.phase === "waiting" && <PendingAskRule />}
+						{isUser && !room && pending?.phase === "waiting" && (
+							<PendingAskRule />
+						)}
 						{message.interaction && (
 							<MessageReference
 								reference={message.interaction.target}
@@ -925,7 +967,7 @@ export const MessageComponent = memo(
 								}
 							/>
 						)}
-						{isUser && (
+						{isUser && !room && (
 							<span className="mb-1.5 flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
 								<span className="flex min-w-0 items-baseline gap-2">
 									{t("asked", "Asked")}
@@ -1119,7 +1161,23 @@ export const MessageComponent = memo(
 						{FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report && (
 							<AgentDebugReport report={message.debug_report} />
 						)}
-						{!loading && (
+						{room && !loading && (
+							<RoomMessageActions
+								align={isUser ? "end" : "start"}
+								disabled={interactionDisabled}
+								onReply={
+									onReply && !interactionDisabled ? replyToMessage : undefined
+								}
+								onEdit={
+									onMessageUpdate && (editable ?? !isUser)
+										? () => setShowEditDialog(true)
+										: undefined
+								}
+								onCopy={copyToClipboard}
+								menu={renderMenu?.(message)}
+							/>
+						)}
+						{!room && !loading && (
 							<MessageActions
 								isUser={isUser}
 								feedbackEnabled={feedbackEnabled}
@@ -1130,18 +1188,26 @@ export const MessageComponent = memo(
 								onThumbsUp={() => upsertFeedback(1)}
 								onThumbsDown={() => upsertFeedback(-1)}
 								onFeedbackClick={() => setShowFeedbackDialog(true)}
-								onEdit={() => setShowEditDialog(true)}
+								onEdit={
+									onMessageUpdate && (editable ?? !isUser)
+										? () => setShowEditDialog(true)
+										: undefined
+								}
 								onCopy={copyToClipboard}
 							/>
 						)}
 						{hasCornerReactions && (
 							<div
 								data-fl-chat-reaction-corner
-								className="absolute -bottom-4 -right-4 z-10 flex items-center justify-end gap-1.5"
+								className={cn(
+									"absolute z-10 flex items-center justify-end gap-1.5",
+									room ? "-bottom-3 right-2" : "-bottom-4 -right-4",
+								)}
 							>
 								<MessageReactions
 									reactions={message.reactions}
 									workflowReactions={message.workflowReactions}
+									summaries={message.reactionSummary}
 									onToggle={onReaction ? toggleReaction : undefined}
 									onReplace={onReaction ? replaceReaction : undefined}
 									disabled={loading || savingReaction || interactionDisabled}
@@ -1232,7 +1298,7 @@ export const MessageComponent = memo(
 					appId={appId}
 					open={showEditDialog}
 					onOpenChange={setShowEditDialog}
-					content={messageContent.text}
+					content={message.source_text ?? messageContent.text}
 					onSave={handleEditSave}
 				/>
 				<FeedbackDialog
@@ -1283,7 +1349,10 @@ export const MessageComponent = memo(
 			prev.anchoredContent === next.anchoredContent &&
 			prev.pending?.phase === next.pending?.phase &&
 			prev.pending?.since === next.pending?.since &&
+			prev.layout === next.layout &&
+			prev.renderMenu === next.renderMenu &&
 			prev.onMessageUpdate === next.onMessageUpdate &&
+			prev.editable === next.editable &&
 			prev.onReply === next.onReply &&
 			prev.onReaction === next.onReaction &&
 			prev.interactionDisabled === next.interactionDisabled

@@ -21,14 +21,6 @@ vi.mock("@flow-like/locales", () => ({
 		i18n: { language: "en" },
 	}),
 }));
-vi.mock("../bots-tab/editor/steps/use-bot-models", () => ({
-	useBotModelOptions: () => ({
-		options: [
-			{ id: "bit-sonnet", label: "Claude Sonnet", local: false, free: false },
-		],
-		isLoading: false,
-	}),
-}));
 vi.mock("./chat-activity", () => ({ ChatActivityMenu: () => null }));
 vi.mock("./global-chat-history", () => ({ GlobalChatHistory: () => null }));
 vi.mock("./chat-memory-settings", () => ({ ChatMemorySettings: () => null }));
@@ -83,10 +75,11 @@ const autoButton = () =>
 	);
 
 describe("a bot's composer actions", () => {
-	test("show the model the bot pins where the standard composer shows its model", async () => {
-		await render(view("bot_scout", "bit-sonnet"), "bot:bot_scout");
-		expect(host.textContent).toContain("Claude Sonnet");
-		expect(host.textContent).toContain("Chosen in Scout's settings");
+	test("show no model when the bot pins one, since the chat can't change it", async () => {
+		await render(view("bot_scout", "bit-sonnet"), "bot:bot_scout", "GPT Test");
+		expect(host.querySelector("[title*='model']")).toBeNull();
+		expect(host.textContent).not.toContain("GPT Test");
+		expect(autoButton()).toBeDefined();
 	});
 
 	test("show the chat's default model the same way when the bot pins none", async () => {
@@ -103,15 +96,8 @@ describe("a bot's composer actions", () => {
 		expect(host.textContent).toContain("GPT Test");
 	});
 
-	test("a pinned model wins over the chat's default", async () => {
-		await render(view("bot_scout", "bit-sonnet"), "bot:bot_scout", "GPT Test");
-		expect(host.textContent).toContain("Claude Sonnet");
-		expect(host.textContent).not.toContain("GPT Test");
-	});
-
 	test("show no model while the chat's default isn't known", async () => {
 		await render(view("bot_scout", null), "bot:bot_scout", null);
-		expect(host.textContent).not.toContain("Chosen in");
 		expect(host.textContent).not.toContain("no model of its own");
 	});
 

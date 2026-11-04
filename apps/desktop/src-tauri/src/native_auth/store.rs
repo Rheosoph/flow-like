@@ -187,15 +187,24 @@ pub(super) async fn write(hub: &str, bytes: Vec<u8>) -> Result<(), String> {
     .map_err(|_| "Authentication storage worker failed")?
 }
 
-// Android has no OS keyring backend in this dependency. Its running process can own
-// refresh, but it must not silently fall back to writing plaintext login grants.
 #[cfg(all(not(test), target_os = "android"))]
-pub(super) async fn read(_: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
-    Ok(None)
+pub(super) async fn read(hub: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
+    let key = format!("native-auth:v1:{}", blake3::hash(hub.as_bytes()).to_hex());
+    tokio::task::spawn_blocking(move || crate::android_mobile::secure_read(&key))
+        .await.map_err(|_| "Authentication storage worker failed")?
 }
 #[cfg(all(not(test), target_os = "android"))]
-pub(super) async fn write(_: &str, bytes: Vec<u8>) -> Result<(), String> {
-    validate_length(&bytes)
+pub(super) async fn write(hub: &str, bytes: Vec<u8>) -> Result<(), String> {
+    validate_length(&bytes)?;
+    let key = format!("native-auth:v1:{}", blake3::hash(hub.as_bytes()).to_hex());
+    let binding = format!("native-auth-binding:{hub}");
+    let bytes = Zeroizing::new(bytes);
+    tokio::task::spawn_blocking(move || {
+        crate::android_mobile::secure_write(&key, &bytes)?;
+        // Workers resolve only this native-written binding, never a webview-supplied token.
+        crate::android_mobile::secure_write(&binding, key.as_bytes())
+    })
+        .await.map_err(|_| "Authentication storage worker failed")?
 }
 
 #[cfg(test)]

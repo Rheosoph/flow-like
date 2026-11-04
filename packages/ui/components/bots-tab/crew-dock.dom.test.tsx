@@ -10,6 +10,8 @@ import {
 } from "bun:test";
 import { act, createElement } from "react";
 import type { IBot } from "../../state/backend-state/bot-state";
+import type { IConversation } from "../../state/backend-state/inbox-state";
+import type { GlobalToolPrompt } from "../../state/global-chat/global-chat-store";
 import {
 	fakeI18n,
 	installDomGlobals,
@@ -113,6 +115,7 @@ const { useGlobalChatStore } = await import(
 	"../../state/global-chat/global-chat-store"
 );
 const { globalChatDb } = await import("../../state/global-chat/global-chat-db");
+const { inboxKeys } = await import("../../hooks/use-inbox");
 const { BotsView } = await import("./bots-view");
 
 function bot(id: string, overrides: Partial<IBot> = {}): IBot {
@@ -160,7 +163,11 @@ const previousChat = useGlobalChatStore.getState();
 let root: ReturnType<typeof createRoot> | undefined;
 let container: HTMLElement;
 
-async function mount(listBots: () => Promise<IBot[]>, signedIn = true) {
+async function mount(
+	listBots: () => Promise<IBot[]>,
+	signedIn = true,
+	listConversations: () => Promise<IConversation[]> = async () => [],
+) {
 	session.signedIn = signedIn;
 	navigation.params = new URLSearchParams();
 	window.history.replaceState(null, "", "/bots");
@@ -171,7 +178,7 @@ async function mount(listBots: () => Promise<IBot[]>, signedIn = true) {
 			listBots,
 			local: { checkMove: async () => ({}), move: async () => ({}) },
 		},
-		inboxState: { listConversations: async () => [] },
+		inboxState: { listConversations },
 		userState: {
 			getInfo: async () => ({ id: "me", name: "Felix Schultz" }),
 			lookupUser: async () => null,
@@ -201,6 +208,7 @@ async function mount(listBots: () => Promise<IBot[]>, signedIn = true) {
 	await act(async () => root?.render(view));
 	await settle();
 	await settle(60);
+	return client;
 }
 
 beforeAll(() => {
@@ -393,18 +401,22 @@ describe("Needs you", () => {
 	}
 
 	/** A run of `conversationId` asks; without one, no run owns the prompt. */
-	async function asks(conversationId?: string) {
+	async function asks(
+		conversationId?: string,
+		kind: GlobalToolPrompt["kind"] = "approval",
+	) {
 		const runId = conversationId && `run-${conversationId}`;
 		await act(async () => {
 			useGlobalChatStore.setState({
 				runs: runId ? { [runId]: { runId, conversationId } as never } : {},
 				toolPrompt: {
 					id: `prompt-${conversationId ?? "unowned"}`,
-					kind: "approval",
+					kind,
 					runId: runId || undefined,
 					conversationId,
-					toolName: "call_app_event",
-					title: "Approve app event execution",
+					toolName: kind === "ask" ? "ask_user" : "call_app_event",
+					title:
+						kind === "ask" ? "Which project?" : "Approve app event execution",
 					respond: () => {},
 				},
 			});
@@ -427,6 +439,107 @@ describe("Needs you", () => {
 			(button) => button.textContent === "Open chat",
 		);
 	}
+
+	test("an inbox approval follows the visibility of its bot chat until answered", async () => {
+		const at = "2026-11-04T10:00:00Z";
+		const conversation: IConversation = {
+			id: "scout-owner-chat",
+			kind: "direct",
+			title: null,
+			encryption: "plain",
+			created_by: "me",
+			created_at: at,
+			last_activity_at: at,
+			members: [
+				{ principal_id: "me", kind: "user", added_by: null, joined_at: at },
+				{
+					principal_id: "bot_scout",
+					kind: "bot",
+					added_by: "me",
+					joined_at: at,
+				},
+			],
+			unread_count: 0,
+			last_entry: {
+				id: "approval-entry",
+				message_id: "approval-scout",
+				conversation_id: "scout-owner-chat",
+				sender_id: "bot_scout",
+				kind: "message",
+				created_at: at,
+				cursor: "1000:approval-entry",
+				envelope: {
+					v: 1,
+					enc: "none",
+					body: {
+						text: "Approve sending the digest",
+						approval: {
+							id: "approval-scout",
+							turn_id: "turn-scout",
+							tool: "send_message",
+							summary: "Send the digest",
+							scope: "",
+						},
+					},
+				},
+			},
+		};
+		let listed = [conversation];
+		const client = await mount(
+			async () => crew,
+			true,
+			async () => listed,
+		);
+		const approvalCard = () =>
+			Array.from(container.querySelectorAll("article")).find((article) =>
+				article.textContent?.includes("Approve sending the digest"),
+			);
+		expect(activeConversation()).toBe(`bot:${ACCOUNT_ASSISTANT}`);
+		expect(approvalCard()).toBeDefined();
+
+		await click(openChatIn(approvalCard()));
+		expect(navigation.params.get("conversation")).toBe(conversation.id);
+		expect(activeConversation()).toBe("bot:bot_scout");
+		expect(approvalCard()).toBeUndefined();
+
+		await openPanel();
+		expect(approvalCard()).toBeDefined();
+		await click(openChatIn(approvalCard()));
+		expect(panelOpen()).toBe(false);
+		expect(approvalCard()).toBeUndefined();
+
+		await click(dockButton("Close chat"));
+		expect(approvalCard()).toBeDefined();
+		await act(async () => {
+			if (!conversation.last_entry) throw new Error("Missing approval fixture");
+			listed = [
+				{
+					...conversation,
+					last_entry: {
+						...conversation.last_entry,
+						id: "answer-entry",
+						message_id: "answer-scout",
+						sender_id: "me",
+						cursor: "2000:answer-entry",
+						envelope: {
+							v: 1,
+							enc: "none",
+							body: {
+								text: "",
+								approval_response: {
+									approval_id: "approval-scout",
+									decision: "deny",
+								},
+							},
+						},
+					},
+				},
+			];
+			await client.invalidateQueries({ queryKey: inboxKeys.conversations() });
+		});
+		await settle();
+		expect(approvalCard()).toBeUndefined();
+	});
 
 	test("names the bot whose run asks and opens its chat", async () => {
 		await mount(async () => crew);
@@ -468,7 +581,7 @@ describe("Needs you", () => {
 		await click(cardButton("Flux"));
 		const openFluxChat = activeConversation();
 		expect(openFluxChat.startsWith("bot:")).toBe(false);
-		await asks("flux-launch");
+		await asks("flux-launch", "ask");
 
 		const card = waitingCard();
 		expect(card?.textContent).toContain("Flux");
@@ -478,6 +591,41 @@ describe("Needs you", () => {
 		expect(navigation.params.get("bot")).toBe("flux");
 		expect(waitingCard()).toBeUndefined();
 	});
+
+	test.each(["ask", "approval"] as const)(
+		"opening a pending %s hides it until the chat closes, and resolving it removes it",
+		async (kind) => {
+			await mount(async () => crew);
+			await asks("bot:bot_scout", kind);
+			const prompt = useGlobalChatStore.getState().toolPrompt;
+			expect(waitingCard()?.textContent).toContain("Scout");
+
+			await click(openChatIn(waitingCard()));
+			expect(activeConversation()).toBe("bot:bot_scout");
+			expect(waitingCard()).toBeUndefined();
+			expect(useGlobalChatStore.getState().toolPrompt).toBe(prompt);
+
+			await click(dockButton("Close chat"));
+			expect(waitingCard()?.textContent).toContain("Scout");
+			await click(openChatIn(waitingCard()));
+
+			// The tool bridge clears the prompt after an answer, denial or cancellation.
+			await act(async () => {
+				useGlobalChatStore.getState().setToolPrompt(null);
+			});
+			await click(dockButton("Close chat"));
+			expect(waitingCard()).toBeUndefined();
+
+			await click(
+				Array.from(container.querySelectorAll("button")).find((button) =>
+					button.textContent?.includes("Scout"),
+				),
+			);
+			expect(activeConversation()).toBe("bot:bot_scout");
+			await click(dockButton("Close chat"));
+			expect(waitingCard()).toBeUndefined();
+		},
+	);
 
 	test("a prompt no run owns is the open chat's, as before", async () => {
 		await mount(async () => crew);

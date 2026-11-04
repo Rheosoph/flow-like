@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	CHAT_TYPING_FIELD,
+	TYPING_HEARTBEAT_MS,
 	TYPING_TTL_MS,
 } from "../lib/realtime/presence-signals";
 
@@ -49,8 +50,6 @@ interface UseRealtimeChatProps {
 const PEER_BUFFER = 50;
 /** Merged messages kept for display across all peers. */
 const MERGED_BUFFER = 200;
-/** The typing heartbeat is republished at most this often while keys keep coming. */
-const TYPING_HEARTBEAT_MS = 1000;
 
 export function useRealtimeChat({ awareness, sub }: UseRealtimeChatProps) {
 	const [messages, setMessages] = useState<ChatMessage[]>([]);

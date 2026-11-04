@@ -42,8 +42,8 @@ import {
 	DropdownMenuTrigger,
 } from "../../..";
 import { cn } from "../../../lib/utils";
-import { commentPlugin } from "../plugins/comment-kit";
 import { BasicMarksKit } from "../plugins/basic-marks-kit";
+import { commentPlugin } from "../plugins/comment-kit";
 import { type TDiscussion, discussionPlugin } from "../plugins/discussion-kit";
 
 import { Editor, EditorContainer } from "./editor";

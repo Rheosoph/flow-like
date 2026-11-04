@@ -16,9 +16,11 @@
         <string>INSendMessageIntent</string>
     </array>
 	<key>NSCameraUsageDescription</key>
-	<string>Request camera access for WebRTC</string>
+	<string>Flow Like uses the camera when you turn it on in a call, take a photo, scan a document, or start a video workflow.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Request microphone access for WebRTC</string>
+	<string>Flow Like records your voice when you start dictation, a voice chat, or an audio workflow.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Flow Like turns your speech into an editable message when you choose to dictate to a bot.</string>
 	<key>CFBundleIconFile</key>
 	<string>icon</string>
 	<key>CFBundleIconName</key>
@@ -29,7 +31,7 @@
 	<key>NSAccessibilityUsageDescription</key>
 	<string>Flow Like needs Accessibility access to automate mouse clicks, keyboard input, and read UI elements in your workflows.</string>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Flow Like needs Screen Recording access to capture screenshots for visual element matching in your automation workflows.</string>
+	<string>Flow Like captures your screen when you choose to share it in a call or use screenshots in an automation workflow.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

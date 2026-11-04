@@ -37,6 +37,16 @@ pub struct Bot {
     pub model: BotModelPolicy,
     /// Bit id of the embedding model the bot's memory uses; null uses the chat's.
     pub embedding_model: Option<String>,
+    /// Bit id of the speech-to-text model the bot transcribes audio with; null leaves the choice
+    /// to the host.
+    pub stt_model: Option<String>,
+    /// Bit id of the text-to-speech model the bot speaks with; null leaves the choice to the host.
+    pub tts_model: Option<String>,
+    /// Bit id of the image generation model the bot draws with; null leaves the choice to the
+    /// host.
+    pub image_model: Option<String>,
+    /// Bit id of the vision model the bot reads images with; null leaves the choice to the host.
+    pub vision_model: Option<String>,
     /// How sensitive the data the bot handles is.
     #[schema(value_type = Object, example = json!({ "classification": "internal", "pii": false }))]
     pub classification: DataSensitivity,
@@ -84,6 +94,17 @@ pub struct CreateBotRequest {
     /// Bit id of the embedding model the bot's memory uses, at most 256 characters; omitted uses
     /// the chat's.
     pub embedding_model: Option<String>,
+    /// Bit id of the speech-to-text model, at most 256 characters; omitted leaves the choice to
+    /// the host.
+    pub stt_model: Option<String>,
+    /// Bit id of the text-to-speech model, at most 256 characters; omitted leaves the choice to
+    /// the host.
+    pub tts_model: Option<String>,
+    /// Bit id of the image generation model, at most 256 characters; omitted leaves the choice
+    /// to the host.
+    pub image_model: Option<String>,
+    /// Bit id of the vision model, at most 256 characters; omitted leaves the choice to the host.
+    pub vision_model: Option<String>,
     #[schema(value_type = Option<Object>, example = json!({ "classification": "internal", "pii": false }))]
     pub classification: Option<DataSensitivity>,
     /// Capability ids. `computer_use`, `browser_use` and `command_line` need a desktop or
@@ -121,6 +142,22 @@ pub struct UpdateBotRequest {
     #[serde(default, deserialize_with = "deserialize_nullable")]
     #[schema(value_type = Option<String>)]
     pub embedding_model: Option<Option<String>>,
+    /// `null` leaves the choice of speech-to-text model to the host.
+    #[serde(default, deserialize_with = "deserialize_nullable")]
+    #[schema(value_type = Option<String>)]
+    pub stt_model: Option<Option<String>>,
+    /// `null` leaves the choice of text-to-speech model to the host.
+    #[serde(default, deserialize_with = "deserialize_nullable")]
+    #[schema(value_type = Option<String>)]
+    pub tts_model: Option<Option<String>>,
+    /// `null` leaves the choice of image generation model to the host.
+    #[serde(default, deserialize_with = "deserialize_nullable")]
+    #[schema(value_type = Option<String>)]
+    pub image_model: Option<Option<String>>,
+    /// `null` leaves the choice of vision model to the host.
+    #[serde(default, deserialize_with = "deserialize_nullable")]
+    #[schema(value_type = Option<String>)]
+    pub vision_model: Option<Option<String>>,
     #[schema(value_type = Option<Object>)]
     pub classification: Option<DataSensitivity>,
     /// Replaces the whole set. The capabilities of Flux and of bots with `flowpilot` can't be
@@ -145,6 +182,10 @@ pub(super) struct BotSettings {
     pub appearance: Value,
     pub model: BotModelPolicy,
     pub embedding_model: Option<String>,
+    pub stt_model: Option<String>,
+    pub tts_model: Option<String>,
+    pub image_model: Option<String>,
+    pub vision_model: Option<String>,
     pub classification: DataSensitivity,
     pub capabilities: Vec<BotCapability>,
     pub profile_id: Option<String>,
@@ -161,6 +202,10 @@ impl BotSettings {
             appearance: row.appearance.clone(),
             model: serde_json::from_value(row.model_policy.clone()).unwrap_or_default(),
             embedding_model: row.embedding_model.clone(),
+            stt_model: row.stt_model.clone(),
+            tts_model: row.tts_model.clone(),
+            image_model: row.image_model.clone(),
+            vision_model: row.vision_model.clone(),
             classification: DataSensitivity {
                 classification: row
                     .classification
@@ -194,6 +239,10 @@ impl BotSettings {
                 "embedding_model",
                 self.embedding_model != next.embedding_model,
             ),
+            ("stt_model", self.stt_model != next.stt_model),
+            ("tts_model", self.tts_model != next.tts_model),
+            ("image_model", self.image_model != next.image_model),
+            ("vision_model", self.vision_model != next.vision_model),
             ("classification", self.classification != next.classification),
             ("capabilities", self.capabilities != next.capabilities),
             ("profile_id", self.profile_id != next.profile_id),
@@ -212,6 +261,10 @@ impl BotSettings {
         row.appearance = Set(self.appearance.clone());
         row.model_policy = Set(serde_json::to_value(&self.model)?);
         row.embedding_model = Set(self.embedding_model.clone());
+        row.stt_model = Set(self.stt_model.clone());
+        row.tts_model = Set(self.tts_model.clone());
+        row.image_model = Set(self.image_model.clone());
+        row.vision_model = Set(self.vision_model.clone());
         row.classification = Set(self
             .classification
             .classification
@@ -237,6 +290,10 @@ impl From<bot::Model> for Bot {
             appearance: settings.appearance,
             model: settings.model,
             embedding_model: settings.embedding_model,
+            stt_model: settings.stt_model,
+            tts_model: settings.tts_model,
+            image_model: settings.image_model,
+            vision_model: settings.vision_model,
             classification: settings.classification,
             capabilities: settings.capabilities,
             profile_id: settings.profile_id,
@@ -273,6 +330,14 @@ fn stored_capabilities(ids: &StringList, system: Option<BotSystemKind>) -> Vec<B
                     .any(|id| BotCapability::parse(id) == Some(*capability))
         })
         .collect()
+}
+
+/// [`BotLocation::hands_off_to_desktop`] for a stored bot, Flux's fixed `flowpilot` included.
+pub(crate) fn hands_off_to_desktop(row: &bot::Model) -> bool {
+    let system = row.system_key.as_deref().and_then(BotSystemKind::parse);
+    BotLocation::parse(&row.location)
+        .unwrap_or_default()
+        .hands_off_to_desktop(&stored_capabilities(&row.capabilities, system))
 }
 
 pub(super) fn location_column(location: BotLocation) -> String {

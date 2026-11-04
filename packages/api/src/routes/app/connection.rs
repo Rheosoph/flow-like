@@ -368,6 +368,7 @@ pub(crate) async fn notify_app_admins_at(
         if let Err(error) = dispatch_notification(
             state,
             DispatchNotificationInput {
+                bot_context: None,
                 user_id,
                 app_id: Some(app_id.to_string()),
                 title: title.clone(),

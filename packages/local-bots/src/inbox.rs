@@ -5,6 +5,8 @@
 
 mod approvals;
 mod body;
+mod files;
+mod pins;
 mod positions;
 mod segments;
 mod targets;
@@ -25,14 +27,19 @@ use flow_like_types::{
     bot_effective::BotRoomLimits,
     create_id,
     inbox::{
-        ConversationEncryption, ConversationKind, EntryCursor, EnvelopeKind, InboxEntryKind,
-        MAX_CONVERSATION_MEMBERS, MemberEventBody, MemberOp, PrincipalKind, TriggerBody,
-        body_target, check_envelope, direct_pair_key, is_valid_message_id,
+        ActivityBody, ConversationEncryption, ConversationKind, EntryCursor, EnvelopeKind,
+        InboxEntryKind, MAX_CONVERSATION_MEMBERS, MemberEventBody, MemberOp, PrincipalKind,
+        TriggerBody, body_target, check_envelope, direct_pair_key, is_valid_message_id,
     },
 };
 use rusqlite::{Connection, OptionalExtension, Params, Row, params};
 use serde_json::Value;
 use std::collections::{BTreeSet, HashSet};
+
+pub use files::LocalConversationFile;
+#[cfg(test)]
+pub(crate) use files::sweep_files_at;
+pub(crate) use files::{FILES_DIR, sweep_files};
 
 pub(crate) const DEFAULT_PAGE_SIZE: u64 = 50;
 pub(crate) const MAX_PAGE_SIZE: u64 = 100;
@@ -264,6 +271,7 @@ fn view(db: &Connection, conversation_id: &str) -> Result<Option<Conversation>> 
             .collect(),
         unread_count: u64::try_from(unread_count).unwrap_or(0),
         last_entry,
+        pinned_at: pins::conversation_pinned_at(db, conversation_id)?.map(timestamp),
         local: true,
     }))
 }
@@ -526,18 +534,21 @@ fn validate_new_conversation(request: CreateConversationRequest) -> Result<NewCo
     }
 }
 
+fn existing_direct(tx: &Connection, other: &str) -> Result<Option<String>> {
+    Ok(tx
+        .query_row(
+            "SELECT id FROM conversations WHERE direct_key = ?1",
+            [direct_pair_key(LOCAL_OWNER_ID, other)],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
 /// The direct conversation with `other`: the existing one, or a new one once `other` passes
 /// the member rules. A direct conversation has no join events, like the API's.
 fn open_direct(tx: &Connection, other: &str, changes: &mut Changes) -> Result<String> {
     let key = direct_pair_key(LOCAL_OWNER_ID, other);
-    let existing: Option<String> = tx
-        .query_row(
-            "SELECT id FROM conversations WHERE direct_key = ?1",
-            [&key],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if let Some(conversation_id) = existing {
+    if let Some(conversation_id) = existing_direct(tx, other)? {
         return Ok(conversation_id);
     }
     let others = local_bots(tx, &[other.to_string()])?;
@@ -663,6 +674,67 @@ pub(crate) fn write_trigger(
     Ok(entry)
 }
 
+fn send_in(
+    tx: &Connection,
+    changes: &mut Changes,
+    conversation_id: &str,
+    sender_id: &str,
+    outgoing: &Outgoing,
+) -> Result<InboxEntry> {
+    if let Some(existing) = entry_by_message_id(tx, &outgoing.message_id)? {
+        return repeated(existing, conversation_id, sender_id);
+    }
+    member_conversation(tx, conversation_id, sender_id)?;
+    if outgoing.kind.targets_message() {
+        targets::check_target(
+            tx,
+            conversation_id,
+            sender_id,
+            outgoing.kind,
+            &outgoing.envelope,
+        )?;
+    }
+    body::check_workspace_files(tx, sender_id, &outgoing.workspace_apps)?;
+    let owner_message = match outgoing.kind {
+        InboxEntryKind::Edit => body_target(&outgoing.envelope).unwrap_or(&outgoing.message_id),
+        _ => &outgoing.message_id,
+    };
+    files::claim(
+        tx,
+        conversation_id,
+        sender_id,
+        owner_message,
+        &outgoing.conversation_files,
+    )?;
+    let at = next_event_time(tx, conversation_id)?;
+    let entry = insert_event(
+        tx,
+        conversation_id,
+        &outgoing.message_id,
+        sender_id,
+        outgoing.kind,
+        outgoing.envelope.clone(),
+        at,
+    )?;
+    if entry.kind == InboxEntryKind::Delete {
+        targets::tombstone_target(tx, &entry)?;
+        pins::drop_message(
+            tx,
+            conversation_id,
+            body_target(&entry.envelope).unwrap_or_default(),
+        )?;
+        files::drop_message(
+            tx,
+            changes,
+            conversation_id,
+            body_target(&entry.envelope).unwrap_or_default(),
+        )?;
+        changes.scrub();
+    }
+    changes.conversation(conversation_id);
+    Ok(entry)
+}
+
 /// What a send carries once checked without the database.
 struct Outgoing {
     message_id: String,
@@ -670,6 +742,7 @@ struct Outgoing {
     envelope: Value,
     /// The workspace apps the body's handles name.
     workspace_apps: BTreeSet<String>,
+    conversation_files: Vec<files::FileUse>,
 }
 
 fn validate_send(request: SendEntryRequest) -> Result<Outgoing> {
@@ -679,7 +752,12 @@ fn validate_send(request: SendEntryRequest) -> Result<Outgoing> {
             request.message_id.chars().take(80).collect::<String>()
         )));
     }
-    if !request.kind.client_sendable() && request.kind != InboxEntryKind::Trigger {
+    if !request.kind.client_sendable()
+        && !matches!(
+            request.kind,
+            InboxEntryKind::Trigger | InboxEntryKind::Activity
+        )
+    {
         return Err(Error::invalid(
             "Member entries are written when members join or leave",
         ));
@@ -708,11 +786,13 @@ fn validate_send(request: SendEntryRequest) -> Result<Outgoing> {
         )));
     }
     let workspace_apps = body::workspace_apps(request.kind, &envelope)?;
+    let conversation_files = body::conversation_files(request.kind, &envelope);
     Ok(Outgoing {
         message_id: request.message_id,
         kind: request.kind,
         envelope,
         workspace_apps,
+        conversation_files,
     })
 }
 
@@ -870,6 +950,7 @@ pub(crate) fn retire_bot(tx: &Connection, bot_id: &str, changes: &mut Changes) -
     for conversation_id in &direct {
         tx.execute("DELETE FROM conversations WHERE id = ?1", [conversation_id])?;
         changes.conversation(conversation_id);
+        changes.files();
     }
     let groups = conversation_ids(
         tx,
@@ -921,14 +1002,17 @@ pub(crate) fn bot_conversations(
 }
 
 impl LocalBotStore {
-    /// The person's conversations, newest activity first (at most 200).
+    /// The person's conversations, pinned first (newest pin first), then newest activity first
+    /// (at most 200).
     pub fn conversations(&self) -> Result<Vec<Conversation>> {
         self.read(|db| {
             let mut statement = db.prepare_cached(
                 "SELECT c.id FROM conversation_members m
                  JOIN conversations c ON c.id = m.conversation_id
+                 LEFT JOIN pinned_conversations p ON p.conversation_id = c.id
                  WHERE m.principal_id = ?1 AND m.left_at IS NULL AND m.status = 'ACTIVE'
-                 ORDER BY c.last_activity_at DESC, c.id DESC LIMIT ?2",
+                 ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, c.last_activity_at DESC, c.id DESC
+                 LIMIT ?2",
             )?;
             let ids: Vec<String> = statement
                 .query_map(params![LOCAL_OWNER_ID, MAX_LISTED_CONVERSATIONS], |row| {
@@ -1116,37 +1200,24 @@ impl LocalBotStore {
         request: SendEntryRequest,
     ) -> Result<InboxEntry> {
         let outgoing = validate_send(request)?;
+        self.write(|tx, changes| send_in(tx, changes, conversation_id, sender_id, &outgoing))
+    }
+
+    /// Stores a message `bot_id` writes into the person's direct conversation with it, started
+    /// when missing. `None` when `from_conversation` is that conversation: nothing is written.
+    pub fn send_to_owner(
+        &self,
+        bot_id: &str,
+        from_conversation: Option<&str>,
+        request: SendEntryRequest,
+    ) -> Result<Option<InboxEntry>> {
+        let outgoing = validate_send(request)?;
         self.write(|tx, changes| {
-            if let Some(existing) = entry_by_message_id(tx, &outgoing.message_id)? {
-                return repeated(existing, conversation_id, sender_id);
+            let conversation_id = open_direct(tx, bot_id, changes)?;
+            if from_conversation == Some(conversation_id.as_str()) {
+                return Ok(None);
             }
-            member_conversation(tx, conversation_id, sender_id)?;
-            if outgoing.kind.targets_message() {
-                targets::check_target(
-                    tx,
-                    conversation_id,
-                    sender_id,
-                    outgoing.kind,
-                    &outgoing.envelope,
-                )?;
-            }
-            body::check_workspace_files(tx, sender_id, &outgoing.workspace_apps)?;
-            let at = next_event_time(tx, conversation_id)?;
-            let entry = insert_event(
-                tx,
-                conversation_id,
-                &outgoing.message_id,
-                sender_id,
-                outgoing.kind,
-                outgoing.envelope,
-                at,
-            )?;
-            if entry.kind == InboxEntryKind::Delete {
-                targets::tombstone_target(tx, &entry)?;
-                changes.scrub();
-            }
-            changes.conversation(conversation_id);
-            Ok(entry)
+            send_in(tx, changes, &conversation_id, bot_id, &outgoing).map(Some)
         })
     }
 
@@ -1160,6 +1231,35 @@ impl LocalBotStore {
         body: &TriggerBody,
     ) -> Result<InboxEntry> {
         self.write(|tx, changes| write_trigger(tx, changes, bot_id, message_id, body))
+    }
+
+    /// Writes an `activity` entry as `bot_id` into the person's direct conversation with it.
+    /// With `start` false a missing conversation is left missing and nothing is written. Writing
+    /// the same message id again returns the first entry.
+    pub fn post_activity(
+        &self,
+        bot_id: &str,
+        message_id: &str,
+        body: &ActivityBody,
+        start: bool,
+    ) -> Result<Option<InboxEntry>> {
+        let outgoing = validate_send(SendEntryRequest {
+            message_id: message_id.to_string(),
+            kind: InboxEntryKind::Activity,
+            envelope: Some(body.envelope()),
+            envelopes: None,
+        })?;
+        self.write(|tx, changes| {
+            let conversation_id = if start {
+                open_direct(tx, bot_id, changes)?
+            } else {
+                match existing_direct(tx, bot_id)? {
+                    Some(conversation_id) => conversation_id,
+                    None => return Ok(None),
+                }
+            };
+            send_in(tx, changes, &conversation_id, bot_id, &outgoing).map(Some)
+        })
     }
 
     /// Moves the person's read marker to the `up_to` entry, or to the newest event; it never
@@ -1209,6 +1309,7 @@ impl LocalBotStore {
             }
             if tx.execute("DELETE FROM conversations WHERE id = ?1", [conversation_id])? > 0 {
                 changes.conversation(conversation_id);
+                changes.files();
                 changes.scrub();
             }
             Ok(())

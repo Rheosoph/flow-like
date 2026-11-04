@@ -21,11 +21,11 @@ use flow_like::{
     },
 };
 use flow_like_local_bots::{Bot, Conversation, InboxEntry, LOCAL_OWNER_ID, SendEntryRequest};
-use flow_like_types::bot_message::ApprovalRequest;
+use flow_like_types::{bot_effective::BotRoomLimits, bot_message::ApprovalRequest};
 use flow_like_types::{
     bot::BotSystemKind,
     bot_turn::{TurnStatus, failure_message_id, reply_message_id, turn_id},
-    inbox::{InboxEntryKind, PrincipalKind, plain_envelope},
+    inbox::{ConversationKind, InboxEntryKind, PrincipalKind, plain_envelope},
 };
 use serde::Serialize;
 use serde_json::json;
@@ -83,6 +83,8 @@ pub struct TurnJob {
     /// The bot's own token for the hub during this turn (account turns); the owner's session
     /// is not used for what the bot does.
     pub hub_token: Option<HubToken>,
+    /// The question whose late answer woke the turn; its follow-ups go on counting from there.
+    pub answered_round: Option<flow_like::flow::copilot::bot_talk::AnsweredRound>,
 }
 
 /// A bot runtime token that never prints.
@@ -178,6 +180,17 @@ impl End {
             reply: None,
             abandon: false,
             rerun: false,
+        }
+    }
+
+    /// A turn nobody asked to answer that stayed silent: done, nothing posted, and the message
+    /// is not run again.
+    fn silent() -> Self {
+        Self {
+            status: TurnStatus::Done,
+            error_code: Some(flow_like_types::bot_turn::ERROR_SILENT.to_owned()),
+            abandon: true,
+            ..Self::cancelled(CODE_CANCELLED)
         }
     }
 
@@ -407,6 +420,19 @@ impl Inner {
         }
     }
 
+    async fn mentioned_only(&self, conversation: &Conversation, bot_id: &str) -> bool {
+        if conversation.kind != ConversationKind::Group {
+            return false;
+        }
+        match self.store.room_limits(&conversation.id, bot_id).await {
+            Ok(limits) => !BotRoomLimits::reads_along(limits.as_ref()),
+            Err(error) => {
+                tracing::warn!(%error, bot_id, conversation_id = %conversation.id, "Bot host: room limits unreadable; the bot answers only when mentioned");
+                true
+            }
+        }
+    }
+
     async fn waiting_for(
         &self,
         conversation: &Conversation,
@@ -426,8 +452,15 @@ impl Inner {
         }
         let not_before = (Utc::now() - self.config.max_age).fixed_offset();
         let hold = super::interactive::hold_now(bot_id, &conversation.id);
-        let waiting =
-            rule::waiting_held(conversation.kind, bot_id, entries, not_before, Some(hold))?;
+        let mentioned_only = self.mentioned_only(conversation, bot_id).await;
+        let waiting = rule::waiting_held(
+            conversation.kind,
+            bot_id,
+            entries,
+            not_before,
+            Some(hold),
+            mentioned_only,
+        )?;
         Some((bot, waiting))
     }
 
@@ -571,19 +604,52 @@ impl Inner {
         .map(JobMemory);
         let mut oldest_first = entries;
         oldest_first.reverse();
-        let transcript = match transcript::transcript(
-            bot_id,
-            conversation.kind,
-            &waiting.message_id,
-            &oldest_first,
-            &names,
-            flow_like_local_bots::LOCAL_OWNER_ID,
-        ) {
-            Ok(transcript) => transcript,
-            Err(Unreadable::Missing | Unreadable::Deleted) => {
-                return End::abandoned(CODE_UNREADABLE);
+        let reacting = oldest_first.iter().any(|entry| {
+            entry.message_id == waiting.message_id && entry.kind == InboxEntryKind::Reaction
+        });
+        let mut reactions = Vec::new();
+        let transcript = if reacting {
+            let answered = self.reactions_answered(key, &oldest_first);
+            let found = transcript::reaction_turn(
+                bot_id,
+                conversation.kind,
+                &answered,
+                &oldest_first,
+                &names,
+                flow_like_local_bots::LOCAL_OWNER_ID,
+            );
+            reactions = found.reactions;
+            found.transcript
+        } else {
+            match transcript::transcript(
+                bot_id,
+                conversation.kind,
+                &waiting.message_id,
+                &oldest_first,
+                &names,
+                flow_like_local_bots::LOCAL_OWNER_ID,
+            ) {
+                Ok(transcript) => transcript,
+                Err(Unreadable::Missing | Unreadable::Deleted) => {
+                    return End::abandoned(CODE_UNREADABLE);
+                }
             }
         };
+        if reacting && transcript.prompt.is_empty() {
+            return End::silent();
+        }
+        let requester = (reacting || !transcript.addressed).then(|| {
+            flow_like::flow::copilot::TurnRequester {
+                requester_id: LOCAL_OWNER_ID.to_owned(),
+                requester_name: None,
+                owner_id: LOCAL_OWNER_ID.to_owned(),
+                owner_name: None,
+                audience: waiting.audience,
+                room: None,
+                addressed: transcript.addressed,
+                reactions,
+            }
+        });
         let grants: Arc<dyn GrantStore> = Arc::new(StoreGrants {
             store: self.store.clone(),
             bot_id: bot_id.clone(),
@@ -609,8 +675,9 @@ impl Inner {
             history: transcript.history,
             memory: memory.clone(),
             gate: gate.clone(),
-            requester: None,
+            requester: requester.clone(),
             hub_token: None,
+            answered_round: None,
         };
         let outcome = tokio::select! {
             biased;
@@ -623,7 +690,17 @@ impl Inner {
         if let Some(card) = gate.parked() {
             return self.park(key, &waiting, &card, cancel).await;
         }
+        let quiet = requester.as_ref().is_some_and(|r| r.may_stay_silent());
         match outcome {
+            Ok(Ok(text)) if requester.as_ref().is_some_and(|r| r.answer_is_silent(&text)) => {
+                End::silent()
+            }
+            Ok(Err(RunError::SessionChanged)) => End::cancelled(CODE_SESSION_CHANGED),
+            Ok(Err(_)) if quiet => End::silent(),
+            Err(_) if quiet => {
+                self.runner.cancel(&run_id);
+                End::silent()
+            }
             Ok(Ok(text)) if !text.trim().is_empty() => {
                 let end = self
                     .post(
@@ -652,7 +729,6 @@ impl Inner {
                 )
                 .await
             }
-            Ok(Err(RunError::SessionChanged)) => End::cancelled(CODE_SESSION_CHANGED),
             Ok(Err(RunError::Failed { code, message })) => {
                 let text = format!(
                     "I couldn't answer this: {}",
@@ -715,6 +791,33 @@ impl Inner {
         cancel: &mut watch::Receiver<Option<Cancel>>,
     ) -> End {
         self.post(key, waiting, text, Some(code), cancel).await
+    }
+
+    /// The reaction entries a local turn answers: those after the bot's last message and after
+    /// the trigger of its last finished turn here (entries oldest first).
+    fn reactions_answered(&self, key: &Key, entries: &[InboxEntry]) -> Vec<String> {
+        let (bot_id, conversation_id) = key;
+        let finished: HashSet<String> = lock(&self.state)
+            .finished
+            .iter()
+            .filter(|info| &info.bot_id == bot_id && &info.conversation_id == conversation_id)
+            .map(|info| info.trigger_message_id.clone())
+            .collect();
+        let last_own = entries
+            .iter()
+            .rposition(|entry| &entry.sender_id == bot_id && entry.kind == InboxEntryKind::Message);
+        let last_turn = entries
+            .iter()
+            .rposition(|entry| finished.contains(&entry.message_id));
+        let after = last_own.into_iter().chain(last_turn).max();
+        entries
+            .iter()
+            .enumerate()
+            .filter(|(index, entry)| {
+                entry.kind == InboxEntryKind::Reaction && after.is_none_or(|after| *index > after)
+            })
+            .map(|(_, entry)| entry.message_id.clone())
+            .collect()
     }
 
     async fn names(&self, conversation: &Conversation) -> HashMap<String, String> {

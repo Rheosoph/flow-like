@@ -6,6 +6,7 @@ use flow_like_types::{
     base64::{Engine, engine::general_purpose::STANDARD},
     images::notification_thumbnail,
 };
+use futures_util::TryStreamExt;
 
 use crate::state::AppState;
 
@@ -25,15 +26,26 @@ fn image_filename(reference: &str) -> Option<&str> {
     (hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit())).then_some(filename)
 }
 
+fn user_directory(user_id: &str) -> Path {
+    Path::from("notification-images").join(blake3::hash(user_id.as_bytes()).to_hex().to_string())
+}
+
 fn image_path(user_id: &str, filename: &str) -> Path {
     // Derive the namespace from the authenticated notification recipient. A supplied
     // reference can never select an object belonging to another user.
-    Path::from("notification-images")
-        .join(blake3::hash(user_id.as_bytes()).to_hex().to_string())
-        .join(filename)
+    user_directory(user_id).join(filename)
 }
 
-fn decode_inline_icon(icon: &str) -> Result<Vec<u8>> {
+fn bot_avatar_directory(owner_id: &str, bot_id: &str) -> Path {
+    user_directory(owner_id).join("bots").join(bot_id)
+}
+
+fn bot_avatar_path(owner_id: &str, bot_id: &str, look: &str) -> Path {
+    bot_avatar_directory(owner_id, bot_id).join(format!("{look}.png"))
+}
+
+/// Re-encodes an image data URL as a PNG of at most 256 px; refuses anything else.
+pub fn decode_inline_icon(icon: &str) -> Result<Vec<u8>> {
     if icon.len() > MAX_INLINE_ICON_LENGTH {
         flow_like_types::bail!("Notification icon exceeds the 512 KiB upload limit");
     }
@@ -76,6 +88,52 @@ async fn resolve_stored_icon(
         .sign_cached("GET", &path, IMAGE_URL_LIFETIME)
         .await?
         .to_string())
+}
+
+/// Stores the picture of one look of a bot and drops the pictures of its earlier looks.
+pub async fn store_bot_avatar(
+    store: &FlowLikeStore,
+    owner_id: &str,
+    bot_id: &str,
+    look: &str,
+    png: Vec<u8>,
+) -> Result<()> {
+    let generic = store.as_generic();
+    let path = bot_avatar_path(owner_id, bot_id, look);
+    generic.put(&path, png.into()).await?;
+    let earlier: Vec<Path> = generic
+        .list(Some(&bot_avatar_directory(owner_id, bot_id)))
+        .map_ok(|meta| meta.location)
+        .try_filter(|location| std::future::ready(*location != path))
+        .try_collect()
+        .await?;
+    for location in earlier {
+        if let Err(error) = generic.delete(&location).await {
+            tracing::warn!(%error, %location, "Could not delete the picture of a bot's earlier look");
+        }
+    }
+    Ok(())
+}
+
+/// A link to the picture of this look of the bot; `None` until a client stored one.
+pub async fn bot_avatar_url(
+    store: &FlowLikeStore,
+    owner_id: &str,
+    bot_id: &str,
+    look: &str,
+) -> Result<Option<String>> {
+    let path = bot_avatar_path(owner_id, bot_id, look);
+    match store.as_generic().head(&path).await {
+        Ok(_) => {}
+        Err(flow_like_storage::object_store::Error::NotFound { .. }) => return Ok(None),
+        Err(error) => return Err(error.into()),
+    }
+    Ok(Some(
+        store
+            .sign_cached("GET", &path, IMAGE_URL_LIFETIME)
+            .await?
+            .to_string(),
+    ))
 }
 
 /// Persist image bytes independently of the expiring URL sent to a device.
@@ -200,6 +258,33 @@ mod tests {
         let resolved = resolve_stored_icon(&store, "user-a", &first).await.unwrap();
         assert!(resolved.starts_with("data:image/png;base64,"));
         assert!(resolve_stored_icon(&store, "user-b", &first).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn a_bot_keeps_only_the_picture_of_its_latest_look() {
+        async fn stored(store: &FlowLikeStore, owner: &str, bot: &str, look: &str) -> bool {
+            bot_avatar_url(store, owner, bot, look)
+                .await
+                .unwrap()
+                .is_some()
+        }
+        let store = FlowLikeStore::Memory(Arc::new(InMemory::new()));
+        let png = decode_inline_icon(&inline_icon()).unwrap();
+        store_bot_avatar(&store, "owner", "bot_10", "look-a", png.clone())
+            .await
+            .unwrap();
+        store_bot_avatar(&store, "owner", "bot_1", "look-a", png.clone())
+            .await
+            .unwrap();
+        assert!(stored(&store, "owner", "bot_1", "look-a").await);
+
+        store_bot_avatar(&store, "owner", "bot_1", "look-b", png)
+            .await
+            .unwrap();
+        assert!(!stored(&store, "owner", "bot_1", "look-a").await);
+        assert!(stored(&store, "owner", "bot_1", "look-b").await);
+        assert!(stored(&store, "owner", "bot_10", "look-a").await);
+        assert!(!stored(&store, "other", "bot_1", "look-b").await);
     }
 
     #[test]

@@ -169,6 +169,80 @@ export const HOME_WIDGET_PRESETS: HomeWidgetPreset[] = [
 		"violet",
 	),
 	preset(
+		"bot-chat-hero",
+		"Talk to your bots",
+		"Message the Assistant, Flux, or any bot in your crew right from your home.",
+		"assistant",
+		"bot",
+		"bot-chat",
+		{ mode: "hero", botId: "", crew: true, limit: 6 },
+		12,
+		3,
+		"card",
+		"violet",
+	),
+	preset(
+		"bot-chat-bar",
+		"Message a bot",
+		"A slim composer that sends straight to one of your bots.",
+		"assistant",
+		"bot",
+		"bot-chat",
+		{ mode: "bar", botId: "", crew: false, limit: 6 },
+		12,
+		1,
+		"borderless",
+		"violet",
+	),
+	preset(
+		"bot-crew",
+		"Your crew",
+		"Your bots as the Bots tab shows them. Open a chat or create a new bot.",
+		"assistant",
+		"bot",
+		"bot-crew",
+		{ limit: 8, newBot: true },
+		8,
+		3,
+		"borderless",
+	),
+	preset(
+		"bot-messages",
+		"Messages",
+		"Your newest conversations with people and bots, and what needs your answer.",
+		"assistant",
+		"message",
+		"bot-messages",
+		{ filter: "all", limit: 6, needsYou: true },
+		4,
+		4,
+		"borderless",
+	),
+	preset(
+		"bot-rooms",
+		"Rooms",
+		"Jump into the group chats you share with people and bots.",
+		"assistant",
+		"users",
+		"bot-messages",
+		{ filter: "rooms", limit: 6 },
+		12,
+		3,
+		"borderless",
+	),
+	preset(
+		"bot-needs-you",
+		"Needs you",
+		"Approvals, invitations, and bot messages waiting for your answer.",
+		"assistant",
+		"attention",
+		"bot-messages",
+		{ filter: "needs" },
+		12,
+		2,
+		"borderless",
+	),
+	preset(
 		"flowpilot-bar",
 		"Ask FlowPilot",
 		"A prompt bar for ideas, questions, and getting work done.",
@@ -1074,14 +1148,15 @@ export function createDefaultHomeLayout(): IHomeLayout {
 	}[] = [
 		{ preset: "greeting", config: { mode: "masthead" } },
 		{
-			preset: "flowpilot-bar",
-			config: {
-				suggestions: true,
-				emphasis: true,
-				placeholder:
-					"Ask FlowPilot to build an app, find a node, or work through an idea…",
-			},
+			preset: "bot-chat-hero",
+			id: "bot-chat",
+			title: "What should we work on?",
+			columns: 8,
 		},
+		{ preset: "bot-messages", config: { limit: 4, needsYou: false } },
+		{ preset: "bot-needs-you" },
+		{ preset: "bot-crew", config: { limit: 5 } },
+		{ preset: "bot-rooms", config: { limit: 3 }, columns: 4 },
 		{
 			preset: "quick-actions",
 			config: {
@@ -1122,6 +1197,12 @@ export function createDefaultHomeLayout(): IHomeLayout {
 			config: {
 				layout: "list",
 				items: [
+					{
+						id: "bots",
+						title: "Put a bot to work",
+						body: "Create a bot for a task, give it the apps it may use, and bring it into a room with your team.",
+						href: "/bots",
+					},
 					{
 						id: "embed",
 						title: "Keep an app open here",
@@ -1211,7 +1292,9 @@ export function getHomeWidgetPreset(widget: IHomeWidget) {
 				? "target"
 				: widget.type === "app-collection"
 					? "source"
-					: "mode";
+					: widget.type === "bot-messages"
+						? "filter"
+						: "mode";
 	const matching = candidates.filter(
 		(item) => item.config[key] === widget.config[key],
 	);

@@ -1884,6 +1884,7 @@
 	"saveRole": "Save role",
 	"savingChanges": "Saving changes...",
 	"schemaDiagram": "Schema diagram",
+	"schemaDiagramNeedsWiderView": "The schema diagram needs a wider view. Open the full view to see and edit it.",
 	"schemasLoadOnlyAfterYouContinue": "Schemas load only after you continue.",
 	"scope": "Scope",
 	"sdkInstallation": "SDK Installation",

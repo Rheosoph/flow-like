@@ -19,6 +19,13 @@ import type { BotAppearance } from "../../bots/types";
 import { describeBotLookRequirement, getBotLookRequirements } from "./bot-look";
 import type { BotPreset } from "./bot-presets";
 
+/** The draft fields that pin a media model of the bot. */
+export type BotModelPin =
+	| "sttModel"
+	| "ttsModel"
+	| "imageModel"
+	| "visionModel";
+
 export interface BotDraft {
 	presetId: string | null;
 	name: string;
@@ -28,6 +35,11 @@ export interface BotDraft {
 	model: IBotModelPolicy;
 	/** Bit id of the embedding model its memory uses; `null` lets the host choose. */
 	embeddingModel: string | null;
+	/** Bit ids of the speech-to-text, text-to-speech, image generation and vision models it pins. */
+	sttModel: string | null;
+	ttsModel: string | null;
+	imageModel: string | null;
+	visionModel: string | null;
 	classification: IDataSensitivity;
 	capabilities: BotCapability[];
 	profileId: string | null;
@@ -113,6 +125,10 @@ export function createEmptyBotDraft(): BotDraft {
 		appearance: { kind: defaultBotCatalog.defaultKind },
 		model: { primary: null, fallbacks: [] },
 		embeddingModel: null,
+		sttModel: null,
+		ttsModel: null,
+		imageModel: null,
+		visionModel: null,
 		classification: { pii: false },
 		capabilities: [...NEW_BOT_CAPABILITIES],
 		profileId: null,
@@ -130,6 +146,10 @@ export function botDraftFromBot(bot: IBot): BotDraft {
 		appearance: structuredClone(bot.appearance),
 		model: normalizeBotModelPolicy(bot.model),
 		embeddingModel: text(bot.embedding_model),
+		sttModel: text(bot.stt_model),
+		ttsModel: text(bot.tts_model),
+		imageModel: text(bot.image_model),
+		visionModel: text(bot.vision_model),
 		classification: normalizeBotClassification(bot.classification),
 		capabilities: orderBotCapabilities(bot.capabilities),
 		profileId: bot.profile_id,
@@ -243,6 +263,10 @@ function draftFields(draft: BotDraft): BotFields {
 		appearance: draft.appearance,
 		model: normalizeBotModelPolicy(draft.model),
 		embedding_model: text(draft.embeddingModel),
+		stt_model: text(draft.sttModel),
+		tts_model: text(draft.ttsModel),
+		image_model: text(draft.imageModel),
+		vision_model: text(draft.visionModel),
 		classification: normalizeBotClassification(draft.classification),
 		capabilities: ordered,
 		profile_id: ordered.includes("profile_apps") ? draft.profileId : null,
@@ -259,6 +283,10 @@ function botFields(bot: IBot): BotFields {
 		appearance: bot.appearance,
 		model: normalizeBotModelPolicy(bot.model),
 		embedding_model: text(bot.embedding_model),
+		stt_model: text(bot.stt_model),
+		tts_model: text(bot.tts_model),
+		image_model: text(bot.image_model),
+		vision_model: text(bot.vision_model),
 		classification: normalizeBotClassification(bot.classification),
 		capabilities: orderBotCapabilities(bot.capabilities),
 		profile_id: bot.profile_id ?? null,
@@ -277,12 +305,23 @@ function withFixedFields(bot: IBot, draft: BotDraft): BotDraft {
 		: kept;
 }
 
-/** The host picks the memory model unless the draft names one. */
+/** The host picks the memory and pinned models unless the draft names one. */
 export function buildCreateBotRequest(draft: BotDraft): ICreateBotRequest {
-	const { embedding_model, ...fields } = draftFields(draft);
+	const {
+		embedding_model,
+		stt_model,
+		tts_model,
+		image_model,
+		vision_model,
+		...fields
+	} = draftFields(draft);
 	return {
 		...fields,
 		...(embedding_model ? { embedding_model } : {}),
+		...(stt_model ? { stt_model } : {}),
+		...(tts_model ? { tts_model } : {}),
+		...(image_model ? { image_model } : {}),
+		...(vision_model ? { vision_model } : {}),
 		name: draft.name.trim(),
 		preset_id: draft.presetId,
 	};

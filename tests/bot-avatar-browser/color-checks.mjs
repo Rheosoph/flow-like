@@ -57,23 +57,25 @@ export async function verifyColors(page, origin, output) {
 				?.colors?.body?.colorId === "color-coral",
 	);
 	await pick(page, "Holographic color pack");
-	const locked = await page.$('[aria-label="Choose Aurora for Body"]');
-	assert.ok(locked);
-	assert.equal(await locked.evaluate((button) => button.disabled), false);
-	await locked.evaluate((button) => button.click());
+	assert.equal(
+		await page.$$eval(".fl-bot-color-packs small", (labels) =>
+			labels.every((label) => label.textContent === "Included"),
+		),
+		true,
+	);
+	assert.equal(await page.$(".fl-bot-color-lock-note"), null);
+	assert.equal(await page.$("[data-preview-only]"), null);
+	await pick(page, "Choose Aurora for Body");
 	assert.equal((await appearance(page)).colors.body.colorId, "holo-aurora");
 	assert.equal(
 		await page.$eval('[aria-label="Save bot"]', (button) => button.disabled),
-		true,
+		false,
 	);
-	await page.$eval('[aria-label="Save bot"]', (button) => button.click());
-	assert.equal(
-		await page.$eval(
-			"[data-saved-appearance]",
-			(element) => JSON.parse(element.textContent).colors.body.colorId,
-		),
-		"color-coral",
-		"Premium previews must never replace the saved appearance",
+	await pick(page, "Save bot");
+	await page.waitForFunction(
+		() =>
+			JSON.parse(document.querySelector("[data-saved-appearance]").textContent)
+				?.colors?.body?.colorId === "holo-aurora",
 	);
 	await page.waitForSelector(
 		'.fl-bot-studio-stage [data-paint-slot="body"][data-paint-kind="gradient"]',
@@ -84,9 +86,9 @@ export async function verifyColors(page, origin, output) {
 		/colors-holographic/,
 	);
 	await pick(page, "Color lab color pack");
-	const previewHex = '[aria-label="Hex color for Body"]';
-	await page.focus(previewHex);
-	await page.$eval(previewHex, (input) => input.select());
+	const defaultHex = '[aria-label="Hex color for Body"]';
+	await page.focus(defaultHex);
+	await page.$eval(defaultHex, (input) => input.select());
 	await page.keyboard.type("#bada55");
 	await page.$$eval("button", (buttons) =>
 		buttons
@@ -100,10 +102,18 @@ export async function verifyColors(page, origin, output) {
 	});
 	assert.equal(
 		await page.$eval('[aria-label="Save bot"]', (button) => button.disabled),
-		true,
+		false,
+	);
+	assert.equal(await page.$(".fl-bot-color-lock-note"), null);
+	assert.equal(await page.$('[aria-label="Save requirements"]'), null);
+	await pick(page, "Save bot");
+	await page.waitForFunction(
+		() =>
+			JSON.parse(document.querySelector("[data-saved-appearance]").textContent)
+				?.colors?.body?.value === "#BADA55",
 	);
 	await page.screenshot({
-		path: resolve(output, "colors-preview-only.png"),
+		path: resolve(output, "colors-default-open.png"),
 		fullPage: true,
 	});
 	await pick(page, "Reset Body color");

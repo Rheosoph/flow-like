@@ -1,8 +1,9 @@
 import type {
+	BotAppearance,
 	BotApprovalDecision,
 	IBot,
 	IBotApp,
-	IBotRestrictions,
+	IBotAvatar,
 	IBotComputerHost,
 	IBotEncryptionHost,
 	IBotMailAddress,
@@ -12,10 +13,12 @@ import type {
 	IBotPermission,
 	IBotPermissions,
 	IBotPresence,
+	IBotRestrictions,
 	IBotSecretInfo,
 	IBotState,
 	IBotTask,
 	IBotToolGrant,
+	IBotTurn,
 	IBotTurnHost,
 	IBotWebhook,
 	IBotWorkspace,
@@ -96,6 +99,15 @@ function expectTask(response: unknown): IBotTask {
 		throw new Error("Unexpected response while saving a task");
 	}
 	return response as unknown as IBotTask;
+}
+
+function expectAvatar(response: unknown, botId: string): IBotAvatar {
+	if (!isRecord(response)) {
+		throw new Error(
+			`Unexpected response while loading the avatar of bot ${botId}`,
+		);
+	}
+	return { url: typeof response.url === "string" ? response.url : null };
 }
 
 function expectWorkspace(response: unknown, botId: string): IBotWorkspace {
@@ -216,6 +228,45 @@ export class BotState implements IBotState {
 			visibility: IAppVisibility.Private,
 		});
 		return workspace;
+	}
+
+	/** Only the hub pushes notifications, so only an account bot has a picture there. */
+	private async avatarRoute(botId: string): Promise<IAccountRoute> {
+		const account = await this.accountFor(botId);
+		if (!account)
+			throw new Error(
+				`Bot ${botId} lives on this computer; only account bots have a notification avatar`,
+			);
+		return account;
+	}
+
+	async getAvatar(botId: string): Promise<IBotAvatar> {
+		const account = await this.avatarRoute(botId);
+		return expectAvatar(
+			await get<IBotAvatar>(
+				account.profile,
+				`${botPath(account.id)}/avatar`,
+				account.auth,
+			),
+			botId,
+		);
+	}
+
+	async putAvatar(
+		botId: string,
+		appearance: BotAppearance,
+		image: string,
+	): Promise<IBotAvatar> {
+		const account = await this.avatarRoute(botId);
+		return expectAvatar(
+			await put<IBotAvatar>(
+				account.profile,
+				`${botPath(account.id)}/avatar`,
+				{ appearance, image },
+				account.auth,
+			),
+			botId,
+		);
 	}
 
 	async createBot(request: ICreateBotRequest): Promise<IBot> {
@@ -416,6 +467,25 @@ export class BotState implements IBotState {
 			session.auth,
 		);
 		return isRecord(response) ? response : {};
+	}
+
+	async getMobileStatus(): Promise<IBotTurn[]> {
+		const session = accountSession(this.backend);
+		if (!session) return this.turns.list();
+		const [remote, local] = await Promise.all([
+			get<{ turns: IBotTurn[] }>(
+				session.profile,
+				"bots/mobile-status",
+				session.auth,
+			),
+			this.turns.list(),
+		]);
+		const merged = new Map(local.map((turn) => [turn.id, turn]));
+		for (const turn of asArray(remote?.turns)) {
+			// The hub owns account turn status; keep native timing when the API omits it.
+			merged.set(turn.id, { ...merged.get(turn.id), ...turn });
+		}
+		return [...merged.values()];
 	}
 
 	async listPermissions(botId: string): Promise<IBotPermissions> {

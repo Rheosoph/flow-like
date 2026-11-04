@@ -2,13 +2,16 @@ import type {
 	BotApprovalDecision,
 	IBot,
 	IBotApp,
-	IBotRestrictions,
 	IBotPermission,
+	IBotRestrictions,
 	IBotSecretInfo,
 	IBotTask,
 	IBotToolGrant,
 	IBotWorkspace,
 	IConversation,
+	IConversationFileDownload,
+	IConversationFileReady,
+	IConversationPinState,
 	IConversationSegmentList,
 	ICreateBotRequest,
 	ICreateBotTaskRequest,
@@ -19,7 +22,11 @@ import type {
 	IInboxImportEntry,
 	IInboxImportResult,
 	IInboxSegmentsQuery,
+	IPinnedMessage,
 	ISendInboxEntryRequest,
+	IStarredMessage,
+	IStarredMessagesPage,
+	IStarredMessagesQuery,
 	IUpdateBotRequest,
 	IUpdateBotTaskRequest,
 } from "@flow-like/flow-like-ui";
@@ -527,6 +534,54 @@ export const localInbox = {
 		return entry as unknown as IInboxEntry;
 	},
 
+	/** Stores a file the person puts into a conversation on this computer. */
+	async uploadFile(
+		conversationId: string,
+		file: File,
+	): Promise<IConversationFileReady> {
+		const operation = `store ${file.name} in local conversation ${conversationId}`;
+		const bytes = new Uint8Array(await file.arrayBuffer());
+		try {
+			return await invoke<IConversationFileReady>(
+				"local_inbox_upload_file",
+				bytes,
+				{
+					headers: {
+						"x-conversation-id": encodeURIComponent(conversationId),
+						"x-file-name": encodeURIComponent(file.name),
+						"x-file-mime": encodeURIComponent(file.type),
+					},
+				},
+			);
+		} catch (error) {
+			const { message, code } = rejection(error);
+			throw new LocalStoreError(
+				`Could not ${operation}: ${message}`,
+				code,
+				error,
+			);
+		}
+	},
+
+	/** A `blob:` URL for a file kept on this computer; revoke it when done. */
+	async fileUrl(
+		conversationId: string,
+		handle: { path: string; mime: string },
+		name = handle.path,
+	): Promise<IConversationFileDownload> {
+		const bytes = await run<ArrayBuffer>(
+			`read ${name} of local conversation ${conversationId}`,
+			"local_inbox_read_file",
+			{ conversationId, path: handle.path },
+		);
+		return {
+			url: URL.createObjectURL(new Blob([bytes], { type: handle.mime })),
+			name,
+			mime: handle.mime,
+			bytes: bytes.byteLength,
+		};
+	},
+
 	async markRead(
 		conversationId: string,
 		upTo?: string,
@@ -540,5 +595,90 @@ export const localInbox = {
 			throw new Error(`Could not ${operation}: this computer returned nothing`);
 		}
 		return marker as { last_read_at: string };
+	},
+
+	async setPinned(
+		conversationId: string,
+		pinned: boolean,
+	): Promise<IConversationPinState> {
+		const operation = `${pinned ? "pin" : "unpin"} local conversation ${conversationId}`;
+		const state = await run(operation, "local_inbox_set_pinned", {
+			conversationId,
+			pinned,
+		});
+		if (!isRecord(state)) {
+			throw new Error(`Could not ${operation}: this computer returned nothing`);
+		}
+		return state as unknown as IConversationPinState;
+	},
+
+	async pins(conversationId: string): Promise<IPinnedMessage[]> {
+		const pins = await run(
+			`list pinned messages of local conversation ${conversationId}`,
+			"local_inbox_pins",
+			{ conversationId },
+		);
+		return Array.isArray(pins) ? (pins as IPinnedMessage[]) : [];
+	},
+
+	async pinMessage(
+		conversationId: string,
+		messageId: string,
+	): Promise<IPinnedMessage> {
+		const operation = `pin ${messageId} in local conversation ${conversationId}`;
+		const pin = await run(operation, "local_inbox_pin_message", {
+			conversationId,
+			messageId,
+		});
+		if (!isRecord(pin)) {
+			throw new Error(`Could not ${operation}: this computer returned nothing`);
+		}
+		return pin as unknown as IPinnedMessage;
+	},
+
+	async unpinMessage(conversationId: string, messageId: string): Promise<void> {
+		await run(
+			`unpin ${messageId} in local conversation ${conversationId}`,
+			"local_inbox_unpin_message",
+			{ conversationId, messageId },
+		);
+	},
+
+	async star(
+		conversationId: string,
+		messageId: string,
+	): Promise<IStarredMessage> {
+		const operation = `star ${messageId} in local conversation ${conversationId}`;
+		const star = await run(operation, "local_inbox_star", {
+			conversationId,
+			messageId,
+		});
+		if (!isRecord(star)) {
+			throw new Error(`Could not ${operation}: this computer returned nothing`);
+		}
+		return star as unknown as IStarredMessage;
+	},
+
+	async unstar(conversationId: string, messageId: string): Promise<void> {
+		await run(
+			`unstar ${messageId} in local conversation ${conversationId}`,
+			"local_inbox_unstar",
+			{ conversationId, messageId },
+		);
+	},
+
+	async stars(
+		query: IStarredMessagesQuery = {},
+	): Promise<IStarredMessagesPage> {
+		const operation = "list starred messages on this computer";
+		const page = await run(operation, "local_inbox_stars", {
+			conversationId: query.conversationId,
+			before: query.before,
+			limit: query.limit,
+		});
+		if (!isRecord(page)) {
+			throw new Error(`Could not ${operation}: this computer returned nothing`);
+		}
+		return page as unknown as IStarredMessagesPage;
 	},
 };

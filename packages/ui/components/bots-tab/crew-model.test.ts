@@ -49,6 +49,27 @@ function lastEntry(sender_id: string): IInboxEntry {
 	};
 }
 
+function approvalEntry(sender_id: string): IInboxEntry {
+	return {
+		...lastEntry(sender_id),
+		envelope: {
+			v: 1,
+			enc: "none",
+			body: {
+				text: "Run git",
+				approval: {
+					id: "ap-1",
+					turn_id: "t1",
+					tool: "shell_run",
+					summary: "Run git",
+					scope: "command:git",
+					args_hash: "h",
+				},
+			},
+		},
+	};
+}
+
 function conversation(
 	id: string,
 	overrides: Partial<IConversation> = {},
@@ -71,7 +92,7 @@ function conversation(
 describe("selectNeedsYou", () => {
 	const myBotIds = new Set(["bot_mine"]);
 
-	test("keeps unread conversations whose newest message came from a bot", () => {
+	test("ordinary unread bot replies do not need the reader's input", () => {
 		const fromBot = conversation("bot", {
 			unread_count: 2,
 			last_entry: lastEntry("bot_scout"),
@@ -91,48 +112,40 @@ describe("selectNeedsYou", () => {
 				me: "me",
 				myBotIds,
 			}).map(({ id }) => id),
-		).toEqual(["bot", "left"]);
+		).toEqual([]);
 	});
 
 	test("an approval card stays until an answer follows, read or not", () => {
-		const card = {
-			...lastEntry("bot_scout"),
-			envelope: {
-				v: 1 as const,
-				enc: "none" as const,
-				body: {
-					text: "run git",
-					approval: {
-						id: "ap-1",
-						turn_id: "t1",
-						tool: "shell_run",
-						summary: "run git",
-						scope: "command:git",
-						args_hash: "h",
-					},
-				},
-			},
-		};
+		const card = approvalEntry("bot_scout");
 		const waiting = conversation("waiting", { last_entry: card });
+		const unread = conversation("unread", {
+			last_entry: card,
+			unread_count: 1,
+		});
 		const answered = conversation("answered", {
 			last_entry: lastEntry("me"),
 		});
+		const finished = conversation("finished", {
+			last_entry: lastEntry("bot_scout"),
+			unread_count: 1,
+		});
 		expect(
-			selectNeedsYou([waiting, answered], { me: "me", myBotIds }).map(
-				({ id }) => id,
-			),
-		).toEqual(["waiting"]);
+			selectNeedsYou([waiting, unread, answered, finished], {
+				me: "me",
+				myBotIds,
+			}).map(({ id }) => id),
+		).toEqual(["waiting", "unread"]);
 	});
 
 	test("skips the conversation already open and my own messages", () => {
 		const open = conversation("open", {
 			unread_count: 1,
-			last_entry: lastEntry("bot_scout"),
+			last_entry: approvalEntry("bot_scout"),
 		});
 		const mine = conversation("mine", {
 			unread_count: 1,
 			members: [member("me", "bot")],
-			last_entry: lastEntry("me"),
+			last_entry: approvalEntry("me"),
 		});
 		expect(
 			selectNeedsYou([open, mine], {
@@ -141,6 +154,40 @@ describe("selectNeedsYou", () => {
 				openConversationId: "open",
 			}),
 		).toEqual([]);
+	});
+
+	test("hides the approval in the bot chat on screen, keeping other chats' approvals", () => {
+		const direct = conversation("direct", {
+			kind: "direct",
+			members: [member("me"), member("bot_scout", "bot")],
+			last_entry: approvalEntry("bot_scout"),
+		});
+		const room = conversation("room", {
+			last_entry: approvalEntry("bot_scout"),
+		});
+		const other = conversation("other", {
+			kind: "direct",
+			members: [member("local"), member("bot_mine", "bot")],
+			last_entry: approvalEntry("bot_mine"),
+		});
+		const conversations = [direct, room, other];
+		expect(
+			selectNeedsYou(conversations, {
+				me: "me",
+				myBotIds,
+				openBotId: "bot_scout",
+			}).map(({ id }) => id),
+		).toEqual(["room", "other"]);
+		expect(
+			selectNeedsYou(conversations, {
+				me: "me",
+				myBotIds,
+				openBotId: "bot_mine",
+			}).map(({ id }) => id),
+		).toEqual(["direct", "room"]);
+		expect(
+			selectNeedsYou(conversations, { me: "me", myBotIds }).map(({ id }) => id),
+		).toEqual(["direct", "room", "other"]);
 	});
 });
 

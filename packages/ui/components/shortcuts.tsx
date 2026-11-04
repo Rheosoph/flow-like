@@ -503,7 +503,9 @@ function SortableShortcutItem({
 					isActive={isActive}
 				>
 					<motion.a
-						href={isScriptNavigationUrl(shortcut.path) ? undefined : shortcut.path}
+						href={
+							isScriptNavigationUrl(shortcut.path) ? undefined : shortcut.path
+						}
 						aria-current={isActive ? "page" : undefined}
 						onClick={(event) => {
 							if (
@@ -517,7 +519,8 @@ function SortableShortcutItem({
 								return;
 							}
 							event.preventDefault();
-							if (!isScriptNavigationUrl(shortcut.path)) onNavigate(shortcut.path);
+							if (!isScriptNavigationUrl(shortcut.path))
+								onNavigate(shortcut.path);
 						}}
 						initial="initial"
 						whileHover="hover"

@@ -67,6 +67,20 @@ pub(crate) async fn open_conversation<C: ConnectionTrait>(
     Ok(plain.then_some(id))
 }
 
+/// Whether `conversation_id` is the direct conversation of `owner_id` and `bot_id`.
+pub(crate) async fn is_owner_chat<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    conversation_id: &str,
+) -> Result<bool, ApiError> {
+    let key = pair_key(owner_id, bot_id);
+    let row = conversation::Entity::find_by_id(conversation_id)
+        .one(db)
+        .await?;
+    Ok(row.is_some_and(|row| row.direct_key.as_deref() == Some(key.as_str())))
+}
+
 fn message(message_id: String, body: Value) -> SendEntryRequest {
     SendEntryRequest {
         message_id,

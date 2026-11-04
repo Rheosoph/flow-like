@@ -1,9 +1,12 @@
 use super::*;
 use crate::{
     entity::bot_turn,
-    routes::inbox::fixture::{at, database as inbox_database, delete_bot, insert_bot},
+    routes::inbox::{
+        exchange::post_as_bot_in,
+        fixture::{at, copies, database as inbox_database, delete_bot, insert_bot},
+    },
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, DatabaseConnection, PaginatorTrait};
 use serde_json::json;
 use std::sync::Mutex;
 
@@ -242,54 +245,168 @@ fn the_text_comes_from_a_plain_envelope_only() {
     assert_eq!(text_of(None), "");
 }
 
+struct DbChat<'a>(&'a DatabaseConnection);
+
+#[async_trait]
+impl OwnerChat for DbChat<'_> {
+    async fn post(
+        &self,
+        conversation_id: &str,
+        bot_id: &str,
+        message_id: &str,
+        text: &str,
+    ) -> Result<()> {
+        let outgoing = message_outgoing(message_id, json!({ "text": text, "hops": 0 }))
+            .map_err(|error| anyhow!("{error}"))?;
+        post_as_bot_in(self.0, conversation_id, bot_id, 0, &outgoing, now_millis())
+            .await
+            .map(|_| ())
+            .map_err(|error| anyhow!("{error}"))
+    }
+}
+
+fn notice(title: Option<&str>, text: &str) -> OwnerNotice {
+    OwnerNotice {
+        title: title.map(str::to_string),
+        text: text.to_string(),
+    }
+}
+
+async fn queued_turns(db: &DatabaseConnection) -> u64 {
+    bot_turn::Entity::find().count(db).await.unwrap()
+}
+
+async fn owner_chat(db: &DatabaseConnection) -> String {
+    open_conversation(db, "user-a", "bot_1", "", now_millis())
+        .await
+        .unwrap()
+        .expect("plain chat")
+}
+
 #[tokio::test]
-async fn tool_notices_are_grouped_counted_and_respect_the_mute() {
+async fn the_owner_message_is_posted_as_the_bot_pushed_once_and_wakes_nobody() {
     let (db, sink) = setup().await;
-    let notice = |link: Option<&str>| OwnerNotice {
-        title: "Heads up".into(),
-        body: "Look".into(),
-        link: link.map(str::to_string),
-    };
-    let first = deliver_tool_notice(&db, &sink, "bot_1", notice(None))
-        .await
-        .unwrap();
-    let second = deliver_tool_notice(&db, &sink, "bot_1", notice(Some("/store")))
-        .await
-        .unwrap();
-    assert!(!first.muted && first.id != second.id);
+    let receipt = deliver_owner_message(
+        &db,
+        &sink,
+        &DbChat(&db),
+        "bot_1",
+        Some(&TurnSite::Conversation("mail-thread".into())),
+        notice(Some("Heads up"), "Mail from Ada about the invoice"),
+    )
+    .await
+    .unwrap();
+    assert!(receipt.posted && !receipt.muted && !receipt.in_owner_chat);
+    assert!(receipt.id.starts_with(OWNER_MESSAGE_PREFIX));
+
+    let copies = copies(&db, &receipt.id).await;
+    assert!(!copies.is_empty());
+    assert!(copies.iter().all(|copy| copy.sender_id == "bot_1"));
+    assert_eq!(copies[0].conversation_id, owner_chat(&db).await);
+    assert_eq!(
+        text_of(Some(&copies[0].envelope)),
+        "Heads up\n\nMail from Ada about the invoice"
+    );
+    assert_eq!(queued_turns(&db).await, 0);
+
     let sent = sink.sent.lock().unwrap().clone();
+    assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].1.title, "bot_1");
-    assert_eq!(sent[0].1.description.as_deref(), Some("Heads up: Look"));
+    assert_eq!(
+        sent[0].1.description.as_deref(),
+        Some("Heads up: Mail from Ada about the invoice")
+    );
     assert_eq!(sent[0].1.link.as_deref(), Some("/bots?bot=bot_1"));
-    assert_eq!(sent[1].1.link.as_deref(), Some("/store"));
     assert_eq!(sent[0].1.source_run_id.as_deref(), Some("bot:bot_1"));
+}
+
+#[tokio::test]
+async fn a_turn_in_the_owner_chat_is_refused_before_anything_is_written() {
+    let (db, sink) = setup().await;
+    let chat = owner_chat(&db).await;
+    let receipt = deliver_owner_message(
+        &db,
+        &sink,
+        &DbChat(&db),
+        "bot_1",
+        Some(&TurnSite::Conversation(chat)),
+        notice(None, "Hello"),
+    )
+    .await
+    .unwrap();
+    assert!(receipt.in_owner_chat && !receipt.posted);
+    assert_eq!(sink.count(), 0);
     let hour_ago = chrono::Utc::now().timestamp_millis() - 3_600_000;
     assert_eq!(
-        count_tool_notices(&db, "user-a", "bot_1", hour_ago)
+        count_tool_messages(&db, "bot_1", hour_ago).await.unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_chat_the_owner_reads_live_is_refused_before_anything_is_written() {
+    let (db, sink) = setup().await;
+    let receipt = deliver_owner_message(
+        &db,
+        &sink,
+        &DbChat(&db),
+        "bot_1",
+        Some(&TurnSite::OwnerLive),
+        notice(None, "Hello"),
+    )
+    .await
+    .unwrap();
+    assert!(receipt.in_owner_chat && !receipt.posted);
+    assert_eq!(sink.count(), 0);
+    let hour_ago = chrono::Utc::now().timestamp_millis() - 3_600_000;
+    assert_eq!(
+        count_tool_messages(&db, "bot_1", hour_ago).await.unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn a_muted_bot_still_posts_but_sends_no_push_and_counts_toward_the_limit() {
+    let (db, sink) = setup().await;
+    mute(&db).await;
+    let receipt = deliver_owner_message(
+        &db,
+        &sink,
+        &DbChat(&db),
+        "bot_1",
+        None,
+        notice(None, "Quiet"),
+    )
+    .await
+    .unwrap();
+    assert!(receipt.muted && receipt.posted);
+    assert_eq!(sink.count(), 0);
+    let hour_ago = chrono::Utc::now().timestamp_millis() - 3_600_000;
+    assert_eq!(
+        count_tool_messages(&db, "bot_1", hour_ago).await.unwrap(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn messages_are_counted_once_per_bot_and_window() {
+    let (db, sink) = setup().await;
+    for text in ["one", "two"] {
+        deliver_owner_message(&db, &sink, &DbChat(&db), "bot_1", None, notice(None, text))
             .await
-            .unwrap(),
+            .unwrap();
+    }
+    let hour_ago = chrono::Utc::now().timestamp_millis() - 3_600_000;
+    assert_eq!(
+        count_tool_messages(&db, "bot_1", hour_ago).await.unwrap(),
         2
     );
     assert_eq!(
-        count_tool_notices(&db, "user-b", "bot_1", hour_ago)
-            .await
-            .unwrap(),
+        count_tool_messages(&db, "bot_2", hour_ago).await.unwrap(),
         0
     );
     let later = chrono::Utc::now().timestamp_millis() + 60_000;
-    assert_eq!(
-        count_tool_notices(&db, "user-a", "bot_1", later)
-            .await
-            .unwrap(),
-        0
-    );
-
-    mute(&db).await;
-    let muted = deliver_tool_notice(&db, &sink, "bot_1", notice(None))
-        .await
-        .unwrap();
-    assert!(muted.muted);
-    assert_eq!(sink.count(), 2);
+    assert_eq!(count_tool_messages(&db, "bot_1", later).await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -301,9 +418,7 @@ async fn reply_notifications_do_not_count_against_the_tool_limit() {
         .unwrap();
     let hour_ago = chrono::Utc::now().timestamp_millis() - 3_600_000;
     assert_eq!(
-        count_tool_notices(&db, "user-a", "bot_1", hour_ago)
-            .await
-            .unwrap(),
+        count_tool_messages(&db, "bot_1", hour_ago).await.unwrap(),
         0
     );
 }

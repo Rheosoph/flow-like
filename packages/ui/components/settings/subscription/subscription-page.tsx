@@ -1,8 +1,8 @@
 "use client";
 
 import { ArrowUpRight, Building2, Crown } from "lucide-react";
-import { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../../hooks/use-invoke";
 import { formatQuotaDate } from "../../../lib/quota";
@@ -15,6 +15,7 @@ import { useBackend } from "../../../state/backend-state";
 import type { IPricingResponse } from "../../../state/backend-state/user-state";
 import { Button } from "../../ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../ui/tabs";
+import { RuntimeCalculator } from "../../upgrade/runtime-calculator";
 import {
 	TIER_COLORS,
 	TIER_ICONS,
@@ -22,7 +23,6 @@ import {
 	TierCard,
 } from "../../upgrade/tier-card";
 import { TierComparison } from "../../upgrade/tier-comparison";
-import { RuntimeCalculator } from "../../upgrade/runtime-calculator";
 import {
 	EnterpriseContent,
 	FreeUseTips,

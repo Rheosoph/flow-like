@@ -1,8 +1,10 @@
 mod bots;
+mod files;
 mod history;
 mod inbox;
 mod paging;
 mod permissions;
+mod pins;
 mod secrets;
 mod storage;
 mod tasks;

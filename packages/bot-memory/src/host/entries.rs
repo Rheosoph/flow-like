@@ -12,8 +12,8 @@ use flow_like_types::bot_message::{
     MessageBody, MessagePart, ToolPart as BodyTool, WorkspaceHandle,
 };
 use flow_like_types::inbox::{
-    InboxEntryKind, PLAIN_ENCRYPTION, TopicBody, TriggerBody, TriggerSource, body_target,
-    is_tombstone,
+    InboxEntryKind, PLAIN_ENCRYPTION, TopicBody, TranscriptBody, TriggerBody, TriggerSource,
+    body_target, is_tombstone,
 };
 use serde_json::Value;
 
@@ -199,6 +199,23 @@ pub fn item_of(entry: &StoredEntry, bot_id: &str) -> Option<HistoryItem> {
                 entry.seq,
                 entry.message_id.clone(),
                 role,
+                entry.created_at,
+                "",
+            );
+            apply_body(&mut item, &parsed);
+            Some(item)
+        }
+        InboxEntryKind::Transcript => {
+            let spoken = TranscriptBody::parse(body).ok()?;
+            let parsed = MessageBody {
+                text: spoken.render(),
+                mentions: spoken.mentions,
+                ..MessageBody::default()
+            };
+            let mut item = HistoryItem::new(
+                entry.seq,
+                entry.message_id.clone(),
+                role_of(&entry.sender_id, bot_id, None),
                 entry.created_at,
                 "",
             );

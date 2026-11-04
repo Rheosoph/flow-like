@@ -2,7 +2,7 @@
 import { useReactFlow } from "./board-runtime";
 
 import { useTranslation } from "@flow-like/locales";
-import { type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import { ZapIcon } from "lucide-react";
 import {
 	type RefObject,

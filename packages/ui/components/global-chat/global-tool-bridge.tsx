@@ -86,6 +86,7 @@ import type {
 	IApplyFlowIrCommitResponse,
 	IBoardState,
 } from "../../state/backend-state/board-state";
+import { BOT_SECRET_NAME_PATTERN } from "../../state/backend-state/bot-state";
 import {
 	type FlowPilotFailureKind,
 	type IAgentDebugEvent,
@@ -110,6 +111,7 @@ import {
 	type GlobalToolAsk,
 	type GlobalToolPrompt,
 	type GlobalToolPromptResolution,
+	type GlobalToolSecret,
 	SUB_STEP_PREFIX,
 	getGlobalChatTurnSelection,
 	selectAutoMode,
@@ -409,7 +411,25 @@ type DialogState =
 			request: FrontendToolRequest;
 			override?: DialogOverride;
 	  }
-	| { type: "ask"; request: FrontendToolRequest };
+	| { type: "ask"; request: FrontendToolRequest }
+	| {
+			type: "secret";
+			request: FrontendToolRequest;
+			secret: GlobalToolSecret;
+	  };
+
+function parseSecretRequest(
+	args: Record<string, unknown>,
+): { name: string; description: string; replace?: boolean } | null {
+	const name = argString(args, "name");
+	const description = argString(args, "description").trim();
+	if (!BOT_SECRET_NAME_PATTERN.test(name) || !description) return null;
+	return {
+		name,
+		description,
+		...(args.replace === true ? { replace: true } : {}),
+	};
+}
 
 function argString(args: Record<string, unknown>, key: string): string {
 	const value = args[key];
@@ -1373,6 +1393,18 @@ function promptForDialog(
 	// inline card so its local state (answer text, remember) never leaks between prompts.
 	const promptId = createId();
 	const bound = (value: GlobalToolPromptResolution) => respond(value, promptId);
+	if (dialog.type === "secret") {
+		return {
+			id: promptId,
+			kind: "secret" as const,
+			...asking,
+			toolName: request.toolName,
+			title: i18next.t("secretRequestTitle", "Secret requested"),
+			description: dialog.secret.description,
+			secret: dialog.secret,
+			respond: bound,
+		};
+	}
 	if (dialog.type === "ask") {
 		const ask = parseAsk(request.arguments);
 		return {
@@ -7950,6 +7982,59 @@ Completion contract: build complete helper logic first and add the Event entry l
 		],
 	);
 
+	/**
+	 * Always asks: auto mode, standing approvals and "don't ask again" never apply. The typed value
+	 * goes from the prompt's input to the bot's secret store; the response only acknowledges.
+	 */
+	const requestSecret = useCallback(
+		async (request: FrontendToolRequest): Promise<FrontendToolResponse> => {
+			const details = parseSecretRequest(request.arguments);
+			const botId = approvalOwner(askingChat(request));
+			const store = botStateRef.current;
+			const failure = (code: string, message: string) => ({
+				requestId: request.requestId,
+				approved: true,
+				result: { status: "error", code, message },
+			});
+			if (!details)
+				return failure(
+					"secret_request_invalid",
+					"secret_request needs a `name` like API_KEY and a `description` of what the secret is for.",
+				);
+			if (typeof botId !== "string" || !store)
+				return failure(
+					"secret_request_needs_bot",
+					"Secrets are stored per bot, and this chat has no bot to store one for. Ask the owner to talk to a bot.",
+				);
+			const outcome = await openDialog({
+				type: "secret",
+				request,
+				secret: {
+					...details,
+					store: async (value) => {
+						await store.upsertBotSecret(botId, details.name, {
+							value,
+							description: details.description,
+						});
+					},
+				},
+			});
+			assertRequestActive(request, "secret response");
+			if (!outcome || !("approved" in outcome) || !outcome.approved)
+				return {
+					requestId: request.requestId,
+					approved: false,
+					error: "The owner declined to provide the secret.",
+				};
+			return {
+				requestId: request.requestId,
+				approved: true,
+				result: { status: "ok", native_approved: true },
+			};
+		},
+		[askingChat, assertRequestActive, openDialog],
+	);
+
 	const execute = useCallback(
 		async (
 			request: FrontendToolRequest,
@@ -7992,6 +8077,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 						},
 					};
 				}
+
+				if (request.toolName === "secret_request")
+					return await requestSecret(request);
 
 				const ownerMessageId = ownerMessageIdForRequest(request);
 				const createdAppId = ownerMessageId
@@ -8150,6 +8238,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 			assertRequestActive,
 			openDialog,
 			ownerMessageIdForRequest,
+			requestSecret,
 			runTool,
 		],
 	);

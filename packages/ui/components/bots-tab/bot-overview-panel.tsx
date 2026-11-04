@@ -15,8 +15,10 @@ import { BotMailPane } from "./bot-mail";
 import {
 	type BotPanelTab,
 	isBotPanelTab,
+	isWorkspaceTab,
 	subjectMemoryBotId,
 } from "./bot-panel-tabs";
+import { BotWorkspaceLink } from "./bot-workspace-link";
 import {
 	BotDataPane,
 	BotFilesPane,
@@ -39,6 +41,7 @@ function BotPanelPane({
 			<BotMemoryPane
 				key={view.botId ?? "flux"}
 				botId={subjectMemoryBotId(view)}
+				bot={bot}
 				embeddingModel={bot?.embedding_model}
 				name={name}
 			/>
@@ -142,6 +145,9 @@ export function BotOverviewPanel({
 				<h2 className="max-w-full truncate text-xl font-semibold tracking-tight">
 					{view.name}
 				</h2>
+				{view.bot && tabs.list.some(isWorkspaceTab) && (
+					<BotWorkspaceLink key={view.bot.id} bot={view.bot} name={view.name} />
+				)}
 			</div>
 			<Tabs
 				value={tabs.shown}

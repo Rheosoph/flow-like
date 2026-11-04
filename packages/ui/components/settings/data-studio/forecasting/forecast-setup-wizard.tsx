@@ -62,7 +62,7 @@ export function ForecastSetupWizard({
 		<section
 			aria-label="Forecast setup"
 			aria-busy={busy}
-			className="space-y-5 rounded-xl border bg-card p-4 sm:p-6"
+			className="space-y-5 rounded-xl border bg-card p-4 @xl/ds:p-6"
 		>
 			<div className="flex flex-wrap items-center justify-between gap-3">
 				<p className="text-sm font-medium">Set up a prediction</p>
@@ -80,7 +80,7 @@ export function ForecastSetupWizard({
 			</div>
 			<ol
 				aria-label="Forecast setup steps"
-				className="grid grid-cols-2 gap-2 sm:grid-cols-4"
+				className="grid grid-cols-2 gap-2 @xl/ds:grid-cols-4"
 			>
 				{steps.map((item, index) => (
 					<li key={item.title}>
@@ -240,7 +240,7 @@ export function ForecastSetupReview({
 					? `Every ${mapping.series_id} gets its own forecast. The chart shows one group at a time; saving keeps all groups.`
 					: "This run forecasts the source rows as one series. An overall total or average must already be calculated in the source SQL."}
 			</p>
-			<dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2">
+			<dl className="grid gap-x-8 gap-y-3 @xl/ds:grid-cols-2">
 				{rows.map(([label, value]) => (
 					<div key={label} className="min-w-0">
 						<dt className="text-xs text-muted-foreground">{label}</dt>

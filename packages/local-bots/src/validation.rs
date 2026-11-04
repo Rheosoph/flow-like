@@ -40,6 +40,10 @@ pub(crate) struct BotSettings {
     pub appearance: Value,
     pub model: BotModelPolicy,
     pub embedding_model: Option<String>,
+    pub stt_model: Option<String>,
+    pub tts_model: Option<String>,
+    pub image_model: Option<String>,
+    pub vision_model: Option<String>,
     pub classification: DataSensitivity,
     pub capabilities: Vec<BotCapability>,
     pub profile_id: Option<String>,
@@ -65,6 +69,10 @@ pub(crate) fn built_in(kind: BotSystemKind) -> BotSettings {
         appearance: json!({ "kind": look }),
         model: BotModelPolicy::default(),
         embedding_model: None,
+        stt_model: None,
+        tts_model: None,
+        image_model: None,
+        vision_model: None,
         classification: DataSensitivity::default(),
         capabilities,
         profile_id: None,
@@ -85,6 +93,10 @@ pub(crate) fn create_settings(request: CreateBotRequest) -> Result<(Option<Strin
             .transpose()?
             .unwrap_or_default(),
         embedding_model: embedding_model(request.embedding_model)?,
+        stt_model: model_pin("stt_model", request.stt_model)?,
+        tts_model: model_pin("tts_model", request.tts_model)?,
+        image_model: model_pin("image_model", request.image_model)?,
+        vision_model: model_pin("vision_model", request.vision_model)?,
         classification: request.classification.unwrap_or_default(),
         capabilities: request
             .capabilities
@@ -126,6 +138,18 @@ pub(crate) fn apply_patch(
     if let Some(model) = patch.embedding_model {
         next.embedding_model = embedding_model(model)?;
     }
+    if let Some(model) = patch.stt_model {
+        next.stt_model = model_pin("stt_model", model)?;
+    }
+    if let Some(model) = patch.tts_model {
+        next.tts_model = model_pin("tts_model", model)?;
+    }
+    if let Some(model) = patch.image_model {
+        next.image_model = model_pin("image_model", model)?;
+    }
+    if let Some(model) = patch.vision_model {
+        next.vision_model = model_pin("vision_model", model)?;
+    }
     if let Some(classification) = patch.classification {
         next.classification = classification;
     }
@@ -154,7 +178,13 @@ fn patched_name(name: Option<String>, system: Option<BotSystemKind>) -> Result<O
 
 /// The Bit id of the embedding model; empty lets the host choose.
 fn embedding_model(value: Option<String>) -> Result<Option<String>> {
-    optional_text("embedding_model", value, MODEL_ID_MAX_CHARS)
+    model_pin("embedding_model", value)
+}
+
+/// A pinned Bit id (speech-to-text, text-to-speech, image generation or vision); empty lets the
+/// host choose.
+fn model_pin(field: &str, value: Option<String>) -> Result<Option<String>> {
+    optional_text(field, value, MODEL_ID_MAX_CHARS)
 }
 
 /// The API's rule for a fixed capability (`flowpilot`): only bots that already hold it have it,

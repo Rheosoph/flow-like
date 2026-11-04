@@ -8,6 +8,7 @@ import {
 	useUserIdentity,
 } from "../../hooks/use-user-lookup";
 import { cn } from "../../lib/utils";
+import { BotIdentityCard } from "../identity/bot-identity-card";
 import { ResolvedIdentityAvatar } from "../identity/identity-avatar";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./hover-card";
 import { RelativeTime } from "./relative-time";
@@ -43,15 +44,11 @@ export interface UserProfileHoverContentProps {
 	subtitle?: string | null;
 	avatarUrl?: string | null;
 	initials: string;
-	/** Replaces the person's avatar, e.g. with a bot acting for its owner. */
-	avatar?: ReactNode;
 	description?: string | null;
 	createdAt?: string | number | null;
 	email?: string | null;
 	showEmail?: boolean;
 	showUserId?: boolean;
-	/** Names the id row when the id is not a user's. */
-	idLabel?: string;
 	showProfileLink?: boolean;
 	isLoading?: boolean;
 }
@@ -67,31 +64,26 @@ export function UserProfileHoverContent({
 	subtitle,
 	avatarUrl,
 	initials,
-	avatar,
 	description,
 	createdAt,
 	email,
 	showEmail = true,
 	showUserId = true,
-	idLabel,
 	showProfileLink = true,
 	isLoading = false,
 }: Readonly<UserProfileHoverContentProps>) {
 	const { t } = useTranslation("common");
-	const idRowLabel = idLabel ?? t("userId", "User ID");
 
 	return (
 		<div className="min-w-0">
 			<div className="border-b bg-muted/30 p-4">
 				<div className="flex min-w-0 items-start gap-3">
-					{avatar ?? (
-						<UserAvatar
-							avatarUrl={avatarUrl}
-							initials={initials}
-							label={label}
-							size="lg"
-						/>
-					)}
+					<UserAvatar
+						avatarUrl={avatarUrl}
+						initials={initials}
+						label={label}
+						size="lg"
+					/>
 					<div className="min-w-0 flex-1">
 						<div className="truncate font-semibold" title={label}>
 							{label}
@@ -146,7 +138,7 @@ export function UserProfileHoverContent({
 						{showUserId && userId ? (
 							<UserDetailRow
 								icon={<IdCard className="h-3.5 w-3.5" />}
-								label={idRowLabel}
+								label={t("userId", "User ID")}
 							>
 								<code className="block truncate rounded bg-muted px-1.5 py-0.5 font-mono text-xs">
 									{userId}
@@ -180,14 +172,13 @@ function unresolvedReason(
 
 /**
  * The card for whatever a stored id resolved to. A bot has no profile page, mail
- * or join date of its own, so it shows the bot acting for its owner instead.
+ * or join date of its own, so it shows the bot and the person it acts for.
  */
-function IdentityProfileContent({
+export function IdentityProfileContent({
 	identity,
 	isLoading,
 }: Readonly<{ identity: UserIdentity; isLoading?: boolean }>) {
-	const { t } = useTranslation("bots");
-	const bot = identity.bot;
+	if (identity.bot) return <BotIdentityCard identity={identity} />;
 
 	return (
 		<UserProfileHoverContent
@@ -196,16 +187,9 @@ function IdentityProfileContent({
 			subtitle={identity.subtitle}
 			avatarUrl={identity.avatarUrl}
 			initials={identity.initials}
-			avatar={
-				bot ? (
-					<ResolvedIdentityAvatar identity={identity} size={40} />
-				) : undefined
-			}
-			description={bot ? bot.description : identity.user?.description}
-			createdAt={bot ? undefined : identity.user?.created_at}
+			description={identity.user?.description}
+			createdAt={identity.user?.created_at}
 			email={identity.user?.email}
-			idLabel={bot ? t("identity.botId") : undefined}
-			showProfileLink={!bot}
 			isLoading={isLoading}
 		/>
 	);

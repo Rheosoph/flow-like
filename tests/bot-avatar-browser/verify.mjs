@@ -9,6 +9,7 @@ import puppeteer from "puppeteer";
 import sharp from "sharp";
 import { verifyColors } from "./color-checks.mjs";
 import { verifyEffects } from "./effects-checks.mjs";
+import { verifyEquipmentFits } from "./equipment-fit-checks.mjs";
 import { verifyClothingFits } from "./fit-checks.mjs";
 import { verifyGallery } from "./gallery-checks.mjs";
 import { verifyMoods } from "./moods-checks.mjs";
@@ -374,6 +375,7 @@ try {
 	await verifyEffects(page, { origin, output });
 	await verifyPixelRenderer(page, { origin });
 	await verifyClothingFits(page, { origin, output });
+	await verifyEquipmentFits(page, { origin, output });
 	await verifyColors(page, origin, output);
 	await verifyWardrobe(page, { origin, output });
 	assert.deepEqual(errors, []);

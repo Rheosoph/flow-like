@@ -23,7 +23,7 @@ def valid_metadata():
             "properties": [{"identifier": name, "valueType": text_type} for name in ("text", "json")],
         }},
     }
-    for name in ("AskFlowPilotIntent", "AskAppChatIntent"):
+    for name in ("AskFlowPilotIntent", "AskAppChatIntent", "AskFlowBotIntent"):
         metadata["actions"][name]["outputType"] = text_type
     metadata["actions"]["RunFlowEventIntent"]["outputType"] = {"entity": {"wrapper": {"typeName": "FlowEventResultEntity"}}}
     return metadata
@@ -72,6 +72,20 @@ class IntentMetadataTests(unittest.TestCase):
             del metadata["actions"]["AskFlowPilotIntent"]["outputType"]
             path.write_text(json.dumps(metadata))
             with self.assertRaisesRegex(ValueError, "must return Text: AskFlowPilotIntent"):
+                verifier.verify_metadata(path)
+
+    def test_bot_shortcuts_require_discovery_and_typed_answers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "extract.actionsdata"
+            metadata = valid_metadata()
+            metadata["actions"]["RunFlowBotTaskIntent"]["isDiscoverable"] = False
+            path.write_text(json.dumps(metadata))
+            with self.assertRaisesRegex(ValueError, "Intent cannot be discovered: RunFlowBotTaskIntent"):
+                verifier.verify_metadata(path)
+            metadata = valid_metadata()
+            del metadata["actions"]["AskFlowBotIntent"]["outputType"]
+            path.write_text(json.dumps(metadata))
+            with self.assertRaisesRegex(ValueError, "must return Text: AskFlowBotIntent"):
                 verifier.verify_metadata(path)
 
     def test_event_result_must_carry_both_properties_without_a_persistent_query(self):

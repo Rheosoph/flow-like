@@ -37,7 +37,7 @@ export function useDockSelection() {
 		}),
 		[params],
 	);
-	const urlKey = dockViewKey(fromUrl);
+	const urlKey = `${dockViewKey(fromUrl)}|${params.get("session") ?? ""}`;
 
 	const [view, setView] = useState<DockView>(fromUrl);
 	const [dockOpen, setDockOpen] = useState(true);
@@ -50,9 +50,10 @@ export function useDockSelection() {
 
 	const navigate = useCallback(
 		(query: string) =>
-			router.replace(query ? `${pathname}?${query}` : pathname, {
-				scroll: false,
-			}),
+			router.replace(
+				`${pathname}${query ? `?${query}` : ""}${window.location.hash}`,
+				{ scroll: false },
+			),
 		[pathname, router],
 	);
 

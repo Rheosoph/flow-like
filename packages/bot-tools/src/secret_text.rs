@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use flow_like_types::base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::Value;
 
 use crate::env::ToolEnv;
@@ -7,6 +8,19 @@ use crate::error::{ToolError, ToolResult};
 
 const OPEN: &str = "{{secret:";
 const CLOSE: &str = "}}";
+const MIN_ENCODED_BYTES: usize = 8;
+
+fn percent_encoded(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
 
 pub fn placeholder(name: &str) -> String {
     format!("{OPEN}{name}{CLOSE}")
@@ -53,11 +67,23 @@ impl Scrubber {
         scrubber
     }
 
+    /// Learns `value` and, when it is long enough not to match by chance, the URL-encoded and
+    /// base64 forms a program prints it in.
     pub fn add(&mut self, name: &str, value: String) {
-        if value.is_empty() || self.values.iter().any(|(known, _)| *known == value) {
+        if value.is_empty() {
             return;
         }
-        self.values.push((name.to_string(), value));
+        let mut forms = Vec::with_capacity(3);
+        if value.len() >= MIN_ENCODED_BYTES {
+            forms.push(percent_encoded(&value));
+            forms.push(STANDARD.encode(value.as_bytes()));
+        }
+        forms.push(value);
+        for form in forms {
+            if !self.values.iter().any(|(_, known)| *known == form) {
+                self.values.push((name.to_string(), form));
+            }
+        }
         self.values
             .sort_by_key(|(_, value)| std::cmp::Reverse(value.len()));
     }
@@ -113,7 +139,7 @@ pub async fn fill_secrets(
             .map_err(ToolError::from)?
             .ok_or_else(|| {
                 ToolError::not_found(format!(
-                    "The bot has no secret named '{name}'; the owner adds secrets in the bot's settings"
+                    "The bot has no secret named '{name}'; call secret_list for the stored names, or secret_request to ask the owner for it"
                 ))
             })?;
         filled = filled.replace(&placeholder(&name), &value);
@@ -144,6 +170,22 @@ mod tests {
             scrubber.scrub("pass-word and pass"),
             "{{secret:long}} and {{secret:short}}"
         );
+    }
+
+    #[test]
+    fn encoded_forms_of_a_long_secret_are_scrubbed_too() {
+        let mut scrubber = Scrubber::default();
+        scrubber.add("key", "s3cr3t/p@ss".into());
+        let encoded = percent_encoded("s3cr3t/p@ss");
+        let base64 = STANDARD.encode("s3cr3t/p@ss");
+        assert_eq!(encoded, "s3cr3t%2Fp%40ss");
+        assert_eq!(
+            scrubber.scrub(&format!("{encoded} {base64} s3cr3t/p@ss")),
+            "{{secret:key}} {{secret:key}} {{secret:key}}"
+        );
+        let mut short = Scrubber::default();
+        short.add("pin", "1234".into());
+        assert_eq!(short.scrub("MTIzNA== 1234"), "MTIzNA== {{secret:pin}}");
     }
 
     #[test]

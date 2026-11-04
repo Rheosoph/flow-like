@@ -11,6 +11,7 @@ import {
 	HomeSchedules,
 } from "./home-content/activity";
 import { HomeAppEmbed } from "./home-content/app-embed";
+import { HomeBotChat, HomeBotCrew, HomeBotMessages } from "./home-content/bots";
 import {
 	HomeAppCollection,
 	HomeCategories,
@@ -55,6 +56,12 @@ export function HomeWidgetContent(props: HomeContentProps) {
 			return <HomeWorkspacePulse {...props} />;
 		case "flowpilot":
 			return <HomeFlowPilot {...props} />;
+		case "bot-chat":
+			return <HomeBotChat {...props} />;
+		case "bot-crew":
+			return <HomeBotCrew {...props} />;
+		case "bot-messages":
+			return <HomeBotMessages {...props} />;
 		case "app-embed":
 			return <HomeAppEmbed {...props} />;
 		case "app-collection":

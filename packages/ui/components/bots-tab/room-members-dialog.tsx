@@ -16,6 +16,7 @@ import type {
 	IConversationMember,
 } from "../../state/backend-state/inbox-state";
 import { IdentityAvatar } from "../identity/identity-avatar";
+import { IdentityHoverCard } from "../identity/identity-hover-card";
 import { Button } from "../ui/button";
 import {
 	Dialog,
@@ -46,7 +47,9 @@ function PersonRow({
 }>) {
 	return (
 		<li className="flex items-center gap-3 py-1.5">
-			<IdentityAvatar subject={id} size={28} />
+			<IdentityHoverCard subject={id} className="shrink-0">
+				<IdentityAvatar subject={id} size={28} />
+			</IdentityHoverCard>
 			<span className="flex min-w-0 flex-1 flex-col">
 				<span className="truncate text-sm font-medium">
 					{directory(id).name}

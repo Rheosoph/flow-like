@@ -1,7 +1,7 @@
 "use client";
 import { useTranslation } from "@flow-like/locales";
 import { useDebounce } from "@uidotdev/usehooks";
-import { type Node, type NodeProps } from "@xyflow/react";
+import type { Node, NodeProps } from "@xyflow/react";
 import {
 	BanIcon,
 	CheckIcon,

@@ -24,6 +24,7 @@ fn card(turn_id: &str) -> ApprovalRequest {
         requester_id: None,
         requester_name: None,
         room: None,
+        secret: None,
     }
 }
 

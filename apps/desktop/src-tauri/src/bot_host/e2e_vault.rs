@@ -42,15 +42,15 @@ impl InboxKeyVault for KeychainVault {
 
 #[cfg(target_os = "android")]
 impl InboxKeyVault for KeychainVault {
-    fn load(&self, _: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
-        Err("Encrypted chats need a system keychain, which this device doesn't offer".into())
+    fn load(&self, owner: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
+        crate::android_mobile::secure_read(&format!("bot-inbox-key:v1:{owner}"))
     }
 
-    fn store(&self, _: &str, _: &[u8]) -> Result<(), String> {
-        self.load("").map(drop)
+    fn store(&self, owner: &str, secret: &[u8]) -> Result<(), String> {
+        crate::android_mobile::secure_write(&format!("bot-inbox-key:v1:{owner}"), secret)
     }
 
-    fn remove(&self, _: &str) -> Result<(), String> {
-        Ok(())
+    fn remove(&self, owner: &str) -> Result<(), String> {
+        crate::android_mobile::secure_delete(&format!("bot-inbox-key:v1:{owner}"))
     }
 }

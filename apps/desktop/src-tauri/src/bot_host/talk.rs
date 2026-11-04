@@ -3,21 +3,25 @@
 //! there and brings the answer back. A callee that is late or offline answers `pending`, and its
 //! answer wakes the asker later in its own conversation with the owner.
 
-use super::hub::{HubFailure, ProfileHub};
+use super::{
+    gate::ApprovalGate,
+    hub::{HubFailure, ProfileHub},
+};
 use async_trait::async_trait;
 use flow_like::flow::copilot::bot_talk::{
-    BotTalkHost, CrewMember, NestedBotTurn, PendingAnswer,
+    BotTalkHost, CrewMember, HeadlessPermission, NestedBotTurn, PendingAnswer,
 };
 use flow_like_types::anyhow;
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 
 pub(crate) struct AccountTalkHost {
     hub: ProfileHub,
     run_id: String,
+    gate: Option<Arc<ApprovalGate>>,
     callee: Mutex<Option<String>>,
     reply_id: Mutex<Option<String>>,
 }
@@ -59,12 +63,24 @@ struct Answer {
 }
 
 impl AccountTalkHost {
-    pub(crate) fn new(app: AppHandle, run_id: &str) -> Self {
+    pub(crate) fn new(app: AppHandle, run_id: &str, gate: Option<Arc<ApprovalGate>>) -> Self {
         Self {
             hub: ProfileHub::new(app),
             run_id: run_id.to_string(),
+            gate,
             callee: Mutex::default(),
             reply_id: Mutex::default(),
+        }
+    }
+
+    async fn settle_card_answer(
+        &self,
+        from: &CrewMember,
+        to: &CrewMember,
+    ) -> flow_like_types::Result<bool> {
+        match &self.gate {
+            Some(gate) => gate.settle_ask_card(to, self.store_grant(from, to)).await,
+            None => Ok(false),
         }
     }
 
@@ -109,10 +125,26 @@ impl BotTalkHost for AccountTalkHost {
         let permissions: Permissions = self
             .call(Method::GET, format!("bots/{}/permissions", from.id), None)
             .await?;
-        Ok(permissions
+        if permissions
             .granted
             .iter()
-            .any(|grant| grant.to_bot_id == to.id))
+            .any(|grant| grant.to_bot_id == to.id)
+        {
+            return Ok(true);
+        }
+        self.settle_card_answer(from, to).await
+    }
+
+    async fn headless_permission(
+        &self,
+        caller: &CrewMember,
+        callee: &CrewMember,
+        question: &str,
+    ) -> HeadlessPermission {
+        match &self.gate {
+            Some(gate) => gate.ask_bot(caller, callee, question).await,
+            None => HeadlessPermission::Unavailable,
+        }
     }
 
     async fn store_grant(&self, from: &CrewMember, to: &CrewMember) -> flow_like_types::Result<()> {
@@ -164,6 +196,7 @@ impl BotTalkHost for AccountTalkHost {
                     "callee_id": turn.callee.id,
                     "question": turn.question,
                     "run_id": self.run_id,
+                    "round": turn.round,
                 })),
             )
             .await?;

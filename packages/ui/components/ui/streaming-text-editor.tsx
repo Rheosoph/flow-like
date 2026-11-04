@@ -6,8 +6,8 @@ import { memo, useMemo, useRef } from "react";
 import { BaseEditorKit } from "../editor/editor-base-kit";
 import {
 	IsStreamingMarkdownContext,
-	RendererPresentationContext,
 	type RendererPresentation,
+	RendererPresentationContext,
 } from "../editor/renderer-presentation";
 import { normalizeStreamingEditorialImage } from "../editor/streaming-editorial-image";
 import { indexEditorPaths } from "./lazy-plate-static";

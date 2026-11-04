@@ -4,7 +4,7 @@ import type * as GeoJSON from "geojson";
 
 import { useTranslation } from "@flow-like/locales";
 import * as MapLibreGL from "maplibre-gl";
-import type { PopupOptions, MarkerOptions } from "maplibre-gl";
+import type { MarkerOptions, PopupOptions } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { Loader2, Locate, Maximize, Minus, Plus, X } from "lucide-react";
 import {
@@ -22,12 +22,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 
-import { observeResize } from "../../lib/observe-resize";
-import { configureMapLibreWorker } from "../../lib/maplibre-worker";
-import { DEFAULT_MAP_STYLES } from "../../lib/map-styles";
 import type { LocationFix } from "../../lib/location";
+import { DEFAULT_MAP_STYLES } from "../../lib/map-styles";
+import { configureMapLibreWorker } from "../../lib/maplibre-worker";
+import { observeResize } from "../../lib/observe-resize";
 import { cn } from "../../lib/utils";
-import { useMapLocation, type MapLocationError } from "./map-location";
+import { type MapLocationError, useMapLocation } from "./map-location";
 
 // Check document class for theme (works with next-themes, etc.)
 function getDocumentTheme(): Theme | null {

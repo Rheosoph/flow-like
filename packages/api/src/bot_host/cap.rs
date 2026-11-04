@@ -155,7 +155,7 @@ async fn requester_turns<C: ConnectionTrait>(
 
 /// The turns whose requester, when not the owner, has started fewer than
 /// [`REQUESTER_DAILY_TURNS`] on the bot in the last 24 hours. A refused turn isn't queued and
-/// the bot says so in the room. The owner's own messages never count.
+/// the bot says so in the room, except for a message it only reads along with or a reaction. The owner's own messages never count.
 pub(crate) async fn admit_requesters<'a, C: ConnectionTrait>(
     db: &C,
     waking: Vec<Waking<'a>>,
@@ -176,6 +176,9 @@ pub(crate) async fn admit_requesters<'a, C: ConnectionTrait>(
             requester_id = item.requester_id,
             "A requester hit the daily turn limit of a bot"
         );
+        if recipient.unprompted() {
+            continue;
+        }
         Box::pin(post_notice_in(
             db,
             &recipient.conversation_id,

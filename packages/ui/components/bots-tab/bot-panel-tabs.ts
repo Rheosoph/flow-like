@@ -36,6 +36,11 @@ export function hasBotWorkspace(bot: Pick<IBot, "system" | "local">): boolean {
 	return bot.system === null || (bot.system === "general" && !bot.local);
 }
 
+/** The tabs that show the bot's workspace; a bot with either has a workspace to open. */
+export function isWorkspaceTab(tab: BotPanelTab): boolean {
+	return tab === "files" || tab === "data";
+}
+
 export function subjectSystem({
 	botId,
 	bot,

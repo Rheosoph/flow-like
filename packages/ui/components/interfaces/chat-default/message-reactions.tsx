@@ -13,6 +13,7 @@ import {
 	PopoverContent,
 	PopoverTrigger,
 } from "../../ui/popover";
+import type { IReactionSummary } from "./chat-db";
 
 const COMMON_REACTIONS = [
 	"👍",
@@ -137,6 +138,7 @@ function ReactionBadge({
 	emoji,
 	selected,
 	fromWorkflow,
+	summary,
 	reactions,
 	onToggle,
 	onReplace,
@@ -145,6 +147,7 @@ function ReactionBadge({
 	emoji: string;
 	selected: boolean;
 	fromWorkflow: boolean;
+	summary?: IReactionSummary;
 	reactions?: readonly string[];
 	onToggle?: (emoji: string) => void;
 	onReplace?: (previousEmoji: string, emoji: string) => void;
@@ -182,9 +185,14 @@ function ReactionBadge({
 		if (mode.current === "hover")
 			closeTimer.current = setTimeout(() => setOpen(false), 200);
 	};
-	const attribution = fromWorkflow
-		? t("workflowReactedWith", "Workflow reacted with {{emoji}}", { emoji })
-		: undefined;
+	const attribution = summary
+		? t("reactedBy", "{{emoji}} from {{names}}", {
+				emoji,
+				names: summary.names.join(", "),
+			})
+		: fromWorkflow
+			? t("workflowReactedWith", "Workflow reacted with {{emoji}}", { emoji })
+			: undefined;
 	const hint =
 		canChange && selected
 			? t(
@@ -204,7 +212,11 @@ function ReactionBadge({
 				<button
 					ref={button}
 					type="button"
-					aria-label={t("toggleReaction", "React with {{emoji}}", { emoji })}
+					aria-label={
+						summary
+							? attribution
+							: t("toggleReaction", "React with {{emoji}}", { emoji })
+					}
 					aria-pressed={selected}
 					aria-describedby={attribution || hint ? descriptionId : undefined}
 					aria-haspopup={canChange ? "dialog" : undefined}
@@ -237,9 +249,17 @@ function ReactionBadge({
 							setOpen(true);
 						}
 					}}
-					className="relative inline-flex size-8 shrink-0 items-center justify-center rounded-full border border-border bg-popover text-lg hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-pressed:border-primary/25 disabled:cursor-default disabled:opacity-60"
+					className={cn(
+						"relative inline-flex h-8 shrink-0 items-center justify-center rounded-full border border-border bg-popover text-lg hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring aria-pressed:border-primary/25 disabled:cursor-default disabled:opacity-60",
+						summary ? "min-w-8 gap-1 px-2" : "w-8",
+					)}
 				>
 					{emoji}
+					{summary && (
+						<span aria-hidden="true" className="text-xs text-muted-foreground">
+							{summary.count}
+						</span>
+					)}
 					{fromWorkflow && (
 						<span className="absolute -bottom-0.5 -right-0.5 rounded-full border border-border bg-popover p-0.5">
 							<BotIcon
@@ -293,6 +313,7 @@ function ReactionBadge({
 export function MessageReactions({
 	reactions,
 	workflowReactions,
+	summaries,
 	onToggle,
 	onReplace,
 	disabled,
@@ -300,13 +321,18 @@ export function MessageReactions({
 	className,
 }: ReactionProps & {
 	workflowReactions?: readonly string[];
+	summaries?: Record<string, IReactionSummary>;
 	onReplace?: (previousEmoji: string, emoji: string) => void;
 	alignEnd?: boolean;
 	className?: string;
 }) {
 	const { t } = useTranslation("chat");
 	const displayed = [
-		...new Set([...(reactions ?? []), ...(workflowReactions ?? [])]),
+		...new Set([
+			...(reactions ?? []),
+			...(workflowReactions ?? []),
+			...Object.keys(summaries ?? {}),
+		]),
 	];
 	if (!displayed.length) return null;
 	return (
@@ -324,6 +350,7 @@ export function MessageReactions({
 					emoji={emoji}
 					selected={reactions?.includes(emoji) ?? false}
 					fromWorkflow={workflowReactions?.includes(emoji) ?? false}
+					summary={summaries?.[emoji]}
 					reactions={reactions}
 					onToggle={onToggle}
 					onReplace={onReplace}

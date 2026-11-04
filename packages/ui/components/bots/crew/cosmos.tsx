@@ -5,6 +5,7 @@ import { BotMotion } from "./motion";
 export const cosmosShapes: readonly BotShapeDefinition[] = [
 	crewShape({
 		id: "orbi",
+		backgroundDetailColors: ["accent"],
 		label: "Orbi",
 		series: "cosmos",
 		description:
@@ -60,6 +61,7 @@ export const cosmosShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "sol",
+		faceColor: "accent",
 		label: "Sol",
 		series: "cosmos",
 		description: "A sunny face with slowly turning rays.",
@@ -85,6 +87,7 @@ export const cosmosShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "stella",
+		backgroundDetailColors: ["accent"],
 		label: "Stella",
 		series: "cosmos",
 		description: "A golden star with a few quiet sparkles.",
@@ -167,6 +170,7 @@ export const cosmosShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "astro",
+		faceColor: "clothing",
 		label: "Astro",
 		series: "cosmos",
 		description: "A tiny astronaut behind a dark visor.",

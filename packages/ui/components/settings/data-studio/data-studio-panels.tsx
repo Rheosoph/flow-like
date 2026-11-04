@@ -209,7 +209,7 @@ function EmptyStudioState({
 }>) {
 	const { t } = useTranslation("settings");
 	return (
-		<div className="flex min-h-72 flex-col items-center justify-center rounded-xl border border-dashed bg-muted/20 p-8 text-center">
+		<div className="flex min-h-72 flex-col items-center justify-center rounded-xl border border-dashed bg-muted/20 p-4 text-center @xl/ds:p-8">
 			<div className="mb-4 rounded-2xl bg-primary/10 p-3 text-primary">
 				<Layers3 className="h-6 w-6" />
 			</div>
@@ -252,7 +252,7 @@ export function DataStudioOverview({
 
 	return (
 		<div className="space-y-6">
-			<div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+			<div className="grid grid-cols-2 gap-3 @4xl/ds:grid-cols-5">
 				{[
 					{
 						label: t("ontologies", "Ontologies"),
@@ -272,8 +272,8 @@ export function DataStudioOverview({
 					{ label: t("shared", "Shared"), value: exposedCount, icon: Share2 },
 					{ label: t("remote", "Remote"), value: remoteCount, icon: Cloud },
 				].map(({ label, value, icon: Icon }) => (
-					<Card key={label}>
-						<CardContent className="flex items-center justify-between p-4">
+					<Card key={label} className="py-3 @xl/ds:py-6">
+						<CardContent className="flex items-center justify-between gap-2 p-3 @xl/ds:p-4">
 							<div>
 								<p className="text-xs font-medium text-muted-foreground">
 									{label}
@@ -288,7 +288,7 @@ export function DataStudioOverview({
 				))}
 			</div>
 
-			<div className="grid gap-5 xl:grid-cols-[1.4fr_1fr]">
+			<div className="grid grid-cols-1 gap-5 @4xl/ds:grid-cols-[1.4fr_1fr]">
 				<Card>
 					<CardHeader className="flex-row items-center justify-between space-y-0 pb-3">
 						<div>
@@ -310,7 +310,7 @@ export function DataStudioOverview({
 					</CardHeader>
 					<CardContent>
 						{ontologies.length === 0 ? (
-							<div className="rounded-xl border border-dashed p-8 text-center">
+							<div className="rounded-xl border border-dashed p-4 text-center @xl/ds:p-8">
 								<p className="text-sm font-medium">
 									{t(
 										"modelYourFirstBusinessObject",
@@ -816,8 +816,8 @@ export function ObjectExplorerPanel({
 	}
 
 	return (
-		<div className="grid h-full min-h-0 grid-cols-1 overflow-hidden rounded-xl border lg:grid-cols-[260px_minmax(0,1fr)]">
-			<aside className="min-h-0 border-b bg-muted/20 lg:border-r lg:border-b-0">
+		<div className="grid h-full min-h-0 grid-cols-1 grid-rows-[auto_minmax(0,1fr)] overflow-hidden rounded-xl border @3xl/ds:grid-cols-[260px_minmax(0,1fr)]">
+			<aside className="min-h-0 border-b bg-muted/20 @3xl/ds:border-r @3xl/ds:border-b-0">
 				<div className="border-b p-3">
 					<Select
 						value={source?.value}
@@ -827,7 +827,7 @@ export function ObjectExplorerPanel({
 						}}
 					>
 						<SelectTrigger
-							className="bg-background"
+							className="w-full min-w-0 bg-background"
 							aria-label={t("selectOntology", "Select ontology")}
 						>
 							<SelectValue />
@@ -848,7 +848,7 @@ export function ObjectExplorerPanel({
 						</SelectContent>
 					</Select>
 				</div>
-				<ScrollArea className="h-[180px] lg:h-[calc(100%-61px)]">
+				<ScrollArea className="h-[180px] @3xl/ds:h-[calc(100%-61px)]">
 					<div className="space-y-1 p-2">
 						<p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
 							{t("objectTypes", "Object types")}
@@ -873,9 +873,9 @@ export function ObjectExplorerPanel({
 			</aside>
 
 			<section className="flex min-h-0 min-w-0 flex-col">
-				<header className="flex flex-col gap-3 border-b p-4 sm:flex-row sm:items-center sm:justify-between">
-					<div>
-						<div className="flex items-center gap-2">
+				<header className="flex flex-col gap-3 border-b p-4 @xl/ds:flex-row @xl/ds:items-center @xl/ds:justify-between">
+					<div className="min-w-0">
+						<div className="flex flex-wrap items-center gap-2">
 							<h2 className="font-semibold">{objectType?.label}</h2>
 							<Badge variant="outline">
 								{t("lengthPreview", "{{length}} preview", {
@@ -902,7 +902,7 @@ export function ObjectExplorerPanel({
 						</p>
 					</div>
 					<div className="flex items-center gap-2">
-						<div className="relative min-w-56">
+						<div className="relative min-w-0 flex-1 @xl/ds:min-w-56 @xl/ds:flex-none">
 							<Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
 							<Input
 								value={query}
@@ -2818,13 +2818,13 @@ function RelationshipRow({
 			? "duplicate"
 			: undefined;
 	const summary = (
-		<div className="flex items-center gap-2 text-sm">
+		<div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
 			<Badge variant="outline">{edge.src_label}</Badge>
 			<ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
 			<span className="font-medium">{humanizeIdentifier(edge.label)}</span>
 			<ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />
 			<Badge variant="outline">{edge.dst_label}</Badge>
-			<code className="ml-auto hidden text-[10px] text-muted-foreground sm:block">{`${edge.table}.${edge.src_column} → ${edge.table}.${edge.dst_column}`}</code>
+			<code className="ml-auto hidden text-[10px] text-muted-foreground @2xl/ds:block">{`${edge.table}.${edge.src_column} → ${edge.table}.${edge.dst_column}`}</code>
 		</div>
 	);
 
@@ -2911,7 +2911,7 @@ function RelationshipRow({
 					</p>
 				)}
 			</div>
-			<div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+			<div className="flex flex-col gap-2 @xl/ds:flex-row @xl/ds:items-center @xl/ds:justify-between">
 				<div className="flex items-center gap-2">
 					<Switch
 						id={`edge-containment-${rowId}`}
@@ -2947,7 +2947,7 @@ function RelationshipRow({
 						onValueChange={(value) => onChange(index, decodeEdgeTarget(value))}
 					>
 						<SelectTrigger
-							className="h-8 w-full text-xs sm:w-64"
+							className="h-8 w-full text-xs @xl/ds:w-64"
 							aria-label={t("childObjectLocation", "Child object location")}
 						>
 							<SelectValue placeholder={t("childLocation", "Child location")} />
@@ -3242,7 +3242,7 @@ export function OntologyModelPanel({
 			/>
 		);
 	return (
-		<div className="grid gap-5 xl:grid-cols-[320px_minmax(0,1fr)]">
+		<div className="grid grid-cols-1 gap-5 @4xl/ds:grid-cols-[320px_minmax(0,1fr)]">
 			<div className="space-y-3">
 				<div className="flex items-center justify-between">
 					<div>
@@ -3298,8 +3298,8 @@ export function OntologyModelPanel({
 				))}
 			</div>
 			{selected && (
-				<div className="space-y-5 rounded-xl border p-5">
-					<div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+				<div className="min-w-0 space-y-5 rounded-xl border p-3 @xl/ds:p-5">
+					<div className="flex flex-col gap-3 @xl/ds:flex-row @xl/ds:items-start @xl/ds:justify-between">
 						<div>
 							<div className="flex items-center gap-2">
 								<h2 className="text-lg font-semibold">{selected.name}</h2>
@@ -3345,20 +3345,28 @@ export function OntologyModelPanel({
 										)}
 							</p>
 						</div>
-						<OntologySchemaGraph
-							key={selected.id}
-							title={selected.name}
-							nodes={selected.nodes}
-							edges={edgesDraft}
-							externalTargets={externalTargets}
-							onSelectObject={revealObject}
-							onSelectRelationship={revealRelationship}
-							onConnect={
-								onSaveEdges && endpoints.length > 0
-									? linkFromDiagram
-									: undefined
-							}
-						/>
+						<p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground @xl/ds:hidden">
+							{t(
+								"schemaDiagramNeedsWiderView",
+								"The schema diagram needs a wider view. Open the full view to see and edit it.",
+							)}
+						</p>
+						<div className="hidden @xl/ds:block">
+							<OntologySchemaGraph
+								key={selected.id}
+								title={selected.name}
+								nodes={selected.nodes}
+								edges={edgesDraft}
+								externalTargets={externalTargets}
+								onSelectObject={revealObject}
+								onSelectRelationship={revealRelationship}
+								onConnect={
+									onSaveEdges && endpoints.length > 0
+										? linkFromDiagram
+										: undefined
+								}
+							/>
+						</div>
 					</div>
 					<div>
 						<div className="mb-3 flex items-center justify-between">
@@ -3375,7 +3383,7 @@ export function OntologyModelPanel({
 							</div>
 							<Badge variant="secondary">{selected.nodes.length}</Badge>
 						</div>
-						<div className="grid gap-3 md:grid-cols-2">
+						<div className="grid grid-cols-1 gap-3 @2xl/ds:grid-cols-2">
 							{selected.nodes.map((object, objectIndex) => (
 								<div
 									key={objectKey(object)}
@@ -3855,7 +3863,7 @@ export function OntologyActionsPanel({
 		);
 	return (
 		<div className="space-y-5">
-			<div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+			<div className="flex flex-col gap-3 @xl/ds:flex-row @xl/ds:items-center @xl/ds:justify-between">
 				<div>
 					<h3 className="font-semibold">
 						{t("ontologyActions", "Ontology actions")}
@@ -3893,7 +3901,7 @@ export function OntologyActionsPanel({
 							{repairError}
 						</p>
 					)}
-					<div className="grid gap-3 lg:grid-cols-2">
+					<div className="grid grid-cols-1 gap-3 @3xl/ds:grid-cols-2">
 						{allActions.map(({ action, ontology: owner }) => (
 							<Card key={`${owner.id}:${action.id}`}>
 								<CardContent className="p-4">
@@ -4087,7 +4095,7 @@ export function OntologyActionsPanel({
 								)}
 							/>
 						</div>
-						<div className="grid gap-3 sm:grid-cols-2">
+						<div className="grid grid-cols-1 gap-3 @xl/ds:grid-cols-2">
 							<div className="grid gap-1.5">
 								<Label>{t("board2", "Board")}</Label>
 								<Select
@@ -4238,7 +4246,7 @@ export function OntologyActionsPanel({
 							</p>
 						)}
 					</div>
-					<div className="grid gap-2 sm:grid-cols-2">
+					<div className="grid grid-cols-1 gap-2 @xl/ds:grid-cols-2">
 						<div className="flex items-center justify-between gap-3 rounded-lg border p-3">
 							<div>
 								<Label htmlFor="ontology-action-enabled">
@@ -4536,7 +4544,7 @@ export function OntologySharingPanel({
 		[onInstallRemoteOntology, onUninstallRemoteOntology, t],
 	);
 	return (
-		<div className="grid gap-5 xl:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
+		<div className="grid grid-cols-1 gap-5 @4xl/ds:grid-cols-[minmax(0,1.4fr)_minmax(320px,0.8fr)]">
 			<div className="space-y-3">
 				<div>
 					<h3 className="font-semibold">
@@ -4563,11 +4571,11 @@ export function OntologySharingPanel({
 					<Card key={ontology.id}>
 						<CardContent className="space-y-4 p-4">
 							<div className="flex items-start justify-between gap-3">
-								<div className="flex gap-3">
-									<div className="rounded-lg bg-primary/10 p-2 text-primary">
+								<div className="flex min-w-0 gap-3">
+									<div className="h-fit shrink-0 rounded-lg bg-primary/10 p-2 text-primary">
 										<Share2 className="h-4 w-4" />
 									</div>
-									<div>
+									<div className="min-w-0">
 										<p className="font-medium">{ontology.name}</p>
 										<p className="text-xs text-muted-foreground">
 											{t(

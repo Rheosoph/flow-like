@@ -139,7 +139,8 @@ async fn fire_in(
     }
 }
 
-/// Fires `task` if it is due and nobody else did; `true` when this call fired it.
+/// Fires `task` if it is due and nobody else did; `true` when this call fired it. A one-time
+/// task's schedule goes with its run, so no scheduler calls for it again.
 pub(crate) async fn fire(state: &AppState, task: &bot_task::Model) -> Result<bool, ApiError> {
     let now = now_millis();
     let fired = state
@@ -148,6 +149,9 @@ pub(crate) async fn fire(state: &AppState, task: &bot_task::Model) -> Result<boo
             Box::pin(async move { fire_in(txn, &task, now).await })
         })
         .await?;
+    if !matches!(fired, Fired::Lost) && TaskKind::parse(&task.kind) == Some(TaskKind::Once) {
+        super::task_schedules::remove(state, &task.id).await;
+    }
     match fired {
         Fired::Lost => Ok(false),
         Fired::Skipped => {

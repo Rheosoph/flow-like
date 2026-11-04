@@ -7,6 +7,7 @@ import {
 	useUserIdentity,
 } from "../../hooks/use-user-lookup";
 import { cn } from "../../lib/utils";
+import { botFrameRadius } from "../bots/appearance";
 import { BotAvatar } from "../bots/bot-avatar";
 import { Skeleton } from "../ui/skeleton";
 import { UserAvatar } from "../ui/user-avatar";
@@ -137,7 +138,11 @@ function BotIdentityAvatar({
 				bot.deleted && "opacity-60 grayscale",
 				className,
 			)}
-			style={{ width: size, height: size }}
+			style={{
+				width: size,
+				height: size,
+				borderRadius: `${botFrameRadius(bot.appearance.frame)}%`,
+			}}
 		>
 			<BotAvatar
 				appearance={bot.appearance}

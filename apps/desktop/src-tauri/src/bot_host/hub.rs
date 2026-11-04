@@ -4,13 +4,18 @@
 use super::runner::identity;
 use async_trait::async_trait;
 use chrono::{DateTime, FixedOffset};
-use flow_like_local_bots::InboxEntry;
 use flow_like::flow::copilot::tool_grants::{GrantKey, GrantStore};
-use flow_like_types::{bot_message::ApprovalRequest, bot_turn::BotTurn, inbox::InboxEntryKind};
-use std::sync::Arc;
+use flow_like_local_bots::InboxEntry;
+use flow_like_types::{
+    bot::{BotCapability, BotLocation},
+    bot_message::ApprovalRequest,
+    bot_turn::BotTurn,
+    inbox::InboxEntryKind,
+};
 use reqwest::Method;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::Duration;
 use tauri::AppHandle;
 
@@ -98,6 +103,12 @@ pub trait TurnHub: Send + Sync + 'static {
     ) -> Result<(), HubFailure>;
     /// The ids of the signed-in account's bots that run on a desktop, at most [`MAX_HOST_BOTS`].
     async fn desktop_bots(&self) -> Result<Vec<String>, HubFailure>;
+    /// What this host reports to the hub: [`Self::desktop_bots`] plus the server bots that hand
+    /// their turns to the owner's desktop while one is online (Flux). Their tasks stay the
+    /// server's, so only the report lists them.
+    async fn reported_bots(&self) -> Result<Vec<String>, HubFailure> {
+        self.desktop_bots().await
+    }
     /// Reports the bots this host runs; answers the ids the hub refused.
     async fn report_host(
         &self,
@@ -125,7 +136,12 @@ pub trait TurnHub: Send + Sync + 'static {
     async fn tool_keys(&self, _bot_id: &str) -> Result<Vec<(String, String)>, HubFailure> {
         Ok(Vec::new())
     }
-    async fn put_tool_key(&self, _bot_id: &str, _tool: &str, _scope: &str) -> Result<(), HubFailure> {
+    async fn put_tool_key(
+        &self,
+        _bot_id: &str,
+        _tool: &str,
+        _scope: &str,
+    ) -> Result<(), HubFailure> {
         Err(HubFailure::offline("This hub keeps no tool grants"))
     }
     async fn delete_tool_key(
@@ -144,6 +160,10 @@ pub trait TurnHub: Send + Sync + 'static {
         _card: &ApprovalRequest,
     ) -> Result<(), HubFailure> {
         Err(HubFailure::offline("This hub cannot park turns"))
+    }
+    /// Ends the turn this host holds `done` without a reply: the bot read along and stayed silent.
+    async fn silent(&self, _turn_id: &str, _host_id: &str) -> Result<(), HubFailure> {
+        Err(HubFailure::offline("This hub cannot end turns silently"))
     }
     /// For a turn a late answer woke: the question and the answer. `None` for any other turn.
     async fn ask_result(
@@ -235,10 +255,27 @@ pub fn entries_of(value: Value) -> Result<Vec<InboxEntry>, HubFailure> {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AskResult {
     pub origin_conversation: String,
+    #[serde(default)]
+    pub callee_id: String,
     pub callee_name: String,
     pub question: String,
     pub answer: String,
     pub failed: bool,
+    /// The question's round; 0 from a hub that predates rounds.
+    #[serde(default)]
+    pub round: u32,
+}
+
+impl AskResult {
+    /// The count the woken turn goes on from; `None` without a callee or round.
+    pub fn answered_round(&self) -> Option<flow_like::flow::copilot::bot_talk::AnsweredRound> {
+        (self.round > 0 && !self.callee_id.is_empty()).then(|| {
+            flow_like::flow::copilot::bot_talk::AnsweredRound {
+                callee_id: self.callee_id.clone(),
+                round: self.round,
+            }
+        })
+    }
 }
 
 pub struct ProfileHub {
@@ -262,10 +299,12 @@ impl ProfileHub {
         }
     }
 
-    /// Asks the hub to notify the account's owner as `bot_id`; it groups, mutes and limits.
-    pub(crate) async fn notify_owner(
+    /// Asks the hub to write a message from `bot_id` into the account owner's chat with it; it
+    /// posts, groups, mutes and limits.
+    pub(crate) async fn message_owner(
         &self,
         bot_id: &str,
+        conversation_id: Option<&str>,
         notice: &flow_like_bot_tools::OwnerNotice,
     ) -> Result<flow_like_bot_tools::NoticeReceipt, HubFailure> {
         let answer = self
@@ -273,12 +312,18 @@ impl ProfileHub {
                 Method::POST,
                 &format!("bots/{bot_id}/notify"),
                 &[],
-                Some(json!({ "title": notice.title, "body": notice.body, "link": notice.link })),
+                Some(json!({
+                    "text": notice.text,
+                    "title": notice.title,
+                    "conversation_id": conversation_id,
+                })),
             )
             .await?;
         Ok(flow_like_bot_tools::NoticeReceipt {
             id: answer["id"].as_str().unwrap_or_default().to_owned(),
             muted: answer["muted"].as_bool().unwrap_or(false),
+            posted: answer["posted"].as_bool().unwrap_or(false),
+            in_owner_chat: answer["in_owner_chat"].as_bool().unwrap_or(false),
         })
     }
 
@@ -343,6 +388,38 @@ impl ProfileHub {
         }
         Err(HubFailure::offline("the hub refused the session"))
     }
+
+    /// The ids of the signed-in account's bots whose location and capabilities `keep` accepts, at
+    /// most [`MAX_HOST_BOTS`].
+    async fn bots_where(
+        &self,
+        keep: impl Fn(BotLocation, &[BotCapability]) -> bool,
+    ) -> Result<Vec<String>, HubFailure> {
+        let list = self.call(Method::GET, "bots", &[], None).await?;
+        Ok(list
+            .get("bots")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|bot| {
+                let capabilities: Vec<BotCapability> = bot
+                    .get("capabilities")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .filter_map(BotCapability::parse)
+                    .collect();
+                bot.get("location")
+                    .and_then(Value::as_str)
+                    .and_then(BotLocation::parse)
+                    .is_some_and(|location| keep(location, &capabilities))
+            })
+            .filter_map(|bot| bot.get("id").and_then(Value::as_str))
+            .take(MAX_HOST_BOTS)
+            .map(str::to_owned)
+            .collect())
+    }
 }
 
 fn answer(status: u16, body: &[u8]) -> Result<Value, HubFailure> {
@@ -399,7 +476,9 @@ impl TurnHub for ProfileHub {
         minted["token"]
             .as_str()
             .map(|token| Some(token.to_owned()))
-            .ok_or_else(|| HubFailure::offline("the hub's runtime token is not in the expected shape"))
+            .ok_or_else(|| {
+                HubFailure::offline("the hub's runtime token is not in the expected shape")
+            })
     }
 
     async fn list(&self) -> Result<Vec<BotTurn>, HubFailure> {
@@ -483,17 +562,15 @@ impl TurnHub for ProfileHub {
     }
 
     async fn desktop_bots(&self) -> Result<Vec<String>, HubFailure> {
-        let list = self.call(Method::GET, "bots", &[], None).await?;
-        Ok(list
-            .get("bots")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter(|bot| bot.get("location").and_then(Value::as_str) == Some("desktop"))
-            .filter_map(|bot| bot.get("id").and_then(Value::as_str))
-            .take(MAX_HOST_BOTS)
-            .map(str::to_owned)
-            .collect())
+        self.bots_where(|location, _| location == BotLocation::Desktop)
+            .await
+    }
+
+    async fn reported_bots(&self) -> Result<Vec<String>, HubFailure> {
+        self.bots_where(|location, capabilities| {
+            location == BotLocation::Desktop || location.hands_off_to_desktop(capabilities)
+        })
+        .await
     }
 
     async fn report_host(
@@ -597,6 +674,17 @@ impl TurnHub for ProfileHub {
             Err(failure) if failure.status == Some(404) => Ok(None),
             Err(failure) => Err(failure),
         }
+    }
+
+    async fn silent(&self, turn_id: &str, host_id: &str) -> Result<(), HubFailure> {
+        self.call(
+            Method::POST,
+            &format!("bots/turns/{turn_id}/silent"),
+            &[],
+            Some(json!({ "host_id": host_id })),
+        )
+        .await
+        .map(drop)
     }
 
     async fn park(

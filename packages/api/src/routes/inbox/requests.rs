@@ -225,7 +225,10 @@ pub(crate) async fn deliver_held_in<C: ConnectionTrait>(
             sender_id: &latest.sender_id,
             mentions: &[],
             replied_sender: None,
+            reading_along: &HashSet::new(),
+            reacted_bot: None,
             hops: 0,
+            replied_hops: None,
             interactive: false,
         },
     );

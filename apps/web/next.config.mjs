@@ -40,6 +40,7 @@ const nextConfig = {
 	poweredByHeader: false,
 	output: "export",
 	env: {
+		NEXT_PUBLIC_BOT_EMOTION_BUNDLED_WASM: "true",
 		NEXT_PUBLIC_EXCALIDRAW_ASSET_PATH: prepareExcalidrawAssets(
 			new URL("./public/", import.meta.url),
 		),
@@ -57,6 +58,12 @@ const nextConfig = {
 		unoptimized: true,
 	},
 	transpilePackages: ["@flow-like/flow-like-ui", "@flow-like/locales"],
+	turbopack: {
+		resolveAlias: {
+			// Emotion inference uses CPU. Its WASM fits Pages' 25 MiB asset limit.
+			"onnxruntime-web/webgpu": { browser: "onnxruntime-web/wasm" },
+		},
+	},
 	// Share one server-side Yjs instance across route bundles and dev recompiles.
 	serverExternalPackages: ["yjs"],
 	experimental: {
@@ -65,7 +72,13 @@ const nextConfig = {
 		preloadEntriesOnStart: false,
 		turbopackFileSystemCacheForDev: true,
 	},
-	webpack: (config) => {
+	webpack: (config, { isServer }) => {
+		if (!isServer) {
+			config.resolve.alias = {
+				...config.resolve.alias,
+				"onnxruntime-web/webgpu$": "onnxruntime-web/wasm",
+			};
+		}
 		config.resolve.fallback = {
 			...config.resolve.fallback,
 			fs: false,

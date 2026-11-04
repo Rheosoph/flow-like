@@ -203,6 +203,47 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     ALTER TABLE conversation_members ADD COLUMN invited_by TEXT;
     ALTER TABLE conversation_members ADD COLUMN invited_at INTEGER;
     ALTER TABLE conversation_members ADD COLUMN accepted_at INTEGER;",
+    // Files a member put into a conversation; the bytes live in the `conversation_files` directory
+    // next to this file, named by id.
+    "CREATE TABLE conversation_files (
+        id TEXT PRIMARY KEY NOT NULL,
+        conversation_id TEXT NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+        uploader_id TEXT NOT NULL,
+        name TEXT NOT NULL,
+        mime TEXT NOT NULL,
+        bytes INTEGER NOT NULL,
+        sha256 TEXT NOT NULL,
+        message_id TEXT,
+        created_at INTEGER NOT NULL
+    );
+    CREATE INDEX conversation_files_message ON conversation_files (conversation_id, message_id);",
+    // The person's pinned conversations, the messages pinned in a conversation and the messages
+    // they starred. Times are epoch micros like every other column.
+    "CREATE TABLE pinned_conversations (
+        conversation_id TEXT PRIMARY KEY NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+        pinned_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE TABLE pinned_messages (
+        conversation_id TEXT NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+        message_id TEXT NOT NULL,
+        pinned_by TEXT NOT NULL,
+        pinned_at INTEGER NOT NULL,
+        PRIMARY KEY (conversation_id, message_id)
+    ) STRICT;
+    CREATE INDEX pinned_messages_position ON pinned_messages (conversation_id, pinned_at, message_id);
+    CREATE TABLE starred_messages (
+        message_id TEXT PRIMARY KEY NOT NULL,
+        conversation_id TEXT NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+        starred_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX starred_messages_position ON starred_messages (starred_at, message_id);
+    CREATE INDEX starred_messages_conversation ON starred_messages (conversation_id, starred_at, message_id);",
+    // The speech-to-text, text-to-speech, image generation and vision bits a bot pins; null lets
+    // the host choose.
+    "ALTER TABLE bots ADD COLUMN stt_model TEXT;
+    ALTER TABLE bots ADD COLUMN tts_model TEXT;
+    ALTER TABLE bots ADD COLUMN image_model TEXT;
+    ALTER TABLE bots ADD COLUMN vision_model TEXT;",
 ];
 
 pub(crate) fn open(path: &Path) -> Result<Connection> {

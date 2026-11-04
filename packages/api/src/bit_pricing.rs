@@ -71,6 +71,17 @@ pub(crate) fn validate_bit_pricing(bit: &Bit) -> Result<(), ApiError> {
             crate::routes::images::catalog_provider(bit)?;
             hosted_image_rate(bit)?;
         }
+        BitTypes::Stt | BitTypes::Tts
+            if bit
+                .parameters
+                .pointer("/provider/provider_name")
+                .and_then(|value| value.as_str())
+                .is_some_and(
+                    flow_like::flow_like_model_provider::provider::is_hosted_provider_name,
+                ) =>
+        {
+            crate::routes::audio::catalog_provider(bit)?;
+        }
         _ => {}
     }
     Ok(())

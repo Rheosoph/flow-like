@@ -5,8 +5,8 @@ import { PageBuilderSurface } from "../../../builder/page-builder-surface";
 import { WidgetBuilderSurface } from "../../../builder/widget-builder-surface";
 import { TableInspector } from "../../../settings/explore/table-inspector";
 import type { IEditorDocument, IEditorTab } from "../editor-documents";
-import { AppStylesDocument } from "./styles-document";
 import { StorageDocument } from "./storage-document";
+import { AppStylesDocument } from "./styles-document";
 
 /**
  * The editor area for anything that is not the graph.

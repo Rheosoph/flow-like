@@ -37,6 +37,7 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
         FlowLikeMLXRuntime.prepareForAppLifecycle()
         FlowLikeNativeRuntime.prepareForAppLifecycle()
         MainActor.assumeIsolated {
+            NativeBotBackgroundRefresh.install()
             NativeSystemIntegration.refreshAppShortcuts = {
                 FlowLikeShortcuts.updateAppShortcutParameters()
             }
@@ -54,6 +55,7 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
 
     @MainActor private static func install() {
         installNotificationDelegate()
+        NativeBotNotifications.registerCategories()
         callPlugin("configureFirebaseAppIfAvailable")
     }
 
@@ -110,6 +112,12 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
                     AnyObject, UIApplication, NSDictionary,
                     @escaping (UIBackgroundFetchResult) -> Void
                 ) -> Void = { _, _, userInfo, handler in
+                    if userInfo["bot_id"] != nil {
+                        MainActor.assumeIsolated {
+                            NativeBotBackgroundRefresh.performFetch(userInfo: userInfo as? [AnyHashable: Any] ?? [:], completion: handler)
+                        }
+                        return
+                    }
                     callPlugin(
                         "applicationDidReceiveRemoteNotificationWithUserInfo:",
                         with: userInfo)
@@ -180,6 +188,10 @@ final class PushNotificationBridge: NSObject, UNUserNotificationCenterDelegate, 
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping @Sendable () -> Void
     ) {
+        if NativeBotNotifications.handleResponse(response) {
+            completionHandler()
+            return
+        }
         guard response.notification.request.trigger is UNPushNotificationTrigger else {
             if let previous = localNotificationDelegate,
                previous.responds(to: #selector(UNUserNotificationCenterDelegate.userNotificationCenter(_:didReceive:withCompletionHandler:))) {

@@ -1,7 +1,11 @@
 import type {
 	IBotRoomLimits,
 	IConversation,
+	IConversationFileDownload,
+	IConversationFileReady,
+	IConversationPinState,
 	IConversationSegmentList,
+	IConversationTurn,
 	ICreateConversationRequest,
 	IInboxEntriesPage,
 	IInboxEntriesQuery,
@@ -15,9 +19,19 @@ import type {
 	IInvitation,
 	IInviteRequest,
 	IInviteResponse,
+	IPinnedMessage,
+	IRealtimeAccess,
 	IRegisterInboxKeyRequest,
 	ISendInboxEntryRequest,
+	IStarredMessage,
+	IStarredMessagesPage,
+	IStarredMessagesQuery,
 } from "@flow-like/flow-like-ui";
+import {
+	conversationFileId,
+	conversationFileTooLarge,
+	putSignedFile,
+} from "@flow-like/flow-like-ui/lib/conversation-files";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { inboxPositionParams } from "@flow-like/flow-like-ui/state/backend-state/inbox-state";
 import {
@@ -223,6 +237,48 @@ export class WebInboxState implements IInboxState {
 		);
 	}
 
+	async uploadConversationFile(
+		conversationId: string,
+		file: File,
+	): Promise<IConversationFileReady> {
+		const tooLarge = conversationFileTooLarge(file);
+		if (tooLarge) throw new Error(tooLarge);
+		const upload = expectRecord<{ file_id: string; upload_url: string }>(
+			await apiPost(
+				`${conversationPath(conversationId)}/files`,
+				{ name: file.name, mime: file.type || undefined, bytes: file.size },
+				this.backend.auth,
+			),
+			`start the upload of ${file.name} to conversation ${conversationId}`,
+		);
+		await putSignedFile(upload.upload_url, file);
+		return expectRecord<IConversationFileReady>(
+			await apiPost(
+				`${conversationPath(conversationId)}/files/${encodeURIComponent(upload.file_id)}/complete`,
+				{},
+				this.backend.auth,
+			),
+			`finish the upload of ${file.name} to conversation ${conversationId}`,
+		);
+	}
+
+	async conversationFileDownload(
+		conversationId: string,
+		handle: { path: string },
+		as?: string,
+	): Promise<IConversationFileDownload> {
+		return expectRecord(
+			await apiGet<IConversationFileDownload>(
+				withQuery(
+					`${conversationPath(conversationId)}/files/${encodeURIComponent(conversationFileId(handle.path))}`,
+					{ as },
+				),
+				this.backend.auth,
+			),
+			`download a file of conversation ${conversationId}`,
+		);
+	}
+
 	async markRead(
 		conversationId: string,
 		upTo?: string,
@@ -326,6 +382,97 @@ export class WebInboxState implements IInboxState {
 		);
 	}
 
+	async setConversationPinned(
+		conversationId: string,
+		pinned: boolean,
+	): Promise<IConversationPinState> {
+		return expectRecord(
+			await apiPatch<IConversationPinState>(
+				`${conversationPath(conversationId)}/pin`,
+				{ pinned },
+				this.backend.auth,
+			),
+			`${pinned ? "pin" : "unpin"} conversation ${conversationId}`,
+		);
+	}
+
+	async listPins(
+		conversationId: string,
+		as?: string,
+	): Promise<IPinnedMessage[]> {
+		const response = await apiGet<{ pins?: IPinnedMessage[] }>(
+			withQuery(`${conversationPath(conversationId)}/pins`, { as }),
+			this.backend.auth,
+		);
+		return asArray(response?.pins);
+	}
+
+	async pinMessage(
+		conversationId: string,
+		messageId: string,
+	): Promise<IPinnedMessage> {
+		return expectRecord(
+			await apiPut<IPinnedMessage>(
+				`${conversationPath(conversationId)}/pins/${encodeURIComponent(messageId)}`,
+				{},
+				this.backend.auth,
+			),
+			`pin message ${messageId} in conversation ${conversationId}`,
+		);
+	}
+
+	async unpinMessage(conversationId: string, messageId: string): Promise<void> {
+		await apiDelete(
+			`${conversationPath(conversationId)}/pins/${encodeURIComponent(messageId)}`,
+			this.backend.auth,
+		);
+	}
+
+	async starMessage(
+		conversationId: string,
+		messageId: string,
+	): Promise<IStarredMessage> {
+		return expectRecord(
+			await apiPut<IStarredMessage>(
+				`${conversationPath(conversationId)}/stars/${encodeURIComponent(messageId)}`,
+				{},
+				this.backend.auth,
+			),
+			`star message ${messageId} in conversation ${conversationId}`,
+		);
+	}
+
+	async unstarMessage(
+		conversationId: string,
+		messageId: string,
+	): Promise<void> {
+		await apiDelete(
+			`${conversationPath(conversationId)}/stars/${encodeURIComponent(messageId)}`,
+			this.backend.auth,
+		);
+	}
+
+	async listStars(
+		query: IStarredMessagesQuery = {},
+	): Promise<IStarredMessagesPage> {
+		const response = await apiGet<IStarredMessagesPage>(
+			withQuery("inbox/stars", {
+				conversation_id: query.conversationId,
+				before: query.before,
+				limit: query.limit?.toString(),
+			}),
+			this.backend.auth,
+		);
+		const page = expectRecord<IStarredMessagesPage>(
+			response,
+			"load starred messages",
+		);
+		return {
+			stars: asArray(page.stars),
+			next_before: page.next_before ?? null,
+		};
+	}
+
 	async cancelInvitation(
 		conversationId: string,
 		principalId: string,
@@ -354,6 +501,32 @@ export class WebInboxState implements IInboxState {
 				principal_id: principalId,
 			}),
 			this.backend.auth,
+		);
+	}
+
+	async listConversationTurns(
+		conversationId: string,
+	): Promise<IConversationTurn[]> {
+		const response = await apiGet<{ turns?: IConversationTurn[] }>(
+			`${conversationPath(conversationId)}/turns`,
+			this.backend.auth,
+		);
+		return asArray(
+			expectRecord<{ turns?: IConversationTurn[] }>(response, "list turns")
+				.turns,
+		);
+	}
+
+	async getConversationRealtimeAccess(
+		conversationId: string,
+	): Promise<IRealtimeAccess> {
+		return expectRecord(
+			await apiPost<IRealtimeAccess>(
+				`${conversationPath(conversationId)}/realtime`,
+				undefined,
+				this.backend.auth,
+			),
+			`get realtime access for conversation ${conversationId}`,
 		);
 	}
 }

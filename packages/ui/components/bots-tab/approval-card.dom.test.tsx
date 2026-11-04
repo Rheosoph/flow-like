@@ -39,6 +39,10 @@ const { BotToolGrants } = await import("./bot-tool-grants");
 const { NeedsYouSection } = await import("./needs-you-section");
 
 const answers: Array<[string, string, string, BotApprovalDecision]> = [];
+const events: string[] = [];
+const secrets: Array<[string, string, { value: string; description: string }]> =
+	[];
+let failSecret = false;
 let grants: IBotToolGrant[] = [];
 const revoked: Array<[string, string, string]> = [];
 let failAnswer = false;
@@ -52,13 +56,35 @@ const botState = {
 		decision: BotApprovalDecision,
 	) => {
 		if (failAnswer) throw new Error("offline");
+		events.push("answer");
 		answers.push([botId, turnId, approvalId, decision]);
+	},
+	upsertBotSecret: async (
+		botId: string,
+		name: string,
+		request: { value: string; description: string },
+	) => {
+		if (failSecret) throw new Error("store offline");
+		events.push("store");
+		secrets.push([botId, name, request]);
+		return { name };
 	},
 	listToolGrants: async () => grants,
 	deleteToolGrant: async (botId: string, tool: string, scope: string) => {
 		revoked.push([botId, tool, scope]);
 		grants = grants.filter((g) => !(g.tool === tool && g.scope === scope));
 	},
+};
+
+const people: Record<string, string> = { "user-anna": "Anna Schmidt" };
+const lookup = (id: string) => ({
+	id,
+	name: people[id],
+	created_at: "2026-01-01T00:00:00Z",
+});
+const userState = {
+	lookupUser: async (id: string) => lookup(id),
+	lookupUsers: async (ids: string[]) => ids.map(lookup),
 };
 
 const previousBackend = useBackendStore.getState().backend;
@@ -99,7 +125,7 @@ async function click(element: HTMLButtonElement | undefined) {
 
 beforeAll(() => {
 	installDomGlobals();
-	useBackendStore.getState().setBackend({ botState } as never);
+	useBackendStore.getState().setBackend({ botState, userState } as never);
 	container = window.document.createElement("div") as unknown as HTMLElement;
 	window.document.body.appendChild(container as never);
 	root = createRoot(container);
@@ -115,10 +141,119 @@ afterAll(async () => {
 beforeEach(async () => {
 	await act(async () => root.render(null));
 	answers.length = 0;
+	events.length = 0;
+	secrets.length = 0;
+	failSecret = false;
 	revoked.length = 0;
 	failAnswer = false;
 	grants = [];
 	client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+});
+
+async function type(input: HTMLInputElement, value: string) {
+	const setter = Object.getOwnPropertyDescriptor(
+		Object.getPrototypeOf(input),
+		"value",
+	)?.set;
+	await act(async () => {
+		setter?.call(input, value);
+		input.dispatchEvent(new window.Event("input", { bubbles: true }) as never);
+	});
+	await settle();
+}
+
+describe("ApprovalCard secret request", () => {
+	const secretCard = (replace?: boolean) =>
+		createElement(ApprovalCard, {
+			approval: {
+				id: "ap-s",
+				turnId: "turn_s",
+				tool: "secret_request",
+				summary: "Ask for a secret",
+				scopes: [],
+				secret: {
+					name: "GITHUB_TOKEN",
+					description: "Lets me open pull requests",
+					...(replace ? { replace } : {}),
+				},
+			} as never,
+			botId: "bot_a",
+			botName: "Scout",
+			readOnly: false,
+		});
+	const input = () =>
+		container.querySelector("input") as unknown as HTMLInputElement;
+
+	test("shows the name, the reason and a masked input instead of the allow buttons", async () => {
+		await show(secretCard());
+		const text = container.textContent ?? "";
+		expect(text).toContain("Scout needs a secret");
+		expect(text).toContain("GITHUB_TOKEN");
+		expect(text).toContain("Lets me open pull requests");
+		expect(input().type).toBe("password");
+		expect(input().getAttribute("autocomplete")).toBe("new-password");
+		expect(button("Allow once")).toBeUndefined();
+		expect(button("Always allow")).toBeUndefined();
+		expect(button("Save secret")).toBeDefined();
+		expect(button("Decline")).toBeDefined();
+		expect(text).not.toContain("rejected");
+	});
+
+	test("a replacement says the stored value was rejected", async () => {
+		await show(secretCard(true));
+		expect(container.textContent).toContain("The stored value was rejected");
+	});
+
+	test("Save is disabled until a value is typed", async () => {
+		await show(secretCard());
+		expect(button("Save secret")?.disabled).toBe(true);
+		await type(input(), "s3cret");
+		expect(button("Save secret")?.disabled).toBe(false);
+	});
+
+	test("stores the value first, then answers once, and never shows the value", async () => {
+		await show(secretCard());
+		await type(input(), "s3cret-value");
+		await click(button("Save secret"));
+		expect(secrets).toEqual([
+			[
+				"bot_a",
+				"GITHUB_TOKEN",
+				{ value: "s3cret-value", description: "Lets me open pull requests" },
+			],
+		]);
+		expect(answers).toEqual([["bot_a", "turn_s", "ap-s", "once"]]);
+		expect(events).toEqual(["store", "answer"]);
+		expect(container.textContent).toContain("Secret saved");
+		expect(container.textContent).not.toContain("s3cret-value");
+		expect(container.querySelector("input")).toBeNull();
+	});
+
+	test("a failed store shows the error and does not answer", async () => {
+		failSecret = true;
+		await show(secretCard());
+		await type(input(), "s3cret-value");
+		await click(button("Save secret"));
+		expect(answers).toEqual([]);
+		expect(container.querySelector('[role="alert"]')).not.toBeNull();
+		expect(button("Save secret")).toBeDefined();
+	});
+
+	test("Decline answers deny without storing anything", async () => {
+		await show(secretCard());
+		await type(input(), "typed-then-declined");
+		await click(button("Decline"));
+		expect(secrets).toEqual([]);
+		expect(answers).toEqual([["bot_a", "turn_s", "ap-s", "deny"]]);
+		expect(container.textContent).toContain("Declined");
+	});
+
+	test("a value over the byte limit cannot be saved", async () => {
+		await show(secretCard());
+		await type(input(), "é".repeat(8 * 1024 + 1));
+		expect(button("Save secret")?.disabled).toBe(true);
+		expect(container.textContent).toContain("Too large");
+	});
 });
 
 describe("ApprovalCard", () => {
@@ -141,6 +276,24 @@ describe("ApprovalCard", () => {
 		expect(button("Allow once")).toBeDefined();
 		expect(button("Always allow")).toBeDefined();
 		expect(button("Deny")).toBeDefined();
+	});
+
+	test("a message to a person names them, and the core's 'The bot wants to' is not repeated", async () => {
+		await show(
+			card({
+				tool: "message_person",
+				summary:
+					'The bot wants to message a person you chat with: "Does Friday work?"',
+				scopes: ["person:user-anna"],
+			}),
+		);
+		await settle(60);
+		const text = container.textContent ?? "";
+		expect(text).toContain(
+			'Scout wants to message a person you chat with: "Does Friday work?"',
+		);
+		expect(text).not.toContain("the bot wants to");
+		expect(text).toContain("Message Anna Schmidt");
 	});
 
 	test("names who triggered the turn and the room", async () => {
@@ -198,6 +351,20 @@ describe("BotToolGrants", () => {
 		scope,
 		granted_at: "2026-11-03T10:00:00Z",
 		granted_by: "me",
+	});
+
+	test("a person grant names the person once the directory answers", async () => {
+		grants = [grant("message_person", "person:user-anna")];
+		await show(createElement(BotToolGrants, { bot, name: "Scout" }));
+		await settle(60);
+		expect(container.textContent).toContain("Message Anna Schmidt");
+	});
+
+	test("a person the directory can't name reads as their id", async () => {
+		grants = [grant("message_person", "person:user-gone")];
+		await show(createElement(BotToolGrants, { bot, name: "Scout" }));
+		await settle(60);
+		expect(container.textContent).toContain("Message user-gone");
 	});
 
 	test("lists standing grants in plain words and hides answer tokens", async () => {

@@ -31,8 +31,8 @@ use flow_like::{
 };
 use flow_like_bot_tools::{
     AppGrant, AppTables, Attachment, Environment, FileData, FileEntry, FileMeta, KnowledgeEmbedder,
-    Limits, LocalShell, MemorySessions, ModelEmbedder, ModelRole, Scope, ShellBackend, ToolEnv,
-    ToolOutcome, env::Access, files::guess_mime,
+    Limits, LocalShell, MemorySessions, ModelEmbedder, ModelRole, Scope, SecretInfo, ShellBackend,
+    ToolEnv, ToolOutcome, env::Access, files::guess_mime,
 };
 use flow_like_types::{
     Bytes, Result, anyhow, bot::BotCapability, bot_message::WorkspaceHandle,
@@ -64,6 +64,8 @@ pub(crate) struct BotToolRuntime {
     pub(crate) model_id: Option<String>,
     pub(crate) embedding_model_id: Option<String>,
     pub(crate) run_id: Option<String>,
+    /// The bot turn this run answers; an account bot reads its secrets for it.
+    pub(crate) turn_id: Option<String>,
 }
 
 impl std::fmt::Debug for BotToolRuntime {
@@ -105,6 +107,18 @@ pub(crate) fn supports(tool: &str) -> bool {
     linked_tool_names().contains(&tool)
 }
 
+/// Only a headless turn (it holds an approval gate) may write to the owner; a foreground chat is
+/// read live.
+fn turn_site(
+    headless: bool,
+    conversation_id: Option<String>,
+) -> Option<flow_like_bot_tools::TurnSite> {
+    if !headless {
+        return Some(flow_like_bot_tools::TurnSite::OwnerLive);
+    }
+    conversation_id.map(flow_like_bot_tools::TurnSite::Conversation)
+}
+
 pub(crate) async fn execute(
     app: &AppHandle,
     context: Option<&FrontendToolContext>,
@@ -141,11 +155,18 @@ pub(crate) async fn execute(
     .with_mail(
         super::bot_tools::mail::mail_for(app, &runtime.context.bot_id, host.clone()).await,
     )
+    .with_people(
+        super::bot_tools::people::people_for(app, &runtime.context.bot_id, host.clone()).await,
+    )
     .with_shell(shell_backend(app, &runtime.context.bot_id).await)
     .with_notifier(crate::bot_host::notifier_for(
         app,
         &runtime.context.bot_id,
         &runtime.context.name,
+        turn_site(
+            gate.is_some(),
+            context.and_then(|context| context.conversation_id.clone()),
+        ),
     ))
     .with_machine(super::bot_tools::local_machine(
         app,
@@ -258,6 +279,17 @@ pub(crate) trait ToolHost: Send + Sync {
     async fn model(&self) -> Result<Arc<dyn ModelLogic>>;
     async fn embedder(&self) -> Result<Option<Arc<dyn KnowledgeEmbedder>>>;
     async fn secret(&self, name: &str) -> Result<Option<String>>;
+    async fn secrets(&self) -> Result<Vec<SecretInfo>>;
+
+    /// A file members put into a conversation, read for the bot of this run.
+    async fn conversation_file(
+        &self,
+        _conversation_id: &str,
+        _path: &str,
+        _max_bytes: u64,
+    ) -> Result<Option<FileData>> {
+        Ok(None)
+    }
 }
 
 pub(crate) struct DesktopToolEnv {
@@ -272,6 +304,7 @@ pub(crate) struct DesktopToolEnv {
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
+    people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
 }
 
 /// One working directory per bot next to the project directory, on local and account bots alike:
@@ -323,6 +356,7 @@ impl DesktopToolEnv {
             scheduler: None,
             notifier: None,
             mail: None,
+            people: None,
         }
     }
 
@@ -339,6 +373,14 @@ impl DesktopToolEnv {
         mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
     ) -> Self {
         self.mail = mail;
+        self
+    }
+
+    pub(crate) fn with_people(
+        mut self,
+        people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
+    ) -> Self {
+        self.people = people;
         self
     }
 
@@ -381,6 +423,10 @@ impl DesktopToolEnv {
     }
 }
 
+fn conversation_of_app(app_id: &str) -> Option<&str> {
+    app_id.strip_prefix(flow_like_types::bot_message::CONVERSATION_FILE_APP_PREFIX)
+}
+
 fn relative_to(base: &ObjectPath, location: &ObjectPath) -> String {
     let base = display_object_path(base);
     let full = display_object_path(location);
@@ -413,6 +459,12 @@ impl ToolEnv for DesktopToolEnv {
         path: &str,
         max_bytes: u64,
     ) -> Result<Option<FileData>> {
+        if let Some(conversation_id) = conversation_of_app(app_id) {
+            return self
+                .host
+                .conversation_file(conversation_id, path, max_bytes)
+                .await;
+        }
         self.require_files(app_id)?;
         let (store, location) = self.locate(app_id, path).await?;
         let store = store.as_generic();
@@ -436,6 +488,16 @@ impl ToolEnv for DesktopToolEnv {
     }
 
     async fn stat_file(&self, app_id: &str, path: &str) -> Result<Option<FileMeta>> {
+        if let Some(conversation_id) = conversation_of_app(app_id) {
+            return Ok(self
+                .host
+                .conversation_file(conversation_id, path, 0)
+                .await?
+                .map(|file| FileMeta {
+                    bytes: file.size,
+                    mime: file.mime,
+                }));
+        }
         self.require_files(app_id)?;
         let (store, location) = self.locate(app_id, path).await?;
         match store.as_generic().head(&location).await {
@@ -485,8 +547,8 @@ impl ToolEnv for DesktopToolEnv {
         Ok(None)
     }
 
-    fn handle_granted(&self, _handle: &WorkspaceHandle) -> bool {
-        false
+    fn handle_granted(&self, handle: &WorkspaceHandle) -> bool {
+        handle.is_conversation_file()
     }
 
     fn sessions(&self) -> Option<Arc<dyn flow_like_bot_tools::SessionCache>> {
@@ -535,6 +597,10 @@ impl ToolEnv for DesktopToolEnv {
         self.notifier.clone()
     }
 
+    fn people(&self) -> Option<Arc<dyn flow_like_bot_tools::PeopleBackend>> {
+        self.people.clone()
+    }
+
     fn browser(&self) -> Option<Arc<dyn flow_like_bot_tools::BrowserBackend>> {
         self.machine.browser.clone()
     }
@@ -546,6 +612,10 @@ impl ToolEnv for DesktopToolEnv {
     async fn secret(&self, name: &str) -> Result<Option<String>> {
         self.host.secret(name).await
     }
+
+    async fn secrets(&self) -> Result<Vec<SecretInfo>> {
+        self.host.secrets().await
+    }
 }
 
 /// This device: local apps through the object store and the device databases, account apps
@@ -554,6 +624,7 @@ struct LiveHost {
     session: NativePlatformSession,
     runtime: Arc<BotToolRuntime>,
     credentials: tokio::sync::Mutex<HashMap<String, Arc<SharedCredentials>>>,
+    bot_token: tokio::sync::Mutex<Option<String>>,
 }
 
 #[async_trait]
@@ -574,6 +645,7 @@ impl LiveHost {
             session,
             runtime,
             credentials: Default::default(),
+            bot_token: Default::default(),
         }
     }
 
@@ -704,22 +776,74 @@ impl ToolHost for LiveHost {
         Ok(Some(Arc::new(embedder)))
     }
 
-    async fn secret(&self, name: &str) -> Result<Option<String>> {
+    async fn conversation_file(
+        &self,
+        conversation_id: &str,
+        path: &str,
+        max_bytes: u64,
+    ) -> Result<Option<FileData>> {
         let bot_id = self.runtime.context.bot_id.clone();
-        let Some(bots) = self.session.app_handle.try_state::<LocalBots>() else {
-            return Err(anyhow!("Bots on this device are unavailable"));
-        };
-        let lookup = bot_id.clone();
-        let is_local = crate::functions::local_bots::on_store(&bots, move |store| {
-            store.get_bot(&lookup).map(|bot| bot.is_some())
-        })
-        .await
-        .map_err(|error| anyhow!(error.to_string()))?;
-        if !is_local {
-            return Err(anyhow!(
-                "Secrets of account bots are not available on this desktop yet; the bot's secret '{name}' cannot be read here"
-            ));
+        if let Some(bots) = self.session.app_handle.try_state::<LocalBots>() {
+            let (conversation, file, reader) = (
+                conversation_id.to_string(),
+                path.to_string(),
+                bot_id.clone(),
+            );
+            let local = crate::functions::local_bots::on_store(&bots, move |store| {
+                store.read_conversation_file(&conversation, &reader, &file)
+            })
+            .await;
+            if let Ok(found) = local {
+                return Ok(found.map(|(meta, bytes)| {
+                    let size = bytes.len() as u64;
+                    let end = size.min(max_bytes) as usize;
+                    FileData {
+                        bytes: Bytes::from(bytes[..end].to_vec()),
+                        size,
+                        mime: Some(meta.mime),
+                        classification: None,
+                    }
+                }));
+            }
         }
+        let file_id = path.split_once('.').map_or(path, |(id, _)| id);
+        let download = self
+            .session
+            .request(
+                Method::GET,
+                &format!(
+                    "inbox/conversations/{}/files/{}?as={}",
+                    segment(conversation_id),
+                    segment(file_id),
+                    segment(&bot_id)
+                ),
+                None,
+            )
+            .await
+            .map_err(|error| anyhow!("Conversation file '{path}': {error}"))?;
+        let url = download["url"]
+            .as_str()
+            .ok_or_else(|| anyhow!("The hub sent no download link for conversation file '{path}'"))?;
+        let bytes = reqwest::get(url)
+            .await?
+            .error_for_status()?
+            .bytes()
+            .await?;
+        let size = bytes.len() as u64;
+        let end = size.min(max_bytes) as usize;
+        Ok(Some(FileData {
+            bytes: bytes.slice(..end),
+            size,
+            mime: download["mime"].as_str().map(str::to_string),
+            classification: None,
+        }))
+    }
+
+    async fn secret(&self, name: &str) -> Result<Option<String>> {
+        let Some(bots) = self.local_bots().await? else {
+            return self.account_secret(name).await;
+        };
+        let bot_id = self.runtime.context.bot_id.clone();
         let opened =
             crate::functions::local_bots::on_store(&bots, move |store| store.open_secrets(&bot_id))
                 .await
@@ -739,8 +863,127 @@ impl ToolHost for LiveHost {
             .find(|secret| secret.name == name)
             .map(|secret| secret.value.to_string()))
     }
+
+    async fn secrets(&self) -> Result<Vec<SecretInfo>> {
+        let bot_id = self.runtime.context.bot_id.clone();
+        if let Some(bots) = self.local_bots().await? {
+            let stored =
+                crate::functions::local_bots::on_store(&bots, move |store| store.secrets(&bot_id))
+                    .await
+                    .map_err(|error| anyhow!(error.to_string()))?;
+            return Ok(stored
+                .into_iter()
+                .map(|secret| SecretInfo {
+                    name: secret.name,
+                    description: secret.description,
+                })
+                .collect());
+        }
+        let listed = self
+            .session
+            .request(
+                Method::GET,
+                &format!("bots/{}/secrets", segment(&bot_id)),
+                None,
+            )
+            .await
+            .map_err(|error| anyhow!("Listing the secrets of bot '{bot_id}': {error}"))?;
+        Ok(listed["secrets"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|secret| {
+                Some(SecretInfo {
+                    name: secret["name"].as_str()?.to_string(),
+                    description: secret["description"].as_str().map(str::to_string),
+                })
+            })
+            .collect())
+    }
+}
+
+impl LiveHost {
+    /// This device's bot store when the bot is a local one; `None` for an account bot.
+    async fn local_bots(&self) -> Result<Option<tauri::State<'_, LocalBots>>> {
+        let Some(bots) = self.session.app_handle.try_state::<LocalBots>() else {
+            return Err(anyhow!("Bots on this device are unavailable"));
+        };
+        let lookup = self.runtime.context.bot_id.clone();
+        let is_local = crate::functions::local_bots::on_store(&bots, move |store| {
+            store.get_bot(&lookup).map(|bot| bot.is_some())
+        })
+        .await
+        .map_err(|error| anyhow!(error.to_string()))?;
+        Ok(is_local.then_some(bots))
+    }
+
+    /// The bot's own token for the turn this run answers; minted once per tool call.
+    async fn bot_token(&self, turn_id: &str) -> Result<String> {
+        let mut cached = self.bot_token.lock().await;
+        if let Some(token) = cached.as_ref() {
+            return Ok(token.clone());
+        }
+        let bot_id = &self.runtime.context.bot_id;
+        let minted = self
+            .session
+            .request(
+                Method::POST,
+                &format!("bots/{}/runtime-token", segment(bot_id)),
+                Some(&serde_json::json!({ "turn_id": turn_id })),
+            )
+            .await
+            .map_err(|error| {
+                anyhow!("Minting bot '{bot_id}' a token for turn '{turn_id}': {error}")
+            })?;
+        let token = minted["token"]
+            .as_str()
+            .ok_or_else(|| anyhow!("The hub minted bot '{bot_id}' no token for turn '{turn_id}'"))?
+            .to_string();
+        *cached = Some(token.clone());
+        Ok(token)
+    }
+
+    /// An account bot's secret, read with the bot's own token while its turn runs; never cached.
+    async fn account_secret(&self, name: &str) -> Result<Option<String>> {
+        let turn_id = self.runtime.turn_id.as_deref().ok_or_else(|| {
+            anyhow!(
+                "An account bot reads its secrets only inside one of its turns; the secret '{name}' cannot be read here"
+            )
+        })?;
+        let token = self.bot_token(turn_id).await?;
+        let read = self
+            .session
+            .request_as_bot(
+                &token,
+                Method::POST,
+                &format!("bots/turns/{}/secrets/{}", segment(turn_id), segment(name)),
+            )
+            .await
+            .map_err(|error| anyhow!("Reading the bot's secret '{name}': {error}"))?;
+        Ok(read.and_then(|read| read["value"].as_str().map(str::to_string)))
+    }
 }
 
 #[cfg(test)]
 #[path = "native_bot_tools_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod turn_site_tests {
+    use super::turn_site;
+    use flow_like_bot_tools::TurnSite;
+
+    #[test]
+    fn a_foreground_chat_is_read_live_and_a_headless_turn_keeps_its_conversation() {
+        assert_eq!(
+            turn_site(false, Some("c1".into())),
+            Some(TurnSite::OwnerLive)
+        );
+        assert_eq!(turn_site(false, None), Some(TurnSite::OwnerLive));
+        assert_eq!(
+            turn_site(true, Some("c1".into())),
+            Some(TurnSite::Conversation("c1".into()))
+        );
+        assert_eq!(turn_site(true, None), None);
+    }
+}

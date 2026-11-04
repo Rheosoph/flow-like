@@ -8,14 +8,65 @@ use crate::inbox::InboxEntryKind;
 
 /// Appearance key the owner's per-bot "Notifications" switch writes (`true` mutes the bot).
 pub const MUTE_KEY: &str = "mute_notifications";
-/// Notifications one bot's `notify_owner` tool may send per [`TOOL_WINDOW_SECS`].
+/// Messages one bot's `message_owner` tool may send per [`TOOL_WINDOW_SECS`].
 pub const TOOL_MAX_PER_WINDOW: usize = 10;
 pub const TOOL_WINDOW_SECS: i64 = 3_600;
 pub const TITLE_MAX_CHARS: usize = 120;
 pub const BODY_MAX_CHARS: usize = 500;
+/// A message the owner is written in their chat.
+pub const MESSAGE_MAX_CHARS: usize = 4_000;
 /// Marks the notifications a bot's tool sent (`source_node_id`), against replies (the message id).
 pub const TOOL_SOURCE: &str = "bot-notify-tool";
 const CHAT_LINK_PREFIX: &str = "/bots?bot=";
+
+/// Routing hints for native notifications. The API still authorizes every action.
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct BotNotificationContext {
+    pub bot_id: String,
+    #[serde(default)]
+    pub review_only: bool,
+    pub conversation_id: Option<String>,
+    pub conversation_encryption: Option<String>,
+    pub message_id: Option<String>,
+    pub turn_id: Option<String>,
+    pub approval_id: Option<String>,
+    pub task_id: Option<String>,
+    /// RFC 3339 deadline for an approval action.
+    pub expires_at: Option<String>,
+}
+
+impl BotNotificationContext {
+    pub fn category(&self) -> &'static str {
+        if self.review_only {
+            "flow_like_bot_review"
+        } else if self.approval_id.is_some() {
+            "flow_like_bot_approval"
+        } else {
+            "flow_like_bot_message"
+        }
+    }
+
+    pub fn fields(&self) -> Vec<(&'static str, &str)> {
+        let mut fields = vec![
+            ("bot_id", self.bot_id.as_str()),
+            ("category", self.category()),
+        ];
+        for (key, value) in [
+            ("conversation_id", &self.conversation_id),
+            ("conversation_encryption", &self.conversation_encryption),
+            ("message_id", &self.message_id),
+            ("turn_id", &self.turn_id),
+            ("approval_id", &self.approval_id),
+            ("task_id", &self.task_id),
+            ("expires_at", &self.expires_at),
+        ] {
+            if let Some(value) = value {
+                fields.push((key, value));
+            }
+        }
+        fields
+    }
+}
 
 pub fn notifications_muted(appearance: &Value) -> bool {
     appearance
@@ -68,6 +119,20 @@ mod tests {
         assert!(reply_is_proactive(InboxEntryKind::Message, 1));
         assert!(reply_is_proactive(InboxEntryKind::Trigger, 0));
         assert!(reply_is_proactive(InboxEntryKind::Trigger, 2));
+    }
+
+    #[test]
+    fn native_context_only_contains_routing_and_approval_hints() {
+        let context = BotNotificationContext {
+            bot_id: "b1".into(),
+            approval_id: Some("ap1".into()),
+            ..Default::default()
+        };
+        let fields: std::collections::BTreeMap<_, _> = context.fields().into_iter().collect();
+        assert_eq!(fields.get("category"), Some(&"flow_like_bot_approval"));
+        assert_eq!(fields.get("approval_id"), Some(&"ap1"));
+        assert!(!fields.contains_key("conversation_id"));
+        assert_eq!(fields.len(), 3);
     }
 
     #[test]
