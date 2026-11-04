@@ -40,6 +40,7 @@ import {
 	type NativeActionRequest,
 	assertNativeActionCurrent,
 	nativeChatOutcome,
+	registerNativeActionRun,
 	runNativeAction,
 } from "../../lib/native-action-result";
 import { isTauri } from "../../lib/platform";
@@ -885,6 +886,7 @@ export function GlobalChatBody({
 				void persistGlobalChatMessage(userMessage);
 				void persistGlobalChatSession(sessionId, sessionTitle);
 				setActiveRun(sessionId, responseMessage.id, turnSelection);
+				registerNativeActionRun(nativeRequest, responseMessage.id);
 			}
 			const authUser = authRef.current?.user;
 			const userContext =

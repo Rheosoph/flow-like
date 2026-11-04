@@ -3,6 +3,7 @@ export interface NativeActionRequest {
 	scope: string;
 	responseMode?: "text" | "result";
 	responseDeadline?: string;
+	automation?: boolean;
 }
 
 export interface NativeActionOutcome {
@@ -28,11 +29,74 @@ export interface NativeActionCompletionContext {
 
 export const MAX_NATIVE_RESULT_BYTES = 256 * 1024;
 
+type NativeLifecycle = "cancelled" | "completed";
+const nativeRequests = new Map<
+	string,
+	{ cancelled: boolean; completed: boolean; runs: Set<string>; expires: number }
+>();
+const nativeListeners = new Set<
+	(request: NativeActionRequest, state: NativeLifecycle) => void
+>();
+const nativeKey = (request: NativeActionRequest) =>
+	JSON.stringify([request.scope, request.id]);
+function nativeRecord(request: NativeActionRequest) {
+	const now = Date.now();
+	for (const [key, record] of nativeRequests)
+		if (record.expires < now) nativeRequests.delete(key);
+	const key = nativeKey(request);
+	let record = nativeRequests.get(key);
+	if (!record) {
+		record = {
+			cancelled: false,
+			completed: false,
+			runs: new Set<string>(),
+			expires: Math.max(
+				now + 300_000,
+				Date.parse(request.responseDeadline ?? "") || 0,
+			),
+		};
+		nativeRequests.set(key, record);
+	}
+	return record;
+}
+
+export function cancelNativeAction(request: NativeActionRequest): void {
+	const record = nativeRecord(request);
+	if (record.cancelled || record.completed) return;
+	record.cancelled = true;
+	for (const listener of nativeListeners) listener(request, "cancelled");
+}
+
+export function registerNativeActionRun(
+	request: NativeActionRequest,
+	runId: string,
+): void {
+	const record = nativeRecord(request);
+	record.runs.add(runId);
+	if (record.cancelled)
+		for (const listener of nativeListeners) listener(request, "cancelled");
+}
+
+export function nativeActionRunIds(request: NativeActionRequest): string[] {
+	return [...(nativeRequests.get(nativeKey(request))?.runs ?? [])];
+}
+
+export function subscribeNativeActionLifecycle(
+	listener: (request: NativeActionRequest, state: NativeLifecycle) => void,
+): () => void {
+	nativeListeners.add(listener);
+	return () => {
+		nativeListeners.delete(listener);
+	};
+}
+
 export function assertNativeActionCurrent(
 	request: NativeActionRequest,
 	currentScope: string | undefined,
 	now = Date.now(),
 ): void {
+	if (nativeRequests.get(nativeKey(request))?.cancelled)
+		throw new Error("This native request was cancelled.");
 	if (!request.id || !request.scope || request.scope !== currentScope)
 		throw new Error(
 			"This request belongs to a different account or workspace.",
@@ -136,13 +200,15 @@ export async function completeNativeAction(
 				scope: request.scope,
 				status: "error",
 				error:
-					"The response is too large for Shortcuts. Open Flow Like to view it.",
+					"The response is too large for this automation. Open Flow Like to view it.",
 			};
 		}
 		const invoke =
 			context.invoke ?? (await import("@tauri-apps/api/core")).invoke;
 		check();
 		await invoke("native_complete_action", { result });
+		nativeRecord(request).completed = true;
+		for (const listener of nativeListeners) listener(request, "completed");
 		return true;
 	} catch {
 		return false;

@@ -3,11 +3,11 @@ import {
 	type DeviceReply,
 	cancelDeviceCommands,
 	createDeviceCommandSession,
+	executeDeviceCommand,
 	parseDeviceRequest,
+	registerDeviceAdapter,
 	validateClipboard,
 	withDeviceCommandBridge,
-	executeDeviceCommand,
-	registerDeviceAdapter,
 } from "./device-bridge";
 import type { IIntercomEvent } from "./schema/events/intercom-event";
 
@@ -650,6 +650,16 @@ describe("live frontend device bridge", () => {
 		expect(parseDeviceRequest(message({ request_id: "unrelated" }))).toBeNull();
 	});
 	test("validates formats, payload bounds and content expiry", () => {
+		expect(() =>
+			validateClipboard({
+				format: "text",
+				text: "Private",
+				appPrivate: "true",
+			}),
+		).toThrow("boolean");
+		expect(() =>
+			validateClipboard({ format: "text", text: "Private", appPrivate: true }),
+		).not.toThrow();
 		expect(() =>
 			validateClipboard({
 				format: "html",

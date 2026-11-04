@@ -7,6 +7,18 @@ import org.junit.Test
 import java.util.UUID
 
 class BotDeliveryPolicyTest {
+    @org.junit.Test fun freshAccountAndEncryptionChangesPreventBackgroundReplies() {
+        val bot=org.json.JSONObject("""{"id":"bot_1","owner_id":"alice","location":"server","capabilities":[]}""")
+        org.junit.Assert.assertTrue(BotDeliveryPolicy.freshBot(bot,"bot_1","alice"))
+        org.junit.Assert.assertFalse(BotDeliveryPolicy.freshBot(bot,"bot_1","bob"))
+        bot.put("capabilities",org.json.JSONArray(listOf("encryption")))
+        org.junit.Assert.assertFalse(BotDeliveryPolicy.freshBot(bot,"bot_1","alice"))
+        val chat=org.json.JSONObject("""{"id":"chat_1","encryption":"plain","members":[{"kind":"user","principal_id":"alice"},{"kind":"bot","principal_id":"bot_1"}]}""")
+        org.junit.Assert.assertTrue(BotDeliveryPolicy.plainConversation(chat,"chat_1","bot_1","alice"))
+        org.junit.Assert.assertFalse(BotDeliveryPolicy.plainConversation(chat,"chat_1","bot_1","bob"))
+        chat.put("encryption","e2e")
+        org.junit.Assert.assertFalse(BotDeliveryPolicy.plainConversation(chat,"chat_1","bot_1","alice"))
+    }
     private val scope = "[\"https://hub.example\",\"profile\",\"alice\"]"
     private fun snapshot() = JSONObject().put("scope", scope).put("bots", JSONArray().put(JSONObject().put("id", "bot")))
     private fun reply() = JSONObject().put("id", UUID.randomUUID().toString()).put("scope", scope).put("backgroundDelivery", true)

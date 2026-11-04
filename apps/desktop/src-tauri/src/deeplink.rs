@@ -164,7 +164,7 @@ fn classify(url: &Url) -> DeepLinkIntent {
             "logout" => DeepLinkIntent::Logout,
             "thirdparty" if rest == "callback" => DeepLinkIntent::ThirdParty,
             "trigger" => classify_trigger(rest),
-            "native" => DeepLinkIntent::Native,
+            "native" | "continue" => DeepLinkIntent::Native,
             "store" => classify_store(url, rest),
             "join" => DeepLinkIntent::Join,
             _ => DeepLinkIntent::Unknown,
@@ -437,6 +437,20 @@ mod tests {
             app_id: app_id.map(ToString::to_string),
             package_id: package_id.map(ToString::to_string),
         }
+    }
+
+    #[test]
+    fn continuation_links_reach_the_scoped_native_dispatcher() {
+        assert_eq!(
+            intent(
+                "flow-like://continue?scope=workspace&url=https%3A%2F%2Fapp.flow-like.com%2Fbots"
+            ),
+            DeepLinkIntent::Native
+        );
+        assert_eq!(
+            intent("https://untrusted.example/continue?scope=workspace"),
+            DeepLinkIntent::Unknown
+        );
     }
 
     #[test]

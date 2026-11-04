@@ -18,22 +18,24 @@ internal object BotDeliveryPolicy {
         val origin = URI(scope.getString(0))
         if (origin.scheme != "https" || origin.host.isNullOrBlank() || origin.rawUserInfo != null ||
             origin.rawQuery != null || origin.rawFragment != null || origin.rawPath.contains('%') || origin.rawPath.contains('\\')) return null
-        return origin.toASCIIString().trimEnd('/') + "/api/v1"
+        return origin.toASCIIString().trimEnd('/').removeSuffix("/api/v1") + "/api/v1"
     }
 
     fun request(item: JSONObject, snapshot: JSONObject): Request? {
-        if (!item.optBoolean("backgroundDelivery") || item.optString("scope") != snapshot.optString("scope")) return null
+        if (!item.optBoolean("backgroundDelivery") || item.optString("scope") != snapshot.optString("scope") ||
+            item.has("responseMode") && !item.isNull("responseMode")) return null
         val base = apiBase(item.getString("scope")) ?: return null
         val action = item.getJSONObject("action")
         val botId = action.optString("botId")
         val bots = snapshot.optJSONArray("bots") ?: return null
         val bot = (0 until bots.length()).map { bots.getJSONObject(it) }.firstOrNull { it.optString("id") == botId } ?: return null
-        if (bot.optBoolean("local") || bot.optBoolean("encrypted") || !identifier.matches(botId)) return null
+        if (bot.optBoolean("local") || bot.optBoolean("encrypted") || !identifier.matches(botId) || action.optBoolean("voice") ||
+            (action.optJSONArray("files")?.length() ?: 0) != 0) return null
         UUID.fromString(item.getString("id"))
         return when (action.optString("kind")) {
             "ask_bot" -> {
                 val conversation = action.optString("conversationId")
-                val text = action.optString("text")
+                val text = action.optString("prompt").ifBlank { action.optString("text") }
                 if (!identifier.matches(conversation) || text.isBlank() || text.toByteArray().size > 60000 ||
                     (action.optJSONArray("files")?.length() ?: 0) != 0) return null
                 Request("$base/inbox/conversations/$conversation/entries", JSONObject()
@@ -50,6 +52,18 @@ internal object BotDeliveryPolicy {
             }
             else -> null
         }
+    }
+
+    fun freshBot(value: JSONObject, botId: String, subject: String): Boolean =
+        value.optString("id") == botId && value.optString("owner_id") == subject &&
+            value.optString("location") in listOf("server", "desktop", "device") &&
+            value.optJSONArray("capabilities")?.let { caps -> (0 until caps.length()).none { caps.optString(it) == "encryption" } } == true
+
+    fun plainConversation(value: JSONObject, conversationId: String, botId: String, subject: String): Boolean {
+        val members = value.optJSONArray("members") ?: return false
+        return value.optString("id") == conversationId && value.optString("encryption") == "plain" &&
+            (0 until members.length()).any { members.getJSONObject(it).let { m -> m.optString("kind") == "bot" && m.optString("principal_id") == botId } } &&
+            (0 until members.length()).any { members.getJSONObject(it).let { m -> m.optString("kind") == "user" && m.optString("principal_id") == subject } }
     }
 
     fun accessToken(scope: String, records: BotRecordStore, nowSeconds: Long = System.currentTimeMillis() / 1000): String? {
@@ -80,31 +94,36 @@ internal class BotDelivery(private val context: Context) {
             return Outcome.COMPLETE
         }
         val request = BotDeliveryPolicy.request(item, snapshot) ?: return Outcome.FOREGROUND
-        val token = BotDeliveryPolicy.accessToken(scope, BotSecureStore(context)) ?: return Outcome.FOREGROUND
         if (store.snapshot()?.optString("scope") != scope) return Outcome.COMPLETE
-        val connection = URI(request.url).toURL().openConnection() as HttpsURLConnection
-        try {
-            connection.instanceFollowRedirects = false
-            connection.requestMethod = "POST"
-            connection.connectTimeout = 15000
-            connection.readTimeout = 15000
-            connection.setRequestProperty("Authorization", "Bearer $token")
-            connection.setRequestProperty("Content-Type", "application/json")
-            connection.setRequestProperty("Accept", "application/json")
-            val bytes = request.body.toString().toByteArray(Charsets.UTF_8)
-            connection.doOutput = true
-            connection.setFixedLengthStreamingMode(bytes.size)
-            connection.outputStream.use { it.write(bytes) }
-            return when (val status = connection.responseCode) {
+        val http = BotHttp(context, scope)
+        val action = item.getJSONObject("action")
+        val botId = action.getString("botId")
+        val bot = http.request("GET", "bots/$botId")
+        if (bot.status != 200) return failure(store, id, scope, bot.status)
+        if (bot.body == null || !BotDeliveryPolicy.freshBot(bot.body, botId, BotNativeStore.subject(scope) ?: ""))
+            return failure(store, id, scope, 409)
+        if (action.optString("kind") == "ask_bot") {
+            val conversationId = action.getString("conversationId")
+            val conversation = http.request("GET", "inbox/conversations/$conversationId")
+            if (conversation.status != 200) return failure(store, id, scope, conversation.status)
+            if (conversation.body == null || !BotDeliveryPolicy.plainConversation(conversation.body, conversationId, botId, BotNativeStore.subject(scope) ?: ""))
+                return failure(store, id, scope, 409)
+        }
+        val base = BotDeliveryPolicy.apiBase(scope) ?: return Outcome.FOREGROUND
+        val response = http.request("POST", request.url.removePrefix("$base/"), request.body)
+        return when (response.status) {
                 in 200..299 -> { store.acknowledge(id, scope); Outcome.COMPLETE }
-                401 -> Outcome.FOREGROUND
+                else -> failure(store, id, scope, response.status)
+        }
+    }
+
+    private fun failure(store: BotNativeStore, id: String, scope: String, status: Int): Outcome = when (status) {
+                401 -> Outcome.RETRY
                 408, 429, in 500..599 -> Outcome.RETRY
                 else -> {
                     store.deliveryFailed(id, scope, "http_$status")
                     BotSurfaces.deliveryFailure(context)
                     Outcome.COMPLETE
                 }
-            }
-        } finally { connection.disconnect() }
     }
 }

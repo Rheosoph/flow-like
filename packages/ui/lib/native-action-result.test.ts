@@ -3,9 +3,13 @@ import {
 	type NativeActionCompletionContext,
 	type NativeActionRequest,
 	assertNativeActionCurrent,
+	cancelNativeAction,
 	completeNativeAction,
+	nativeActionRunIds,
 	nativeChatOutcome,
+	registerNativeActionRun,
 	runNativeAction,
+	subscribeNativeActionLifecycle,
 } from "./native-action-result";
 
 const request: NativeActionRequest = {
@@ -20,6 +24,51 @@ const context = () => ({
 	invoke: mock<NonNullable<NativeActionCompletionContext["invoke"]>>(
 		async () => undefined,
 	),
+});
+
+test("cancellation fences only its exact workspace request and keeps run ownership", async () => {
+	const pending = {
+		id: "cancelled-native",
+		scope: "account-a",
+		responseMode: "text" as const,
+	};
+	const other = { ...pending, scope: "account-b" };
+	registerNativeActionRun(pending, "run-a");
+	registerNativeActionRun(other, "run-b");
+	const events: string[] = [];
+	const off = subscribeNativeActionLifecycle((request, status) =>
+		events.push(`${request.scope}:${status}`),
+	);
+	cancelNativeAction(pending);
+	cancelNativeAction(pending);
+	expect(events).toEqual(["account-a:cancelled"]);
+	expect(nativeActionRunIds(pending)).toEqual(["run-a"]);
+	expect(() => assertNativeActionCurrent(pending, "account-a")).toThrow(
+		"cancelled",
+	);
+	expect(() => assertNativeActionCurrent(other, "account-b")).not.toThrow();
+	const invoke = mock(async () => undefined);
+	expect(
+		await completeNativeAction(
+			pending,
+			{ status: "success", text: "Late" },
+			{ getCurrentScope: () => "account-a", invoke },
+		),
+	).toBe(false);
+	expect(invoke).not.toHaveBeenCalled();
+	off();
+});
+
+test("a run associated after cancellation is stopped by the same lifecycle listener", () => {
+	const request = { id: "cancel-before-chat-start", scope: "scope" };
+	cancelNativeAction(request);
+	let runIds: string[] = [];
+	const off = subscribeNativeActionLifecycle((item, status) => {
+		if (status === "cancelled") runIds = nativeActionRunIds(item);
+	});
+	registerNativeActionRun(request, "late-run");
+	expect(runIds).toEqual(["late-run"]);
+	off();
 });
 
 describe("native action results", () => {

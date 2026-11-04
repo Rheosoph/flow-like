@@ -50,6 +50,7 @@ internal class BotNativeStore(private val directory: File, private val secure: B
         secure.delete("native-actions")
         secure.delete("native-notification-actions")
         secure.delete("native-results")
+        secure.delete("native-automation")
         directory.listFiles().orEmpty().filter { it.isFile }.forEach { it.delete() }
     }
 
@@ -66,6 +67,7 @@ internal class BotNativeStore(private val directory: File, private val secure: B
             if (item.optString("scope") == scope) {
                 if (System.currentTimeMillis() - created < MAX_ACTION_AGE_MS &&
                     (!item.has("responseDeadline") || !expired(item.getString("responseDeadline")))) active.put(item)
+                else if (item.has("responseMode")) cancelAutomation(item.getString("id"), scope, "The automation timed out.")
                 else deliveryFailed(item.getString("id"), scope, "expired")
             }
         }
@@ -145,7 +147,71 @@ internal class BotNativeStore(private val directory: File, private val secure: B
         val id = result.getString("id")
         val scope = result.getString("scope")
         if (snapshot()?.optString("scope") != scope) return@synchronized
+        val records = json("native-automation")
+        val record = records?.optJSONObject(id)
+        if (record != null) {
+            if (record.optString("scope") != scope || record.has("result") || expired(record.optString("responseDeadline"))) return@synchronized
+            require(result.optString("status") in listOf("success", "error", "interaction_required")) { "Invalid automation outcome" }
+            require(result.toString().toByteArray(Charsets.UTF_8).size <= 256 * 1024) { "Automation result is too large" }
+            if (result.has("json") && !result.isNull("json")) org.json.JSONTokener(result.getString("json")).nextValue()
+            record.put("result", JSONObject(result.toString())).put("expiresAt", Instant.now().plusSeconds(300).toString())
+            save("native-automation", records)
+        }
         acknowledge(id, scope)
+    }
+
+    fun enqueueAutomation(action: JSONObject, scope: String, responseMode: String,
+                          id: String = UUID.randomUUID().toString()): JSONObject = synchronized(lock) {
+        require(responseMode in listOf("text", "result")) { "Invalid response format" }
+        val snapshot = snapshot() ?: error("The workspace is unavailable")
+        require(snapshot.optString("scope") == scope)
+        BotAutomationPolicy.validate(snapshot, action, responseMode)
+        val now = Instant.now()
+        val records = json("native-automation") ?: JSONObject()
+        val retained = JSONObject()
+        for (key in records.keys()) {
+            val item = records.getJSONObject(key)
+            if (item.optString("scope") == scope && !expired(item.optString("expiresAt"))) retained.put(key, item)
+        }
+        require(retained.length() < 32) { "Too many automation requests" }
+        require(!retained.has(id)) { "This automation already started" }
+        val deadline = now.plusSeconds(90).toString()
+        val request = enqueue(action, scope, id, deadline = deadline).put("responseMode", responseMode).put("automation", true)
+        val queued = queue()
+        for (index in 0 until queued.length()) if (queued.getJSONObject(index).optString("id") == id) queued.put(index, request)
+        writeQueue(queued)
+        retained.put(id, JSONObject().put("id", id).put("scope", scope).put("responseDeadline", deadline)
+            .put("expiresAt", now.plusSeconds(390).toString()).put("request", request))
+        save("native-automation", retained)
+        request
+    }
+
+    fun automationCurrent(id: String, scope: String): Boolean = synchronized(lock) {
+        if (snapshot()?.optString("scope") != scope) return@synchronized false
+        val record = json("native-automation")?.optJSONObject(id) ?: return@synchronized false
+        record.optString("scope") == scope && !record.has("result") && !expired(record.optString("responseDeadline"))
+    }
+
+    fun automationResult(id: String, scope: String, consume: Boolean = false): JSONObject? = synchronized(lock) {
+        if (snapshot()?.optString("scope") != scope) return@synchronized null
+        val records = json("native-automation") ?: return@synchronized null
+        val record = records.optJSONObject(id) ?: return@synchronized null
+        if (record.optString("scope") != scope || expired(record.optString("expiresAt"))) return@synchronized null
+        val result = record.optJSONObject("result") ?: return@synchronized null
+        if (consume) { records.remove(id); save("native-automation", records) }
+        JSONObject(result.toString())
+    }
+
+    fun cancelAutomation(id: String, scope: String, reason: String = "The automation was cancelled.") = synchronized(lock) {
+        if (snapshot()?.optString("scope") != scope) return@synchronized
+        val records = json("native-automation") ?: return@synchronized
+        val record = records.optJSONObject(id) ?: return@synchronized
+        if (record.optString("scope") != scope || record.has("result")) return@synchronized
+        record.put("result", JSONObject().put("id", id).put("scope", scope).put("status", "error").put("error", reason.take(1000)))
+            .put("expiresAt", Instant.now().plusSeconds(300).toString())
+        save("native-automation", records)
+        acknowledge(id, scope)
+        BotAutomationSignals.cancelled?.invoke(id, scope)
     }
 
     fun foregroundActions(): JSONArray = synchronized(lock) {

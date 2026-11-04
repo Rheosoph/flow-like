@@ -47,6 +47,7 @@ import {
 } from "./native-bots";
 
 export type NativeActionKind =
+	| "resume_page"
 	| "open_home"
 	| "open_inbox"
 	| "open_app"
@@ -62,8 +63,10 @@ export type NativeActionKind =
 	| "capture_bot_voice"
 	| "capture_bot_document"
 	| "local_bot_summary"
+	| "private_bot_clipboard"
 	| "share";
 export interface NativeAction {
+	url?: string;
 	botId?: string;
 	conversationId?: string;
 	taskId?: string;
@@ -89,6 +92,7 @@ export interface NativePendingAction {
 	createdAt?: string;
 	responseMode?: "text" | "result";
 	responseDeadline?: string;
+	automation?: boolean;
 	backgroundDelivery?: boolean;
 	backgroundError?: string;
 }
@@ -543,7 +547,7 @@ export function nativeQuickActionPayload(
 			supplied = { [inputs[0].name]: parsed };
 		else
 			throw new Error(
-				"Shortcut input must be a JSON object keyed by Event input names, or text for a single String input.",
+				"Automation input must be a JSON object keyed by Event input names, or text for a single String input.",
 			);
 		for (const name of Object.keys(supplied))
 			if (!inputs.some((input) => input.name === name))
@@ -620,6 +624,7 @@ function nativeInputMatches(
 
 export interface NativeDispatchContext {
 	scope: string;
+	getWebOrigin?: () => Promise<string | undefined>;
 	backend: IBackendState;
 	navigate: (url: string) => void;
 	bot?: (action: NativeAction) => Promise<void>;
@@ -679,9 +684,20 @@ export async function dispatchNativeAction(
 		(!Number.isFinite(deadline) || deadline <= Date.now())
 	)
 		throw new Error(
-			"This Shortcut request expired. Run it again to get a response.",
+			"This automation request expired. Run it again to get a response.",
 		);
 	const action = request.action;
+	if (action.kind === "resume_page") {
+		const origin = await context.getWebOrigin?.();
+		if (!context.isCurrent()) return;
+		const target = resumePageAction(action.url, origin);
+		if (!target)
+			throw new Error(
+				"This continuation link is not an available page in this workspace.",
+			);
+		await dispatchNativeAction({ ...request, action: target }, context);
+		return;
+	}
 	if (
 		NATIVE_BOT_ACTIONS.has(action.kind) ||
 		(action.kind === "share" && action.botId)
@@ -784,11 +800,11 @@ export async function dispatchNativeAction(
 			)
 		)
 			throw new Error(
-				"This Event is no longer available to Siri and Shortcuts.",
+				"This Event is no longer available to device automations.",
 			);
 		if (!context.callEvent)
 			throw new Error(
-				"This app version cannot return Event results to Shortcuts.",
+				"This app version cannot return Event results to device automations.",
 			);
 		await context.callEvent(action.appId, event, action.text || action.prompt);
 		return;
@@ -911,6 +927,27 @@ export function nativeNavigationRequest(
 		return;
 	}
 	if (
+		url.protocol === "flow-like:" &&
+		url.hostname === "continue" &&
+		!url.username &&
+		!url.password &&
+		!url.port &&
+		!url.hash &&
+		["", "/"].includes(url.pathname) &&
+		url.searchParams.getAll("scope").length === 1 &&
+		url.searchParams.get("scope") === scope &&
+		url.searchParams.getAll("url").length === 1
+	) {
+		return {
+			id: crypto.randomUUID(),
+			scope,
+			action: {
+				kind: "resume_page",
+				url: url.searchParams.get("url") ?? undefined,
+			},
+		};
+	}
+	if (
 		url.protocol !== "flow-like:" ||
 		url.hostname !== "native" ||
 		url.username ||
@@ -991,6 +1028,71 @@ export function nativeNavigationRequest(
 				eventId: url.searchParams.get("eventId") || undefined,
 			},
 		};
+}
+
+/** Continuation links carry navigation only; live access checks run in the normal dispatcher. */
+export function resumePageAction(
+	raw?: string,
+	webOrigin?: string,
+): NativeAction | undefined {
+	if (
+		!raw ||
+		raw.length > 16_384 ||
+		!webOrigin ||
+		nativeWebOrigin(webOrigin) !== webOrigin
+	)
+		return;
+	try {
+		const url = new URL(raw);
+		if (
+			url.protocol !== "https:" ||
+			url.origin !== webOrigin ||
+			url.username ||
+			url.password ||
+			url.hash ||
+			raw.includes("\\") ||
+			Array.from(raw).some((character) => character.charCodeAt(0) < 32)
+		)
+			return;
+		const params = url.searchParams;
+		if (
+			["bot", "conversation", "id", "eventId", "route", APP_QUERY_PARAM].some(
+				(key) => params.getAll(key).length > 1,
+			)
+		)
+			return;
+		if (url.pathname === "/bots") {
+			const conversationId = params.get("conversation");
+			const botId = params.get("bot");
+			if (conversationId)
+				return {
+					kind: "open_conversation",
+					conversationId,
+					botId: botId || undefined,
+				};
+			return { kind: "open_bot", botId: botId || undefined };
+		}
+		if (!isUsePathname(url.pathname)) return;
+		const appId = params.get("id");
+		if (!appId) return;
+		const path = readUseRoutePath(url.pathname) ?? params.get("route");
+		if (path !== null) {
+			const queryParams = Array.from(
+				readAppQuery(url.search),
+				([name, value]) => ({ name, value }),
+			);
+			return {
+				kind: "open_app",
+				appId,
+				...parseAppRouteTarget(path, queryParams),
+			};
+		}
+		const eventId = params.get("eventId");
+		if (eventId) return { kind: "open_event", appId, eventId };
+		return { kind: "open_app", appId };
+	} catch {
+		return;
+	}
 }
 
 export function withNativeActiveRuns(

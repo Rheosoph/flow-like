@@ -6,8 +6,13 @@ import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-sel
 import { useInvoke } from "@flow-like/flow-like-ui/hooks/use-invoke";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import {
+	type NativeActionRequest,
+	assertNativeActionCurrent,
+	cancelNativeAction,
 	completeNativeAction,
 	nativeActionErrorOutcome,
+	nativeActionRunIds,
+	subscribeNativeActionLifecycle,
 } from "@flow-like/flow-like-ui/lib/native-action-result";
 import type { NativeCustomWidget } from "@flow-like/flow-like-ui/lib/native-widget";
 import {
@@ -21,6 +26,7 @@ import {
 import type { IBotTurn } from "@flow-like/flow-like-ui/state/backend-state/bot-state";
 import { useExecutionEngine } from "@flow-like/flow-like-ui/state/execution-engine-context";
 import { useGlobalChatStore } from "@flow-like/flow-like-ui/state/global-chat/global-chat-store";
+import { cancelGlobalChatRun } from "@flow-like/flow-like-ui/state/global-chat/global-chat-stream";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -127,6 +133,7 @@ export function NativeIntegrationProvider() {
 	const currentScope = useRef<string | undefined>(undefined);
 	currentScope.current = identityReady ? scope : undefined;
 	const writes = useRef(Promise.resolve());
+	const automationRequests = useRef(new Map<string, NativePendingAction>());
 	const previousScope = useRef<string | undefined>(undefined);
 	const [mcpRequests, setMcpRequests] = useState<NativeMcpRequest[]>([]);
 	const [eventRuns, setEventRuns] = useState<NativeEventRunView[]>([]);
@@ -195,6 +202,27 @@ export function NativeIntegrationProvider() {
 			}
 		};
 		const current = () => !stopped && currentScope.current === scope;
+		const automationKey = (request: NativeActionRequest) =>
+			JSON.stringify([request.scope, request.id]);
+		const stopAutomation = (request: NativeActionRequest) => {
+			for (const runId of nativeActionRunIds(request))
+				void cancelGlobalChatRun(runId).catch(() => {});
+			void engine.cancelTask(`native-${request.id}`).catch(() => {});
+			const matches = (item?: NativeActionRequest) =>
+				item?.id === request.id && item?.scope === request.scope;
+			useGlobalChatStore.setState((state) => {
+				const drafts = [state.draft, ...state.nativeDrafts].filter(
+					(draft) => draft && !matches(draft.nativeRequest),
+				);
+				return {
+					draft: drafts[0] ?? null,
+					nativeDrafts: drafts.slice(1) as typeof state.nativeDrafts,
+					queue: state.queue.filter((item) => !matches(item.nativeRequest)),
+				};
+			});
+			setEventRuns((runs) => runs.filter((run) => !matches(run)));
+			setBotInput((input) => (input && matches(input) ? undefined : input));
+		};
 		const enqueueWrite = (fn: () => Promise<unknown>) => {
 			writes.current = writes.current
 				.catch(() => {})
@@ -221,6 +249,48 @@ export function NativeIntegrationProvider() {
 			previousScope.current = scope;
 		}
 		previousScope.current = scope;
+		const offLifecycle = subscribeNativeActionLifecycle((request, state) => {
+			if (request.scope !== scope || !request.automation) return;
+			automationRequests.current.delete(automationKey(request));
+			if (state === "cancelled") stopAutomation(request);
+		});
+		const onAutomationCancel = (event: Event) => {
+			const detail = (event as CustomEvent).detail;
+			if (detail?.scope !== scope || typeof detail?.id !== "string") return;
+			const request = automationRequests.current.get(automationKey(detail));
+			if (request) cancelNativeAction(request);
+		};
+		let checkingAutomations = false;
+		const checkAutomations = async () => {
+			if (checkingAutomations) return;
+			checkingAutomations = true;
+			try {
+				for (const request of automationRequests.current.values()) {
+					if (request.scope !== scope) continue;
+					try {
+						assertNativeActionCurrent(request, currentScope.current);
+						if (
+							!(await invoke<boolean>("native_automation_current", {
+								id: request.id,
+								scope: request.scope,
+							}))
+						)
+							cancelNativeAction(request);
+					} catch {
+						cancelNativeAction(request);
+					}
+				}
+			} finally {
+				checkingAutomations = false;
+			}
+		};
+		window.addEventListener(
+			"flow-like-native-action-cancel",
+			onAutomationCancel,
+		);
+		const automationTimer = window.setInterval(() => {
+			void checkAutomations();
+		}, 1000);
 		const icons = createNativeAppIconPublisher({
 			publish: async (payload) => {
 				if (current()) await invoke("native_publish_app_icons", { ...payload });
@@ -351,11 +421,34 @@ export function NativeIntegrationProvider() {
 			}
 			handling.add(key);
 			try {
+				if (request.responseMode && request.automation) {
+					assertNativeActionCurrent(request, scope);
+					if (
+						!(await invoke<boolean>("native_automation_current", {
+							id: request.id,
+							scope,
+						}))
+					)
+						throw new Error("This automation was cancelled or expired.");
+					automationRequests.current.set(automationKey(request), request);
+				}
+				const requestCurrent = () => {
+					try {
+						assertNativeActionCurrent(request, currentScope.current);
+						return current();
+					} catch {
+						return false;
+					}
+				};
 				await dispatchNativeAction(request, {
 					scope,
 					backend,
+					getWebOrigin: async () =>
+						navigation.current.webOrigin ||
+						(await webOrigin.refetch()).data ||
+						undefined,
 					navigate: (url) => navigation.current.router.push(url),
-					isCurrent: current,
+					isCurrent: requestCurrent,
 					complete: async (outcome) => {
 						void queryClient.invalidateQueries({ queryKey: ["inbox"] });
 						await completeNativeAction(request, outcome, {
@@ -364,19 +457,21 @@ export function NativeIntegrationProvider() {
 						});
 					},
 					bot: async (action) => {
-						if (!action.botId || !current()) return;
+						if (!action.botId || !requestCurrent()) return;
 						const operation: NativeBotInputOperation | undefined =
-							action.kind === "capture_bot_voice" || action.voice
-								? "voice"
-								: action.kind === "capture_bot_document"
-									? action.operation === "photo"
-										? "photo"
-										: "document"
-									: action.kind === "local_bot_summary"
-										? action.operation === "extract"
-											? "extract"
-											: "summarize"
-										: undefined;
+							action.kind === "private_bot_clipboard"
+								? "private_clipboard"
+								: action.kind === "capture_bot_voice" || action.voice
+									? "voice"
+									: action.kind === "capture_bot_document"
+										? action.operation === "photo"
+											? "photo"
+											: "document"
+										: action.kind === "local_bot_summary"
+											? action.operation === "extract"
+												? "extract"
+												: "summarize"
+											: undefined;
 						navigation.current.router.push(nativeBotUrl(action));
 						if (operation) {
 							setBotInput({
@@ -389,7 +484,7 @@ export function NativeIntegrationProvider() {
 							return;
 						}
 						const files = await readNativeBotFiles(action.files ?? []);
-						if (!current()) return;
+						if (!requestCurrent()) return;
 						const prompt = action.prompt || action.text || "";
 						if (!prompt && !files.length) return;
 						markHandled(key);
@@ -418,7 +513,7 @@ export function NativeIntegrationProvider() {
 								});
 							}),
 						);
-						if (!current()) return;
+						if (!requestCurrent()) return;
 						if (prompt || files.length) {
 							markHandled(key);
 							useGlobalChatStore.getState().setDraft({
@@ -431,9 +526,17 @@ export function NativeIntegrationProvider() {
 							throw new Error("Provide a question for FlowPilot.");
 					},
 					callEvent: (appId, event, input) => {
-						if (!current()) return;
+						if (!requestCurrent()) return;
 						markHandled(key);
-						const isCurrent = () => currentScope.current === scope;
+						const isCurrent = () => {
+							try {
+								if (request.automation)
+									assertNativeActionCurrent(request, currentScope.current);
+								return currentScope.current === scope;
+							} catch {
+								return false;
+							}
+						};
 						const completion = {
 							getCurrentScope: () => currentScope.current,
 							invoke,
@@ -601,9 +704,14 @@ export function NativeIntegrationProvider() {
 			if (
 				!value ||
 				typeof value.botId !== "string" ||
-				!["voice", "document", "photo", "summarize", "extract"].includes(
-					value.operation,
-				)
+				![
+					"voice",
+					"document",
+					"photo",
+					"summarize",
+					"extract",
+					"private_clipboard",
+				].includes(value.operation)
 			)
 				return;
 			void handle({
@@ -611,11 +719,13 @@ export function NativeIntegrationProvider() {
 				scope,
 				action: {
 					kind:
-						value.operation === "voice"
-							? "capture_bot_voice"
-							: ["summarize", "extract"].includes(value.operation)
-								? "local_bot_summary"
-								: "capture_bot_document",
+						value.operation === "private_clipboard"
+							? "private_bot_clipboard"
+							: value.operation === "voice"
+								? "capture_bot_voice"
+								: ["summarize", "extract"].includes(value.operation)
+									? "local_bot_summary"
+									: "capture_bot_document",
 					botId: value.botId,
 					operation: value.operation,
 				},
@@ -721,6 +831,15 @@ export function NativeIntegrationProvider() {
 		onFocus();
 		return () => {
 			stopped = true;
+			clearInterval(automationTimer);
+			window.removeEventListener(
+				"flow-like-native-action-cancel",
+				onAutomationCancel,
+			);
+			if (currentScope.current !== scope)
+				for (const request of automationRequests.current.values())
+					if (request.scope === scope) cancelNativeAction(request);
+			offLifecycle();
 			icons.dispose();
 			notificationIcons.dispose();
 			customWidgetPublisher.dispose();
@@ -747,6 +866,7 @@ export function NativeIntegrationProvider() {
 		backend,
 		engine,
 		queryClient,
+		webOrigin.refetch,
 	]);
 	if (identityReady && botInput?.scope === scope)
 		return (
@@ -756,7 +876,10 @@ export function NativeIntegrationProvider() {
 				isCurrent={() => currentScope.current === botInput.scope}
 				onClose={() => setBotInput(undefined)}
 				onSend={async (result) => {
-					const files = await readNativeBotFiles(result.files ?? []);
+					const files = [
+						...(await readNativeBotFiles(result.files ?? [])),
+						...(result.attachments ?? []),
+					];
 					if (currentScope.current !== botInput.scope) return;
 					router.push(nativeBotUrl({ botId: botInput.botId }));
 					useGlobalChatStore.getState().setDraft({

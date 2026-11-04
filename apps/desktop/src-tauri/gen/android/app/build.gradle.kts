@@ -101,6 +101,8 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("androidx.sharetarget:sharetarget:1.2.0")
     implementation("com.google.android.gms:play-services-mlkit-document-scanner:16.0.0")
+    implementation("com.google.android.gms:play-services-location:21.3.0")
+    implementation("com.google.mlkit:text-recognition:16.0.1")
     if (enableBotLocalAi) {
         implementation("com.google.guava:guava:33.4.8-android")
         implementation("com.google.mlkit:genai-summarization:1.0.0-beta1")

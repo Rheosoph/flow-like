@@ -153,6 +153,7 @@ rdev.workspace = true
 flow-like = { workspace = true, features = ["app-runtime", "tauri", "local-ml", "local-tts-metal", "local-tts-accelerate", "local-stt-metal", "local-stt-accelerate"] }
 
 [target."cfg(target_os = \"android\")".dependencies]
+jni = "0.21.1"
 flow-like-catalog = { workspace = true, default-features = false, features = ["mobile", "draft-testing"] }
 
 [target."cfg(target_os = \"linux\")".dependencies]

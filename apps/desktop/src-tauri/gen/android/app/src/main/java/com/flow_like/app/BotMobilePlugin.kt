@@ -33,6 +33,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
     private val secure = BotSecureStore(activity)
     private val worker = Executors.newSingleThreadExecutor()
     private val modelWorker = Executors.newSingleThreadExecutor()
+    private val captureWorker = Executors.newSingleThreadExecutor()
     private var view: WebView? = null
     private val cancelled = ConcurrentHashMap.newKeySet<String>()
     private val cameraFiles = ConcurrentHashMap<String, File>()
@@ -40,6 +41,14 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
     override fun load(webView: WebView) {
         super.load(webView)
         view = webView
+        BotCredentialBroker.init(activity)
+        NativeGeofences.install(activity)
+        BotAutomationSignals.cancelled = { id, scope ->
+            val detail = JSONObject().put("id", id).put("scope", scope)
+            activity.runOnUiThread {
+                view?.evaluateJavascript("window.dispatchEvent(new CustomEvent('flow-like-native-action-cancel',{detail:$detail}));", null)
+            }
+        }
         handleIntent(activity.intent)
     }
 
@@ -61,6 +70,9 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
             Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).resolveActivity(activity.packageManager) != null,
             BotDocumentActivity.scannerAvailable(activity), BotLocalAi.availability(activity),
             BuildConfig.BOT_APP_FUNCTIONS && android.os.Build.VERSION.SDK_INT >= 36)
+            .put("privateClipboard", true).put("clipboard", NativeDeviceClipboard.capabilities())
+            .put("localOcr", true).put("nativeLocation", true).put("geofences", true)
+            .put("automationResults", true).put("quickSettings", true)
     }
 
     // These commands are called only by Rust. No frontend command exposes secret values.
@@ -78,13 +90,16 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
     }
     @Command fun publishSnapshot(invoke: Invoke) = execute(invoke) {
         store.publish(invoke.getArgs().getJSONObject("snapshot"))
+        NativeGeofences.dispatch { NativeGeofences.reconcile(activity) }
         BotSurfaces.refresh(activity)
         BotStatusSync.schedule(activity)
         ready()
         JSONObject()
     }
     @Command fun clearSnapshot(invoke: Invoke) = execute(invoke) {
-        store.clear(); BotSurfaces.clear(activity); JSONObject()
+        store.clear(); BotSurfaces.clear(activity)
+        NativeGeofences.clear(activity); NativeDeviceClipboard.clearPrivate(activity)
+        JSONObject()
     }
     @Command fun pendingActions(invoke: Invoke) = execute(invoke) { JSONObject().put("actions", store.foregroundActions()) }
     @Command fun acknowledgeAction(invoke: Invoke) = execute(invoke) {
@@ -97,6 +112,38 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
     @Command fun sharedFilesDirectory(invoke: Invoke) = execute(invoke) {
         JSONObject().put("path", BotNativeStore.sharedDirectory(activity).absolutePath)
     }
+
+    @Command fun automationCurrent(invoke: Invoke) = execute(invoke) {
+        val args = invoke.getArgs()
+        JSONObject().put("active", store.automationCurrent(args.getString("id"), args.getString("scope")))
+    }
+    @Command fun locationRequest(invoke: Invoke) {
+        val args = invoke.getArgs()
+        activity.runOnUiThread {
+            NativeDeviceLocation.request(activity, args.getString("requestId"), args.getJSONObject("options")) {
+                invoke.resolve(JSObject(it.toString()))
+            }
+        }
+    }
+    @Command fun locationCancel(invoke: Invoke) = execute(invoke) {
+        NativeDeviceLocation.cancel(invoke.getArgs().getString("requestId")); JSONObject()
+    }
+    @Command fun geofencePermission(invoke: Invoke) {
+        activity.runOnUiThread {
+            NativeGeofencePermissions.request(activity, invoke.getArgs().getString("mode")) {
+                invoke.resolve(JSObject(it.toString()))
+            }
+        }
+    }
+    @Command fun geofenceScope(invoke: Invoke) = execute(invoke) { JSONObject().put("scope", NativeGeofences.scope(activity)) }
+    @Command fun geofenceSync(invoke: Invoke) = execute(invoke) { NativeGeofences.sync(activity, invoke.getArgs().getJSONObject("config")) }
+    @Command fun geofenceEvents(invoke: Invoke) = execute(invoke) { JSONObject().put("events", NativeGeofences.events(activity)) }
+    @Command fun geofenceAck(invoke: Invoke) = execute(invoke) { NativeGeofences.ack(activity, invoke.getArgs().getJSONArray("ids")); JSONObject() }
+    @Command fun geofenceRuntimeState(invoke: Invoke) = execute(invoke) { NativeGeofences.runtimeState(activity) }
+    @Command fun writeClipboard(invoke: Invoke) {
+        activity.runOnUiThread { invoke.resolve(JSObject(NativeDeviceClipboard.write(activity, invoke.getArgs().getJSONObject("payload")).toString())) }
+    }
+    @Command fun readPrivateClipboard(invoke: Invoke) = execute(invoke) { NativeDeviceClipboard.readPrivate(activity) }
 
     @Command fun botRequest(invoke: Invoke) {
         try {
@@ -220,12 +267,13 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
             finishRequest(invoke, JSONObject().put("cancelled", true))
             return
         }
-        worker.execute {
+        captureWorker.execute {
             try {
                 require(file.length() in 1..20L * 1024 * 1024)
                 val imported = File(BotNativeStore.sharedDirectory(activity), "${UUID.randomUUID()}-photo.jpg")
                 file.copyTo(imported)
-                finishRequest(invoke, JSONObject().put("files", JSONArray().put(imported.absolutePath)))
+                val paths = JSONArray().put(imported.absolutePath)
+                finishRequest(invoke, JSONObject().put("files", paths).put("text", NativeDeviceOcr.readFiles(activity, paths)))
             } catch (_: Exception) { invoke.reject("unavailable: The photo could not be imported") }
             finally { file.delete() }
         }
@@ -233,8 +281,11 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
 
     @ActivityCallback fun documentResult(invoke: Invoke, result: ActivityResult) {
         if (result.resultCode != Activity.RESULT_OK) { finishRequest(invoke, JSONObject().put("cancelled", true)); return }
-        worker.execute {
-            try { finishRequest(invoke, JSONObject().put("files", copyFiles(result.data))) }
+        captureWorker.execute {
+            try {
+                val paths = copyFiles(result.data)
+                finishRequest(invoke, JSONObject().put("files", paths).put("text", NativeDeviceOcr.readFiles(activity, paths)))
+            }
             catch (_: Exception) { invoke.reject("unavailable: The selected documents could not be read") }
         }
     }
@@ -287,6 +338,7 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
 
     private fun handleIntent(intent: Intent?) {
         if (intent == null) return
+        if (intent.action == "com.flow_like.app.AUTOMATION_WAKE") { ready(); return }
         if (intent.action == BotSurfaces.OPEN_SHORTCUT) {
             val id = intent.getStringExtra("bot_id") ?: return
             worker.execute {
