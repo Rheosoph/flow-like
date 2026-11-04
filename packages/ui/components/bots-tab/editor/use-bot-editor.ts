@@ -15,6 +15,7 @@ import {
 	type BotDraft,
 	type BotDraftProblem,
 	type BotLocationMove,
+	type BotModelPin,
 	botDraftFromBot,
 	botDraftFromPreset,
 	buildUpdateBotRequest,
@@ -79,6 +80,7 @@ export interface BotEditor {
 	setInstructions: (instructions: string) => void;
 	setModel: (model: IBotModelPolicy) => void;
 	setEmbeddingModel: (embeddingModel: string | null) => void;
+	setModelPin: (pin: BotModelPin, bitId: string | null) => void;
 	setLocation: (location: BotLocation) => void;
 	setDeviceId: (deviceId: string) => void;
 	setClassification: (classification: IDataSensitivity) => void;
@@ -326,6 +328,7 @@ export function useBotEditor(
 		setInstructions: (instructions) => update({ instructions }),
 		setModel: (model) => update({ model }),
 		setEmbeddingModel: (embeddingModel) => update({ embeddingModel }),
+		setModelPin: (pin, bitId) => update({ [pin]: bitId }),
 		setLocation: (location) => {
 			if (localOnly || fixedLocation) return;
 			if (flowPilot) return update({ location });

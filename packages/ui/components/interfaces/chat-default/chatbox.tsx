@@ -22,6 +22,8 @@ import {
 	useState,
 } from "react";
 import { cn, humanFileSize } from "../../../lib/utils";
+import { useMentionPicker } from "../../bots-tab/mention-picker";
+import type { Mentionable } from "../../bots-tab/mentions";
 import type { ThinkingOption } from "../../thinking/thinking-options";
 import { ThinkingPicker } from "../../thinking/thinking-picker";
 import { Button } from "../../ui/button";
@@ -70,6 +72,10 @@ interface ChatBoxProps {
 	 * restored so nothing is silently lost.
 	 */
 	onSteer?: (content: string) => Promise<boolean>;
+	/** Responses are generating: with nothing to send, the send button becomes Stop. */
+	stop?: ChatBoxStop;
+	/** Rendered left of the send controls, told whether the send button currently shows Stop. */
+	renderRunStatus?: (stopShown: boolean) => ReactNode;
 	onVoiceModeToggle?: () => void;
 	/** Called when the user starts speaking/recording, to interrupt answer playback. */
 	onInterrupt?: () => void;
@@ -78,6 +84,16 @@ interface ChatBoxProps {
 	model?: ChatBoxModel;
 	/** Additional controls alongside the thinking picker. */
 	actions?: ReactNode;
+	/** Who typing `@` suggests; the text keeps `@Name`, so the host reads mentions from it. */
+	mentionables?: readonly Mentionable[];
+	placeholder?: string;
+}
+
+export interface ChatBoxStop {
+	readonly onStop: () => void;
+	readonly label: string;
+	/** Every live response is already cancelling. */
+	readonly stopping: boolean;
 }
 
 export interface ChatBoxThinking {
@@ -117,11 +133,15 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			sendDisabled = false,
 			sendHint,
 			onSteer,
+			stop,
+			renderRunStatus,
 			onVoiceModeToggle,
 			onInterrupt,
 			thinking,
 			model,
 			actions,
+			mentionables,
+			placeholder,
 		}: Readonly<ChatBoxProps>,
 		ref,
 	) => {
@@ -142,6 +162,12 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const chatboxRef = useRef<HTMLTextAreaElement | null>(null);
 		const transcriptionBaseRef = useRef("");
+		const mentionPicker = useMentionPicker({
+			mentionables,
+			value: input,
+			onChange: setInput,
+			inputRef: chatboxRef,
+		});
 
 		const recorder = useVoiceRecorder({
 			maxDuration: voiceMaxDuration,
@@ -192,6 +218,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 				: "record";
 		const isRecording = recorder.isRecording || recorder.isArming;
 		const isTranscribing = speech.isListening;
+		const hasContent =
+			!!input.trim() || !!recordedAudio || attachedFiles.length > 0;
+		const hasDraft = hasContent || isRecording || isTranscribing;
+		const showStop = !!stop && !hasDraft;
 
 		// biome-ignore lint/correctness/useExhaustiveDependencies: `voiceMode` is the trigger; a newly configured mode clears the previous mode's speech failure and error.
 		useEffect(() => {
@@ -287,12 +317,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const handleSubmit = async (e: React.FormEvent) => {
 			e.preventDefault();
-			if (
-				sendDisabled ||
-				isRecording ||
-				isTranscribing ||
-				(!input.trim() && !recordedAudio)
-			) {
+			if (sendDisabled || isRecording || isTranscribing || !hasContent) {
 				return;
 			}
 
@@ -371,8 +396,9 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			return `${mins}:${secs.toString().padStart(2, "0")}`;
 		};
 
-		const handleKeyDown = (e: React.KeyboardEvent) => {
+		const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
 			if (e.nativeEvent.isComposing || composing) return;
+			if (mentionPicker.handleKeyDown(e)) return;
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
 				void handleSubmit(e);
@@ -598,6 +624,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					className="relative"
 					data-fl-chat-composer
 				>
+					{mentionPicker.menu}
 					<div
 						className="flex flex-col items-start overflow-hidden rounded-xl border border-border shadow-sm transition-all duration-200 focus-within:border-input focus-within:ring-2 focus-within:ring-ring"
 						onDrop={handleDrop}
@@ -610,15 +637,21 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						{/* Text Input */}
 						<div className="flex-1 py-2 w-full pr-2">
 							<Textarea
-								aria-label="Message"
+								aria-label={placeholder ?? "Message"}
 								ref={chatboxRef}
 								value={input}
-								onChange={(e) => setInput(e.target.value)}
+								onChange={(e) => {
+									setInput(e.target.value);
+									mentionPicker.track(e.target);
+								}}
 								onCompositionStart={() => setComposing(true)}
 								onCompositionEnd={() => setComposing(false)}
 								onKeyDown={handleKeyDown}
+								onKeyUp={mentionPicker.handleKeyUp}
 								onPaste={handlePaste}
-								placeholder={i18next.t("typeAMessage", "Type a message...")}
+								placeholder={
+									placeholder ?? i18next.t("typeAMessage", "Type a message...")
+								}
 								className="min-w-0 border-0 focus:ring-0 resize-none bg-transparent! placeholder:text-muted-foreground text-[16px] sm:text-sm leading-relaxed min-h-[44px] max-h-[180px] overflow-y-auto w-full"
 								rows={Math.min(5, Math.max(1, input.split("\n").length))}
 								style={{
@@ -799,6 +832,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 							{/* Send Button & Audio Controls */}
 							<div className="p-2 pt-0 flex items-center gap-2">
+								{renderRunStatus?.(showStop)}
+
 								{/* Voice-to-text transcription button (STT mode) */}
 								{audioInput && effectiveVoiceMode === "stt" && (
 									<Button
@@ -936,7 +971,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									</Button>
 								)}
 
-								{onSteer && (
+								{onSteer && !showStop && (
 									<Button
 										aria-label={i18next.t(
 											"addToTheRunningResponse",
@@ -963,26 +998,28 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									</Button>
 								)}
 
-								<Button
-									aria-label={
-										sendHint ?? i18next.t("sendMessage", "Send message")
-									}
-									title={sendHint}
-									type="submit"
-									size="sm"
-									disabled={
-										sendDisabled ||
-										isRecording ||
-										isTranscribing ||
-										(!input.trim() && !recordedAudio)
-									}
-									variant={
-										input.trim() || recordedAudio ? "default" : "secondary"
-									}
-									className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-all duration-200"
-								>
-									<Send className="w-4 h-4" />
-								</Button>
+								{stop && showStop ? (
+									<StopButton stop={stop} />
+								) : (
+									<Button
+										aria-label={
+											sendHint ?? i18next.t("sendMessage", "Send message")
+										}
+										title={sendHint}
+										type="submit"
+										size="sm"
+										disabled={
+											sendDisabled ||
+											isRecording ||
+											isTranscribing ||
+											!hasContent
+										}
+										variant={hasContent ? "default" : "secondary"}
+										className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-all duration-200"
+									>
+										<Send className="w-4 h-4" />
+									</Button>
+								)}
 							</div>
 						</div>
 					</div>
@@ -996,3 +1033,27 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		);
 	},
 );
+
+/** Send's stand-in while a response streams; the ring spins until every response is cancelling. */
+function StopButton({ stop }: { stop: ChatBoxStop }) {
+	return (
+		<Button
+			aria-label={stop.label}
+			title={stop.label}
+			type="button"
+			size="sm"
+			variant="secondary"
+			disabled={stop.stopping}
+			onClick={stop.onStop}
+			className="relative h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full"
+		>
+			{!stop.stopping && (
+				<span
+					aria-hidden
+					className="pointer-events-none absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-primary"
+				/>
+			)}
+			<SquareIcon className="size-3 fill-current" />
+		</Button>
+	);
+}

@@ -21,7 +21,7 @@ const controls = vi.hoisted(() => ({
 	restore: vi.fn(),
 	openOverlay: vi.fn(),
 	dismissOverlay: vi.fn(),
-	toast: Object.assign(vi.fn(), { dismiss: vi.fn(), error: vi.fn() }),
+	toast: { custom: vi.fn(), dismiss: vi.fn(), error: vi.fn() },
 	t: (_key: string, fallback: string, values?: Record<string, unknown>) =>
 		fallback.replace(/\{\{(\w+)\}\}/g, (_, name) =>
 			String(values?.[name] ?? ""),
@@ -50,6 +50,7 @@ vi.mock("sonner", () => ({ toast: controls.toast }));
 
 let root: Root;
 let container: HTMLDivElement;
+let toastRoot: Root | undefined;
 let nextMessage = 0;
 
 function VisibleChat({ target }: { target: ChatActivityTarget }) {
@@ -57,13 +58,31 @@ function VisibleChat({ target }: { target: ChatActivityTarget }) {
 	return null;
 }
 
-function reply(target: ChatActivityTarget, title = "Research complete") {
+function reply(
+	target: ChatActivityTarget,
+	title = "Research complete",
+	preview = "The report is ready to review.",
+) {
 	return recordChatActivity({
 		target,
 		messageId: `ui-test-message-${++nextMessage}`,
 		title,
-		preview: "The report is ready to review.",
+		preview,
 	});
+}
+
+async function showToast(index = 0) {
+	const [render, options] = controls.toast.custom.mock.calls[index];
+	const host = document.createElement("div");
+	document.body.append(host);
+	toastRoot = createRoot(host);
+	await act(async () => toastRoot?.render(render(options.id)));
+	const button = (label: string) =>
+		Array.from(host.querySelectorAll<HTMLButtonElement>("button")).find(
+			(item) =>
+				item.textContent === label || item.getAttribute("aria-label") === label,
+		);
+	return { host, id: options.id as string, button };
 }
 
 beforeEach(() => {
@@ -80,7 +99,9 @@ beforeEach(() => {
 
 afterEach(async () => {
 	await act(async () => root.unmount());
-	container.remove();
+	await act(async () => toastRoot?.unmount());
+	toastRoot = undefined;
+	document.body.replaceChildren();
 	useChatActivityStore.getState().clear();
 	vi.restoreAllMocks();
 	vi.clearAllMocks();
@@ -101,12 +122,12 @@ describe("conversation activity", () => {
 			reply(target);
 		});
 
-		expect(controls.toast).toHaveBeenCalledTimes(1);
+		expect(controls.toast.custom).toHaveBeenCalledTimes(1);
 		expect(container.querySelector("output")?.textContent).toBe("1");
-		const options = controls.toast.mock.calls[0][1];
-		expect(options.closeButton).toBe(true);
-		expect(options.action.label).toBe("Open conversation");
-		await act(async () => options.action.onClick());
+		const popup = await showToast();
+		expect(popup.host.textContent).toContain("Research complete");
+		expect(popup.host.textContent).toContain("The report is ready to review.");
+		await act(async () => popup.button("Open conversation")?.click());
 		await vi.waitFor(() =>
 			expect(controls.restore).toHaveBeenCalledWith("background-chat"),
 		);
@@ -125,7 +146,27 @@ describe("conversation activity", () => {
 		);
 		expect(useChatActivityStore.getState().entries).toHaveLength(0);
 		expect(container.querySelector("output")).toBeNull();
-		expect(controls.toast.dismiss).toHaveBeenCalledWith(options.id);
+		expect(controls.toast.dismiss).toHaveBeenCalledWith(popup.id);
+	});
+
+	it("shows a markdown reply as plain text and closes without opening it", async () => {
+		await act(async () => root.render(<ChatActivityProvider />));
+		await act(async () => {
+			reply(
+				{ kind: "flowpilot", sessionId: "markdown-chat" },
+				"Weather app",
+				"## Build brief: Weather app\n\n- **App:** new app\n- `MCP` [docs](https://example.test)\n\n```json\n{}\n```",
+			);
+		});
+		const popup = await showToast();
+		expect(popup.host.textContent).toContain(
+			"Build brief: Weather app · App: new app · MCP docs",
+		);
+		expect(popup.host.textContent).not.toMatch(/[#*`{]/);
+		await act(async () => popup.button("Close")?.click());
+		expect(controls.toast.dismiss).toHaveBeenCalledWith(popup.id);
+		expect(controls.restore).not.toHaveBeenCalled();
+		expect(useChatActivityStore.getState().entries).toHaveLength(1);
 	});
 
 	it("closes the FlowPilot dock before opening encoded app targets without marking them read", async () => {
@@ -168,7 +209,8 @@ describe("conversation activity", () => {
 		controls.restore.mockRejectedValue(new Error("Database unavailable"));
 		await act(async () => root.render(<ChatActivityProvider />));
 		reply({ kind: "flowpilot", sessionId: "failed-chat" });
-		await act(async () => controls.toast.mock.calls[0][1].action.onClick());
+		const popup = await showToast();
+		await act(async () => popup.button("Open conversation")?.click());
 		await vi.waitFor(() =>
 			expect(controls.toast.error).toHaveBeenCalledWith(
 				"Could not open this conversation.",
@@ -198,9 +240,9 @@ describe("conversation activity", () => {
 			window.dispatchEvent(new StorageEvent("storage", { key }));
 		});
 		expect(container.querySelector("output")).toBeNull();
-		expect(controls.toast).toHaveBeenCalledTimes(1);
+		expect(controls.toast.custom).toHaveBeenCalledTimes(1);
 		expect(controls.toast.dismiss).toHaveBeenCalledWith(
-			controls.toast.mock.calls[0][1].id,
+			controls.toast.custom.mock.calls[0][1].id,
 		);
 	});
 
@@ -215,11 +257,11 @@ describe("conversation activity", () => {
 			),
 		);
 		reply(target);
-		expect(controls.toast).not.toHaveBeenCalled();
+		expect(controls.toast.custom).not.toHaveBeenCalled();
 		expect(useChatActivityStore.getState().entries).toHaveLength(0);
 		await act(async () => root.render(null));
 		reply({ kind: "flowpilot", sessionId: "unmounted-chat" });
-		expect(controls.toast).not.toHaveBeenCalled();
+		expect(controls.toast.custom).not.toHaveBeenCalled();
 		expect(useChatActivityStore.getState().entries).toHaveLength(1);
 	});
 });

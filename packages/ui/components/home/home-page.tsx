@@ -138,7 +138,9 @@ export function HomePage() {
 	);
 	useRequestFabBubble(
 		!editing &&
-			!resolved.layout.widgets.some((widget) => widget.type === "flowpilot"),
+			!resolved.layout.widgets.some((widget) =>
+				["flowpilot", "bot-chat"].includes(widget.type),
+			),
 	);
 	useSuppressFabBubble(editing);
 	const save = async (layout: IHomeLayout | null) => {

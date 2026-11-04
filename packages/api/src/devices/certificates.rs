@@ -841,6 +841,7 @@ impl NativeDelivery<'_> {
             self.0,
             &delivery.notification_id,
             DispatchNotificationInput {
+                bot_context: None,
                 user_id: delivery.user_id,
                 app_id: None,
                 title: delivery.title,

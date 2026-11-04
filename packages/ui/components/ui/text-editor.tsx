@@ -14,22 +14,18 @@ import {
 	useMemo,
 } from "react";
 import { AuthContext } from "react-oidc-context";
+import remarkBreaks from "remark-breaks";
+import remarkEmoji from "remark-emoji";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import {
 	type EditorUser,
 	PLATE_JSON_PREFIX,
 	parsePlateDocument,
 } from "../../lib/plate-document";
-import remarkBreaks from "remark-breaks";
-import remarkEmoji from "remark-emoji";
-import remarkGfm from "remark-gfm";
-import remarkMath from "remark-math";
-import { FootnoteScope } from "../editor/footnote-context";
 import { AIUsageAppContext } from "../editor/ai-usage-context";
 import { BaseEditorKit } from "../editor/editor-base-kit";
-import {
-	RendererPresentationContext,
-	type RendererPresentation,
-} from "../editor/renderer-presentation";
+import { FootnoteScope } from "../editor/footnote-context";
 import {
 	type MentionItem,
 	MentionItemsProvider,
@@ -39,6 +35,10 @@ import { preprocessDirectiveBlocks } from "../editor/plugins/remark-directives";
 import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
 import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
 import { remarkUserMention } from "../editor/plugins/remark-user-mention";
+import {
+	type RendererPresentation,
+	RendererPresentationContext,
+} from "../editor/renderer-presentation";
 import {
 	DEFAULT_UPLOAD_PREFIX,
 	EditorUploadContext,

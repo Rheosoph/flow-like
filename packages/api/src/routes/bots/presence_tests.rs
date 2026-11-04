@@ -5,7 +5,7 @@ use super::{
         report_in,
     },
 };
-use crate::routes::inbox::fixture::{at, delete_bot, insert_bot};
+use crate::routes::inbox::fixture::{at, delete_bot, insert_bot, insert_flux};
 use chrono::Duration;
 use flow_like_types::{bot::BotLocation, bot_turn::TurnHostKind};
 use sea_orm::DatabaseConnection;
@@ -198,6 +198,26 @@ async fn a_report_refuses_foreign_deleted_unknown_and_wrong_kind_bots() {
     .unwrap();
     assert_eq!(device.accepted, ["bot_device"]);
     assert_eq!(device.refused, ["bot_desktop"]);
+}
+
+#[tokio::test]
+async fn a_desktop_may_report_flux_though_it_runs_on_the_server() {
+    let db = database().await;
+    bots(&db).await;
+    insert_flux(&db, "bot_flux", "user-a").await;
+    insert_flux(&db, "bot_their_flux", "user-b").await;
+    let now = at(10_000);
+    let wanted = ids(&["bot_flux", "bot_server", "bot_their_flux"]);
+    let reported = |kind| report_in(&db, "user-a", "host-1", kind, &wanted, now);
+
+    let desktop = reported(TurnHostKind::Desktop).await.unwrap();
+    assert_eq!(desktop.accepted, ["bot_flux"]);
+    assert_eq!(desktop.refused, ["bot_server", "bot_their_flux"]);
+    let device = reported(TurnHostKind::Device).await.unwrap();
+    assert!(device.accepted.is_empty(), "{device:?}");
+
+    let presence = presence_in(&db, "user-a", now).await.unwrap();
+    assert_eq!(state(&presence, "bot_flux"), PresenceState::Online);
 }
 
 #[tokio::test]

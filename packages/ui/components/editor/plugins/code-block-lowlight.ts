@@ -1,6 +1,6 @@
 import { all, createLowlight } from "lowlight";
-import { DIRECTIVE_TYPES } from "./remark-directives";
 import { RICH_MEDIA_LANGUAGES } from "../ui/rich-media-data";
+import { DIRECTIVE_TYPES } from "./remark-directives";
 
 /**
  * Fence languages routed to custom renderers (charts, admonitions, embeds).

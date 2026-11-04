@@ -15,6 +15,9 @@ SHORTCUTS = {
     "OpenFlowInboxIntent",
     "OpenFlowHomeIntent",
     "OpenFlowAppIntent",
+    "OpenFlowBotIntent",
+    "AskFlowBotIntent",
+    "RunFlowBotTaskIntent",
 }
 
 
@@ -38,7 +41,7 @@ def verify_metadata(path: Path, *, shortcuts: bool = True, module: str | None = 
         if missing:
             raise ValueError(f"Missing App Shortcuts: {', '.join(sorted(missing))}")
     text_type = {"primitive": {"wrapper": {"typeIdentifier": 0}}}
-    for name in ("AskFlowPilotIntent", "AskAppChatIntent"):
+    for name in ("AskFlowPilotIntent", "AskAppChatIntent", "AskFlowBotIntent"):
         if name not in required:
             continue
         if actions[name].get("outputType") != text_type:

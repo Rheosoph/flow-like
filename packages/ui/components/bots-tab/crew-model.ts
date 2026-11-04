@@ -1,5 +1,8 @@
-import { LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
-import type { IConversation } from "../../state/backend-state/inbox-state";
+import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
+import type {
+	IConversation,
+	IInvitation,
+} from "../../state/backend-state/inbox-state";
 import { isApprovalCard } from "./approval-entry";
 
 /**
@@ -85,8 +88,8 @@ export function personUnreadTotal(
 }
 
 /**
- * Conversations waiting on the reader: unread, and the newest message came from a bot. A bot's
- * approval card stays here, read or not, until an answer becomes the newest message.
+ * Bot approvals waiting on the reader, whether read or unread. Ordinary unread replies stay in
+ * Messages. Live questions come from the tool prompt; message text does not identify a question.
  */
 export function selectNeedsYou(
 	conversations: readonly IConversation[],
@@ -94,19 +97,69 @@ export function selectNeedsYou(
 		me?: string | null;
 		myBotIds: ReadonlySet<string>;
 		openConversationId?: string | null;
+		openBotId?: string | null;
 	},
 ): IConversation[] {
 	return conversations.filter((conversation) => {
 		const sender = conversation.last_entry?.sender_id;
 		return (
-			(conversation.unread_count > 0 ||
-				isApprovalCard(conversation.last_entry)) &&
+			isApprovalCard(conversation.last_entry) &&
 			conversation.id !== options.openConversationId &&
+			(!options.openBotId ||
+				directPartnerId(conversation, options.me) !== options.openBotId) &&
 			Boolean(sender) &&
 			!isSelfPrincipal(sender, options.me) &&
 			isBotMember(conversation, sender as string, options.myBotIds)
 		);
 	});
+}
+
+/** Whether a bot runs on a desktop or device of the account, whose presence the hub reports. */
+export function hasBotsHostedElsewhere(
+	bots: readonly IBot[] | undefined,
+): boolean {
+	return (
+		bots?.some(
+			(bot) => !bot.local && !bot.system && bot.location !== "server",
+		) ?? false
+	);
+}
+
+/** Everyone a crew view names: members, pending members, newest senders and inviters. */
+export function crewPrincipalIds(
+	conversations: readonly IConversation[],
+	invitations: readonly IInvitation[] = [],
+): string[] {
+	return [
+		...conversations.flatMap((conversation) => [
+			...conversation.members.map((member) => member.principal_id),
+			...(conversation.pending ?? []).map((member) => member.principal_id),
+			...(conversation.last_entry ? [conversation.last_entry.sender_id] : []),
+		]),
+		...invitations.flatMap((invitation) =>
+			invitation.invited_by ? [invitation.invited_by] : [],
+		),
+	];
+}
+
+/** The people, never you or a bot, of your conversations: the pickers' recent list. */
+export function recentPeopleIds(
+	conversations: readonly IConversation[],
+	me?: string | null,
+): string[] {
+	return [
+		...new Set(
+			conversations.flatMap((conversation) =>
+				conversation.members
+					.filter(
+						(member) =>
+							member.kind === "user" &&
+							!isSelfPrincipal(member.principal_id, me),
+					)
+					.map((member) => member.principal_id),
+			),
+		),
+	];
 }
 
 export function splitConversations(conversations: readonly IConversation[]): {

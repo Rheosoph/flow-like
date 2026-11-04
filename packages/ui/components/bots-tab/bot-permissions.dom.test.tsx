@@ -107,7 +107,7 @@ describe("BotPermissions grant action", () => {
 		await settle();
 		const items = [...window.document.querySelectorAll("[role='menuitem']")];
 		expect(items.map((item) => item.textContent)).toEqual(["Flux", "Scout"]);
-		await act(async () => (items[0] as HTMLElement).click());
+		await act(async () => (items[0] as unknown as HTMLElement).click());
 		await settle();
 		expect(calls).toEqual([{ from: "bot_pip", to: "bot_flux" }]);
 		await settle(100);

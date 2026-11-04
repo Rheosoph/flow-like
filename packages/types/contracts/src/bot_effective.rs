@@ -23,6 +23,16 @@ pub struct BotRoomLimits {
     /// Further scopes per app.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub scopes: BTreeMap<String, BotScopes>,
+    /// The bot answers only when a message names it or replies to it; it doesn't read along.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub mentioned_only: bool,
+}
+
+impl BotRoomLimits {
+    /// Whether a bot with these limits (`None`: none set) may wake on a message that doesn't address it.
+    pub fn reads_along(limits: Option<&Self>) -> bool {
+        !limits.is_some_and(|limits| limits.mentioned_only)
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -383,5 +393,17 @@ mod tests {
     fn room_limits_round_trip() {
         let limits: BotRoomLimits = serde_json::from_str("{}").unwrap();
         assert_eq!(limits, BotRoomLimits::default());
+        assert!(BotRoomLimits::reads_along(Some(&limits)) && BotRoomLimits::reads_along(None));
+        assert_eq!(serde_json::to_string(&limits).unwrap(), "{}");
+    }
+
+    #[test]
+    fn mentioned_only_round_trips_and_stops_reading_along() {
+        let limits: BotRoomLimits = serde_json::from_str(r#"{"mentioned_only":true}"#).unwrap();
+        assert!(limits.mentioned_only && !BotRoomLimits::reads_along(Some(&limits)));
+        assert_eq!(
+            serde_json::to_string(&limits).unwrap(),
+            r#"{"mentioned_only":true}"#
+        );
     }
 }

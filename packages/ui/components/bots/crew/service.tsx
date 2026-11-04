@@ -621,6 +621,7 @@ export const serviceEquipment: readonly BotEquipmentDefinition[] = [
 	},
 	{
 		id: "field-cap",
+		excludedKinds: ["kero"],
 		label: "Field cap",
 		slot: "head",
 		render: (context) => (

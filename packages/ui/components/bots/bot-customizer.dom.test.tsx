@@ -3,35 +3,39 @@
 import { act, useState } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { BotAvatar } from "./bot-avatar";
 import { BotCustomizer, type BotCustomizerProps } from "./bot-customizer";
 import { defaultBotCatalog } from "./catalog";
+import { getBotColorSelectionPaint } from "./colors";
 import { canSaveBotAppearance } from "./save-eligibility";
 import type { BotAppearance, BotAvatarProps, BotCatalog } from "./types";
 
 vi.mock("./bot-avatar", () => ({
-	BotAvatar: ({
-		appearance,
-		label,
-		animated,
-		pose,
-		expression,
-		mood,
-		agentState,
-		decorative,
-	}: BotAvatarProps) => (
-		<div
-			role={decorative ? undefined : "img"}
-			aria-label={label}
-			data-kind={appearance?.kind}
-			data-animated={animated}
-			data-pose={pose}
-			data-expression={expression}
-			data-mood={mood}
-			data-agent-state={agentState}
-			data-effect={appearance?.effect}
-			data-emote={appearance?.emote}
-			data-equipment={JSON.stringify(appearance?.equipment)}
-		/>
+	BotAvatar: vi.fn(
+		({
+			appearance,
+			label,
+			animated,
+			pose,
+			expression,
+			mood,
+			agentState,
+			decorative,
+		}: BotAvatarProps) => (
+			<div
+				role={decorative ? undefined : "img"}
+				aria-label={label}
+				data-kind={appearance?.kind}
+				data-animated={animated}
+				data-pose={pose}
+				data-expression={expression}
+				data-mood={mood}
+				data-agent-state={agentState}
+				data-effect={appearance?.effect}
+				data-emote={appearance?.emote}
+				data-equipment={JSON.stringify(appearance?.equipment)}
+			/>
+		),
 	),
 }));
 
@@ -218,6 +222,33 @@ async function mount(
 }
 
 describe("BotCustomizer", () => {
+	it("keeps crew artwork unchanged during randomization but updates expression previews", async () => {
+		await mount({ kind: "round" });
+		const avatar = vi.mocked(BotAvatar);
+		avatar.mockClear();
+		const random = vi.spyOn(Math, "random").mockReturnValue(0.1);
+		try {
+			await click("Randomize bot");
+		} finally {
+			random.mockRestore();
+		}
+		expect(avatar.mock.calls.filter(([props]) => props.decorative)).toEqual([]);
+		expect(button("Choose Angular bot").getAttribute("aria-pressed")).toBe(
+			"true",
+		);
+		expect(
+			container.querySelector('[role="img"]')?.getAttribute("data-kind"),
+		).toBe("angular");
+
+		avatar.mockClear();
+		await click("Happy", group("Preview expression"));
+		const thumbnails = avatar.mock.calls.filter(([props]) => props.decorative);
+		expect(thumbnails).toHaveLength(5);
+		expect(thumbnails.every(([props]) => props.expression === "happy")).toBe(
+			true,
+		);
+	});
+
 	it("resets the complete draft and preview to the catalog default without saving", async () => {
 		const initial: BotAppearance = {
 			kind: "angular",
@@ -327,7 +358,14 @@ describe("BotCustomizer", () => {
 		expect(next.kind).toBe("custom");
 		expect(next.equipment?.neck).toBe("scarf");
 		expect(next.equipment?.head).toBe("custom-hat");
-		expect(next.colors).toBeUndefined();
+		expect(Object.values(next.colors ?? {}).length).toBeGreaterThan(0);
+		for (const selection of Object.values(next.colors ?? {})) {
+			expect(selection?.kind).toBe("swatch");
+			if (selection?.kind === "swatch")
+				expect(catalog.colorPacks["colors-essentials"].colorIds).toContain(
+					selection.colorId,
+				);
+		}
 		expect(next.variant).toBeUndefined();
 		expect(next.dark).toBeUndefined();
 		expect(next.effect).toBe("crt");
@@ -340,6 +378,123 @@ describe("BotCustomizer", () => {
 		expect(
 			container.querySelector('[role="img"]')?.getAttribute("data-expression"),
 		).toBe("neutral");
+	});
+
+	it("randomizes and saves packed characters, outfits and colors without ownership restrictions", async () => {
+		const fullCatalog: BotCatalog = {
+			...catalog,
+			shapes: {
+				round: catalog.shapes.round,
+				angular: {
+					...catalog.shapes.angular,
+					eyeStyle: "dots",
+					palette: { ...catalog.shapes.angular.palette, background: "#101018" },
+					colorSlots: ["body"],
+				},
+			},
+			packs: {
+				...catalog.packs,
+				"tech-crew": {
+					...catalog.packs["tech-crew"],
+					equipmentIds: ["helm", "scarf"],
+				},
+			},
+			colors: { "holo-aurora": catalog.colors["holo-aurora"] },
+		};
+		const onSave = vi.fn();
+		const onChange = await mount({ kind: "round" }, vi.fn(), {
+			catalog: fullCatalog,
+			onSave,
+		});
+		const random = vi.spyOn(Math, "random").mockReturnValue(0.9);
+		try {
+			await click("Randomize bot");
+		} finally {
+			random.mockRestore();
+		}
+		const next = onChange.mock.calls[0][0] as BotAppearance;
+		expect(next.kind).toBe("angular");
+		expect(next.equipment).toEqual({
+			head: "helm",
+			neck: "scarf",
+		});
+		expect(next.colors?.body).toMatchObject({
+			kind: "hex",
+			packId: "color-lab",
+		});
+		expect(next.halo).toBe("none");
+		expect(container.querySelector('[data-locked="true"]')).toBeNull();
+		expect(
+			container.querySelector('[aria-label="Save requirements"]'),
+		).toBeNull();
+		expect(button("Save bot").disabled).toBe(false);
+		await click("Save bot");
+		expect(onSave).toHaveBeenCalledWith(next);
+	});
+
+	it("randomizes at most one accessory with an outfit while reaching every slot", async () => {
+		const withHandItem: BotCatalog = {
+			...catalog,
+			equipment: {
+				...catalog.equipment,
+				book: { id: "book", label: "Book", slot: "hand", render: () => null },
+			},
+		};
+		const onChange = await mount({ kind: "round" }, vi.fn(), {
+			catalog: withHandItem,
+		});
+		let seed = 581;
+		const random = vi.spyOn(Math, "random").mockImplementation(() => {
+			seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+			return seed / 0x100000000;
+		});
+		const reachedSlots = new Set<string>();
+		try {
+			for (let index = 0; index < 48; index++) {
+				await click("Randomize bot");
+				const next = onChange.mock.lastCall?.[0] as BotAppearance;
+				const slots = Object.keys(next.equipment ?? {});
+				expect(slots.length).toBeLessThanOrEqual(2);
+				expect(next.equipment?.neck).toBe("scarf");
+				for (const slot of slots) reachedSlots.add(slot);
+			}
+		} finally {
+			random.mockRestore();
+		}
+		expect(reachedSlots).toEqual(new Set(["neck", "head", "eyes", "hand"]));
+	});
+
+	it("keeps randomized textures, backgrounds and halos from competing", async () => {
+		const onChange = await mount({ kind: "round" });
+		let seed = 1571;
+		const random = vi.spyOn(Math, "random").mockImplementation(() => {
+			seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
+			return seed / 0x100000000;
+		});
+		let quietLooks = 0;
+		let withoutEmotes = 0;
+		try {
+			for (let index = 0; index < 32; index++) {
+				await click("Randomize bot");
+				const next = onChange.mock.lastCall?.[0] as BotAppearance;
+				const textured = Object.values(next.colors ?? {}).some((color) => {
+					const paint = getBotColorSelectionPaint(color, catalog);
+					return paint && paint.kind !== "solid";
+				});
+				const decorations = [
+					textured,
+					next.backdrop !== "none",
+					next.halo !== "none",
+				].filter(Boolean).length;
+				expect(decorations).toBeLessThanOrEqual(1);
+				if (!decorations) quietLooks++;
+				if (next.emote === "none") withoutEmotes++;
+			}
+		} finally {
+			random.mockRestore();
+		}
+		expect(quietLooks).toBeGreaterThan(16);
+		expect(withoutEmotes).toBeGreaterThan(16);
 	});
 
 	it("groups every look and changes effects without clearing the outfit or emote", async () => {
@@ -655,7 +810,7 @@ describe("BotCustomizer", () => {
 		});
 	});
 
-	it("previews premium colors and opens the required color pack without saving", async () => {
+	it("selects and saves premium colors without ownership restrictions", async () => {
 		const onSave = vi.fn();
 		const onRequestColorPack = vi.fn();
 		const onChange = await mount({ kind: "round" }, vi.fn(), {
@@ -670,14 +825,17 @@ describe("BotCustomizer", () => {
 			variant: "original",
 			colors: { body: { kind: "swatch", colorId: "holo-aurora" } },
 		});
-		expect(button("Save bot").disabled).toBe(true);
+		expect(button("Save bot").disabled).toBe(false);
 		await click("Save bot");
-		expect(onSave).not.toHaveBeenCalled();
-		const requirements = container.querySelector(
-			'[aria-label="Save requirements"]',
-		);
-		expect(requirements?.textContent).toContain("Aurora");
-		await click("Holographic", requirements ?? container);
+		expect(onSave).toHaveBeenCalledWith({
+			kind: "round",
+			variant: "original",
+			colors: { body: { kind: "swatch", colorId: "holo-aurora" } },
+		});
+		expect(
+			container.querySelector('[aria-label="Save requirements"]'),
+		).toBeNull();
+		await click("View Holographic color pack");
 		expect(onRequestColorPack).toHaveBeenCalledWith(
 			catalog.colorPacks["colors-holographic"],
 		);
@@ -914,6 +1072,66 @@ describe("BotCustomizer", () => {
 		expect(button("Choose Custom bot")).toBeTruthy();
 	});
 
+	it("hides excluded items and removes them when changing to an incompatible character", async () => {
+		const restricted = {
+			...catalog,
+			equipment: {
+				...catalog.equipment,
+				cap: {
+					...catalog.equipment.cap,
+					kinds: ["round", "angular"],
+					excludedKinds: ["angular"],
+				},
+			},
+		};
+		const onChange = await mount(
+			{ kind: "round", equipment: { head: "cap", neck: "scarf" } },
+			vi.fn(),
+			{ catalog: restricted },
+		);
+		await section("Outfit");
+		expect(button("Choose Round cap")).toBeTruthy();
+		await section("Crew");
+		await click("Choose Angular bot");
+		expect(onChange).toHaveBeenLastCalledWith({
+			kind: "angular",
+			equipment: { neck: "scarf" },
+		});
+		await section("Outfit");
+		expect(
+			container.querySelector('[aria-label="Choose Round cap"]'),
+		).toBeNull();
+		expect(button("Choose Angular helmet")).toBeTruthy();
+	});
+
+	it("skips excluded items when randomizing without ownership restrictions", async () => {
+		const restricted = {
+			...catalog,
+			defaultKind: "angular",
+			shapes: { angular: catalog.shapes.angular },
+			packs: {},
+			equipment: {
+				scarf: {
+					...catalog.equipment.scarf,
+					kinds: ["angular"],
+					excludedKinds: ["angular"],
+				},
+			},
+		};
+		const onChange = await mount({ kind: "angular" }, vi.fn(), {
+			catalog: restricted,
+		});
+		const random = vi.spyOn(Math, "random").mockReturnValue(0.9);
+		try {
+			await click("Randomize bot");
+		} finally {
+			random.mockRestore();
+		}
+		const next = onChange.mock.lastCall?.[0] as BotAppearance;
+		expect(next.equipment).toEqual({});
+		expect(canSaveBotAppearance(next, restricted)).toBe(true);
+	});
+
 	it("clears incompatible equipment when changing shape and preserves universal items", async () => {
 		const initial: BotAppearance = {
 			kind: "round",
@@ -1132,7 +1350,7 @@ describe("BotCustomizer", () => {
 		expect(onChange).toHaveBeenLastCalledWith({ ...initial, frame: "square" });
 	});
 
-	it("preserves unowned colors on edits and when choosing another compatible shape", async () => {
+	it("preserves colors on edits and when choosing another compatible shape", async () => {
 		const initial: BotAppearance = {
 			kind: "round",
 			colors: { body: { kind: "swatch", colorId: "holo-aurora" } },

@@ -53,6 +53,10 @@ fn new_bot(
         appearance: Value::Null,
         model: BotModelPolicy::default(),
         embedding_model: None,
+        stt_model: None,
+        tts_model: None,
+        image_model: None,
+        vision_model: None,
         classification: DataSensitivity::default(),
         capabilities: Vec::new(),
         profile_id: None,
@@ -66,6 +70,10 @@ fn new_bot(
         appearance: Some(request.appearance),
         model: request.model,
         embedding_model: Some(request.embedding_model),
+        stt_model: Some(request.stt_model),
+        tts_model: Some(request.tts_model),
+        image_model: Some(request.image_model),
+        vision_model: Some(request.vision_model),
         classification: request.classification,
         capabilities: request.capabilities,
         profile_id: Some(request.profile_id),
@@ -155,6 +163,18 @@ fn patch_look(next: &mut BotSettings, patch: &mut UpdateBotRequest) -> Result<()
         patch.embedding_model.take(),
         |id| optional_text("embedding_model", id, MODEL_ID_MAX_CHARS),
     )?;
+    replace(&mut next.stt_model, patch.stt_model.take(), |id| {
+        optional_text("stt_model", id, MODEL_ID_MAX_CHARS)
+    })?;
+    replace(&mut next.tts_model, patch.tts_model.take(), |id| {
+        optional_text("tts_model", id, MODEL_ID_MAX_CHARS)
+    })?;
+    replace(&mut next.image_model, patch.image_model.take(), |id| {
+        optional_text("image_model", id, MODEL_ID_MAX_CHARS)
+    })?;
+    replace(&mut next.vision_model, patch.vision_model.take(), |id| {
+        optional_text("vision_model", id, MODEL_ID_MAX_CHARS)
+    })?;
     replace(&mut next.classification, patch.classification.take(), Ok)
 }
 
@@ -389,6 +409,10 @@ pub(super) fn system_defaults(kind: BotSystemKind) -> BotSettings {
         appearance: serde_json::json!({ "kind": look }),
         model: BotModelPolicy::default(),
         embedding_model: None,
+        stt_model: None,
+        tts_model: None,
+        image_model: None,
+        vision_model: None,
         classification: DataSensitivity::default(),
         capabilities,
         profile_id: None,
@@ -805,6 +829,56 @@ mod tests {
             assert_eq!(wire, expected, "{location}");
             let next = patch(&bot, None, json!({ "capabilities": ["knowledge"] })).unwrap();
             assert_eq!(next.capabilities, [BotCapability::Knowledge]);
+        }
+    }
+
+    #[test]
+    fn the_stt_tts_image_and_vision_pins_are_optional_bounded_ids_with_patch_semantics() {
+        let (_, pinned) = create(json!({
+            "name": "Pinned",
+            "appearance": { "kind": "pip" },
+            "stt_model": " stt-a ",
+            "tts_model": "tts-a",
+            "image_model": "image-a",
+            "vision_model": "vision-a",
+        }))
+        .unwrap();
+        assert_eq!(pinned.stt_model.as_deref(), Some("stt-a"));
+        assert_eq!(pinned.tts_model.as_deref(), Some("tts-a"));
+        assert_eq!(pinned.image_model.as_deref(), Some("image-a"));
+        assert_eq!(pinned.vision_model.as_deref(), Some("vision-a"));
+
+        let renamed = patch(&pinned, None, json!({ "name": "Pinned 2" })).unwrap();
+        assert_eq!(renamed.stt_model.as_deref(), Some("stt-a"));
+        assert_eq!(renamed.vision_model.as_deref(), Some("vision-a"));
+
+        let set = patch(&pinned, None, json!({ "tts_model": "tts-b" })).unwrap();
+        assert_eq!(set.tts_model.as_deref(), Some("tts-b"));
+        assert_eq!(pinned.changed_fields(&set), ["tts_model"]);
+
+        let cleared = patch(
+            &pinned,
+            None,
+            json!({ "stt_model": null, "image_model": " ", "vision_model": null }),
+        )
+        .unwrap();
+        assert_eq!(cleared.stt_model, None);
+        assert_eq!(cleared.image_model, None);
+        assert_eq!(cleared.vision_model, None);
+        assert_eq!(cleared.tts_model.as_deref(), Some("tts-a"));
+        assert_eq!(
+            pinned.changed_fields(&cleared),
+            ["stt_model", "image_model", "vision_model"]
+        );
+
+        for field in ["stt_model", "tts_model", "image_model", "vision_model"] {
+            let error = patch(
+                &pinned,
+                None,
+                json!({ field: "e".repeat(MODEL_ID_MAX_CHARS + 1) }),
+            )
+            .unwrap_err();
+            assert!(error.public_message().unwrap().contains(field));
         }
     }
 

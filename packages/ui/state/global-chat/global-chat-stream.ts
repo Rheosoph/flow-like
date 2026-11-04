@@ -1142,14 +1142,15 @@ async function readCurrentTranscript(conversationId: string): Promise<Landing> {
  */
 export async function restoreGlobalChatConversation(
 	addressedTo: string,
-	options?: { skipIfBusy?: boolean },
+	options?: { skipIfBusy?: boolean; signal?: AbortSignal },
 ): Promise<boolean> {
+	if (options?.signal?.aborted) return false;
 	const ticket = ++conversationSwitch;
 	if (!options?.skipIfBusy) beginConversationLoading();
 	try {
 		const { conversationId, messages: restored } =
 			await readCurrentTranscript(addressedTo);
-		if (ticket !== conversationSwitch) return false;
+		if (ticket !== conversationSwitch || options?.signal?.aborted) return false;
 		const state = useGlobalChatStore.getState();
 		if (
 			options?.skipIfBusy &&
@@ -1254,7 +1255,11 @@ export async function forgetBotChat(botId: string): Promise<void> {
  * conversation in this tab, or a fresh one. Runs keep streaming in the conversation they started
  * in, and the newest switch wins.
  */
-export async function switchGlobalChatBot(botId: string | null): Promise<void> {
+export async function switchGlobalChatBot(
+	botId: string | null,
+	options?: { signal?: AbortSignal },
+): Promise<void> {
+	if (options?.signal?.aborted) return;
 	const ticket = ++conversationSwitch;
 	const shown = useGlobalChatStore.getState().activeConversationId;
 	const target = switchTarget(botId);
@@ -1273,7 +1278,7 @@ export async function switchGlobalChatBot(botId: string | null): Promise<void> {
 				}),
 			);
 		}
-		if (isSuperseded(ticket, shown)) return;
+		if (isSuperseded(ticket, shown) || options?.signal?.aborted) return;
 		showSwitchedConversation(
 			currentConversationId(shown),
 			landing.conversationId,

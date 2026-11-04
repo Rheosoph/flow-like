@@ -2,7 +2,6 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { CpuIcon } from "lucide-react";
-import { useBotModelOptions } from "../bots-tab/editor/steps/use-bot-models";
 import { BotAvatar } from "../bots/bot-avatar";
 import { useChatBotReaction } from "./chat-bot-reaction";
 import type { GlobalChatBotView } from "./use-global-chat-bot";
@@ -12,7 +11,17 @@ export function pinnedBotModel(chatBot: GlobalChatBotView): string | null {
 	return chatBot.bot?.model.primary || null;
 }
 
-function ModelChip({ label, hint }: Readonly<{ label: string; hint: string }>) {
+/** The chat's own model, shown for a bot that pins none, so its chat names who answers. */
+export function DefaultModelChip({
+	botName,
+	label,
+}: Readonly<{ botName: string; label: string }>) {
+	const { t } = useTranslation("bots");
+	const hint = t(
+		"chat.defaultModelHint",
+		"{{name}} has no model of its own, so it uses the chat's default model",
+		{ name: botName },
+	);
 	return (
 		<span
 			title={hint}
@@ -22,49 +31,6 @@ function ModelChip({ label, hint }: Readonly<{ label: string; hint: string }>) {
 			<span className="hidden max-w-32 truncate sm:inline">{label}</span>
 			<span className="sr-only">{hint}</span>
 		</span>
-	);
-}
-
-/** Read-only stand-in for the model picker in a bot's chat: its settings choose the model. */
-export function BotModelChip({
-	botName,
-	modelId,
-}: Readonly<{ botName: string; modelId: string }>) {
-	const { t } = useTranslation("bots");
-	const { options, isLoading } = useBotModelOptions();
-	const option = options.find((item) => item.id === modelId);
-	const label =
-		option?.label ??
-		(isLoading
-			? "…"
-			: t("editor.brain.unknownModel", "Unknown model ({{id}})", {
-					id: modelId,
-				}));
-	return (
-		<ModelChip
-			label={label}
-			hint={t("chat.modelHint", "Chosen in {{name}}'s settings", {
-				name: botName,
-			})}
-		/>
-	);
-}
-
-/** The chat's own model, shown for a bot that pins none, so every bot chat names who answers. */
-export function DefaultModelChip({
-	botName,
-	label,
-}: Readonly<{ botName: string; label: string }>) {
-	const { t } = useTranslation("bots");
-	return (
-		<ModelChip
-			label={label}
-			hint={t(
-				"chat.defaultModelHint",
-				"{{name}} has no model of its own, so it uses the chat's default model",
-				{ name: botName },
-			)}
-		/>
 	);
 }
 

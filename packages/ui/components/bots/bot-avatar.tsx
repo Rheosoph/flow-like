@@ -3,6 +3,7 @@
 import { type CSSProperties, useId, useRef } from "react";
 import { BOT_TIMING } from "./animation";
 import {
+	botFrameRadius,
 	getBotBadges,
 	getBotPalette,
 	isBotPaletteEffect,
@@ -252,8 +253,7 @@ export function BotAvatar({
 		variant !== "original" && variant !== "holo"
 			? `url(#${idPrefix}-variant)`
 			: undefined;
-	const radius =
-		resolved.frame === "circle" ? 50 : resolved.frame === "squircle" ? 28 : 0;
+	const radius = botFrameRadius(resolved.frame);
 	const eye = shape.anchors.eyes;
 	const roundEyes =
 		!shape.eyeStyle ||

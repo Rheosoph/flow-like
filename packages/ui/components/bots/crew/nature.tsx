@@ -18,6 +18,7 @@ const petals = [
 export const natureShapes: readonly BotShapeDefinition[] = [
 	crewShape({
 		id: "sprout",
+		backgroundDetailColors: ["accent"],
 		label: "Sprout",
 		series: "nature",
 		description: "A peach-colored seedling with two green leaves.",
@@ -150,6 +151,7 @@ export const natureShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "porci",
+		backgroundDetailColors: ["accent"],
 		label: "Porci",
 		series: "nature",
 		description: "A little mushroom under a red spotted cap.",
@@ -186,6 +188,7 @@ export const natureShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "bloom",
+		backgroundDetailColors: ["sclera"],
 		label: "Bloom",
 		series: "nature",
 		description: "A yellow daisy face surrounded by white petals.",

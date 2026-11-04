@@ -99,6 +99,44 @@ pub struct ToolJob {
     pub models: JobModels,
     #[serde(default)]
     pub allow_expensive_documents: bool,
+    /// The secrets the call's arguments name, opened by the API for this job only.
+    #[serde(default, skip_serializing_if = "JobSecrets::is_empty")]
+    pub secrets: JobSecrets,
+}
+
+/// Secret values by name that travel inside one signed job; never printed.
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct JobSecrets(pub BTreeMap<String, String>);
+
+impl JobSecrets {
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for JobSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.0.keys()).finish()
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::SecretSource for JobSecrets {
+    async fn secret(&self, name: &str) -> flow_like_types::Result<Option<String>> {
+        Ok(self.0.get(name).cloned())
+    }
+
+    async fn list(&self) -> flow_like_types::Result<Vec<flow_like_bot_tools::SecretInfo>> {
+        Ok(self
+            .0
+            .keys()
+            .map(|name| flow_like_bot_tools::SecretInfo {
+                name: name.clone(),
+                description: None,
+            })
+            .collect())
+    }
 }
 
 /// The text a host returns to the model for a finished tool: the envelope, with the outcome's

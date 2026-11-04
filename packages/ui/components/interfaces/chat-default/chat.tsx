@@ -14,6 +14,9 @@ import {
 } from "react";
 import type { IEventPayloadChat } from "../../../lib";
 import type { IInteractionRequest } from "../../../lib/schema/interaction";
+import { cn } from "../../../lib/utils";
+import { ConversationNotePill } from "../../bots-tab/conversation-note";
+import type { Mentionable } from "../../bots-tab/mentions";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import type { IMessage } from "./chat-db";
@@ -24,7 +27,7 @@ import {
 	createMessageReference,
 	isVisibleChatMessage,
 } from "./chat-message-interaction";
-import { ChatRunControls } from "./chat-run-controls";
+import { ChatRunStatus, useRunStop } from "./chat-run-controls";
 import {
 	ChatBox,
 	type ChatBoxModel,
@@ -157,7 +160,33 @@ export interface IChatConcurrency {
 	onRemoveQueued: (id: string) => void;
 }
 
+/**
+ * What a chat with several speakers adds on top of the standard chat. Every part is optional and a
+ * 1:1 chat passes none of it.
+ */
+export interface IChatGroup {
+	/** Rendered above a message: the speaker line, day dividers, membership notes. */
+	renderMessageHeader?: (message: IMessage, index: number) => React.ReactNode;
+	/** Hover menu in a message's corner, e.g. edit and delete for your own. */
+	renderMessageMenu?: (message: IMessage) => React.ReactNode;
+	mentionables?: readonly Mentionable[];
+	placeholder?: string;
+	/** Writing is not possible; the composer stays but cannot send. */
+	composerDisabled?: boolean;
+	/** Which messages the sender may edit; defaults to answers only. */
+	editable?: (message: IMessage) => boolean;
+	/**
+	 * `room`: a conversation between several senders. Your messages are a compact bubble on the
+	 * right, others' sit flat beside an avatar gutter, and actions float over the message on hover
+	 * instead of taking a row. Omitted keeps the one-on-one layout.
+	 */
+	layout?: "room";
+	/** Whether a message opens a new sender run; runs sit further apart than a run's own messages. */
+	runStart?: (message: IMessage) => boolean;
+}
+
 export interface IChatProps {
+	group?: IChatGroup;
 	messages: IMessage[];
 	onSendMessage: ISendMessageFunction;
 	concurrency?: IChatConcurrency;
@@ -244,6 +273,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			thinking,
 			model,
 			composerActions,
+			group,
 		},
 		ref,
 	) => {
@@ -269,6 +299,16 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 		const pendingMessagesRef = useRef<IMessage[] | null>(null);
 		const rafIdRef = useRef<number | null>(null);
 		const [voiceModeOpen, setVoiceModeOpen] = useState(false);
+		const runStop = useRunStop(concurrency);
+		const renderRunStatus = useMemo(
+			() =>
+				concurrency
+					? (stopShown: boolean) => (
+							<ChatRunStatus concurrency={concurrency} stopShown={stopShown} />
+						)
+					: undefined,
+			[concurrency],
+		);
 
 		const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
 		const voiceEnabled = isVoiceEnabled(voiceConfig);
@@ -777,7 +817,10 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 							<div
 								ref={scrollContainerRef}
 								onScroll={handleScroll}
-								className="flex-1 overflow-y-auto overscroll-contain p-4 pb-2 space-y-8 flex flex-col items-center grow max-h-full"
+								className={cn(
+									"flex-1 overflow-y-auto overscroll-contain p-4 pb-2 flex flex-col items-center grow max-h-full",
+									group?.layout === "room" ? "gap-1" : "space-y-8",
+								)}
 								data-fl-chat-messages
 								style={{ WebkitOverflowScrolling: "touch" }}
 							>
@@ -793,43 +836,89 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 													),
 											),
 									)
-									.map((item, index) => (
-										<div
-											className="w-full px-1 sm:px-4"
-											key={`msg-${item.data.id}`}
-											style={{
-												maxWidth:
-													"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
-											}}
-										>
-											<MessageShell
-												immediate={
-													index >= chatItems.length - IMMEDIATE_MESSAGE_TAIL
-												}
-												root={scrollContainerRef}
+									.map((item, index) =>
+										item.data.notice ? (
+											<div
+												className={cn(
+													"w-full px-1 sm:px-4",
+													group?.layout === "room" ? "mt-3" : "-mt-4 mb-4",
+												)}
+												key={`msg-${item.data.id}`}
+												style={{
+													maxWidth:
+														"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+												}}
 											>
-												<MessageComponent
-													message={item.data as IMessage}
-													onMessageUpdate={onMessageUpdate}
-													onReply={handleReply}
-													onReaction={onMessageReaction}
-													interactionDisabled={interactionDisabled}
-													appId={appId}
-													boardId={boardId}
-													eventId={eventId}
-													widgetSnapshots={widgetSnapshots}
-													anchoredContent={messageInlineContent?.get(
-														item.data.id,
-													)}
-													pending={pendingAsks.byAsk.get(item.data.id)}
+												{group?.renderMessageHeader?.(
+													item.data as IMessage,
+													index,
+												)}
+												<ConversationNotePill
+													note={item.data.notice.note}
+													viewerBotId={item.data.notice.botId}
 												/>
-											</MessageShell>
-											<SettledInteractions
-												interactions={settledByMessageId.get(item.data.id)}
-												onRespond={onRespondToInteraction}
-											/>
-										</div>
-									))}
+											</div>
+										) : (
+											<div
+												className={cn(
+													"w-full px-1 sm:px-4",
+													group?.layout !== "room" &&
+														group?.renderMessageMenu &&
+														"group/msg relative",
+													group?.layout === "room" &&
+														index > 0 &&
+														group.runStart?.(item.data as IMessage) &&
+														"mt-3",
+												)}
+												key={`msg-${item.data.id}`}
+												data-chat-message={item.data.id}
+												style={{
+													maxWidth:
+														"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
+												}}
+											>
+												{group?.renderMessageHeader?.(
+													item.data as IMessage,
+													index,
+												)}
+												{group?.layout !== "room" &&
+													group?.renderMessageMenu && (
+														<div className="absolute -top-3 right-4 z-10 opacity-0 transition-opacity group-focus-within/msg:opacity-100 group-hover/msg:opacity-100 has-data-[state=open]:opacity-100">
+															{group.renderMessageMenu(item.data as IMessage)}
+														</div>
+													)}
+												<MessageShell
+													immediate={
+														index >= chatItems.length - IMMEDIATE_MESSAGE_TAIL
+													}
+													root={scrollContainerRef}
+												>
+													<MessageComponent
+														message={item.data as IMessage}
+														onMessageUpdate={onMessageUpdate}
+														onReply={handleReply}
+														editable={group?.editable?.(item.data as IMessage)}
+														onReaction={onMessageReaction}
+														interactionDisabled={interactionDisabled}
+														appId={appId}
+														boardId={boardId}
+														eventId={eventId}
+														widgetSnapshots={widgetSnapshots}
+														anchoredContent={messageInlineContent?.get(
+															item.data.id,
+														)}
+														pending={pendingAsks.byAsk.get(item.data.id)}
+														layout={group?.layout}
+														renderMenu={group?.renderMessageMenu}
+													/>
+												</MessageShell>
+												<SettledInteractions
+													interactions={settledByMessageId.get(item.data.id)}
+													onRespond={onRespondToInteraction}
+												/>
+											</div>
+										),
+									)}
 								{isSending &&
 									!sendingReaction &&
 									!localMessages.some(
@@ -947,7 +1036,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 
 							{inlinePrompt && (
 								<div
-									className="mx-auto w-full shrink-0 px-2 pt-1"
+									className="mx-auto w-full shrink-0 px-3 pt-2 pb-2"
 									style={{
 										maxWidth:
 											"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
@@ -968,7 +1057,6 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										"calc(var(--fl-chat-pad-bottom, 0.75rem) + var(--fl-safe-bottom, env(safe-area-inset-bottom, 0px)))",
 								}}
 							>
-								{concurrency && <ChatRunControls concurrency={concurrency} />}
 								{replyTarget && (
 									<MessageReference
 										reference={replyTarget}
@@ -977,6 +1065,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 								)}
 								{defaultActiveTools && (
 									<ChatBox
+										mentionables={group?.mentionables}
+										placeholder={group?.placeholder}
 										ref={chatBox}
 										availableTools={config?.tools ?? []}
 										defaultActiveTools={defaultActiveTools}
@@ -993,7 +1083,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 										// With concurrency the composer never locks: a send starts another
 										// turn or queues. Without it, a live stream still blocks as before.
 										sendDisabled={
-											concurrency ? false : isSending || isStreamActive
+											group?.composerDisabled ||
+											(concurrency ? false : isSending || isStreamActive)
 										}
 										sendHint={
 											concurrency?.atCapacity
@@ -1010,6 +1101,8 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 												? concurrency.onSteer
 												: undefined
 										}
+										stop={runStop}
+										renderRunStatus={renderRunStatus}
 										onInterrupt={playback.stop}
 										onVoiceModeToggle={
 											voiceEnabled && voiceConfig.invoke === "auto"

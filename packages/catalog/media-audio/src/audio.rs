@@ -43,6 +43,8 @@ const PROVIDER_OPENROUTER: &str = "custom:openrouter";
 const PROVIDER_MISTRAL: &str = "custom:mistral";
 const PROVIDER_GROQ: &str = "custom:groq";
 
+mod hosted;
+
 #[derive(Debug, Clone)]
 struct TextToSpeechRequest {
     text: String,
@@ -2540,7 +2542,11 @@ impl NodeLogic for TextToSpeechNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let bit: Bit = context.evaluate_pin("provider").await?;
-        let provider = provider_from_bit(&bit)?;
+        let hosted_provider = hosted::provider_for(&bit);
+        let provider = match &hosted_provider {
+            Some(provider) => provider.clone(),
+            None => provider_from_bit(&bit)?,
+        };
         refuse_relayed_media(&context.app_state, &bit)?;
 
         let text: String = context.evaluate_pin("text").await?;
@@ -2576,10 +2582,13 @@ impl NodeLogic for TextToSpeechNode {
             LogLevel::Info,
         );
 
-        crate::ensure_vertex_credentials_explicit(context, &provider)?;
-        let audio =
+        let audio = if hosted_provider.is_some() {
+            hosted::speak(context, &bit, &request).await?
+        } else {
+            crate::ensure_vertex_credentials_explicit(context, &provider)?;
             generate_speech_with_provider(context.execution_environment(), &provider, &request)
-                .await?;
+                .await?
+        };
         let extension = extension_from_mime(audio.mime_type.as_deref(), &request.output_format);
         let path = output_path_for_audio(context, &output_path, &extension).await?;
         path.put(context, audio.bytes, false).await?;
@@ -2876,7 +2885,11 @@ impl NodeLogic for SpeechToTextNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let bit: Bit = context.evaluate_pin("provider").await?;
-        let provider = transcription_provider_from_bit(&bit)?;
+        let hosted_provider = hosted::provider_for(&bit);
+        let provider = match &hosted_provider {
+            Some(provider) => provider.clone(),
+            None => transcription_provider_from_bit(&bit)?,
+        };
         refuse_relayed_media(&context.app_state, &bit)?;
 
         let audio_path: FlowPath = context.evaluate_pin("audio").await?;
@@ -2910,9 +2923,12 @@ impl NodeLogic for SpeechToTextNode {
             LogLevel::Info,
         );
 
-        crate::ensure_vertex_credentials_explicit(context, &provider)?;
-        let result =
-            transcribe_with_provider(context.execution_environment(), &provider, &request).await?;
+        let result = if hosted_provider.is_some() {
+            hosted::transcribe(context, &bit, &request).await?
+        } else {
+            crate::ensure_vertex_credentials_explicit(context, &provider)?;
+            transcribe_with_provider(context.execution_environment(), &provider, &request).await?
+        };
         let message = HistoryMessage::from_string(Role::User, &result.text);
         let history = History::new(
             provider

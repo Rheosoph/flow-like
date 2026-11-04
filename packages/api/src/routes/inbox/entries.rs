@@ -2,7 +2,8 @@ use super::{
     Event, INBOX_ENVELOPES_MISMATCH, INBOX_HANDLE_NOT_ALLOWED, INBOX_MESSAGE_ID_TAKEN,
     acting_reader, active_members, active_membership, allocate_seqs, conversation_not_found,
     delivery::{
-        Addressed, BotDelivery, BotRecipient, bot_recipients, deliver_to_bots, live_bots, woken,
+        Addressed, BotDelivery, BotRecipient, bot_recipients, deliver_to_bots, live_bots,
+        reading_along, woken,
     },
     insert_copies, lock_conversation, member_conversation,
     members::Principal,
@@ -38,9 +39,9 @@ use flow_like_types::{
     bot_message::MessageBody,
     bot_turn::is_interactive_host,
     inbox::{
-        ConversationEncryption, ConversationKind, EntryCursor, EnvelopeKind, InboxEntryKind,
-        MAX_CONVERSATION_MEMBERS, TopicBody, TriggerBody, body_target, check_envelope,
-        is_valid_message_id,
+        ActivityBody, CallBody, ConversationEncryption, ConversationKind, EntryCursor,
+        EnvelopeKind, InboxEntryKind, MAX_CONVERSATION_MEMBERS, ReactionEvent, TopicBody,
+        TranscriptBody, TriggerBody, body_target, check_envelope, is_valid_message_id,
     },
 };
 use sea_orm::{
@@ -48,7 +49,7 @@ use sea_orm::{
     QuerySelect, sea_query::Expr,
 };
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -81,22 +82,24 @@ fn parse_cursor(name: &str, value: Option<&str>) -> Result<Option<EntryCursor>, 
         .transpose()
 }
 
+fn cursor_position(name: &str, cursor: &EntryCursor) -> Result<Position, ApiError> {
+    let at = DateTime::from_timestamp_micros(cursor.created_at_micros)
+        .ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "Invalid {name}: {} is outside the supported time range",
+                cursor.created_at_micros
+            ))
+        })?
+        .fixed_offset();
+    Ok(Position {
+        at,
+        entry_id: cursor.entry_id.clone(),
+    })
+}
+
 fn position(name: &str, value: Option<&str>) -> Result<Option<Position>, ApiError> {
     parse_cursor(name, value)?
-        .map(|cursor| {
-            let at = DateTime::from_timestamp_micros(cursor.created_at_micros)
-                .ok_or_else(|| {
-                    ApiError::bad_request(format!(
-                        "Invalid {name}: {} is outside the supported time range",
-                        cursor.created_at_micros
-                    ))
-                })?
-                .fixed_offset();
-            Ok(Position {
-                at,
-                entry_id: cursor.entry_id,
-            })
-        })
+        .map(|cursor| cursor_position(name, &cursor))
         .transpose()
 }
 
@@ -173,6 +176,40 @@ pub(super) async fn entries_page<C: ConnectionTrait>(
     })
 }
 
+/// The first `limit` entries of the reader's copy strictly after `after`, oldest first, and
+/// whether more follow. Without `after`, the newest `limit` entries, oldest first, and no more.
+pub(crate) async fn entries_following<C: ConnectionTrait>(
+    db: &C,
+    reader: &str,
+    conversation_id: &str,
+    after: Option<&EntryCursor>,
+    limit: u64,
+) -> Result<(Vec<InboxEntry>, bool), ApiError> {
+    let Some(after) = after else {
+        let bounds = PageBounds {
+            before: None,
+            after: None,
+            limit,
+        };
+        let mut page = entries_page(db, reader, conversation_id, &bounds).await?;
+        page.entries.reverse();
+        return Ok((page.entries, false));
+    };
+    let after = cursor_position("after", after)?;
+    let mut rows = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(reader))
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(newer_than(&after))
+        .order_by_asc(inbox_entry::Column::CreatedAt)
+        .order_by_asc(inbox_entry::Column::Id)
+        .limit(limit + 1)
+        .all(db)
+        .await?;
+    let more = rows.len() as u64 > limit;
+    rows.truncate(limit as usize);
+    Ok((rows.into_iter().map(InboxEntry::from).collect(), more))
+}
+
 /// What a send carries: one plain envelope, or one sealed envelope per member.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Content {
@@ -187,6 +224,7 @@ pub(crate) struct Links {
     pub reply_to: Option<String>,
     pub mentions: Vec<String>,
     pub workspace_apps: BTreeSet<String>,
+    pub conversation_files: Vec<super::files::ConversationFileUse>,
 }
 
 /// A send request checked without the database.
@@ -249,7 +287,16 @@ pub(super) fn plain_links(kind: InboxEntryKind, envelope: &Value) -> Result<Link
             Ok(Links {
                 workspace_apps: message
                     .handles()
+                    .filter(|handle| !handle.is_conversation_file())
                     .map(|handle| handle.app_id.clone())
+                    .collect(),
+                conversation_files: message
+                    .conversation_files()
+                    .map(|file| super::files::ConversationFileUse {
+                        conversation_id: file.conversation_id.to_string(),
+                        file_id: file.file_id.to_string(),
+                        handle: file.handle.clone(),
+                    })
                     .collect(),
                 reply_to: message.reply_to,
                 mentions: message.mentions,
@@ -261,6 +308,18 @@ pub(super) fn plain_links(kind: InboxEntryKind, envelope: &Value) -> Result<Link
         InboxEntryKind::Trigger => TriggerBody::parse(body)
             .map(|trigger| Links {
                 mentions: trigger.bot_id.into_iter().collect(),
+                ..Links::default()
+            })
+            .map_err(ApiError::bad_request),
+        InboxEntryKind::Activity => ActivityBody::parse(body)
+            .map(|_| Links::default())
+            .map_err(ApiError::bad_request),
+        InboxEntryKind::Call => CallBody::parse(body)
+            .map(|_| Links::default())
+            .map_err(ApiError::bad_request),
+        InboxEntryKind::Transcript => TranscriptBody::parse(body)
+            .map(|transcript| Links {
+                mentions: transcript.mentions,
                 ..Links::default()
             })
             .map_err(ApiError::bad_request),
@@ -504,6 +563,20 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
         checked_envelopes(txn, conversation_id, sender, outgoing).await?;
     super::requests::ensure_request_room(txn, &conversation, sender, outgoing.kind).await?;
     check_workspace_files(txn, &[(sender, &outgoing.links.workspace_apps)]).await?;
+    let owner_message = match (&outgoing.content, outgoing.kind) {
+        (Content::Plain(envelope), InboxEntryKind::Edit) => {
+            body_target(envelope).unwrap_or(outgoing.message_id.as_str())
+        }
+        _ => outgoing.message_id.as_str(),
+    };
+    super::files::claim(
+        txn,
+        conversation_id,
+        sender,
+        owner_message,
+        &outgoing.links.conversation_files,
+    )
+    .await?;
     let event = Event {
         conversation_id,
         message_id: &outgoing.message_id,
@@ -515,7 +588,7 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
     let entry = write_event(txn, &event, envelopes, outgoing).await?;
     let principals: Vec<Principal> = members.iter().map(Principal::from).collect();
     let bots = live_bots(txn, &principals).await?;
-    let delivered = deliver(txn, &event, &conversation, &bots, outgoing, hops).await?;
+    let delivered = deliver(txn, &event, &conversation, &bots, &members, outgoing, hops).await?;
     Ok(Sent {
         entry,
         wake: woken(&principals, &bots),
@@ -543,6 +616,7 @@ async fn write_event<'e, C: ConnectionTrait>(
         let target = body_target(envelope).unwrap_or_default();
         let edits = edits_of(txn, conversation_id, sender, sender, target).await?;
         tombstone(txn, conversation_id, sender, target, edits).await?;
+        super::files::drop_message_files(txn, conversation_id, target, event.created_at).await?;
     }
     Ok(entry)
 }
@@ -554,16 +628,19 @@ async fn deliver<'e, C: ConnectionTrait>(
     event: &Event<'e>,
     conversation: &conversation::Model,
     bots: &[bot::Model],
+    members: &[conversation_member::Model],
     outgoing: &Outgoing,
     hops: u32,
 ) -> Result<Vec<BotRecipient>, ApiError> {
+    let conversation_kind =
+        ConversationKind::parse(&conversation.kind).unwrap_or(ConversationKind::Group);
+    let reading_along = reading_along(conversation_kind, event.sender_id, bots, members);
     let delivery = BotDelivery {
-        conversation_kind: ConversationKind::parse(&conversation.kind)
-            .unwrap_or(ConversationKind::Group),
+        conversation_kind,
         sender_id: event.sender_id.to_string(),
         kind: event.kind,
         seq: event.seq,
-        recipients: recipients_of(txn, event, bots, outgoing, hops).await?,
+        recipients: recipients_of(txn, event, bots, &reading_along, outgoing, hops).await?,
     };
     let answers_an_approval = matches!(&outgoing.content, Content::Plain(envelope) if super::approvals::is_approval_response(envelope));
     if answers_an_approval {
@@ -581,19 +658,25 @@ async fn recipients_of<'e, C: ConnectionTrait>(
     txn: &C,
     event: &Event<'e>,
     bots: &[bot::Model],
+    reading_along: &HashSet<String>,
     outgoing: &Outgoing,
     hops: u32,
 ) -> Result<Vec<BotRecipient>, DbErr> {
     if bots.iter().all(|bot| bot.id == event.sender_id) {
         return Ok(Vec::new());
     }
-    let replied_sender = match &outgoing.links.reply_to {
+    let replied = match &outgoing.links.reply_to {
         Some(reply_to) => sender_copy(txn, event.sender_id, reply_to)
             .await?
-            .filter(|replied| replied.conversation_id == event.conversation_id)
-            .map(|replied| replied.sender_id),
+            .filter(|replied| replied.conversation_id == event.conversation_id),
         None => None,
     };
+    let replied_hops = replied
+        .as_ref()
+        .filter(|_| hops > 0)
+        .and_then(|question| answer_wakes_asker_at(question, event.sender_id));
+    let replied_sender = replied.map(|replied| replied.sender_id);
+    let reacted_bot = reacted_bot_of(txn, event, bots, outgoing).await?;
     Ok(bot_recipients(
         bots,
         &Addressed {
@@ -602,10 +685,52 @@ async fn recipients_of<'e, C: ConnectionTrait>(
             sender_id: event.sender_id,
             mentions: &outgoing.links.mentions,
             replied_sender: replied_sender.as_deref(),
+            reading_along,
+            reacted_bot: reacted_bot.as_deref(),
             hops,
+            replied_hops,
             interactive: matches!(&outgoing.content, Content::Plain(envelope) if super::delivery::is_interactive(envelope)),
         },
     ))
+}
+
+/// The hops a bot's answer wakes the asker with when `question` is the asker's counted question
+/// to `answerer`: follow-ups then don't add up to the hop limit.
+fn answer_wakes_asker_at(question: &inbox_entry::Model, answerer: &str) -> Option<u32> {
+    let body =
+        flow_like_types::bot_message::MessageBody::parse(question.envelope.get("body")?).ok()?;
+    if !body.mentions.iter().any(|id| id == answerer) {
+        return None;
+    }
+    body.ask?.answer_wakes_at()
+}
+
+/// The bot whose message a person's new reaction in the event is on. A bot's own reaction, a
+/// removal, and a reaction to a person's message name none.
+async fn reacted_bot_of<'e, C: ConnectionTrait>(
+    txn: &C,
+    event: &Event<'e>,
+    bots: &[bot::Model],
+    outgoing: &Outgoing,
+) -> Result<Option<String>, DbErr> {
+    let Content::Plain(envelope) = &outgoing.content else {
+        return Ok(None);
+    };
+    if event.kind != InboxEntryKind::Reaction || bots.iter().any(|bot| bot.id == event.sender_id) {
+        return Ok(None);
+    }
+    let Some(reaction) = ReactionEvent::parse(event.message_id, event.sender_id, envelope)
+        .filter(|reaction| reaction.add)
+    else {
+        return Ok(None);
+    };
+    let Some(target) = sender_copy(txn, event.sender_id, &reaction.target).await? else {
+        return Ok(None);
+    };
+    Ok(bots
+        .iter()
+        .find(|bot| bot.id == target.sender_id)
+        .map(|bot| bot.id.clone()))
 }
 
 fn sender_entry(
@@ -640,6 +765,7 @@ async fn checked_envelopes<C: ConnectionTrait>(
     let members = active_members(txn, &[conversation_id.to_string()]).await?;
     let encryption = ConversationEncryption::parse(&conversation.encryption)
         .unwrap_or(ConversationEncryption::E2e);
+    ensure_readable_kind(encryption, &members, outgoing)?;
     let stripped = room_content(&conversation, &members, sender, outgoing);
     let envelopes = envelopes_for(
         stripped.as_ref().unwrap_or(&outgoing.content),
@@ -652,6 +778,37 @@ async fn checked_envelopes<C: ConnectionTrait>(
         check_target(txn, conversation_id, sender, outgoing.kind, envelope).await?;
     }
     Ok((conversation, members, envelopes))
+}
+
+/// Calls have no end-to-end encrypted form in v1, and a transcript may only name members.
+fn ensure_readable_kind(
+    encryption: ConversationEncryption,
+    members: &[conversation_member::Model],
+    outgoing: &Outgoing,
+) -> Result<(), ApiError> {
+    if !matches!(
+        outgoing.kind,
+        InboxEntryKind::Call | InboxEntryKind::Transcript
+    ) {
+        return Ok(());
+    }
+    if encryption == ConversationEncryption::E2e {
+        return Err(ApiError::bad_request(format!(
+            "A {} entry needs a readable body: calls are not available in end-to-end encrypted conversations",
+            outgoing.kind.as_str()
+        )));
+    }
+    match outgoing
+        .links
+        .mentions
+        .iter()
+        .find(|id| !members.iter().any(|member| &member.principal_id == *id))
+    {
+        Some(stranger) => Err(ApiError::bad_request(format!(
+            "body.mentions names '{stranger}', who is not a member of this conversation"
+        ))),
+        None => Ok(()),
+    }
 }
 
 /// What a bot's message looks like in a room with other people: its tool parts cut down to a
@@ -934,6 +1091,11 @@ pub async fn send_entry(
     .await?;
     tracing::Span::current().record("bot_deliveries", sent.bots.len());
     let first_send = !sent.wake.is_empty();
+    if outgoing.kind == InboxEntryKind::Delete
+        && let Err(error) = super::files::sweep(&state).await
+    {
+        tracing::warn!(%error, conversation_id, "Removing a deleted message's files failed; the next sweep retries");
+    }
     wake(&state, sent.wake).await;
     if person_sent && first_send {
         super::person_push::after_person_send(&state, &sent.entry).await;

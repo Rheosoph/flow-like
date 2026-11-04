@@ -1,7 +1,11 @@
 import type {
 	IBotRoomLimits,
 	IConversation,
+	IConversationFileDownload,
+	IConversationFileReady,
+	IConversationPinState,
 	IConversationSegmentList,
+	IConversationTurn,
 	ICreateConversationRequest,
 	IInboxEntriesPage,
 	IInboxEntriesQuery,
@@ -15,9 +19,19 @@ import type {
 	IInvitation,
 	IInviteRequest,
 	IInviteResponse,
+	IPinnedMessage,
+	IRealtimeAccess,
 	IRegisterInboxKeyRequest,
 	ISendInboxEntryRequest,
+	IStarredMessage,
+	IStarredMessagesPage,
+	IStarredMessagesQuery,
 } from "@flow-like/flow-like-ui";
+import {
+	conversationFileId,
+	conversationFileTooLarge,
+	putSignedFile,
+} from "@flow-like/flow-like-ui/lib/conversation-files";
 import { asArray, isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
 import { LOCAL_OWNER_ID } from "@flow-like/flow-like-ui/state/backend-state/bot-state";
 import { inboxPositionParams } from "@flow-like/flow-like-ui/state/backend-state/inbox-state";
@@ -61,6 +75,19 @@ function localConversationsBesideAccount(): Promise<
 		console.warn("[LocalBots] Listing account conversations only:", error);
 		return undefined;
 	});
+}
+
+const DEFAULT_STARS_PAGE = 50;
+
+/** A failing local store must not hide the account's stars. */
+function localStarsBesideAccount(limit: number): Promise<IStarredMessage[]> {
+	return localInbox
+		.stars({ limit })
+		.then((page) => asArray(page.stars))
+		.catch((error) => {
+			console.warn("[LocalBots] Listing account stars only:", error);
+			return [];
+		});
 }
 
 /** Reading as a bot shows the local conversations that bot is in. */
@@ -439,6 +466,259 @@ export class InboxState implements IInboxState {
 		);
 	}
 
+	async uploadConversationFile(
+		conversationId: string,
+		file: File,
+	): Promise<IConversationFileReady> {
+		const tooLarge = conversationFileTooLarge(file);
+		if (tooLarge) throw new Error(tooLarge);
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () =>
+				localInbox.uploadFile(conversationId, file),
+			);
+		}
+		const upload = expectRecord<{ file_id: string; upload_url: string }>(
+			await post(
+				account.profile,
+				`${conversationPath(account.id)}/files`,
+				{ name: file.name, mime: file.type || undefined, bytes: file.size },
+				account.auth,
+			),
+			`start the upload of ${file.name} to conversation ${conversationId}`,
+		);
+		await putSignedFile(upload.upload_url, file);
+		return expectRecord<IConversationFileReady>(
+			await post(
+				account.profile,
+				`${conversationPath(account.id)}/files/${encodeURIComponent(upload.file_id)}/complete`,
+				{},
+				account.auth,
+			),
+			`finish the upload of ${file.name} to conversation ${conversationId}`,
+		);
+	}
+
+	async conversationFileDownload(
+		conversationId: string,
+		handle: { path: string; mime: string },
+		as?: string,
+	): Promise<IConversationFileDownload> {
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () =>
+				localInbox.fileUrl(conversationId, handle),
+			);
+		}
+		return expectRecord(
+			await get<IConversationFileDownload>(
+				account.profile,
+				withQuery(
+					`${conversationPath(account.id)}/files/${encodeURIComponent(conversationFileId(handle.path))}`,
+					{ as },
+				),
+				account.auth,
+			),
+			`download a file of conversation ${conversationId}`,
+		);
+	}
+
+	async setConversationPinned(
+		conversationId: string,
+		pinned: boolean,
+	): Promise<IConversationPinState> {
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () =>
+				localInbox.setPinned(conversationId, pinned),
+			);
+		}
+		const state = expectRecord<IConversationPinState>(
+			await patch<IConversationPinState>(
+				account.profile,
+				`${conversationPath(account.id)}/pin`,
+				{ pinned },
+				account.auth,
+			),
+			`${pinned ? "pin" : "unpin"} conversation ${conversationId}`,
+		);
+		return { ...state, conversation_id: conversationId };
+	}
+
+	async listPins(
+		conversationId: string,
+		as?: string,
+	): Promise<IPinnedMessage[]> {
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () => localInbox.pins(conversationId));
+		}
+		const response = expectRecord<{ pins?: IPinnedMessage[] }>(
+			await get<{ pins?: IPinnedMessage[] }>(
+				account.profile,
+				withQuery(`${conversationPath(account.id)}/pins`, { as }),
+				account.auth,
+			),
+			`load pinned messages of conversation ${conversationId}`,
+		);
+		return asArray(response.pins);
+	}
+
+	async pinMessage(
+		conversationId: string,
+		messageId: string,
+	): Promise<IPinnedMessage> {
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () =>
+				localInbox.pinMessage(conversationId, messageId),
+			);
+		}
+		return expectRecord(
+			await put<IPinnedMessage>(
+				account.profile,
+				`${conversationPath(account.id)}/pins/${encodeURIComponent(messageId)}`,
+				{},
+				account.auth,
+			),
+			`pin ${messageId} in conversation ${conversationId}`,
+		);
+	}
+
+	async unpinMessage(conversationId: string, messageId: string): Promise<void> {
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () =>
+				localInbox.unpinMessage(conversationId, messageId),
+			);
+		}
+		await del<void>(
+			account.profile,
+			`${conversationPath(account.id)}/pins/${encodeURIComponent(messageId)}`,
+			undefined,
+			account.auth,
+		);
+	}
+
+	async starMessage(
+		conversationId: string,
+		messageId: string,
+	): Promise<IStarredMessage> {
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () =>
+				localInbox.star(conversationId, messageId),
+			);
+		}
+		const star = expectRecord<IStarredMessage>(
+			await put<IStarredMessage>(
+				account.profile,
+				`${conversationPath(account.id)}/stars/${encodeURIComponent(messageId)}`,
+				{},
+				account.auth,
+			),
+			`star ${messageId} in conversation ${conversationId}`,
+		);
+		return { ...star, conversation_id: conversationId };
+	}
+
+	async unstarMessage(
+		conversationId: string,
+		messageId: string,
+	): Promise<void> {
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () =>
+				localInbox.unstar(conversationId, messageId),
+			);
+		}
+		await del<void>(
+			account.profile,
+			`${conversationPath(account.id)}/stars/${encodeURIComponent(messageId)}`,
+			undefined,
+			account.auth,
+		);
+	}
+
+	async listStars(
+		query: IStarredMessagesQuery = {},
+	): Promise<IStarredMessagesPage> {
+		const session = accountSession(this.backend);
+		if (query.conversationId) {
+			return this.listConversationStars(query.conversationId, query);
+		}
+		if (!session) return this.localStars(query);
+		const limit = query.limit ?? DEFAULT_STARS_PAGE;
+		const [local, remote] = await Promise.all([
+			query.before ? [] : localStarsBesideAccount(limit),
+			this.accountStars(session, query),
+		]);
+		const ids = this.registries.conversations;
+		const accountStars = [];
+		for (const star of remote.stars) {
+			if (!(await ids.isLocal(star.conversation_id, session.sub))) {
+				accountStars.push(star);
+			}
+		}
+		const stars = [...local, ...accountStars].sort(
+			(a, b) => Date.parse(b.starred_at) - Date.parse(a.starred_at),
+		);
+		return { stars, next_before: remote.next_before };
+	}
+
+	private async listConversationStars(
+		conversationId: string,
+		query: IStarredMessagesQuery,
+	): Promise<IStarredMessagesPage> {
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () => this.localStars(query));
+		}
+		const page = await this.accountStars(account, {
+			...query,
+			conversationId: account.id,
+		});
+		return {
+			...page,
+			stars: page.stars.map((star) => ({
+				...star,
+				conversation_id: conversationId,
+			})),
+		};
+	}
+
+	private async localStars(
+		query: IStarredMessagesQuery,
+	): Promise<IStarredMessagesPage> {
+		const page = await localInbox.stars(query);
+		return {
+			stars: asArray(page.stars),
+			next_before: page.next_before ?? null,
+		};
+	}
+
+	private async accountStars(
+		session: IAccountSession,
+		query: IStarredMessagesQuery,
+	): Promise<IStarredMessagesPage> {
+		const page = expectRecord<IStarredMessagesPage>(
+			await get<IStarredMessagesPage>(
+				session.profile,
+				withQuery("inbox/stars", {
+					conversation_id: query.conversationId,
+					before: query.before,
+					limit: query.limit?.toString(),
+				}),
+				session.auth,
+			),
+			"load starred messages",
+		);
+		return {
+			stars: asArray(page.stars),
+			next_before: page.next_before ?? null,
+		};
+	}
+
 	async markRead(
 		conversationId: string,
 		upTo?: string,
@@ -643,6 +923,42 @@ export class InboxState implements IInboxState {
 			}),
 			undefined,
 			session.auth,
+		);
+	}
+
+	async listConversationTurns(
+		conversationId: string,
+	): Promise<IConversationTurn[]> {
+		const account = await this.accountFor(conversationId);
+		if (!account) return [];
+		const response = expectRecord<{ turns?: IConversationTurn[] }>(
+			await get<{ turns?: IConversationTurn[] }>(
+				account.profile,
+				`${conversationPath(account.id)}/turns`,
+				account.auth,
+			),
+			`list turns of conversation ${conversationId}`,
+		);
+		return asArray(response.turns);
+	}
+
+	async getConversationRealtimeAccess(
+		conversationId: string,
+	): Promise<IRealtimeAccess> {
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			throw new Error(
+				`Realtime access is unavailable for local conversation ${conversationId}`,
+			);
+		}
+		return expectRecord(
+			await post<IRealtimeAccess>(
+				account.profile,
+				`${conversationPath(account.id)}/realtime`,
+				undefined,
+				account.auth,
+			),
+			`get realtime access for conversation ${conversationId}`,
 		);
 	}
 }

@@ -5,8 +5,8 @@
 			"label": ""
 		},
 		"channels": {
-			"label": "",
-			"description": ""
+			"description": "",
+			"label": ""
 		},
 		"code_execution": {
 			"description": "",
@@ -98,8 +98,7 @@
 		}
 	},
 	"chat": {
-		"defaultModelHint": "",
-		"modelHint": ""
+		"defaultModelHint": ""
 	},
 	"computer": {
 		"alt": "",
@@ -111,6 +110,14 @@
 		"stop": ""
 	},
 	"crew": {
+		"activity": {
+			"queued": "",
+			"running": "",
+			"typingMany": "",
+			"typingOne": "",
+			"typingTwo": "",
+			"waiting": ""
+		},
 		"approval": {
 			"always": "",
 			"answeredAlways": "",
@@ -122,6 +129,21 @@
 			"failed": "",
 			"label": "",
 			"once": "",
+			"secret": {
+				"decline": "",
+				"declined": "",
+				"eyebrow": "",
+				"failed": "",
+				"hint": "",
+				"placeholder": "",
+				"replaceHint": "",
+				"save": "",
+				"saved": "",
+				"saving": "",
+				"title": "",
+				"tooLarge": "",
+				"valueLabel": ""
+			},
 			"title": "",
 			"triggeredBy": "",
 			"triggeredByInRoom": ""
@@ -129,12 +151,41 @@
 		"botSettings": "",
 		"botTag": "",
 		"builtIn": "",
+		"call": {
+			"durationHours": "",
+			"durationMinutes": "",
+			"durationShort": "",
+			"ended": "",
+			"error": {
+				"denied": "",
+				"failed": "",
+				"full": "",
+				"unavailable": ""
+			},
+			"join": "",
+			"leave": "",
+			"listen": "",
+			"listenHint": "",
+			"listenNeedsModel": "",
+			"live": "",
+			"mute": "",
+			"mutedPerson": "",
+			"speaking": "",
+			"start": "",
+			"started": "",
+			"startedYou": "",
+			"transcribedPerson": "",
+			"unmute": ""
+		},
 		"cancel": "",
 		"composer": {
 			"encrypted": "",
+			"mentionHint": "",
 			"placeholder": "",
-			"send": "",
 			"to": ""
+		},
+		"conversationMenu": {
+			"open": ""
 		},
 		"directMessage": "",
 		"dock": {
@@ -185,6 +236,30 @@
 		},
 		"loadFailed": "",
 		"loadFailedFlux": "",
+		"marks": {
+			"beforeYouJoined": "",
+			"jump": "",
+			"loadFailed": "",
+			"loadMore": "",
+			"noStars": "",
+			"notFound": "",
+			"pinConversation": "",
+			"pinLimit": "",
+			"pinMessage": "",
+			"pinnedBy": "",
+			"pinnedConversation": "",
+			"pinnedCount_one": "",
+			"pinnedCount_other": "",
+			"pinnedTitle": "",
+			"star": "",
+			"starred": "",
+			"starredDescription": "",
+			"starredShort": "",
+			"starredTitle": "",
+			"unpinConversation": "",
+			"unpinMessage": "",
+			"unstar": ""
+		},
 		"members": {
 			"added": "",
 			"joined": "",
@@ -216,6 +291,7 @@
 			"retry": "",
 			"save": "",
 			"sending": "",
+			"sentByEmail": "",
 			"unsupported": ""
 		},
 		"mute": {
@@ -256,6 +332,38 @@
 			"remove": "",
 			"title": ""
 		},
+		"note": {
+			"asked": "",
+			"askedBy": "",
+			"body": "",
+			"bodyOfType": "",
+			"clickForDetails": "",
+			"copied": "",
+			"copy": "",
+			"from": "",
+			"instruction": "",
+			"mail": {
+				"attachments": "",
+				"body": "",
+				"cc": "",
+				"from": "",
+				"notKept": "",
+				"to": "",
+				"unverified": "",
+				"verified": ""
+			},
+			"messaged": "",
+			"messagedPrefix": "",
+			"payload": "",
+			"payloadFile": "",
+			"source": {
+				"email": "",
+				"event": "",
+				"schedule": "",
+				"webhook": ""
+			},
+			"untitled": ""
+		},
 		"openChat": "",
 		"picker": {
 			"alreadyInvited": "",
@@ -279,6 +387,7 @@
 			"where": ""
 		},
 		"retry": "",
+		"roomTag": "",
 		"rooms": {
 			"bots_one": "",
 			"bots_other": "",
@@ -291,6 +400,7 @@
 			"noMessages": "",
 			"people_one": "",
 			"people_other": "",
+			"theyWrote": "",
 			"title": "",
 			"youWrote": ""
 		},
@@ -319,8 +429,12 @@
 			"today": "",
 			"yesterday": ""
 		},
+		"transcript": {
+			"said": ""
+		},
 		"trigger": {
 			"email": "",
+			"emailFrom": "",
 			"event": "",
 			"schedule": "",
 			"webhook": ""
@@ -404,6 +518,21 @@
 			"moveDown": "",
 			"moveUp": "",
 			"noModels": "",
+			"pins": {
+				"hint": "",
+				"host": "",
+				"hostHint": "",
+				"image": "",
+				"imageHint": "",
+				"none": "",
+				"stt": "",
+				"sttHint": "",
+				"title": "",
+				"tts": "",
+				"ttsHint": "",
+				"vision": "",
+				"visionHint": ""
+			},
 			"primary": "",
 			"remove": "",
 			"searchModels": "",
@@ -501,8 +630,8 @@
 			"add": "",
 			"delete": "",
 			"deleteConfirm": "",
-			"deleted": "",
 			"deleteFailed": "",
+			"deleted": "",
 			"description": "",
 			"descriptionPlaceholder": "",
 			"empty": "",
@@ -517,8 +646,8 @@
 			"neverUsed": "",
 			"replaceValue": "",
 			"save": "",
-			"saved": "",
 			"saveFailed": "",
+			"saved": "",
 			"sealed": "",
 			"sealedHint": "",
 			"subtitle": "",
@@ -577,6 +706,8 @@
 		"host": "",
 		"other": "",
 		"page": "",
+		"person": "",
+		"personUnknown": "",
 		"table": "",
 		"tool": ""
 	},
@@ -591,7 +722,30 @@
 		"topicStarted": "",
 		"untitled": ""
 	},
+	"home": {
+		"chat": {
+			"heading": "",
+			"message": "",
+			"pickBot": "",
+			"placeholder": "",
+			"send": ""
+		},
+		"messages": {
+			"caughtUp": "",
+			"signIn": "",
+			"title": ""
+		},
+		"needs": {
+			"empty": ""
+		},
+		"openBots": "",
+		"rooms": {
+			"empty": "",
+			"title": ""
+		}
+	},
 	"identity": {
+		"actsFor": "",
 		"bot": "",
 		"botId": "",
 		"botOf": "",
@@ -637,11 +791,16 @@
 		"count_other": "",
 		"deleteFailed": "",
 		"factsEmpty": "",
+		"factsEmptyOff": "",
 		"factsFailed": "",
 		"forget": "",
 		"justNow": "",
 		"loadFailed": "",
-		"off": ""
+		"noticeCapability": "",
+		"noticeModel": "",
+		"off": "",
+		"turnOn": "",
+		"turnOnFailed": ""
 	},
 	"move": {
 		"account": "",
@@ -765,8 +924,8 @@
 			"label": "",
 			"on": "",
 			"rotate": "",
-			"rotated": "",
 			"rotateFailed": "",
+			"rotated": "",
 			"unpublished": "",
 			"waiting": ""
 		},
@@ -807,6 +966,7 @@
 			"on": ""
 		},
 		"openFull": "",
+		"openWorkspace": "",
 		"permissions": {
 			"granted": "",
 			"none": "",
@@ -842,11 +1002,17 @@
 		},
 		"waitingForYou": "",
 		"webhooks": {
+			"authenticatedUrl": "",
+			"authenticatedUrlHint": "",
+			"authenticationHint": "",
+			"closeExamples": "",
 			"copied": "",
 			"copy": "",
 			"create": "",
 			"delete": "",
 			"done": "",
+			"examples": "",
+			"headerExample": "",
 			"instruction": "",
 			"instructionLabel": "",
 			"issued": "",
@@ -856,11 +1022,16 @@
 			"neverCalled": "",
 			"none": "",
 			"once": "",
+			"optionalSigning": "",
+			"placeholderHint": "",
+			"responseHint": "",
 			"rotate": "",
 			"secret": "",
+			"signingHint": "",
 			"signingKey": "",
 			"title": "",
-			"url": ""
+			"url": "",
+			"urlExample": ""
 		},
 		"working": ""
 	},

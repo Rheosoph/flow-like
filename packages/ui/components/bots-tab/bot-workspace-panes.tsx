@@ -33,6 +33,7 @@ import { MemoryList } from "../global-chat/memory-list";
 import { Button } from "../ui/button";
 import { BotFactsList } from "./bot-facts-list";
 import { BotHistoryPanel } from "./bot-history-panel";
+import { BotMemoryNotice, useBotMemoryOff } from "./bot-memory-notice";
 import { useBotWorkspace, workspaceFailure } from "./use-bot-workspace";
 import { WorkspaceDataStudio, WorkspaceStorage } from "./workspace-views";
 
@@ -42,12 +43,13 @@ interface PaneProps {
 	name: string;
 }
 
-/** The workspace app's own pages, where its files and tables have the whole window. */
+/** The workspace app's own pages, where its files and tables have the whole window; without a view, its overview. */
 export function workspaceFullViewRoute(
 	appId: string,
-	view: "storage" | "explore",
+	view?: "storage" | "explore",
 ): string {
-	return `/library/config/${view}?${new URLSearchParams({ id: appId })}`;
+	const path = view ? `/library/config/${view}` : "/library/config";
+	return `${path}?${new URLSearchParams({ id: appId })}`;
 }
 
 function FullViewLink({ href }: Readonly<{ href: string }>) {
@@ -114,6 +116,15 @@ function RetryButton({ onRetry }: Readonly<{ onRetry: () => void }>) {
 	);
 }
 
+/** The box Files and Data lay out by (`@lg/pane:` …): one vertical scroller, never a horizontal one. */
+function PaneBody({ children }: Readonly<{ children: ReactNode }>) {
+	return (
+		<div className="@container/pane flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden">
+			{children}
+		</div>
+	);
+}
+
 /** Files and Data open in the bot's workspace app, set up the first time either is shown. */
 function WorkspaceGate({
 	bot,
@@ -169,7 +180,7 @@ function WorkspaceGate({
 			/>
 		);
 	}
-	return children(query.data.app_id);
+	return <PaneBody>{children(query.data.app_id)}</PaneBody>;
 }
 
 function WorkspaceFiles({
@@ -217,7 +228,9 @@ export function BotFilesPane({ bot, name }: Readonly<PaneProps>) {
 							<PaneLoading label={t("crew.dock.loading", "Loading…")} />
 						}
 					>
-						<WorkspaceFiles appId={appId} name={name} />
+						<div className="min-h-0 min-w-0 flex-1">
+							<WorkspaceFiles appId={appId} name={name} />
+						</div>
 					</Suspense>
 				</>
 			)}
@@ -237,7 +250,7 @@ export function BotDataPane({ bot, name }: Readonly<PaneProps>) {
 							<PaneLoading label={t("crew.dock.loading", "Loading…")} />
 						}
 					>
-						<div className="flex min-h-0 flex-1 flex-col overflow-auto">
+						<div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto overflow-x-hidden">
 							<WorkspaceDataStudio appId={appId} />
 						</div>
 					</Suspense>
@@ -254,18 +267,21 @@ export function BotDataPane({ bot, name }: Readonly<PaneProps>) {
 function BotFactsPane({
 	botId,
 	name,
-}: Readonly<{ botId: string; name: string }>) {
+	notice,
+}: Readonly<{ botId: string; name: string; notice?: ReactNode }>) {
 	const { t } = useTranslation("bots");
 	const { query } = useBotWorkspace(botId);
 	const appId = query.data?.app_id;
 	return (
 		<div className="flex min-h-0 flex-1 flex-col">
+			{notice}
 			<BotHistoryPanel botId={botId} name={name} />
 			{appId ? (
 				<BotFactsList
 					botId={botId}
 					appId={appId}
 					name={name}
+					memoryOff={Boolean(notice)}
 					onJump={(seq) => {
 						if (botHasInboxHistory(botId)) void jumpBotChat(botId, seq);
 					}}
@@ -292,10 +308,13 @@ function BotFactsPane({
 
 export function BotMemoryPane({
 	botId,
+	bot,
 	embeddingModel,
 	name,
 }: Readonly<{
 	botId: string | null;
+	/** The bot's row, when it has one; its capabilities decide whether it remembers at all. */
+	bot?: IBot;
 	embeddingModel?: string | null;
 	name: string;
 }>) {
@@ -303,6 +322,10 @@ export function BotMemoryPane({
 	const backend = useBackend();
 	const chatEmbeddingModel = useGlobalChatStore((s) => s.embeddingModelId);
 	const active = Boolean(embeddingModel || chatEmbeddingModel);
+	const off = useBotMemoryOff(bot, embeddingModel);
+	const notice = off ? (
+		<BotMemoryNotice reason={off} bot={bot} botId={botId} name={name} />
+	) : undefined;
 	const profile = useInvoke(
 		backend.userState.getSettingsProfile,
 		backend.userState,
@@ -315,21 +338,31 @@ export function BotMemoryPane({
 		[profileId, botId],
 	);
 	if (botId && botId !== ASSISTANT_BOT_ID) {
-		return <BotFactsPane botId={botId} name={name} />;
+		return <BotFactsPane botId={botId} name={name} notice={notice} />;
 	}
 	if (owner) {
 		return (
-			<MemoryList
-				owner={owner}
-				active={active}
-				emptyHint={t(
-					"workspace.memoryEmpty",
-					"{{name}} saves facts, preferences and decisions here as you chat.",
-					{ name },
-				)}
-				className="flex-1 px-4 pt-3 pb-4"
-				listClassName="flex-1"
-			/>
+			<>
+				{notice}
+				<MemoryList
+					owner={owner}
+					active={active || Boolean(notice)}
+					emptyHint={
+						notice
+							? t(
+									"memory.factsEmptyOff",
+									"Nothing is saved while memory is off.",
+								)
+							: t(
+									"workspace.memoryEmpty",
+									"{{name}} saves facts, preferences and decisions here as you chat.",
+									{ name },
+								)
+					}
+					className="flex-1 px-4 pt-3 pb-4"
+					listClassName="flex-1"
+				/>
+			</>
 		);
 	}
 	if (profile.isError) {

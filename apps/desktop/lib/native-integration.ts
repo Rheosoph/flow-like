@@ -11,6 +11,7 @@ import {
 	readAppQuery,
 } from "@flow-like/flow-like-ui/lib/app-route-url";
 import type { ActiveEventExecution } from "@flow-like/flow-like-ui/lib/execution-engine";
+import type { NativeActionOutcome } from "@flow-like/flow-like-ui/lib/native-action-result";
 import {
 	type NativeSurface,
 	isNativeEventExposed,
@@ -36,6 +37,14 @@ import {
 	readUseRoutePath,
 } from "@flow-like/flow-like-ui/lib/use-route-url";
 import type { IBackendState } from "@flow-like/flow-like-ui/state/backend-state";
+import {
+	NATIVE_BOT_ACTIONS,
+	type NativeBotApproval,
+	type NativeBotEntity,
+	type NativeBotTask,
+	dispatchNativeBotAction,
+	loadNativeBotCatalog,
+} from "./native-bots";
 
 export type NativeActionKind =
 	| "open_home"
@@ -45,8 +54,22 @@ export type NativeActionKind =
 	| "run_event"
 	| "open_run"
 	| "flowpilot"
+	| "open_bot"
+	| "ask_bot"
+	| "open_conversation"
+	| "run_bot_task"
+	| "respond_bot_approval"
+	| "capture_bot_voice"
+	| "capture_bot_document"
+	| "local_bot_summary"
 	| "share";
 export interface NativeAction {
+	botId?: string;
+	conversationId?: string;
+	taskId?: string;
+	turnId?: string;
+	approvalId?: string;
+	decision?: "once" | "deny";
 	path?: string;
 	queryParams?: AppQueryParam[];
 	kind: NativeActionKind;
@@ -63,8 +86,11 @@ export interface NativePendingAction {
 	id: string;
 	scope: string;
 	action: NativeAction;
+	createdAt?: string;
 	responseMode?: "text" | "result";
 	responseDeadline?: string;
+	backgroundDelivery?: boolean;
+	backgroundError?: string;
 }
 import type {
 	NativeNotificationIcon,
@@ -79,6 +105,7 @@ export interface NativeSnapshotItem {
 	status?: string;
 	progress?: number;
 	startedAt?: string;
+	updatedAt?: string;
 	action: NativeAction;
 	/** A run executing in this app right now, never run history. */
 	live?: true;
@@ -91,12 +118,18 @@ export type NativeWidgetKind =
 	| "recent_apps"
 	| "usage"
 	| "workspace"
+	| "bots"
+	| "bot_tasks"
+	| "bot_approvals"
 	| "event_favorites";
 export interface NativeSnapshotSection {
 	kind: NativeWidgetKind;
 	title: string;
 	state: "ready" | "unavailable" | "signed_out";
 	items: NativeSnapshotItem[];
+	updatedAt?: string;
+	staleAt?: string;
+	expiresAt?: string;
 }
 export interface NativeEventEntity {
 	id: string;
@@ -111,6 +144,11 @@ export interface NativeEventEntity {
 	surfaces: NativeSurface[];
 }
 export interface NativeSnapshot {
+	userId?: string;
+	bots?: NativeBotEntity[];
+	conversations?: { id: string; botId?: string; title: string }[];
+	botTasks?: NativeBotTask[];
+	botApprovals?: NativeBotApproval[];
 	customWidgets?: NativeCustomWidget[];
 	version: 1;
 	scope: string;
@@ -169,6 +207,7 @@ export async function loadNativeSnapshot(
 		historyResult,
 		activityResult,
 		usageResult,
+		botCatalogResult,
 	] = await Promise.allSettled([
 		backend.appState.getApps(),
 		backend.userState.getProfile(),
@@ -184,6 +223,7 @@ export async function loadNativeSnapshot(
 		authenticated && backend.usageState
 			? backend.usageState.getUsageSummary()
 			: Promise.resolve(undefined),
+		loadNativeBotCatalog(backend),
 	]);
 	const reads = {
 		apps: libraryResult,
@@ -192,6 +232,7 @@ export async function loadNativeSnapshot(
 		history: historyResult,
 		activity: activityResult,
 		usage: usageResult,
+		bots: botCatalogResult,
 	};
 	for (const [name, result] of Object.entries(reads))
 		if (result.status === "rejected")
@@ -433,15 +474,29 @@ export async function loadNativeSnapshot(
 		for (const item of sections)
 			if (["inbox", "attention", "recent_runs", "usage"].includes(item.kind))
 				item.state = "signed_out";
+	const botCatalog = settledValue(botCatalogResult);
+	let userId: string | undefined;
+	try {
+		const identity: unknown = JSON.parse(scope);
+		if (Array.isArray(identity) && typeof identity[2] === "string")
+			userId = identity[2];
+	} catch {
+		/* Older native callers have opaque workspace identifiers. */
+	}
 	return {
 		version: 1,
 		scope,
+		userId,
+		bots: botCatalog?.bots ?? [],
+		conversations: botCatalog?.conversations ?? [],
+		botTasks: botCatalog?.botTasks ?? [],
+		botApprovals: botCatalog?.botApprovals ?? [],
 		generatedAt: now.toISOString(),
 		staleAt: new Date(now.getTime() + NATIVE_SNAPSHOT_STALE_MS).toISOString(),
 		expiresAt: new Date(
 			now.getTime() + NATIVE_SNAPSHOT_RETENTION_MS,
 		).toISOString(),
-		sections,
+		sections: [...sections, ...(botCatalog?.sections ?? [])],
 		events,
 		apps,
 		...(appsFailed ? { appsUnavailable: true as const } : {}),
@@ -567,6 +622,8 @@ export interface NativeDispatchContext {
 	scope: string;
 	backend: IBackendState;
 	navigate: (url: string) => void;
+	bot?: (action: NativeAction) => Promise<void>;
+	complete?: (outcome: NativeActionOutcome) => Promise<void>;
 	flowpilot: (
 		prompt?: string,
 		voice?: boolean,
@@ -599,6 +656,21 @@ export async function dispatchNativeAction(
 ): Promise<void> {
 	if (!request.id || request.scope !== context.scope || !context.isCurrent())
 		throw new Error("This action belongs to a different account or workspace.");
+	if (request.backgroundError)
+		throw new Error(request.backgroundError.slice(0, 1000));
+	if (request.backgroundDelivery) {
+		const created = Date.parse(request.createdAt ?? "");
+		if (
+			request.responseMode ||
+			!["ask_bot", "respond_bot_approval"].includes(request.action.kind) ||
+			!Number.isFinite(created) ||
+			created > Date.now() + 60_000 ||
+			created + 86_400_000 <= Date.now()
+		)
+			throw new Error(
+				"This queued bot action expired. Open the conversation to try again.",
+			);
+	}
 	const deadline = request.responseDeadline
 		? Date.parse(request.responseDeadline)
 		: undefined;
@@ -610,6 +682,13 @@ export async function dispatchNativeAction(
 			"This Shortcut request expired. Run it again to get a response.",
 		);
 	const action = request.action;
+	if (
+		NATIVE_BOT_ACTIONS.has(action.kind) ||
+		(action.kind === "share" && action.botId)
+	) {
+		await dispatchNativeBotAction(request, context);
+		return;
+	}
 	if (action.kind === "open_home") {
 		context.navigate("/");
 		return;
@@ -843,6 +922,29 @@ export function nativeNavigationRequest(
 	if (url.pathname === "/home")
 		return { id: crypto.randomUUID(), scope, action: { kind: "open_home" } };
 	if (url.searchParams.get("scope") !== scope) return;
+	if (url.pathname === "/bots")
+		return { id: crypto.randomUUID(), scope, action: { kind: "open_bot" } };
+	if (
+		["/bot", "/conversation", "/bot-task", "/bot-approval"].includes(
+			url.pathname,
+		)
+	) {
+		const botId = url.searchParams.get("botId") || undefined;
+		const conversationId = url.searchParams.get("conversationId") || undefined;
+		if (!botId && !conversationId) return;
+		return {
+			id: crypto.randomUUID(),
+			scope,
+			action: {
+				kind: conversationId ? "open_conversation" : "open_bot",
+				botId,
+				conversationId,
+				taskId: url.searchParams.get("taskId") || undefined,
+				turnId: url.searchParams.get("turnId") || undefined,
+				approvalId: url.searchParams.get("approvalId") || undefined,
+			},
+		};
+	}
 	if (url.pathname === "/flowpilot" || url.pathname === "/inbox")
 		return {
 			id: crypto.randomUUID(),
@@ -950,6 +1052,31 @@ export function withNativeActivePage(
 		webOrigin,
 		activePage: undefined as NativeSnapshot["activePage"],
 	};
+	if (
+		webOrigin &&
+		nativeWebOrigin(webOrigin) === webOrigin &&
+		pathname.replace(/\/$/, "") === "/bots"
+	) {
+		const params = new URLSearchParams(query);
+		const selectedBot = params.get("bot") || "general";
+		const bot = snapshot.bots?.find(
+			(bot) => bot.id === selectedBot || bot.system === selectedBot,
+		);
+		const conversation = snapshot.conversations?.find(
+			(conversation) => conversation.id === params.get("conversation"),
+		);
+		if (conversation)
+			next.activePage = {
+				title: conversation.title,
+				url: `${webOrigin}/bots?conversation=${encodeURIComponent(conversation.id)}`,
+			};
+		else if (bot)
+			next.activePage = {
+				title: bot.title,
+				url: `${webOrigin}/bots?bot=${encodeURIComponent(bot.id)}`,
+			};
+		return next;
+	}
 	if (
 		!webOrigin ||
 		nativeWebOrigin(webOrigin) !== webOrigin ||

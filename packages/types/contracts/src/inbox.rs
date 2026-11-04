@@ -96,12 +96,21 @@ wire_enum!(
         /// Work that wakes a bot: a schedule firing, a webhook, an email or an event. Hosts write
         /// it as the bot's owner into the bot's conversation; clients never send it.
         Trigger => "trigger",
+        /// A line about something a bot did elsewhere, e.g. one bot asking another. Hosts write
+        /// it, clients never send it, and it wakes no one.
+        Activity => "activity",
+        /// A call started or ended in the conversation. It wakes no bot and counts as unread
+        /// for no one.
+        Call => "call",
+        /// A line a person spoke in a call, transcribed on their device. It wakes only the
+        /// bots it mentions and counts as unread for no one.
+        Transcript => "transcript",
     }
 );
 
 impl InboxEntryKind {
     pub fn client_sendable(self) -> bool {
-        !matches!(self, Self::Member | Self::Trigger)
+        !matches!(self, Self::Member | Self::Trigger | Self::Activity)
     }
 
     /// Entries that ask a bot to act, as a message from its owner does.
@@ -237,6 +246,58 @@ pub fn body_target(envelope: &Value) -> Option<&str> {
         .filter(|target| !target.is_empty())
 }
 
+/// A plain reaction entry: `sender_id` added or removed `emoji` on the message `target`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactionEvent {
+    pub message_id: String,
+    pub sender_id: String,
+    pub target: String,
+    pub emoji: String,
+    pub add: bool,
+}
+
+impl ReactionEvent {
+    /// The reaction in a plain envelope's body `{ target, emoji, op? }`; `op` defaults to `add`.
+    pub fn parse(message_id: &str, sender_id: &str, envelope: &Value) -> Option<Self> {
+        let body = envelope.get("body")?;
+        let emoji = body
+            .get("emoji")?
+            .as_str()
+            .filter(|emoji| !emoji.is_empty())?;
+        let add = match body.get("op").and_then(Value::as_str) {
+            None | Some("add") => true,
+            Some("remove") => false,
+            Some(_) => return None,
+        };
+        Some(Self {
+            message_id: message_id.to_string(),
+            sender_id: sender_id.to_string(),
+            target: body_target(envelope)?.to_string(),
+            emoji: emoji.to_string(),
+            add,
+        })
+    }
+}
+
+/// The reactions still in place: the additions among `events` (oldest first) that no later
+/// removal by the same sender of the same emoji on the same message undid.
+pub fn net_reactions(events: &[ReactionEvent]) -> Vec<ReactionEvent> {
+    events
+        .iter()
+        .enumerate()
+        .filter(|(index, event)| {
+            event.add
+                && !events[index + 1..].iter().any(|later| {
+                    !later.add
+                        && later.sender_id == event.sender_id
+                        && later.target == event.target
+                        && later.emoji == event.emoji
+                })
+        })
+        .map(|(_, event)| event.clone())
+        .collect()
+}
+
 /// The body field only tombstones carry.
 pub const TOMBSTONE_FIELD: &str = "deleted";
 
@@ -281,6 +342,121 @@ impl TopicBody {
             ));
         }
         Ok(topic)
+    }
+}
+
+/// A call lasts at most this many milliseconds.
+pub const CALL_MAX_DURATION_MS: u64 = 86_400_000;
+/// A transcript line's text is at most this many characters.
+pub const TRANSCRIPT_TEXT_MAX_CHARS: usize = 4_000;
+/// One transcribed utterance lasts at most this many milliseconds.
+pub const TRANSCRIPT_MAX_DURATION_MS: u64 = 15 * 60 * 1000;
+/// A transcript names at most this many principals.
+pub const TRANSCRIPT_MAX_MENTIONS: usize = MAX_CONVERSATION_MEMBERS;
+
+/// What bots read in front of a transcribed line.
+pub const SPOKEN_IN_CALL: &str = "(spoken in call)";
+
+/// The body of a `call` entry. A call's id is the `message_id` of its `started` entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum CallBody {
+    /// The call begins; the entry's `message_id` is the call's id.
+    Started,
+    /// The last person left call `call` after `duration_ms`.
+    Ended { call: String, duration_ms: u64 },
+}
+
+impl CallBody {
+    pub fn parse(body: &Value) -> Result<Self, String> {
+        let call: Self = serde_json::from_value(body.clone()).map_err(|error| {
+            format!(
+                "a call body is {{ op: \"started\" }} or {{ op: \"ended\", call, duration_ms }}: {error}"
+            )
+        })?;
+        if let Self::Ended {
+            call: id,
+            duration_ms,
+        } = &call
+        {
+            check_call_id(id)?;
+            if *duration_ms > CALL_MAX_DURATION_MS {
+                return Err(format!(
+                    "a call lasts at most {CALL_MAX_DURATION_MS} ms; body.duration_ms is {duration_ms}"
+                ));
+            }
+        }
+        Ok(call)
+    }
+}
+
+fn check_call_id(call: &str) -> Result<(), String> {
+    if is_valid_message_id(call) {
+        return Ok(());
+    }
+    Err(format!(
+        "body.call '{}' must be the call's message id: 1 to {MESSAGE_ID_MAX_CHARS} characters of A-Z, a-z, 0-9, '_' and '-'",
+        call.chars().take(80).collect::<String>()
+    ))
+}
+
+/// The body of a `transcript` entry: one utterance of a person in a call.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TranscriptBody {
+    pub call: String,
+    pub text: String,
+    /// When the utterance began, in milliseconds after the call started.
+    pub offset_ms: u64,
+    pub duration_ms: u64,
+    #[serde(default)]
+    pub mentions: Vec<String>,
+}
+
+impl TranscriptBody {
+    /// The line a bot reads: the text, marked as spoken in a call.
+    pub fn render(&self) -> String {
+        format!("{SPOKEN_IN_CALL} {}", self.text)
+    }
+
+    pub fn parse(body: &Value) -> Result<Self, String> {
+        let transcript: Self = serde_json::from_value(body.clone()).map_err(|error| {
+            format!(
+                "a transcript body is {{ call, text, offset_ms, duration_ms, mentions? }}: {error}"
+            )
+        })?;
+        check_call_id(&transcript.call)?;
+        let chars = transcript.text.chars().count();
+        if transcript.text.trim().is_empty() || chars > TRANSCRIPT_TEXT_MAX_CHARS {
+            return Err(format!(
+                "a transcript text has 1 to {TRANSCRIPT_TEXT_MAX_CHARS} characters; this one has {chars}"
+            ));
+        }
+        if transcript.duration_ms > TRANSCRIPT_MAX_DURATION_MS {
+            return Err(format!(
+                "a transcript lasts at most {TRANSCRIPT_MAX_DURATION_MS} ms; body.duration_ms is {}",
+                transcript.duration_ms
+            ));
+        }
+        if transcript.mentions.len() > TRANSCRIPT_MAX_MENTIONS {
+            return Err(format!(
+                "body.mentions names at most {TRANSCRIPT_MAX_MENTIONS} principals; this one names {}",
+                transcript.mentions.len()
+            ));
+        }
+        if let Some(mention) = transcript.mentions.iter().find(|mention| {
+            mention.is_empty()
+                || mention.chars().count() > crate::bot_message::MAX_NAME_CHARS
+                || mention
+                    .chars()
+                    .any(|char| char.is_whitespace() || char.is_control())
+        }) {
+            return Err(format!(
+                "body.mentions '{}' must be 1 to {} characters without spaces",
+                mention.chars().take(80).collect::<String>(),
+                crate::bot_message::MAX_NAME_CHARS
+            ));
+        }
+        Ok(transcript)
     }
 }
 
@@ -388,6 +564,78 @@ impl TriggerBody {
             ));
         }
         text
+    }
+}
+
+/// An activity's question is at most this many characters.
+pub const ACTIVITY_QUESTION_MAX_CHARS: usize = 300;
+
+/// The body of an `activity` entry, written in a plain envelope by a host.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ActivityBody {
+    /// `asker_id` asked `callee_id`; question and answer live in the exchange `exchange_id`.
+    BotAsk {
+        ask_id: String,
+        asker_id: String,
+        callee_id: String,
+        exchange_id: String,
+        question: String,
+    },
+}
+
+impl ActivityBody {
+    /// A `bot_ask` whose question is clipped to [`ACTIVITY_QUESTION_MAX_CHARS`].
+    pub fn bot_ask(
+        ask_id: impl Into<String>,
+        asker_id: impl Into<String>,
+        callee_id: impl Into<String>,
+        exchange_id: impl Into<String>,
+        question: &str,
+    ) -> Self {
+        Self::BotAsk {
+            ask_id: ask_id.into(),
+            asker_id: asker_id.into(),
+            callee_id: callee_id.into(),
+            exchange_id: exchange_id.into(),
+            question: question.chars().take(ACTIVITY_QUESTION_MAX_CHARS).collect(),
+        }
+    }
+
+    pub fn parse(body: &Value) -> Result<Self, String> {
+        let activity: Self = serde_json::from_value(body.clone()).map_err(|error| {
+            format!(
+                "an activity body is {{ type: \"bot_ask\", ask_id, asker_id, callee_id, exchange_id, question }}: {error}"
+            )
+        })?;
+        let Self::BotAsk {
+            ask_id,
+            asker_id,
+            callee_id,
+            exchange_id,
+            question,
+        } = &activity;
+        for (name, value) in [
+            ("ask_id", ask_id),
+            ("asker_id", asker_id),
+            ("callee_id", callee_id),
+            ("exchange_id", exchange_id),
+        ] {
+            if value.trim().is_empty() {
+                return Err(format!("an activity needs a non-empty body.{name}"));
+            }
+        }
+        let chars = question.chars().count();
+        if chars > ACTIVITY_QUESTION_MAX_CHARS {
+            return Err(format!(
+                "an activity question has at most {ACTIVITY_QUESTION_MAX_CHARS} characters; this one has {chars}"
+            ));
+        }
+        Ok(activity)
+    }
+
+    pub fn envelope(&self) -> Value {
+        plain_envelope(serde_json::to_value(self).unwrap_or(Value::Null))
     }
 }
 
@@ -566,16 +814,109 @@ mod tests {
             .filter(|kind| kind.client_sendable())
             .map(|kind| kind.as_str())
             .collect();
-        assert_eq!(sendable, ["message", "reaction", "edit", "delete", "topic"]);
+        assert_eq!(
+            sendable,
+            [
+                "message",
+                "reaction",
+                "edit",
+                "delete",
+                "topic",
+                "call",
+                "transcript"
+            ]
+        );
+        assert!(!InboxEntryKind::Call.wakes_bot());
+        assert!(!InboxEntryKind::Transcript.wakes_bot());
+        assert!(!InboxEntryKind::Call.targets_message());
+        assert!(!InboxEntryKind::Transcript.targets_message());
         assert!(InboxEntryKind::Trigger.wakes_bot());
         assert!(InboxEntryKind::Message.wakes_bot());
         assert!(!InboxEntryKind::Topic.wakes_bot());
+        assert!(!InboxEntryKind::Activity.wakes_bot());
+        assert!(!InboxEntryKind::Activity.client_sendable());
         assert!(InboxEntryKind::Reaction.targets_message());
         assert!(!InboxEntryKind::Reaction.requires_own_target());
         assert!(InboxEntryKind::Edit.requires_own_target());
         assert!(InboxEntryKind::Delete.requires_own_target());
         assert!(!InboxEntryKind::Message.targets_message());
         assert!(!InboxEntryKind::Topic.targets_message());
+    }
+
+    #[test]
+    fn a_call_body_is_started_or_ended_with_a_bounded_duration() {
+        assert_eq!(
+            CallBody::parse(&json!({ "op": "started" })),
+            Ok(CallBody::Started)
+        );
+        assert_eq!(
+            CallBody::parse(&json!({ "op": "ended", "call": "c_1", "duration_ms": 1500 })),
+            Ok(CallBody::Ended {
+                call: "c_1".into(),
+                duration_ms: 1500
+            })
+        );
+        let longest = json!({ "op": "ended", "call": "c_1", "duration_ms": CALL_MAX_DURATION_MS });
+        assert!(CallBody::parse(&longest).is_ok());
+        let too_long =
+            json!({ "op": "ended", "call": "c_1", "duration_ms": CALL_MAX_DURATION_MS + 1 });
+        assert!(
+            CallBody::parse(&too_long)
+                .unwrap_err()
+                .contains("body.duration_ms")
+        );
+        let long_id = "c".repeat(MESSAGE_ID_MAX_CHARS + 1);
+        let error = CallBody::parse(&json!({ "op": "ended", "call": long_id, "duration_ms": 1 }))
+            .unwrap_err();
+        assert!(error.contains("body.call"));
+        assert!(CallBody::parse(&json!({ "op": "ended", "duration_ms": 1 })).is_err());
+        assert!(CallBody::parse(&json!({ "op": "ringing" })).is_err());
+        assert!(CallBody::parse(&json!({})).is_err());
+    }
+
+    #[test]
+    fn a_transcript_body_enforces_its_text_duration_and_mention_limits() {
+        let line = |text: &str| json!({ "call": "c_1", "text": text, "offset_ms": 2000, "duration_ms": 3000, "mentions": ["bot_1"] });
+        let parsed = TranscriptBody::parse(&line("hello")).unwrap();
+        assert_eq!(parsed.mentions, ["bot_1"]);
+        assert_eq!((parsed.offset_ms, parsed.duration_ms), (2000, 3000));
+        let no_mentions = json!({ "call": "c_1", "text": "hi", "offset_ms": 0, "duration_ms": 10 });
+        assert!(
+            TranscriptBody::parse(&no_mentions)
+                .unwrap()
+                .mentions
+                .is_empty()
+        );
+        assert_eq!(parsed.render(), "(spoken in call) hello");
+        assert!(TranscriptBody::parse(&line(&"a".repeat(TRANSCRIPT_TEXT_MAX_CHARS))).is_ok());
+        let long = TranscriptBody::parse(&line(&"a".repeat(TRANSCRIPT_TEXT_MAX_CHARS + 1)));
+        assert!(long.unwrap_err().contains("4000"));
+        assert!(TranscriptBody::parse(&line("   ")).is_err());
+        let slow = json!({ "call": "c_1", "text": "hi", "offset_ms": 0, "duration_ms": TRANSCRIPT_MAX_DURATION_MS + 1 });
+        assert!(
+            TranscriptBody::parse(&slow)
+                .unwrap_err()
+                .contains("body.duration_ms")
+        );
+        let crowd: Vec<String> = (0..=TRANSCRIPT_MAX_MENTIONS)
+            .map(|n| format!("p{n}"))
+            .collect();
+        let crowded = json!({ "call": "c_1", "text": "hi", "offset_ms": 0, "duration_ms": 1, "mentions": crowd });
+        assert!(
+            TranscriptBody::parse(&crowded)
+                .unwrap_err()
+                .contains("body.mentions")
+        );
+        let spaced = json!({ "call": "c_1", "text": "hi", "offset_ms": 0, "duration_ms": 1, "mentions": ["has space"] });
+        assert!(TranscriptBody::parse(&spaced).is_err());
+        let bad_call =
+            json!({ "call": "has space", "text": "hi", "offset_ms": 0, "duration_ms": 1 });
+        assert!(
+            TranscriptBody::parse(&bad_call)
+                .unwrap_err()
+                .contains("body.call")
+        );
+        assert!(TranscriptBody::parse(&json!({ "call": "c_1", "text": "hi" })).is_err());
     }
 
     #[test]
@@ -603,6 +944,23 @@ mod tests {
         blank.ref_id = " ".into();
         assert!(TriggerBody::parse(&blank.envelope()["body"]).is_err());
         assert!(TriggerBody::parse(&json!({ "source": "carrier-pigeon" })).is_err());
+    }
+
+    #[test]
+    fn an_activity_body_round_trips_clips_and_rejects() {
+        let body = ActivityBody::bot_ask("a1", "scout", "pebble", "ex1", &"q".repeat(500));
+        let ActivityBody::BotAsk { question, .. } = &body;
+        assert_eq!(question.chars().count(), ACTIVITY_QUESTION_MAX_CHARS);
+        let envelope = body.envelope();
+        assert_eq!(check_envelope(&envelope), Ok(EnvelopeKind::Plain));
+        assert_eq!(ActivityBody::parse(&envelope["body"]), Ok(body.clone()));
+        assert_eq!(envelope["body"]["type"], "bot_ask");
+        let blank = ActivityBody::bot_ask("a1", " ", "pebble", "ex1", "hi");
+        assert!(ActivityBody::parse(&blank.envelope()["body"]).is_err());
+        let long = json!({ "type": "bot_ask", "ask_id": "a", "asker_id": "b", "callee_id": "c",
+            "exchange_id": "e", "question": "x".repeat(ACTIVITY_QUESTION_MAX_CHARS + 1) });
+        assert!(ActivityBody::parse(&long).is_err());
+        assert!(ActivityBody::parse(&json!({ "type": "nope" })).is_err());
     }
 
     #[test]
@@ -804,6 +1162,39 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<MemberEventBody>(envelope["body"].clone()).unwrap(),
             body
+        );
+    }
+
+    #[test]
+    fn a_removed_reaction_is_no_longer_in_place_but_a_later_one_is() {
+        let react = |id: &str, sender: &str, emoji: &str, op: &str| {
+            let envelope = serde_json::json!({
+                "body": { "target": "m1", "emoji": emoji, "op": op }
+            });
+            ReactionEvent::parse(id, sender, &envelope).unwrap()
+        };
+        let events = [
+            react("r1", "ann", "👍", "add"),
+            react("r2", "ann", "👍", "remove"),
+            react("r3", "ann", "❓", "add"),
+            react("r4", "bob", "👍", "add"),
+            react("r5", "bob", "👍", "remove"),
+            react("r6", "bob", "👍", "add"),
+        ];
+        let kept: Vec<_> = net_reactions(&events)
+            .into_iter()
+            .map(|event| event.message_id)
+            .collect();
+        assert_eq!(kept, ["r3", "r6"]);
+        let no_op = serde_json::json!({ "body": { "target": "m1", "emoji": "👍" } });
+        assert!(ReactionEvent::parse("r", "ann", &no_op).unwrap().add);
+        assert!(
+            ReactionEvent::parse(
+                "r",
+                "ann",
+                &serde_json::json!({ "body": { "target": "m1" } })
+            )
+            .is_none()
         );
     }
 }

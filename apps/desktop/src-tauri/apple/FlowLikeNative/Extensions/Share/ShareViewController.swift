@@ -55,13 +55,61 @@ final class ShareViewController: SharePlatformController {
                 }
                 let combined = text.joined(separator: "\n\n")
                 guard combined.utf8.count <= 1_048_576 else { throw NativeIntegrationError.oversized }
-                _ = try NativeStore.shared.enqueue(NativeAction(kind: "share", text: combined.isEmpty ? nil : combined, files: files))
-                // Share extensions cannot force their containing app to launch on iOS.
-                showCompletion()
+                chooseDestination(text: combined.isEmpty ? nil : combined, files: files)
             } catch {
                 extensionContext?.cancelRequest(withError: error)
             }
         }
+    }
+
+    @MainActor private func chooseDestination(text: String?, files: [String]) {
+        let snapshot = NativeStore.shared.snapshot()
+        let bots = (snapshot?.bots ?? []).filter { $0.exposes("share") }.prefix(32)
+        #if os(iOS)
+        let chooser = UIAlertController(title: "Send to a bot", message: "Choose which bot receives this content when you open Flow Like.", preferredStyle: .actionSheet)
+        for bot in bots {
+            chooser.addAction(UIAlertAction(title: bot.title, style: .default) { [weak self] _ in
+                self?.send(text: text, files: files, botId: bot.id, scope: snapshot?.scope)
+            })
+        }
+        chooser.addAction(UIAlertAction(title: "Choose in Flow Like", style: .default) { [weak self] _ in
+            self?.send(text: text, files: files, botId: nil, scope: snapshot?.scope)
+        })
+        chooser.addAction(UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+            self?.extensionContext?.completeRequest(returningItems: nil)
+        })
+        chooser.popoverPresentationController?.sourceView = view
+        chooser.popoverPresentationController?.sourceRect = CGRect(x: view.bounds.midX, y: view.bounds.midY, width: 1, height: 1)
+        present(chooser, animated: true)
+        #else
+        let chooser = NSAlert()
+        chooser.messageText = "Send to a bot"
+        chooser.informativeText = "Choose which bot receives this content in Flow Like."
+        let menu = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 280, height: 28))
+        menu.addItem(withTitle: "Choose in Flow Like")
+        bots.forEach { menu.addItem(withTitle: $0.title) }
+        chooser.accessoryView = menu
+        chooser.addButton(withTitle: "Send")
+        chooser.addButton(withTitle: "Cancel")
+        let complete: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+            guard response == .alertFirstButtonReturn else {
+                self?.extensionContext?.completeRequest(returningItems: nil)
+                return
+            }
+            let index = menu.indexOfSelectedItem - 1
+            let botId = bots.indices.contains(index) ? bots[index].id : nil
+            self?.send(text: text, files: files, botId: botId, scope: snapshot?.scope)
+        }
+        if let window = view.window { chooser.beginSheetModal(for: window, completionHandler: complete) }
+        else { complete(chooser.runModal()) }
+        #endif
+    }
+
+    @MainActor private func send(text: String?, files: [String], botId: String?, scope: String?) {
+        do {
+            _ = try NativeStore.shared.enqueue(NativeAction(kind: "share", text: text, files: files, botId: botId), expectedScope: scope)
+            showCompletion()
+        } catch { extensionContext?.cancelRequest(withError: error) }
     }
 
     @MainActor private func showCompletion() {

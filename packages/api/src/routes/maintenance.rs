@@ -118,6 +118,9 @@ async fn run_maintenance_job(
             if let Err(error) = crate::locked_storage::sweep_expired_versions(&state).await {
                 tracing::error!(%error, "Scheduled locked retention deletion sweep failed");
             }
+            if let Err(error) = crate::routes::inbox::files::sweep(&state).await {
+                tracing::error!(%error, "Scheduled conversation file sweep failed");
+            }
 
             let store = require_cache_store(&state.cache).await?;
 

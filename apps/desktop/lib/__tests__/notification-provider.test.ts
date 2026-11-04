@@ -9,9 +9,10 @@ const mocks = vi.hoisted(() => ({
 	preference: true,
 	auth: {
 		isAuthenticated: true,
+		isLoading: false,
 		user: { profile: { sub: "test-user" }, access_token: "access-token" },
 	},
-	backend: { profile: { hub: "https://hub.example.test" } },
+	backend: { profile: { id: "profile", hub: "https://hub.example.test" } },
 	hub: {
 		hub: {
 			push_notifications: {
@@ -27,6 +28,7 @@ const mocks = vi.hoisted(() => ({
 	listen: vi.fn(),
 	fetcher: vi.fn(),
 	tapUnregister: vi.fn(),
+	onTapped: vi.fn(),
 	startRegistration: vi.fn(),
 }));
 
@@ -69,7 +71,7 @@ vi.mock("../remote-push", () => ({
 	getPushDeviceId: async () => "test-device",
 	isRemotePushPreferenceEnabled: () => mocks.preference,
 	loadRemotePushPlugin: async () => ({
-		onNotificationTapped: async () => ({ unregister: mocks.tapUnregister }),
+		onNotificationTapped: mocks.onTapped,
 	}),
 }));
 vi.mock("../remote-push-registration", () => ({
@@ -90,6 +92,10 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 	mocks.preference = true;
+	mocks.auth.isAuthenticated = true;
+	mocks.auth.isLoading = false;
+	mocks.backend.profile.id = "profile";
+	mocks.onTapped.mockResolvedValue({ unregister: mocks.tapUnregister });
 	mocks.invoke.mockResolvedValue(null);
 	mocks.listen.mockResolvedValue(() => {});
 	mocks.fetcher.mockResolvedValue({ id: "push-target", success: true });
@@ -184,4 +190,57 @@ test("unmount stops registration, aborts its request and removes refresh listene
 	window.dispatchEvent(new Event("online"));
 	document.dispatchEvent(new Event("visibilitychange"));
 	expect(registration.refresh).not.toHaveBeenCalled();
+});
+
+function botPush(overrides: Record<string, unknown> = {}) {
+	return {
+		title: "Private bot update",
+		body: "Account-specific content",
+		category: "flow_like_bot_message",
+		data: {
+			bot_id: "bot",
+			link: "/bots?bot=bot",
+			user_id: "test-user",
+			native_scope: JSON.stringify([
+				"https://hub.example.test",
+				"profile",
+				"test-user",
+			]),
+			...overrides,
+		},
+	};
+}
+
+test("drops bot push bodies and taps from another account or workspace", async () => {
+	await mount();
+	const tapped = mocks.onTapped.mock.calls[0][0];
+	for (const push of [
+		botPush({ native_scope: "other-workspace" }),
+		botPush({ user_id: "other-user" }),
+		botPush({ native_scope: undefined }),
+	]) {
+		await registrations[0].options.onNotification?.(push);
+		tapped(push);
+	}
+	expect(mocks.queryClient.refetchQueries).not.toHaveBeenCalled();
+	expect(mocks.router.push).not.toHaveBeenCalled();
+	tapped(botPush());
+	expect(mocks.queryClient.refetchQueries).toHaveBeenCalledOnce();
+	expect(mocks.router.push).toHaveBeenCalledWith("/bots?bot=bot");
+});
+
+test("retained callbacks reject bot pushes after the workspace changes or auth begins loading", async () => {
+	await mount();
+	const previous = registrations[0];
+	const tapped = mocks.onTapped.mock.calls[0][0];
+	mocks.backend.profile.id = "second-profile";
+	await act(async () => root.render(createElement(NotificationProvider)));
+	await previous.options.onNotification?.(botPush());
+	tapped(botPush());
+	mocks.backend.profile.id = "profile";
+	mocks.auth.isLoading = true;
+	await act(async () => root.render(createElement(NotificationProvider)));
+	tapped(botPush());
+	expect(mocks.queryClient.refetchQueries).not.toHaveBeenCalled();
+	expect(mocks.router.push).not.toHaveBeenCalled();
 });

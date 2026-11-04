@@ -53,6 +53,10 @@
 		D8F50B492139C7FEB053F795 /* Intents.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3156864FB05B536664665A8 /* Intents.swift */; };
 		DE97791C7BD72228784CBF65 /* NativeStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32E150C1D4C2089F42232978 /* NativeStore.swift */; };
 		E0EE42BFEE45FB1AA0BDD4B0 /* FlowLikeWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37DDB6DF4A3F21C35ACFAC7B /* FlowLikeWidgets.swift */; };
+		E9B325FAFD94532342DA2F7D /* BotNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 912AF874D5D500E030DFA67C /* BotNotifications.swift */; };
+		159BD23E8667A1D3C8E77AFE /* BotDeviceServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CBF20FC760102F8D0FC93CE /* BotDeviceServices.swift */; };
+		0A4132C24EBF104B4C882283 /* BotCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC7382A28AB8A860912D684F /* BotCapture.swift */; };
+		ACB6FC2E5E34D529B07511AD /* BotBackgroundRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = C35C69760B484F89995136C3 /* BotBackgroundRefresh.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -127,6 +131,10 @@
 		EE922AFABCE32B3F84FDA161 /* ActionResults.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActionResults.swift; sourceTree = "<group>"; };
 		F2EDFB48BB58BBDFDF6EC13A /* Info-macOS.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "Info-macOS.plist"; sourceTree = "<group>"; };
 		FD1BA254DE4B039F47C25C64 /* Share-macOS.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "Share-macOS.entitlements"; sourceTree = "<group>"; };
+		912AF874D5D500E030DFA67C /* BotNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BotNotifications.swift; sourceTree = "<group>"; };
+		6CBF20FC760102F8D0FC93CE /* BotDeviceServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BotDeviceServices.swift; sourceTree = "<group>"; };
+		AC7382A28AB8A860912D684F /* BotCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BotCapture.swift; sourceTree = "<group>"; };
+		C35C69760B484F89995136C3 /* BotBackgroundRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BotBackgroundRefresh.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -242,6 +250,10 @@
 				EE922AFABCE32B3F84FDA161 /* ActionResults.swift */,
 				B07B9BCFE973893E69CE2B9D /* ActivityBridge.swift */,
 				01A708413E3811BBA282C3B3 /* AppIcons.swift */,
+				912AF874D5D500E030DFA67C /* BotNotifications.swift */,
+				6CBF20FC760102F8D0FC93CE /* BotDeviceServices.swift */,
+				AC7382A28AB8A860912D684F /* BotCapture.swift */,
+				C35C69760B484F89995136C3 /* BotBackgroundRefresh.swift */,
 				0D3552550A5268ACB5D2C106 /* CBridge.swift */,
 				475D1C5627521D3955AA0623 /* GeofenceLease.swift */,
 				28D0E393A00360F1F8DB4DF1 /* Geofences.swift */,
@@ -508,6 +520,10 @@
 				2682AC5B354E66C06DD1D31D /* ActionResults.swift in Sources */,
 				642D8DAAEDFC3027EDB45E99 /* ActivityBridge.swift in Sources */,
 				A1336D7925D53443BC3D7AB6 /* AppIcons.swift in Sources */,
+				E9B325FAFD94532342DA2F7D /* BotNotifications.swift in Sources */,
+				159BD23E8667A1D3C8E77AFE /* BotDeviceServices.swift in Sources */,
+				0A4132C24EBF104B4C882283 /* BotCapture.swift in Sources */,
+				ACB6FC2E5E34D529B07511AD /* BotBackgroundRefresh.swift in Sources */,
 				B3543E56EF578B27D784D0D8 /* CBridge.swift in Sources */,
 				D3F3808C2C4CECFA2645F7ED /* GeofenceLease.swift in Sources */,
 				99C9E9142752B653462A2D5A /* GeofenceStore.swift in Sources */,

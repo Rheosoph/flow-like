@@ -12,10 +12,11 @@ pub mod moves;
 pub mod workspace;
 
 use flow_like_local_bots::{
-    Bot, BotApp, BotMover, BotPermission, BotSecretInfo, ChangeNotifier, Conversation, CreateBotRequest,
-    CreateConversationRequest, EntriesQuery, HubBody, HubCall, HubMethod, InboxEntriesPage,
-    InboxEntry, KeyError, LOCAL_OWNER_ID, LocalBotBundle, LocalBotStore, MarkReadResponse,
-    SecretKeyProvider, SendEntryRequest, UpdateBotRequest, codes,
+    Bot, BotApp, BotMover, BotPermission, BotSecretInfo, ChangeNotifier, Conversation,
+    ConversationPinState, CreateBotRequest, CreateConversationRequest, EntriesQuery, HubBody,
+    HubCall, HubMethod, InboxEntriesPage, InboxEntry, KeyError, LOCAL_OWNER_ID, LocalBotBundle,
+    LocalBotStore, LocalConversationFile, MarkReadResponse, PinnedMessage, SecretKeyProvider,
+    SendEntryRequest, StarredMessage, StarredMessagesPage, UpdateBotRequest, codes,
 };
 use flow_like_types::{bot::BotSystemKind, bot_restrictions::BotRestrictions};
 use hub::HubClient;
@@ -210,13 +211,24 @@ fn save_key(_: &keyring::Entry, secret: &[u8]) -> Result<(), String> {
         .map_err(|_| "Cannot save the key for bot secrets".into())
 }
 
-// Android has no OS keyring backend in this dependency, and secrets must never fall back to a
-// key stored next to them.
 #[cfg(all(not(test), target_os = "android"))]
-fn keychain_key(_: bool) -> Result<Zeroizing<[u8; 32]>, KeyError> {
-    Err(KeyError::Unavailable(
-        "Secrets need a system keychain, which this device doesn't offer".into(),
-    ))
+fn keychain_key(create: bool) -> Result<Zeroizing<[u8; 32]>, KeyError> {
+    use chacha20poly1305::{KeyInit, XChaCha20Poly1305, aead::OsRng};
+    // Serialize first creation so concurrent secret writes always use the same key.
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = LOCK.lock().map_err(|_| KeyError::Unavailable("Android credential store is busy".into()))?;
+    const KEY: &str = "local-bots:secret-key:v1";
+    let secret = match crate::android_mobile::secure_read(KEY).map_err(KeyError::Unavailable)? {
+        Some(value) => value,
+        None if create => {
+            let secret = Zeroizing::new(XChaCha20Poly1305::generate_key(&mut OsRng).to_vec());
+            crate::android_mobile::secure_write(KEY, &secret).map_err(KeyError::Unavailable)?;
+            secret
+        }
+        None => return Err(KeyError::Missing("This device's key for bot secrets is missing".into())),
+    };
+    secret.as_slice().try_into().map(Zeroizing::new)
+        .map_err(|_| KeyError::Missing("This device's key for bot secrets is damaged".into()))
 }
 
 #[cfg(test)]
@@ -651,6 +663,67 @@ pub async fn local_inbox_send(
     .await
 }
 
+/// Stores a file the person puts into a local conversation. The bytes are the raw request body;
+/// the headers `x-conversation-id`, `x-file-name` (percent-encoded) and `x-file-mime` describe it.
+#[tauri::command]
+pub async fn local_inbox_upload_file(
+    state: State<'_, LocalBots>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<LocalConversationFile, CommandError> {
+    let header = |name: &str| -> Result<String, CommandError> {
+        let value = request
+            .headers()
+            .get(name)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default();
+        urlencoding::decode(value)
+            .map(|decoded| decoded.into_owned())
+            .map_err(|error| {
+                CommandError::new(codes::INVALID, format!("Header '{name}' is not valid: {error}"))
+            })
+    };
+    let conversation_id = header("x-conversation-id")?;
+    let name = header("x-file-name")?;
+    let mime = Some(header("x-file-mime")?).filter(|mime| !mime.is_empty());
+    let tauri::ipc::InvokeBody::Raw(data) = request.body() else {
+        return Err(CommandError::new(
+            codes::INVALID,
+            "Upload a file as the raw bytes of the request",
+        ));
+    };
+    let data = data.clone();
+    with_store(state, move |store| {
+        store.store_conversation_file(
+            &conversation_id,
+            LOCAL_OWNER_ID,
+            &name,
+            mime.as_deref(),
+            &data,
+        )
+    })
+    .await
+}
+
+/// The bytes of a conversation file on this device, as a raw response.
+#[tauri::command]
+pub async fn local_inbox_read_file(
+    state: State<'_, LocalBots>,
+    conversation_id: String,
+    path: String,
+) -> Result<tauri::ipc::Response, CommandError> {
+    let found = with_store(state, move |store| {
+        store.read_conversation_file(&conversation_id, LOCAL_OWNER_ID, &path)
+    })
+    .await?;
+    match found {
+        Some((_, bytes)) => Ok(tauri::ipc::Response::new(bytes)),
+        None => Err(CommandError::new(
+            codes::NOT_FOUND,
+            "This file is no longer on this device",
+        )),
+    }
+}
+
 #[tauri::command]
 pub async fn local_inbox_mark_read(
     state: State<'_, LocalBots>,
@@ -659,6 +732,87 @@ pub async fn local_inbox_mark_read(
 ) -> Result<MarkReadResponse, CommandError> {
     with_store(state, move |store| {
         store.mark_read(&conversation_id, up_to.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn local_inbox_set_pinned(
+    state: State<'_, LocalBots>,
+    conversation_id: String,
+    pinned: bool,
+) -> Result<ConversationPinState, CommandError> {
+    with_store(state, move |store| {
+        store.set_conversation_pinned(&conversation_id, pinned)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn local_inbox_pins(
+    state: State<'_, LocalBots>,
+    conversation_id: String,
+) -> Result<Vec<PinnedMessage>, CommandError> {
+    with_store(state, move |store| store.pins(&conversation_id)).await
+}
+
+#[tauri::command]
+pub async fn local_inbox_pin_message(
+    state: State<'_, LocalBots>,
+    conversation_id: String,
+    message_id: String,
+) -> Result<PinnedMessage, CommandError> {
+    with_store(state, move |store| {
+        store.pin_message(&conversation_id, &message_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn local_inbox_unpin_message(
+    state: State<'_, LocalBots>,
+    conversation_id: String,
+    message_id: String,
+) -> Result<(), CommandError> {
+    with_store(state, move |store| {
+        store.unpin_message(&conversation_id, &message_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn local_inbox_star(
+    state: State<'_, LocalBots>,
+    conversation_id: String,
+    message_id: String,
+) -> Result<StarredMessage, CommandError> {
+    with_store(state, move |store| {
+        store.star_message(&conversation_id, &message_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn local_inbox_unstar(
+    state: State<'_, LocalBots>,
+    conversation_id: String,
+    message_id: String,
+) -> Result<(), CommandError> {
+    with_store(state, move |store| {
+        store.unstar_message(&conversation_id, &message_id)
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn local_inbox_stars(
+    state: State<'_, LocalBots>,
+    conversation_id: Option<String>,
+    before: Option<String>,
+    limit: Option<u64>,
+) -> Result<StarredMessagesPage, CommandError> {
+    with_store(state, move |store| {
+        store.stars(conversation_id.as_deref(), before.as_deref(), limit)
     })
     .await
 }

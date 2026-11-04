@@ -78,7 +78,7 @@ async fn database() -> DatabaseConnection {
         table.col(column.clone());
     }
     db.execute(&table).await.unwrap();
-    for statement in INBOX_TABLES {
+    for statement in INBOX_TABLES.iter().chain(&super::marks::TEST_TABLES) {
         db.execute_unprepared(statement).await.unwrap();
     }
     db
@@ -117,6 +117,10 @@ async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str, deleted: 
         deleted_at: Set(deleted.then(|| at(1))),
         import_key: Set(None),
         embedding_model: Set(None),
+        stt_model: Set(None),
+        tts_model: Set(None),
+        image_model: Set(None),
+        vision_model: Set(None),
     }
     .insert(db)
     .await

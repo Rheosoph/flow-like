@@ -19,6 +19,7 @@ import {
 	loadAround,
 	loadLatest,
 	loadOlder,
+	pushedTranscript,
 	sendInteractive,
 	startNewTopic,
 	transcriptOf,
@@ -187,6 +188,156 @@ describe("the chat from the bot's inbox history", () => {
 			"final",
 		]);
 	});
+
+	test("a trigger and a bot ask show as notices; only the trigger reaches the model", () => {
+		const entries = [
+			entry(1, "user_1", "", {
+				kind: "trigger",
+				envelope: {
+					v: 1,
+					enc: "none",
+					body: {
+						source: "schedule",
+						ref_id: "task_1",
+						title: "Morning brief",
+						text: "Summarize the news",
+					},
+				},
+			}),
+			entry(2, BOT, "", {
+				kind: "activity",
+				envelope: {
+					v: 1,
+					enc: "none",
+					body: {
+						type: "bot_ask",
+						ask_id: "ask-1",
+						asker_id: BOT,
+						callee_id: "bot_pebble",
+						exchange_id: "conv_x",
+						question: "Any news?",
+					},
+				},
+			}),
+			entry(3, BOT, "Here is the news"),
+		];
+		const { messages, seqs } = transcriptOf(entries, BOT, "bot:bot_ada");
+		expect(messages.map((message) => message.notice?.note.type)).toEqual([
+			"trigger",
+			"bot_ask",
+			undefined,
+		]);
+		expect(messages[0].inner).toEqual({
+			role: IRole.System,
+			content: "Summarize the news",
+		});
+		expect(messages[1].inner.content).toBe("");
+		expect(messages[1].notice?.botId).toBe(BOT);
+		expect(seqs).toEqual({ m1: 1, m2: 2, m3: 3 });
+	});
+
+	test("reads further back while reactions leave the newest page short", async () => {
+		const { inbox, queries } = fakeInbox(120);
+		const listEntries = inbox.listEntries.bind(inbox);
+		const reacting = {
+			...inbox,
+			async listEntries(id: string, query?: IInboxEntriesQuery) {
+				const page = await listEntries(id, query);
+				return {
+					...page,
+					entries: page.entries.map((item) =>
+						(item.seq ?? 0) > 80
+							? {
+									...item,
+									kind: "reaction" as const,
+									envelope: {
+										v: 1 as const,
+										enc: "none" as const,
+										body: { target: "m1", emoji: "👍", op: "add" },
+									},
+								}
+							: item,
+					),
+				};
+			},
+		} as IInboxState;
+		const page = await loadLatest(reacting, target, "bot:bot_ada", 50);
+		expect(queries.map((query) => query.to_seq)).toEqual([
+			Number.MAX_SAFE_INTEGER,
+			70,
+		]);
+		expect(page.messages).toHaveLength(60);
+		expect(page.messages.at(-1)?.id).toBe("m80");
+		expect(page.olderTo).toBe(20);
+		expect(page.newestCursor).toBe("120000:e120");
+	});
+
+	test("a page remembers the cursor of its newest entry", async () => {
+		const { inbox } = fakeInbox(3);
+		const page = await loadLatest(inbox, target, "bot:bot_ada");
+		expect(page.newestCursor).toBe("3000:e3");
+	});
+});
+
+describe("entries the realtime feed pushes", () => {
+	const sessionId = "bot:bot_ada";
+	const shown = (id: string, role: IRole, timestamp: number) => ({
+		id,
+		appId: "global",
+		sessionId,
+		inner: { role, content: id },
+		files: [],
+		timestamp,
+	});
+
+	test("the bot's stored reply to a message the chat streamed is left out", () => {
+		const onScreen = [
+			shown("m1", IRole.User, 1),
+			shown("local-answer", IRole.Assistant, 2),
+		];
+		const pushed = [
+			entry(1, "user_1", "hi"),
+			entry(2, BOT, "hello", {
+				envelope: {
+					v: 1,
+					enc: "none",
+					body: { text: "hello", reply_to: "m1" },
+				},
+			}),
+			entry(3, BOT, "", {
+				kind: "trigger",
+				envelope: {
+					v: 1,
+					enc: "none",
+					body: { source: "webhook", ref_id: "h1", title: "Order", text: "Go" },
+				},
+			}),
+			entry(4, BOT, "On it", {
+				envelope: {
+					v: 1,
+					enc: "none",
+					body: { text: "On it", reply_to: "m3" },
+				},
+			}),
+		];
+		const { messages } = pushedTranscript(pushed, BOT, sessionId, onScreen);
+		expect(messages.map((message) => message.id)).toEqual(["m1", "m3", "m4"]);
+	});
+
+	test("a reply to a message still waiting for its answer comes through", () => {
+		const onScreen = [shown("m1", IRole.User, 1)];
+		const pushed = [
+			entry(2, BOT, "hello", {
+				envelope: {
+					v: 1,
+					enc: "none",
+					body: { text: "hello", reply_to: "m1" },
+				},
+			}),
+		];
+		const { messages } = pushedTranscript(pushed, BOT, sessionId, onScreen);
+		expect(messages.map((message) => message.id)).toEqual(["m2"]);
+	});
 });
 
 describe("sending from the interactive chat", () => {
@@ -266,7 +417,7 @@ describe("the jump list", () => {
 	});
 });
 
-describe("the one-time import of the old IndexedDB chat", () => {
+describe("the import of the IndexedDB chat", () => {
 	beforeEach(() => globalChatDb.markers.clear());
 
 	const legacy = [
@@ -303,6 +454,29 @@ describe("the one-time import of the old IndexedDB chat", () => {
 		await globalChatDb.markers.clear();
 		expect(await importLegacyChat(inbox, target, legacy)).toBe(0);
 		expect(imported.size).toBe(2);
+	});
+
+	test("messages this device saved after the import follow on the next run", async () => {
+		const { inbox, imported } = fakeInbox(0);
+		await importLegacyChat(inbox, target, legacy);
+		const later = Date.now() + 1_000;
+		const stranded = [
+			...legacy,
+			{
+				id: "s1",
+				role: "user" as const,
+				text: "Still there?",
+				timestamp: later,
+			},
+			{
+				id: "s2",
+				role: "assistant" as const,
+				text: "Yes",
+				timestamp: later + 1,
+			},
+		];
+		expect(await importLegacyChat(inbox, target, stranded)).toBe(2);
+		expect([...imported.keys()]).toEqual(["a1", "a2", "s1", "s2"]);
 	});
 
 	test("an empty old chat still marks the bot done", async () => {

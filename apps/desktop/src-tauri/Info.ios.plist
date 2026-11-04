@@ -2,6 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array><string>com.flow-like.app.bot-refresh</string></array>
+	<key>UIBackgroundModes</key>
+	<array><string>remote-notification</string><string>fetch</string></array>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Flow Like turns your speech into an editable message when you choose to dictate to a bot.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Flow Like records your voice when you start dictation, a voice chat, or an audio workflow.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Flow Like uses the camera when you turn it on in a call, take a photo, scan a document, or start a video workflow.</string>
 	<!-- iOS 27 requires a static scene configuration, including for a single window. -->
 	<key>UIApplicationSceneManifest</key>
 	<dict>

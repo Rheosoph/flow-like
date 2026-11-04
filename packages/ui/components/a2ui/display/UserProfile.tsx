@@ -18,6 +18,7 @@ import {
 import { cn } from "../../../lib/utils";
 import type { IUserLookup } from "../../../state/backend-state/types";
 import { resolveAccountId } from "../../../state/backend-state/user-state";
+import { BotIdentityCard } from "../../identity/bot-identity-card";
 import {
 	ResolvedIdentityAvatar,
 	identityAccessibleName,
@@ -469,22 +470,28 @@ export function A2UIUserProfile({
 				align="start"
 				className="w-80 max-w-[calc(100vw-2rem)] p-0"
 			>
-				<UserProfileHoverContent
-					userId={resolvedUserId}
-					label={label}
-					subtitle={subtitle}
-					avatarUrl={avatarUrl}
-					initials={initials}
-					avatar={bot && <ResolvedIdentityAvatar identity={bot} size={40} />}
-					description={description}
-					createdAt={createdAt}
-					email={email}
-					showEmail={showEmail}
-					showUserId={showUserId}
-					idLabel={bot && t("bots:identity.botId")}
-					showProfileLink={linksToProfile}
-					isLoading={isLoading}
-				/>
+				{bot ? (
+					<BotIdentityCard
+						identity={bot}
+						showId={showUserId}
+						showProfileLink={showProfileLink}
+					/>
+				) : (
+					<UserProfileHoverContent
+						userId={resolvedUserId}
+						label={label}
+						subtitle={subtitle}
+						avatarUrl={avatarUrl}
+						initials={initials}
+						description={description}
+						createdAt={createdAt}
+						email={email}
+						showEmail={showEmail}
+						showUserId={showUserId}
+						showProfileLink={linksToProfile}
+						isLoading={isLoading}
+					/>
+				)}
 			</HoverCardContent>
 		</HoverCard>
 	);

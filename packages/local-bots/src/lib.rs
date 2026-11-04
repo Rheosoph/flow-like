@@ -27,12 +27,14 @@ mod workspace;
 mod tests;
 
 pub use error::{Error, Result, codes};
+pub use inbox::LocalConversationFile;
 pub use model::{
     Bot, BotApp, BotPermission, BotSecretEncryption, BotSecretInfo, Conversation,
-    ConversationMember, ConversationSegment, ConversationSegmentList, CreateBotRequest,
-    CreateConversationRequest, EntriesQuery, ExportedConversation, ExportedSecret,
-    InboxEntriesPage, InboxEntry, LocalBotBundle, MarkReadResponse, OpenedSecrets, PositionQuery,
-    SecretValue, SegmentsQuery, SendEntryRequest, UpdateBotRequest, WriteSegmentRequest,
+    ConversationMember, ConversationPinState, ConversationSegment, ConversationSegmentList,
+    CreateBotRequest, CreateConversationRequest, EntriesQuery, ExportedConversation,
+    ExportedSecret, InboxEntriesPage, InboxEntry, LocalBotBundle, MarkReadResponse, OpenedSecrets,
+    PinnedMessage, PositionQuery, SecretValue, SegmentsQuery, SendEntryRequest, StarredMessage,
+    StarredMessagesPage, UpdateBotRequest, WriteSegmentRequest,
 };
 pub use store::{ChangeNotifier, KeyError, LocalBotStore, SecretKeyProvider};
 pub use tool_grants::ParkedTurn;

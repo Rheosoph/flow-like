@@ -1,5 +1,5 @@
 "use client";
-import { UsageOperationDetails } from "./usage-operation-details";
+import { ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../../hooks/use-invoke";
@@ -7,12 +7,12 @@ import { formatQuota } from "../../../lib/quota";
 import { asArray } from "../../../lib/response-shape";
 import { useBackend } from "../../../state/backend-state";
 import { Button } from "../../ui/button";
+import { UsageOperationDetails } from "./usage-operation-details";
 import {
 	usageFundingLabel,
 	usageStatusLabel,
 	useUsageNames,
 } from "./use-usage-names";
-import { ChevronDown } from "lucide-react";
 
 export function UsageOperations() {
 	const backend = useBackend();

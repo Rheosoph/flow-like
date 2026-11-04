@@ -191,6 +191,10 @@ export function useUserLookup(userId?: string | null) {
 /** The person a bot acts for, as far as the directory has answered. */
 export interface BotOwnerIdentity {
 	label: string;
+	/** Handle or email, when it says something the label does not. */
+	subtitle?: string;
+	/** The owner's account to link to; absent until the directory knows it. */
+	accountId?: string;
 	avatarUrl?: string;
 	initials: string;
 	isPending: boolean;
@@ -310,6 +314,10 @@ function useBotIdentity(
 			description: names.description || undefined,
 			owner: {
 				label: ownerLabel,
+				subtitle: userSecondaryLabel(ownerAccount),
+				accountId: ownerAccount
+					? resolveAccountId(ownerAccount.id, bot.owner_id)
+					: undefined,
 				avatarUrl: userAvatarUrl(ownerAccount),
 				initials: userInitials(ownerLabel, "??"),
 				isPending: owner.isPending,

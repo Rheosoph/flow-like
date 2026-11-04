@@ -1,11 +1,10 @@
 "use client";
 import { useTranslation } from "@flow-like/locales";
-import { isScriptNavigationUrl } from "../../lib/navigation-url";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
-	ChartNoAxesCombinedIcon,
 	AudioLinesIcon,
 	CameraIcon,
+	ChartNoAxesCombinedIcon,
 	ClockIcon,
 	DownloadCloudIcon,
 	ExternalLinkIcon,
@@ -40,6 +39,7 @@ import { Progress } from "../../components/ui/progress";
 import { useHub } from "../../hooks/use-hub";
 import { useInvoke } from "../../hooks/use-invoke";
 import { isMlxModelBit } from "../../lib/bit/mlx-model-pack";
+import { isScriptNavigationUrl } from "../../lib/navigation-url";
 import { type IBit, IBitTypes } from "../../lib/schema/bit/bit";
 import { humanFileSize } from "../../lib/utils";
 import { useBackend } from "../../state/backend-state";

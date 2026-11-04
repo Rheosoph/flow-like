@@ -425,6 +425,10 @@ pub async fn global_chat(
 ) -> Result<UnifiedCopilotResponse, String> {
     let mut finish = None;
     let mut bot_memory = None;
+    let bot_turn_id = interactive
+        .as_ref()
+        .zip(bot_id.as_deref())
+        .map(|(args, bot)| flow_like_types::bot_turn::turn_id(bot, &args.trigger_message_id));
     if let (Some(args), Some(bot)) = (interactive, bot_id.as_deref())
         && let Some(run) = crate::bot_host::interactive::open_for_app(&app_handle, bot, args).await
     {
@@ -469,6 +473,7 @@ pub async fn global_chat(
             interaction_mode:
                 crate::functions::ai::native_tool_bridge::NativeInteractionMode::Interactive,
             bot_memory,
+            bot_turn_id,
             ..Default::default()
         },
         bot_id,
@@ -515,9 +520,14 @@ pub async fn global_chat_native(
     // Keep model selection, memory and delegated tools on the profile that owns this run.
     let mut options = options;
     let nested_talk = options.bot_talk.take();
+    let answered_round = options.answered_round.take();
     let bot_memory = options.bot_memory.take();
     let requester = options.requester.take();
     let approval_gate = options.approval_gate.clone();
+    let bot_turn_id = options
+        .bot_turn_id
+        .clone()
+        .or_else(|| approval_gate.as_ref().map(|gate| gate.turn_id().to_string()));
     options.attachments = attachments_manifest.clone().unwrap_or_default();
     let conversation_id = options.conversation_id.clone();
     let run_id = Some(run_id.unwrap_or_else(flow_like_types::create_id));
@@ -601,6 +611,7 @@ pub async fn global_chat_native(
                 &app_handle,
                 &bot.context,
                 nested_talk,
+                answered_round.as_ref(),
                 approval_gate,
                 profile_id,
                 run_id.as_deref().unwrap_or_default(),
@@ -835,6 +846,7 @@ pub async fn global_chat_native(
                 .clone()
                 .or(chat_embedding_model_id),
             run_id: run_id.clone(),
+            turn_id: bot_turn_id.clone(),
         })
     });
 

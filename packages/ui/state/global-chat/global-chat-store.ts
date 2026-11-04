@@ -144,14 +144,15 @@ function readPersistedOverlayAutoOpenDismissed() {
 	}
 }
 
-/** The FlowPilot provider/model/effort the user last *explicitly* chose. Remembered
+/** The provider, chat model, memory model and effort the user last explicitly chose. Remembered
  * across sessions and hydrated by useHydrateAgentSelection so every surface (hero,
- * Bots tab, overlay) opens on the same picks. Written only by the select* actions —
+ * Bots tab, overlay) opens on the same picks. Written only by the select* actions;
  * the plain setters stay non-persisting so a transient "keep a valid model"
  * fallback can never overwrite the remembered choice. */
 export const AGENT_PROVIDER_KEY = "flowpilot.hero.provider";
 export const AGENT_MODEL_KEY = "flowpilot.hero.model";
 export const AGENT_REASONING_KEY = "flowpilot.hero.reasoning-effort";
+export const AGENT_EMBEDDING_MODEL_KEY = "flowpilot.memory.embedding-model";
 
 function persistAgentPref(key: string, value: string) {
 	try {
@@ -208,6 +209,8 @@ export interface GlobalChatDraft {
 	modelId?: string;
 	/** Raw browser files captured on the landing bar, forwarded to the first Bots tab send. */
 	files?: File[];
+	/** The chat bot it is written to, as the dock names it; unset (FlowPilot entry points) is Flux. */
+	botId?: string | null;
 }
 
 /** Provider-neutral model configuration captured once when a global assistant turn starts. */
@@ -309,7 +312,7 @@ export type GlobalToolAsk = AskUserForm;
  */
 export interface GlobalToolPrompt {
 	id: string;
-	kind: "approval" | "ask";
+	kind: "approval" | "ask" | "secret";
 	/** The run that asks; absent when no run owns the request. */
 	runId?: string;
 	/** That run's chat (its bot's, or a Flux one), as it was when the prompt opened. */
@@ -331,7 +334,20 @@ export interface GlobalToolPrompt {
 	rememberAppId?: string;
 	/** Present only when `kind === "ask"`: drives freeform vs. single/multiple choice rendering. */
 	ask?: GlobalToolAsk;
+	/** Present only when `kind === "secret"`. */
+	secret?: GlobalToolSecret;
 	respond: (value: GlobalToolPromptResolution) => void;
+}
+
+/**
+ * A bot's request for a secret. The prompt hands the typed value to `store` and nowhere else:
+ * it is never part of the resolution, the debug record or any cache.
+ */
+export interface GlobalToolSecret {
+	name: string;
+	description: string;
+	replace?: boolean;
+	store: (value: string) => Promise<void>;
 }
 
 export interface PendingComponentsEntry {
@@ -516,12 +532,13 @@ interface GlobalChatState {
 	setProvider: (provider: AIProvider) => void;
 	setSelectedModelId: (modelId: string) => void;
 	setReasoningEffort: (effort: string) => void;
-	/** Explicit (user-driven) picks — these also persist across sessions. The plain
+	setEmbeddingModelId: (modelId: string) => void;
+	/** Explicit user picks also persist across sessions. The plain
 	 * setters above stay non-persisting for internal "keep a valid model" fallbacks. */
 	selectProvider: (provider: AIProvider) => void;
 	selectModel: (modelId: string) => void;
 	selectReasoningEffort: (effort: string) => void;
-	setEmbeddingModelId: (modelId: string) => void;
+	selectEmbeddingModel: (modelId: string) => void;
 	/** Auto mode of a chat's owner: its bot's, or Flux's (every Flux chat; the default). */
 	setAutoMode: (autoMode: boolean, conversationId?: string) => void;
 	/** `runId` anchors the card in that run's reply; without it only a sole live run anchors. */
@@ -1101,6 +1118,10 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 		set({ reasoningEffort });
 	},
 	setEmbeddingModelId: (embeddingModelId) => set({ embeddingModelId }),
+	selectEmbeddingModel: (embeddingModelId) => {
+		persistAgentPref(AGENT_EMBEDDING_MODEL_KEY, embeddingModelId);
+		set({ embeddingModelId });
+	},
 	setAutoMode: (autoMode, conversationId) => {
 		const botId = conversationId
 			? conversationBotId(currentConversationId(conversationId))

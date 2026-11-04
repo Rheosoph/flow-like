@@ -13,7 +13,7 @@
  * Matched per path segment. `startsWith("/flow")` would also strip the chrome
  * from a future `/flow-templates`.
  */
-const WINDOW_OWNING_ROUTES = new Set(["/flow"]);
+const WINDOW_OWNING_ROUTES = new Set(["/flow", "/meeting"]);
 
 export function ownsWindowChrome(route?: string | null): boolean {
 	if (!route) return false;

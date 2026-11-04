@@ -53,7 +53,7 @@ pub use behavioral_state::*;
 pub use benchmark_cases::workflow_benchmark_cases;
 pub use bot_run::{
     BotRunContext, BotToolHost, BotToolset, EffectivePermissions, FLUX_BOT_ID, FLUX_BOT_NAME,
-    GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, TurnRequester, bot_persona_section,
+    GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, ReactionNote, SILENT_REPLY, TurnRequester, bot_persona_section,
     bot_platform_context, bot_system_prompt, find_bot_tool_spec, resolve_bot_model,
     resolve_host_completion_model, run_bot_chat, run_bot_chat_with_talk, runnable_completion_model,
 };

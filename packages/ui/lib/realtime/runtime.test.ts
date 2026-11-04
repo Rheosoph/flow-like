@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import type { IInboxEntry } from "../../state/backend-state/inbox-state";
 import {
 	type RealtimeFetch,
 	RealtimeRuntime,
@@ -1053,4 +1054,163 @@ test("malformed event order cannot become an acknowledged batch", () => {
 			errors: [],
 		}),
 	).toThrow();
+});
+
+const centry = (micros: number) =>
+	({
+		id: `e${micros}`,
+		message_id: `m${micros}`,
+		cursor: `${micros}:e${micros}`,
+	}) as IInboxEntry;
+
+describe("conversation subscriptions", () => {
+	test("merges ports by the oldest cursor and routes only newer entries", async () => {
+		const fetcher = vi.fn(hold).mockResolvedValueOnce(
+			response({
+				conversations: [
+					{
+						conversation_id: "c",
+						entries: [centry(3), centry(4), centry(5)],
+						has_more: false,
+					},
+				],
+			}),
+		);
+		const runtime = create(fetcher);
+		const first = connect(runtime, "first");
+		const second = connect(runtime, "second");
+		first.subscribe({
+			notifications: false,
+			runs: [],
+			conversations: [{ conversation_id: "c", after: "2:e2" }],
+		});
+		second.subscribe({
+			notifications: false,
+			runs: [],
+			conversations: [{ conversation_id: "c", after: "4:e4" }],
+		});
+		await vi.advanceTimersByTimeAsync(1);
+		expect(JSON.parse(String(fetcher.mock.calls[0][1]?.body))).toMatchObject({
+			conversations: [{ conversation_id: "c", after: "2:e2" }],
+		});
+		expect(
+			snapshots(first)[0].snapshot.conversations?.[0].entries.map(
+				(item) => item.cursor,
+			),
+		).toEqual(["3:e3", "4:e4", "5:e5"]);
+		expect(
+			snapshots(second)[0].snapshot.conversations?.[0].entries.map(
+				(item) => item.cursor,
+			),
+		).toEqual(["5:e5"]);
+		first.accept();
+		second.accept();
+		await vi.advanceTimersByTimeAsync(60);
+		expect(
+			JSON.parse(String(fetcher.mock.calls[1][1]?.body)).conversations,
+		).toEqual([{ conversation_id: "c", after: "5:e5" }]);
+	});
+
+	test("a port holding no entries makes the merged request cursorless", async () => {
+		const fetcher = vi.fn(hold);
+		const runtime = create(fetcher);
+		const first = connect(runtime, "first");
+		const second = connect(runtime, "second");
+		first.subscribe({
+			notifications: false,
+			runs: [],
+			conversations: [{ conversation_id: "c", as: "bot", after: "2:e2" }],
+		});
+		second.subscribe({
+			notifications: false,
+			runs: [],
+			conversations: [{ conversation_id: "c", as: "bot" }],
+		});
+		await vi.advanceTimersByTimeAsync(1);
+		const body = JSON.parse(String(fetcher.mock.calls.at(-1)?.[1]?.body));
+		expect(body.conversations).toEqual([{ conversation_id: "c", as: "bot" }]);
+	});
+
+	test("drops a conversation that is not found and keeps an unavailable one", async () => {
+		const fetcher = vi.fn(hold).mockResolvedValueOnce(
+			response({
+				conversation_errors: [
+					{ conversation_id: "gone", code: "not_found" },
+					{ conversation_id: "later", code: "unavailable" },
+				],
+			}),
+		);
+		const runtime = create(fetcher);
+		const first = connect(runtime, "first");
+		first.subscribe({
+			notifications: true,
+			runs: [],
+			conversations: [
+				{ conversation_id: "gone" },
+				{ conversation_id: "later" },
+			],
+		});
+		await vi.advanceTimersByTimeAsync(1);
+		expect(snapshots(first)[0].snapshot.conversation_errors).toHaveLength(2);
+		first.accept();
+		await vi.advanceTimersByTimeAsync(60);
+		expect(
+			JSON.parse(String(fetcher.mock.calls[1][1]?.body)).conversations,
+		).toBeUndefined();
+	});
+
+	test("polls again soon while a conversation has more", async () => {
+		const fetcher = vi.fn(hold).mockResolvedValueOnce(
+			response({
+				conversations: [
+					{ conversation_id: "c", entries: [centry(1)], has_more: true },
+				],
+			}),
+		);
+		const runtime = create(fetcher);
+		const first = connect(runtime, "first");
+		first.subscribe({
+			notifications: false,
+			runs: [],
+			conversations: [{ conversation_id: "c" }],
+		});
+		await vi.advanceTimersByTimeAsync(1);
+		first.accept();
+		await vi.advanceTimersByTimeAsync(60);
+		expect(fetcher).toHaveBeenCalledTimes(2);
+		expect(
+			JSON.parse(String(fetcher.mock.calls[1][1]?.body)).conversations,
+		).toEqual([{ conversation_id: "c", after: "1:e1" }]);
+	});
+
+	test("rejects malformed conversation sections", () => {
+		const base = { protocol_version: 1, runs: [], errors: [] };
+		const bad = [
+			{ conversation_id: "c", entries: [{ cursor: "1:a" }], has_more: false },
+			{
+				conversation_id: "c",
+				entries: [centry(2), centry(1)],
+				has_more: false,
+			},
+			{ conversation_id: "c", entries: [], has_more: "no" },
+		];
+		for (const update of bad)
+			expect(() =>
+				parseRealtimeResponse({ ...base, conversations: [update] }),
+			).toThrow();
+		expect(() =>
+			parseRealtimeResponse({
+				...base,
+				conversation_errors: [{ conversation_id: "c" }],
+			}),
+		).toThrow();
+		expect(
+			parseRealtimeResponse({
+				...base,
+				conversations: [
+					{ conversation_id: "c", entries: [centry(1)], has_more: false },
+				],
+			}).conversations,
+		).toHaveLength(1);
+	});
 });

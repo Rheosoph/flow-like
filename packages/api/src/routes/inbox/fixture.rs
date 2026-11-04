@@ -20,7 +20,7 @@ use sea_orm::{
 };
 use serde_json::{Value, json};
 
-const TABLES: [&str; 7] = [
+const TABLES: [&str; 8] = [
     r#"CREATE TABLE public."Conversation" (
         "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
         "directKey" TEXT UNIQUE, "createdBy" TEXT NOT NULL, "lastActivityAt" TEXT NOT NULL,
@@ -53,6 +53,11 @@ const TABLES: [&str; 7] = [
         "level" INTEGER NOT NULL, "seqFrom" INTEGER NOT NULL, "seqTo" INTEGER NOT NULL,
         "tFrom" TEXT NOT NULL, "tTo" TEXT NOT NULL, "title" TEXT, "summary" TEXT NOT NULL,
         "parentId" TEXT, "version" INTEGER NOT NULL, "createdAt" TEXT NOT NULL)"#,
+    r#"CREATE TABLE public."ConversationFile" (
+        "id" TEXT PRIMARY KEY, "conversationId" TEXT NOT NULL, "uploaderId" TEXT NOT NULL,
+        "name" TEXT NOT NULL, "mime" TEXT NOT NULL, "bytes" INTEGER NOT NULL, "sha256" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'PENDING', "messageId" TEXT, "deletedAt" TEXT,
+        "createdAt" TEXT NOT NULL)"#,
 ];
 
 pub(crate) async fn database() -> DatabaseConnection {
@@ -74,7 +79,7 @@ pub(crate) async fn database() -> DatabaseConnection {
         }
         db.execute(&table).await.unwrap();
     }
-    for statement in TABLES {
+    for statement in TABLES.iter().chain(&super::marks::TEST_TABLES) {
         db.execute_unprepared(statement).await.unwrap();
     }
     db
@@ -138,8 +143,26 @@ pub(crate) async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str
         deleted_at: Set(None),
         import_key: Set(None),
         embedding_model: Set(None),
+        stt_model: Set(None),
+        tts_model: Set(None),
+        image_model: Set(None),
+        vision_model: Set(None),
     }
     .insert(db)
+    .await
+    .unwrap();
+}
+
+/// The owner's Flux on the server: its row stores no capability, its system key gives it
+/// `flowpilot`.
+pub(crate) async fn insert_flux(db: &DatabaseConnection, id: &str, owner_id: &str) {
+    insert_bot(db, id, owner_id, "SERVER").await;
+    bot::ActiveModel {
+        id: Set(id.into()),
+        system_key: Set(Some("flux".into())),
+        ..Default::default()
+    }
+    .update(db)
     .await
     .unwrap();
 }

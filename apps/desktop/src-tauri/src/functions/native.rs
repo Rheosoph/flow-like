@@ -4,13 +4,17 @@ use tauri::AppHandle;
 #[path = "native_location.rs"]
 mod location;
 
-#[cfg(any(target_os = "ios", target_os = "macos"))]
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
 #[path = "native_shared_files.rs"]
 mod shared_files;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 #[path = "native_actions.rs"]
 mod actions;
+
+#[cfg(target_os = "ios")]
+#[path = "native_bot_refresh.rs"]
+mod bot_refresh;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple {
@@ -57,6 +61,8 @@ mod apple {
     }
     pub fn setup(app: &AppHandle) {
         let _ = APP.set(app.clone());
+        #[cfg(target_os = "ios")]
+        super::bot_refresh::setup(app);
         unsafe {
             flow_like_native_set_action_callback(action_ready);
             flow_like_native_set_inactive_callback(inactive);
@@ -238,7 +244,9 @@ pub async fn native_publish_snapshot(snapshot: Value) -> Result<(), String> {
     }
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::publish(snapshot);
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::publish(snapshot);
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     {
         let _ = snapshot;
         Ok(())
@@ -249,7 +257,9 @@ pub async fn native_publish_snapshot(snapshot: Value) -> Result<(), String> {
 pub async fn native_clear_snapshot() -> Result<(), String> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::clear();
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::clear();
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     Ok(())
 }
 
@@ -257,7 +267,9 @@ pub async fn native_clear_snapshot() -> Result<(), String> {
 pub async fn native_take_actions() -> Result<Value, String> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::take_actions();
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::take_actions();
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     Ok(json!([]))
 }
 
@@ -265,7 +277,9 @@ pub async fn native_take_actions() -> Result<Value, String> {
 pub async fn native_pending_actions() -> Result<Value, String> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::pending_actions();
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::pending_actions();
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     Ok(json!([]))
 }
 
@@ -273,7 +287,9 @@ pub async fn native_pending_actions() -> Result<Value, String> {
 pub async fn native_ack_action(id: String, scope: String) -> Result<(), String> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::acknowledge_action(id, scope);
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::acknowledge_action(id, scope);
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     {
         let _ = (id, scope);
         Ok(())
@@ -299,15 +315,20 @@ pub async fn native_complete_action(result: Value) -> Result<(), String> {
     }
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::complete_action(result);
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::complete_action(result);
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     Ok(())
 }
 
 #[tauri::command]
 pub async fn native_read_shared_file(path: String) -> Result<Value, String> {
-    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    #[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
     {
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
         let root = apple::shared_files_directory()?;
+        #[cfg(target_os = "android")]
+        let root = crate::android_mobile::shared_files_directory()?;
         return tokio::task::spawn_blocking(move || {
             let (bytes, name) = shared_files::read(&root, std::path::Path::new(&path))?;
             let mime_type = flow_like_types::mime_guess::from_path(&name)
@@ -318,7 +339,7 @@ pub async fn native_read_shared_file(path: String) -> Result<Value, String> {
         .await
         .map_err(|e| e.to_string())?;
     }
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     {
         let _ = path;
         Err("Native shared files are unavailable on this platform".into())

@@ -4,8 +4,8 @@ use super::{
     delivery::BotRecipient,
     entries::{SendAs, send_as, send_in},
     fixture::{
-        assert_code, at, bot_principal, copies, database, delete_bot, insert_bot, outgoing,
-        running_turn, says, text, turn, user,
+        assert_code, at, bot_principal, copies, database, delete_bot, insert_bot, insert_flux,
+        outgoing, running_turn, says, text, turn, user,
     },
     members::add_in,
     model::TurnClaim,
@@ -99,18 +99,18 @@ fn as_and_turn_come_together() {
 }
 
 #[tokio::test]
-async fn only_the_owner_s_desktop_bots_are_sent_as_over_http() {
+async fn only_bots_the_owner_s_desktop_answers_are_sent_as_over_http() {
     let db = database().await;
     insert_bot(&db, "bot_desk", "user-a", "DESKTOP").await;
+    insert_flux(&db, "bot_flux", "user-a").await;
     insert_bot(&db, "bot_srv", "user-a", "SERVER").await;
     insert_bot(&db, "bot_dev", "user-a", "DEVICE").await;
     insert_bot(&db, "bot_gone", "user-a", "DESKTOP").await;
     delete_bot(&db, "bot_gone").await;
 
-    assert_eq!(
-        desktop_bot(&db, "user-a", "bot_desk").await.unwrap().id,
-        "bot_desk"
-    );
+    for bot in ["bot_desk", "bot_flux"] {
+        assert_eq!(desktop_bot(&db, "user-a", bot).await.unwrap().id, bot);
+    }
     for (owner, bot) in [
         ("user-b", "bot_desk"),
         ("user-a", "bot_gone"),
@@ -298,8 +298,11 @@ async fn the_bots_that_receive_an_entry_are_handed_to_their_hosts() {
         owner_id: owner_id.into(),
         location,
         device_id: (location == BotLocation::Device).then(|| format!("device-of-{bot_id}")),
+        hands_off: false,
         mentioned,
         replied_to,
+        read_along: true,
+        reacted: false,
         conversation_id: "team".into(),
         trigger_message_id: "ask_1".into(),
         hops: 0,
@@ -429,5 +432,115 @@ async fn the_fingerprint_watches_a_person_s_inbox_and_their_live_bots() {
     assert_eq!(
         markers,
         BTreeSet::from(["bot_2".to_string(), "user-b".to_string()])
+    );
+}
+
+#[tokio::test]
+async fn a_persons_unaddressed_message_lets_every_bot_member_read_along_unless_limited_to_mentions()
+{
+    use super::invitations::set_limits_in;
+    use flow_like_types::bot_effective::BotRoomLimits;
+
+    let db = database().await;
+    team(&db).await;
+    let read_along = |sent: &super::entries::Sent| -> Vec<(String, bool)> {
+        sent.bots
+            .iter()
+            .map(|bot| (bot.bot_id.clone(), bot.read_along))
+            .collect()
+    };
+
+    let first = send_in(&db, "team", "user-b", &text("plain_1"), at(1))
+        .await
+        .unwrap();
+    assert_eq!(
+        read_along(&first),
+        [("bot_1".to_string(), true), ("bot_2".to_string(), true)]
+    );
+
+    let limits = BotRoomLimits {
+        mentioned_only: true,
+        ..Default::default()
+    };
+    set_limits_in(&db, "team", "bot_2", "user-b", Some(&limits))
+        .await
+        .unwrap();
+    let second = send_in(&db, "team", "user-a", &text("plain_2"), at(2))
+        .await
+        .unwrap();
+    assert_eq!(
+        read_along(&second),
+        [("bot_1".to_string(), true), ("bot_2".to_string(), false)]
+    );
+
+    let mention = outgoing(
+        "named_1",
+        InboxEntryKind::Message,
+        json!({ "text": "bot_2?", "mentions": ["bot_2"] }),
+    );
+    let named = send_in(&db, "team", "user-a", &mention, at(3))
+        .await
+        .unwrap();
+    let bot_2 = named.bots.iter().find(|bot| bot.bot_id == "bot_2").unwrap();
+    assert!(bot_2.mentioned && !bot_2.read_along);
+
+    let from_bot = send_in(&db, "team", "bot_1", &text("bot_say"), at(4))
+        .await
+        .unwrap();
+    assert!(
+        from_bot.bots.iter().all(|bot| !bot.read_along),
+        "a bot's message never wakes the others unaddressed"
+    );
+}
+
+#[tokio::test]
+async fn only_a_persons_new_reaction_to_a_bots_own_message_wakes_that_bot() {
+    let db = database().await;
+    team(&db).await;
+    send_in(&db, "team", "bot_1", &text("b1"), at(1))
+        .await
+        .unwrap();
+    send_in(&db, "team", "user-a", &text("p1"), at(2))
+        .await
+        .unwrap();
+    let react = |id: &str, target: &str, op: &str| {
+        outgoing(
+            id,
+            InboxEntryKind::Reaction,
+            json!({ "target": target, "emoji": "👎", "op": op }),
+        )
+    };
+    let reacted = |sent: &super::entries::Sent| -> Vec<String> {
+        sent.bots
+            .iter()
+            .filter(|bot| bot.reacted)
+            .map(|bot| bot.bot_id.clone())
+            .collect()
+    };
+
+    let own = send_in(&db, "team", "user-b", &react("r1", "b1", "add"), at(3))
+        .await
+        .unwrap();
+    assert_eq!(reacted(&own), ["bot_1"]);
+
+    let others = send_in(&db, "team", "user-b", &react("r2", "p1", "add"), at(4))
+        .await
+        .unwrap();
+    assert!(
+        reacted(&others).is_empty(),
+        "a person's message wakes no bot"
+    );
+
+    let by_bot = send_in(&db, "team", "bot_2", &react("r3", "b1", "add"), at(5))
+        .await
+        .unwrap();
+    assert!(reacted(&by_bot).is_empty(), "a bot's reaction wakes nobody");
+
+    let removal = send_in(&db, "team", "user-b", &react("r4", "b1", "remove"), at(6))
+        .await
+        .unwrap();
+    assert!(
+        reacted(&removal).is_empty(),
+        "taking a reaction back wakes nobody"
     );
 }

@@ -1,6 +1,12 @@
 import { createId } from "@paralleldrive/cuid2";
-import { foldInboxEntries } from "../../components/bots-tab/fold-entries";
+import { plainBody } from "../../components/bots-tab/approval-entry";
+import {
+	type ConversationNote,
+	foldInboxEntries,
+} from "../../components/bots-tab/fold-entries";
+import { triggerModelText } from "../../components/bots-tab/note-facts";
 import type { IMessage } from "../../components/interfaces/chat-default/chat-db";
+import { compareInboxCursors } from "../../lib/inbox-cursor";
 import { IRole } from "../../lib/schema/llm/history";
 import type {
 	IConversationSegment,
@@ -14,8 +20,10 @@ import { GLOBAL_CHAT_APP_ID, globalChatDb } from "./global-chat-db";
 /** Hosts leave a marked message to its chat this long; the chat holds the turn while it streams. */
 export const INTERACTIVE_GRACE_MS = 120_000;
 
-/** Entries one page of the chat reads. */
+/** Messages and notes one page of the chat shows, when the history has them. */
 export const HISTORY_PAGE = 50;
+/** Reads one page makes at most while reactions and edits leave it short. */
+const MAX_FILL_READS = 4;
 
 /** A jump shows this many messages before the target and after it, so the target sits near the bottom. */
 const WINDOW_BEFORE = 40;
@@ -38,6 +46,8 @@ export interface TranscriptPage {
 	olderTo: number | null;
 	/** The `from_seq` that continues forward; null at the newest entry. */
 	newerFrom: number | null;
+	/** Cursor of the newest entry read, where pushed entries continue; null for an empty read. */
+	newestCursor: string | null;
 }
 
 const conversations = new Map<string, Promise<string>>();
@@ -108,11 +118,36 @@ export function startNewTopic(
 	});
 }
 
+/** A trigger the model reads as what it was asked; a bot ask is only shown. */
+function noticeOf(
+	note: ConversationNote,
+	botId: string,
+	sessionId: string,
+): IMessage {
+	return {
+		id: note.id,
+		appId: GLOBAL_CHAT_APP_ID,
+		sessionId,
+		notice: { note, botId },
+		inner: {
+			role: IRole.System,
+			content: note.type === "trigger" ? triggerModelText(note) : "",
+		},
+		files: [],
+		tools: [],
+		actions: [],
+		timestamp: note.time,
+	};
+}
+
 function messageOf(
 	item: ReturnType<typeof foldInboxEntries>[number],
 	botId: string,
 	sessionId: string,
 ): IMessage | null {
+	if (item.type === "trigger" || item.type === "bot_ask") {
+		return noticeOf(item, botId, sessionId);
+	}
 	if (item.type !== "message" || item.content.kind !== "text") return null;
 	const { approval } = item;
 	return {
@@ -127,6 +162,7 @@ function messageOf(
 						scopes: approval.scopes,
 						requesterName: approval.requesterName,
 						room: approval.room,
+						...(approval.secret ? { secret: approval.secret } : {}),
 						answer: approval.answer,
 					},
 				}
@@ -145,7 +181,13 @@ function messageOf(
 	};
 }
 
-/** The chat's messages from inbox entries (any order, repeats allowed), oldest first. */
+const SHOWN_KINDS: ReadonlySet<string> = new Set([
+	"message",
+	"trigger",
+	"activity",
+]);
+
+/** The chat's messages and notes from inbox entries (any order, repeats allowed), oldest first. */
 export function transcriptOf(
 	entries: readonly IInboxEntry[],
 	botId: string,
@@ -153,7 +195,7 @@ export function transcriptOf(
 ): Pick<TranscriptPage, "messages" | "seqs"> {
 	const seqs: Record<string, number> = {};
 	for (const entry of entries) {
-		if (entry.kind === "message" && typeof entry.seq === "number") {
+		if (SHOWN_KINDS.has(entry.kind) && typeof entry.seq === "number") {
 			seqs[entry.message_id] = entry.seq;
 		}
 	}
@@ -161,6 +203,52 @@ export function transcriptOf(
 		.map((item) => messageOf(item, botId, sessionId))
 		.filter((message): message is IMessage => message !== null);
 	return { messages, seqs };
+}
+
+/** Ids of the person's messages the chat already shows an answer after, e.g. one it streamed. */
+function answeredOnScreen(shown: readonly IMessage[]): Set<string> {
+	const answered = new Set<string>();
+	let waiting: string[] = [];
+	for (const message of [...shown].sort((a, b) => a.timestamp - b.timestamp)) {
+		if (message.inner.role === IRole.User) waiting.push(message.id);
+		if (message.inner.role === IRole.Assistant && !message.notice) {
+			for (const id of waiting) answered.add(id);
+			waiting = [];
+		}
+	}
+	return answered;
+}
+
+/**
+ * Entries the realtime feed pushed, as chat messages. The bot's stored reply to a message the chat
+ * answered live carries another id than the streamed one, so it is left out.
+ */
+export function pushedTranscript(
+	entries: readonly IInboxEntry[],
+	botId: string,
+	sessionId: string,
+	shown: readonly IMessage[],
+): Pick<TranscriptPage, "messages" | "seqs"> {
+	const answered = answeredOnScreen(shown);
+	const fresh = entries.filter((entry) => {
+		const replyTo = plainBody(entry)?.reply_to;
+		return !(
+			entry.sender_id === botId &&
+			typeof replyTo === "string" &&
+			answered.has(replyTo)
+		);
+	});
+	return transcriptOf(fresh, botId, sessionId);
+}
+
+function newestCursor(entries: readonly IInboxEntry[]): string | null {
+	return entries.reduce<string | null>(
+		(newest, entry) =>
+			newest === null || compareInboxCursors(entry.cursor, newest) > 0
+				? entry.cursor
+				: newest,
+		null,
+	);
 }
 
 async function readPage(
@@ -174,6 +262,45 @@ async function readPage(
 		...transcriptOf(page.entries, target.botId, sessionId),
 		olderTo: page.next_to_seq ?? null,
 		newerFrom: page.next_from_seq ?? null,
+		newestCursor: newestCursor(page.entries),
+	};
+}
+
+/**
+ * Reads back from `toSeq` until `limit` messages and notes are on the page or the history starts.
+ * Reactions, edits and topics take positions but show nothing, so one read can come up short; the
+ * reads are folded together so an edit still reaches a message from an earlier read.
+ */
+async function readBack(
+	inbox: IInboxState,
+	target: BotHistoryTarget,
+	sessionId: string,
+	toSeq: number,
+	limit: number,
+): Promise<TranscriptPage> {
+	const entries: IInboxEntry[] = [];
+	let olderTo: number | null = toSeq;
+	let newerFrom: number | null = null;
+	let shown: Pick<TranscriptPage, "messages" | "seqs"> = {
+		messages: [],
+		seqs: {},
+	};
+	for (let read = 0; read < MAX_FILL_READS && olderTo !== null; read += 1) {
+		const page = await inbox.listEntries(target.conversationId, {
+			to_seq: olderTo,
+			limit,
+		});
+		if (read === 0) newerFrom = page.next_from_seq ?? null;
+		olderTo = page.next_to_seq ?? null;
+		entries.push(...page.entries);
+		shown = transcriptOf(entries, target.botId, sessionId);
+		if (shown.messages.length >= limit) break;
+	}
+	return {
+		...shown,
+		olderTo,
+		newerFrom,
+		newestCursor: newestCursor(entries),
 	};
 }
 
@@ -184,7 +311,7 @@ export function loadLatest(
 	sessionId: string,
 	limit = HISTORY_PAGE,
 ): Promise<TranscriptPage> {
-	return readPage(inbox, target, sessionId, { to_seq: NEWEST, limit });
+	return readBack(inbox, target, sessionId, NEWEST, limit);
 }
 
 /** The page before `olderTo`. */
@@ -195,7 +322,7 @@ export function loadOlder(
 	olderTo: number,
 	limit = HISTORY_PAGE,
 ): Promise<TranscriptPage> {
-	return readPage(inbox, target, sessionId, { to_seq: olderTo, limit });
+	return readBack(inbox, target, sessionId, olderTo, limit);
 }
 
 /** A window of the chat around a position, for a jump-list click or a fact's `#seq`. */
@@ -291,11 +418,12 @@ function importedKey(botId: string): string {
 	return `${IMPORTED_KEY_PREFIX}${botId}`;
 }
 
-async function wasImported(botId: string): Promise<boolean> {
+/** When the last import ran; null before the first. */
+async function importedAt(botId: string): Promise<number | null> {
 	try {
-		return (await globalChatDb.markers.get(importedKey(botId))) !== undefined;
+		return (await globalChatDb.markers.get(importedKey(botId)))?.at ?? null;
 	} catch {
-		return false;
+		return null;
 	}
 }
 
@@ -308,17 +436,19 @@ async function markImported(botId: string) {
 }
 
 /**
- * Moves the bot's old IndexedDB chat into its inbox, once: oldest first, in chunks, with the old
- * message ids, which the inbox skips when they are already there. Resolves with how many entries
- * the inbox added.
+ * Moves the bot's IndexedDB chat into its inbox: all of it the first time, afterwards what this
+ * device saved since the last import (while the inbox couldn't be reached). Oldest first, in
+ * chunks, with the old message ids, which the inbox skips when they are already there. Resolves
+ * with how many entries the inbox added.
  */
 export async function importLegacyChat(
 	inbox: IInboxState,
 	target: BotHistoryTarget,
 	legacy: readonly LegacyMessage[],
 ): Promise<number> {
-	if (await wasImported(target.botId)) return 0;
-	const entries = [...legacy]
+	const since = await importedAt(target.botId);
+	const entries = legacy
+		.filter((message) => since === null || message.timestamp >= since)
 		.sort((a, b) => a.timestamp - b.timestamp)
 		.map(legacyImportEntry)
 		.filter((entry): entry is LegacyImportEntry => entry !== null);

@@ -5,7 +5,7 @@ use crate::error::{Error, Result, codes};
 use chrono::DateTime;
 use flow_like_types::{
     bot_message::MessageBody,
-    inbox::{InboxEntryKind, TopicBody, TriggerBody},
+    inbox::{ActivityBody, CallBody, InboxEntryKind, TopicBody, TranscriptBody, TriggerBody},
 };
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value;
@@ -29,6 +29,7 @@ pub(super) fn workspace_apps(kind: InboxEntryKind, envelope: &Value) -> Result<B
             }
             Ok(message
                 .handles()
+                .filter(|handle| !handle.is_conversation_file())
                 .map(|handle| handle.app_id.clone())
                 .collect())
         }
@@ -36,6 +37,15 @@ pub(super) fn workspace_apps(kind: InboxEntryKind, envelope: &Value) -> Result<B
             .map(|_| BTreeSet::new())
             .map_err(Error::invalid),
         InboxEntryKind::Trigger => TriggerBody::parse(body)
+            .map(|_| BTreeSet::new())
+            .map_err(Error::invalid),
+        InboxEntryKind::Activity => ActivityBody::parse(body)
+            .map(|_| BTreeSet::new())
+            .map_err(Error::invalid),
+        InboxEntryKind::Call => CallBody::parse(body)
+            .map(|_| BTreeSet::new())
+            .map_err(Error::invalid),
+        InboxEntryKind::Transcript => TranscriptBody::parse(body)
             .map(|_| BTreeSet::new())
             .map_err(Error::invalid),
         InboxEntryKind::Reaction | InboxEntryKind::Delete | InboxEntryKind::Member => {
@@ -72,4 +82,28 @@ pub(super) fn check_workspace_files(
         )),
         None => Ok(()),
     }
+}
+
+/// The conversation files a message or edit body points at.
+pub(super) fn conversation_files(
+    kind: InboxEntryKind,
+    envelope: &Value,
+) -> Vec<super::files::FileUse> {
+    if !matches!(kind, InboxEntryKind::Message | InboxEntryKind::Edit) {
+        return Vec::new();
+    }
+    let Some(body) = envelope.get("body") else {
+        return Vec::new();
+    };
+    let Ok(message) = MessageBody::parse(body) else {
+        return Vec::new();
+    };
+    message
+        .conversation_files()
+        .map(|file| super::files::FileUse {
+            conversation_id: file.conversation_id.to_string(),
+            file_id: file.file_id.to_string(),
+            handle: file.handle.clone(),
+        })
+        .collect()
 }

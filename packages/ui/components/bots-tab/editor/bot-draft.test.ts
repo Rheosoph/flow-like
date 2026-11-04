@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { IBot } from "../../../state/backend-state/bot-state";
 import { defaultBotCatalog } from "../../bots/catalog";
+import type { BotAppearance } from "../../bots/types";
 import {
 	botDraftFromBot,
 	botDraftFromPreset,
@@ -13,7 +14,6 @@ import {
 	setBotDraftCapability,
 	setBotDraftLocation,
 } from "./bot-draft";
-import { BOT_OWNED_PACK_IDS } from "./bot-look";
 import { findBotPreset } from "./bot-presets";
 
 const texts = { name: "Coder", description: "Codes", instructions: "Be kind" };
@@ -39,10 +39,6 @@ function bot(overrides: Partial<IBot> = {}): IBot {
 		...overrides,
 	};
 }
-
-const lockedKind = Object.values(defaultBotCatalog.packs).find(
-	(pack) => !BOT_OWNED_PACK_IDS.includes(pack.id),
-)?.shapeIds[0] as string;
 
 describe("drafts", () => {
 	test("a blank draft only needs a name and starts with Memory on", () => {
@@ -188,6 +184,43 @@ describe("requests", () => {
 		).toEqual({ embedding_model: "embed_b" });
 	});
 
+	test("create sends the pinned models only when they are picked", () => {
+		expect(buildCreateBotRequest(createEmptyBotDraft())).not.toHaveProperty(
+			"stt_model",
+		);
+		const request = buildCreateBotRequest({
+			...createEmptyBotDraft(),
+			name: "Scout",
+			sttModel: "stt_a",
+			ttsModel: "tts_a",
+			imageModel: "image_a",
+			visionModel: "vlm_a",
+		});
+		expect(request).toMatchObject({
+			stt_model: "stt_a",
+			tts_model: "tts_a",
+			image_model: "image_a",
+			vision_model: "vlm_a",
+		});
+	});
+
+	test("update sends a pinned model when it changes, null to let the host choose", () => {
+		const original = bot({ vision_model: "vlm_a" });
+		const draft = botDraftFromBot(original);
+		expect(draft.visionModel).toBe("vlm_a");
+		expect(buildUpdateBotRequest(original, draft)).toEqual({});
+		expect(
+			buildUpdateBotRequest(original, { ...draft, visionModel: null }),
+		).toEqual({ vision_model: null });
+		expect(
+			buildUpdateBotRequest(original, {
+				...draft,
+				sttModel: "stt_b",
+				imageModel: "image_b",
+			}),
+		).toEqual({ stt_model: "stt_b", image_model: "image_b" });
+	});
+
 	test("update sends nothing when nothing changed", () => {
 		const original = bot();
 		expect(buildUpdateBotRequest(original, botDraftFromBot(original))).toEqual(
@@ -269,21 +302,72 @@ describe("requests", () => {
 });
 
 describe("problems", () => {
-	test("a look from a pack nobody owns blocks saving until it changes", () => {
-		const draft = {
-			...createEmptyBotDraft(),
-			name: "Scout",
-			appearance: { kind: lockedKind },
-		};
-		const problems = getBotDraftProblems(draft, {
-			system: null,
-			checkLook: true,
-		});
-		expect(problems.map((problem) => problem.code)).toEqual(["look_locked"]);
-		expect(
-			getBotDraftProblems(draft, { system: null, checkLook: false }),
-		).toEqual([]);
+	test("every catalog character can be created and saved without purchases", () => {
+		const original = bot();
+		for (const kind of Object.keys(defaultBotCatalog.shapes)) {
+			const appearance = { kind };
+			const draft = { ...createEmptyBotDraft(), name: "Scout", appearance };
+			expect(
+				getBotDraftProblems(draft, { system: null, checkLook: true }),
+			).toEqual([]);
+			expect(buildCreateBotRequest(draft).appearance).toEqual(appearance);
+			expect(
+				buildUpdateBotRequest(original, {
+					...botDraftFromBot(original),
+					appearance,
+				}),
+			).toEqual(kind === original.appearance.kind ? {} : { appearance });
+		}
 	});
+
+	test("packed equipment, premium colors and custom colors can be saved without purchases", () => {
+		const appearance: BotAppearance = {
+			kind: "lava",
+			equipment: { head: "crown" },
+			colors: {
+				body: { kind: "swatch", colorId: "holo-aurora" },
+				accent: { kind: "hex", value: "#123456", packId: "color-lab" },
+			},
+		};
+		const draft = { ...createEmptyBotDraft(), name: "Scout", appearance };
+		expect(
+			getBotDraftProblems(draft, { system: null, checkLook: true }),
+		).toEqual([]);
+		expect(buildCreateBotRequest(draft).appearance).toEqual(appearance);
+		const original = bot();
+		expect(
+			buildUpdateBotRequest(original, {
+				...botDraftFromBot(original),
+				appearance,
+			}),
+		).toEqual({ appearance });
+	});
+
+	test.each([
+		{ kind: "missing-character" },
+		{ kind: "mochi", equipment: { head: "missing-equipment" } },
+		{
+			kind: "mochi",
+			colors: { body: { kind: "swatch", colorId: "missing-color" } },
+		},
+	] satisfies BotAppearance[])(
+		"unavailable look selections still block saving: %j",
+		(appearance) => {
+			const draft = {
+				...createEmptyBotDraft(),
+				name: "Scout",
+				appearance,
+			};
+			const problems = getBotDraftProblems(draft, {
+				system: null,
+				checkLook: true,
+			});
+			expect(problems.map((problem) => problem.code)).toEqual(["look_invalid"]);
+			expect(
+				getBotDraftProblems(draft, { system: null, checkLook: false }),
+			).toEqual([]);
+		},
+	);
 
 	test("missing profile, device and too long texts are reported", () => {
 		const draft = {

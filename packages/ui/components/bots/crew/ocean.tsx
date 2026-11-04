@@ -78,6 +78,7 @@ export const oceanShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "shelly",
+		faceColor: "accent",
 		label: "Shelly",
 		series: "ocean",
 		description: "A sea turtle peeking out of a moss-green shell.",
@@ -263,6 +264,7 @@ export const oceanShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "pearl",
+		faceColor: "sclera",
 		label: "Pearl",
 		series: "ocean",
 		description: "A cream pearl nestled inside a scalloped pink shell.",

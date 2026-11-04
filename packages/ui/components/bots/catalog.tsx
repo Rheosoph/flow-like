@@ -3,6 +3,7 @@ import { getBotClothingFit } from "./clothing-fit";
 import { defaultBotColorPacks, defaultBotColors } from "./color-catalog";
 import { normalizeBotHex } from "./colors";
 import { crewEquipment, crewPacks, crewSeries, crewShapes } from "./crew";
+import { getBotHeadsetFit } from "./headwear-fit";
 import type {
 	BotCatalog,
 	BotCatalogExtension,
@@ -173,41 +174,52 @@ const starterEquipment: readonly BotEquipmentDefinition[] = [
 		id: "headset",
 		label: "Headset",
 		slot: "head",
-		render: (context) => (
-			<Headpiece context={context}>
-				<path
-					d="M-25 29V18C-25 -10 25 -10 25 18V29"
-					fill="none"
-					stroke={context.palette.clothing}
-					strokeWidth="5"
-				/>
-				<rect
-					x="-28"
-					y="19"
-					width="8"
-					height="16"
-					rx="4"
-					fill={context.palette.clothing}
-				/>
-				<rect
-					x="20"
-					y="19"
-					width="8"
-					height="16"
-					rx="4"
-					fill={context.palette.clothing}
-				/>
-				<path d="M24 34Q24 44 13 43" fill="none" />
-				<rect
-					x="8"
-					y="40"
-					width="8"
-					height="5"
-					rx="2.5"
-					fill={context.palette.ink}
-				/>
-			</Headpiece>
-		),
+		render: ({ anchors, palette }) => {
+			const fit = getBotHeadsetFit(anchors);
+			return (
+				<g
+					stroke={palette.ink}
+					strokeWidth="1.6"
+					strokeLinejoin="round"
+					strokeLinecap="round"
+				>
+					<path
+						d={`M${fit.left} ${fit.earY}V${anchors.head.y + 8}Q${fit.left} ${fit.top} ${anchors.head.x} ${fit.top}Q${fit.right} ${fit.top} ${fit.right} ${anchors.head.y + 8}V${fit.earY}`}
+						fill="none"
+						stroke={palette.clothing}
+						strokeWidth="5"
+					/>
+					<rect
+						x={fit.left - 4}
+						y={fit.earY - 7}
+						width="8"
+						height="16"
+						rx="4"
+						fill={palette.clothing}
+					/>
+					<rect
+						x={fit.right - 4}
+						y={fit.earY - 7}
+						width="8"
+						height="16"
+						rx="4"
+						fill={palette.clothing}
+					/>
+					<path
+						d={`M${fit.right} ${fit.earY + 7}Q${fit.right} ${fit.micY} ${fit.micX} ${fit.micY}`}
+						fill="none"
+					/>
+					<rect
+						x={fit.micX - 4}
+						y={fit.micY - 2.5}
+						width="8"
+						height="5"
+						rx="2.5"
+						fill={palette.ink}
+					/>
+				</g>
+			);
+		},
 	},
 	{
 		id: "crown",
@@ -578,6 +590,15 @@ function mergeDefinitions<T extends { id: string }>(
 
 function copyShape(shape: BotShapeDefinition): BotShapeDefinition {
 	const { eyes, head, neck, mouth, hand } = shape.anchors;
+	for (const slot of shape.backgroundDetailColors ?? []) {
+		if (
+			!(BOT_COLOR_SLOTS as readonly string[]).includes(slot) ||
+			slot === "background"
+		)
+			throw new Error(
+				`Invalid background detail color for bot shape ${shape.id}: ${slot}`,
+			);
+	}
 	if (shape.colorSlots !== undefined) {
 		if (!Array.isArray(shape.colorSlots))
 			throw new Error(`Invalid color slots for bot shape ${shape.id}.`);
@@ -596,6 +617,13 @@ function copyShape(shape: BotShapeDefinition): BotShapeDefinition {
 	}
 	return Object.freeze({
 		...shape,
+		...(shape.backgroundDetailColors
+			? {
+					backgroundDetailColors: Object.freeze([
+						...shape.backgroundDetailColors,
+					]),
+				}
+			: {}),
 		...(shape.colorSlots
 			? { colorSlots: Object.freeze([...shape.colorSlots]) }
 			: {}),
@@ -770,6 +798,9 @@ export function createBotCatalog(
 			Object.freeze({
 				...item,
 				...(item.kinds ? { kinds: Object.freeze([...item.kinds]) } : {}),
+				...(item.excludedKinds
+					? { excludedKinds: Object.freeze([...item.excludedKinds]) }
+					: {}),
 			}),
 	);
 	const series = mergeDefinitions(
@@ -844,7 +875,7 @@ export function createBotCatalog(
 				`Invalid compact skill for bot equipment ${item.id}: ${item.compactSkill}`,
 			);
 		}
-		for (const kind of item.kinds ?? []) {
+		for (const kind of [...(item.kinds ?? []), ...(item.excludedKinds ?? [])]) {
 			if (!Object.hasOwn(shapes, kind)) {
 				throw new Error(`Unknown shape for bot equipment ${item.id}: ${kind}`);
 			}

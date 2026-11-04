@@ -1,6 +1,6 @@
 "use client";
 
-import { toPlatePlugin, type PlateEditor } from "platejs/react";
+import { type PlateEditor, toPlatePlugin } from "platejs/react";
 import {
 	FOOTNOTE_DEFINITION,
 	FOOTNOTE_REFERENCE,

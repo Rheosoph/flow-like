@@ -16,11 +16,8 @@ import {
 	DialogTitle,
 } from "../ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "../ui/popover";
-import {
-	BotModelChip,
-	DefaultModelChip,
-	pinnedBotModel,
-} from "./bot-chat-parts";
+import { BotCaptureActions } from "./bot-capture-actions";
+import { DefaultModelChip, pinnedBotModel } from "./bot-chat-parts";
 import { ChatActivityMenu } from "./chat-activity";
 import { ChatMemorySettings } from "./chat-memory-settings";
 import { ChatModelSettings } from "./chat-model-settings";
@@ -63,9 +60,9 @@ function AutoModeToggle() {
 }
 
 /**
- * What a bot's composer adds to the standard one: the model that answers (the bot's own, else the
- * chat's default), Auto, and a menu with updates, Flux's history and, for a bot without a row, its
- * settings.
+ * What a bot's composer adds to the standard one: the chat's default model for a bot that pins none
+ * (a pinned model can't be changed here, so it isn't shown), Auto, and a menu with updates, Flux's
+ * history and, for a bot without a row, its settings.
  */
 export function BotChatActions({
 	chatBot,
@@ -78,16 +75,11 @@ export function BotChatActions({
 	onOpenSettings: () => void;
 }>) {
 	const { t } = useTranslation("chat");
-	const pinnedModel = pinnedBotModel(chatBot);
 	const options = t("conversationOptions", "Conversation options");
 	return (
 		<>
-			{pinnedModel ? (
-				<BotModelChip botName={chatBot.name} modelId={pinnedModel} />
-			) : (
-				defaultModelLabel && (
-					<DefaultModelChip botName={chatBot.name} label={defaultModelLabel} />
-				)
+			{!pinnedBotModel(chatBot) && defaultModelLabel && (
+				<DefaultModelChip botName={chatBot.name} label={defaultModelLabel} />
 			)}
 			<AutoModeToggle />
 			<Popover>
@@ -123,6 +115,7 @@ export function BotChatActions({
 						<ChatActivityMenu />
 						<GlobalChatHistory />
 					</div>
+					<BotCaptureActions botId={chatBot.bot?.id} />
 				</PopoverContent>
 			</Popover>
 		</>

@@ -5,9 +5,12 @@ import { type ComponentType, useEffect } from "react";
 import { useBotLabels } from "../../../hooks/use-bots";
 import { useBackend, useSignedIn } from "../../../state/backend-state";
 import type { IBot } from "../../../state/backend-state/bot-state";
+import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
 import { ChatMemorySettings } from "../../global-chat/chat-memory-settings";
 import { ChatModelSettings } from "../../global-chat/chat-model-settings";
 import { DialogDescription, DialogTitle } from "../../ui/dialog";
+import { hasBotWorkspace } from "../bot-panel-tabs";
+import { BotMemoryPane } from "../bot-workspace-panes";
 import type { BotDraft } from "./bot-draft";
 import { useBotPresetTexts } from "./bot-editor-copy";
 import { type BotDiscardPrompt, BotEditorFooter } from "./bot-editor-footer";
@@ -21,6 +24,7 @@ import { DescribeStep } from "./steps/describe-step";
 import { LocationStep } from "./steps/location-step";
 import { LookStep } from "./steps/look-step";
 import { BotMemoryModelField } from "./steps/memory-model-field";
+import { BotModelPinsField } from "./steps/model-pins-field";
 import { SafetyStep } from "./steps/safety-step";
 import { SecretsStep } from "./steps/secrets-step";
 import { type BotEditor, useBotEditor } from "./use-bot-editor";
@@ -178,11 +182,16 @@ function AbilitiesView({ editor }: StepViewProps) {
 }
 
 /**
- * Flux's saved memories are FlowPilot's, per profile; every other bot, Flux's copies included, keeps
- * its own. A FlowPilot bot always remembers, so its memory model sits here instead of in a Memory card.
+ * Memory model changes stay in the bot's draft. Flux manages FlowPilot's memories per profile;
+ * every other bot manages its own saved entries.
  */
 function BrainView({ editor }: StepViewProps) {
 	const { draft, original } = editor;
+	const labels = useBotLabels();
+	const chatEmbeddingModel = useGlobalChatStore(
+		(state) => state.embeddingModelId,
+	);
+	const remembers = editor.flowPilot || draft.capabilities.includes("memory");
 	return (
 		<div className="flex flex-col gap-5">
 			<BrainStep
@@ -193,16 +202,39 @@ function BrainView({ editor }: StepViewProps) {
 				onModelChange={editor.setModel}
 			>
 				{!draft.model.primary && <ChatModelSettings />}
-				{editor.flowPilot && (
+				{remembers && (
 					<BotMemoryModelField
 						value={draft.embeddingModel}
 						onChange={editor.setEmbeddingModel}
 					/>
 				)}
+				<BotModelPinsField
+					values={{
+						sttModel: draft.sttModel,
+						ttsModel: draft.ttsModel,
+						imageModel: draft.imageModel,
+						visionModel: draft.visionModel,
+					}}
+					onChange={editor.setModelPin}
+				/>
 			</BrainStep>
 			{original && (
 				<ChatMemorySettings
 					botId={original.system === "flux" ? null : original.id}
+					showModelPicker={false}
+					memoryEnabled={
+						remembers && Boolean(draft.embeddingModel || chatEmbeddingModel)
+					}
+					memoryContent={
+						hasBotWorkspace(original) ? (
+							<BotMemoryPane
+								botId={original.id}
+								bot={original}
+								embeddingModel={original.embedding_model}
+								name={labels(original).name}
+							/>
+						) : undefined
+					}
 				/>
 			)}
 		</div>

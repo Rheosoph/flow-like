@@ -102,6 +102,30 @@ pub(super) async fn message(
     body: Value,
     inboxes: &[&str],
 ) {
+    entry(
+        db,
+        conversation_id,
+        message_id,
+        sender,
+        seq,
+        "MESSAGE",
+        body,
+        inboxes,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn entry(
+    db: &DatabaseConnection,
+    conversation_id: &str,
+    message_id: &str,
+    sender: &str,
+    seq: i64,
+    kind: &str,
+    body: Value,
+    inboxes: &[&str],
+) {
     for inbox in inboxes {
         inbox_entry::ActiveModel {
             id: Set(format!("e-{inbox}-{message_id}")),
@@ -109,7 +133,7 @@ pub(super) async fn message(
             conversation_id: Set(conversation_id.into()),
             message_id: Set(message_id.into()),
             sender_id: Set(sender.into()),
-            kind: Set("MESSAGE".into()),
+            kind: Set(kind.into()),
             envelope: Set(json!({ "v": 1, "enc": "none", "body": body })),
             created_at: Set(at(seq)),
             seq: Set(Some(seq)),
@@ -126,8 +150,11 @@ pub(super) fn recipient(bot_id: &str, owner_id: &str, location: BotLocation) -> 
         owner_id: owner_id.into(),
         location,
         device_id: None,
+        hands_off: false,
         mentioned: false,
         replied_to: false,
+        read_along: false,
+        reacted: false,
         conversation_id: "c1".into(),
         trigger_message_id: "m1".into(),
         hops: 0,

@@ -31,6 +31,12 @@ pub struct Bot {
     pub model: BotModelPolicy,
     /// Bit id of the embedding model its memory uses; null lets the host choose.
     pub embedding_model: Option<String>,
+    /// Bit ids of the speech-to-text, text-to-speech, image generation and vision models it
+    /// pins; null lets the host choose.
+    pub stt_model: Option<String>,
+    pub tts_model: Option<String>,
+    pub image_model: Option<String>,
+    pub vision_model: Option<String>,
     pub classification: DataSensitivity,
     pub capabilities: Vec<BotCapability>,
     pub profile_id: Option<String>,
@@ -84,6 +90,10 @@ pub struct CreateBotRequest {
     pub appearance: Value,
     pub model: Option<BotModelPolicy>,
     pub embedding_model: Option<String>,
+    pub stt_model: Option<String>,
+    pub tts_model: Option<String>,
+    pub image_model: Option<String>,
+    pub vision_model: Option<String>,
     pub classification: Option<DataSensitivity>,
     pub capabilities: Option<Vec<String>>,
     pub profile_id: Option<String>,
@@ -105,6 +115,14 @@ pub struct UpdateBotRequest {
     pub model: Option<BotModelPolicy>,
     #[serde(default, deserialize_with = "nullable")]
     pub embedding_model: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub stt_model: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub tts_model: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub image_model: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub vision_model: Option<Option<String>>,
     pub classification: Option<DataSensitivity>,
     pub capabilities: Option<Vec<String>>,
     #[serde(default, deserialize_with = "nullable")]
@@ -166,7 +184,42 @@ pub struct Conversation {
     pub unread_count: u64,
     /// The newest message.
     pub last_entry: Option<InboxEntry>,
+    /// When the person pinned the conversation to the top of their list.
+    pub pinned_at: Option<DateTime<FixedOffset>>,
     pub local: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ConversationPinState {
+    pub conversation_id: String,
+    pub pinned_at: Option<DateTime<FixedOffset>>,
+}
+
+/// A message pinned for the conversation; `entry` and `latest_edit` are the local copy.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PinnedMessage {
+    pub message_id: String,
+    pub pinned_by: String,
+    pub pinned_at: DateTime<FixedOffset>,
+    pub entry: Option<InboxEntry>,
+    pub latest_edit: Option<InboxEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StarredMessage {
+    pub conversation_id: String,
+    pub message_id: String,
+    pub starred_at: DateTime<FixedOffset>,
+    pub entry: InboxEntry,
+    pub latest_edit: Option<InboxEntry>,
+    /// Opaque; pass back as `before`.
+    pub cursor: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct StarredMessagesPage {
+    pub stars: Vec<StarredMessage>,
+    pub next_before: Option<String>,
 }
 
 /// One bot's summary of a conversation's history, shaped like the API's `ConversationSegment`:

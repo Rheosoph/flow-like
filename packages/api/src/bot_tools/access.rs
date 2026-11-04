@@ -100,6 +100,25 @@ impl ApiAccess {
         }
     }
 
+    /// The content store for a conversation's files, for a principal that is an active member of
+    /// the conversation. Room limits that narrow the bot's apps do not apply: the person shared
+    /// the file in this room.
+    async fn conversation_store(&self, conversation_id: &str) -> Result<FlowLikeStore> {
+        let principal = match &self.who {
+            Who::Owner(owner) => owner.as_str(),
+            Who::Bot(bot) => bot.bot_id.as_str(),
+        };
+        crate::routes::inbox::files::ensure_member(&self.state.db, conversation_id, principal)
+            .await
+            .map_err(|error| {
+                flow_like_types::anyhow!(
+                    "'{principal}' is not an active member of conversation '{conversation_id}': {error}"
+                )
+            })?;
+        let master = self.state.master_credentials().await?;
+        master.to_store(false).await
+    }
+
     async fn credentials(&self, app_id: &str) -> Result<SharedCredentials> {
         match &self.who {
             Who::Owner(owner) => owner_credentials(&self.state, owner, app_id).await,
@@ -111,6 +130,9 @@ impl ApiAccess {
 #[async_trait]
 impl AppAccess for ApiAccess {
     async fn store(&self, app_id: &str) -> Result<FlowLikeStore> {
+        if let Some(conversation_id) = crate::routes::inbox::files::conversation_of_app(app_id) {
+            return self.conversation_store(conversation_id).await;
+        }
         self.credentials(app_id)
             .await?
             .to_store_type(StoreType::Content)

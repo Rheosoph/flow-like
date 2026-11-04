@@ -5,6 +5,7 @@ import {
 	getBotCustomizableColorSlots,
 	normalizeBotColorSelection,
 } from "./colors";
+import { isBotEquipmentCompatible } from "./equipment-fit";
 import {
 	canUseBotEquipment,
 	canUseBotShape,
@@ -42,8 +43,8 @@ function selectionId(value: unknown, fallback: string): string {
 	return typeof value === "string" ? value : fallback;
 }
 
-/** Checks the persisted selections, including colors hidden by effects. The host must repeat
- * this check with trusted ownership at its persistence boundary. Preview remains unrestricted. */
+/** Checks persisted selections, including colors hidden by effects. Ownership restrictions
+ * apply only when supplied by the host. */
 export function getBotSaveEligibility(
 	appearance: Partial<BotAppearance>,
 	catalog: BotCatalog,
@@ -113,7 +114,8 @@ export function getBotSaveEligibility(
 				!!item &&
 				validSlot &&
 				item.slot === slot &&
-				(!item.kinds || (!!shape && item.kinds.includes(shape.id)));
+				!!shape &&
+				isBotEquipmentCompatible(item, shape);
 			if (compatible && canUseBotEquipment(item.id, catalog, ownedPackIds))
 				continue;
 			requirements.push({

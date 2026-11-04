@@ -232,3 +232,83 @@ describe('what "Don\'t ask again" covers', () => {
 		expect(respond).toHaveBeenCalledWith({ approved: true, remember: true });
 	});
 });
+
+describe("secret prompt", () => {
+	const secretPrompt = (
+		store: (value: string) => Promise<void>,
+		respond: GlobalToolPrompt["respond"],
+	) =>
+		approval({
+			kind: "secret",
+			toolName: "secret_request",
+			title: "Secret requested",
+			rememberable: false,
+			rememberAppId: undefined,
+			appId: undefined,
+			secret: { name: "API_KEY", description: "For the weather API", store },
+			respond,
+		});
+	const buttonLabelled = (label: string) =>
+		Array.from(host.querySelectorAll("button")).find(
+			(button) => button.textContent?.trim() === label,
+		);
+	const typeValue = async (value: string) => {
+		const input = host.querySelector("input") as HTMLInputElement;
+		const setter = Object.getOwnPropertyDescriptor(
+			Object.getPrototypeOf(input),
+			"value",
+		)?.set;
+		await act(async () => {
+			setter?.call(input, value);
+			input.dispatchEvent(new Event("input", { bubbles: true }));
+		});
+	};
+
+	test("masks the input and offers no remember option", async () => {
+		await show(
+			secretPrompt(
+				async () => {},
+				() => {},
+			),
+		);
+		expect(host.querySelector("input")?.getAttribute("type")).toBe("password");
+		expect(host.textContent).toContain("API_KEY");
+		expect(host.textContent).toContain("For the weather API");
+		expect(rememberLabel()).toBeUndefined();
+	});
+
+	test("stores the value, then resolves without carrying it", async () => {
+		const store = vi.fn(async () => {});
+		const respond = vi.fn();
+		await show(secretPrompt(store, respond));
+		await typeValue("hunter2");
+		await act(async () => buttonLabelled("Save secret")?.click());
+		await settle();
+		expect(store).toHaveBeenCalledWith("hunter2");
+		expect(respond).toHaveBeenCalledWith({ approved: true, remember: false });
+		expect(JSON.stringify(respond.mock.calls)).not.toContain("hunter2");
+	});
+
+	test("a failed store keeps the prompt open", async () => {
+		const respond = vi.fn();
+		await show(
+			secretPrompt(async () => {
+				throw new Error("offline");
+			}, respond),
+		);
+		await typeValue("hunter2");
+		await act(async () => buttonLabelled("Save secret")?.click());
+		await settle();
+		expect(respond).not.toHaveBeenCalled();
+		expect(host.querySelector('[role="alert"]')).not.toBeNull();
+	});
+
+	test("Decline resolves as not approved without storing", async () => {
+		const store = vi.fn(async () => {});
+		const respond = vi.fn();
+		await show(secretPrompt(store, respond));
+		await act(async () => buttonLabelled("Decline")?.click());
+		expect(store).not.toHaveBeenCalled();
+		expect(respond).toHaveBeenCalledWith({ approved: false, remember: false });
+	});
+});

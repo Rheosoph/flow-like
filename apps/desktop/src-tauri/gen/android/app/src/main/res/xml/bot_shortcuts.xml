@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <share-target android:targetClass="com.flow_like.app.MainActivity">
+        <data android:mimeType="text/*" />
+        <data android:mimeType="image/*" />
+        <data android:mimeType="application/pdf" />
+        <category android:name="com.flow_like.app.BOT_SHARE" />
+    </share-target>
+</shortcuts>

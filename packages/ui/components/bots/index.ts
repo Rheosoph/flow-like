@@ -14,6 +14,7 @@ export {
 } from "./bot-color-picker";
 export { BotPaintBlend, BotPaintDefs, getBotPaintId } from "./bot-paints";
 export { createBotCatalog, defaultBotCatalog } from "./catalog";
+export { isBotEquipmentCompatible } from "./equipment-fit";
 export {
 	canUseBotColor,
 	getBotColorBase,

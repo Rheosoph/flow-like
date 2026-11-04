@@ -95,6 +95,16 @@ impl HostStore for Direct {
         self.0.get_bot(id).map_err(|e| e.to_string())
     }
 
+    async fn room_limits(
+        &self,
+        conversation_id: &str,
+        bot_id: &str,
+    ) -> Result<Option<flow_like_types::bot_effective::BotRoomLimits>, String> {
+        self.0
+            .member_limits(conversation_id, bot_id)
+            .map_err(|e| e.to_string())
+    }
+
     async fn send(
         &self,
         conversation_id: &str,
@@ -193,6 +203,8 @@ pub(super) enum Mode {
     Reply,
     Fail,
     Blank,
+    /// Answers with the silent reply.
+    Silent,
     /// Calls a tool that asks the owner through the turn's approval gate.
     Ask,
     /// Asks another bot through the turn's approval gate.
@@ -262,6 +274,7 @@ impl TurnRunner for FakeRunner {
         match mode {
             Mode::Reply => Ok(format!("answer to: {}", job.prompt)),
             Mode::Blank => Ok("  ".into()),
+            Mode::Silent => Ok(flow_like::flow::copilot::SILENT_REPLY.into()),
             Mode::Ask => {
                 let args = json!({ "index": "notes" });
                 match job
@@ -445,6 +458,17 @@ impl Fixture {
             bot,
             &self.newest(&conversation.id),
             far_past(),
+            false,
+        )
+    }
+
+    fn waiting_mentioned_only(&self, conversation: &Conversation, bot: &str) -> Option<Waiting> {
+        waiting(
+            conversation.kind,
+            bot,
+            &self.newest(&conversation.id),
+            far_past(),
+            true,
         )
     }
 
@@ -505,13 +529,17 @@ fn a_direct_message_of_the_person_waits_until_the_bot_has_spoken() {
 }
 
 #[test]
-fn a_group_wakes_a_bot_only_when_it_is_mentioned_or_replied_to() {
+fn a_persons_message_in_a_group_wakes_every_bot_but_only_a_mention_or_reply_addresses_it() {
     let f = Fixture::open();
     let (ada, bob) = (f.bot("Ada"), f.bot("Bob"));
     let group = f.conversation("group", &[&ada.id, &bob.id]);
 
     f.say(&group.id, "m1", "anyone?");
-    assert_eq!(f.waiting(&group, &ada.id), None);
+    for bot in [&ada, &bob] {
+        let waiting = f.waiting(&group, &bot.id).unwrap();
+        assert_eq!(waiting.message_id, "m1");
+        assert!(!waiting.addressed, "{:?} reads along", bot.name);
+    }
 
     f.send(
         &group.id,
@@ -520,8 +548,8 @@ fn a_group_wakes_a_bot_only_when_it_is_mentioned_or_replied_to() {
         "message",
         json!({ "text": "ada?", "mentions": [ada.id] }),
     );
-    assert_eq!(f.waiting(&group, &ada.id).unwrap().message_id, "m2");
-    assert_eq!(f.waiting(&group, &bob.id), None);
+    assert!(f.waiting(&group, &ada.id).unwrap().addressed);
+    assert!(!f.waiting(&group, &bob.id).unwrap().addressed);
 
     f.send(
         &group.id,
@@ -531,6 +559,11 @@ fn a_group_wakes_a_bot_only_when_it_is_mentioned_or_replied_to() {
         json!({ "text": "yes" }),
     );
     assert_eq!(f.waiting(&group, &ada.id), None);
+    assert_eq!(
+        f.waiting(&group, &bob.id).unwrap().message_id,
+        "m2",
+        "a bot's message wakes a bot only when it names it"
+    );
     f.send(
         &group.id,
         LOCAL_OWNER_ID,
@@ -538,8 +571,82 @@ fn a_group_wakes_a_bot_only_when_it_is_mentioned_or_replied_to() {
         "message",
         json!({ "text": "thanks", "reply_to": "a1" }),
     );
-    assert_eq!(f.waiting(&group, &ada.id).unwrap().message_id, "m3");
-    assert_eq!(f.waiting(&group, &bob.id), None);
+    assert!(f.waiting(&group, &ada.id).unwrap().addressed);
+    assert!(!f.waiting(&group, &bob.id).unwrap().addressed);
+}
+
+#[test]
+fn answer_only_when_mentioned_stops_reading_along_but_not_a_mention_or_a_direct_chat() {
+    let f = Fixture::open();
+    let ada = f.bot("Ada");
+    let group = f.conversation("group", &[&ada.id]);
+    f.say(&group.id, "m1", "anyone?");
+    assert_eq!(f.waiting_mentioned_only(&group, &ada.id), None);
+    f.send(
+        &group.id,
+        LOCAL_OWNER_ID,
+        "m2",
+        "message",
+        json!({ "text": "ada?", "mentions": [ada.id] }),
+    );
+    assert_eq!(
+        f.waiting_mentioned_only(&group, &ada.id).unwrap().message_id,
+        "m2"
+    );
+    let chat = f.direct(&ada);
+    f.say(&chat.id, "d1", "hello");
+    assert_eq!(
+        f.waiting_mentioned_only(&chat, &ada.id).unwrap().message_id,
+        "d1"
+    );
+}
+
+#[test]
+fn a_persons_reaction_wakes_only_the_bot_whose_message_it_reacts_to() {
+    let f = Fixture::open();
+    let (ada, bob) = (f.bot("Ada"), f.bot("Bob"));
+    let group = f.conversation("group", &[&ada.id, &bob.id]);
+    let react = |id: &str, sender: &str, target: &str, op: &str| {
+        f.send(
+            &group.id,
+            sender,
+            id,
+            "reaction",
+            json!({ "target": target, "emoji": "👎", "op": op }),
+        );
+    };
+    f.send(&group.id, &ada.id, "a1", "message", json!({ "text": "my plan" }));
+    f.say(&group.id, "m1", "hm");
+    f.send(&group.id, &ada.id, "a2", "message", json!({ "text": "ok" }));
+
+    react("r1", LOCAL_OWNER_ID, "a1", "add");
+    let waiting = f.waiting_mentioned_only(&group, &ada.id).unwrap();
+    assert_eq!(waiting.message_id, "r1");
+    assert!(waiting.addressed && waiting.hops == 0);
+    assert_eq!(f.waiting_mentioned_only(&group, &bob.id), None, "other bots are not woken");
+
+    react("r2", LOCAL_OWNER_ID, "m1", "add");
+    assert_eq!(
+        f.waiting_mentioned_only(&group, &ada.id).unwrap().message_id,
+        "r1",
+        "a reaction to a person's message wakes nobody"
+    );
+    react("r3", &bob.id, "a1", "add");
+    assert_eq!(
+        f.waiting_mentioned_only(&group, &ada.id).unwrap().message_id,
+        "r1",
+        "a bot's reaction wakes nobody"
+    );
+    react("r4", LOCAL_OWNER_ID, "a1", "remove");
+    assert_eq!(f.waiting_mentioned_only(&group, &ada.id), None, "taken back before the turn");
+
+    react("r5", LOCAL_OWNER_ID, "a1", "add");
+    f.send(&group.id, &ada.id, "a3", "message", json!({ "text": "sorry" }));
+    assert_eq!(
+        f.waiting_mentioned_only(&group, &ada.id),
+        None,
+        "only reactions newer than the bot's last message count"
+    );
 }
 
 #[test]
@@ -602,7 +709,7 @@ fn topics_tombstones_edits_and_old_messages_are_no_trigger() {
     f.say(&chat.id, "m3", "late");
     let entries = f.newest(&chat.id);
     let tomorrow = (Utc::now() + Age::days(1)).fixed_offset();
-    assert_eq!(waiting(chat.kind, &bot.id, &entries, tomorrow), None);
+    assert_eq!(waiting(chat.kind, &bot.id, &entries, tomorrow, false), None);
     assert_eq!(chat.kind, ConversationKind::Direct);
 }
 
@@ -1061,6 +1168,38 @@ mod grants {
     }
 
     #[tokio::test]
+    async fn a_trigger_started_turn_parks_its_first_ask_resumes_and_asks() {
+        let f = asking_a_bot();
+        let bot = f.bot("Pip");
+        let chat = f.direct(&bot);
+        let trigger = flow_like_types::inbox::TriggerBody {
+            source: flow_like_types::inbox::TriggerSource::Webhook,
+            ref_id: "hook".into(),
+            title: "Hook".into(),
+            text: "Check with Flux".into(),
+            payload: None,
+            payload_handle: None,
+            bot_id: None,
+        };
+        f.store.post_trigger(&bot.id, "tk-1", &trigger).unwrap();
+        f.host.poke(Some(&chat.id));
+        until("the turn parks", || {
+            f.status_of(&bot.id, "tk-1") == Some(TurnStatus::Waiting)
+        })
+        .await;
+        let card = f
+            .messages_of(&chat.id, &bot.id)
+            .into_iter()
+            .find(|entry| body(entry).get("approval").is_some())
+            .expect("an approval card");
+        assert_eq!(body(&card)["approval"]["tool"], "ask_bot");
+        assert_eq!(body(&card)["approval"]["scope"], "bot:flux-id");
+        answer(&f, &bot, "tk-1", &card, ApprovalDecision::Always).await;
+        until("the resumed reply", || !replies(&f, &bot, &chat).is_empty()).await;
+        assert_eq!(replies(&f, &bot, &chat), ["asked Flux"]);
+    }
+
+    #[tokio::test]
     async fn deny_on_an_ask_card_refuses_the_ask() {
         let f = asking_a_bot();
         let bot = f.bot("Pip");
@@ -1412,6 +1551,7 @@ mod interactive {
             &f.newest(&conversation.id),
             far_past(),
             Some(hold),
+            false,
         )
     }
 

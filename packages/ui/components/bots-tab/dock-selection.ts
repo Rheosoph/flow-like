@@ -72,6 +72,7 @@ export function dockSelectionQuery(
 		dockSelectionKey(parseDockSelection(params)) !== dockSelectionKey(selection)
 	) {
 		params.delete("panel");
+		params.delete("session");
 		for (const name of WORKSPACE_VIEW_PARAMS) params.delete(name);
 	}
 	params.delete("bot");
@@ -167,6 +168,29 @@ export function dockSelectionForBot(
 	return !shown || shown.id === bot.id
 		? { type: "system", system: bot.system }
 		: { type: "bot", botId: bot.id };
+}
+
+/** Flux's row answers in Flux's conversations; every other row in its own. */
+export function chatBotIdOf(bot: Pick<IBot, "id" | "system">): string | null {
+	return bot.system === "flux" ? null : bot.id;
+}
+
+/**
+ * The global chat bot a selection's dock answers with: null for Flux, the Assistant's row once the
+ * list holds one (else `general`), a bot's own id. Undefined for a conversation, which has none.
+ */
+export function chatBotIdForSelection(
+	selection: DockSelection,
+	bots: readonly IBot[] | undefined,
+): string | null | undefined {
+	if (selection.type === "conversation") return undefined;
+	if (selection.type === "bot") {
+		const bot = bots?.find((item) => item.id === selection.botId);
+		return bot ? chatBotIdOf(bot) : selection.botId;
+	}
+	if (selection.system === "flux") return null;
+	const assistant = systemDockBot("general", bots);
+	return assistant ? chatBotIdOf(assistant) : ASSISTANT_BOT_ID;
 }
 
 /** The entry whose chat a global chat bot answers in: Flux for `null`, else the bot's own. */

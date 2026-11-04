@@ -8,7 +8,10 @@ use flow_like_types::{
     bot_message::MessageBody,
     bot_notify::reply_is_proactive,
     bot_turn::{MAX_HOPS, TurnAudience},
-    inbox::{ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, TriggerBody, is_tombstone},
+    inbox::{
+        ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, ReactionEvent, TriggerBody,
+        is_tombstone, net_reactions,
+    },
 };
 
 const HOST_REPLY_PREFIXES: [&str; 2] = ["re-", "rf-"];
@@ -45,6 +48,9 @@ pub struct Waiting {
     /// direct conversation.
     pub requester_id: String,
     pub audience: TurnAudience,
+    /// The message names the bot, replies to it, or is in a direct conversation; otherwise the
+    /// bot reads along and may stay silent.
+    pub addressed: bool,
 }
 
 struct Message<'a> {
@@ -189,17 +195,26 @@ fn addressed(
 }
 
 /// The newest message of someone else that `bot_id` has yet to answer, from `entries` (newest
-/// first). Direct conversations always wake the bot, groups only when it is mentioned or replied
-/// to. A message of a bot counts at least one hop and none beyond [`MAX_HOPS`] wakes anyone.
-/// Edits, topics, reactions, member events, tombstones and messages sent before `not_before` are
-/// no trigger.
+/// first). Direct conversations always wake the bot; in a group it wakes when the bot is
+/// mentioned or replied to, and for a person's message also when the bot reads along (unless
+/// `mentioned_only`). A message of a bot counts at least one hop and none beyond [`MAX_HOPS`]
+/// wakes anyone. Edits, topics, reactions, member events, tombstones and messages sent before
+/// `not_before` are no trigger.
 pub fn waiting(
     kind: ConversationKind,
     bot_id: &str,
     entries: &[InboxEntry],
     not_before: DateTime<FixedOffset>,
+    mentioned_only: bool,
 ) -> Option<Waiting> {
-    waiting_held(kind, bot_id, entries, not_before, None)
+    waiting_held(kind, bot_id, entries, not_before, None, mentioned_only)
+}
+
+fn reads_along(kind: ConversationKind, message: &Message, mentioned_only: bool) -> bool {
+    kind == ConversationKind::Group
+        && !mentioned_only
+        && message.entry.kind == InboxEntryKind::Message
+        && message.entry.sender_id == flow_like_local_bots::LOCAL_OWNER_ID
 }
 
 /// [`waiting`] that leaves the messages an interactive chat holds to that chat.
@@ -209,6 +224,7 @@ pub fn waiting_held(
     entries: &[InboxEntry],
     not_before: DateTime<FixedOffset>,
     hold: Option<Hold>,
+    mentioned_only: bool,
 ) -> Option<Waiting> {
     let parked = parked_turns(entries, bot_id);
     let messages = messages(entries);
@@ -224,7 +240,8 @@ pub fn waiting_held(
                 && message.entry.created_at >= not_before
                 && !hold.is_some_and(|hold| hold.keeps(message))
                 && hops_of(message, bot_sender) <= MAX_HOPS
-                && addressed(kind, bot_id, message, &messages)
+                && (addressed(kind, bot_id, message, &messages)
+                    || reads_along(kind, message, mentioned_only))
         })
         .filter(|message| {
             !parked.contains(&flow_like_types::bot_turn::turn_id(
@@ -246,10 +263,66 @@ pub fn waiting_held(
             Waiting {
                 requester_id: requester_id.to_string(),
                 audience: TurnAudience::of(kind),
+                addressed: addressed(kind, bot_id, message, &messages),
                 message_id: message.entry.message_id.clone(),
                 seq: message.entry.seq,
                 hops,
                 proactive: reply_is_proactive(message.entry.kind, hops),
             }
         })
+        .or_else(|| reacted_to(kind, bot_id, entries, not_before))
+}
+
+/// The newest reaction of a person still in place on a message `bot_id` sent after its last one.
+/// A reaction wakes the bot in groups and direct conversations alike; a bot's reaction wakes
+/// nobody.
+fn reacted_to(
+    kind: ConversationKind,
+    bot_id: &str,
+    entries: &[InboxEntry],
+    not_before: DateTime<FixedOffset>,
+) -> Option<Waiting> {
+    let after_last_own = entries
+        .iter()
+        .position(|entry| entry.sender_id == bot_id && entry.kind == InboxEntryKind::Message)
+        .unwrap_or(entries.len());
+    let events: Vec<(&InboxEntry, ReactionEvent)> = entries[..after_last_own]
+        .iter()
+        .rev()
+        .filter(|entry| entry.kind == InboxEntryKind::Reaction && is_plain(entry))
+        .filter(|entry| !is_tombstone(&entry.envelope))
+        .filter(|entry| entry.sender_id == flow_like_local_bots::LOCAL_OWNER_ID)
+        .filter_map(|entry| {
+            ReactionEvent::parse(&entry.message_id, &entry.sender_id, &entry.envelope)
+                .map(|event| (entry, event))
+        })
+        .collect();
+    let plain: Vec<ReactionEvent> = events.iter().map(|(_, event)| event.clone()).collect();
+    let in_place: HashSet<String> = net_reactions(&plain)
+        .into_iter()
+        .map(|event| event.message_id)
+        .collect();
+    events
+        .iter()
+        .rev()
+        .filter(|(entry, event)| {
+            in_place.contains(&event.message_id)
+                && entry.created_at >= not_before
+                && entries.iter().any(|candidate| {
+                    candidate.message_id == event.target
+                        && candidate.sender_id == bot_id
+                        && candidate.kind == InboxEntryKind::Message
+                        && !is_tombstone(&candidate.envelope)
+                })
+        })
+        .map(|(entry, _)| Waiting {
+            message_id: entry.message_id.clone(),
+            seq: entry.seq,
+            hops: 0,
+            proactive: false,
+            requester_id: flow_like_local_bots::LOCAL_OWNER_ID.to_string(),
+            audience: TurnAudience::of(kind),
+            addressed: true,
+        })
+        .next()
 }

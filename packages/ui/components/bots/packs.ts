@@ -44,7 +44,7 @@ export function getBotEquipmentPacks(
 	);
 }
 
-/** Save entitlement only; previews may use any catalog item. The host enforces purchased access. */
+/** All catalog items are available unless the host supplies ownership restrictions. */
 export function canUseBotShape(
 	kind: string,
 	catalog: BotCatalog,

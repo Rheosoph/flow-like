@@ -148,7 +148,15 @@ fn location_of(kind: TurnHostKind) -> BotLocation {
     }
 }
 
-/// Records that `host_id` saw the caller's live bots among `bot_ids` that run on `kind`.
+/// Whether a host of `kind` may report `bot`: it runs there, or it is a server bot that hands its
+/// turns to the owner's desktop while one is online.
+fn reportable(bot: &bot::Model, kind: TurnHostKind) -> bool {
+    BotLocation::parse(&bot.location).unwrap_or_default() == location_of(kind)
+        || (kind == TurnHostKind::Desktop && super::model::hands_off_to_desktop(bot))
+}
+
+/// Records that `host_id` saw the caller's live bots among `bot_ids` that run on `kind`, or hand
+/// off to it.
 pub(crate) async fn report_in<C: ConnectionTrait>(
     db: &C,
     owner_id: &str,
@@ -162,15 +170,15 @@ pub(crate) async fn report_in<C: ConnectionTrait>(
         Vec::new()
     } else {
         bot::Entity::find()
-            .select_only()
-            .column(bot::Column::Id)
             .filter(bot::Column::Id.is_in(wanted.iter().map(|id| id.as_str())))
             .filter(bot::Column::OwnerId.eq(owner_id))
             .filter(bot::Column::DeletedAt.is_null())
-            .filter(bot::Column::Location.eq(location_of(kind).as_str().to_ascii_uppercase()))
-            .into_tuple()
             .all(db)
             .await?
+            .into_iter()
+            .filter(|bot| reportable(bot, kind))
+            .map(|bot| bot.id)
+            .collect()
     };
     if !matching.is_empty() {
         bot_host_heartbeat::Entity::insert_many(matching.iter().map(|bot_id| {

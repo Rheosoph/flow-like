@@ -227,6 +227,62 @@ For an incoming webhook, design the board around a small, auditable boundary:
 
 See [App events](/apps/events/) for the app-side event model.
 
+### Send an event to a bot
+
+A server bot with the **Webhook** capability can receive a request directly.
+In the bot's **Details** tab, create a webhook and enter what the bot should do
+with each call. Copy its URL and secret before closing the setup panel. Local
+bots do not have public webhook URLs.
+
+HMAC signing is optional. Send the secret in `X-Flow-Like-Webhook-Secret` to
+authenticate a request. Replace these example values with the credentials
+from the setup panel:
+
+```bash
+WEBHOOK_URL='https://api.flow-like.com/api/v1/bots/hooks/bh_example'
+WEBHOOK_SECRET='whsec_replace_with_your_secret'
+
+curl --fail-with-body "$WEBHOOK_URL" \
+  -H "X-Flow-Like-Webhook-Secret: $WEBHOOK_SECRET" \
+  -H 'Content-Type: application/json' \
+  --data-raw '{"type":"order.created","order_id":"order_123"}'
+```
+
+The request returns `202` with the queued turn. The bot receives the payload
+along with your webhook instruction, and its reply appears in your conversation
+with the bot. JSON bodies stay structured; text bodies are passed as text. A
+request body can contain up to 256 KiB.
+
+For a provider that only accepts a destination URL, use the setup panel's URL
+with the secret included. It has this form:
+
+```text
+https://api.flow-like.com/api/v1/bots/hooks/bh_example?secret=whsec_replace_with_your_secret
+```
+
+That URL also works with curl, without authentication headers or a signature:
+
+```bash
+curl --fail-with-body "${WEBHOOK_URL}?secret=${WEBHOOK_SECRET}" \
+  -H 'Content-Type: application/json' \
+  --data-raw '{"type":"order.created","order_id":"order_123"}'
+```
+
+Anyone with this URL can call the webhook. Keep it out of shared logs and
+documents. Rotating the webhook secret invalidates previously copied URLs,
+secrets, and signing keys. Authentication with this URL proves possession of
+the secret; it does not verify a provider's own event signature.
+
+To wait up to 30 seconds for a reply, add `?wait=30` to the URL when using a
+header, or `&wait=30` when the URL already contains `secret`. A reply available
+within that window returns `200`; otherwise the request returns `202` and the
+latest turn state. Check its `status` for completion or failure.
+
+If your sender supports HMAC, use the optional signing key as a UTF-8 string to
+compute HMAC-SHA256 over the exact request body. Send the hexadecimal result as
+`X-Flow-Like-Signature: sha256=<hex>`. This is another authentication method;
+you only need one of the secret header, secret URL, bearer token, or signature.
+
 ## Files, email, and MCP
 
 - [HTTP Download](/nodes/web/http-download/) writes a remote file through the workflow's file abstraction.

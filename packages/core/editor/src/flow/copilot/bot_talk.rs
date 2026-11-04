@@ -3,14 +3,16 @@
 //! does the rest, so the desktop, the API and a headless worker behave alike.
 //!
 //! An ask runs in this order: one ask at a time per run, at most [`MAX_ASK_HOPS`] asks in one chain,
-//! the callee resolved in the caller's roster, no bot twice in a chain, the
-//! [`classification_gate`], then the owner's permission (a standing grant, or the chat's `ask_user`
-//! question: Allow once, Always allow, Deny). Only then is the exchange conversation opened, the
-//! question recorded as the caller's message, the callee's turn run nested (its own persona, tools,
-//! model, memory and history, nobody to ask mid-turn, at most [`ASK_BOT_ANSWER_TIMEOUT`]) and its
-//! answer recorded as the callee's.
+//! the callee resolved in the caller's roster, no bot twice in a chain, at most
+//! [`MAX_EXCHANGE_ROUNDS`] questions to the same bot per trigger, the [`classification_gate`],
+//! then the owner's permission (a standing grant, or the chat's `ask_user` question: Allow once,
+//! Always allow, Deny). Only then is the exchange conversation opened, the question recorded as
+//! the caller's message, the callee's turn run nested (its own persona, tools, model, memory and
+//! history, nobody to ask mid-turn, at most [`ASK_BOT_ANSWER_TIMEOUT`]) and its answer recorded as
+//! the callee's.
 
 use std::{
+    collections::HashMap,
     fmt,
     sync::{
         Arc, Mutex,
@@ -33,6 +35,10 @@ use super::tool_spec::{PlatformToolSpec, ToolApprovalSpec, spec_arg_str};
 pub const ASK_BOT_TOOL: &str = "ask_bot";
 /// Asks in one chain: the owner's chat → A asks B → B asks C → C asks D; D can't ask further.
 pub const MAX_ASK_HOPS: usize = 3;
+/// Questions one bot may ask the same bot for one trigger (the owner's message, a mail, a webhook
+/// call or another event that started the run), follow-ups included. A run woken by a late answer
+/// continues the count; the next trigger starts it over in the same exchange.
+pub const MAX_EXCHANGE_ROUNDS: u32 = 5;
 /// How long one nested answer may take.
 pub const ASK_BOT_ANSWER_TIMEOUT: Duration = Duration::from_secs(120);
 /// The owner's permission question (`ask_user` waits up to 600 s) plus the answer cap.
@@ -181,6 +187,19 @@ pub trait BotTalkHost: Send + Sync {
         text: &str,
     ) -> flow_like_types::Result<String>;
 
+    /// Records `question` as `caller`'s message, its `round`th question to the callee for the
+    /// current trigger; returns the message id. A host whose late answers wake the caller keeps
+    /// `round` with the question, so the woken run goes on counting ([`BotTalk::with_round`]).
+    async fn record_question(
+        &self,
+        conversation_id: &str,
+        caller: &CrewMember,
+        question: &str,
+        _round: u32,
+    ) -> flow_like_types::Result<String> {
+        self.record(conversation_id, caller, question).await
+    }
+
     /// Runs `turn.callee`'s turn through the same entry as any of its turns (`run_bot_chat`): its
     /// own persona, tools, model and memory, the exchange's history before
     /// `turn.question_message_id`, `turn.question` as the prompt and `turn.talk` for its own asks.
@@ -302,12 +321,25 @@ pub struct NestedBotTurn {
     pub question: String,
     /// The question's message in the exchange; the callee's history is what came before it.
     pub question_message_id: String,
+    /// Which of the caller's questions to the callee for the current trigger this is, from 1.
+    pub round: u32,
     /// The callee's side of bot talk: one ask further down the chain, never interactive.
     pub talk: Arc<BotTalk>,
 }
 
+/// The question whose late answer woke a run: the run goes on counting its questions to that
+/// callee from `round` ([`BotTalk::with_answered`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnsweredRound {
+    pub callee_id: String,
+    pub round: u32,
+}
+
+/// Questions asked per (asker, callee) for one trigger, shared by every run nested in it.
+type Rounds = Arc<Mutex<HashMap<(String, String), u32>>>;
+
 /// One run's side of bot talk: who asks, which asks led to this run, whether the owner can be asked
-/// in it, and the most sensitive data it has seen.
+/// in it, the most sensitive data it has seen, and how many questions went to each bot.
 pub struct BotTalk {
     host: Arc<dyn BotTalkHost>,
     caller: CrewMember,
@@ -315,6 +347,7 @@ pub struct BotTalk {
     interactive: bool,
     taint: Mutex<DataSensitivity>,
     asking: Arc<AtomicBool>,
+    rounds: Rounds,
     answer_timeout: Duration,
     gate: Gate,
 }
@@ -347,6 +380,7 @@ impl BotTalk {
             interactive,
             taint: Mutex::new(DataSensitivity::default()),
             asking: Arc::new(AtomicBool::new(false)),
+            rounds: Rounds::default(),
             answer_timeout: ASK_BOT_ANSWER_TIMEOUT,
             gate: Arc::new(classification_gate),
         }
@@ -387,6 +421,42 @@ impl BotTalk {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = taint;
         self
+    }
+
+    /// A run woken by the late answer to its `round`th question to `callee_id`: the trigger is the
+    /// same, so its follow-ups go on counting from there.
+    pub fn with_round(self, callee_id: &str, round: u32) -> Self {
+        self.count_round(callee_id, round);
+        self
+    }
+
+    /// [`Self::with_round`] for the question whose answer woke the run, when one did.
+    pub fn with_answered(self, answered: Option<&AnsweredRound>) -> Self {
+        match answered {
+            Some(answered) => self.with_round(&answered.callee_id, answered.round),
+            None => self,
+        }
+    }
+
+    /// Questions this run's bot already asked `callee` for the current trigger.
+    pub fn rounds_with(&self, callee: &CrewMember) -> u32 {
+        self.rounds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(&(self.caller.id.clone(), callee.id.clone()))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn count_round(&self, callee_id: &str, round: u32) {
+        let mut rounds = self
+            .rounds
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let asked = rounds
+            .entry((self.caller.id.clone(), callee_id.to_string()))
+            .or_default();
+        *asked = (*asked).max(round);
     }
 
     pub fn caller(&self) -> &CrewMember {
@@ -466,6 +536,9 @@ impl BotTalk {
         } else {
             "No one can approve a first question during this run, so only bots your owner already allowed you to ask will answer. Every question and answer is saved in a conversation your owner can read.".to_string()
         });
+        lines.push(format!(
+            "When an answer leaves something open, ask the same bot a follow-up: it remembers your earlier exchanges. You can ask one bot up to {MAX_EXCHANGE_ROUNDS} questions for one request, follow-ups included."
+        ));
         lines.extend(crew.iter().map(crew_line));
         lines.join("\n")
     }
@@ -474,7 +547,7 @@ impl BotTalk {
     pub fn turn_section(&self) -> Option<String> {
         let asker = &self.asked_by.last()?.name;
         let mut section = format!(
-            "## THIS TURN\n{asker}, another of your owner's bots, asks you this through `{ASK_BOT_TOOL}`. Your owner isn't part of this exchange but can read it later. Answer {asker} completely in this one reply: no one can answer questions during this turn. Share only what the question needs."
+            "## THIS TURN\n{asker}, another of your owner's bots, asks you this through `{ASK_BOT_TOOL}`. Your owner isn't part of this exchange but can read it later. Answer {asker} completely in this one reply: no one can answer questions during this turn. If you need more from {asker}, end your answer with what you need; {asker} can follow up. Share only what the question needs."
         );
         if self.asked_by.len() > 1 {
             section.push_str(&format!(
@@ -518,6 +591,7 @@ impl BotTalk {
             interactive: false,
             taint: Mutex::new(taint),
             asking: Arc::new(AtomicBool::new(false)),
+            rounds: self.rounds.clone(),
             answer_timeout: self.answer_timeout,
             gate: self.gate.clone(),
         }
@@ -568,6 +642,16 @@ impl BotTalk {
                 ),
             ));
         }
+        let round = self.rounds_with(&callee) + 1;
+        if round > MAX_EXCHANGE_ROUNDS {
+            return exchange.stopped(Stop::refused(
+                "bot_talk_round_limit",
+                format!(
+                    "You already asked {0} {MAX_EXCHANGE_ROUNDS} questions for this request, the most one request allows. Nothing was sent; answer with what you have. Your owner's next message, or another event that wakes you, lets you ask {0} again.",
+                    callee.name
+                ),
+            ));
+        }
         let taint = self.taint();
         if let TalkGate::Refuse(reason) =
             (self.gate)(&self.caller.classification, &taint, &callee.classification)
@@ -582,7 +666,7 @@ impl BotTalk {
             Ok(warning) => warnings.extend(warning),
             Err(stop) => return exchange.stopped(stop),
         }
-        self.run_exchange(request, callee, exchange, taint, warnings)
+        self.run_exchange(request, callee, round, exchange, taint, warnings)
             .await
     }
 
@@ -634,28 +718,32 @@ impl BotTalk {
         }
     }
 
-    /// Records the question, runs the callee's turn and records its answer.
+    /// Records the question as round `round`, runs the callee's turn and records its answer. A
+    /// recorded question counts, answered or not.
     async fn run_exchange(
         &self,
         request: AskArguments,
         callee: CrewMember,
+        round: u32,
         mut exchange: Exchange,
         taint: DataSensitivity,
         mut warnings: Vec<String>,
     ) -> AskResult {
         let (conversation_id, question_message_id) = match self
-            .record_question(&callee, &request.message, &mut exchange)
+            .record_question(&callee, &request.message, round, &mut exchange)
             .await
         {
             Ok(ids) => ids,
             Err(stop) => return exchange.stopped(stop),
         };
+        self.count_round(&callee.id, round);
         let turn = NestedBotTurn {
             caller: self.caller.clone(),
             callee: callee.clone(),
             conversation_id: conversation_id.clone(),
             question: request.message,
             question_message_id,
+            round,
             talk: Arc::new(self.nested(&callee, taint)),
         };
         let answer = match self.nested_answer(turn).await {
@@ -672,12 +760,13 @@ impl BotTalk {
         exchange.answered(&callee, &answer, warnings)
     }
 
-    /// Opens the exchange with `callee` and records the question in it as the caller's message.
-    /// Returns the conversation and message ids.
+    /// Opens the exchange with `callee` and records the question in it as the caller's message of
+    /// round `round`. Returns the conversation and message ids.
     async fn record_question(
         &self,
         callee: &CrewMember,
         question: &str,
+        round: u32,
         exchange: &mut Exchange,
     ) -> Result<(String, String), Stop> {
         let conversation_id = self
@@ -691,7 +780,7 @@ impl BotTalk {
         exchange.conversation_id = Some(conversation_id.clone());
         let message_id = self
             .host
-            .record(&conversation_id, &self.caller, question)
+            .record_question(&conversation_id, &self.caller, question, round)
             .await
             .map_err(|error| {
                 let context = format!(
@@ -2359,5 +2448,143 @@ mod tests {
         assert_eq!(allowed["status"], "ok");
         let looped = parsed(&last.ask(&ask("bot_digest"), owner.as_ref()).await);
         assert_eq!(looped["code"], "bot_talk_cycle");
+    }
+
+    fn rounds_of(host: &FakeHost) -> Vec<(String, u32)> {
+        host.turns()
+            .into_iter()
+            .map(|turn| (turn.callee.id, turn.round))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn follow_ups_to_one_bot_stop_at_the_round_limit_of_the_trigger() {
+        let host = Arc::new(
+            FakeHost::new(crew(), answering("Noted."))
+                .granting(&[("bot_scout", "bot_ledger"), ("bot_scout", "bot_digest")]),
+        );
+        let owner = Owner::absent();
+        let talk = talk(&host, false);
+
+        for _ in 0..MAX_EXCHANGE_ROUNDS {
+            let answered = parsed(&talk.ask(&question("And then?"), owner.as_ref()).await);
+            assert_eq!(answered["status"], "ok");
+        }
+        let refused = parsed(&talk.ask(&question("And then?"), owner.as_ref()).await);
+        assert_eq!(refused["code"], "bot_talk_round_limit");
+        assert_eq!(refused["exchange"]["status"], "refused");
+        assert!(text(&refused["message"]).contains("Nothing was sent"));
+        let other = parsed(
+            &talk
+                .ask(
+                    &json!({ "bot": "Research digest", "message": "Anything new?" }),
+                    owner.as_ref(),
+                )
+                .await,
+        );
+        assert_eq!(other["status"], "ok");
+
+        let expected: Vec<(String, u32)> = (1..=MAX_EXCHANGE_ROUNDS)
+            .map(|round| ("bot_ledger".to_string(), round))
+            .chain([("bot_digest".to_string(), 1)])
+            .collect();
+        assert_eq!(rounds_of(&host), expected);
+        assert_eq!(talk.rounds_with(&ledger()), MAX_EXCHANGE_ROUNDS);
+
+        let next_trigger = BotTalk::new(host.clone(), scout(), false);
+        let fresh = parsed(
+            &next_trigger
+                .ask(&question("New request."), owner.as_ref())
+                .await,
+        );
+        assert_eq!(fresh["status"], "ok");
+        assert_eq!(
+            rounds_of(&host).last(),
+            Some(&("bot_ledger".to_string(), 1))
+        );
+        assert_eq!(fresh["exchange"]["conversation_id"], "conversation-1");
+    }
+
+    #[tokio::test]
+    async fn a_run_woken_by_a_late_answer_continues_the_count() {
+        let host = Arc::new(
+            FakeHost::new(crew(), answering("Here it is."))
+                .granting(&[("bot_scout", "bot_ledger")]),
+        );
+        let owner = Owner::absent();
+        let woken = talk(&host, false).with_round("bot_ledger", MAX_EXCHANGE_ROUNDS - 1);
+
+        let last = parsed(&woken.ask(&question("One more?"), owner.as_ref()).await);
+        assert_eq!(last["status"], "ok");
+        assert_eq!(
+            rounds_of(&host),
+            [("bot_ledger".to_string(), MAX_EXCHANGE_ROUNDS)]
+        );
+        let refused = parsed(&woken.ask(&question("And more?"), owner.as_ref()).await);
+        assert_eq!(refused["code"], "bot_talk_round_limit");
+
+        let lower = talk(&host, false)
+            .with_round("bot_ledger", 3)
+            .with_round("bot_ledger", 1);
+        assert_eq!(lower.rounds_with(&ledger()), 3);
+    }
+
+    #[tokio::test]
+    async fn questions_that_were_not_sent_do_not_count() {
+        let host = Arc::new(FakeHost::new(crew(), answering("Unused.")));
+        let owner = Owner::choosing("deny");
+        let talk = talk(&host, true);
+
+        let denied = parsed(&talk.ask(&question("May I?"), owner.as_ref()).await);
+        assert_eq!(denied["status"], "denied");
+        assert_eq!(talk.rounds_with(&ledger()), 0);
+    }
+
+    #[tokio::test]
+    async fn runs_nested_in_one_trigger_share_the_count_of_each_pair() {
+        let owner = Owner::absent();
+        let host = Arc::new(
+            FakeHost::new(
+                crew(),
+                relaying(&[("bot_ledger", "bot_digest")], owner.clone()),
+            )
+            .granting(&[("bot_scout", "bot_ledger"), ("bot_ledger", "bot_digest")]),
+        );
+        let talk = talk(&host, false);
+
+        for _ in 0..MAX_EXCHANGE_ROUNDS {
+            let answered = parsed(&talk.ask(&question("Pass it on?"), owner.as_ref()).await);
+            assert_eq!(answered["status"], "ok");
+            assert_eq!(nested_result(&answered)["status"], "ok");
+        }
+        let digest_rounds: Vec<u32> = rounds_of(&host)
+            .into_iter()
+            .filter(|(callee, _)| callee == "bot_digest")
+            .map(|(_, round)| round)
+            .collect();
+        assert_eq!(digest_rounds, (1..=MAX_EXCHANGE_ROUNDS).collect::<Vec<_>>());
+
+        let ledger_talk = talk.nested(&ledger(), DataSensitivity::default());
+        assert_eq!(ledger_talk.rounds_with(&digest()), MAX_EXCHANGE_ROUNDS);
+        let refused = parsed(
+            &ledger_talk
+                .ask(
+                    &json!({ "bot": "bot_digest", "message": "Once more?" }),
+                    owner.as_ref(),
+                )
+                .await,
+        );
+        assert_eq!(refused["code"], "bot_talk_round_limit");
+    }
+
+    #[test]
+    fn the_crew_offers_follow_ups_and_a_callee_may_ask_back_in_its_answer() {
+        let host = Arc::new(FakeHost::new(crew(), answering("Unused.")));
+        let section = talk(&host, false).crew_section(&[ledger()]);
+        assert!(section.contains("ask the same bot a follow-up"));
+        assert!(section.contains(&format!("up to {MAX_EXCHANGE_ROUNDS} questions")));
+        let nested = talk(&host, false).nested(&ledger(), DataSensitivity::default());
+        let turn = nested.turn_section().unwrap();
+        assert!(turn.contains("Scout can follow up"));
     }
 }

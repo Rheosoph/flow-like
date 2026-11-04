@@ -10,6 +10,8 @@ import { BotMotion } from "./motion";
 export const healthcareShapes: readonly BotShapeDefinition[] = [
 	crewShape({
 		id: "scope",
+		backgroundDetailColors: ["clothing"],
+		faceColor: "accent",
 		label: "Scope",
 		series: "healthcare",
 		description:

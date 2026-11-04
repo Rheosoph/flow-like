@@ -5,6 +5,7 @@ import {
 	type IApiState,
 	type IAppRouteState,
 	type IAppState,
+	type IAudioState,
 	type IBackendState,
 	type IBitState,
 	type IBoardState,
@@ -45,11 +46,13 @@ import { i18n as i18next } from "@flow-like/locales";
 import { useEffect } from "react";
 import type { AuthContextProps } from "react-oidc-context";
 
+import type { MeetingClient } from "@flow-like/flow-like-ui/lib/meetings/types";
 import {
 	WebAIState,
 	WebApiKeyState,
 	WebApiState,
 	WebAppState,
+	WebAudioState,
 	WebBitState,
 	WebBoardState,
 	WebDatabaseState,
@@ -74,6 +77,7 @@ import { WebAnalyticsState } from "../lib/web-states/analytics-state";
 import type { WebBackendRef } from "../lib/web-states/api-utils";
 import { WebBotState } from "../lib/web-states/bot-state";
 import { WebInboxState } from "../lib/web-states/inbox-state";
+import { createWebMeetingClient } from "../lib/web-states/meeting-client";
 import { WebSalesState } from "../lib/web-states/sales-state";
 
 export class WebBackend implements IBackendState {
@@ -102,7 +106,9 @@ export class WebBackend implements IBackendState {
 	salesState: ISalesState;
 	botState: IBotState;
 	inboxState: IInboxState;
+	meetingClient: MeetingClient;
 	usageState: IUsageState;
+	audioState: IAudioState;
 	analyticsState: IAnalyticsState;
 
 	private backendRef: WebBackendRef;
@@ -140,7 +146,9 @@ export class WebBackend implements IBackendState {
 		this.salesState = new WebSalesState(this.backendRef);
 		this.botState = new WebBotState(this.backendRef);
 		this.inboxState = new WebInboxState(this.backendRef);
+		this.meetingClient = createWebMeetingClient(this.backendRef);
 		this.usageState = new WebUsageState(this.backendRef);
+		this.audioState = new WebAudioState(this.backendRef);
 		this.analyticsState = new WebAnalyticsState(this.backendRef);
 	}
 

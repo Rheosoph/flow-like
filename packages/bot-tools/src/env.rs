@@ -328,8 +328,14 @@ pub trait ToolEnv: Send + Sync {
         None
     }
 
-    /// Reaches the bot's owner for `notify_owner`; `None` where the host cannot notify.
+    /// Reaches the bot's owner for `message_owner`; `None` where the host cannot message the owner.
     fn notifier(&self) -> Option<Arc<dyn crate::notify::OwnerNotifier>> {
+        None
+    }
+
+    /// Reaches the people the owner chats with for `list_people` and `message_person`; `None`
+    /// where the bot is not on an account.
+    fn people(&self) -> Option<Arc<dyn crate::people::PeopleBackend>> {
         None
     }
 
@@ -350,4 +356,7 @@ pub trait ToolEnv: Send + Sync {
     }
 
     async fn secret(&self, name: &str) -> Result<Option<String>>;
+
+    /// The bot's stored secrets by name and description, sorted by name; never their values.
+    async fn secrets(&self) -> Result<Vec<crate::secrets::SecretInfo>>;
 }

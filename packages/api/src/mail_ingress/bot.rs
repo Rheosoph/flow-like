@@ -23,8 +23,9 @@ use crate::{
 };
 use base64::Engine;
 use flow_like::credentials::StoreType;
+use flow_like_bot_tools::layout::INBOX_DIR;
 use flow_like_catalog_core::{InboundEmail, InboundEmailAddress, InboundEmailAuthentication};
-use flow_like_storage::object_store::ObjectStoreExt;
+use flow_like_storage::{files::store::FlowLikeStore, object_store::ObjectStoreExt};
 use flow_like_types::{
     bot_message::WorkspaceHandle,
     inbox::{TRIGGER_TEXT_MAX_CHARS, TriggerBody, TriggerSource},
@@ -145,9 +146,9 @@ async fn workspace_of(state: &AppState, bot_id: &str) -> Result<Option<String>, 
         .map(|app| app.id))
 }
 
-struct Stored {
-    attachments: Vec<Value>,
-    text_file: Option<WorkspaceHandle>,
+pub(super) struct Stored {
+    pub(super) attachments: Vec<Value>,
+    pub(super) text_file: Option<WorkspaceHandle>,
 }
 
 fn handle(workspace: &str, path: &str, bytes: &[u8], mime: &str) -> WorkspaceHandle {
@@ -167,12 +168,11 @@ async fn store_files(
     objects: &[(String, Vec<u8>)],
     folder: &str,
 ) -> Result<Stored, ApiError> {
-    let mut stored = Stored {
-        attachments: Vec::new(),
-        text_file: None,
-    };
     let Some(workspace) = workspace_of(state, &bot.id).await? else {
-        return Ok(stored);
+        return Ok(Stored {
+            attachments: Vec::new(),
+            text_file: None,
+        });
     };
     let credentials = owner_credentials(state, &bot.owner_id, &workspace)
         .await
@@ -181,7 +181,35 @@ async fn store_files(
         .to_store_type(StoreType::Content)
         .await
         .map_err(|error| ApiError::internal(format!("Bot workspace unavailable: {error}")))?;
-    let generic = store.as_generic();
+    save_files(&store, &workspace, email, objects, folder).await
+}
+
+async fn put_workspace_file(
+    store: &FlowLikeStore,
+    workspace: &str,
+    path: &str,
+    bytes: &[u8],
+) -> Result<(), ApiError> {
+    let key = store
+        .construct_upload(workspace, path)
+        .await
+        .map_err(|error| ApiError::internal(format!("Bot workspace path '{path}': {error}")))?;
+    store.as_generic().put(&key, bytes.to_vec().into()).await?;
+    Ok(())
+}
+
+/// Writes under the workspace's upload root, where the bot's file tools resolve a handle's path.
+pub(super) async fn save_files(
+    store: &FlowLikeStore,
+    workspace: &str,
+    email: &InboundEmail,
+    objects: &[(String, Vec<u8>)],
+    folder: &str,
+) -> Result<Stored, ApiError> {
+    let mut stored = Stored {
+        attachments: Vec::new(),
+        text_file: None,
+    };
     let bytes_at = |path: &str| {
         objects
             .iter()
@@ -206,27 +234,23 @@ async fn store_files(
             }));
             continue;
         }
-        let path = format!("bot/inbox/{folder}/{name}");
-        generic
-            .put(&path.clone().into(), bytes.to_vec().into())
-            .await?;
+        let path = format!("{INBOX_DIR}/{folder}/{name}");
+        put_workspace_file(store, workspace, &path, bytes).await?;
         stored.attachments.push(json!({
             "name": name,
             "content_type": attachment.content_type,
             "size": bytes.len(),
             "embedded": attachment.embedded,
-            "handle": handle(&workspace, &path, bytes, &attachment.content_type),
+            "handle": handle(workspace, &path, bytes, &attachment.content_type),
         }));
     }
     if let Some(text_path) = &email.text_path
         && let Some(bytes) = bytes_at(&text_path.path)
         && bytes.len() > INLINE_TEXT_CHARS
     {
-        let path = format!("bot/inbox/{folder}/body.txt");
-        generic
-            .put(&path.clone().into(), bytes.to_vec().into())
-            .await?;
-        stored.text_file = Some(handle(&workspace, &path, bytes, "text/plain"));
+        let path = format!("{INBOX_DIR}/{folder}/body.txt");
+        put_workspace_file(store, workspace, &path, bytes).await?;
+        stored.text_file = Some(handle(workspace, &path, bytes, "text/plain"));
     }
     Ok(stored)
 }

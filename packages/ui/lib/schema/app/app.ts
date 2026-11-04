@@ -3,6 +3,8 @@ export interface IApp {
 	authors: string[];
 	avg_rating?: number | null;
 	bits: string[];
+	/** Set on a bot's workspace app: the id of the bot it belongs to. */
+	bot_id?: null | string;
 	boards: string[];
 	changelog?: null | string;
 	created_at: ISystemTime;

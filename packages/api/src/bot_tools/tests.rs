@@ -10,7 +10,7 @@ use flow_like::flow::copilot::tool_grants::{GrantKey, GrantStore};
 use flow_like::flow_like_model_provider::llm::ModelLogic;
 use flow_like_bot_tools::{KnowledgeEmbedder, ModelRole};
 use flow_like_bot_tools_host::{
-    AppAccess, JobApp, JobScope, ModelSource, ToolJob, ToolReply, job_hash,
+    AppAccess, JobApp, JobScope, JobSecrets, ModelSource, ToolJob, ToolReply, job_hash,
 };
 use flow_like_storage::databases::vector::lancedb::connect_lance;
 use flow_like_storage::files::store::FlowLikeStore;
@@ -218,6 +218,12 @@ async fn host_with_grants(
         },
         executor: executor.map(|executor| executor as Arc<dyn ToolExecutor>),
         grants,
+        secrets: Arc::new(JobSecrets(
+            [("PG_SALES", "pg-pa55"), ("OTHER", "other-value")]
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), value.to_string()))
+                .collect(),
+        )),
     }))
 }
 
@@ -257,6 +263,34 @@ async fn heavy_tools_become_a_job_that_carries_only_the_scoped_credentials() {
     let apps: Vec<_> = job.credentials.keys().cloned().collect();
     assert_eq!(apps, [DOCS, WORKSPACE]);
     assert_eq!(job.scope.apps.len(), 1);
+}
+
+#[flow_like_types::tokio::test]
+async fn a_job_carries_only_the_secrets_its_arguments_name() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = host_with(Some(executor.clone()), routing::host_tools(true, &[])).await;
+    host.run(
+        "data_sources",
+        json!({ "operation": "attach", "attach": { "kind": "postgres", "name": "sales",
+            "connection": { "secret": "PG_SALES", "host": "db.example.com", "database": "sales" } } }),
+    )
+    .await;
+    let jobs = executor.jobs.lock().unwrap();
+    let job: ToolJob = serde_json::from_str(&jobs[0].3).unwrap();
+    let names: Vec<&String> = job.secrets.0.keys().collect();
+    assert_eq!(names, ["PG_SALES"]);
+    assert_eq!(job.secrets.0["PG_SALES"], "pg-pa55");
+}
+
+#[flow_like_types::tokio::test]
+async fn the_secret_list_runs_in_the_api_with_names_only() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = host_with(Some(executor.clone()), routing::host_tools(true, &[])).await;
+    let listed = host.run("secret_list", json!({})).await;
+    assert_eq!(parse(&listed)["status"], "ok");
+    assert!(listed.contains("PG_SALES") && listed.contains("OTHER"));
+    assert!(!listed.contains("pg-pa55") && !listed.contains("other-value"));
+    assert!(executor.jobs.lock().unwrap().is_empty());
 }
 
 #[flow_like_types::tokio::test]

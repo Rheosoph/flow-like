@@ -8,6 +8,7 @@ import {
 	toggleAskUserChoice,
 } from "../../lib/ask-user";
 import { cn } from "../../lib/utils";
+import { RequestChoice } from "../interfaces/chat-default/request-card";
 import { Checkbox } from "../ui/checkbox";
 import { Textarea } from "../ui/textarea";
 
@@ -43,10 +44,13 @@ export function AskUserQuestions({
 	};
 
 	return (
-		<div className={cn("space-y-3", roomy && "space-y-4")}>
+		<div className={cn("space-y-4", roomy && "space-y-5")}>
 			{form.intro && (
 				<p
-					className={cn("text-muted-foreground", roomy ? "text-sm" : "text-xs")}
+					className={cn(
+						"leading-relaxed text-muted-foreground",
+						roomy ? "text-sm" : "text-[13px]",
+					)}
 				>
 					{form.intro}
 				</p>
@@ -86,18 +90,13 @@ function AskUserQuestionBlock({
 }) {
 	const choiceIdPrefix = useId();
 	return (
-		<div className="space-y-1.5">
+		<div className="space-y-2">
 			{index !== undefined && (
-				<p
-					className={cn(
-						"font-medium leading-snug",
-						roomy ? "text-sm" : "text-xs",
-					)}
-				>
-					<span className="mr-1.5 text-muted-foreground tabular-nums">
-						{index}.
+				<p className="flex items-start gap-2 text-sm font-medium leading-snug">
+					<span className="mt-px flex size-5 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-semibold tabular-nums text-muted-foreground">
+						{index}
 					</span>
-					{question.question}
+					<span className="min-w-0 pt-px">{question.question}</span>
 				</p>
 			)}
 			{question.mode === "freeform" ? (
@@ -109,7 +108,7 @@ function AskUserQuestionBlock({
 					}
 					placeholder={question.placeholder ?? "Your answer…"}
 					className={cn(
-						"resize-none focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0",
+						"resize-none rounded-lg bg-background/60 text-sm leading-relaxed focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0",
 						roomy ? "min-h-28" : "min-h-20",
 					)}
 					onKeyDown={(event) => {
@@ -125,56 +124,34 @@ function AskUserQuestionBlock({
 					}}
 				/>
 			) : (
-				<div className={cn("space-y-1.5", roomy && "space-y-2")}>
+				<div className="space-y-1.5">
 					{question.choices.map((choice, choiceIndex) => {
 						const active = draft.selected.includes(choiceIndex);
 						const choiceId = `${choiceIdPrefix}-${choiceIndex}`;
 						return (
-							<label
+							<RequestChoice
 								key={`${choice.label}-${choiceIndex}`}
 								htmlFor={choiceId}
-								className={cn(
-									"flex w-full cursor-pointer items-start gap-2.5 rounded-lg border text-left transition-colors",
-									roomy ? "gap-3 p-3" : "p-2.5",
-									active
-										? "border-primary/50 bg-primary/10"
-										: "border-border/50 bg-background/70 hover:bg-muted/40",
-								)}
-							>
-								<Checkbox
-									id={choiceId}
-									checked={active}
-									onCheckedChange={() =>
-										onDraftChange(
-											toggleAskUserChoice(question, draft, choiceIndex),
-										)
-									}
-									className={cn(
-										"mt-0.5 shrink-0",
-										question.mode === "single_choice" && "rounded-full",
-									)}
-								/>
-								<span className="min-w-0">
-									<span
+								active={active}
+								size={roomy ? "lg" : "md"}
+								control={
+									<Checkbox
+										id={choiceId}
+										checked={active}
+										onCheckedChange={() =>
+											onDraftChange(
+												toggleAskUserChoice(question, draft, choiceIndex),
+											)
+										}
 										className={cn(
-											"block font-medium",
-											roomy ? "text-sm" : "text-xs",
+											"mt-0.5 shrink-0",
+											question.mode === "single_choice" && "rounded-full",
 										)}
-									>
-										{choice.label}
-									</span>
-									{choice.description && (
-										<span
-											className={cn(
-												"mt-0.5 block text-muted-foreground",
-												roomy ? "text-xs" : "text-[11px]",
-											)}
-										>
-											{choice.description}
-										</span>
-									)}
-								</span>
-							</label>
+									/>
+								}
+								label={choice.label}
+								description={choice.description}
+							/>
 						);
 					})}
 				</div>

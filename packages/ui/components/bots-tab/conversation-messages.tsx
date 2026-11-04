@@ -1,20 +1,23 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { AlarmClockIcon, MailIcon, WebhookIcon, ZapIcon } from "lucide-react";
+import { MailIcon } from "lucide-react";
 import { useMemo } from "react";
 import type { IConversation } from "../../state/backend-state/inbox-state";
 import { IdentityAvatar } from "../identity/identity-avatar";
+import { IdentityHoverCard } from "../identity/identity-hover-card";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
+import { CallLine, type ThreadCall } from "./conversation-call";
+import { ConversationNotePill } from "./conversation-note";
 import { activityTimeKind } from "./crew-model";
 import type {
 	ConversationBlock,
 	ConversationMemberEvent,
 	ConversationMessage,
-	ConversationTrigger,
 } from "./fold-entries";
-import { BotSenderChip, type MessageActions, MessageRow } from "./message-row";
+import { BotSenderChip, type MessageActions } from "./message-row";
+import { SpokenLines } from "./spoken-lines";
 import type { ConversationText } from "./use-conversation-text";
 import type { CrewDirectory } from "./use-crew-directory";
 
@@ -22,17 +25,27 @@ export interface PendingSend {
 	messageId: string;
 	text: string;
 	mentions?: readonly string[];
+	replyTo?: string;
+	files?: readonly File[];
 	failed: boolean;
 }
 
 /** What every row of one conversation needs to render and act on itself. */
+/** Which messages you starred, and which are pinned for everyone and by whom. */
+export interface ThreadMarks {
+	starred: ReadonlySet<string>;
+	pinnedBy: ReadonlyMap<string, string>;
+}
+
 export interface ThreadContext {
 	conversation: IConversation;
 	me?: string | null;
 	directory: CrewDirectory;
 	text: ConversationText;
 	actions: MessageActions;
+	marks: ThreadMarks;
 	readOnly: boolean;
+	call?: ThreadCall;
 }
 
 export interface ThreadHistory {
@@ -99,45 +112,15 @@ function MemberLine({
 	);
 }
 
-const TRIGGER_ICONS = {
-	schedule: AlarmClockIcon,
-	webhook: WebhookIcon,
-	email: MailIcon,
-	event: ZapIcon,
-} as const;
-
-/** A compact card for work that woke the bot, e.g. "Scheduled: Morning brief". */
-export function TriggerCard({
-	trigger,
-}: Readonly<{ trigger: ConversationTrigger }>) {
-	const { t } = useTranslation("bots");
-	const Icon = TRIGGER_ICONS[trigger.source];
-	const labels = {
-		schedule: t("crew.trigger.schedule", "Scheduled: {{title}}", {
-			title: trigger.title,
-		}),
-		webhook: t("crew.trigger.webhook", "Webhook: {{title}}", {
-			title: trigger.title,
-		}),
-		email: t("crew.trigger.email", "Email: {{title}}", {
-			title: trigger.title,
-		}),
-		event: t("crew.trigger.event", "Event: {{title}}", {
-			title: trigger.title,
-		}),
-	};
-	return (
-		<div
-			data-slot="trigger-card"
-			className="mx-auto flex max-w-[85%] items-center gap-1.5 rounded-full border bg-muted/40 px-3 py-1 text-xs text-muted-foreground"
-		>
-			<Icon className="size-3.5 shrink-0" aria-hidden />
-			<span className="truncate">{labels[trigger.source]}</span>
-		</div>
-	);
+/** The bot of a direct conversation, whose point of view its notes take. */
+function directBotOf(conversation: IConversation): string | undefined {
+	if (conversation.kind !== "direct") return undefined;
+	return conversation.members.find((member) => member.kind === "bot")
+		?.principal_id;
 }
 
-function MessageGroup({
+/** The line above a run of one speaker's messages. */
+export function SpeakerLine({
 	block,
 	thread,
 }: Readonly<{
@@ -146,98 +129,86 @@ function MessageGroup({
 }>) {
 	const { conversation, directory, text } = thread;
 	const first = block.messages[0] as ConversationMessage;
-	const last = block.messages[block.messages.length - 1] as ConversationMessage;
-	const rows = block.messages.map((message) => (
-		<MessageRow
-			key={message.id}
-			message={message}
-			directory={directory}
-			actions={thread.actions}
-			readOnly={thread.readOnly}
-		/>
-	));
-	if (block.mine) {
-		return (
-			<div className="flex flex-col items-end gap-1">
-				{rows}
-				<span className="text-[11px] text-muted-foreground">
-					{text.formats.time.format(last.time)}
-				</span>
-			</div>
-		);
-	}
 	const isBotMember = conversation.members.some(
 		(member) => member.principal_id === block.senderId && member.kind === "bot",
 	);
 	return (
-		<div className="flex items-start gap-2.5">
-			<IdentityAvatar subject={block.senderId} size={30} />
-			<div className="flex min-w-0 flex-1 flex-col gap-0.5">
-				<div className="flex flex-wrap items-center gap-1.5">
-					<span className="text-[13px] font-semibold">
-						{directory(block.senderId).name}
-					</span>
-					<BotSenderChip
-						senderId={block.senderId}
-						isBotMember={isBotMember}
-						me={thread.me}
-						directory={directory}
-					/>
-					<time
-						dateTime={first.createdAt}
-						className="text-[11px] text-muted-foreground"
-					>
-						{text.formats.time.format(first.time)}
-					</time>
-				</div>
-				{rows}
-			</div>
+		<div className="mb-1 flex min-w-0 items-center gap-2 px-4">
+			<IdentityHoverCard subject={block.senderId} className="shrink-0">
+				<IdentityAvatar subject={block.senderId} size={22} />
+			</IdentityHoverCard>
+			<IdentityHoverCard subject={block.senderId}>
+				<span className="truncate text-[13px] font-semibold">
+					{directory(block.senderId).name}
+				</span>
+			</IdentityHoverCard>
+			<BotSenderChip
+				senderId={block.senderId}
+				isBotMember={isBotMember}
+				me={thread.me}
+				directory={directory}
+			/>
+			<time
+				dateTime={first.createdAt}
+				className="text-[11px] text-muted-foreground"
+			>
+				{text.formats.time.format(first.time)}
+			</time>
 		</div>
 	);
 }
 
-function PendingBubble({
+/** Above a message the bot sent as an email, so it doesn't read as a chat reply. */
+export function MailSentLine({ to }: Readonly<{ to: readonly string[] }>) {
+	const { t } = useTranslation("bots");
+	return (
+		<div className="flex min-w-0 items-center gap-1 px-4 text-[11px] text-muted-foreground">
+			<MailIcon className="size-3 shrink-0" aria-hidden />
+			<span className="truncate">
+				{t("crew.messages.sentByEmail", "Sent by email to {{recipients}}", {
+					recipients: to.join(", "),
+				})}
+			</span>
+		</div>
+	);
+}
+
+/** Where an unconfirmed send stands, under the message the chat shows for it. */
+export function PendingStatus({
 	send,
 	actions,
 }: Readonly<{ send: PendingSend; actions: PendingSendActions }>) {
 	const { t } = useTranslation("bots");
-	return (
-		<div className="flex flex-col items-end gap-1">
-			<div className="max-w-[85%] rounded-[14px] rounded-br-sm bg-secondary px-3 py-2 text-sm leading-relaxed text-secondary-foreground opacity-70">
-				<span className="wrap-break-word whitespace-pre-wrap">{send.text}</span>
-			</div>
-			{send.failed ? (
-				<span className="flex items-center gap-1 text-[11px] text-destructive">
-					{t("crew.messages.notSent", "Not sent")}
-					<Button
-						type="button"
-						variant="link"
-						size="sm"
-						className="h-auto p-0 text-[11px]"
-						onClick={() => actions.retry(send)}
-					>
-						{t("crew.messages.retry", "Retry")}
-					</Button>
-					<Button
-						type="button"
-						variant="link"
-						size="sm"
-						className="h-auto p-0 text-[11px] text-muted-foreground"
-						onClick={() => actions.discard(send)}
-					>
-						{t("crew.messages.discard", "Discard")}
-					</Button>
-				</span>
-			) : (
-				<span className="text-[11px] text-muted-foreground">
-					{t("crew.messages.sending", "Sending…")}
-				</span>
-			)}
-		</div>
+	return send.failed ? (
+		<span className="flex items-center gap-1 px-4 text-[11px] text-destructive">
+			{t("crew.messages.notSent", "Not sent")}
+			<Button
+				type="button"
+				variant="link"
+				size="sm"
+				className="h-auto p-0 text-[11px]"
+				onClick={() => actions.retry(send)}
+			>
+				{t("crew.messages.retry", "Retry")}
+			</Button>
+			<Button
+				type="button"
+				variant="link"
+				size="sm"
+				className="h-auto p-0 text-[11px] text-muted-foreground"
+				onClick={() => actions.discard(send)}
+			>
+				{t("crew.messages.discard", "Discard")}
+			</Button>
+		</span>
+	) : (
+		<span className="px-4 text-[11px] text-muted-foreground">
+			{t("crew.messages.sending", "Sending…")}
+		</span>
 	);
 }
 
-function HistoryState({
+export function HistoryState({
 	history,
 	empty,
 }: Readonly<{ history: ThreadHistory; empty: boolean }>) {
@@ -274,7 +245,8 @@ function HistoryState({
 	);
 }
 
-function ThreadBlock({
+/** A non-message block (day, membership, trigger, bot ask) shown between messages. */
+export function ThreadNote({
 	block,
 	thread,
 }: Readonly<{ block: ConversationBlock; thread: ThreadContext }>) {
@@ -282,60 +254,25 @@ function ThreadBlock({
 	if (block.type === "member") {
 		return <MemberLine event={block.event} directory={thread.directory} />;
 	}
-	if (block.type === "trigger") return <TriggerCard trigger={block.trigger} />;
-	return <MessageGroup block={block} thread={thread} />;
-}
-
-/** The scrolling message log. Column-reverse keeps it pinned to the newest message. */
-export function ConversationMessages({
-	blocks,
-	pending,
-	thread,
-	history,
-	sends,
-}: Readonly<{
-	blocks: readonly ConversationBlock[];
-	pending: readonly PendingSend[];
-	thread: ThreadContext;
-	history: ThreadHistory;
-	sends: PendingSendActions;
-}>) {
-	const { t } = useTranslation("bots");
-	return (
-		<div className="flex min-h-0 flex-1 flex-col-reverse overflow-y-auto overscroll-contain">
-			<div
-				role="log"
-				aria-label={t("crew.messages.label", "Messages")}
-				className="flex flex-col gap-4 px-4.5 pt-4 pb-5"
-			>
-				{history.hasOlder && (
-					<div className="flex justify-center">
-						<Button
-							type="button"
-							variant="ghost"
-							size="sm"
-							disabled={history.loadingOlder}
-							onClick={history.onLoadOlder}
-						>
-							{history.loadingOlder
-								? t("crew.messages.loadingOlder", "Loading…")
-								: t("crew.messages.loadOlder", "Load older messages")}
-						</Button>
-					</div>
-				)}
-				<HistoryState
-					history={history}
-					empty={
-						blocks.length === 0 && pending.length === 0 && !history.hasOlder
-					}
-				/>
-				{blocks.map((block) => (
-					<ThreadBlock key={block.key} block={block} thread={thread} />
-				))}
-				{pending.map((send) => (
-					<PendingBubble key={send.messageId} send={send} actions={sends} />
-				))}
-			</div>
-		</div>
-	);
+	if (block.type === "call") {
+		return (
+			<CallLine
+				call={block.call}
+				directory={thread.directory}
+				thread={thread.call}
+			/>
+		);
+	}
+	if (block.type === "spoken") {
+		return <SpokenLines block={block} directory={thread.directory} />;
+	}
+	if (block.type === "note") {
+		return (
+			<ConversationNotePill
+				note={block.note}
+				viewerBotId={directBotOf(thread.conversation)}
+			/>
+		);
+	}
+	return null;
 }

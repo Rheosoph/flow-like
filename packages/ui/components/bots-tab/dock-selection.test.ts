@@ -120,6 +120,22 @@ describe("the bot's panel in the URL", () => {
 		).toBe("panel=data&table=facts&bot=bot_scout");
 	});
 
+	test("a Flux bookmark keeps its session only while Flux stays selected", () => {
+		const current = "bot=flux&session=chat-1&panel=memory&voice=1";
+		expect(
+			dockSelectionQuery({ type: "system", system: "flux" }, current),
+		).toBe("session=chat-1&panel=memory&voice=1&bot=flux");
+		expect(
+			dockSelectionQuery({ type: "bot", botId: "bot_scout" }, current),
+		).toBe("voice=1&bot=bot_scout");
+		expect(
+			dockSelectionQuery(
+				{ type: "conversation", conversationId: "room-1" },
+				current,
+			),
+		).toBe("voice=1&conversation=room-1");
+	});
+
 	test("links into the Bots tab carry the panel or the move review", () => {
 		expect(dockRoute({ type: "system", system: "general" })).toBe("/bots");
 		expect(dockRoute({ type: "bot", botId: "bot_scout" }, "files")).toBe(

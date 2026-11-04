@@ -393,6 +393,41 @@ impl NativePlatformSession {
     pub(crate) fn client(&self) -> &Client {
         &self.client
     }
+
+    /// A call the bot makes with its own runtime token instead of the person's session. `None`
+    /// when the hub answers 404.
+    pub(crate) async fn request_as_bot(
+        &self,
+        bot_token: &str,
+        method: Method,
+        path: &str,
+    ) -> Result<Option<Value>, String> {
+        self.assert_current_profile().await?;
+        let response = self
+            .client
+            .request(method, api_url(&self.hub, path)?)
+            .bearer_auth(bot_token)
+            .send()
+            .await
+            .map_err(|_| "The hub request could not be completed.".to_string())?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(format!(
+                "The hub returned HTTP {} for this bot request.",
+                response.status().as_u16()
+            ));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| "The hub response was interrupted.".to_string())?;
+        self.assert_current_profile().await?;
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|_| "The hub returned invalid JSON.".into())
+    }
 }
 
 pub(crate) async fn app_events(

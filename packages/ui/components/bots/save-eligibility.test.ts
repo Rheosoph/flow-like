@@ -70,7 +70,7 @@ describe("bot save eligibility", () => {
 		).toEqual(["bubble"]);
 	});
 
-	it("keeps character ownership optional while requiring premium color ownership", () => {
+	it("allows all catalog cosmetics when ownership restrictions are omitted", () => {
 		const appearance: BotAppearance = {
 			kind: "mochi",
 			equipment: { head: "crown" },
@@ -85,20 +85,11 @@ describe("bot save eligibility", () => {
 				catalog,
 			).canSave,
 		).toBe(true);
-		const result = getBotSaveEligibility(
-			{ ...appearance, colors: { body: swatch("pastel-mint") } },
-			catalog,
-		);
-		expect(result.canSave).toBe(false);
-		expect(result.requirements).toEqual([
-			{
-				kind: "color",
-				id: "pastel-mint",
-				label: "Soft mint",
-				slot: "body",
-				packIds: ["colors-pastels", "mixed-colors"],
-			},
-		]);
+		for (const body of [swatch("pastel-mint"), swatch("holo-aurora"), hex()]) {
+			expect(
+				getBotSaveEligibility({ ...appearance, colors: { body } }, catalog),
+			).toEqual({ canSave: true, requirements: [] });
+		}
 	});
 
 	it("checks the default character when no shape is supplied", () => {
@@ -232,11 +223,7 @@ describe("bot save eligibility", () => {
 			kind: "mochi",
 			colors: { body: hex() },
 		};
-		for (const owned of [
-			undefined,
-			["basics-crew"],
-			["basics-crew", "another-lab"],
-		]) {
+		for (const owned of [["basics-crew"], ["basics-crew", "another-lab"]]) {
 			expect(
 				getBotSaveEligibility(appearance, extended, owned).requirements,
 			).toEqual([
@@ -349,6 +336,45 @@ describe("bot save eligibility", () => {
 				packIds: [],
 			});
 		}
+	});
+
+	it("rejects excluded equipment even when its pack is owned", () => {
+		const extended = createBotCatalog(
+			{
+				equipment: [
+					{
+						...catalog.equipment.crown,
+						kinds: ["mochi", "miso"],
+						excludedKinds: ["mochi"],
+					},
+				],
+			},
+			catalog,
+		);
+		expect(
+			getBotSaveEligibility(
+				{ kind: "mochi", equipment: { head: "crown" } },
+				extended,
+				["favorites"],
+			),
+		).toEqual({
+			canSave: false,
+			requirements: [
+				{
+					kind: "equipment",
+					id: "crown",
+					label: catalog.equipment.crown.label,
+					slot: "head",
+					packIds: [],
+				},
+			],
+		});
+		expect(
+			canSaveBotAppearance(
+				{ kind: "miso", equipment: { head: "crown" } },
+				extended,
+			),
+		).toBe(true);
 	});
 
 	it("rejects malformed and unsupported colors instead of dropping them during saving", () => {

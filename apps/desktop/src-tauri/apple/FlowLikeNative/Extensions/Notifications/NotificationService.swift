@@ -221,10 +221,17 @@ final class NotificationService: UNNotificationServiceExtension, URLSessionDataD
         [title == sender ? "" : title, body].filter { !$0.isEmpty }.joined(separator: "\n")
     }
 
-    /// The app that sent the notification becomes a one-to-one conversation partner.
+    /// The notification's stack: an app's id or `bot:<id>` for a bot, so senders that share a name stay apart.
+    static func conversationIdentifier(for content: UNNotificationContent, sender: String) -> String {
+        [content.threadIdentifier, content.userInfo["app_id"] as? String]
+            .compactMap { $0 }
+            .first { !$0.isEmpty } ?? sender
+    }
+
+    /// The app or bot that sent the notification becomes a one-to-one conversation partner.
     static func messageIntent(for content: UNNotificationContent, avatar: Data?) -> INSendMessageIntent? {
         guard let name = senderName(from: content.userInfo) else { return nil }
-        let conversation = (content.userInfo["app_id"] as? String) ?? name
+        let conversation = conversationIdentifier(for: content, sender: name)
         let sender = INPerson(
             personHandle: INPersonHandle(value: "flow-like-app:\(conversation)", type: .unknown),
             nameComponents: nil,

@@ -61,6 +61,12 @@ pub struct NativeRunOptions {
     pub approval_gate: Option<Arc<crate::bot_host::ApprovalGate>>,
     /// Whose message woke a headless bot turn and who reads the answer.
     pub requester: Option<flow_like::flow::copilot::TurnRequester>,
+    /// The question whose late answer woke a headless bot turn: the turn's follow-ups to that
+    /// callee go on counting from its round.
+    pub answered_round: Option<flow_like::flow::copilot::bot_talk::AnsweredRound>,
+    /// The bot turn an interactive chat answers; a headless turn's comes from its gate. An
+    /// account bot's tools read its secrets for this turn.
+    pub bot_turn_id: Option<String>,
 }
 
 impl NativeRunOptions {

@@ -51,9 +51,9 @@ async function show(
 	view: IBotComputerView | undefined,
 	handlers: { onStop?: () => void; onRetry?: () => void } = {},
 ) {
-	container = window.document.createElement("div");
-	window.document.body.appendChild(container);
-	root = createRoot(container as unknown as Element);
+	container = window.document.createElement("div") as unknown as HTMLElement;
+	window.document.body.appendChild(container as never);
+	root = createRoot(container);
 	await act(async () => {
 		root.render(
 			createElement(ComputerStage, {

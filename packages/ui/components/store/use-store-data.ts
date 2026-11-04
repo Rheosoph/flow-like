@@ -5,7 +5,6 @@ import { useAuth } from "react-oidc-context";
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../hooks/use-invoke";
 import { addAppToProfile } from "../../lib/add-app-to-profile";
-import { usePaymentDistribution, usePayments } from "../payments/use-payments";
 import { apiErrorMessage } from "../../lib/api-error";
 import { openExternalUrl } from "../../lib/open-external";
 import { asArray } from "../../lib/response-shape";
@@ -15,6 +14,7 @@ import type { IMetadata } from "../../lib/schema/bit/bit-pack";
 import { useBackend } from "../../state/backend-state";
 import type { IEventMapping } from "../interfaces/interfaces";
 import { appPairs } from "../library/library-types";
+import { usePaymentDistribution, usePayments } from "../payments/use-payments";
 
 interface StoreRouter {
 	push(href: string): void;

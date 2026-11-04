@@ -53,6 +53,7 @@ pub struct FakeEnv {
     pub environment: Mutex<Environment>,
     pub secrets: Mutex<HashMap<String, String>>,
     pub notifier: Mutex<Option<Arc<dyn crate::notify::OwnerNotifier>>>,
+    pub people: Mutex<Option<Arc<dyn crate::people::PeopleBackend>>>,
     pub scheduler: Mutex<Option<Arc<dyn crate::schedule::Scheduler>>>,
     app_dbs: Mutex<
         HashMap<
@@ -107,6 +108,7 @@ impl FakeEnv {
             environment: Mutex::new(Environment::Local),
             secrets: Mutex::default(),
             notifier: Mutex::new(None),
+            people: Mutex::new(None),
             scheduler: Mutex::new(None),
             app_dbs: Mutex::default(),
             expensive_ok: AtomicBool::new(false),
@@ -263,6 +265,10 @@ impl ToolEnv for FakeEnv {
         self.notifier.lock().expect("notifier").clone()
     }
 
+    fn people(&self) -> Option<Arc<dyn crate::people::PeopleBackend>> {
+        self.people.lock().expect("people").clone()
+    }
+
     fn sandbox(&self) -> Option<Arc<dyn SandboxBackend>> {
         if let Some(real) = self.real_sandbox.lock().expect("real").clone() {
             return Some(real);
@@ -407,6 +413,24 @@ impl ToolEnv for FakeEnv {
 
     async fn secret(&self, name: &str) -> Result<Option<String>> {
         Ok(self.secrets.lock().expect("secrets").get(name).cloned())
+    }
+
+    async fn secrets(&self) -> Result<Vec<crate::secrets::SecretInfo>> {
+        let mut names: Vec<String> = self
+            .secrets
+            .lock()
+            .expect("secrets")
+            .keys()
+            .cloned()
+            .collect();
+        names.sort();
+        Ok(names
+            .into_iter()
+            .map(|name| crate::secrets::SecretInfo {
+                name,
+                description: None,
+            })
+            .collect())
     }
 }
 

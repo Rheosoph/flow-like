@@ -192,6 +192,35 @@ describe("the bot host's turns", () => {
 		status: "running" as const,
 	});
 
+	test("mobile status keeps local turns and hub terminal state without losing native start time", async () => {
+		const state = new BotState(backend());
+		const local = { ...turn("local_a"), id: "local-turn" };
+		const hosted = { ...turn("acct_a"), started_at: "2026-11-04T10:00:00Z" };
+		mocks.invoke.mockResolvedValue([local, hosted]);
+		mocks.get.mockResolvedValue({
+			turns: [
+				{
+					...turn("acct_a"),
+					status: "done",
+					updated_at: "2026-11-04T10:01:00Z",
+				},
+			],
+		});
+		await expect(state.getMobileStatus()).resolves.toEqual([
+			local,
+			{ ...hosted, status: "done", updated_at: "2026-11-04T10:01:00Z" },
+		]);
+		expect(mocks.get).toHaveBeenCalledWith(profile, "bots/mobile-status", auth);
+	});
+
+	test("signed-out mobile status reads only the native host", async () => {
+		mocks.invoke.mockResolvedValue([turn("local_a")]);
+		await expect(
+			new BotState(backend(false)).getMobileStatus(),
+		).resolves.toEqual([turn("local_a")]);
+		expect(mocks.get).not.toHaveBeenCalled();
+	});
+
 	test("lists them and hears every change", async () => {
 		const state = await signedInState();
 		mocks.invoke.mockResolvedValue([turn("local_a")]);

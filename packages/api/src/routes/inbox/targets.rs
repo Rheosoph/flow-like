@@ -23,9 +23,10 @@ use sea_orm::{
 /// Edits one message takes at most.
 pub(super) const MAX_EDITS_PER_MESSAGE: usize = 40;
 
-// A deletion inserts its copies, moves the position and touches the lock, and rewrites every copy
-// of the message and its edits: far below DSQL's 3,000 rows per transaction.
-const _: () = assert!(MAX_CONVERSATION_MEMBERS * (MAX_EDITS_PER_MESSAGE + 2) + 2 <= 2_500);
+// A deletion inserts its copies, moves the position and touches the lock, rewrites every copy of
+// the message and its edits, and drops the message's pin and every member's star of it: far below
+// DSQL's 3,000 rows per transaction.
+const _: () = assert!(MAX_CONVERSATION_MEMBERS * (MAX_EDITS_PER_MESSAGE + 3) + 3 <= 2_500);
 
 const EDITS_OF_SQL: &str = r#"SELECT "messageId" FROM "InboxEntry" WHERE "inboxId" = $1 AND "conversationId" = $2 AND "kind" = $3 AND "senderId" = $4 AND ("envelope" -> 'body' ->> 'target') = $5"#;
 
@@ -135,7 +136,8 @@ pub(super) async fn edits_of<C: ConnectionTrait>(
 }
 
 /// Rewrites every copy of `target` and of its `edits`, in the inbox of everyone who was ever a
-/// member, to the tombstone. The caller checked that `sender` sent the plain message.
+/// member, to the tombstone, and takes it off pins and stars. The caller checked that `sender`
+/// sent the plain message.
 pub(super) async fn tombstone<C: ConnectionTrait>(
     txn: &C,
     conversation_id: &str,
@@ -143,6 +145,7 @@ pub(super) async fn tombstone<C: ConnectionTrait>(
     target: &str,
     edits: Vec<String>,
 ) -> Result<(), DbErr> {
+    super::marks::forget_message(txn, conversation_id, target).await?;
     let mut message_ids = edits;
     message_ids.push(target.to_string());
     let holders: Vec<String> = conversation_member::Entity::find()

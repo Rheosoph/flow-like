@@ -12,6 +12,7 @@ import { useBotHistoryStore } from "./bot-history-store";
 import {
 	botHasInboxHistory,
 	desktopInteractiveArgs,
+	ensureBotTarget,
 	jumpBotChat,
 	registerBotInbox,
 	sendInteractiveMessage,
@@ -215,9 +216,23 @@ describe("a bot chat on its inbox history", () => {
 		expect(webInteractiveBody(null)).toEqual({});
 	});
 
-	test("a chat without inbox history sends no mark", async () => {
+	test("a chat whose inbox nothing resolved yet resolves it before sending", async () => {
 		const { inbox, sent } = backend();
 		registerBotInbox(inbox);
+		expect(
+			await sendInteractiveMessage("bot:bot_ada", { id: "m", text: "x" }, "r"),
+		).toMatchObject({ conversationId: "conv_ada", triggerMessageId: "m" });
+		expect(sent[0].envelope?.body).toMatchObject({ text: "x" });
+		expect(await ensureBotTarget("bot:bot_ada")).toEqual({
+			botId: "bot_ada",
+			conversationId: "conv_ada",
+		});
+	});
+
+	test("a chat whose inbox can't be reached sends no mark", async () => {
+		const { inbox, sent } = backend({ failing: true });
+		registerBotInbox(inbox);
+		vi.spyOn(console, "warn").mockImplementation(() => {});
 		expect(
 			await sendInteractiveMessage("bot:bot_ada", { id: "m", text: "x" }, "r"),
 		).toBeNull();

@@ -1,7 +1,7 @@
 use super::{
     approvals::{
-        BOT_APPROVAL_UNKNOWN, BOT_TURN_NOT_WAITING, Expired, GrantRows, answer_in, expire_in,
-        grant_in, list_grants, park_in, revoke_in,
+        BOT_APPROVAL_UNKNOWN, BOT_TURN_NOT_WAITING, Expired, GrantRows, answer_in, cancel_in,
+        expire_in, grant_in, list_grants, park_in, revoke_in,
     },
     fixture::{assert_code, at, conversation, database, delivery, insert_bot, recipient},
     ledger::{self, BOT_TURN_LEASE_LOST, ClaimRequest, claim_in, enqueue_in, recover_in},
@@ -423,6 +423,55 @@ async fn an_answer_needs_the_waiting_turn_its_card_and_its_owner() {
 }
 
 #[tokio::test]
+async fn cancelling_a_waiting_turn_posts_a_notice_after_the_approval() {
+    let (db, turn, card) = parked().await;
+    let (cancelled, sent) = cancel_in(&db, OWNER, BOT, &turn.id, now_millis())
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status, STORED_CANCELLED);
+    let notice = sent.unwrap().entry;
+    assert_eq!(notice.conversation_id, "c1");
+    assert_eq!(notice.sender_id, BOT);
+    assert_ne!(notice.message_id, card.id);
+    assert!(notice.envelope["body"]["approval"].is_null());
+    assert_eq!(
+        notice.envelope["body"]["text"],
+        "You cancelled this task. I no longer need your approval."
+    );
+    let stored_card = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(OWNER))
+        .filter(inbox_entry::Column::MessageId.eq(card.id.as_str()))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(notice.seq > stored_card.seq);
+    assert!(notice.created_at > stored_card.created_at);
+    assert_code(
+        &resolve(&db, &turn, &card, ApprovalDecision::Once)
+            .await
+            .unwrap_err(),
+        StatusCode::CONFLICT,
+        BOT_TURN_NOT_WAITING,
+    );
+    assert!(
+        cancel_in(&db, OWNER, BOT, &turn.id, now_millis())
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn cancelling_a_running_turn_posts_no_approval_notice() {
+    let (db, turn) = running().await;
+    let (cancelled, sent) = cancel_in(&db, OWNER, BOT, &turn.id, now_millis())
+        .await
+        .unwrap();
+    assert_eq!(cancelled.status, STORED_CANCELLED);
+    assert!(sent.is_none());
+}
+
+#[tokio::test]
 async fn recovery_leaves_a_waiting_turn_alone_and_seven_days_cancel_it_with_a_notice() {
     let (db, turn, _) = parked().await;
     let long_after = now_millis() + Duration::days(30);
@@ -515,4 +564,25 @@ async fn the_parked_card_names_who_woke_the_turn() {
         .unwrap();
     assert_eq!(posted.requester_id.as_deref(), Some("user-c"));
     assert_eq!(posted.room, None);
+}
+
+#[tokio::test]
+async fn an_expired_notification_cannot_approve_before_the_sweeper_runs() {
+    let (db, turn, card) = parked().await;
+    let now = turn.updated_at + Duration::days(APPROVAL_WAIT_DAYS);
+    let error = answer_in(
+        &db,
+        OWNER,
+        BOT,
+        &turn.id,
+        &answer(&card, ApprovalDecision::Once),
+        "c1",
+        now,
+    )
+    .await
+    .unwrap_err();
+    assert_code(&error, StatusCode::CONFLICT, ERROR_APPROVAL_EXPIRED);
+    assert!(list_grants(&db, OWNER, BOT, true).await.unwrap().is_empty());
+    let unchanged = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
+    assert_eq!(unchanged.status, STORED_WAITING);
 }

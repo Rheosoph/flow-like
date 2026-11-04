@@ -44,8 +44,8 @@ function useSettingsProfile() {
 	return useInvoke(backend.userState.getSettingsProfile, backend.userState, []);
 }
 
-/** The profile's embedding models, from the same queries as the chat's memory picker. */
-export function useBotEmbeddingModelOptions(): {
+/** The profile's models of these Bit types, from the same queries as the chat's memory picker. */
+export function useBotBitOptions(types: readonly IBitTypes[]): {
 	options: BotEmbeddingModelOption[];
 	isLoading: boolean;
 } {
@@ -63,14 +63,21 @@ export function useBotEmbeddingModelOptions(): {
 	const options = useMemo(
 		() =>
 			asArray(profileBits.data)
-				.filter((bit) => bit.type === IBitTypes.Embedding)
+				.filter((bit) => types.includes(bit.type))
 				.map((bit) => ({ id: bit.id, label: bitName(bit, language) })),
-		[profileBits.data, language],
+		[profileBits.data, language, types],
 	);
 	return {
 		options,
 		isLoading: settingsProfile.isLoading || profileBits.isLoading,
 	};
+}
+
+const EMBEDDING_TYPES: readonly IBitTypes[] = [IBitTypes.Embedding];
+
+/** The profile's embedding models, from the same queries as the chat's memory picker. */
+export function useBotEmbeddingModelOptions() {
+	return useBotBitOptions(EMBEDDING_TYPES);
 }
 
 /** The profile's language models, from the same queries as the chat's model picker. */

@@ -272,3 +272,37 @@ export async function apiDelete<T>(
 		auth,
 	);
 }
+
+export async function apiPostBlob(
+	path: string,
+	body: unknown,
+	auth?: AuthContextProps,
+): Promise<Blob> {
+	const accessToken = auth?.user?.access_token;
+	const headers = new Headers({ "Content-Type": "application/json" });
+	if (accessToken) {
+		headers.set("Authorization", `Bearer ${accessToken}`);
+	}
+	const payload = jsonStringify(body);
+	const safePath = redactApiPathSecrets(path) ?? path;
+	return withRequestDeadline<Blob>(
+		safePath,
+		async (deadline) => {
+			const response = await fetchWithSession(
+				constructApiUrl(path),
+				{
+					method: "POST",
+					body: payload,
+					headers,
+					signal: deadline.signal,
+				},
+				auth,
+			);
+			if (!response.ok) {
+				throw apiResponseError(response, await response.text(), path);
+			}
+			return response.blob();
+		},
+		{ timeoutMs: requestTimeoutMs(cleanApiPath(path), "POST", payload.length) },
+	);
+}

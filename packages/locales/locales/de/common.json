@@ -2648,6 +2648,7 @@
 	"searchYourPackages": "Deine Pakete durchsuchen…",
 	"secret": "Geheim",
 	"secretInputConnectASecret": "Geheime Eingabe (verbinde ein Secret)",
+	"secretRequestTitle": "",
 	"secretVariablesWillBeExportedInPlainText": "Geheime Variablen werden im Klartext exportiert",
 	"secureCheckoutViaStripe": "Sichere Zahlung über Stripe",
 	"security": "Sicherheit",

@@ -53,6 +53,7 @@ export const arcaneShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "phial",
+		faceColor: "accent",
 		label: "Phial",
 		series: "arcane",
 		description: "A corked potion bottle filled with mint-green bubbles.",

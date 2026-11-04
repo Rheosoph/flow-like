@@ -12,6 +12,9 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
+import { useConversationActivity } from "../../hooks/use-conversation-activity";
+import { useConversationCall } from "../../hooks/use-conversation-call";
+import { useConversationRoom } from "../../hooks/use-conversation-room";
 import {
 	compareInboxCursors,
 	newInboxMessageId,
@@ -19,9 +22,12 @@ import {
 	useInboxEntries,
 	useMarkConversationRead,
 	useSendInboxEntry,
+	useSendMessageWithFiles,
 	useSetConversationMuted,
 } from "../../hooks/use-inbox";
+import { useSpeechModel } from "../../hooks/use-speech-model";
 import { LocalPrincipalsProvider } from "../../hooks/use-user-lookup";
+import { useBackend } from "../../state/backend-state";
 import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
 import type {
 	IConversation,
@@ -34,11 +40,16 @@ import type {
 } from "../../state/backend-state/inbox-state";
 import { Button } from "../ui/button";
 import { Skeleton } from "../ui/skeleton";
-import { ConversationComposer } from "./conversation-composer";
 import {
-	ConversationMessages,
-	type PendingSendActions,
-	type ThreadContext,
+	CallButton,
+	ConversationCallBar,
+	useCallErrorText,
+} from "./conversation-call";
+import { ConversationChat } from "./conversation-chat";
+import { ConversationMenu, canMuteConversation } from "./conversation-menu";
+import type {
+	PendingSendActions,
+	ThreadContext,
 } from "./conversation-messages";
 import {
 	awaitingAnswer,
@@ -54,7 +65,13 @@ import {
 } from "./fold-entries";
 import { useLocalPrincipals } from "./local-principals";
 import { MemberStack } from "./member-stack";
-import { mentionablesOf } from "./mentions";
+import { mentionablesOf, spokenMentions } from "./mentions";
+import { requestMessageJump, useMessageJump } from "./message-jump";
+import {
+	PinnedMessagesBar,
+	StarredMessagesDialog,
+	useThreadMarks,
+} from "./message-marks";
 import { DeleteMessageDialog, type MessageActions } from "./message-row";
 import {
 	discardPendingSend,
@@ -63,6 +80,7 @@ import {
 	useShowsPendingSends,
 } from "./pending-sends";
 import type { PickerSource } from "./principal-picker";
+import { ConnectedRoomMeetings } from "./room-meetings";
 import { RoomMembersDialog } from "./room-members-dialog";
 import {
 	type ConversationText,
@@ -189,30 +207,44 @@ function usePendingSends(
 ) {
 	useShowsPendingSends(conversationId);
 	const pending = usePendingSendList(conversationId);
+	const { mutateAsync: sendWithFiles } = useSendMessageWithFiles();
 
 	const send = useCallback(
 		(
 			text: string,
 			mentions: readonly string[] = [],
 			messageId = newInboxMessageId(),
-		) =>
-			sendPendingMessage(
+			replyTo?: string,
+			files?: readonly File[],
+		) => {
+			const body: IInboxMessageBody = {
+				text,
+				...(mentions.length > 0 ? { mentions: [...mentions] } : {}),
+				...(replyTo ? { reply_to: replyTo } : {}),
+			};
+			return sendPendingMessage(
 				conversationId,
-				{ messageId, text, mentions },
+				{ messageId, text, mentions, replyTo, files },
 				() =>
-					sendPlain(
-						"message",
-						mentions.length > 0 ? { text, mentions: [...mentions] } : { text },
-						messageId,
-					),
+					files && files.length > 0
+						? sendWithFiles({ conversationId, body, files, messageId })
+						: sendPlain("message", body, messageId),
 				onFailedUnseen,
-			),
-		[conversationId, sendPlain, onFailedUnseen],
+			);
+		},
+		[conversationId, sendPlain, sendWithFiles, onFailedUnseen],
 	);
 
 	const actions = useMemo<PendingSendActions>(
 		() => ({
-			retry: (item) => void send(item.text, item.mentions, item.messageId),
+			retry: (item) =>
+				void send(
+					item.text,
+					item.mentions,
+					item.messageId,
+					item.replyTo,
+					item.files,
+				),
 			discard: (item) => discardPendingSend(conversationId, item.messageId),
 		}),
 		[conversationId, send],
@@ -301,6 +333,7 @@ function ConversationView({
 	onClose: () => void;
 }>) {
 	const { t } = useTranslation("bots");
+	const meetingClient = useBackend().meetingClient;
 	const entriesQuery = useInboxEntries(conversation.id);
 	const pages = entriesQuery.data?.pages;
 	const entries = useMemo(
@@ -339,10 +372,59 @@ function ConversationView({
 		[bots, directory, me],
 	);
 	const manageable = conversation.kind === "group" && !conversation.local;
-	const personChat =
-		!conversation.local &&
-		conversation.members.filter((member) => member.kind === "user").length > 1;
+	const personChat = canMuteConversation(conversation);
 	useMarkReadWhileOpen(conversation.id, entries, me);
+	const room = useConversationRoom(conversation, me);
+	const activity = useConversationActivity(
+		conversation,
+		me,
+		pages?.[0]?.tail ?? entries[0]?.cursor,
+		room,
+	);
+
+	const callStarts = useMemo(
+		() =>
+			new Map(
+				items.flatMap((item) =>
+					item.type === "call" ? [[item.id, item.time] as const] : [],
+				),
+			),
+		[items],
+	);
+	const speechModel = useSpeechModel(room !== undefined);
+	const listenBots = useMemo(
+		() =>
+			conversation.members
+				.filter((member) => member.kind === "bot")
+				.map((member) => ({
+					id: member.principal_id,
+					name: directory(member.principal_id).name,
+					kind: "bot" as const,
+				})),
+		[conversation.members, directory],
+	);
+	const listen = useMemo(
+		() => ({
+			stt: speechModel,
+			hasBots: listenBots.length > 0,
+			mentionsIn: (spoken: string) => spokenMentions(spoken, listenBots),
+		}),
+		[speechModel, listenBots],
+	);
+	const call = useConversationCall(conversation, me, room, callStarts, listen);
+	const callErrorText = useCallErrorText();
+	useEffect(() => {
+		if (call.error) toast.error(callErrorText(call.error));
+	}, [call.error, callErrorText]);
+	const joinCall = call.join;
+	const threadCall = useMemo(
+		() => ({
+			liveCallId: call.live?.callId ?? null,
+			joined: call.joined,
+			onJoin: () => void joinCall(),
+		}),
+		[call.live?.callId, call.joined, joinCall],
+	);
 
 	const mentionables = useMemo(
 		() => mentionablesOf(conversation, directory, me),
@@ -354,6 +436,18 @@ function ConversationView({
 				"Pending: they haven't accepted your message yet",
 			)
 		: null;
+
+	const composerPlaceholder =
+		requestHint ??
+		(mentionables.some((option) => option.kind === "bot")
+			? t(
+					"crew.composer.placeholderBots",
+					"Message {{name}} · @mention a bot to make sure it answers",
+					{ name: heading.title },
+				)
+			: t("crew.composer.placeholder", "Message {{name}}", {
+					name: heading.title,
+				}));
 
 	const sendPlain = useSendPlain(conversation.id);
 	const notifyUnseenFailure = useCallback(
@@ -380,6 +474,7 @@ function ConversationView({
 		},
 		[t],
 	);
+	const threadMarks = useThreadMarks(conversation.id, failed);
 	const actions = useMemo<MessageActions>(
 		() => ({
 			react: (target, emoji, op) => {
@@ -391,9 +486,44 @@ function ConversationView({
 					throw error;
 				}),
 			requestDelete: setDeleteTarget,
+			star: threadMarks.star,
+			pin: threadMarks.pin,
 		}),
-		[failed, sendPlain],
+		[failed, sendPlain, threadMarks.star, threadMarks.pin],
 	);
+	const [starsOpen, setStarsOpen] = useState(false);
+	const jump = useCallback(
+		(messageId: string) => requestMessageJump(conversation.id, messageId),
+		[conversation.id],
+	);
+	const loadedIds = useMemo(
+		() =>
+			new Set(
+				items.flatMap((item) => (item.type === "message" ? [item.id] : [])),
+			),
+		[items],
+	);
+	const notFound = useCallback(
+		() =>
+			toast.error(
+				t(
+					"crew.marks.notFound",
+					"That message isn't in this conversation's history anymore.",
+				),
+			),
+		[t],
+	);
+	const fetchOlder = entriesQuery.fetchNextPage;
+	const loadOlder = useCallback(() => void fetchOlder(), [fetchOlder]);
+	useMessageJump({
+		conversationId: conversation.id,
+		loadedIds,
+		hasOlder: Boolean(entriesQuery.hasNextPage),
+		loadingOlder: entriesQuery.isFetchingNextPage,
+		pageCount: pages?.length ?? 0,
+		loadOlder,
+		onMissing: notFound,
+	});
 	const confirmDelete = useCallback(() => {
 		if (deleteTarget) {
 			sendPlain("delete", { target: deleteTarget }).catch(failed);
@@ -408,7 +538,9 @@ function ConversationView({
 		directory,
 		text,
 		actions,
+		marks: threadMarks.marks,
 		readOnly: encrypted,
+		call: threadCall,
 	};
 
 	return (
@@ -419,6 +551,7 @@ function ConversationView({
 						principalIds={otherMemberIds(conversation, me)}
 						max={3}
 						size={34}
+						hoverCards
 					/>
 				}
 				title={heading.title}
@@ -426,6 +559,18 @@ function ConversationView({
 				encrypted={encrypted}
 				actions={
 					<>
+						<ConversationMenu
+							conversation={conversation}
+							onShowStarred={() => setStarsOpen(true)}
+						/>
+						{call.available && <CallButton call={call} />}
+						{!conversation.local && me && meetingClient && (
+							<ConnectedRoomMeetings
+								conversationId={conversation.id}
+								client={meetingClient}
+								me={me}
+							/>
+						)}
 						{personChat && (
 							<MuteButton
 								conversationId={conversation.id}
@@ -449,6 +594,20 @@ function ConversationView({
 				}
 				onClose={onClose}
 			/>
+			<ConversationCallBar call={call} me={me} directory={directory} />
+			<PinnedMessagesBar
+				conversationId={conversation.id}
+				pins={threadMarks.pins}
+				text={text}
+				onJump={jump}
+			/>
+			<StarredMessagesDialog
+				open={starsOpen}
+				onOpenChange={setStarsOpen}
+				conversationId={conversation.id}
+				text={text}
+				onOpen={(_, messageId) => jump(messageId)}
+			/>
 			{manageable && (
 				<RoomMembersDialog
 					open={membersOpen}
@@ -459,7 +618,7 @@ function ConversationView({
 					me={me}
 				/>
 			)}
-			<ConversationMessages
+			<ConversationChat
 				blocks={blocks}
 				pending={pending.visible}
 				thread={thread}
@@ -472,9 +631,7 @@ function ConversationView({
 					onRetry: () => void entriesQuery.refetch(),
 				}}
 				sends={pending.actions}
-			/>
-			<ConversationComposer
-				recipient={heading.title}
+				placeholder={composerPlaceholder}
 				disabledReason={
 					encrypted
 						? t(
@@ -484,8 +641,10 @@ function ConversationView({
 						: null
 				}
 				mentionables={mentionables}
-				hint={requestHint}
-				onSend={(body, mentions) => void pending.send(body, mentions)}
+				activity={activity}
+				onSend={(body, mentions, replyTo, files) =>
+					void pending.send(body, mentions, undefined, replyTo, files)
+				}
 			/>
 			<DeleteMessageDialog
 				open={deleteTarget !== null}

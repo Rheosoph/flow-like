@@ -34,9 +34,9 @@ const options = {
 };
 
 async function show(onChange: (next: unknown) => void, preset = "read_only") {
-	container = window.document.createElement("div");
-	window.document.body.appendChild(container);
-	root = createRoot(container as unknown as Element);
+	container = window.document.createElement("div") as unknown as HTMLElement;
+	window.document.body.appendChild(container as never);
+	root = createRoot(container);
 	await act(async () =>
 		root.render(
 			createElement(RestrictionsEditor, {
@@ -114,7 +114,9 @@ describe("the restrictions editor", () => {
 				"value",
 			)?.set;
 			setter?.call(input, "/reports/2026/");
-			input.dispatchEvent(new window.Event("input", { bubbles: true }));
+			input.dispatchEvent(
+				new window.Event("input", { bubbles: true }) as never,
+			);
 		});
 		const add = [...container.querySelectorAll("button")].find(
 			(button) => button.textContent === "Add a folder",

@@ -1656,6 +1656,7 @@ pub(crate) async fn run_global_chat(
                 token.clone(),
                 crate::routes::bots::tool_grants::rows_for_owner(&state, &bot.context.bot_id, &sub),
                 None,
+                Some(flow_like_bot_tools::TurnSite::OwnerLive),
             )
             .await;
             ServerPlatformBridge::bot(channel.clone(), frames_tx.clone()).with_bot_tools(bot_tools)

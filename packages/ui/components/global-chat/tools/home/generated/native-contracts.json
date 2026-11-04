@@ -1,8 +1,8 @@
 {
 	"catalog": {
 		"status": "ok",
-		"total": 88,
-		"widget_type_total": 26,
+		"total": 94,
+		"widget_type_total": 29,
 		"widget_types": {
 			"workspace-pulse": {
 				"type": "workspace-pulse",
@@ -475,6 +475,86 @@
 						"non_empty": ["modelId"]
 					}
 				]
+			},
+			"bot-chat": {
+				"type": "bot-chat",
+				"description": "A composer that sends a message to one of the reader's bots and opens its chat.",
+				"additional_properties": false,
+				"fields": {
+					"mode": {
+						"type": "string",
+						"description": "Composer presentation.",
+						"default": "hero",
+						"enum": ["hero", "bar"]
+					},
+					"botId": {
+						"type": "string",
+						"description": "Bot the composer talks to first: general (the Assistant), flux, or a bot id. Empty is the Assistant."
+					},
+					"crew": {
+						"type": "boolean",
+						"description": "Show the reader's bots to switch to before sending.",
+						"default": true
+					},
+					"limit": {
+						"type": "number",
+						"description": "Maximum items to show.",
+						"default": 6,
+						"integer": true,
+						"minimum": 1,
+						"maximum": 12
+					},
+					"placeholder": {
+						"type": "string",
+						"description": "Prompt input placeholder."
+					}
+				}
+			},
+			"bot-crew": {
+				"type": "bot-crew",
+				"description": "The reader's bots as cards that open their chats.",
+				"additional_properties": false,
+				"fields": {
+					"limit": {
+						"type": "number",
+						"description": "Maximum items to show.",
+						"default": 8,
+						"integer": true,
+						"minimum": 1,
+						"maximum": 50
+					},
+					"newBot": {
+						"type": "boolean",
+						"description": "Show the tile that creates a bot.",
+						"default": true
+					}
+				}
+			},
+			"bot-messages": {
+				"type": "bot-messages",
+				"description": "The reader's conversations with people and bots: newest, unread, direct, rooms, or only what needs an answer.",
+				"additional_properties": false,
+				"fields": {
+					"filter": {
+						"type": "string",
+						"description": "Which conversations to show.",
+						"default": "all",
+						"enum": ["all", "unread", "direct", "rooms", "needs"]
+					},
+					"limit": {
+						"type": "number",
+						"description": "Maximum items to show.",
+						"default": 6,
+						"integer": true,
+						"minimum": 1,
+						"maximum": 50
+					},
+					"needsYou": {
+						"type": "boolean",
+						"description": "Pin approvals, invitations and waiting bots on top. Ignored for rooms.",
+						"default": true
+					}
+				}
 			},
 			"flowpilot": {
 				"type": "flowpilot",
@@ -2071,7 +2151,7 @@
 			},
 			"targets": {
 				"surface": "The styled element of one widget. Select it with :root in css; unprefixed utilities in className apply to it.",
-				"generic_header": "Widget types without their own header (all except section-heading, greeting, flowpilot, app-embed, quick-actions, app-spotlight, app-ranking, app-collection-feature, model-spotlight and workspace-pulse) render one only when title or description is set. className: [&>div>header], [&>div>header>h2] (starts with an svg icon, [&>div>header>h2>svg]) and [&>div>header>p] (description); css: :root > div > header > h2. Prefer these child paths over a bare header or h2, which also match headings inside app-ranking and section-heading bodies.",
+				"generic_header": "Widget types without their own header (all except section-heading, greeting, flowpilot, bot-chat, bot-crew, bot-messages, app-embed, quick-actions, app-spotlight, app-ranking, app-collection-feature, model-spotlight and workspace-pulse) render one only when title or description is set. className: [&>div>header], [&>div>header>h2] (starts with an svg icon, [&>div>header>h2>svg]) and [&>div>header>p] (description); css: :root > div > header > h2. Prefer these child paths over a bare header or h2, which also match headings inside app-ranking and section-heading bodies.",
 				"hooks": "[data-home-section-heading] h2/p/a; [data-home-greeting] h1/p; [data-home-discovery=app-spotlight|app-ranking|app-collection-feature|model-spotlight] h2/p/a with [data-home-discovery-mode=hero|compact]; [data-workspace-pulse=starter|loading|unavailable|activity] with [data-workspace-mode=attention|strip]; [data-home-collection-rendering]; [data-home-package-rendering] > [data-package-card]; [data-home-app-updated]; [data-home-data-state]; [data-home-data-presentation=<visualization>]; [data-home-data-calendar]. Reach them with e.g. [&_[data-home-greeting]_h1]:text-4xl.",
 				"source_note": "run-activity, executions-by-app, ai-usage, run-stats, recent-runs, schedules and workspace-pulse show their data source as details > summary with details > p.",
 				"unhooked": "Body wrappers and empty, loading and error states are plain divs without hooks; editor chrome is outside the surface and cannot be styled."
@@ -2488,6 +2568,148 @@
 					"config": {
 						"days": 7,
 						"showAttention": true
+					}
+				}
+			},
+			{
+				"preset_id": "bot-chat-hero",
+				"name": "Talk to your bots",
+				"description": "Message the Assistant, Flux, or any bot in your crew right from your home.",
+				"category": "assistant",
+				"widget": {
+					"type": "bot-chat",
+					"title": "Talk to your bots",
+					"description": "",
+					"size": {
+						"columns": 12,
+						"rows": 3
+					},
+					"appearance": {
+						"variant": "card",
+						"accent": "violet"
+					},
+					"config": {
+						"mode": "hero",
+						"botId": "",
+						"crew": true,
+						"limit": 6
+					}
+				}
+			},
+			{
+				"preset_id": "bot-chat-bar",
+				"name": "Message a bot",
+				"description": "A slim composer that sends straight to one of your bots.",
+				"category": "assistant",
+				"widget": {
+					"type": "bot-chat",
+					"title": "Message a bot",
+					"description": "",
+					"size": {
+						"columns": 12,
+						"rows": 1
+					},
+					"appearance": {
+						"variant": "borderless",
+						"accent": "violet"
+					},
+					"config": {
+						"mode": "bar",
+						"botId": "",
+						"crew": false,
+						"limit": 6
+					}
+				}
+			},
+			{
+				"preset_id": "bot-crew",
+				"name": "Your crew",
+				"description": "Your bots as the Bots tab shows them. Open a chat or create a new bot.",
+				"category": "assistant",
+				"widget": {
+					"type": "bot-crew",
+					"title": "Your crew",
+					"description": "",
+					"size": {
+						"columns": 8,
+						"rows": 3
+					},
+					"appearance": {
+						"variant": "borderless",
+						"accent": "neutral"
+					},
+					"config": {
+						"limit": 8,
+						"newBot": true
+					}
+				}
+			},
+			{
+				"preset_id": "bot-messages",
+				"name": "Messages",
+				"description": "Your newest conversations with people and bots, and what needs your answer.",
+				"category": "assistant",
+				"widget": {
+					"type": "bot-messages",
+					"title": "Messages",
+					"description": "",
+					"size": {
+						"columns": 4,
+						"rows": 4
+					},
+					"appearance": {
+						"variant": "borderless",
+						"accent": "neutral"
+					},
+					"config": {
+						"filter": "all",
+						"limit": 6,
+						"needsYou": true
+					}
+				}
+			},
+			{
+				"preset_id": "bot-rooms",
+				"name": "Rooms",
+				"description": "Jump into the group chats you share with people and bots.",
+				"category": "assistant",
+				"widget": {
+					"type": "bot-messages",
+					"title": "Rooms",
+					"description": "",
+					"size": {
+						"columns": 12,
+						"rows": 3
+					},
+					"appearance": {
+						"variant": "borderless",
+						"accent": "neutral"
+					},
+					"config": {
+						"filter": "rooms",
+						"limit": 6
+					}
+				}
+			},
+			{
+				"preset_id": "bot-needs-you",
+				"name": "Needs you",
+				"description": "Approvals, invitations, and bot messages waiting for your answer.",
+				"category": "assistant",
+				"widget": {
+					"type": "bot-messages",
+					"title": "Needs you",
+					"description": "",
+					"size": {
+						"columns": 12,
+						"rows": 2
+					},
+					"appearance": {
+						"variant": "borderless",
+						"accent": "neutral"
+					},
+					"config": {
+						"filter": "needs"
 					}
 				}
 			},
@@ -4379,24 +4601,100 @@
 				}
 			},
 			{
-				"id": "default-flowpilot-bar",
-				"type": "flowpilot",
-				"title": "Ask FlowPilot",
+				"id": "default-bot-chat",
+				"type": "bot-chat",
+				"title": "What should we work on?",
 				"description": "",
 				"size": {
-					"columns": 12,
-					"rows": 1,
+					"columns": 8,
+					"rows": 3,
+					"heightMode": "auto"
+				},
+				"appearance": {
+					"variant": "card",
+					"accent": "violet"
+				},
+				"config": {
+					"mode": "hero",
+					"botId": "",
+					"crew": true,
+					"limit": 6
+				}
+			},
+			{
+				"id": "default-bot-messages",
+				"type": "bot-messages",
+				"title": "Messages",
+				"description": "",
+				"size": {
+					"columns": 4,
+					"rows": 4,
 					"heightMode": "auto"
 				},
 				"appearance": {
 					"variant": "borderless",
-					"accent": "violet"
+					"accent": "neutral"
 				},
 				"config": {
-					"mode": "bar",
-					"suggestions": true,
-					"emphasis": true,
-					"placeholder": "Ask FlowPilot to build an app, find a node, or work through an idea…"
+					"filter": "all",
+					"limit": 4,
+					"needsYou": false
+				}
+			},
+			{
+				"id": "default-bot-needs-you",
+				"type": "bot-messages",
+				"title": "Needs you",
+				"description": "",
+				"size": {
+					"columns": 12,
+					"rows": 2,
+					"heightMode": "auto"
+				},
+				"appearance": {
+					"variant": "borderless",
+					"accent": "neutral"
+				},
+				"config": {
+					"filter": "needs"
+				}
+			},
+			{
+				"id": "default-bot-crew",
+				"type": "bot-crew",
+				"title": "Your crew",
+				"description": "",
+				"size": {
+					"columns": 8,
+					"rows": 3,
+					"heightMode": "auto"
+				},
+				"appearance": {
+					"variant": "borderless",
+					"accent": "neutral"
+				},
+				"config": {
+					"limit": 5,
+					"newBot": true
+				}
+			},
+			{
+				"id": "default-bot-rooms",
+				"type": "bot-messages",
+				"title": "Rooms",
+				"description": "",
+				"size": {
+					"columns": 4,
+					"rows": 3,
+					"heightMode": "auto"
+				},
+				"appearance": {
+					"variant": "borderless",
+					"accent": "neutral"
+				},
+				"config": {
+					"filter": "rooms",
+					"limit": 3
 				}
 			},
 			{
@@ -4516,6 +4814,12 @@
 					"mode": "resources",
 					"items": [
 						{
+							"id": "bots",
+							"title": "Put a bot to work",
+							"body": "Create a bot for a task, give it the apps it may use, and bring it into a room with your team.",
+							"href": "/bots"
+						},
+						{
 							"id": "embed",
 							"title": "Keep an app open here",
 							"body": "In Customize, add Embed an app. Choose a page or chat, then add query parameters if needed."
@@ -4605,5 +4909,5 @@
 			}
 		]
 	},
-	"default_fingerprint": "fp1:282f9ced7e261f45541da14b302bc1f3"
+	"default_fingerprint": "fp1:273e05f83556e9f0f45aed13ae8da86a"
 }

@@ -33,6 +33,11 @@ model Bot {
   importKey       String?
   /// Bit id of the embedding model its memory uses; null lets the host choose.
   embeddingModel  String?
+  /// Bit ids of the speech-to-text, text-to-speech, image generation and vision models the bot pins; null lets the host choose.
+  sttModel        String?
+  ttsModel        String?
+  imageModel      String?
+  visionModel     String?
   permissionsFrom BotPermission[]       @relation("BotPermissionFrom")
   permissionsTo   BotPermission[]       @relation("BotPermissionTo")
   hostHeartbeats  BotHostHeartbeat[]

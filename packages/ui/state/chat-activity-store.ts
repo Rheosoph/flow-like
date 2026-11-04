@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { plainMarkdownLines } from "../lib/markdown-text";
 
 export type ChatActivityTarget =
 	| { kind: "flowpilot"; sessionId: string }
@@ -38,6 +39,17 @@ function compact(value: string, limit: number): string {
 	return value.replace(/\s+/g, " ").trim().slice(0, limit);
 }
 
+/** Replies are markdown; a preview keeps their text without the syntax, and headings and list items stay apart. */
+function plainPreview(markdown: string): string {
+	let preview = "";
+	for (const line of plainMarkdownLines(markdown)) {
+		if (preview) preview += /[.!?:;,…]$/.test(preview) ? " " : " · ";
+		preview += line;
+		if (preview.length >= 200) break;
+	}
+	return compact(preview, 200);
+}
+
 function readEntry(value: unknown): ChatActivityEntry | undefined {
 	if (!value || typeof value !== "object") return;
 	const entry = value as Partial<ChatActivityEntry>;
@@ -68,7 +80,7 @@ function readEntry(value: unknown): ChatActivityEntry | undefined {
 		target,
 		messageId: entry.messageId,
 		title: compact(entry.title, 120),
-		preview: compact(entry.preview, 200),
+		preview: plainPreview(entry.preview),
 		createdAt: entry.createdAt,
 	};
 }
@@ -194,7 +206,7 @@ export function createChatActivityTracker(options: {
 			...input,
 			id,
 			title: compact(input.title, 120),
-			preview: compact(input.preview, 200),
+			preview: plainPreview(input.preview),
 			createdAt: Date.now(),
 		};
 		store.setState({

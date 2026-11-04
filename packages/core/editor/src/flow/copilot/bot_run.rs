@@ -19,6 +19,7 @@ use async_trait::async_trait;
 use flow_like_model_provider::history::HistoryThinking;
 use flow_like_types::bot::{BotCapability, BotModelPolicy, BotSystemKind};
 use flow_like_types::bot_effective::{BotRoomLimits, resolve_bot_permissions};
+use flow_like_types::bot_message::SECRET_REQUEST_TOOL;
 use flow_like_types::bot_restrictions::{BotPermission, BotScopes};
 use flow_like_types::bot_turn::TurnAudience;
 use flow_like_types::data_classification::{DataClassification, DataSensitivity};
@@ -30,7 +31,9 @@ use super::assistant::{
     global_assistant_system_prompt_for,
 };
 use super::bot_talk::{BotTalk, BotTalkBridge, ask_bot_tool_spec};
-use super::capability_tools::{HostTools, bot_tool_spec, linked_tool_names, tool_capability};
+use super::capability_tools::{
+    HostTools, bot_tool_spec, is_secret_tool, linked_tool_names, tool_capability, uses_secrets,
+};
 use super::memory::{AssistantMemory, MemoryScope};
 use super::memory_tools::{MemoryBridge, memory_tool_specs};
 use super::platform::{PlatformCopilot, PlatformSurface, PlatformToolBridge};
@@ -82,12 +85,14 @@ const GRAPH_QUERY_OPERATIONS: [&str; 8] = [
     "sample",
 ];
 const STORAGE_READ_OPERATIONS: [&str; 2] = ["list_files", "read_file"];
-/// Tools that need a person at the open chat: questions, and app pages or chats shown inline.
-const CHAT_ONLY_TOOLS: [&str; 4] = [
+/// Tools that need a person at the open chat: questions, app pages or chats shown inline, and
+/// moving the window to another screen.
+const CHAT_ONLY_TOOLS: [&str; 5] = [
     "ask_user",
     "open_app_page",
     "open_app_chat",
     "interact_app_page",
+    "navigate_view",
 ];
 /// Tools core runs itself on every host.
 const CORE_TOOLS: [&str; 3] = [RESEARCH_AGENT_TOOL, MEMORY_STORE_TOOL, MEMORY_SEARCH_TOOL];
@@ -146,6 +151,10 @@ impl BotToolset {
     }
 }
 
+/// Tools that reach the owner's contacts: their list would leak to, and their messages would be
+/// sent for, whoever woke the turn.
+const OWNER_ONLY_TOOLS: [&str; 2] = ["list_people", "message_person"];
+
 /// Who woke a turn and who reads its answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnRequester {
@@ -156,15 +165,86 @@ pub struct TurnRequester {
     pub audience: TurnAudience,
     /// The room's title, when the turn runs in a group.
     pub room: Option<String>,
+    /// The message names the bot, replies to it, or is in a direct conversation. When false the
+    /// bot read along and may end the turn silently.
+    pub addressed: bool,
+    /// Reactions to the bot's own messages that woke the turn; the bot may follow up or stay
+    /// silent.
+    pub reactions: Vec<ReactionNote>,
+}
+
+/// A person's reaction to one of the bot's messages.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReactionNote {
+    pub by: String,
+    pub emoji: String,
+    pub excerpt: String,
+}
+
+/// What an unaddressed turn answers to stay silent.
+pub const SILENT_REPLY: &str = "NO_REPLY";
+
+/// Whether `text` is the silent reply, ignoring case and surrounding punctuation or markdown.
+pub fn is_silent_reply(text: &str) -> bool {
+    text.trim()
+        .trim_matches(|c: char| !c.is_alphanumeric() && c != '_')
+        .eq_ignore_ascii_case(SILENT_REPLY)
 }
 
 impl TurnRequester {
+    /// Whether nobody asked for an answer: the bot read along or only got a reaction.
+    pub fn may_stay_silent(&self) -> bool {
+        !self.addressed || !self.reactions.is_empty()
+    }
+
+    /// Whether the turn ends without a reply: only a turn nobody asked to answer may, with the
+    /// silent reply or no text at all.
+    pub fn answer_is_silent(&self, text: &str) -> bool {
+        self.may_stay_silent() && (text.trim().is_empty() || is_silent_reply(text))
+    }
+
+    fn reaction_section(&self) -> Option<String> {
+        if self.reactions.is_empty() {
+            return None;
+        }
+        let lines: Vec<String> = self
+            .reactions
+            .iter()
+            .map(|note| {
+                format!(
+                    "- {} reacted {} to your message: \"{}\"",
+                    note.by, note.emoji, note.excerpt
+                )
+            })
+            .collect();
+        Some(format!(
+            "## REACTIONS TO YOUR MESSAGES\n{}\nNo one wrote to you; decide whether a reaction deserves a reply. A thumbs up or a similar sign of approval usually needs none; a thumbs down, a question mark or a sign of confusion usually deserves a short follow-up. To stay silent, reply with exactly {SILENT_REPLY} and nothing else; that posts nothing.",
+            lines.join("\n")
+        ))
+    }
+
+    fn read_along_section(&self) -> String {
+        format!(
+            "## YOU WEREN'T ADDRESSED\nThe latest message in this room doesn't mention you and doesn't reply to you; you read along. Answer only if it concerns you or you have something useful to add that no one has said yet. Otherwise end the turn silently by replying with exactly {SILENT_REPLY} and nothing else; that posts nothing. Never explain that you stay silent."
+        )
+    }
+
     fn requester_label(&self) -> &str {
         trimmed(self.requester_name.as_deref()).unwrap_or(&self.requester_id)
     }
 
     /// Tells the model who is talking when it is not the owner alone.
     fn prompt_section(&self) -> Option<String> {
+        let sections: Vec<String> = self
+            .who_section()
+            .into_iter()
+            .chain((!self.addressed).then(|| self.read_along_section()))
+            .chain(self.reaction_section())
+            .collect();
+        (!sections.is_empty()).then(|| sections.join("\n\n"))
+    }
+
+    fn who_section(&self) -> Option<String> {
         let by_owner = self.requester_id == self.owner_id;
         if by_owner && self.audience == TurnAudience::Owner {
             return None;
@@ -253,6 +333,14 @@ pub struct BotRunContext {
     pub workspace_app_id: Option<String>,
     /// Bit id of the embedding model the bot's memory uses; `None` uses the chat's.
     pub embedding_model: Option<String>,
+    /// Bit id of the speech-to-text model the bot pins; `None` leaves the choice to the host.
+    pub stt_model: Option<String>,
+    /// Bit id of the text-to-speech model the bot pins; `None` leaves the choice to the host.
+    pub tts_model: Option<String>,
+    /// Bit id of the image generation model the bot pins; `None` leaves the choice to the host.
+    pub image_model: Option<String>,
+    /// Bit id of the vision model the bot pins; `None` leaves the choice to the host.
+    pub vision_model: Option<String>,
     /// What runs this turn's tools; a turn without an open chat gets only what its host runs.
     pub tool_host: BotToolHost,
     /// The bot-tools tools this host links and runs; a bot is offered one only while it holds the
@@ -297,17 +385,38 @@ impl BotRunContext {
     }
 
     /// The bot-tools tools offered: the bot holds the tool's capability, has a workspace to act
-    /// in, and the host runs the tool.
+    /// in, and the host runs the tool. A turn someone else woke gets no [`OWNER_ONLY_TOOLS`].
     fn capability_tool_specs(&self) -> Vec<PlatformToolSpec> {
         if self.workspace_app_id.is_none() {
             return Vec::new();
         }
-        linked_tool_names()
+        let owner_asked = self.owner_asked();
+        let hosted: Vec<&'static str> = linked_tool_names()
             .into_iter()
             .filter(|name| self.host_tools.runs(name))
+            .collect();
+        let offered: Vec<&'static str> = hosted
+            .iter()
+            .copied()
             .filter(|name| tool_capability(name).is_some_and(|capability| self.has(capability)))
+            .filter(|name| owner_asked || !OWNER_ONLY_TOOLS.contains(name))
+            .collect();
+        let secrets = uses_secrets(&offered);
+        let secret_tools = hosted.into_iter().filter(|name| {
+            secrets && is_secret_tool(name) && (owner_asked || *name != SECRET_REQUEST_TOOL)
+        });
+        offered
+            .into_iter()
+            .chain(secret_tools)
             .filter_map(bot_tool_spec)
             .collect()
+    }
+
+    /// Whether the owner woke this turn (or chats live); `false` for a room member's message.
+    pub fn owner_asked(&self) -> bool {
+        self.requester
+            .as_ref()
+            .is_none_or(|requester| requester.requester_id == requester.owner_id)
     }
 
     /// Whether the bot recalls and keeps memories: with `memory` on, and always for FlowPilot bots.
@@ -926,6 +1035,22 @@ fn capability_label(capability: BotCapability) -> &'static str {
     }
 }
 
+/// Capabilities backed by bot-tools tools, which only some hosts run.
+const HOST_TOOL_CAPABILITIES: [BotCapability; 12] = [
+    BotCapability::Knowledge,
+    BotCapability::CodeExecution,
+    BotCapability::Documents,
+    BotCapability::DataConnections,
+    BotCapability::ImageGeneration,
+    BotCapability::Scheduling,
+    BotCapability::PushNotifications,
+    BotCapability::Email,
+    BotCapability::Channels,
+    BotCapability::CommandLine,
+    BotCapability::BrowserUse,
+    BotCapability::ComputerUse,
+];
+
 /// Capabilities the owner switched on that have no tools in this run.
 fn pending_capabilities(bot: &BotRunContext, offered: &[&str]) -> Vec<String> {
     let reason = |capability: BotCapability, reaches_apps: bool| {
@@ -958,20 +1083,11 @@ fn pending_capabilities(bot: &BotRunContext, offered: &[&str]) -> Vec<String> {
                 reason(capability, bot.reaches_apps())
             }
             BotCapability::DataStudio | BotCapability::Storage => None,
-            BotCapability::Knowledge
-            | BotCapability::CodeExecution
-            | BotCapability::Documents
-            | BotCapability::DataConnections
-            | BotCapability::ImageGeneration
-                if backed(capability) =>
-            {
+            BotCapability::Webhook => None,
+            capability if HOST_TOOL_CAPABILITIES.contains(&capability) && backed(capability) => {
                 None
             }
-            BotCapability::Knowledge
-            | BotCapability::CodeExecution
-            | BotCapability::Documents
-            | BotCapability::DataConnections
-            | BotCapability::ImageGeneration => Some(format!(
+            capability if HOST_TOOL_CAPABILITIES.contains(&capability) => Some(format!(
                 "{} (not available on this host)",
                 capability_label(capability)
             )),
@@ -1008,6 +1124,12 @@ fn offered_list(offered: &[&str], candidates: &[&str]) -> String {
         .join(", ")
 }
 
+fn memory_ability_line(offered: &[&str]) -> Option<String> {
+    offered.contains(&"memory_save").then(|| {
+        "- Memory: you have your own persistent memory, separate from other bots. Saved facts remain available in later conversations with you. Use `memory_search` to recall your owner's facts and preferences. When your owner asks you to remember something, call `memory_save` now, including how they want to be addressed. Use `memory_forget` when they ask you to forget a saved fact. Confirm a change only after the tool reports success; if it needs confirmation or fails, explain that nothing was saved or forgotten.".to_string()
+    })
+}
+
 fn ability_lines(bot: &BotRunContext, offered: &[&str]) -> Vec<String> {
     let offers = |name: &str| offered.contains(&name);
     let mut lines = vec![if offers("ask_user") {
@@ -1027,6 +1149,7 @@ fn ability_lines(bot: &BotRunContext, offered: &[&str]) -> Vec<String> {
     } else {
         "- No internet: you can't search or open web pages. Answer from your tools and the conversation, and say what you could not check.".to_string()
     });
+    lines.extend(memory_ability_line(offered));
     if offers("list_apps") {
         lines.push(format!(
             "- Apps: `list_apps` lists {} with their active Events. Use an app through the exact `consumer_tool` of its Event ({}); {} explain it.{} Calls that name any other app are refused, and calls that run an app ask your owner first.",
@@ -1065,10 +1188,13 @@ fn ability_lines(bot: &BotRunContext, offered: &[&str]) -> Vec<String> {
         ));
     }
     lines.extend(capability_tool_lines(bot, offered));
+    if bot.has(BotCapability::Webhook) {
+        lines.push("- Webhooks: a call to one of your webhooks reaches you as a message from your owner with the webhook's instruction and the call's data marked `Payload (webhook)`. Act on it with your tools as the instruction says; your reply lands in your owner's chat and goes back to the caller when it waits for it. Your owner creates and changes webhooks in your settings.".to_string());
+    }
     lines
 }
 
-const CAPABILITY_TOOL_LINES: [(BotCapability, &str, &str); 5] = [
+const CAPABILITY_TOOL_LINES: [(BotCapability, &str, &str); 12] = [
     (
         BotCapability::Storage,
         "Files",
@@ -1093,6 +1219,41 @@ const CAPABILITY_TOOL_LINES: [(BotCapability, &str, &str); 5] = [
         BotCapability::Documents,
         "Documents",
         "read, summarize and extract files, and create Word, Excel, PowerPoint and PDF files in your workspace",
+    ),
+    (
+        BotCapability::Scheduling,
+        "Scheduling",
+        "schedule work for yourself, once (\"in 5 minutes\", \"tomorrow at 9\") or recurring; when a task fires you get its instruction as a message from your owner and answer in their chat, so reminders and follow-ups are yours to schedule",
+    ),
+    (
+        BotCapability::PushNotifications,
+        "Notify",
+        "write to your owner in your direct chat from any turn, with a push notification to them; in the chat you are answering in, just reply",
+    ),
+    (
+        BotCapability::Email,
+        "Email",
+        "send mail from your own address and answer mail threads; a new recipient domain asks your owner once",
+    ),
+    (
+        BotCapability::Channels,
+        "People",
+        "write as yourself to people your owner already chats with: `list_people` gives their ids, the first message to each person asks your owner, and their answers reach you in your room with them",
+    ),
+    (
+        BotCapability::CommandLine,
+        "Command line",
+        "run programs on this device in a copy of your workspace files; each new program asks your owner first",
+    ),
+    (
+        BotCapability::BrowserUse,
+        "Browser",
+        "open and drive a browser on this device",
+    ),
+    (
+        BotCapability::ComputerUse,
+        "Computer",
+        "see and operate this device's screen",
     ),
 ];
 
@@ -1217,7 +1378,11 @@ pub fn bot_system_prompt(bot: &BotRunContext) -> String {
         .and_then(TurnRequester::prompt_section);
     if bot.toolset == BotToolset::FlowPilot {
         let flowpilot = global_assistant_system_prompt_for(WebResearchCapability::Inline);
-        let extras: Vec<String> = bot_persona_section(bot).into_iter().chain(who).collect();
+        let extras: Vec<String> = bot_persona_section(bot)
+            .into_iter()
+            .chain(who)
+            .chain(memory_ability_line(&bot.offered_tools()))
+            .collect();
         return if extras.is_empty() {
             flowpilot
         } else {
@@ -1342,6 +1507,15 @@ fn turn_memory<M>(bot: &BotRunContext, memory: Option<M>) -> Option<M> {
     memory.filter(|_| bot.remembers())
 }
 
+const MEMORY_OFF_SECTION: &str = "## YOUR MEMORY IS OFF IN THIS RUN\nYour owner switched memory on, but it isn't available right now: nothing from this conversation is saved, and you can't recall earlier conversations. When your owner asks you to remember or recall something, say that your memory is off and that they can turn it on in your Memory tab. Never claim you saved, remembered or recalled anything.";
+
+/// A bot that remembers but got neither its memory engine nor the chat's memory this turn (no
+/// embedding model, workspace or store) is told so, so it never claims it saved anything.
+fn memory_off_section(bot: &BotRunContext, memory_enabled: bool) -> Option<&'static str> {
+    (bot.remembers() && !memory_enabled && bot.host_tools.memory().is_none())
+        .then_some(MEMORY_OFF_SECTION)
+}
+
 /// What one bot turn runs with: its system prompt, advertised tools and bridge.
 struct BotTurn {
     system_prompt: String,
@@ -1373,6 +1547,7 @@ async fn prepare_bot_turn(
         None => Default::default(),
     };
     let mut sections = vec![bot_system_prompt(&bot)];
+    sections.extend(memory_off_section(&bot, memory_enabled).map(str::to_string));
     sections.extend(talk_turn.prompt);
     if !context.trim().is_empty() {
         sections.push(context.to_string());
@@ -1567,6 +1742,8 @@ mod tests {
                 owner_name: Some("Olga".into()),
                 audience,
                 room: Some("Launch crew".into()),
+                addressed: true,
+                reactions: Vec::new(),
             }),
             ..bot(&[BotCapability::Internet, BotCapability::SelectedApps])
         }
@@ -1588,6 +1765,63 @@ mod tests {
         );
         assert!(prompt.contains("Olga is your owner"));
         assert_eq!(member.permissions, EffectivePermissions::unrestricted());
+    }
+
+    fn read_along(context: &BotRunContext) -> BotRunContext {
+        let mut context = context.clone();
+        if let Some(requester) = context.requester.as_mut() {
+            requester.addressed = false;
+        }
+        context
+    }
+
+    #[test]
+    fn an_unaddressed_turn_is_told_to_answer_only_when_useful_and_how_to_stay_silent() {
+        let addressed = requested_by("member", TurnAudience::Room);
+        assert!(!bot_system_prompt(&addressed).contains("YOU WEREN'T ADDRESSED"));
+        let prompt = bot_system_prompt(&read_along(&addressed));
+        assert!(prompt.contains("YOU WEREN'T ADDRESSED"));
+        assert!(prompt.contains("exactly NO_REPLY"));
+        assert!(prompt.contains("Mia (a member, not your owner)"));
+        let by_owner = read_along(&requested_by("owner", TurnAudience::Room));
+        assert!(bot_system_prompt(&by_owner).contains("YOU WEREN'T ADDRESSED"));
+    }
+
+    #[test]
+    fn a_reaction_turn_names_who_reacted_to_what_and_may_end_silently() {
+        let mut context = requested_by("member", TurnAudience::Room);
+        let requester = context.requester.as_mut().unwrap();
+        requester.reactions = vec![ReactionNote {
+            by: "Mia".into(),
+            emoji: "👎".into(),
+            excerpt: "Ship it on Friday".into(),
+        }];
+        let prompt = bot_system_prompt(&context);
+        assert!(prompt.contains("Mia reacted 👎 to your message: \"Ship it on Friday\""));
+        assert!(prompt.contains("exactly NO_REPLY"));
+        assert!(!prompt.contains("YOU WEREN'T ADDRESSED"));
+        let requester = context.requester.unwrap();
+        assert!(requester.addressed && requester.answer_is_silent("NO_REPLY"));
+        assert!(!requester.answer_is_silent("Sorry, what went wrong?"));
+    }
+
+    #[test]
+    fn only_an_unaddressed_turn_ends_silently() {
+        for text in ["NO_REPLY", " no_reply\n", "`NO_REPLY`", "**NO_REPLY**.", "", "  "] {
+            let unaddressed = read_along(&requested_by("member", TurnAudience::Room));
+            let requester = unaddressed.requester.unwrap();
+            assert!(requester.answer_is_silent(text), "{text:?}");
+        }
+        let requester = read_along(&requested_by("member", TurnAudience::Room))
+            .requester
+            .unwrap();
+        for text in ["NO_REPLY is what I would say", "Sure, here you go", "NOREPLY"] {
+            assert!(!requester.answer_is_silent(text), "{text:?}");
+        }
+        let addressed = requested_by("member", TurnAudience::Room).requester.unwrap();
+        for text in ["NO_REPLY", ""] {
+            assert!(!addressed.answer_is_silent(text), "{text:?}");
+        }
     }
 
     #[test]
@@ -1621,7 +1855,9 @@ mod tests {
         assert!(prompt.contains("`research_agent`"));
         assert!(prompt.contains("`list_apps` lists the apps your owner attached to you"));
         assert!(prompt.contains("`database_tool` reads the tables"));
-        assert!(prompt.contains("## SWITCHED ON BUT NOT AVAILABLE HERE\nComputer use, Email."));
+        assert!(prompt.contains(
+            "## SWITCHED ON BUT NOT AVAILABLE HERE\nComputer use (not available on this host), Email (not available on this host)."
+        ));
         assert!(prompt.contains("## LEAVE TO FLUX"));
         assert!(prompt.contains("classified the data you handle as confidential"));
         assert!(prompt.contains("It includes personal data"));
@@ -1649,7 +1885,8 @@ mod tests {
         assert!(!prompt.contains("YOUR OWNER'S INSTRUCTIONS"));
         assert!(!prompt.contains("`list_apps`"));
         assert!(!prompt.contains("`open_app_page`"));
-        assert!(prompt.contains("Files (you have no apps to use it with yet), Webhook."));
+        assert!(prompt.contains("NOT AVAILABLE HERE\nFiles (you have no apps to use it with yet)."));
+        assert!(prompt.contains("- Webhooks: a call to one of your webhooks"));
         assert!(prompt.contains("hasn't classified the data you handle"));
         assert_eq!(names(&quiet, false), ["ask_user"]);
     }
@@ -1750,6 +1987,32 @@ mod tests {
             .into_iter()
             .filter(|name| tool_capability(name).is_some())
             .collect()
+    }
+
+    #[test]
+    fn secret_tools_come_with_a_tool_that_takes_secrets_and_only_the_owner_asks_for_one() {
+        let secret_tools = |context: &BotRunContext| -> Vec<&'static str> {
+            names(context, false)
+                .into_iter()
+                .filter(|name| name.starts_with("secret_"))
+                .collect()
+        };
+        let linked = HostTools::linked();
+        assert!(secret_tools(&hosted(&[BotCapability::Storage], linked.clone())).is_empty());
+        let shell = hosted(&[BotCapability::CommandLine], linked.clone());
+        assert_eq!(secret_tools(&shell), ["secret_list", "secret_request"]);
+        let member = BotRunContext {
+            requester: requested_by("member", TurnAudience::Room).requester,
+            ..shell.clone()
+        };
+        assert_eq!(secret_tools(&member), ["secret_list"]);
+        let no_shell = hosted(&[BotCapability::CommandLine], linked.with_shell(false));
+        assert!(secret_tools(&no_shell).is_empty());
+        assert!(shell.prepare_tool_call("secret_request", json!({})).is_ok());
+        assert_eq!(
+            code(&member.prepare_tool_call("secret_request", json!({})).unwrap_err()),
+            "bot_tool_unavailable"
+        );
     }
 
     const FILE_TOOLS: [&str; 4] = ["file_list", "file_read", "file_save", "file_write"];
@@ -1867,6 +2130,56 @@ mod tests {
         assert!(!prompt.contains("SWITCHED ON BUT NOT AVAILABLE HERE"));
         assert!(prompt.contains("- Knowledge: `knowledge_create`"));
         assert!(prompt.contains("dropping an index asks your owner first"));
+    }
+
+    #[test]
+    fn scheduling_notifications_email_and_webhooks_are_usable_where_the_host_runs_them() {
+        let held = [
+            BotCapability::Scheduling,
+            BotCapability::PushNotifications,
+            BotCapability::Email,
+            BotCapability::Webhook,
+        ];
+        let server = hosted(
+            &held,
+            HostTools::only(&[
+                "schedule_task",
+                "list_tasks",
+                "cancel_task",
+                "message_owner",
+                "email_send",
+                "email_reply",
+            ]),
+        );
+        let prompt = bot_system_prompt(&server);
+        assert!(!prompt.contains("SWITCHED ON BUT NOT AVAILABLE HERE"), "{prompt}");
+        assert!(prompt.contains("- Scheduling: `schedule_task`, `list_tasks`, `cancel_task`"));
+        assert!(prompt.contains("- Notify: `message_owner`"));
+        assert!(prompt.contains("- Email: `email_send`, `email_reply`"));
+        assert!(prompt.contains("- Webhooks: a call to one of your webhooks"));
+
+        let bare = hosted(&held, HostTools::none());
+        let prompt = bot_system_prompt(&bare);
+        assert!(prompt.contains("Scheduling (not available on this host)"));
+        assert!(prompt.contains("Push notifications (not available on this host)"));
+        assert!(!prompt.contains("Webhook ("));
+        assert!(prompt.contains("- Webhooks: a call to one of your webhooks"));
+    }
+
+    #[test]
+    fn people_tools_are_offered_only_on_turns_the_owner_woke() {
+        let people = ["list_people", "message_person"];
+        let mut context = hosted(&[BotCapability::Channels], HostTools::only(&people));
+        assert_eq!(capability_names(&context), people);
+        assert!(bot_system_prompt(&context).contains("- People: `list_people`, `message_person`"));
+        context.requester = requested_by("owner", TurnAudience::Room).requester;
+        assert_eq!(capability_names(&context), people);
+        context.requester = requested_by("member", TurnAudience::Room).requester;
+        assert!(capability_names(&context).is_empty());
+        let refused = context
+            .prepare_tool_call("message_person", json!({ "person": "user-anna", "text": "hi" }))
+            .unwrap_err();
+        assert_eq!(code(&refused), "bot_tool_unavailable");
     }
 
     #[test]
@@ -3094,6 +3407,96 @@ mod tests {
             .into_iter()
             .filter(|name| flow_like_bot_memory::host::MemoryToolbox::handles(name))
             .collect()
+    }
+
+    #[tokio::test]
+    async fn assistant_prompt_describes_memory_only_when_its_tools_are_available() {
+        let handle = super::super::memory_tools::test_handle().await;
+        let remembering = BotRunContext {
+            host_tools: HostTools::none().with_memory(handle.clone()),
+            ..BotRunContext::general()
+        };
+        let unavailable = BotRunContext::general();
+        let disabled = BotRunContext {
+            capabilities: vec![BotCapability::Internet],
+            ..remembering.clone()
+        };
+        let flowpilot = BotRunContext {
+            toolset: BotToolset::FlowPilot,
+            capabilities: vec![BotCapability::Flowpilot],
+            ..remembering.clone()
+        };
+
+        for (bot, has_memory) in [
+            (remembering, true),
+            (unavailable, false),
+            (disabled, false),
+            (flowpilot, true),
+        ] {
+            let turn = prepare_bot_turn(
+                Arc::new(bot),
+                "",
+                false,
+                Arc::new(RecordingBridge::default()),
+                None,
+            )
+            .await;
+            assert_eq!(turn.system_prompt.contains("- Memory:"), has_memory);
+            for tool in ["memory_save", "memory_search", "memory_forget"] {
+                assert_eq!(
+                    turn.tool_specs.iter().any(|spec| spec.name == tool),
+                    has_memory
+                );
+                assert_eq!(
+                    turn.system_prompt.contains(&format!("`{tool}`")),
+                    has_memory
+                );
+            }
+            if has_memory {
+                assert!(turn.system_prompt.contains("later conversations with you"));
+                assert!(turn.system_prompt.contains("call `memory_save` now"));
+                assert!(
+                    turn.system_prompt
+                        .contains("only after the tool reports success")
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_bot_whose_memory_is_unavailable_this_turn_is_told_so() {
+        let prompt_of = |bot: BotRunContext, memory_enabled: bool| async move {
+            prepare_bot_turn(
+                Arc::new(bot),
+                "",
+                memory_enabled,
+                Arc::new(RecordingBridge::default()),
+                None,
+            )
+            .await
+            .system_prompt
+        };
+        let unavailable = prompt_of(BotRunContext::general(), false).await;
+        assert!(unavailable.contains(MEMORY_OFF_SECTION));
+        assert!(unavailable.contains("Memory tab"));
+
+        let handle = super::super::memory_tools::test_handle().await;
+        let engine = BotRunContext {
+            host_tools: HostTools::none().with_memory(handle),
+            ..BotRunContext::general()
+        };
+        assert!(!prompt_of(engine, false).await.contains(MEMORY_OFF_SECTION));
+        let chat_memory = prompt_of(BotRunContext::general(), true).await;
+        assert!(!chat_memory.contains(MEMORY_OFF_SECTION));
+        let switched_off = BotRunContext {
+            capabilities: vec![BotCapability::Internet],
+            ..BotRunContext::general()
+        };
+        assert!(
+            !prompt_of(switched_off, false)
+                .await
+                .contains(MEMORY_OFF_SECTION)
+        );
     }
 
     #[tokio::test]

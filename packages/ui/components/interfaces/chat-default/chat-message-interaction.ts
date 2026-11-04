@@ -45,7 +45,7 @@ export function createMessageReference(
 	/** Selected text from this message's rendered body, checked by the caller. */
 	selectedText?: string,
 ): IChatMessageReference {
-	const content = joinContentText(message.inner.content);
+	const content = message.source_text ?? joinContentText(message.inner.content);
 	const visible =
 		message.inner.role === IRole.Assistant
 			? extractThinkBlocks(content).text

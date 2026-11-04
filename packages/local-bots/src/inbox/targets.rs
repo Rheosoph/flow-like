@@ -21,7 +21,11 @@ fn target_not_found(message: String) -> Error {
 }
 
 /// The sender of the message `target` names, unless it was deleted.
-fn live_message_author(db: &Connection, conversation_id: &str, target: &str) -> Result<String> {
+pub(super) fn live_message_author(
+    db: &Connection,
+    conversation_id: &str,
+    target: &str,
+) -> Result<String> {
     let (author, content): (String, Json<Value>) = db
         .prepare_cached(
             "SELECT sender_id, envelope FROM entries

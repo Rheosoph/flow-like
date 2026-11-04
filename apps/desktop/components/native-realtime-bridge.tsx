@@ -1,10 +1,16 @@
 "use client";
 
 import { useBackend, useBackendReady } from "@flow-like/flow-like-ui";
-import { inboxKeys } from "@flow-like/flow-like-ui/hooks/use-inbox";
+import { unwatchedInboxPredicate } from "@flow-like/flow-like-ui/hooks/use-inbox";
+import type { RealtimeConversationSubscription } from "@flow-like/flow-like-ui/lib/realtime/types";
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { useAuth } from "react-oidc-context";
+import {
+	desktopConversationFeed,
+	onWatchedConversationsChange,
+} from "../lib/desktop-conversation-feed";
+import { localRegistries } from "../lib/local-bots/registry";
 import { watchNativeRealtime } from "../lib/native-realtime";
 import { TauriBackend } from "./tauri-provider";
 
@@ -14,6 +20,41 @@ const NOTIFICATION_QUERIES = new Set([
 	"getInvites",
 	"listMyInvitations",
 ]);
+
+const WATCH_DEBOUNCE_MS = 100;
+
+interface AccountConversations {
+	readonly subscriptions: RealtimeConversationSubscription[];
+	readonly localIds: ReadonlyMap<string, string>;
+}
+
+/** Watched conversations the account serves; ones on this computer are read from the local store. */
+async function accountConversations(
+	backend: object,
+	subject: string,
+): Promise<AccountConversations> {
+	const registry = localRegistries(backend).conversations;
+	const targets = desktopConversationFeed.targets();
+	const local = await Promise.all(
+		targets.map((target) =>
+			registry.isLocal(target.conversationId, subject).catch(() => true),
+		),
+	);
+	const remote = targets.filter((_, index) => !local[index]);
+	return {
+		subscriptions: remote.map((target) => ({
+			conversation_id: registry.accountId(target.conversationId, subject),
+			as: target.as,
+			after: target.after,
+		})),
+		localIds: new Map(
+			remote.map((target) => [
+				registry.accountId(target.conversationId, subject),
+				target.conversationId,
+			]),
+		),
+	};
+}
 
 export function NativeRealtimeBridge() {
 	const backend = useBackend();
@@ -32,31 +73,88 @@ export function NativeRealtimeBridge() {
 		if (!ready || !signedIn || !profileId || !subject || !issuer || !hasToken)
 			return;
 		let revision: string | undefined;
-		return watchNativeRealtime({
-			profileId,
-			subject,
-			issuer,
-			request: { notifications: {}, runs: [], timeout_ms: 20_000 },
-			onMessage: (message) => {
-				if (message.type !== "update") return;
-				const update = message.response.notifications;
-				if (!update || update.revision === revision) return;
-				return queryClient
-					.invalidateQueries(
-						{
-							predicate: (query) =>
-								NOTIFICATION_QUERIES.has(String(query.queryKey[0])) ||
-								query.queryKey[0] === inboxKeys.all[0] ||
-								(query.queryKey[0] === "home" &&
-									query.queryKey[4] === "notifications"),
-						},
-						{ throwOnError: true },
-					)
-					.then(() => {
-						revision = update.revision;
-					});
-			},
+		let closed = false;
+		let stopWatching: (() => void) | undefined;
+		let requested = "[]";
+		let localIds: ReadonlyMap<string, string> = new Map();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		const unwatched = unwatchedInboxPredicate((id, as) =>
+			desktopConversationFeed.isWatched(id, as),
+		);
+		const open = (conversations: RealtimeConversationSubscription[]) => {
+			stopWatching?.();
+			stopWatching = watchNativeRealtime({
+				profileId,
+				subject,
+				issuer,
+				request: {
+					notifications: {},
+					runs: [],
+					...(conversations.length ? { conversations } : {}),
+					timeout_ms: 20_000,
+				},
+				onMessage: (message) => {
+					if (message.type !== "update") return;
+					for (const item of message.response.conversations ?? [])
+						desktopConversationFeed.deliver(
+							localIds.get(item.conversation_id) ?? item.conversation_id,
+							item.entries,
+							{ as: item.as },
+						);
+					const update = message.response.notifications;
+					if (!update || update.revision === revision) return;
+					return queryClient
+						.invalidateQueries(
+							{
+								predicate: (query) =>
+									NOTIFICATION_QUERIES.has(String(query.queryKey[0])) ||
+									unwatched(query) ||
+									(query.queryKey[0] === "home" &&
+										query.queryKey[4] === "notifications"),
+							},
+							{ throwOnError: true },
+						)
+						.then(() => {
+							revision = update.revision;
+						});
+				},
+			});
+		};
+		const resubscribe = async () => {
+			const account = await accountConversations(backend, subject);
+			const signature = JSON.stringify(
+				account.subscriptions.map(({ conversation_id, as }) => [
+					conversation_id,
+					as,
+				]),
+			);
+			if (closed) return;
+			localIds = account.localIds;
+			if (signature === requested) return;
+			requested = signature;
+			open(account.subscriptions);
+		};
+		const stopListening = onWatchedConversationsChange(() => {
+			clearTimeout(timer);
+			timer = setTimeout(() => void resubscribe(), WATCH_DEBOUNCE_MS);
 		});
-	}, [ready, signedIn, profileId, subject, issuer, hasToken, queryClient]);
+		open([]);
+		void resubscribe();
+		return () => {
+			closed = true;
+			clearTimeout(timer);
+			stopListening();
+			stopWatching?.();
+		};
+	}, [
+		ready,
+		signedIn,
+		profileId,
+		subject,
+		issuer,
+		hasToken,
+		queryClient,
+		backend,
+	]);
 	return null;
 }

@@ -62,13 +62,25 @@ enum NativeActivityBridge {
               let url = activity.webpageURL, url.user == nil, url.password == nil,
               url.fragment == nil, url.absoluteString.utf8.count <= 131_072,
               let parts = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              isUsePathname(parts.percentEncodedPath),
+              (isUsePathname(parts.percentEncodedPath) || parts.percentEncodedPath == "/bots"),
               let snapshot = store.catalog(),
               activity.userInfo?["scope"] as? String == snapshot.scope,
               let origin = origin(url), origin == snapshot.webOrigin else { return false }
         // Handoff URLs come from URLSearchParams. Unlike URLComponents.queryItems,
         // form decoding distinguishes a space (+) from a literal plus (%2B).
         let query = NativeAppRoute.queryParameters(encodedQuery: parts.percentEncodedQuery ?? "")
+        if parts.percentEncodedPath == "/bots" {
+            guard ["bot", "conversation"].allSatisfy({ key in query.filter { $0.name == key }.count <= 1 }) else { return false }
+            let action: NativeAction
+            if let conversationId = query.first(where: { $0.name == "conversation" })?.value,
+               let conversation = snapshot.conversations?.first(where: { $0.id == conversationId }), let botId = conversation.botId {
+                action = NativeAction(kind: "open_conversation", botId: botId, conversationId: conversationId)
+            } else if let botId = query.first(where: { $0.name == "bot" })?.value,
+                      snapshot.bots?.contains(where: { $0.id == botId }) == true {
+                action = NativeAction(kind: "open_bot", botId: botId)
+            } else { return false }
+            return (try? store.enqueue(action, expectedScope: snapshot.scope)) != nil
+        }
         guard ["id", "eventId", "route", "appQuery"].allSatisfy({ key in query.filter { $0.name == key }.count <= 1 }),
               let appId = query.first(where: { $0.name == "id" })?.value,
               snapshot.apps.contains(where: { $0.id == appId }) else { return false }

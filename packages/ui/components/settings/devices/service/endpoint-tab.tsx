@@ -61,13 +61,13 @@ import {
 	type SettingsEditor,
 	useSettingsEditor,
 } from "./settings-sheets";
+import { ServiceTunnels } from "./tunnels-block";
 import {
 	type SecretWrite,
 	type ServiceConfigRead,
 	useSecretWrite,
 	useServiceConfig,
 } from "./use-service-config";
-import { ServiceTunnels } from "./tunnels-block";
 
 /* BG20: with a wildcard address the device can't tell which name people use; the owner types it and it stays on this computer. */
 

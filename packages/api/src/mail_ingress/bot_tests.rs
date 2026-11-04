@@ -1,10 +1,16 @@
 use super::{
-    bot::{authenticated, drop_reason, ids_in},
+    bot::{authenticated, drop_reason, ids_in, save_files},
     bot_address::{address_of, bot_of_address, claim_in, release_in},
 };
 use flow_like_catalog_core::{InboundEmail, InboundEmailAuthentication, InboundEmailVerdict};
+use flow_like_storage::{
+    files::store::FlowLikeStore,
+    object_store::{ObjectStoreExt, memory::InMemory},
+};
+use flow_like_types::bot_message::WorkspaceHandle;
 use sea_orm::{ConnectOptions, ConnectionTrait, Database, DatabaseConnection};
 use serde_json::json;
+use std::sync::Arc;
 
 fn email(from: &str, extra: serde_json::Value) -> InboundEmail {
     let mut value = json!({
@@ -44,6 +50,53 @@ fn automated_failed_and_self_sent_mail_never_wakes_the_bot() {
         ..Default::default()
     });
     assert_eq!(drop_reason(&spoofed, own), Some("failed authentication"));
+}
+
+#[tokio::test]
+async fn stored_mail_files_land_where_their_handles_resolve() {
+    let store = FlowLikeStore::Memory(Arc::new(InMemory::new()));
+    let long_text = "x".repeat(5_000);
+    let mail = email(
+        "a@example.com",
+        json!({
+            "attachments": [{
+                "filename": "key.asc", "content_type": "application/pgp-keys", "size": 3,
+                "path": {"path": "mail/d/key.asc", "store_ref": "s"},
+            }],
+            "text_path": {"path": "mail/d/body.txt", "store_ref": "s"},
+        }),
+    );
+    let objects = vec![
+        ("mail/d/key.asc".to_owned(), b"key".to_vec()),
+        ("mail/d/body.txt".to_owned(), long_text.clone().into_bytes()),
+    ];
+    let stored = save_files(&store, "ws", &mail, &objects, "f")
+        .await
+        .unwrap();
+    let attachment: WorkspaceHandle =
+        serde_json::from_value(stored.attachments[0]["handle"].clone()).unwrap();
+    let text = stored.text_file.unwrap();
+    for (handle, path, expected) in [
+        (&attachment, "bot/inbox/f/key.asc", b"key".as_slice()),
+        (&text, "bot/inbox/f/body.txt", long_text.as_bytes()),
+    ] {
+        assert_eq!(handle.app_id, "ws");
+        assert_eq!(handle.path, path);
+        let key = store
+            .construct_upload(&handle.app_id, &handle.path)
+            .await
+            .unwrap();
+        assert_eq!(key.as_ref(), format!("apps/ws/upload/{path}"));
+        let bytes = store
+            .as_generic()
+            .get(&key)
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(bytes.as_ref(), expected);
+    }
 }
 
 #[test]

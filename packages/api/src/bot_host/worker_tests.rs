@@ -1,10 +1,10 @@
 use super::{
-    fixture::{at, conversation, database, insert_bot, message},
-    history::{HISTORY_ENTRIES, HistoryError, transcript},
+    fixture::{at, conversation, database, entry, insert_bot, message},
+    history::{HISTORY_ENTRIES, HistoryError, reaction_turn, transcript},
     ledger::{self, ClaimRequest, enqueue_in},
     worker::{
-        CODE_TIMEOUT, Failure, commit_reply_in, executor_token, memory_written, refuse_tool,
-        reply_request, retries, room_of,
+        Answer, CODE_TIMEOUT, Failure, answer_request, commit_reply_in, executor_token,
+        memory_written, refuse_tool, reply_request, retries, room_of,
     },
 };
 use crate::{
@@ -83,6 +83,64 @@ async fn the_transcript_ends_at_the_answered_message_and_marks_who_spoke() {
         })
         .collect();
     assert_eq!(history, [(false, "first"), (true, "second")]);
+}
+
+#[tokio::test]
+async fn a_spoken_transcript_reads_as_the_speakers_line_and_a_call_is_left_out() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    conversation(&db, "g1", "GROUP", "PLAIN", &["user-a", "user-c", "bot_1"]).await;
+    let inboxes = ["user-a", "user-c", "bot_1"];
+    entry(
+        &db,
+        "g1",
+        "call_1",
+        "user-c",
+        1,
+        "CALL",
+        json!({ "op": "started" }),
+        &inboxes,
+    )
+    .await;
+    entry(
+        &db,
+        "g1",
+        "t1",
+        "user-c",
+        2,
+        "TRANSCRIPT",
+        json!({ "call": "call_1", "text": "ship it friday", "offset_ms": 1000, "duration_ms": 2000, "mentions": [] }),
+        &inboxes,
+    )
+    .await;
+    entry(
+        &db,
+        "g1",
+        "t2",
+        "user-a",
+        3,
+        "TRANSCRIPT",
+        json!({ "call": "call_1", "text": "@bot_1 note that", "offset_ms": 4000, "duration_ms": 1500, "mentions": ["bot_1"] }),
+        &inboxes,
+    )
+    .await;
+    let transcript = transcript(&db, "bot_1", "g1", "t2", ConversationKind::Group, "user-a")
+        .await
+        .unwrap();
+    assert!(transcript.addressed);
+    assert_eq!(
+        transcript.prompt,
+        "user-a (your owner) wrote: (spoken in call) @bot_1 note that"
+    );
+    let said: Vec<_> = transcript
+        .history
+        .iter()
+        .map(|m| m.content.as_str())
+        .collect();
+    assert_eq!(
+        said,
+        ["user-c (member, not your owner) wrote: (spoken in call) ship it friday"]
+    );
 }
 
 #[tokio::test]
@@ -321,8 +379,11 @@ async fn the_reply_completes_the_turn_once_and_a_repeat_returns_the_first_copy()
         owner_id: "user-a".into(),
         location: BotLocation::Server,
         device_id: None,
+        hands_off: false,
         mentioned: false,
         replied_to: false,
+        read_along: false,
+        reacted: false,
         conversation_id: "c1".into(),
         trigger_message_id: "m3".into(),
         hops: 0,
@@ -380,8 +441,11 @@ async fn a_failed_turn_posts_its_error_and_ends_failed_in_one_step() {
             owner_id: "user-a".into(),
             location: BotLocation::Server,
             device_id: None,
+            hands_off: false,
             mentioned: false,
             replied_to: false,
+            read_along: false,
+            reacted: false,
             conversation_id: "c1".into(),
             trigger_message_id: "m3".into(),
             hops: 0,
@@ -453,8 +517,11 @@ async fn bots_answering_each_other_stop_at_the_hop_cap() {
             owner_id: "user-a".into(),
             location: BotLocation::Server,
             device_id: None,
+            hands_off: false,
             mentioned: false,
             replied_to: false,
+            read_along: false,
+            reacted: false,
             conversation_id: "c1".into(),
             trigger_message_id: "m1".into(),
             hops: 0,
@@ -553,4 +620,300 @@ fn a_turn_token_names_the_bot_and_keeps_the_owner_as_payer() {
     let claims = crate::execution::verify_execution_jwt(&token).unwrap();
     assert_eq!(claims.conv_id.as_deref(), Some("conv-1"));
     assert_eq!(room_of(ConversationKind::Direct, "conv-1"), None);
+}
+
+#[test]
+fn only_a_spoken_answer_posts_a_reply() {
+    let turn = bot_turn::Model {
+        id: turn_id("bot_1", "m3"),
+        bot_id: "bot_1".into(),
+        owner_id: "user-a".into(),
+        conversation_id: "c1".into(),
+        trigger_message_id: "m3".into(),
+        host_kind: "SERVER".into(),
+        status: "RUNNING".into(),
+        attempts: 1,
+        host_id: Some("h1".into()),
+        lease_until: None,
+        operation_id: None,
+        reply_message_id: None,
+        error_code: None,
+        hops: 0,
+        requester_id: None,
+        audience: "ROOM".into(),
+        created_at: now_millis(),
+        updated_at: now_millis(),
+    };
+    let silent = Answer {
+        text: String::new(),
+        resumed: false,
+        silent: true,
+    };
+    assert!(answer_request(&turn, &silent).is_none());
+    let spoken = Answer {
+        text: "hello".into(),
+        resumed: false,
+        silent: false,
+    };
+    assert!(answer_request(&turn, &spoken).is_some());
+}
+
+#[tokio::test]
+async fn a_silent_turn_ends_done_with_the_silent_code_and_posts_nothing() {
+    let db = database().await;
+    lone_message_history(&db).await;
+    let recipient = super::fixture::recipient("bot_1", "user-a", BotLocation::Server);
+    let mut recipient = recipient;
+    recipient.trigger_message_id = "m3".into();
+    recipient.read_along = true;
+    let delivery = super::fixture::delivery(ConversationKind::Group, vec![recipient]);
+    enqueue_in(&db, &delivery, now_millis()).await.unwrap();
+    let turn = claim_now(&db, "bot_1", "m3", "h1").await;
+    let before = inbox_entry::Entity::find().all(&db).await.unwrap().len();
+
+    assert!(
+        ledger::complete_silent_in(&db, &turn.id, "h1", now_millis())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !ledger::complete_silent_in(&db, &turn.id, "h1", now_millis())
+            .await
+            .unwrap(),
+        "a finished turn is not completed twice"
+    );
+    let done = bot_turn::Entity::find_by_id(&turn.id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(done.status, STORED_DONE);
+    assert_eq!(
+        done.error_code.as_deref(),
+        Some(flow_like_types::bot_turn::ERROR_SILENT)
+    );
+    assert!(done.reply_message_id.is_none() && done.lease_until.is_none());
+    assert_eq!(
+        inbox_entry::Entity::find().all(&db).await.unwrap().len(),
+        before
+    );
+}
+
+#[tokio::test]
+async fn another_host_cannot_complete_a_turn_silently() {
+    let db = database().await;
+    lone_message_history(&db).await;
+    let mut recipient = super::fixture::recipient("bot_1", "user-a", BotLocation::Server);
+    recipient.trigger_message_id = "m3".into();
+    let delivery = super::fixture::delivery(ConversationKind::Direct, vec![recipient]);
+    enqueue_in(&db, &delivery, now_millis()).await.unwrap();
+    let turn = claim_now(&db, "bot_1", "m3", "h1").await;
+    assert!(
+        !ledger::complete_silent_in(&db, &turn.id, "h2", now_millis())
+            .await
+            .unwrap()
+    );
+}
+
+async fn room_with_reactions(db: &DatabaseConnection) {
+    insert_bot(db, "bot_1", "user-a", "SERVER").await;
+    conversation(db, "c1", "GROUP", "PLAIN", &["user-a", "user-b", "bot_1"]).await;
+    let inboxes = ["user-a", "user-b", "bot_1"];
+    message(
+        db,
+        "c1",
+        "m1",
+        "user-a",
+        1,
+        json!({ "text": "plan?" }),
+        &inboxes,
+    )
+    .await;
+    message(
+        db,
+        "c1",
+        "m2",
+        "user-b",
+        2,
+        json!({ "text": "hm" }),
+        &inboxes,
+    )
+    .await;
+    message(
+        db,
+        "c1",
+        "b1",
+        "bot_1",
+        3,
+        json!({ "text": "Ship on Friday" }),
+        &inboxes,
+    )
+    .await;
+}
+
+fn reaction(target: &str, emoji: &str, op: &str) -> serde_json::Value {
+    json!({ "target": target, "emoji": emoji, "op": op })
+}
+
+#[tokio::test]
+async fn a_reaction_turn_lists_the_reactions_in_place_on_the_bots_own_messages_only() {
+    let db = database().await;
+    room_with_reactions(&db).await;
+    let inboxes = ["user-a", "user-b", "bot_1"];
+    entry(
+        &db,
+        "c1",
+        "r1",
+        "user-a",
+        4,
+        "REACTION",
+        reaction("b1", "👎", "add"),
+        &inboxes,
+    )
+    .await;
+    entry(
+        &db,
+        "c1",
+        "r2",
+        "user-b",
+        5,
+        "REACTION",
+        reaction("b1", "👍", "add"),
+        &inboxes,
+    )
+    .await;
+    entry(
+        &db,
+        "c1",
+        "r3",
+        "user-b",
+        6,
+        "REACTION",
+        reaction("b1", "👍", "remove"),
+        &inboxes,
+    )
+    .await;
+    entry(
+        &db,
+        "c1",
+        "r4",
+        "user-a",
+        7,
+        "REACTION",
+        reaction("m2", "❓", "add"),
+        &inboxes,
+    )
+    .await;
+
+    let answered: Vec<String> = ["r1", "r2", "r4"].iter().map(|id| id.to_string()).collect();
+    let turn = reaction_turn(
+        &db,
+        "bot_1",
+        "c1",
+        &answered,
+        ConversationKind::Group,
+        "user-a",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        turn.reactions.len(),
+        1,
+        "removed and foreign-message reactions drop out"
+    );
+    assert_eq!(turn.reactions[0].emoji, "👎");
+    assert_eq!(turn.reactions[0].excerpt, "Ship on Friday");
+    assert!(turn.transcript.addressed);
+    assert!(
+        turn.transcript
+            .prompt
+            .contains("reacted 👎 to your message")
+    );
+}
+
+#[tokio::test]
+async fn a_reaction_removed_before_the_turn_starts_leaves_nothing_to_answer() {
+    let db = database().await;
+    room_with_reactions(&db).await;
+    let inboxes = ["user-a", "user-b", "bot_1"];
+    entry(
+        &db,
+        "c1",
+        "r1",
+        "user-a",
+        4,
+        "REACTION",
+        reaction("b1", "👎", "add"),
+        &inboxes,
+    )
+    .await;
+    entry(
+        &db,
+        "c1",
+        "r2",
+        "user-a",
+        5,
+        "REACTION",
+        reaction("b1", "👎", "remove"),
+        &inboxes,
+    )
+    .await;
+    let answered = vec!["r1".to_string()];
+    let turn = reaction_turn(
+        &db,
+        "bot_1",
+        "c1",
+        &answered,
+        ConversationKind::Group,
+        "user-a",
+    )
+    .await
+    .unwrap();
+    assert!(turn.reactions.is_empty());
+}
+
+#[tokio::test]
+async fn several_reactions_in_a_row_make_one_turn_that_names_each() {
+    let db = database().await;
+    room_with_reactions(&db).await;
+    let inboxes = ["user-a", "user-b", "bot_1"];
+    entry(
+        &db,
+        "c1",
+        "r1",
+        "user-a",
+        4,
+        "REACTION",
+        reaction("b1", "👎", "add"),
+        &inboxes,
+    )
+    .await;
+    entry(
+        &db,
+        "c1",
+        "r2",
+        "user-b",
+        5,
+        "REACTION",
+        reaction("b1", "❓", "add"),
+        &inboxes,
+    )
+    .await;
+    let answered = vec!["r2".to_string(), "r1".to_string()];
+    let turn = reaction_turn(
+        &db,
+        "bot_1",
+        "c1",
+        &answered,
+        ConversationKind::Group,
+        "user-a",
+    )
+    .await
+    .unwrap();
+    let emojis: Vec<_> = turn
+        .reactions
+        .iter()
+        .map(|note| note.emoji.as_str())
+        .collect();
+    assert_eq!(emojis, ["👎", "❓"]);
 }

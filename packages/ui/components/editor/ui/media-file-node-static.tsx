@@ -1,9 +1,9 @@
 "use client";
 
 import { NodeApi, type TCaptionProps, type TFileElement } from "platejs";
+import type { SlateElementProps } from "platejs/static";
 import type { MediaMetadata } from "../media-metadata";
 import { MediaAttribution } from "./media-attribution";
-import type { SlateElementProps } from "platejs/static";
 
 import { FileUp } from "lucide-react";
 import { SlateElement } from "platejs/static";

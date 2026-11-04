@@ -10,10 +10,9 @@ use flow_like_bot_tools::email::{
 use flow_like_types::base64::{Engine, engine::general_purpose::STANDARD};
 use reqwest::Method;
 use serde_json::{Value, json};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use super::schedule::TaskApi;
-use crate::functions::local_bots::{LocalBots, on_store};
 
 struct HubMail {
     api: Arc<dyn TaskApi>,
@@ -129,16 +128,8 @@ pub(crate) async fn mail_for(
     bot_id: &str,
     api: Arc<dyn TaskApi>,
 ) -> Option<Arc<dyn MailBackend>> {
-    if let Some(bots) = app.try_state::<LocalBots>() {
-        let lookup = bot_id.to_string();
-        let local = on_store(&bots, move |store| {
-            store.get_bot(&lookup).map(|bot| bot.is_some())
-        })
-        .await
-        .unwrap_or(false);
-        if local {
-            return None;
-        }
+    if super::held_locally(app, bot_id).await {
+        return None;
     }
     Some(Arc::new(HubMail {
         api,

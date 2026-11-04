@@ -6,11 +6,11 @@ mod env;
 mod models;
 mod wire;
 
-pub use env::{AppAccess, HostEnv};
+pub use env::{AppAccess, HostEnv, SecretSource};
 pub use models::{ModelSource, StateModels};
 pub use wire::{
-    IMAGES_FIELD, JobApp, JobModels, JobScope, ToolJob, ToolJobEnvelope, ToolReply, job_hash,
-    outcome_output,
+    IMAGES_FIELD, JobApp, JobModels, JobScope, JobSecrets, ToolJob, ToolJobEnvelope, ToolReply,
+    job_hash, outcome_output,
 };
 
 #[cfg(test)]

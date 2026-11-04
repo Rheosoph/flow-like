@@ -379,6 +379,11 @@ fn checked_event(
         )));
     }
     let links = checked_body(&id, entry.kind, &entry.envelope)?;
+    if !links.conversation_files.is_empty() {
+        return Err(ApiError::bad_request(format!(
+            "'{id}' carries a conversation file; files uploaded to a conversation don't move with an import"
+        )));
+    }
     if entry.created_at.timestamp_micros() < 0 {
         return Err(ApiError::bad_request(format!(
             "'{id}' was sent at {}, before 1970; import entries from 1970 on",

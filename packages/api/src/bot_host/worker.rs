@@ -43,7 +43,7 @@ use flow_like::{
     copilot::flowpilot_thinking,
     flow::copilot::{
         BotToolHost, HeadlessMemory, PlatformContextInput, bot_platform_context,
-        bot_talk::{BotPresence, BotTalk},
+        bot_talk::{AnsweredRound, BotPresence, BotTalk},
         find_bot_tool_spec,
         memory::{AssistantMemory, MemoryScope},
         platform::PlatformToolBridge,
@@ -87,6 +87,8 @@ const MAX_REPLY_CHARS: usize = 48_000;
 const DEFAULT_INTERVAL_SECS: u64 = 5;
 const DEFAULT_CONCURRENCY: usize = 4;
 const RECOVER_EVERY: Duration = Duration::from_secs(60);
+/// Due bot tasks are fired this often between recoveries: an indexed query on `nextRunAt`.
+const FIRE_TASKS_EVERY: Duration = Duration::from_secs(10);
 const RETRY_BACKOFF_SECS: [i64; 2] = [10, 30];
 
 pub const CODE_TIMEOUT: &str = "BOT_TURN_TIMEOUT";
@@ -186,8 +188,27 @@ impl Failure {
         }
     }
 
+    /// The failure of a turn nobody asked for: recorded, never posted and never retried.
+    fn unrequested(self) -> Self {
+        Self {
+            retryable: false,
+            post: false,
+            ..self
+        }
+    }
+
     fn model(error: &flow_like_types::Error) -> Self {
         tracing::warn!(%error, "Bot turn: the model run failed");
+        if let Some(refusal) = provider_refusal(&format!("{error:#}")) {
+            return Self::new(
+                CODE_SETUP,
+                format!(
+                    "I can't answer yet: my language model provider refused the request ({refusal})."
+                ),
+                false,
+                true,
+            );
+        }
         Self::new(
             CODE_MODEL,
             "The language model didn't answer. You can ask again, or have my owner retry this turn.",
@@ -204,6 +225,27 @@ impl Failure {
             true,
         )
     }
+}
+
+/// The provider's refusal of authorization or billing (HTTP 401 or 403) in a model error, with
+/// the provider's own words when it gave any. Retrying such a request cannot help. The model
+/// error reaches the host as text, so this reads rig's `Invalid status code …` message.
+fn provider_refusal(error: &str) -> Option<String> {
+    const MARKER: &str = "status code";
+    let (_, after) = error.split_once(MARKER)?;
+    let after = after.trim_start_matches([':', ' ']);
+    let status = after.get(..3)?;
+    if status != "401" && status != "403" {
+        return None;
+    }
+    let reason = after
+        .split_once("with message:")
+        .map(|(_, detail)| detail.trim())
+        .filter(|detail| !detail.is_empty());
+    Some(match reason {
+        Some(detail) => format!("{status}: {}", detail.chars().take(240).collect::<String>()),
+        None => status.to_string(),
+    })
 }
 
 impl From<ApiError> for Failure {
@@ -337,6 +379,8 @@ async fn turn_requester(
     turn: &bot_turn::Model,
     room: Option<&str>,
     kind: ConversationKind,
+    addressed: bool,
+    reactions: Vec<flow_like::flow::copilot::ReactionNote>,
 ) -> Result<flow_like::flow::copilot::TurnRequester, ApiError> {
     let requester_id = turn
         .requester_id
@@ -351,6 +395,8 @@ async fn turn_requester(
         owner_id: turn.owner_id.clone(),
         audience: TurnAudience::of(kind),
         room: room.map(str::to_string),
+        addressed,
+        reactions,
     })
 }
 
@@ -460,14 +506,28 @@ pub(crate) fn reply_request(
     }
 }
 
+/// The reply an answer posts; none when the bot read along and stayed silent.
+pub(crate) fn answer_request(turn: &bot_turn::Model, answer: &Answer) -> Option<SendEntryRequest> {
+    (!answer.silent).then(|| {
+        reply_request(
+            turn,
+            reply_message_id(&turn.bot_id, &turn.trigger_message_id),
+            &clipped(&answer.text),
+            None,
+        )
+    })
+}
+
 /// The turn's memory, kept until its reply is posted: the follow-up work needs the reply.
 type FollowUp = Arc<std::sync::Mutex<Option<HeadlessMemory>>>;
 
 /// One attempt at a turn: everything up to the model's answer.
 /// A finished turn's answer; `resumed` when the turn slept for an owner's approval.
-struct Answer {
-    text: String,
-    resumed: bool,
+pub(crate) struct Answer {
+    pub(crate) text: String,
+    pub(crate) resumed: bool,
+    /// The bot read along and chose to stay silent: nothing is posted.
+    pub(crate) silent: bool,
 }
 
 async fn attempt(
@@ -476,6 +536,8 @@ async fn attempt(
     host_id: &str,
     mutating: &Arc<AtomicBool>,
     follow_up: &FollowUp,
+    unaddressed: &AtomicBool,
+    batched: &[String],
 ) -> Result<Answer, Failure> {
     let owner = turn.owner_id.as_str();
     let row = bot::Entity::find_by_id(&turn.bot_id)
@@ -495,29 +557,82 @@ async fn attempt(
         ));
     }
     let kind = ConversationKind::parse(&conversation.kind).unwrap_or(ConversationKind::Group);
-    let mut transcript = history::transcript(
+    let reacting = history::entry_kind(
         &state.db,
         &turn.bot_id,
         &turn.conversation_id,
         &turn.trigger_message_id,
-        kind,
-        owner,
     )
-    .await?;
+    .await?
+        == Some(InboxEntryKind::Reaction);
+    let mut reactions = Vec::new();
+    let mut transcript = if reacting {
+        let answered: Vec<String> = std::iter::once(turn.trigger_message_id.clone())
+            .chain(batched.iter().cloned())
+            .collect();
+        let found = history::reaction_turn(
+            &state.db,
+            &turn.bot_id,
+            &turn.conversation_id,
+            &answered,
+            kind,
+            owner,
+        )
+        .await?;
+        reactions = found.reactions;
+        found.transcript
+    } else {
+        history::transcript(
+            &state.db,
+            &turn.bot_id,
+            &turn.conversation_id,
+            &turn.trigger_message_id,
+            kind,
+            owner,
+        )
+        .await?
+    };
+    if reacting && reactions.is_empty() && transcript.addressed && transcript.prompt.is_empty() {
+        unaddressed.store(true, Ordering::SeqCst);
+        return Ok(Answer {
+            text: String::new(),
+            resumed: false,
+            silent: true,
+        });
+    }
+    let mut chat_conversation = turn.conversation_id.clone();
+    let mut answered_round = None;
     if let Some(answered) = super::talk::answered_ask(&state.db, turn).await? {
+        chat_conversation = answered.origin_conversation.clone();
         transcript = super::talk::ask_result_transcript(&state.db, turn, &answered).await?;
+        answered_round = Some(AnsweredRound {
+            callee_id: answered.callee_id,
+            round: answered.round,
+        });
     }
     let asked_by = super::talk::asked_by(&state.db, turn).await?;
     let ancestors: Vec<String> = asked_by.iter().map(|member| member.id.clone()).collect();
     let asker = (!asked_by.is_empty()).then_some(asked_by);
+    let addressed = transcript.addressed || asker.is_some();
+    unaddressed.store(!addressed || !reactions.is_empty(), Ordering::SeqCst);
 
     let (profile, access) = load_profile(state, owner, row.profile_id.as_deref()).await?;
     let mut bot = chat_bot(state, owner, Some(turn.bot_id.as_str()), &profile)
         .await?
         .ok_or_else(|| Failure::silent(CODE_BOT_GONE, "The bot was deleted"))?;
     bot.context.tool_host = BotToolHost::CoreOnly;
-    bot.context.requester =
-        Some(turn_requester(&state.db, turn, conversation.title.as_deref(), kind).await?);
+    bot.context.requester = Some(
+        turn_requester(
+            &state.db,
+            turn,
+            conversation.title.as_deref(),
+            kind,
+            addressed,
+            reactions,
+        )
+        .await?,
+    );
+    let requester = bot.context.requester.clone();
     let flow_like_state = master_flow_like_state(state).await?;
     let model_id = server_bot_model(state, owner, &flow_like_state, &profile, &bot.model).await;
     if let Some(rejection) = access.rejection(model_id.as_deref()) {
@@ -541,7 +656,10 @@ async fn attempt(
         .try_to_provider()
         .ok_or_else(|| ApiError::bad_request("The bot's model is not a completion provider"))?;
     ensure_metered_or_customer_provider(&provider.provider_name)?;
-    let memory_model = bot.context.memory_model(None).map(str::to_string);
+    let memory_model = match bot.context.memory_model(None) {
+        Some(id) => Some(id.to_string()),
+        None => stored_memory_model(&flow_like_state, &profile, &bot, owner).await,
+    };
     let memory_hosted = match memory_model.as_deref() {
         Some(id) => {
             let bit = profile
@@ -674,6 +792,9 @@ async fn attempt(
         token.clone(),
         grants.clone(),
         conv_id,
+        Some(flow_like_bot_tools::TurnSite::Conversation(
+            chat_conversation,
+        )),
     )
     .await;
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(HeadlessBridge {
@@ -691,7 +812,7 @@ async fn attempt(
         },
         ancestors,
     ));
-    let talk = Arc::new(match asker {
+    let talk = match asker {
         Some(asked_by) => BotTalk::resumed(
             talk_host.clone(),
             super::talk::crew_member(&row, BotPresence::Online),
@@ -699,14 +820,15 @@ async fn attempt(
             Default::default(),
         ),
         None => BotTalk::for_run(talk_host.clone(), &bot.context, BotLocation::Server),
-    });
+    };
+    let talk = Arc::new(talk.with_answered(answered_round.as_ref()));
     let chat = run_bot_chat_with_talk(
         flow_like_state,
         Some(profile),
         Arc::new(bot.context),
         context,
         prompt,
-        None,
+        attached_images(state, &turn.conversation_id, &turn.trigger_message_id).await,
         history,
         Some(selected.id.clone()),
         Some(flowpilot_thinking(None)),
@@ -741,6 +863,17 @@ async fn attempt(
     match outcome {
         Err(_) => Err(Failure::timeout()),
         Ok(Err(error)) => Err(Failure::model(&error)),
+        Ok(Ok(text))
+            if requester
+                .as_ref()
+                .is_some_and(|r| r.answer_is_silent(&text)) =>
+        {
+            Ok(Answer {
+                text: String::new(),
+                resumed,
+                silent: true,
+            })
+        }
         Ok(Ok(text)) if text.trim().is_empty() => Err(Failure::new(
             CODE_MODEL,
             "The language model returned no answer. You can ask again, or have my owner retry this turn.",
@@ -749,9 +882,38 @@ async fn attempt(
         )),
         Ok(Ok(text)) => {
             clear_tokens(grants.as_ref(), &seen).await;
-            Ok(Answer { text, resumed })
+            Ok(Answer {
+                text,
+                resumed,
+                silent: false,
+            })
         }
     }
+}
+
+/// The embedding model a remembering bot's memories were stored with, when the bot names none of
+/// its own: its chats embed with the chat's model, and a turn no chat started must reuse that
+/// model to recall them. `None` when nothing is stored yet or the profile can't run the model.
+async fn stored_memory_model(
+    flow_like_state: &Arc<flow_like::state::FlowLikeState>,
+    profile: &Arc<Profile>,
+    bot: &crate::routes::bots::runtime::ChatBot,
+    owner: &str,
+) -> Option<String> {
+    if !bot.context.remembers() {
+        return None;
+    }
+    let scope = bot.context.memory_scope(&profile.id);
+    let id = AssistantMemory::status(flow_like_state.clone(), Some(owner), &scope)
+        .await
+        .ok()?
+        .embedding_model_id?;
+    let bit = profile
+        .find_bit(&id, flow_like_state.http_client.clone())
+        .await
+        .map_err(|error| tracing::warn!(%error, %id, "Bot turn: stored memory model not found"))
+        .ok()?;
+    bit.try_to_embedding().map(|_| id)
 }
 
 async fn open_memory(
@@ -954,13 +1116,21 @@ async fn finish(
         other => other,
     };
     match result {
-        Ok(Answer { text, resumed }) => {
-            let request = reply_request(
-                turn,
-                reply_message_id(&turn.bot_id, &turn.trigger_message_id),
-                &clipped(&text),
-                None,
-            );
+        Ok(answer) => {
+            let Some(request) = answer_request(turn, &answer) else {
+                match ledger::complete_silent_in(&state.db, &turn.id, host_id, now).await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        tracing::warn!(turn_id = %turn.id, "Bot turn: the lease was lost before the silent outcome was recorded")
+                    }
+                    Err(error) => {
+                        tracing::warn!(%error, turn_id = %turn.id, "Bot turn: the silent outcome was not recorded");
+                        record_failure(state, turn, host_id, CODE_FAILED, now).await;
+                    }
+                }
+                return;
+            };
+            let resumed = answer.resumed;
             let posted = match super::talk::answered_ask(&state.db, turn).await {
                 Ok(Some(answered)) => {
                     post_reply_in_origin(
@@ -1067,7 +1237,7 @@ fn spawn_heartbeat(
 
 /// Runs a claimed turn to its end, keeping its lease alive while it runs.
 async fn run_claimed(state: &AppState, host_id: &str, claimed: Claimed) {
-    let turn = claimed.turn;
+    let (turn, batched) = (claimed.turn, claimed.batched);
     let lost = Arc::new(Notify::new());
     let heartbeat = spawn_heartbeat(
         state.clone(),
@@ -1077,14 +1247,21 @@ async fn run_claimed(state: &AppState, host_id: &str, claimed: Claimed) {
     );
     let mutating = Arc::new(AtomicBool::new(false));
     let follow_up: FollowUp = Arc::default();
+    let unaddressed = AtomicBool::new(false);
     let result = tokio::select! {
-        result = attempt(state, &turn, host_id, &mutating, &follow_up) => Some(result),
+        result = attempt(state, &turn, host_id, &mutating, &follow_up, &unaddressed, &batched) => Some(result),
         () = lost.notified() => None,
+    };
+    let result = match result {
+        Some(Err(failure)) if failure.park.is_none() && unaddressed.load(Ordering::SeqCst) => {
+            Some(Err(failure.unrequested()))
+        }
+        other => other,
     };
     heartbeat.abort();
     match result {
         Some(result) => {
-            let answered = result.is_ok();
+            let answered = matches!(&result, Ok(answer) if !answer.silent);
             finish(
                 state,
                 &turn,
@@ -1212,6 +1389,7 @@ pub fn spawn_worker(state: AppState, config: WorkerConfig) -> Option<JoinHandle<
         let mut ticker = tokio::time::interval(config.interval);
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         let mut recovered_at: Option<Instant> = None;
+        let mut fired_at: Option<Instant> = None;
         loop {
             tokio::select! {
                 _ = ticker.tick() => {}
@@ -1219,8 +1397,14 @@ pub fn spawn_worker(state: AppState, config: WorkerConfig) -> Option<JoinHandle<
             }
             if recovered_at.is_none_or(|at| at.elapsed() >= RECOVER_EVERY) {
                 recovered_at = Some(Instant::now());
+                fired_at = recovered_at;
                 if let Err(error) = recover(&state).await {
                     tracing::warn!(%error, "Bot turn recovery failed");
+                }
+            } else if fired_at.is_none_or(|at| at.elapsed() >= FIRE_TASKS_EVERY) {
+                fired_at = Some(Instant::now());
+                if let Err(error) = super::tasks::fire_due(&state).await {
+                    tracing::warn!(%error, "Bot task sweep incomplete");
                 }
             }
             if let Err(error) = run_pass(&state, &host, &slots).await {
@@ -1280,6 +1464,39 @@ mod tests {
     }
 
     #[test]
+    fn a_provider_refusal_of_auth_or_billing_is_a_setup_failure_posted_at_once() {
+        for message in [
+            "Invalid status code 403 Forbidden with message: The app has no billing owner",
+            "CompletionError: HttpError: Invalid status code: 401 Unauthorized",
+        ] {
+            let failure = Failure::model(&flow_like_types::anyhow!("{message}"));
+            assert_eq!(
+                (failure.code, failure.retryable, failure.post),
+                (CODE_SETUP, false, true),
+                "{message}"
+            );
+        }
+        let billing = Failure::model(&flow_like_types::anyhow!(
+            "ProviderError: Invalid status code 403 Forbidden with message: The app has no billing owner"
+        ));
+        assert!(billing.text.contains("403") && billing.text.contains("no billing owner"));
+
+        for message in [
+            "Invalid status code 429 Too Many Requests",
+            "Invalid status code 502 Bad Gateway",
+            "connection reset",
+            "tool 4031 failed",
+        ] {
+            let failure = Failure::model(&flow_like_types::anyhow!("{message}"));
+            assert_eq!(
+                (failure.code, failure.retryable),
+                (CODE_MODEL, true),
+                "{message}"
+            );
+        }
+    }
+
+    #[test]
     fn long_answers_are_cut_to_one_envelope() {
         let long = "a".repeat(MAX_REPLY_CHARS + 10);
         let cut = clipped(&long);
@@ -1287,4 +1504,14 @@ mod tests {
         assert!(cut.ends_with("_(cut: too long to send)_"));
         assert_eq!(clipped("short"), "short");
     }
+}
+
+async fn attached_images(
+    state: &AppState,
+    conversation_id: &str,
+    message_id: &str,
+) -> Option<Vec<flow_like::flow::copilot::ChatImage>> {
+    let images =
+        crate::routes::inbox::files::message_images(state, conversation_id, message_id).await;
+    (!images.is_empty()).then_some(images)
 }

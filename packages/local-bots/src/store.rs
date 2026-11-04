@@ -6,7 +6,7 @@ use rusqlite::{
 };
 use serde::de::DeserializeOwned;
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
 };
 use zeroize::Zeroizing;
@@ -42,6 +42,7 @@ pub(crate) struct Changes {
     bots: Vec<Option<String>>,
     inbox: Vec<Option<String>>,
     scrub: bool,
+    files: bool,
 }
 
 fn note(changes: &mut Vec<Option<String>>, id: Option<&str>) {
@@ -63,6 +64,11 @@ impl Changes {
         note(&mut self.inbox, Some(conversation_id));
     }
 
+    /// The write removed conversation file rows; their bytes go once it committed.
+    pub fn files(&mut self) {
+        self.files = true;
+    }
+
     /// The write deleted or overwrote content, which the WAL still holds until it is emptied.
     pub fn scrub(&mut self) {
         self.scrub = true;
@@ -76,6 +82,7 @@ pub struct LocalBotStore {
     key: Arc<dyn SecretKeyProvider>,
     key_lock: Mutex<()>,
     notify: Arc<dyn ChangeNotifier>,
+    pub(crate) files_dir: PathBuf,
 }
 
 impl LocalBotStore {
@@ -86,11 +93,19 @@ impl LocalBotStore {
         key: Arc<dyn SecretKeyProvider>,
         notify: Arc<dyn ChangeNotifier>,
     ) -> Result<Self> {
+        let db = schema::open(path.as_ref())?;
+        let files_dir = path
+            .as_ref()
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(crate::inbox::FILES_DIR);
+        crate::inbox::sweep_files(&db, &files_dir);
         Ok(Self {
-            db: Mutex::new(schema::open(path.as_ref())?),
+            db: Mutex::new(db),
             key,
             key_lock: Mutex::new(()),
             notify,
+            files_dir,
         })
     }
 
@@ -116,6 +131,9 @@ impl LocalBotStore {
             tx.commit()?;
             if changes.scrub {
                 schema::empty_wal(&db);
+            }
+            if changes.files {
+                crate::inbox::sweep_files(&db, &self.files_dir);
             }
             value
         };

@@ -327,6 +327,40 @@ describe("browser realtime connection", () => {
 		).toBe(0);
 	});
 
+	test("worker failure moves accepted conversation cursors into the fallback", async () => {
+		const fetcher = vi.fn(hold).mockResolvedValueOnce(
+			Response.json({
+				protocol_version: 1,
+				runs: [],
+				errors: [],
+				conversations: [
+					{
+						conversation_id: "c",
+						entries: [{ id: "e1", message_id: "m1", cursor: "1:e1" }],
+						has_more: false,
+					},
+				],
+			}),
+		);
+		vi.stubGlobal("fetch", replayOnly(fetcher));
+		const instances = worker(
+			new RealtimeRuntime({ fetch: replayOnly(fetcher) }),
+		);
+		const client = await connect();
+		client.subscribe(() => {});
+		client.setSubscriptions({
+			notifications: false,
+			runs: [],
+			conversations: [{ conversation_id: "c" }],
+		});
+		await vi.advanceTimersByTimeAsync(1);
+		instances[0].onerror?.();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(
+			JSON.parse(String(fetcher.mock.calls.at(-1)?.[1]?.body)).conversations,
+		).toEqual([{ conversation_id: "c", after: "1:e1" }]);
+	});
+
 	test("a temporarily unavailable run stays subscribed across a worker fallback", async () => {
 		const fetcher = vi.fn(hold).mockResolvedValueOnce(
 			Response.json({

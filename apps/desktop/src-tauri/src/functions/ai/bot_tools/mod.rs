@@ -3,6 +3,7 @@
 
 pub mod view;
 pub(crate) mod mail;
+pub(crate) mod people;
 pub(crate) mod schedule;
 
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
@@ -13,7 +14,22 @@ mod computer;
 use std::sync::Arc;
 
 use flow_like_bot_tools::{BrowserBackend, ComputerBackend};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
+
+use crate::functions::local_bots::{LocalBots, on_store};
+
+/// Whether `bot_id` lives in this device's store, not on an account.
+pub(crate) async fn held_locally(app: &AppHandle, bot_id: &str) -> bool {
+    let Some(bots) = app.try_state::<LocalBots>() else {
+        return false;
+    };
+    let lookup = bot_id.to_string();
+    on_store(&bots, move |store| {
+        store.get_bot(&lookup).map(|bot| bot.is_some())
+    })
+    .await
+    .unwrap_or(false)
+}
 
 /// The backends one tool call may use; both `None` on phones and tablets.
 #[derive(Default, Clone)]

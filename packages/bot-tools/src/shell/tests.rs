@@ -154,7 +154,8 @@ mod unix {
             names.iter().all(|name| !name.starts_with("CARGO_")),
             "leaked: {names:?}"
         );
-        assert!(printed.contains("API_TOKEN=s3cret"));
+        assert!(printed.contains("API_TOKEN={{secret:API_TOKEN}}"));
+        assert!(!printed.contains("s3cret"));
         assert!(
             printed.contains(&format!(
                 "HOME={}",
@@ -168,6 +169,26 @@ mod unix {
 
     fn result_text(outcome: &ToolOutcome) -> String {
         result(outcome)["stdout"].as_str().unwrap().to_string()
+    }
+
+    #[tokio::test]
+    async fn a_secret_reaches_the_program_but_never_its_printed_output() {
+        let rig = Rig::new().await;
+        rig.env.set_secret("API_TOKEN", "tok/en+value=1");
+        let script = r#"test "$API_TOKEN" = 'tok/en+value=1' && echo match; echo "out $API_TOKEN"; echo "err $API_TOKEN" >&2; printf %s "$API_TOKEN" | base64; exit 7"#;
+        let outcome = rig
+            .call(json!({ "command": "sh", "args": ["-c", script], "secrets": ["API_TOKEN"] }))
+            .await;
+        let result = result(&outcome);
+        let stdout = result["stdout"].as_str().unwrap();
+        assert!(
+            stdout.starts_with("match\nout {{secret:API_TOKEN}}\n"),
+            "{stdout}"
+        );
+        assert_eq!(result["stderr"], "err {{secret:API_TOKEN}}\n");
+        let text = result.to_string();
+        assert!(!text.contains("tok/en+value=1"));
+        assert!(!text.contains("dG9rL2VuK3ZhbHVlPTE="));
     }
 
     #[tokio::test]

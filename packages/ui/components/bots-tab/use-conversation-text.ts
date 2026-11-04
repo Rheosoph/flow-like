@@ -7,6 +7,7 @@ import type {
 	IInboxEntry,
 } from "../../state/backend-state/inbox-state";
 import { approvalResponseOf } from "./approval-entry";
+import { useNoteText } from "./conversation-note";
 import {
 	activityTimeKind,
 	conversationComposition,
@@ -14,7 +15,7 @@ import {
 	isSelfPrincipal,
 	otherMemberIds,
 } from "./crew-model";
-import { inboxMessageContent } from "./fold-entries";
+import { inboxMessageContent, noteOf } from "./fold-entries";
 import type { CrewDirectory } from "./use-crew-directory";
 
 const MAX_TITLE_NAMES = 3;
@@ -50,9 +51,12 @@ export function useConversationText(
 		[directory, me, t],
 	);
 
+	const noteText = useNoteText();
 	const entryText = useCallback(
 		(entry: IInboxEntry | null): string => {
 			if (!entry) return t("crew.rooms.noMessages", "No messages yet");
+			const note = noteOf(entry);
+			if (note) return noteText(note, (id) => directory(id).name);
 			const answer = approvalResponseOf(entry)?.decision;
 			if (answer) {
 				return {
@@ -68,7 +72,7 @@ export function useConversationText(
 				return t("crew.messages.unsupported", "Message this app can't show");
 			return content.text.replace(/\s+/g, " ").trim();
 		},
-		[t],
+		[t, noteText, directory],
 	);
 
 	const senderLabel = useCallback(

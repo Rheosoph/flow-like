@@ -1,13 +1,20 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { useQueries } from "@tanstack/react-query";
 import { CheckIcon, Loader2Icon, SearchIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useBotLabels } from "../../hooks/use-bots";
 import { useInvitable } from "../../hooks/use-inbox";
 import { useProjectUserSearch } from "../../hooks/use-project-user-search";
+import {
+	type UserLookupResult,
+	useLookupDisplayName,
+	userLookupQueryOptions,
+} from "../../hooks/use-user-lookup";
 import { userDisplayName, userSecondaryLabel } from "../../lib/user-display";
 import { cn } from "../../lib/utils";
+import { useBackend } from "../../state/backend-state";
 import type { IBot } from "../../state/backend-state/bot-state";
 import type {
 	IInvitable,
@@ -123,15 +130,33 @@ function PickerGroup({
 	);
 }
 
-/** One server-approved principal as a picker row. */
-function invitableRow(entry: IInvitable): PickerRow {
-	return {
-		id: entry.principal_id,
-		kind: entry.kind,
-		label: entry.name ?? entry.principal_id,
-		detail: entry.description ?? undefined,
-		mode: entry.mode,
-	};
+function combineLookups(
+	results: { data?: UserLookupResult }[],
+): UserLookupResult[] {
+	return results.map((result) => result.data ?? null);
+}
+
+/** Looks up, in one batch, the server-approved principals that arrived without a name. */
+function useNamelessLookups(entries: readonly IInvitable[]) {
+	const backend = useBackend();
+	const ids = useMemo(
+		() => [
+			...new Set(
+				entries
+					.filter((entry) => !entry.name?.trim())
+					.map((entry) => entry.principal_id),
+			),
+		],
+		[entries],
+	);
+	const lookups = useQueries({
+		queries: ids.map((id) => userLookupQueryOptions(backend.userState, id)),
+		combine: combineLookups,
+	});
+	return useMemo(
+		() => new Map(ids.map((id, index) => [id, lookups[index]])),
+		[ids, lookups],
+	);
 }
 
 function useDebounced(value: string, delayMs: number) {
@@ -186,18 +211,40 @@ export function PrincipalPicker({
 		conversationId: serverRule?.conversationId,
 		enabled: ruled,
 	});
-	const ruledRows = useMemo(
+	const lookupName = useLookupDisplayName();
+	const unknown = t("crew.unknownMember", "Someone");
+	const ownBots = useMemo(
+		() => new Map(bots.map((bot) => [bot.id, bot])),
+		[bots],
+	);
+	const lookups = useNamelessLookups(invitable.data ?? []);
+	const ruledRows = useMemo<PickerRow[]>(
 		() =>
 			(invitable.data ?? [])
 				.filter((entry) => entry.state !== "member")
-				.map((entry) => ({
-					...invitableRow(entry),
-					detail:
-						entry.state === "invited"
-							? t("crew.picker.alreadyInvited", "Already invited")
-							: (entry.description ?? undefined),
-				})),
-		[invitable.data, t],
+				.map((entry) => {
+					const own = ownBots.get(entry.principal_id);
+					const looked = lookups.get(entry.principal_id) ?? null;
+					const ownLabels = own ? botLabels(own) : undefined;
+					const description =
+						entry.description?.trim() ||
+						ownLabels?.description ||
+						(looked ? userSecondaryLabel(looked) : undefined);
+					return {
+						id: entry.principal_id,
+						kind: entry.kind,
+						label:
+							entry.name?.trim() ||
+							ownLabels?.name ||
+							(looked ? lookupName(looked, unknown) : unknown),
+						detail:
+							entry.state === "invited"
+								? t("crew.picker.alreadyInvited", "Already invited")
+								: description || undefined,
+						mode: entry.mode,
+					};
+				}),
+		[invitable.data, ownBots, lookups, botLabels, lookupName, unknown, t],
 	);
 
 	const botRows = useMemo<PickerRow[]>(

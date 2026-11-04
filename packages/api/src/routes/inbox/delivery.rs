@@ -4,9 +4,13 @@
 //! queued.
 
 use super::members::Principal;
-use crate::{entity::bot, error::ApiError};
+use crate::{
+    entity::{bot, conversation_member},
+    error::ApiError,
+};
 use flow_like_types::{
     bot::BotLocation,
+    bot_effective::BotRoomLimits,
     inbox::{ConversationKind, InboxEntryKind, PrincipalKind},
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter};
@@ -19,10 +23,18 @@ pub(crate) struct BotRecipient {
     pub owner_id: String,
     pub location: BotLocation,
     pub device_id: Option<String>,
+    /// A server bot whose turns the owner's online desktop answers
+    /// ([`BotLocation::hands_off_to_desktop`]).
+    pub hands_off: bool,
     /// The entry names the bot in `mentions`.
     pub mentioned: bool,
     /// The entry replies to a message the bot sent.
     pub replied_to: bool,
+    /// A person's message in a group may wake the bot though it names neither the bot nor a
+    /// message of it: the bot reads along and decides whether to answer.
+    pub read_along: bool,
+    /// A person reacted to a message the bot sent.
+    pub reacted: bool,
     pub conversation_id: String,
     /// The entry's message id: what a turn for it answers.
     pub trigger_message_id: String,
@@ -106,7 +118,15 @@ pub(super) struct Addressed<'a> {
     pub mentions: &'a [String],
     /// The sender of the message the entry replies to.
     pub replied_sender: Option<&'a str>,
+    /// Bots that read along with this entry: set only for a person's message in a group, and only
+    /// the bots whose room limits don't restrict them to mentions.
+    pub reading_along: &'a HashSet<String>,
+    /// The bot whose message a person reacted to, when the entry is that reaction.
+    pub reacted_bot: Option<&'a str>,
     pub hops: u32,
+    /// The hops the replied bot gets when the entry answers its counted question
+    /// ([`flow_like_types::bot_message::BotAsk::answer_wakes_at`]); `None`: the entry's own.
+    pub replied_hops: Option<u32>,
     pub interactive: bool,
 }
 
@@ -128,12 +148,46 @@ pub(super) fn bot_recipients(bots: &[bot::Model], entry: &Addressed) -> Vec<BotR
             owner_id: bot.owner_id.clone(),
             location: BotLocation::parse(&bot.location).unwrap_or_default(),
             device_id: bot.device_id.clone(),
+            hands_off: crate::routes::bots::model::hands_off_to_desktop(bot),
             mentioned: entry.mentions.contains(&bot.id),
             replied_to: entry.replied_sender == Some(bot.id.as_str()),
+            read_along: entry.reading_along.contains(&bot.id),
+            reacted: entry.reacted_bot == Some(bot.id.as_str()),
             conversation_id: entry.conversation_id.to_string(),
             trigger_message_id: entry.message_id.to_string(),
-            hops: entry.hops,
+            hops: match entry.replied_hops {
+                Some(hops) if entry.replied_sender == Some(bot.id.as_str()) => hops,
+                _ => entry.hops,
+            },
             interactive: entry.interactive,
         })
+        .collect()
+}
+
+/// The bot members that read along with an entry of `sender_id`: all of them when a person wrote
+/// in a group, except those whose room limits restrict them to mentions or can't be read.
+pub(super) fn reading_along(
+    kind: ConversationKind,
+    sender_id: &str,
+    bots: &[bot::Model],
+    members: &[conversation_member::Model],
+) -> HashSet<String> {
+    if kind != ConversationKind::Group || bots.iter().any(|bot| bot.id == sender_id) {
+        return HashSet::new();
+    }
+    let limited: HashSet<&str> = members
+        .iter()
+        .filter(|member| {
+            member.limits.as_ref().is_some_and(|limits| {
+                serde_json::from_value::<BotRoomLimits>(limits.clone())
+                    .map(|limits| !BotRoomLimits::reads_along(Some(&limits)))
+                    .unwrap_or(true)
+            })
+        })
+        .map(|member| member.principal_id.as_str())
+        .collect();
+    bots.iter()
+        .filter(|bot| !limited.contains(bot.id.as_str()))
+        .map(|bot| bot.id.clone())
         .collect()
 }

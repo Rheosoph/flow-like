@@ -188,8 +188,8 @@ them in an arbitrary variant and write `_` for spaces, such as
 
 The widget title and description appear only when you set them, and not on
 widgets that draw their own heading: greetings, section headings, FlowPilot,
-quick actions, embedded Apps, spotlights, rankings, featured collections, and
-workspace pulse. Prefer these selectors over a bare `header` or `h2`, which can
+the bot widgets (composer, crew, messages and rooms), quick actions, embedded
+Apps, spotlights, rankings, featured collections, and workspace pulse. Prefer these selectors over a bare `header` or `h2`, which can
 also match headings inside the widget's content.
 
 ## Ask FlowPilot to restyle your Home

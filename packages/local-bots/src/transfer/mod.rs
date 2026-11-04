@@ -240,6 +240,26 @@ fn built_in_edits(bot: &Bot, kind: BotSystemKind) -> Map<String, Value> {
         json!(bot.embedding_model),
     );
     edit(
+        "stt_model",
+        bot.stt_model != defaults.stt_model,
+        json!(bot.stt_model),
+    );
+    edit(
+        "tts_model",
+        bot.tts_model != defaults.tts_model,
+        json!(bot.tts_model),
+    );
+    edit(
+        "image_model",
+        bot.image_model != defaults.image_model,
+        json!(bot.image_model),
+    );
+    edit(
+        "vision_model",
+        bot.vision_model != defaults.vision_model,
+        json!(bot.vision_model),
+    );
+    edit(
         "classification",
         bot.classification != defaults.classification,
         json!(bot.classification),

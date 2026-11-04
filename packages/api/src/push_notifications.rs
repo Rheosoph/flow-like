@@ -1,14 +1,18 @@
 use crate::{
+    bot_notify::display_name,
     entity::{
-        notification, push_notification_target,
+        bot, notification, push_notification_target,
         sea_orm_active_enums::{
             NotificationType, PushNotificationTargetPlatform, PushNotificationTargetProvider,
         },
     },
     notification_images::prepare_notification_icon,
-    routes::app::{
-        connection::{app_meta_lookup, graph::presign_media},
-        events::db::decrypt_token,
+    routes::{
+        app::{
+            connection::{app_meta_lookup, graph::presign_media},
+            events::db::decrypt_token,
+        },
+        bots::avatar::current_avatar_url,
     },
     state::AppState,
 };
@@ -54,6 +58,7 @@ fn google_token_cache() -> &'static RwLock<Option<CachedAccessToken>> {
 
 #[derive(Clone, Debug)]
 pub struct DispatchNotificationInput {
+    pub bot_context: Option<flow_like_types::bot_notify::BotNotificationContext>,
     pub user_id: String,
     pub app_id: Option<String>,
     pub title: String,
@@ -110,32 +115,72 @@ struct PushSender {
 
 const MAX_PUSH_SENDER_NAME_BYTES: usize = 128;
 
-/// Only Apple targets present a sender, so other deliveries skip the lookup.
+/// A bot's notifications come from the bot: its name and the picture of its current look.
+async fn bot_sender(
+    state: &AppState,
+    input: &DispatchNotificationInput,
+    bot_id: &str,
+) -> PushSender {
+    let found = bot::Entity::find_by_id(bot_id)
+        .filter(bot::Column::DeletedAt.is_null())
+        .one(&state.db)
+        .await;
+    let (name, icon) = match found {
+        Ok(Some(bot)) => {
+            let icon = match current_avatar_url(state, &bot).await {
+                Ok(icon) => icon.filter(|url| is_push_image_url(url)),
+                Err(error) => {
+                    tracing::warn!(%error, %bot_id, "Could not sign the bot's avatar for a push notification");
+                    None
+                }
+            };
+            (display_name(&bot), icon)
+        }
+        Ok(None) => (input.title.clone(), None),
+        Err(error) => {
+            tracing::warn!(%error, %bot_id, "Could not load the bot for a push notification");
+            (input.title.clone(), None)
+        }
+    };
+    PushSender {
+        name,
+        icon,
+        thread_id: flow_like_types::bot_notify::group_key(bot_id),
+    }
+}
+
+/// Apple devices show every sender; Android shows only bots, whose pushes the app draws itself.
+fn presents_sender(
+    input: &DispatchNotificationInput,
+    target: &push_notification_target::Model,
+) -> bool {
+    match target.platform {
+        PushNotificationTargetPlatform::Ios => true,
+        PushNotificationTargetPlatform::Android => input.bot_context.is_some(),
+        PushNotificationTargetPlatform::Desktop => false,
+    }
+}
+
+/// Deliveries to devices that show no sender skip the lookup.
 async fn push_sender(
     state: &AppState,
     input: &DispatchNotificationInput,
     targets: &[push_notification_target::Model],
 ) -> Option<PushSender> {
+    if !targets.iter().any(|target| presents_sender(input, target)) {
+        return None;
+    }
     if let Some(bot_id) = input
         .link
         .as_deref()
         .and_then(flow_like_types::bot_notify::bot_id_from_link)
     {
-        return Some(PushSender {
-            name: input.title.clone(),
-            icon: None,
-            thread_id: flow_like_types::bot_notify::group_key(bot_id),
-        });
+        return Some(bot_sender(state, input, bot_id).await);
     }
     let app_id = input
         .app_id
         .as_ref()
-        .filter(|_| matches!(input.notification_type, NotificationType::Workflow))
-        .filter(|_| {
-            targets
-                .iter()
-                .any(|target| target.platform == PushNotificationTargetPlatform::Ios)
-        })?;
+        .filter(|_| matches!(input.notification_type, NotificationType::Workflow))?;
     let mut metas = match app_meta_lookup(state, std::slice::from_ref(app_id)).await {
         Ok(metas) => metas,
         Err(error) => {
@@ -196,14 +241,21 @@ pub(crate) fn registration_metadata(
         Some(value) => serde_json::Map::from_iter([("client".to_string(), value)]),
         None => serde_json::Map::new(),
     };
-    metadata.remove(DELIVERY_METADATA_KEY);
-    if let Some(record) = previous.and_then(|value| value.get(DELIVERY_METADATA_KEY)) {
-        metadata.insert(DELIVERY_METADATA_KEY.to_string(), record.clone());
+    for key in [
+        DELIVERY_METADATA_KEY,
+        crate::routes::bots::live_activities::METADATA_KEY,
+    ] {
+        metadata.remove(key);
+        let scope_changed = key == crate::routes::bots::live_activities::METADATA_KEY
+            && previous.and_then(|value| value.get("native_scope")) != metadata.get("native_scope");
+        if !scope_changed && let Some(record) = previous.and_then(|value| value.get(key)) {
+            metadata.insert(key.to_string(), record.clone());
+        }
     }
     (!metadata.is_empty()).then_some(serde_json::Value::Object(metadata))
 }
 
-fn metadata_unchanged(metadata: &Option<serde_json::Value>) -> Condition {
+pub(crate) fn metadata_unchanged(metadata: &Option<serde_json::Value>) -> Condition {
     Condition::all().add(match metadata {
         Some(value) => push_notification_target::Column::Metadata.eq(value.clone()),
         None => push_notification_target::Column::Metadata.is_null(),
@@ -899,6 +951,19 @@ fn apply_apns_sender(
     }
 }
 
+/// Fields the Android app reads to draw a bot's push as a message from the bot, stacked with its
+/// others under `thread_id`; the same names as on Apple devices.
+fn apply_android_sender(data: &mut serde_json::Value, sender: Option<&PushSender>) {
+    let Some(sender) = sender else {
+        return;
+    };
+    data["thread_id"] = serde_json::json!(sender.thread_id);
+    data["app_name"] = serde_json::json!(push_text(&sender.name, MAX_PUSH_SENDER_NAME_BYTES));
+    if let Some(icon) = &sender.icon {
+        data["app_icon"] = serde_json::json!(icon);
+    }
+}
+
 #[cfg(any(feature = "aws", feature = "azure", test))]
 fn apns_payload(
     input: &DispatchNotificationInput,
@@ -922,6 +987,10 @@ fn apns_payload(
     if let Some(image) = notification_image_url(input) {
         payload["aps"]["mutable-content"] = serde_json::json!(1);
         payload["image"] = serde_json::json!(image);
+    }
+    if let Some(context) = &input.bot_context {
+        payload["aps"]["category"] = serde_json::json!(context.category());
+        payload["aps"]["content-available"] = serde_json::json!(1);
     }
     apply_apns_sender(&mut payload, input, sender);
     fit_push_payload(payload)
@@ -1010,7 +1079,7 @@ async fn record_delivery_result(
             error: error.map(ToOwned::to_owned),
             notification_id: notification_id.to_string(),
         };
-        let mut metadata = registration_metadata(target.metadata.clone(), None)
+        let mut metadata = registration_metadata(target.metadata.clone(), target.metadata.as_ref())
             .unwrap_or_else(|| serde_json::json!({}));
         metadata[DELIVERY_METADATA_KEY] = serde_json::to_value(record)
             .map_err(|error| sea_orm::DbErr::Custom(error.to_string()))?;
@@ -1163,6 +1232,55 @@ async fn send_via_fcm(
     }
 }
 
+pub(crate) async fn send_live_activity(
+    state: &AppState,
+    target: &push_notification_target::Model,
+    activity_token: &str,
+    content: serde_json::Value,
+    end: bool,
+    timestamp: i64,
+) -> flow_like_types::Result<()> {
+    let config = state
+        .platform_config
+        .push_notifications
+        .fcm
+        .as_ref()
+        .ok_or_else(|| flow_like_types::anyhow!("FCM is not configured"))?;
+    let token = decrypt_token(&target.token_encrypted, &state.encryption_key)
+        .ok_or_else(|| flow_like_types::anyhow!("Push target token unavailable"))?;
+    let credentials = resolve_service_account_json(state, &config.service_account_json_env).await?;
+    let access_token = fetch_google_access_token(&credentials).await?;
+    let mut aps = serde_json::json!({"timestamp": timestamp, "event": if end { "end" } else { "update" }, "content-state": content});
+    if end {
+        aps["dismissal-date"] = serde_json::json!(timestamp + 300);
+    } else {
+        aps["stale-date"] = serde_json::json!(timestamp + 900);
+    }
+    let body = serde_json::json!({"message": {"token": token, "apns": {
+        "live_activity_token": activity_token,
+        "headers": {"apns-priority": "5", "apns-push-type": "liveactivity"},
+        "payload": {"aps": aps}
+    }}});
+    let response = shared_http_client()
+        .post(format!(
+            "https://fcm.googleapis.com/v1/projects/{}/messages:send",
+            config.project_id
+        ))
+        .bearer_auth(access_token)
+        .timeout(std::time::Duration::from_secs(10))
+        .json(&body)
+        .send()
+        .await?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(flow_like_types::anyhow!(
+            "Live Activity provider returned {}",
+            response.status()
+        ))
+    }
+}
+
 fn fcm_message_body(
     config: &PushNotificationsConfig,
     target: &push_notification_target::Model,
@@ -1192,7 +1310,15 @@ fn fcm_message_body(
         }
     });
 
-    if target.platform == PushNotificationTargetPlatform::Android {
+    if target.platform == PushNotificationTargetPlatform::Android && input.bot_context.is_some() {
+        body["message"]
+            .as_object_mut()
+            .unwrap()
+            .remove("notification");
+        body["message"]["android"] = serde_json::json!({"priority": "HIGH"});
+        apply_android_sender(&mut body["message"]["data"], sender);
+    }
+    if target.platform == PushNotificationTargetPlatform::Android && input.bot_context.is_none() {
         let mut android_notification = serde_json::Map::new();
         if let Some(channel_id) = target.channel_id.clone().or(config.channel_id.clone()) {
             android_notification.insert(
@@ -1238,6 +1364,10 @@ fn fcm_message_body(
             apns["fcm_options"] = serde_json::json!({
                 "image": image_url,
             });
+        }
+        if let Some(context) = &input.bot_context {
+            apns["payload"]["aps"]["category"] = serde_json::json!(context.category());
+            apns["payload"]["aps"]["content-available"] = serde_json::json!(1);
         }
         apply_apns_sender(&mut apns["payload"], input, sender);
 
@@ -1301,6 +1431,32 @@ fn notification_string_data(
 ) -> HashMap<String, String> {
     let mut data = HashMap::new();
     data.insert("notification_id".to_string(), notification_id.to_string());
+    if let Some(context) = &input.bot_context {
+        data.insert("user_id".to_string(), input.user_id.clone());
+        if let Some(scope) = target
+            .metadata
+            .as_ref()
+            .and_then(|value| value.get("native_scope"))
+            .and_then(serde_json::Value::as_str)
+            .filter(|scope| scope.len() <= 1024)
+        {
+            data.insert("native_scope".to_string(), scope.to_string());
+        }
+        data.extend(
+            context
+                .fields()
+                .into_iter()
+                .map(|(key, value)| (key.to_string(), value.to_string())),
+        );
+        data.insert(
+            "title".to_string(),
+            push_text(&input.title, 256).to_string(),
+        );
+        data.insert(
+            "body".to_string(),
+            push_text(input.description.as_deref().unwrap_or_default(), 1024).to_string(),
+        );
+    }
     if target.device_id.len() <= 256 {
         data.insert("device_id".to_string(), target.device_id.clone());
     }
@@ -1437,6 +1593,14 @@ fn aws_sns_payload(
     let default_body = push_text(input.description.as_deref().unwrap_or(&input.title), 1024);
     let payload = match target.platform {
         PushNotificationTargetPlatform::Android => {
+            if input.bot_context.is_some() {
+                let mut gcm = serde_json::json!({"priority": "high", "data": data});
+                apply_android_sender(&mut gcm["data"], sender);
+                return Ok(serde_json::to_string(&serde_json::json!({
+                    "default": default_body,
+                    "GCM": serde_json::to_string(&fit_push_payload(gcm)?)?
+                }))?);
+            }
             let mut notification = serde_json::json!({
                 "title": push_text(&input.title, 256),
                 "body": push_text(input.description.as_deref().unwrap_or_default(), 1024),
@@ -1612,6 +1776,13 @@ fn azure_message_payload(
 
     match target.platform {
         PushNotificationTargetPlatform::Android => {
+            if input.bot_context.is_some() {
+                let mut message = serde_json::json!({
+                    "message": {"android": {"priority": "HIGH"}, "data": data}
+                });
+                apply_android_sender(&mut message["message"]["data"], sender);
+                return Ok(serde_json::to_string(&fit_push_payload(message)?)?);
+            }
             let mut notification = serde_json::json!({
                 "title": push_text(&input.title, 256),
                 "body": push_text(input.description.as_deref().unwrap_or_default(), 1024),
@@ -2072,6 +2243,7 @@ mod tests {
 
     fn notification_input() -> DispatchNotificationInput {
         DispatchNotificationInput {
+            bot_context: None,
             user_id: "user-id".to_string(),
             app_id: Some("app-id".to_string()),
             title: "Build finished".to_string(),
@@ -2089,6 +2261,91 @@ mod tests {
         body.get("message")
             .and_then(serde_json::Value::as_object)
             .expect("FCM body contains a message object")
+    }
+
+    #[test]
+    fn native_bot_actions_keep_account_and_approval_context_on_both_platforms() {
+        let mut input = notification_input();
+        input.bot_context = Some(flow_like_types::bot_notify::BotNotificationContext {
+            bot_id: "bot_1".into(),
+            turn_id: Some("turn_1".into()),
+            approval_id: Some("approval_1".into()),
+            conversation_id: Some("conversation_1".into()),
+            expires_at: Some("2026-11-11T00:00:00Z".into()),
+            ..Default::default()
+        });
+        let mut android_target = target(PushNotificationTargetPlatform::Android);
+        android_target.metadata = Some(serde_json::json!({"native_scope": "profile-a"}));
+        let android = fcm_message_body(
+            &push_config(),
+            &android_target,
+            "token",
+            "notification",
+            &input,
+            None,
+        )
+        .unwrap();
+        assert!(android["message"].get("notification").is_none());
+        assert_eq!(android["message"]["android"]["priority"], "HIGH");
+        let data = &android["message"]["data"];
+        assert_eq!(data["user_id"], input.user_id);
+        assert_eq!(data["native_scope"], "profile-a");
+        assert_eq!(data["approval_id"], "approval_1");
+        let ios = fcm_message_body(
+            &push_config(),
+            &target(PushNotificationTargetPlatform::Ios),
+            "token",
+            "notification",
+            &input,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            ios["message"]["apns"]["payload"]["aps"]["category"],
+            "flow_like_bot_approval"
+        );
+        assert_eq!(ios["message"]["apns"]["payload"]["turn_id"], "turn_1");
+        assert_eq!(
+            ios["message"]["apns"]["payload"]["aps"]["content-available"],
+            1
+        );
+        let native = apns_payload(&input, HashMap::new(), None).unwrap();
+        assert_eq!(native["aps"]["content-available"], 1);
+        assert_eq!(native["aps"]["category"], "flow_like_bot_approval");
+    }
+
+    #[test]
+    fn clients_cannot_replace_activity_tokens_through_push_metadata() {
+        let key = crate::routes::bots::live_activities::METADATA_KEY;
+        let previous = serde_json::json!({ key: [{"token_encrypted": "secret"}] });
+        let client = serde_json::json!({ key: [{"token_encrypted": "forged"}], "device": "phone" });
+        let registered = registration_metadata(Some(client.clone()), Some(&previous)).unwrap();
+        assert_eq!(registered[key], previous[key]);
+        assert!(
+            registration_metadata(Some(client), None)
+                .unwrap()
+                .get(key)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn switching_native_scope_discards_previous_activity_subscriptions() {
+        let key = crate::routes::bots::live_activities::METADATA_KEY;
+        let previous =
+            serde_json::json!({"native_scope": "profile-a", key: [{"token_encrypted": "old"}]});
+        let next = registration_metadata(
+            Some(serde_json::json!({"native_scope": "profile-b"})),
+            Some(&previous),
+        )
+        .unwrap();
+        assert!(next.get(key).is_none());
+        let same = registration_metadata(
+            Some(serde_json::json!({"native_scope": "profile-a"})),
+            Some(&previous),
+        )
+        .unwrap();
+        assert_eq!(same[key], previous[key]);
     }
 
     #[test]
@@ -2369,6 +2626,54 @@ mod tests {
         let payload = apns_payload(&input, HashMap::new(), Some(&sender)).unwrap();
         assert_eq!(payload["aps"]["thread-id"], "bot:bot_1");
         assert_eq!(payload["app_name"], "Researcher");
+    }
+
+    #[test]
+    fn bot_notifications_stack_under_the_bot_on_android() {
+        let mut input = notification_input();
+        input.app_id = None;
+        input.link = Some(flow_like_types::bot_notify::chat_link("bot_1"));
+        input.bot_context = Some(flow_like_types::bot_notify::BotNotificationContext {
+            bot_id: "bot_1".into(),
+            ..Default::default()
+        });
+        let sender = PushSender {
+            name: "Joerg".to_string(),
+            icon: Some("https://cdn.example.com/bots/bot_1/look.png?signature=abc".to_string()),
+            thread_id: flow_like_types::bot_notify::group_key("bot_1"),
+        };
+        let android = target(PushNotificationTargetPlatform::Android);
+        assert!(presents_sender(&input, &android));
+        let body = fcm_message_body(
+            &push_config(),
+            &android,
+            "token",
+            "notification",
+            &input,
+            Some(&sender),
+        )
+        .unwrap();
+        let data = &body["message"]["data"];
+        assert_eq!(data["thread_id"], "bot:bot_1");
+        assert_eq!(data["app_name"], "Joerg");
+        assert_eq!(data["app_icon"], sender.icon.clone().unwrap());
+
+        input.bot_context = None;
+        assert!(!presents_sender(&input, &android));
+        let system = fcm_message_body(
+            &push_config(),
+            &android,
+            "token",
+            "notification",
+            &input,
+            Some(&sender),
+        )
+        .unwrap();
+        assert!(system["message"]["data"].get("app_name").is_none());
+        assert!(presents_sender(
+            &input,
+            &target(PushNotificationTargetPlatform::Ios)
+        ));
     }
 
     #[test]

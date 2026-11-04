@@ -11,6 +11,7 @@ mod host;
 mod routing;
 mod schedule;
 mod scope;
+mod secrets;
 
 #[cfg(test)]
 mod tests;
@@ -49,6 +50,7 @@ pub(crate) async fn turn_host(
     token: Option<String>,
     grants: std::sync::Arc<dyn flow_like::flow::copilot::tool_grants::GrantStore>,
     conv_id: Option<&str>,
+    site: Option<flow_like_bot_tools::TurnSite>,
 ) -> Option<std::sync::Arc<BotToolsHost>> {
     let workspace = bot.workspace_app_id.clone()?;
     let principal = BotUser {
@@ -83,7 +85,11 @@ pub(crate) async fn turn_host(
             api_base_url: None,
         },
     });
-    let notifier = std::sync::Arc::new(crate::bot_notify::ServerNotifier::new(state, &bot.bot_id));
+    let notifier = std::sync::Arc::new(crate::bot_notify::ServerNotifier::new(
+        state,
+        &bot.bot_id,
+        site,
+    ));
     let scheduler = std::sync::Arc::new(schedule::ApiScheduler::new(state, owner, &bot.bot_id));
     Some(std::sync::Arc::new(
         BotToolsHost::new(TurnDeps {
@@ -109,8 +115,14 @@ pub(crate) async fn turn_host(
             },
             executor: executor_for(state),
             grants,
+            secrets: std::sync::Arc::new(secrets::ServerSecrets::new(state, &bot.bot_id)),
         })
         .with_notifier(notifier)
+        .with_people(std::sync::Arc::new(crate::bot_people::ServerPeople::new(
+            state,
+            &bot.bot_id,
+            owner,
+        )))
         .with_scheduler(scheduler)
         .with_mail(std::sync::Arc::new(email::ApiMail::new(state, &bot.bot_id))),
     ))

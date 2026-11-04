@@ -1,3 +1,4 @@
+import type { IRealtimeAccess } from "../../lib/realtime/types";
 import type { IBotScopes } from "./bot-state";
 
 export type ConversationKind = "direct" | "group";
@@ -10,7 +11,10 @@ export type InboxEntryKind =
 	| "delete"
 	| "topic"
 	| "member"
-	| "trigger";
+	| "trigger"
+	| "activity"
+	| "call"
+	| "transcript";
 
 /** At most this many members, so one fan-out stays far below the database's transaction cap. */
 export const MAX_CONVERSATION_MEMBERS = 50;
@@ -32,9 +36,47 @@ export interface IInboxSealedEnvelope {
 
 export type IInboxEnvelope = IInboxPlainEnvelope | IInboxSealedEnvelope;
 
+/** A file in a bot's workspace, or a conversation file (`app_id` = `conversation_<conversation id>`). */
+export interface IInboxFileHandle {
+	app_id: string;
+	path: string;
+	bytes: number;
+	sha256: string;
+	mime: string;
+}
+
+export interface IInboxAttachmentPart {
+	kind: "attachment";
+	/** `a1`, `a2` ... numbered in order within the message. */
+	id: string;
+	name: string;
+	handle: IInboxFileHandle;
+}
+
+/** A finished conversation file upload: its `handle` goes into an attachment part. */
+export interface IConversationFileReady extends IInboxFileHandle {
+	file_id: string;
+	name: string;
+}
+
+export interface IConversationFileDownload {
+	/** A signed link for a few minutes, or a `blob:` URL for a file on this computer. */
+	url: string;
+	expires_at?: string;
+	name: string;
+	mime: string;
+	bytes: number;
+}
+
+export const CONVERSATION_FILE_APP_PREFIX = "conversation_";
+/** The most one conversation file can hold, like the 1:1 chat's uploads. */
+export const MAX_CONVERSATION_FILE_BYTES = 35 * 1024 * 1024;
+
 export interface IInboxMessageBody {
 	text: string;
 	reply_to?: string;
+	/** Attachments, numbered `a1`, `a2` ... in order. */
+	parts?: IInboxAttachmentPart[];
 	/** People and bots the message names; a mentioned bot in the room wakes. */
 	mentions?: string[];
 	/** Set by a chat that answers this message itself; hosts leave it alone meanwhile. */
@@ -54,6 +96,14 @@ export interface IInboxApproval {
 	requester_id?: string;
 	requester_name?: string;
 	room?: string;
+	/** Set on a `secret_request` card: the owner types the value instead of allowing a call. */
+	secret?: IInboxApprovalSecret;
+}
+
+export interface IInboxApprovalSecret {
+	name: string;
+	description: string;
+	replace?: boolean;
 }
 
 export interface IInboxApprovalResponse {
@@ -75,6 +125,11 @@ export interface IInboxEditBody {
 export interface IInboxDeleteBody {
 	target: string;
 }
+
+/** A call line: `started` carries the call id as its `message_id`; `ended` names it. */
+export type IInboxCallBody =
+	| { op: "started" }
+	| { op: "ended"; call: string; duration_ms: number };
 
 export interface IInboxMemberBody {
 	op: "join" | "leave";
@@ -100,6 +155,8 @@ export interface IBotRoomLimits {
 	apps?: string[] | null;
 	/** Further scopes per app id. */
 	scopes?: Record<string, IBotScopes>;
+	/** The bot answers only when a message names it or replies to it; it doesn't read along. */
+	mentioned_only?: boolean;
 }
 
 /** Someone invited to a group who has not joined yet. */
@@ -141,10 +198,57 @@ export interface IConversation {
 	unread_count: number;
 	/** You muted it: messages arrive and count as unread, but send no push. */
 	muted?: boolean;
+	/** When you pinned it to the top of your list; null when it isn't pinned. */
+	pinned_at?: string | null;
 	/** Newest `message` entry in the reader's inbox. */
 	last_entry: IInboxEntry | null;
 	/** Lives only on this device, between you and local bots, until it moves to an account. */
 	local?: boolean;
+}
+
+export interface IConversationPinState {
+	conversation_id: string;
+	pinned_at: string | null;
+}
+
+/** A message pinned to a conversation for every member. */
+export interface IPinnedMessage {
+	message_id: string;
+	pinned_by: string;
+	pinned_at: string;
+	/** The reader's copy; null when they joined after it was sent. */
+	entry: IInboxEntry | null;
+	/** The sender's newest edit of it in the reader's copy. */
+	latest_edit: IInboxEntry | null;
+}
+
+/** The most messages one conversation keeps pinned. */
+export const MAX_PINNED_MESSAGES = 50;
+
+/** A message you starred, kept for you across conversations. */
+export interface IStarredMessage {
+	conversation_id: string;
+	message_id: string;
+	starred_at: string;
+	entry: IInboxEntry;
+	/** The sender's newest edit of it in your copy. */
+	latest_edit: IInboxEntry | null;
+	/** Opaque; pass it back as `before`. */
+	cursor: string;
+}
+
+export interface IStarredMessagesPage {
+	/** Newest star first. */
+	stars: IStarredMessage[];
+	next_before: string | null;
+}
+
+export interface IStarredMessagesQuery {
+	/** Only this conversation's stars. */
+	conversationId?: string;
+	before?: string;
+	/** 1 to 200; 50 when omitted. */
+	limit?: number;
 }
 
 export interface ICreateConversationRequest {
@@ -158,7 +262,7 @@ export interface ICreateConversationRequest {
 export interface ISendInboxEntryRequest {
 	/** Chosen by the sender; sending the same id again returns the first result. */
 	message_id: string;
-	kind: Exclude<InboxEntryKind, "member" | "trigger">;
+	kind: Exclude<InboxEntryKind, "member" | "trigger" | "activity">;
 	/** Plain conversations. */
 	envelope?: IInboxPlainEnvelope;
 	/** End-to-end encrypted conversations: one sealed envelope per active member. */
@@ -302,6 +406,18 @@ export interface IInviteResponse {
 	conversation: IConversation;
 }
 
+export type ConversationTurnStatus = "queued" | "running" | "waiting";
+
+/** A bot turn on an account conversation that has not finished. */
+export interface IConversationTurn {
+	id: string;
+	bot_id: string;
+	status: ConversationTurnStatus;
+	trigger_message_id: string;
+	created_at: string;
+	updated_at: string;
+}
+
 export interface IInboxState {
 	/** Newest activity first. `as` reads one of your bots' inboxes. */
 	listConversations(as?: string): Promise<IConversation[]>;
@@ -340,6 +456,26 @@ export interface IInboxState {
 	/** Declines a message request and hides every other invitation from the same person. */
 	blockInvitation(invitation: IInvitation): Promise<void>;
 	setConversationMuted(conversationId: string, muted: boolean): Promise<void>;
+	/** Pinned conversations list first, newest pin first. */
+	setConversationPinned(
+		conversationId: string,
+		pinned: boolean,
+	): Promise<IConversationPinState>;
+	/** The conversation's pinned messages, newest pin first; `as` reads as one of your bots. */
+	listPins(conversationId: string, as?: string): Promise<IPinnedMessage[]>;
+	/** Pins a message for every member; pinning it again changes nothing. */
+	pinMessage(
+		conversationId: string,
+		messageId: string,
+	): Promise<IPinnedMessage>;
+	unpinMessage(conversationId: string, messageId: string): Promise<void>;
+	/** Stars a message for you only; starring it again changes nothing. */
+	starMessage(
+		conversationId: string,
+		messageId: string,
+	): Promise<IStarredMessage>;
+	unstarMessage(conversationId: string, messageId: string): Promise<void>;
+	listStars(query?: IStarredMessagesQuery): Promise<IStarredMessagesPage>;
 	cancelInvitation(conversationId: string, principalId: string): Promise<void>;
 	setMemberLimits(
 		conversationId: string,
@@ -350,6 +486,21 @@ export interface IInboxState {
 		conversationId: string,
 		request: ISendInboxEntryRequest,
 	): Promise<IInboxEntry>;
+	/**
+	 * Puts a file into a conversation you are an active member of and returns the handle for the
+	 * attachment part. Fails with `ATTACHMENTS_ENCRYPTED_UNSUPPORTED` in an end-to-end encrypted
+	 * conversation.
+	 */
+	uploadConversationFile(
+		conversationId: string,
+		file: File,
+	): Promise<IConversationFileReady>;
+	/** A short-lived link to a conversation file; `as` reads as one of your bots. */
+	conversationFileDownload(
+		conversationId: string,
+		handle: Pick<IInboxFileHandle, "path" | "mime">,
+		as?: string,
+	): Promise<IConversationFileDownload>;
 	/**
 	 * Moves messages of a bot's earlier chat into its direct conversation, oldest first. Messages
 	 * already there (same id) are skipped.
@@ -372,6 +523,33 @@ export interface IInboxState {
 	registerKey(request: IRegisterInboxKeyRequest): Promise<IInboxKey>;
 	/** Retires a key; pass one of your bots' ids to retire that bot's key. */
 	revokeKey(keyId: string, principalId?: string): Promise<void>;
+	/** Unfinished bot turns in an account conversation, oldest first; local conversations have none. */
+	listConversationTurns?(conversationId: string): Promise<IConversationTurn[]>;
+	/** Signaling credentials for the conversation's peer room; account conversations only. */
+	getConversationRealtimeAccess?(
+		conversationId: string,
+	): Promise<IRealtimeAccess>;
+}
+
+function timeOf(value: string | null | undefined): number {
+	const time = value ? Date.parse(value) : Number.NaN;
+	return Number.isNaN(time) ? 0 : time;
+}
+
+/** Pinned conversations first, newest pin first; then newest activity first. */
+export function compareConversations(
+	a: Pick<IConversation, "id" | "pinned_at" | "last_activity_at">,
+	b: Pick<IConversation, "id" | "pinned_at" | "last_activity_at">,
+): number {
+	const pinned = Number(Boolean(b.pinned_at)) - Number(Boolean(a.pinned_at));
+	if (pinned !== 0) return pinned;
+	const order =
+		a.pinned_at && b.pinned_at
+			? timeOf(b.pinned_at) - timeOf(a.pinned_at)
+			: timeOf(b.last_activity_at) - timeOf(a.last_activity_at);
+	if (order !== 0) return order;
+	if (a.id === b.id) return 0;
+	return a.id < b.id ? 1 : -1;
 }
 
 /** The by-position part of an entries query as URL parameters; unset fields are left out. */

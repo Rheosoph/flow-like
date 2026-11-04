@@ -118,14 +118,10 @@ export function LargeGraphNavigation({
 							aria-label={t("largeGraphSearchNodes", "Search nodes")}
 						/>
 						<output className="block px-1 py-2 text-xs text-muted-foreground">
-							{t(
-								"largeGraphSearchResults",
-								"Results: {{shown}} of {{total}}",
-								{
-									shown: Math.min(matches.length, SEARCH_RESULT_LIMIT),
-									total: matches.length.toLocaleString(),
-								},
-							)}
+							{t("largeGraphSearchResults", "Results: {{shown}} of {{total}}", {
+								shown: Math.min(matches.length, SEARCH_RESULT_LIMIT),
+								total: matches.length.toLocaleString(),
+							})}
 						</output>
 						<ul className="max-h-72 overflow-y-auto">
 							{matches.slice(0, SEARCH_RESULT_LIMIT).map((entry) => (

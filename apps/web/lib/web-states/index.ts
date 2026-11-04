@@ -21,3 +21,4 @@ export { WebApiState } from "./api-state";
 export { WebHelperState } from "./helper-state";
 export { WebSinkState } from "./sink-state";
 export { WebUsageState } from "./usage-state";
+export { WebAudioState } from "./audio-state";

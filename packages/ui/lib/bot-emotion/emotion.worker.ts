@@ -18,7 +18,16 @@ env.allowLocalModels = false;
 env.useBrowserCache = true;
 // Transformers.js omits revision on tokenizer metadata probes. Pin their URLs too.
 env.remotePathTemplate = `{model}/resolve/${BOT_EMOTION_REVISION}/`;
-if (env.backends.onnx.wasm) env.backends.onnx.wasm.numThreads = 1;
+if (env.backends.onnx.wasm) {
+	env.backends.onnx.wasm.numThreads = 1;
+	if (
+		typeof process !== "undefined" &&
+		process.env.NEXT_PUBLIC_BOT_EMOTION_BUNDLED_WASM === "true"
+	) {
+		// Use the bundled factory and same-origin WASM instead of the CDN defaults.
+		env.backends.onnx.wasm.wasmPaths = undefined;
+	}
+}
 
 function send(message: EmotionWorkerResponse) {
 	self.postMessage(message);

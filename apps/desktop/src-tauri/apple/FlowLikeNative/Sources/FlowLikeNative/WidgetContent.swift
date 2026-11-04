@@ -88,6 +88,7 @@ public enum NativeWidgetLaunchURL {
         switch kind {
         case "flowpilot": destination = "flowpilot"
         case "inbox", "attention": destination = "inbox"
+        case "bots", "bot_tasks", "bot_approvals": destination = "bots"
         default: return home
         }
         var components = URLComponents(string: "flow-like://native/\(destination)")!
@@ -101,6 +102,15 @@ public enum NativeWidgetLaunchURL {
         components.queryItems = [URLQueryItem(name: "appId", value: appId),
                                  URLQueryItem(name: "runId", value: runId),
                                  URLQueryItem(name: "scope", value: scope)]
+        components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        return components.url ?? home
+    }
+
+    public static func bot(botId: String, scope: String, conversationId: String? = nil, turnId: String? = nil) -> URL {
+        var components = URLComponents(string: "flow-like://native/bot")!
+        components.queryItems = [URLQueryItem(name: "botId", value: botId), URLQueryItem(name: "scope", value: scope)]
+        if let conversationId { components.queryItems?.append(URLQueryItem(name: "conversationId", value: conversationId)) }
+        if let turnId { components.queryItems?.append(URLQueryItem(name: "turnId", value: turnId)) }
         components.percentEncodedQuery = components.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
         return components.url ?? home
     }

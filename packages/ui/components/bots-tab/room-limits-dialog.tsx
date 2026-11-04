@@ -61,6 +61,30 @@ function RoomLimitsForm({
 			}}
 		>
 			<div className="flex max-h-[50dvh] flex-col gap-4 overflow-y-auto pr-1">
+				<label className="flex items-start gap-2 text-sm">
+					<Checkbox
+						className="mt-0.5"
+						checked={draft.mentionedOnly}
+						disabled={pending}
+						onCheckedChange={(on) =>
+							setDraft((current) => ({
+								...current,
+								mentionedOnly: on === true,
+							}))
+						}
+					/>
+					<span className="flex flex-col gap-0.5">
+						<span>
+							{t("roomLimits.mentionedOnly", "Answer only when mentioned")}
+						</span>
+						<span className="text-xs text-muted-foreground">
+							{t(
+								"roomLimits.mentionedOnlyHint",
+								"Without this, the bot reads along with messages from people in this room and decides itself whether to answer.",
+							)}
+						</span>
+					</span>
+				</label>
 				<RestrictionsEditor
 					value={draft.restrictions}
 					options={NO_OPTIONS}

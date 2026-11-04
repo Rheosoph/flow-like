@@ -425,6 +425,28 @@ async fn a_moved_bot_keeps_its_memory_and_embedding_model() {
     assert_eq!(settings.embedding_model.as_deref(), Some("embed-a"));
 }
 
+#[tokio::test]
+async fn a_moved_bot_keeps_its_model_pins() {
+    let db = database().await;
+    let local = request(
+        LOCAL_ID,
+        json!({
+            "stt_model": "stt-a",
+            "tts_model": "tts-a",
+            "image_model": "image-a",
+            "vision_model": "vision-a",
+        }),
+    );
+    let Imported::Created(stored) = import(&db, &local).await.unwrap() else {
+        panic!("a new bot is created");
+    };
+    let settings = BotSettings::from_row(&stored);
+    assert_eq!(settings.stt_model.as_deref(), Some("stt-a"));
+    assert_eq!(settings.tts_model.as_deref(), Some("tts-a"));
+    assert_eq!(settings.image_model.as_deref(), Some("image-a"));
+    assert_eq!(settings.vision_model.as_deref(), Some("vision-a"));
+}
+
 /// `custom_bot` rows run on the server; FREE (no account row yet) allows three of them.
 #[tokio::test]
 async fn a_bot_moves_onto_the_server_only_within_the_plan() {

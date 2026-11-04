@@ -19,7 +19,7 @@ use axum::{
     Router,
     extract::DefaultBodyLimit,
     http::StatusCode,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
 };
 use chrono::{DateTime, FixedOffset, Timelike};
 use flow_like_types::inbox::{InboxEntryKind, MAX_CONVERSATION_MEMBERS, MAX_ENVELOPE_BYTES};
@@ -28,22 +28,29 @@ use sea_orm::{
     EntityTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait, SqlErr, Statement,
 };
 
+pub(crate) mod activity;
 pub(crate) mod approvals;
 pub mod conversations;
 pub mod delivery;
 pub mod entries;
+pub mod files;
 pub(crate) mod exchange;
 pub mod import;
 pub mod invitations;
 pub mod keys;
 pub(crate) mod mail_threads;
+pub(crate) mod marks;
 pub mod members;
 pub mod model;
+pub(crate) mod outreach;
 pub(crate) mod person_push;
+pub mod pins;
 mod positions;
+pub mod presence;
 pub(crate) mod requests;
 pub mod retirement;
 pub mod segments;
+pub mod stars;
 mod targets;
 pub(crate) mod triggers;
 pub mod turns;
@@ -58,6 +65,8 @@ mod concurrency_tests;
 #[cfg(test)]
 pub(crate) mod fixture;
 #[cfg(test)]
+mod files_tests;
+#[cfg(test)]
 mod history_tests;
 #[cfg(test)]
 mod import_tests;
@@ -65,6 +74,10 @@ mod import_tests;
 mod invitations_tests;
 #[cfg(test)]
 mod mail_threads_tests;
+#[cfg(test)]
+mod marks_tests;
+#[cfg(test)]
+mod presence_tests;
 #[cfg(test)]
 mod requests_tests;
 #[cfg(test)]
@@ -86,6 +99,7 @@ pub(crate) const BOT_TURN_NOT_CLAIMED: &str = "BOT_TURN_NOT_CLAIMED";
 pub(crate) const INBOX_INVITE_LIMIT: &str = "INBOX_INVITE_LIMIT";
 pub(crate) const INBOX_INVITE_NOT_ALLOWED: &str = "INBOX_INVITE_NOT_ALLOWED";
 pub(crate) const INBOX_REQUEST_LIMIT: &str = "INBOX_REQUEST_LIMIT";
+pub(crate) const INBOX_PIN_LIMIT: &str = "INBOX_PIN_LIMIT";
 
 pub(crate) const MEMBER_ACTIVE: &str = "ACTIVE";
 pub(crate) const MEMBER_PENDING: &str = "PENDING";
@@ -152,6 +166,20 @@ pub fn routes() -> Router<AppState> {
             "/conversations/{conversation_id}/mute",
             patch(person_push::set_mute),
         )
+        .route("/conversations/{conversation_id}/pin", patch(pins::set_pin))
+        .route(
+            "/conversations/{conversation_id}/pins",
+            get(pins::list_pins),
+        )
+        .route(
+            "/conversations/{conversation_id}/pins/{message_id}",
+            put(pins::pin_message).delete(pins::unpin_message),
+        )
+        .route(
+            "/conversations/{conversation_id}/stars/{message_id}",
+            put(stars::star_message).delete(stars::unstar_message),
+        )
+        .route("/stars", get(stars::list_stars))
         .route("/invitable", get(invitations::list_invitable))
         .route(
             "/conversations/{conversation_id}/entries",
@@ -160,12 +188,32 @@ pub fn routes() -> Router<AppState> {
                 .layer(DefaultBodyLimit::max(SEND_BODY_LIMIT)),
         )
         .route(
+            "/conversations/{conversation_id}/files",
+            post(files::mint_file),
+        )
+        .route(
+            "/conversations/{conversation_id}/files/{file_id}",
+            get(files::download_file),
+        )
+        .route(
+            "/conversations/{conversation_id}/files/{file_id}/complete",
+            post(files::complete_file),
+        )
+        .route(
             "/conversations/{conversation_id}/read",
             post(entries::mark_read),
         )
         .route(
             "/conversations/{conversation_id}/turns/{turn_id}",
             get(crate::routes::bots::turns::get_conversation_turn),
+        )
+        .route(
+            "/conversations/{conversation_id}/turns",
+            get(presence::list_active_turns),
+        )
+        .route(
+            "/conversations/{conversation_id}/realtime",
+            post(presence::conversation_realtime),
         )
         .route(
             "/conversations/{conversation_id}/segments",
@@ -276,6 +324,19 @@ async fn reader_membership<C: ConnectionTrait>(
         .map(|_| ())
 }
 
+/// The inbox `sub` reads a conversation from, itself or with `as_bot` one of its bots, as the
+/// entries route resolves it; the reader must be an active member.
+pub(crate) async fn readable_inbox<C: ConnectionTrait>(
+    db: &C,
+    sub: &str,
+    as_bot: Option<&str>,
+    conversation_id: &str,
+) -> Result<String, ApiError> {
+    let reader = reader(db, sub, as_bot).await?;
+    reader_membership(db, conversation_id, &reader).await?;
+    Ok(reader.inbox)
+}
+
 /// The inboxes a person's realtime fingerprint covers: their own and their live bots'.
 pub(crate) fn watched_inboxes(column: impl ColumnTrait, sub: &str) -> Condition {
     let bots = bot::Entity::find()
@@ -291,7 +352,7 @@ pub(crate) fn watched_inboxes(column: impl ColumnTrait, sub: &str) -> Condition 
 
 /// The principal's membership if it is active; a conversation they left or were never in
 /// reads as missing.
-async fn active_membership<C: ConnectionTrait>(
+pub(crate) async fn active_membership<C: ConnectionTrait>(
     db: &C,
     conversation_id: &str,
     principal_id: &str,
@@ -421,6 +482,7 @@ fn message_id_taken() -> ApiError {
 pub(crate) async fn wake(state: &AppState, people: impl IntoIterator<Item = String>) {
     futures::future::join_all(people.into_iter().map(|sub| async move {
         state.channels.publish_realtime_invalidation(&sub).await;
+        crate::routes::bots::live_activities::refresh_owner(state, &sub).await;
     }))
     .await;
 }

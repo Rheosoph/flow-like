@@ -127,6 +127,8 @@ pub struct Conversation {
     pub unread_count: u64,
     /// The reader muted this conversation: its messages send no push.
     pub muted: bool,
+    /// When the reader pinned it to the top of their list; null when it isn't pinned.
+    pub pinned_at: Option<DateTime<FixedOffset>>,
     /// The newest message in the reader's inbox.
     pub last_entry: Option<InboxEntry>,
 }

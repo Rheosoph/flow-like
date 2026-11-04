@@ -43,9 +43,10 @@ function expectWorkspace(value: unknown, botId: string): IBotWorkspace {
 
 /**
  * The bot's workspace app, set up the first time a pane needs it. Asked once per bot and
- * session; the host answers a repeat with the same app.
+ * session; the host answers a repeat with the same app. Without `setUp` it only reads an
+ * earlier answer until `query.refetch()` asks.
  */
-export function useBotWorkspace(botId: string) {
+export function useBotWorkspace(botId: string, setUp = true) {
 	const state = useBackend().botState;
 	const supported = typeof state?.getWorkspace === "function";
 	const query = useQuery({
@@ -56,7 +57,7 @@ export function useBotWorkspace(botId: string) {
 			}
 			return expectWorkspace(await state.getWorkspace(botId), botId);
 		},
-		enabled: supported,
+		enabled: supported && setUp,
 		staleTime: Number.POSITIVE_INFINITY,
 		gcTime: Number.POSITIVE_INFINITY,
 		retry: false,

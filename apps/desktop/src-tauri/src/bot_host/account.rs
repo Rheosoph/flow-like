@@ -19,6 +19,7 @@ use super::{
 };
 use flow_like::flow::copilot::{
     TurnRequester,
+    bot_talk::AnsweredRound,
     memory_open::follow_up,
     tool_grants::{GrantStore, clear_tokens, resume_note},
 };
@@ -26,7 +27,7 @@ use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
     bot_message::ApprovalRequest,
     bot_turn::{BotTurn, TurnAudience, TurnStatus, failure_message_id, reply_message_id},
-    inbox::{ConversationKind, plain_envelope},
+    inbox::{ConversationKind, InboxEntryKind, plain_envelope},
 };
 use serde_json::json;
 use std::{
@@ -284,7 +285,7 @@ impl Inner {
         {
             tracing::debug!(%failure, "Bot host: publishing encryption keys failed");
         }
-        let bots = self.hub.desktop_bots().await?;
+        let bots = self.hub.reported_bots().await?;
         if bots.is_empty() && !self.reporting.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -436,8 +437,31 @@ impl Inner {
             .zip(lead.requester_name.iter())
             .map(|(id, name)| (id.clone(), name.clone()))
             .collect();
+        let reacting = entries.iter().any(|entry| {
+            entry.message_id == lead.trigger_message_id && entry.kind == InboxEntryKind::Reaction
+        });
+        let mut reactions = Vec::new();
+        let mut answered_round = None;
         let transcript = match self.late_answer(lead, &hub).await {
-            Some(transcript) => transcript,
+            Some((transcript, round)) => {
+                answered_round = round;
+                transcript
+            }
+            None if reacting => {
+                let answered: Vec<String> = std::iter::once(lead.trigger_message_id.clone())
+                    .chain(lead.batched.iter().cloned())
+                    .collect();
+                let found = transcript::reaction_turn(
+                    bot_id,
+                    kind,
+                    &answered,
+                    &entries,
+                    &names,
+                    &lead.owner_id,
+                );
+                reactions = found.reactions;
+                found.transcript
+            }
             None => match transcript::transcript(
                 bot_id,
                 kind,
@@ -466,10 +490,27 @@ impl Inner {
             bot_id: bot_id.clone(),
         });
         let seen = grants.list().await.unwrap_or_default();
+        let no_prompt = transcript.prompt.is_empty();
         let prompt = match resume_note(grants.as_ref()).await {
             Some(note) => format!("{}\n\n{note}", transcript.prompt),
             None => transcript.prompt,
         };
+        let requester = TurnRequester {
+            requester_id: lead
+                .requester_id
+                .clone()
+                .unwrap_or_else(|| lead.owner_id.clone()),
+            requester_name: lead.requester_name.clone(),
+            owner_id: lead.owner_id.clone(),
+            owner_name: None,
+            audience: lead.audience,
+            room: None,
+            addressed: transcript.addressed,
+            reactions,
+        };
+        if reacting && no_prompt {
+            return self.stay_silent(lead).await;
+        }
         let (runner, stop_id) = (self.runner.clone(), lead.id.clone());
         let gate = ApprovalGate::new(grants.clone(), &lead.id, move || runner.cancel(&stop_id));
         let job = TurnJob {
@@ -481,18 +522,9 @@ impl Inner {
             history: transcript.history,
             memory: memory.clone(),
             gate: gate.clone(),
-            requester: Some(TurnRequester {
-                requester_id: lead
-                    .requester_id
-                    .clone()
-                    .unwrap_or_else(|| lead.owner_id.clone()),
-                requester_name: lead.requester_name.clone(),
-                owner_id: lead.owner_id.clone(),
-                owner_name: None,
-                audience: lead.audience,
-                room: None,
-            }),
+            requester: Some(requester.clone()),
             hub_token,
+            answered_round,
         };
         let outcome = tokio::select! {
             biased;
@@ -506,6 +538,15 @@ impl Inner {
             return self.park(key, lead, &hub, &card, sealed, cancel).await;
         }
         match outcome {
+            Ok(Ok(text)) if requester.answer_is_silent(&text) => {
+                self.stay_silent(lead).await
+            }
+            Ok(Err(RunError::SessionChanged)) => End::dropped(super::host::CODE_SESSION_CHANGED),
+            Ok(Err(_)) if requester.may_stay_silent() => self.stay_silent(lead).await,
+            Err(_) if requester.may_stay_silent() => {
+                self.runner.cancel(&lead.id);
+                self.stay_silent(lead).await
+            }
             Ok(Ok(text)) if !text.trim().is_empty() => {
                 let end = self
                     .post(key, lead, &hub, &clipped(&text, MAX_REPLY_CHARS), None, sealed, cancel)
@@ -522,7 +563,6 @@ impl Inner {
                 let text = "The language model returned no answer. You can ask again.";
                 self.post(key, lead, &hub, text, Some(CODE_MODEL), sealed, cancel).await
             }
-            Ok(Err(RunError::SessionChanged)) => End::dropped(super::host::CODE_SESSION_CHANGED),
             Ok(Err(RunError::Failed { code, message })) => {
                 let text = format!(
                     "I couldn't answer this: {}",
@@ -538,13 +578,29 @@ impl Inner {
         }
     }
 
+    /// Ends a turn that read along without answering: done, nothing posted.
+    async fn stay_silent(&self, lead: &BotTurn) -> End {
+        match self.hub.silent(&lead.id, &self.config.host_id).await {
+            Ok(()) => End {
+                status: TurnStatus::Done,
+                error_code: flow_like_types::bot_turn::ERROR_SILENT.to_owned(),
+                reply: None,
+            },
+            Err(failure) if failure.lease_lost() => End::lease_lost(),
+            Err(failure) => {
+                tracing::warn!(%failure, "Bot host: the hub did not record a silent turn");
+                End::failed(CODE_HUB)
+            }
+        }
+    }
+
     /// The turn a late answer woke reads the conversation the question was asked from, with the
-    /// answer on top; `None` for any other turn.
+    /// answer on top, and goes on counting its questions to the callee; `None` for any other turn.
     async fn late_answer(
         &self,
         lead: &BotTurn,
         hub: &Arc<dyn TurnHub>,
-    ) -> Option<transcript::Transcript> {
+    ) -> Option<(transcript::Transcript, Option<AnsweredRound>)> {
         let asked = match hub.ask_result(&lead.bot_id, &lead.id).await {
             Ok(asked) => asked?,
             Err(failure) => {
@@ -573,7 +629,7 @@ impl Inner {
             None => (Vec::new(), None),
         };
         let latest = latest.filter(|text| !text.trim().is_empty());
-        Some(transcript::Transcript {
+        let transcript = transcript::Transcript {
             prompt: flow_like_types::bot_message::ask_result_prompt(
                 &asked.callee_name,
                 &clipped(&asked.question, ASK_PREVIEW_CHARS),
@@ -582,7 +638,9 @@ impl Inner {
                 latest.as_deref(),
             ),
             history,
-        })
+            addressed: true,
+        };
+        Some((transcript, asked.answered_round()))
     }
 
     /// Asks the hub to park the turn this host holds; the hub posts the card as the bot.

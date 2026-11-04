@@ -436,6 +436,9 @@ pub async fn update_bot(
             })
         })
         .await?;
+    if patched.changed.contains(&"location") {
+        crate::bot_host::task_schedules::sync_bot(&state, &bot_id).await;
+    }
     if !patched.changed.is_empty() {
         audit!(
             state,

@@ -9,6 +9,7 @@ use super::{
     model::{Bot, BotSettings, UpdateBotRequest},
     owned_bot,
     provision::{insert_system_bots, live_bots, new_bot_row},
+    secrets,
     validation::{
         BOT_CAPABILITIES_FIXED, BOT_LIMIT_REACHED, BOT_SERVER_LIMIT_REACHED, MAX_CUSTOM_BOTS,
         NAME_MAX_CHARS, system_defaults,
@@ -379,6 +380,10 @@ fn stored_rows_read_back_as_the_settings_that_wrote_them() {
         deleted_at: None,
         import_key: None,
         embedding_model: None,
+        stt_model: None,
+        tts_model: None,
+        image_model: None,
+        vision_model: None,
     };
     assert_eq!(model.location, "DESKTOP");
     assert_eq!(*model.capabilities, ["computer_use", "webhook"]);
@@ -598,6 +603,10 @@ async fn a_duplicate_copies_the_settings_and_the_apps_the_owner_still_uses() {
             fallbacks: vec!["model-b".into()],
         },
         embedding_model: Some("embed-a".into()),
+        stt_model: Some("stt-a".into()),
+        tts_model: Some("tts-a".into()),
+        image_model: Some("image-a".into()),
+        vision_model: Some("vision-a".into()),
         classification: DataSensitivity {
             classification: Some(DataClassification::Confidential),
             pii: true,
@@ -976,4 +985,77 @@ fn the_duplicate_route_and_the_server_bot_limit_are_documented() {
             "{method} {path}: {conflict}"
         );
     }
+}
+
+async fn stored_secret(
+    db: &DatabaseConnection,
+    bot_id: &str,
+    name: &str,
+    encryption: &str,
+    ciphertext: String,
+) {
+    bot_secret::ActiveModel {
+        bot_id: Set(bot_id.into()),
+        name: Set(name.into()),
+        encryption: Set(encryption.into()),
+        ciphertext: Set(ciphertext),
+        description: Set(Some("Weather API".into())),
+        created_at: Set(at(0)),
+        updated_at: Set(at(0)),
+        last_used_at: Set(None),
+    }
+    .insert(db)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn only_server_secrets_open_for_the_bot_and_each_read_is_recorded() {
+    let db = database().await;
+    let master = [7u8; 32];
+    let ciphertext = super::secret_cipher::encrypt(&master, "bot_a", "API_KEY", "sk-1").unwrap();
+    stored_secret(&db, "bot_a", "API_KEY", "SERVER", ciphertext).await;
+    stored_secret(&db, "bot_a", "SEALED_KEY", "SEALED", "{}".into()).await;
+
+    let value = secrets::open_for_bot(&db, &master, "bot_a", "API_KEY")
+        .await
+        .unwrap();
+    assert_eq!(value.as_deref(), Some("sk-1"));
+    let read = bot_secret::Entity::find_by_id(("bot_a".to_string(), "API_KEY".to_string()))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(read.last_used_at.is_some());
+
+    assert_eq!(
+        secrets::open_for_bot(&db, &master, "bot_a", "MISSING")
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        secrets::open_for_bot(&db, &master, "bot_b", "API_KEY")
+            .await
+            .unwrap(),
+        None
+    );
+    let sealed = secrets::open_for_bot(&db, &master, "bot_a", "SEALED_KEY")
+        .await
+        .unwrap_err();
+    assert_eq!(sealed.status(), StatusCode::CONFLICT);
+    assert_eq!(sealed.public_code(), "BOT_SECRET_SEALED");
+    assert!(
+        secrets::open_for_bot(&db, &[8u8; 32], "bot_a", "API_KEY")
+            .await
+            .is_err()
+    );
+
+    let names: Vec<String> = secrets::secret_infos(&db, "bot_a")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|info| info.name)
+        .collect();
+    assert_eq!(names, ["API_KEY", "SEALED_KEY"]);
 }

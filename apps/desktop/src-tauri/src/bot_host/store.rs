@@ -7,7 +7,10 @@ use flow_like_local_bots::{
     Bot, Conversation, ConversationSegmentList, EntriesQuery, InboxEntriesPage, InboxEntry,
     PositionQuery, SegmentsQuery, SendEntryRequest, WriteSegmentRequest,
 };
-use flow_like_types::bot_message::{ApprovalRequest, ApprovalResponse};
+use flow_like_types::{
+    bot_effective::BotRoomLimits,
+    bot_message::{ApprovalRequest, ApprovalResponse},
+};
 use flow_like::flow::copilot::tool_grants::GrantKey;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
@@ -27,6 +30,14 @@ pub trait HostStore: Send + Sync + 'static {
         sender_id: &str,
         request: SendEntryRequest,
     ) -> Result<InboxEntry, String>;
+    /// The limits the person set for the bot in this room; `None` adds no limit.
+    async fn room_limits(
+        &self,
+        _conversation_id: &str,
+        _bot_id: &str,
+    ) -> Result<Option<BotRoomLimits>, String> {
+        Ok(None)
+    }
     /// Entries by position, oldest first: what a bot's memory reads its history through.
     async fn positions(
         &self,
@@ -142,6 +153,16 @@ impl HostStore for AppStore {
     async fn bot(&self, bot_id: &str) -> Result<Option<Bot>, String> {
         let id = bot_id.to_owned();
         self.with(move |store| store.get_bot(&id)).await
+    }
+
+    async fn room_limits(
+        &self,
+        conversation_id: &str,
+        bot_id: &str,
+    ) -> Result<Option<BotRoomLimits>, String> {
+        let (conversation, bot) = (conversation_id.to_owned(), bot_id.to_owned());
+        self.with(move |store| store.member_limits(&conversation, &bot))
+            .await
     }
 
     async fn send(

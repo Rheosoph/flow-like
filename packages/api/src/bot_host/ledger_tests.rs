@@ -3,12 +3,19 @@ use super::{
         assert_code, at, conversation, database, delete_bot, delivery, insert_bot, recipient, says,
     },
     ledger::{
-        BOT_TURN_LEASE_LOST, BOT_TURN_NOT_RETRYABLE, ClaimRequest, Refusal, claim_in, enqueue_in,
-        fail_held_in, heartbeat_in, mark_failed_after_reply_in, next_head, queued_heads,
-        recover_in, release_for_retry_in, retry_in, take_in, watched_turn,
+        BOT_TURN_LEASE_LOST, BOT_TURN_NOT_RETRYABLE, ClaimRequest, DESKTOP_HANDOFF_SECS, Refusal,
+        claim_in, enqueue_in, fail_held_in, hand_back_in, heartbeat_in, mark_failed_after_reply_in,
+        next_head, queued_heads, queues_turn, recover_in, release_for_retry_in, retry_in, take_in,
+        watched_turn,
     },
 };
-use crate::entity::{bot, bot_turn};
+use crate::{
+    entity::{bot, bot_turn},
+    routes::{
+        bots::presence::{ONLINE_WINDOW_SECS, report_in},
+        inbox::{delivery::BotRecipient, fixture::insert_flux},
+    },
+};
 use axum::http::StatusCode;
 use chrono::{DateTime, Duration, FixedOffset};
 use flow_like_types::{
@@ -22,7 +29,8 @@ use flow_like_types::{
     inbox::{ConversationKind, InboxEntryKind},
 };
 use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, sea_query::Expr,
+    ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    sea_query::Expr,
 };
 
 const SERVER: BotLocation = BotLocation::Server;
@@ -171,6 +179,67 @@ async fn in_a_group_only_a_mentioned_or_replied_to_bot_takes_a_turn() {
 }
 
 #[tokio::test]
+async fn a_persons_unaddressed_message_wakes_every_reading_bot_but_a_bots_message_wakes_none() {
+    let db = database().await;
+    let mut reader = recipient("bot_1", "user-a", SERVER);
+    reader.read_along = true;
+    let mut mention_only = recipient("bot_2", "user-a", SERVER);
+    mention_only.read_along = false;
+    let mut named = recipient("bot_3", "user-a", SERVER);
+    named.read_along = false;
+    named.mentioned = true;
+    let found = delivery(
+        ConversationKind::Group,
+        vec![reader.clone(), mention_only.clone(), named.clone()],
+    );
+    for (recipient, wakes) in [(&reader, true), (&mention_only, false), (&named, true)] {
+        assert_eq!(
+            queues_turn(&found, recipient),
+            wakes,
+            "{}",
+            recipient.bot_id
+        );
+    }
+    assert!(reader.reads_along_only() && !named.reads_along_only());
+    assert_eq!(enqueue_in(&db, &found, at(1)).await.unwrap(), 2);
+
+    let mut by_bot = delivery(ConversationKind::Group, vec![]);
+    by_bot.sender_id = "bot_9".into();
+    let mut addressed = named.clone();
+    addressed.hops = 1;
+    reader.read_along = false;
+    assert!(!queues_turn(&by_bot, &reader));
+    assert!(queues_turn(&by_bot, &addressed));
+    addressed.hops = MAX_HOPS + 1;
+    assert!(!queues_turn(&by_bot, &addressed));
+}
+
+#[test]
+fn a_reaction_wakes_only_the_bot_it_reacts_to_in_a_group_or_a_direct_conversation() {
+    for kind in [ConversationKind::Group, ConversationKind::Direct] {
+        let mut reacted = recipient("bot_1", "user-a", SERVER);
+        reacted.reacted = true;
+        let mut other = recipient("bot_2", "user-a", SERVER);
+        other.read_along = true;
+        other.mentioned = true;
+        let mut found = delivery(kind, vec![reacted.clone(), other.clone()]);
+        found.kind = InboxEntryKind::Reaction;
+        assert!(queues_turn(&found, &reacted), "{kind:?}");
+        assert!(!queues_turn(&found, &other), "{kind:?}");
+        found.sender_id = "bot_1".into();
+        assert!(!queues_turn(&found, &reacted), "a bot's own reaction");
+    }
+}
+
+#[test]
+fn direct_conversations_wake_the_bot_whether_or_not_it_reads_along() {
+    let mut quiet = recipient("bot_1", "user-a", SERVER);
+    quiet.read_along = false;
+    let found = delivery(ConversationKind::Direct, vec![quiet.clone()]);
+    assert!(queues_turn(&found, &quiet));
+}
+
+#[tokio::test]
 async fn messages_carry_hops_and_the_cap_itself_still_queues() {
     let db = database().await;
     let mut at_cap = recipient("bot_1", "user-a", SERVER);
@@ -209,6 +278,30 @@ async fn only_messages_wake_bots() {
         assert_eq!(enqueue_in(&db, &event, at(1)).await.unwrap(), 0, "{kind:?}");
     }
     assert!(turns(&db).await.is_empty());
+}
+
+#[tokio::test]
+async fn a_transcript_wakes_only_the_bots_it_mentions() {
+    let db = database().await;
+    for kind in [ConversationKind::Direct, ConversationKind::Group] {
+        let mut named = recipient("bot_1", "user-a", SERVER);
+        named.mentioned = true;
+        let mut other = recipient("bot_2", "user-b", SERVER);
+        other.read_along = true;
+        let mut event = delivery(kind, vec![named.clone(), other.clone()]);
+        event.kind = InboxEntryKind::Transcript;
+        assert!(queues_turn(&event, &named), "{kind:?}");
+        assert!(!queues_turn(&event, &other), "{kind:?}");
+    }
+    let mut event = delivery(
+        ConversationKind::Group,
+        vec![recipient("bot_1", "user-a", SERVER)],
+    );
+    event.kind = InboxEntryKind::Call;
+    let mut named = recipient("bot_1", "user-a", SERVER);
+    named.mentioned = true;
+    assert!(!queues_turn(&event, &named), "a call wakes no one");
+    assert_eq!(enqueue_in(&db, &event, at(1)).await.unwrap(), 0);
 }
 
 #[tokio::test]
@@ -793,4 +886,140 @@ async fn a_turn_is_watched_by_its_bots_owner_and_the_conversations_people() {
             .unwrap()
             .is_none()
     );
+}
+
+/// A ledger whose owner `user-a` has Flux (`bot_flux`) and a plain server bot (`bot_plain`).
+async fn handoff_db() -> DatabaseConnection {
+    let db = database().await;
+    db.execute_unprepared(
+        r#"CREATE TABLE public."BotHostHeartbeat" (
+            "botId" TEXT NOT NULL, "hostId" TEXT NOT NULL, "hostKind" TEXT NOT NULL,
+            "lastSeenAt" TEXT NOT NULL, PRIMARY KEY ("botId", "hostId"))"#,
+    )
+    .await
+    .unwrap();
+    insert_flux(&db, "bot_flux", "user-a").await;
+    insert_bot(&db, "bot_plain", "user-a", "SERVER").await;
+    db
+}
+
+async fn desktop_saw_flux(db: &DatabaseConnection, now: DateTime<FixedOffset>) {
+    let report = report_in(
+        db,
+        "user-a",
+        "desk-1",
+        TurnHostKind::Desktop,
+        &["bot_flux".to_string()],
+        now,
+    )
+    .await
+    .unwrap();
+    assert_eq!(report.accepted, ["bot_flux"]);
+}
+
+/// Flux and the plain bot receive `trigger` in `c1`.
+async fn both_receive(db: &DatabaseConnection, trigger: &str, now: DateTime<FixedOffset>) {
+    let recipients = ["bot_flux", "bot_plain"]
+        .into_iter()
+        .map(|bot_id| BotRecipient {
+            trigger_message_id: trigger.into(),
+            hands_off: bot_id == "bot_flux",
+            ..recipient(bot_id, "user-a", SERVER)
+        })
+        .collect();
+    let queued = enqueue_in(db, &delivery(ConversationKind::Direct, recipients), now)
+        .await
+        .unwrap();
+    assert_eq!(queued, 2, "{trigger}");
+}
+
+async fn host_kind(db: &DatabaseConnection, bot_id: &str, trigger: &str) -> String {
+    row(db, bot_id, trigger).await.host_kind
+}
+
+#[tokio::test]
+async fn flux_s_turns_go_to_the_owner_s_desktop_while_it_is_online() {
+    let db = handoff_db().await;
+    desktop_saw_flux(&db, at(0)).await;
+
+    both_receive(&db, "m1", at(ONLINE_WINDOW_SECS)).await;
+    assert_eq!(host_kind(&db, "bot_flux", "m1").await, "DESKTOP");
+    assert_eq!(host_kind(&db, "bot_plain", "m1").await, "SERVER");
+
+    both_receive(&db, "m2", at(ONLINE_WINDOW_SECS + 1)).await;
+    assert_eq!(host_kind(&db, "bot_flux", "m2").await, "SERVER");
+}
+
+#[tokio::test]
+async fn only_the_desktop_claims_a_turn_flux_handed_off() {
+    let db = handoff_db().await;
+    desktop_saw_flux(&db, at(0)).await;
+    both_receive(&db, "m1", at(1)).await;
+    let id = turn_id("bot_flux", "m1");
+
+    assert_eq!(
+        claim(&db, "bot_flux", "m1", "server", at(2))
+            .await
+            .unwrap_err(),
+        Refusal::HostKind(TurnHostKind::Desktop)
+    );
+    let claimed = claim_in(
+        &db,
+        &claim_request(&id, "desk-1", TurnHostKind::Desktop, at(3)),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(claimed.turn.host_id.as_deref(), Some("desk-1"));
+
+    let plain = turn_id("bot_plain", "m1");
+    assert_eq!(
+        claim_in(
+            &db,
+            &claim_request(&plain, "desk-1", TurnHostKind::Desktop, at(3))
+        )
+        .await
+        .unwrap()
+        .unwrap_err(),
+        Refusal::HostKind(TurnHostKind::Server)
+    );
+}
+
+#[tokio::test]
+async fn the_server_takes_back_a_handed_off_turn_no_desktop_claimed() {
+    let db = handoff_db().await;
+    insert_bot(&db, "bot_desk", "user-a", "DESKTOP").await;
+    desktop_saw_flux(&db, at(0)).await;
+    both_receive(&db, "m1", at(1)).await;
+    queue(
+        &db,
+        "bot_desk",
+        "user-a",
+        BotLocation::Desktop,
+        "c1",
+        "m1",
+        at(1),
+    )
+    .await;
+
+    let waiting = hand_back_in(&db, at(1 + DESKTOP_HANDOFF_SECS))
+        .await
+        .unwrap();
+    assert!(waiting.is_empty(), "{waiting:?}");
+    assert_eq!(host_kind(&db, "bot_flux", "m1").await, "DESKTOP");
+
+    let late = at(2 + DESKTOP_HANDOFF_SECS);
+    let handed_back = hand_back_in(&db, late).await.unwrap();
+    assert_eq!(handed_back, [turn_id("bot_flux", "m1")]);
+    let taken = row(&db, "bot_flux", "m1").await;
+    assert_eq!(
+        (
+            taken.host_kind.as_str(),
+            taken.status.as_str(),
+            taken.updated_at
+        ),
+        ("SERVER", STORED_QUEUED, late)
+    );
+    assert_eq!(host_kind(&db, "bot_desk", "m1").await, "DESKTOP");
+    assert!(claim(&db, "bot_flux", "m1", "server", late).await.is_ok());
 }

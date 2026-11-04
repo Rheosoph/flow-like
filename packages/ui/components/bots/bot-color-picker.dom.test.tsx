@@ -111,9 +111,38 @@ describe("BotColorPicker", () => {
 		expect(button("Reset colors").disabled).toBe(true);
 	});
 
-	it.each([undefined, []] as const)(
-		"previews premium colors without an owned pack: %s",
-		async (ownedPackIds) => {
+	it("includes every color pack and custom hex by default", async () => {
+		const { onChange } = await mount();
+		for (const pack of Object.values(defaultBotCatalog.colorPacks)) {
+			await click(`${pack.label} color pack`);
+			expect(button(`${pack.label} color pack`).textContent).toContain(
+				"Included",
+			);
+			expect(container.querySelector(".fl-bot-color-lock-note")).toBeNull();
+			for (const colorId of pack.colorIds) {
+				const name = `Choose ${defaultBotCatalog.colors[colorId].label} for Body`;
+				expect(button(name).hasAttribute("data-preview-only")).toBe(false);
+				await click(name);
+				expect(onChange).toHaveBeenLastCalledWith("body", {
+					kind: "swatch",
+					colorId,
+				});
+			}
+		}
+		await click("Color lab color pack");
+		await type("Hex color for Body", "#f80");
+		await click("Apply custom color");
+		expect(onChange).toHaveBeenLastCalledWith("body", {
+			kind: "hex",
+			value: "#FF8800",
+			packId: "color-lab",
+		});
+		expect(container.textContent).not.toContain("Preview only");
+	});
+
+	it.each([{ ownedPackIds: [] }, { ownedPackIds: ["basics-crew"] }])(
+		"previews premium colors without an owned pack: $ownedPackIds",
+		async ({ ownedPackIds }) => {
 			const onRequestPack = vi.fn();
 			const { onChange } = await mount({ ownedPackIds, onRequestPack });
 			await click("Pastels color pack");
@@ -178,6 +207,7 @@ describe("BotColorPicker", () => {
 			access: "premium" as const,
 		};
 		const { onChange } = await mount({
+			ownedPackIds: [],
 			catalog: {
 				...defaultBotCatalog,
 				colorPacks: { ...defaultBotCatalog.colorPacks, shared },

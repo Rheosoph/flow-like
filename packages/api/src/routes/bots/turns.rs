@@ -258,6 +258,47 @@ pub async fn heartbeat_turn(
     Ok(turn_response(&turn, Vec::new()))
 }
 
+#[utoipa::path(
+    post,
+    path = "/bots/turns/{turn_id}/silent",
+    tag = "Bots",
+    params(("turn_id" = String, Path, description = "The turn you claimed")),
+    request_body = TurnHostRequest,
+    responses(
+        (status = 200, description = "The turn is done without a reply (`error_code` SILENT): the bot read along with a message that didn't address it and chose to say nothing. Nothing is posted.", body = BotTurn),
+        (status = 400, description = "host_id is empty, too long or has spaces"),
+        (status = 401, description = "Not signed in"),
+        (status = 404, description = "You have no such turn"),
+        (status = 409, description = "BOT_TURN_LEASE_LOST: the turn isn't running under this host any more; stop working on it")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "POST /bots/turns/{turn_id}/silent", skip(state, user, body))]
+pub async fn silent_turn(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(turn_id): Path<String>,
+    Json(body): Json<TurnHostRequest>,
+) -> Result<Json<BotTurn>, ApiError> {
+    let sub = user.sub()?;
+    let host_id = checked_host_id(body)?;
+    let turn = ledger::find(&state.db, &turn_id, Some(&sub))
+        .await?
+        .ok_or_else(|| ledger::Refusal::NotFound.into_api(&turn_id))?;
+    if !ledger::complete_silent_in(&state.db, &turn.id, &host_id, now_millis()).await? {
+        return Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            ledger::BOT_TURN_LEASE_LOST,
+            format!("Host '{host_id}' no longer holds turn '{turn_id}'; it can't end silently"),
+        ));
+    }
+    wake(&state, [sub.clone()]).await;
+    let done = ledger::find(&state.db, &turn_id, Some(&sub))
+        .await?
+        .ok_or_else(|| ledger::Refusal::NotFound.into_api(&turn_id))?;
+    Ok(turn_response(&done, Vec::new()))
+}
+
 /// Whether the interactive chat still holds the turn of a message it sent.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct TurnHold {
@@ -344,7 +385,7 @@ pub async fn cancel_turn(
 ) -> Result<Json<BotTurn>, ApiError> {
     let sub = user.sub()?;
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
-    let turn = ledger::cancel_owned_in(&state.db, &sub, &bot.id, &turn_id, now_millis()).await?;
+    let turn = crate::bot_host::approvals::cancel(&state, &sub, &bot.id, &turn_id).await?;
     audit!(
         state,
         user,

@@ -1,32 +1,58 @@
 import type { ReactNode } from "react";
+import { getBotHeadwearFit } from "../headwear-fit";
 import type {
 	BotEquipmentDefinition,
 	BotPalette,
 	BotRenderContext,
 } from "../types";
 
+// Kero's raised eyes intersect these brims and side pieces.
+const KERO_INCOMPATIBLE_HEADWEAR = new Set([
+	"bucket-hat",
+	"butterfly-hairclip",
+	"puppy-ear-band",
+	"hamster-hood",
+	"elephant-ear-band",
+	"soft-serve-hat",
+	"mission-cap",
+	"paper-boat-hat",
+	"knight-helmet",
+	"winged-helmet",
+	"straw-sunhat",
+	"flower-crown",
+	"aviator-cap",
+	"tennis-visor",
+	"ski-earflap-hat",
+	"chess-rook-hat",
+	"pirate-headscarf",
+	"press-visor",
+]);
+
 function headwear(
 	id: string,
 	label: string,
-	draw: (palette: BotPalette) => ReactNode,
+	draw: (
+		palette: BotPalette,
+		fit: ReturnType<typeof getBotHeadwearFit>,
+	) => ReactNode,
 ): BotEquipmentDefinition {
 	return {
 		id,
 		label,
 		slot: "head",
+		...(KERO_INCOMPATIBLE_HEADWEAR.has(id) ? { excludedKinds: ["kero"] } : {}),
 		render: ({ anchors, palette }) => {
-			const scaleX = anchors.head.width / 44;
-			const scaleY = Math.min(scaleX, Math.max(0.2, (anchors.head.y - 3) / 25));
+			const fit = getBotHeadwearFit(anchors);
 			return (
 				<g
-					transform={`translate(${anchors.head.x} ${anchors.head.y}) scale(${scaleX} ${scaleY})`}
+					transform={fit.transform}
 					fill={palette.clothing}
 					stroke={palette.ink}
 					strokeWidth="1.4"
 					strokeLinejoin="round"
 					strokeLinecap="round"
 				>
-					{draw(palette)}
+					{draw(palette, fit)}
 				</g>
 			);
 		},
@@ -933,18 +959,26 @@ const specialtyHeadwearBySeries: Readonly<
 		)),
 	],
 	basics: [
-		headwear("winter-earmuffs", "Winter earmuffs", (p) => (
-			<>
-				<path
-					d="M-24 12V-2Q-24 -19 0 -19Q24 -19 24 -2V12"
-					fill="none"
-					strokeWidth="4"
-				/>
-				<ellipse cx="-25" cy="14" rx="8" ry="11" fill={p.cheek} />
-				<ellipse cx="25" cy="14" rx="8" ry="11" fill={p.cheek} />
-				<path d="M-28 8L-23 18M22 9L28 18" stroke={p.sclera} opacity=".7" />
-			</>
-		)),
+		headwear("winter-earmuffs", "Winter earmuffs", (p, fit) => {
+			const left = Math.min(-25, fit.faceLeft - 8);
+			const right = Math.max(25, fit.faceRight + 8);
+			return (
+				<>
+					<path
+						d={`M${left} ${fit.earY}V-2Q${left} -19 0 -19Q${right} -19 ${right} -2V${fit.earY}`}
+						fill="none"
+						strokeWidth="4"
+					/>
+					<ellipse cx={left} cy={fit.earY} rx="8" ry="11" fill={p.cheek} />
+					<ellipse cx={right} cy={fit.earY} rx="8" ry="11" fill={p.cheek} />
+					<path
+						d={`M${left - 3} ${fit.earY - 6}L${left + 2} ${fit.earY + 4}M${right - 3} ${fit.earY - 5}L${right + 3} ${fit.earY + 4}`}
+						stroke={p.sclera}
+						opacity=".7"
+					/>
+				</>
+			);
+		}),
 		headwear("sleeping-cap", "Sleeping cap", (p) => (
 			<>
 				<path
@@ -1344,19 +1378,39 @@ const specialtyHeadwearBySeries: Readonly<
 				<circle cx="20" cy="1" r="2" fill={p.sclera} />
 			</>
 		)),
-		headwear("ear-defenders", "Ear defenders", (p) => (
-			<>
-				<path
-					d="M-24 16V-3Q-23 -20 0 -20Q23 -20 24 -3V16"
-					fill="none"
-					stroke={p.accent}
-					strokeWidth="6"
-				/>
-				<rect x="-31" y="5" width="12" height="23" rx="5" />
-				<rect x="19" y="5" width="12" height="23" rx="5" />
-				<path d="M-27 10V22M27 10V22" stroke={p.accent} strokeWidth="3" />
-			</>
-		)),
+		headwear("ear-defenders", "Ear defenders", (p, fit) => {
+			const left = Math.min(-25, fit.faceLeft - 6);
+			const right = Math.max(25, fit.faceRight + 6);
+			return (
+				<>
+					<path
+						d={`M${left} ${fit.earY}V-3Q${left} -20 0 -20Q${right} -20 ${right} -3V${fit.earY}`}
+						fill="none"
+						stroke={p.accent}
+						strokeWidth="6"
+					/>
+					<rect
+						x={left - 6}
+						y={fit.earY - 11.5}
+						width="12"
+						height="23"
+						rx="5"
+					/>
+					<rect
+						x={right - 6}
+						y={fit.earY - 11.5}
+						width="12"
+						height="23"
+						rx="5"
+					/>
+					<path
+						d={`M${left} ${fit.earY - 6}V${fit.earY + 6}M${right} ${fit.earY - 6}V${fit.earY + 6}`}
+						stroke={p.accent}
+						strokeWidth="3"
+					/>
+				</>
+			);
+		}),
 		eyewear(
 			"jeweler-loupe",
 			"Jeweler's loupe",
@@ -1373,22 +1427,28 @@ const specialtyHeadwearBySeries: Readonly<
 		),
 	],
 	ocean: [
-		headwear("diving-hood", "Diving hood", (p) => (
-			<>
-				<path d="M-26 21V-1Q-26 -24 0 -24Q26 -24 26 -1V21L18 25L17 -2Q0 -10 -17 -2L-18 25Z" />
-				<path
-					d="M0 -22V-6M-20 13V21M20 13V21"
-					stroke={p.accent}
-					strokeWidth="3"
-				/>
-				<path
-					d="M-18 -3Q0 -11 18 -3"
-					fill="none"
-					stroke={p.sclera}
-					strokeWidth="2"
-				/>
-			</>
-		)),
+		headwear("diving-hood", "Diving hood", (p, fit) => {
+			const left = Math.min(-18, fit.faceLeft);
+			const right = Math.max(18, fit.faceRight);
+			return (
+				<>
+					<path
+						d={`M${left - 8} 21V-1Q${left - 8} -24 0 -24Q${right + 8} -24 ${right + 8} -1V21L${right} 25V-2Q0 -10 ${left} -2V25Z`}
+					/>
+					<path
+						d={`M0 -22V-6M${left - 3} 13V21M${right + 3} 13V21`}
+						stroke={p.accent}
+						strokeWidth="3"
+					/>
+					<path
+						d={`M${left} -3Q0 -11 ${right} -3`}
+						fill="none"
+						stroke={p.sclera}
+						strokeWidth="2"
+					/>
+				</>
+			);
+		}),
 		eyewear("snorkel-mask", "Snorkel mask", (c) => {
 			const { left, right, radius } = c.anchors.eyes;
 			const y = (left[1] + right[1]) / 2;
@@ -1820,24 +1880,28 @@ const specialtyHeadwearBySeries: Readonly<
 		)),
 	],
 	celebrations: [
-		headwear("ruffled-bonnet", "Ruffled bonnet", (p) => (
-			<>
-				<path
-					d="M-25 13Q-31 5 -26 0Q-30 -8 -21 -12Q-20 -21 -10 -19Q-3 -27 5 -21Q16 -25 20 -15Q30 -13 26 -3Q32 3 25 12L17 7Q20 -14 0 -14Q-20 -14 -17 7Z"
-					fill={p.sclera}
-				/>
-				<path
-					d="M-21 8L-17 23L-9 18L-14 8M21 8L17 23L9 18L14 8"
-					fill={p.cheek}
-				/>
-				<path
-					d="M-18 -9Q0 -22 18 -9"
-					fill="none"
-					stroke={p.accent}
-					strokeWidth="2"
-				/>
-			</>
-		)),
+		headwear("ruffled-bonnet", "Ruffled bonnet", (p, fit) => {
+			const left = Math.min(-17, fit.faceLeft);
+			const right = Math.max(17, fit.faceRight);
+			return (
+				<>
+					<path
+						d={`M${left - 8} 13Q${left - 14} 5 ${left - 9} 0Q${left - 13} -8 ${left - 4} -12Q${left - 3} -21 -10 -19Q-3 -27 5 -21Q16 -25 ${right + 3} -15Q${right + 13} -13 ${right + 9} -3Q${right + 15} 3 ${right + 8} 12L${right} 7Q${right + 3} -14 0 -14Q${left - 3} -14 ${left} 7Z`}
+						fill={p.sclera}
+					/>
+					<path
+						d={`M${left - 9} 8L${left - 7} 23L${left} 18L${left - 2} 8M${right + 9} 8L${right + 7} 23L${right} 18L${right + 2} 8`}
+						fill={p.cheek}
+					/>
+					<path
+						d={`M${left - 1} -9Q0 -22 ${right + 1} -9`}
+						fill="none"
+						stroke={p.accent}
+						strokeWidth="2"
+					/>
+				</>
+			);
+		}),
 		headwear("birthday-candle-crown", "Birthday candle crown", (p) => (
 			<>
 				<path d="M-23 4V-3Q0 -10 23 -3V4Z" fill={p.cheek} />
@@ -1873,21 +1937,29 @@ const specialtyHeadwearBySeries: Readonly<
 		)),
 	],
 	service: [
-		headwear("motorcycle-helmet", "Motorcycle helmet", (p) => (
-			<>
-				<path
-					d="M-24 17L-26 -3Q-24 -24 0 -24Q24 -24 26 -3L24 17L15 20V1H-15V20Z"
-					fill={p.sclera}
-				/>
-				<path d="M-23 -1Q0 -8 23 -1L20 5H-20Z" fill={p.clothing} />
-				<path
-					d="M-4 -22V-8H4V-22M-22 12H-17M17 12H22"
-					fill={p.accent}
-					stroke={p.accent}
-					strokeWidth="2"
-				/>
-			</>
-		)),
+		headwear("motorcycle-helmet", "Motorcycle helmet", (p, fit) => {
+			const left = Math.min(-17, fit.faceLeft);
+			const right = Math.max(17, fit.faceRight);
+			const brimBottom = Math.min(5, fit.faceTop);
+			return (
+				<>
+					<path
+						d={`M${left - 7} 17L${left - 9} -3Q${left - 7} -24 0 -24Q${right + 7} -24 ${right + 9} -3L${right + 7} 17L${right} 20V${brimBottom}H${left}V20Z`}
+						fill={p.sclera}
+					/>
+					<path
+						d={`M${left - 6} -1Q0 -8 ${right + 6} -1L${right + 3} ${brimBottom}H${left - 3}Z`}
+						fill={p.clothing}
+					/>
+					<path
+						d={`M-4 -22V-8H4V-22M${left - 5} 12H${left}M${right} 12H${right + 5}`}
+						fill={p.accent}
+						stroke={p.accent}
+						strokeWidth="2"
+					/>
+				</>
+			);
+		}),
 		eyewear("pilot-sunshield", "Pilot sunshield", (c) => (
 			<LensPair context={c}>
 				<path

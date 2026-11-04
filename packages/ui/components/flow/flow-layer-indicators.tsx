@@ -1,6 +1,6 @@
 "use client";
 import { useTranslation } from "@flow-like/locales";
-import { type Node } from "@xyflow/react";
+import type { Node } from "@xyflow/react";
 import { Layers } from "lucide-react";
 import { memo, useMemo } from "react";
 import { type PeerUserInfo, colorFromSub } from "../../hooks/use-peer-users";

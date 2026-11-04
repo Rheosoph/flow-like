@@ -166,6 +166,14 @@ pub(super) struct BotRecord {
     #[serde(default)]
     pub(super) embedding_model: Option<String>,
     #[serde(default)]
+    pub(super) stt_model: Option<String>,
+    #[serde(default)]
+    pub(super) tts_model: Option<String>,
+    #[serde(default)]
+    pub(super) image_model: Option<String>,
+    #[serde(default)]
+    pub(super) vision_model: Option<String>,
+    #[serde(default)]
     pub(super) classification: DataSensitivity,
     #[serde(default)]
     pub(super) capabilities: Vec<String>,
@@ -183,6 +191,10 @@ impl From<flow_like_local_bots::Bot> for BotRecord {
             instructions: bot.instructions,
             model: bot.model,
             embedding_model: bot.embedding_model,
+            stt_model: bot.stt_model,
+            tts_model: bot.tts_model,
+            image_model: bot.image_model,
+            vision_model: bot.vision_model,
             classification: bot.classification,
             capabilities: bot
                 .capabilities
@@ -344,6 +356,10 @@ pub(super) fn desktop_bot(
         profile_app_ids,
         workspace_app_id: None,
         embedding_model: record.embedding_model,
+        stt_model: record.stt_model,
+        tts_model: record.tts_model,
+        image_model: record.image_model,
+        vision_model: record.vision_model,
         tool_host,
         host_tools: super::super::super::native_bot_tools::host_tools(),
         requester: None,
@@ -924,6 +940,10 @@ mod tests {
                 "instructions": "",
                 "model": { "primary": "model-a", "fallbacks": ["model-b"] },
                 "embedding_model": "embed-a",
+                "stt_model": "stt-a",
+                "tts_model": "tts-a",
+                "image_model": "image-a",
+                "vision_model": "vision-a",
                 "classification": { "classification": "confidential", "pii": true },
                 "capabilities": ["internet", "selected_apps", "profile_apps", "telepathy"],
                 "profile_id": "profile-1",
@@ -970,6 +990,10 @@ mod tests {
         assert_eq!(bot.model.primary.as_deref(), Some("model-a"));
         assert_eq!(bot.model.fallbacks, ["model-b"]);
         assert_eq!(context.embedding_model.as_deref(), Some("embed-a"));
+        assert_eq!(context.stt_model.as_deref(), Some("stt-a"));
+        assert_eq!(context.tts_model.as_deref(), Some("tts-a"));
+        assert_eq!(context.image_model.as_deref(), Some("image-a"));
+        assert_eq!(context.vision_model.as_deref(), Some("vision-a"));
         assert_eq!(
             context.memory_model(Some("embed-chat")),
             None,
@@ -1076,6 +1100,34 @@ mod tests {
         );
     }
 
+    /// The hub hands Flux's room turns to this desktop because it builds without a window; every
+    /// tool such a turn is offered must run here, the build and specialist tools among them.
+    #[test]
+    fn flux_without_a_window_is_offered_only_tools_this_desktop_runs() {
+        let flux = desktop_bot(
+            record(json!({ "id": "bot_flux", "system": "flux", "capabilities": [] })),
+            Vec::new(),
+            BTreeSet::new(),
+            BotToolHost::Native,
+        );
+        let offered: Vec<&str> = flux
+            .context
+            .tool_specs(false)
+            .iter()
+            .map(|spec| spec.name)
+            .collect();
+        for builds in ["create_app", "flowpilot_board", "flowpilot_widget", "upsert_event"] {
+            assert!(offered.contains(&builds), "{builds} missing from {offered:?}");
+        }
+        let core_runs = flow_like::flow::copilot::tool_spec::RESEARCH_AGENT_TOOL;
+        for tool_name in offered.iter().filter(|name| **name != core_runs) {
+            assert!(
+                crate::functions::ai::native_tool_bridge::supports(tool_name, &json!({})),
+                "{tool_name} has no native implementation"
+            );
+        }
+    }
+
     #[test]
     fn a_local_bot_maps_like_an_account_bot() {
         let local: flow_like_local_bots::Bot = flow_like_local_bots::Bot {
@@ -1089,6 +1141,10 @@ mod tests {
             appearance: json!({ "kind": "pip" }),
             model: BotModelPolicy::default(),
             embedding_model: None,
+            stt_model: None,
+            tts_model: None,
+            image_model: None,
+            vision_model: None,
             classification: DataSensitivity::default(),
             capabilities: vec![BotCapability::SelectedApps, BotCapability::Storage],
             profile_id: None,

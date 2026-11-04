@@ -5,7 +5,7 @@ import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { IBot } from "../../state/backend-state/bot-state";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
-import { BotModelChip, pinnedBotModel } from "./bot-chat-parts";
+import { pinnedBotModel } from "./bot-chat-parts";
 import { GlobalChatHistory } from "./global-chat-history";
 import type { GlobalChatBotView } from "./use-global-chat-bot";
 
@@ -19,15 +19,6 @@ vi.mock("@flow-like/locales", () => ({
 		i18n: { language: "en" },
 	}),
 }));
-vi.mock("../bots-tab/editor/steps/use-bot-models", () => ({
-	useBotModelOptions: () => ({
-		options: [
-			{ id: "bit-sonnet", label: "Claude Sonnet", local: false, free: false },
-		],
-		isLoading: false,
-	}),
-}));
-
 let root: Root;
 let host: HTMLDivElement;
 
@@ -62,22 +53,6 @@ describe("the model a bot's chat runs on", () => {
 		expect(
 			pinnedBotModel({ ...view("general", null), bot: undefined }),
 		).toBeNull();
-	});
-
-	test("shows as a read-only chip with the model's name", async () => {
-		await act(async () =>
-			root.render(<BotModelChip botName="Scout" modelId="bit-sonnet" />),
-		);
-		expect(host.textContent).toContain("Claude Sonnet");
-		expect(host.querySelector("button")).toBeNull();
-		expect(host.querySelector("[title]")?.getAttribute("title")).toBe(
-			"Chosen in Scout's settings",
-		);
-
-		await act(async () =>
-			root.render(<BotModelChip botName="Scout" modelId="bit-retired" />),
-		);
-		expect(host.textContent).toContain("Unknown model (bit-retired)");
 	});
 });
 

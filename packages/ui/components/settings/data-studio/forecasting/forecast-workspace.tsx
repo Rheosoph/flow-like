@@ -1303,7 +1303,7 @@ function ForecastWorkspaceBody({
 
 	return (
 		<div className="h-full overflow-y-auto bg-muted/10">
-			<div className="mx-auto max-w-[1600px] space-y-5 p-4 lg:p-6">
+			<div className="mx-auto max-w-[1600px] space-y-5 p-3 @xl/ds:p-4 @3xl/ds:p-6">
 				<div className="flex flex-wrap items-center justify-between gap-3">
 					<div>
 						<h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">

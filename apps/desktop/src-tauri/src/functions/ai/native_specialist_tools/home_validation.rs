@@ -606,7 +606,7 @@ fn minimum_rows(widget: &Value) -> u64 {
             }
         }
         "app-embed" => 3,
-        "section-heading" | "greeting" | "flowpilot" | "quick-actions" => 1,
+        "section-heading" | "greeting" | "flowpilot" | "bot-chat" | "quick-actions" => 1,
         "workspace-pulse" if widget["config"]["mode"] == "strip" => 1,
         _ => 2,
     }

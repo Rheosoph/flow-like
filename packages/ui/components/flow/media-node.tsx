@@ -4,11 +4,11 @@ import { NodeResizer } from "./board-runtime-primitives";
 import { useReactFlow } from "./board-runtime";
 
 import { useTranslation } from "@flow-like/locales";
-import {
-	type Node,
-	type NodeProps,
-	type ResizeDragEvent,
-	type ResizeParams,
+import type {
+	Node,
+	NodeProps,
+	ResizeDragEvent,
+	ResizeParams,
 } from "@xyflow/react";
 import {
 	AlertCircleIcon,

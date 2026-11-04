@@ -6,9 +6,12 @@
 
 use crate::{
     db::{DbDialect, RetryPolicy, coordination::coordinate, retry_transaction},
-    entity::{bot, bot_turn, conversation},
+    entity::{bot, bot_host_heartbeat, bot_turn, conversation},
     error::ApiError,
-    routes::inbox::delivery::{BotDelivery, BotRecipient},
+    routes::{
+        bots::{model::hands_off_to_desktop, presence::ONLINE_WINDOW_SECS},
+        inbox::delivery::{BotDelivery, BotRecipient},
+    },
     state::AppState,
 };
 use axum::http::StatusCode;
@@ -17,10 +20,10 @@ use flow_like_types::{
     bot::BotLocation,
     bot_turn::{
         BotTurn, ERROR_BATCHED, ERROR_BOT_DELETED, ERROR_HOST_LOST, ERROR_QUEUE_EXPIRED,
-        INTERACTIVE_GRACE_SECS, LEASE_SECS, MAX_ATTEMPTS, MAX_HOPS, MAX_RUNNING_PER_OWNER,
-        QUEUED_EXPIRY_SECS, STORED_CANCELLED, STORED_DONE, STORED_FAILED, STORED_QUEUED,
-        STORED_RUNNING, STORED_WAITING, TurnAudience, TurnHostKind, TurnStatus, reply_message_id,
-        turn_id,
+        ERROR_SILENT, INTERACTIVE_GRACE_SECS, LEASE_SECS, MAX_ATTEMPTS, MAX_HOPS,
+        MAX_RUNNING_PER_OWNER, QUEUED_EXPIRY_SECS, STORED_CANCELLED, STORED_DESKTOP, STORED_DONE,
+        STORED_FAILED, STORED_QUEUED, STORED_RUNNING, STORED_SERVER, STORED_WAITING, TurnAudience,
+        TurnHostKind, TurnStatus, reply_message_id, turn_id,
     },
     inbox::{ConversationEncryption, ConversationKind, InboxEntryKind},
 };
@@ -30,7 +33,7 @@ use sea_orm::{
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
     sea_query::{Expr, ExprTrait, OnConflict},
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 pub(crate) const BOT_TURN_NOT_QUEUED: &str = "BOT_TURN_NOT_QUEUED";
 pub(crate) const BOT_TURN_BUSY: &str = "BOT_TURN_BUSY";
@@ -41,6 +44,9 @@ pub(crate) const BOT_TURN_NOT_RETRYABLE: &str = "BOT_TURN_NOT_RETRYABLE";
 pub(crate) const BOT_TURN_NOT_CANCELLABLE: &str = "BOT_TURN_NOT_CANCELLABLE";
 pub(crate) const ERROR_OWNER_CANCELLED: &str = "BOT_TURN_CANCELLED";
 
+/// How long a turn handed off to the owner's desktop waits for it before the server takes it
+/// back: the desktop host lists turns every 30 seconds, plus a margin.
+pub(crate) const DESKTOP_HANDOFF_SECS: i64 = 45;
 /// Rows one recovery rule touches per pass; a busy ledger drains over several passes, and a
 /// pass stays far below DSQL's per-transaction row cap.
 const RECOVER_BATCH: u64 = 200;
@@ -66,15 +72,38 @@ pub(crate) fn host_kind_of(location: BotLocation) -> TurnHostKind {
     }
 }
 
-/// Whether the message wakes the bot: only messages, not one the bot sent itself, not past
-/// [`MAX_HOPS`] bot turns, and in a group only when it names the bot or replies to it.
+/// Whether the message wakes the bot: only messages (and spoken transcripts, which wake just the
+/// bots they mention), not one the bot sent itself, not past
+/// [`MAX_HOPS`] bot turns, and in a group only when it names the bot or replies to it, or when a
+/// person wrote it and the bot reads along ([`BotRecipient::read_along`]). A person's reaction
+/// wakes only the bot whose message it reacts to.
 pub(crate) fn queues_turn(delivery: &BotDelivery, recipient: &BotRecipient) -> bool {
-    delivery.kind.wakes_bot()
-        && recipient.bot_id != delivery.sender_id
-        && recipient.hops <= MAX_HOPS
-        && (delivery.conversation_kind == ConversationKind::Direct
-            || recipient.mentioned
-            || recipient.replied_to)
+    if recipient.bot_id == delivery.sender_id || recipient.hops > MAX_HOPS {
+        return false;
+    }
+    match delivery.kind {
+        InboxEntryKind::Reaction => recipient.reacted,
+        InboxEntryKind::Transcript => recipient.mentioned,
+        kind if kind.wakes_bot() => {
+            delivery.conversation_kind == ConversationKind::Direct
+                || recipient.mentioned
+                || recipient.replied_to
+                || (delivery.kind == InboxEntryKind::Message && recipient.read_along)
+        }
+        _ => false,
+    }
+}
+
+impl BotRecipient {
+    /// The entry doesn't address the bot in a group: it woke the bot to read along.
+    pub(crate) fn reads_along_only(&self) -> bool {
+        self.read_along && !self.mentioned && !self.replied_to
+    }
+
+    /// Nobody asked the bot a question: it reads along or only got a reaction.
+    pub(crate) fn unprompted(&self) -> bool {
+        self.reacted || self.reads_along_only()
+    }
 }
 
 /// A recipient whose turn is about to queue, with whose request it answers.
@@ -119,8 +148,59 @@ async fn waking_of<'a, C: ConnectionTrait>(
     Ok(waking)
 }
 
+/// The bots among `recipients` that hand off and that one of their owner's desktops reported
+/// within the online window.
+async fn desktop_online<C: ConnectionTrait>(
+    db: &C,
+    recipients: &[&BotRecipient],
+    now: DateTime<FixedOffset>,
+) -> Result<HashSet<String>, DbErr> {
+    let ids: Vec<&str> = recipients
+        .iter()
+        .filter(|recipient| recipient.hands_off)
+        .map(|recipient| recipient.bot_id.as_str())
+        .collect();
+    if ids.is_empty() {
+        return Ok(HashSet::new());
+    }
+    let seen: Vec<String> = bot_host_heartbeat::Entity::find()
+        .select_only()
+        .column(bot_host_heartbeat::Column::BotId)
+        .distinct()
+        .filter(bot_host_heartbeat::Column::BotId.is_in(ids))
+        .filter(bot_host_heartbeat::Column::HostKind.eq(STORED_DESKTOP))
+        .filter(
+            bot_host_heartbeat::Column::LastSeenAt.gte(now - Duration::seconds(ONLINE_WINDOW_SECS)),
+        )
+        .into_tuple()
+        .all(db)
+        .await?;
+    Ok(seen.into_iter().collect())
+}
+
+/// Where a recipient's turn goes: its location's host, or the desktop for a bot that hands off
+/// while a desktop of its owner is online.
+fn host_kind(recipient: &BotRecipient, desktops: &HashSet<String>) -> TurnHostKind {
+    if recipient.hands_off && desktops.contains(&recipient.bot_id) {
+        TurnHostKind::Desktop
+    } else {
+        host_kind_of(recipient.location)
+    }
+}
+
+/// Whether a host of `kind` may run the bot's turns: the host of its location, and for a bot
+/// that hands off, the owner's desktop.
+fn runs_on(bot: &bot::Model, kind: TurnHostKind) -> bool {
+    kind == host_kind_of(BotLocation::parse(&bot.location).unwrap_or_default())
+        || (kind == TurnHostKind::Desktop && hands_off_to_desktop(bot))
+}
+
 /// The turn row a recipient gets for `trigger_message_id`.
-fn queued_row(waking: &Waking, now: DateTime<FixedOffset>) -> bot_turn::ActiveModel {
+fn queued_row(
+    waking: &Waking,
+    kind: TurnHostKind,
+    now: DateTime<FixedOffset>,
+) -> bot_turn::ActiveModel {
     let recipient = waking.recipient;
     bot_turn::ActiveModel {
         id: Set(turn_id(&recipient.bot_id, &recipient.trigger_message_id)),
@@ -128,7 +208,7 @@ fn queued_row(waking: &Waking, now: DateTime<FixedOffset>) -> bot_turn::ActiveMo
         owner_id: Set(recipient.owner_id.clone()),
         conversation_id: Set(recipient.conversation_id.clone()),
         trigger_message_id: Set(recipient.trigger_message_id.clone()),
-        host_kind: Set(host_kind_of(recipient.location).stored().to_string()),
+        host_kind: Set(kind.stored().to_string()),
         status: Set(STORED_QUEUED.to_string()),
         attempts: Set(0),
         host_id: Set(None),
@@ -171,14 +251,17 @@ pub(crate) async fn enqueue_in<C: ConnectionTrait>(
         .iter()
         .filter(|recipient| queues_turn(delivery, recipient))
         .collect();
+    let desktops = desktop_online(db, &waking, now).await?;
+    let on_server =
+        |recipient: &BotRecipient| host_kind(recipient, &desktops) == TurnHostKind::Server;
     let server_conversation = waking
         .iter()
-        .find(|recipient| host_kind_of(recipient.location) == TurnHostKind::Server)
+        .find(|recipient| on_server(recipient))
         .map(|recipient| recipient.conversation_id.clone());
     if let Some(conversation_id) = server_conversation
         && !server_can_read(db, &conversation_id).await?
     {
-        waking.retain(|recipient| host_kind_of(recipient.location) != TurnHostKind::Server);
+        waking.retain(|recipient| !on_server(recipient));
     }
     let waking = super::cap::admit(db, waking, now).await?;
     let waking = waking_of(db, delivery, waking).await?;
@@ -186,7 +269,10 @@ pub(crate) async fn enqueue_in<C: ConnectionTrait>(
     if waking.is_empty() {
         return Ok(0);
     }
-    let rows: Vec<_> = waking.iter().map(|item| queued_row(item, now)).collect();
+    let rows: Vec<_> = waking
+        .iter()
+        .map(|item| queued_row(item, host_kind(item.recipient, &desktops), now))
+        .collect();
     let inserted = bot_turn::Entity::insert_many(rows)
         .on_conflict(
             OnConflict::columns([bot_turn::Column::BotId, bot_turn::Column::TriggerMessageId])
@@ -447,8 +533,8 @@ pub(crate) async fn claim_in<C: ConnectionTrait>(
         cancel_in(db, &requested.id, ERROR_BOT_DELETED, now).await?;
         return Ok(Err(Refusal::BotGone));
     };
-    let located = host_kind_of(BotLocation::parse(&bot.location).unwrap_or_default());
-    if located != kind {
+    if !runs_on(&bot, kind) {
+        let located = host_kind_of(BotLocation::parse(&bot.location).unwrap_or_default());
         rehome_in(db, &requested.id, located, now).await?;
         return Ok(Err(Refusal::HostKind(located)));
     }
@@ -753,6 +839,30 @@ pub(crate) async fn mark_failed_after_reply_in<C: ConnectionTrait>(
     Ok(marked.rows_affected > 0)
 }
 
+/// Ends a turn the host holds `DONE` without a reply: the bot read along and stayed silent.
+pub(crate) async fn complete_silent_in<C: ConnectionTrait>(
+    db: &C,
+    turn_id: &str,
+    host_id: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<bool, DbErr> {
+    let done = bot_turn::Entity::update_many()
+        .col_expr(bot_turn::Column::Status, Expr::value(STORED_DONE))
+        .col_expr(bot_turn::Column::ErrorCode, Expr::value(ERROR_SILENT))
+        .col_expr(
+            bot_turn::Column::LeaseUntil,
+            Expr::value(None::<DateTime<FixedOffset>>),
+        )
+        .col_expr(bot_turn::Column::UpdatedAt, Expr::value(now))
+        .filter(bot_turn::Column::Id.eq(turn_id))
+        .filter(bot_turn::Column::Status.eq(STORED_RUNNING))
+        .filter(bot_turn::Column::HostId.eq(host_id))
+        .filter(bot_turn::Column::LeaseUntil.gt(now))
+        .exec(db)
+        .await?;
+    Ok(done.rows_affected > 0)
+}
+
 /// Puts a turn the host holds back in the queue to run again at `retry_at`.
 pub(crate) async fn release_for_retry_in<C: ConnectionTrait>(
     db: &C,
@@ -880,6 +990,45 @@ async fn rehome_in<C: ConnectionTrait>(
         .exec(db)
         .await?;
     Ok(())
+}
+
+/// Gives back to the server the turns of server bots that sat queued for a desktop for
+/// [`DESKTOP_HANDOFF_SECS`]: the desktop went offline before it claimed them, or lost its lease.
+/// Returns their ids, for the server's host to pick up at once.
+pub(crate) async fn hand_back_in<C: ConnectionTrait>(
+    db: &C,
+    now: DateTime<FixedOffset>,
+) -> Result<Vec<String>, DbErr> {
+    use sea_orm::QueryTrait;
+    let server_bots = bot::Entity::find()
+        .select_only()
+        .column(bot::Column::Id)
+        .filter(bot::Column::Location.eq(BotLocation::Server.as_str().to_ascii_uppercase()))
+        .into_query();
+    let unclaimed: Vec<String> = bot_turn::Entity::find()
+        .select_only()
+        .column(bot_turn::Column::Id)
+        .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
+        .filter(bot_turn::Column::HostKind.eq(STORED_DESKTOP))
+        .filter(ready(now))
+        .filter(bot_turn::Column::UpdatedAt.lt(now - Duration::seconds(DESKTOP_HANDOFF_SECS)))
+        .filter(bot_turn::Column::BotId.in_subquery(server_bots))
+        .limit(RECOVER_BATCH)
+        .into_tuple()
+        .all(db)
+        .await?;
+    if unclaimed.is_empty() {
+        return Ok(unclaimed);
+    }
+    bot_turn::Entity::update_many()
+        .col_expr(bot_turn::Column::HostKind, Expr::value(STORED_SERVER))
+        .col_expr(bot_turn::Column::UpdatedAt, Expr::value(now))
+        .filter(bot_turn::Column::Id.is_in(unclaimed.iter().cloned()))
+        .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
+        .filter(bot_turn::Column::HostKind.eq(STORED_DESKTOP))
+        .exec(db)
+        .await?;
+    Ok(unclaimed)
 }
 
 /// Queues the owner's failed turn of `bot_id` again with a fresh attempt budget; `None` when the

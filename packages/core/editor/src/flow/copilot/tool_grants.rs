@@ -14,6 +14,8 @@
 //! | `interact_app_page` | `target:<app_id>:event:<id>` or `target:<app_id>:page:<id>` |
 //! | `code_run` with `network_hosts` | one `host:<h>` per host |
 //! | `shell_run` | `command:<program basename>`; `shell: true` is `command:sh` |
+//! | `email_send` | one `email:<domain>` per recipient domain |
+//! | `message_person` | `person:<id>` |
 //! | `data_sources` attach | `connection:<kind>:<host>:<port>:<database>` |
 //! | `http_request`, `forecast_tool`, `flowpilot_board_review`, `app_build`, `apply_home_layout` | none: asked every time |
 //! | every other tool that asks | `*` |
@@ -21,7 +23,7 @@
 //! The document cost check is the grant `(documents, documents.expensive)`.
 
 use async_trait::async_trait;
-use flow_like_types::bot_message::ApprovalRequest;
+use flow_like_types::bot_message::{ApprovalRequest, SECRET_REQUEST_TOOL, SecretAsk};
 use flow_like_types::tool_grant::{
     ApprovalDecision, DENY_PREFIX, DOCUMENTS_TOOL, ONCE_PREFIX, SCOPE_ALL,
     SCOPE_DOCUMENTS_EXPENSIVE, args_hash,
@@ -32,12 +34,13 @@ use flow_like_bot_tools as tools;
 
 use super::tool_spec::spec_arg_str;
 
-const NOT_GRANTABLE: [&str; 5] = [
+const NOT_GRANTABLE: [&str; 6] = [
     "http_request",
     "forecast_tool",
     "flowpilot_board_review",
     "app_build",
     "apply_home_layout",
+    SECRET_REQUEST_TOOL,
 ];
 
 /// One stored `(tool, scope)` pair.
@@ -167,6 +170,7 @@ pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Opti
             .map(|site| format!("browser:{site}"))),
         "computer_screenshot" | "computer_act" => Some(vec!["computer:session".to_string()]),
         "email_send" => flow_like_bot_tools::email::grant_scopes(args),
+        "message_person" => flow_like_bot_tools::people::grant_scopes(args),
         "shell_run" => one(flow_like_bot_tools::shell::grant_scope(args).and_then(|s| clean(&s))),
         _ => Some(vec![SCOPE_ALL.to_string()]),
     }
@@ -333,7 +337,22 @@ pub fn approval_request(
         requester_id: None,
         requester_name: None,
         room: None,
+        secret: secret_ask(tool, args),
     }
+}
+
+/// What a `secret_request` card asks for; `None` for every other tool or invalid arguments.
+fn secret_ask(tool: &str, args: &Value) -> Option<SecretAsk> {
+    if tool != SECRET_REQUEST_TOOL {
+        return None;
+    }
+    let args = serde_json::from_value(args.clone()).ok()?;
+    let (name, description) = tools::secrets::checked_request(&args).ok()?;
+    Some(SecretAsk {
+        name,
+        description,
+        replace: args.replace,
+    })
 }
 
 /// What a headless host does with a call that asks the owner.
@@ -615,6 +634,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn always_for_one_person_never_covers_another() {
+        let store = Memory::default();
+        let anna = json!({"person": "user-anna", "text": "Does Friday work?"});
+        record_answer(
+            &store,
+            "message_person",
+            &anna,
+            None,
+            ApprovalDecision::Always,
+        )
+        .await
+        .unwrap();
+        assert!(
+            store
+                .has("message_person", "person:user-anna")
+                .await
+                .unwrap()
+        );
+        let later = json!({"person": "user-anna", "text": "Thanks!"});
+        let ben = json!({"person": "user-ben", "text": "Does Friday work?"});
+        assert_eq!(
+            check_call(&store, "message_person", &later, None)
+                .await
+                .unwrap(),
+            GrantCheck::Granted
+        );
+        assert_eq!(
+            check_call(&store, "message_person", &ben, None)
+                .await
+                .unwrap(),
+            GrantCheck::Missing
+        );
+        assert_eq!(
+            grant_scopes("message_person", &json!({"person": "Anna Schmidt"}), None),
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn a_grant_for_every_host_is_needed_to_cover_a_call_with_two() {
         let store = Memory::default();
         store.put("code_run", "host:a.com").await.unwrap();
@@ -798,6 +856,54 @@ mod tests {
         let seen = store.list().await.unwrap();
         clear_tokens(&store, &seen).await;
         assert!(store.list().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_secret_request_parks_with_the_ask_and_is_never_granted_for_good() {
+        let store = Memory::default();
+        let args =
+            json!({"name": "GITHUB_TOKEN", "description": "Open pull requests", "replace": true});
+        let HeadlessAnswer::Park(card) = headless_answer(
+            &store,
+            "bt_1",
+            SECRET_REQUEST_TOOL,
+            &args,
+            None,
+            "The bot asks you for the secret GITHUB_TOKEN",
+        )
+        .await
+        else {
+            panic!("expected a park");
+        };
+        assert_eq!(card.scope, "");
+        assert_eq!(
+            card.secret,
+            Some(SecretAsk {
+                name: "GITHUB_TOKEN".into(),
+                description: "Open pull requests".into(),
+                replace: true,
+            })
+        );
+        record_card_answer(&store, &card, ApprovalDecision::Always)
+            .await
+            .unwrap();
+        assert_eq!(
+            headless_answer(&store, "bt_1", SECRET_REQUEST_TOOL, &args, None, "").await,
+            HeadlessAnswer::Run
+        );
+        assert!(matches!(
+            headless_answer(&store, "bt_2", SECRET_REQUEST_TOOL, &args, None, "").await,
+            HeadlessAnswer::Park(_)
+        ));
+        let bad = json!({"name": "lower", "description": "x"});
+        assert_eq!(
+            approval_request("bt_1", SECRET_REQUEST_TOOL, &bad, None, "x").secret,
+            None
+        );
+        assert_eq!(
+            approval_request("bt_1", "code_run", &args, None, "x").secret,
+            None
+        );
     }
 
     #[tokio::test]

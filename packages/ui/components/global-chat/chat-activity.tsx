@@ -1,7 +1,13 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { BellIcon, MessageSquareIcon, SparklesIcon } from "lucide-react";
+import {
+	ArrowUpRightIcon,
+	BellIcon,
+	MessageSquareIcon,
+	SparklesIcon,
+	XIcon,
+} from "lucide-react";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -84,9 +90,74 @@ function useOpenChatActivity() {
 	);
 }
 
+function ChatActivityIcon({
+	target,
+}: Readonly<{ target: ChatActivityTarget }>) {
+	return (
+		<span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+			{target.kind === "flowpilot" ? (
+				<SparklesIcon className="size-4" />
+			) : (
+				<MessageSquareIcon className="size-4" />
+			)}
+		</span>
+	);
+}
+
+function ChatActivityPreview({
+	entry,
+}: Readonly<{ entry: ChatActivityEntry }>) {
+	const { t } = useTranslation("chat");
+	return (
+		<span className="mt-1 line-clamp-2 wrap-break-word text-xs leading-relaxed text-muted-foreground">
+			{entry.preview || t("newReplyReady", "A new reply is ready.")}
+		</span>
+	);
+}
+
+function ChatActivityToast({
+	entry,
+	onOpen,
+	onClose,
+}: Readonly<{
+	entry: ChatActivityEntry;
+	onOpen: () => void;
+	onClose: () => void;
+}>) {
+	const { t } = useTranslation("chat");
+	return (
+		<div className="relative flex w-full items-start gap-3 rounded-xl border border-border bg-popover p-3.5 pr-10 text-popover-foreground shadow-floating">
+			<ChatActivityIcon target={entry.target} />
+			<div className="flex min-w-0 flex-1 flex-col">
+				<span className="truncate text-sm font-medium">{entry.title}</span>
+				<ChatActivityPreview entry={entry} />
+				<Button
+					type="button"
+					size="sm"
+					variant="secondary"
+					className="mt-3 h-7 self-start px-2.5 text-xs"
+					onClick={onOpen}
+				>
+					{t("openConversation", "Open conversation")}
+					<ArrowUpRightIcon className="size-3.5" />
+				</Button>
+			</div>
+			<Button
+				type="button"
+				variant="ghost"
+				size="icon"
+				className="absolute right-2 top-2 size-7 text-muted-foreground"
+				aria-label={t("close", "Close")}
+				onClick={onClose}
+			>
+				<XIcon className="size-3.5" />
+			</Button>
+		</div>
+	);
+}
+
 /** One listener per app shell, including while every chat surface is closed. */
 export function ChatActivityProvider() {
-	const { t } = useTranslation("chat");
 	const openActivity = useOpenChatActivity();
 
 	useEffect(() => {
@@ -102,26 +173,21 @@ export function ChatActivityProvider() {
 			},
 		);
 		const unsubscribe = subscribeChatActivity((entry) => {
-			toast(t("flowpilotActivity", "FlowPilot activity"), {
-				id: `chat-activity:${entry.id}`,
-				icon: <SparklesIcon className="size-4 text-primary" />,
-				description: (
-					<div className="space-y-1">
-						<p className="truncate font-medium text-foreground">
-							{entry.title}
-						</p>
-						<p className="line-clamp-2 break-words text-muted-foreground">
-							{entry.preview || t("newReplyReady", "A new reply is ready.")}
-						</p>
-					</div>
+			toast.custom(
+				(id) => (
+					<ChatActivityToast
+						entry={entry}
+						onOpen={() => void openActivity(entry)}
+						onClose={() => toast.dismiss(id)}
+					/>
 				),
-				action: {
-					label: t("openConversation", "Open conversation"),
-					onClick: () => void openActivity(entry),
+				{
+					id: `chat-activity:${entry.id}`,
+					duration: 8_000,
+					// Sonner sizes only its own styled toasts; a custom one shrinks to its content.
+					className: "w-(--width)",
 				},
-				closeButton: true,
-				duration: 8_000,
-			});
+			);
 		});
 		document.addEventListener(
 			"visibilitychange",
@@ -140,7 +206,7 @@ export function ChatActivityProvider() {
 			window.removeEventListener("focus", refreshChatActivityVisibility);
 			window.removeEventListener("storage", syncChatActivity);
 		};
-	}, [openActivity, t]);
+	}, [openActivity]);
 
 	return null;
 }
@@ -195,7 +261,7 @@ export function ChatActivityMenu() {
 			<PopoverContent
 				align="end"
 				sideOffset={8}
-				className="z-[10000] w-[360px] max-w-[calc(100vw-2rem)] overflow-hidden p-0 shadow-floating"
+				className="z-10000 w-90 max-w-[calc(100vw-2rem)] overflow-hidden p-0 shadow-floating"
 				aria-label={t("conversationUpdates", "Conversation updates")}
 			>
 				<div className="border-b border-border/50 px-4 py-3">
@@ -230,14 +296,8 @@ export function ChatActivityMenu() {
 								}}
 								className="flex w-full items-start gap-3 rounded-lg px-2.5 py-3 text-left transition-colors hover:bg-accent/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 disabled:opacity-60"
 							>
-								<span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
-									{entry.target.kind === "flowpilot" ? (
-										<SparklesIcon className="size-4" />
-									) : (
-										<MessageSquareIcon className="size-4" />
-									)}
-								</span>
-								<span className="min-w-0 flex-1">
+								<ChatActivityIcon target={entry.target} />
+								<span className="flex min-w-0 flex-1 flex-col">
 									<span className="flex items-center justify-between gap-2">
 										<span className="truncate text-sm font-medium">
 											{entry.title}
@@ -252,10 +312,7 @@ export function ChatActivityMenu() {
 											)}
 										</time>
 									</span>
-									<span className="mt-1 line-clamp-2 break-words text-xs leading-relaxed text-muted-foreground">
-										{entry.preview ||
-											t("newReplyReady", "A new reply is ready.")}
-									</span>
+									<ChatActivityPreview entry={entry} />
 								</span>
 								<span
 									aria-hidden

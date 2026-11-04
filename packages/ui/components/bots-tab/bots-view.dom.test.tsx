@@ -108,6 +108,7 @@ const { useChatActivityStore } = await import(
 );
 const { ChatActivityMenu } = await import("../global-chat/chat-activity");
 const { botKeys } = await import("../../hooks/use-bots");
+const { inboxKeys } = await import("../../hooks/use-inbox");
 const { BotsView } = await import("./bots-view");
 
 function bot(id: string, overrides: Partial<IBot> = {}): IBot {
@@ -199,6 +200,7 @@ const backend = {
 	},
 	userState: {
 		getInfo: async () => ({ id: "me", name: "Felix Schultz" }),
+		getProfile: async () => null,
 		lookupUser: async (id: string) => users[id] ?? null,
 		lookupUsers: async (ids: string[]) =>
 			ids.map((id) => users[id]).filter(Boolean),
@@ -325,7 +327,8 @@ describe("BotsView", () => {
 	test("greets the user and summarizes what needs them", () => {
 		const text = container.textContent ?? "";
 		expect(text).toContain(", Felix");
-		expect(text).toContain("1 thing needs you · 3 bots");
+		expect(text).toContain("Nothing needs you · 3 bots");
+		expect(buttonContaining("Open chat")).toBeUndefined();
 	});
 
 	test("lists the crew with built-in, location and encryption badges", () => {
@@ -413,12 +416,44 @@ describe("BotsView", () => {
 		expect(dockTitle()).toBe("Flux");
 	});
 
-	test("Needs you opens the conversation", async () => {
+	test("an explicit approval appears in Needs you and opens its conversation", async () => {
+		await act(async () => {
+			client.setQueryData<IConversation[]>(inboxKeys.conversations(), (list) =>
+				list?.map((conversation): IConversation => {
+					if (conversation.id !== "c1" || !conversation.last_entry)
+						return conversation;
+					return {
+						...conversation,
+						last_entry: {
+							...conversation.last_entry,
+							envelope: {
+								v: 1,
+								enc: "none",
+								body: {
+									text: "Send the digest",
+									approval: {
+										id: "ap-1",
+										turn_id: "turn-1",
+										tool: "send_message",
+										summary: "Send the digest",
+										scope: "",
+										args_hash: "h",
+									},
+								},
+							},
+						},
+					};
+				}),
+			);
+		});
+		await settle();
+		expect(container.textContent).toContain("1 thing needs you · 3 bots");
 		await click(buttonContaining("Open chat"));
 		expect(navigation.replace).toHaveBeenLastCalledWith(
 			"/bots?conversation=c1",
 			{ scroll: false },
 		);
+		expect(buttonContaining("Open chat")).toBeUndefined();
 	});
 
 	test("keeps the room open when the global chat switches conversations on its own", async () => {
@@ -479,6 +514,24 @@ describe("BotsView", () => {
 		});
 	});
 
+	test("activity reopens a closed Flux dock on the selected session and updates its bookmark", async () => {
+		expect(new URLSearchParams(window.location.search).get("session")).toBe(
+			"chat-1",
+		);
+		await click(
+			container.querySelector<HTMLElement>(
+				"aside button[aria-label='Close chat']",
+			),
+		);
+		expect(container.querySelector("aside")).toBeNull();
+		await openActivity("chat-activity", "Another report is ready");
+		expect(activeConversation()).toBe("chat-activity");
+		expect(showsGlobalChat()).toBe(true);
+		expect(new URLSearchParams(window.location.search).get("session")).toBe(
+			"chat-activity",
+		);
+	});
+
 	test("a draft is FlowPilot's: queued while a bot's chat is closed, it opens Flux's chat", async () => {
 		await click(buttonContaining("Scout", "Runs in the cloud"));
 		await click(
@@ -513,6 +566,26 @@ describe("BotsView", () => {
 		await settle();
 		expect(showsGlobalChat()).toBe(true);
 		expect(navigation.replace.mock.calls.length).toBe(urlWrites);
+		useGlobalChatStore.setState({ draft: null, nativeDrafts: [] });
+	});
+
+	test("a draft written to a bot opens that bot's chat, not Flux's", async () => {
+		await click(
+			container.querySelector<HTMLElement>(
+				"aside button[aria-label='Close chat']",
+			),
+		);
+		await act(async () => {
+			useGlobalChatStore
+				.getState()
+				.setDraft({ prompt: "Summarize the launch", botId: "bot_scout" });
+		});
+		await settle();
+		expect(showsGlobalChat()).toBe(true);
+		expect(dockTitle()).toBe("Scout");
+		expect(navigation.replace).toHaveBeenLastCalledWith("/bots?bot=bot_scout", {
+			scroll: false,
+		});
 		useGlobalChatStore.setState({ draft: null, nativeDrafts: [] });
 	});
 

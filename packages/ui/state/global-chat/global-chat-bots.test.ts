@@ -9,7 +9,11 @@ import {
 	desktopChatBotArgs,
 	webChatBotBody,
 } from "./global-chat-bots";
-import { globalChatDb, listFluxChatSessions } from "./global-chat-db";
+import {
+	type IMessage,
+	globalChatDb,
+	listFluxChatSessions,
+} from "./global-chat-db";
 import {
 	deleteGlobalChatMemory,
 	listGlobalChatMemories,
@@ -230,6 +234,53 @@ function heldReads() {
 const loading = () => useGlobalChatStore.getState().conversationLoading;
 
 describe("the chat's loading state while a conversation is read", () => {
+	test.each(["restore", "switch"] as const)(
+		"an aborted %s cannot reopen a conversation after its dock unmounts",
+		async (operation) => {
+			useGlobalChatStore
+				.getState()
+				.loadConversation("flux-current", [
+					makeGlobalChatMessage(IRole.User, "Keep this chat", "flux-current"),
+				]);
+			const messages = useGlobalChatStore.getState().messages;
+			sessionStorage.setItem(LAST_CONVERSATION_KEY, "flux-current");
+			sessionStorage.setItem(LAST_FLUX_CONVERSATION_KEY, "flux-previous");
+			const reads = heldReads();
+			const controller = new AbortController();
+			try {
+				const options = { signal: controller.signal };
+				const opening =
+					operation === "restore"
+						? restoreGlobalChatConversation("bot:bot_scout", options)
+						: switchGlobalChatBot("bot_scout", options);
+				await vi.waitFor(() =>
+					expect(reads.reading("bot:bot_scout")).toBe(true),
+				);
+				expect(loading()).toBe(true);
+				controller.abort();
+				reads.hand("bot:bot_scout", [
+					makeGlobalChatMessage(IRole.User, "Scout's history", "bot:bot_scout"),
+				]);
+				await opening;
+				expect(shown()).toEqual({
+					conversationId: "flux-current",
+					botId: null,
+					texts: ["Keep this chat"],
+				});
+				expect(useGlobalChatStore.getState().messages).toBe(messages);
+				expect(sessionStorage.getItem(LAST_CONVERSATION_KEY)).toBe(
+					"flux-current",
+				);
+				expect(sessionStorage.getItem(LAST_FLUX_CONVERSATION_KEY)).toBe(
+					"flux-previous",
+				);
+				expect(loading()).toBe(false);
+			} finally {
+				reads.spy.mockRestore();
+			}
+		},
+	);
+
 	test("a bot switch holds it, with the previous chat still in the store, until the bot's conversation lands", async () => {
 		const reads = heldReads();
 		try {

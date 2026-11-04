@@ -37,7 +37,7 @@ use sea_orm::{
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-const INBOX_TABLES: [&str; 4] = [
+const INBOX_TABLES: [&str; 5] = [
     r#"CREATE TABLE public."Conversation" (
         "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
         "directKey" TEXT UNIQUE, "createdBy" TEXT NOT NULL, "lastActivityAt" TEXT NOT NULL,
@@ -57,6 +57,11 @@ const INBOX_TABLES: [&str; 4] = [
         "principalId" TEXT NOT NULL, "keyId" TEXT NOT NULL, "algorithm" TEXT NOT NULL,
         "publicKey" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "revokedAt" TEXT,
         PRIMARY KEY ("principalId", "keyId"))"#,
+    r#"CREATE TABLE public."ConversationFile" (
+        "id" TEXT PRIMARY KEY, "conversationId" TEXT NOT NULL, "uploaderId" TEXT NOT NULL,
+        "name" TEXT NOT NULL, "mime" TEXT NOT NULL, "bytes" INTEGER NOT NULL, "sha256" TEXT,
+        "status" TEXT NOT NULL DEFAULT 'PENDING', "messageId" TEXT, "deletedAt" TEXT,
+        "createdAt" TEXT NOT NULL)"#,
 ];
 
 async fn database() -> DatabaseConnection {
@@ -78,7 +83,7 @@ async fn database() -> DatabaseConnection {
         }
         db.execute(&table).await.unwrap();
     }
-    for statement in INBOX_TABLES {
+    for statement in INBOX_TABLES.iter().chain(&super::marks::TEST_TABLES) {
         db.execute_unprepared(statement).await.unwrap();
     }
     db
@@ -146,6 +151,10 @@ async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str, deleted: 
         deleted_at: Set(deleted.then(|| at(1))),
         import_key: Set(None),
         embedding_model: Set(None),
+        stt_model: Set(None),
+        tts_model: Set(None),
+        image_model: Set(None),
+        vision_model: Set(None),
     }
     .insert(db)
     .await

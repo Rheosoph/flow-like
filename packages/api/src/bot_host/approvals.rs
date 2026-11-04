@@ -5,7 +5,8 @@
 
 use super::ledger::{self, BOT_TURN_LEASE_LOST};
 use crate::{
-    entity::{bot, bot_tool_grant, bot_turn, conversation},
+    bot_notify::display_name,
+    entity::{bot, bot_tool_grant, bot_turn, conversation, inbox_entry},
     error::ApiError,
     push_notifications::{DispatchNotificationInput, dispatch_notification_idempotent},
     routes::{
@@ -26,8 +27,10 @@ use chrono::{DateTime, Duration, FixedOffset};
 use flow_like::flow::copilot::tool_grants::{GrantKey, GrantStore, record_card_answer};
 use flow_like_types::{
     bot_message::{ApprovalRequest, ApprovalResponse},
+    bot_notify::{chat_link, group_key},
     bot_turn::{STORED_CANCELLED, STORED_QUEUED, STORED_RUNNING, STORED_WAITING},
     create_id,
+    inbox::direct_pair_key,
     tool_grant::{
         APPROVAL_WAIT_DAYS, ApprovalAnswer, DENY_PREFIX, ERROR_APPROVAL_EXPIRED, ONCE_PREFIX,
         TOKEN_TTL_HOURS, ToolGrant, ToolGrantKey, check_key, is_token_scope,
@@ -360,28 +363,53 @@ pub(crate) async fn park_held(
     Ok(())
 }
 
+/// The card waits in the owner's chat with the bot, so the push opens that chat and groups
+/// under the bot like its other notifications.
 async fn notify_owner(state: &AppState, turn: &bot_turn::Model, card: &ApprovalRequest) {
     let name = bot::Entity::find_by_id(&turn.bot_id)
         .one(&state.db)
         .await
         .ok()
         .flatten()
-        .and_then(|row| row.name)
+        .map(|row| display_name(&row))
         .unwrap_or_else(|| "Your bot".to_string());
+    let entry = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(&turn.owner_id))
+        .filter(inbox_entry::Column::SenderId.eq(&turn.bot_id))
+        .filter(inbox_entry::Column::MessageId.eq(&card.id))
+        .one(&state.db)
+        .await
+        .ok()
+        .flatten();
+    let expires_at = entry
+        .as_ref()
+        .map_or_else(now_millis, |entry| entry.created_at)
+        + Duration::days(APPROVAL_WAIT_DAYS);
     let sent = dispatch_notification_idempotent(
         state,
         &format!("botapproval_{}", card.id),
         DispatchNotificationInput {
+            bot_context: Some(flow_like_types::bot_notify::BotNotificationContext {
+                bot_id: turn.bot_id.clone(),
+                review_only: card.secret.is_some(),
+                turn_id: Some(turn.id.clone()),
+                approval_id: card.secret.is_none().then(|| card.id.clone()),
+                conversation_id: entry.as_ref().map(|entry| entry.conversation_id.clone()),
+                conversation_encryption: Some("plain".into()),
+                message_id: Some(card.id.clone()),
+                expires_at: Some(expires_at.to_rfc3339()),
+                ..Default::default()
+            }),
             user_id: turn.owner_id.clone(),
             app_id: None,
             title: format!("{name} needs your approval"),
             description: Some(card.summary.clone()),
             icon: None,
             image: None,
-            link: None,
+            link: Some(chat_link(&turn.bot_id)),
             notification_type: crate::entity::sea_orm_active_enums::NotificationType::System,
-            source_run_id: None,
-            source_node_id: None,
+            source_run_id: Some(group_key(&turn.bot_id)),
+            source_node_id: Some(card.id.clone()),
         },
     )
     .await;
@@ -444,6 +472,12 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
     }
     if turn.reply_message_id.as_deref() != Some(answer.approval_id.as_str()) {
         return Err(unknown_approval(turn_id, &answer.approval_id));
+    }
+    if turn.updated_at <= now - Duration::days(APPROVAL_WAIT_DAYS) {
+        return Err(conflict(
+            ERROR_APPROVAL_EXPIRED,
+            "This approval has expired".to_string(),
+        ));
     }
     let card = card_in(txn, owner_id, conversation, &answer.approval_id)
         .await?
@@ -514,6 +548,72 @@ pub(crate) async fn answer(
         .await?;
     wake(state, sent.wake).await;
     super::dispatch_turns(state, vec![turn.id.clone()]).await;
+    Ok(turn)
+}
+
+/// Cancels the turn and posts a notice after its pending approval in the owner's chat.
+pub(crate) async fn cancel_in<C: ConnectionTrait>(
+    txn: &C,
+    owner_id: &str,
+    bot_id: &str,
+    turn_id: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<(bot_turn::Model, Option<Sent>), ApiError> {
+    let turn = ledger::cancel_owned_in(txn, owner_id, bot_id, turn_id, now).await?;
+    let Some(approval_id) = turn.reply_message_id.as_deref() else {
+        return Ok((turn, None));
+    };
+    let card = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(owner_id))
+        .filter(inbox_entry::Column::SenderId.eq(bot_id))
+        .filter(inbox_entry::Column::MessageId.eq(approval_id))
+        .one(txn)
+        .await?
+        .filter(|entry| entry.envelope["body"]["approval"]["turn_id"].as_str() == Some(turn_id));
+    let Some(card) = card else {
+        return Ok((turn, None));
+    };
+    let sent = post_notice_in(
+        txn,
+        &card.conversation_id,
+        bot_id,
+        &format!("cancel-{}", turn.id),
+        "You cancelled this task. I no longer need your approval.",
+        now.max(card.created_at + Duration::milliseconds(1)),
+    )
+    .await?;
+    Ok((turn, Some(sent)))
+}
+
+/// Serializes cancellation with approval posting and answering in the owner's direct chat.
+pub(crate) async fn cancel(
+    state: &AppState,
+    owner_id: &str,
+    bot_id: &str,
+    turn_id: &str,
+) -> Result<bot_turn::Model, ApiError> {
+    let (turn, sent) = state
+        .transaction(|txn| {
+            let (owner, bot, turn) = (
+                owner_id.to_string(),
+                bot_id.to_string(),
+                turn_id.to_string(),
+            );
+            Box::pin(async move {
+                let direct = conversation::Entity::find()
+                    .filter(conversation::Column::DirectKey.eq(direct_pair_key(&owner, &bot)))
+                    .one(txn)
+                    .await?;
+                if let Some(direct) = direct {
+                    lock(txn, &direct.id).await?;
+                }
+                cancel_in(txn, &owner, &bot, &turn, now_millis()).await
+            })
+        })
+        .await?;
+    if let Some(sent) = sent {
+        wake(state, sent.wake).await;
+    }
     Ok(turn)
 }
 

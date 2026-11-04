@@ -2,6 +2,7 @@
 //! functions the owner's endpoints use, so caps and schedule rules are the API's.
 
 use crate::{
+    bot_host::task_schedules,
     routes::{
         bots::{lock_bot, tasks},
         inbox::now_millis,
@@ -66,6 +67,7 @@ impl Scheduler for ApiScheduler {
             })
             .await
             .map_err(|error| anyhow!("{error}"))?;
+        task_schedules::sync(&self.state, &row).await;
         Ok(to_task(row))
     }
 
@@ -78,7 +80,10 @@ impl Scheduler for ApiScheduler {
 
     async fn cancel(&self, task_id: &str) -> Result<bool> {
         match tasks::delete_in(&self.state.db, &self.owner_id, &self.bot_id, task_id).await {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                task_schedules::remove(&self.state, task_id).await;
+                Ok(true)
+            }
             Err(error) if error.status() == axum::http::StatusCode::NOT_FOUND => Ok(false),
             Err(error) => Err(anyhow!("{error}")),
         }

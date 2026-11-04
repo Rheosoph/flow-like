@@ -12,14 +12,17 @@ use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTr
 
 pub mod apps;
 pub mod ask;
+pub mod avatar;
 pub mod clone;
 pub mod crud;
 pub mod fire;
 pub mod import;
 pub mod mail;
+pub mod live_activities;
 pub mod memory;
 pub mod model;
 pub mod notify;
+pub mod people;
 pub mod permissions;
 pub mod presence;
 mod provision;
@@ -54,6 +57,7 @@ pub fn routes() -> Router<AppState> {
         .route("/import", post(import::import_bot))
         .route("/import/check", post(import::check_bot_import))
         .route("/presence", get(presence::get_presence))
+        .route("/mobile-status", get(live_activities::mobile_status))
         .route(
             "/hosts/{host_id}",
             put(presence::report_host).delete(presence::forget_host),
@@ -66,8 +70,13 @@ pub fn routes() -> Router<AppState> {
         .route("/turns", get(turns::list_turns))
         .route("/turns/{turn_id}/claim", post(turns::claim_turn))
         .route("/turns/{turn_id}/heartbeat", post(turns::heartbeat_turn))
+        .route("/turns/{turn_id}/silent", post(turns::silent_turn))
         .route("/turns/{turn_id}/hold", post(turns::hold_turn))
         .route("/turns/{turn_id}/park", post(tool_grants::park_turn))
+        .route(
+            "/turns/{turn_id}/secrets/{name}",
+            post(secrets::read_turn_secret),
+        )
         .route(
             "/{bot_id}",
             get(crud::get_bot)
@@ -75,6 +84,10 @@ pub fn routes() -> Router<AppState> {
                 .delete(crud::delete_bot),
         )
         .route("/{bot_id}/clone", post(clone::clone_bot))
+        .route(
+            "/{bot_id}/avatar",
+            get(avatar::get_bot_avatar).put(avatar::put_bot_avatar),
+        )
         .route(
             "/{bot_id}/runtime-token",
             post(runtime_token::mint_runtime_token),
@@ -161,7 +174,11 @@ pub fn routes() -> Router<AppState> {
             "/{bot_id}/permissions/{to_bot_id}",
             put(permissions::grant_bot_permission).delete(permissions::revoke_bot_permission),
         )
-        .route("/{bot_id}/notify", post(notify::notify_owner))
+        .route("/{bot_id}/live-activities", post(live_activities::register))
+        .route("/{bot_id}/live-activities/{activity_id}", delete(live_activities::unregister))
+        .route("/{bot_id}/notify", post(notify::message_owner))
+        .route("/{bot_id}/people", get(people::list_bot_people))
+        .route("/{bot_id}/people/message", post(people::message_person))
         .route("/{bot_id}/apps", get(apps::list_bot_apps))
         .route(
             "/{bot_id}/apps/{app_id}",

@@ -79,6 +79,7 @@ export const snacksShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "toasty",
+		faceColor: "sclera",
 		label: "Toasty",
 		series: "snacks",
 		description: "Golden toast with a little pat of butter.",

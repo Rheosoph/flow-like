@@ -47,6 +47,7 @@ import type { IEventPayloadChat } from "../../lib/schema/flow/event-payload-chat
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
 import {
 	desktopInteractiveArgs,
+	ensureBotTarget,
 	registerBotInbox,
 	sendInteractiveMessage,
 	webInteractiveBody,
@@ -106,6 +107,7 @@ import {
 } from "../../state/global-chat/global-chat-stream";
 import { runGlobalChatTool } from "../../state/global-chat/global-chat-tool-registry";
 import { webGlobalChatStart } from "../../state/global-chat/global-chat-web-transport";
+import { useFollowBotChat } from "../../state/global-chat/use-follow-bot-chat";
 import { FlowScriptWorkspacePanel } from "../flowpilot/flowscript-workspace-panel";
 import {
 	flowPilotModelIdForProvider,
@@ -328,6 +330,7 @@ export function GlobalChatBody({
 	const activeConversationId = useGlobalChatStore(
 		(s) => s.activeConversationId,
 	);
+	useFollowBotChat(activeConversationId);
 	const chatBot = useGlobalChatBot();
 	const chatBotNameRef = useRef(chatBot.name);
 	chatBotNameRef.current = chatBot.name;
@@ -808,6 +811,9 @@ export function GlobalChatBody({
 			);
 			if (!nativeRequest) {
 				appendMessage(userMessage);
+				// A bot chat lives in the inbox once its target resolves; saved before that, the
+				// message would stay on this device only.
+				await ensureBotTarget(sessionId);
 				void persistGlobalChatMessage(userMessage);
 				void persistGlobalChatSession(sessionId, sessionTitle);
 			}
@@ -1380,10 +1386,15 @@ export function GlobalChatBody({
 			consumeDraft(pendingDraft);
 			return;
 		}
-		// Drafts come from FlowPilot entry points (hero bar, board surfaces, native requests), so Flux
-		// takes them: the overlay switches to Flux itself, a dock waits until the Bots tab shows Flux.
-		if (chatBot.botId !== null || (pinnedToDock && dockBotId !== null)) {
-			if (!pinnedToDock) void switchGlobalChatBot(null);
+		// A draft goes to the bot it names; FlowPilot entry points (hero bar, board surfaces, native
+		// requests) name none, so Flux takes them. The overlay switches to that bot itself, a dock
+		// waits until the Bots tab shows it.
+		const draftBotId = pendingDraft.botId ?? null;
+		if (
+			chatBot.botId !== draftBotId ||
+			(pinnedToDock && dockBotId !== draftBotId)
+		) {
+			if (!pinnedToDock) void switchGlobalChatBot(draftBotId);
 			return;
 		}
 		if (

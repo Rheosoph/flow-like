@@ -455,6 +455,9 @@ struct WorkspaceWidgetView: View {
         case "recent_apps": return small && accessible ? "Apps" : title
         case "recent_runs": return small && accessible ? "Runs" : title
         case "attention": return small ? "Attention" : "Needs attention"
+        case "bots": return "Bots"
+        case "bot_tasks": return "Bot tasks"
+        case "bot_approvals": return "Bot approvals"
         default: return title
         }
     }
@@ -470,6 +473,7 @@ struct WorkspaceWidgetView: View {
                 case "workspace": workspaceContent(snapshot)
                 case "recent_apps" where !accessible: appGrid(snapshot)
                 case "event_favorites" where !small && !accessible: favoriteGrid(snapshot)
+                case "bot_approvals": botApprovals(snapshot)
                 default: itemList(snapshot)
                 }
             } else { emptyContent }
@@ -481,6 +485,29 @@ struct WorkspaceWidgetView: View {
     }
 
     private var voiceIntent: OpenFlowPilotIntent { OpenFlowPilotIntent(voice: true) }
+
+    private func botApprovals(_ snapshot: NativeSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(Array(items.prefix(rowLimit))) { item in
+                VStack(alignment: .leading, spacing: 6) {
+                    Button(intent: OpenNativeItemIntent(itemId: item.id, section: sectionKind, scope: snapshot.scope)) {
+                        Text(item.title).font(.subheadline.weight(.medium)).lineLimit(2)
+                    }.buttonStyle(.plain)
+                    if staleSince == nil, let approval = snapshot.botApprovals?.first(where: { $0.id == item.action.approvalId || $0.id == item.id }), approval.isPending() {
+                        HStack {
+                            Button(intent: RespondBotApprovalIntent(approvalId: approval.id, scope: snapshot.scope, allowOnce: true)) {
+                                Label("Allow once", systemImage: "checkmark")
+                            }
+                            Button(intent: RespondBotApprovalIntent(approvalId: approval.id, scope: snapshot.scope, allowOnce: false)) {
+                                Label("Deny", systemImage: "xmark")
+                            }
+                        }.font(.caption).buttonStyle(.bordered)
+                    }
+                }.privacySensitive()
+            }
+            Spacer(minLength: 0)
+        }
+    }
 
     private var flowPilotContent: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -751,6 +778,9 @@ struct WorkspaceWidgetView: View {
         case "event_favorites": return "No favorites"
         case "recent_apps": return "No recent apps"
         case "recent_runs": return "No recent runs"
+        case "bots": return "No bots available"
+        case "bot_tasks": return "No bot tasks"
+        case "bot_approvals": return "No pending approvals"
         default: return "No activity yet"
         }
     }
@@ -835,6 +865,24 @@ struct EventFavoritesWidget: NativeSectionWidget {
     static let sectionKind = "event_favorites"
     static let title = "Event Favorites"
     static let symbol = "star"
+}
+
+struct BotsWidget: NativeSectionWidget {
+    static let sectionKind = "bots"
+    static let title = "Bots"
+    static let symbol = "bubble.left.and.text.bubble.right"
+}
+
+struct BotTasksWidget: NativeSectionWidget {
+    static let sectionKind = "bot_tasks"
+    static let title = "Bot Tasks"
+    static let symbol = "checklist"
+}
+
+struct BotApprovalsWidget: NativeSectionWidget {
+    static let sectionKind = "bot_approvals"
+    static let title = "Bot Approvals"
+    static let symbol = "checkmark.shield"
 }
 
 struct FlowOpenAppConfiguration: WidgetConfigurationIntent {
@@ -1641,6 +1689,68 @@ struct FlowRunActivityWidget: Widget {
     }
 }
 
+struct FlowBotActivityWidget: Widget {
+    var body: some WidgetConfiguration {
+        ActivityConfiguration(for: FlowBotActivityAttributes.self) { context in
+            VStack(alignment: .leading, spacing: 8) {
+                Label(context.state.title, systemImage: "bubble.left.and.text.bubble.right").font(.headline)
+                Text(context.isStale ? "Open Flow Like for current status" : status(context.state.status)).font(.caption)
+                if !context.isStale, let progress = context.state.progress { ProgressView(value: progress) }
+            }.padding().privacySensitive().widgetURL(url(context.attributes))
+        } dynamicIsland: { context in
+            DynamicIsland {
+                DynamicIslandExpandedRegion(.leading) { Image(systemName: "bubble.left.and.text.bubble.right") }
+                DynamicIslandExpandedRegion(.center) { Text(context.state.title).lineLimit(1).privacySensitive() }
+                DynamicIslandExpandedRegion(.bottom) {
+                    Text(context.isStale ? "Open Flow Like for current status" : status(context.state.status)).font(.caption).privacySensitive()
+                }
+            } compactLeading: { Image(systemName: "bubble.left") }
+              compactTrailing: { Image(systemName: context.state.status == "waiting" ? "hand.raised" : "ellipsis") }
+              minimal: { Image(systemName: "bubble.left") }
+              .widgetURL(url(context.attributes))
+        }
+    }
+    private func status(_ value: String) -> String { value == "waiting" ? "Waiting for your response" : value.capitalized }
+    private func url(_ attributes: FlowBotActivityAttributes) -> URL {
+        NativeWidgetLaunchURL.bot(botId: attributes.botId, scope: attributes.scope,
+            conversationId: attributes.conversationId, turnId: attributes.turnId)
+    }
+}
+
+struct BotLockScreenWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "com.flow-like.app.bot-lock-screen", provider: WorkspaceProvider(sectionKind: "bot_approvals")) { entry in
+            BotLockScreenView(entry: entry)
+        }
+        .configurationDisplayName("Bot Approvals")
+        .description("See how many bot approvals are waiting, then open Flow Like to review them.")
+        .supportedFamilies([.accessoryCircular, .accessoryRectangular, .accessoryInline])
+    }
+}
+
+private struct BotLockScreenView: View {
+    let entry: WorkspaceEntry
+    @Environment(\.widgetFamily) private var family
+    private var snapshot: NativeSnapshot? {
+        guard let snapshot = entry.snapshot, snapshot.isCurrent(at: entry.date),
+              let approvals = snapshot.sections.first(where: { $0.kind == "bot_approvals" }), approvals.state == "ready",
+              snapshot.freshness(of: approvals)?.isStale(at: entry.date) == false else { return nil }
+        return snapshot
+    }
+    private var count: Int { snapshot?.botApprovals?.filter { $0.isPending(at: entry.date) }.count ?? 0 }
+    var body: some View {
+        Group {
+            if family == .accessoryCircular {
+                VStack(spacing: 2) { Image(systemName: "checkmark.shield"); Text(snapshot == nil ? "–" : String(count)).font(.headline) }
+            } else {
+                Label(snapshot == nil ? "Open Flow Like" : "\(count) bot approvals", systemImage: "checkmark.shield")
+                    .font(.caption).lineLimit(2)
+            }
+        }.privacySensitive().containerBackground(for: .widget) { Color.clear }
+            .widgetURL(NativeWidgetLaunchURL.section("bot_approvals", scope: snapshot?.scope))
+    }
+}
+
 #endif
 
 @available(iOSApplicationExtension 18.0, macOSApplicationExtension 26.0, *)
@@ -1676,6 +1786,17 @@ struct FlowEventControl: ControlWidget {
     }
 }
 
+@available(iOSApplicationExtension 18.0, macOSApplicationExtension 26.0, *)
+struct FlowBotControl: ControlWidget {
+    var body: some ControlWidgetConfiguration {
+        AppIntentControlConfiguration(kind: "com.flow-like.app.bot-control", intent: FlowBotControlConfiguration.self) { configuration in
+            ControlWidgetButton(action: OpenWidgetFlowBotIntent(bot: configuration.bot, voice: configuration.voice)) {
+                Label(configuration.bot?.title ?? "Choose bot", systemImage: configuration.voice ? "mic" : "bubble.left.and.text.bubble.right")
+            }.disabled(configuration.bot == nil)
+        }.displayName("Bot").description("Open a chosen bot or start an editable voice message.")
+    }
+}
+
 @main
 struct FlowLikeWidgetBundle: WidgetBundle {
     var body: some Widget {
@@ -1687,16 +1808,22 @@ struct FlowLikeWidgetBundle: WidgetBundle {
         UsageWidget()
         WorkspaceWidget()
         EventFavoritesWidget()
+        BotsWidget()
+        BotTasksWidget()
+        BotApprovalsWidget()
         OpenAppWidget()
         NativeDataChartWidget()
         NativeAppPageWidget()
         #if os(iOS)
         FlowRunActivityWidget()
+        FlowBotActivityWidget()
+        BotLockScreenWidget()
         #endif
         if #available(iOSApplicationExtension 18.0, macOSApplicationExtension 26.0, *) {
             FlowPilotControl()
             FlowInboxControl()
             FlowEventControl()
+            FlowBotControl()
         }
     }
 }

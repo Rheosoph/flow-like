@@ -2,8 +2,8 @@ use super::{
     ask::{ask_message_id, ask_trigger, run_owner},
     fire::{turn_state, wait_for_turn},
     webhooks::{
-        MAX_PAYLOAD_BYTES, WindowLimiter, admit, authorized, check_payload_size, create_in,
-        hash_secret, payload_of, rotate_in, trigger_for,
+        HookQuery, MAX_PAYLOAD_BYTES, WindowLimiter, admit, authorized, check_payload_size,
+        create_in, hash_secret, payload_of, rotate_in, trigger_for,
     },
 };
 use crate::{
@@ -90,23 +90,88 @@ fn signed(key: &str, body: &[u8]) -> HeaderMap {
 #[test]
 fn the_secret_opens_the_hook_in_a_header_or_as_a_bearer_token() {
     let stored = hash_secret("whsec_good");
-    assert!(authorized(&stored, &secret_header("whsec_good"), b"{}"));
+    assert!(authorized(
+        &stored,
+        &secret_header("whsec_good"),
+        None,
+        b"{}"
+    ));
     let mut bearer = HeaderMap::new();
     bearer.insert(
         "authorization",
         HeaderValue::from_static("Bearer whsec_good"),
     );
-    assert!(authorized(&stored, &bearer, b"{}"));
+    assert!(authorized(&stored, &bearer, None, b"{}"));
+}
+
+#[test]
+fn the_forwarded_bearer_secret_survives_cloudfront_origin_signing() {
+    let stored = hash_secret("whsec_good");
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "authorization",
+        HeaderValue::from_static("AWS4-HMAC-SHA256 Credential=origin"),
+    );
+    headers.insert(
+        "x-flow-like-authorization",
+        HeaderValue::from_static("Bearer whsec_good"),
+    );
+    assert!(authorized(&stored, &headers, None, b"{}"));
+    headers.insert(
+        "x-flow-like-authorization",
+        HeaderValue::from_static("Bearer whsec_bad"),
+    );
+    assert!(!authorized(&stored, &headers, None, b"{}"));
+}
+
+#[test]
+fn a_url_secret_authenticates_without_custom_headers_or_a_signature() {
+    let uri = "/bots/hooks/bh_1?secret=whsec%5Fgood&wait=30"
+        .parse()
+        .unwrap();
+    let axum::extract::Query(query) =
+        axum::extract::Query::<HookQuery>::try_from_uri(&uri).unwrap();
+    assert_eq!(query.wait, Some(30));
+    assert!(authorized(
+        &hash_secret("whsec_good"),
+        &HeaderMap::new(),
+        query.secret.as_deref(),
+        br#"{"type":"order.created"}"#,
+    ));
+
+    let uri = "/bots/hooks/bh_1?wait=30".parse().unwrap();
+    let axum::extract::Query(query) =
+        axum::extract::Query::<HookQuery>::try_from_uri(&uri).unwrap();
+    assert!(query.secret.is_none());
+}
+
+#[test]
+fn a_wrong_empty_or_hashed_url_secret_opens_nothing() {
+    let stored = hash_secret("whsec_good");
+    for secret in ["whsec_bad", "", " ", stored.as_str()] {
+        assert!(!authorized(&stored, &HeaderMap::new(), Some(secret), b"{}"));
+    }
+    assert!(!authorized(
+        "",
+        &HeaderMap::new(),
+        Some("whsec_good"),
+        b"{}"
+    ));
 }
 
 #[test]
 fn a_wrong_or_missing_secret_opens_nothing() {
     let stored = hash_secret("whsec_good");
-    assert!(!authorized(&stored, &secret_header("whsec_bad"), b"{}"));
-    assert!(!authorized(&stored, &secret_header(&stored), b"{}"));
-    assert!(!authorized(&stored, &HeaderMap::new(), b"{}"));
-    assert!(!authorized("", &HeaderMap::new(), b"{}"));
-    assert!(!authorized("", &secret_header(""), b"{}"));
+    assert!(!authorized(
+        &stored,
+        &secret_header("whsec_bad"),
+        None,
+        b"{}"
+    ));
+    assert!(!authorized(&stored, &secret_header(&stored), None, b"{}"));
+    assert!(!authorized(&stored, &HeaderMap::new(), None, b"{}"));
+    assert!(!authorized("", &HeaderMap::new(), None, b"{}"));
+    assert!(!authorized("", &secret_header(""), None, b"{}"));
 }
 
 #[test]
@@ -115,15 +180,22 @@ fn a_signature_of_the_exact_body_under_the_signing_key_opens_the_hook() {
     assert!(authorized(
         &stored,
         &signed(&stored, b"{\"a\":1}"),
+        None,
         b"{\"a\":1}"
     ));
     assert!(!authorized(
         &stored,
         &signed(&stored, b"{\"a\":1}"),
+        None,
         b"{\"a\":2}"
     ));
-    assert!(!authorized(&stored, &signed("whsec_good", b"{}"), b"{}"));
-    assert!(!authorized("", &signed("", b"{}"), b"{}"));
+    assert!(!authorized(
+        &stored,
+        &signed("whsec_good", b"{}"),
+        None,
+        b"{}"
+    ));
+    assert!(!authorized("", &signed("", b"{}"), None, b"{}"));
 }
 
 #[test]
@@ -155,21 +227,36 @@ async fn an_admitted_call_needs_the_secret_and_the_cap_and_the_capability() {
     let hook = hook(&db, "bot_a", "whsec_good").await;
     let now = Instant::now();
 
-    let (admitted, bot) = admit(&db, &hook.id, &secret_header("whsec_good"), b"{}", now)
-        .await
-        .unwrap();
+    let (admitted, bot) = admit(
+        &db,
+        &hook.id,
+        &secret_header("whsec_good"),
+        None,
+        b"{}",
+        now,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         (admitted.id.as_str(), bot.id.as_str()),
         (hook.id.as_str(), "bot_a")
     );
 
-    let wrong = admit(&db, &hook.id, &secret_header("whsec_bad"), b"{}", now).await;
+    let wrong = admit(&db, &hook.id, &secret_header("whsec_bad"), None, b"{}", now).await;
     assert_code(
         &wrong.unwrap_err(),
         StatusCode::UNAUTHORIZED,
         "BOT_WEBHOOK_UNAUTHORIZED",
     );
-    let missing = admit(&db, "bh_unknown", &secret_header("whsec_good"), b"{}", now).await;
+    let missing = admit(
+        &db,
+        "bh_unknown",
+        &secret_header("whsec_good"),
+        None,
+        b"{}",
+        now,
+    )
+    .await;
     assert_code(
         &missing.unwrap_err(),
         StatusCode::UNAUTHORIZED,
@@ -177,7 +264,7 @@ async fn an_admitted_call_needs_the_secret_and_the_cap_and_the_capability() {
     );
 
     let big = vec![b'x'; MAX_PAYLOAD_BYTES + 1];
-    let refused = admit(&db, &hook.id, &secret_header("whsec_good"), &big, now).await;
+    let refused = admit(&db, &hook.id, &secret_header("whsec_good"), None, &big, now).await;
     assert_code(
         &refused.unwrap_err(),
         StatusCode::PAYLOAD_TOO_LARGE,
@@ -187,12 +274,58 @@ async fn an_admitted_call_needs_the_secret_and_the_cap_and_the_capability() {
     let mut off: bot_webhook::ActiveModel = hook.clone().into();
     off.enabled = Set(false);
     off.update(&db).await.unwrap();
-    let disabled = admit(&db, &hook.id, &secret_header("whsec_good"), b"{}", now).await;
+    let disabled = admit(
+        &db,
+        &hook.id,
+        &secret_header("whsec_good"),
+        None,
+        b"{}",
+        now,
+    )
+    .await;
     assert_code(
         &disabled.unwrap_err(),
         StatusCode::FORBIDDEN,
         "BOT_WEBHOOK_DISABLED",
     );
+}
+
+#[tokio::test]
+async fn a_url_secret_admits_a_call_and_rotation_revokes_the_old_url() {
+    let db = database().await;
+    hooked_bot(&db, "bot_a", "user-a").await;
+    let hook = hook(&db, "bot_a", "whsec_old").await;
+    let now = Instant::now();
+    let headers = HeaderMap::new();
+
+    let (admitted, _) = admit(&db, &hook.id, &headers, Some("whsec_old"), b"{}", now)
+        .await
+        .unwrap();
+    assert_eq!(admitted.id, hook.id);
+
+    for secret in [None, Some("wrong")] {
+        let error = admit(&db, &hook.id, &headers, secret, b"{}", now)
+            .await
+            .unwrap_err();
+        assert_code(&error, StatusCode::UNAUTHORIZED, "BOT_WEBHOOK_UNAUTHORIZED");
+    }
+
+    let (_, secret) = rotate_in(&db, "user-a", "bot_a", &hook.id).await.unwrap();
+    let old = admit(&db, &hook.id, &headers, Some("whsec_old"), b"{}", now)
+        .await
+        .unwrap_err();
+    assert_code(&old, StatusCode::UNAUTHORIZED, "BOT_WEBHOOK_UNAUTHORIZED");
+    admit(&db, &hook.id, &headers, Some(&secret), b"{}", now)
+        .await
+        .unwrap();
+
+    let mut off: bot_webhook::ActiveModel = hook.into();
+    off.enabled = Set(false);
+    let disabled = off.update(&db).await.unwrap();
+    let error = admit(&db, &disabled.id, &headers, Some(&secret), b"{}", now)
+        .await
+        .unwrap_err();
+    assert_code(&error, StatusCode::FORBIDDEN, "BOT_WEBHOOK_DISABLED");
 }
 
 #[tokio::test]
@@ -228,6 +361,7 @@ async fn a_bot_without_the_capability_cannot_have_or_serve_a_webhook() {
         &db,
         &hook.id,
         &secret_header("whsec_good"),
+        None,
         b"{}",
         Instant::now(),
     )
@@ -288,11 +422,26 @@ async fn too_many_calls_or_too_many_refusals_are_answered_with_429() {
     let hook = hook(&db, "bot_a", "whsec_good").await;
     let now = Instant::now();
     for _ in 0..30 {
-        admit(&db, &hook.id, &secret_header("whsec_good"), b"{}", now)
-            .await
-            .unwrap();
+        admit(
+            &db,
+            &hook.id,
+            &secret_header("whsec_good"),
+            None,
+            b"{}",
+            now,
+        )
+        .await
+        .unwrap();
     }
-    let throttled = admit(&db, &hook.id, &secret_header("whsec_good"), b"{}", now).await;
+    let throttled = admit(
+        &db,
+        &hook.id,
+        &secret_header("whsec_good"),
+        None,
+        b"{}",
+        now,
+    )
+    .await;
     assert_eq!(
         throttled.unwrap_err().status(),
         StatusCode::TOO_MANY_REQUESTS
@@ -300,10 +449,18 @@ async fn too_many_calls_or_too_many_refusals_are_answered_with_429() {
 
     let other = self::hook(&db, "bot_a", "whsec_other").await;
     for _ in 0..10 {
-        let refused = admit(&db, &other.id, &secret_header("nope"), b"{}", now).await;
+        let refused = admit(&db, &other.id, &secret_header("nope"), None, b"{}", now).await;
         assert_eq!(refused.unwrap_err().status(), StatusCode::UNAUTHORIZED);
     }
-    let blocked = admit(&db, &other.id, &secret_header("whsec_other"), b"{}", now).await;
+    let blocked = admit(
+        &db,
+        &other.id,
+        &secret_header("whsec_other"),
+        None,
+        b"{}",
+        now,
+    )
+    .await;
     assert_eq!(blocked.unwrap_err().status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
@@ -319,20 +476,21 @@ async fn rotating_invalidates_the_old_secret_and_the_old_signing_key() {
 
     let (rotated, secret) = rotate_in(&db, "user-a", "bot_a", &hook.id).await.unwrap();
     let now = Instant::now();
-    let old = admit(&db, &hook.id, &secret_header("whsec_old"), b"{}", now).await;
+    let old = admit(&db, &hook.id, &secret_header("whsec_old"), None, b"{}", now).await;
     assert_eq!(old.unwrap_err().status(), StatusCode::UNAUTHORIZED);
-    let old_signature = admit(&db, &hook.id, &signed(&old_key, b"{}"), b"{}", now).await;
+    let old_signature = admit(&db, &hook.id, &signed(&old_key, b"{}"), None, b"{}", now).await;
     assert_eq!(
         old_signature.unwrap_err().status(),
         StatusCode::UNAUTHORIZED
     );
-    admit(&db, &hook.id, &secret_header(&secret), b"{}", now)
+    admit(&db, &hook.id, &secret_header(&secret), None, b"{}", now)
         .await
         .unwrap();
     admit(
         &db,
         &hook.id,
         &signed(&rotated.secret_hash, b"{}"),
+        None,
         b"{}",
         now,
     )

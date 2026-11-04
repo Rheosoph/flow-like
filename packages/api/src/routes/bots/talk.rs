@@ -16,7 +16,9 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like::flow::copilot::bot_talk::{BotPresence, BotTalkHost, CrewMember, PendingAnswer};
+use flow_like::flow::copilot::bot_talk::{
+    BotPresence, BotTalkHost, CrewMember, MAX_EXCHANGE_ROUNDS, PendingAnswer,
+};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -38,6 +40,12 @@ pub struct TalkRequest {
     pub question: String,
     /// The asking run; asking the same question in the same run again continues the same exchange.
     pub run_id: String,
+    /// Which of the caller's questions to this bot for the current request this is, from 1 up
+    /// to the limit of questions one request may send to one bot. A late answer to it wakes the
+    /// caller without adding a hop and says the round back in `ask-result`. 0 or absent: the
+    /// answer counts hops as before.
+    #[serde(default)]
+    pub round: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
@@ -85,6 +93,8 @@ pub struct AskResult {
     pub question: String,
     pub answer: String,
     pub failed: bool,
+    /// The question's round; the woken turn goes on counting from it. 0: none was kept.
+    pub round: u32,
 }
 
 #[utoipa::path(
@@ -192,6 +202,12 @@ pub async fn talk(
     if body.callee_id == bot_id {
         return Err(ApiError::bad_request("A bot can't ask itself"));
     }
+    if body.round > MAX_EXCHANGE_ROUNDS {
+        return Err(ApiError::bad_request(format!(
+            "A bot asks another at most {MAX_EXCHANGE_ROUNDS} questions for one request; this is question {}",
+            body.round
+        )));
+    }
     let caller = crew_member(
         &owned_bot(&state.db, &sub, &bot_id).await?,
         BotPresence::Online,
@@ -205,7 +221,7 @@ pub async fn talk(
     let callee = crew_member(&callee_row, presence);
     let host = ServerTalkHost::for_chat(state.clone(), &sub, body.run_id.trim());
     let asked = host
-        .ask_for_desktop(&caller, &callee, question)
+        .ask_for_desktop(&caller, &callee, question, body.round)
         .await
         .map_err(ApiError::internal_error)?;
     let (status, text) = match asked.outcome {
@@ -268,6 +284,7 @@ pub async fn turn_ask_result(
         callee_id,
         answer,
         failed,
+        round,
     } = answered_ask(&state.db, &turn)
         .await?
         .ok_or_else(|| ApiError::not_found("This turn does not wait on an answer"))?;
@@ -279,5 +296,6 @@ pub async fn turn_ask_result(
         question,
         answer,
         failed,
+        round,
     }))
 }

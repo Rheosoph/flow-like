@@ -20,6 +20,7 @@ const navigation = {
 		navigation.params = new URLSearchParams(href.split("?")[1] ?? "");
 		window.history.replaceState(null, "", href);
 	}),
+	push: mock((_href: string) => {}),
 };
 
 const CHAT_BODY = "../global-chat/global-chat-body";
@@ -133,7 +134,7 @@ mock.module("@flow-like/locales", () => ({
 }));
 mock.module("next/navigation", () => ({
 	...actual.navigation,
-	useRouter: () => ({ replace: navigation.replace, push: () => {} }),
+	useRouter: () => ({ replace: navigation.replace, push: navigation.push }),
 	usePathname: () => "/bots",
 	useSearchParams: () => navigation.params,
 }));
@@ -237,6 +238,7 @@ const bots = [
 		name: "Writer",
 		description: "Writer's job",
 		capabilities: ["memory"],
+		embedding_model: "embed-a",
 	}),
 	bot("bot_pebble", {
 		name: "Pebble",
@@ -288,6 +290,7 @@ const backend = {
 		lookupUsers: async () => [],
 		getSettingsProfile: async () => ({ hub_profile: { id: "profile-1" } }),
 	},
+	bitState: { getProfileBits: async () => [] },
 	storageState: { downloadStorageItems },
 	roleState: {
 		getOwnRole: async () => ({
@@ -420,6 +423,12 @@ function panelButton(label: string) {
 	);
 }
 
+function panelLink(text: string) {
+	return Array.from(
+		panel()?.querySelectorAll<HTMLAnchorElement>("a[href]") ?? [],
+	).find((link) => link.textContent?.includes(text));
+}
+
 async function click(element: { click(): void } | null | undefined) {
 	expect(element ?? undefined).toBeDefined();
 	await act(async () => {
@@ -484,11 +493,13 @@ describe("the pill and the bot's panel", () => {
 		expect(pill()?.textContent).toContain("Runs in the cloud");
 		await click(pill());
 		expect(tabs()).toEqual(["Details", "Files", "Data", "Memory"]);
+		expect(panelButton("Open workspace") === undefined).toBe(false);
 
 		await click(buttonContaining("Writer", "Runs in the cloud"));
 		expect(panelOpen()).toBe(false);
 		await click(pill());
 		expect(tabs()).toEqual(["Details", "Memory"]);
+		expect(panelButton("Open workspace") === undefined).toBe(true);
 		expect(getWorkspace).not.toHaveBeenCalled();
 	});
 
@@ -513,10 +524,16 @@ describe("the pill and the bot's panel", () => {
 		expect(panelText()).toContain("FlowPilot");
 		expect(panelText()).toContain("Always on");
 		expect(panelText()).not.toContain("Where it runs");
+		expect(panelText()).not.toContain("Open workspace");
 		expect(getWorkspace).not.toHaveBeenCalled();
 
 		await openTab("Memory");
-		expect(lastUrl()).toBe("/bots?bot=flux&panel=memory");
+		const bookmark = new URL(lastUrl() ?? "", window.location.origin);
+		expect(bookmark.searchParams.get("bot")).toBe("flux");
+		expect(bookmark.searchParams.get("panel")).toBe("memory");
+		expect(bookmark.searchParams.get("session")).toBe(
+			useGlobalChatStore.getState().activeConversationId,
+		);
 		expect(memory.list).toHaveBeenLastCalledWith(
 			{ profileId: "profile-1", botId: null },
 			"token",
@@ -572,10 +589,11 @@ describe("the bot's workspace in the panel", () => {
 		await act(async () => release?.());
 		await settle();
 		expect(panelText()).toContain("Files of ws-scout");
-		const link = panel()?.querySelector<HTMLAnchorElement>("a[href]");
-		expect(link?.textContent).toContain("Open full view");
-		expect(link?.getAttribute("href")).toBe(
+		expect(panelLink("Open full view")?.getAttribute("href")).toBe(
 			"/library/config/storage?id=ws-scout",
+		);
+		expect(panelLink("Open workspace")?.getAttribute("href")).toBe(
+			"/library/config?id=ws-scout",
 		);
 		const files = shown.storage.at(-1);
 		expect(files?.appId).toBe("ws-scout");
@@ -595,7 +613,7 @@ describe("the bot's workspace in the panel", () => {
 		await openTab("Data");
 		expect(lastUrl()).toBe("/bots?bot=bot_scout&panel=data");
 		expect(panelText()).toContain("Tables of ws-scout");
-		expect(panel()?.querySelector("a[href]")?.getAttribute("href")).toBe(
+		expect(panelLink("Open full view")?.getAttribute("href")).toBe(
 			"/library/config/explore?id=ws-scout",
 		);
 		expect(shown.studio.at(-1)).toBe("ws-scout");
@@ -618,6 +636,21 @@ describe("the bot's workspace in the panel", () => {
 		expect(pillName()).toBe("Writer");
 		expect(panelOpen()).toBe(false);
 		expect(workspaceCalls("bot_writer")).toBe(0);
+	});
+
+	test("the header link sets the workspace up only when followed, then links straight to it", async () => {
+		await visit("bot=bot_pebble&panel=details");
+		expect(workspaceCalls("bot_pebble")).toBe(0);
+		expect(panelLink("Open workspace") === undefined).toBe(true);
+
+		await click(panelButton("Open workspace"));
+		expect(workspaceCalls("bot_pebble")).toBe(1);
+		expect(navigation.push).toHaveBeenLastCalledWith(
+			"/library/config?id=ws-bot_pebble",
+		);
+		expect(panelLink("Open workspace")?.getAttribute("href")).toBe(
+			"/library/config?id=ws-bot_pebble",
+		);
 	});
 
 	test("Memory lists the bot's facts with their quote and forgets one", async () => {

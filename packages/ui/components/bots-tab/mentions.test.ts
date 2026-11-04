@@ -3,10 +3,12 @@ import type { IConversation } from "../../state/backend-state/inbox-state";
 import {
 	type Mentionable,
 	filterMentionables,
+	inlineMentions,
 	insertMention,
 	mentionQuery,
 	mentionablesOf,
-	mentionsIn,
+	mentionedIn,
+	spokenMentions,
 } from "./mentions";
 
 const options: Mentionable[] = [
@@ -58,14 +60,28 @@ describe("filterMentionables", () => {
 	});
 });
 
-describe("mentionsIn", () => {
-	test("keeps only the picked principals whose @name is still in the text", () => {
-		const picked = new Map([
-			["b1", "Scout"],
-			["u1", "Ada"],
+describe("mentionedIn", () => {
+	test("names everyone whose @name stands in the text as a whole word", () => {
+		expect(mentionedIn("hello @Scout please", options)).toEqual(["b1"]);
+		expect(mentionedIn("@Ada, @Mascot!", options)).toEqual(["u1", "b2"]);
+		expect(mentionedIn("nobody", options)).toEqual([]);
+	});
+
+	test("ignores a name inside a longer word or without its @", () => {
+		expect(mentionedIn("@Scouting ahead", options)).toEqual([]);
+		expect(mentionedIn("Scout, come here", options)).toEqual([]);
+		expect(mentionedIn("mail@Scout", options)).toEqual([]);
+	});
+
+	test("reads names with spaces and regex characters literally", () => {
+		const people: Mentionable[] = [
+			{ id: "p1", name: "Anna Weber", kind: "user" },
+			{ id: "p2", name: "C++ (bot)", kind: "bot" },
+		];
+		expect(mentionedIn("@Anna Weber and @C++ (bot) here", people)).toEqual([
+			"p1",
+			"p2",
 		]);
-		expect(mentionsIn("hello @Scout please", picked)).toEqual(["b1"]);
-		expect(mentionsIn("nobody", picked)).toEqual([]);
 	});
 });
 
@@ -100,5 +116,64 @@ describe("mentionablesOf", () => {
 				"me",
 			),
 		).toEqual([]);
+	});
+});
+
+describe("inlineMentions", () => {
+	const scout = { id: "bot_scout", name: "Scout" };
+
+	test("links a spelled-out @Name in place", () => {
+		expect(inlineMentions("hey @Scout, look", [scout])).toBe(
+			"hey [@Scout](mention://bot_scout), look",
+		);
+	});
+
+	test("leads with a mention the text doesn't spell out", () => {
+		expect(inlineMentions("look", [scout])).toBe(
+			"[@Scout](mention://bot_scout) look",
+		);
+	});
+
+	test("does not touch longer names", () => {
+		expect(inlineMentions("@Scouting", [scout])).toBe(
+			"[@Scout](mention://bot_scout) @Scouting",
+		);
+	});
+});
+
+describe("spokenMentions", () => {
+	const crew: Mentionable[] = [
+		...options,
+		{ id: "b3", name: "Mo Mo", kind: "bot" },
+		{ id: "b4", name: "Éclair", kind: "bot" },
+	];
+
+	test("matches a bot name as a whole word in any case", () => {
+		expect(spokenMentions("hey scout, what do you think?", crew)).toEqual([
+			"b1",
+		]);
+		expect(spokenMentions("SCOUT", crew)).toEqual(["b1"]);
+	});
+
+	test("does not match inside longer words", () => {
+		expect(spokenMentions("scouting the mascots", crew)).toEqual([]);
+		expect(spokenMentions("the Mascot is here", crew)).toEqual(["b2"]);
+	});
+
+	test("never names people", () => {
+		expect(spokenMentions("Ada said hi", crew)).toEqual([]);
+	});
+
+	test("handles names with spaces and accents", () => {
+		expect(spokenMentions("ask mo mo about it", crew)).toEqual(["b3"]);
+		expect(spokenMentions("an éclair please", crew)).toEqual(["b4"]);
+		expect(spokenMentions("peclair", crew)).toEqual([]);
+	});
+
+	test("names several bots once each", () => {
+		expect(spokenMentions("Scout and Mascot, scout again", crew)).toEqual([
+			"b1",
+			"b2",
+		]);
 	});
 });

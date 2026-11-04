@@ -12,7 +12,9 @@ use flow_like::flow::copilot::tool_grants::{
 use flow_like::flow::copilot::tool_spec::resolve_tool_approval;
 use flow_like::flow::copilot::{HostTools, find_bot_tool_spec, tool_outcome_output};
 use flow_like_bot_tools::MemorySessions;
-use flow_like_bot_tools_host::{AppAccess, HostEnv, JobModels, JobScope, ModelSource, ToolJob};
+use flow_like_bot_tools_host::{
+    AppAccess, HostEnv, JobModels, JobScope, JobSecrets, ModelSource, SecretSource, ToolJob,
+};
 use flow_like_types::tokio::sync::OnceCell;
 use flow_like_types::{bot_message::ApprovalRequest, tool_grant::ApprovalDecision};
 use serde_json::{Value, json};
@@ -53,6 +55,7 @@ pub(crate) struct TurnDeps {
     pub models: TurnModels,
     pub executor: Option<Arc<dyn ToolExecutor>>,
     pub grants: Arc<dyn GrantStore>,
+    pub secrets: Arc<dyn SecretSource>,
 }
 
 /// One bot turn's bot tools on the server: the in-process set runs here, the rest goes to the
@@ -64,6 +67,7 @@ pub(crate) struct BotToolsHost {
     executor_jobs: AtomicUsize,
     parked: Mutex<Option<ApprovalRequest>>,
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
+    people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
 }
@@ -109,6 +113,7 @@ impl BotToolsHost {
             executor_jobs: AtomicUsize::new(0),
             parked: Mutex::new(None),
             notifier: None,
+            people: None,
             scheduler: None,
             mail: None,
         }
@@ -135,6 +140,14 @@ impl BotToolsHost {
         notifier: Arc<dyn flow_like_bot_tools::OwnerNotifier>,
     ) -> Self {
         self.notifier = Some(notifier);
+        self
+    }
+
+    pub(crate) fn with_people(
+        mut self,
+        people: Arc<dyn flow_like_bot_tools::PeopleBackend>,
+    ) -> Self {
+        self.people = Some(people);
         self
     }
 
@@ -289,9 +302,13 @@ impl BotToolsHost {
         )
         .with_sessions(self.sessions.clone())
         .with_object_writes(false)
-        .with_expensive_documents(expensive_documents);
+        .with_expensive_documents(expensive_documents)
+        .with_secrets(self.deps.secrets.clone());
         if let Some(notifier) = &self.notifier {
             env = env.with_notifier(notifier.clone());
+        }
+        if let Some(people) = &self.people {
+            env = env.with_people(people.clone());
         }
         if let Some(scheduler) = &self.scheduler {
             env = env.with_scheduler(scheduler.clone());
@@ -322,6 +339,18 @@ impl BotToolsHost {
             let credential = self.deps.directory.credential(app_id).await?;
             credentials.insert(app_id.to_string(), credential);
         }
+        let mut secrets = BTreeMap::new();
+        for name in flow_like_bot_tools::secrets::referenced_secrets(&args) {
+            let value = self
+                .deps
+                .secrets
+                .secret(&name)
+                .await
+                .map_err(|error| error.to_string())?;
+            if let Some(value) = value {
+                secrets.insert(name, value);
+            }
+        }
         let job = ToolJob {
             tool: tool.to_string(),
             args,
@@ -336,6 +365,7 @@ impl BotToolsHost {
                 embedding: bit_json(&self.deps.models.embedding),
             },
             allow_expensive_documents: expensive_documents,
+            secrets: JobSecrets(secrets),
         };
         serde_json::to_string(&job).map_err(|error| format!("Cannot encode the tool job: {error}"))
     }

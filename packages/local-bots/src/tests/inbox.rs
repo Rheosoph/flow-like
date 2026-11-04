@@ -1,7 +1,8 @@
 use super::*;
 use crate::codes;
 use flow_like_types::inbox::{
-    ConversationEncryption, ConversationKind, InboxEntryKind, PrincipalKind, direct_pair_key,
+    ActivityBody, ConversationEncryption, ConversationKind, InboxEntryKind, PrincipalKind,
+    direct_pair_key,
 };
 
 fn member_ids(conversation: &Conversation) -> Vec<String> {
@@ -101,6 +102,7 @@ fn conversations_serialize_like_the_api_plus_local() {
             "last_entry",
             "local",
             "members",
+            "pinned_at",
             "title",
             "unread_count"
         ]
@@ -1050,4 +1052,96 @@ fn room_limits_live_on_a_bots_membership_and_pending_members_do_not_count() {
         ids(&["local", &scout.id])
     );
     assert!(f.store.member_limits(&group.id, &ranger.id).is_err());
+}
+
+fn owner_message(message_id: &str, text: &str) -> SendEntryRequest {
+    entry_request(json!({
+        "message_id": message_id,
+        "kind": "message",
+        "envelope": plain_envelope(json!({ "text": text })),
+    }))
+}
+
+#[test]
+fn a_bot_writes_to_its_owner_in_the_direct_chat_it_opens_when_missing() {
+    let f = fixture();
+    let bot = f.bot("Scout");
+    let written = f
+        .store
+        .send_to_owner(
+            &bot.id,
+            Some("mail-thread"),
+            owner_message("mo-1", "Mail from Ada"),
+        )
+        .unwrap()
+        .expect("written");
+    assert_eq!(written.sender_id, bot.id);
+    let direct = f.direct(&bot);
+    assert_eq!(written.conversation_id, direct.id);
+    assert_eq!(f.all_entries(&direct.id).len(), 1);
+    let again = f
+        .store
+        .send_to_owner(&bot.id, None, owner_message("mo-1", "Mail from Ada"))
+        .unwrap()
+        .expect("repeat");
+    assert_eq!(again.id, written.id);
+    assert_eq!(f.all_entries(&direct.id).len(), 1);
+}
+
+#[test]
+fn a_bot_does_not_write_to_the_owner_chat_it_runs_in() {
+    let f = fixture();
+    let bot = f.bot("Scout");
+    let direct = f.direct(&bot);
+    let refused = f
+        .store
+        .send_to_owner(&bot.id, Some(&direct.id), owner_message("mo-2", "Hi"))
+        .unwrap();
+    assert!(refused.is_none());
+    assert!(f.all_entries(&direct.id).is_empty());
+}
+
+#[test]
+fn an_activity_is_host_written_once_and_neither_unread_nor_a_preview() {
+    let f = fixture();
+    let scout = f.bot("Scout");
+    let pebble = f.bot("Pebble");
+    let chat = f.direct(&scout);
+    let body = ActivityBody::bot_ask("ask-1", &scout.id, &pebble.id, "exchange-1", "How many?");
+
+    let first = f
+        .store
+        .post_activity(&scout.id, "act-1", &body, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(first.kind, InboxEntryKind::Activity);
+    assert_eq!(first.sender_id, scout.id);
+    let again = f
+        .store
+        .post_activity(&scout.id, "act-1", &body, false)
+        .unwrap()
+        .unwrap();
+    assert_eq!(again.id, first.id);
+    assert_eq!(
+        f.all_entries(&chat.id)
+            .iter()
+            .filter(|entry| entry.kind == InboxEntryKind::Activity)
+            .count(),
+        1
+    );
+    assert_eq!(unread(&f, &chat.id), 0);
+    assert!(f.visible(&chat.id).last_entry.is_none());
+
+    assert!(
+        f.store
+            .post_activity(&pebble.id, "act-2", &body, false)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        f.store
+            .post_activity(&pebble.id, "act-2", &body, true)
+            .unwrap()
+            .is_some()
+    );
 }

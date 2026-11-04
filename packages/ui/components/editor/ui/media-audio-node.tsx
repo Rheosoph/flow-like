@@ -9,11 +9,11 @@ import { ResizableProvider } from "@platejs/resizable";
 import { PlateElement, withHOC } from "platejs/react";
 
 import { AudioPlugin } from "@platejs/media/react";
-import { MediaToolbar } from "./media-toolbar";
-import { MediaAttribution } from "./media-attribution";
-import type { MediaMetadata } from "../media-metadata";
 import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
+import type { MediaMetadata } from "../media-metadata";
 import { Caption, CaptionTextarea } from "./caption";
+import { MediaAttribution } from "./media-attribution";
+import { MediaToolbar } from "./media-toolbar";
 
 export const AudioElement = withHOC(
 	ResizableProvider,

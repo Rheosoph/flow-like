@@ -302,6 +302,7 @@ export const workplaceShapes: readonly BotShapeDefinition[] = [
 	}),
 	crewShape({
 		id: "badge",
+		faceColor: "sclera",
 		label: "Badge",
 		series: "workplace",
 		description:

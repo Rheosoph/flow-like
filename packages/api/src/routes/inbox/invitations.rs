@@ -928,6 +928,7 @@ pub(crate) async fn notify_invited(
         if let Err(error) = dispatch_notification(
             state,
             DispatchNotificationInput {
+                bot_context: None,
                 user_id,
                 app_id: None,
                 title,

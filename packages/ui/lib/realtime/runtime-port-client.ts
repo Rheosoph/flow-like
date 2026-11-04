@@ -1,3 +1,4 @@
+import { compareInboxCursors } from "../inbox-cursor";
 import { RealtimeRuntime, validRealtimeSubscription } from "./runtime";
 import {
 	REALTIME_ERROR_UNAVAILABLE,
@@ -326,6 +327,34 @@ export class RealtimePortClient implements RealtimeClient {
 						);
 						desired.revision = run.revision;
 					}
+				}
+				const conversations = this.subscription.conversations;
+				if (conversations) {
+					for (const update of message.snapshot.conversations ?? []) {
+						const newest = update.entries.at(-1)?.cursor;
+						const desired = conversations.find(
+							(item) =>
+								item.conversation_id === update.conversation_id &&
+								item.as === update.as,
+						);
+						if (desired && newest)
+							desired.after =
+								desired.after !== undefined &&
+								compareInboxCursors(desired.after, newest) >= 0
+									? desired.after
+									: newest;
+					}
+					const dropped = (message.snapshot.conversation_errors ?? []).filter(
+						(error) => error.code !== REALTIME_ERROR_UNAVAILABLE,
+					);
+					this.subscription.conversations = conversations.filter(
+						(item) =>
+							!dropped.some(
+								(error) =>
+									error.conversation_id === item.conversation_id &&
+									error.as === item.as,
+							),
+					);
 				}
 				const failed = new Set(
 					message.snapshot.errors

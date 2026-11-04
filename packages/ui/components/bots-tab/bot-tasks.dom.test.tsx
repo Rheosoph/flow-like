@@ -28,7 +28,7 @@ mock.module("@flow-like/locales", () => ({
 
 const { createRoot } = await import("react-dom/client");
 const { BotTasksView } = await import("./bot-tasks");
-const { TriggerCard } = await import("./conversation-messages");
+const { TriggerPill } = await import("./conversation-note");
 
 function task(patch: Partial<IBotTask>): IBotTask {
 	return {
@@ -81,7 +81,10 @@ function button(label: string): HTMLButtonElement {
 async function click(element: Element) {
 	await act(async () => {
 		element.dispatchEvent(
-			new window.MouseEvent("click", { bubbles: true, cancelable: true }),
+			new window.MouseEvent("click", {
+				bubbles: true,
+				cancelable: true,
+			}) as never,
 		);
 	});
 }
@@ -97,7 +100,7 @@ async function type(element: Element, value: string) {
 			field,
 			value,
 		);
-		field.dispatchEvent(new window.Event("input", { bubbles: true }));
+		field.dispatchEvent(new window.Event("input", { bubbles: true }) as never);
 	});
 }
 
@@ -183,7 +186,10 @@ describe("BotTasksView", () => {
 			(
 				container.querySelector("form") as unknown as HTMLFormElement
 			).dispatchEvent(
-				new window.Event("submit", { bubbles: true, cancelable: true }),
+				new window.Event("submit", {
+					bubbles: true,
+					cancelable: true,
+				}) as never,
 			);
 		});
 		expect(created).toHaveLength(1);
@@ -220,14 +226,16 @@ describe("BotTasksView", () => {
 	});
 });
 
-describe("TriggerCard", () => {
-	test("a scheduled trigger reads as a compact card with its title", async () => {
+describe("TriggerPill", () => {
+	test("a scheduled trigger reads as a pill with its title", async () => {
 		await act(async () =>
 			root.render(
-				createElement(TriggerCard, {
+				createElement(TriggerPill, {
 					trigger: {
 						type: "trigger",
 						id: "tk-1",
+						refId: "tk-1-ref",
+						text: "Run it",
 						createdAt: new Date().toISOString(),
 						time: Date.now(),
 						source: "schedule",
@@ -236,17 +244,19 @@ describe("TriggerCard", () => {
 				}),
 			),
 		);
-		const card = container.querySelector('[data-slot="trigger-card"]');
+		const card = container.querySelector('[data-slot="trigger-pill"]');
 		expect(card?.textContent).toBe("Scheduled: Morning brief");
 	});
 
 	test("other sources are named", async () => {
 		await act(async () =>
 			root.render(
-				createElement(TriggerCard, {
+				createElement(TriggerPill, {
 					trigger: {
 						type: "trigger",
 						id: "tk-2",
+						refId: "tk-2-ref",
+						text: "Run it",
 						createdAt: new Date().toISOString(),
 						time: Date.now(),
 						source: "webhook",
@@ -256,7 +266,46 @@ describe("TriggerCard", () => {
 			),
 		);
 		expect(
-			container.querySelector('[data-slot="trigger-card"]')?.textContent,
+			container.querySelector('[data-slot="trigger-pill"]')?.textContent,
 		).toBe("Webhook: New order");
+	});
+
+	test("an email names its sender, and a click shows the mail", async () => {
+		await act(async () =>
+			root.render(
+				createElement(TriggerPill, {
+					trigger: {
+						type: "trigger",
+						id: "tk-3",
+						refId: "mail-1",
+						text: "Answer this mail",
+						createdAt: new Date().toISOString(),
+						time: Date.now(),
+						source: "email",
+						title: "Invoice 42",
+						payload: {
+							from: [{ name: "Anna", email: "anna@example.com" }],
+							to: [{ name: "", email: "bot@example.com" }],
+							subject: "Invoice 42",
+							text: "Please pay by Friday.",
+							authenticated: false,
+							attachments: [{ name: "invoice.pdf", size: 2048 }],
+						},
+					},
+				}),
+			),
+		);
+		const pill = container.querySelector('[data-slot="trigger-pill"] button');
+		expect(pill?.textContent).toBe("Email from Anna: Invoice 42");
+		await act(async () => (pill as HTMLButtonElement).click());
+		const details = window.document.querySelector(
+			'[data-slot="trigger-details"]',
+		);
+		expect(details?.textContent).toContain("anna@example.com");
+		expect(details?.textContent).toContain("Please pay by Friday.");
+		expect(details?.textContent).toContain("invoice.pdf");
+		expect(details?.textContent).toContain("not verified");
+		await act(async () => root.render(createElement("div")));
+		await new Promise((resolve) => setTimeout(resolve, 10));
 	});
 });

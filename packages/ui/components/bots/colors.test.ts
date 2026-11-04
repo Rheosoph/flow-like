@@ -106,8 +106,19 @@ describe("bot color catalog", () => {
 		}
 	});
 
-	it("keeps premium swatches and hex locked without matching ownership", () => {
-		for (const owned of [undefined, [], ["basics-crew"], ["colors-pastels"]]) {
+	it("makes every known color available when ownership is omitted", () => {
+		const catalog = createBotCatalog({ colors: [customColor()] });
+		for (const id of Object.keys(catalog.colors)) {
+			expect(canUseBotColor(swatch(id), catalog)).toBe(true);
+		}
+		expect(canUseBotColor(hex(), catalog)).toBe(true);
+		expect(canUseBotColor(swatch("missing"), catalog)).toBe(false);
+		expect(canUseBotColor(hex("invalid"), catalog)).toBe(false);
+		expect(canUseBotColor(hex("#fff", "missing"), catalog)).toBe(false);
+	});
+
+	it("keeps premium swatches and hex locked with an explicit ownership list", () => {
+		for (const owned of [[], ["basics-crew"], ["colors-pastels"]]) {
 			expect(
 				canUseBotColor(swatch("holo-aurora"), defaultBotCatalog, owned),
 			).toBe(false);
@@ -132,7 +143,7 @@ describe("bot color catalog", () => {
 		expect(
 			getBotColorPacks("custom-color", first).map((pack) => pack.id),
 		).toEqual(["custom-colors", "another-colors"]);
-		expect(canUseBotColor(swatch("custom-color"), first)).toBe(false);
+		expect(canUseBotColor(swatch("custom-color"), first, [])).toBe(false);
 		expect(
 			canUseBotColor(swatch("custom-color"), first, ["another-colors"]),
 		).toBe(true);
@@ -225,7 +236,8 @@ describe("bot color catalog", () => {
 		expect(
 			canUseBotColor(hex("#fff", "__proto__"), catalog, ["__proto__"]),
 		).toBe(true);
-		expect(canUseBotColor(swatch("constructor"), catalog)).toBe(false);
+		expect(canUseBotColor(swatch("constructor"), catalog)).toBe(true);
+		expect(canUseBotColor(swatch("constructor"), catalog, [])).toBe(false);
 	});
 
 	it("copies and freezes paints, stop arrays, pack membership and editable slots", () => {

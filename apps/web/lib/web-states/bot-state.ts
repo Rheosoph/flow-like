@@ -1,8 +1,9 @@
 import type {
+	BotAppearance,
 	BotApprovalDecision,
 	IBot,
 	IBotApp,
-	IBotRestrictions,
+	IBotAvatar,
 	IBotMailAddress,
 	IBotMailAvailability,
 	IBotMailThread,
@@ -10,6 +11,7 @@ import type {
 	IBotPermission,
 	IBotPermissions,
 	IBotPresence,
+	IBotRestrictions,
 	IBotSecretInfo,
 	IBotState,
 	IBotTask,
@@ -53,6 +55,15 @@ function expectBot(response: unknown, operation: string): IBot {
 	return response as unknown as IBot;
 }
 
+function expectAvatar(response: unknown, botId: string): IBotAvatar {
+	if (!isRecord(response)) {
+		throw new Error(
+			`Unexpected response while loading the avatar of bot ${botId}`,
+		);
+	}
+	return { url: typeof response.url === "string" ? response.url : null };
+}
+
 function expectWorkspace(response: unknown, botId: string): IBotWorkspace {
 	if (
 		!isRecord(response) ||
@@ -93,6 +104,28 @@ export class WebBotState implements IBotState {
 			await apiPost<IBotWorkspace>(
 				`${botPath(botId)}/workspace`,
 				undefined,
+				this.backend.auth,
+			),
+			botId,
+		);
+	}
+
+	async getAvatar(botId: string): Promise<IBotAvatar> {
+		return expectAvatar(
+			await apiGet<IBotAvatar>(`${botPath(botId)}/avatar`, this.backend.auth),
+			botId,
+		);
+	}
+
+	async putAvatar(
+		botId: string,
+		appearance: BotAppearance,
+		image: string,
+	): Promise<IBotAvatar> {
+		return expectAvatar(
+			await apiPut<IBotAvatar>(
+				`${botPath(botId)}/avatar`,
+				{ appearance, image },
 				this.backend.auth,
 			),
 			botId,

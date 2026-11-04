@@ -2,8 +2,8 @@
 
 use crate::native_auth::SessionBinding;
 use flow_like_types::realtime::{
-    MAX_REALTIME_RESPONSE_BYTES, MAX_REALTIME_RUNS, MAX_REALTIME_TIMEOUT_MS,
-    REALTIME_PROTOCOL_VERSION, RealtimePollRequest, RealtimePollResponse,
+    MAX_REALTIME_CONVERSATIONS, MAX_REALTIME_RESPONSE_BYTES, MAX_REALTIME_RUNS,
+    MAX_REALTIME_TIMEOUT_MS, REALTIME_PROTOCOL_VERSION, RealtimePollRequest, RealtimePollResponse,
     RealtimeTransportPreference,
 };
 use serde::{Serialize, de::DeserializeOwned};
@@ -93,10 +93,20 @@ impl Default for SessionState {
     }
 }
 
+fn distinct_conversations<'a>(requests: impl Iterator<Item = &'a RealtimePollRequest>) -> usize {
+    requests
+        .flat_map(|request| &request.conversations)
+        .map(|subscription| subscription.key())
+        .collect::<HashSet<_>>()
+        .len()
+}
+
 fn uses_configured_provider(state: &SessionState) -> bool {
     state.subscribers.values().any(|subscriber| {
         subscriber.transport == RealtimeTransportPreference::Configured
-            && (subscriber.request.notifications.is_some() || !subscriber.request.runs.is_empty())
+            && (subscriber.request.notifications.is_some()
+                || !subscriber.request.runs.is_empty()
+                || !subscriber.request.conversations.is_empty())
     })
 }
 
@@ -229,6 +239,17 @@ pub(crate) async fn realtime_subscribe(
                 .is_some_and(|request| request.runs.len() > MAX_REALTIME_RUNS)
             {
                 return Err("Too many simultaneous realtime run subscriptions".into());
+            }
+            if distinct_conversations(
+                state
+                    .subscribers
+                    .iter()
+                    .filter(|(existing, _)| *existing != &owner)
+                    .map(|(_, subscription)| &subscription.request)
+                    .chain(std::iter::once(&request)),
+            ) > MAX_REALTIME_CONVERSATIONS
+            {
+                return Err("Too many simultaneous realtime conversation subscriptions".into());
             }
             events
                 .send(RealtimeMessage::State {
@@ -380,6 +401,8 @@ fn deliver(
         if response.notifications.is_none()
             && response.runs.is_empty()
             && response.errors.is_empty()
+            && response.conversations.is_empty()
+            && response.conversation_errors.is_empty()
         {
             return true;
         }

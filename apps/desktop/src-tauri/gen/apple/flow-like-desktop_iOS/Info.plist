@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array><string>com.flow-like.app.bot-refresh</string></array>
 	<key>FirebaseAppDelegateProxyEnabled</key>
 	<false/>
 	<key>NSLocationWhenInUseUsageDescription</key>
@@ -53,11 +55,13 @@
 		<string>_https._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Request camera access for WebRTC</string>
+	<string>Flow Like uses the camera when you turn it on in a call, take a photo, scan a document, or start a video workflow.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Flow-Like needs local network access to connect to your desktop and discover peers.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Request microphone access for WebRTC</string>
+	<string>Flow Like records your voice when you start dictation, a voice chat, or an audio workflow.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Flow Like turns your speech into an editable message when you choose to dictate to a bot.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Allow Flow-Like to save images to your Photos.</string>
 	<key>NSPrivacyAccessedAPITypes</key>

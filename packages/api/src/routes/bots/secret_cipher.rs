@@ -58,10 +58,6 @@ pub(crate) fn encrypt(master: &[u8; 32], bot_id: &str, name: &str, value: &str) 
 
 /// The value [`encrypt`] stored for secret `name` of bot `bot_id`. Fails for any other bot,
 /// name or deployment key, and for anything that was not written by [`encrypt`].
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "the bot runtime reads secrets in a later phase")
-)]
 pub(crate) fn decrypt(master: &[u8; 32], bot_id: &str, name: &str, stored: &str) -> Result<String> {
     let encoded = stored
         .strip_prefix(PREFIX)

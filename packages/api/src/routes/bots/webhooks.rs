@@ -1,7 +1,8 @@
 //! Bot webhooks: public URLs that wake a bot. The owner creates one per integration (the secret is
-//! shown once, only its hash is stored); a call with the secret, or an HMAC signature keyed by the
-//! secret's hash, writes a `trigger` entry into the bot's conversation with its owner and answers
-//! with the turn it queued. Servers only: a bot that lives in a local store has no public URL.
+//! shown once, only its hash is stored); a call with the secret in a header or query parameter,
+//! or an optional HMAC signature keyed by the secret's hash, writes a `trigger` entry into the
+//! bot's conversation with its owner and answers with the turn it queued. Servers only: a bot
+//! that lives in a local store has no public URL.
 
 use super::{
     fire::{FiredTurn, fire_trigger, turn_state, wait_for_turn},
@@ -11,7 +12,7 @@ use crate::{
     credentials::{CredentialsAccess, RuntimeCredentials},
     entity::{bot, bot_webhook},
     error::ApiError,
-    middleware::jwt::AppUser,
+    middleware::jwt::{AppUser, viewer_authorization},
     state::AppState,
 };
 use axum::{
@@ -22,7 +23,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, FixedOffset, Utc};
-use flow_like_storage::object_store::{ObjectStoreExt, path::Path as StorePath};
+use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_types::{
     bot_message::WorkspaceHandle,
     inbox::{
@@ -100,10 +101,12 @@ pub struct BotWebhookList {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct IssuedBotWebhook {
     pub webhook: BotWebhookInfo,
-    /// Send it in `X-Flow-Like-Webhook-Secret` or as a bearer token. Shown once.
+    /// Send it in `X-Flow-Like-Webhook-Secret`, as a bearer token, or in the `secret` query
+    /// parameter when the sender can only configure a URL. Shown once.
     pub secret: String,
-    /// Alternative to the secret: sign the raw body with HMAC-SHA256 under this key (the
-    /// lowercase hex blake3 hash of the secret) and send `X-Flow-Like-Signature: sha256=<hex>`.
+    /// Optional alternative to sending the secret: sign the raw body with HMAC-SHA256 under
+    /// this key (the lowercase hex blake3 hash of the secret) and send
+    /// `X-Flow-Like-Signature: sha256=<hex>`.
     /// Shown once.
     pub signing_key: String,
 }
@@ -124,8 +127,11 @@ pub struct UpdateBotWebhookRequest {
     pub enabled: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, IntoParams)]
+#[derive(Deserialize, IntoParams)]
 pub struct HookQuery {
+    /// Webhook secret for senders that can only configure a URL. Keep the complete URL private.
+    /// Omit this when using a secret header, bearer token, or HMAC signature.
+    pub secret: Option<String>,
     /// Seconds to wait for the bot's reply, at most 30. Without it the call answers 202 at once.
     pub wait: Option<u64>,
 }
@@ -238,12 +244,7 @@ fn secret_from(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(SECRET_HEADER)
         .and_then(|value| value.to_str().ok())
-        .or_else(|| {
-            headers
-                .get(axum::http::header::AUTHORIZATION)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.strip_prefix("Bearer "))
-        })
+        .or_else(|| viewer_authorization(headers).and_then(|value| value.strip_prefix("Bearer ")))
         .map(str::trim)
         .filter(|secret| !secret.is_empty())
 }
@@ -273,13 +274,21 @@ fn secret_matches(secret_hash: &str, presented: &str) -> bool {
 }
 
 /// Whether the call carries the webhook's secret or a valid signature of its body.
-pub(crate) fn authorized(secret_hash: &str, headers: &HeaderMap, body: &[u8]) -> bool {
+pub(crate) fn authorized(
+    secret_hash: &str,
+    headers: &HeaderMap,
+    query_secret: Option<&str>,
+    body: &[u8],
+) -> bool {
     let by_secret = secret_from(headers).is_some_and(|secret| secret_matches(secret_hash, secret));
+    let by_query = query_secret
+        .filter(|secret| !secret.is_empty())
+        .is_some_and(|secret| secret_matches(secret_hash, secret));
     let by_signature = headers
         .get(SIGNATURE_HEADER)
         .and_then(|value| value.to_str().ok())
         .is_some_and(|signature| signature_matches(secret_hash, signature, body));
-    by_secret || by_signature
+    by_secret || by_query || by_signature
 }
 
 pub(crate) fn check_payload_size(len: usize) -> Result<(), ApiError> {
@@ -354,19 +363,19 @@ async fn store_payload(
                     "Scoping the bot workspace credentials failed: {error}"
                 ))
             })?;
-    let store = credentials
-        .to_store(false)
-        .await
-        .map_err(|error| ApiError::internal(format!("Opening the bot workspace failed: {error}")))?
-        .as_generic();
+    let store = credentials.to_store(false).await.map_err(|error| {
+        ApiError::internal(format!("Opening the bot workspace failed: {error}"))
+    })?;
     let path = format!("inbox/webhooks/{hook_id}/{message_id}.json");
+    let key = store
+        .construct_upload(&app_id, &path)
+        .await
+        .map_err(|error| ApiError::internal(format!("Bot workspace path '{path}': {error}")))?;
     let digest = hex::encode(Sha256::digest(&bytes));
     let size = bytes.len() as u64;
     store
-        .put(
-            &StorePath::from(format!("apps/{app_id}/{path}")),
-            bytes::Bytes::from(bytes).into(),
-        )
+        .as_generic()
+        .put(&key, bytes::Bytes::from(bytes).into())
         .await
         .map_err(|error| ApiError::internal(format!("Saving a webhook payload failed: {error}")))?;
     Ok(WorkspaceHandle {
@@ -658,6 +667,7 @@ pub(crate) async fn admit(
     db: &DatabaseConnection,
     hook_id: &str,
     headers: &HeaderMap,
+    query_secret: Option<&str>,
     body: &[u8],
     now: Instant,
 ) -> Result<(bot_webhook::Model, bot::Model), ApiError> {
@@ -672,7 +682,7 @@ pub(crate) async fn admit(
         .as_ref()
         .map(|hook| hook.secret_hash.clone())
         .unwrap_or_default();
-    let Some(hook) = hook.filter(|_| authorized(&stored, headers, body)) else {
+    let Some(hook) = hook.filter(|_| authorized(&stored, headers, query_secret, body)) else {
         REFUSALS.allow(&probe, now);
         return Err(unauthorized());
     };
@@ -698,6 +708,9 @@ pub(crate) async fn admit(
     Ok((hook, bot))
 }
 
+/// Wake a bot with a payload. Supply the webhook secret through `X-Flow-Like-Webhook-Secret`,
+/// `Authorization: Bearer <secret>`, or `?secret=<secret>`. HMAC signing is optional and can
+/// replace the secret with `X-Flow-Like-Signature: sha256=<hex>` over the exact request body.
 #[utoipa::path(
     post,
     path = "/bots/hooks/{hook_id}",
@@ -714,7 +727,7 @@ pub(crate) async fn admit(
         (status = 429, description = "More than 30 calls a minute, or too many refused calls")
     )
 )]
-#[tracing::instrument(name = "POST /bots/hooks/{hook_id}", skip(state, headers, body))]
+#[tracing::instrument(name = "POST /bots/hooks/{hook_id}", skip(state, query, headers, body))]
 pub async fn call_bot_webhook(
     State(state): State<AppState>,
     Path(hook_id): Path<String>,
@@ -722,7 +735,15 @@ pub async fn call_bot_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let (hook, bot) = admit(&state.db, &hook_id, &headers, &body, Instant::now()).await?;
+    let (hook, bot) = admit(
+        &state.db,
+        &hook_id,
+        &headers,
+        query.secret.as_deref(),
+        &body,
+        Instant::now(),
+    )
+    .await?;
     let message_id = format!("wh-{}", uuid::Uuid::new_v4().simple());
     let content_type = headers
         .get(axum::http::header::CONTENT_TYPE)

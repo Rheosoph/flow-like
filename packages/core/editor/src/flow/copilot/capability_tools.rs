@@ -35,12 +35,48 @@ fn email_ask_message(args: &Value) -> String {
     format!("The bot wants to email {recipients} with the subject '{subject}'.")
 }
 
+fn person_ask_message(args: &Value) -> String {
+    let text = args.get("text").and_then(Value::as_str).unwrap_or_default();
+    let preview: String = text.trim().chars().take(400).collect();
+    let cut = if preview.chars().count() < text.trim().chars().count() {
+        "…"
+    } else {
+        ""
+    };
+    format!("The bot wants to message a person you chat with: \"{preview}{cut}\"")
+}
+
+fn secret_ask_message(args: &Value) -> String {
+    let field = |key: &str| {
+        args.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+    };
+    let again = if args.get("replace").and_then(Value::as_bool) == Some(true) {
+        " (a new value: the stored one was rejected)"
+    } else {
+        ""
+    };
+    format!(
+        "The bot asks you for the secret {}{again}: {}",
+        field("name"),
+        field("description")
+    )
+}
+
 fn ask_message(tool: &str, args: &Value) -> String {
     if tool == "shell_run" {
         return shell_ask_message(args);
     }
+    if tool == tools::secrets::SECRET_REQUEST {
+        return secret_ask_message(args);
+    }
     if tool == "email_send" {
         return email_ask_message(args);
+    }
+    if tool == tools::people::MESSAGE_PERSON {
+        return person_ask_message(args);
     }
     let target = ["index", "path", "name", "url"]
         .iter()
@@ -108,7 +144,9 @@ registered_tools!(
     "data_sources",
     "data_query",
     "code_run",
-    "notify_owner",
+    "message_owner",
+    "list_people",
+    "message_person",
     "schedule_task",
     "list_tasks",
     "cancel_task",
@@ -124,7 +162,21 @@ registered_tools!(
     "email_send",
     "email_reply",
     "image_generate",
+    "secret_list",
+    "secret_request",
 );
+
+/// Offered beside a tool that takes secrets by name rather than through a capability of their own.
+pub(super) fn is_secret_tool(name: &str) -> bool {
+    [tools::secrets::SECRET_LIST, tools::secrets::SECRET_REQUEST].contains(&name)
+}
+
+/// Whether the offered tools include one that takes a secret by name.
+pub(super) fn uses_secrets(offered: &[&str]) -> bool {
+    offered
+        .iter()
+        .any(|name| tools::secrets::SECRET_USERS.contains(name))
+}
 
 /// Tools that need the machine's own browser, screen or keyboard; `HostTools::linked` leaves
 /// them out and `with_local_machine` adds them.
@@ -328,7 +380,7 @@ mod tests {
                 spec.name
             );
             assert!(
-                required_capability(&spec).is_some(),
+                required_capability(&spec).is_some() || is_secret_tool(spec.name),
                 "{} has no capability",
                 spec.name
             );
@@ -365,6 +417,8 @@ mod tests {
                         | "computer_screenshot"
                         | "computer_act"
                         | "email_send"
+                        | "message_person"
+                        | "secret_request"
                 ) || outside,
                 "{name}"
             );

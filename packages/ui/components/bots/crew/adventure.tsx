@@ -5,6 +5,7 @@ import { BotMotion } from "./motion";
 export const adventureShapes: readonly BotShapeDefinition[] = [
 	crewShape({
 		id: "scout",
+		faceColor: "sclera",
 		label: "Scout",
 		series: "adventure",
 		description: "A pocket compass with a red north-pointing needle.",

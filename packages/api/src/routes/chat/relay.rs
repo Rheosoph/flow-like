@@ -406,7 +406,7 @@ pub(crate) async fn resolve_usage_context(
 ) -> Result<UsageRequestContext, ApiError> {
     if let AppUser::Executor(executor) = user {
         return Ok(UsageRequestContext {
-            app_id: Some(executor.app_id.clone()),
+            app_id: executor.usage_app_id(),
             user_id: executor.sub.clone(),
             technical_user_id: executor.technical_user_id.clone(),
         });

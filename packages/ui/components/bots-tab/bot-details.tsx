@@ -399,7 +399,7 @@ export function BotDetails({
 			{bot && offersEncryption(bot) && <BotEncryption bot={bot} />}
 			{bot && offersTasks(bot) && <BotTasks bot={bot} />}
 			{bot && offersEmail(bot) && <BotEmailAddress botId={bot.id} />}
-			{bot && offersWebhooks(bot) && <BotWebhooks bot={bot} />}
+			{bot && offersWebhooks(bot) && <BotWebhooks key={bot.id} bot={bot} />}
 			{bot && <BotActions bot={bot} actions={actions} />}
 		</div>
 	);

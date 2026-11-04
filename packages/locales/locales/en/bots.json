@@ -5,7 +5,7 @@
 			"label": "Browser"
 		},
 		"channels": {
-			"description": "Talks with people on Slack, Teams, Telegram, Discord or email",
+			"description": "Messages people you chat with, with your approval; Slack, Teams, Telegram and Discord come later",
 			"label": "Channels"
 		},
 		"code_execution": {
@@ -98,8 +98,7 @@
 		}
 	},
 	"chat": {
-		"defaultModelHint": "{{name}} has no model of its own, so it uses the chat's default model",
-		"modelHint": "Chosen in {{name}}'s settings"
+		"defaultModelHint": "{{name}} has no model of its own, so it uses the chat's default model"
 	},
 	"computer": {
 		"alt": "What {{name}} sees right now",
@@ -111,6 +110,14 @@
 		"stop": "Stop"
 	},
 	"crew": {
+		"activity": {
+			"queued": "Waiting for {{name}}",
+			"running": "{{name}} is answering",
+			"typingMany": "Several people are typing",
+			"typingOne": "{{name}} is typing",
+			"typingTwo": "{{first}} and {{second}} are typing",
+			"waiting": "{{name}} is waiting for approval"
+		},
 		"approval": {
 			"always": "Always allow",
 			"answeredAlways": "Always allowed",
@@ -122,6 +129,21 @@
 			"failed": "Couldn't send your answer. Try again.",
 			"label": "Approval request",
 			"once": "Allow once",
+			"secret": {
+				"decline": "Decline",
+				"declined": "Declined",
+				"eyebrow": "Needs a secret",
+				"failed": "Couldn't save the secret. Try again.",
+				"hint": "Goes straight into {{name}}'s secret store. It never appears in the chat and the model never sees it.",
+				"placeholder": "Paste the value",
+				"replaceHint": "The stored value was rejected. Enter a new one to replace it.",
+				"save": "Save secret",
+				"saved": "Secret saved",
+				"saving": "Saving...",
+				"title": "{{name}} needs a secret",
+				"tooLarge": "Too large. The limit is {{max}} KB.",
+				"valueLabel": "Secret value"
+			},
 			"title": "{{name}} wants to {{summary}}",
 			"triggeredBy": "Triggered by {{name}}",
 			"triggeredByInRoom": "Triggered by {{name}} in {{room}}"
@@ -129,12 +151,58 @@
 		"botSettings": "Settings for {{name}}",
 		"botTag": "Bot",
 		"builtIn": "Built in",
+		"call": {
+			"durationHours": "{{hours}} h {{minutes}} min",
+			"durationMinutes": "{{minutes}} min",
+			"durationShort": "under 1 min",
+			"ended": "Call ended · {{duration}}",
+			"error": {
+				"denied": "Microphone access is blocked. Allow it in your browser settings to join the call.",
+				"failed": "The call didn't start. Try again.",
+				"full": "This call is full.",
+				"unavailable": "No microphone was found, or another app is using it."
+			},
+			"join": "Join",
+			"leave": "Leave call",
+			"listen": "Let bots listen",
+			"listenHint": "Your microphone is transcribed on your device or your speech model and posted as text. Bots can read it, and saying a bot's name wakes it.",
+			"listenNeedsModel": "Add a speech-to-text model to your profile to let bots listen.",
+			"live": "Call in progress",
+			"mute": "Mute microphone",
+			"mutedPerson": "{{name}} is muted",
+			"speaking": "{{name}} is speaking",
+			"start": "Start a call",
+			"started": "{{name}} started a call",
+			"startedYou": "You started a call",
+			"transcribedPerson": "{{name}} lets bots listen",
+			"unmute": "Unmute microphone",
+			"cameraOff": "Turn camera off",
+			"cameraOn": "Turn camera on",
+			"screenOff": "Stop sharing screen",
+			"screenOn": "Share screen",
+			"cameraDenied": "Camera access was denied. Allow camera access in your browser or system settings.",
+			"cameraUnavailable": "The camera is unavailable. Check that it is connected and another app is not using it.",
+			"screenDenied": "Screen sharing was cancelled or denied. Choose Share screen to try again.",
+			"screenUnavailable": "Screen sharing is unavailable here. Open this meeting in a browser that supports screen sharing.",
+			"cameraUnsupported": "Camera sharing is unavailable on this device.",
+			"screenUnsupported": "Screen sharing is unavailable here. Use a supported desktop browser.",
+			"yourScreen": "Your screen",
+			"yourCamera": "Your camera",
+			"screenLabel": "{{name}}'s screen",
+			"cameraLabel": "{{name}}'s camera",
+			"you": "You",
+			"fullscreen": "Expand {{name}}"
+		},
 		"cancel": "Cancel",
 		"composer": {
 			"encrypted": "Writing in end-to-end encrypted chats isn't available in this app yet.",
+			"mentionHint": "Bots here read along and answer when they have something to add. @mention one to make sure it answers.",
 			"placeholder": "Message {{name}}",
-			"send": "Send",
+			"placeholderBots": "Message {{name}} · @mention a bot to make sure it answers",
 			"to": "To {{name}}"
+		},
+		"conversationMenu": {
+			"open": "Conversation options"
 		},
 		"directMessage": "Direct message",
 		"dock": {
@@ -185,6 +253,30 @@
 		},
 		"loadFailed": "Couldn't load your bots. Assistant and Flux still work.",
 		"loadFailedFlux": "Couldn't load your bots. Flux still works.",
+		"marks": {
+			"beforeYouJoined": "A message from before you joined this conversation",
+			"jump": "Show in conversation",
+			"loadFailed": "Couldn't load your starred messages.",
+			"loadMore": "Show more",
+			"noStars": "Nothing starred yet. Star a message from its menu to find it here.",
+			"notFound": "That message isn't in this conversation's history anymore.",
+			"pinConversation": "Pin to top",
+			"pinLimit": "This conversation already has {{max}} pinned messages. Unpin one first.",
+			"pinMessage": "Pin for everyone",
+			"pinnedBy": "Pinned by {{name}}",
+			"pinnedConversation": "Pinned",
+			"pinnedCount_one": "{{count}} pinned",
+			"pinnedCount_other": "{{count}} pinned",
+			"pinnedTitle": "Pinned messages",
+			"star": "Star message",
+			"starred": "Starred",
+			"starredDescription": "Only you see what you star.",
+			"starredShort": "Starred",
+			"starredTitle": "Starred messages",
+			"unpinConversation": "Unpin from top",
+			"unpinMessage": "Unpin for everyone",
+			"unstar": "Remove star"
+		},
 		"members": {
 			"added": "{{by}} added {{name}}",
 			"joined": "{{name}} joined",
@@ -202,20 +294,22 @@
 			"deleteTitle": "Delete this message?",
 			"discard": "Discard",
 			"edit": "Edit",
-			"edited": "(edited)",
 			"editLabel": "Edit message",
+			"edited": "(edited)",
 			"empty": "No messages yet. Say hello.",
 			"encrypted": "Encrypted message",
+			"errorTitle": "Couldn't answer",
 			"label": "Messages",
 			"loadFailed": "Couldn't load these messages.",
-			"loadingOlder": "Loading…",
 			"loadOlder": "Load older messages",
+			"loadingOlder": "Loading…",
 			"more": "More actions",
 			"notSent": "Not sent",
 			"reactionLabel": "{{emoji}} from {{names}}",
 			"retry": "Retry",
 			"save": "Save",
 			"sending": "Sending…",
+			"sentByEmail": "Sent by email to {{recipients}}",
 			"unsupported": "Message this app can't show"
 		},
 		"mute": {
@@ -256,6 +350,38 @@
 			"remove": "Remove {{name}}",
 			"title": "New room"
 		},
+		"note": {
+			"asked": "{{asker}} asked {{callee}}",
+			"askedBy": "{{name}} asked",
+			"body": "Request body",
+			"bodyOfType": "Request body ({{type}})",
+			"clickForDetails": "Click for details",
+			"copied": "Copied",
+			"copy": "Copy",
+			"from": "From {{sender}}",
+			"instruction": "What the bot was asked",
+			"mail": {
+				"attachments": "Attachments",
+				"body": "Message",
+				"cc": "Cc",
+				"from": "From",
+				"notKept": "not kept: {{reason}}",
+				"to": "To",
+				"unverified": "The sender's domain is not verified; the mail may not come from who it claims",
+				"verified": "The sender's domain is verified"
+			},
+			"messaged": "Messaged {{name}}",
+			"messagedPrefix": "Messaged",
+			"payload": "Payload",
+			"payloadFile": "Payload file",
+			"source": {
+				"email": "Email",
+				"event": "Event",
+				"schedule": "Scheduled task",
+				"webhook": "Webhook"
+			},
+			"untitled": "Untitled"
+		},
 		"openChat": "Open chat",
 		"picker": {
 			"alreadyInvited": "Already invited",
@@ -279,6 +405,7 @@
 			"where": "Message request"
 		},
 		"retry": "Try again",
+		"roomTag": "Room",
 		"rooms": {
 			"bots_one": "{{count}} bot",
 			"bots_other": "{{count}} bots",
@@ -291,6 +418,7 @@
 			"noMessages": "No messages yet",
 			"people_one": "{{count}} person",
 			"people_other": "{{count}} people",
+			"theyWrote": "{{name}}: {{text}}",
 			"title": "Rooms and people",
 			"youWrote": "You: {{text}}"
 		},
@@ -319,8 +447,12 @@
 			"today": "Today",
 			"yesterday": "Yesterday"
 		},
+		"transcript": {
+			"said": "{{name}} said"
+		},
 		"trigger": {
 			"email": "Email: {{title}}",
+			"emailFrom": "Email from {{from}}: {{title}}",
 			"event": "Event: {{title}}",
 			"schedule": "Scheduled: {{title}}",
 			"webhook": "Webhook: {{title}}"
@@ -330,7 +462,73 @@
 		"unread_other": "{{count}} unread",
 		"you": "You",
 		"youObject": "you",
-		"yourCrew": "Your crew"
+		"yourCrew": "Your crew",
+		"meetings": {
+			"brand": "Flow-Like meeting",
+			"open": "Meetings",
+			"loading": "Loading meeting…",
+			"unavailable": "This meeting is unavailable. Open your invitation link, or sign in with an account that belongs to the room.",
+			"ended": "Meeting ended",
+			"notYet": "Your meeting is scheduled",
+			"opensSoon": "You can join 15 minutes before the start time. Keep this page open or come back then.",
+			"ready": "Ready to join?",
+			"mediaOff": "Your microphone and camera stay off until you join the call and choose what to share.",
+			"joinAccount": "Join with my account",
+			"yourName": "Your name",
+			"joinGuest": "Ask to join as a guest",
+			"guestScope": "The host will admit you. Your access is limited to this meeting and expires when it ends.",
+			"needInvitation": "Ask the host for a guest invitation link, or sign in to join as a room member.",
+			"signIn": "Sign in to join with your account",
+			"endEveryone": "End meeting for everyone",
+			"leave": "Leave meeting",
+			"connecting": "Connecting to the meeting…",
+			"removed": "The host declined or ended your participation.",
+			"waiting": "Waiting for the host",
+			"waitingHint": "Your request has been sent. This page updates when the host admits you.",
+			"reconnecting": "Checking meeting access. Audio and video are paused until the connection is restored.",
+			"participants": "Participants",
+			"guest": "Guest",
+			"admitName": "Admit {{name}}",
+			"admit": "Admit",
+			"removeName": "Remove {{name}}",
+			"decline": "Decline",
+			"remove": "Remove",
+			"participant": "Participant",
+			"call": "Meeting call",
+			"joinCall": "Join audio and video",
+			"callReady": "Join the call when you are ready. You can enable your camera or share a screen from the call controls.",
+			"mediaConnecting": "Connecting audio and video…",
+			"chat": "Meeting chat",
+			"message": "Message",
+			"writeMessage": "Write a message…",
+			"send": "Send",
+			"description": "Schedule a call for this room. Members can join, and invited guests wait for the host to admit them.",
+			"schedule": "Schedule meeting",
+			"shareLink": "Meeting link",
+			"copy": "Copy link",
+			"copied": "Link copied",
+			"join": "Join meeting",
+			"view": "View meeting",
+			"inviteGuests": "Invite guests",
+			"calendar": "Add to calendar",
+			"cancel": "Cancel meeting",
+			"end": "End meeting",
+			"replaceLink": "Replace guest link",
+			"empty": "No meetings scheduled for this room yet.",
+			"titleRequired": "Enter a meeting title.",
+			"title": "Title",
+			"start": "Starts",
+			"finish": "Ends",
+			"timeZone": "Times use your time zone: {{zone}}. Joining opens 15 minutes before the start.",
+			"allowGuests": "Allow guests with an invitation link",
+			"back": "Back",
+			"saving": "Scheduling…",
+			"invalidLink": "This meeting link is incomplete. Ask the host for a new link.",
+			"unsupportedClient": "Meetings are unavailable in this app.",
+			"browserScreenSharing": "For screen sharing, open this meeting in your browser.",
+			"browserOpenFailed": "The browser could not be opened. Copy the meeting link from the room and open it in your browser.",
+			"openBrowser": "Open meeting in browser"
+		}
 	},
 	"editor": {
 		"abilities": {
@@ -404,6 +602,21 @@
 			"moveDown": "Move down",
 			"moveUp": "Move up",
 			"noModels": "No matching models.",
+			"pins": {
+				"hint": "The speech, image and vision models it always uses. Each one left to the host is chosen by the app or server it runs on.",
+				"host": "Let the host choose",
+				"hostHint": "The app or server it runs on picks one",
+				"image": "Image generation",
+				"imageHint": "Draws the images it creates.",
+				"none": "Add a matching model to your profile to choose one here.",
+				"stt": "Speech to text",
+				"sttHint": "Transcribes the voice messages and calls it hears.",
+				"title": "Pinned models",
+				"tts": "Text to speech",
+				"ttsHint": "Speaks its replies aloud.",
+				"vision": "Vision",
+				"visionHint": "Reads the images it is shown."
+			},
 			"primary": "Model",
 			"remove": "Remove",
 			"searchModels": "Search models",
@@ -501,8 +714,8 @@
 			"add": "Add secret",
 			"delete": "Delete",
 			"deleteConfirm": "Delete {{name}}?",
-			"deleted": "{{name}} deleted",
 			"deleteFailed": "The secret couldn't be deleted.",
+			"deleted": "{{name}} deleted",
 			"description": "Description (optional)",
 			"descriptionPlaceholder": "What it's for",
 			"empty": "No secrets yet.",
@@ -517,8 +730,8 @@
 			"neverUsed": "never used",
 			"replaceValue": "Replace",
 			"save": "Save secret",
-			"saved": "{{name}} saved",
 			"saveFailed": "The secret couldn't be saved.",
+			"saved": "{{name}} saved",
 			"sealed": "Sealed",
 			"sealedHint": "Sealed for the bot's host. Delete it and add it again to store a new value through Flow-Like.",
 			"subtitle": "API keys, tokens and passwords the bot may use.",
@@ -577,6 +790,8 @@
 		"host": "Run code that reaches {{host}}",
 		"other": "{{tool}}: {{scope}}",
 		"page": "Use page {{id}} of app {{app}}",
+		"person": "Message {{name}}",
+		"personUnknown": "Message a person you chat with",
 		"table": "Use {{tool}} on table {{table}}",
 		"tool": "Use {{tool}}"
 	},
@@ -591,7 +806,30 @@
 		"topicStarted": "{{name}} starts a new topic.",
 		"untitled": "Chat of {{date}}"
 	},
+	"home": {
+		"chat": {
+			"heading": "What should we work on?",
+			"message": "Message {{name}}",
+			"pickBot": "Who to talk to",
+			"placeholder": "Message {{name}}…",
+			"send": "Send to {{name}}"
+		},
+		"messages": {
+			"caughtUp": "You're all caught up.",
+			"signIn": "Sign in to message people and share rooms with your bots.",
+			"title": "Messages"
+		},
+		"needs": {
+			"empty": "Nothing needs you right now."
+		},
+		"openBots": "Open Bots",
+		"rooms": {
+			"empty": "No rooms yet. Bring people and bots together in one.",
+			"title": "Rooms"
+		}
+	},
 	"identity": {
+		"actsFor": "Acts for",
 		"bot": "Bot",
 		"botId": "Bot ID",
 		"botOf": "{{owner}}'s bot",
@@ -631,17 +869,22 @@
 		}
 	},
 	"memory": {
-		"cleared": "Cleared all memories",
 		"clearFailed": "Couldn't clear memories",
+		"cleared": "Cleared all memories",
 		"count_one": "{{count}} memory",
 		"count_other": "{{count}} memories",
 		"deleteFailed": "Couldn't delete memory",
 		"factsEmpty": "{{name}} writes down facts, preferences and decisions here as you chat.",
+		"factsEmptyOff": "Nothing is saved while memory is off.",
 		"factsFailed": "Couldn't load {{name}}'s facts.",
 		"forget": "Forget this fact",
 		"justNow": "just now",
 		"loadFailed": "Couldn't load memories",
-		"off": "Memory is off. Choose an embedding model in bot settings to recall and save memories. You can still review and delete saved memories here."
+		"noticeCapability": "Memory is switched off for {{name}}: nothing you say is saved or recalled.",
+		"noticeModel": "{{name}} can't remember anything yet: no memory model is selected.",
+		"off": "Memory is off. Choose an embedding model in bot settings to recall and save memories. You can still review and delete saved memories here.",
+		"turnOn": "Turn on memory",
+		"turnOnFailed": "Memory could not be turned on"
 	},
 	"move": {
 		"account": "Signed in as {{account}}",
@@ -765,8 +1008,8 @@
 			"label": "End-to-end encrypted chats",
 			"on": "On",
 			"rotate": "Rotate key",
-			"rotated": "New key published",
 			"rotateFailed": "The key could not be rotated",
+			"rotated": "New key published",
 			"unpublished": "The key isn't published yet; it is published when the host is online.",
 			"waiting": "Waiting for the host to make the key."
 		},
@@ -807,6 +1050,7 @@
 			"on": "On"
 		},
 		"openFull": "Open full view",
+		"openWorkspace": "Open workspace",
 		"permissions": {
 			"allow": "Allow {{name}} to ask…",
 			"granted": "{{name}} can ask",
@@ -843,11 +1087,17 @@
 		},
 		"waitingForYou": "Waiting for you",
 		"webhooks": {
+			"authenticatedUrl": "URL with secret",
+			"authenticatedUrlHint": "For services that only accept a destination URL, use this URL. Anyone with it can call the bot, so keep it private.",
+			"authenticationHint": "Send the secret in a header or in the URL. HMAC signing is optional.",
+			"closeExamples": "Close examples",
 			"copied": "Copied",
 			"copy": "Copy {{label}}",
 			"create": "Create webhook",
 			"delete": "Delete {{name}}",
 			"done": "I saved it",
+			"examples": "curl examples",
+			"headerExample": "Secret in a header",
 			"instruction": "What should the bot do with each call?",
 			"instructionLabel": "Instruction",
 			"issued": "{{name}} is ready",
@@ -857,11 +1107,16 @@
 			"neverCalled": "Never called",
 			"none": "No webhooks yet. A webhook gives other systems a URL that wakes this bot with their data.",
 			"once": "Copy the secret now. It is shown only once; rotate the webhook if you lose it.",
+			"optionalSigning": "Optional HMAC signing",
+			"placeholderHint": "Replace YOUR_WEBHOOK_SECRET with your saved secret. Rotate the secret if you lost it.",
+			"responseHint": "Without wait, the request returns 202 with the turn state. Add ?wait=30 to the URL, or &wait=30 if it already has a query, to wait up to 30 seconds for a reply.",
 			"rotate": "Rotate the secret of {{name}}",
 			"secret": "Secret",
+			"signingHint": "Use the signing key as text to sign the exact request body with HMAC-SHA256. Send the lowercase hex digest in X-Flow-Like-Signature: sha256=<hex>. No secret header or URL parameter is needed when signing.",
 			"signingKey": "Signing key (HMAC-SHA256)",
 			"title": "Webhooks",
-			"url": "URL"
+			"url": "URL",
+			"urlExample": "Secret in the URL"
 		},
 		"working": "Working…"
 	},
@@ -970,6 +1225,8 @@
 		"apps": "Projects it may use in this room",
 		"description": "Everyone in the room can wake this bot. It may do at most this here, and never more than you allow it elsewhere.",
 		"failed": "The room limits couldn't be saved.",
+		"mentionedOnly": "Answer only when mentioned",
+		"mentionedOnlyHint": "Without this, the bot reads along with messages from people in this room and decides itself whether to answer.",
 		"title": "{{bot}} in {{room}}"
 	},
 	"roomMembers": {
@@ -1005,6 +1262,12 @@
 		}
 	},
 	"workspace": {
+		"brand": {
+			"label": "Bot workspace",
+			"openChat": "Open chat",
+			"settings": "Bot settings",
+			"unnamed": "Bot"
+		},
 		"failed": "Couldn't set up {{name}}'s workspace.",
 		"filesTitle": "{{name}}'s files",
 		"memoryEmpty": "{{name}} saves facts, preferences and decisions here as you chat.",

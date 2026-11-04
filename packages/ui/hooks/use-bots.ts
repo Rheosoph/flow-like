@@ -4,10 +4,11 @@ import { useTranslation } from "@flow-like/locales";
 import {
 	type QueryClient,
 	useMutation,
+	useQueries,
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useBackend } from "../state/backend-state";
 import type {
 	BotApprovalDecision,
@@ -44,6 +45,8 @@ export const botKeys = {
 		[...botKeys.all, "mail-threads", botId] as const,
 	mailThread: (botId: string, threadId: string) =>
 		[...botKeys.all, "mail-thread", botId, threadId] as const,
+	avatar: (botId: string, look: string) =>
+		[...botKeys.all, "avatar", botId, look] as const,
 };
 
 const BOT_STALE_TIME = 30_000;
@@ -85,6 +88,51 @@ export function useBots() {
 		queryFn: () => requireBotState(state).listBots(),
 		enabled: Boolean(state),
 		staleTime: BOT_STALE_TIME,
+	});
+}
+
+async function syncBotAvatar(state: IBotState, bot: IBot): Promise<boolean> {
+	if (!state.getAvatar || !state.putAvatar) return false;
+	try {
+		if ((await state.getAvatar(bot.id)).url) return true;
+		const { botAvatarPng } = await import("../components/bots/avatar-image");
+		await state.putAvatar(
+			bot.id,
+			bot.appearance,
+			await botAvatarPng(bot.appearance),
+		);
+		return true;
+	} catch (error) {
+		console.warn(
+			`[Bots] Could not upload the notification avatar of bot ${bot.id}:`,
+			error,
+		);
+		throw error;
+	}
+}
+
+/**
+ * Uploads a picture of each account bot's current look the hub has none of, so its push
+ * notifications show the bot. Only clients can draw a look, so the ones showing the bots do.
+ */
+export function useBotAvatarSync(bots: readonly IBot[] | undefined) {
+	const state = useBackend().botState;
+	const accountBots = useMemo(
+		() => (bots ?? []).filter((bot) => !bot.local),
+		[bots],
+	);
+	useQueries({
+		queries: accountBots.map((bot) => ({
+			queryKey: botKeys.avatar(bot.id, JSON.stringify(bot.appearance)),
+			queryFn: () => syncBotAvatar(requireBotState(state), bot),
+			enabled: Boolean(state?.getAvatar && state.putAvatar),
+			staleTime: Number.POSITIVE_INFINITY,
+			// A later look's upload deletes this one's picture, so a look shown again checks again.
+			gcTime: 0,
+			retry: false,
+			refetchOnWindowFocus: false,
+			refetchOnReconnect: false,
+		})),
 	});
 }
 

@@ -25,6 +25,15 @@ describe("room limits model", () => {
 		expect(permissionsFromMask(0)).toEqual([]);
 	});
 
+	test("answering only when mentioned is a limit of its own", () => {
+		const draft = draftFromLimits({ mentioned_only: true });
+		expect(draft.mentionedOnly).toBe(true);
+		expect(limitsFromDraft(draft)).toEqual({ mentioned_only: true });
+		expect(
+			limitsFromDraft({ ...NO_ROOM_LIMITS, mentionedOnly: false }),
+		).toBeNull();
+	});
+
 	test("no draft limit means no limits at all", () => {
 		expect(limitsFromDraft(NO_ROOM_LIMITS)).toBeNull();
 		expect(draftFromLimits(null)).toEqual(NO_ROOM_LIMITS);

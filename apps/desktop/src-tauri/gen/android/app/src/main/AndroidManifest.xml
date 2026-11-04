@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" xmlns:tools="http://schemas.android.com/tools">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <queries>
+        <intent><action android:name="android.speech.action.RECOGNIZE_SPEECH" /></intent>
+        <intent><action android:name="android.media.action.IMAGE_CAPTURE" /></intent>
+    </queries>
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
@@ -22,6 +27,16 @@
                 <!-- AndroidTV support -->
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <action android:name="android.intent.action.SEND_MULTIPLE" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+                <data android:mimeType="image/*" />
+                <data android:mimeType="application/pdf" />
+                <data android:mimeType="application/vnd.openxmlformats-officedocument.wordprocessingml.document" />
+            </intent-filter>
+            <meta-data android:name="android.app.shortcuts" android:resource="@xml/bot_shortcuts" />
             <!-- DEEP LINK PLUGIN. AUTO-GENERATED. DO NOT REMOVE. -->
             <intent-filter android:autoVerify="true" >
                 <action android:name="android.intent.action.VIEW" />
@@ -36,6 +51,8 @@
                 <data android:pathPrefix="/trigger" />
                 <data android:pathPrefix="/store" />
                 <data android:pathPrefix="/join" />
+                <data android:pathPrefix="/bots" />
+                <data android:pathPrefix="/inbox" />
 
             </intent-filter>
             <intent-filter >
@@ -51,6 +68,12 @@
             </intent-filter>
             <!-- DEEP LINK PLUGIN. AUTO-GENERATED. DO NOT REMOVE. -->
         </activity>
+        <activity android:name=".BotActionActivity" android:exported="false" android:excludeFromRecents="true" />
+        <activity android:name=".BotDocumentActivity" android:exported="false" android:excludeFromRecents="true" />
+        <receiver android:name=".BotWidgetProvider" android:exported="false">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE" /></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/bot_widget" />
+        </receiver>
 
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_icon"
@@ -59,8 +82,9 @@
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/notification_color" />
 
+        <service android:name="app.tauri.remotepush.FCMService" tools:node="remove" />
         <service
-            android:name="app.tauri.remotepush.FCMService"
+            android:name=".BotMessagingService"
             android:exported="false">
             <intent-filter>
                 <action android:name="com.google.firebase.MESSAGING_EVENT" />

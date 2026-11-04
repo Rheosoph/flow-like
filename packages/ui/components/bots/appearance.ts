@@ -5,10 +5,12 @@ import {
 	getBotCustomizableColorSlots,
 	normalizeBotColorSelection,
 } from "./colors";
+import { isBotEquipmentCompatible } from "./equipment-fit";
 import type {
 	BotAppearance,
 	BotCatalog,
 	BotEffect,
+	BotFrame,
 	BotPalette,
 	BotSkillDefinition,
 } from "./types";
@@ -71,6 +73,17 @@ function option<T extends string>(
 	return value !== undefined && options.includes(value) ? value : fallback;
 }
 
+const FRAME_RADIUS_PERCENT: Readonly<Record<BotFrame, number>> = {
+	circle: 50,
+	squircle: 28,
+	square: 0,
+};
+
+/** Corner radius in percent of the avatar's size, as the frame clips it. */
+export function botFrameRadius(frame: BotFrame | undefined): number {
+	return FRAME_RADIUS_PERCENT[option(frame, BOT_OPTIONS.frame, "circle")];
+}
+
 const replacedKinds: Readonly<Record<string, string>> = {
 	chatty: "bubble",
 	keel: "helm",
@@ -110,7 +123,10 @@ export function resolveBotAppearance(
 			id && Object.hasOwn(catalog.equipment, id)
 				? catalog.equipment[id]
 				: undefined;
-		if (item?.slot === slot && (!item.kinds || item.kinds.includes(kind)))
+		if (
+			item?.slot === slot &&
+			isBotEquipmentCompatible(item, catalog.shapes[kind])
+		)
 			equipment[slot] = item.id;
 	}
 	const colors: NonNullable<BotAppearance["colors"]> = {};

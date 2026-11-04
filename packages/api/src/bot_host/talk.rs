@@ -21,6 +21,7 @@ use crate::{
             presence::{PresenceState, presence_in},
         },
         inbox::{
+            activity::record_bot_ask,
             approvals::{lock as lock_conversation, open_conversation, post_notice_in},
             delivery::BotRecipient,
             exchange::{message_outgoing, open_exchange, post_as_bot},
@@ -43,7 +44,7 @@ use flow_like_types::{
     bot_message::{ApprovalRequest, MessageBody},
     bot_turn::{STORED_QUEUED, turn_id},
     data_classification::{DataClassification, DataSensitivity},
-    inbox::{ConversationKind, TOMBSTONE_FIELD},
+    inbox::{ActivityBody, ConversationKind, TOMBSTONE_FIELD},
     tokio,
 };
 use sea_orm::{
@@ -72,6 +73,25 @@ const EXPIRE_BATCH: u64 = 50;
 
 pub(crate) fn grant_scope(callee_id: &str) -> String {
     format!("bot:{callee_id}")
+}
+
+/// The conversation a desktop-hosted turn of `bot_id` (its `run_id` is the turn id) runs in; a
+/// chat run has no turn and returns `None`.
+pub(crate) async fn turn_conversation<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    run_id: &str,
+) -> Result<Option<String>, ApiError> {
+    if run_id.is_empty() {
+        return Ok(None);
+    }
+    Ok(bot_turn::Entity::find_by_id(run_id)
+        .filter(bot_turn::Column::OwnerId.eq(owner_id))
+        .filter(bot_turn::Column::BotId.eq(bot_id))
+        .one(db)
+        .await?
+        .map(|turn| turn.conversation_id))
 }
 
 fn clip(text: &str, max_chars: usize) -> String {
@@ -214,6 +234,8 @@ pub(crate) struct Question<'a> {
     pub hops: u32,
     pub chain: &'a [String],
     pub wait_secs: u32,
+    /// The asker's question number to this callee for the trigger; 0 from askers that predate it.
+    pub round: u32,
 }
 
 pub(crate) fn ask_body(question: &Question, now: DateTime<FixedOffset>) -> Value {
@@ -227,6 +249,9 @@ pub(crate) fn ask_body(question: &Question, now: DateTime<FixedOffset>) -> Value
     });
     if question.wait_secs > 0 {
         ask["wait_secs"] = json!(question.wait_secs);
+    }
+    if question.round > 0 {
+        ask["round"] = json!(question.round);
     }
     json!({
         "text": question.text,
@@ -290,7 +315,8 @@ pub struct ServerTalkHost {
 }
 
 impl ServerTalkHost {
-    /// A chat run of `run_id`; its late answers return to the owner's direct conversation.
+    /// A chat run of `run_id`; its late answers return to the owner's direct conversation, or to
+    /// the conversation of the desktop-hosted turn `run_id` names.
     pub fn for_chat(state: AppState, owner_id: &str, run_id: &str) -> Self {
         Self::new(state, owner_id, run_id, None, Vec::new())
     }
@@ -341,6 +367,13 @@ impl ServerTalkHost {
     ) -> flow_like_types::Result<String> {
         if let Some(held) = &self.held {
             return Ok(held.turn.conversation_id.clone());
+        }
+        if let Some(origin) =
+            turn_conversation(&self.state.db, &self.owner_id, &caller.id, &self.run_id)
+                .await
+                .map_err(|error| flow_like_types::anyhow!("{error}"))?
+        {
+            return Ok(origin);
         }
         let direct =
             open_conversation(&self.state.db, &self.owner_id, &caller.id, "", now_millis())
@@ -490,6 +523,35 @@ impl BotTalkHost for ServerTalkHost {
         sender: &CrewMember,
         text: &str,
     ) -> flow_like_types::Result<String> {
+        self.post(conversation_id, sender, text, 0).await
+    }
+
+    async fn record_question(
+        &self,
+        conversation_id: &str,
+        caller: &CrewMember,
+        question: &str,
+        round: u32,
+    ) -> flow_like_types::Result<String> {
+        self.post(conversation_id, caller, question, round).await
+    }
+
+    async fn run_turn(&self, turn: NestedBotTurn) -> flow_like_types::Result<String> {
+        self.await_queued(&turn.caller, &turn.callee, &turn.question_message_id)
+            .await
+    }
+}
+
+impl ServerTalkHost {
+    /// The callee's answer is already in the exchange (its turn posted it); anything else the
+    /// caller sends is its question of `round`.
+    async fn post(
+        &self,
+        conversation_id: &str,
+        sender: &CrewMember,
+        text: &str,
+        round: u32,
+    ) -> flow_like_types::Result<String> {
         let callee = self.remember(|asked| asked.callee.clone());
         let Some(callee) = callee.filter(|callee| callee.id != sender.id) else {
             return self
@@ -513,6 +575,7 @@ impl BotTalkHost for ServerTalkHost {
             hops: self.hops(),
             chain: &chain,
             wait_secs,
+            round,
         };
         let outgoing = message_outgoing(&ask_id, ask_body(&question, now))
             .map_err(|error| flow_like_types::anyhow!("{error}"))?;
@@ -525,17 +588,13 @@ impl BotTalkHost for ServerTalkHost {
         )
         .await
         .map_err(|error| flow_like_types::anyhow!("{error}"))?;
+        let activity =
+            ActivityBody::bot_ask(&ask_id, &sender.id, &callee.id, conversation_id, text);
+        record_bot_ask(&self.state, &self.owner_id, &origin, &activity).await;
         self.remember(|asked| asked.ask_id = Some(ask_id.clone()));
         Ok(ask_id)
     }
 
-    async fn run_turn(&self, turn: NestedBotTurn) -> flow_like_types::Result<String> {
-        self.await_queued(&turn.caller, &turn.callee, &turn.question_message_id)
-            .await
-    }
-}
-
-impl ServerTalkHost {
     /// Waits for the callee's answer to the question already recorded as `question_message_id`.
     async fn await_queued(
         &self,
@@ -575,16 +634,20 @@ impl ServerTalkHost {
         self.wait_for_answer(caller, callee, &tid, started).await
     }
 
-    /// A bot on a desktop asks `callee` through the hub: the exchange, the question and the wait,
-    /// with the late answer returning to the asker's direct conversation with its owner.
+    /// A bot on a desktop asks `callee` through the hub its question of `round` (0 from desktops
+    /// that predate rounds): the exchange, the question and the wait, with the late answer
+    /// returning to the asker's direct conversation with its owner.
     pub(crate) async fn ask_for_desktop(
         &self,
         caller: &CrewMember,
         callee: &CrewMember,
         question: &str,
+        round: u32,
     ) -> flow_like_types::Result<DesktopAnswer> {
         let exchange_id = self.exchange_conversation(caller, callee).await?;
-        let ask_id = self.record(&exchange_id, caller, question).await?;
+        let ask_id = self
+            .record_question(&exchange_id, caller, question, round)
+            .await?;
         let outcome = self.await_queued(caller, callee, &ask_id).await;
         let reply_id = self.remember(|asked| asked.reply_id.clone());
         Ok(DesktopAnswer {
@@ -692,6 +755,8 @@ pub(crate) struct AnsweredAsk {
     pub callee_id: String,
     pub answer: String,
     pub failed: bool,
+    /// The question's round; the asker's woken run goes on counting from it (0: none kept).
+    pub round: u32,
 }
 
 pub(crate) async fn answered_ask<C: ConnectionTrait>(
@@ -716,6 +781,7 @@ pub(crate) async fn answered_ask<C: ConnectionTrait>(
         callee_id: trigger.sender_id,
         answer: answer.text,
         failed: answer.error.is_some(),
+        round: ask.round,
     }))
 }
 
@@ -767,6 +833,7 @@ pub(crate) async fn ask_result_transcript<C: ConnectionTrait>(
             latest.as_deref(),
         ),
         history,
+        addressed: true,
     })
 }
 

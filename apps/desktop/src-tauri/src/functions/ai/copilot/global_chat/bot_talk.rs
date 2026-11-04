@@ -3,7 +3,7 @@
 //! person and the two bots belong to, and the callee's turn runs through `global_chat_native`
 //! like any other headless bot turn. Account bots join through the hub later.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use flow_like::{
@@ -11,7 +11,8 @@ use flow_like::{
     flow::copilot::{
         BotRunContext, ChatRole, FLUX_BOT_NAME, GENERAL_BOT_DESCRIPTION, GENERAL_BOT_NAME,
         bot_talk::{
-            BotPresence, BotTalk, BotTalkHost, CrewMember, HeadlessPermission, NestedBotTurn,
+            AnsweredRound, BotPresence, BotTalk, BotTalkHost, CrewMember, HeadlessPermission,
+            NestedBotTurn,
         },
     },
 };
@@ -23,16 +24,13 @@ use flow_like_types::{
     anyhow,
     bot::{BotLocation, BotSystemKind},
     create_id,
-    inbox::{ConversationKind, InboxEntryKind, plain_envelope},
+    inbox::{ActivityBody, ConversationKind, InboxEntryKind, plain_envelope},
 };
 use serde_json::json;
 use tauri::{AppHandle, Manager, ipc::Channel};
 
 use crate::{
-    bot_host::{
-        ApprovalGate,
-        gate::{ASK_BOT_TOOL, ask_bot_scope},
-    },
+    bot_host::ApprovalGate,
     functions::{
         ai::native_tool_bridge::{NativeRunOptions, with_execution_profile},
         local_bots::{LocalBots, on_store},
@@ -45,12 +43,13 @@ const EXCHANGE_TITLE_SEPARATOR: &str = " ↔ ";
 const HISTORY_ENTRIES: u64 = 41;
 
 /// The bot talk of a run on this desktop: the asking bot's own when another bot's ask started
-/// the run, else a fresh one for a bot of this device. `None` for a run the local store can't
-/// serve (no store, or the bot lives in the account).
+/// the run, else a fresh one that goes on counting from `answered` when a late answer woke the
+/// run. `None` for a run the local store can't serve (no store, or the bot lives in the account).
 pub(super) async fn talk_for(
     app: &AppHandle,
     bot: &BotRunContext,
     nested: Option<Arc<BotTalk>>,
+    answered: Option<&AnsweredRound>,
     gate: Option<Arc<ApprovalGate>>,
     profile_id: &str,
     run_id: &str,
@@ -63,11 +62,18 @@ pub(super) async fn talk_for(
             app: app.clone(),
             profile_id: profile_id.to_string(),
             gate,
+            callee: Mutex::new(None),
         })
     } else {
-        Arc::new(crate::bot_host::talk::AccountTalkHost::new(app.clone(), run_id))
+        Arc::new(crate::bot_host::talk::AccountTalkHost::new(
+            app.clone(),
+            run_id,
+            gate,
+        ))
     };
-    Some(Arc::new(BotTalk::for_run(host, bot, BotLocation::Desktop)))
+    Some(Arc::new(
+        BotTalk::for_run(host, bot, BotLocation::Desktop).with_answered(answered),
+    ))
 }
 
 /// Whether the bot has a row in this device's store; any other bot is the account's.
@@ -91,6 +97,7 @@ struct DesktopTalkHost {
     app: AppHandle,
     profile_id: String,
     gate: Option<Arc<ApprovalGate>>,
+    callee: Mutex<Option<CrewMember>>,
 }
 
 impl DesktopTalkHost {
@@ -117,16 +124,10 @@ impl DesktopTalkHost {
         from: &CrewMember,
         to: &CrewMember,
     ) -> flow_like_types::Result<bool> {
-        let Some(gate) = &self.gate else {
-            return Ok(false);
-        };
-        let scope = ask_bot_scope(&to.id);
-        if !gate.grants().has(ASK_BOT_TOOL, &scope).await.unwrap_or(false) {
-            return Ok(false);
+        match &self.gate {
+            Some(gate) => gate.settle_ask_card(to, self.store_grant(from, to)).await,
+            None => Ok(false),
         }
-        self.store_grant(from, to).await?;
-        gate.grants().delete(ASK_BOT_TOOL, &scope).await?;
-        Ok(true)
     }
 }
 
@@ -186,6 +187,7 @@ impl BotTalkHost for DesktopTalkHost {
         callee: &CrewMember,
     ) -> flow_like_types::Result<String> {
         let (caller_member, callee_member) = (caller.clone(), callee.clone());
+        *self.callee.lock().unwrap_or_else(|p| p.into_inner()) = Some(callee.clone());
         self.store(move |store| exchange_of(store, &caller_member, &callee_member))
             .await?
             .ok_or_else(|| unknown_bot(callee))
@@ -197,14 +199,26 @@ impl BotTalkHost for DesktopTalkHost {
         sender: &CrewMember,
         text: &str,
     ) -> flow_like_types::Result<String> {
+        let callee = self
+            .callee
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone()
+            .filter(|callee| callee.id != sender.id);
         let (conversation_id, member, text) = (
             conversation_id.to_string(),
             sender.clone(),
             text.to_string(),
         );
-        self.store(move |store| record_in(store, &conversation_id, &member, &text))
-            .await?
-            .ok_or_else(|| unknown_bot(sender))
+        self.store(move |store| {
+            let message_id = record_in(store, &conversation_id, &member, &text)?;
+            if let (Some(message_id), Some(callee)) = (&message_id, &callee) {
+                record_ask_activity(store, &conversation_id, message_id, &member, callee, &text);
+            }
+            Ok(message_id)
+        })
+        .await?
+        .ok_or_else(|| unknown_bot(sender))
     }
 
     async fn run_turn(&self, turn: NestedBotTurn) -> flow_like_types::Result<String> {
@@ -427,6 +441,30 @@ fn record_in(
         },
     )?;
     Ok(Some(entry.message_id))
+}
+
+/// Leaves the question as an activity in the asker's chat and in the callee's, when that exists.
+/// A failure is logged: the ask goes on without it.
+fn record_ask_activity(
+    store: &LocalBotStore,
+    exchange_id: &str,
+    ask_id: &str,
+    asker: &CrewMember,
+    callee: &CrewMember,
+    question: &str,
+) {
+    let (Ok(Some(asker_row)), Ok(Some(callee_row))) = (row_id(store, asker), row_id(store, callee))
+    else {
+        return;
+    };
+    let body = ActivityBody::bot_ask(ask_id, &asker_row, &callee_row, exchange_id, question);
+    for (bot_id, start) in [(&asker_row, true), (&callee_row, false)] {
+        let digest = blake3::hash(format!("{ask_id}\0{bot_id}").as_bytes()).to_hex();
+        let message_id = format!("act-{}", &digest[..32]);
+        if let Err(error) = store.post_activity(bot_id, &message_id, &body, start) {
+            tracing::warn!(%error, %bot_id, "Bot talk: the ask was not recorded as activity");
+        }
+    }
 }
 
 fn message_text(entry: &InboxEntry) -> Option<&str> {

@@ -57,6 +57,10 @@ impl ApprovalGate {
         &self.grants
     }
 
+    pub fn turn_id(&self) -> &str {
+        &self.turn_id
+    }
+
     /// The card of the call that parked the turn.
     pub fn parked(&self) -> Option<ApprovalRequest> {
         self.parked
@@ -136,6 +140,22 @@ impl ApprovalGate {
             }
             Err(_) => HeadlessPermission::Unavailable,
         }
+    }
+
+    /// The owner's "Always allow" on an ask card: `store_grant` makes it a standing permission
+    /// between the two bots and the card's grant is spent. `false` when no such answer exists.
+    pub async fn settle_ask_card(
+        &self,
+        callee: &CrewMember,
+        store_grant: impl std::future::Future<Output = flow_like_types::Result<()>>,
+    ) -> flow_like_types::Result<bool> {
+        let scope = ask_bot_scope(&callee.id);
+        if !self.grants.has(ASK_BOT_TOOL, &scope).await.unwrap_or(false) {
+            return Ok(false);
+        }
+        store_grant.await?;
+        self.grants.delete(ASK_BOT_TOOL, &scope).await?;
+        Ok(true)
     }
 
     /// Whether a call above the document cost limits may run: the owner granted it, or answered

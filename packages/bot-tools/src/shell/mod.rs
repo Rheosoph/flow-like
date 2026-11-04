@@ -12,6 +12,7 @@ use serde_json::{Value, json};
 use crate::env::ToolEnv;
 use crate::error::{ToolError, ToolResult, code};
 use crate::outcome::ToolOutput;
+use crate::secret_text::Scrubber;
 use crate::spec::{Approval, ToolSpec, schema_of};
 
 pub use backend::{ShellBackend, ShellRequest, ShellResponse};
@@ -144,14 +145,42 @@ async fn secret_env(env: &dyn ToolEnv, names: &[String]) -> ToolResult<Vec<(Stri
         let value = env
             .secret(name)
             .await?
-            .ok_or_else(|| ToolError::not_found(format!("The bot has no secret '{name}'")))?;
+            .ok_or_else(|| {
+                ToolError::not_found(format!(
+                    "The bot has no secret '{name}'; call secret_list for the stored names, or secret_request to ask the owner for it"
+                ))
+            })?;
         found.push((name.clone(), value));
     }
     Ok(found)
 }
 
+/// Runs the command with the named secrets in its environment; whatever it prints of them comes
+/// back as `{{secret:NAME}}`.
 pub async fn shell_run(env: &dyn ToolEnv, args: ShellRunArgs) -> ToolResult<ToolOutput> {
     check_args(&args)?;
+    let secrets = secret_env(env, &args.secrets).await?;
+    let mut scrubber = Scrubber::default();
+    for (name, value) in &secrets {
+        scrubber.add(name, value.clone());
+    }
+    match run_command(env, args, secrets).await {
+        Ok(mut output) => {
+            scrubber.scrub_value(&mut output.result);
+            for warning in &mut output.warnings {
+                *warning = scrubber.scrub(warning);
+            }
+            Ok(output)
+        }
+        Err(error) => Err(scrubber.scrub_error(error)),
+    }
+}
+
+async fn run_command(
+    env: &dyn ToolEnv,
+    args: ShellRunArgs,
+    secrets: Vec<(String, String)>,
+) -> ToolResult<ToolOutput> {
     let backend = env.shell().ok_or_else(|| {
         ToolError::new(
             code::SHELL_UNAVAILABLE,
@@ -161,7 +190,6 @@ pub async fn shell_run(env: &dyn ToolEnv, args: ShellRunArgs) -> ToolResult<Tool
     let limits = env.limits().clone();
     let root = backend.root();
     let cwd = confine_cwd(&root, args.cwd.as_deref())?;
-    let secrets = secret_env(env, &args.secrets).await?;
     let wall = args
         .timeout_s
         .unwrap_or(limits.shell_wall_time_secs)

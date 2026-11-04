@@ -179,6 +179,12 @@ impl BotLocation {
     pub fn allows(self, capability: BotCapability) -> bool {
         self != Self::Server || !capability.requires_local_host()
     }
+
+    /// Whether the owner's desktop answers the bot's turns while it is online: a server bot that
+    /// holds `flowpilot`, whose build tools only a desktop runs without a window.
+    pub fn hands_off_to_desktop(self, capabilities: &[BotCapability]) -> bool {
+        self == Self::Server && capabilities.contains(&BotCapability::Flowpilot)
+    }
 }
 
 /// The built-in bots every person has and can't delete.

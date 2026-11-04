@@ -80,13 +80,7 @@ export const BOT_CAPABILITY_GROUPS: readonly {
 
 /** Configured today; the bot starts using them once the bot runtime lands. */
 export const BOT_RUNTIME_PENDING_CAPABILITIES: ReadonlySet<BotCapability> =
-	new Set([
-		"connectors",
-		"channels",
-		"skills",
-		"image_generation",
-		"delegation",
-	]);
+	new Set(["connectors", "skills", "image_generation", "delegation"]);
 
 export const BOT_CAPABILITY_ICONS: Readonly<Record<BotCapability, LucideIcon>> =
 	{

@@ -87,7 +87,7 @@ export function getBotColorSelectionPaint(
 		: catalog.colors[normalized.colorId].paint;
 }
 
-/** Saving requires an included or owned color pack; previewing any known color remains allowed. */
+/** All known colors are available unless the host supplies an ownership list. */
 export function canUseBotColor(
 	selection: BotColorSelection | undefined,
 	catalog: BotCatalog,
@@ -95,11 +95,12 @@ export function canUseBotColor(
 ): boolean {
 	const normalized = normalizeBotColorSelection(selection, catalog);
 	if (!normalized) return false;
+	if (ownedPackIds === undefined) return true;
 	const packs =
 		normalized.kind === "hex"
 			? [catalog.colorPacks[normalized.packId]]
 			: getBotColorPacks(normalized.colorId, catalog);
 	return packs.some(
-		(pack) => pack.access === "included" || ownedPackIds?.includes(pack.id),
+		(pack) => pack.access === "included" || ownedPackIds.includes(pack.id),
 	);
 }

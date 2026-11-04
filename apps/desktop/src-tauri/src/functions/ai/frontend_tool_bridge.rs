@@ -937,8 +937,10 @@ impl FrontendToolBridge {
                     )
                     .await;
                 let options = super::native_tool_bridge::run_options(self.context.as_ref());
+                let waived = options.auto_approve
+                    && tool_name != flow_like_types::bot_message::SECRET_REQUEST_TOOL;
                 let asks = matches!(approval.kind.as_str(), "mutating" | "execute")
-                    && !options.auto_approve
+                    && !waived
                     && !cached_schema;
                 if asks && let Some(gate) = &options.approval_gate {
                     let context_app = self.context.as_ref().and_then(|context| context.app_id.as_deref());

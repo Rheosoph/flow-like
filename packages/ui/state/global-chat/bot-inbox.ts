@@ -101,6 +101,20 @@ export function activeBotTarget(
 	return botId ? (targets.get(botId) ?? null) : null;
 }
 
+/**
+ * The bot chat's inbox target, resolved now when nothing resolved it yet (the backend changed under
+ * an open chat, or the first resolve failed). Await it before saving a message, or the message
+ * stays on this device and the bot's later turns never see it.
+ */
+export async function ensureBotTarget(
+	conversationId: string,
+): Promise<BotHistoryTarget | null> {
+	const known = activeBotTarget(conversationId);
+	if (known) return known;
+	const botId = conversationBotId(conversationId);
+	return botId ? resolveBotTarget(botId) : null;
+}
+
 /** The message a run answers in the bot's inbox: the run stores its reply there as the bot. */
 export interface InteractiveRef {
 	conversationId: string;
@@ -118,7 +132,7 @@ export async function sendInteractiveMessage(
 	message: { id: string; text: string },
 	clientRunId: string,
 ): Promise<InteractiveRef | null> {
-	const target = activeBotTarget(conversationId);
+	const target = await ensureBotTarget(conversationId);
 	const backend = inbox;
 	if (!target || !backend) return null;
 	try {

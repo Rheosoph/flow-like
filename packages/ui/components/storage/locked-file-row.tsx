@@ -128,7 +128,7 @@ export function LockedFileRow({
 								"Locked file actions for {{name}}",
 								{ name: item.name },
 							)}
-							className="shrink-0 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
+							className="shrink-0 opacity-0 @max-xl/storage:opacity-100 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
 							variant="ghost"
 							size="sm"
 							onClick={(event) => {

@@ -1,7 +1,9 @@
 "use client";
 
-import { inboxKeys } from "@flow-like/flow-like-ui/hooks/use-inbox";
+import { unwatchedInboxPredicate } from "@flow-like/flow-like-ui/hooks/use-inbox";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
+import { registerConversationFeed } from "@flow-like/flow-like-ui/lib/realtime/conversation-feed";
+import { ConversationFeedHub } from "@flow-like/flow-like-ui/lib/realtime/conversation-feed-hub";
 import { getRealtimeClient } from "@flow-like/flow-like-ui/lib/realtime/runtime-client";
 import type { RealtimeClient } from "@flow-like/flow-like-ui/lib/realtime/types";
 import { useBackend } from "@flow-like/flow-like-ui/state/backend-state";
@@ -31,6 +33,17 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 		let unsubscribe: (() => void) | undefined;
 		let retryTimer: ReturnType<typeof setTimeout> | undefined;
 		let failures = 0;
+		const feedHub = new ConversationFeedHub(() => syncSubscriptions());
+		const syncSubscriptions = () =>
+			client?.setSubscriptions({
+				notifications: true,
+				runs: [],
+				conversations: feedHub.targets().map((target) => ({
+					conversation_id: target.conversationId,
+					as: target.as,
+					after: target.after,
+				})),
+			});
 		const sessionUrl = `${hub.replace(/\/$/, "")}/api/v1/realtime/poll`;
 		const activity = () =>
 			client?.setActivity({
@@ -93,12 +106,10 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 			}
 			clientRef.current = client;
 			unsubscribe = client.subscribe(async (update) => {
-				if (
-					!currentAccount() ||
-					update.type !== "snapshot" ||
-					!update.snapshot.notifications
-				)
-					return;
+				if (!currentAccount() || update.type !== "snapshot") return;
+				for (const item of update.snapshot.conversations ?? [])
+					feedHub.deliver(item.conversation_id, item.entries, { as: item.as });
+				if (!update.snapshot.notifications) return;
 				await Promise.all([
 					...[
 						backend.userState.getNotifications,
@@ -119,16 +130,22 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 						{ throwOnError: true },
 					),
 					queryClient.invalidateQueries(
-						{ queryKey: inboxKeys.all },
+						{
+							predicate: unwatchedInboxPredicate(
+								feedHub.isWatched.bind(feedHub),
+							),
+						},
 						{ throwOnError: true },
 					),
 				]);
 			});
 			activity();
-			client.setSubscriptions({ notifications: true, runs: [] });
+			syncSubscriptions();
+			registerConversationFeed(feedHub);
 		};
 		const attempt = () => {
 			void start().catch(() => {
+				registerConversationFeed(null);
 				unsubscribe?.();
 				client?.close();
 				if (clientRef.current === client) clientRef.current = undefined;
@@ -148,6 +165,7 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 		window.addEventListener("offline", activity);
 		return () => {
 			stopped = true;
+			registerConversationFeed(null);
 			clearTimeout(retryTimer);
 			unsubscribe?.();
 			client?.close();

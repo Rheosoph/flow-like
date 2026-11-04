@@ -2,16 +2,19 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { ArrowLeftIcon, XIcon } from "lucide-react";
-import { useLayoutEffect } from "react";
 import { cn } from "../../lib/utils";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
-import { switchGlobalChatBot } from "../../state/global-chat/global-chat-stream";
 import { useDraftRelay } from "../global-chat/chat-bot-avatar";
 import { GlobalChatBody } from "../global-chat/global-chat-body";
 import { useChatBotView } from "../global-chat/use-global-chat-bot";
 import { Button } from "../ui/button";
 import { BotChatFrame, type BotPanelControl } from "./bot-chat-frame";
 import type { BotPanelActions } from "./bot-details";
+import { botPanelTabs, shownBotPanelTab } from "./bot-panel-tabs";
+import { useDockPanelLayout } from "./crew-split-layout";
+import type { DockSelection } from "./dock-selection";
+import { useBotChatRead } from "./use-bot-chat-read";
+import { useDockChatSession } from "./use-dock-chat-session";
 
 const CORNER_BUTTON = "size-8 rounded-full text-muted-foreground";
 
@@ -26,12 +29,14 @@ const CORNER_BUTTON = "size-8 rounded-full text-muted-foreground";
  */
 export function GlobalChatDock({
 	botId,
+	sourceSelection,
 	panel,
 	actions,
 	onClose,
 }: Readonly<{
 	/** Null for Flux; `general` for the Assistant without an account row. */
 	botId: string | null;
+	sourceSelection?: DockSelection;
 	panel: BotPanelControl;
 	actions: BotPanelActions;
 	onClose: () => void;
@@ -42,9 +47,10 @@ export function GlobalChatDock({
 	);
 	const draft = useDraftRelay();
 	const chatBot = useChatBotView(botId);
-	useLayoutEffect(() => {
-		void switchGlobalChatBot(botId);
-	}, [botId]);
+	useDockChatSession(botId, sourceSelection);
+	const layout = useDockPanelLayout();
+	const tab = shownBotPanelTab(panel.tab, botPanelTabs(chatBot));
+	useBotChatRead(botId, tab === null || layout === "column");
 	const back = t("crew.dock.back", "Back to your crew");
 	const close = t("crew.dock.close", "Close chat");
 	return (

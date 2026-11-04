@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test";
 import {
-	createEnvelope,
 	type MicrophoneResultPayload,
+	createEnvelope,
 } from "@flow-like/widget-sdk";
 import { createMicroWidgetMicrophone } from "./micro-widget-microphone";
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -149,7 +149,6 @@ test("authorized capture pauses host audio before requesting microphone access",
 	denied.dispose();
 });
 
-
 test("releasing before permission resolves rejects the capture and closes the late stream", async () => {
 	let resolve!: (stream: MediaStream) => void;
 	let stopped = 0;
@@ -159,16 +158,45 @@ test("releasing before permission resolves rejects the capture and closes the la
 		enabled: () => true,
 		result: (result) => results.push(result),
 		recording: () => {},
-		getUserMedia: () => new Promise((done) => { resolve = done; }),
-		createRecorder: () => { recorders++; throw Error("must not start"); },
+		getUserMedia: () =>
+			new Promise((done) => {
+				resolve = done;
+			}),
+		createRecorder: () => {
+			recorders++;
+			throw Error("must not start");
+		},
 	});
-	capture.handle(createEnvelope("microphone:request", { requestId: "hold", maxDurationMs: 30000 }, "nonce", "instance"));
-	capture.handle(createEnvelope("microphone:stop", { requestId: "unrelated" }, "nonce", "instance"));
+	capture.handle(
+		createEnvelope(
+			"microphone:request",
+			{ requestId: "hold", maxDurationMs: 30000 },
+			"nonce",
+			"instance",
+		),
+	);
+	capture.handle(
+		createEnvelope(
+			"microphone:stop",
+			{ requestId: "unrelated" },
+			"nonce",
+			"instance",
+		),
+	);
 	expect(results).toHaveLength(0);
-	capture.handle(createEnvelope("microphone:stop", { requestId: "hold" }, "nonce", "instance"));
+	capture.handle(
+		createEnvelope(
+			"microphone:stop",
+			{ requestId: "hold" },
+			"nonce",
+			"instance",
+		),
+	);
 	expect(results).toHaveLength(1);
 	expect(results[0].ok).toBe(false);
-	resolve({ getTracks: () => [{ stop: () => stopped++ }] } as unknown as MediaStream);
+	resolve({
+		getTracks: () => [{ stop: () => stopped++ }],
+	} as unknown as MediaStream);
 	await tick();
 	expect(stopped).toBe(1);
 	expect(recorders).toBe(0);

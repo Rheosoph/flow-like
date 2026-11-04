@@ -5,7 +5,10 @@
 
 use super::{lock_bot, owned_bot};
 use crate::{
-    bot_host::tasks::{self as firing, SCHEDULING_CAPABILITY},
+    bot_host::{
+        task_schedules,
+        tasks::{self as firing, SCHEDULING_CAPABILITY},
+    },
     entity::{bot, bot_task},
     error::ApiError,
     middleware::jwt::AppUser,
@@ -379,6 +382,7 @@ pub async fn create_bot_task(
             })
         })
         .await?;
+    task_schedules::sync(&state, &row).await;
     Ok((StatusCode::CREATED, Json(row.into())))
 }
 
@@ -424,6 +428,7 @@ pub async fn update_bot_task(
         Utc::now().fixed_offset(),
     )
     .await?;
+    task_schedules::sync(&state, &row).await;
     Ok(Json(row.into()))
 }
 
@@ -450,6 +455,7 @@ pub async fn delete_bot_task(
 ) -> Result<StatusCode, ApiError> {
     let sub = user.sub()?;
     delete_in(&state.db, &sub, &bot_id, &task_id).await?;
+    task_schedules::remove(&state, &task_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 

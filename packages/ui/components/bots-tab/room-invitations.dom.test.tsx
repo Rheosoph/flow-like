@@ -34,6 +34,13 @@ mock.module("../../hooks/use-inbox", () => ({
 	}),
 }));
 
+const actualHoverCard = {
+	...(await import("../identity/identity-hover-card")),
+};
+mock.module("../identity/identity-hover-card", () => ({
+	IdentityHoverCard: ({ children }: { children: unknown }) => children,
+}));
+
 const actualAvatar = { ...(await import("../identity/identity-avatar")) };
 mock.module("../identity/identity-avatar", () => ({
 	IdentityAvatar: ({ subject }: { subject: string }) =>
@@ -74,6 +81,7 @@ afterAll(() => {
 	mock.module("../../hooks/use-inbox", () => actualInbox);
 	mock.module("./room-limits-dialog", () => actualDialog);
 	mock.module("../identity/identity-avatar", () => actualAvatar);
+	mock.module("../identity/identity-hover-card", () => actualHoverCard);
 	restoreDomGlobals();
 });
 
@@ -96,9 +104,9 @@ function invitation(patch: Partial<IInvitation>): IInvitation {
 
 async function show(item: IInvitation) {
 	answers.length = 0;
-	container = window.document.createElement("div");
-	window.document.body.appendChild(container);
-	root = createRoot(container as unknown as Element);
+	container = window.document.createElement("div") as unknown as HTMLElement;
+	window.document.body.appendChild(container as never);
+	root = createRoot(container);
 	await act(async () =>
 		root.render(
 			createElement(NeedsYouSection, {

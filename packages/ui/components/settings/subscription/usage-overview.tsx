@@ -1,12 +1,17 @@
 "use client";
 
-import { useAuth } from "react-oidc-context";
 import { useQueryClient } from "@tanstack/react-query";
-import { UsageOperations } from "./usage-operations";
-import { usageFundingLabel, useUsageNames } from "./use-usage-names";
+import {
+	ArrowUpRight,
+	ChevronDown,
+	Clock3,
+	Database,
+	RefreshCw,
+	Sparkles,
+} from "lucide-react";
 import { useMemo, useState } from "react";
+import { useAuth } from "react-oidc-context";
 import { useInvoke } from "../../../hooks/use-invoke";
-import { useBackend } from "../../../state/backend-state";
 import {
 	type QuotaResource,
 	formatQuota,
@@ -14,25 +19,20 @@ import {
 	quotaLabels,
 	usageCsv,
 } from "../../../lib/quota";
-import {
-	ArrowUpRight,
-	Database,
-	Clock3,
-	Sparkles,
-	RefreshCw,
-	ChevronDown,
-} from "lucide-react";
 import { asArray, isRecord } from "../../../lib/response-shape";
-import { cn } from "../../../lib/utils";
-import { openUpgradeDialog } from "../../../state/upgrade-dialog-state";
-import { Button } from "../../ui/button";
-import { RuntimeCalculator } from "../../upgrade/runtime-calculator";
 import {
 	availableRuntimeCapacity,
 	estimateCloudRuns,
 	formatRuntimeSeconds,
 	getRuntimeSample,
 } from "../../../lib/runtime-estimate";
+import { cn } from "../../../lib/utils";
+import { useBackend } from "../../../state/backend-state";
+import { openUpgradeDialog } from "../../../state/upgrade-dialog-state";
+import { Button } from "../../ui/button";
+import { RuntimeCalculator } from "../../upgrade/runtime-calculator";
+import { UsageOperations } from "./usage-operations";
+import { usageFundingLabel, useUsageNames } from "./use-usage-names";
 
 const PRIMARY_RESOURCES = [
 	"hosted_ai_cost_micros",

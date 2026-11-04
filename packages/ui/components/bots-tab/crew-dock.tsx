@@ -11,7 +11,11 @@ import type { BotPanelActions } from "./bot-details";
 import { ConversationPanel } from "./conversation-panel";
 import type { CrewMode } from "./crew-model";
 import { DockHeader } from "./dock-header";
-import { type DockSelection, systemDockBot } from "./dock-selection";
+import {
+	type DockSelection,
+	chatBotIdOf,
+	systemDockBot,
+} from "./dock-selection";
 import { GlobalChatDock } from "./global-chat-dock";
 
 function DockMessage({
@@ -58,14 +62,10 @@ export interface DockAccount {
 
 /** What every bot's chat in the dock shares: its panel, the panel's actions and the way out. */
 interface ChatDockProps {
+	sourceSelection?: DockSelection;
 	panel: BotPanelControl;
 	actions: BotPanelActions;
 	onClose: () => void;
-}
-
-/** Flux's row answers in Flux's conversations; every other row in its own. */
-function chatBotIdOf(bot: IBot): string | null {
-	return bot.system === "flux" ? null : bot.id;
 }
 
 function LoadingDock({ onClose }: Readonly<{ onClose: () => void }>) {

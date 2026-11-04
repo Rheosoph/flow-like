@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod authorization;
 pub mod egress;
 pub mod embedding;

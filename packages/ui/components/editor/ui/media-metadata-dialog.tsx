@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import { useEditorRef, useElement } from "platejs/react";
+import { useState } from "react";
 import {
 	Button,
 	Dialog,

@@ -4,6 +4,7 @@ import {
 	defaultBotCatalog,
 	getBotEquipmentPacks,
 	getBotPackContents,
+	isBotEquipmentCompatible,
 } from "../../packages/ui/components/bots";
 
 export function BotWardrobe({ parameters }: { parameters: URLSearchParams }) {
@@ -15,6 +16,7 @@ export function BotWardrobe({ parameters }: { parameters: URLSearchParams }) {
 	);
 	const [size, setSize] = useState(120);
 	const [packId, setPackId] = useState(parameters.get("pack") ?? "all");
+	const shape = defaultBotCatalog.shapes[kind];
 	const collections = [
 		{
 			id: "essentials",
@@ -28,15 +30,29 @@ export function BotWardrobe({ parameters }: { parameters: URLSearchParams }) {
 			label: pack.label,
 			equipment: getBotPackContents(pack, defaultBotCatalog).equipment,
 		})),
-	];
+	].map((collection) => ({
+		...collection,
+		total: collection.equipment.length,
+		equipment: collection.equipment.filter((item) =>
+			isBotEquipmentCompatible(item, shape),
+		),
+	}));
+	const supported = collections.reduce(
+		(count, collection) => count + collection.equipment.length,
+		0,
+	);
+	const total = Object.keys(defaultBotCatalog.equipment).length;
 	return (
-		<main>
+		<main
+			data-wardrobe-kind={kind}
+			data-compatible-equipment={supported}
+			data-excluded-equipment={total - supported}
+		>
 			<header>
 				<span className="eyebrow">FLOW-LIKE / WARDROBE</span>
 				<h1>Clothes for every kind of day</h1>
 				<p>
-					{Object.keys(defaultBotCatalog.equipment).length} accessories and
-					outfits. Try each collection on any character.
+					{supported} of {total} accessories and outfits fit {shape.label}.
 				</p>
 				<a href="/">Customize a bot</a>
 				{" · "}
@@ -93,7 +109,12 @@ export function BotWardrobe({ parameters }: { parameters: URLSearchParams }) {
 					.map((collection) => (
 						<section key={collection.id} data-wardrobe-pack={collection.id}>
 							<h2>{collection.label}</h2>
-							<p>{collection.equipment.length} items</p>
+							<p>
+								{collection.equipment.length} compatible items
+								{collection.total > collection.equipment.length
+									? `, ${collection.total - collection.equipment.length} excluded`
+									: ""}
+							</p>
 							<div className="crew-row">
 								{collection.equipment.map((item) => (
 									<figure

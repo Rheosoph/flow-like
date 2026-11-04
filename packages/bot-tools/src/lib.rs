@@ -22,8 +22,10 @@ pub mod knowledge;
 pub mod layout;
 pub mod notify;
 pub mod outcome;
+pub mod people;
 pub mod schedule;
 pub mod secret_text;
+pub mod secrets;
 pub mod shell;
 pub mod spec;
 pub mod tables;
@@ -51,9 +53,11 @@ pub use env::{
 };
 pub use error::{ToolError, ToolResult};
 pub use files::FileRef;
-pub use notify::{NoticeReceipt, OwnerNotice, OwnerNotifier};
+pub use notify::{NoticeReceipt, OwnerNotice, OwnerNotifier, TurnSite};
 pub use outcome::{Status, ToolImage, ToolOutcome, ToolOutput, Usage};
+pub use people::{Contact, Delivery, PeopleBackend, PersonMessage};
 pub use schedule::Scheduler;
+pub use secrets::SecretInfo;
 pub use shell::{LocalShell, ShellBackend, ShellRequest, ShellResponse};
 pub use spec::{Approval, ToolSpec, spec, specs};
 
@@ -91,7 +95,9 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         documents::FILE_SUMMARIZE => documents::file_summarize(env, parse_args(tool, args)?).await,
         documents::FILE_EXTRACT => documents::file_extract(env, parse_args(tool, args)?).await,
         code::CODE_RUN => code::code_run(env, parse_args(tool, args)?).await,
-        notify::NOTIFY_OWNER => notify::notify_owner(env, parse_args(tool, args)?).await,
+        notify::MESSAGE_OWNER => notify::message_owner(env, parse_args(tool, args)?).await,
+        people::LIST_PEOPLE => people::list_people(env, parse_args(tool, args)?).await,
+        people::MESSAGE_PERSON => people::message_person(env, parse_args(tool, args)?).await,
         browser::BROWSER_OPEN => browser::browser_open(env, parse_args(tool, args)?).await,
         browser::BROWSER_SNAPSHOT => browser::browser_snapshot(env, parse_args(tool, args)?).await,
         browser::BROWSER_ACT => browser::browser_act(env, parse_args(tool, args)?).await,
@@ -105,6 +111,8 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         computer::COMPUTER_ACT => computer::computer_act(env, parse_args(tool, args)?).await,
         computer::COMPUTER_WAIT => computer::computer_wait(env, parse_args(tool, args)?).await,
         shell::SHELL_RUN => shell::shell_run(env, parse_args(tool, args)?).await,
+        secrets::SECRET_LIST => secrets::secret_list(env, parse_args(tool, args)?).await,
+        secrets::SECRET_REQUEST => secrets::secret_request(env, parse_args(tool, args)?).await,
         documents::EXCEL_INSPECT => documents::excel_inspect(env, parse_args(tool, args)?).await,
         #[cfg(feature = "data")]
         data::DATA_SOURCES => data::data_sources(env, parse_args(tool, args)?).await,

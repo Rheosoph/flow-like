@@ -46,10 +46,12 @@ pub fn specs() -> Vec<ToolSpec> {
     all.extend(crate::code::specs());
     all.extend(crate::email::specs());
     all.extend(crate::notify::specs());
+    all.extend(crate::people::specs());
     all.extend(crate::schedule::specs());
     all.extend(crate::browser::specs());
     all.extend(crate::computer::specs());
     all.extend(crate::shell::specs());
+    all.extend(crate::secrets::specs());
     #[cfg(feature = "data")]
     all.extend(crate::data::specs());
     all

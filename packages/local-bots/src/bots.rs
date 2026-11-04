@@ -27,7 +27,8 @@ use zeroize::Zeroizing;
 
 const BOT_COLUMNS: &str = "id, system, preset_id, name, description, instructions, appearance, \
                            model, embedding_model, classification, pii, capabilities, profile_id, \
-                           workspace_app_id, created_at, updated_at";
+                           workspace_app_id, created_at, updated_at, stt_model, tts_model, \
+                           image_model, vision_model";
 
 const OWNER_ROLE: &str = "owner";
 
@@ -61,6 +62,10 @@ impl StoredBot {
                 appearance: row.get::<_, Json<Value>>("appearance")?.0,
                 model: row.get::<_, Json<BotModelPolicy>>("model")?.0,
                 embedding_model: row.get("embedding_model")?,
+                stt_model: row.get("stt_model")?,
+                tts_model: row.get("tts_model")?,
+                image_model: row.get("image_model")?,
+                vision_model: row.get("vision_model")?,
                 classification: DataSensitivity {
                     classification: classification
                         .as_deref()
@@ -98,6 +103,10 @@ impl StoredBot {
             appearance: settings.appearance,
             model: settings.model,
             embedding_model: settings.embedding_model,
+            stt_model: settings.stt_model,
+            tts_model: settings.tts_model,
+            image_model: settings.image_model,
+            vision_model: settings.vision_model,
             classification: settings.classification,
             capabilities: settings.capabilities,
             profile_id: settings.profile_id,
@@ -217,8 +226,9 @@ fn insert_bot(db: &Connection, bot: NewBot<'_>, now: i64) -> Result<()> {
     db.execute(
         "INSERT INTO bots (id, system, preset_id, name, description, instructions, appearance,
              model, embedding_model, classification, pii, capabilities, profile_id, created_at,
-             updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14)",
+             updated_at, stt_model, tts_model, image_model, vision_model)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15, ?16, ?17,
+             ?18)",
         params![
             bot.id,
             bot.system.map(BotSystemKind::as_str),
@@ -234,6 +244,10 @@ fn insert_bot(db: &Connection, bot: NewBot<'_>, now: i64) -> Result<()> {
             columns.capabilities,
             settings.profile_id,
             now,
+            settings.stt_model,
+            settings.tts_model,
+            settings.image_model,
+            settings.vision_model,
         ],
     )?;
     Ok(())
@@ -246,7 +260,8 @@ fn save_settings(db: &Connection, bot_id: &str, settings: &BotSettings, now: i64
     db.execute(
         "UPDATE bots SET name = ?2, description = ?3, instructions = ?4, appearance = ?5,
              model = ?6, embedding_model = ?7, classification = ?8, pii = ?9, capabilities = ?10,
-             profile_id = ?11, updated_at = MAX(?12, updated_at + ?13)
+             profile_id = ?11, updated_at = MAX(?12, updated_at + ?13), stt_model = ?14,
+             tts_model = ?15, image_model = ?16, vision_model = ?17
          WHERE id = ?1",
         params![
             bot_id,
@@ -262,6 +277,10 @@ fn save_settings(db: &Connection, bot_id: &str, settings: &BotSettings, now: i64
             settings.profile_id,
             now,
             STEP_MICROS,
+            settings.stt_model,
+            settings.tts_model,
+            settings.image_model,
+            settings.vision_model,
         ],
     )?;
     Ok(())

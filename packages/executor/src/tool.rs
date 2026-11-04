@@ -218,7 +218,8 @@ pub(crate) async fn run_job(
     let models = Arc::new(models(&job, claims, &envelope.executor_jwt, state));
     let env = HostEnv::new(&job.workspace, &job.scope, access, models)
         .with_sessions(Arc::new(MemorySessions::default()))
-        .with_expensive_documents(job.allow_expensive_documents);
+        .with_expensive_documents(job.allow_expensive_documents)
+        .with_secrets(Arc::new(job.secrets.clone()));
     let started = Instant::now();
     let outcome = tokio::time::timeout(deadline(claims), run(&job.tool, job.args.clone(), &env))
         .await
@@ -274,6 +275,7 @@ mod tests {
                 .collect(),
             models: JobModels::default(),
             allow_expensive_documents: false,
+            secrets: Default::default(),
         }
     }
 
