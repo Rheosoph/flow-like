@@ -252,9 +252,7 @@ mod tests {
 
     #[test]
     fn test_app_connection_jwt_roundtrip() {
-        if !is_configured() {
-            return;
-        }
+        crate::backend_jwt::init_for_tests();
 
         let correlation = crate::correlation::CorrelationContext {
             trace_id: Some("run_root".to_string()),

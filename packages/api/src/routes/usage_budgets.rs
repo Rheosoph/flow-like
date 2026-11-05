@@ -180,13 +180,14 @@ async fn bot_view(state: &AppState, bot: bot::Model) -> Result<UsageBudgetView, 
         if conversation.as_ref().is_some_and(|row| row.kind != "GROUP") {
             continue;
         }
+        let archived = view.archived || conversation.is_none();
         let mut group_view = budget_view(
             state,
             BudgetScope::bot_group(&bot.id, &group),
             conversation.and_then(|row| row.title),
         )
         .await?;
-        group_view.archived = view.archived;
+        group_view.archived = archived;
         view.groups.push(group_view);
     }
     Ok(view)

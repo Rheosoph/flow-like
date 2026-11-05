@@ -15,8 +15,8 @@ use axum::{
 };
 use chrono::{DateTime, FixedOffset};
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DbErr, EntityTrait, ExprTrait, QueryFilter, QuerySelect,
-    sea_query::{Expr, SimpleExpr},
+    ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QuerySelect,
+    sea_query::{Expr, Func, SimpleExpr},
 };
 
 /// A correlated filter for an InboxEntry query. Keeping the rows preserves message-id claims.
@@ -51,10 +51,12 @@ pub(super) fn next_clear_marker(
     previous: Option<DateTime<FixedOffset>>,
     now: DateTime<FixedOffset>,
 ) -> DateTime<FixedOffset> {
-    previous
-        .and_then(|at| at.checked_add_signed(chrono::Duration::milliseconds(1)))
-        .unwrap_or(now)
-        .max(now)
+    std::cmp::max(
+        previous
+            .and_then(|at| at.checked_add_signed(chrono::Duration::milliseconds(1)))
+            .unwrap_or(now),
+        now,
+    )
 }
 
 pub(super) async fn reopen<C: ConnectionTrait>(
@@ -114,7 +116,10 @@ pub(super) async fn delete_in<C: ConnectionTrait>(
         .unwrap_or(0);
     let legacy: Option<DateTime<FixedOffset>> = inbox_entry::Entity::find()
         .select_only()
-        .column_as(Expr::col(inbox_entry::Column::CreatedAt).max(), "newest")
+        .column_as(
+            Expr::expr(Func::max(Expr::col(inbox_entry::Column::CreatedAt))),
+            "newest",
+        )
         .filter(inbox_entry::Column::InboxId.eq(principal))
         .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
         .filter(inbox_entry::Column::Seq.is_null())
@@ -123,7 +128,7 @@ pub(super) async fn delete_in<C: ConnectionTrait>(
         .await?
         .flatten();
     let cleared_at = next_clear_marker(member.cleared_at, now);
-    let legacy_boundary = legacy.unwrap_or(now).max(now);
+    let legacy_boundary = std::cmp::max(legacy.unwrap_or(now), now);
     conversation_member::Entity::update_many()
         .col_expr(conversation_member::Column::HiddenAt, Expr::value(now))
         .col_expr(

@@ -56,7 +56,7 @@ const INBOX_TABLES: [&str; 5] = [
     r#"CREATE TABLE public."InboxEntry" (
         "id" TEXT PRIMARY KEY, "inboxId" TEXT NOT NULL, "conversationId" TEXT NOT NULL,
         "messageId" TEXT NOT NULL, "senderId" TEXT NOT NULL, "kind" TEXT NOT NULL,
-        "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER, "cleared" BOOLEAN NOT NULL DEFAULT false, UNIQUE ("inboxId", "messageId"),
+        "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER, "cleared" BOOLEAN, UNIQUE ("inboxId", "messageId"),
         UNIQUE ("inboxId", "conversationId", "seq"))"#,
     r#"CREATE TABLE public."InboxKey" (
         "principalId" TEXT NOT NULL, "keyId" TEXT NOT NULL, "algorithm" TEXT NOT NULL,
