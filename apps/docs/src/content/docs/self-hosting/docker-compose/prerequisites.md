@@ -58,9 +58,11 @@ Restrict access to this host and its deployment credentials accordingly.
 
 ## Identity and public access
 
-Prepare an OpenID Connect application with the correct discovery/JWKS endpoints,
-client ID, callback URL and logout URL. The checked-in hub configuration contains
-placeholder identity-provider settings.
+Choose an existing OpenID Connect application or the optional bundled Keycloak
+provider. For an existing provider, prepare its discovery, JWKS and user-info
+endpoints, client ID, callback URL and logout URL. The checked-in hub configuration
+contains placeholders. `setup-env.py --oidc bundled` generates those settings and
+adds the provider to Compose; see [Installation](/self-hosting/docker-compose/installation/#run-the-bundled-identity-provider).
 
 Public hosting also needs DNS and an operator-managed TLS reverse proxy.
 Configure HTTPS for web/API/storage and WSS for signaling. Keep the browser
@@ -75,6 +77,7 @@ The default published listeners bind to loopback:
 | `localhost:4444` | Signaling |
 | `s3.localhost:9000` | Object data gateway |
 | `localhost:3002` | Grafana, when monitoring is enabled |
+| `auth.localhost:8443` | HTTPS identity provider, when bundled OIDC is enabled |
 
 PostgreSQL, Redis, the compiler, execution managers, RustFS administration and
 metrics listeners are private. The `s3.localhost` name must resolve to the

@@ -11,6 +11,7 @@ pub struct CommonConfig {
     pub allowed_https_hosts: Vec<String>,
     pub buckets: Vec<String>,
     pub object_store_tls_gateway: bool,
+    pub channel_nats_url: Option<String>,
     pub backend_pub: String,
     pub capacity: usize,
     /// Durations in seconds, shared with deployment environment variables.
@@ -106,6 +107,9 @@ impl CommonConfig {
                 .collect(),
             object_store_tls_gateway: env::var("EXECUTION_OBJECT_STORE_TLS_GATEWAY").as_deref()
                 == Ok("true"),
+            channel_nats_url: env::var("CHANNEL_NATS_URL")
+                .ok()
+                .filter(|value| !value.is_empty()),
             backend_pub: secret("BACKEND_PUB")?,
             capacity: positive(
                 "MAX_CONCURRENT_EXECUTIONS",
@@ -172,6 +176,11 @@ impl CommonConfig {
         }
         if !safe_id(&result.installation) {
             return Err(Error::invalid("Invalid execution installation ID"));
+        }
+        if let Some(url) = &result.channel_nats_url {
+            crate::gateway::policy::nats_destination(url).map_err(|_| {
+                Error::invalid("CHANNEL_NATS_URL must be an internal nats://host:port endpoint")
+            })?;
         }
         for bucket in &result.buckets {
             if !(3..=63).contains(&bucket.len())

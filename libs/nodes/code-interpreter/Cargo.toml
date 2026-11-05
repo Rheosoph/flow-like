@@ -15,6 +15,8 @@ execute = [
     "dep:wasmtime-wasi",
     "dep:tempfile",
     "dep:anyhow",
+    "dep:sha2",
+    "dep:zip",
 ]
 # AOT-compile python.wasm into the binary at build time for zero cold-start.
 # Requires python.wasm to be available (via PYTHON_WASM_PATH env or standard paths).
@@ -23,6 +25,10 @@ bundled-python = [
     "execute",
     "flow-like-catalog-build-helper/code-interpreter-build",
 ]
+
+[[example]]
+name = "precompile_ios"
+required-features = ["execute"]
 
 [dependencies]
 flow-like-catalog-core.workspace = true
@@ -46,6 +52,8 @@ wasmtime = { workspace = true, optional = true }
 wasmtime-wasi = { workspace = true, optional = true }
 tempfile = { version = "3", optional = true }
 anyhow = { version = "1", optional = true }
+sha2 = { workspace = true, optional = true }
+zip = { workspace = true, optional = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }

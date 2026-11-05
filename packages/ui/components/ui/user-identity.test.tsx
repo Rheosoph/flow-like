@@ -65,6 +65,29 @@ function resolved(): UserIdentity {
 	};
 }
 
+const BOT = "bot_tz4a98xxat96iws9zmbrgj3a";
+
+function bot(): UserIdentity {
+	return {
+		user: { id: BOT, name: "Scout", created_at: "" },
+		accountId: BOT,
+		label: "Scout",
+		subtitle: "Felix Schultz's bot",
+		initials: "SC",
+		isPending: false,
+		isResolved: true,
+		isError: false,
+		bot: {
+			ownerId: SUB,
+			system: null,
+			appearance: { kind: "mochi" },
+			deleted: false,
+			isOwn: false,
+			owner: { label: "Felix Schultz", initials: "FS", isPending: false },
+		},
+	};
+}
+
 async function renderTag(props: Record<string, unknown> = {}) {
 	const { UserInlineTag } = await import("./user-identity");
 	return renderToStaticMarkup(<UserInlineTag userId={SUB} {...props} />);
@@ -109,6 +132,15 @@ describe("UserInlineTag", () => {
 		expect(await renderTag()).toContain(SUB);
 	});
 
+	test("draws a bot as itself, acting for its owner", async () => {
+		identity = bot();
+		const markup = await renderTag();
+		expect(markup).toContain("Scout");
+		expect(markup).toContain("fl-bot");
+		expect(markup).toContain('aria-label="Scout, Felix Schultz');
+		expect(markup).not.toContain(BOT);
+	});
+
 	test("carries the host's chrome onto the trigger in every state", async () => {
 		for (const state of [pending, unresolved, resolved]) {
 			identity = state();
@@ -132,6 +164,19 @@ describe("UserIdentityCard", () => {
 		expect(missing).not.toContain("Felix Schultz");
 
 		expect(missing).toContain("No account matches this id");
+	});
+
+	test("shows a bot with its owner and no profile page of its own", async () => {
+		const { UserIdentityCard } = await import("./user-identity");
+
+		identity = bot();
+		const card = renderToStaticMarkup(<UserIdentityCard userId={BOT} />);
+		expect(card).toContain('data-slot="bot-identity-card"');
+		expect(card).toContain("Acts for");
+		expect(card).toContain("Felix Schultz");
+		expect(card).toContain("fl-bot");
+		expect(card).toContain(BOT);
+		expect(card).not.toContain("View profile");
 	});
 
 	test("never claims the account is missing when the lookup itself failed", async () => {

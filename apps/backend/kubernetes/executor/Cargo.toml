@@ -14,7 +14,7 @@ flow-like-runtime = { workspace = true, features = ["flow-metadata", "flow-runti
 flow-like-types.workspace = true
 flow-like-storage.workspace = true
 flow-like-catalog = { workspace = true, default-features = false, features = ["executor-local-ml"] }
-flow-like-executor = { workspace = true, features = ["executor-local-ml"] }
+flow-like-executor = { workspace = true, features = ["channel-nats", "executor-local-ml"] }
 mimalloc.workspace = true
 serde = { workspace = true, features = ["derive", "rc"] }
 serde_json.workspace = true

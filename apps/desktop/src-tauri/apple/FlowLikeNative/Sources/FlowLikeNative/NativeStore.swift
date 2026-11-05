@@ -1,5 +1,8 @@
 import Foundation
 import Darwin
+#if os(iOS)
+import UIKit
+#endif
 
 public enum NativeIntegrationError: LocalizedError, Equatable {
     case unavailable, expired, invalidAction, invalidRoute, oversized
@@ -8,7 +11,7 @@ public enum NativeIntegrationError: LocalizedError, Equatable {
         switch self {
         case .unavailable: return "Open Flow Like to connect your workspace."
         case .expired: return "Open Flow Like to refresh your workspace."
-        case .invalidAction: return "This action is no longer available. Open Flow Like to choose an app or Event."
+        case .invalidAction: return "This action is no longer available. Open Flow Like to choose a bot, app, or Event."
         case .invalidRoute: return "Choose a path inside this app and add matching query names and values. External URLs, fragments, and parent paths are not supported."
         case .oversized: return "This content is too large to share with Flow Like."
         }
@@ -27,6 +30,10 @@ public struct NativeStore: Sendable {
     private func root() throws -> URL {
         guard let directory else { throw NativeIntegrationError.unavailable }
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        #if os(iOS)
+        try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                                             ofItemAtPath: directory.path)
+        #endif
         return directory
     }
 
@@ -95,18 +102,38 @@ public struct NativeStore: Sendable {
     }
 
     public func enqueue(_ action: NativeAction, expectedScope: String? = nil,
-                        responseMode: String? = nil, responseTimeout: TimeInterval = 90) throws -> NativeActionRequest {
+                        responseMode: String? = nil, responseTimeout: TimeInterval = 90,
+                        executionMode: String? = nil, backgroundDelivery: Bool = false) throws -> NativeActionRequest {
         guard responseMode == nil || (["text", "result"].contains(responseMode!) && responseTimeout > 0 && responseTimeout <= 90) else {
             throw NativeIntegrationError.invalidAction
         }
+        guard executionMode == nil || executionMode == "foreground" || executionMode == "background" else {
+            throw NativeIntegrationError.invalidAction
+        }
+        if backgroundDelivery {
+            guard responseMode == nil, executionMode != "background", action.voice != true,
+                  action.files?.isEmpty != false, ["ask_bot", "respond_bot_approval"].contains(action.kind) else {
+                throw NativeIntegrationError.invalidAction
+            }
+        }
+        if executionMode == "background" {
+            guard action.kind == "flowpilot", responseMode == "text", responseTimeout <= 25,
+                  action.prompt?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false,
+                  action.voice != true, action.files?.isEmpty != false else {
+                throw NativeIntegrationError.invalidAction
+            }
+        }
         let request = try withLock { directory in
-            let allowed = ["open_home", "open_inbox", "open_app", "open_event", "run_event", "open_run", "flowpilot", "share"]
+            let allowed = ["open_home", "open_inbox", "open_app", "open_event", "run_event", "open_run", "flowpilot", "share",
+                           "open_bot", "ask_bot", "open_conversation", "run_bot_task", "respond_bot_approval",
+                           "capture_bot_voice", "capture_bot_document", "local_bot_summary"]
             guard allowed.contains(action.kind) else { throw NativeIntegrationError.invalidAction }
             let snapshot = catalog()
             guard let scope = snapshot?.scope else {
                 throw NativeIntegrationError.expired
             }
             guard expectedScope == nil || expectedScope == scope else { throw NativeIntegrationError.invalidAction }
+            try snapshot?.validateBotAction(action)
             if action.kind == "open_app" {
                 guard let appId = action.appId, snapshot?.apps.contains(where: { $0.id == appId }) == true else {
                     throw NativeIntegrationError.invalidAction
@@ -123,9 +150,11 @@ public struct NativeStore: Sendable {
             }
             let formatter = ISO8601DateFormatter()
             formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            let now = Date()
             let request = NativeActionRequest(id: UUID().uuidString, scope: scope, action: action,
-                                              createdAt: formatter.string(from: Date()), responseMode: responseMode,
-                                              responseDeadline: responseMode.map { _ in formatter.string(from: Date().addingTimeInterval(responseTimeout)) })
+                                              createdAt: formatter.string(from: now), responseMode: responseMode,
+                                              responseDeadline: responseMode.map { _ in formatter.string(from: now.addingTimeInterval(responseTimeout)) },
+                                              executionMode: executionMode, backgroundDelivery: backgroundDelivery ? true : nil)
             var actions = readActions(in: directory).filter { $0.scope == scope && $0.isCurrent }
             actions.append(request)
             guard actions.count <= 64 else { throw NativeIntegrationError.oversized }
@@ -137,6 +166,10 @@ public struct NativeStore: Sendable {
                 if responseMode != nil { try? NativeActionResults(directory: directory).remove(id: request.id, scope: scope) }
                 throw error
             }
+            #if os(iOS)
+            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                                                 ofItemAtPath: directory.appendingPathComponent("actions.json").path)
+            #endif
             return request
         }
         NativeActionNotifier.post()
@@ -145,10 +178,11 @@ public struct NativeStore: Sendable {
 
     public func takeActions() throws -> [NativeActionRequest] {
         try withLock { directory in
-            let actions = readActions(in: directory)
-            try JSONEncoder().encode([NativeActionRequest]()).write(to: directory.appendingPathComponent("actions.json"), options: .atomic)
-            guard let scope = persistedScope() else { return [] }
-            return actions.filter { $0.scope == scope && $0.isCurrent }
+            let scope = persistedScope()
+            let actions = readActions(in: directory).filter { $0.scope == scope && $0.isCurrent }
+            let owned = NativeBotRefreshBridge.ownedIDs(scope: scope)
+            try JSONEncoder().encode(actions.filter { $0.isBackground || owned.contains($0.id) }).write(to: directory.appendingPathComponent("actions.json"), options: .atomic)
+            return actions.filter { !$0.isBackground && !owned.contains($0.id) }
         }
     }
 
@@ -160,7 +194,81 @@ public struct NativeStore: Sendable {
             if stored.count != actions.count {
                 try JSONEncoder().encode(actions).write(to: directory.appendingPathComponent("actions.json"), options: .atomic)
             }
-            return actions
+            let owned = NativeBotRefreshBridge.ownedIDs(scope: scope)
+            return actions.filter { !$0.isBackground && !owned.contains($0.id) }
+        }
+    }
+
+    func botRefreshPayload(includeActions: Bool) throws -> NativeBotRefreshPayload {
+        try withLock { directory in
+            guard let snapshot = catalog() else { throw NativeIntegrationError.unavailable }
+            let actions = includeActions ? readActions(in: directory).filter {
+                $0.scope == snapshot.scope && $0.isCurrent && $0.allowsBackgroundDelivery && $0.backgroundError == nil
+            } : []
+            return NativeBotRefreshPayload(scope: snapshot.scope, bots: snapshot.bots ?? [], actions: actions)
+        }
+    }
+
+    func applyBotRefresh(_ result: NativeBotRefreshResult, scope: String, allowedIDs: Set<String>, now: Date = Date()) throws {
+        try withLock { directory in
+            guard var snapshot = catalog(), snapshot.scope == scope else { throw NativeIntegrationError.invalidAction }
+            let delivered = Set(result.deliveredIds ?? []).intersection(allowedIDs)
+            let failures = Dictionary((result.failedActions ?? []).filter { allowedIDs.contains($0.id) }
+                .map { ($0.id, String($0.error.prefix(512))) }, uniquingKeysWith: { first, _ in first })
+            let stored = readActions(in: directory)
+            let resolved = Set(stored.filter { $0.scope == scope && delivered.contains($0.id) && $0.action.kind == "respond_bot_approval" }
+                .compactMap { $0.action.approvalId })
+            let actions = stored.filter { $0.scope == scope && $0.isCurrent && !delivered.contains($0.id) }.map { request in
+                var request = request
+                if let error = failures[request.id], request.allowsBackgroundDelivery { request.backgroundError = error }
+                return request
+            }
+            try JSONEncoder().encode(actions).write(to: directory.appendingPathComponent("actions.json"), options: .atomic)
+            snapshot.botApprovals = snapshot.botApprovals?.filter { !resolved.contains($0.id) }
+            for index in snapshot.sections.indices where snapshot.sections[index].kind == "bot_approvals" {
+                snapshot.sections[index].items.removeAll { item in resolved.contains(item.action.approvalId ?? item.id) }
+            }
+            guard result.turns != nil || !resolved.isEmpty else { return }
+            if let turns = result.turns {
+                let names = Dictionary((snapshot.bots ?? []).map { ($0.id, $0.title) }, uniquingKeysWith: { first, _ in first })
+                let items = turns.prefix(50).compactMap { turn -> NativeItem? in
+                    guard let name = names[turn.bot_id], ["queued", "running", "waiting"].contains(turn.status),
+                          !turn.id.isEmpty, !turn.conversation_id.isEmpty else { return nil }
+                    return NativeItem(id: turn.id, title: name, action: NativeAction(kind: "open_conversation", botId: turn.bot_id,
+                        conversationId: turn.conversation_id, turnId: turn.id), status: turn.status,
+                        startedAt: turn.started_at, updatedAt: turn.updated_at ?? turn.started_at, live: true)
+                }
+                let section = NativeSection(kind: "bot_tasks", title: "Bot tasks", state: "ready", items: Array(items.prefix(20)),
+                    updatedAt: NativeSnapshot.string(now), staleAt: NativeSnapshot.string(now.addingTimeInterval(300)), expiresAt: snapshot.expiresAt)
+                if let index = snapshot.sections.firstIndex(where: { $0.kind == "bot_tasks" }) { snapshot.sections[index] = section }
+                else { snapshot.sections.append(section) }
+            }
+            // Other sections keep their original age and privacy deadline.
+            let data = try JSONEncoder().encode(snapshot)
+            guard data.count <= 2_097_152 else { throw NativeIntegrationError.oversized }
+            try data.write(to: directory.appendingPathComponent("snapshot.json"), options: .atomic)
+        }
+    }
+
+    // Claiming removes work before execution. A crashed process must not replay tool side effects.
+    public func claimBackgroundActions() throws -> [NativeActionRequest] {
+        try withLock { directory in
+            let scope = persistedScope()
+            let actions = readActions(in: directory).filter { $0.scope == scope && $0.isCurrent }
+            let results = NativeActionResults(directory: directory)
+            let claimed = try actions.filter { request in
+                guard request.isBackground else { return false }
+                return try results.backgroundActionActive(id: request.id, scope: request.scope)
+            }
+            try JSONEncoder().encode(actions.filter { !$0.isBackground }).write(to: directory.appendingPathComponent("actions.json"), options: .atomic)
+            return claimed
+        }
+    }
+
+    public func backgroundActionActive(id: String, scope: String) throws -> Bool {
+        try withLock { directory in
+            guard persistedScope() == scope else { return false }
+            return try NativeActionResults(directory: directory).backgroundActionActive(id: id, scope: scope)
         }
     }
 
@@ -185,7 +293,9 @@ public struct NativeStore: Sendable {
         while true {
             try Task.checkCancellation()
             guard request.isCurrent else {
-                throw NativeActionFailure(message: "Flow Like did not return a result within 90 seconds. A run already started may still continue in the app.")
+                throw NativeActionFailure(message: request.isBackground
+                    ? "FlowPilot reached the background action time limit. Cancellation was requested."
+                    : "Flow Like did not return a result before the action deadline. A run already started may still continue in the app.")
             }
             let result = try withLock { directory in
                 guard persistedScope() == request.scope else { throw NativeIntegrationError.invalidAction }
@@ -197,12 +307,31 @@ public struct NativeStore: Sendable {
     }
 
     public func cancelActionResponse(_ request: NativeActionRequest) throws {
+        defer { NativeActionNotifier.post() }
         try withLock { directory in
             guard persistedScope() == request.scope else { return }
             let actions = readActions(in: directory).filter { $0.id != request.id || $0.scope != request.scope }
             try JSONEncoder().encode(actions).write(to: directory.appendingPathComponent("actions.json"), options: .atomic)
             try NativeActionResults(directory: directory).remove(id: request.id, scope: request.scope)
         }
+    }
+
+    @available(iOSApplicationExtension, unavailable)
+    @available(macOSApplicationExtension, unavailable)
+    public func waitForBackgroundActionResult(_ request: NativeActionRequest) async throws -> NativeActionResult {
+        #if os(iOS)
+        let lifetime = await NativeActionBackgroundLifetime(store: self, request: request)
+        do {
+            let result = try await waitForActionResult(request)
+            await lifetime.end()
+            return result
+        } catch {
+            await lifetime.end()
+            throw error
+        }
+        #else
+        return try await waitForActionResult(request)
+        #endif
     }
 
     public func publishAppIcons(_ data: Data) throws {
@@ -310,8 +439,44 @@ public struct NativeStore: Sendable {
         let descriptor = open(directory.appendingPathComponent("native.lock").path, O_CREAT | O_RDWR, 0o600)
         guard descriptor >= 0 else { throw NativeIntegrationError.unavailable }
         defer { close(descriptor) }
+        #if os(iOS)
+        try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                                             ofItemAtPath: directory.appendingPathComponent("native.lock").path)
+        #endif
         guard flock(descriptor, LOCK_EX) == 0 else { throw NativeIntegrationError.unavailable }
         defer { flock(descriptor, LOCK_UN) }
         return try body(directory)
     }
 }
+
+#if os(iOS)
+@available(iOSApplicationExtension, unavailable)
+@MainActor private final class NativeActionBackgroundLifetime {
+    private var identifier: UIBackgroundTaskIdentifier = .invalid
+    private let store: NativeStore
+    private let request: NativeActionRequest
+
+    init(store: NativeStore, request: NativeActionRequest) {
+        self.store = store
+        self.request = request
+        identifier = UIApplication.shared.beginBackgroundTask(withName: "FlowPilot Action") { [weak self] in
+            MainActor.assumeIsolated { self?.expire() }
+        }
+        if identifier == .invalid { expire() }
+    }
+
+    private func expire() {
+        // A completion that won the race must remain available to the waiting intent.
+        try? store.completeAction(NativeActionResult(id: request.id, scope: request.scope, status: "error",
+            error: "iOS ended the background execution time. Cancellation was requested."))
+        NativeActionNotifier.post()
+        end()
+    }
+
+    func end() {
+        guard identifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(identifier)
+        identifier = .invalid
+    }
+}
+#endif

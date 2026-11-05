@@ -1,0 +1,231 @@
+/// A conversation between principals (user subs and bot ids). DIRECT holds exactly two
+/// principals, deduplicated by `directKey`; GROUP has a title and at most 50 active members,
+/// so one fan-out stays far below DSQL's 3,000-row transaction cap.
+model Conversation {
+  id             String                @id
+  /// DIRECT | GROUP
+  kind           String
+  title          String?
+  /// PLAIN | E2E
+  encryption     String                @default("PLAIN")
+  /// Order-independent key of the two principals of a DIRECT conversation.
+  directKey      String?               @unique
+  createdBy      String
+  lastActivityAt DateTime              @db.Timestamptz(3)
+  members        ConversationMember[]
+  createdAt      DateTime              @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime              @updatedAt @db.Timestamptz(3)
+  /// The id a moved conversation had on the device: an import key per creator (NULLs distinct).
+  importKey      String?
+  /// The newest `InboxEntry.seq` handed out, allocated under the conversation's lock; null is 0.
+  lastSeq        BigInt?
+  /// A group's picture: the blake3 hex of the PNG at `conversations/<id>/image/<image>.png`.
+  image          String?
+  segments       ConversationSegment[]
+  files          ConversationFile[]
+  botTurns       BotTurn[]
+  pinnedFor      PinnedConversation[]
+  pinnedMessages PinnedMessage[]
+  stars          StarredMessage[]
+  meetings       Meeting[]
+  inviteLinks    ConversationInviteLink[]
+
+  @@unique([createdBy, importKey])
+}
+
+/// A person's inbox block. User blocks also cover that user's bots. The owner's bots inherit
+/// these blocks; shared group membership is unchanged.
+model InboxBlock {
+  /// The person who set the block; no foreign key, like ConversationMember.principalId.
+  ownerId       String
+  /// A user sub or bot id.
+  principalId   String
+  /// USER | BOT
+  principalKind String
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([ownerId, principalId])
+  @@index([principalId])
+}
+
+/// A shareable link anyone signed in uses to join a plain group at once. It works while its
+/// creator is an active member, until it expires or reaches `maxUses`; at most 20 per group.
+model ConversationInviteLink {
+  id             String       @id
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  token          String       @unique
+  name           String?
+  /// The member who made it, a user sub; no foreign key.
+  createdBy      String
+  /// -1 is unlimited.
+  maxUses        BigInt       @default(-1)
+  countJoined    BigInt       @default(0)
+  expiresAt      DateTime?    @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @db.Timestamptz(3)
+
+  @@index([conversationId, createdAt])
+  @@index([createdBy])
+}
+
+/// A conversation a person pinned to the top of their list. A member who leaves keeps the row;
+/// lists only show conversations they are still an active member of.
+model PinnedConversation {
+  /// A user sub; no foreign key, like `ConversationMember.principalId`.
+  principalId    String
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  pinnedAt       DateTime     @db.Timestamptz(3)
+
+  @@id([principalId, conversationId])
+  @@index([conversationId])
+}
+
+/// A message pinned to its conversation for every member, at most 50 per conversation. Deleting
+/// the message removes its pin.
+model PinnedMessage {
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// The pinned message's `InboxEntry.messageId`, the same in every copy.
+  messageId      String
+  /// The person who pinned it; no foreign key.
+  pinnedBy       String
+  pinnedAt       DateTime     @db.Timestamptz(3)
+
+  @@id([conversationId, messageId])
+  @@index([pinnedBy])
+}
+
+/// A message a person starred, kept for them across conversations. Deleting the message removes
+/// every star of it.
+model StarredMessage {
+  /// A user sub; no foreign key.
+  principalId    String
+  messageId      String
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  starredAt      DateTime     @db.Timestamptz(3)
+
+  @@id([principalId, messageId])
+  @@index([principalId, starredAt])
+  @@index([principalId, conversationId, starredAt])
+  @@index([conversationId, messageId])
+}
+
+/// A principal in a conversation. Rows stay after leaving (`leftAt`) so history keeps its
+/// members; only active members read and receive.
+model ConversationMember {
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// A user sub or a bot id; no foreign key, bots and users share this column.
+  principalId    String
+  /// USER | BOT
+  principalKind  String
+  addedBy        String?
+  joinedAt       DateTime     @db.Timestamptz(3)
+  leftAt         DateTime?    @db.Timestamptz(3)
+  lastReadAt     DateTime?    @db.Timestamptz(3)
+  /// ACTIVE | PENDING | DECLINED. Only ACTIVE members read, receive and count; an invitee is PENDING until they accept.
+  status         String       @default("ACTIVE")
+  /// A bot's room limits (`BotRoomLimits`), set by the bot's owner when accepting; null for people and unlimited bots.
+  limits         Json?
+  invitedBy      String?
+  invitedAt      DateTime?    @db.Timestamptz(3)
+  acceptedAt     DateTime?    @db.Timestamptz(3)
+
+  @@id([conversationId, principalId])
+  @@index([principalId, leftAt])
+  @@index([principalId, status])
+}
+
+/// One principal's copy of one conversation event. Pages are ordered by (createdAt, id).
+model InboxEntry {
+  id             String   @id
+  /// The principal that owns this copy.
+  inboxId        String
+  conversationId String
+  /// Shared by every copy of one event; chosen by the sender so a retried send is idempotent.
+  messageId      String
+  senderId       String
+  /// MESSAGE | REACTION | EDIT | DELETE | MEMBER
+  kind           String
+  /// Envelope v1: plain { v, enc: "none", body } or sealed to this inbox's key.
+  envelope       Json
+  createdAt      DateTime @db.Timestamptz(3)
+  /// The event's position in its conversation, the same in every copy and never reused. Null
+  /// on events written before positions existed.
+  seq            BigInt?
+
+  @@unique([inboxId, messageId])
+  /// Reads by position (`seq BETWEEN …`) in one copy; a position appears once per copy. NULLs
+  /// are distinct.
+  @@unique([inboxId, conversationId, seq])
+  @@index([inboxId, conversationId, createdAt])
+  @@index([inboxId, createdAt])
+}
+
+/// One bot's summary of a conversation's history: the events `seqFrom..=seqTo` (level 0), or at
+/// level 1 a summary of its older segments that keeps their range. Written once and never
+/// rewritten; a changed summary is a new `version`. Two bots in one conversation each keep their
+/// own.
+model ConversationSegment {
+  id             String       @id
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// The bot whose host wrote the summary.
+  authorId       String
+  author         Bot          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  level          Int
+  seqFrom        BigInt
+  seqTo          BigInt
+  tFrom          DateTime     @db.Timestamptz(3)
+  tTo            DateTime     @db.Timestamptz(3)
+  title          String?
+  summary        String
+  /// The level-1 segment that merged this one.
+  parentId       String?
+  version        Int
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([conversationId, authorId, level, seqFrom])
+  @@index([authorId])
+}
+
+/// A file a conversation member uploaded into a conversation: platform storage under
+/// `conversations/<conversationId>/`, not an app. `messageId` is set when a message carries it;
+/// deleting that message sets `deletedAt` and the sweep removes the object and the row.
+model ConversationFile {
+  id             String       @id
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  /// A user sub or a bot id; no foreign key.
+  uploaderId     String
+  name           String
+  mime           String
+  bytes          BigInt
+  sha256         String?
+  /// PENDING | READY
+  status         String       @default("PENDING")
+  messageId      String?
+  deletedAt      DateTime?    @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+
+  @@index([conversationId, messageId])
+  @@index([uploaderId])
+  @@index([deletedAt])
+  @@index([status, createdAt])
+}
+
+/// A public key others seal envelopes to. People register their own; owners register their
+/// bots' keys. Anyone signed in may read active keys.
+model InboxKey {
+  principalId String
+  keyId       String
+  algorithm   String
+  publicKey   String
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  revokedAt   DateTime? @db.Timestamptz(3)
+
+  @@id([principalId, keyId])
+}

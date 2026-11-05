@@ -88,7 +88,7 @@ import {
 	useSearchParams,
 } from "next/navigation";
 import type React from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	databaseSelectorFromParams,
@@ -121,6 +121,68 @@ function normalizeTableName(name: string): string {
 function formatList(values: string[]): string {
 	return values.join(", ");
 }
+
+const ScrollableTabStrip: React.FC<{
+	activeValue: string;
+	children: React.ReactNode;
+}> = ({ activeValue, children }) => {
+	const scrollerRef = useRef<HTMLDivElement>(null);
+	const [edges, setEdges] = useState({ start: false, end: false });
+
+	const measure = useCallback(() => {
+		const el = scrollerRef.current;
+		if (!el) return;
+		const start = el.scrollLeft > 1;
+		const end = el.scrollLeft + el.clientWidth < el.scrollWidth - 1;
+		setEdges((prev) =>
+			prev.start === start && prev.end === end ? prev : { start, end },
+		);
+	}, []);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: activeValue re-runs the scroll-into-view on tab change
+	useEffect(() => {
+		const el = scrollerRef.current;
+		if (!el) return;
+		const active = el.querySelector<HTMLElement>('[data-state="active"]');
+		if (active) {
+			const left = active.offsetLeft;
+			const right = left + active.offsetWidth;
+			if (left < el.scrollLeft) el.scrollLeft = left;
+			else if (right > el.scrollLeft + el.clientWidth)
+				el.scrollLeft = right - el.clientWidth;
+		}
+		measure();
+		const observer = new ResizeObserver(measure);
+		observer.observe(el);
+		return () => observer.disconnect();
+	}, [activeValue, measure]);
+
+	return (
+		<div className="relative px-4 pt-4 @xl/ds:px-6">
+			<div
+				ref={scrollerRef}
+				onScroll={measure}
+				className="no-scrollbar relative overflow-x-auto"
+			>
+				{children}
+			</div>
+			<div
+				aria-hidden
+				className={`pointer-events-none absolute bottom-0 left-4 w-8 rounded-l-lg bg-gradient-to-r from-background to-transparent transition-opacity @xl/ds:left-6 ${edges.start ? "opacity-100" : "opacity-0"}`}
+				style={{ top: "1rem" }}
+			/>
+			<div
+				aria-hidden
+				className={`pointer-events-none absolute bottom-0 right-4 w-8 rounded-r-lg bg-gradient-to-l from-background to-transparent transition-opacity @xl/ds:right-6 ${edges.end ? "opacity-100" : "opacity-0"}`}
+				style={{ top: "1rem" }}
+			/>
+		</div>
+	);
+};
+
+const StudioRoot: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+	<div className="@container/ds h-full min-h-0 min-w-0">{children}</div>
+);
 
 export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
 	const router = useRouter();
@@ -208,36 +270,42 @@ export const ExploreDataPage: React.FC<ExploreDataPageProps> = ({ appId }) => {
 
 	if (overlayParam) {
 		return (
-			<OverlayView
-				appId={appId}
-				overlayId={overlayParam}
-				userScoped={userScoped}
-				onBack={() => {
-					const params = new URLSearchParams(searchParams?.toString() ?? "");
-					params.delete("overlay");
-					params.delete("scope");
-					router.push(`${pathname}?${params.toString()}`);
-				}}
-			/>
+			<StudioRoot>
+				<OverlayView
+					appId={appId}
+					overlayId={overlayParam}
+					userScoped={userScoped}
+					onBack={() => {
+						const params = new URLSearchParams(searchParams?.toString() ?? "");
+						params.delete("overlay");
+						params.delete("scope");
+						router.push(`${pathname}?${params.toString()}`);
+					}}
+				/>
+			</StudioRoot>
 		);
 	}
 
-	return table ? (
-		<TableView
-			table={table}
-			appId={appId}
-			userScoped={userScoped}
-			onBack={() => {
-				const params = new URLSearchParams(searchParams?.toString() ?? "");
-				params.delete("table");
-				params.delete("scope");
-				for (const name of ["branch", "version", "tag", "page"])
-					params.delete(name);
-				router.push(`${pathname}?${params.toString()}`);
-			}}
-		/>
-	) : (
-		<DatabaseOverview appId={appId} searchParams={searchParams} />
+	return (
+		<StudioRoot>
+			{table ? (
+				<TableView
+					table={table}
+					appId={appId}
+					userScoped={userScoped}
+					onBack={() => {
+						const params = new URLSearchParams(searchParams?.toString() ?? "");
+						params.delete("table");
+						params.delete("scope");
+						for (const name of ["branch", "version", "tag", "page"])
+							params.delete(name);
+						router.push(`${pathname}?${params.toString()}`);
+					}}
+				/>
+			) : (
+				<DatabaseOverview appId={appId} searchParams={searchParams} />
+			)}
+		</StudioRoot>
 	);
 };
 
@@ -1156,7 +1224,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	// simply not allowed to look.
 	if (!canReadData) {
 		return (
-			<div className="p-6">
+			<div className="p-4 @xl/ds:p-6">
 				<SectionLockedPanel
 					feature={t("dataStudio", "Data Studio")}
 					description={t(
@@ -1208,15 +1276,15 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 	}
 
 	return (
-		<div className="flex flex-col h-full">
-			<div className="p-6 pb-0">
-				<header className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-					<div className="flex items-center gap-3">
-						<div className="rounded-xl bg-primary/10 p-2.5 text-primary">
+		<div className="flex flex-col h-full min-w-0">
+			<div className="p-4 pb-0 @xl/ds:p-6 @xl/ds:pb-0">
+				<header className="flex flex-col gap-3 @xl/ds:flex-row @xl/ds:items-center @xl/ds:justify-between @xl/ds:gap-4">
+					<div className="flex min-w-0 items-center gap-3">
+						<div className="shrink-0 rounded-xl bg-primary/10 p-2.5 text-primary">
 							<Layers3 className="h-5 w-5" />
 						</div>
-						<div>
-							<h1 className="text-2xl font-semibold">
+						<div className="min-w-0">
+							<h1 className="text-xl font-semibold @xl/ds:text-2xl">
 								{t("dataStudio", "Data Studio")}
 							</h1>
 							<p className="text-sm text-muted-foreground">
@@ -1227,7 +1295,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 							</p>
 						</div>
 					</div>
-					<div className="flex items-center gap-2">
+					<div className="flex shrink-0 flex-wrap items-center gap-2">
 						<Button variant="outline" size="sm" onClick={refreshStudio}>
 							<RefreshCw className="h-4 w-4" /> {t("refresh", "Refresh")}
 						</Button>
@@ -1249,10 +1317,10 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 			<Tabs
 				value={activeView}
 				onValueChange={setActiveView}
-				className="flex flex-col flex-1 min-h-0"
+				className="flex flex-col flex-1 min-h-0 min-w-0"
 			>
-				<div className="overflow-x-auto px-6 pt-4">
-					<TabsList className="w-max">
+				<ScrollableTabStrip activeValue={activeView}>
+					<TabsList className="w-max max-w-none justify-start">
 						<TabsTrigger value="overview">
 							<LayoutDashboard className="mr-1.5 h-3.5 w-3.5" />
 							{t("overview", "Overview")}
@@ -1288,8 +1356,11 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 							</TabsTrigger>
 						)}
 					</TabsList>
-				</div>
-				<TabsContent value="overview" className="flex-1 overflow-y-auto p-6">
+				</ScrollableTabStrip>
+				<TabsContent
+					value="overview"
+					className="flex-1 overflow-y-auto p-4 @xl/ds:p-6"
+				>
 					<DataStudioOverview
 						ontologies={ontologyData}
 						tableCount={processedTables.length}
@@ -1301,7 +1372,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 				</TabsContent>
 				<TabsContent
 					value="objects"
-					className="flex min-h-0 flex-1 flex-col gap-4 p-6"
+					className="flex min-h-0 flex-1 flex-col gap-4 p-4 @xl/ds:p-6"
 				>
 					{!canExecuteEvents && (
 						<PermissionNotice
@@ -1342,7 +1413,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 				</TabsContent>
 				<TabsContent
 					value="model"
-					className="flex-1 space-y-4 overflow-y-auto p-6"
+					className="flex-1 space-y-4 overflow-y-auto p-4 @xl/ds:p-6"
 				>
 					{!canWriteData && (
 						<PermissionNotice
@@ -1363,7 +1434,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 				</TabsContent>
 				<TabsContent
 					value="actions"
-					className="flex-1 space-y-4 overflow-y-auto p-6"
+					className="flex-1 space-y-4 overflow-y-auto p-4 @xl/ds:p-6"
 				>
 					{!canWriteActions && (
 						<PermissionNotice
@@ -1401,7 +1472,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 				</TabsContent>
 				<TabsContent
 					value="sharing"
-					className="flex-1 space-y-4 overflow-y-auto p-6"
+					className="flex-1 space-y-4 overflow-y-auto p-4 @xl/ds:p-6"
 				>
 					{!canWriteData && (
 						<PermissionNotice
@@ -1440,10 +1511,10 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 				</TabsContent>
 				<TabsContent
 					value="sources"
-					className="flex-1 overflow-y-auto p-6 space-y-4"
+					className="flex-1 overflow-y-auto p-4 @xl/ds:p-6 space-y-4"
 				>
-					<div className="flex items-center justify-between gap-3">
-						<div>
+					<div className="flex flex-wrap items-center justify-between gap-3">
+						<div className="min-w-0">
 							<h2 className="font-semibold">
 								{t("nativeTables", "Native tables")}
 							</h2>
@@ -1540,7 +1611,7 @@ const DatabaseOverview: React.FC<DatabaseOverviewProps> = ({
 									live against the source.
 								</p>
 							</div>
-							<div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+							<div className="grid grid-cols-1 gap-4 @xl/ds:grid-cols-2 @4xl/ds:grid-cols-3">
 								{usableImports.map((imported) => (
 									<RemoteSourceCard
 										key={imported.id}
@@ -1806,7 +1877,7 @@ const RemoteSourceCard: React.FC<RemoteSourceCardProps> = ({
 const LOADING_CARD_KEYS = ["one", "two", "three", "four", "five", "six"];
 
 const LoadingState: React.FC = () => (
-	<div className="p-6">
+	<div className="p-4 @xl/ds:p-6">
 		<div className="flex items-center gap-4 mb-6">
 			<Database className="h-8 w-8 text-muted-foreground animate-pulse" />
 			<div>
@@ -1814,7 +1885,7 @@ const LoadingState: React.FC = () => (
 				<div className="h-4 w-72 bg-muted animate-pulse rounded" />
 			</div>
 		</div>
-		<div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
+		<div className="grid grid-cols-1 @xl/ds:grid-cols-2 @4xl/ds:grid-cols-3 gap-4">
 			{LOADING_CARD_KEYS.map((key) => (
 				<Card key={key} className="animate-pulse bg-muted/50 p-5 space-y-4">
 					<div className="flex items-center gap-3">
@@ -1961,8 +2032,8 @@ const PartialFailureAlert: React.FC<{
 };
 
 const ErrorState: React.FC<{ onRetry: () => void }> = ({ onRetry }) => (
-	<div className="p-6">
-		<div className="rounded-lg border bg-card p-8 text-center">
+	<div className="p-4 @xl/ds:p-6">
+		<div className="rounded-lg border bg-card p-5 text-center @xl/ds:p-8">
 			<Database className="mx-auto h-10 w-10 text-destructive mb-4" />
 			<h3 className="text-lg font-semibold mb-2">
 				{i18next.t("failedToLoadTables", "Failed to load tables")}
@@ -1982,8 +2053,8 @@ const ErrorState: React.FC<{ onRetry: () => void }> = ({ onRetry }) => (
 );
 
 const EmptyState: React.FC<{ onRetry: () => void }> = ({ onRetry }) => (
-	<div className="p-6">
-		<div className="rounded-lg border bg-card p-8 text-center">
+	<div className="p-4 @xl/ds:p-6">
+		<div className="rounded-lg border bg-card p-5 text-center @xl/ds:p-8">
 			<Database className="mx-auto h-10 w-10 text-muted-foreground mb-4" />
 			<h3 className="text-lg font-semibold mb-2">
 				{i18next.t("noTablesFound", "No tables found")}

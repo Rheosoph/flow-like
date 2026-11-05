@@ -18,6 +18,13 @@ import {
 import { cn } from "../../../lib/utils";
 import { useMounted } from "../hooks/use-mounted";
 import { useMentionItems } from "../mention-items-context";
+import {
+	SELF_SUBJECT_MENTION_CLASS,
+	SUBJECT_MENTION_CLASS,
+	SubjectMentionLabel,
+	mentionedSubject,
+	useIsSelfMention,
+} from "./mention-node-static";
 
 import {
 	InlineCombobox,
@@ -39,6 +46,32 @@ export function MentionElement(
 	const focused = useFocused();
 	const mounted = useMounted();
 	const readOnly = useReadOnly();
+	const subject = mentionedSubject(element.key);
+	const isSelf = useIsSelfMention(subject);
+	const label = `${props.prefix ?? ""}${element.value}`;
+
+	if (subject) {
+		return (
+			<PlateElement
+				{...props}
+				className={cn(
+					SUBJECT_MENTION_CLASS,
+					isSelf && SELF_SUBJECT_MENTION_CLASS,
+					selected && focused && "ring-2 ring-ring",
+				)}
+				attributes={{
+					...props.attributes,
+					contentEditable: false,
+					"data-slate-value": element.value,
+					"data-mention-subject": subject,
+					"data-mention-self": isSelf || undefined,
+				}}
+			>
+				<SubjectMentionLabel subject={subject} label={label} />
+				{props.children}
+			</PlateElement>
+		);
+	}
 
 	return (
 		<PlateElement

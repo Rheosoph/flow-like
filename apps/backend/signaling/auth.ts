@@ -236,6 +236,33 @@ export function deriveRealtimeTopic(
 	return `${appId}:${boardId}${suffix}`;
 }
 
+/** Three segments ending in `room-v1`, so it never equals a board topic. */
+export function deriveConversationTopic(conversationId: unknown): string {
+	if (typeof conversationId !== "string" || !ID_PATTERN.test(conversationId)) {
+		throw new RealtimeAuthError();
+	}
+	return `inbox:${conversationId}:room-v1`;
+}
+
+/** A token names either a board or a conversation; one naming both is refused. */
+export function deriveTopicForClaims(claims: Record<string, unknown>): string {
+	if (claims.conversation_id === undefined) {
+		return deriveRealtimeTopic(
+			claims.app_id,
+			claims.board_id,
+			claims.board_format_version,
+		);
+	}
+	if (
+		claims.app_id !== undefined ||
+		claims.board_id !== undefined ||
+		claims.board_format_version !== undefined
+	) {
+		throw new RealtimeAuthError();
+	}
+	return deriveConversationTopic(claims.conversation_id);
+}
+
 function requiredBoundedString(value: unknown, maximum: number): string {
 	if (
 		typeof value !== "string" ||
@@ -257,7 +284,10 @@ function requiredInteger(value: unknown): number {
 export async function createRealtimeAuthenticator(config: RealtimeAuthConfig) {
 	let verificationKey: CryptoKey | Uint8Array | null = null;
 	if (!config.insecureLocalDev) {
-		verificationKey = await importSPKI(config.publicKeyPem!, "ES256");
+		if (!config.publicKeyPem) {
+			throw new Error("Realtime authentication needs the backend public key");
+		}
+		verificationKey = await importSPKI(config.publicKeyPem, "ES256");
 	}
 
 	return async function authorizeUpgrade(
@@ -272,7 +302,10 @@ export async function createRealtimeAuthenticator(config: RealtimeAuthConfig) {
 				insecureLocalDev: true,
 			};
 		}
-		if (!originIsAllowed(originHeader, config.allowedOrigins)) {
+		if (
+			!verificationKey ||
+			!originIsAllowed(originHeader, config.allowedOrigins)
+		) {
 			throw new RealtimeAuthError();
 		}
 
@@ -280,7 +313,7 @@ export async function createRealtimeAuthenticator(config: RealtimeAuthConfig) {
 		try {
 			const { payload, protectedHeader } = await jwtVerify(
 				token,
-				verificationKey!,
+				verificationKey,
 				{
 					algorithms: ["ES256"],
 					issuer: config.issuer,
@@ -320,11 +353,7 @@ export async function createRealtimeAuthenticator(config: RealtimeAuthConfig) {
 			const subject = requiredBoundedString(payload.sub, 256);
 			requiredBoundedString(payload.jti, 256);
 			return {
-				allowedTopic: deriveRealtimeTopic(
-					payload.app_id,
-					payload.board_id,
-					payload.board_format_version,
-				),
+				allowedTopic: deriveTopicForClaims(payload),
 				expiresAtMs: expiresAt * 1000,
 				subject,
 				insecureLocalDev: false,

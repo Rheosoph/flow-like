@@ -349,7 +349,7 @@ export function ForecastLibrary({
 					disabled={busy || selection.length === 0}
 				>
 					<SelectTrigger
-						className="h-9 w-full min-w-0 basis-full text-xs sm:w-auto sm:basis-auto sm:flex-1"
+						className="h-9 w-full min-w-0 basis-full text-xs @xl/ds:w-auto @xl/ds:basis-auto @xl/ds:flex-1"
 						aria-label="Open a saved prediction"
 					>
 						<SelectValue

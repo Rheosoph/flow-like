@@ -3,9 +3,10 @@ title: Customize your Home
 description: Arrange Home widgets, save a personal layout, and choose which defaults to inherit.
 ---
 
-Home brings your Apps, FlowPilot, workspace activity, and discovery widgets into
-one page. Choose **Customize** to add widgets, change their content, or arrange
-them for the active Profile. Web and desktop use the same editor.
+Home brings your bots, conversations, Apps, workspace activity, and discovery
+widgets into one page. Choose **Customize** to add widgets, change their
+content, or arrange them for the active Profile. Web and desktop use the same
+editor.
 
 ## Save a personal layout
 
@@ -24,9 +25,62 @@ Finish an active move or resize before saving. If a save fails, the editor
 retains the draft so you can retry.
 
 The widget library groups available widgets by purpose. Use its search field
-or a category such as **Apps**, **Data**, or **Content** to find one to add.
+or a category such as **Bots**, **Apps**, **Data**, or **Content** to find one
+to add.
 
 ![The Add widget library beside the Home layout, with search and category filters](../../../assets/HomeWidgets.webp)
+
+## Talk to your bots from Home
+
+The starter Home opens with your bots. The **Bots** category holds these
+widgets:
+
+- **Talk to your bots**: write a message and choose who gets it, the Assistant,
+  Flux, or any bot in your crew. Sending opens that bot's chat in the Bots tab
+  and sends the message there. **Message a bot** is the same composer as a
+  slim bar. In its settings, choose which bot it talks to first.
+- **Your crew**: your bots as cards. Select one to open its chat, or choose
+  **New bot** to create one without leaving Home.
+- **Messages**: your newest conversations with people and bots. Approvals,
+  invitations and bot messages waiting for your answer are pinned on top, and
+  you can accept or decline an invitation right there.
+- **Rooms**: your group chats with their members. Start a new room or message
+  from the widget.
+- **Needs you**: only what waits for your answer.
+
+**Messages** can also show only unread conversations or only direct messages.
+A conversation you pin with **Pin to top** in its **⋯** menu stays first in
+Messages, Rooms and the Bots tab, and only you see your pins. Inside a chat, a
+message's menu stars it for you or pins it for everyone in the conversation.
+**Starred** in the Bots tab lists your starred messages.
+Messages, rooms and invitations need an account. On the desktop, conversations
+with bots on this computer also show while you are signed out.
+
+## Schedule a meeting from a room
+
+Open an account room and select **Meetings**, then **Schedule meeting**. Enter
+a title and start and end times. The form shows your local time zone. Enable
+**Allow guests** to invite people outside the room, including people without
+a Flow-Like account.
+After scheduling, copy the meeting link or use **Add to calendar** to download
+a calendar event.
+
+Room members join with their accounts. A guest opens the invitation link in a
+browser, enters a name, and waits for the host to select **Admit**. Meeting
+chat and media are separate from the room, so guests cannot read its history
+or use its bots. **Replace guest link** invalidates the previous link for new
+join requests.
+
+Joining opens 15 minutes before the start time. Select **Join audio and video**
+to start your microphone, then use the call controls to turn on your camera
+or share a screen. Camera and screen sharing can run together. The browser
+asks which screen, window, or tab to share. If screen sharing is unavailable
+in your app, open the meeting in a browser that supports it.
+
+Calls support up to eight people, including the host. The app stops media when
+you leave, the scheduled time ends, or the host removes you. The host can also
+select **End meeting for everyone**. If the app cannot confirm your access,
+it stops media until you reconnect and join the call again.
 
 ## Add an image
 

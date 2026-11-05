@@ -99,7 +99,7 @@ pub struct PlatformContextInput<'a> {
 }
 
 /// How the running backend reaches the public web. `Delegated` and `Inline` keep web access out of
-/// the root model behind the sealed `research_agent`, which never accepts a model-authored query.
+/// the root model behind `research_agent`, which accepts a public question and relevant context.
 /// `Native` hands the root model its backend's own search and fetch tools, so it writes its own
 /// queries from the full conversation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -110,6 +110,8 @@ pub enum WebResearchCapability {
     Inline,
     /// The root agent's CLI (Codex, Claude Code) runs its built-in web search and fetch.
     Native,
+    /// No public-web access: no research tool and no web playbook (a bot without `internet`).
+    Disabled,
 }
 
 const FLOWPILOT_CORE: &str = r#"You are FlowPilot, Flow-Like's platform assistant. Complete requests using the current profile's tools and apps. Prefer acting over describing steps.
@@ -180,15 +182,19 @@ A BUILD request is almost always shorter than the artifact it implies, and a mis
 
 use super::app_build_prompt::{APP_BUILD_PIPELINE, BUILD_BRIEF_PLAYBOOK, BUILD_PLAYBOOK};
 
-const DELEGATED_WEB_PLAYBOOK: &str = r#"## SEALED PUBLIC-WEB FALLBACK
+const DELEGATED_WEB_PLAYBOOK: &str = r#"## PUBLIC-WEB FALLBACK
 
-The host gives the isolated researcher the immutable user request, not root history or model-authored app/private context. Follow the routing rules above.
+You direct the researcher through `research_agent` with a self-contained `question` and optional public `context`. Resolve references from the conversation before calling: a follow-up about square grids after discussing H3 must explicitly name H3 and the comparison. Include the user's constraints and the evidence needed. The researcher receives your brief without the full conversation, memory, files, or app results. Keep private content out of the brief. Follow the routing rules above.
+
+Review the findings against the user's actual question. If a relevant point is missing or the researcher misunderstood, call `research_agent` again with a corrected question, relevant public findings, and the remaining evidence gap. Research calls share the turn's search and page budget.
 
 Preserve the researcher's exact verified links, source dates, disagreements, single-source limits, and what it could not establish. Never promote a search snippet or unsupported claim into verified fact."#;
 
 const INLINE_WEB_PLAYBOOK: &str = r#"## PUBLIC-WEB FALLBACK
 
-The host runs research in an isolated public-only context bound to the immutable user request; it cannot receive root history or model-authored arguments. Follow the routing rules above.
+You direct the researcher through `research_agent` with a self-contained `question` and optional public `context`. Resolve references from the conversation before calling: a follow-up about square grids after discussing H3 must explicitly name H3 and the comparison. Include the user's constraints and the evidence needed. The researcher receives your brief without the full conversation, memory, files, or app results. Keep private content out of the brief. Follow the routing rules above.
+
+Review the findings against the user's actual question. If a relevant point is missing or the researcher misunderstood, call `research_agent` again with a corrected question, relevant public findings, and the remaining evidence gap. Research calls share the turn's search and page budget.
 
 Preserve its verified links, source dates, conflicts, single-source limits, and what could not be established. Never promote a search snippet or unsupported claim into verified fact."#;
 
@@ -203,13 +209,20 @@ const SEALED_ROUTING_INTRO: &str =
 
 Local apps are the first choice, including installed research/search apps. Check app capabilities before public research or HTTP fallback.";
 
-const SEALED_PUBLIC_WEB_ROUTE: &str = "4. Call `research_agent` only after `list_apps` returns: no suitable app/interface exists, or local research candidates were tried in best-fit order with no usable answer and no useful, nonredundant candidate remained. Partial listings (`complete: false`, truncation, event-read errors) do not prove absence. A declined local call is a stop. Never run research in the same wave as local app/content/action calls. Research receives only the immutable source request, never app inventory/results, memory, attachments, or root history. It must extract only safe public factual subquestions, never query or repeat secrets, credentials, or private identifiers. Queries derived from private output require a new sanitized user request.";
+const SEALED_PUBLIC_WEB_ROUTE: &str = "4. Call `research_agent` only after `list_apps` returns: no suitable app/interface exists, or local research candidates were tried in best-fit order with no usable answer and no useful, nonredundant candidate remained. Partial listings (`complete: false`, truncation, event-read errors) do not prove absence. A declined local call is a stop. Research may share a wave with independent calls. Supply a complete public question and relevant public context, resolving references to earlier conversation. Never include app records, file contents, credentials, secrets, personal data, or private identifiers. Keep private-data synthesis in the parent assistant. You may refine the brief and research again within the shared budget.";
 
 const NATIVE_ROUTING_INTRO: &str = SEALED_ROUTING_INTRO;
 
 const NATIVE_PUBLIC_WEB_ROUTE: &str = "4. Use built-in web search and page fetch only after `list_apps` returns no suitable app/interface or local research yields no usable answer. Partial inventories do not prove absence. A call the user declined is still a stop. Queries and fetched URLs leave the device: include only public subject matter, never app record contents, internal IDs, file contents, credentials, personal data, or anything the user shared privately.";
 
-const CHAT_REPLY_FORMATTING: &str = r#"## CHAT REPLY FORMATTING
+const DISABLED_ROUTING_INTRO: &str = "## EXISTING APPS, EVENTS, AND DATA
+
+Local apps are the only source: this run has no public-web access.";
+
+const DISABLED_PUBLIC_WEB_ROUTE: &str =
+    "4. When no app answers, say what could not be checked instead of guessing.";
+
+pub(super) const CHAT_REPLY_FORMATTING: &str = r#"## CHAT REPLY FORMATTING
 
 Lead with the result. Default to short paragraphs; brief replies need no headings or widgets. Choose richer formats when they clarify the answer. Specialist ownership still applies; preserve returned chart/query/step-log blocks and verified source links.
 
@@ -293,6 +306,7 @@ pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> 
             NATIVE_PUBLIC_WEB_ROUTE,
             NATIVE_WEB_PLAYBOOK,
         ),
+        WebResearchCapability::Disabled => (DISABLED_ROUTING_INTRO, DISABLED_PUBLIC_WEB_ROUTE, ""),
     };
     let routing = TASK_ROUTING_PLAYBOOK
         .replace("{routing_intro}", routing_intro)
@@ -310,6 +324,9 @@ pub fn global_assistant_system_prompt_for(capability: WebResearchCapability) -> 
         chat_ui.as_str(),
         CHAT_REPLY_CLOSING,
     ]
+    .into_iter()
+    .filter(|section| !section.is_empty())
+    .collect::<Vec<_>>()
     .join("\n\n")
 }
 /// Render the open-board section injected into the assistant context. Kept separate so the wording
@@ -486,28 +503,36 @@ pub fn attachments_section(entries: &[AttachmentManifestEntry]) -> String {
         "These files belong to this message. You may inspect images directly. To hand files to an app chat, set `forward_files` to the exact relevant names, or `[]` for none; never forward unrelated files.".to_string(),
         "To load a GeoJSON file (FeatureCollection, Feature or Feature array) into an app's tables, call `data_studio_agent` with `forward_files` naming it and ask for `import_geojson`; no other attachment format can be imported.".to_string(),
     ];
-    for entry in entries {
-        let name = entry
-            .name
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .unwrap_or("(unnamed file)");
-        let mime = entry
-            .mime_type
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty());
-        let size = entry.size.map(format_attachment_size);
-        let meta = match (mime, size) {
-            (Some(mime), Some(size)) => format!(" ({mime}, {size})"),
-            (Some(mime), None) => format!(" ({mime})"),
-            (None, Some(size)) => format!(" ({size})"),
-            (None, None) => String::new(),
-        };
-        lines.push(format!("- {name}{meta}"));
-    }
+    lines.extend(attachment_lines(entries));
     lines.join("\n")
+}
+
+/// One `- name (type, size)` line per attached file.
+pub(super) fn attachment_lines(entries: &[AttachmentManifestEntry]) -> Vec<String> {
+    entries
+        .iter()
+        .map(|entry| {
+            let name = entry
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or("(unnamed file)");
+            let mime = entry
+                .mime_type
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty());
+            let size = entry.size.map(format_attachment_size);
+            let meta = match (mime, size) {
+                (Some(mime), Some(size)) => format!(" ({mime}, {size})"),
+                (Some(mime), None) => format!(" ({mime})"),
+                (None, Some(size)) => format!(" ({size})"),
+                (None, None) => String::new(),
+            };
+            format!("- {name}{meta}")
+        })
+        .collect()
 }
 
 /// Collect the self-awareness context for the global assistant: the signed-in user, the active
@@ -599,6 +624,11 @@ pub async fn run_platform_chat<F>(
 where
     F: Fn(String) + Send + Sync + 'static,
 {
+    if let Some(error) =
+        super::bot_run::flowpilot_memory_error(memory.as_deref().map(AssistantMemory::scope))
+    {
+        return Err(flow_like_types::anyhow!(error));
+    }
     // This wrapper always drives the rig/Bits loop, whose host executes the sealed researcher
     // locally instead of delegating it through a frontend-managed specialist scope.
     let base_prompt = global_assistant_system_prompt_for(WebResearchCapability::Inline);
@@ -803,12 +833,12 @@ mod tests {
         let delegated = global_assistant_system_prompt_for(WebResearchCapability::Delegated);
         let inline = global_assistant_system_prompt_for(WebResearchCapability::Inline);
 
-        assert!(delegated.contains("## SEALED PUBLIC-WEB FALLBACK"));
+        assert!(delegated.contains("## PUBLIC-WEB FALLBACK"));
         assert!(delegated.contains("`research_agent`"));
         assert!(!delegated.contains("`internet_search`"));
         assert!(inline.contains("## PUBLIC-WEB FALLBACK"));
         assert!(inline.contains("`research_agent`"));
-        assert!(inline.contains("isolated public-only context"));
+        assert!(inline.contains("The researcher receives your brief"));
         assert!(!inline.contains("`internet_search`"));
     }
 
@@ -818,7 +848,7 @@ mod tests {
 
         assert!(native.contains("## PUBLIC WEB RESEARCH"));
         assert!(!native.contains("research_agent"));
-        assert!(!native.contains("SEALED PUBLIC-WEB FALLBACK"));
+        assert!(!native.contains("## PUBLIC-WEB FALLBACK"));
         assert!(native.contains("only after `list_apps` returns no suitable app/interface"));
         assert!(native.contains("local research yields no usable answer"));
         assert!(native.contains("A call the user declined is still a stop"));
@@ -839,7 +869,7 @@ mod tests {
         let prompt = global_assistant_system_prompt();
 
         let discovery = prompt.find("begin with `list_apps`").unwrap();
-        let fallback = prompt.find("## SEALED PUBLIC-WEB FALLBACK").unwrap();
+        let fallback = prompt.find("## PUBLIC-WEB FALLBACK").unwrap();
         assert!(discovery < fallback);
         assert!(prompt.contains("Local apps are the first choice"));
         assert!(prompt.contains("including installed research/search apps"));
@@ -917,14 +947,18 @@ mod tests {
     }
 
     #[test]
-    fn solve_keeps_public_fallback_separate_from_private_context() {
-        let delegated = global_assistant_system_prompt();
-        let inline = global_assistant_system_prompt_for(WebResearchCapability::Inline);
-
-        assert!(delegated.contains("immutable user request"));
-        assert!(delegated.contains("not root history or model-authored app/private context"));
-        assert!(inline.contains("bound to the immutable user request"));
-        assert!(inline.contains("cannot receive root history"));
+    fn solve_directs_research_with_public_context_and_followups() {
+        for capability in [
+            WebResearchCapability::Delegated,
+            WebResearchCapability::Inline,
+        ] {
+            let prompt = global_assistant_system_prompt_for(capability);
+            assert!(prompt.contains("self-contained `question` and optional public `context`"));
+            assert!(prompt.contains("must explicitly name H3 and the comparison"));
+            assert!(prompt.contains("call `research_agent` again with a corrected question"));
+            assert!(prompt.contains("Keep private content out of the brief"));
+            assert!(!prompt.contains("immutable user request"));
+        }
     }
 
     #[test]

@@ -33,6 +33,8 @@ export type IChatThinkingLevel = "off" | "low" | "mid" | "high";
 export interface IEventPayloadChat {
 	ai_disclosure?: string | null;
 	allow_file_upload?: boolean | null;
+	allow_model_selection?: boolean | null;
+	require_vlm?: boolean | null;
 	allow_thinking_selection?: boolean | null;
 	default_thinking?: IChatThinkingLevel | null;
 	attach_widget_snapshots?: boolean | null;

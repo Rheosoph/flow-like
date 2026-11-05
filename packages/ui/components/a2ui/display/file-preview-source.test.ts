@@ -23,7 +23,7 @@ describe("explicit editor source selection", () => {
 	it("rejects unsupported editor IDs and mismatched initial files", () => {
 		expect(resolveCraftEditor("unknown")).toBeUndefined();
 		expect(resolveCraftEditor("solidcraft", "/letter.docx")).toBeUndefined();
-		expect(resolveCraftEditor("solidcraft", "/model.FCStd")).toBeUndefined();
+		expect(resolveCraftEditor("solidcraft", "/model.dwg")).toBeUndefined();
 	});
 });
 
@@ -76,8 +76,6 @@ describe("Craft preview source detection", () => {
 	it.each([
 		["legacy.ppt", PPTX_MIME],
 		["legacy.doc", DOCX_MIME],
-		["part.FCStd", "model/step"],
-		["part.3dm", "model/obj"],
 		["drawing.dwg", "model/step"],
 	])(
 		"does not reinterpret unsupported %s from its MIME type",
@@ -107,6 +105,14 @@ describe("Craft preview source detection", () => {
 		["table.xlsb", "gridcraft", "xlsx"],
 		["table.ods", "gridcraft", "xlsx"],
 		["part.step", "solidcraft", "solidcraft"],
+		["part.FCStd", "solidcraft", "solidcraft"],
+		["part.3dm", "solidcraft", "solidcraft"],
+		["layout.indd", "designcraft", "designcraft"],
+		["layout.indt", "designcraft", "designcraft"],
+		["image.xcf", "photocraft", "pcraft"],
+		["image.xpm", "photocraft", "pcraft"],
+		["scan.dicom", "photocraft", "pcraft"],
+		["texture.dds", "photocraft", "dds"],
 		["part.solidcraft", "solidcraft", "solidcraft"],
 	])(
 		"selects the editor and save format for %s",
@@ -174,3 +180,34 @@ describe("Craft preview source detection", () => {
 		).toBeUndefined();
 	});
 });
+
+// Opaque download URLs must route the same way as named files.
+it.each([
+	["application/x-extension-fcstd", "fcstd", "solidcraft", "solidcraft"],
+	["model/vnd.3dm", "3dm", "solidcraft", "solidcraft"],
+	["application/x-indesign", "indd", "designcraft", "designcraft"],
+	["application/dicom", "dcm", "photocraft", "pcraft"],
+	["image/x-xcf", "xcf", "photocraft", "pcraft"],
+	["image/vnd-ms.dds", "dds", "photocraft", "dds"],
+	["image/jp2", "jp2", "vectorcraft", "vectorcraft"],
+])(
+	"routes %s for both previews and explicit editors",
+	(mimeType, extension, id, outputExtension) => {
+		const expected = { viewer: { id, extension, outputExtension } };
+		expect(
+			resolveCraftPreview(
+				"https://files.example/download",
+				undefined,
+				mimeType,
+			),
+		).toMatchObject(expected);
+		expect(
+			resolveCraftEditor(
+				id,
+				"https://files.example/download",
+				undefined,
+				mimeType,
+			),
+		).toMatchObject(expected);
+	},
+);

@@ -273,6 +273,7 @@ pub async fn create_notification(
     let result = dispatch_notification_with_status(
         &state,
         DispatchNotificationInput {
+            bot_context: None,
             user_id: target_sub,
             app_id: Some(app_id),
             title: params.title,
@@ -319,6 +320,7 @@ mod tests {
         use crate::middleware::jwt::{ApiKey, ConnectedAppUser, ExecutorUser, OpenIDUser};
         let run = |technical_user_id: Option<&str>, app_chain: Option<Vec<String>>| {
             AppUser::Executor(ExecutorUser {
+                bot: None,
                 sub: "user-1".into(),
                 app_id: "app-1".into(),
                 run_id: "run-1".into(),

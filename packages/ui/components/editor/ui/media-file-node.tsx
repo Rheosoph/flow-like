@@ -10,11 +10,11 @@ import { FileUp } from "lucide-react";
 import { PlateElement, useReadOnly, withHOC } from "platejs/react";
 
 import { FilePlugin } from "@platejs/media/react";
-import { MediaToolbar } from "./media-toolbar";
-import { MediaAttribution } from "./media-attribution";
-import type { MediaMetadata } from "../media-metadata";
 import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
+import type { MediaMetadata } from "../media-metadata";
 import { Caption, CaptionTextarea } from "./caption";
+import { MediaAttribution } from "./media-attribution";
+import { MediaToolbar } from "./media-toolbar";
 
 export const FileElement = withHOC(
 	ResizableProvider,

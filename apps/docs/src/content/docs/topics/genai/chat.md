@@ -25,6 +25,10 @@ Read only the outputs the workflow needs. Treat user text, attachments, and rest
 
 The chat composer has a thinking picker (an atom icon) unless the chat's settings turn it off; **Default Thinking** sets the level a new chat starts with. The Chat Event writes the level into History's `thinking` field (`off`, `low`, `mid` or `high`; `low` when the chat sent none), which model and agent nodes read from there. If a model rejects the setting, the request is sent again without it. To pin a level regardless of the user's choice, put [Set History Thinking](/nodes/ai/generative/history/ai-generative-set-history-thinking/) after the event.
 
+The composer also offers a model picker by default. Users can choose an active profile model or leave **Automatic** selected. The browser remembers their choice per app in IndexedDB, including across chat sessions and events. In the event's **Capabilities** settings, turn off **Model Picker** to hide it, or enable **Require Vision Model** to show only models that accept images. Vision filtering is off by default.
+
+[Find Model](/nodes/ai/generative/ai-generative-find-model/) uses this selection when its preference weights are unchanged and no model name hint is set. A multimodal requirement still applies. Customized weights or a model hint keep the workflow's own selection behavior. Automatic selection, older clients that omit `selected_model`, and saved choices that are no longer available use the existing profile-based fallback.
+
 ## Minimal model response
 
 A basic model-backed chat board:

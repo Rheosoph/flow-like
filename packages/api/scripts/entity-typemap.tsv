@@ -27,6 +27,7 @@ audit_record	actor_type	crate::sea_orm_active_enums::AuditActorType
 bit	authors	crate::json_types::StringList
 bit	dependencies	crate::json_types::StringList
 bit	type	crate::sea_orm_active_enums::BitType
+bot	capabilities	crate::json_types::StringList
 challenge	kind	crate::sea_orm_active_enums::ChallengeKind
 channel	kind	crate::sea_orm_active_enums::ChannelMessageKind
 channel	status	crate::sea_orm_active_enums::ChannelMessageStatus

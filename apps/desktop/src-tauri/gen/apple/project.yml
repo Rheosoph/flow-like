@@ -51,7 +51,15 @@ targets:
       properties:
         FirebaseAppDelegateProxyEnabled: false
         UIBackgroundModes: [remote-notification, fetch]
+        BGTaskSchedulerPermittedIdentifiers: [com.flow-like.app.bot-refresh]
         LSRequiresIPhoneOS: true
+        # Keep this aligned with Info.ios.plist for XcodeGen and direct Xcode archives.
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: TaoSceneDelegate
         UILaunchStoryboardName: LaunchScreen
         UIRequiredDeviceCapabilities: [arm64, metal]
         UISupportedInterfaceOrientations:
@@ -66,6 +74,9 @@ targets:
         CFBundleShortVersionString: 0.0.4
         CFBundleVersion: "0.0.4"
         NSSupportsLiveActivities: true
+        NSSpeechRecognitionUsageDescription: Flow Like turns your speech into an editable message when you choose to dictate to a bot.
+        NSMicrophoneUsageDescription: Flow Like records your voice when you start dictation, a voice chat, or an audio workflow.
+        NSCameraUsageDescription: Flow Like uses the camera when you turn it on in a call, take a photo, scan a document, or start a video workflow.
         NSLocationWhenInUseUsageDescription: Flow Like uses your location when you request it in a workflow or map.
         NSLocationAlwaysAndWhenInUseUsageDescription: Flow Like monitors the regions you enable so location Events can run when you arrive or leave, including while the app is closed.
         NSUserActivityTypes: [com.flow-like.app.page, INSendMessageIntent]

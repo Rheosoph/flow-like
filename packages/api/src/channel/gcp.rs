@@ -70,6 +70,27 @@ pub struct GcpChannelRuntime {
 }
 
 impl GcpChannelRuntime {
+    pub fn realtime(
+        &self,
+        scope: &str,
+        ttl_secs: i64,
+    ) -> Result<flow_like_types::realtime::RealtimeTransport> {
+        let claims = flow_like_channels::gcp::realtime_claims(scope, Self::expiry(ttl_secs))?;
+        Ok(
+            flow_like_types::realtime::RealtimeTransport::GcpFirebaseRtdb {
+                database_url: self.config.database_url.clone(),
+                api_key: self.config.api_key.clone(),
+                project_id: self.config.project_id.clone(),
+                custom_token: self.token(&format!("realtime-{scope}"), claims, ttl_secs)?,
+                path: format!("/realtime/{scope}/wake"),
+            },
+        )
+    }
+
+    pub async fn publish_realtime(&self, scope: &str, payload: &[u8]) -> Result<()> {
+        self.forwarder.publish_realtime(scope, payload).await
+    }
+
     pub async fn from_env(secrets: &SecretStore) -> Result<Self> {
         let config = GcpChannelConfig::from_env()?;
         let service_account_json = secrets

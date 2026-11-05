@@ -8,7 +8,10 @@ use crate::error::ExecutorError;
 use crate::types::WasmPackageRef;
 use flow_like::flow::board::Board;
 use flow_like::flow::node::NodeLogic;
-use flow_like_wasm::{LoadedWasm, WasmConfig, WasmEngine, WasmModule, WasmNodeLogic};
+use flow_like_wasm::{
+    LoadedWasm, PackagePermissions, WasmConfig, WasmEngine, WasmModule, WasmNodeLogic,
+    WasmSecurityConfig,
+};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -54,9 +57,57 @@ fn package_cache_key(app_id: &str, package_id: &str, pkg_ref: &WasmPackageRef) -
         pkg_ref.version,
         pkg_ref.wasm_hash,
         pkg_ref.cwasm_checksum,
+        pkg_ref.permissions,
         flow_like_wasm::aot_cache::WASM_ARTIFACT_VERSION,
     ])
     .to_string()
+}
+
+/// The package-wide security settings the manifest sets: memory and time limits and the host
+/// allowlist. A ref without permissions comes from an API that does not send them and gets the
+/// default limits; permissions that cannot be read refuse the package rather than widen it.
+fn package_security(
+    package_id: &str,
+    pkg_ref: &WasmPackageRef,
+) -> Result<WasmSecurityConfig, ExecutorError> {
+    let Some(permissions) = &pkg_ref.permissions else {
+        return Ok(WasmSecurityConfig::default());
+    };
+    let permissions: PackagePermissions =
+        serde_json::from_value(permissions.clone()).map_err(|e| {
+            ExecutorError::Execution(format!(
+                "Unreadable permissions for {} v{}: {}",
+                package_id, pkg_ref.version, e
+            ))
+        })?;
+    let mut security: WasmSecurityConfig = permissions.to_security_config();
+    security.limits.memory_limit =
+        capped_memory(package_id, security.limits.memory_limit, memory_ceiling());
+    Ok(security)
+}
+
+const DEFAULT_MEMORY_CEILING_MB: usize = 1024;
+
+/// The most memory one package instance may get on this executor, `EXECUTOR_WASM_MAX_MEMORY_MB`.
+fn memory_ceiling() -> usize {
+    std::env::var("EXECUTOR_WASM_MAX_MEMORY_MB")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .filter(|mb| *mb > 0)
+        .unwrap_or(DEFAULT_MEMORY_CEILING_MB)
+        .saturating_mul(1024 * 1024)
+}
+
+fn capped_memory(package_id: &str, requested: usize, ceiling: usize) -> usize {
+    if requested > ceiling {
+        tracing::warn!(
+            package_id = %package_id,
+            requested_bytes = requested,
+            ceiling_bytes = ceiling,
+            "Package asks for more memory than this executor allows; capping it"
+        );
+    }
+    requested.min(ceiling)
 }
 
 /// Load WASM packages from presigned URLs and return node logic instances.
@@ -175,6 +226,29 @@ async fn load_single_package(
     package_id: &str,
     pkg_ref: &WasmPackageRef,
 ) -> Result<Vec<Arc<dyn NodeLogic>>, ExecutorError> {
+    let nodes = load_package_nodes(engine, http, package_id, pkg_ref).await?;
+    Ok(nodes
+        .into_iter()
+        .map(|logic| Arc::new(logic) as Arc<dyn NodeLogic>)
+        .collect())
+}
+
+/// The nodes of a bot skill's package, loaded like a board run loads them.
+#[cfg(feature = "bot-tools")]
+pub(crate) async fn load_skill_nodes(
+    package_id: &str,
+    pkg_ref: &WasmPackageRef,
+) -> Result<Vec<WasmNodeLogic>, ExecutorError> {
+    let engine = wasm_engine().await?;
+    load_package_nodes(&engine, &WASM_HTTP_CLIENT, package_id, pkg_ref).await
+}
+
+async fn load_package_nodes(
+    engine: &Arc<WasmEngine>,
+    http: &reqwest::Client,
+    package_id: &str,
+    pkg_ref: &WasmPackageRef,
+) -> Result<Vec<WasmNodeLogic>, ExecutorError> {
     let cwasm_resp = http.get(&pkg_ref.cwasm_url).send().await.map_err(|e| {
         ExecutorError::Storage(format!(
             "Failed to download cwasm for {}: {}",
@@ -218,7 +292,8 @@ async fn load_single_package(
         }
     };
 
-    let init_security = flow_like_wasm::WasmSecurityConfig::default().for_metadata();
+    let manifest_security = package_security(package_id, pkg_ref)?;
+    let init_security = manifest_security.for_metadata();
 
     let mut instance = loaded
         .instantiate(engine, init_security.clone())
@@ -237,11 +312,11 @@ async fn load_single_package(
         ))
     })?;
 
-    let nodes: Vec<Arc<dyn NodeLogic>> = definitions
+    let nodes: Vec<WasmNodeLogic> = definitions
         .into_iter()
         .map(|def| {
-            let node_security =
-                flow_like_wasm::WasmSecurityConfig::from_node_permissions(&def.permissions);
+            let node_security = WasmSecurityConfig::from_node_permissions(&def.permissions)
+                .with_package_settings(&manifest_security);
             let logic = WasmNodeLogic::from_loaded_with_target(
                 loaded.clone(),
                 engine.clone(),
@@ -249,7 +324,7 @@ async fn load_single_package(
                 def,
             )
             .with_package_id(package_id.to_string());
-            Arc::new(logic) as Arc<dyn NodeLogic>
+            logic
         })
         .collect();
 
@@ -313,6 +388,7 @@ mod tests {
             wasm_url: "https://example.test/source?token=one".into(),
             cwasm_url: "https://example.test/compiled?token=one".into(),
             cwasm_checksum: "compiled-hash".into(),
+            permissions: None,
         }
     }
 
@@ -331,6 +407,117 @@ mod tests {
         refreshed = first.clone();
         refreshed.wasm_hash = "new-source".into();
         assert_ne!(key, package_cache_key("app-one", "package", &refreshed));
+    }
+
+    #[test]
+    fn changed_permissions_never_reuse_nodes_built_with_the_old_limits() {
+        let first = package();
+        let mut stricter = first.clone();
+        stricter.permissions = Some(serde_json::json!({"memory": "minimal"}));
+        assert_ne!(
+            package_cache_key("app", "package", &first),
+            package_cache_key("app", "package", &stricter)
+        );
+    }
+
+    fn with_permissions(permissions: serde_json::Value) -> WasmPackageRef {
+        WasmPackageRef {
+            permissions: Some(permissions),
+            ..package()
+        }
+    }
+
+    #[test]
+    fn the_manifest_sets_the_memory_and_time_limits_and_the_allowed_hosts() {
+        let security = package_security(
+            "package",
+            &with_permissions(serde_json::json!({
+                "memory": "heavy",
+                "timeout": "extended",
+                "network": {"http_enabled": true, "allowed_hosts": ["api.example.com"]},
+            })),
+        )
+        .unwrap();
+
+        assert_eq!(security.limits.memory_limit, 128 * 1024 * 1024);
+        assert_eq!(security.limits.timeout, Duration::from_secs(60));
+        assert_eq!(
+            security.allowed_hosts.as_deref(),
+            Some(&["api.example.com".to_string()][..])
+        );
+    }
+
+    #[test]
+    fn node_security_takes_limits_and_hosts_from_the_manifest_and_capabilities_from_the_node() {
+        use flow_like::flow::node::NodePermission;
+        use flow_like_wasm::WasmCapabilities;
+
+        let manifest = package_security(
+            "package",
+            &with_permissions(serde_json::json!({
+                "memory": "light",
+                "timeout": "quick",
+                "network": {"allowed_hosts": ["api.example.com"]},
+            })),
+        )
+        .unwrap();
+        let node = WasmSecurityConfig::from_node_permissions(&[NodePermission::NetworkHttp])
+            .with_package_settings(&manifest);
+
+        assert_eq!(node.limits.memory_limit, 32 * 1024 * 1024);
+        assert_eq!(node.limits.timeout, Duration::from_secs(5));
+        assert_eq!(
+            node.allowed_hosts.as_deref(),
+            Some(&["api.example.com".to_string()][..])
+        );
+        assert!(node.capabilities.contains(WasmCapabilities::HTTP_ALL));
+        assert_eq!(
+            manifest.for_metadata().allowed_hosts.as_deref(),
+            Some(&[][..])
+        );
+        assert_eq!(
+            manifest.for_metadata().limits.memory_limit,
+            32 * 1024 * 1024
+        );
+    }
+
+    #[test]
+    fn a_package_without_permissions_keeps_the_default_limits() {
+        let security = package_security("package", &package()).unwrap();
+        let default = WasmSecurityConfig::default();
+
+        assert_eq!(security.limits.memory_limit, default.limits.memory_limit);
+        assert_eq!(security.limits.timeout, default.limits.timeout);
+        assert!(security.allowed_hosts.is_none());
+    }
+
+    #[test]
+    fn a_memory_tier_above_the_executor_ceiling_is_capped() {
+        assert_eq!(capped_memory("p", 4096 << 20, 1024 << 20), 1024 << 20);
+        assert_eq!(capped_memory("p", 128 << 20, 1024 << 20), 128 << 20);
+        let security = package_security(
+            "package",
+            &with_permissions(serde_json::json!({"memory": "maximum"})),
+        )
+        .unwrap();
+        assert_eq!(
+            security.limits.memory_limit,
+            DEFAULT_MEMORY_CEILING_MB << 20
+        );
+    }
+
+    #[test]
+    fn unreadable_permissions_refuse_the_package() {
+        for permissions in [
+            serde_json::json!({"memory": "gigantic"}),
+            serde_json::json!("heavy"),
+            serde_json::json!({"network": {"allowed_hosts": "api.example.com"}}),
+        ] {
+            assert!(
+                package_security("package", &with_permissions(permissions)).is_err(),
+                "permissions that cannot be read must not become the defaults"
+            );
+        }
     }
 }
 

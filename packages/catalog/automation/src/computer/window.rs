@@ -791,7 +791,7 @@ impl NodeLogic for FocusWindowNode {
 }
 
 #[cfg(feature = "execute")]
-type WindowCapture = (
+pub type WindowCapture = (
     image::RgbaImage,
     Vec<u8>,
     Option<crate::types::screen_frame::ScreenFrame>,
@@ -799,7 +799,7 @@ type WindowCapture = (
 
 /// Captures a window by native ID with its PNG encoding and desktop frame. Blocking.
 #[cfg(feature = "execute")]
-fn capture_window(window_id: &str) -> flow_like_types::Result<Option<WindowCapture>> {
+pub fn capture_window(window_id: &str) -> flow_like_types::Result<Option<WindowCapture>> {
     let windows = xcap::Window::all()
         .map_err(|e| flow_like_types::anyhow!("Failed to list windows: {}", e))?;
     let Some(window) = windows
@@ -929,7 +929,7 @@ fn parse_arguments(text: &str) -> flow_like_types::Result<Vec<String>> {
 }
 
 #[cfg(feature = "execute")]
-fn launch_application(path: &str, arguments: &[String]) -> flow_like_types::Result<i64> {
+pub fn launch_application(path: &str, arguments: &[String]) -> flow_like_types::Result<i64> {
     if path.trim().is_empty() {
         return Err(flow_like_types::anyhow!("Application path is required"));
     }

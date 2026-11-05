@@ -2,6 +2,7 @@ import {
 	BoardEditCoordinator,
 	type BoardEditRecoveryStorage,
 	BoardEditRecoveryStore,
+	type BoardEditTarget,
 	BoardZeroProgressRetryGuard,
 	CreatedArtifactJournal,
 	type CreatedArtifactRequestIdentity,
@@ -18,6 +19,7 @@ import {
 	hasActiveFrontendRequestOwnership,
 	isCancellableNestedCopilotTool,
 	isCreatedAppBuildTargetMismatch,
+	prepareFlowPilotBoardCreation,
 	resolveFlowPilotBoardCreationId,
 	resolveFrontendToolExecutionDeadline,
 	retainedFlowScriptRecoveryInstruction,
@@ -109,6 +111,121 @@ describe("board edit guard", () => {
 				createId: () => "board-generated",
 			}),
 		).toBe("board-generated");
+	});
+
+	test("read-only board requests never create or rename a target", async () => {
+		const create = vi.fn();
+		const createId = vi.fn(() => "new-board");
+		const exists = vi.fn(async () => true);
+		const onTarget = vi.fn();
+		const journal = new CreatedArtifactJournal();
+		const record = vi.spyOn(journal, "record");
+		for (const requestedBoardId of [undefined, "existing-board"]) {
+			await expect(
+				prepareFlowPilotBoardCreation({
+					readOnly: true,
+					appId: "app",
+					requestedBoardId,
+					journal,
+					requestId: "explain",
+					createId,
+					onTarget,
+					exists,
+					create,
+				}),
+			).rejects.toThrow("Read-only requests cannot create boards");
+		}
+		expect(createId).not.toHaveBeenCalled();
+		expect(exists).not.toHaveBeenCalled();
+		expect(create).not.toHaveBeenCalled();
+		expect(onTarget).not.toHaveBeenCalled();
+		expect(record).not.toHaveBeenCalled();
+	});
+
+	test("a lost creation acknowledgement survives reload without creating another board", async () => {
+		const storage = new MemoryRecoveryStorage();
+		const journal = () =>
+			new CreatedArtifactJournal(undefined, undefined, undefined, storage);
+		const identity = {
+			conversationId: "conversation",
+			toolName: "flowpilot_board",
+			scope: "app",
+			instruction: "Build a scan worker",
+		};
+		const saved = new Set<string>();
+		const create = vi.fn(async (boardId: string) => {
+			saved.add(boardId);
+			throw new Error("Connection lost after saving");
+		});
+		const onTarget = vi.fn();
+		const createId = vi.fn(() => "scan-worker");
+		const options = {
+			readOnly: false,
+			appId: "app",
+			identity,
+			requestId: "create",
+			createId,
+			onTarget,
+			exists: async (id: string) => saved.has(id),
+			create,
+		};
+		await expect(
+			prepareFlowPilotBoardCreation({ ...options, journal: journal() }),
+		).rejects.toThrow("Connection lost after saving");
+		expect(onTarget).toHaveBeenCalledWith("scan-worker");
+		const retry = await prepareFlowPilotBoardCreation({
+			...options,
+			journal: journal(),
+		});
+		expect(retry).toEqual({ boardId: "scan-worker", createdBoard: false });
+		expect(createId).toHaveBeenCalledTimes(1);
+		expect(create).toHaveBeenCalledTimes(1);
+	});
+
+	test("an unavailable authoritative listing never authorizes board creation", async () => {
+		const error = new ApiResponseError({
+			status: 503,
+			message: "Board listing is temporarily unavailable",
+		});
+		const identity = {
+			conversationId: "conversation",
+			toolName: "flowpilot_board",
+			scope: "app",
+			instruction: "Build a scan worker",
+		};
+		const journal = new CreatedArtifactJournal();
+		const create = vi.fn();
+		const onTarget = vi.fn();
+		const createId = vi.fn(() => "scan-worker");
+		const options = {
+			readOnly: false,
+			appId: "app",
+			identity,
+			journal,
+			requestId: "create",
+			createId,
+			onTarget,
+			create,
+		};
+		await expect(
+			prepareFlowPilotBoardCreation({
+				...options,
+				exists: async () => {
+					throw error;
+				},
+			}),
+		).rejects.toBe(error);
+		expect(create).not.toHaveBeenCalled();
+		expect(onTarget).toHaveBeenCalledWith("scan-worker");
+		expect(journal.find(identity)?.artifacts.boardId).toBe("scan-worker");
+		await expect(
+			prepareFlowPilotBoardCreation({
+				...options,
+				exists: async () => true,
+			}),
+		).resolves.toEqual({ boardId: "scan-worker", createdBoard: false });
+		expect(createId).toHaveBeenCalledTimes(1);
+		expect(create).not.toHaveBeenCalled();
 	});
 
 	test("retained FlowScript recovery overrides delegated tiny diagnostic fallbacks", () => {
@@ -1190,6 +1307,71 @@ eventsSimple() {
 
 		expect(assessment.ok).toBe(false);
 		expect(assessment.code).toMatch(/completeness_regression|scope_missing/);
+	});
+
+	test.each(["timeout", "error"] as const)(
+		"a board %s keeps its known target without claiming a write outcome",
+		(status) => {
+			const result = boardEditInterruptionResult({
+				status,
+				code: "board_interrupted",
+				message: "Request expired while waiting for the board lock",
+				target: { appId: "app", boardId: "existing-board" },
+			});
+			expect(result).toMatchObject({
+				status,
+				app_id: "app",
+				board_id: "existing-board",
+			});
+			expect(result).not.toHaveProperty("created_board_id");
+			expect(result).not.toHaveProperty("board_creation_status");
+			expect(result).not.toHaveProperty("applied");
+			expect(result.next_action).toContain("Reuse this board id");
+		},
+	);
+
+	test("a late creation acknowledgement cannot turn a timeout into a successful creation", () => {
+		const request = Object.freeze({ requestId: "create" });
+		const targets = new WeakMap<object, BoardEditTarget>();
+		targets.set(request, {
+			appId: "app",
+			boardId: "new-board",
+			creationStatus: "unconfirmed",
+		});
+		const options = {
+			status: "timeout" as const,
+			code: "frontend_execution_deadline",
+			message: "Creation acknowledgement has not arrived",
+		};
+		const timeout = boardEditInterruptionResult({
+			...options,
+			target: targets.get(request),
+		});
+		targets.set(request, {
+			appId: "app",
+			boardId: "new-board",
+			creationStatus: "confirmed",
+		});
+		const expiry = boardEditInterruptionResult({
+			...options,
+			target: targets.get(request),
+		});
+		expect(timeout).toMatchObject({
+			app_id: "app",
+			board_id: "new-board",
+			board_creation_status: "unconfirmed",
+		});
+		expect(timeout).not.toHaveProperty("created_board_id");
+		expect(expiry).toMatchObject({
+			status: "timeout",
+			app_id: "app",
+			board_id: "new-board",
+			created_board_id: "new-board",
+		});
+		expect(expiry).not.toHaveProperty("board_creation_status");
+		expect(timeout).not.toHaveProperty("applied");
+		expect(expiry).not.toHaveProperty("applied");
+		expect(request).toEqual({ requestId: "create" });
 	});
 
 	test("returns an actionable retained workspace when a board run times out", () => {

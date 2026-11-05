@@ -1,7 +1,7 @@
 "use client";
 
-import { useContext } from "react";
 import { SlateElement, type SlateElementProps } from "platejs/static";
+import { useContext } from "react";
 import {
 	type FootnoteElement,
 	footnoteDomId,

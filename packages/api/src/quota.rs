@@ -260,6 +260,23 @@ pub async fn operation_payer(state: &AppState, id: &str) -> Result<String, ApiEr
         .payer_id)
 }
 
+/// The funding class of a running assistant operation that `actor_id` started, `None` for any
+/// other operation: a device may settle only what the hub reserved for its owner's turn.
+pub(crate) async fn running_assistant_funding(
+    state: &AppState,
+    operation_id: &str,
+    actor_id: &str,
+) -> Result<Option<String>, ApiError> {
+    Ok(operation(&state.db, operation_id)
+        .await?
+        .filter(|row| {
+            row.kind == "assistant"
+                && row.status == "running"
+                && row.actor_id.as_deref() == Some(actor_id)
+        })
+        .map(|row| row.funding_class))
+}
+
 async fn find_active_period<C: ConnectionTrait>(
     db: &C,
     payer: &str,
@@ -388,7 +405,10 @@ pub(crate) async fn reserve_instance_with_db(
     if request.actor_id.as_deref() != Some(usage.delegated_user_id.as_str())
         || request.app_id != usage.app_id
         || request.model_id.as_deref() != Some(usage.model_id.as_str())
-        || !matches!(request.kind.as_str(), "llm" | "embedding")
+        || !matches!(
+            request.kind.as_str(),
+            "llm" | "embedding" | "image_generation" | "audio_transcription" | "audio_speech"
+        )
         || request.funding_class != "hosted"
         || request.execution_mode != "instance_hosted_ai"
         || request.amounts.ai_calls != 1
@@ -987,6 +1007,7 @@ pub async fn finish_cloud(
             if status == "completed" { 0 } else { 4 },
             Some(runtime_ms),
             &crate::execution::run_summary::RunSummary::default(),
+            None,
         )
         .await?;
     }
@@ -1204,7 +1225,7 @@ pub async fn release_unstarted_with_db(
         {
             if matches!(
                 row.try_get::<String>("", "kind")?.as_str(),
-                "llm" | "embedding"
+                "llm" | "embedding" | "image_generation" | "audio_transcription" | "audio_speech"
             ) {
                 crate::usage_accounting::release_unstarted_hosted(db, dialect, operation_id)
                     .await?;
@@ -1276,7 +1297,7 @@ pub async fn summary(
     days: i64,
     include_history: bool,
 ) -> Result<Value, ApiError> {
-    summary_with_db(
+    let summary = summary_with_db(
         &state.db,
         state.db_dialect,
         &state.platform_config.tiers,
@@ -1284,7 +1305,14 @@ pub async fn summary(
         days,
         include_history,
     )
-    .await
+    .await?;
+    if summary["warnings"]
+        .as_array()
+        .is_some_and(|warnings| !warnings.is_empty())
+    {
+        state.channels.publish_realtime_invalidation(payer_id).await;
+    }
+    Ok(summary)
 }
 
 pub(crate) async fn summary_with_db(

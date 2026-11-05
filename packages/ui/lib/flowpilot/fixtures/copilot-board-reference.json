@@ -1,0 +1,19 @@
+{
+	"id": "board-compatibility",
+	"name": "",
+	"description": "",
+	"nodes": {},
+	"variables": {},
+	"comments": {},
+	"layers": {},
+	"refs": {},
+	"viewport": [0, 0, 1],
+	"version": [0, 0, 0],
+	"stage": "Dev",
+	"log_level": "Debug",
+	"execution_mode": "Hybrid",
+	"page_ids": [],
+	"hash": null,
+	"created_at": { "secs_since_epoch": 0, "nanos_since_epoch": 0 },
+	"updated_at": { "secs_since_epoch": 0, "nanos_since_epoch": 0 }
+}

@@ -13,11 +13,17 @@ interface ConfigRequest {
 
 const mocks = vi.hoisted(() => ({
 	backend: { userState: {}, teamState: {}, appState: {} },
-	profile: { hub: "api.flow-like.com", secure: true },
+	profile: { id: "profile-a", hub: "api.flow-like.com", secure: true },
 	configRequests: [] as ConfigRequest[],
 	invalidate: async () => undefined,
 	openUrl: vi.fn().mockResolvedValue(undefined),
 	signInLink: undefined as string | undefined,
+	isTauri: false,
+	invoke: vi.fn(),
+	toastError: vi.fn(),
+	nativeUser: null as string | null,
+	listenersReady: undefined as Promise<void> | undefined,
+	listeners: new Map<string, (event: { payload: unknown }) => Promise<void>>(),
 }));
 
 vi.mock("@flow-like/flow-like-ui", () => ({
@@ -29,9 +35,21 @@ vi.mock("@flow-like/flow-like-ui", () => ({
 vi.mock("@flow-like/flow-like-ui/components/account/account-session", () => ({
 	createAccountTokenProvider: () => ({ getTokens: async () => null }),
 }));
-vi.mock("@tauri-apps/api/event", () => ({
-	listen: async () => () => undefined,
+vi.mock("@tauri-apps/api/core", () => ({
+	invoke: mocks.invoke,
+	isTauri: () => mocks.isTauri,
 }));
+vi.mock("@tauri-apps/api/event", () => ({
+	listen: async (
+		name: string,
+		callback: (event: { payload: unknown }) => Promise<void>,
+	) => {
+		await mocks.listenersReady;
+		mocks.listeners.set(name, callback);
+		return () => mocks.listeners.delete(name);
+	},
+}));
+vi.mock("sonner", () => ({ toast: { error: mocks.toastError } }));
 vi.mock("@tauri-apps/plugin-deep-link", () => ({
 	getCurrent: async () => null,
 }));
@@ -110,10 +128,27 @@ beforeEach(() => {
 	(
 		globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 	).IS_REACT_ACT_ENVIRONMENT = true;
-	mocks.profile = { hub: "api.flow-like.com", secure: true };
+	mocks.profile = { id: "profile-a", hub: "api.flow-like.com", secure: true };
 	mocks.configRequests = [];
 	mocks.openUrl.mockReset().mockResolvedValue(undefined);
 	mocks.signInLink = undefined;
+	mocks.isTauri = false;
+	mocks.nativeUser = null;
+	mocks.listenersReady = undefined;
+	mocks.listeners.clear();
+	mocks.toastError.mockReset();
+	mocks.invoke.mockReset().mockImplementation(async (command: string) => {
+		if (command === "native_auth_read")
+			return {
+				generation: "generation-a",
+				initialized: true,
+				user: mocks.nativeUser,
+				authority: "https://auth.flow-like.test",
+				clientId: "client-a",
+			};
+		if (command === "begin_login") return;
+		throw new Error(`Unexpected command ${command}`);
+	});
 	probe.mounts = 0;
 	probe.unmounts = 0;
 	probe.mountedWith = [];
@@ -127,6 +162,7 @@ afterEach(async () => {
 	await act(async () => root.unmount());
 	container.remove();
 	localStorage.clear();
+	vi.restoreAllMocks();
 });
 
 describe("DesktopAuthProvider", () => {
@@ -153,6 +189,138 @@ describe("DesktopAuthProvider", () => {
 				iat: Math.floor(Date.now() / 1000),
 			},
 		});
+
+	test("reloads a completed native debug callback even when its change event was missed", async () => {
+		mocks.isTauri = true;
+		await render();
+		await answer(0, browserConfig());
+		expect(probe.auth?.isAuthenticated).toBe(false);
+		await act(async () => probe.auth?.signinRedirect());
+		expect(mocks.invoke).toHaveBeenCalledWith("begin_login", {
+			profileId: "profile-a",
+		});
+		const invokeNative = mocks.invoke.getMockImplementation();
+		if (!invokeNative) throw new Error("Native command mock is missing");
+		let complete!: () => void;
+		mocks.invoke.mockImplementation(async (command: string) => {
+			if (command !== "deeplink_debug_dispatch") return invokeNative(command);
+			await new Promise<void>((resolve) => {
+				complete = resolve;
+			});
+			mocks.nativeUser = storedUser().toStorageString();
+		});
+		const url =
+			"https://flow-like.com/callback?code=test-code&state=fl-native-test";
+		await act(async () => {
+			window.dispatchEvent(new CustomEvent("debug-oidc", { detail: { url } }));
+		});
+		expect(mocks.invoke).toHaveBeenCalledWith("deeplink_debug_dispatch", {
+			url,
+		});
+		expect(probe.auth?.isAuthenticated).toBe(false);
+		await act(async () => complete());
+		await flush();
+		expect(probe.auth?.isAuthenticated).toBe(true);
+		expect(probe.auth?.user?.access_token).toBe("access-a");
+		expect(mocks.toastError).not.toHaveBeenCalled();
+	});
+
+	test("loads and clears native sessions only for the configured profile and hub", async () => {
+		mocks.isTauri = true;
+		await render();
+		await answer(0, browserConfig());
+		const changed = mocks.listeners.get("native-auth-changed");
+		if (!changed) throw new Error("Native authentication listener is missing");
+		mocks.nativeUser = storedUser().toStorageString();
+		await act(async () =>
+			changed({
+				payload: {
+					profileId: "other-profile",
+					hub: "https://api.flow-like.com",
+				},
+			}),
+		);
+		expect(probe.auth?.isAuthenticated).toBe(false);
+		await act(async () =>
+			changed({
+				payload: { profileId: "profile-a", hub: "https://other-hub.test" },
+			}),
+		);
+		expect(probe.auth?.isAuthenticated).toBe(false);
+		await act(async () =>
+			changed({
+				payload: { profileId: "profile-a", hub: "https://api.flow-like.com" },
+			}),
+		);
+		await flush();
+		expect(probe.auth?.isAuthenticated).toBe(true);
+		mocks.nativeUser = null;
+		await act(async () =>
+			changed({
+				payload: { profileId: "profile-a", hub: "https://api.flow-like.com" },
+			}),
+		);
+		await flush();
+		expect(probe.auth?.isAuthenticated).toBe(false);
+		expect(probe.auth?.user).toBeUndefined();
+	});
+
+	test("recovers a native login completed before the event listeners were ready", async () => {
+		mocks.isTauri = true;
+		let ready!: () => void;
+		mocks.listenersReady = new Promise<void>((resolve) => {
+			ready = resolve;
+		});
+		await render();
+		await answer(0, browserConfig());
+		expect(probe.auth?.isAuthenticated).toBe(false);
+		mocks.nativeUser = storedUser().toStorageString();
+		await act(async () => ready());
+		await flush();
+		expect(probe.auth?.isAuthenticated).toBe(true);
+	});
+
+	test("shows a failed native callback instead of leaving sign-in silently pending", async () => {
+		mocks.isTauri = true;
+		await render();
+		await answer(0, browserConfig());
+		const message =
+			"Sign-in could not be completed. Start a new sign-in request.";
+		await act(async () =>
+			mocks.listeners.get("native-auth-error")?.({ payload: { message } }),
+		);
+		expect(mocks.toastError).toHaveBeenCalledWith(message);
+		expect(probe.auth?.isAuthenticated).toBe(false);
+	});
+
+	test("reports a refused debug callback without publishing a signed-in session", async () => {
+		mocks.isTauri = true;
+		await render();
+		await answer(0, browserConfig());
+		mocks.invoke.mockRejectedValueOnce(
+			"Authentication state is unknown or was already consumed",
+		);
+		const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
+		await act(async () => {
+			window.dispatchEvent(
+				new CustomEvent("debug-oidc", {
+					detail: {
+						url: "https://flow-like.com/callback?code=test-code&state=fl-native-test",
+					},
+				}),
+			);
+		});
+		await flush();
+		expect(mocks.toastError).toHaveBeenCalledWith(
+			"Sign-in could not be completed. Start a new sign-in request.",
+		);
+		expect(errorLog).toHaveBeenCalledWith(
+			"Debug OIDC dispatch failed:",
+			"Authentication state is unknown or was already consumed",
+		);
+		expect(probe.auth?.isAuthenticated).toBe(false);
+		errorLog.mockRestore();
+	});
 
 	test("finishes native browser navigation without leaving sign-in or sign-out loading", async () => {
 		localStorage.setItem(
@@ -204,7 +372,7 @@ describe("DesktopAuthProvider", () => {
 		await render();
 		await answer(0, browserConfig());
 		expect(probe.auth?.user?.access_token).toBe("access-a");
-		mocks.profile = { hub: "second-hub.test", secure: true };
+		mocks.profile = { ...mocks.profile, hub: "second-hub.test", secure: true };
 		await render();
 		expect(probe.auth?.isAuthenticated).toBe(false);
 		expect(probe.auth?.user).toBeNull();
@@ -323,7 +491,7 @@ describe("DesktopAuthProvider", () => {
 		await render();
 		await answer(0, oidcConfig("client-a"));
 
-		mocks.profile = { hub: "hub.example.com", secure: true };
+		mocks.profile = { ...mocks.profile, hub: "hub.example.com", secure: true };
 		await render();
 		expect(mocks.configRequests[1]?.hub).toBe("hub.example.com");
 		await answer(1, oidcConfig("client-b"));
@@ -335,7 +503,7 @@ describe("DesktopAuthProvider", () => {
 
 	test("ignores a configuration answer for a hub that is no longer current", async () => {
 		await render();
-		mocks.profile = { hub: "hub.example.com", secure: true };
+		mocks.profile = { ...mocks.profile, hub: "hub.example.com", secure: true };
 		await render();
 
 		await answer(1, oidcConfig("client-b"));
@@ -350,7 +518,7 @@ describe("DesktopAuthProvider", () => {
 		await render();
 		await answer(0, oidcConfig("shared-client"));
 		const previousAuth = probe.auth;
-		mocks.profile = { hub: "another-hub.test", secure: true };
+		mocks.profile = { ...mocks.profile, hub: "another-hub.test", secure: true };
 		await render();
 		await answer(1, oidcConfig("shared-client"));
 		expect(probe.unmounts).toBe(1);

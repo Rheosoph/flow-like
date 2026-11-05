@@ -63,7 +63,7 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 ethercrab = { version = "0.7.1", default-features = false, features = ["std"], optional = true }
 
-[target.'cfg(target_os = "ios")'.dependencies]
+[target.'cfg(any(target_os = "ios", target_os = "android"))'.dependencies]
 # librdkafka 2.12.1 includes curl headers even with OIDC disabled.
 # Supply curl until https://github.com/confluentinc/librdkafka/pull/5309 is released.
 rdkafka = { version = "0.39", default-features = false, features = ["curl-static"], optional = true }

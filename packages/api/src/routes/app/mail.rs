@@ -138,8 +138,8 @@ pub struct SendMailResponse {
 
 /// An API error that may tell the caller when a retry can succeed.
 pub struct MailError {
-    error: ApiError,
-    retry_after: Option<u64>,
+    pub(crate) error: ApiError,
+    pub(crate) retry_after: Option<u64>,
 }
 
 impl From<ApiError> for MailError {
@@ -163,14 +163,14 @@ impl IntoResponse for MailError {
     }
 }
 
-fn too_many(message: impl Into<String>, retry_after_secs: u64) -> MailError {
+pub(crate) fn too_many(message: impl Into<String>, retry_after_secs: u64) -> MailError {
     MailError {
         error: ApiError::too_many_requests(message),
         retry_after: Some(retry_after_secs.max(1)),
     }
 }
 
-fn valid_address(address: &str) -> bool {
+pub(crate) fn valid_address(address: &str) -> bool {
     if address.len() > 254 || !address.is_ascii() {
         return false;
     }
@@ -197,7 +197,7 @@ fn valid_address(address: &str) -> bool {
         })
 }
 
-fn validate_body(text: Option<&str>, html: Option<&str>) -> Result<(), ApiError> {
+pub(crate) fn validate_body(text: Option<&str>, html: Option<&str>) -> Result<(), ApiError> {
     let bytes = text.map_or(0, str::len) + html.map_or(0, str::len);
     if bytes == 0 || bytes > MAX_BODY_BYTES {
         return Err(ApiError::bad_request(
@@ -278,7 +278,9 @@ fn decode_attachment(attachment: MailAttachment) -> Result<EmailAttachment, ApiE
     })
 }
 
-fn decode_attachments(attachments: Vec<MailAttachment>) -> Result<Vec<EmailAttachment>, ApiError> {
+pub(crate) fn decode_attachments(
+    attachments: Vec<MailAttachment>,
+) -> Result<Vec<EmailAttachment>, ApiError> {
     if attachments.len() > MAX_MAIL_ATTACHMENTS {
         return Err(ApiError::bad_request(format!(
             "A message can carry at most {MAX_MAIL_ATTACHMENTS} attachments"
@@ -341,7 +343,7 @@ fn dedupe_recipients(request: &mut SendMailRequest) {
 }
 
 /// Event addresses only receive mail from outside, so flows cannot trigger each other.
-fn ensure_external<'a>(
+pub(crate) fn ensure_external<'a>(
     domain: Option<&str>,
     recipients: impl IntoIterator<Item = &'a String>,
 ) -> Result<(), ApiError> {
@@ -373,7 +375,7 @@ fn display_name(requested: Option<&str>, event_name: &str, from: &str) -> String
         .unwrap_or_else(|| from.split('@').next().unwrap_or(from).to_owned())
 }
 
-fn clean_display_name(raw: &str) -> Option<String> {
+pub(crate) fn clean_display_name(raw: &str) -> Option<String> {
     let cleaned = raw
         .chars()
         .map(|c| {
@@ -633,7 +635,7 @@ async fn release(state: &AppState, claim: &OwnedClaim) {
 }
 
 /// One message per interval and app; the reservation's expiry becomes `Retry-After`.
-async fn reserve_interval(state: &AppState, app_id: &str) -> Result<(), MailError> {
+pub(crate) async fn reserve_interval(state: &AppState, app_id: &str) -> Result<(), MailError> {
     let interval = state.mail_automation.min_send_interval_seconds;
     let unavailable = |_| ApiError::service_unavailable("Mail limit storage is unavailable");
     let cache = state.cache.platform().await.map_err(unavailable)?;
@@ -1137,6 +1139,7 @@ mod tests {
 
     fn executor(sub: &str) -> ExecutorUser {
         ExecutorUser {
+            bot: None,
             sub: sub.into(),
             app_id: "app".into(),
             run_id: "run".into(),

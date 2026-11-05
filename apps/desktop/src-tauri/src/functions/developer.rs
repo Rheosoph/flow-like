@@ -1304,8 +1304,12 @@ fn load_manifest_typed(project_path: &Path) -> Result<PackageManifest, TauriFunc
     let manifest_path = project_path.join("flow-like.toml");
     let content = std::fs::read_to_string(&manifest_path)
         .map_err(|e| TauriFunctionError::new(&e.to_string()))?;
-    PackageManifest::from_toml(&content)
-        .map_err(|e| TauriFunctionError::new(&format!("Invalid manifest: {}", e)))
+    let mut manifest = PackageManifest::from_toml(&content)
+        .map_err(|e| TauriFunctionError::new(&format!("Invalid manifest: {}", e)))?;
+    manifest
+        .embed_skill_instructions(project_path)
+        .map_err(|e| TauriFunctionError::new(&e))?;
+    Ok(manifest)
 }
 
 fn load_optional_manifest(

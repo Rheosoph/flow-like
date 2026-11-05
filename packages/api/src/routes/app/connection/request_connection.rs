@@ -38,7 +38,7 @@ pub struct RequestConnectionRequest {
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Target app not found"),
-        (status = 409, description = "Connection or request already exists")
+        (status = 409, description = "Connection or request already exists; BOT_WORKSPACE_LOCKED: either app is a bot's workspace, which is never shared")
     ),
     security(
         ("bearer_auth" = []),
@@ -77,6 +77,8 @@ pub async fn request_connection(
         .one(&state.db)
         .await?
         .ok_or_else(|| ApiError::not_found("Target app not found"))?;
+    crate::routes::bots::workspace::refuse_workspaces(&state.db, [&app_id, &payload.target_app_id])
+        .await?;
 
     let existing = app_connection::Entity::find()
         .filter(

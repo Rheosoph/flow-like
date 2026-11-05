@@ -349,6 +349,7 @@ mod tests {
 
     fn executor(app_id: &str, sub: &str) -> ExecutorUser {
         ExecutorUser {
+            bot: None,
             sub: sub.into(),
             app_id: app_id.into(),
             run_id: "run-1".into(),

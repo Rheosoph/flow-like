@@ -1,11 +1,11 @@
 {
 	"repository": "https://github.com/storytold/designcraft.git",
-	"revision": "3384224419824d5284c68035eb30fad6e3d89c3f",
-	"version": "0.7.0",
+	"revision": "1fe8885bda7451263879cfbb256b9a3d46c411bf",
+	"version": "0.16.0",
 	"wasmBindgen": "0.2.129",
 	"cargoPackage": "designcraft-web",
 	"label": "Flows Design",
 	"canvasId": "craft_canvas",
-	"extensions": ["designcraft", "idml"],
+	"extensions": ["designcraft", "idml", "indd", "indt"],
 	"maxBytes": 52428800
 }

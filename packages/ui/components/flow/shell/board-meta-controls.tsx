@@ -14,6 +14,7 @@ import type { ReactNode } from "react";
 import { memo, useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useInvalidateInvoke, useInvoke } from "../../../hooks";
+import { useBoardVersionCurrent } from "../../../hooks/use-board-version-current";
 import { asArray } from "../../../lib/response-shape";
 import {
 	type IBoard,
@@ -321,6 +322,35 @@ function useBoardGateVerdict(appId: string, boardId: string) {
 	});
 }
 
+export const BoardReleaseStatus = memo(function BoardReleaseStatus({
+	appId,
+	boardId,
+	stage,
+	version,
+}: Readonly<{
+	appId: string;
+	boardId: string;
+	stage: IExecutionStage;
+	version?: [number, number, number];
+}>) {
+	const { t } = useTranslation("flow");
+	const versionCurrent = useBoardVersionCurrent(appId, boardId, !version);
+	if (version) {
+		return `v${version.join(".")} · ${t("readonly", "- Read-Only")}`;
+	}
+	const newest = versionCurrent.isError ? null : versionCurrent.data?.newest;
+	return (
+		<>
+			{t("draftUnpublished", "Draft (unpublished)")}
+			{newest &&
+				` · ${t("publishedVersion", "Published v{{version}}", {
+					version: newest.join("."),
+				})}`}
+			{` · ${stage}`}
+		</>
+	);
+});
+
 /** Which version is open, which stage it ships at, and cutting a new one. */
 export const BoardReleaseForm = memo(function BoardReleaseForm({
 	appId,
@@ -347,19 +377,36 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 		backend.boardState,
 		[appId, boardId],
 	);
+	const versionCurrent = useBoardVersionCurrent(appId, boardId);
 
-	// Publishing bumps the board's own version, so the draft the editor holds is
-	// stale the moment the snapshot lands — without this the status bar and the
-	// "Latest" entry keep naming the version that was just superseded.
+	// The creation result is the next draft number. Read publication metadata
+	// again so the confirmation names the snapshot that can actually be pinned.
 	const createVersion = useCallback(
 		async (type: IVersionType) => {
 			setCreating(true);
 			try {
 				await backend.boardState.createBoardVersion(appId, boardId, type);
-				await Promise.all([
+				const [publishedState] = await Promise.all([
+					versionCurrent.refetch(),
 					versions.refetch(),
 					invalidate(backend.boardState.getBoard, [appId, boardId]),
+					backend.boardState.getBoardVersionInfos
+						? invalidate(backend.boardState.getBoardVersionInfos, [
+								appId,
+								boardId,
+							])
+						: Promise.resolve(),
 				]);
+				const published = publishedState.isSuccess
+					? publishedState.data?.current
+					: null;
+				toast.success(
+					published
+						? t("publishedVersion", "Published v{{version}}", {
+								version: published.join("."),
+							})
+						: t("versionCreated", "Version created"),
+				);
 			} catch (error) {
 				console.error("Failed to create board version", error);
 				toast.error(t("failedToCreateVersion", "Failed to create version"));
@@ -367,29 +414,35 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 				setCreating(false);
 			}
 		},
-		[appId, boardId, backend, versions, invalidate, t],
+		[appId, boardId, backend, versions, versionCurrent, invalidate, t],
 	);
 
-	// While a version is pinned, `board` is that immutable snapshot and its
-	// version field is the pinned number — naming it "Latest" would hide the
-	// draft entirely. Read the draft separately, and only while pinned; the
-	// unpinned key is the one the editor already holds, so this hits cache.
-	const draft = useInvoke(
-		backend.boardState.getBoard,
-		backend.boardState,
-		[appId, boardId],
-		typeof version !== "undefined",
-	);
-	const latest = version ? draft.data?.version : board.version;
+	const newestPublished =
+		!versionCurrent.isError && versionCurrent.data
+			? versionCurrent.data.newest
+			: versions.isError
+				? undefined
+				: asArray(versions.data)[0];
+	const noPublishedVersions =
+		versionCurrent.isSuccess &&
+		Boolean(versionCurrent.data || versions.isSuccess);
+	const publicationUnavailable =
+		versionCurrent.isError ||
+		(!noPublishedVersions && versions.isError && !versionCurrent.isPending);
 	const gate = useBoardGateVerdict(appId, boardId);
 
 	return (
 		<div className="flex flex-col gap-3">
 			<Field label={t("version", "Version")}>
 				<Select
-					value={version ? version.join(".") : "Latest"}
+					value={version ? version.join(".") : "draft"}
+					onOpenChange={(open) => {
+						if (!open) return;
+						void versions.refetch();
+						void versionCurrent.refetch();
+					}}
 					onValueChange={(value) => {
-						if (value === "Latest") {
+						if (value === "draft") {
 							selectVersion(undefined);
 							return;
 						}
@@ -398,24 +451,34 @@ export const BoardReleaseForm = memo(function BoardReleaseForm({
 						);
 					}}
 				>
-					<SelectTrigger className="h-8">
+					<SelectTrigger className="h-8" aria-label={t("version", "Version")}>
 						<SelectValue />
 					</SelectTrigger>
 					<SelectContent>
-						<SelectItem value="Latest">
-							{latest
-								? t("latestVersion", "Latest ({{version}})", {
-										version: latest.join("."),
-									})
-								: t("latest", "Latest")}
+						<SelectItem value="draft">
+							{t("draftUnpublished", "Draft (unpublished)")}
 						</SelectItem>
 						{asArray(versions.data).map((entry) => (
 							<SelectItem key={entry.join(".")} value={entry.join(".")}>
-								{entry.join(".")}
+								v{entry.join(".")}
 							</SelectItem>
 						))}
 					</SelectContent>
 				</Select>
+				<p className="text-[11px] text-muted-foreground">
+					{newestPublished
+						? t("newestPublishedVersion", "Newest published: v{{version}}", {
+								version: newestPublished.join("."),
+							})
+						: publicationUnavailable
+							? t(
+									"publishedVersionsUnavailable",
+									"Published versions unavailable",
+								)
+							: noPublishedVersions
+								? t("noPublishedVersions", "No published versions")
+								: t("loadingPublishedVersions", "Loading published versions…")}
+				</p>
 				{onCompare && (
 					<Button
 						variant="outline"

@@ -11,25 +11,16 @@
 							"name": "Chatting",
 							"description": "A friendly setup for conversations, brainstorming, and everyday assistance.",
 							"icon": "/flow/icons/message.svg",
-							"thumbnail": "/swimlanes/0-6.jpg",
-							"interests": [
-								"conversation",
-								"brainstorming",
-								"productivity"
-							],
-							"tags": [
-								"starter",
-								"chat"
-							],
+							"thumbnail": "/swimlanes/0-6.webp",
+							"interests": ["conversation", "brainstorming", "productivity"],
+							"tags": ["starter", "chat"],
 							"hub": "api.flow-like.com",
 							"secure": true,
 							"hubs": [],
 							"apps": null,
 							"shortcuts": null,
 							"theme": null,
-							"bits": [
-								"docs:starter-chat"
-							],
+							"bits": ["docs:starter-chat"],
 							"settings": {
 								"connection_mode": "simplebezier"
 							},
@@ -45,9 +36,7 @@
 					},
 					[
 						{
-							"authors": [
-								"Flow-Like"
-							],
+							"authors": ["Flow-Like"],
 							"created": "2026-01-15T12:00:00Z",
 							"dependencies": [],
 							"dependency_tree_hash": "docs-starter-chat-tree-v1",
@@ -73,10 +62,7 @@
 									"preview_media": [],
 									"release_notes": null,
 									"support_url": null,
-									"tags": [
-										"chat",
-										"assistant"
-									],
+									"tags": ["chat", "assistant"],
 									"thumbnail": null,
 									"updated_at": {
 										"secs_since_epoch": 1768478400,
@@ -104,25 +90,16 @@
 							"name": "Gaming",
 							"description": "Build playful automations, game helpers, and interactive experiences.",
 							"icon": "/flow/icons/play.svg",
-							"thumbnail": "/swimlanes/0-7.jpg",
-							"interests": [
-								"games",
-								"interactive",
-								"creative"
-							],
-							"tags": [
-								"starter",
-								"gaming"
-							],
+							"thumbnail": "/swimlanes/0-7.webp",
+							"interests": ["games", "interactive", "creative"],
+							"tags": ["starter", "gaming"],
 							"hub": "api.flow-like.com",
 							"secure": true,
 							"hubs": [],
 							"apps": null,
 							"shortcuts": null,
 							"theme": null,
-							"bits": [
-								"docs:starter-gaming"
-							],
+							"bits": ["docs:starter-gaming"],
 							"settings": {
 								"connection_mode": "simplebezier"
 							},
@@ -138,9 +115,7 @@
 					},
 					[
 						{
-							"authors": [
-								"Flow-Like"
-							],
+							"authors": ["Flow-Like"],
 							"created": "2026-01-15T12:00:00Z",
 							"dependencies": [],
 							"dependency_tree_hash": "docs-starter-gaming-tree-v1",
@@ -166,10 +141,7 @@
 									"preview_media": [],
 									"release_notes": null,
 									"support_url": null,
-									"tags": [
-										"gaming",
-										"interactive"
-									],
+									"tags": ["gaming", "interactive"],
 									"thumbnail": null,
 									"updated_at": {
 										"secs_since_epoch": 1768478400,
@@ -197,25 +169,16 @@
 							"name": "Learning",
 							"description": "Explore guided projects, explainers, and reusable learning workflows.",
 							"icon": "/flow/icons/book-key.svg",
-							"thumbnail": "/swimlanes/0-8.jpg",
-							"interests": [
-								"learning",
-								"research",
-								"education"
-							],
-							"tags": [
-								"starter",
-								"learning"
-							],
+							"thumbnail": "/swimlanes/0-8.webp",
+							"interests": ["learning", "research", "education"],
+							"tags": ["starter", "learning"],
 							"hub": "api.flow-like.com",
 							"secure": true,
 							"hubs": [],
 							"apps": null,
 							"shortcuts": null,
 							"theme": null,
-							"bits": [
-								"docs:starter-learning"
-							],
+							"bits": ["docs:starter-learning"],
 							"settings": {
 								"connection_mode": "simplebezier"
 							},
@@ -231,9 +194,7 @@
 					},
 					[
 						{
-							"authors": [
-								"Flow-Like"
-							],
+							"authors": ["Flow-Like"],
 							"created": "2026-01-15T12:00:00Z",
 							"dependencies": [],
 							"dependency_tree_hash": "docs-starter-learning-tree-v1",
@@ -259,10 +220,7 @@
 									"preview_media": [],
 									"release_notes": null,
 									"support_url": null,
-									"tags": [
-										"learning",
-										"education"
-									],
+									"tags": ["learning", "education"],
 									"thumbnail": null,
 									"updated_at": {
 										"secs_since_epoch": 1768478400,
@@ -290,25 +248,16 @@
 							"name": "Coding",
 							"description": "Prototype software, inspect data, and automate developer workflows.",
 							"icon": "/flow/icons/computer.svg",
-							"thumbnail": "/swimlanes/wasm-nodes.jpg",
-							"interests": [
-								"coding",
-								"automation",
-								"developer tools"
-							],
-							"tags": [
-								"starter",
-								"coding"
-							],
+							"thumbnail": "/swimlanes/wasm-nodes.webp",
+							"interests": ["coding", "automation", "developer tools"],
+							"tags": ["starter", "coding"],
 							"hub": "api.flow-like.com",
 							"secure": true,
 							"hubs": [],
 							"apps": null,
 							"shortcuts": null,
 							"theme": null,
-							"bits": [
-								"docs:starter-coding"
-							],
+							"bits": ["docs:starter-coding"],
 							"settings": {
 								"connection_mode": "simplebezier"
 							},
@@ -324,9 +273,7 @@
 					},
 					[
 						{
-							"authors": [
-								"Flow-Like"
-							],
+							"authors": ["Flow-Like"],
 							"created": "2026-01-15T12:00:00Z",
 							"dependencies": [],
 							"dependency_tree_hash": "docs-starter-coding-tree-v1",
@@ -352,10 +299,7 @@
 									"preview_media": [],
 									"release_notes": null,
 									"support_url": null,
-									"tags": [
-										"coding",
-										"automation"
-									],
+									"tags": ["coding", "automation"],
 									"thumbnail": null,
 									"updated_at": {
 										"secs_since_epoch": 1768478400,
@@ -380,7 +324,7 @@
 			{
 				"name": "Flow-Like Documentation",
 				"description": "Deterministic local data for documentation screenshots.",
-				"thumbnail": "/swimlanes/studio.jpg",
+				"thumbnail": "/swimlanes/studio.webp",
 				"icon": "/app-logo.webp",
 				"features": {},
 				"hubs": [],
@@ -400,25 +344,16 @@
 				"name": "Chatting",
 				"description": "A friendly setup for conversations, brainstorming, and everyday assistance.",
 				"icon": "/flow/icons/message.svg",
-				"thumbnail": "/swimlanes/0-6.jpg",
-				"interests": [
-					"conversation",
-					"brainstorming",
-					"productivity"
-				],
-				"tags": [
-					"starter",
-					"chat"
-				],
+				"thumbnail": "/swimlanes/0-6.webp",
+				"interests": ["conversation", "brainstorming", "productivity"],
+				"tags": ["starter", "chat"],
 				"hub": "api.flow-like.com",
 				"secure": true,
 				"hubs": [],
 				"apps": null,
 				"shortcuts": null,
 				"theme": null,
-				"bits": [
-					"docs:starter-chat"
-				],
+				"bits": ["docs:starter-chat"],
 				"settings": {
 					"connection_mode": "simplebezier"
 				},

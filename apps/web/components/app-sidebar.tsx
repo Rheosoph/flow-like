@@ -9,7 +9,6 @@ import {
 	AnimatedPackageIcon,
 	AnimatedSettingsIcon,
 	AnimatedSidebarIcon,
-	AnimatedSparklesIcon,
 	AnimatedStudyHatIcon,
 	AnimatedThemeIcon,
 	Button,
@@ -65,6 +64,9 @@ import {
 } from "@flow-like/flow-like-ui";
 import { AccountMenu } from "@flow-like/flow-like-ui/components/account/account-menu";
 import { AccountMenuProvider } from "@flow-like/flow-like-ui/components/account/account-menu-context";
+import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
+import { BotsNavAvatar } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-avatar";
+import { ChatActivityBadge } from "@flow-like/flow-like-ui/components/global-chat/chat-activity";
 import { ProfileAvatar } from "@flow-like/flow-like-ui/components/profile/profile-avatar";
 import { ownsWindowChrome } from "@flow-like/flow-like-ui/lib/chrome-route";
 import { useClientRouter } from "@flow-like/flow-like-ui/lib/client-navigation";
@@ -102,7 +104,7 @@ import { Shortcuts } from "./shortcuts";
 
 /** Labels are rebuilt per render so a language switch relabels the sidebar. */
 function useNavData() {
-	const { t } = useTranslation(["common", "settings"]);
+	const { t } = useTranslation(["common", "settings", "nav"]);
 	return useMemo(
 		() => ({
 			navMain: [
@@ -115,9 +117,9 @@ function useNavData() {
 					items: [],
 				},
 				{
-					title: t("flowpilot", "FlowPilot"),
-					url: "/chat",
-					icon: AnimatedSparklesIcon,
+					title: t("nav:bots", "Bots"),
+					url: BOTS_ROUTE,
+					icon: BotsNavAvatar,
 					isActive: false,
 					permission: false,
 					items: [],
@@ -710,21 +712,47 @@ function NavFlatItem({
 	const active = isItemActive(item, pathname);
 	return (
 		<SidebarMenuItem>
-			<SidebarMenuButton asChild isActive={active} tooltip={item.title}>
+			<SidebarMenuButton
+				asChild
+				isActive={active}
+				tooltip={item.title}
+				className={
+					item.url === BOTS_ROUTE
+						? "overflow-visible pl-0.5 pr-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!"
+						: undefined
+				}
+			>
 				<MotionLink
 					href={item.url}
 					aria-current={active ? "page" : undefined}
 					initial="initial"
 					whileHover="hover"
 				>
-					{item.icon && (
-						<motion.div variants={iconVariants}>
-							<item.icon className="size-4" />
-						</motion.div>
+					{item.url === BOTS_ROUTE ? (
+						<div className="flex size-7 shrink-0 items-center justify-center">
+							<BotsNavAvatar size={28} />
+						</div>
+					) : (
+						item.icon && (
+							<motion.div variants={iconVariants}>
+								<item.icon className="size-4" />
+							</motion.div>
+						)
 					)}
-					<span>{item.title}</span>
+					<span
+						className={
+							item.url === BOTS_ROUTE
+								? "group-data-[collapsible=icon]:sr-only"
+								: undefined
+						}
+					>
+						{item.title}
+					</span>
 				</MotionLink>
 			</SidebarMenuButton>
+			{item.url === BOTS_ROUTE && (
+				<ChatActivityBadge className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 group-data-[collapsible=icon]:right-0 group-data-[collapsible=icon]:top-0 group-data-[collapsible=icon]:translate-y-0" />
+			)}
 		</SidebarMenuItem>
 	);
 }

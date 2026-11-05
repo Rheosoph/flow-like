@@ -42,12 +42,15 @@ export function createNativeEventOutput(
 		tools: [],
 		actions: [],
 	};
-	let chat = {
+	let chat: Parameters<typeof processChatEvents>[1] & {
+		responseMessages: IMessage[];
+	} = {
 		intermediateResponse: Response.default(),
 		responseMessage: message,
+		responseMessages: [message],
 		attachments: new Map<string, IAttachment>(),
-		tmpLocalState: null as unknown,
-		tmpGlobalState: null as unknown,
+		tmpLocalState: null,
+		tmpGlobalState: null,
 		done: false,
 		appId,
 		eventId: event.id,
@@ -110,7 +113,11 @@ export function createNativeEventOutput(
 			}
 			tooLarge =
 				new TextEncoder().encode(
-					JSON.stringify({ returned, text, content: message.inner.content }),
+					JSON.stringify({
+						returned,
+						text,
+						content: chat.responseMessages.map((item) => item.inner.content),
+					}),
 				).length > 196_608;
 			return interactions;
 		},
@@ -124,9 +131,12 @@ export function createNativeEventOutput(
 			if (failure) throw new Error(failure);
 			if (tooLarge)
 				throw new Error(
-					"The Event response is too large for Shortcuts. Return a smaller output.",
+					"The Event response is too large for this automation. Return a smaller output.",
 				);
-			const visibleText = joinContentText(message.inner.content);
+			const visibleText = chat.responseMessages
+				.map((item) => joinContentText(item.inner.content))
+				.filter(Boolean)
+				.join("\n\n");
 			if (isChat) return { text: visibleText || text };
 			if (hasReturn)
 				return {
@@ -161,13 +171,13 @@ export async function executeNativeEventWithResult(options: {
 			(!Number.isFinite(Date.parse(request.responseDeadline)) ||
 				Date.parse(request.responseDeadline) <= Date.now())
 		)
-			throw new Error("This Shortcut request expired before it could run.");
+			throw new Error("This automation request expired before it could run.");
 	};
 	assertCurrent();
 	const kind = classifyAppEventInterface(event);
 	if (kind === "page" || kind === "unavailable")
 		throw new NativeEventInteractionRequired(
-			"Open this Event in Flow Like to use its page. Pages do not return a Shortcut response.",
+			"Open this Event in Flow Like to use its page. Pages do not return an automation response.",
 		);
 	if (event.event_type === "mcp") {
 		let args: unknown;
@@ -214,7 +224,7 @@ export async function executeNativeEventWithResult(options: {
 		const values = nativeQuickActionPayload(event, input);
 		if (values === null)
 			throw new NativeEventInteractionRequired(
-				"This Event needs more inputs. Supply its required inputs in the Shortcut or open its form in Flow Like.",
+				"This Event needs more inputs. Supply its required inputs in the automation or open its form in Flow Like.",
 			);
 		payload = values;
 	}

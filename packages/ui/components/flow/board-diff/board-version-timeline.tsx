@@ -9,6 +9,10 @@ import type {
 	IBoardVersionInfo,
 } from "../../../lib/schema/flow/board-version";
 import { cn } from "../../../lib/utils";
+import {
+	ResolvedIdentityAvatar,
+	identityAccessibleName,
+} from "../../identity/identity-avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../../ui/tooltip";
 import { UserAvatar } from "../../ui/user-identity";
 
@@ -101,17 +105,21 @@ const StopAuthor = memo(function StopAuthor({
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<span>
-					<UserAvatar
-						avatarUrl={identity.avatarUrl}
-						initials={identity.initials}
-						label={identity.label}
-						size="xs"
-						className="size-4 text-[7px]"
-					/>
+					{identity.bot ? (
+						<ResolvedIdentityAvatar identity={identity} size={16} />
+					) : (
+						<UserAvatar
+							avatarUrl={identity.avatarUrl}
+							initials={identity.initials}
+							label={identity.label}
+							size="xs"
+							className="size-4 text-[7px]"
+						/>
+					)}
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="bottom" className="text-xs">
-				{identity.label}
+				{identityAccessibleName(identity)}
 			</TooltipContent>
 		</Tooltip>
 	);

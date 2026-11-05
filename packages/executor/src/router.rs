@@ -67,6 +67,7 @@ pub fn executor_router(state: ExecutorState) -> Router {
         .route("/execute", post(execute_callback))
         .route("/execute/stream", post(execute_stream))
         .route("/execute/sse", post(execute_sse))
+        .route("/tool", post(execute_tool))
         .route("/health", get(health_check))
         .with_state(Arc::new(state))
 }
@@ -78,6 +79,28 @@ async fn health_check() -> Json<HealthResponse> {
         service: "flow-like-executor".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
     })
+}
+
+/// Run one bot tool call for a bot turn.
+///
+/// POST /tool
+///
+/// The envelope's executor token must bind the job text; see [`crate::tool`].
+#[cfg(feature = "bot-tools")]
+async fn execute_tool(
+    State(state): State<Arc<ExecutorState>>,
+    Json(envelope): Json<flow_like_bot_tools_host::ToolJobEnvelope>,
+) -> Result<Json<flow_like_bot_tools_host::ToolReply>, (StatusCode, String)> {
+    let _permit = state.try_admit()?;
+    crate::tool::handle(envelope).await.map(Json)
+}
+
+#[cfg(not(feature = "bot-tools"))]
+async fn execute_tool() -> (StatusCode, &'static str) {
+    (
+        StatusCode::NOT_IMPLEMENTED,
+        "This executor was built without bot tools",
+    )
 }
 
 /// Execute with callback-based progress reporting

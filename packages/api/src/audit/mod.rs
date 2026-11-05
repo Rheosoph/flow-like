@@ -55,6 +55,7 @@ pub fn actor_type_from_user(user: &AppUser) -> AuditActorType {
         AppUser::APIKey(_) => AuditActorType::ApiKey,
         AppUser::Executor(_) => AuditActorType::Executor,
         AppUser::ConnectedApp(_) => AuditActorType::System,
+        AppUser::Bot(_) => AuditActorType::TechnicalUser,
         AppUser::Unauthorized => AuditActorType::System,
     }
 }

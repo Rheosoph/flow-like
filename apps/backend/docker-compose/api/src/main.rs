@@ -91,6 +91,13 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
 
     let state = Arc::new(State::new(Arc::new(catalog), Arc::new(cdn_bucket), None).await);
 
+    let requested = flow_like_api::channel::ChannelBackend::parse(
+        std::env::var("CHANNEL_TRANSPORT").ok().as_deref(),
+    )?;
+    if state.channels.backend() != &requested {
+        return Err("Configured channel transport failed to initialize".into());
+    }
+
     if !flow_like_api::execution::is_jwt_configured() {
         return Err("backend JWT signing keys were not initialized".into());
     }
@@ -114,6 +121,10 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let _deletion_worker = flow_like_api::deletion::spawn_deletion_worker(
         state.clone(),
         flow_like_api::deletion::DeletionWorkerConfig::from_env(),
+    );
+    let _bot_turn_worker = flow_like_api::bot_host::spawn_worker(
+        state.clone(),
+        flow_like_api::bot_host::WorkerConfig::from_env(),
     );
     let _package_license_sweeper = flow_like_api::package_license::spawn_sweeper(state.clone());
     let _execution_usage_rollup = flow_like_api::execution_usage_rollup::spawn(state.clone());

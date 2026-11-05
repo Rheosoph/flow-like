@@ -4,7 +4,9 @@ import {
 	REALTIME_PROTOCOL,
 	REALTIME_TOKEN_PROTOCOL_PREFIX,
 	createRealtimeAuthenticator,
+	deriveConversationTopic,
 	deriveRealtimeTopic,
+	deriveTopicForClaims,
 	extractRealtimeToken,
 	originIsAllowed,
 	parseRealtimeAuthConfig,
@@ -31,6 +33,16 @@ async function fixture(
 	allowedOrigins = origin,
 	board_format_version?: unknown,
 ) {
+	return claimsFixture(
+		{ app_id: "app_123", board_id: "board_456", board_format_version },
+		allowedOrigins,
+	);
+}
+
+async function claimsFixture(
+	claims: Record<string, unknown>,
+	allowedOrigins = origin,
+) {
 	const { privateKey, publicKey } = await generateKeyPair("ES256");
 	const publicKeyPem = await exportSPKI(publicKey);
 	const config = parseRealtimeAuthConfig({
@@ -45,9 +57,7 @@ async function fixture(
 	const token = await new SignJWT({
 		typ: "realtime",
 		scope: "realtime.read",
-		app_id: "app_123",
-		board_id: "board_456",
-		board_format_version,
+		...claims,
 	})
 		.setProtectedHeader({ alg: "ES256", kid: keyId })
 		.setIssuer(issuer)
@@ -106,6 +116,80 @@ describe("realtime signaling authentication", () => {
 				deriveRealtimeTopic("app_123", "board_456", version),
 			).toThrow();
 		}
+	});
+
+	test("gives a conversation token only its conversation room", async () => {
+		const { config, token } = await claimsFixture({
+			conversation_id: "conv_123",
+		});
+		const authenticate = await createRealtimeAuthenticator(config);
+		const authorization = await authenticate(
+			origin,
+			`${REALTIME_PROTOCOL}, ${REALTIME_TOKEN_PROTOCOL_PREFIX}${token}`,
+		);
+		expect(authorization.allowedTopic).toBe("inbox:conv_123:room-v1");
+		expect(authorization.subject).toBe("user_789");
+	});
+
+	test("isolates meeting epochs from their parent conversation and old sessions", async () => {
+		const roomId = "meeting-call_123-2";
+		const { config, token } = await claimsFixture({ conversation_id: roomId });
+		const authenticate = await createRealtimeAuthenticator(config);
+		const authorization = await authenticate(
+			origin,
+			`${REALTIME_PROTOCOL}, ${REALTIME_TOKEN_PROTOCOL_PREFIX}${token}`,
+		);
+		expect(authorization.allowedTopic).toBe(`inbox:${roomId}:room-v1`);
+		expect(authorization.allowedTopic).not.toBe(deriveConversationTopic("conv_123"));
+		expect(authorization.allowedTopic).not.toBe(deriveConversationTopic("meeting-call_123-1"));
+		expect(authorization.allowedTopic).not.toBe(deriveConversationTopic("meeting-other_call-2"));
+	});
+
+	test("rejects a token naming a conversation and a board", async () => {
+		for (const extra of [
+			{ app_id: "app_123", board_id: "board_456" },
+			{ app_id: "app_123" },
+			{ board_id: "board_456" },
+			{ board_format_version: 1 },
+		]) {
+			const { config, token } = await claimsFixture({
+				conversation_id: "conv_123",
+				...extra,
+			});
+			const authenticate = await createRealtimeAuthenticator(config);
+			await expect(
+				authenticate(
+					origin,
+					`${REALTIME_PROTOCOL}, ${REALTIME_TOKEN_PROTOCOL_PREFIX}${token}`,
+				),
+			).rejects.toThrow("Realtime authorization failed");
+		}
+	});
+
+	test("rejects malformed conversation ids", async () => {
+		for (const conversation_id of ["", "conv:123", "a".repeat(129), 7, null]) {
+			const { config, token } = await claimsFixture({ conversation_id });
+			const authenticate = await createRealtimeAuthenticator(config);
+			await expect(
+				authenticate(
+					origin,
+					`${REALTIME_PROTOCOL}, ${REALTIME_TOKEN_PROTOCOL_PREFIX}${token}`,
+				),
+			).rejects.toThrow("Realtime authorization failed");
+			expect(() => deriveConversationTopic(conversation_id)).toThrow();
+		}
+	});
+
+	test("keeps conversation and board topics apart", () => {
+		const conversation = deriveConversationTopic("board_456");
+		for (const version of [1, 2]) {
+			expect(deriveRealtimeTopic("inbox", "board_456", version)).not.toBe(
+				conversation,
+			);
+		}
+		expect(deriveTopicForClaims({ conversation_id: "board_456" })).toBe(
+			conversation,
+		);
 	});
 
 	test("rejects the same token from an unlisted browser origin", async () => {

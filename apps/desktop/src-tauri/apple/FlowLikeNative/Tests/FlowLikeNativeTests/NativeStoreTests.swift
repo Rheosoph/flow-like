@@ -2,6 +2,72 @@ import Foundation
 import Testing
 @testable import FlowLikeNative
 
+@Test func backgroundActionsAreClaimedOnceWithoutFrontendDelivery() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = NativeStore(directory: directory)
+    try store.publish(snapshot(scope: "alice"))
+    let native = try store.enqueue(NativeAction(kind: "flowpilot", prompt: "Summarize"), responseMode: "text",
+                                   responseTimeout: 25, executionMode: "background")
+    let created = try #require(native.createdAt.flatMap(NativeSnapshot.date))
+    let deadline = try #require(native.responseDeadline.flatMap(NativeSnapshot.date))
+    #expect(deadline.timeIntervalSince(created) == 25)
+    let foreground = try store.enqueue(NativeAction(kind: "open_home"))
+    #expect(try store.pendingActions().map(\.id) == [foreground.id])
+    #expect(try store.takeActions().map(\.id) == [foreground.id])
+    let reopened = NativeStore(directory: directory)
+    #expect(try reopened.claimBackgroundActions().map(\.id) == [native.id])
+    #expect(try reopened.claimBackgroundActions().isEmpty)
+    #expect(try reopened.backgroundActionActive(id: native.id, scope: "alice"))
+    #expect(try !reopened.backgroundActionActive(id: native.id, scope: "bob"))
+    try reopened.completeAction(NativeActionResult(id: native.id, scope: native.scope, status: "success", text: "Done"))
+    #expect(try !reopened.backgroundActionActive(id: native.id, scope: "alice"))
+}
+
+@Test func backgroundCancellationExpiryAndAccountChangesRevokeActiveClaims() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = NativeStore(directory: directory)
+    try store.publish(snapshot(scope: "alice"))
+    func enqueue(timeout: TimeInterval = 25) throws -> NativeActionRequest {
+        try store.enqueue(NativeAction(kind: "flowpilot", prompt: "Summarize"), responseMode: "text",
+                          responseTimeout: timeout, executionMode: "background")
+    }
+    let cancelled = try enqueue()
+    _ = try store.claimBackgroundActions()
+    try store.cancelActionResponse(cancelled)
+    #expect(try !store.backgroundActionActive(id: cancelled.id, scope: cancelled.scope))
+    #expect(throws: NativeIntegrationError.expired) {
+        try store.completeAction(NativeActionResult(id: cancelled.id, scope: cancelled.scope, status: "success", text: "Late"))
+    }
+    let expired = try enqueue(timeout: 0.01)
+    _ = try store.claimBackgroundActions()
+    try await Task.sleep(nanoseconds: 30_000_000)
+    #expect(try !store.backgroundActionActive(id: expired.id, scope: expired.scope))
+    let changed = try enqueue()
+    _ = try store.claimBackgroundActions()
+    try store.publish(snapshot(scope: "bob"))
+    #expect(try !store.backgroundActionActive(id: changed.id, scope: changed.scope))
+}
+
+@Test func backgroundQueueRejectsUiActionsAndUnboundedRequests() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = NativeStore(directory: directory)
+    try store.publish(snapshot(scope: "alice"))
+    for action in [NativeAction(kind: "open_home"), NativeAction(kind: "flowpilot", prompt: " "),
+                   NativeAction(kind: "flowpilot", prompt: "Question", voice: true)] {
+        #expect(throws: NativeIntegrationError.invalidAction) {
+            try store.enqueue(action, responseMode: "text", responseTimeout: 25, executionMode: "background")
+        }
+    }
+    #expect(throws: NativeIntegrationError.invalidAction) {
+        try store.enqueue(NativeAction(kind: "flowpilot", prompt: "Question"), responseMode: "text",
+                          responseTimeout: 90, executionMode: "background")
+    }
+    #expect(try store.claimBackgroundActions().isEmpty)
+}
+
 @Test func rejectsExpiredSnapshot() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }

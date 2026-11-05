@@ -98,7 +98,7 @@ async fn start_app() -> Result<(), String> {
                 session.host_command = Some(host_command);
                 let mut app = CadApp::new(session, Services::default());
                 if let Some(rs) = &cc.wgpu_render_state {
-                    app.set_wgpu(rs);
+                    app.set_wgpu(rs, None);
                 }
                 Ok(Box::new(Host {
                     app,
@@ -187,6 +187,7 @@ impl Host {
                 }
                 let bytes = data.to_vec();
                 let doc = cadcraft_io::read(&bytes, &name).map_err(|e| e.to_string())?;
+                let warnings = doc.read_notes.clone();
                 self.app
                     .session
                     .open_drawing(doc, &name, Some(name.clone()));
@@ -199,7 +200,7 @@ impl Host {
                 self.opened = true;
                 event(
                     "opened",
-                    json!({"revision": self.app.session.state().map(|s| s.revision).unwrap_or(0), "readOnly": self.read_only}),
+                    json!({"revision": self.app.session.state().map(|s| s.revision).unwrap_or(0), "readOnly": self.read_only, "warnings": warnings}),
                 );
             }
             Some("set-read-only") => {
@@ -285,7 +286,7 @@ impl eframe::App for Host {
                 )
             });
         }
-        self.app.raw_input_hook(raw);
+        self.app.raw_input_hook(ctx, raw);
         if !self.read_only {
             cadcraft_ui_egui::cmdline::capture_tab(ctx, raw);
         }

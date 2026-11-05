@@ -303,17 +303,48 @@ describe("WebAuthProvider", () => {
 		expect(harness.stopSilentRenew).toHaveBeenCalledOnce();
 	});
 
-	it("reports a failed configuration request without initializing an OIDC session", async () => {
-		harness.loadConfiguration.mockRejectedValueOnce(
-			new Error("Network unavailable"),
-		);
-		await renderProvider();
-		expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-			"Web configuration is unavailable",
-		);
-		expect(harness.createUserManager).not.toHaveBeenCalled();
-		expect(harness.childMounts).toBe(0);
-	});
+	it.each(["network", "http"])(
+		"recovers from a %s configuration failure when the user retries",
+		async (failure) => {
+			if (failure === "network") {
+				harness.loadConfiguration.mockRejectedValueOnce(
+					new Error("Network unavailable"),
+				);
+			} else {
+				harness.loadConfiguration.mockResolvedValueOnce(undefined);
+			}
+			await renderProvider();
+			expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+				"Web configuration is unavailable",
+			);
+			expect(harness.createUserManager).not.toHaveBeenCalled();
+			expect(harness.childMounts).toBe(0);
+
+			let finishRetry!: (config: unknown) => void;
+			harness.loadConfiguration.mockReturnValueOnce(
+				new Promise((resolve) => {
+					finishRetry = resolve;
+				}),
+			);
+			const retryButton = container.querySelector("button");
+			expect(retryButton?.textContent).toBe("Try again");
+			await act(async () => retryButton?.click());
+			expect(harness.loadConfiguration).toHaveBeenCalledTimes(2);
+			expect(container.textContent).toBe("Loading");
+			expect(harness.childMounts).toBe(0);
+
+			await act(async () =>
+				finishRetry({
+					client_id: "web-client",
+					authority: "https://login.test",
+				}),
+			);
+			expect(container.querySelector('[role="alert"]')).toBeNull();
+			expect(container.textContent).toBe("App content");
+			expect(harness.createUserManager).toHaveBeenCalledOnce();
+			expect(harness.childMounts).toBe(1);
+		},
+	);
 
 	it.each(["/thirdparty/callback", "/thirdparty/callback/"])(
 		"restores the Hub user without consuming third-party state on %s",

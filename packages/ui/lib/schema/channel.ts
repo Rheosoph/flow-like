@@ -13,6 +13,13 @@ export type IChannelClientDescriptor =
 	| { type: "http"; push_url: string; token: string }
 	| { type: "in_process" }
 	| {
+			type: "nats";
+			url: string;
+			subject: string;
+			token: string;
+			expires_at: number;
+	  }
+	| {
 			type: "aws_mqtt";
 			endpoint: string;
 			region: string;
@@ -50,7 +57,7 @@ export interface IChannelHandle {
 	/** Unix seconds; the waiter stops listening after this. */
 	expires_at: number;
 	transport: IChannelClientDescriptor;
-	/** Used when `transport` cannot be reached; always the API push endpoint. */
+	/** API push capability, preferred over a legacy cloud transport when present. */
 	fallback?: IChannelClientDescriptor | null;
 }
 

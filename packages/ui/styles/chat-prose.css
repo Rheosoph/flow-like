@@ -160,6 +160,10 @@
 	line-height: 1.5;
 }
 
+[data-fl-renderer] [data-mention-subject] {
+	font-size: 0.95em;
+}
+
 [data-fl-renderer] .slate-table {
 	max-width: 100%;
 	margin: 1.4em 0;

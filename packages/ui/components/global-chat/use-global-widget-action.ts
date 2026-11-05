@@ -1,16 +1,19 @@
 "use client";
 
 import { useCallback } from "react";
-import { IRole, Response, useBackend } from "../../index";
+import { IRole, useBackend } from "../../index";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
 import {
 	makeGlobalChatMessage,
 	persistGlobalChatMessage,
 } from "../../state/global-chat/global-chat-stream";
 import { getFrontendStateStore } from "../a2ui/frontend-state";
-import type { IAttachment } from "../interfaces/chat-default/chat-db";
+import { createChatTurn } from "../interfaces/chat-default/chat-turn";
 import type { RunWidgetAction } from "../interfaces/chat-default/chat-widget-execution";
-import { processChatEvents } from "../interfaces/chat-default/event-processor";
+import {
+	refreshMainChatWidget,
+	resolveMainChatWidget,
+} from "../interfaces/chat-default/main-widget-state";
 
 /**
  * Widget-action runner for widgets embedded in global-chat messages. The
@@ -26,13 +29,34 @@ export function useGlobalChatRunWidgetAction(): RunWidgetAction {
 
 	return useCallback<RunWidgetAction>(
 		async (appId, boardId, runPayload, onA2UIEvents) => {
-			const responseMessage = makeGlobalChatMessage(
+			let responseMessage = makeGlobalChatMessage(
 				IRole.Assistant,
 				"",
 				useGlobalChatStore.getState().activeConversationId,
 			);
-			let intermediateResponse = Response.default();
-			const attachments = new Map<string, IAttachment>();
+			const currentMainWidget = () => {
+				const state = useGlobalChatStore.getState();
+				return resolveMainChatWidget(
+					[
+						...state.messages,
+						...Object.values(state.runs).flatMap((run) =>
+							run.message ? [run.message] : [],
+						),
+					],
+					responseMessage.sessionId,
+				);
+			};
+			responseMessage.main_widget = currentMainWidget();
+			const initialMainWidget = responseMessage.main_widget;
+			let publishedMainWidget = initialMainWidget;
+			const turn = createChatTurn({
+				responseMessage,
+				tmpLocalState: null,
+				tmpGlobalState: null,
+				appId: responseMessage.appId,
+				eventId: "",
+				sessionId: responseMessage.sessionId,
+			});
 
 			const result = await backend.boardState.executeBoard(
 				appId,
@@ -50,18 +74,20 @@ export function useGlobalChatRunWidgetAction(): RunWidgetAction {
 					}
 					onA2UIEvents?.(events);
 
-					const processed = processChatEvents(events, {
-						intermediateResponse,
-						responseMessage,
-						attachments,
-						tmpLocalState: null,
-						tmpGlobalState: null,
-						done: false,
-						appId,
-						eventId: "",
-						sessionId: responseMessage.sessionId,
-					});
-					intermediateResponse = processed.intermediateResponse;
+					refreshMainChatWidget(turn.responseMessage, currentMainWidget());
+					const processed = turn.fold(events);
+					responseMessage = processed.responseMessage;
+					if (responseMessage.main_widget !== publishedMainWidget) {
+						const mainWidget = responseMessage.main_widget;
+						if (mainWidget?.widget && !mainWidget.widget.origin) {
+							responseMessage.main_widget = {
+								...mainWidget,
+								widget: { ...mainWidget.widget, origin: { appId, boardId } },
+							};
+						}
+						publishedMainWidget = responseMessage.main_widget;
+						useGlobalChatStore.getState().commitMessage({ ...responseMessage });
+					}
 
 					if (processed.interactions?.length) {
 						useGlobalChatStore
@@ -73,29 +99,40 @@ export function useGlobalChatRunWidgetAction(): RunWidgetAction {
 
 			// Widgets pushed by the action run stay bound to the board that ran it,
 			// so their own actions keep routing to the original use-case board.
-			if (responseMessage.widgets?.length) {
-				responseMessage.widgets = responseMessage.widgets.map((widget) => ({
-					...widget,
-					origin: { appId, boardId },
-				}));
-			}
+			for (const message of turn.responseMessages) {
+				if (message.main_widget?.widget && !message.main_widget.widget.origin) {
+					message.main_widget = {
+						...message.main_widget,
+						widget: {
+							...message.main_widget.widget,
+							origin: { appId, boardId },
+						},
+					};
+				}
+				if (message.widgets?.length) {
+					message.widgets = message.widgets.map((widget) => ({
+						...widget,
+						origin: { appId, boardId },
+					}));
+				}
 
-			const textContent =
-				typeof responseMessage.inner.content === "string"
-					? responseMessage.inner.content.trim()
-					: (responseMessage.inner.content?.length ?? 0);
-			const hasContent = Boolean(
-				textContent ||
-					responseMessage.files?.length ||
-					responseMessage.widgets?.length ||
-					responseMessage.plan_steps?.length,
-			);
+				const textContent =
+					typeof message.inner.content === "string"
+						? message.inner.content.trim()
+						: (message.inner.content?.length ?? 0);
+				const hasContent = Boolean(
+					textContent ||
+						message.files?.length ||
+						message.widgets?.length ||
+						message.main_widget !== initialMainWidget ||
+						message.plan_steps?.length,
+				);
 
-			// Only surface a new assistant message when the action produced chat
-			// content; a pure in-place widget update leaves no residue.
-			if (hasContent) {
-				useGlobalChatStore.getState().appendMessage(responseMessage);
-				void persistGlobalChatMessage(responseMessage);
+				// Save pane changes even when the action did not produce a chat bubble.
+				if (hasContent) {
+					useGlobalChatStore.getState().commitMessage(message);
+					await persistGlobalChatMessage(message);
+				}
 			}
 
 			return result;

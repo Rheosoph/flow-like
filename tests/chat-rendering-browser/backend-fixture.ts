@@ -6,3 +6,5 @@ const backend = {
 };
 
 export const useBackend = () => backend;
+export const useBackendReady = () => true;
+export const useSignedIn = () => false;

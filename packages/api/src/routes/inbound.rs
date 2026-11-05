@@ -3002,7 +3002,7 @@ async fn dispatch_event_stream(
         board_id: Set(board_id),
         version: Set(None),
         event_id: Set(Some(event_row.id.clone())),
-        node_id: Set(Some(event_row.id.clone())),
+        node_id: Set(Some(request.node_id.clone())),
         status: Set(RunStatus::Pending),
         mode: Set(RunMode::Http),
         run_variant: Set(target.run_variant()),
@@ -3028,7 +3028,10 @@ async fn dispatch_event_stream(
         app_id: Set(event_row.app_id.clone()),
         created_at: Set(now),
         updated_at: Set(now),
-        event_version: Set(None),
+        event_version: Set(Some(format!(
+            "{}.{}.{}",
+            core_event.event_version.0, core_event.event_version.1, core_event.event_version.2
+        ))),
         nodes: Set(None),
         logs_count: Set(None),
     };

@@ -10,7 +10,8 @@
 			"meta": {
 				"en": {
 					"name": "Forecasting models: Apache 2.0 license",
-					"description": "Apache 2.0 license text distributed with the forecasting checkpoints that use this license."
+					"description": "Apache 2.0 license text distributed with the forecasting checkpoints that use this license.",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/apache-704b592298da2c69.webp"
 				}
 			}
 		},
@@ -29,7 +30,8 @@
 			"meta": {
 				"en": {
 					"name": "Timestral 209M: config.json",
-					"description": "Pinned config.json for Timestral 209M."
+					"description": "Pinned config.json for Timestral 209M.",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
 				}
 			}
 		},
@@ -48,7 +50,8 @@
 			"meta": {
 				"en": {
 					"name": "Timestral 209M: LICENSE",
-					"description": "Pinned LICENSE for Timestral 209M."
+					"description": "Pinned LICENSE for Timestral 209M.",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
 				}
 			}
 		},
@@ -116,7 +119,8 @@
 			"meta": {
 				"en": {
 					"name": "Timestral 5M: config.json",
-					"description": "Pinned config.json for Timestral 5M."
+					"description": "Pinned config.json for Timestral 5M.",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
 				}
 			}
 		},
@@ -135,7 +139,8 @@
 			"meta": {
 				"en": {
 					"name": "Timestral 5M: LICENSE",
-					"description": "Pinned LICENSE for Timestral 5M."
+					"description": "Pinned LICENSE for Timestral 5M.",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
 				}
 			}
 		},
@@ -203,7 +208,8 @@
 			"meta": {
 				"en": {
 					"name": "Chronos 2: config.json",
-					"description": "Pinned config.json for Chronos 2."
+					"description": "Pinned config.json for Chronos 2.",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/amazon-0a11bc5a0dcda1a8.webp"
 				}
 			}
 		},
@@ -271,7 +277,8 @@
 			"meta": {
 				"en": {
 					"name": "Toto 2.0 22M: config.json",
-					"description": "Pinned config.json for Toto 2.0 22M."
+					"description": "Pinned config.json for Toto 2.0 22M.",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/datadog-fe28b54e5ce40e04.webp"
 				}
 			}
 		},
@@ -339,7 +346,8 @@
 			"meta": {
 				"en": {
 					"name": "TimesFM 2.5 200M: config.json",
-					"description": "Pinned config.json for TimesFM 2.5 200M."
+					"description": "Pinned config.json for TimesFM 2.5 200M.",
+					"icon": "https://cdn.flow-like.com/media/google.webp"
 				}
 			}
 		},
@@ -407,7 +415,8 @@
 			"meta": {
 				"en": {
 					"name": "IBM Granite TinyTimeMixer R2 (512–96): config.json",
-					"description": "Pinned config.json for IBM Granite TinyTimeMixer R2 (512–96)."
+					"description": "Pinned config.json for IBM Granite TinyTimeMixer R2 (512–96).",
+					"icon": "https://cdn.flow-like.com/media/ibm.webp"
 				}
 			}
 		},

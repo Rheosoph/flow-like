@@ -613,6 +613,7 @@ const ALL_FEATURES: AgentFeatures = {
 	on_demand_events: 1,
 	telegram_bots: 1,
 	discord_bots: 1,
+	bot_host: 1,
 	model_store: 1,
 	model_host: 1,
 	model_runtime_llamacpp: 1,

@@ -29,7 +29,9 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use flow_like_types_contracts::Cacheable;
 use futures::{StreamExt, TryStreamExt, stream};
 use reqwest::{StatusCode, Url, header};
-use rig::completion::{CompletionModel, CompletionRequestBuilder, Message as RigMessage};
+use rig::completion::{
+    CompletionModel, CompletionRequest, CompletionRequestBuilder, Message as RigMessage,
+};
 use rig::message::{DocumentSourceKind, MimeType, UserContent as RigUserContent};
 use rig::providers::gemini::completion::gemini_api_types::{
     AdditionalParameters, GenerationConfig, ThinkingConfig, ThinkingLevel,
@@ -1012,7 +1014,7 @@ impl GeminiModel {
 
         let mut builder = rig::providers::gemini::Client::builder()
             .api_key(api_key)
-            .http_client(AuthorizedHttpClient::for_egress(egress)?);
+            .http_client(AuthorizedHttpClient::for_provider(provider, egress)?);
         if let Some(endpoint) = endpoint {
             builder = builder.base_url(endpoint);
         }
@@ -1115,13 +1117,28 @@ impl Cacheable for GeminiModel {
     }
 }
 
+/// Rig copies the request's token limit and temperature only when `generationConfig` exists.
+/// Agents can set these fields without supplying the History's generation configuration.
+fn gemini_request(_model: &str, mut request: CompletionRequest) -> CompletionRequest {
+    if request.max_tokens.is_some() || request.temperature.is_some() {
+        let config = super::body_params(&mut request)
+            .entry("generationConfig")
+            .or_insert_with(|| serde_json::json!({}));
+        if config.is_null() {
+            *config = serde_json::json!({});
+        }
+    }
+    request
+}
+
 #[async_trait]
 impl ModelLogic for GeminiModel {
     #[allow(deprecated)]
     async fn provider(&self) -> Result<ModelConstructor> {
-        Ok(ModelConstructor {
-            inner: Box::new(self.client.clone()),
-        })
+        Ok(ModelConstructor::with_request_fixup(
+            self.client.clone(),
+            gemini_request,
+        ))
     }
 
     async fn default_model(&self) -> Option<String> {
@@ -1209,7 +1226,9 @@ impl ModelLogic for GeminiModel {
 mod tests {
     use super::*;
     use crate::egress::tests::answer_every_connection;
+    use crate::llm::test_support::{json_response, serve_once, sse_response};
     use rig::OneOrMany;
+    use rig::completion::Completion;
     use rig::message::{
         Audio as RigAudio, AudioMediaType, Document as RigDocument, DocumentMediaType,
         Image as RigImage, ImageMediaType, Video as RigVideo, VideoMediaType,
@@ -1217,6 +1236,97 @@ mod tests {
     use std::net::SocketAddr;
     use std::sync::atomic::AtomicUsize;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[tokio::test]
+    async fn agent_output_limits_reach_both_transports_without_history_settings() {
+        use serde_json::{Value, json};
+        use std::collections::HashMap;
+
+        let config = json!({
+            "maxOutputTokens": 999,
+            "temperature": 0.9,
+            "topP": 0.8,
+            "thinkingConfig": {"thinkingBudget": 128},
+        });
+        for params in [
+            None,
+            Some(json!({"generationConfig": null})),
+            Some(json!({"generationConfig": config})),
+        ] {
+            for streaming in [false, true] {
+                let response = json!({
+                    "responseId": "test-response",
+                    "candidates": [{
+                        "content": {"role": "model", "parts": [{"text": "ok"}]},
+                        "finishReason": "STOP",
+                    }],
+                    "usageMetadata": {
+                        "promptTokenCount": 12,
+                        "candidatesTokenCount": 1,
+                        "totalTokenCount": 13,
+                    },
+                });
+                let response = if streaming {
+                    sse_response(&[response])
+                } else {
+                    json_response(response)
+                };
+                let (endpoint, server) = serve_once(response).await;
+                let model = GeminiModel::from_provider(
+                    &ModelProvider {
+                        provider_name: "custom:gemini".into(),
+                        model_id: None,
+                        version: None,
+                        api_surface: None,
+                        params: Some(HashMap::from([
+                            ("api_key".into(), json!("test-key")),
+                            ("model_id".into(), json!("gemini-2.5-flash")),
+                            ("endpoint".into(), json!(endpoint)),
+                        ])),
+                    },
+                    ProviderEgress::Open,
+                )
+                .await
+                .unwrap();
+                let mut agent = model
+                    .provider()
+                    .await
+                    .unwrap()
+                    .into_client()
+                    .agent("gemini-2.5-flash")
+                    .max_tokens(321)
+                    .temperature(0.2);
+                if let Some(params) = params.clone() {
+                    agent = agent.additional_params(params);
+                }
+                let agent = agent.build();
+                let request = agent
+                    .completion("hi", Vec::<RigMessage>::new())
+                    .await
+                    .unwrap();
+                if streaming {
+                    let mut stream = request.stream().await.unwrap();
+                    while let Some(chunk) = stream.next().await {
+                        chunk.unwrap();
+                    }
+                } else {
+                    request.send().await.unwrap();
+                }
+
+                let body: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+                let sent = &body["generationConfig"];
+                assert_eq!(sent["maxOutputTokens"], 321, "stream={streaming}");
+                assert_eq!(sent["temperature"], 0.2, "stream={streaming}");
+                if params
+                    .as_ref()
+                    .is_some_and(|params| params["generationConfig"].is_object())
+                {
+                    assert_eq!(sent["topP"], config["topP"]);
+                    assert_eq!(sent["thinkingConfig"], config["thinkingConfig"]);
+                }
+            }
+        }
+    }
 
     const SIGNED_JPEG: &str = "https://example-bucket.s3.amazonaws.com/path/photo.jpg?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc";
     const GIF_1X1: &str = "R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw==";

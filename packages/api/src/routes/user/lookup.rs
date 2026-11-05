@@ -1,6 +1,6 @@
 use crate::{
     ensure_permission,
-    entity::{membership, sea_orm_active_enums::UserStatus, user},
+    entity::{bot, membership, sea_orm_active_enums::UserStatus, user},
     error::ApiError,
     middleware::jwt::{AppUser, ExecutorUse},
     permission::role_permission::RolePermissions,
@@ -22,7 +22,7 @@ use axum::{
     extract::{Path, Query, State},
 };
 use flow_like::hub::Lookup;
-use flow_like_types::{Value, tokio::try_join};
+use flow_like_types::{Value, bot::BotSystemKind, tokio::try_join};
 use sea_orm::{
     ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect, QueryTrait,
     sea_query::{Alias, Expr, ExprTrait, Func, Order, SimpleExpr, extension::postgres::PgBinOper},
@@ -45,6 +45,30 @@ pub struct UserLookupResponse {
     /// An exact identifier match, even when lookup settings hide that identifier.
     #[serde(skip_serializing_if = "Option::is_none")]
     exact_match: Option<bool>,
+    /// Set when the id is a bot's sub. A bot acts for its owner and has no email,
+    /// username or avatar URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bot: Option<BotLookup>,
+}
+
+/// The bot behind a looked-up sub.
+#[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
+pub struct BotLookup {
+    /// The person the bot acts for.
+    pub owner_id: String,
+    /// `general` (Assistant) or `flux` for built-in bots, null otherwise. A built-in bot
+    /// without a stored name shows its localized default name.
+    #[schema(value_type = Option<String>, example = "general")]
+    pub system: Option<BotSystemKind>,
+    /// The look from the bot builder: an object with a string `kind`.
+    #[schema(value_type = Object, example = json!({ "kind": "pip" }))]
+    pub appearance: Value,
+    /// The pinned text-to-speech Bit ID, so call participants can use the bot's voice.
+    /// Provider configuration and credentials stay private. Deleted bots expose no voice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tts_model: Option<String>,
+    /// The bot was deleted; what it did still shows it.
+    pub deleted: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, ToSchema)]
@@ -53,6 +77,34 @@ pub struct UserBatchLookupBody {
 }
 
 impl UserLookupResponse {
+    /// The lookup entry of a bot sub, deleted bots included. The hub's lookup settings hide
+    /// the description and creation time as they do for people; the name and `bot` stay.
+    pub fn from_bot(row: bot::Model, lookup: &Lookup) -> Self {
+        UserLookupResponse {
+            id: row.id,
+            email: None,
+            username: None,
+            preferred_username: None,
+            name: row.name,
+            avatar_url: None,
+            additional_information: None,
+            description: lookup.description.then_some(row.description).flatten(),
+            created_at: lookup.created_at.then_some(row.created_at),
+            exact_match: None,
+            bot: Some(BotLookup {
+                owner_id: row.owner_id,
+                system: row.system_key.as_deref().and_then(BotSystemKind::parse),
+                appearance: row.appearance,
+                tts_model: if row.deleted_at.is_none() {
+                    row.tts_model
+                } else {
+                    None
+                },
+                deleted: row.deleted_at.is_some(),
+            }),
+        }
+    }
+
     pub async fn parse(user: user::Model, lookup_config: Lookup, state: &AppState) -> Self {
         let avatar_url = match (lookup_config.avatar, user.avatar.as_ref()) {
             (true, Some(avatar_id)) => match sign_avatar(&user.id, avatar_id, state).await {
@@ -104,6 +156,7 @@ impl UserLookupResponse {
             description: lookup.description.then_some(user.description).flatten(),
             created_at: lookup.created_at.then_some(user.created_at),
             exact_match: None,
+            bot: None,
         }
     }
 }
@@ -113,12 +166,12 @@ impl UserLookupResponse {
     path = "/user/lookup/{sub}",
     tag = "user",
     params(
-        ("sub" = String, Path, description = "User ID to look up")
+        ("sub" = String, Path, description = "User or bot ID to look up")
     ),
     responses(
-        (status = 200, description = "User found", body = UserLookupResponse),
+        (status = 200, description = "The user, or the bot with its owner when the ID is a bot's", body = UserLookupResponse),
         (status = 401, description = "Unauthorized"),
-        (status = 404, description = "User not found")
+        (status = 404, description = "No user or bot has this ID")
     ),
     security(
         ("bearer_auth" = [])
@@ -143,6 +196,13 @@ pub async fn user_lookup(
         return Ok(Json(response));
     }
 
+    if let Some(found_bot) = bot::Entity::find_by_id(sub).one(&state.db).await? {
+        return Ok(Json(UserLookupResponse::from_bot(
+            found_bot,
+            &lookup_config,
+        )));
+    }
+
     Err(ApiError::NOT_FOUND)
 }
 
@@ -152,7 +212,7 @@ pub async fn user_lookup(
     tag = "user",
     request_body = UserBatchLookupBody,
     responses(
-        (status = 200, description = "Users found for the requested IDs", body = Vec<UserLookupResponse>),
+        (status = 200, description = "Users and bots found for the requested IDs; IDs nobody has are left out", body = Vec<UserLookupResponse>),
         (status = 401, description = "Unauthorized")
     ),
     security(
@@ -186,15 +246,30 @@ pub async fn user_batch_lookup(
     }
 
     let found_users = user::Entity::find()
-        .filter(user::Column::Id.is_in(ids))
+        .filter(user::Column::Id.is_in(ids.iter().cloned()))
         .limit(100)
         .all(&state.db)
         .await?;
+    let found_ids = found_users
+        .iter()
+        .map(|user_info| user_info.id.as_str())
+        .collect::<HashSet<_>>();
+    let misses = ids
+        .iter()
+        .filter(|id| !found_ids.contains(id.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    let found_bots = crate::routes::bots::bots_by_id(&state.db, misses).await?;
 
-    let mut responses = Vec::with_capacity(found_users.len());
+    let mut responses = Vec::with_capacity(found_users.len() + found_bots.len());
     for user_info in found_users {
         responses.push(UserLookupResponse::parse(user_info, lookup_config.clone(), &state).await);
     }
+    responses.extend(
+        found_bots
+            .into_iter()
+            .map(|row| UserLookupResponse::from_bot(row, &lookup_config)),
+    );
 
     Ok(Json(responses))
 }
@@ -756,6 +831,157 @@ mod tests {
             ..everything
         });
         assert_eq!(no_avatar["avatar_url"], Value::Null);
+    }
+
+    fn bot_row() -> bot::Model {
+        let created = chrono::DateTime::from_timestamp(1_800_000_000, 0)
+            .unwrap()
+            .fixed_offset();
+        bot::Model {
+            id: "bot_1".into(),
+            owner_id: "user-1".into(),
+            system_key: Some("flux".into()),
+            preset_id: None,
+            name: Some("Scout".into()),
+            description: Some("Builds flows".into()),
+            instructions: Some("private instructions".into()),
+            appearance: serde_json::json!({ "kind": "flux" }),
+            model_policy: serde_json::json!({}),
+            classification: None,
+            pii: false,
+            capabilities: Default::default(),
+            profile_id: None,
+            location: "SERVER".into(),
+            device_id: None,
+            created_at: created,
+            updated_at: created,
+            deleted_at: Some(created),
+            import_key: None,
+            embedding_model: None,
+            stt_model: None,
+            tts_model: None,
+            image_model: None,
+            vision_model: None,
+            subtask_model: None,
+        }
+    }
+
+    #[test]
+    fn a_bot_sub_looks_up_as_its_bot_without_personal_fields() {
+        let row = bot::Model {
+            name: None,
+            ..bot_row()
+        };
+        let wire =
+            serde_json::to_value(UserLookupResponse::from_bot(row, &Lookup::default())).unwrap();
+
+        assert_eq!(wire["id"], "bot_1");
+        assert_eq!(wire["name"], Value::Null);
+        assert_eq!(wire["description"], "Builds flows");
+        assert!(wire["created_at"].is_string());
+        for field in [
+            "email",
+            "username",
+            "preferred_username",
+            "avatar_url",
+            "additional_information",
+        ] {
+            assert_eq!(wire[field], Value::Null, "{field}");
+        }
+        assert_eq!(
+            wire["bot"],
+            serde_json::json!({
+                "owner_id": "user-1",
+                "system": "flux",
+                "appearance": { "kind": "flux" },
+                "deleted": true,
+            })
+        );
+        assert!(!wire.to_string().contains("private instructions"));
+    }
+
+    #[test]
+    fn a_live_bot_shares_only_its_pinned_voice_model() {
+        let row = bot::Model {
+            deleted_at: None,
+            tts_model: Some("catalog-voice-bit".into()),
+            stt_model: Some("private-transcription-bit".into()),
+            model_policy: serde_json::json!({"api_key": "private-provider-key"}),
+            ..bot_row()
+        };
+        let hidden = Lookup {
+            description: false,
+            created_at: false,
+            ..Lookup::default()
+        };
+        let wire = serde_json::to_value(UserLookupResponse::from_bot(row, &hidden)).unwrap();
+        assert_eq!(wire["bot"]["tts_model"], "catalog-voice-bit");
+        assert_eq!(wire["bot"]["deleted"], false);
+        assert_eq!(wire["description"], Value::Null);
+        assert_eq!(wire["created_at"], Value::Null);
+        for private in [
+            "private instructions",
+            "private-provider-key",
+            "private-transcription-bit",
+            "model_policy",
+        ] {
+            assert!(!wire.to_string().contains(private), "{private}");
+        }
+    }
+
+    #[test]
+    fn unpinned_and_deleted_bots_expose_no_voice_model() {
+        for row in [
+            bot::Model {
+                deleted_at: None,
+                tts_model: None,
+                ..bot_row()
+            },
+            bot::Model {
+                tts_model: Some("removed-voice-bit".into()),
+                ..bot_row()
+            },
+        ] {
+            let wire = serde_json::to_value(UserLookupResponse::from_bot(row, &Lookup::default()))
+                .unwrap();
+            assert!(wire["bot"].get("tts_model").is_none());
+        }
+        let older: BotLookup = serde_json::from_value(serde_json::json!({
+            "owner_id": "user-1", "system": null, "appearance": {}, "deleted": false,
+        }))
+        .unwrap();
+        assert!(older.tts_model.is_none());
+    }
+
+    #[test]
+    fn a_bot_lookup_hides_what_the_lookup_settings_hide_for_people() {
+        let hidden = Lookup {
+            description: false,
+            created_at: false,
+            ..Lookup::default()
+        };
+        let wire = serde_json::to_value(UserLookupResponse::from_bot(bot_row(), &hidden)).unwrap();
+
+        assert_eq!(wire["description"], Value::Null);
+        assert_eq!(wire["created_at"], Value::Null);
+        assert_eq!(wire["name"], "Scout");
+        assert_eq!(wire["bot"]["owner_id"], "user-1");
+        assert_eq!(wire["bot"]["deleted"], true);
+
+        let nothing_shared = Lookup {
+            email: false,
+            name: false,
+            username: false,
+            preferred_username: false,
+            avatar: false,
+            additional_information: false,
+            description: false,
+            created_at: false,
+        };
+        let wire =
+            serde_json::to_value(UserLookupResponse::from_bot(bot_row(), &nothing_shared)).unwrap();
+        assert_eq!(wire["name"], "Scout");
+        assert_eq!(wire["bot"]["system"], "flux");
     }
 
     #[test]

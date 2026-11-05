@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AppFunctionAppMetadata xmlns:appfn="http://schemas.android.com/apk/androidx.appfunctions"
+    appfn:instructions="Flow-Like manages bots and their tasks. List bots to obtain identifiers in the active workspace. Opening a bot or preparing a message returns a screen-opening action. Messages remain drafts until the person sends them. Task status comes from a cached snapshot with an observation time. Encrypted bots are excluded, and the device must be unlocked." />

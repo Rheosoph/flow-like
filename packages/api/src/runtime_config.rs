@@ -87,6 +87,10 @@ pub(crate) struct OAuthProviderConfig {
     pub(crate) userinfo_url: Option<String>,
     pub(crate) device_auth_url: Option<String>,
     pub(crate) auth_method: Option<String>,
+    #[serde(default)]
+    pub(crate) api_hosts: Vec<String>,
+    #[serde(default)]
+    pub(crate) mcp_url: Option<String>,
 }
 
 /// API-only OpenID fields are parsed from the same selected document as Hub.

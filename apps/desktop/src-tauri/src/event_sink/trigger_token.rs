@@ -16,10 +16,102 @@ const WRONG_ACCOUNT_CODE: &str = "TRIGGER_TOKEN_WRONG_ACCOUNT:";
 
 /// The signed-in subject on the current profile's hub. A trigger's PAT counts
 /// as this account's own only when it was verified against it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TriggerAccount {
+    pub profile_id: String,
+    pub issuer: String,
     pub sub: String,
     pub hub_origin: String,
+}
+
+/// A saved trigger keeps its profile and account when another profile opens in the UI.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TriggerProfile {
+    pub profile_id: String,
+    pub hub_origin: String,
+    pub issuer: Option<String>,
+    pub subject: Option<String>,
+}
+
+impl TriggerProfile {
+    pub(crate) async fn capture(profile: &flow_like::profile::Profile) -> Result<Self> {
+        let hub_origin =
+            flow_like::hub::hub_origin(&profile.hub, profile.secure).unwrap_or_default();
+        let auth = crate::native_auth::SessionBinding::capture(&profile.id, &hub_origin)
+            .await
+            .map_err(|error| anyhow!(error))?;
+        Ok(Self {
+            profile_id: profile.id.clone(),
+            hub_origin,
+            issuer: auth.as_ref().map(|auth| auth.issuer.clone()),
+            subject: auth.as_ref().map(|auth| auth.subject.clone()),
+        })
+    }
+
+    pub(crate) fn account(&self) -> Option<TriggerAccount> {
+        Some(TriggerAccount {
+            profile_id: self.profile_id.clone(),
+            issuer: self.issuer.clone()?,
+            sub: self.subject.clone()?,
+            hub_origin: self.hub_origin.clone(),
+        })
+    }
+
+    fn matches(
+        &self,
+        profile: &flow_like::profile::Profile,
+        account: Option<&TriggerAccount>,
+    ) -> bool {
+        !self.profile_id.is_empty()
+            && profile.id == self.profile_id
+            && flow_like::hub::hub_origin(&profile.hub, profile.secure).unwrap_or_default()
+                == self.hub_origin
+            && self.issuer.is_some() == self.subject.is_some()
+            && self.account().as_ref() == account
+    }
+
+    pub(crate) async fn resolve(
+        &self,
+        app: &AppHandle,
+    ) -> Result<(
+        crate::profile::UserProfile,
+        Option<crate::native_auth::SessionBinding>,
+    )> {
+        let settings = crate::state::TauriSettingsState::construct(app).await?;
+        let settings = settings.lock().await;
+        let profile = settings.profile_by_id(&self.profile_id)?;
+        let auth = crate::native_auth::SessionBinding::capture(&self.profile_id, &self.hub_origin)
+            .await
+            .map_err(|error| anyhow!(error))?;
+        let account = auth.as_ref().map(TriggerAccount::from_binding);
+        ensure!(
+            self.matches(&profile.hub_profile, account.as_ref()),
+            "The trigger's saved profile, hub, or account changed. Sign in to that profile or enable the trigger again."
+        );
+        Ok((profile, auth))
+    }
+}
+
+pub(crate) fn execution_authority(
+    auth: Option<crate::native_auth::SessionBinding>,
+    token: Option<&str>,
+) -> Result<Option<crate::native_auth::SessionBinding>> {
+    ensure!(
+        auth.as_ref().is_none_or(|auth| auth.is_current()),
+        "The trigger account changed"
+    );
+    let token = token.map(|token| token.strip_prefix("Bearer ").unwrap_or(token));
+    if token.is_some_and(|token| token.starts_with("pat_")) {
+        return Ok(None);
+    }
+    if let Some(token) = token {
+        let subject = flow_like::flow::execution::extract_sub_from_jwt(token)?;
+        ensure!(
+            auth.as_ref().is_some_and(|auth| auth.subject == subject),
+            "The registered execution token belongs to another or signed-out profile account"
+        );
+    }
+    Ok(auth)
 }
 
 /// The hub refused a trigger's PAT itself: revoked, expired or unknown.
@@ -33,6 +125,23 @@ impl std::fmt::Display for TokenRefused {
 impl std::error::Error for TokenRefused {}
 
 impl TriggerAccount {
+    fn from_binding(binding: &crate::native_auth::SessionBinding) -> Self {
+        Self {
+            profile_id: binding.profile_id.clone(),
+            issuer: binding.issuer.clone(),
+            sub: binding.subject.clone(),
+            hub_origin: binding.hub.clone(),
+        }
+    }
+
+    pub(crate) fn profile_binding(&self) -> TriggerProfile {
+        TriggerProfile {
+            profile_id: self.profile_id.clone(),
+            hub_origin: self.hub_origin.clone(),
+            issuer: Some(self.issuer.clone()),
+            subject: Some(self.sub.clone()),
+        }
+    }
     /// `None` while nobody is signed in or the profile names no hub.
     pub async fn current(app_handle: &AppHandle) -> Option<Self> {
         let profile = crate::state::TauriSettingsState::current_profile(app_handle)
@@ -44,14 +153,14 @@ impl TriggerAccount {
     /// The signed-in subject on `hub`, the hub of a profile read once for a
     /// run, so the run talks to the hub its account was checked against.
     pub async fn signed_in_to(
-        app_handle: &AppHandle,
+        _app_handle: &AppHandle,
         hub: &flow_like::profile::Profile,
     ) -> Option<Self> {
         let hub_origin = flow_like::hub::hub_origin(&hub.hub, hub.secure)?;
-        let sub = crate::functions::flow::storage::current_user_sub(app_handle)
+        let binding = crate::native_auth::SessionBinding::capture(&hub.id, &hub_origin)
             .await
-            .ok()?;
-        (sub != "local").then_some(Self { sub, hub_origin })
+            .ok()??;
+        Some(Self::from_binding(&binding))
     }
 }
 
@@ -92,16 +201,32 @@ pub async fn verify_token_owner(
     app_id: &str,
     pat: &str,
 ) -> Result<TriggerAccount> {
-    let account = TriggerAccount::current(app_handle)
+    let profile = crate::state::TauriSettingsState::current_profile(app_handle).await?;
+    let account = TriggerAccount::signed_in_to(app_handle, &profile.hub_profile)
         .await
         .ok_or_else(|| anyhow!("Sign in to the hub before choosing a token for this trigger"))?;
-    let profile = crate::state::TauriSettingsState::current_profile(app_handle).await?;
-    let identity = token_identity(&profile.hub_profile, app_id, pat).await?;
-    accept_owner(&identity, &account)?;
+    verify_token_for_profile(&profile.hub_profile, &account, app_id, pat).await
+}
+
+/// Keep a save's token verification on the profile captured before its first await.
+pub(crate) async fn verify_token_for_profile(
+    profile: &flow_like::profile::Profile,
+    account: &TriggerAccount,
+    app_id: &str,
+    pat: &str,
+) -> Result<TriggerAccount> {
+    ensure!(
+        profile.id == account.profile_id
+            && flow_like::hub::hub_origin(&profile.hub, profile.secure).as_deref()
+                == Some(account.hub_origin.as_str()),
+        "The trigger token verification profile changed"
+    );
+    let identity = token_identity(profile, app_id, pat).await?;
+    accept_owner(&identity, account)?;
     if let Some(id) = pat_id(pat) {
-        accept_level(token_level(&profile.hub_profile, pat, id).await?)?;
+        accept_level(token_level(profile, pat, id).await?)?;
     }
-    Ok(account)
+    Ok(account.clone())
 }
 
 /// Who `pat` is in `app_id`, as the hub answers it.
@@ -200,6 +325,96 @@ fn accept_owner(identity: &UserExecutionContext, account: &TriggerAccount) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_token_is_never_verified_against_a_different_profile_or_hub() {
+        let profile = flow_like::profile::Profile {
+            id: "profile-1".into(),
+            hub: "https://hub.example".into(),
+            secure: true,
+            ..Default::default()
+        };
+        let account = TriggerAccount {
+            profile_id: profile.id.clone(),
+            issuer: "https://issuer.example".into(),
+            sub: "user-1".into(),
+            hub_origin: "https://hub.example".into(),
+        };
+        for foreign in [
+            TriggerAccount {
+                profile_id: "profile-2".into(),
+                ..account.clone()
+            },
+            TriggerAccount {
+                hub_origin: "https://other.example".into(),
+                ..account.clone()
+            },
+        ] {
+            let error = verify_token_for_profile(&profile, &foreign, "app", "pat_never_send")
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "The trigger token verification profile changed"
+            );
+        }
+    }
+
+    #[test]
+    fn a_saved_trigger_accepts_only_its_exact_profile_hub_issuer_and_account() {
+        let profile = flow_like::profile::Profile {
+            id: "profile-1".into(),
+            hub: "https://hub.example".into(),
+            secure: true,
+            ..Default::default()
+        };
+        let account = TriggerAccount {
+            profile_id: profile.id.clone(),
+            issuer: "https://issuer.example".into(),
+            sub: "user-1".into(),
+            hub_origin: "https://hub.example".into(),
+        };
+        let saved = account.profile_binding();
+        assert!(saved.matches(&profile, Some(&account)));
+        assert!(!saved.matches(&profile, None));
+        for foreign in [
+            TriggerAccount {
+                profile_id: "profile-2".into(),
+                ..account.clone()
+            },
+            TriggerAccount {
+                issuer: "https://other-issuer.example".into(),
+                ..account.clone()
+            },
+            TriggerAccount {
+                sub: "user-2".into(),
+                ..account.clone()
+            },
+            TriggerAccount {
+                hub_origin: "https://other-hub.example".into(),
+                ..account.clone()
+            },
+        ] {
+            assert!(!saved.matches(&profile, Some(&foreign)), "{foreign:?}");
+        }
+        let moved = flow_like::profile::Profile {
+            hub: "https://other-hub.example".into(),
+            ..profile.clone()
+        };
+        assert!(!saved.matches(&moved, Some(&account)));
+        let renamed = flow_like::profile::Profile {
+            name: "New display name".into(),
+            ..profile.clone()
+        };
+        assert!(saved.matches(&renamed, Some(&account)));
+        let anonymous = TriggerProfile {
+            issuer: None,
+            subject: None,
+            ..saved
+        };
+        assert!(anonymous.matches(&profile, None));
+        assert!(!anonymous.matches(&profile, Some(&account)));
+    }
     use flow_like::flow::execution::RoleContext;
 
     fn identity(sub: &str, permissions: i64, technical: bool) -> UserExecutionContext {
@@ -217,6 +432,8 @@ mod tests {
     #[test]
     fn a_token_counts_only_for_its_signed_in_owner_who_may_run_events() {
         let account = TriggerAccount {
+            profile_id: "profile-1".into(),
+            issuer: "https://issuer.example".into(),
             sub: "user-1".to_string(),
             hub_origin: "https://hub.example".to_string(),
         };
@@ -247,6 +464,8 @@ mod tests {
     #[test]
     fn only_another_accounts_token_is_refused_with_the_wrong_account_code() {
         let account = TriggerAccount {
+            profile_id: "profile-1".into(),
+            issuer: "https://issuer.example".into(),
             sub: "user-1".to_string(),
             hub_origin: "https://hub.example".to_string(),
         };

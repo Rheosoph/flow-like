@@ -8,6 +8,7 @@ pub mod app;
 pub mod bit;
 pub mod course;
 pub mod template;
+pub mod user;
 pub mod wasm_package;
 
 use std::sync::Arc;
@@ -53,10 +54,13 @@ pub enum ExternalStep {
     /// Remote sinks that run as the user, paused and handed back to their apps'
     /// admins before the account's memberships go.
     UserSinkRunAs,
+    /// The workspaces of the account's bots (`App.botId`), each queued as its own
+    /// app deletion while the bots still name them.
+    UserBotWorkspaces,
 }
 
 impl ExternalStep {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::AppSinkSchedules,
         Self::AppStoragePrefixes,
         Self::AppCacheBackend,
@@ -68,6 +72,7 @@ impl ExternalStep {
         Self::AppQuotaPayloads,
         Self::UserQuotaPayloads,
         Self::UserSinkRunAs,
+        Self::UserBotWorkspaces,
     ];
 
     pub fn describe(self) -> &'static str {
@@ -87,6 +92,7 @@ impl ExternalStep {
                 "cancel account operations and remove expired private inputs"
             }
             Self::UserSinkRunAs => "pause the event sinks that run as the account",
+            Self::UserBotWorkspaces => "queue the deletion of the account's bot workspaces",
         }
     }
 }
@@ -163,6 +169,10 @@ pub async fn run(
             )
             .await
             .map_err(ApiError::internal_error)?;
+            Ok(Flow::Continue)
+        }
+        ExternalStep::UserBotWorkspaces => {
+            user::queue_bot_workspaces(state, &root_id).await?;
             Ok(Flow::Continue)
         }
     }

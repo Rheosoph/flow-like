@@ -9,10 +9,12 @@ import type { FlowScriptWorkspaceCandidate } from "../../components/flowpilot/fl
 import type { AIProvider } from "../../components/flowpilot/types";
 import type {
 	IAttachment,
+	IChatMainWidget,
 	IChatUsageStat,
 	IChatWidget,
 	IPlanStep,
 } from "../../components/interfaces/chat-default/chat-db";
+import type { IChatMessageInteraction } from "../../components/interfaces/chat-default/chat-message-interaction";
 import { mergeChatWidgets } from "../../components/interfaces/chat-default/event-processor";
 import { joinContentText } from "../../components/interfaces/chat-default/inline-segments";
 import type { AskUserChoice, AskUserForm } from "../../lib/ask-user";
@@ -32,6 +34,14 @@ import {
 	recordAgentDebugEvent,
 	recordAgentGenerationMetricEvent,
 } from "./agent-debug-report";
+import {
+	addressedNow,
+	botConversationId,
+	conversationBotId,
+	currentConversationId,
+	isBotConversation,
+	rememberMovedConversation,
+} from "./global-chat-bots";
 import type { IMessage } from "./global-chat-db";
 
 /**
@@ -63,6 +73,30 @@ export type GlobalChatMode = "closed" | "overlay";
 
 /** Session-scoped pointer to the active conversation, so reloads/navigation restore the transcript. */
 export const LAST_CONVERSATION_KEY = "flow-like:global-chat:last-conversation";
+
+/** Session-scoped pointer to Flux's own last conversation, so leaving a bot's chat returns to it. */
+export const LAST_FLUX_CONVERSATION_KEY =
+	"flow-like:global-chat:last-flux-conversation";
+
+/** Point the reload restore, and for Flux the way back from a bot's chat, at a conversation. */
+export function rememberGlobalChatConversation(conversationId: string) {
+	try {
+		sessionStorage.setItem(LAST_CONVERSATION_KEY, conversationId);
+		if (!isBotConversation(conversationId)) {
+			sessionStorage.setItem(LAST_FLUX_CONVERSATION_KEY, conversationId);
+		}
+	} catch {
+		// restore pointers are best-effort
+	}
+}
+
+export function readLastFluxConversation(): string | null {
+	try {
+		return sessionStorage.getItem(LAST_FLUX_CONVERSATION_KEY);
+	} catch {
+		return null;
+	}
+}
 
 /** Session-scoped dock visibility, so a hard reload mid-response re-opens the overlay (and thus
  * re-mounts the chat surface that re-attaches to the live stream) instead of hiding it. */
@@ -110,14 +144,15 @@ function readPersistedOverlayAutoOpenDismissed() {
 	}
 }
 
-/** The FlowPilot provider/model/effort the user last *explicitly* chose. Remembered
+/** The provider, chat model, memory model and effort the user last explicitly chose. Remembered
  * across sessions and hydrated by useHydrateAgentSelection so every surface (hero,
- * /chat, overlay) opens on the same picks. Written only by the select* actions —
+ * Bots tab, overlay) opens on the same picks. Written only by the select* actions;
  * the plain setters stay non-persisting so a transient "keep a valid model"
  * fallback can never overwrite the remembered choice. */
 export const AGENT_PROVIDER_KEY = "flowpilot.hero.provider";
 export const AGENT_MODEL_KEY = "flowpilot.hero.model";
 export const AGENT_REASONING_KEY = "flowpilot.hero.reasoning-effort";
+export const AGENT_EMBEDDING_MODEL_KEY = "flowpilot.memory.embedding-model";
 
 function persistAgentPref(key: string, value: string) {
 	try {
@@ -164,14 +199,18 @@ export interface InlineAppSurface extends InlineCardAnchor {
 }
 
 export interface GlobalChatDraft {
+	interaction?: IChatMessageInteraction;
+	reactionAccepted?: boolean;
 	/** Native input can wait for model readiness; never deliver it under a different account. */
 	nativeScope?: string;
 	nativeRequest?: NativeActionRequest;
 	prompt: string;
 	/** Backend-prefixed model id (e.g. "github-copilot:…", "codex:…") or a raw Bits id. */
 	modelId?: string;
-	/** Raw browser files captured on the landing bar, forwarded to the first /chat send. */
+	/** Raw browser files captured on the landing bar, forwarded to the first Bots tab send. */
 	files?: File[];
+	/** The chat bot it is written to, as the dock names it; unset (FlowPilot entry points) is Flux. */
+	botId?: string | null;
 }
 
 /** Provider-neutral model configuration captured once when a global assistant turn starts. */
@@ -212,6 +251,7 @@ export interface GlobalChatSteer {
  */
 export interface GlobalChatRun {
 	runId: string;
+	/** Also names the run's bot (`bot:<id>`; anything else is Flux), which a later switch can't change. */
 	conversationId: string;
 	status: GlobalChatRunStatus;
 	startedAt: number;
@@ -228,6 +268,7 @@ export interface GlobalChatRun {
 	subAttachments: IAttachment[];
 	subUsageStats: IChatUsageStat[];
 	subWidgets: IChatWidget[];
+	subMainWidget?: IChatMainWidget;
 	pendingAppRefs: string[];
 	debugReport: IAgentDebugReport | null;
 	steers: GlobalChatSteer[];
@@ -242,6 +283,9 @@ export interface GlobalChatQueuedMessage {
 	id: string;
 	conversationId: string;
 	content: string;
+	interaction?: IChatMessageInteraction;
+	/** The UI already reflects this operation; draining must not undo later reactions. */
+	reactionAccepted?: boolean;
 	/** Raw browser files, held until the send actually happens (they are uploaded at send time). */
 	files?: File[];
 	nativeRequest?: NativeActionRequest;
@@ -268,7 +312,11 @@ export type GlobalToolAsk = AskUserForm;
  */
 export interface GlobalToolPrompt {
 	id: string;
-	kind: "approval" | "ask";
+	kind: "approval" | "ask" | "secret";
+	/** The run that asks; absent when no run owns the request. */
+	runId?: string;
+	/** That run's chat (its bot's, or a Flux one), as it was when the prompt opened. */
+	conversationId?: string;
 	toolName: string;
 	title: string;
 	description?: string;
@@ -282,9 +330,24 @@ export interface GlobalToolPrompt {
 	destructive?: boolean;
 	/** False when this one request cannot be safely represented by a reusable approval scope. */
 	rememberable?: boolean;
+	/** The app a remembered approval is limited to; unset when it covers the tool in every app. */
+	rememberAppId?: string;
 	/** Present only when `kind === "ask"`: drives freeform vs. single/multiple choice rendering. */
 	ask?: GlobalToolAsk;
+	/** Present only when `kind === "secret"`. */
+	secret?: GlobalToolSecret;
 	respond: (value: GlobalToolPromptResolution) => void;
+}
+
+/**
+ * A bot's request for a secret. The prompt hands the typed value to `store` and nowhere else:
+ * it is never part of the resolution, the debug record or any cache.
+ */
+export interface GlobalToolSecret {
+	name: string;
+	description: string;
+	replace?: boolean;
+	store: (value: string) => Promise<void>;
 }
 
 export interface PendingComponentsEntry {
@@ -304,15 +367,17 @@ export interface PendingComponentsEntry {
 		pending: PendingComponentsEntry;
 		ownerRunId: string | null;
 	};
+	/** The chat of the run that staged it; that chat's owner's auto mode may apply it. */
+	conversationId?: string;
 }
 
 /**
  * Shared state for the global FlowPilot assistant. Lives outside the surface components so the same
- * conversation renders in the full `/chat` view and in the docked bottom-right overlay: when the agent
- * navigates the user away from `/chat`, the chat morphs into the overlay without losing context.
+ * conversation renders in the Bots tab's dock and in the docked bottom-right overlay: when the agent
+ * navigates the user away from the Bots tab, the chat morphs into the overlay without losing context.
  */
 interface GlobalChatState {
-	/** Pending message handed off from the landing bar to the /chat view. */
+	/** Pending message handed off from the landing bar to the Bots tab. */
 	draft: GlobalChatDraft | null;
 	/** Native requests wait in order while model selection or execution capacity is unavailable. */
 	nativeDrafts: GlobalChatDraft[];
@@ -320,7 +385,9 @@ interface GlobalChatState {
 	mode: GlobalChatMode;
 	/** Whether automatic opens are suppressed because the user explicitly dismissed the dock. */
 	overlayAutoOpenDismissed: boolean;
-	/** Conversation currently shown in both /chat and the overlay. */
+	/** Bumped whenever the conversation should come into view; the Bots tab's dock follows it. */
+	revealRequest: number;
+	/** Conversation currently shown in both the Bots tab and the overlay. */
 	activeConversationId: string;
 	/** Committed messages of the active conversation. */
 	messages: IMessage[];
@@ -344,6 +411,11 @@ interface GlobalChatState {
 	 * keeps conversation switches from firing it early or unrelated runs from holding it hostage.
 	 */
 	pendingNavigation: { target: string; runId?: string } | null;
+	/**
+	 * A switch to another bot or a restore from history is still reading its conversation, so the
+	 * chat on screen is about to be replaced. Landing a conversation ends it.
+	 */
+	conversationLoading: boolean;
 	/** Pending inline approval/question from the global tool bridge (one at a time). */
 	toolPrompt: GlobalToolPrompt | null;
 	provider: AIProvider;
@@ -353,10 +425,13 @@ interface GlobalChatState {
 	reasoningEffort: string;
 	/** Embedding bit id used for profile-scoped memory ("" = memory off). */
 	embeddingModelId: string;
-	/** Waive tool-approval prompts and the pending-change review gate. Deliberately not
-	 * persisted — it resets on page load, unlike the picker preferences above. Never waives
-	 * `ask_user` or destructive-deletion approval. */
+	/** Flux's auto mode, shared by every Flux chat: waive tool-approval prompts and the
+	 * pending-change review gate for Flux's runs. Deliberately not persisted — it resets on page
+	 * load, unlike the picker preferences above. Never waives `ask_user` or destructive-deletion
+	 * approval. Read it through `selectAutoMode` with the asking run's chat. */
 	autoMode: boolean;
+	/** Each bot's own auto mode, by bot id; a bot's runs never use Flux's. */
+	botAutoMode: Readonly<Record<string, boolean>>;
 	/** App chat events the agent surfaced inline in the global chat view. */
 	inlineAppChats: InlineAppChat[];
 	/** App UI pages the agent embedded inline in the global chat view (artifact-like). */
@@ -401,6 +476,8 @@ interface GlobalChatState {
 	enableOverlayAutoOpen: () => void;
 	/** Close the dock without treating it as a user dismissal (for example on the full chat page). */
 	closeOverlay: () => void;
+	/** Ask the Bots tab to show the conversation in its dock (the overlay never opens there). */
+	requestReveal: () => void;
 	/** Defer a route change until the agent turn ends (navigating mid-stream breaks the run). */
 	setPendingNavigation: (
 		navigation: { target: string; runId?: string } | null,
@@ -450,17 +527,20 @@ interface GlobalChatState {
 		conversationId: string,
 	) => GlobalChatQueuedMessage | undefined;
 	clearQueue: (conversationId?: string) => void;
+	setConversationLoading: (loading: boolean) => void;
 	setToolPrompt: (prompt: GlobalToolPrompt | null) => void;
 	setProvider: (provider: AIProvider) => void;
 	setSelectedModelId: (modelId: string) => void;
 	setReasoningEffort: (effort: string) => void;
-	/** Explicit (user-driven) picks — these also persist across sessions. The plain
+	setEmbeddingModelId: (modelId: string) => void;
+	/** Explicit user picks also persist across sessions. The plain
 	 * setters above stay non-persisting for internal "keep a valid model" fallbacks. */
 	selectProvider: (provider: AIProvider) => void;
 	selectModel: (modelId: string) => void;
 	selectReasoningEffort: (effort: string) => void;
-	setEmbeddingModelId: (modelId: string) => void;
-	setAutoMode: (autoMode: boolean) => void;
+	selectEmbeddingModel: (modelId: string) => void;
+	/** Auto mode of a chat's owner: its bot's, or Flux's (every Flux chat; the default). */
+	setAutoMode: (autoMode: boolean, conversationId?: string) => void;
 	/** `runId` anchors the card in that run's reply; without it only a sole live run anchors. */
 	addInlineAppChat: (chat: Omit<InlineAppChat, "id">, runId?: string) => void;
 	removeInlineAppChat: (id: string) => void;
@@ -487,6 +567,8 @@ interface GlobalChatState {
 	addSubUsageStats: (runId: string, stats: IChatUsageStat[]) => void;
 	/** Upsert nested-run widgets (by instance id, longer-updates-wins) into the run's bubble. */
 	addSubWidgets: (runId: string, widgets: IChatWidget[]) => void;
+	/** Replace or clear the conversation pane from an app workflow. */
+	setSubMainWidget: (runId: string, mainWidget: IChatMainWidget) => void;
 	setFlowscriptWorkspace: (
 		runId: string | null,
 		workspace: FlowScriptWorkspaceCandidate | null,
@@ -524,10 +606,24 @@ interface GlobalChatState {
 			"components" | "canvasSettings" | "surfaceId" | "appId"
 		> | null,
 	) => void;
-	/** Start a fresh conversation (new id, cleared transcript). */
+	/** Start a fresh Flux conversation (new id, cleared transcript). A bot has only its one. */
 	newConversation: () => void;
 	/** Resume a persisted conversation from history. */
 	loadConversation: (conversationId: string, messages: IMessage[]) => void;
+	/**
+	 * Add saved rows the open conversation doesn't show yet, touching nothing else: its cards,
+	 * reviews and live bubbles stay. A live run's checkpoint is its bubble, never a second message.
+	 */
+	mergeConversationMessages: (
+		conversationId: string,
+		messages: IMessage[],
+	) => void;
+	/**
+	 * Move a bot's one conversation to the bot's new id, as when a bot on this device moves to the
+	 * account and the server mints its id: the transcript on screen, queued sends, live runs, their
+	 * restore pointers and the saved rows. Idempotent; a no-op when the bot never chatted.
+	 */
+	rebindBotChat: (fromBotId: string, toBotId: string) => Promise<void>;
 }
 
 const usageSignature = (stat: IChatUsageStat) => JSON.stringify(stat);
@@ -555,11 +651,14 @@ function foldSubBuffers(run: GlobalChatRun): GlobalChatRun {
 		...run,
 		message: {
 			...message,
+			// The run's conversation wins, so a reply follows its bot's chat when that is rebound.
+			sessionId: run.conversationId,
 			flowscript_workspace:
 				run.flowscriptWorkspace ?? message.flowscript_workspace,
 			plan_steps: [...ownSteps, ...run.subPlanSteps],
 			files: run.subAttachments.length > 0 ? run.subAttachments : message.files,
 			widgets: run.subWidgets.length > 0 ? run.subWidgets : message.widgets,
+			main_widget: run.subMainWidget ?? message.main_widget,
 			usage_stats: usage.length > 0 ? usage : undefined,
 			app_refs:
 				run.pendingAppRefs.length > 0
@@ -663,6 +762,47 @@ function restoreFlowScriptWorkspace(
 	};
 }
 
+/** The in-memory side of moving a conversation to a new id; the same state when it holds none. */
+function rebindConversationState(
+	state: GlobalChatState,
+	from: string,
+	to: string,
+): Partial<GlobalChatState> | GlobalChatState {
+	const active = state.activeConversationId === from;
+	const movedRuns = Object.values(state.runs).filter(
+		(run) => run.conversationId === from,
+	);
+	const queueMoves = state.queue.some((entry) => entry.conversationId === from);
+	if (!active && movedRuns.length === 0 && !queueMoves) return state;
+	const runs = { ...state.runs };
+	for (const run of movedRuns) {
+		runs[run.runId] = foldSubBuffers({ ...run, conversationId: to });
+	}
+	const activeConversationId = active ? to : state.activeConversationId;
+	return {
+		...deriveRunViews(runs, activeConversationId),
+		activeConversationId,
+		messages: active
+			? state.messages.map((message) =>
+					message.sessionId === from ? { ...message, sessionId: to } : message,
+				)
+			: state.messages,
+		queue: state.queue.map((entry) =>
+			entry.conversationId === from ? { ...entry, conversationId: to } : entry,
+		),
+	};
+}
+
+/** A staged set keeps the chat of the run that staged it, whose owner's auto mode may apply it. */
+function withStagingChat(
+	state: GlobalChatState,
+	runId: string | null,
+	pending: PendingComponentsEntry | null,
+): PendingComponentsEntry | null {
+	const conversationId = runId ? state.runs[runId]?.conversationId : undefined;
+	return pending && conversationId ? { ...pending, conversationId } : pending;
+}
+
 function switchConversation(
 	state: GlobalChatState,
 	conversationId: string,
@@ -670,6 +810,7 @@ function switchConversation(
 ): Partial<GlobalChatState> {
 	return {
 		activeConversationId: conversationId,
+		conversationLoading: false,
 		messages,
 		inlineAppChats: [],
 		inlineAppPages: [],
@@ -688,6 +829,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	nativeDrafts: [],
 	mode: "closed",
 	overlayAutoOpenDismissed: false,
+	revealRequest: 0,
 	activeConversationId: createId(),
 	messages: [],
 	runs: {},
@@ -695,12 +837,14 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	isStreaming: false,
 	streamingMessages: [],
 	pendingNavigation: null,
+	conversationLoading: false,
 	toolPrompt: null,
 	provider: "bits",
 	selectedModelId: "",
 	reasoningEffort: "",
 	embeddingModelId: "",
 	autoMode: false,
+	botAutoMode: {},
 	inlineAppChats: [],
 	inlineAppPages: [],
 	inlineAppSurfaces: [],
@@ -710,7 +854,8 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	pendingComponents: null,
 	pendingComponentsOwnerRunId: null,
 
-	setDraft: (draft) =>
+	setDraft: (draft) => {
+		const before = get();
 		set((state) => {
 			const incomingNative = Boolean(draft.nativeRequest || draft.nativeScope);
 			const pending = [state.draft, ...state.nativeDrafts];
@@ -735,7 +880,10 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 			if (state.draft.nativeRequest || state.draft.nativeScope)
 				return { draft, nativeDrafts: [state.draft, ...state.nativeDrafts] };
 			return { draft };
-		}),
+		});
+		// Only the mounted chat body sends drafts, so a queued one asks to be shown.
+		if (get() !== before) get().requestReveal();
+	},
 	consumeDraft: (expected) => {
 		const { draft, nativeDrafts } = get();
 		if (expected && draft !== expected) return null;
@@ -780,18 +928,23 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 		persistOverlayMode("closed");
 		set({ mode: "closed" });
 	},
+	requestReveal: () =>
+		set((state) => ({ revealRequest: state.revealRequest + 1 })),
 	setPendingNavigation: (pendingNavigation) => set({ pendingNavigation }),
 	// Both writers are conversation-guarded: a run that finishes after the user switched chats must
 	// not splice its reply into the transcript now on screen. It is still persisted to IndexedDB by
 	// the stream engine, so switching back shows it.
-	appendMessage: (message) =>
-		set((state) =>
-			message.sessionId && message.sessionId !== state.activeConversationId
-				? state
-				: { messages: [...state.messages, message] },
-		),
-	commitMessage: (message) =>
+	appendMessage: (incoming) =>
 		set((state) => {
+			const message = addressedNow(incoming);
+			return message.sessionId &&
+				message.sessionId !== state.activeConversationId
+				? state
+				: { messages: [...state.messages, message] };
+		}),
+	commitMessage: (incoming) =>
+		set((state) => {
+			const message = addressedNow(incoming);
 			if (
 				message.sessionId &&
 				message.sessionId !== state.activeConversationId
@@ -806,10 +959,10 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 		}),
 	startRun: ({
 		runId,
-		conversationId,
+		conversationId: addressedTo,
 		selection,
 		label,
-		message,
+		message: addressedMessage,
 		sourceAttachments,
 	}) =>
 		set((state) => {
@@ -821,6 +974,8 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 					state.activeConversationId,
 				);
 			}
+			const conversationId = currentConversationId(addressedTo);
+			const message = addressedMessage && addressedNow(addressedMessage);
 			return deriveRunViews(
 				{
 					...state.runs,
@@ -904,8 +1059,12 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 		),
 	enqueueMessage: (entry) => {
 		const id = createId();
+		const conversationId = currentConversationId(entry.conversationId);
 		set((state) => ({
-			queue: [...state.queue, { ...entry, id, createdAt: Date.now() }],
+			queue: [
+				...state.queue,
+				{ ...entry, conversationId, id, createdAt: Date.now() },
+			],
 		}));
 		return id;
 	},
@@ -920,7 +1079,8 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 				entry.id === id ? { ...entry, content } : entry,
 			),
 		})),
-	takeNextQueuedMessage: (conversationId) => {
+	takeNextQueuedMessage: (addressedTo) => {
+		const conversationId = currentConversationId(addressedTo);
 		const next = get().queue.find(
 			(entry) => entry.conversationId === conversationId,
 		);
@@ -930,12 +1090,17 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 		}));
 		return next;
 	},
-	clearQueue: (conversationId) =>
-		set((state) => ({
-			queue: conversationId
-				? state.queue.filter((entry) => entry.conversationId !== conversationId)
-				: [],
-		})),
+	clearQueue: (addressedTo) =>
+		set((state) => {
+			if (!addressedTo) return { queue: [] };
+			const conversationId = currentConversationId(addressedTo);
+			return {
+				queue: state.queue.filter(
+					(entry) => entry.conversationId !== conversationId,
+				),
+			};
+		}),
+	setConversationLoading: (conversationLoading) => set({ conversationLoading }),
 	setToolPrompt: (toolPrompt) => set({ toolPrompt }),
 	setProvider: (provider) => set({ provider }),
 	setSelectedModelId: (selectedModelId) => set({ selectedModelId }),
@@ -953,7 +1118,22 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 		set({ reasoningEffort });
 	},
 	setEmbeddingModelId: (embeddingModelId) => set({ embeddingModelId }),
-	setAutoMode: (autoMode) => set({ autoMode }),
+	selectEmbeddingModel: (embeddingModelId) => {
+		persistAgentPref(AGENT_EMBEDDING_MODEL_KEY, embeddingModelId);
+		set({ embeddingModelId });
+	},
+	setAutoMode: (autoMode, conversationId) => {
+		const botId = conversationId
+			? conversationBotId(currentConversationId(conversationId))
+			: null;
+		if (botId === null) {
+			set({ autoMode });
+			return;
+		}
+		set((state) => ({
+			botAutoMode: { ...state.botAutoMode, [botId]: autoMode },
+		}));
+	},
 	addInlineAppChat: (chat, runId) =>
 		set((state) => {
 			// One card per (app, event) — surfacing the same chat twice just keeps the existing card.
@@ -1158,6 +1338,14 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 					: foldSubBuffers({ ...run, subWidgets });
 			}),
 		),
+	setSubMainWidget: (runId, subMainWidget) =>
+		set((state) =>
+			patchRun(state, runId, (run) =>
+				run.subMainWidget === subMainWidget
+					? run
+					: foldSubBuffers({ ...run, subMainWidget }),
+			),
+		),
 	setFlowscriptWorkspace: (runId, flowscriptWorkspace) =>
 		set((state) => {
 			const run = runId ? state.runs[runId] : undefined;
@@ -1256,7 +1444,7 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 				return state;
 			}
 			return {
-				pendingComponents,
+				pendingComponents: withStagingChat(state, runId, pendingComponents),
 				pendingComponentsOwnerRunId: pendingComponents ? runId : null,
 			};
 		}),
@@ -1296,10 +1484,11 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 	// active chat) from the docked overlay must keep the dock open, not close it. Runs of OTHER
 	// conversations are deliberately preserved — switching chats no longer kills what is in flight.
 	newConversation: () => {
-		// Drop the reload-restore pointer, or the next surface mount silently swaps the fresh
-		// conversation back to the previous one.
+		// Drop the restore pointers, or the next surface mount (or the way back from a bot's chat)
+		// silently swaps the fresh conversation back to the previous one.
 		try {
 			sessionStorage.removeItem(LAST_CONVERSATION_KEY);
+			sessionStorage.removeItem(LAST_FLUX_CONVERSATION_KEY);
 		} catch {
 			// storage unavailable — restore is best-effort anyway
 		}
@@ -1313,6 +1502,31 @@ export const useGlobalChatStore = create<GlobalChatState>((set, get) => ({
 				messages.map(markRestoredMessageDebugReportStale),
 			),
 		),
+	mergeConversationMessages: (conversationId, messages) =>
+		set((state) => {
+			if (state.activeConversationId !== conversationId) return state;
+			const shown = new Set(state.messages.map((message) => message.id));
+			const missing = messages.filter(
+				(message) => !shown.has(message.id) && !state.runs[message.id],
+			);
+			if (missing.length === 0) return state;
+			return {
+				messages: [
+					...state.messages,
+					...missing.map(markRestoredMessageDebugReportStale),
+				].sort((a, b) => a.timestamp - b.timestamp),
+			};
+		}),
+	rebindBotChat: async (fromBotId, toBotId) => {
+		const from = botConversationId(fromBotId);
+		const to = botConversationId(toBotId);
+		if (from === to) return;
+		rememberMovedConversation(from, to);
+		set((state) => rebindConversationState(state, from, to));
+		// The engine imports this store, so it loads lazily here instead of at module scope.
+		const { rebindSavedConversation } = await import("./global-chat-stream");
+		await rebindSavedConversation(from, to);
+	},
 }));
 
 function freezeTurnSelection(
@@ -1370,12 +1584,70 @@ export function getGlobalChatTurnSelection(
 	);
 }
 
+/**
+ * Whether a chat's runs act without asking: its bot's auto mode, or Flux's for a Flux chat. A
+ * request no chat owns (`undefined`) is never waived.
+ */
+export function selectAutoMode(
+	state: Pick<GlobalChatState, "autoMode" | "botAutoMode">,
+	conversationId: string | undefined,
+): boolean {
+	if (conversationId === undefined) return false;
+	const botId = conversationBotId(currentConversationId(conversationId));
+	return botId === null ? state.autoMode : state.botAutoMode[botId] === true;
+}
+
+/** Whether the staged components may apply unreviewed: the staging chat owner's auto mode. */
+export function selectPendingComponentsAutoMode(
+	state: Pick<
+		GlobalChatState,
+		"autoMode" | "botAutoMode" | "pendingComponents"
+	>,
+): boolean {
+	return selectAutoMode(state, state.pendingComponents?.conversationId);
+}
+
+/** The chat whose run asks through the open prompt, under its current id. */
+export function selectToolPromptConversationId(
+	state: Pick<GlobalChatState, "toolPrompt" | "runs">,
+): string | undefined {
+	const prompt = state.toolPrompt;
+	const conversationId =
+		(prompt?.runId && state.runs[prompt.runId]?.conversationId) ||
+		prompt?.conversationId;
+	return conversationId ? currentConversationId(conversationId) : undefined;
+}
+
+/**
+ * Whether the open chat holds the prompt's card: its run is this chat's, or no run owns the prompt.
+ * Any other chat only points at the asking one, Flux chats included.
+ */
+export function selectToolPromptHere(
+	state: Pick<GlobalChatState, "toolPrompt" | "runs" | "activeConversationId">,
+): boolean {
+	if (!state.toolPrompt) return false;
+	const asking = selectToolPromptConversationId(state);
+	return asking === undefined || asking === state.activeConversationId;
+}
+
+/**
+ * The bot the active conversation talks to; null for Flux. Read from the conversation id, so it can
+ * never disagree with the transcript on screen.
+ */
+export function selectActiveBotId(
+	state: Pick<GlobalChatState, "activeConversationId">,
+): string | null {
+	return conversationBotId(state.activeConversationId);
+}
+
 /** Live runs of a conversation (defaults to the active one), oldest first. */
 export function selectGlobalChatRuns(
 	state: GlobalChatState,
 	conversationId?: string,
 ): GlobalChatRun[] {
-	const target = conversationId ?? state.activeConversationId;
+	const target = currentConversationId(
+		conversationId ?? state.activeConversationId,
+	);
 	return Object.values(state.runs)
 		.filter((run) => run.conversationId === target)
 		.sort((a, b) => a.startedAt - b.startedAt);
@@ -1386,7 +1658,9 @@ export function selectGlobalChatQueue(
 	state: GlobalChatState,
 	conversationId?: string,
 ): GlobalChatQueuedMessage[] {
-	const target = conversationId ?? state.activeConversationId;
+	const target = currentConversationId(
+		conversationId ?? state.activeConversationId,
+	);
 	return state.queue.filter((entry) => entry.conversationId === target);
 }
 

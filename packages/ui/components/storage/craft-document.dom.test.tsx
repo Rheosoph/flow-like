@@ -150,6 +150,82 @@ function messages(type: string) {
 		.filter((message) => message.type === type);
 }
 
+it("keeps the editor's loading controls reachable while progress extends its timeout", async () => {
+	vi.useFakeTimers();
+	await render(true, "/files/design.solidcraft", {
+		viewer: requireViewer("design.solidcraft"),
+		filename: "design.solidcraft",
+		initialEditing: true,
+	});
+	await receive({
+		type: "loading",
+		interactive: true,
+		completed: 0,
+		total: 10,
+	});
+	expect(container.querySelector("output")?.classList.contains("sr-only")).toBe(
+		false,
+	);
+	await receive({ type: "ready" });
+	await act(async () => vi.advanceTimersByTime(80_000));
+	await receive({
+		type: "loading",
+		interactive: true,
+		completed: 2,
+		total: 10,
+	});
+	expect(container.querySelector("output")?.classList.contains("sr-only")).toBe(
+		true,
+	);
+	expect(button("Save").disabled).toBe(true);
+	await act(async () => vi.advanceTimersByTime(80_000));
+	expect(reportError).not.toHaveBeenCalled();
+	await receive({ type: "opened" });
+	expect(container.querySelector("output")).toBeNull();
+	expect(button("Save").disabled).toBe(false);
+	await receive({
+		type: "loading",
+		interactive: true,
+		completed: 3,
+		total: 10,
+	});
+	await act(async () => vi.advanceTimersByTime(100_000));
+	expect(reportError).not.toHaveBeenCalled();
+});
+
+it("fails a staged load when progress stops and allows retry after cancellation", async () => {
+	vi.useFakeTimers();
+	fetchDocument.mockImplementation(async () => new Response(originalBytes));
+	await render();
+	await receive({ type: "ready" });
+	await receive({
+		type: "loading",
+		interactive: true,
+		completed: 0,
+		total: 10,
+	});
+	await act(async () => vi.advanceTimersByTime(90_000));
+	expect(reportError).toHaveBeenCalledOnce();
+	expect(container.querySelector("iframe")).toBeNull();
+	await act(async () => button("Try again").click());
+	await receive({ type: "ready" });
+	await receive({
+		type: "loading",
+		interactive: true,
+		completed: 1,
+		total: 10,
+	});
+	await receive({
+		type: "error",
+		error: "Opening the document was cancelled.",
+	});
+	expect(container.textContent).toContain(
+		"Opening the document was cancelled.",
+	);
+	expect(container.querySelector("iframe")).toBeNull();
+	expect(button("Try again").disabled).toBe(false);
+});
+
 it("registers the opened document for scoped MCP and invalidates it on replacement", async () => {
 	fetchDocument.mockImplementation(async () => new Response(originalBytes));
 	const toolTarget = {

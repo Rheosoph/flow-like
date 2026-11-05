@@ -25,6 +25,7 @@ const LUCIDE_ICON_MAP: Record<string, string> = {
 	"audio.svg": "audio-lines",
 	"automation.svg": "workflow",
 	"aws.svg": "cloud",
+	"bot.svg": "bot",
 	"bell-ring.svg": "bell-ring",
 	"bell.svg": "bell",
 	"book-key.svg": "book-key",

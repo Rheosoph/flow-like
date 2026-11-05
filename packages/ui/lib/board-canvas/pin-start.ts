@@ -51,15 +51,7 @@ export function resolvePinStart(
 		return;
 	if (options.explicit) {
 		const pin = index.pin(options.explicit);
-		return pin && allowed(pin)
-			? {
-					pin,
-					reconnect: index.selectedEndpointFor(
-						options.explicit,
-						options.canReconnect,
-					),
-				}
-			: undefined;
+		return pin && allowed(pin) ? { pin } : undefined;
 	}
 	const visiblePin = index.closestPin(
 		point,
@@ -67,14 +59,9 @@ export function resolvePinStart(
 		(pin) => allowed(pin) && insidePin(point, pin),
 		Math.max(12, 9 * zoom),
 	);
-	if (visiblePin)
-		return {
-			pin: visiblePin,
-			reconnect: index.selectedEndpointFor(
-				{ nodeId: visiblePin.nodeId, pinId: visiblePin.id },
-				options.canReconnect,
-			),
-		};
+	// A pin starts a new wire regardless of selection. Reconnecting its selected wire would
+	// anchor the opposite pin and reverse which direction the user can connect to.
+	if (visiblePin) return { pin: visiblePin };
 	// At overview zoom, a fuzzy pin radius can otherwise cover the entire node.
 	if (
 		node &&

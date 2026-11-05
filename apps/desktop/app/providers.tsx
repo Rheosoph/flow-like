@@ -8,6 +8,7 @@ import {
 	QueryClient,
 	QueryClientProvider,
 } from "@flow-like/flow-like-ui";
+import { AppLocalPrincipals } from "@flow-like/flow-like-ui/components/bots-tab/app-local-principals";
 import { ThemeProvider } from "@flow-like/flow-like-ui/components/theme-provider";
 import { NetworkStatusIndicator } from "@flow-like/flow-like-ui/components/ui/network-status-indicator";
 import { Toaster } from "@flow-like/flow-like-ui/components/ui/sonner";
@@ -32,8 +33,10 @@ import DownloadNotificationProvider from "../components/download-notification-pr
 import GlobalAnchorHandler from "../components/global-anchor-component";
 import { IdbMigrationGate } from "../components/idb-migration-gate";
 import { IOSWebviewHardening } from "../components/ios-webview-hardening";
+import { LocalBotsBridge } from "../components/local-bots-bridge";
 import { LocalSinkConsentProvider } from "../components/local-sink";
 import { NativeIntegrationProvider } from "../components/native-integration-provider";
+import { NativeRealtimeBridge } from "../components/native-realtime-bridge";
 import NotificationProvider from "../components/notification-provider";
 import { OAuthCallbackHandler } from "../components/oauth-callback-handler";
 import { OAuthExecutionProvider } from "../components/oauth-execution-provider";
@@ -53,6 +56,13 @@ import { initBlobOffload } from "../lib/init-blob-offload";
 // Keep the always-mounted chat surfaces out of the synchronous root-layout chunk. The bridge is
 // still rendered unconditionally once its client chunk loads, so it keeps listening independently
 // of whether the overlay is open.
+const ChatActivityProvider = dynamic(
+	() =>
+		import("@flow-like/flow-like-ui/components/global-chat/chat-activity").then(
+			(module) => module.ChatActivityProvider,
+		),
+	{ ssr: false },
+);
 const GlobalChatOverlay = dynamic(
 	() =>
 		import(
@@ -172,20 +182,25 @@ export function Providers({
 														<PendingInviteRedeemer />
 														<DeviceModelUnlockProvider />
 														<NotificationProvider />
+														<NativeRealtimeBridge />
+														<LocalBotsBridge />
 														<RuntimeVariablesProviderComponent>
 															<ExecutionServiceProvider>
 																<ExecutionEngineProviderComponent>
 																	<SpotlightWrapper>
 																		<TelemetryProvider>
-																			<ThemeLoader />
-																			<Suspense fallback={null}>
-																				<NativeIntegrationProvider />
-																			</Suspense>
-																			<AppSidebar>{children}</AppSidebar>
-																			<GlobalToolBridge />
-																			<GlobalChatOverlay />
-																			<FlowPilotBubbleButton />
-																			<GlobalUpgradeDialog />
+																			<AppLocalPrincipals>
+																				<ThemeLoader />
+																				<Suspense fallback={null}>
+																					<NativeIntegrationProvider />
+																				</Suspense>
+																				<AppSidebar>{children}</AppSidebar>
+																				<ChatActivityProvider />
+																				<GlobalToolBridge />
+																				<GlobalChatOverlay />
+																				<FlowPilotBubbleButton />
+																				<GlobalUpgradeDialog />
+																			</AppLocalPrincipals>
 																		</TelemetryProvider>
 																	</SpotlightWrapper>
 																</ExecutionEngineProviderComponent>

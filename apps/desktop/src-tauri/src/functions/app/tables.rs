@@ -93,7 +93,7 @@ async fn db_connection_handle(
 }
 
 /// The device databases of Offline apps.
-async fn device_connection(
+pub(crate) async fn device_connection(
     app_handle: &AppHandle,
     app_id: &str,
     credentials: Option<Arc<SharedCredentials>>,

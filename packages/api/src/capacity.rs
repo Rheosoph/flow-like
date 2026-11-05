@@ -4,10 +4,13 @@
 //! at admission and survives editing, source retirement and deletion.
 
 use flow_like_storage::object_store::ObjectStoreExt;
-use sea_orm::{ConnectionTrait, DatabaseTransaction, Statement};
+use sea_orm::{ConnectionTrait, DatabaseTransaction, EntityTrait, QuerySelect, Statement};
 
 use crate::{
-    entity::sea_orm_active_enums::Visibility,
+    entity::{
+        sea_orm_active_enums::{UserTier, Visibility},
+        user,
+    },
     error::{ApiError, QuotaLimitDetails},
     state::AppState,
 };
@@ -116,6 +119,7 @@ fn baseline_pending() -> ApiError {
 
 /// Advance one indexed membership page. Partial totals stay unavailable for
 /// admission; a retained project row marks which stored bytes already contribute.
+/// A bot's workspace contributes its bytes but never a project.
 async fn baseline_page(
     txn: &DatabaseTransaction,
     payer_id: &str,
@@ -137,7 +141,7 @@ async fn baseline_page(
     let mut cursor: String = row.try_get("", "baselineAppId")?;
     let rows = txn.query_all_raw(Statement::from_sql_and_values(txn.get_database_backend(),r#"
         SELECT m."appId",a.id AS "ownedAppId",a."totalSize",
-          COALESCE(a.visibility IN ('PRIVATE','PROTOTYPE') AND NOT COALESCE(s.visibility IN ('PUBLIC','PUBLIC_REQUEST_ACCESS'),false),false) AS counted,
+          COALESCE(a."botId" IS NULL AND a.visibility IN ('PRIVATE','PROTOTYPE') AND NOT COALESCE(s.visibility IN ('PUBLIC','PUBLIC_REQUEST_ACCESS'),false),false) AS counted,
           CASE WHEN s.visibility IN ('PUBLIC','PUBLIC_REQUEST_ACCESS') THEN s.id ELSE NULL END AS source
         FROM (SELECT "appId","roleId" FROM "Membership" WHERE "userId"=$1 AND "appId">$2 ORDER BY "appId" LIMIT $3) m
         LEFT JOIN "App" a ON a.id=m."appId" AND a."ownerRoleId"=m."roleId"
@@ -409,6 +413,44 @@ pub async fn admit_project(
     Ok(())
 }
 
+/// Admits a bot's workspace: its bytes count toward the owner's storage like any app of
+/// theirs, but it takes no project slot, so no plan limit applies. Call inside the
+/// transaction that creates its rows.
+pub async fn admit_bot_workspace(
+    txn: &DatabaseTransaction,
+    payer_id: &str,
+    app_id: &str,
+) -> Result<(), ApiError> {
+    flow_like_db::coordination::app_capacity(txn, app_id).await?;
+    crate::db::coordination::coordinate(txn, "account-quota", &[payer_id]).await?;
+    lock_account(txn, payer_id).await?;
+    txn.execute_raw(Statement::from_sql_and_values(
+        txn.get_database_backend(),
+        r#"INSERT INTO "ProjectCapacity" ("appId", "payerId", "counted") VALUES ($1, $2, false)"#,
+        [app_id.into(), payer_id.into()],
+    ))
+    .await?;
+    Ok(())
+}
+
+/// A bot's workspace stays its owner's private app: its visibility and payer never change.
+async fn refuse_bot_workspace(txn: &DatabaseTransaction, app_id: &str) -> Result<(), ApiError> {
+    let bot_id = txn
+        .query_one_raw(Statement::from_sql_and_values(
+            txn.get_database_backend(),
+            r#"SELECT "botId" FROM "App" WHERE "id" = $1"#,
+            [app_id.into()],
+        ))
+        .await?
+        .map(|row| row.try_get::<Option<String>>("", "botId"))
+        .transpose()?
+        .flatten();
+    match bot_id {
+        Some(_) => Err(crate::routes::bots::workspace::locked(app_id)),
+        None => Ok(()),
+    }
+}
+
 /// Deletion releases the slot once, while preserving the payer for late S3 events.
 pub async fn release_project(state: &AppState, app_id: &str) -> Result<(), ApiError> {
     if let Some(payer) = payer_for_app(&state.db, app_id).await? {
@@ -441,6 +483,7 @@ pub async fn set_visibility(
     plan: &str,
     limit: i64,
 ) -> Result<(), ApiError> {
+    refuse_bot_workspace(txn, app_id).await?;
     flow_like_db::coordination::app_capacity(txn, app_id).await?;
     let Some(payer_id) = payer_for_app(txn, app_id).await? else {
         return Ok(());
@@ -483,8 +526,8 @@ pub async fn set_visibility(
     Ok(())
 }
 
-/// Move current occupancy with ownership. Existing operations retain their admitted
-/// payer; unfinished work and issued upload grants must settle before a transfer.
+/// Move stored bytes and upload reservations with ownership. Grant rows retain
+/// their admission payer as a fallback; the retained project payer owns occupancy.
 pub async fn transfer_project(
     txn: &DatabaseTransaction,
     app_id: &str,
@@ -493,6 +536,7 @@ pub async fn transfer_project(
     project_limit: i64,
     storage_limit: i64,
 ) -> Result<(), ApiError> {
+    refuse_bot_workspace(txn, app_id).await?;
     flow_like_db::coordination::app_capacity(txn, app_id).await?;
     let old_payer = payer_for_app(txn, app_id)
         .await?
@@ -509,23 +553,29 @@ pub async fn transfer_project(
     for payer in payers {
         lock_account(txn, payer).await?;
     }
-    for query in [
-        r#"SELECT id FROM "StorageUploadGrant" WHERE "appId" = $1 LIMIT 1"#,
-        r#"SELECT id FROM "QuotaOperation" WHERE "appId" = $1 AND status != 'finalized' LIMIT 1"#,
-        r#"SELECT "destAppId" FROM "ForkJob" WHERE "destAppId" = $1 AND status NOT IN ('DONE','FAILED') LIMIT 1"#,
+    for (kind, query) in [
+        (
+            "cloud operation",
+            r#"SELECT id,status::text AS status FROM "QuotaOperation" WHERE "appId" = $1 AND status != 'finalized' LIMIT 1"#,
+        ),
+        (
+            "fork job",
+            r#"SELECT id,status::text AS status FROM "ForkJob" WHERE "destAppId" = $1 AND status NOT IN ('DONE','FAILED') LIMIT 1"#,
+        ),
     ] {
-        if txn
+        if let Some(blocker) = txn
             .query_one_raw(Statement::from_sql_and_values(
                 txn.get_database_backend(),
                 query,
                 [app_id.into()],
             ))
             .await?
-            .is_some()
         {
-            return Err(ApiError::conflict(
-                "This project has unfinished cloud work or issued upload grants. Retry the ownership transfer after the work finishes and the grants expire.",
-            ));
+            let id: String = blocker.try_get("", "id")?;
+            let status: String = blocker.try_get("", "status")?;
+            return Err(ApiError::conflict(format!(
+                "Ownership transfer is blocked by {kind} {id} (status: {status}). Finish or reconcile this work before retrying."
+            )));
         }
     }
     let project = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
@@ -535,6 +585,18 @@ pub async fn transfer_project(
     }
     let counted = i64::from(project.try_get::<bool>("", "counted")?);
     let bytes = project.try_get::<i64>("", "totalSize")?.max(0);
+    let reserved: i64 = txn
+        .query_one_raw(Statement::from_sql_and_values(
+            txn.get_database_backend(),
+            r#"SELECT COALESCE(SUM("reservedBytes"),0)::bigint AS reserved FROM "StorageUploadGrant" WHERE "appId"=$1"#,
+            [app_id.into()],
+        ))
+        .await?
+        .ok_or_else(|| ApiError::internal("upload reservation total missing"))?
+        .try_get("", "reserved")?;
+    let occupied = bytes
+        .checked_add(reserved)
+        .ok_or_else(|| ApiError::internal("storage total overflow"))?;
     let usage = lock_account(txn, new_payer).await?;
     if crate::quota::enforcing()
         && counted > 0
@@ -553,7 +615,7 @@ pub async fn transfer_project(
     }
     if crate::quota::enforcing()
         && storage_limit >= 0
-        && bytes
+        && occupied
             > storage_limit
                 .saturating_sub(usage.storage_bytes)
                 .saturating_sub(usage.reserved_storage_bytes)
@@ -564,14 +626,14 @@ pub async fn transfer_project(
             plan,
             usage.storage_bytes,
             usage.reserved_storage_bytes,
-            bytes,
+            occupied,
             storage_limit,
         ));
     }
     for (payer, direction) in [(old_payer.as_str(), -1_i64), (new_payer, 1_i64)] {
         txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-            r#"UPDATE "AccountCapacity" SET "projectCount"=GREATEST(0,"projectCount"+$2),"storageBytes"=GREATEST(0,"storageBytes"+$3),"updatedAt"=now() WHERE "payerId"=$1"#,
-            [payer.into(),(direction*counted).into(),(direction*bytes).into()])).await?;
+            r#"UPDATE "AccountCapacity" SET "projectCount"=GREATEST(0,"projectCount"+$2),"storageBytes"=GREATEST(0,"storageBytes"+$3),"reservedStorageBytes"=GREATEST(0,"reservedStorageBytes"+$4),"updatedAt"=now() WHERE "payerId"=$1"#,
+            [payer.into(),(direction*counted).into(),(direction*bytes).into(),(direction*reserved).into()])).await?;
     }
     txn.execute_raw(Statement::from_sql_and_values(
         txn.get_database_backend(),
@@ -659,6 +721,42 @@ pub async fn check_storage_write(
         ));
     }
     Ok(())
+}
+
+/// Bots a person may keep on the server, by plan; -1 is unlimited. Assistant, Flux and bots on
+/// a desktop or device don't count. Every bot a person creates also counts toward the all-bots
+/// safety cap in `routes::bots`.
+pub fn max_server_bots(plan: &UserTier) -> i64 {
+    match plan {
+        UserTier::Free => 3,
+        UserTier::Premium => 10,
+        UserTier::Pro => 25,
+        UserTier::Max => 50,
+        UserTier::Enterprise => -1,
+    }
+}
+
+/// Turns bots may start for each other (a bot's message waking another bot) in any 24 hours, by
+/// the owner's plan; -1 is unlimited. Turns a person starts never count.
+pub fn max_bot_started_turns_per_day(plan: &UserTier) -> i64 {
+    match plan {
+        UserTier::Free => 50,
+        UserTier::Premium => 200,
+        UserTier::Pro => 500,
+        UserTier::Max => 1000,
+        UserTier::Enterprise => -1,
+    }
+}
+
+/// The person's plan; FREE, the plan every account starts on, until their account row exists.
+pub async fn plan_of<C: ConnectionTrait>(db: &C, user_id: &str) -> Result<UserTier, ApiError> {
+    Ok(user::Entity::find_by_id(user_id)
+        .select_only()
+        .column(user::Column::Tier)
+        .into_tuple::<UserTier>()
+        .one(db)
+        .await?
+        .unwrap_or(UserTier::Free))
 }
 
 fn object_id(bucket: &str, key: &str) -> String {
@@ -801,17 +899,17 @@ async fn reserve_uploads_in(
             .collect::<Vec<_>>()
             .join(",");
         let rows = txn.query_all_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-            format!(r#"SELECT ids.id,g."maxBytes",g."reservedBytes",g."payerId",COALESCE(f.size,0) AS size
+            format!(r#"SELECT ids.id,g."maxBytes",g."reservedBytes",g."appId",COALESCE(f.size,0) AS size
             FROM (VALUES {ids_sql}) AS ids(id)
             LEFT JOIN "StorageUploadGrant" g ON g.id=ids.id
             LEFT JOIN "FileAccountingObject" f ON f.id=ids.id"#), ids)).await?;
         let mut previous = std::collections::HashMap::new();
         for row in rows {
             let id: String = row.try_get("", "id")?;
-            let owner: Option<String> = row.try_get("", "payerId")?;
-            if owner.as_deref().is_some_and(|owner| owner != payer_id) {
+            let project: Option<String> = row.try_get("", "appId")?;
+            if project.as_deref().is_some_and(|project| project != app_id) {
                 return Err(ApiError::forbidden(
-                    "The storage object belongs to another account.",
+                    "The storage object belongs to another project.",
                 ));
             }
             previous.insert(
@@ -885,7 +983,7 @@ async fn reserve_uploads_in(
 pub async fn sweep_upload_grants(state: &AppState) -> Result<u64, ApiError> {
     let cutoff = chrono::Utc::now().fixed_offset() - chrono::Duration::hours(24);
     let rows = state.db.query_all_raw(Statement::from_sql_and_values(state.db.get_database_backend(),
-        r#"SELECT g."id",g."payerId",g."bucket",g."objectKey",g."expiresAt",p.active FROM "StorageUploadGrant" g LEFT JOIN "ProjectCapacity" p ON p."appId"=g."appId" WHERE g."expiresAt" < $1 ORDER BY g."expiresAt" LIMIT 100"#, [cutoff.into()])).await?;
+        r#"SELECT g."id",g."appId",g."bucket",g."objectKey",g."expiresAt",p.active FROM "StorageUploadGrant" g LEFT JOIN "ProjectCapacity" p ON p."appId"=g."appId" WHERE g."expiresAt" < $1 ORDER BY g."expiresAt" LIMIT 100"#, [cutoff.into()])).await?;
     if rows.is_empty() {
         return Ok(0);
     }
@@ -906,7 +1004,7 @@ pub async fn sweep_upload_grants(state: &AppState) -> Result<u64, ApiError> {
             continue;
         }
         let id: String = row.try_get("", "id")?;
-        let payer: String = row.try_get("", "payerId")?;
+        let app_id: String = row.try_get("", "appId")?;
         let key: String = row.try_get("", "objectKey")?;
         let expires: chrono::DateTime<chrono::FixedOffset> = row.try_get("", "expiresAt")?;
         let actual = match flow_like_types::tokio::time::timeout(
@@ -930,24 +1028,61 @@ pub async fn sweep_upload_grants(state: &AppState) -> Result<u64, ApiError> {
             .await;
             continue;
         }
-        released += u64::from(state.transaction(|txn| {
-            let id = id.clone(); let payer = payer.clone();
-            Box::pin(async move {
-                lock_account(txn, &payer).await?;
-                let accounted = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-                    r#"SELECT "size" FROM "FileAccountingObject" WHERE "id" = $1"#, [id.clone().into()])).await?.map(|r| r.try_get::<i64>("", "size")).transpose()?.unwrap_or(0);
-                if actual != accounted { return Ok::<bool, ApiError>(false); }
-                let deleted = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-                    r#"DELETE FROM "StorageUploadGrant" WHERE "id" = $1 AND "expiresAt" = $2 RETURNING "reservedBytes""#, [id.into(), expires.into()])).await?;
-                let Some(deleted) = deleted else { return Ok(false) };
-                let reserved: i64 = deleted.try_get("", "reservedBytes")?;
-                txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
-                    r#"UPDATE "AccountCapacity" SET "reservedStorageBytes" = GREATEST(0,"reservedStorageBytes" - $2), "updatedAt" = now() WHERE "payerId" = $1"#, [payer.into(), reserved.into()])).await?;
-                Ok(true)
-            })
-        }).await?);
+        released += u64::from(
+            state
+                .transaction(|txn| {
+                    let id = id.clone();
+                    let app_id = app_id.clone();
+                    Box::pin(async move {
+                        release_upload_grant(txn, &app_id, &id, expires, actual).await
+                    })
+                })
+                .await?,
+        );
     }
     Ok(released)
+}
+
+/// Resolve the payer after acquiring the app lock: ownership may have changed
+/// while storage was sampled. A renewed grant must survive the earlier sample.
+async fn release_upload_grant(
+    txn: &DatabaseTransaction,
+    app_id: &str,
+    id: &str,
+    expires: chrono::DateTime<chrono::FixedOffset>,
+    actual: i64,
+) -> Result<bool, ApiError> {
+    flow_like_db::coordination::app_capacity(txn, app_id).await?;
+    let grant = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+        r#"SELECT "payerId" FROM "StorageUploadGrant" WHERE id=$1 AND "appId"=$2 AND "expiresAt"=$3"#,
+        [id.into(), app_id.into(), expires.into()])).await?;
+    let Some(grant) = grant else { return Ok(false) };
+    let payer = payer_for_app(txn, app_id)
+        .await?
+        .unwrap_or(grant.try_get::<String>("", "payerId")?);
+    lock_account(txn, &payer).await?;
+    let accounted = txn
+        .query_one_raw(Statement::from_sql_and_values(
+            txn.get_database_backend(),
+            r#"SELECT "size" FROM "FileAccountingObject" WHERE "id" = $1"#,
+            [id.into()],
+        ))
+        .await?
+        .map(|r| r.try_get::<i64>("", "size"))
+        .transpose()?
+        .unwrap_or(0);
+    if actual != accounted {
+        return Ok(false);
+    }
+    let deleted = txn.query_one_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+        r#"DELETE FROM "StorageUploadGrant" WHERE "id" = $1 AND "expiresAt" = $2 RETURNING "reservedBytes""#, [id.into(), expires.into()])).await?;
+    let Some(deleted) = deleted else {
+        return Ok(false);
+    };
+    let reserved: i64 = deleted.try_get("", "reservedBytes")?;
+    txn.execute_raw(Statement::from_sql_and_values(txn.get_database_backend(),
+        r#"UPDATE "AccountCapacity" SET "reservedStorageBytes" = GREATEST(0,"reservedStorageBytes" - $2), "updatedAt" = now() WHERE "payerId" = $1"#, [payer.into(), reserved.into()])).await?;
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -984,13 +1119,42 @@ mod tests {
         assert_eq!(public_fork_source(&Visibility::Offline, "source"), None);
     }
 
-    #[tokio::test]
-    async fn postgres_project_admission_serializes_and_preserves_fork_provenance() {
+    #[test]
+    fn bot_started_turn_limits_grow_with_the_plan() {
+        let limits: Vec<i64> = [
+            UserTier::Free,
+            UserTier::Premium,
+            UserTier::Pro,
+            UserTier::Max,
+            UserTier::Enterprise,
+        ]
+        .iter()
+        .map(max_bot_started_turns_per_day)
+        .collect();
+        assert_eq!(limits, [50, 200, 500, 1000, -1]);
+    }
+
+    #[test]
+    fn server_bot_limits_grow_with_the_plan() {
+        let limits: Vec<i64> = [
+            UserTier::Free,
+            UserTier::Premium,
+            UserTier::Pro,
+            UserTier::Max,
+            UserTier::Enterprise,
+        ]
+        .iter()
+        .map(max_server_bots)
+        .collect();
+        assert_eq!(limits, [3, 10, 25, 50, -1]);
+    }
+
+    async fn postgres_test_database() -> Option<(DatabaseConnection, DatabaseConnection, String)> {
         use sea_orm::sqlx::postgres::{PgConnectOptions, PgPoolOptions};
         use std::str::FromStr;
         let Ok(url) = std::env::var("FLOW_LIKE_TEST_DATABASE_URL") else {
             eprintln!("skipping capacity integration test: FLOW_LIKE_TEST_DATABASE_URL is unset");
-            return;
+            return None;
         };
         let admin = Database::connect(&url).await.unwrap();
         let schema = format!(
@@ -1019,9 +1183,9 @@ mod tests {
             r#"CREATE TABLE "QuotaOperation" (id TEXT PRIMARY KEY, "appId" TEXT, status TEXT)"#,
             r#"CREATE TABLE "User" (id TEXT PRIMARY KEY,tier TEXT)"#,
             r#"INSERT INTO "User" VALUES ('payer','FREE'),('recipient','FREE')"#,
-            r#"CREATE TABLE "App" ("id" TEXT PRIMARY KEY, "ownerRoleId" TEXT, "visibility" TEXT, "forkedFrom" TEXT, "totalSize" BIGINT)"#,
+            r#"CREATE TABLE "App" ("id" TEXT PRIMARY KEY, "ownerRoleId" TEXT, "visibility" TEXT, "forkedFrom" TEXT, "totalSize" BIGINT, "botId" TEXT)"#,
             r#"CREATE TABLE "Membership" ("userId" TEXT, "roleId" TEXT, "appId" TEXT)"#,
-            r#"CREATE TABLE "ForkJob" ("destAppId" TEXT, "policy" JSONB, status TEXT DEFAULT 'DONE')"#,
+            r#"CREATE TABLE "ForkJob" (id TEXT PRIMARY KEY DEFAULT 'fork-job', "destAppId" TEXT, "policy" JSONB, status TEXT DEFAULT 'DONE')"#,
             r#"CREATE TABLE "FileAccountingObject" ("id" TEXT PRIMARY KEY, "size" BIGINT)"#,
         ] {
             db.execute_raw(Statement::from_string(DatabaseBackend::Postgres, statement))
@@ -1038,6 +1202,332 @@ mod tests {
                 .await
                 .unwrap();
         }
+        Some((admin, db, schema))
+    }
+
+    async fn transfer_fixture(
+        db: &DatabaseConnection,
+    ) -> (
+        chrono::DateTime<chrono::FixedOffset>,
+        chrono::DateTime<chrono::FixedOffset>,
+    ) {
+        for query in [
+            r#"INSERT INTO "App" VALUES ('original','owner','PRIVATE',NULL,10),('other','owner','PRIVATE',NULL,3),('recipient-app','recipient-owner','PRIVATE',NULL,5)"#,
+            r#"INSERT INTO "Membership" VALUES ('payer','owner','original'),('payer','owner','other'),('recipient','recipient-owner','recipient-app')"#,
+        ] {
+            db.execute_raw(Statement::from_string(DatabaseBackend::Postgres, query))
+                .await
+                .unwrap();
+        }
+        let now = chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis())
+            .unwrap()
+            .fixed_offset();
+        let expires = now + chrono::Duration::minutes(15);
+        let expired = now - chrono::Duration::hours(48);
+        let txn = db.begin().await.unwrap();
+        lock_account(&txn, "payer").await.unwrap();
+        lock_account(&txn, "recipient").await.unwrap();
+        txn.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            r#"INSERT INTO "FileAccountingObject" (id,size) VALUES ($1,10)"#,
+            [object_id("bucket", "settled").into()],
+        ))
+        .await
+        .unwrap();
+        for (payer, app, key, bytes, expiry) in [
+            ("payer", "original", "active", 40, expires),
+            ("payer", "original", "expired", 20, expired),
+            ("payer", "original", "settled", 10, expired),
+            ("payer", "other", "other", 11, expires),
+            ("recipient", "recipient-app", "recipient", 7, expires),
+        ] {
+            reserve_uploads_in(
+                &txn,
+                payer,
+                app,
+                vec![("bucket".into(), key.into(), bytes)],
+                expiry,
+                "FREE",
+                1000,
+            )
+            .await
+            .unwrap();
+        }
+        txn.commit().await.unwrap();
+        (expires, expired)
+    }
+
+    async fn assert_usage(db: &DatabaseConnection, payer: &str, expected: (i64, i64, i64)) {
+        let usage = initialized_usage(db, payer).await.unwrap().unwrap();
+        assert_eq!(
+            (
+                usage.storage_bytes,
+                usage.reserved_storage_bytes,
+                usage.project_count,
+            ),
+            expected,
+            "capacity for {payer}",
+        );
+    }
+
+    #[tokio::test]
+    async fn postgres_transfer_identifies_unresolved_cloud_work() {
+        let Some((admin, db, schema)) = postgres_test_database().await else {
+            return;
+        };
+        transfer_fixture(&db).await;
+        for status in ["reserved", "running", "unknown", "releasing"] {
+            db.execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"INSERT INTO "QuotaOperation" (id,"appId",status) VALUES ('cloud-run','original',$1) ON CONFLICT (id) DO UPDATE SET status=$1"#,
+                [status.into()],
+            )).await.unwrap();
+            let txn = db.begin().await.unwrap();
+            let error = transfer_project(&txn, "original", "recipient", "FREE", 10, 82)
+                .await
+                .unwrap_err();
+            assert_eq!(error.public_code(), "CONFLICT");
+            let message = error.public_message().unwrap();
+            assert!(message.contains("cloud operation cloud-run"));
+            assert!(message.contains(status));
+            txn.rollback().await.unwrap();
+            assert_usage(&db, "payer", (13, 71, 2)).await;
+            assert_usage(&db, "recipient", (5, 7, 1)).await;
+        }
+        db.execute_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            r#"UPDATE "QuotaOperation" SET status='finalized' WHERE id='cloud-run'"#,
+        ))
+        .await
+        .unwrap();
+        for status in ["QUEUED", "RUNNING", "ABORTING"] {
+            db.execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"INSERT INTO "ForkJob" (id,"destAppId",status) VALUES ('copy-job','original',$1) ON CONFLICT (id) DO UPDATE SET status=$1"#,
+                [status.into()],
+            )).await.unwrap();
+            let txn = db.begin().await.unwrap();
+            let error = transfer_project(&txn, "original", "recipient", "FREE", 10, 82)
+                .await
+                .unwrap_err();
+            assert_eq!(error.public_code(), "CONFLICT");
+            let message = error.public_message().unwrap();
+            assert!(message.contains("fork job copy-job"));
+            assert!(message.contains(status));
+            txn.rollback().await.unwrap();
+        }
+        for status in ["DONE", "FAILED"] {
+            let txn = db.begin().await.unwrap();
+            txn.execute_raw(Statement::from_sql_and_values(
+                DatabaseBackend::Postgres,
+                r#"UPDATE "ForkJob" SET status=$1 WHERE id='copy-job'"#,
+                [status.into()],
+            ))
+            .await
+            .unwrap();
+            transfer_project(&txn, "original", "recipient", "FREE", 10, 82)
+                .await
+                .unwrap();
+            txn.rollback().await.unwrap();
+        }
+        db.close().await.unwrap();
+        admin
+            .execute_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                format!("DROP SCHEMA {schema} CASCADE"),
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[cfg(feature = "db-chaos")]
+    #[tokio::test]
+    async fn postgres_transfer_moves_upload_reservations_without_rewriting_grants() {
+        let Some((admin, db, schema)) = postgres_test_database().await else {
+            return;
+        };
+        let (expires, _) = transfer_fixture(&db).await;
+        let prepared = PreparedUploadReservation::for_test(
+            "payer",
+            "original",
+            ("bucket".into(), "active".into(), 100),
+            1000,
+        );
+        // The transfer must remain a bounded write even with thousands of grants.
+        db.execute_raw(Statement::from_string(DatabaseBackend::Postgres,
+            r#"INSERT INTO "StorageUploadGrant" (id,"payerId","appId",bucket,"objectKey","maxBytes","reservedBytes","expiresAt") SELECT 'empty-'||n,'payer','original','bucket','empty-'||n,0,0,now() FROM generate_series(1,3005) n"#))
+            .await.unwrap();
+        let txn = db.begin().await.unwrap();
+        let denied = transfer_project(&txn, "original", "recipient", "FREE", 10, 81)
+            .await
+            .unwrap_err();
+        assert_eq!(denied.public_code(), "PLAN_LIMIT_EXCEEDED");
+        txn.rollback().await.unwrap();
+        assert_usage(&db, "payer", (13, 71, 2)).await;
+        assert_usage(&db, "recipient", (5, 7, 1)).await;
+        assert_eq!(
+            payer_for_app(&db, "original").await.unwrap().as_deref(),
+            Some("payer")
+        );
+
+        crate::db::testing::Chaos::new(Some(64), None)
+            .transaction(
+                &db,
+                crate::db::DbDialect::Postgres,
+                None,
+                &crate::db::RetryPolicy::default(),
+                |txn| {
+                    Box::pin(async move {
+                        transfer_project(txn, "original", "recipient", "FREE", 10, 82).await
+                    })
+                },
+            )
+            .await
+            .unwrap();
+        assert_usage(&db, "payer", (3, 11, 1)).await;
+        assert_usage(&db, "recipient", (15, 67, 2)).await;
+        let row = db.query_one_raw(Statement::from_string(DatabaseBackend::Postgres,
+            r#"SELECT count(*) AS n FROM "StorageUploadGrant" WHERE "appId"='original' AND "payerId"='payer'"#))
+            .await.unwrap().unwrap();
+        assert_eq!(row.try_get::<i64>("", "n").unwrap(), 3008);
+
+        let txn = db.begin().await.unwrap();
+        assert_eq!(
+            prepared.reserve(&txn).await.unwrap_err().public_code(),
+            "CONFLICT"
+        );
+        txn.rollback().await.unwrap();
+        let txn = db.begin().await.unwrap();
+        reserve_uploads_in(
+            &txn,
+            "recipient",
+            "original",
+            vec![("bucket".into(), "active".into(), 60)],
+            expires + chrono::Duration::minutes(5),
+            "FREE",
+            102,
+        )
+        .await
+        .unwrap();
+        txn.commit().await.unwrap();
+        assert_usage(&db, "payer", (3, 11, 1)).await;
+        assert_usage(&db, "recipient", (15, 87, 2)).await;
+
+        let txn = db.begin().await.unwrap();
+        assert_eq!(
+            reserve_uploads_in(
+                &txn,
+                "recipient",
+                "original",
+                vec![("bucket".into(), "other".into(), 11)],
+                expires,
+                "FREE",
+                1000,
+            )
+            .await
+            .unwrap_err()
+            .status(),
+            axum::http::StatusCode::FORBIDDEN,
+        );
+        txn.rollback().await.unwrap();
+
+        let txn = db.begin().await.unwrap();
+        transfer_project(&txn, "original", "payer", "FREE", 10, 104)
+            .await
+            .unwrap();
+        txn.commit().await.unwrap();
+        assert_usage(&db, "payer", (13, 91, 2)).await;
+        assert_usage(&db, "recipient", (5, 7, 1)).await;
+
+        db.close().await.unwrap();
+        admin
+            .execute_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                format!("DROP SCHEMA {schema} CASCADE"),
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn postgres_grant_cleanup_resolves_transferred_payer_and_preserves_renewals() {
+        let Some((admin, db, schema)) = postgres_test_database().await else {
+            return;
+        };
+        let (expires, expired) = transfer_fixture(&db).await;
+        // This candidate was selected before ownership changed.
+        let candidate = object_id("bucket", "expired");
+        let txn = db.begin().await.unwrap();
+        transfer_project(&txn, "original", "recipient", "FREE", 10, 82)
+            .await
+            .unwrap();
+        txn.commit().await.unwrap();
+        let txn = db.begin().await.unwrap();
+        assert!(
+            release_upload_grant(&txn, "original", &candidate, expired, 0)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !release_upload_grant(&txn, "original", &candidate, expired, 0)
+                .await
+                .unwrap()
+        );
+        txn.commit().await.unwrap();
+        assert_usage(&db, "payer", (3, 11, 1)).await;
+        assert_usage(&db, "recipient", (15, 47, 2)).await;
+
+        let settled = object_id("bucket", "settled");
+        let txn = db.begin().await.unwrap();
+        assert!(
+            !release_upload_grant(&txn, "original", &settled, expired, 11)
+                .await
+                .unwrap()
+        );
+        reserve_uploads_in(
+            &txn,
+            "recipient",
+            "original",
+            vec![("bucket".into(), "settled".into(), 30)],
+            expires,
+            "FREE",
+            1000,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !release_upload_grant(&txn, "original", &settled, expired, 10)
+                .await
+                .unwrap()
+        );
+        txn.commit().await.unwrap();
+        assert_usage(&db, "recipient", (15, 67, 2)).await;
+
+        let txn = db.begin().await.unwrap();
+        assert!(
+            release_upload_grant(&txn, "original", &settled, expires, 10)
+                .await
+                .unwrap()
+        );
+        txn.commit().await.unwrap();
+        assert_usage(&db, "payer", (3, 11, 1)).await;
+        assert_usage(&db, "recipient", (15, 47, 2)).await;
+
+        db.close().await.unwrap();
+        admin
+            .execute_raw(Statement::from_string(
+                DatabaseBackend::Postgres,
+                format!("DROP SCHEMA {schema} CASCADE"),
+            ))
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn postgres_project_admission_serializes_and_preserves_fork_provenance() {
+        let Some((admin, db, schema)) = postgres_test_database().await else {
+            return;
+        };
         for statement in [
             r#"INSERT INTO "App" VALUES ('public-source',NULL,'PUBLIC',NULL,0),('original','owner','PRIVATE',NULL,10),('verified-fork','owner','PRIVATE','public-source',10),('unverified-fork','owner','PRIVATE','public-source',10)"#,
             r#"INSERT INTO "Membership" VALUES ('payer','owner','original'),('payer','owner','verified-fork'),('payer','owner','unverified-fork')"#,
@@ -1217,13 +1707,9 @@ mod tests {
             .is_none()
         );
         let txn = db.begin().await.unwrap();
-        assert_eq!(
-            transfer_project(&txn, "original", "recipient", "FREE", 10, 1000)
-                .await
-                .unwrap_err()
-                .public_code(),
-            "CONFLICT"
-        );
+        transfer_project(&txn, "original", "recipient", "FREE", 10, 1000)
+            .await
+            .unwrap();
         txn.rollback().await.unwrap();
         let txn = db.begin().await.unwrap();
         assert_eq!(

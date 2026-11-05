@@ -157,7 +157,7 @@ impl NodeLogic for DocxAddTableNode {
 }
 
 #[cfg(feature = "execute")]
-fn build_table(
+pub(crate) fn build_table(
     data: &[Vec<String>],
     header_row: bool,
     alternate_rows: bool,

@@ -7,7 +7,6 @@ import {
 	ChevronDownIcon,
 	HistoryIcon,
 	HomeIcon,
-	Loader2Icon,
 	SquarePenIcon,
 } from "lucide-react";
 import { usePathname } from "next/navigation";
@@ -47,6 +46,7 @@ import { captureTelemetryError } from "../../lib/telemetry/errors";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { captureWidgetSnapshots } from "../../lib/widget-snapshot";
 import { type IBackendState, useBackend } from "../../state/backend-state";
+import { registerChatActivitySurface } from "../../state/chat-activity-store";
 import { useExecutionEngine } from "../../state/execution-engine-context";
 import { getFrontendStateStore } from "../a2ui/frontend-state";
 import { buildWorkflowFrontendContext } from "../a2ui/workflow-payload";
@@ -69,42 +69,56 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 } from "../ui";
-import { ChatAppearance } from "./chat-default/appearance";
 import { fileToAttachment } from "./chat-default/attachment";
-import { Chat, type IChatRef } from "./chat-default/chat";
+import type { IChatRef } from "./chat-default/chat";
+import {
+	completeAppChatTurn,
+	createAppChatActivityWriter,
+} from "./chat-default/chat-activity";
 import {
 	type IAttachment,
+	type IChatMainWidget,
 	type IGlobalState,
 	type ILocalChatState,
 	type IMessage,
 	chatDb,
 	decodeMessageRow,
-	finalizeChatMessage,
 	latestChatDraft,
 	promoteChatDrafts,
-	putChatDraft,
 	putChatMessage,
 } from "./chat-default/chat-db";
+import {
+	type IChatMessageInteraction,
+	applyMessageReaction,
+	createMessageReference,
+	historyMessageForModel,
+} from "./chat-default/chat-message-interaction";
+import { ChatSurface } from "./chat-default/chat-surface";
 import {
 	type IChatTurn,
 	type IStreamLiveState,
 	createChatTurn,
 } from "./chat-default/chat-turn";
-import {
-	ChatWidgetExecutionProvider,
-	type RunWidgetAction,
-} from "./chat-default/chat-widget-execution";
+import type { RunWidgetAction } from "./chat-default/chat-widget-execution";
 import type { ISendMessageFunction } from "./chat-default/chatbox";
 import { processChatEvents } from "./chat-default/event-processor";
 import { ChatHistory } from "./chat-default/history";
+import {
+	refreshMainChatWidget,
+	resolveMainChatWidget,
+} from "./chat-default/main-widget-state";
 import { submitInteractionResponse } from "./chat-default/respond-interaction";
 import {
 	addSessionInteractions,
 	updateSessionInteractions,
 	useSessionInteractions,
 } from "./chat-default/session-interactions";
+import { useChatModel } from "./chat-default/use-chat-model";
 import { useChatThinking } from "./chat-default/use-chat-thinking";
-import { ChatWelcome } from "./chat-default/welcome";
+import {
+	persistWorkflowReactions,
+	putChatDraftsWithReactions,
+} from "./chat-default/workflow-reactions";
 import type { IUseInterfaceProps } from "./interfaces";
 
 function extractErrorMessage(err: unknown): string {
@@ -121,6 +135,46 @@ function extractErrorMessage(err: unknown): string {
 		}
 	}
 	return String(err);
+}
+
+function hasErrorFlag(
+	err: unknown,
+	flag: "isActiveStreamError" | "isOAuthError" | "isUnacceptedChatInteraction",
+) {
+	return Boolean((err as Record<string, unknown> | null)?.[flag]);
+}
+
+/**
+ * Reports a send that failed. The active-stream guard already toasted, and OAuth or a detached run
+ * is no failure. A reaction's caller still sees a send that was refused or never accepted.
+ */
+function settleSendFailure(
+	error: unknown,
+	interaction: IChatMessageInteraction | undefined,
+) {
+	const activeStream = hasErrorFlag(error, "isActiveStreamError");
+	if (
+		!activeStream &&
+		!hasErrorFlag(error, "isOAuthError") &&
+		!isDetachedReply(error)
+	) {
+		console.error("Error sending message:", error);
+		captureTelemetryError(error, {
+			culprit: "chat.send_message",
+		});
+		toast.error(`Failed to send message: ${extractErrorMessage(error)}`);
+	}
+	if (
+		interaction &&
+		(activeStream || hasErrorFlag(error, "isUnacceptedChatInteraction"))
+	) {
+		throw error;
+	}
+}
+
+/** The run continues on the server, and its saved reply already says so. */
+function isDetachedReply(err: unknown): boolean {
+	return (err as { name?: unknown } | null)?.name === "ExecutionDetachedError";
 }
 
 /** A missing consent is no failure: the OAuth flow re-sends the message once it is granted. */
@@ -386,6 +440,7 @@ function createUserMessage(
 	historyMessage: IHistoryMessage,
 	activeTools: string[],
 	thinking: ChatThinkingLevel | undefined,
+	interaction?: IChatMessageInteraction,
 ): IMessage {
 	return {
 		id: createId(),
@@ -397,6 +452,7 @@ function createUserMessage(
 		tools: activeTools ?? [],
 		actions: [],
 		thinking,
+		interaction,
 	};
 }
 
@@ -409,27 +465,31 @@ function createPayload(
 	activeTools: string[],
 	otherAttachments: IAttachment[],
 	thinking: ChatThinkingLevel,
+	selectedModel?: string,
 ) {
 	return {
 		chat_id: userMessage.sessionId,
 		messages: [
-			...lastMessages.map((msg) => ({
-				role: msg.inner.role,
-				content:
-					typeof msg.inner.content === "string"
-						? msg.inner.content
-						: msg.inner.content?.map((c) => ({
-								type: c.type,
-								text: c.text,
-								image_url: c.image_url,
-								audio_url: c.audio_url,
-								video_url: c.video_url,
-								document_url: c.document_url,
-								media_type: c.media_type,
-								additional_params: c.additional_params,
-							})),
-			})),
-			historyMessage,
+			...lastMessages.map((msg) => {
+				const history = historyMessageForModel(msg);
+				return {
+					role: history.role,
+					content:
+						typeof history.content === "string"
+							? history.content
+							: history.content?.map((c) => ({
+									type: c.type,
+									text: c.text,
+									image_url: c.image_url,
+									audio_url: c.audio_url,
+									video_url: c.video_url,
+									document_url: c.document_url,
+									media_type: c.media_type,
+									additional_params: c.additional_params,
+								})),
+				};
+			}),
+			historyMessageForModel(userMessage, historyMessage),
 		],
 		local_session: localState?.localState ?? {},
 		global_session: globalState?.globalState ?? {},
@@ -437,28 +497,46 @@ function createPayload(
 		tools: activeTools ?? [],
 		attachments: otherAttachments,
 		thinking,
+		...(selectedModel ? { selected_model: selectedModel } : {}),
 	};
+}
+
+const mainWidgetSeeds = new WeakMap<IMessage, IChatMainWidget>();
+
+function seedMainWidget(
+	message: IMessage,
+	mainWidget: IChatMainWidget | undefined,
+) {
+	message.main_widget = mainWidget;
+	if (mainWidget) mainWidgetSeeds.set(message, mainWidget);
+	return message;
 }
 
 function createResponseMessage(
 	sessionId: string,
 	appId: string,
 	eventName: string,
+	mainWidget?: IChatMainWidget,
+	triggerMessageId?: string,
 ): IMessage {
-	return {
-		id: createId(),
-		sessionId: sessionId,
-		appId,
-		files: [],
-		inner: {
-			role: IRole.Assistant,
-			content: "",
+	return seedMainWidget(
+		{
+			id: createId(),
+			sessionId: sessionId,
+			appId,
+			trigger_message_id: triggerMessageId,
+			files: [],
+			inner: {
+				role: IRole.Assistant,
+				content: "",
+			},
+			explicit_name: eventName,
+			timestamp: Date.now(),
+			tools: [],
+			actions: [],
 		},
-		explicit_name: eventName,
-		timestamp: Date.now(),
-		tools: [],
-		actions: [],
-	};
+		mainWidget,
+	);
 }
 
 /**
@@ -471,6 +549,10 @@ function cloneResponseMessageForReplay(responseMessage: IMessage): IMessage {
 			? structuredClone(responseMessage)
 			: (JSON.parse(JSON.stringify(responseMessage)) as IMessage);
 
+	clonedMessage.id = responseMessage.stream_root_id ?? responseMessage.id;
+	clonedMessage.timestamp =
+		responseMessage.stream_root_timestamp ?? responseMessage.timestamp;
+	clonedMessage.stream_message_id = undefined;
 	clonedMessage.files = [];
 	clonedMessage.inner = {
 		...clonedMessage.inner,
@@ -481,7 +563,7 @@ function cloneResponseMessageForReplay(responseMessage: IMessage): IMessage {
 	clonedMessage.usage_stats = undefined;
 	clonedMessage.widgets = undefined;
 
-	return clonedMessage;
+	return seedMainWidget(clonedMessage, mainWidgetSeeds.get(responseMessage));
 }
 
 interface IStreamCompletionOptions {
@@ -517,17 +599,24 @@ async function handleStreamCompletion({
 	error,
 	onInteractions,
 }: IStreamCompletionOptions) {
-	// The turn is over for this subscriber whatever happens below: left attached, it would fold the
-	// session's next run into this turn's message.
+	const persistenceManaged =
+		executionEngine.isPersistenceManaged?.(streamId) ?? false;
+	// Detach this view before another turn starts using the session.
 	executionEngine.unsubscribeFromEventStream(streamId, subscriberId);
 	if (processedCompletedStreams.current.has(streamId)) {
 		return;
 	}
 
 	processedCompletedStreams.current.add(streamId);
+	if (persistenceManaged) {
+		// The shared runtime publishes completion only after the transcript is durable.
+		chatRef.current?.clearCurrentMessageUpdate();
+		chatRef.current?.scrollToBottom();
+		return;
+	}
 
 	try {
-		let message = responseMessage;
+		let messages = live?.responseMessages ?? [responseMessage];
 		let tmpLocalState = live?.tmpLocalState ?? null;
 		let tmpGlobalState = live?.tmpGlobalState ?? null;
 
@@ -546,15 +635,15 @@ async function handleStreamCompletion({
 				eventId,
 				sessionId,
 			});
-			message = result.responseMessage;
-			tmpLocalState = result.tmpLocalState;
-			tmpGlobalState = result.tmpGlobalState;
+			messages = result.responseMessages;
+			tmpLocalState = result.tmpLocalState ?? null;
+			tmpGlobalState = result.tmpGlobalState ?? null;
 			if (result.interactions?.length && onInteractions) {
 				onInteractions(result.interactions);
 			}
 		}
 
-		if (error) message.error = error;
+		if (error) messages[messages.length - 1].error = error;
 
 		if (tmpLocalState) {
 			await chatDb.localStage.put(tmpLocalState);
@@ -565,7 +654,16 @@ async function handleStreamCompletion({
 		}
 
 		// Persist before clearing the streaming bubble so the message never blinks out in between.
-		await finalizeChatMessage(message);
+		await completeAppChatTurn(
+			messages,
+			{ appId, eventId, sessionId },
+			{ events },
+		);
+		await persistWorkflowReactions(events, {
+			appId,
+			sessionId,
+			triggerMessageId: responseMessage.trigger_message_id,
+		});
 
 		chatRef.current?.clearCurrentMessageUpdate();
 		chatRef.current?.scrollToBottom();
@@ -573,18 +671,6 @@ async function handleStreamCompletion({
 		processedCompletedStreams.current.delete(streamId);
 		throw error;
 	}
-}
-
-function ConversationLoading() {
-	const { t } = useTranslation("interfaces");
-	return (
-		<div className="flex h-full flex-col items-center justify-center gap-3">
-			<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
-			<p className="text-sm text-muted-foreground">
-				{t("loadingConversation", "Loading conversation...")}
-			</p>
-		</div>
-	);
 }
 
 /**
@@ -598,7 +684,12 @@ function createChatIncrementalSaver(
 ): (events: IIntercomEvent[]) => Promise<void> {
 	return async (events) => {
 		turn.catchUp(events);
-		await putChatDraft(turn.responseMessage);
+		await putChatDraftsWithReactions(turn.responseMessages);
+		await persistWorkflowReactions(events, {
+			appId: turn.responseMessage.appId,
+			sessionId: turn.responseMessage.sessionId,
+			triggerMessageId: turn.responseMessage.trigger_message_id,
+		});
 		const { tmpLocalState, tmpGlobalState } = turn.live();
 		if (tmpLocalState) {
 			await chatDb.localStage.put(tmpLocalState);
@@ -632,6 +723,16 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		appId,
 		urlSessionId || fallbackSessionId,
 	);
+	useEffect(
+		() =>
+			registerChatActivitySurface({
+				kind: "app",
+				appId,
+				eventId: event.id,
+				sessionId: sessionIdParameter,
+			}),
+		[appId, event.id, sessionIdParameter],
+	);
 	const prefilledMessage = searchParams.get("message");
 	const setQueryParams = useSetQueryParams();
 	const chatRef = useRef<IChatRef>(null);
@@ -641,14 +742,19 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	const processedCompletedStreams = useRef<Set<string>>(new Set());
 	const reconnectSubscribed = useRef<Set<string>>(new Set());
 	const pendingSendSessions = useRef<Set<string>>(new Set());
-	const [isSendingFromWelcome, setIsSendingFromWelcome] = useState(false);
 	const [isStreamActive, setIsStreamActive] = useState(false);
+	const [runtimeReady, setRuntimeReady] = useState(
+		() => executionEngine.isRuntimeReady?.() ?? true,
+	);
 	const [showPrefilledConfirm, setShowPrefilledConfirm] = useState(false);
 	const prefilledConsumed = useRef(false);
 	const lastNavigateToRef = useRef<string | null>(null);
 	const thinking = useChatThinking(appId, event.id, config);
 	const thinkingRef = useRef(thinking);
 	thinkingRef.current = thinking;
+	const model = useChatModel(appId, config, event.execution_mode);
+	const modelRef = useRef(model);
+	modelRef.current = model;
 	const activeInteractions = useSessionInteractions(sessionIdParameter);
 	const activeInteractionsRef =
 		useRef<IInteractionRequest[]>(activeInteractions);
@@ -670,12 +776,16 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			}
 
 			try {
-				await submitInteractionResponse(interaction, value);
+				const accepted = await submitInteractionResponse(interaction, value);
 
 				updateSessionInteractions(sessionIdParameter, (prev) =>
 					prev.map((i) =>
 						i.id === interactionId
-							? { ...i, status: "responded" as const, response_value: value }
+							? {
+									...i,
+									status: "responded" as const,
+									response_value: accepted ? accepted.value : value,
+								}
 							: i,
 					),
 				);
@@ -775,10 +885,16 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 	// Store pending message data for OAuth retry
 	const pendingMessageRef = useRef<{
+		requestId: string;
+		appId: string;
+		eventId: string;
+		sessionId: string;
 		content: string;
 		filesAttached?: File[];
 		activeTools?: string[];
 		audioFile?: File;
+		interaction?: IChatMessageInteraction;
+		selectedModel?: string;
 	} | null>(null);
 
 	useEffect(() => {
@@ -793,6 +909,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		}
 
 		const update = () => {
+			setRuntimeReady(executionEngine.isRuntimeReady?.() ?? true);
 			setIsStreamActive(
 				pendingSendSessions.current.has(sessionIdParameter) ||
 					executionEngine.isStreamActive(sessionIdParameter),
@@ -858,6 +975,30 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	useEffect(() => {
 		messagesRef.current = messages;
 	}, [messages]);
+	const liveMainWidgets = useRef(new Map<string, IMessage>());
+	const readMainWidget = useCallback(
+		(sessionId: string) =>
+			resolveMainChatWidget(
+				messagesRef.current,
+				sessionId,
+				liveMainWidgets.current.get(sessionId),
+			),
+		[],
+	);
+	const rememberMainWidget = useCallback((responses: IMessage[]) => {
+		const last = responses.at(-1);
+		if (!last) return;
+		const mainWidget = resolveMainChatWidget(
+			responses,
+			last.sessionId,
+			liveMainWidgets.current.get(last.sessionId),
+		);
+		if (mainWidget)
+			liveMainWidgets.current.set(last.sessionId, {
+				...last,
+				main_widget: mainWidget,
+			});
+	}, []);
 
 	const localState = useLiveQuery(() => {
 		if (!sessionIdParameter) return undefined;
@@ -1080,10 +1221,11 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 	}, [toolbarElements, navElements, sidebarContent, toolbarRef, sidebarRef]);
 
 	// Reconnect to active stream or process completed stream when component mounts or session changes
+	// biome-ignore lint/correctness/useExhaustiveDependencies: a stream that starts after mount (another view sent) must re-run the reconnect, though the body asks the engine directly.
 	useEffect(() => {
 		if (!sessionIdParameter) return;
 		// Wait for messages to be loaded from IndexedDB
-		if (!messagesLoaded) return;
+		if (!messagesLoaded || !runtimeReady) return;
 
 		const streamId = sessionIdParameter;
 
@@ -1124,16 +1266,30 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		// The stream checkpoints under the id its sender chose. Resuming under that id lets completion
 		// replace the draft; a fresh id would settle a second copy beside it.
 		const resumeResponseMessage = async (): Promise<IMessage> => {
+			const sharedSeed = executionEngine.getChatSeed?.(streamId);
+			if (sharedSeed) return structuredClone(sharedSeed.responseMessage);
 			const draft = await latestChatDraft(sessionIdParameter);
+			const mainWidget = resolveMainChatWidget(
+				messagesRef.current.filter((message) => message.id !== draft?.id),
+				sessionIdParameter,
+			);
 			return draft
-				? cloneResponseMessageForReplay(draft)
-				: createResponseMessage(sessionIdParameter, appId, event.name);
+				? seedMainWidget(cloneResponseMessageForReplay(draft), mainWidget)
+				: createResponseMessage(
+						sessionIdParameter,
+						appId,
+						event.name,
+						mainWidget,
+					);
 		};
 
 		// Active streams need Chat mounted for live updates. Completed streams also use
 		// subscription replay so failures before the first event reach their saved reply.
 		if (!hasMessages && !executionEngine.isStreamComplete(streamId)) return;
 
+		if (executionEngine.isStreamActive(streamId)) {
+			processedCompletedStreams.current.delete(streamId);
+		}
 		// Mark this subscriber as active before subscribing
 		reconnectSubscribed.current.add(subscriberId);
 		let cancelled = false;
@@ -1165,16 +1321,23 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					subscriberId,
 					(events) => {
 						if (!replaying) handleNavigationEventsRef.current(events);
+						if (!replaying) {
+							refreshMainChatWidget(
+								turn.responseMessage,
+								readMainWidget(sessionIdParameter),
+							);
+						}
 						const result = turn.fold(events);
+						rememberMainWidget(result.responseMessages);
 
 						if (result.interactions?.length) {
 							addSessionInteractions(sessionIdParameter, result.interactions);
 						}
 
 						if (result.shouldUpdate) {
-							chatRef.current?.pushCurrentMessageUpdate({
-								...responseMessage,
-							});
+							chatRef.current?.pushCurrentMessageUpdate(
+								result.responseMessages.map((message) => ({ ...message })),
+							);
 							chatRef.current?.scrollToBottom();
 						}
 					},
@@ -1220,7 +1383,11 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		event.name,
 		executionEngine,
 		messagesLoaded,
+		runtimeReady,
 		hasMessages,
+		isStreamActive,
+		readMainWidget,
+		rememberMainWidget,
 	]);
 
 	// Internal function to execute the chat (called after OAuth is confirmed)
@@ -1230,19 +1397,51 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			filesAttached?: File[],
 			activeTools?: string[],
 			audioFile?: File,
+			interaction?: IChatMessageInteraction,
 			skipConsentCheck?: boolean,
 		) => {
 			const streamId = sessionIdParameter;
+			const pending = pendingMessageRef.current;
+			if (
+				pending &&
+				(pending.appId !== appId ||
+					pending.eventId !== event.id ||
+					pending.sessionId !== streamId)
+			) {
+				pendingMessageRef.current = null;
+			}
+			if (
+				!skipConsentCheck &&
+				pendingMessageRef.current &&
+				(interaction || pendingMessageRef.current.interaction)
+			) {
+				const error = Object.assign(
+					new Error(
+						"Complete the current authorization request before sending another message.",
+					),
+					{ isActiveStreamError: true },
+				);
+				if (!interaction) toast.error(error.message);
+				throw error;
+			}
 			if (
 				pendingSendSessions.current.has(streamId) ||
 				executionEngine.isStreamActive(streamId)
 			) {
-				toast.error("Please wait for the current response to complete.");
-				return;
+				const error = Object.assign(
+					new Error("Please wait for the current response to complete."),
+					{ isActiveStreamError: true },
+				);
+				if (!interaction) toast.error(error.message);
+				throw error;
 			}
 
 			pendingSendSessions.current.add(streamId);
 			setIsStreamActive(true);
+			const selectedModel = skipConsentCheck
+				? pendingMessageRef.current?.selectedModel
+				: modelRef.current.selectedModel;
+			let userMessageCommitted = false;
 
 			try {
 				const isOffline = await backend.isOffline(appId);
@@ -1267,12 +1466,19 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						"missing providers",
 					);
 					if (oauthResult.missingProviders.length > 0) {
+						const requestId = createId();
 						// Store pending message for retry
 						pendingMessageRef.current = {
+							requestId,
+							appId,
+							eventId: event.id,
+							sessionId: streamId,
 							content,
 							filesAttached,
 							activeTools,
 							audioFile,
+							interaction,
+							selectedModel,
 						};
 						// Emit OAuth required event
 						window.dispatchEvent(
@@ -1280,6 +1486,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 								detail: {
 									missingProviders: oauthResult.missingProviders,
 									appId,
+									eventId: event.id,
+									sessionId: streamId,
+									requestId,
 									boardId: event.board_id,
 									nodeId: event.node_id,
 									payload: {},
@@ -1313,10 +1522,38 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					historyMessage,
 					activeTools ?? [],
 					thinkingRef.current.stamp,
+					interaction,
 				);
 
 				await updateSession(sessionIdParameter, appId, content);
-				await putChatMessage(userMessage);
+				await chatDb.transaction("rw", chatDb.messages, async () => {
+					if (interaction?.type === "reaction") {
+						const stored = await chatDb.messages.get(
+							interaction.target.messageId,
+						);
+						const target = stored ? decodeMessageRow(stored) : undefined;
+						if (
+							!target ||
+							target.appId !== appId ||
+							target.sessionId !== sessionIdParameter
+						) {
+							throw new Error(
+								"The message is no longer available in this chat.",
+							);
+						}
+						await putChatMessage({
+							...target,
+							reactions: applyMessageReaction(
+								target.reactions,
+								interaction.emoji,
+								interaction.operation,
+								interaction.replacesEmoji,
+							),
+						});
+					}
+					await putChatMessage(userMessage);
+				});
+				userMessageCommitted = true;
 
 				const lastMessages =
 					messagesRef.current
@@ -1336,10 +1573,18 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 									message.inner.role === IRole.Assistant &&
 									message.widgets?.length,
 							)?.widgets;
-						if (latestWidgets?.length) {
-							const snapshots = await captureWidgetSnapshots(
-								latestWidgets.map((widget) => widget.instance_id),
-							);
+						const mainWidget = resolveMainChatWidget(
+							messagesRef.current,
+							sessionIdParameter,
+						)?.widget;
+						const widgetIds = [
+							...new Set([
+								...(latestWidgets ?? []).map((widget) => widget.instance_id),
+								...(mainWidget ? [mainWidget.instance_id] : []),
+							]),
+						];
+						if (widgetIds.length) {
+							const snapshots = await captureWidgetSnapshots(widgetIds);
 							if (snapshots.length) {
 								payloadHistoryMessage = {
 									...historyMessage,
@@ -1367,12 +1612,17 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					activeTools ?? [],
 					otherAttachments,
 					thinkingRef.current.level,
+					selectedModel,
 				);
 
 				const responseMessage = createResponseMessage(
 					sessionIdParameter,
 					appId,
 					event.name,
+					readMainWidget(sessionIdParameter),
+					interaction?.type === "reaction"
+						? interaction.target.messageId
+						: userMessage.id,
 				);
 
 				chatRef.current?.pushCurrentMessageUpdate({ ...responseMessage });
@@ -1398,7 +1648,17 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 
 				// Create incremental save function for robust message persistence
 				// This saves the message every N events to prevent data loss
-				const incrementalSave = createChatIncrementalSaver(turn);
+				const activityWriter = createAppChatActivityWriter(
+					turn,
+					{ appId, eventId: event.id, sessionId: sessionIdParameter },
+					() => executionEngine.getAccumulatedEvents(streamId),
+				);
+				const saveCheckpoint = createChatIncrementalSaver(turn);
+				const incrementalSave = async (events: IIntercomEvent[]) => {
+					if (executionEngine.isPersistenceManaged?.(streamId)) return;
+					await activityWriter.settled();
+					await saveCheckpoint(events);
+				};
 				// The chat event owns its state; embedded widgets use their surface IDs.
 				const frontendContext = await buildWorkflowFrontendContext(
 					appId,
@@ -1414,6 +1674,11 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 						payload: { ...payload, ...frontendContext },
 					},
 					streamState: false,
+					chat: {
+						responseMessage: structuredClone(responseMessage),
+						tmpLocalState: localState,
+						tmpGlobalState: globalState,
+					},
 					onExecutionStart: (execution_id: string) => {},
 					onLiveEvents: (events) => {
 						for (const item of events) {
@@ -1421,6 +1686,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 								getFrontendStateStore(appId).handleMessage(item.payload);
 							}
 						}
+						if (!executionEngine.isPersistenceManaged?.(streamId))
+							activityWriter.onEvents(events);
 					},
 					path: `${pathname}?id=${appId}&eventId=${event.id}&sessionId=${sessionIdParameter}`,
 					title: event.name || "Chat",
@@ -1428,6 +1695,25 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					skipConsentCheck,
 					// Save to Dexie every 10 events and on completion for robustness
 					onIncrementalSave: incrementalSave,
+					onUnobservedComplete: async (events, failure) => {
+						if (executionEngine.isPersistenceManaged?.(streamId)) return;
+						turn.catchUp(events);
+						const messages = turn.responseMessages;
+						const error = runFailureCard(event.name, failure);
+						if (error && messages.length > 0) {
+							messages[messages.length - 1].error = error;
+						}
+						await completeAppChatTurn(
+							messages,
+							{ appId, eventId: event.id, sessionId: sessionIdParameter },
+							{ events },
+						);
+						await persistWorkflowReactions(events, {
+							appId,
+							sessionId: sessionIdParameter,
+							triggerMessageId: responseMessage.trigger_message_id,
+						});
+					},
 					saveIntervalEvents: 10,
 				});
 				executionEngine.subscribeToEventStream(
@@ -1435,16 +1721,21 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					subscriberId,
 					(events) => {
 						handleNavigationEvents(events);
+						refreshMainChatWidget(
+							turn.responseMessage,
+							readMainWidget(sessionIdParameter),
+						);
 						const result = turn.fold(events);
+						rememberMainWidget(result.responseMessages);
 
 						if (result.interactions?.length) {
 							addSessionInteractions(sessionIdParameter, result.interactions);
 						}
 
 						if (result.shouldUpdate) {
-							chatRef.current?.pushCurrentMessageUpdate({
-								...responseMessage,
-							});
+							chatRef.current?.pushCurrentMessageUpdate(
+								result.responseMessages.map((message) => ({ ...message })),
+							);
 							chatRef.current?.scrollToBottom();
 						}
 					},
@@ -1475,6 +1766,16 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				);
 
 				await executionPromise;
+			} catch (error) {
+				if (interaction && !userMessageCommitted) {
+					throw Object.assign(
+						error instanceof Error
+							? error
+							: new Error(extractErrorMessage(error)),
+						{ isUnacceptedChatInteraction: true },
+					);
+				}
+				throw error;
 			} finally {
 				pendingSendSessions.current.delete(streamId);
 				// The user may have switched session while this run streamed; the composer
@@ -1496,6 +1797,8 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			localState,
 			globalState,
 			handleNavigationEvents,
+			readMainWidget,
+			rememberMainWidget,
 			pathname,
 		],
 	);
@@ -1505,6 +1808,7 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		const handleOAuthRetry = (e: Event) => {
 			const retryEvent = e as CustomEvent<{
 				appId: string;
+				requestId?: string;
 				boardId?: string;
 				nodeId?: string;
 				skipConsentCheck?: boolean;
@@ -1535,6 +1839,15 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				console.log("[Chat] No pending message to retry");
 				return;
 			}
+			if (retryEvent.detail.requestId !== pending.requestId) return;
+			if (
+				pending.appId !== appId ||
+				pending.eventId !== event.id ||
+				pending.sessionId !== sessionIdParameter
+			) {
+				pendingMessageRef.current = null;
+				return;
+			}
 
 			console.log("[Chat] Re-sending pending message with skipConsentCheck");
 
@@ -1544,8 +1857,10 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				pending.filesAttached,
 				pending.activeTools,
 				pending.audioFile,
+				pending.interaction,
 				true, // skipConsentCheck
 			).catch((err) => {
+				if (isDetachedReply(err)) return;
 				console.error("Failed to retry chat message after OAuth:", err);
 				captureTelemetryError(err, {
 					culprit: "chat.oauth_retry_send",
@@ -1555,10 +1870,32 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 		};
 
 		window.addEventListener("flow:oauth-retry", handleOAuthRetry);
+		const handleOAuthCancelled = (event: Event) => {
+			const detail = (
+				event as CustomEvent<{
+					requestId?: string;
+					appId?: string;
+					eventId?: string;
+					sessionId?: string;
+				}>
+			).detail;
+			const pending = pendingMessageRef.current;
+			if (
+				pending &&
+				detail?.requestId === pending.requestId &&
+				detail.appId === pending.appId &&
+				detail.eventId === pending.eventId &&
+				detail.sessionId === pending.sessionId
+			) {
+				pendingMessageRef.current = null;
+			}
+		};
+		window.addEventListener("flow:oauth-cancelled", handleOAuthCancelled);
 		return () => {
 			window.removeEventListener("flow:oauth-retry", handleOAuthRetry);
+			window.removeEventListener("flow:oauth-cancelled", handleOAuthCancelled);
 		};
-	}, [appId, event.board_id, executeChatMessage]);
+	}, [appId, event.id, event.board_id, sessionIdParameter, executeChatMessage]);
 
 	const handleSendMessage: ISendMessageFunction = useCallback(
 		async (
@@ -1566,19 +1903,11 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 			filesAttached,
 			activeTools?: string[],
 			audioFile?: File,
+			interaction?: IChatMessageInteraction,
 		) => {
 			if (!sessionIdParameter || sessionIdParameter === "") {
 				toast.error("Session ID is not set. Please start a new chat.");
 				return;
-			}
-
-			// Show loading state if sending from welcome screen
-			const hasFiles = (filesAttached && filesAttached.length > 0) || audioFile;
-			if (
-				hasFiles &&
-				(!messagesRef.current || messagesRef.current.length === 0)
-			) {
-				setIsSendingFromWelcome(true);
 			}
 
 			try {
@@ -1587,28 +1916,31 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					filesAttached,
 					activeTools,
 					audioFile,
+					interaction,
 				);
 			} catch (error) {
-				// Active stream errors and OAuth errors are handled separately
-				if (
-					(error as { isActiveStreamError?: unknown } | null)
-						?.isActiveStreamError
-				) {
-					// Already shown a toast in executeChatMessage guard
-				} else if (
-					!(error as { isOAuthError?: unknown } | null)?.isOAuthError
-				) {
-					console.error("Error sending message:", error);
-					captureTelemetryError(error, {
-						culprit: "chat.send_message",
-					});
-					toast.error(`Failed to send message: ${extractErrorMessage(error)}`);
-				}
-			} finally {
-				setIsSendingFromWelcome(false);
+				settleSendFailure(error, interaction);
 			}
 		},
 		[sessionIdParameter, executeChatMessage],
+	);
+
+	const handleMessageReaction = useCallback(
+		async (
+			message: IMessage,
+			emoji: string,
+			operation: "add" | "remove",
+			replacesEmoji?: string,
+		) => {
+			await handleSendMessage(emoji, undefined, undefined, undefined, {
+				type: "reaction",
+				target: createMessageReference(message),
+				emoji,
+				operation,
+				...(operation === "add" && replacesEmoji ? { replacesEmoji } : {}),
+			});
+		},
+		[handleSendMessage],
 	);
 
 	const onMessageUpdate = useCallback(
@@ -1729,9 +2061,17 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				sessionIdParameter,
 				appId,
 				event.name,
+				readMainWidget(sessionIdParameter),
 			);
-			let intermediateResponse = Response.default();
-			const attachments = new Map<string, IAttachment>();
+			const initialMainWidget = responseMessage.main_widget;
+			const turn = createChatTurn({
+				responseMessage,
+				tmpLocalState: null,
+				tmpGlobalState: null,
+				appId,
+				eventId: event.id,
+				sessionId: sessionIdParameter,
+			});
 
 			const result = await backend.boardState.executeBoard(
 				actionAppId,
@@ -1756,20 +2096,12 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					}
 					onA2UIEvents?.(events);
 
-					const processed = processChatEvents(events, {
-						intermediateResponse,
-						responseMessage,
-						attachments,
-						tmpLocalState: null,
-						tmpGlobalState: null,
-						done: false,
-						appId,
-						eventId: event.id,
-						sessionId: sessionIdParameter,
-					});
-
-					intermediateResponse = processed.intermediateResponse;
-					Object.assign(responseMessage, processed.responseMessage);
+					refreshMainChatWidget(
+						turn.responseMessage,
+						readMainWidget(sessionIdParameter),
+					);
+					const processed = turn.fold(events);
+					rememberMainWidget(processed.responseMessages);
 
 					if (processed.interactions?.length) {
 						addSessionInteractions(sessionIdParameter, processed.interactions);
@@ -1778,9 +2110,9 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 					// The assistant bubble appears only once the action actually
 					// streams chat content — a pure widget update shows nothing.
 					if (processed.shouldUpdate) {
-						chatRef.current?.pushCurrentMessageUpdate({
-							...processed.responseMessage,
-						});
+						chatRef.current?.pushCurrentMessageUpdate(
+							processed.responseMessages.map((message) => ({ ...message })),
+						);
 						chatRef.current?.scrollToBottom();
 					}
 				},
@@ -1797,72 +2129,69 @@ export const ChatInterfaceMemoized = memo(function ChatInterface({
 				);
 			}
 
-			const textContent =
-				typeof responseMessage.inner.content === "string"
-					? responseMessage.inner.content.trim()
-					: (responseMessage.inner.content?.length ?? 0);
-			const hasContent = Boolean(
-				textContent ||
-					responseMessage.files?.length ||
-					responseMessage.widgets?.length ||
-					responseMessage.plan_steps?.length,
-			);
+			const messagesWithContent = turn.responseMessages.filter((message) => {
+				const textContent =
+					typeof message.inner.content === "string"
+						? message.inner.content.trim()
+						: (message.inner.content?.length ?? 0);
+				return Boolean(
+					textContent ||
+						message.files?.length ||
+						message.widgets?.length ||
+						message.main_widget !== initialMainWidget ||
+						message.plan_steps?.length,
+				);
+			});
 
-			// Only persist a new assistant message when the action produced chat
-			// content; a pure in-place widget update leaves no residue.
-			if (hasContent) {
-				await putChatMessage(responseMessage);
+			// Main widget changes are saved with the turn so they survive reopening the chat.
+			for (const message of messagesWithContent) {
+				await putChatMessage(message);
 			}
 			chatRef.current?.clearCurrentMessageUpdate();
-			if (hasContent) {
+			if (messagesWithContent.length > 0) {
 				chatRef.current?.scrollToBottom();
 			}
 
 			return result;
 		},
-		[backend, appId, event, sessionIdParameter, handleNavigationEvents],
+		[
+			backend,
+			appId,
+			event,
+			sessionIdParameter,
+			handleNavigationEvents,
+			readMainWidget,
+			rememberMainWidget,
+		],
 	);
 
 	return (
 		<>
-			<ChatAppearance
-				appId={appId}
-				eventId={event.id}
+			<ChatSurface
+				chatRef={chatRef}
+				loading={!messagesLoaded}
+				welcome={
+					showWelcome
+						? { title: event.name, description: event.description }
+						: undefined
+				}
+				runWidgetAction={runWidgetAction}
+				sessionId={sessionIdParameter}
+				messages={messages}
+				onSendMessage={handleSendMessage}
+				onMessageUpdate={onMessageUpdate}
+				onMessageReaction={handleMessageReaction}
 				config={config}
-				fallback={<ConversationLoading />}
-			>
-				{!messagesLoaded ? (
-					<ConversationLoading />
-				) : showWelcome ? (
-					<ChatWelcome
-						onSendMessage={handleSendMessage}
-						event={event}
-						config={config}
-						isSending={isSendingFromWelcome}
-						appId={appId}
-						thinking={thinking.picker}
-					/>
-				) : (
-					<ChatWidgetExecutionProvider runWidgetAction={runWidgetAction}>
-						<Chat
-							ref={chatRef}
-							sessionId={sessionIdParameter}
-							messages={messages}
-							onSendMessage={handleSendMessage}
-							onMessageUpdate={onMessageUpdate}
-							config={config}
-							isStreamActive={isStreamActive}
-							activeInteractions={activeInteractions}
-							onRespondToInteraction={handleRespondToInteraction}
-							appId={appId}
-							boardId={event.board_id}
-							eventId={event.id}
-							showAiDisclosure
-							thinking={thinking.picker}
-						/>
-					</ChatWidgetExecutionProvider>
-				)}
-			</ChatAppearance>
+				isStreamActive={isStreamActive}
+				activeInteractions={activeInteractions}
+				onRespondToInteraction={handleRespondToInteraction}
+				appId={appId}
+				boardId={event.board_id}
+				eventId={event.id}
+				showAiDisclosure
+				thinking={thinking.picker}
+				model={model.picker}
+			/>
 			<AlertDialog
 				open={showPrefilledConfirm}
 				onOpenChange={(open) => {

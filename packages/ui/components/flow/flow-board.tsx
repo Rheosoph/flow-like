@@ -137,13 +137,14 @@ import { BoardEditorActions } from "../../components/flow/shell/board-editor-act
 import type { IBoardEditorAction } from "../../components/flow/shell/board-editor-actions";
 import { BoardExplorer } from "../../components/flow/shell/board-explorer";
 import { BoardInspector } from "../../components/flow/shell/board-inspector";
+import { BoardLoadError } from "../../components/flow/shell/board-load-error";
 import {
 	BoardIdentityForm,
 	BoardReleaseForm,
+	BoardReleaseStatus,
 	BoardRuntimeForm,
 	executionModeIcon,
 } from "../../components/flow/shell/board-meta-controls";
-import { BoardLoadError } from "../../components/flow/shell/board-load-error";
 import { BoardMobileHost } from "../../components/flow/shell/board-mobile-host";
 import { BoardNavMenu } from "../../components/flow/shell/board-nav-menu";
 import { BoardPane, BoardPanel } from "../../components/flow/shell/board-panes";
@@ -5981,9 +5982,12 @@ function FlowBoardContent({
 											/>
 										}
 									>
-										{version
-											? `v${version.join(".")} · ${t("readonly", "- Read-Only")}`
-											: `v${(board.data.version ?? [0, 0, 0]).join(".")} · ${board.data.stage}`}
+										<BoardReleaseStatus
+											appId={appId}
+											boardId={boardId}
+											stage={board.data.stage}
+											version={version}
+										/>
 									</BoardStatusItem>
 								)}
 								{boardDiff.notice && (

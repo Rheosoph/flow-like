@@ -15,10 +15,7 @@ use flow_like_types::Bytes;
 use flow_like_types::image::ImageReader;
 use flow_like_types::{async_trait, json::json};
 #[cfg(feature = "execute")]
-use markitdown::{
-    ConversionOptions, Document, ExtractedImage, LlmConfig, MarkItDown, SharedLlmClient,
-    SummaryConfig, SummaryStrategy, create_llm_client_with_config,
-};
+use markitdown::{Document, ExtractedImage, LlmConfig, SummaryStrategy};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "execute")]
@@ -26,13 +23,15 @@ use std::io::Cursor;
 
 #[cfg(feature = "execute")]
 use flow_like_model_provider::{
-    history::{History, HistoryThinking},
-    llm::lenient_settings::{LenientSettings, RejectedSettings},
+    history::HistoryThinking,
     summarization::{
         ChunkingMethod, DensificationStrategy, SummarizationConfig, SummarizationStrategy,
         TextChunk,
     },
 };
+
+#[cfg(feature = "execute")]
+pub mod service;
 
 /// Represents a single page extracted from a document
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -403,18 +402,19 @@ async fn evaluate_thinking(
     })
 }
 
-/// markitdown builds its own requests, so the provider's thinking parameters are mapped from a
-/// History once and merged into every request it sends. Temperature, thinking and max tokens
-/// are each dropped once the provider rejects them; the returned handle lists what was dropped.
+/// The model Bit as a page reader, built through the run's model factory. Settings the model
+/// cannot take are logged as warnings.
 #[cfg(feature = "execute")]
-async fn build_llm_client(
+async fn reader_client(
     context: &mut ExecutionContext,
     model_bit: &Bit,
     thinking: HistoryThinking,
     config: LlmConfig,
-) -> flow_like_types::Result<(SharedLlmClient, RejectedSettings)> {
-    let model_factory = context.app_state.model_factory.clone();
-    let model = model_factory
+) -> flow_like_types::Result<service::ReaderClient> {
+    let model = context
+        .app_state
+        .model_factory
+        .clone()
         .build(
             model_bit,
             context.app_state.clone(),
@@ -422,39 +422,23 @@ async fn build_llm_client(
             context.model_usage_context(),
         )
         .await?;
-
-    let mut history = History::new(model_bit.id.clone(), Vec::new());
-    history.thinking = Some(thinking);
-    let params = match model.agent_settings(&Some(history)) {
-        Ok(settings) => settings.params,
-        Err(error) => {
-            context.log_message(
-                &format!("The model takes no Thinking setting, so it is left out: {error}"),
-                flow_like::flow::execution::LogLevel::Warn,
-            );
-            None
-        }
-    };
-
-    #[allow(deprecated)]
-    let completion_handle = model.completion_model_handle(None).await?;
-    let model = LenientSettings::new(completion_handle, params);
-    let rejected = model.rejected();
-
-    Ok((create_llm_client_with_config(model, config), rejected))
+    let reader = service::build_llm_client(&service::ReaderModel {
+        model,
+        model_name: model_bit.id.clone(),
+        thinking,
+        config,
+    })
+    .await?;
+    for warning in &reader.warnings {
+        context.log_message(warning, flow_like::flow::execution::LogLevel::Warn);
+    }
+    Ok(reader)
 }
 
 #[cfg(feature = "execute")]
-fn log_rejected_settings(context: &mut ExecutionContext, rejected: &RejectedSettings) {
-    for rejected in rejected.take_unreported() {
-        context.log_message(
-            &format!(
-                "The model rejected the {} setting, so it is left out of this and later requests: {}",
-                rejected.setting.label(),
-                rejected.error
-            ),
-            flow_like::flow::execution::LogLevel::Warn,
-        );
+fn log_rejected_settings(context: &mut ExecutionContext, reader: &service::ReaderClient) {
+    for message in reader.rejected_settings() {
+        context.log_message(&message, flow_like::flow::execution::LogLevel::Warn);
     }
 }
 
@@ -464,50 +448,6 @@ fn file_extension(file: &FlowPath) -> String {
         .extension()
         .map(|e| format!(".{}", e))
         .unwrap_or_default()
-}
-
-#[cfg(feature = "execute")]
-/// Safely calls markitdown convert_bytes, catching any panics from the underlying crate.
-async fn safe_convert_bytes(
-    _md: &MarkItDown,
-    bytes: Bytes,
-    options: Option<ConversionOptions>,
-) -> flow_like_types::Result<Document> {
-    use flow_like_types::tokio;
-
-    let handle = tokio::task::spawn(async move {
-        let md = MarkItDown::new();
-        md.convert_bytes(bytes, options).await
-    });
-
-    match handle.await {
-        Ok(Ok(doc)) => Ok(doc),
-        Ok(Err(e)) => Err(flow_like_types::anyhow!(
-            "Document conversion failed: {}",
-            e
-        )),
-        Err(e) if e.is_panic() => {
-            let panic_msg = if let Ok(reason) = e.try_into_panic() {
-                if let Some(s) = reason.downcast_ref::<String>() {
-                    s.clone()
-                } else if let Some(s) = reason.downcast_ref::<&str>() {
-                    s.to_string()
-                } else {
-                    "Unknown panic".to_string()
-                }
-            } else {
-                "Unknown panic".to_string()
-            };
-            Err(flow_like_types::anyhow!(
-                "Document conversion panicked: {}",
-                panic_msg
-            ))
-        }
-        Err(e) => Err(flow_like_types::anyhow!(
-            "Document conversion task failed: {}",
-            e
-        )),
-    }
 }
 
 #[cfg(feature = "execute")]
@@ -662,13 +602,12 @@ impl NodeLogic for ExtractDocumentNode {
         let file_buffer = file.get(context, false).await?;
         let bytes = Bytes::from(file_buffer);
 
-        let options = ConversionOptions::default()
-            .with_extension(&extension)
-            .with_image_context_path(file.path)
-            .with_images(extract_images);
-
-        let md = MarkItDown::new();
-        let result = safe_convert_bytes(&md, bytes, Some(options)).await?;
+        let options = service::ConvertOptions {
+            extract_images,
+            force_ocr: false,
+            source_path: Some(file.path),
+        };
+        let result = service::convert(bytes, Some(&extension), &options, None).await?;
 
         let pages = document_to_pages(&result, context).await?;
 
@@ -839,21 +778,15 @@ impl NodeLogic for ExtractDocumentAiNode {
 
         let (llm_config, force_ocr) = apply_prompt_pins(context, llm_config).await?;
 
-        let (llm_client, rejected) =
-            build_llm_client(context, &model_bit, thinking, llm_config).await?;
+        let reader = reader_client(context, &model_bit, thinking, llm_config).await?;
 
-        let md = MarkItDown::new();
-        let file_path_clone = file.path.clone();
-        let mut options = ConversionOptions::default()
-            .with_extension(&extension)
-            .with_image_context_path(file.path)
-            .with_images(extract_images)
-            .with_force_llm_ocr(force_ocr)
-            .with_llm(llm_client);
-        options.url = Some(file_path_clone);
-
-        let result = safe_convert_bytes(&md, bytes, Some(options)).await;
-        log_rejected_settings(context, &rejected);
+        let options = service::ConvertOptions {
+            extract_images,
+            force_ocr,
+            source_path: Some(file.path),
+        };
+        let result = service::convert(bytes, Some(&extension), &options, Some(&reader)).await;
+        log_rejected_settings(context, &reader);
         let result = result?;
 
         let pages = document_to_pages(&result, context).await?;
@@ -963,7 +896,6 @@ impl NodeLogic for ExtractDocumentsNode {
         let files: Vec<FlowPath> = context.evaluate_pin("files").await?;
         let extract_images: bool = context.evaluate_pin("extract_images").await?;
 
-        let md = MarkItDown::new();
         let mut all_results: Vec<Vec<DocumentPage>> = Vec::with_capacity(files.len());
 
         for file in files {
@@ -972,12 +904,12 @@ impl NodeLogic for ExtractDocumentsNode {
             let file_buffer = file.get(context, false).await?;
             let bytes = Bytes::from(file_buffer);
 
-            let options = ConversionOptions::default()
-                .with_extension(&extension)
-                .with_image_context_path(file.path)
-                .with_images(extract_images);
-
-            let result = safe_convert_bytes(&md, bytes, Some(options)).await?;
+            let options = service::ConvertOptions {
+                extract_images,
+                force_ocr: false,
+                source_path: Some(file.path),
+            };
+            let result = service::convert(bytes, Some(&extension), &options, None).await?;
 
             let pages = document_to_pages(&result, context).await?;
             all_results.push(pages);
@@ -1150,10 +1082,8 @@ impl NodeLogic for ExtractDocumentsAiNode {
 
         let (llm_config, force_ocr) = apply_prompt_pins(context, llm_config).await?;
 
-        let (llm_client, rejected) =
-            build_llm_client(context, &model_bit, thinking, llm_config).await?;
+        let reader = reader_client(context, &model_bit, thinking, llm_config).await?;
 
-        let md = MarkItDown::new();
         let mut all_results: Vec<Vec<DocumentPage>> = Vec::with_capacity(files.len());
 
         for file in files {
@@ -1161,15 +1091,13 @@ impl NodeLogic for ExtractDocumentsAiNode {
             let file_buffer = file.get(context, false).await?;
             let bytes = Bytes::from(file_buffer);
 
-            let options = ConversionOptions::default()
-                .with_extension(&extension)
-                .with_images(extract_images)
-                .with_image_context_path(file.path.clone())
-                .with_force_llm_ocr(force_ocr)
-                .with_llm(llm_client.clone());
-
-            let result = safe_convert_bytes(&md, bytes, Some(options)).await;
-            log_rejected_settings(context, &rejected);
+            let options = service::ConvertOptions {
+                extract_images,
+                force_ocr,
+                source_path: Some(file.path),
+            };
+            let result = service::convert(bytes, Some(&extension), &options, Some(&reader)).await;
+            log_rejected_settings(context, &reader);
             let result = result?;
 
             let pages = document_to_pages(&result, context).await?;
@@ -1296,9 +1224,10 @@ fn non_empty(value: String) -> Option<String> {
 }
 
 #[cfg(feature = "execute")]
-async fn summary_config_from_pins(
+async fn summarize_options_from_pins(
     context: &mut ExecutionContext,
-) -> flow_like_types::Result<SummaryConfig> {
+    file: &FlowPath,
+) -> flow_like_types::Result<service::SummarizeOptions> {
     let strategy: String = context.evaluate_pin("strategy").await?;
     let focus: String = context.evaluate_pin("focus").await?;
     let language: String = context.evaluate_pin("language").await?;
@@ -1307,19 +1236,16 @@ async fn summary_config_from_pins(
     let include_images: bool = context.evaluate_pin("include_images").await?;
     let parallel_requests: i64 = context.evaluate_pin("parallel_requests").await?;
 
-    let mut config = SummaryConfig::default()
-        .with_strategy(parse_summary_strategy(&strategy)?)
-        .with_summary_words(summary_words.max(0) as usize)
-        .with_max_key_points(max_key_points.max(0) as usize)
-        .with_images(include_images)
-        .with_concurrency(parallel_requests.max(1) as usize);
-    if let Some(focus) = non_empty(focus) {
-        config = config.with_focus(focus);
-    }
-    if let Some(language) = non_empty(language) {
-        config = config.with_language(language);
-    }
-    Ok(config)
+    Ok(service::SummarizeOptions {
+        goal: non_empty(focus),
+        language: non_empty(language),
+        strategy: parse_summary_strategy(&strategy)?,
+        summary_words: summary_words.max(0) as usize,
+        max_key_points: max_key_points.max(0) as usize,
+        include_images,
+        parallel_requests: parallel_requests.max(1) as usize,
+        source_path: Some(file.path.clone()),
+    })
 }
 
 #[cfg(feature = "execute")]
@@ -1548,38 +1474,23 @@ impl NodeLogic for SummarizeFileNode {
         let temperature: f64 = context.evaluate_pin("temperature").await?;
         let max_tokens: i64 = context.evaluate_pin("max_tokens").await?;
         let thinking = evaluate_thinking(context).await?;
-        let summary_config = summary_config_from_pins(context).await?;
+        let options = summarize_options_from_pins(context, &file).await?;
 
         let llm_config = LlmConfig::default()
             .with_temperature(temperature)
             .with_max_tokens((max_tokens > 0).then_some(max_tokens as u64));
-        let (llm_client, rejected) =
-            build_llm_client(context, &model_bit, thinking, llm_config).await?;
+        let reader = reader_client(context, &model_bit, thinking, llm_config).await?;
 
         let extension = file_extension(&file);
         let bytes = Bytes::from(file.get(context, false).await?);
 
-        let mut options = ConversionOptions::default()
-            .with_extension(&extension)
-            .with_image_context_path(file.path.clone())
-            .with_images(summary_config.include_images)
-            .with_llm(llm_client)
-            .with_summarization(summary_config);
-        options.url = Some(file.path.clone());
-
-        let md = MarkItDown::new();
-        let document = safe_convert_bytes(&md, bytes, Some(options)).await;
-        log_rejected_settings(context, &rejected);
-        let document = document?;
-        let summary = document.summary.clone().ok_or_else(|| {
-            flow_like_types::anyhow!(
-                "Summarizing `{}` returned no summary; the converter ignored summarization mode",
-                file.path
-            )
-        })?;
+        let summarized = service::summarize(bytes, Some(&extension), &options, &reader).await;
+        log_rejected_settings(context, &reader);
+        let summarized = summarized?;
+        let summary = summarized.summary;
         log_summary_outcome(context, &file.path, &summary);
 
-        let notes = document_to_pages(&document, context).await?;
+        let notes = document_to_pages(&summarized.document, context).await?;
 
         context
             .set_pin_value("summary", json!(summary.summary))
@@ -1589,7 +1500,7 @@ impl NodeLogic for SummarizeFileNode {
             .await?;
         context.set_pin_value("notes", json!(notes)).await?;
         context
-            .set_pin_value("markdown", json!(document.to_markdown()))
+            .set_pin_value("markdown", json!(summarized.markdown))
             .await?;
         context
             .set_pin_value("failed_pages", json!(summary.failed_pages))

@@ -5,7 +5,7 @@ use flow_like::flow::{
     variable::VariableType,
 };
 use flow_like_model_provider::{history::Content, response::Response};
-use flow_like_types::async_trait;
+use flow_like_types::{async_trait, json::json};
 
 use super::CachedChatResponse;
 
@@ -31,6 +31,7 @@ impl NodeLogic for PushResponseNode {
         node.set_flowscript_name("chat", "pushResponse");
         node.add_icon("/flow/icons/event.svg");
         node.set_event_callback(true);
+        node.set_version(1);
 
         node.add_input_pin(
             "exec_in",
@@ -48,6 +49,14 @@ impl NodeLogic for PushResponseNode {
         .set_schema::<Response>()
         .set_options(PinOptions::new().set_enforce_schema(true).build());
 
+        node.add_input_pin(
+            "new_message",
+            "New Message",
+            "Start a new message. Later chat pushes belong to this message.",
+            VariableType::Boolean,
+        )
+        .set_default_value(Some(json!(false)));
+
         node.add_output_pin(
             "exec_out",
             "Output",
@@ -62,15 +71,19 @@ impl NodeLogic for PushResponseNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let response: Response = context.evaluate_pin("response").await?;
+        // Older saved nodes do not have this pin until their catalog migration runs.
+        let new_message = match context.get_pin_by_name("new_message").await {
+            Ok(pin) => context.evaluate_pin_ref::<bool>(pin).await?,
+            Err(_) => false,
+        };
         let (summary, level) = describe_response(&response);
         context.log_message(&summary, level);
 
         let cached_response = CachedChatResponse::load(context).await?;
-        let current = {
-            let mut mutable_response = cached_response.response.lock().await;
-            mutable_response.response = response;
-            mutable_response.clone()
-        };
+        let _message_guard = cached_response.emission.lock().await;
+        let current = cached_response
+            .replace_response(response, new_message)
+            .await;
 
         context.stream_response("chat_stream", current).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -153,6 +166,15 @@ fn strip_think_blocks(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn new_message_defaults_to_false_and_migrates_existing_nodes() {
+        let node = PushResponseNode::new().get_node();
+        assert_eq!(node.version, Some(1));
+        let pin = node.get_pin_by_name("new_message").unwrap();
+        assert_eq!(pin.data_type, VariableType::Boolean);
+        assert_eq!(pin.effective_default(&Default::default()), json!(false));
+    }
 
     #[test]
     fn unterminated_think_hides_the_rest() {

@@ -3,9 +3,9 @@
 import { Calculator, ChevronDown } from "lucide-react";
 import { useId, useState } from "react";
 import {
+	type RuntimeSample,
 	estimateCloudRuns,
 	formatRuntimeSeconds,
-	type RuntimeSample,
 } from "../../lib/runtime-estimate";
 import { Button } from "../ui/button";
 

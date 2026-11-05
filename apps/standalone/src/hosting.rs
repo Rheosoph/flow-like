@@ -621,12 +621,12 @@ impl PreparedHost {
         let listener = match inherited_listener {
             Some(listener) => {
                 ensure!(
-                    listener.local_addr()? == std::net::SocketAddr::new(hosting.host, hosting.port),
+                    hosting.accepts_listener(listener.local_addr()?),
                     "Inherited placement listener address differs"
                 );
                 listener
             }
-            None => TcpListener::bind((hosting.host, hosting.port))
+            None => TcpListener::bind(hosting.listen_address())
                 .await
                 .context("Bind placement HTTP service")?,
         };

@@ -133,6 +133,21 @@ describe("platform wire contracts", () => {
 				.lastSequence,
 		).toBe(4);
 	});
+	test("polling reports whether more pages follow", async () => {
+		transport({
+			run_id: "r",
+			status: "Running",
+			has_more: true,
+			events: [
+				{ sequence: 7, event_type: "output", payload: 1, created_at: "now" },
+			],
+		});
+		const page = await client().pollExecution("private_poll_token", {
+			afterSequence: 6,
+		});
+		expect(page.has_more).toBe(true);
+		expect(page.lastSequence).toBe(7);
+	});
 	test("database query pagination and reference selectors stay in query parameters", async () => {
 		const mock = transport([]);
 		await client().queryTable("a", "documents", {

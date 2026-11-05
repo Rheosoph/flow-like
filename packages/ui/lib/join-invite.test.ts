@@ -3,7 +3,9 @@ import { ApiResponseError } from "./api-error";
 import {
 	JOIN_MAX_RETRIES,
 	attemptJoinWithRetry,
+	attemptRoomJoin,
 	isTerminalJoinError,
+	roomJoinFailureKind,
 } from "./join-invite";
 
 function apiError(status: number, code?: string): ApiResponseError {
@@ -57,4 +59,31 @@ describe("attemptJoinWithRetry", () => {
 
 test("retry budget is unchanged", () => {
 	expect(JOIN_MAX_RETRIES).toBe(6);
+});
+
+describe("room join helpers", () => {
+	test("maps server codes to room-specific failures", () => {
+		const failed = (status: number, code?: string) => ({
+			ok: false,
+			kind: status === 404 ? ("invalid" as const) : ("forbidden" as const),
+			error: apiError(status, code),
+		});
+		expect(roomJoinFailureKind(failed(404, "INBOX_LINK_NOT_FOUND"))).toBe(
+			"invalid",
+		);
+		expect(roomJoinFailureKind(failed(403, "INBOX_LINK_USED_UP"))).toBe(
+			"used-up",
+		);
+		expect(roomJoinFailureKind(failed(409, "INBOX_MEMBER_LIMIT"))).toBe("full");
+		expect(roomJoinFailureKind({ ok: false, kind: "retry-exhausted" })).toBe(
+			"retry",
+		);
+	});
+
+	test("returns the joined room of a successful attempt", async () => {
+		const joined = { conversation: { id: "c1" }, joined: false } as never;
+		const outcome = await attemptRoomJoin(async () => joined);
+		expect(outcome.result.ok).toBe(true);
+		expect(outcome.joined).toBe(joined);
+	});
 });

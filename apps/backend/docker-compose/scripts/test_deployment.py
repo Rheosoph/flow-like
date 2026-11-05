@@ -1,5 +1,6 @@
 """Render actual Compose graphs and reject unsafe mode/configuration combinations."""
 import importlib.util
+import base64
 import json
 import os
 from pathlib import Path
@@ -101,12 +102,55 @@ class DeploymentTest(unittest.TestCase):
                 web = config["services"]["web"]["environment"]
                 self.assertEqual(web["FLOW_LIKE_WEB_REDIRECT_URL"], frontend + "/callback")
 
+    def test_nats_grants_and_broker_trust_stay_separate(self):
+        for compose_file in ("docker-compose.yml", "docker-stack.yml"):
+            values, config = self.render(compose_file=compose_file)
+            services = config["services"]
+            api = services["api"]["environment"]
+            broker = services["nats"]
+            self.assertEqual(api["CHANNEL_TRANSPORT"], "nats")
+            self.assertEqual(api["CHANNEL_NATS_WS_URL"], "ws://localhost:8080/nats")
+            self.assertTrue(api["CHANNEL_NATS_ACCOUNT_SEED"].startswith("SA"))
+            self.assertNotIn("ports", broker)
+            self.assertEqual(broker["deploy"]["replicas"], 1)
+            self.assertTrue(broker["read_only"])
+            trust = json.loads(base64.b64decode(broker["environment"]["NATS_SERVER_CONFIG"]))
+            self.assertIn("http://localhost:3001", trust["websocket"]["allowed_origins"])
+            self.assertEqual(trust["resolver"], "MEMORY")
+            self.assertEqual(len(trust["resolver_preload"]), 1)
+            self.assertNotIn(api["CHANNEL_NATS_ACCOUNT_SEED"], json.dumps(trust))
+            for name, service in services.items():
+                if name != "api":
+                    self.assertNotIn("CHANNEL_NATS_ACCOUNT_SEED", service.get("environment", {}))
+            if compose_file == "docker-compose.yml":
+                self.assertEqual(preflight.validate(values, config), [])
+
+    def test_nats_preflight_rejects_missing_trust_and_insecure_browser_url(self):
+        for changes, message in (({"NATS_SERVER_CONFIG": "invalid"}, "NATS_SERVER_CONFIG"),
+                                 ({"CHANNEL_NATS_ACCOUNT_SEED": "invalid"}, "CHANNEL_NATS_ACCOUNT_SEED"),
+                                 ({"PUBLIC_API_URL": "https://api.example.test"}, "wss://")):
+            values, config = self.render(changes)
+            self.assertTrue(any(message in error for error in preflight.validate(values, config)))
+
     def test_bucket_key_auto_default_and_explicit_overrides_reach_api(self):
         for compose_file in ("docker-compose.yml", "docker-stack.yml"):
             for value in ("", "true", "false"):
                 with self.subTest(compose_file=compose_file, value=value):
                     _, config = self.render({"S3_KMS_BUCKET_KEY": value}, compose_file=compose_file)
                     self.assertEqual(config["services"]["api"]["environment"]["S3_KMS_BUCKET_KEY"], value)
+
+    def test_hosted_media_credentials_only_reach_api(self):
+        keys = ["OPENROUTER_API_KEY", "HOSTED_OPENAI_API_KEY", "HOSTED_GROQ_API_KEY",
+                "HOSTED_MISTRAL_API_KEY", "HOSTED_TOGETHER_API_KEY", "HOSTED_XAI_API_KEY",
+                "HOSTED_GEMINI_API_KEY", "HOSTED_CLOUDFLARE_API_TOKEN", "HOSTED_CLOUDFLARE_ACCOUNT_ID"]
+        supplied = {key: f"media_test_{index}" for index, key in enumerate(keys)}
+        for compose_file in ("docker-compose.yml", "docker-stack.yml"):
+            _, config = self.render(supplied, compose_file=compose_file)
+            for key, value in supplied.items():
+                self.assertEqual(config["services"]["api"]["environment"][key], value)
+                for name, service in config["services"].items():
+                    if name != "api":
+                        self.assertNotIn(key, service.get("environment", {}))
 
     def test_stripe_credentials_survive_setup_and_only_reach_api(self):
         supplied = {key: f"test_{index}" for index, key in enumerate(setup.STRIPE_SETTINGS)}
@@ -459,7 +503,7 @@ class DeploymentTest(unittest.TestCase):
         self.assertFalse(db_init.get("depends_on"))
         self.assertEqual(set(db_init["networks"]), {"app"})
         for name in ("api", "audit-worker"):
-            self.assertEqual(set(config["services"][name]["depends_on"]), {"db-init"}, name)
+            self.assertEqual(set(config["services"][name]["depends_on"]), {"db-init", "nats"} if name == "api" else {"db-init"}, name)
             self.assertEqual(config["services"][name]["depends_on"]["db-init"]["condition"], "service_completed_successfully")
 
     def test_audit_credentials_are_confined_to_worker(self):

@@ -1,6 +1,6 @@
 import {
-	COMPONENT_PROPS,
 	type A2UIComponentType,
+	COMPONENT_PROPS,
 } from "./component-prop-manifest";
 
 /**

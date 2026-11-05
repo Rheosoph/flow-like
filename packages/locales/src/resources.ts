@@ -1,5 +1,6 @@
 import admin from "../locales/en/admin.json";
 import audit from "../locales/en/audit.json";
+import bots from "../locales/en/bots.json";
 import chat from "../locales/en/chat.json";
 import common from "../locales/en/common.json";
 import devices from "../locales/en/devices.json";
@@ -27,6 +28,7 @@ export const SOURCE_RESOURCES = {
 	audit,
 	payments,
 	devices,
+	bots,
 } as const;
 
 export type SourceResources = typeof SOURCE_RESOURCES;

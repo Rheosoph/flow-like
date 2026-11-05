@@ -45,6 +45,63 @@ test("unpriced hosted models warn admins without inventing rates", () => {
 	}
 });
 
+test("hosted image editors use image providers and per-image prices", () => {
+	const cloudflare = renderEditor({
+		bitType: IBitTypes.ImageGeneration,
+		provider: "hosted:cloudflare",
+		pricing: { request_micro_usd: 2500 },
+	});
+	expect(cloudflare).toContain("Cloudflare Workers AI");
+	expect(cloudflare).toContain("USD per image");
+	expect(cloudflare).toContain('value="0.0025"');
+	expect(cloudflare).toContain("HOSTED_CLOUDFLARE_ACCOUNT_ID");
+	expect(cloudflare).toContain("Access tier");
+	expect(cloudflare).not.toContain("API surface");
+	expect(cloudflare).not.toContain("USD per 1M");
+	const openrouter = renderEditor({
+		bitType: IBitTypes.ImageGeneration,
+		provider: "hosted:openrouter",
+		pricing: { request_micro_usd: 0 },
+	});
+	expect(openrouter).toContain("Maximum USD per image");
+	expect(openrouter).toContain("cost reported by OpenRouter");
+	expect(openrouter).toContain("OPENROUTER_API_KEY");
+	for (const props of [
+		{ bitType: IBitTypes.VideoGeneration },
+		{ bitType: IBitTypes.ImageGeneration, provider: "local:stablediffusion" },
+	])
+		expect(renderEditor(props)).not.toContain("Hosted image generation");
+});
+
+test("custom HTTP models expose request parameters while subscription and local models do not", () => {
+	for (const provider of [
+		"custom:anthropic",
+		"custom:gemini",
+		"custom:lmstudio",
+	])
+		expect(renderEditor({ scope: "custom", provider })).toContain(
+			"Add request parameters",
+		);
+	expect(
+		renderEditor({
+			scope: "custom",
+			provider: "custom:systemone",
+			bitType: IBitTypes.SystemOne,
+		}),
+	).toContain("Add request parameters");
+	for (const provider of [
+		"Local",
+		"MLX",
+		"custom:claude-code",
+		"custom:codex",
+		"custom:github-copilot",
+		"custom:microsoft-copilot",
+	])
+		expect(renderEditor({ scope: "custom", provider })).not.toContain(
+			"Add request parameters",
+		);
+});
+
 test("hosted pricing fields display exact USD amounts and permit removal", () => {
 	const markup = renderEditor({
 		bitType: IBitTypes.Vlm,
@@ -208,4 +265,31 @@ test("forecasting parameters expose checkpoint families and assets without chat 
 	expect(markup).not.toContain("API surface");
 	expect(markup).not.toContain("Context length");
 	expect(markup).not.toContain("Hosted model pricing");
+});
+
+test("hosted speech editors use the audio provider list without LLM API settings", () => {
+	for (const bitType of [IBitTypes.Stt, IBitTypes.Tts]) {
+		const markup = renderEditor({ bitType, provider: "hosted:openrouter" });
+		for (const provider of [
+			"openrouter",
+			"openai",
+			"groq",
+			"mistral",
+			"together",
+			"xai",
+			"gemini",
+		])
+			expect(markup).toContain(`value="hosted:${provider}"`);
+		expect(markup).not.toContain('value="hosted:anthropic"');
+		expect(markup).not.toContain("API surface");
+		expect(markup).not.toContain("USD per 1M");
+		expect(markup).toContain("OPENROUTER_API_KEY");
+		if (bitType === IBitTypes.Tts) {
+			expect(markup).toContain("Default voice");
+			expect(markup).not.toContain("Default language");
+		} else {
+			expect(markup).toContain("Default language");
+			expect(markup).not.toContain("Default voice");
+		}
+	}
 });

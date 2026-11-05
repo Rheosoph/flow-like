@@ -320,7 +320,22 @@ export function bundleLicenses({
 	for (const pkg of packages) {
 		const key = `${pkg.name}@${pkg.version}`;
 		const prefix = `dependencies/${pkg.name}-${pkg.version}`;
-		const override = overrides[key];
+		const resolved =
+			!pkg.location || /^https?:/.test(pkg.location)
+				? pkg.location
+					? gitPackage(pkg, lock, cargoHome, run)
+					: registryPackage(pkg, lock, cargoHome)
+				: undefined;
+		const revision = resolved
+			? resolved.archive
+				? existsSync(join(resolved.base, ".cargo_vcs_info.json"))
+					? JSON.parse(
+							readFileSync(join(resolved.base, ".cargo_vcs_info.json"), "utf8"),
+						).git?.sha1
+					: undefined
+				: resolved.source.split("#")[1]
+			: undefined;
+		const override = selectNoticeOverride(overrides, key, revision);
 		const additional = (override?.additionalLicenses || []).map(selectLicense);
 		pkg.selectedLicense = [
 			...new Set([pkg.selectedLicense, ...additional]),
@@ -343,9 +358,6 @@ export function bundleLicenses({
 			pkg.source = `${pin.repository.replace(/\.git$/, "")}/tree/${pin.revision}/${portable(relative(workspace, location))}`;
 			pkg.notices = upstreamFiles;
 		} else {
-			const resolved = pkg.location
-				? gitPackage(pkg, lock, cargoHome, run)
-				: registryPackage(pkg, lock, cargoHome);
 			pkg.source = resolved.source;
 			pkg.checksum = resolved.checksum;
 			for (const path of filesBelow(resolved.base).filter((path) =>
@@ -366,11 +378,6 @@ export function bundleLicenses({
 					`Review the missing-notice override for the new ${key} version.`,
 				);
 			if (override) {
-				const revision = resolved.archive
-					? JSON.parse(
-							readFileSync(join(resolved.base, ".cargo_vcs_info.json"), "utf8"),
-						).git?.sha1
-					: resolved.source.split("#")[1];
 				if (revision !== override.revision)
 					throw new Error(
 						`Review the changed upstream source for ${key} before reusing its license notices.`,
@@ -392,6 +399,9 @@ export function bundleLicenses({
 			}
 			if (override) pkg.noticeSources = override.sources;
 			if (pkg.name === "epaint_default_fonts") {
+				const fontBase = resolved.archive
+					? resolved.base
+					: join(resolved.base, "crates/epaint_default_fonts");
 				for (const font of [
 					"UFL.txt",
 					"OFL.txt",
@@ -402,7 +412,7 @@ export function bundleLicenses({
 					const destination = `${prefix}/${path}.txt`;
 					if (!pkg.notices.includes(destination))
 						pkg.notices.push(
-							put(destination, readFileSync(join(resolved.base, path))),
+							put(destination, readFileSync(join(fontBase, path))),
 						);
 				}
 			}
@@ -425,18 +435,23 @@ export function bundleLicenses({
 					`No license text for ${key}; add its pinned upstream notices to license-data/overrides.json.`,
 				);
 			if (requiresSource) {
-				if (!resolved.archive)
-					throw new Error(
-						`Package the exact modified/Git MPL source for ${key} before distributing it.`,
-					);
-				verifyUnmodifiedSource(
-					resolved.base,
-					resolved.archive,
-					resolved.checksum,
-				);
-				pkg.sourceArchive = `sources/${pkg.name}-${pkg.version}.crate`;
 				mkdirSync(join(licenses, "sources"), { recursive: true });
-				cpSync(resolved.archive, join(licenses, pkg.sourceArchive));
+				if (resolved.archive) {
+					verifyUnmodifiedSource(
+						resolved.base,
+						resolved.archive,
+						resolved.checksum,
+					);
+					pkg.sourceArchive = `sources/${pkg.name}-${pkg.version}.crate`;
+					cpSync(resolved.archive, join(licenses, pkg.sourceArchive));
+				} else {
+					pkg.sourceArchive = `sources/${pkg.name}-${pkg.version}-${revision.slice(0, 12)}.tar.gz`;
+					archiveGitSource(
+						resolved.base,
+						revision,
+						join(licenses, pkg.sourceArchive),
+					);
+				}
 			}
 		}
 		pkg.location = undefined;
@@ -467,7 +482,7 @@ export function bundleLicenses({
 <h1>${escapeHtml(pin.label || "Flows Word")}: third-party licenses and source</h1>
 <p>This editor includes open-source software and other third-party materials. Their own licenses apply to those materials. Flow-Like's license and usage restrictions do not limit the rights those licenses grant, including rights to MPL-covered source.</p>
 <p>Based on ${escapeHtml(pin.repository.replace(/\.git$/, ""))}, revision <code>${escapeHtml(pin.revision)}</code>. The upstream application code is used under MIT. Dependencies may have different terms, listed below. Warranty or support offered by Flow-Like is provided by Rheosoph GmbH alone, not the upstream contributors.</p>
-${mpl.length ? `<h2>MPL source downloads</h2><p>These unmodified dependencies contain code covered by the Mozilla Public License 2.0. Download their exact source archives below. Each .crate file is a gzip-compressed tar archive containing the source, including MPL-covered files. The full MPL license accompanies each dependency's notices. Covered files remain under MPL-2.0; other files retain their stated licenses.</p><ul>${mpl.map((pkg) => `<li><a download href="${href(pkg.sourceArchive)}">${escapeHtml(pkg.name)} ${escapeHtml(pkg.version)} source</a> (${escapeHtml(pkg.selectedLicense)})</li>`).join("")}</ul>` : ""}
+${mpl.length ? `<h2>MPL source downloads</h2><p>These unmodified dependencies contain code covered by the Mozilla Public License 2.0. Download their exact source archives below. Each .crate or .tar.gz file is a gzip-compressed tar archive containing the source, including MPL-covered files. The full MPL license accompanies each dependency's notices. Covered files remain under MPL-2.0; other files retain their stated licenses.</p><ul>${mpl.map((pkg) => `<li><a download href="${href(pkg.sourceArchive)}">${escapeHtml(pkg.name)} ${escapeHtml(pkg.version)} source</a> (${escapeHtml(pkg.selectedLicense)})</li>`).join("")}</ul>` : ""}
 ${packages.some((pkg) => pkg.selectedLicense.includes("IJG")) ? "<p>This software is based in part on the work of the Independent JPEG Group.</p>" : ""}
 <h2>Application and asset notices</h2><ul>${renderNotices(upstreamFiles)}</ul>
 <h2>Dependency notices</h2><p>The list follows this editor's ${target} dependency graph. <a href="manifest.json">Download the dependency inventory</a>.</p>
@@ -489,4 +504,39 @@ ${packages
 		`${pin.label || "Flows Word"}: packaged ${packages.length} dependency notices and ${mpl.length} MPL source archives.`,
 	);
 	return manifest;
+}
+
+export function selectNoticeOverride(overrides, key, revision) {
+	return (revision && overrides[`${key}#${revision}`]) || overrides[key];
+}
+
+export function archiveGitSource(base, revision, destination) {
+	const git = (args, options = {}) =>
+		execFileSync("git", args, {
+			cwd: base,
+			encoding: "utf8",
+			maxBuffer: 64 * 1024 * 1024,
+			...options,
+		});
+	if (
+		!/^[a-f0-9]{40}$/.test(revision) ||
+		git(["rev-parse", "HEAD"]).trim() !== revision
+	)
+		throw new Error(
+			"The dependency source no longer matches its pinned Git revision.",
+		);
+	const changes = git(["status", "--porcelain", "--untracked-files=all"])
+		.split("\n")
+		.filter((line) => line && line !== "?? .cargo-ok");
+	if (changes.length)
+		throw new Error(
+			"The Git dependency has modified source; review it before packaging.",
+		);
+	writeFileSync(
+		destination,
+		git(
+			["archive", "--format=tar.gz", `--prefix=source-${revision}/`, revision],
+			{ encoding: undefined },
+		),
+	);
 }

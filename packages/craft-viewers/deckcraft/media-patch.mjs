@@ -86,17 +86,17 @@ export function prepareBrowserMedia({
 		"browser video voice",
 	);
 	const tick =
-		"    pub fn tick(&mut self, ctx: &egui::Context, session: &mut Session) -> bool {";
+		"    pub fn tick_clock(&mut self, now: f64, session: &mut Session) -> bool {";
 	ui = replaceOnce(
 		ui,
 		tick,
-		`${tick}\n        while let Some(result) = {\n            let value = deckcraft_media::browser::take_poster();\n            (!value.is_null() && !value.is_undefined()).then_some(value)\n        } {\n            if let Some(error) = deckcraft_media::browser::field(&result, "error").as_string() {\n                session.ui_requests.push(deckcraft_engine::UiRequest::Message { text: error });\n            } else {\n                let id = deckcraft_media::browser::number(&result, "shape") as u32;\n                let ms = deckcraft_media::browser::number(&result, "ms") as u64;\n                if let Err(error) = session.execute("media.posterFrame", &serde_json::json!({"id": id, "ms": ms})) {\n                    session.ui_requests.push(deckcraft_engine::UiRequest::Message { text: error.to_string() });\n                }\n            }\n        }\n        if deckcraft_media::browser::pending_posters() { ctx.request_repaint_after(std::time::Duration::from_millis(15)); }`,
+		`${tick}\n        while let Some(result) = {\n            let value = deckcraft_media::browser::take_poster();\n            (!value.is_null() && !value.is_undefined()).then_some(value)\n        } {\n            if let Some(error) = deckcraft_media::browser::field(&result, "error").as_string() {\n                session.ui_requests.push(deckcraft_engine::UiRequest::Message { text: error });\n            } else {\n                let id = deckcraft_media::browser::number(&result, "shape") as u32;\n                let ms = deckcraft_media::browser::number(&result, "ms") as u64;\n                if let Err(error) = session.execute("media.posterFrame", &serde_json::json!({"id": id, "ms": ms})) {\n                    session.ui_requests.push(deckcraft_engine::UiRequest::Message { text: error.to_string() });\n                }\n            }\n        }`,
 		"asynchronous poster results",
 	);
 	ui = replaceOnce(
 		ui,
-		'            "play" => self.play(doc, id, &clip, t, owner),',
-		`            "poster" => {\n                if let Some(item) = doc.media(clip.media) { let _ = deckcraft_media::browser::request_poster(id.0, &item.data, t.unwrap_or(0.0)); }\n            }\n            "play" => self.play(doc, id, &clip, t, owner),`,
+		'            "play" => self.play(doc_uid, doc, id, &clip, t, owner),',
+		`            "poster" => {\n                if let Some(item) = doc.media(clip.media) { let _ = deckcraft_media::browser::request_poster(id.0, &item.data, t.unwrap_or(0.0)); }\n            }\n            "play" => self.play(doc_uid, doc, id, &clip, t, owner),`,
 		"browser poster request",
 	);
 	ui = replaceOnce(
@@ -104,6 +104,12 @@ export function prepareBrowserMedia({
 		'format!("No sound: {err}")',
 		'format!("Media: {err}")',
 		"media capability message",
+	);
+	ui = replaceOnce(
+		ui,
+		"        self.owners.keys().any(|id| self.is_playing(*id))",
+		"        deckcraft_media::browser::pending_posters() || self.owners.keys().any(|id| self.is_playing(*id))",
+		"pending browser poster repaint",
 	);
 	write(uiPath, original(uiPath));
 	write("crates/ui-egui/src/browser-media.rs", ui);

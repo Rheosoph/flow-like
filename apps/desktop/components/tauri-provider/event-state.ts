@@ -82,7 +82,7 @@ import type {
 import { i18n } from "@flow-like/locales";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
-import { fetcher, streamFetcher } from "../../lib/api";
+import { fetcher } from "../../lib/api";
 import {
 	isHubUnavailable,
 	isMissingResourceError,
@@ -92,6 +92,10 @@ import {
 	dispatchFlowNotificationEvent,
 	dispatchFlowNotificationEvents,
 } from "../../lib/flow-notification-events";
+import {
+	cancelNativeRemoteExecution,
+	runNativeRemoteExecution,
+} from "../../lib/native-remote-execution";
 import { oauthConsentStore, oauthTokenStore } from "../../lib/oauth-db";
 import { oauthService } from "../../lib/oauth-service";
 import {
@@ -451,8 +455,6 @@ export class EventState implements IEventState {
 		string,
 		{ attempts: number; retryAt: number; error: unknown }
 	>();
-	/** Server run id → mutes and aborts that run's stream on this device. */
-	private readonly remoteRuns = new Map<string, () => void>();
 
 	constructor(private readonly backend: TauriBackend) {}
 
@@ -1902,53 +1904,32 @@ export class EventState implements IEventState {
 			throw new Error("Profile and auth required for remote execution");
 		}
 
-		let closed = false;
 		let foundRunId = false;
-		let remoteRunId: string | undefined;
-		const stream = new AbortController();
 		const dispatchStart = runTimingNow();
 
 		try {
 			beforeDispatch?.();
-			await streamFetcher<IIntercomEvent>(
-				this.backend.profile,
-				`apps/${appId}/events/${eventId}/invoke`,
-				{
-					method: "POST",
-					body: JSON.stringify({
-						payload: payload.payload,
-						stream_state: streamState ?? false,
-						oauth_tokens: undefined,
-						runtime_variables: payload.runtime_variables,
-						profile_id: this.backend.profile?.id,
-						page_trigger: pageTrigger
-							? serializePageTrigger(pageTrigger)
-							: undefined,
-					}),
-					signal: stream.signal,
+			await runNativeRemoteExecution({
+				owner: this.backend,
+				profile: this.backend.profile,
+				auth: this.backend.auth,
+				path: `apps/${appId}/events/${eventId}/invoke`,
+				body: {
+					payload: payload.payload,
+					stream_state: streamState ?? false,
+					oauth_tokens: undefined,
+					runtime_variables: payload.runtime_variables,
+					profile_id: this.backend.profile?.id,
+					page_trigger: pageTrigger
+						? serializePageTrigger(pageTrigger)
+						: undefined,
 				},
-				this.backend.auth,
-				(event: IIntercomEvent) => {
-					if (closed) return;
-
-					if (
-						!foundRunId &&
-						onEventId &&
-						event.event_type === "run_initiated"
-					) {
-						const runId = (event.payload as { run_id?: string })?.run_id;
-						if (runId) {
-							recordRunStep("remote.until_run_id", dispatchStart);
-							remoteRunId = runId;
-							this.remoteRuns.set(runId, () => {
-								closed = true;
-								stream.abort();
-							});
-							onEventId(runId);
-							foundRunId = true;
-						}
-					}
-
+				onRunId: (runId) => {
+					recordRunStep("remote.until_run_id", dispatchStart);
+					foundRunId = true;
+					onEventId?.(runId);
+				},
+				onEvent: (event) => {
 					dispatchPaymentRequest(event);
 					if (event.event_type === "toast") {
 						const payload = event.payload as {
@@ -1988,19 +1969,14 @@ export class EventState implements IEventState {
 
 					if (cb) cb([event]);
 				},
-			);
+			});
 		} catch (error) {
-			// A cancelled run's stream was aborted on purpose and ends like one the server closed.
-			if (!stream.signal.aborted) {
-				if (!foundRunId) recordRunStep("remote.until_error", dispatchStart);
-				this.reportPageContractRejection(appId, eventId, pageTrigger, error);
-				throw error;
-			}
-		} finally {
-			if (remoteRunId) this.remoteRuns.delete(remoteRunId);
+			if (!foundRunId) recordRunStep("remote.until_error", dispatchStart);
+			finishAllProgressToasts(false);
+			this.reportPageContractRejection(appId, eventId, pageTrigger, error);
+			throw error;
 		}
 
-		closed = true;
 		finishAllProgressToasts(true);
 		return undefined;
 	}
@@ -2045,22 +2021,8 @@ export class EventState implements IEventState {
 
 	async cancelExecution(runId: string): Promise<void> {
 		cancelDeviceCommands(runId);
-		const closeRemoteRun = this.remoteRuns.get(runId);
-		if (!closeRemoteRun) {
-			await invoke("cancel_execution", {
-				runId: runId,
-			});
-			return;
-		}
-		// A server run has no local handle: close its stream here, then ask the API to stop it.
-		closeRemoteRun();
-		if (!this.backend.profile) return;
-		await fetcher(
-			this.backend.profile,
-			`execution/run/${encodeURIComponent(runId)}`,
-			{ method: "DELETE" },
-			this.backend.auth,
-		);
+		if (await cancelNativeRemoteExecution(this.backend, runId)) return;
+		await invoke("cancel_execution", { runId });
 	}
 
 	async isEventSinkActive(

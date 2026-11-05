@@ -1019,6 +1019,17 @@ impl<'a> SourceIndex<'a> {
         self.site(token.byte, token.byte + len)
     }
 
+    /// The statement an anchor comment closes, without its indentation or the comment itself.
+    fn anchored_statement_site(&self, anchor: &Token) -> SourceSite {
+        let line_start = self.source[..anchor.byte]
+            .rfind('\n')
+            .map_or(0, |index| index + 1);
+        let line = &self.source[line_start..anchor.byte];
+        let start = line_start + line.len() - line.trim_start().len();
+        let end = line_start + line.trim_end().len();
+        self.site(start, end)
+    }
+
     fn locate(&self, diagnostic: &FlowScriptDiagnostic) -> (Vec<SourceSite>, bool) {
         if diagnostic.code == FlowScriptDiagnosticCode::FsAnchorDuplicate
             || diagnostic.code == FlowScriptDiagnosticCode::FsAnchorUnresolved
@@ -1033,6 +1044,16 @@ impl<'a> SourceIndex<'a> {
                 })
                 .collect();
             return (sites, true);
+        }
+        let mentioned = mentioned_anchor_ids(&diagnostic.message);
+        let anchored: Vec<_> = self
+            .anchors
+            .iter()
+            .filter(|(_, id)| mentioned.contains(&id.as_str()))
+            .map(|(token, _)| self.anchored_statement_site(token))
+            .collect();
+        if !anchored.is_empty() {
+            return (anchored, true);
         }
         if diagnostic.message.starts_with("assignment to variable ") {
             let Some(target) = diagnostic.declaration.as_deref() else {
@@ -1363,6 +1384,19 @@ fn backtick_values(message: &str) -> Vec<String> {
         .collect()
 }
 
+/// Entity ids a message names in anchor spelling, e.g. `` `//@n:<id>` ``.
+fn mentioned_anchor_ids(message: &str) -> Vec<&str> {
+    message
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .filter_map(|value| {
+            let (kind, id) = value.strip_prefix("//@")?.split_once(':')?;
+            (matches!(kind, "n" | "l" | "v") && !id.is_empty()).then_some(id)
+        })
+        .collect()
+}
+
 fn quoted_value_after(message: &str, marker: &str) -> Option<String> {
     let rest = message.split_once(marker)?.1;
     let quote = rest.chars().next()?;
@@ -1414,6 +1448,7 @@ mod tests {
         ReconcileResult {
             commands: Vec::new(),
             corrections: Vec::new(),
+            warnings: Vec::new(),
             diagnostics: messages
                 .iter()
                 .map(|message| (*message).to_string())
@@ -2040,6 +2075,37 @@ mod tests {
                 .map(|diagnostic| diagnostic.source_span.as_ref().unwrap().start.line)
                 .collect::<Vec<_>>(),
             vec![3, 5]
+        );
+    }
+
+    #[test]
+    fn a_message_naming_an_anchor_points_to_its_statement() {
+        let source = concat!(
+            "function first() {   //@l:fn_first\n",
+            "    if (true) {   //@n:branch_a\n",
+            "    }\n",
+            "    if (false) {   //@n:branch_b\n",
+            "    }\n",
+            "}\n",
+        );
+        let structured = result(&[
+            "the new statement order leaves `Branch` (`//@n:branch_b`) with no execution predecessor, so it would never run: the statement written before it still drives another one. Keep it directly after a statement whose next step you are not moving, or remove the `//@n:` anchor from its line so it is recreated in its new position",
+            "the new statement order leaves the exit of Function `first` (`//@l:fn_first`) with no execution predecessor, so its callers would never continue: no statement written last in its body still leads out of it",
+        ]).structured_diagnostics_for_source(source);
+        let located = structured
+            .iter()
+            .map(|diagnostic| {
+                assert!(diagnostic.source_span_is_exact, "{}", diagnostic.message);
+                let span = diagnostic.source_span.as_ref().unwrap();
+                (
+                    span.start.line,
+                    &source[span.start.offset.unwrap()..span.end.offset.unwrap()],
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            located,
+            vec![(4, "if (false) {"), (1, "function first() {")]
         );
     }
 

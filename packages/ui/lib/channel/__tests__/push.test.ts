@@ -61,7 +61,10 @@ describe("http channel push", () => {
 		expect(init.headers).toEqual({
 			"content-type": "application/json",
 			authorization: "Bearer push-token",
+			"x-channel-delivery-id": expect.any(String),
 		});
+		expect(init.credentials).toBe("omit");
+		expect(init.redirect).toBe("error");
 		expect(JSON.parse(String(init.body))).toEqual({
 			channel_id: "run-1",
 			request_id: "req-1",
@@ -169,7 +172,7 @@ describe("fallback", () => {
 		expect(fetchMock.calls).toHaveLength(1);
 	});
 
-	it("skips the fallback for an expired aws_mqtt credential when aborted", async () => {
+	it("does not deliver an aborted push through either transport", async () => {
 		const fetchMock = installFetch(() => new Response(null, { status: 204 }));
 		restore = fetchMock.restore;
 		const controller = new AbortController();
@@ -196,9 +199,123 @@ describe("fallback", () => {
 				{ request_id: "req-1", value: 1 },
 				{ signal: controller.signal },
 			),
-		).rejects.toThrow(/expired/);
+		).rejects.toThrow(/abort/i);
 		expect(fetchMock.calls).toHaveLength(0);
 	});
+});
+
+describe("API forwarding for legacy cloud handles", () => {
+	const transports: IChannelHandle["transport"][] = [
+		{
+			type: "aws_mqtt",
+			endpoint: "iot.example",
+			region: "eu-central-1",
+			target_client_id: "run-1",
+			topic: "runs/run-1/inbox",
+			credentials: {
+				access_key_id: "old",
+				secret_access_key: "old",
+				session_token: "old",
+				expiration: 1,
+			},
+		},
+		{
+			type: "azure_web_pubsub",
+			url: "wss://azure.example",
+			group: "run:run-1",
+			expires_at: 1,
+		},
+		{
+			type: "gcp_firebase_rtdb",
+			database_url: "https://firebase.example",
+			api_key: "old",
+			project_id: "old",
+			custom_token: "old",
+			inbox_path: "/channels/run-1/inbox",
+			inbound_path: "/channels/run-1/inbound",
+			expires_at: 1,
+		},
+		{
+			type: "nats",
+			url: "wss://nats.example",
+			subject: "channel.run-1.inbox",
+			token: "old",
+			expires_at: 1,
+		},
+	];
+
+	for (const transport of transports) {
+		it(`uses only the API for ${transport.type} replies, steering and cancellation`, async () => {
+			const fetchMock = installFetch(() => Response.json({ accepted: true }));
+			restore = fetchMock.restore;
+			const handle = httpHandle({
+				transport,
+				fallback: {
+					type: "http",
+					push_url: FALLBACK_URL,
+					token: "scoped-capability",
+				},
+			});
+			await replyToChannel(
+				handle,
+				{ page: "ready" },
+				{ deliveryId: "reply-delivery" },
+			);
+			await steerChannel(handle, "continue", { deliveryId: "steer-delivery" });
+			await cancelChannel(handle, { deliveryId: "cancel-delivery" });
+			expect(fetchMock.calls.map(({ url }) => url)).toEqual([
+				FALLBACK_URL,
+				FALLBACK_URL,
+				FALLBACK_URL,
+			]);
+			expect(
+				fetchMock.calls.map(
+					({ init }) =>
+						(init.headers as Record<string, string>)["x-channel-delivery-id"],
+				),
+			).toEqual(["reply-delivery", "steer-delivery", "cancel-delivery"]);
+			const first = fetchMock.calls[0].init;
+			expect((first.headers as Record<string, string>).authorization).toBe(
+				"Bearer scoped-capability",
+			);
+			expect(JSON.parse(String(first.body))).toEqual({
+				channel_id: "run-1",
+				request_id: "req-1",
+				kind: "reply",
+				value: { page: "ready" },
+			});
+		});
+
+		it(`refuses a ${transport.type} handle without an API capability instead of publishing to the provider`, async () => {
+			const fetchMock = installFetch(() => Response.json({ accepted: true }));
+			restore = fetchMock.restore;
+			await expect(
+				replyToChannel(httpHandle({ transport, fallback: null }), 1),
+			).rejects.toThrow(/without an API push capability/);
+			expect(fetchMock.calls).toHaveLength(0);
+		});
+
+		it(`keeps a failed ${transport.type} API reply on the HTTP path`, async () => {
+			const fetchMock = installFetch(
+				() => new Response("unavailable", { status: 503 }),
+			);
+			restore = fetchMock.restore;
+			await expect(
+				replyToChannel(
+					httpHandle({
+						transport,
+						fallback: {
+							type: "http",
+							push_url: FALLBACK_URL,
+							token: "scoped-capability",
+						},
+					}),
+					1,
+				),
+			).rejects.toThrow(/503/);
+			expect(fetchMock.calls.map(({ url }) => url)).toEqual([FALLBACK_URL]);
+		});
+	}
 });
 
 describe("isChannelHandle", () => {

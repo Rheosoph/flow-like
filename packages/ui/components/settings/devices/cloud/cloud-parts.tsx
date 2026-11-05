@@ -10,6 +10,7 @@ import type {
 	GateResult,
 } from "../../../../lib/device-management/model/types";
 import { formatEuroMicros } from "../../../../lib/device-resources";
+import { ResolvedIdentityAvatar } from "../../../identity/identity-avatar";
 import { UnknownPerson, identityName } from "../access/person-name";
 import { enumLabel } from "../copy/enum-labels";
 import { gateCopy } from "../copy/gate-copy";
@@ -110,6 +111,9 @@ export function CloudPerson({
 			fullName={fullName}
 			{...(identity.subtitle ? { email: identity.subtitle } : {})}
 			{...(identity.avatarUrl ? { avatarUrl: identity.avatarUrl } : {})}
+			avatar={
+				identity.bot && <ResolvedIdentityAvatar identity={identity} size={20} />
+			}
 		/>
 	);
 }

@@ -688,8 +688,11 @@ static CARRIER: LazyLock<String> =
 pub(crate) struct MediaSplice(AuthorizedHttpClient);
 
 impl MediaSplice {
-    pub(crate) fn for_egress(egress: ProviderEgress) -> anyhow::Result<Self> {
-        AuthorizedHttpClient::for_egress(egress).map(Self)
+    pub(crate) fn for_provider(
+        provider: &crate::provider::ModelProvider,
+        egress: ProviderEgress,
+    ) -> anyhow::Result<Self> {
+        AuthorizedHttpClient::for_provider(provider, egress).map(Self)
     }
 }
 

@@ -1,9 +1,12 @@
+pub mod audio;
 pub mod authorization;
 pub mod egress;
 pub mod embedding;
 pub mod history;
 pub mod image_embedding;
+pub mod image_generation;
 pub mod llm;
+mod request_params;
 pub mod response;
 pub mod response_chunk;
 pub mod rig_conversion;

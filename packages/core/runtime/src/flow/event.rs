@@ -391,6 +391,10 @@ pub struct ChatEventParameters {
     pub color_scheme: Option<String>,
     /// User-facing disclosure that the conversation is with an AI.
     pub ai_disclosure: Option<String>,
+    /// Show the model picker in the composer. Defaults to enabled.
+    pub allow_model_selection: Option<bool>,
+    /// Offer only vision language models in the model picker. Defaults to disabled.
+    pub require_vlm: Option<bool>,
     /// Show the thinking picker in the composer. Defaults to enabled.
     pub allow_thinking_selection: Option<bool>,
     /// Thinking level a new chat starts with: "off" | "low" | "mid" | "high".
@@ -3424,6 +3428,8 @@ mod tests {
         assert!(parameters.background_image.is_none());
         assert!(parameters.color_scheme.is_none());
         assert!(parameters.ai_disclosure.is_none());
+        assert!(parameters.allow_model_selection.is_none());
+        assert!(parameters.require_vlm.is_none());
         // Motion the interface never asked for must stay off for chats saved before the field
         // existed, so an upgrade never starts animating someone's placeholder.
         assert!(parameters.placeholder_typing_motion.is_none());

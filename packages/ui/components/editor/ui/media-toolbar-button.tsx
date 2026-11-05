@@ -16,8 +16,8 @@ import {
 import { KEYS, isUrl } from "platejs";
 import { useEditorRef } from "platejs/react";
 import { toast } from "sonner";
-import { MediaLibraryDialog } from "./media-library-dialog";
 import { useFilePicker } from "use-file-picker";
+import { MediaLibraryDialog } from "./media-library-dialog";
 
 import {
 	AlertDialog,

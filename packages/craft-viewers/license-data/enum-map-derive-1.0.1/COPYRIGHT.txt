@@ -1,0 +1,7 @@
+// SPDX-FileCopyrightText: 2017 - 2022 Luna Borowska <luna@borowska.pw>
+// SPDX-FileCopyrightText: 2018 hcpl <hcpl.prog@gmail.com>
+// SPDX-FileCopyrightText: 2019 mara <vmedea@protonmail.com>
+// SPDX-FileCopyrightText: 2021 - 2022 Luna Borowska <luna@borowska.pw>
+// SPDX-FileCopyrightText: 2021 - 2023 Luna Borowska <luna@borowska.pw>
+// SPDX-FileCopyrightText: 2021 Bruno Corrêa Zimmermann <brunoczim@gmail.com>
+// SPDX-FileCopyrightText: 2021 Dietrich <dietrich@teilgedanken.de>

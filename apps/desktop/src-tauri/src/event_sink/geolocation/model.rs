@@ -76,6 +76,8 @@ impl GeoLocationSink {
             radius_meters: self.radius,
             transition: transition.into(),
             background: self.background,
+            #[cfg(target_os = "android")]
+            delivery: None,
         }
     }
 }
@@ -91,6 +93,25 @@ pub struct NativeRegistration {
     pub radius_meters: f64,
     pub transition: String,
     pub background: bool,
+    #[cfg(target_os = "android")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<AndroidDelivery>,
+}
+
+#[cfg(any(target_os = "android", test))]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AndroidDelivery {
+    pub endpoint: String,
+    pub authorization: String,
+    pub oauth_tokens: serde_json::Value,
+}
+
+#[cfg(any(target_os = "android", test))]
+impl std::fmt::Debug for AndroidDelivery {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("AndroidDelivery(<protected trigger authority>)")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -195,6 +216,19 @@ pub fn now_ms() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn android_trigger_authority_stays_out_of_debug_output() {
+        let delivery = AndroidDelivery {
+            endpoint: "https://hub.example/api/v1/sink/trigger/geofence/event".into(),
+            authorization: "pat_sensitive".into(),
+            oauth_tokens: serde_json::json!({"provider":{"access_token":"oauth_sensitive"}}),
+        };
+        let debug = format!("{delivery:?}");
+        assert!(!debug.contains("pat_sensitive"));
+        assert!(!debug.contains("oauth_sensitive"));
+        let native_wire = serde_json::to_value(delivery).unwrap();
+        assert!(native_wire.get("oauthTokens").is_some());
+    }
     fn config() -> GeoLocationSink {
         serde_json::from_value(
             serde_json::json!({"latitude":52.5,"longitude":13.4,"radius":200,"trigger_on":"Both"}),

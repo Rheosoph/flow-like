@@ -126,7 +126,8 @@ impl VertexModel {
             service_account_json.as_deref(),
             access_token.as_deref(),
             egress,
-        )?;
+        )?
+        .with_request_params(provider)?;
 
         Ok(VertexModel {
             client,

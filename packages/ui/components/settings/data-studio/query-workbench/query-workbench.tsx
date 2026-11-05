@@ -62,6 +62,7 @@ import { QueryResultView } from "./query-result-view";
 import { SaveQueryDialog } from "./save-query-dialog";
 import { SavedQuerySidebar } from "./saved-query-sidebar";
 
+const NARROW_WORKBENCH_PX = 560;
 const DEFAULT_LIMIT = 1000;
 const READ_DATA = [RolePermissions.ReadFiles, RolePermissions.ReadDatabase];
 const WRITE_DATA = [RolePermissions.WriteFiles, RolePermissions.WriteDatabase];
@@ -402,6 +403,7 @@ export function QueryWorkbench({
 		paramValues,
 		sql,
 		surface,
+		t,
 		userScoped,
 	]);
 
@@ -557,6 +559,7 @@ export function QueryWorkbench({
 			savedQueriesQuery,
 			sql,
 			surface,
+			t,
 			userScoped,
 			vizConfig,
 		],
@@ -598,6 +601,17 @@ export function QueryWorkbench({
 	const denyWrite = useCallback(() => {
 		toast.error(writeDeniedMessage);
 	}, [writeDeniedMessage]);
+
+	const narrowCheckedRef = useRef(false);
+	const collapseSidebarWhenNarrow = useCallback(
+		(root: HTMLDivElement | null) => {
+			if (!root || narrowCheckedRef.current) return;
+			narrowCheckedRef.current = true;
+			if (root.clientWidth >= NARROW_WORKBENCH_PX) return;
+			requestAnimationFrame(() => sidebarPanelRef.current?.collapse());
+		},
+		[],
+	);
 
 	const toggleSidebar = useCallback(() => {
 		const panel = sidebarPanelRef.current;
@@ -646,6 +660,7 @@ export function QueryWorkbench({
 
 	return (
 		<div
+			ref={collapseSidebarWhenNarrow}
 			className="flex h-full min-h-0 flex-col overflow-hidden"
 			onKeyDown={handleKeyDown}
 		>
@@ -866,14 +881,14 @@ export function QueryWorkbench({
 											{remoteImports.map((imported) => (
 												<SelectItem key={imported.id} value={imported.id}>
 													{imported.contract.name}
-													{` · `}
+													{" · "}
 													{resolveSourceName?.(imported.target_app_id) ??
 														imported.target_app_id}
 												</SelectItem>
 											))}
 										</SelectContent>
 									</Select>
-									<Badge variant="outline" className="hidden gap-1 sm:flex">
+									<Badge variant="outline" className="hidden gap-1 @xl/ds:flex">
 										<Cloud className="h-3 w-3" /> {t("readonly", "Read-only")}
 									</Badge>
 								</>
@@ -912,7 +927,7 @@ export function QueryWorkbench({
 												)}
 												<Trans i18nKey="runKbdClassnameml05HiddenRoundedBorderBorderprimaryforeground30Bgprimaryforeground10Px1Text10pxFontmediumSminlineKbd">
 													Run
-													<kbd className="ml-0.5 hidden rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1 text-[10px] font-medium sm:inline">
+													<kbd className="ml-0.5 hidden rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1 text-[10px] font-medium @xl/ds:inline">
 														⌘↵
 													</kbd>
 												</Trans>

@@ -13,6 +13,11 @@ use rig::{
 };
 
 use crate::egress::ProviderEgress;
+use crate::{provider::ModelProvider, request_params::RequestParams};
+
+mod retry;
+#[cfg(test)]
+mod retry_tests;
 
 #[derive(Clone)]
 pub struct ScopedRequestAuthorizer {
@@ -110,6 +115,7 @@ pub struct AuthorizedHttpClient<H = rig::http_client::ReqwestClient> {
     inner: H,
     authorizer: Option<ScopedRequestAuthorizer>,
     egress: ProviderEgress,
+    request_params: RequestParams,
 }
 
 impl<H> std::fmt::Debug for AuthorizedHttpClient<H> {
@@ -128,6 +134,7 @@ impl Default for AuthorizedHttpClient {
             inner: rig::http_client::ReqwestClient::default(),
             authorizer: None,
             egress: ProviderEgress::Open,
+            request_params: RequestParams::default(),
         }
     }
 }
@@ -145,6 +152,7 @@ impl AuthorizedHttpClient {
                 .build()?,
             authorizer: Some(ScopedRequestAuthorizer::new(provider, audience, base_url)?),
             egress: ProviderEgress::Open,
+            request_params: RequestParams::default(),
         })
     }
 
@@ -161,11 +169,41 @@ impl AuthorizedHttpClient {
                 .build()?,
             authorizer: None,
             egress,
+            request_params: RequestParams::default(),
         })
+    }
+
+    /// Applies a Bit's native request parameters after the SDK has serialized its body.
+    pub fn for_provider(provider: &ModelProvider, egress: ProviderEgress) -> anyhow::Result<Self> {
+        let mut client = Self::for_egress(egress)?;
+        client.request_params = RequestParams::from_provider(provider)?;
+        Ok(client)
     }
 }
 
 impl<H> AuthorizedHttpClient<H> {
+    fn configure_body(&self, request: &mut Request<Bytes>) -> http_client::Result<()> {
+        if self.request_params.is_empty() || request.method() != http::Method::POST {
+            return Ok(());
+        }
+        let mut body: serde_json::Value = serde_json::from_slice(request.body())
+            .map_err(|error| http_client::Error::Instance(Box::new(error)))?;
+        if !body.is_object() {
+            return Err(http_client::Error::Instance(Box::new(
+                std::io::Error::other(
+                    "Custom request parameters require a JSON object request body",
+                ),
+            )));
+        }
+        self.request_params.apply(&mut body);
+        *request.body_mut() = Bytes::from(
+            serde_json::to_vec(&body)
+                .map_err(|error| http_client::Error::Instance(Box::new(error)))?,
+        );
+        request.headers_mut().remove(http::header::CONTENT_LENGTH);
+        Ok(())
+    }
+
     fn admit<T>(&self, request: &Request<T>) -> http_client::Result<()> {
         self.egress
             .check_uri(request.uri())
@@ -198,8 +236,16 @@ impl<H: HttpClientExt + Clone + 'static> HttpClientExt for AuthorizedHttpClient<
         let mut request = request.map(|body| -> Bytes { body.into() });
         async move {
             client.admit(&request)?;
-            client.authorize(&mut request).await?;
-            client.inner.send(request).await
+            client.configure_body(&mut request)?;
+            retry::send(&request, || {
+                let mut attempt = request.clone();
+                let client = &client;
+                async move {
+                    client.authorize(&mut attempt).await?;
+                    client.inner.send(attempt).await
+                }
+            })
+            .await
         }
     }
 
@@ -229,8 +275,16 @@ impl<H: HttpClientExt + Clone + 'static> HttpClientExt for AuthorizedHttpClient<
         let mut request = request.map(|body| -> Bytes { body.into() });
         async move {
             client.admit(&request)?;
-            client.authorize(&mut request).await?;
-            client.inner.send_streaming(request).await
+            client.configure_body(&mut request)?;
+            retry::send(&request, || {
+                let mut attempt = request.clone();
+                let client = &client;
+                async move {
+                    client.authorize(&mut attempt).await?;
+                    client.inner.send_streaming(attempt).await
+                }
+            })
+            .await
         }
     }
 }
@@ -247,6 +301,41 @@ mod tests {
         },
         time::{Duration, SystemTime},
     };
+
+    #[test]
+    fn request_overrides_update_body_length_without_touching_headers_or_gets() {
+        let client = AuthorizedHttpClient {
+            request_params: RequestParams::new(
+                serde_json::json!({"future_option": [false, null, 7]}),
+            )
+            .unwrap(),
+            ..Default::default()
+        };
+        let mut request = Request::post("https://models.test/v1/messages")
+            .header(http::header::CONTENT_LENGTH, "2")
+            .header(http::header::AUTHORIZATION, "Bearer private-key")
+            .body(Bytes::from_static(b"{}"))
+            .unwrap();
+        client.configure_body(&mut request).unwrap();
+        assert!(
+            request
+                .headers()
+                .get(http::header::CONTENT_LENGTH)
+                .is_none()
+        );
+        assert_eq!(
+            request.headers()[http::header::AUTHORIZATION],
+            "Bearer private-key"
+        );
+        let body: serde_json::Value = serde_json::from_slice(request.body()).unwrap();
+        assert_eq!(body, serde_json::json!({"future_option": [false, null, 7]}));
+
+        let mut get = Request::get("https://models.test/v1/models")
+            .body(Bytes::new())
+            .unwrap();
+        client.configure_body(&mut get).unwrap();
+        assert!(get.body().is_empty());
+    }
 
     #[derive(Default)]
     struct RotatingAuthorizer(AtomicUsize);
@@ -341,6 +430,7 @@ mod tests {
                 .unwrap(),
             ),
             egress: ProviderEgress::Open,
+            request_params: RequestParams::default(),
         };
         let rig_client = rig::providers::openai::CompletionsClient::builder()
             .api_key("obsolete-startup-token")
@@ -512,6 +602,7 @@ mod tests {
             inner: backend.clone(),
             authorizer: None,
             egress: ProviderEgress::Public,
+            request_params: RequestParams::default(),
         };
         let request = |url: &str| Request::post(url).body(Bytes::new()).unwrap();
         for url in [
@@ -558,6 +649,7 @@ mod tests {
                 .unwrap(),
             authorizer: None,
             egress: ProviderEgress::Private,
+            request_params: RequestParams::default(),
         };
         let request = Request::post(format!(
             "http://models.test:{}/v1/chat/completions",

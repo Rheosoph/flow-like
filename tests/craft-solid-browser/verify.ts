@@ -14,6 +14,10 @@ interface CraftEvent {
 	readOnly?: boolean;
 	error?: string;
 	dirty?: boolean;
+	warnings?: string[];
+	interactive?: boolean;
+	completed?: number;
+	total?: number;
 	response?: Record<string, unknown> | null;
 }
 
@@ -34,6 +38,19 @@ declare global {
 
 const directory = await mkdtemp(join(tmpdir(), "flow-like-craft-solid-"));
 const assets = resolve(import.meta.dir, "../../apps/web/public/craft");
+const upstream = await Bun.file(
+	resolve(
+		import.meta.dir,
+		"../../packages/craft-viewers/solidcraft/upstream.json",
+	),
+).json();
+const source =
+	process.env.CRAFT_SOURCE_SOLIDCRAFT ||
+	resolve(
+		import.meta.dir,
+		"../../target/craft-viewers/solidcraft/source",
+		upstream.revision,
+	);
 const bridgeEntry = join(directory, "mcp-bridge.ts");
 await writeFile(
 	bridgeEntry,
@@ -347,19 +364,41 @@ const exportDesign = async (requestId: string, purpose?: "download") => {
 		JSON.parse(entry("container.json").toString()).format,
 		"solidcraft-container/1",
 	);
+	const document = JSON.parse(entry("document.json").toString());
+	assert.equal(document.format, "solidcraft/47");
 	return {
 		bytes,
 		revision: exported.revision,
-		document: JSON.parse(entry("document.json").toString()),
+		document,
 		entry,
 	};
 };
+const assertLoading = async (after: number) => {
+	const events = await page.evaluate(
+		(after) => window.events.slice(after),
+		after,
+	);
+	const opened = events.findIndex((event) => event.type === "opened");
+	const progress = events.filter((event) => event.type === "loading");
+	assert.ok(progress.length > 0, "The staged loader reports progress");
+	assert.ok(opened > events.findIndex((event) => event.type === "loading"));
+	for (const event of progress) {
+		assert.equal(event.interactive, true);
+		assert.ok(Number.isSafeInteger(event.completed));
+		assert.ok(Number.isSafeInteger(event.total));
+		assert.ok((event.completed ?? -1) >= 0);
+		assert.ok((event.total ?? -1) >= (event.completed ?? 0));
+	}
+};
 const command = async (text: string) => {
-	// The pinned editor places its command field above the 40-pixel timeline.
-	await page.mouse.click(220, 846);
+	// The current editor accepts command JSON in the ribbon's search box.
+	await page.mouse.click(1190, 56);
+	await settle();
 	await page.keyboard.type(text);
 	await page.keyboard.press("Enter");
 	await settle();
+	// Let the search box finish closing before the next command opens it again.
+	await new Promise((resolve) => setTimeout(resolve, 160));
 };
 const viewportPixels = async () =>
 	sharp(
@@ -599,10 +638,10 @@ try {
 	assert.equal(freshBox.document.features.length, 1);
 	assert.equal(freshBox.document.features[0].type, "box");
 	// Native app-bar Undo and Redo operate on the newly created live document.
-	await page.mouse.click(168, 17);
+	await page.mouse.click(239, 17);
 	await settle();
 	assert.deepEqual((await exportDesign("created-undo")).document.features, []);
-	await page.mouse.click(198, 17);
+	await page.mouse.click(272, 17);
 	await settle();
 	const freshRedo = await exportDesign("created-redo");
 	assert.deepEqual(freshRedo.document.features, freshBox.document.features);
@@ -631,7 +670,7 @@ try {
 	await send({ type: "set-read-only", readOnly: false });
 	await settle();
 	// Change theme through the native Preferences dialog, then inspect the preview.
-	await page.mouse.click(1210, 17);
+	await page.mouse.click(1054, 17);
 	await settle();
 	await page.mouse.click(620, 254);
 	await settle();
@@ -652,6 +691,132 @@ try {
 	assert.equal(lightPreview.revision, freshRedo.revision);
 	console.log(
 		"solidcraft: blank creation, native sketch dialog/undo/redo, download and save acknowledgement verified",
+	);
+	await load();
+	const beforeNativeReopen = await open(
+		"created.solidcraft",
+		freshRedo.bytes,
+		false,
+	);
+	await waitEvent("opened", undefined, beforeNativeReopen);
+	await assertLoading(beforeNativeReopen);
+	assert.deepEqual(
+		(await exportDesign("created-reopened")).document.features,
+		freshRedo.document.features,
+		"A new format 47 model must reopen with its feature history",
+	);
+	for (const extension of ["FCStd", "3dm"]) {
+		const bytes = new Uint8Array(
+			await Bun.file(
+				join(source, "crates/io/src/native_cad/fixtures", `block.${extension}`),
+			).arrayBuffer(),
+		);
+		await load();
+		const opened = await waitEvent(
+			"opened",
+			undefined,
+			await open(`block.${extension}`, bytes, false),
+		);
+		assert.ok(
+			opened.warnings?.some((warning) =>
+				/original design history/i.test(warning),
+			),
+			`${extension} import must explain that it preserves geometry rather than the original design history`,
+		);
+		const imported = await exportDesign(`native-${extension}`);
+		const feature = imported.document.features.find(
+			(feature: { type: string }) => feature.type === "import",
+		);
+		assert.ok(
+			feature?.step_blob,
+			`${extension} must preserve imported STEP geometry`,
+		);
+		const step = imported.entry(feature.step_blob);
+		assert.match(step.toString(), /MANIFOLD_SOLID_BREP/);
+		await load();
+		await waitEvent(
+			"opened",
+			undefined,
+			await open(`imported-${extension}.solidcraft`, imported.bytes, false),
+		);
+		const reopened = await exportDesign(`native-${extension}-reopened`);
+		assert.deepEqual(reopened.document.features, imported.document.features);
+		assert.deepEqual(reopened.entry(feature.step_blob), step);
+		console.log(
+			`solidcraft: ${extension} geometry import, warning, format 47 save and reopen verified`,
+		);
+	}
+	await load();
+	const stepBytes = new Uint8Array(
+		await Bun.file(
+			join(source, "tests/step-conformance/cylinder_seam.step"),
+		).arrayBuffer(),
+	);
+	const beforeStep = await open("cylinder.step", stepBytes, false);
+	await waitEvent("opened", undefined, beforeStep);
+	await assertLoading(beforeStep);
+	const stepDesign = await exportDesign("staged-step");
+	assert.ok(
+		stepDesign.document.features.some(
+			(feature: { type: string }) => feature.type === "import",
+		),
+	);
+	await load();
+	const manyFeatures = {
+		...sketch,
+		name: "Cancellation fixture",
+		next_id: 6001,
+		features: Array.from({ length: 6000 }, (_, index) => ({
+			...sketch.features[0],
+			id: index + 1,
+			name: `Sketch ${index + 1}`,
+		})),
+	};
+	const beforeCancelOpen = await open(
+		"cancel.solidcraft",
+		encode(JSON.stringify(manyFeatures)),
+	);
+	await waitEvent("loading", undefined, beforeCancelOpen);
+	const beforePendingExport = await cursor();
+	await send({
+		type: "export",
+		requestId: "pending-load",
+		format: "solidcraft",
+		purpose: "download",
+	});
+	assert.match(
+		(await waitEvent("error", "pending-load", beforePendingExport)).error ?? "",
+		/enable editing/i,
+	);
+	const beforeCancel = await cursor();
+	await page.mouse.click(1100, 800);
+	await page.keyboard.press("Escape");
+	assert.match(
+		(await waitEvent("error", undefined, beforeCancel)).error ?? "",
+		/cancelled/i,
+	);
+	const cancelledEvents = await page.evaluate(
+		(after) => window.events.slice(after),
+		beforeCancelOpen,
+	);
+	assert.equal(
+		cancelledEvents.some((event) => event.type === "opened"),
+		false,
+	);
+	assert.equal(
+		cancelledEvents.some((event) => event.type === "dirty" && event.dirty),
+		false,
+	);
+	const beforeRetry = await cursor();
+	await send({
+		type: "create",
+		name: "After cancel.solidcraft",
+		readOnly: false,
+	});
+	await waitEvent("opened", undefined, beforeRetry);
+	assert.deepEqual((await exportDesign("after-cancel")).document.features, []);
+	console.log(
+		"solidcraft: native design and STEP progress, cancellation, blocked export and clean retry verified",
 	);
 	for (const [format, bytes] of [
 		["gltf", embeddedGltf],
@@ -896,6 +1061,12 @@ try {
 
 	for (const [name, contents, expected] of [
 		["broken.solidcraft", "{}", /invalid|missing|design|document/i],
+		[
+			"broken.FCStd",
+			"PK\\x03\\x04junk",
+			/invalid|unrecogn|could not|zip|archive/i,
+		],
+		["broken.3dm", "not a model", /invalid|unrecogn|could not|rhino|header/i],
 		[
 			"external.gltf",
 			JSON.stringify({

@@ -138,7 +138,7 @@ impl CohereModel {
 
         let mut builder = rig::providers::cohere::Client::builder()
             .api_key(api_key)
-            .http_client(MediaSplice::for_egress(egress)?);
+            .http_client(MediaSplice::for_provider(provider, egress)?);
         if let Some(endpoint) = params.get("endpoint").and_then(|v| v.as_str()) {
             builder = builder.base_url(endpoint);
         }

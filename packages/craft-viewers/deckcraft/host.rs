@@ -131,7 +131,7 @@ impl Host {
                 let created = self.app.session.execute("file.new", &json!({}));
                 self.app.session.hosted = hosted;
                 created.map_err(|error| error.to_string())?;
-                self.app.home = None;
+                self.app.backstage = None;
                 self.name = name;
                 self.read_only = field(&message, "readOnly").as_bool().unwrap_or(true);
                 self.opened = true;
@@ -341,7 +341,7 @@ impl eframe::App for Host {
         }
         self.report_dirty();
     }
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         raw.dropped_files.clear();
         if self.read_only {
             self.app.host_cancel_synthetic();
@@ -357,7 +357,7 @@ impl eframe::App for Host {
                 )
             });
         } else {
-            self.app.raw_input_hook(raw);
+            self.app.raw_input_hook(ctx, raw);
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -396,8 +396,13 @@ fn create_app(cc: &eframe::CreationContext<'_>) -> deckcraft_ui_egui::SlideApp {
             }
             None
         })),
-        open_async: Some(Box::new(move |purpose| {
+        open_async: Some(Box::new(move |purpose, request_id| {
             if !matches!(purpose, "picture" | "audio" | "video") {
+                picker_inbox
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(deckcraft_ui_egui::InboxEvent::Cancelled { id: request_id });
+                ctx.request_repaint();
                 return;
             }
             let inbox = picker_inbox.clone();
@@ -405,20 +410,34 @@ fn create_app(cc: &eframe::CreationContext<'_>) -> deckcraft_ui_egui::SlideApp {
             let prepare_media = matches!(purpose, "audio" | "video");
             wasm_bindgen_futures::spawn_local(async move {
                 let Some(file) = rfd::AsyncFileDialog::new().pick_file().await else {
+                    inbox
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(deckcraft_ui_egui::InboxEvent::Cancelled { id: request_id });
+                    ctx.request_repaint();
                     return;
                 };
                 let bytes = file.read().await;
-                if bytes.len() <= MAX_BYTES {
+                if bytes.is_empty() || bytes.len() > MAX_BYTES {
+                    inbox
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .push(deckcraft_ui_egui::InboxEvent::Cancelled { id: request_id });
+                    ctx.request_repaint();
+                } else {
                     let bytes = std::sync::Arc::new(bytes);
                     if prepare_media {
                         let _ = deckcraft_media::browser::prepare(&bytes).await;
                     }
                     let bytes =
                         std::sync::Arc::try_unwrap(bytes).unwrap_or_else(|bytes| (*bytes).clone());
-                    inbox
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .push((file.file_name(), bytes));
+                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push(
+                        deckcraft_ui_egui::InboxEvent::File(deckcraft_ui_egui::InboxFile {
+                            id: request_id,
+                            name: file.file_name(),
+                            bytes,
+                        }),
+                    );
                     ctx.request_repaint();
                 }
             });

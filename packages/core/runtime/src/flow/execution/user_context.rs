@@ -21,6 +21,8 @@ pub enum ExecutionPrincipal {
     ApiKey,
     /// Another app calling through an app connection.
     ConnectedApp,
+    /// A bot acting for its owner. `sub` is the bot id; the owner is `on_behalf_of`.
+    Bot,
 }
 
 /// Represents the user context during execution.
@@ -154,6 +156,25 @@ impl UserExecutionContext {
             origin_app_id: Some(origin_app_id.into()),
             on_behalf_of: None,
         }
+    }
+
+    /// Create a context for a bot turn. The bot is the subject, its permissions are the already
+    /// narrowed role, and the owner it acts for is attribution only.
+    pub fn bot(bot_id: impl Into<String>, role: RoleContext) -> Self {
+        Self {
+            sub: bot_id.into(),
+            role: Some(role),
+            is_technical_user: true,
+            key_id: None,
+            principal: ExecutionPrincipal::Bot,
+            origin_app_id: None,
+            on_behalf_of: None,
+        }
+    }
+
+    /// Check if a bot is running this
+    pub fn is_bot(&self) -> bool {
+        self.principal == ExecutionPrincipal::Bot
     }
 
     /// Record the subject the calling principal reported as the initiator.

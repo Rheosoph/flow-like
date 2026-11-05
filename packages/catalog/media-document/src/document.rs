@@ -6,6 +6,8 @@ pub mod docx;
 pub mod file_metadata;
 pub mod pdf;
 pub mod pptx;
+#[cfg(feature = "execute")]
+pub mod service;
 pub mod styles;
 
 #[cfg(feature = "execute")]

@@ -45,6 +45,50 @@ function fixture(): IBit {
 	};
 }
 const profile = { id: "profile" } as IProfile;
+
+test("hosted image edits validate image pricing, provider settings and file-free Bits", () => {
+	const draft = fixture();
+	draft.type = IBitTypes.ImageGeneration;
+	draft.parameters = {
+		provider: {
+			provider_name: "hosted:openrouter",
+			model_id: "google/gemini-2.5-flash-image",
+			params: { tier: "FREE" },
+		},
+		pricing: { request_micro_usd: 100_000 },
+	};
+	expect(validateBitDraft(draft, "admin")).toBeNull();
+	expect(validateBitDraft(draft, "custom")).toContain("administrator");
+	draft.parameters.pricing = {};
+	expect(validateBitDraft(draft, "admin")).toContain("price");
+	draft.parameters.pricing = { request_micro_usd: 0 };
+	expect(validateBitDraft(draft, "admin")).toBeNull();
+	draft.dependencies = ["weights"];
+	expect(validateBitDraft(draft, "admin")).toContain("weight dependencies");
+	draft.dependencies = [];
+	draft.parameters.provider.provider_name = "Hosted";
+	expect(validateBitDraft(draft, "admin")).toContain("Choose");
+	draft.parameters.provider.provider_name = "hosted:openrouter";
+	draft.parameters.provider.params.api_key = "secret";
+	expect(validateBitDraft(draft, "admin")).toContain("server");
+});
+
+test("custom model request parameters require an object and cannot change streaming mode", () => {
+	const draft = fixture();
+	draft.parameters.provider.provider_name = "custom:anthropic";
+	for (const invalid of [null, [], "text", 12, { stream: false }]) {
+		draft.parameters.provider.params.request_params = invalid;
+		expect(validateBitDraft(draft, "custom")).toMatch(/request parameters/i);
+	}
+	draft.parameters.provider.params.request_params = {
+		max_tokens: 8192,
+		thinking: { type: "adaptive", option: null },
+		stops: ["END"],
+		feature: false,
+	};
+	expect(validateBitDraft(draft, "custom")).toBeNull();
+});
+
 function apiFixture(source: IBit) {
 	const calls: string[] = [];
 	const state = { failLanguage: "", noResult: false, newId: "" };

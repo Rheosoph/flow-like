@@ -8,8 +8,12 @@ from pathlib import Path
 import re
 import secrets
 import subprocess
+import sys
 import tempfile
 import urllib.parse
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+import nats_bootstrap
 
 BASE = Path(__file__).resolve().parents[1]
 STRIPE_SETTINGS = ("STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "STRIPE_CONNECT_WEBHOOK_SECRET",
@@ -289,8 +293,14 @@ def generate(namespace, release, image_pull_secrets=()):
     api = origin(os.environ.get("PUBLIC_API_URL", "http://localhost:8080"), "PUBLIC_API_URL")
     bundled = os.environ.get("RUSTFS_ENABLED", "true").lower() == "true"
     public_s3 = origin(os.environ.get("S3_PUBLIC_ENDPOINT", f"http://{release}-object-gateway.{namespace}.svc.cluster.local:9000") if bundled else required("S3_PUBLIC_ENDPOINT"), "S3_PUBLIC_ENDPOINT")
-    values = {"fullnameOverride": release, "jwt": {"existingSecret": jwt}, "api": {"existingSecret": system, "publicUrl": api, "corsAllowedOrigins": [web, "tauri://localhost", "http://tauri.localhost", "https://tauri.localhost"]}, "execution": {"existingSecret": execution}, "storage": {"provider": "s3", "s3": {"publicEndpoint": public_s3}}}
+    values = {"fullnameOverride": release, "jwt": {"existingSecret": jwt}, "api": {"existingSecret": system, "publicUrl": api, "corsAllowedOrigins": [web, "http://tauri.localhost", "https://tauri.localhost"]}, "execution": {"existingSecret": execution}, "storage": {"provider": "s3", "s3": {"publicEndpoint": public_s3}}}
     values["api"]["frontendBaseUrl"] = web
+    nats = nats_bootstrap.generate()
+    nats_ws = ("wss" if urllib.parse.urlsplit(api).scheme == "https" else "ws") + "://" + urllib.parse.urlsplit(api).netloc + "/nats"
+    values["channels"] = {"transport": "nats", "nats": {
+        "publicWebsocketUrl": os.environ.get("CHANNEL_NATS_WS_URL", nats_ws),
+        "issuerSecret": secret("nats-issuer", {"CHANNEL_NATS_ACCOUNT_SEED": nats["account_seed"]}),
+        "serverSecret": secret("nats-server", {"nats.conf": nats_bootstrap.server_config(nats, [web, "http://tauri.localhost", "https://tauri.localhost"])})}}
     hub_json, hub_ref = runtime_config()
     if hub_ref is not None:
         values["api"]["runtimeConfig"] = {"secretRef": hub_ref}
@@ -323,6 +333,17 @@ def generate(namespace, release, image_pull_secrets=()):
         values["redis"] = {"auth": {"existingSecret": secret("redis", {"REDIS_PASSWORD": password, "REDIS_URL": redis_url})}}
     if os.environ.get("OPENROUTER_API_KEY"):
         values["llm"] = {"openrouter": {"existingSecret": secret("openrouter", {"OPENROUTER_API_KEY": required("OPENROUTER_API_KEY"), "OPENROUTER_ENDPOINT": os.environ.get("OPENROUTER_ENDPOINT", "https://openrouter.ai/api")})}}
+    for provider in ("openai", "groq", "mistral", "together", "xai", "gemini"):
+        key = f"HOSTED_{provider.upper()}_API_KEY"
+        if os.environ.get(key):
+            credentials = {key: required(key)}
+            if provider == "openai":
+                credentials["HOSTED_OPENAI_ENDPOINT"] = os.environ.get("HOSTED_OPENAI_ENDPOINT", "https://api.openai.com")
+            values.setdefault("llm", {})[provider] = {"enabled": True, "existingSecret": secret(provider, credentials)}
+    cloudflare = ("HOSTED_CLOUDFLARE_API_TOKEN", "HOSTED_CLOUDFLARE_ACCOUNT_ID")
+    if any(os.environ.get(key) for key in cloudflare):
+        credentials = {key: required(key) for key in cloudflare}
+        values.setdefault("llm", {})["cloudflare"] = {"enabled": True, "existingSecret": secret("cloudflare", credentials)}
     for name in image_pull_secrets:
         if len(name) > 253 or not re.fullmatch(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?", name):
             raise ValueError("image pull secret names must be DNS subdomain names")

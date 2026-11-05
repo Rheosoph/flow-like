@@ -235,6 +235,9 @@ fn preflight_archive(bytes: &[u8], maximum_bytes: u64) -> Result<u64> {
             "PyTorch checkpoint contains too many archive entries".into(),
         ));
     }
+    archive
+        .validate_header_consistency()
+        .map_err(|error| Error::Record(format!("Inconsistent PyTorch ZIP headers: {error}")))?;
     let mut names = HashSet::new();
     let mut root = None::<String>;
     let mut pickle = false;
@@ -414,6 +417,20 @@ mod tests {
             writer.write_all(data).unwrap();
         }
         writer.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn rejects_conflicting_storage_headers_before_import() {
+        let mut bytes = fixture("model", 2, false);
+        assert_eq!(preflight_archive(&bytes, 1024 * 1024).unwrap(), 4);
+        let offset = zip::ZipArchive::new(Cursor::new(&bytes))
+            .unwrap()
+            .by_name("weights/data/0")
+            .unwrap()
+            .header_start() as usize;
+        bytes[offset + 30] = b'x';
+        let error = convert_pytorch_weights(&bytes, 1024 * 1024).unwrap_err();
+        assert!(error.to_string().contains("filename mismatch"), "{error}");
     }
 
     #[test]

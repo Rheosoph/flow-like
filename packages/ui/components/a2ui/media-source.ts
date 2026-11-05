@@ -1,5 +1,8 @@
-import { craftViewer } from "../storage/craft-viewers";
+import { resolveCraftPreview } from "./display/file-preview-source";
+import { inferFileName } from "./media-filename";
 import type { BoundValue, SurfaceComponent } from "./types";
+
+export { inferFileName } from "./media-filename";
 
 function literalString(value: string): BoundValue {
 	return { literalString: value };
@@ -17,34 +20,6 @@ export type MediaKind =
 	| "code"
 	| "text"
 	| "unknown";
-
-export function inferFileName(src: string, filename?: string): string {
-	if (filename) return filename;
-
-	try {
-		const parsed = new URL(src, "https://flow-like.local/");
-		const queryFilename = parsed.searchParams.get("filename");
-		if (queryFilename) return queryFilename;
-	} catch {}
-
-	if (src.startsWith("data:")) {
-		const mediaType = src.split(";")[0].split(":")[1];
-		if (mediaType) {
-			const extension = mediaType.split("/")[1];
-			if (extension) return `file.${extension}`;
-		}
-		return "file";
-	}
-
-	const inferred = src.split(/[?#]/)[0]?.split("/").filter(Boolean).pop();
-	if (!inferred) return "file";
-
-	try {
-		return decodeURIComponent(inferred);
-	} catch {
-		return inferred;
-	}
-}
 
 function getExtension(src: string, filename?: string): string {
 	return inferFileName(src, filename).split(".").pop()?.toLowerCase() ?? "";
@@ -252,9 +227,9 @@ export function applyMediaSourceUpdate(
 			break;
 		case "filePreview":
 		case "fileEditor": {
-			const viewer = craftViewer(inferFileName(src, filename));
+			const viewer = resolveCraftPreview(src, filename, mimeType)?.viewer;
 			// Node media kinds are broad hints. Let the registry select Office,
-			// spreadsheet, and other non-native viewers from the supplied filename.
+			// spreadsheet, and other non-native viewers from the file metadata.
 			const previewType =
 				mediaKind === "file" ||
 				(viewer && !viewer.nativePreview && viewer.extension !== "svg")

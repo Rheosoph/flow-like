@@ -38,6 +38,7 @@ impl ToProto<flow_like_types::proto::App> for App {
             forked_from: self.forked_from.clone(),
             forked_at: self.forked_at.map(Timestamp::from),
             frontend: self.frontend.as_ref().map(|frontend| frontend.to_proto()),
+            bot_id: self.bot_id.clone(),
         }
     }
 }
@@ -80,6 +81,7 @@ impl FromProto<flow_like_types::proto::App> for App {
             allow_forking: proto.allow_forking.unwrap_or(false),
             forked_from: proto.forked_from,
             forked_at: proto.forked_at.and_then(|t| SystemTime::try_from(t).ok()),
+            bot_id: proto.bot_id,
             app_state: None,
             frontend: proto.frontend.map(FrontendConfiguration::from_proto),
         }

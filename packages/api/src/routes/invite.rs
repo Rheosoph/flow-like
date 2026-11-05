@@ -1,7 +1,7 @@
 use axum::{
     Router,
-    extract::{Query, State, rejection::QueryRejection},
-    http::{HeaderValue, StatusCode, header},
+    extract::{Query, State},
+    http::{HeaderValue, StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
     routing::get,
 };
@@ -19,9 +19,9 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 
 use crate::{
-    entity::{app, invite_link, membership, meta, sea_orm_active_enums::Visibility},
+    entity::{app, invite_link, membership, meta, sea_orm_active_enums::Visibility, user},
     error::ApiError,
-    routes::app::meta::MetaMode,
+    routes::{app::meta::MetaMode, inbox::links},
     state::AppState,
 };
 
@@ -40,7 +40,18 @@ struct InviteQuery {
     token: String,
 }
 
+/// A group chat's invite link: `room` is the link's token.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RoomQuery {
+    room: String,
+}
+
 impl InviteQuery {
+    fn pairs(&self) -> [(&'static str, &str); 2] {
+        [("appId", &self.app_id), ("token", &self.token)]
+    }
+
     fn is_valid(&self) -> bool {
         [&self.app_id, &self.token].into_iter().all(|value| {
             !value.is_empty()
@@ -243,21 +254,37 @@ fn api_url(public_api: Option<&str>, domain: &str, secure: bool) -> Result<Url, 
     Ok(url)
 }
 
-fn destination_urls(mut api: Url, mut web: Url, query: &InviteQuery) -> (String, String, String) {
+fn destination_urls(
+    mut api: Url,
+    mut web: Url,
+    pairs: &[(&str, &str)],
+) -> (String, String, String) {
     api.set_path(&format!("{}/join", api.path().trim_end_matches('/')));
-    api.query_pairs_mut()
-        .append_pair("appId", &query.app_id)
-        .append_pair("token", &query.token);
+    api.query_pairs_mut().extend_pairs(pairs);
     web.set_path(&format!("{}/join", web.path().trim_end_matches('/')));
-    web.query_pairs_mut()
-        .append_pair("appId", &query.app_id)
-        .append_pair("token", &query.token);
+    web.query_pairs_mut().extend_pairs(pairs);
     let mut desktop = Url::parse("flow-like://join").expect("static desktop URL");
-    desktop
-        .query_pairs_mut()
-        .append_pair("appId", &query.app_id)
-        .append_pair("token", &query.token);
+    desktop.query_pairs_mut().extend_pairs(pairs);
     (api.to_string(), web.to_string(), desktop.to_string())
+}
+
+/// The web app and the public API origins invitation pages link to.
+fn public_origins(state: &AppState) -> Result<(Url, Url), ApiError> {
+    let configured_base = std::env::var("FRONTEND_BASE_URL").ok();
+    let configured = std::env::var("FRONTEND_URL").ok();
+    let web = frontend_url(
+        configured_base.as_deref(),
+        configured.as_deref(),
+        state.platform_config.app.as_deref(),
+        state.platform_config.secure,
+    )?;
+    let public_api = std::env::var("PUBLIC_API_URL").ok();
+    let api = api_url(
+        public_api.as_deref(),
+        &state.platform_config.domain,
+        state.platform_config.secure,
+    )?;
+    Ok((api, web))
 }
 
 fn bounded_text(value: &str, limit: usize) -> String {
@@ -274,21 +301,8 @@ async fn load_page(state: &AppState, query: &InviteQuery) -> Result<Option<Strin
     else {
         return Ok(None);
     };
-    let configured_base = std::env::var("FRONTEND_BASE_URL").ok();
-    let configured = std::env::var("FRONTEND_URL").ok();
-    let base = frontend_url(
-        configured_base.as_deref(),
-        configured.as_deref(),
-        state.platform_config.app.as_deref(),
-        state.platform_config.secure,
-    )?;
-    let public_api = std::env::var("PUBLIC_API_URL").ok();
-    let api = api_url(
-        public_api.as_deref(),
-        &state.platform_config.domain,
-        state.platform_config.secure,
-    )?;
-    let (share_url, web_url, desktop_url) = destination_urls(api, base, query);
+    let (api, web) = public_origins(state)?;
+    let (share_url, web_url, desktop_url) = destination_urls(api, web, &query.pairs());
 
     // Preview media is unused here; avoid signing unrelated screenshots.
     metadata.preview_media.clear();
@@ -306,6 +320,7 @@ async fn load_page(state: &AppState, query: &InviteQuery) -> Result<Option<Strin
     let image = safe_image(metadata.thumbnail).or_else(|| icon.clone());
     let name = bounded_text(&metadata.name, 120);
     Ok(Some(page::render_invitation(&page::InvitationPage {
+        kind: page::InvitationKind::Project,
         name: if name.is_empty() {
             "Flow-Like project".into()
         } else {
@@ -314,6 +329,92 @@ async fn load_page(state: &AppState, query: &InviteQuery) -> Result<Option<Strin
         description: bounded_text(&metadata.description, 280),
         image,
         icon,
+        desktop_url,
+        web_url,
+        share_url,
+    })))
+}
+
+/// The inviter as the hub's lookup policy lets anyone holding the link see them: a name and an
+/// avatar at most, never an email or a login handle.
+struct Inviter {
+    name: Option<String>,
+    avatar: Option<String>,
+}
+
+async fn inviter(state: &AppState, user_id: &str) -> Result<Inviter, ApiError> {
+    let lookup = &state.platform_config.lookup;
+    let Some(row) = user::Entity::find_by_id(user_id).one(&state.db).await? else {
+        return Ok(Inviter {
+            name: None,
+            avatar: None,
+        });
+    };
+    let name = [
+        row.name.clone().filter(|_| lookup.name),
+        row.preferred_username
+            .clone()
+            .filter(|_| lookup.preferred_username),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|name| bounded_text(&name, 80))
+    .find(|name| !name.is_empty());
+    let avatar = match row.avatar.as_deref().filter(|_| lookup.avatar) {
+        Some(avatar_id) => crate::routes::user::sign_avatar(&row.id, avatar_id, state)
+            .await
+            .ok()
+            .and_then(|url| safe_image(Some(url))),
+        None => None,
+    };
+    Ok(Inviter { name, avatar })
+}
+
+fn room_description(inviter: Option<&str>, members: usize) -> String {
+    let people = if members == 1 {
+        "1 member".to_string()
+    } else {
+        format!("{members} members")
+    };
+    match inviter {
+        Some(name) => format!("{name} invited you to this group chat. {people}."),
+        None => format!("You’re invited to this group chat. {people}."),
+    }
+}
+
+/// A group chat's invitation. The group and its inviter are read only after the token proved to
+/// be a live link.
+async fn load_room_page(state: &AppState, query: &RoomQuery) -> Result<Option<String>, ApiError> {
+    let Some(live) = links::live_link(&state.db, &query.room, Utc::now().fixed_offset()).await?
+    else {
+        return Ok(None);
+    };
+    let (api, web) = public_origins(state)?;
+    let (share_url, web_url, desktop_url) =
+        destination_urls(api, web, &[("room", query.room.as_str())]);
+    let inviter = inviter(state, &live.link.created_by).await?;
+    let picture = match live.conversation.image.as_deref() {
+        Some(image) => crate::routes::inbox::image::image_url(state, &live.conversation.id, image)
+            .await
+            .and_then(|url| safe_image(Some(url))),
+        None => None,
+    };
+    let name = live
+        .conversation
+        .title
+        .as_deref()
+        .map(|title| bounded_text(title, 120))
+        .filter(|title| !title.is_empty())
+        .unwrap_or_else(|| "Group chat".into());
+    Ok(Some(page::render_invitation(&page::InvitationPage {
+        kind: page::InvitationKind::Room,
+        name,
+        description: bounded_text(
+            &room_description(inviter.name.as_deref(), live.members),
+            280,
+        ),
+        image: None,
+        icon: picture.or(inviter.avatar),
         desktop_url,
         web_url,
         share_url,
@@ -347,15 +448,18 @@ fn html_response(status: StatusCode, html: String) -> Response {
     response
 }
 
-async fn invitation(
-    State(state): State<AppState>,
-    query: Result<Query<InviteQuery>, QueryRejection>,
-) -> Response {
-    let Ok(Query(query)) = query else {
-        return html_response(StatusCode::OK, page::render_unavailable(false));
+async fn invitation(State(state): State<AppState>, uri: Uri) -> Response {
+    let load = async {
+        if let Ok(Query(room)) = Query::<RoomQuery>::try_from_uri(&uri) {
+            return load_room_page(&state, &room).await;
+        }
+        match Query::<InviteQuery>::try_from_uri(&uri) {
+            Ok(Query(query)) => load_page(&state, &query).await,
+            Err(_) => Ok(None),
+        }
     };
     // Leave time for the outer read deadline to send the neutral HTML response.
-    match timeout(Duration::from_secs(8), load_page(&state, &query)).await {
+    match timeout(Duration::from_secs(8), load).await {
         Ok(Ok(Some(html))) => html_response(StatusCode::OK, html),
         Ok(Ok(None)) => html_response(StatusCode::OK, page::render_unavailable(false)),
         Ok(Err(_)) | Err(_) => {
@@ -551,7 +655,7 @@ mod tests {
     fn destinations_use_only_the_configured_origin_and_encoded_invitation() {
         let base = frontend_url(None, None, Some("app.example.com"), true).unwrap();
         let api = api_url(None, "api.example.com", true).unwrap();
-        let (share, web, desktop) = destination_urls(api, base, &query());
+        let (share, web, desktop) = destination_urls(api, base, &query().pairs());
         assert_eq!(
             share,
             "https://api.example.com/join?appId=project&token=invitation-token"
@@ -605,7 +709,7 @@ mod tests {
         let (prefixed_share, _, _) = destination_urls(
             prefixed,
             frontend_url(Some("https://app.example.com"), None, None, true).unwrap(),
-            &query(),
+            &query().pairs(),
         );
         assert_eq!(
             prefixed_share,
@@ -634,7 +738,7 @@ mod tests {
         let (_, web, _) = destination_urls(
             api_url(None, "localhost:8080", false).unwrap(),
             web,
-            &query(),
+            &query().pairs(),
         );
         assert_eq!(
             web,
@@ -662,7 +766,7 @@ mod tests {
         let (_, prefixed, _) = destination_urls(
             api_url(None, "api.example.com", true).unwrap(),
             prefixed,
-            &query(),
+            &query().pairs(),
         );
         assert_eq!(
             prefixed,

@@ -75,7 +75,7 @@ impl AnthropicModel {
 
         let mut builder = rig::providers::anthropic::Client::builder()
             .api_key(api_key)
-            .http_client(AuthorizedHttpClient::for_egress(egress)?);
+            .http_client(AuthorizedHttpClient::for_provider(provider, egress)?);
         if let Some(endpoint) = params.get("endpoint").and_then(|v| v.as_str()) {
             builder = builder.base_url(endpoint);
         }
@@ -329,8 +329,8 @@ fn messages_params(history: &History, claude: Option<Claude>) -> Value {
     params
 }
 
-/// Mirrors the `max_tokens` Rig 0.38.2 picks when the request sets none.
-fn rig_default_max_tokens(model: &str) -> u64 {
+/// Keeps Rig's known-model limits and its conservative fallback for other IDs.
+fn default_max_tokens(model: &str) -> u64 {
     if ["claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6"]
         .iter()
         .any(|prefix| model.starts_with(prefix))
@@ -365,6 +365,10 @@ fn anthropic_request(
 /// Applies Anthropic's per-model limits to the final request, including the fields agents set
 /// on the builder (`tool_choice`, `temperature`) that the History mapping cannot see.
 fn enforce_model_constraints(model: &str, mut request: CompletionRequest) -> CompletionRequest {
+    // Rig's default constructor has no output limit for IDs outside its model table.
+    let max_tokens = *request
+        .max_tokens
+        .get_or_insert_with(|| default_max_tokens(model));
     let Some(claude) = Claude::parse(model) else {
         return request;
     };
@@ -378,10 +382,7 @@ fn enforce_model_constraints(model: &str, mut request: CompletionRequest) -> Com
             request.tool_choice,
             Some(ToolChoice::Required | ToolChoice::Specific { .. })
         );
-        let ceiling = request
-            .max_tokens
-            .unwrap_or_else(|| rig_default_max_tokens(model))
-            .saturating_sub(1);
+        let ceiling = max_tokens.saturating_sub(1);
         let params = body_params(&mut request);
         let requested = params
             .get("thinking")
@@ -463,7 +464,8 @@ fn enforce_model_constraints(model: &str, mut request: CompletionRequest) -> Com
 mod tests {
     use super::*;
     use crate::history::{HistoryMessage, ResponseFormat, Role};
-    use crate::llm::test_support::{json_response, serve_once};
+    use crate::llm::test_support::{json_response, serve_once, sse_response};
+    use futures::StreamExt;
     use rig::completion::Completion;
     use std::collections::HashMap;
 
@@ -490,6 +492,44 @@ mod tests {
             additional_params: Some(params),
             output_schema: None,
         }
+    }
+
+    #[test]
+    fn missing_output_limits_cover_known_new_and_custom_model_ids() {
+        for (model, expected) in [
+            ("claude-sonnet-4-6", 64_000),
+            ("claude-opus-4-7", 128_000),
+            ("claude-opus-5-5", 2_048),
+            ("hosted-assistant-bit", 2_048),
+        ] {
+            let mut unbounded = request(json!({}));
+            unbounded.max_tokens = None;
+            let fixed = anthropic_request(model, unbounded).unwrap();
+            assert_eq!(fixed.max_tokens, Some(expected), "{model}");
+
+            for limit in [0, 8192] {
+                let mut explicit = request(json!({}));
+                explicit.max_tokens = Some(limit);
+                let fixed = anthropic_request(model, explicit).unwrap();
+                assert_eq!(fixed.max_tokens, Some(limit), "{model}");
+            }
+        }
+    }
+
+    #[test]
+    fn thinking_budget_uses_the_fallback_output_limit() {
+        let mut unbounded = request(json!({
+            "thinking": {"type": "enabled", "budget_tokens": 16_384},
+        }));
+        unbounded.max_tokens = None;
+
+        let fixed = anthropic_request("claude-3-7-sonnet-latest", unbounded).unwrap();
+
+        assert_eq!(fixed.max_tokens, Some(2_048));
+        assert_eq!(
+            fixed.additional_params.unwrap()["thinking"]["budget_tokens"],
+            2_047
+        );
     }
 
     #[test]
@@ -704,6 +744,81 @@ mod tests {
             !error.contains("X-Amz") && !error.contains("report.pdf"),
             "{error}"
         );
+    }
+
+    #[tokio::test]
+    async fn custom_agents_send_missing_output_limits_for_both_transports() {
+        for model_id in ["claude-opus-5-5", "hosted-assistant-bit"] {
+            for streaming in [false, true] {
+                let message = json!({
+                    "id": "msg_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model_id,
+                    "content": [{"type": "text", "text": "ok"}],
+                    "stop_reason": "end_turn",
+                    "usage": {"input_tokens": 12, "output_tokens": 1},
+                });
+                let response = if streaming {
+                    sse_response(&[
+                        json!({"type": "message_start", "message": message}),
+                        json!({
+                            "type": "content_block_delta", "index": 0,
+                            "delta": {"type": "text_delta", "text": "ok"},
+                        }),
+                        json!({
+                            "type": "message_delta", "delta": {"stop_reason": "end_turn"},
+                            "usage": {"output_tokens": 1},
+                        }),
+                    ])
+                } else {
+                    json_response(message)
+                };
+                let (endpoint, server) = serve_once(response).await;
+                let model = super::super::custom::build(
+                    "custom:anthropic",
+                    &ModelProvider {
+                        provider_name: "custom:anthropic".into(),
+                        model_id: Some(model_id.into()),
+                        version: None,
+                        api_surface: None,
+                        params: Some(HashMap::from([
+                            ("api_key".into(), json!("test-key")),
+                            ("model_id".into(), json!(model_id)),
+                            ("endpoint".into(), json!(endpoint)),
+                        ])),
+                    },
+                    ProviderEgress::Open,
+                    super::super::custom::AmbientCredentials::Forbidden,
+                )
+                .await
+                .unwrap();
+                let agent = model
+                    .provider()
+                    .await
+                    .unwrap()
+                    .into_client()
+                    .agent(model_id)
+                    .build();
+                let request = agent
+                    .completion("hi", Vec::<rig::completion::Message>::new())
+                    .await
+                    .unwrap();
+                if streaming {
+                    let mut stream = request.stream().await.unwrap();
+                    while let Some(chunk) = stream.next().await {
+                        chunk.unwrap();
+                    }
+                } else {
+                    request.send().await.unwrap();
+                }
+
+                let body: Value = serde_json::from_str(&server.await.unwrap()).unwrap();
+                assert_eq!(body["model"], model_id);
+                assert_eq!(body["max_tokens"], 2_048, "{model_id}, stream={streaming}");
+                assert_eq!(body["stream"].as_bool().unwrap_or(false), streaming);
+            }
+        }
     }
 
     #[tokio::test]

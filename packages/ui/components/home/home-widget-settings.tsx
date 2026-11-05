@@ -21,12 +21,15 @@ import { useSavedForecast } from "../settings/data-studio/forecasting/use-saved-
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
+import { HomeBotPicker } from "./home-content/bots";
 import { useHomeLibrary } from "./home-content/collections";
 import {
 	HOME_APP_RENDERINGS,
+	HOME_BOT_MESSAGE_FILTERS,
 	HOME_MODEL_RENDERINGS,
 	HOME_PACKAGE_RENDERINGS,
 	homeAppRendering,
+	homeBotMessageFilter,
 	homeLinksRendering,
 	homeModelRendering,
 	homePackageRendering,
@@ -1302,6 +1305,106 @@ export function HomeWidgetSettings({ widget, onChange }: SettingsProps) {
 				)}
 			</div>
 		);
+	if (widget.type === "bot-chat")
+		return (
+			<div className="space-y-4">
+				<Choice
+					label="Shape"
+					value={textConfig(config, "mode", "hero")}
+					onChange={(value) => update("mode", value)}
+					choices={[
+						["hero", "Hero with the bot and your crew"],
+						["bar", "Slim prompt bar"],
+					]}
+				/>
+				<Field
+					label="Talks to"
+					hint="People can switch to another bot of their crew before sending."
+				>
+					{(id) => (
+						<HomeBotPicker
+							id={id}
+							value={textConfig(config, "botId")}
+							onChange={(value) => update("botId", value)}
+							className={selectClass}
+						/>
+					)}
+				</Field>
+				<label className="flex items-center gap-2 text-xs">
+					<input
+						type="checkbox"
+						className="accent-primary"
+						checked={config.crew !== false}
+						onChange={(event) => update("crew", event.target.checked)}
+					/>
+					Show your crew to switch bots
+				</label>
+				{config.crew !== false && <Count config={config} update={update} />}
+				<Field label="Prompt placeholder">
+					{(id) => (
+						<Input
+							id={id}
+							value={textConfig(config, "placeholder")}
+							onChange={(event) => update("placeholder", event.target.value)}
+							placeholder="Message the Assistant…"
+						/>
+					)}
+				</Field>
+			</div>
+		);
+	if (widget.type === "bot-crew")
+		return (
+			<div className="space-y-4">
+				<Count config={config} update={update} />
+				<label className="flex items-center gap-2 text-xs">
+					<input
+						type="checkbox"
+						className="accent-primary"
+						checked={config.newBot !== false}
+						onChange={(event) => update("newBot", event.target.checked)}
+					/>
+					Show the New bot tile
+				</label>
+			</div>
+		);
+	if (widget.type === "bot-messages") {
+		const filter = homeBotMessageFilter(config);
+		const filterLabels: Record<
+			(typeof HOME_BOT_MESSAGE_FILTERS)[number],
+			string
+		> = {
+			all: "Newest conversations",
+			unread: "Unread conversations",
+			direct: "Direct messages",
+			rooms: "Rooms",
+			needs: "Only what needs you",
+		};
+		return (
+			<div className="space-y-4">
+				<Choice
+					label="Show"
+					value={filter}
+					onChange={(value) => update("filter", value)}
+					choices={HOME_BOT_MESSAGE_FILTERS.map((value) => [
+						value,
+						filterLabels[value],
+					])}
+				/>
+				{filter !== "needs" && <Count config={config} update={update} />}
+				{filter !== "needs" && filter !== "rooms" && (
+					<label className="flex items-center gap-2 text-xs">
+						<input
+							type="checkbox"
+							className="accent-primary"
+							checked={config.needsYou !== false}
+							onChange={(event) => update("needsYou", event.target.checked)}
+						/>
+						Pin approvals, invitations and waiting bots on top
+					</label>
+				)}
+			</div>
+		);
+	}
 	if (widget.type === "greeting")
 		return (
 			<div className="space-y-4">

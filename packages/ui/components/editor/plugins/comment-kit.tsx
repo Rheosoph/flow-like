@@ -79,7 +79,8 @@ export const commentPlugin = toTPlatePlugin<CommentConfig>(BaseCommentPlugin, {
 			setDraft: () => {
 				if (
 					!editor.getOption(discussionPlugin, "enabled") ||
-					!editor.getOption(discussionPlugin, "currentUserId") || !editor.selection
+					!editor.getOption(discussionPlugin, "currentUserId") ||
+					!editor.selection
 				)
 					return;
 				if (editor.api.isCollapsed()) {

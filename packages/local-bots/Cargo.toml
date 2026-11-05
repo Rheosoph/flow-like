@@ -1,0 +1,22 @@
+[package]
+name = "flow-like-local-bots"
+version = "0.1.0"
+edition = "2024"
+description = "Bots and their inbox kept on a desktop without an account"
+
+[dependencies]
+chacha20poly1305.workspace = true
+chrono.workspace = true
+flow-like-types.workspace = true
+rusqlite = { version = "0.32.1", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+tokio = { workspace = true, features = ["rt", "sync"] }
+zeroize.workspace = true
+
+[dev-dependencies]
+# The desktop enables `extra_check`, which rejects row-returning statements in `execute_batch`.
+rusqlite = { version = "0.32.1", features = ["bundled", "extra_check"] }
+tempfile = "3"
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }

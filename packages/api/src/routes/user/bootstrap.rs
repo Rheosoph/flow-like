@@ -12,13 +12,21 @@ use flow_like::{app::App, bit::Metadata};
 use flow_like_types::tokio::try_join;
 use sea_orm::{
     ColumnTrait, EntityTrait, JoinType, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
-    RelationTrait,
+    RelationTrait, Select,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::IntoParams;
 
 use super::notifications::{NotificationOverview, notification_counts};
+
+/// The apps `sub` is a member of, without bots' workspaces: those belong to their bots.
+pub(crate) fn member_apps(sub: &str) -> Select<app::Entity> {
+    app::Entity::find()
+        .join(JoinType::InnerJoin, app::Relation::Membership.def())
+        .filter(membership::Column::UserId.eq(sub))
+        .filter(app::Column::BotId.is_null())
+}
 
 #[derive(Debug, Clone, Deserialize, IntoParams)]
 pub struct BootstrapParams {
@@ -89,15 +97,10 @@ pub async fn bootstrap(
     let invites_limit_val = std::cmp::Ord::min(params.invites_limit.unwrap_or(20), 100);
     let invites_offset_val = params.invites_offset.unwrap_or(0);
 
-    let apps_total_fut = app::Entity::find()
-        .join(JoinType::InnerJoin, app::Relation::Membership.def())
-        .filter(membership::Column::UserId.eq(&sub))
-        .count(&state.db);
-    let apps_page_fut = app::Entity::find()
+    let apps_total_fut = member_apps(&sub).count(&state.db);
+    let apps_page_fut = member_apps(&sub)
         .order_by_desc(app::Column::UpdatedAt)
         .order_by_asc(app::Column::Id)
-        .join(JoinType::InnerJoin, app::Relation::Membership.def())
-        .filter(membership::Column::UserId.eq(&sub))
         .limit(Some(apps_limit))
         .offset(Some(apps_offset))
         .all(&state.db);

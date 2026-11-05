@@ -13,10 +13,17 @@ import {
 import type { IProfile } from "../../packages/ui/lib/schema/profile/profile";
 import {
 	type IBackendState,
+	useAuthStatusStore,
 	useBackend,
 	useBackendStore,
 } from "../../packages/ui/state/backend-state";
 import { useGlobalChatStore } from "../../packages/ui/state/global-chat/global-chat-store";
+import {
+	fixtureBots,
+	fixtureConversations,
+	fixtureInvitations,
+	fixtureLookup,
+} from "./default-fixture-bots";
 import {
 	defaultFixtureApps,
 	defaultFixtureHistory,
@@ -93,6 +100,7 @@ function DefaultScenario({
 	scenario,
 	original,
 }: { scenario: Scenario; original: IBackendState }) {
+	const me = useAuth().user?.profile.sub ?? "fixture-user";
 	const persistedLayoutKey = new URLSearchParams(location.search).has("persist")
 		? `home-default-browser-qa-${scenario}`
 		: undefined;
@@ -246,6 +254,7 @@ function DefaultScenario({
 				flowPilotState: () => useGlobalChatStore.getState().mode,
 			},
 		});
+		useAuthStatusStore.getState().setSignedIn(authenticated);
 		useBackendStore.getState().setBackend({
 			...original,
 			profile,
@@ -313,6 +322,9 @@ function DefaultScenario({
 			},
 			userState: {
 				...original.userState,
+				lookupUser: async (id: string) => fixtureLookup(me, id),
+				lookupUsers: async (ids: string[]) =>
+					ids.map((id) => fixtureLookup(me, id)),
 				getProfile: async () => profile,
 				getSettingsProfile: async () => ({ hub_profile: profile }),
 				getAllSettingsProfiles: async () => [{ hub_profile: profile }],
@@ -384,6 +396,20 @@ function DefaultScenario({
 				isBitInstalled: async () => true,
 				getBitSize: async () => 0,
 			},
+			...(scenario === "returning"
+				? {
+						botState: {
+							listBots: async () => fixtureBots(me),
+							getPresence: async () => ({
+								bot_ledger: { state: "online" as const },
+							}),
+						} as unknown as IBackendState["botState"],
+						inboxState: {
+							listConversations: async () => fixtureConversations(me),
+							listInvitations: async () => fixtureInvitations(me),
+						} as unknown as IBackendState["inboxState"],
+					}
+				: {}),
 			usageState: offline
 				? undefined
 				: {
@@ -502,7 +528,7 @@ function DefaultScenario({
 					},
 		} as unknown as IBackendState);
 		setReady(true);
-	}, [scenario, original]);
+	}, [scenario, original, me]);
 	if (!ready) return null;
 	return (
 		<HomeEditor

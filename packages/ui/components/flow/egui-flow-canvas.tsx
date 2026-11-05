@@ -97,6 +97,10 @@ function NativeViewportPlane({
 				zIndex,
 				pointerEvents: "none",
 				transformOrigin: "0 0",
+				// Keep transparent canvases on stable compositor layers as DOM editors
+				// move or unmount. These viewport-sized planes never scale their pixels.
+				transform: "translateZ(0)",
+				contain: "paint",
 			}}
 		>
 			{children}

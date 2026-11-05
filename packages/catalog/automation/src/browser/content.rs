@@ -744,7 +744,7 @@ impl NodeLogic for BrowserClickAtPointNode {
 const SCROLL_MODES: [&str; 3] = ["by", "top", "bottom"];
 
 #[cfg(feature = "execute")]
-const SCROLL_SCRIPT: &str = "const [scope, mode, dx, dy] = arguments; const target = scope || document.scrollingElement || document.documentElement; if (mode === 'top') { target.scrollTo({ left: target.scrollLeft, top: 0, behavior: 'instant' }); } else if (mode === 'bottom') { target.scrollTo({ left: target.scrollLeft, top: target.scrollHeight, behavior: 'instant' }); } else { target.scrollBy({ left: dx, top: dy, behavior: 'instant' }); } const maxTop = Math.max(0, target.scrollHeight - target.clientHeight); return { x: target.scrollLeft, y: target.scrollTop, atBottom: target.scrollTop >= maxTop - 1 };";
+pub(crate) const SCROLL_SCRIPT: &str = "const [scope, mode, dx, dy] = arguments; const target = scope || document.scrollingElement || document.documentElement; if (mode === 'top') { target.scrollTo({ left: target.scrollLeft, top: 0, behavior: 'instant' }); } else if (mode === 'bottom') { target.scrollTo({ left: target.scrollLeft, top: target.scrollHeight, behavior: 'instant' }); } else { target.scrollBy({ left: dx, top: dy, behavior: 'instant' }); } const maxTop = Math.max(0, target.scrollHeight - target.clientHeight); return { x: target.scrollLeft, y: target.scrollTop, atBottom: target.scrollTop >= maxTop - 1 };";
 
 #[crate::register_node]
 #[derive(Default)]

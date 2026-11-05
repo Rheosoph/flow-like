@@ -95,6 +95,20 @@ pub async fn create_app_connection_token(
         return Err(ApiError::FORBIDDEN);
     }
 
+    if let AppUser::Executor(executor) = &user
+        && let Some(bot) = &executor.bot
+    {
+        let grant = crate::bot_permission::bot_grant_in(&state.db, bot, &target_app_id).await?;
+        if !grant
+            .permissions
+            .intersects(RolePermissions::ExecuteBoards | RolePermissions::ExecuteEvents)
+        {
+            return Err(ApiError::forbidden(
+                "The bot holds no execute permission in the target app",
+            ));
+        }
+    }
+
     let connection = app_connection::Entity::find()
         .filter(
             app_connection::Column::SourceAppId
@@ -214,7 +228,10 @@ async fn claimed_run<C: ConnectionTrait>(
         AppUser::OpenID(person) => execution_run::Column::UserId.eq(person.sub.as_str()),
         AppUser::PAT(person) => execution_run::Column::UserId.eq(person.sub.as_str()),
         AppUser::APIKey(key) => execution_run::Column::TechnicalUserId.eq(key.key_id.as_str()),
-        AppUser::Executor(_) | AppUser::ConnectedApp(_) | AppUser::Unauthorized => {
+        AppUser::Executor(_)
+        | AppUser::ConnectedApp(_)
+        | AppUser::Bot(_)
+        | AppUser::Unauthorized => {
             return Ok(None);
         }
     };
@@ -258,6 +275,7 @@ mod tests {
 
     fn run(sub: &str) -> ExecutorUser {
         ExecutorUser {
+            bot: None,
             sub: sub.into(),
             app_id: "app-1".into(),
             run_id: "run-1".into(),

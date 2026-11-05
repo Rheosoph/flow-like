@@ -98,6 +98,20 @@ class PlatformContracts(unittest.IsolatedAsyncioTestCase):
             self.reply = lambda _, status=status: httpx.Response(200, json={"status": status, "events": []})
             self.assertTrue(self.client.poll_execution("poll-secret").done)
 
+    async def test_poll_is_done_only_on_the_last_page(self):
+        self.reply = lambda _: httpx.Response(200, json={"status": "Running", "has_more": True,
+            "events": [{"sequence": 4, "event_type": "output", "payload": 1}]})
+        async for result in self.call_both("poll_execution", "poll-secret", after_sequence=3):
+            self.assertTrue(result.has_more)
+            self.assertFalse(result.done)
+            self.assertEqual(result.next_sequence, 4)
+        self.reply = lambda _: httpx.Response(200, json={"status": "Completed", "has_more": True, "events": []})
+        self.assertFalse(self.client.poll_execution("poll-secret", after_sequence=4).done)
+        self.reply = lambda _: httpx.Response(200, json={"status": "Completed", "has_more": False, "events": []})
+        result = self.client.poll_execution("poll-secret", after_sequence=4)
+        self.assertTrue(result.done)
+        self.assertFalse(result.has_more)
+
     async def test_create_app_uses_upsert_and_complete_metadata(self):
         self.reply = lambda _: httpx.Response(200, json={"id": "app", "bits": []})
         async for app in self.call_both("create_app", "My app", "Description", bits=["bit"]):

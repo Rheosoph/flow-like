@@ -69,6 +69,23 @@ export function homeLinksRendering(
 	return (config.rendering ?? legacyVariant) === "list" ? "list" : "grid";
 }
 
+/** What a bot messages widget lists; `needs` shows only what waits for an answer. */
+export const HOME_BOT_MESSAGE_FILTERS = [
+	"all",
+	"unread",
+	"direct",
+	"rooms",
+	"needs",
+] as const;
+export type HomeBotMessageFilter = (typeof HOME_BOT_MESSAGE_FILTERS)[number];
+
+export function homeBotMessageFilter(
+	config: Record<string, unknown>,
+): HomeBotMessageFilter {
+	const value = config.filter;
+	return HOME_BOT_MESSAGE_FILTERS.find((filter) => filter === value) ?? "all";
+}
+
 export function textConfig(
 	config: Record<string, unknown>,
 	key: string,

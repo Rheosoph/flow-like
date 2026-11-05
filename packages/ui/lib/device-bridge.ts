@@ -1,4 +1,9 @@
-import { isChannelHandle, replyToChannel } from "./channel";
+import {
+	claimChannelRequest,
+	isChannelHandle,
+	isSharedChannel,
+	replyToChannel,
+} from "./channel";
 import { getFrontendAudioEpoch } from "./frontend-audio";
 import type { IChannelHandle } from "./schema/channel";
 import type { IIntercomEvent } from "./schema/events/intercom-event";
@@ -121,6 +126,11 @@ export function validateClipboard(args: Record<string, unknown>): void {
 			"invalid_arguments",
 			"Keep on device must be a boolean",
 		);
+	if (args.appPrivate !== undefined && typeof args.appPrivate !== "boolean")
+		throw new DeviceError(
+			"invalid_arguments",
+			"Private clipboard must be a boolean",
+		);
 }
 
 async function browserClipboard(
@@ -128,7 +138,11 @@ async function browserClipboard(
 	context: DeviceContext,
 ): Promise<unknown> {
 	validateClipboard(args);
-	if (args.localOnly === true || args.expiresAt !== undefined)
+	if (
+		args.localOnly === true ||
+		args.expiresAt !== undefined ||
+		args.appPrivate === true
+	)
 		throw new DeviceError(
 			"unsupported_options",
 			"This browser cannot enforce clipboard expiration or local-only sharing",
@@ -402,6 +416,20 @@ export function createDeviceCommandSession(
 				void (async () => {
 					let response: DeviceReply;
 					let onAbort: (() => void) | undefined;
+					if (isSharedChannel(request.channel)) {
+						let claimed = false;
+						try {
+							claimed = await claimChannelRequest(request.channel);
+						} catch (error) {
+							console.warn("Device request could not be claimed", error);
+						}
+						if (!claimed) {
+							clearTimeout(timeout);
+							pending.delete(job);
+							controller.signal.removeEventListener("abort", abort);
+							return;
+						}
+					}
 					try {
 						if (deadline <= now())
 							throw new DeviceError("expired", "Device request has expired");

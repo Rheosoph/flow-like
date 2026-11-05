@@ -609,6 +609,7 @@ pub(crate) async fn deliver_legacy_purchase_effect(
         state,
         &format!("purchase:{purchase_id}"),
         crate::push_notifications::DispatchNotificationInput {
+            bot_context: None,
             user_id: user_id.to_owned(),
             app_id: None,
             title: format!("Purchase Complete: {name}"),

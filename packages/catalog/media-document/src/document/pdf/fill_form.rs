@@ -132,7 +132,7 @@ impl NodeLogic for PdfFillFormNode {
 }
 
 #[cfg(feature = "execute")]
-fn set_acroform_field(
+pub(crate) fn set_acroform_field(
     doc: &mut Document,
     field_name: &str,
     field_value: &str,

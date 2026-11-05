@@ -556,6 +556,11 @@ export function LogsPanel({
 				onFoldChange={setFold}
 				relative={relative}
 				onRelativeChange={setRelative}
+				actions={
+					!panel || !toolbarSlot ? (
+						<DetailToggle open={detailOpen} onToggle={toggleDetail} />
+					) : undefined
+				}
 			/>
 			{runError ? <RunErrorBanner message={runError} /> : null}
 			{firstError ? (

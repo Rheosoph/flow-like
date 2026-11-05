@@ -4,18 +4,21 @@
 //! Large payloads (>100KB) are stored via FlowLikeStore under "polling/{run_id}/{event_id}"
 //! Tables: ExecutionRuns, ExecutionEvents with GSIs for app/run lookups.
 
-use super::{postgres::PostgresStateStore, types::*};
+use super::{
+    postgres::PostgresStateStore,
+    replay::{ConsistentEventReads, replay_contiguous, replay_page_query},
+    types::*,
+};
 use async_trait::async_trait;
 use aws_config::SdkConfig;
 use aws_sdk_dynamodb::{
     Client,
-    types::{AttributeValue, KeyType, ReturnValue, ScalarAttributeType, WriteRequest},
+    types::{
+        AttributeValue, KeyType, KeysAndAttributes, ReturnValue, ScalarAttributeType, WriteRequest,
+    },
 };
 use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_storage::{
-    files::store::FlowLikeStore,
-    object_store::{ObjectStore, path::Path},
-};
+use flow_like_storage::{files::store::FlowLikeStore, object_store::path::Path};
 use flow_like_types::utils::constant_time_eq;
 use futures::{StreamExt, TryStreamExt, stream};
 use sea_orm::DatabaseConnection;
@@ -30,6 +33,7 @@ const POLLING_PREFIX: &str = "polling";
 const EVENT_WRITE_MAX_ATTEMPTS: usize = 6;
 const EVENT_WRITE_BASE_DELAY_MS: u64 = 25;
 const EVENT_WRITE_CONCURRENCY: usize = 16;
+const BATCH_GET_MAX_KEYS: usize = 100;
 const LEASE_UPDATE_ATTEMPTS: usize = 3;
 const SOURCE_IMPORT_CONDITION: &str = "attribute_not_exists(id)";
 const UNLEASED_UPDATE_CONDITION: &str = "#status IN (:pending, :running) AND #updated_at = :expected_updated_at AND attribute_not_exists(#bound_job_id)";
@@ -341,6 +345,52 @@ impl DynamoDbStateStore {
     ) -> Result<(usize, serde_json::Value), StateStoreError> {
         let payload = self.fetch_large_payload(&store_ref).await?;
         Ok((index, payload))
+    }
+
+    /// Event records in item order, with offloaded payloads read concurrently.
+    async fn hydrate_events(
+        &self,
+        items: Vec<HashMap<String, AttributeValue>>,
+    ) -> Result<Vec<ExecutionEventRecord>, StateStoreError> {
+        let mut records = Vec::with_capacity(items.len());
+        let mut offloaded = Vec::new();
+        for item in items {
+            let (record, payload_ref) = item_to_event(&item)?;
+            if let Some(store_ref) = payload_ref {
+                offloaded.push((records.len(), store_ref));
+            }
+            records.push(record);
+        }
+
+        if offloaded.is_empty() {
+            return Ok(records);
+        }
+
+        let payloads = stream::iter(
+            offloaded
+                .into_iter()
+                .map(|(index, store_ref)| self.fetch_large_payload_at(index, store_ref)),
+        )
+        .buffer_unordered(EVENT_WRITE_CONCURRENCY)
+        .try_collect::<Vec<_>>()
+        .await?;
+        for (index, payload) in payloads {
+            records[index].payload = payload;
+        }
+
+        Ok(records)
+    }
+
+    /// An eventually consistent read, repeated consistently on a miss: a run
+    /// written moments ago can be invisible to the first read but not the second.
+    async fn read_run_settled(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<ExecutionRunRecord>, StateStoreError> {
+        match self.read_run(run_id, false).await? {
+            Some(record) => Ok(Some(record)),
+            None => self.read_run(run_id, true).await,
+        }
     }
 
     /// The run condition also stops the update-as-upsert from minting a
@@ -916,6 +966,67 @@ fn item_to_event(
 }
 
 #[async_trait]
+impl ConsistentEventReads for DynamoDbStateStore {
+    /// The table key is the canonical id, so the base table answers by sequence
+    /// with strongly consistent reads that never wait on `RunIdIndex`.
+    async fn read_sequences(
+        &self,
+        run_id: &str,
+        sequences: &[i32],
+    ) -> Result<Vec<ExecutionEventRecord>, StateStoreError> {
+        let mut items = Vec::with_capacity(sequences.len());
+        for chunk in sequences.chunks(BATCH_GET_MAX_KEYS) {
+            let mut pending: Vec<_> = chunk
+                .iter()
+                .map(|sequence| {
+                    HashMap::from([(
+                        "id".to_string(),
+                        AttributeValue::S(canonical_execution_event_id(run_id, *sequence)),
+                    )])
+                })
+                .collect();
+            for attempt in 0..EVENT_WRITE_MAX_ATTEMPTS {
+                let keys = KeysAndAttributes::builder()
+                    .set_keys(Some(pending))
+                    .consistent_read(true)
+                    .build()
+                    .map_err(|error| StateStoreError::Database(error.to_string()))?;
+                let result = self
+                    .client
+                    .batch_get_item()
+                    .request_items(&self.events_table, keys)
+                    .send()
+                    .await
+                    .map_err(|error| StateStoreError::Database(error.to_string()))?;
+                items.extend(
+                    result
+                        .responses
+                        .and_then(|mut tables| tables.remove(&self.events_table))
+                        .unwrap_or_default(),
+                );
+                pending = result
+                    .unprocessed_keys
+                    .and_then(|mut tables| tables.remove(&self.events_table))
+                    .map(|keys| keys.keys)
+                    .unwrap_or_default();
+                if pending.is_empty() {
+                    break;
+                }
+                if attempt + 1 == EVENT_WRITE_MAX_ATTEMPTS {
+                    return Err(StateStoreError::Database(format!(
+                        "DynamoDB left {} execution event reads of run '{run_id}' unprocessed after {} attempts",
+                        pending.len(),
+                        EVENT_WRITE_MAX_ATTEMPTS
+                    )));
+                }
+                tokio::time::sleep(event_write_retry_delay(attempt)).await;
+            }
+        }
+        self.hydrate_events(items).await
+    }
+}
+
+#[async_trait]
 impl ExecutionStateStore for DynamoDbStateStore {
     fn backend_name(&self) -> &'static str {
         "dynamodb"
@@ -968,7 +1079,7 @@ impl ExecutionStateStore for DynamoDbStateStore {
     }
 
     async fn get_run(&self, run_id: &str) -> Result<Option<ExecutionRunRecord>, StateStoreError> {
-        match self.read_run(run_id, false).await? {
+        match self.read_run_settled(run_id).await? {
             Some(record) => Ok(Some(record)),
             None => self.import_source_run(run_id, None).await,
         }
@@ -979,7 +1090,7 @@ impl ExecutionStateStore for DynamoDbStateStore {
         run_id: &str,
         app_id: &str,
     ) -> Result<Option<ExecutionRunRecord>, StateStoreError> {
-        match self.read_run(run_id, false).await? {
+        match self.read_run_settled(run_id).await? {
             Some(record) if record.app_id == app_id => Ok(Some(record)),
             Some(_) => Ok(None),
             None => self.import_source_run(run_id, Some(app_id)).await,
@@ -1434,35 +1545,26 @@ impl ExecutionStateStore for DynamoDbStateStore {
             .await
             .map_err(|e| StateStoreError::Database(e.to_string()))?;
 
-        let mut records = Vec::new();
-        let mut offloaded = Vec::new();
-        if let Some(items) = result.items {
-            for item in items {
-                let (record, payload_ref) = item_to_event(&item)?;
-                if let Some(store_ref) = payload_ref {
-                    offloaded.push((records.len(), store_ref));
-                }
-                records.push(record);
-            }
-        }
+        self.hydrate_events(result.items.unwrap_or_default()).await
+    }
 
-        if offloaded.is_empty() {
-            return Ok(records);
-        }
-
-        let payloads = stream::iter(
-            offloaded
-                .into_iter()
-                .map(|(index, store_ref)| self.fetch_large_payload_at(index, store_ref)),
+    /// `RunIdIndex` is eventually consistent and fed from many partitions, and a
+    /// batch's events are written concurrently, so the index can show a later
+    /// sequence before an earlier one. Gaps are settled with consistent reads.
+    async fn replay_events(
+        &self,
+        run_id: &str,
+        cursor: ReplayCursor,
+    ) -> Result<EventReplay, StateStoreError> {
+        let visible = self.get_events(replay_page_query(run_id, cursor)).await?;
+        replay_contiguous(
+            self,
+            run_id,
+            visible,
+            cursor,
+            chrono::Utc::now().timestamp_millis(),
         )
-        .buffer_unordered(EVENT_WRITE_CONCURRENCY)
-        .try_collect::<Vec<_>>()
-        .await?;
-        for (index, payload) in payloads {
-            records[index].payload = payload;
-        }
-
-        Ok(records)
+        .await
     }
 
     async fn get_max_sequence(&self, run_id: &str) -> Result<i32, StateStoreError> {
@@ -1500,8 +1602,8 @@ impl ExecutionStateStore for DynamoDbStateStore {
 
         stream::iter(
             event_ids
-                .to_vec()
-                .into_iter()
+                .iter()
+                .cloned()
                 .map(|id| self.mark_event_delivered(run_id, id)),
         )
         .buffer_unordered(EVENT_WRITE_CONCURRENCY)

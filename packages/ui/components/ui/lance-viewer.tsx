@@ -2018,7 +2018,7 @@ const RowFilterInput: React.FC<{
 }> = ({ value, placeholder, onValueChange, onSubmit, onClear }) => {
 	const { t } = useTranslation("common");
 	return (
-		<div className="relative w-full sm:w-80">
+		<div className="relative w-full max-w-full sm:w-80">
 			<Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
 			<Input
 				className="h-8 pl-8 pr-8"

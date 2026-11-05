@@ -48,7 +48,7 @@ pub struct AddMemberRequest {
         (status = 200, description = "Member added or invited", body = GroupInfo),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Group or app not found"),
-        (status = 409, description = "App already in group")
+        (status = 409, description = "App already in group; BOT_WORKSPACE_LOCKED: the group's app or the app to add is a bot's workspace, which is never shared")
     ),
     security(("bearer_auth" = []), ("api_key" = []), ("pat" = []))
 )]
@@ -81,6 +81,8 @@ pub async fn add_member(
         .one(&state.db)
         .await?
         .ok_or_else(|| ApiError::not_found("App not found"))?;
+    crate::routes::bots::workspace::refuse_workspaces(&state.db, [&app_id, &payload.member_app_id])
+        .await?;
 
     let existing = app_group_member::Entity::find()
         .filter(app_group_member::Column::GroupId.eq(&group_id))

@@ -3,6 +3,126 @@ import test from "node:test";
 
 globalThis.addEventListener ??= () => {};
 const codecs = await import("./browser-codecs.js");
+
+function mp4Box(type, ...payloads) {
+	const result = Buffer.concat([
+		Buffer.alloc(4),
+		Buffer.from(type),
+		...payloads,
+	]);
+	result.writeUInt32BE(result.length);
+	return result;
+}
+
+function sampleTrack(codec, offset, wide = false) {
+	const sampleDescription = Buffer.alloc(8);
+	sampleDescription.writeUInt32BE(1, 4);
+	const sizes = Buffer.alloc(12);
+	sizes.writeUInt32BE(2, 8);
+	const offsets = Buffer.alloc(wide ? 16 : 12);
+	offsets.writeUInt32BE(1, 4);
+	if (wide) offsets.writeBigUInt64BE(BigInt(offset), 8);
+	else offsets.writeUInt32BE(offset, 8);
+	return mp4Box(
+		"trak",
+		mp4Box(
+			"mdia",
+			mp4Box(
+				"minf",
+				mp4Box(
+					"stbl",
+					mp4Box("stsd", sampleDescription, mp4Box(codec)),
+					mp4Box("stsz", sizes),
+					mp4Box(wide ? "co64" : "stco", offsets),
+				),
+			),
+		),
+	);
+}
+
+for (const wide of [false, true]) {
+	test(`AAC roll groups preserve fast-start ${wide ? "64" : "32"}-bit sample offsets`, () => {
+		const ftyp = mp4Box("ftyp", Buffer.from("isom"));
+		const payload = Buffer.from("encoded media");
+		let moov = mp4Box(
+			"moov",
+			sampleTrack("avc1", 0, wide),
+			sampleTrack("mp4a", 0, wide),
+		);
+		const oldOffset = ftyp.length + moov.length + 8;
+		moov = mp4Box(
+			"moov",
+			sampleTrack("avc1", oldOffset, wide),
+			sampleTrack("mp4a", oldOffset, wide),
+		);
+		const input = Buffer.concat([ftyp, moov, mp4Box("mdat", payload)]);
+		const before = Buffer.from(input);
+		const output = Buffer.from(codecs.addAacRollGroups(input));
+		assert.deepEqual(input, before, "the original muxed bytes stay intact");
+		assert.equal(output.length, input.length + 54);
+		assert.equal(output.indexOf("mdat") + 4, oldOffset + 54);
+		assert.deepEqual(output.subarray(oldOffset + 54), payload);
+		let cursor = 0;
+		for (let track = 0; track < 2; track++) {
+			cursor = output.indexOf(wide ? "co64" : "stco", cursor) + 12;
+			assert.equal(
+				wide
+					? Number(output.readBigUInt64BE(cursor))
+					: output.readUInt32BE(cursor),
+				oldOffset + 54,
+			);
+		}
+		const sgpd = output.indexOf("sgpd");
+		const sbgp = output.indexOf("sbgp");
+		assert.equal(output.readInt16BE(sgpd + 20), -1);
+		assert.equal(output.readUInt32BE(sbgp + 16), 2);
+		assert.equal(
+			output.indexOf("sgpd", sgpd + 4),
+			-1,
+			"video track gets no audio roll group",
+		);
+		assert.deepEqual(
+			Buffer.from(codecs.addAacRollGroups(output)),
+			output,
+			"groups are added only once",
+		);
+	});
+}
+
+test("MP4 priming keeps trailing metadata offsets and video-only files unchanged", () => {
+	const mdat = mp4Box("mdat", Buffer.from("encoded media"));
+	const input = Buffer.concat([mdat, mp4Box("moov", sampleTrack("mp4a", 8))]);
+	const output = Buffer.from(codecs.addAacRollGroups(input));
+	assert.equal(output.readUInt32BE(output.indexOf("stco") + 12), 8);
+	assert.deepEqual(output.subarray(0, mdat.length), mdat);
+	const video = Buffer.concat([mdat, mp4Box("moov", sampleTrack("avc1", 8))]);
+	assert.deepEqual(Buffer.from(codecs.addAacRollGroups(video)), video);
+	assert.throws(
+		() => codecs.addAacRollGroups(Uint8Array.of(0, 0, 0, 0)),
+		/invalid sample tables/,
+	);
+});
+
+test("MP4 results survive growth of the caller's WASM memory", () => {
+	const video = mp4Box("moov", sampleTrack("avc1", 0));
+	const audio = codecs.addAacRollGroups(
+		Buffer.concat([
+			mp4Box("mdat", Buffer.from("encoded media")),
+			mp4Box("moov", sampleTrack("mp4a", 8)),
+		]),
+	);
+	for (const original of [video, audio]) {
+		const memory = new WebAssembly.Memory({ initial: 1 });
+		const input = new Uint8Array(memory.buffer, 0, original.length);
+		input.set(original);
+		const output = codecs.addAacRollGroups(input);
+		assert.notEqual(output.buffer, input.buffer);
+		memory.grow(1);
+		assert.equal(input.byteLength, 0);
+		assert.deepEqual(Buffer.from(output), Buffer.from(original));
+	}
+});
+
 const WEBKIT_AAC_DESCRIPTION = Uint8Array.of(
 	0x03,
 	0x80,

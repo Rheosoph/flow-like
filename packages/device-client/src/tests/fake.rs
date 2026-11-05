@@ -464,6 +464,7 @@ impl FakeDevice {
     fn service(&self, open: &TunnelOpen) -> Option<Service> {
         let key = match open.target {
             TunnelTarget::ModelGateway => "model_gateway",
+            TunnelTarget::BotPlayground { .. } => "bot_playground",
             TunnelTarget::Service => open.service_id.as_str(),
         };
         self.options.services.get(key).cloned()

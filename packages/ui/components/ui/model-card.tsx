@@ -2,11 +2,11 @@
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
 import type { UseQueryResult } from "@tanstack/react-query";
 import {
-	ChartNoAxesCombinedIcon,
 	ArrowRightIcon,
 	AudioLinesIcon,
 	BrainIcon,
 	CameraIcon,
+	ChartNoAxesCombinedIcon,
 	CheckIcon,
 	ClockIcon,
 	DownloadCloudIcon,

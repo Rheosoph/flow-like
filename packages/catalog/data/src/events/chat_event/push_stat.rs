@@ -7,7 +7,7 @@ use flow_like::flow::{
 use flow_like_model_provider::response::LLMUsageStats;
 use flow_like_types::async_trait;
 
-use super::ChatUsageStat;
+use super::{CachedChatResponse, ChatUsageStat};
 
 #[crate::register_node]
 #[derive(Default)]
@@ -66,7 +66,12 @@ impl NodeLogic for PushStatNode {
         let step_name: String = context.evaluate_pin("step_name").await?;
         let stat: LLMUsageStats = context.evaluate_pin("stat").await?;
 
+        let cached_response = CachedChatResponse::load(context).await?;
+        let _message_guard = cached_response.emission.lock().await;
+        let message_id = cached_response.message_id().await;
+
         let event = ChatUsageStat {
+            message_id,
             step_name,
             stats: stat,
         };

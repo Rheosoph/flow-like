@@ -4,8 +4,8 @@ import { useTranslation } from "@flow-like/locales";
 import {
 	AudioLines,
 	Boxes,
-	ChartNoAxesCombined,
 	Brain,
+	ChartNoAxesCombined,
 	Code2,
 	Cpu,
 	DollarSign,

@@ -14,12 +14,12 @@ import { PlateElement, useEditorMounted, withHOC } from "platejs/react";
 
 import { cn } from "../../../lib/utils";
 
-import { MediaToolbar } from "./media-toolbar";
 import { VideoPlugin } from "@platejs/media/react";
-import { MediaAttribution } from "./media-attribution";
-import type { MediaMetadata } from "../media-metadata";
 import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
+import type { MediaMetadata } from "../media-metadata";
 import { Caption, CaptionTextarea } from "./caption";
+import { MediaAttribution } from "./media-attribution";
+import { MediaToolbar } from "./media-toolbar";
 import {
 	Resizable,
 	ResizeHandle,

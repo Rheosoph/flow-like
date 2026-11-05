@@ -1,0 +1,815 @@
+"use client";
+
+import { useTranslation } from "@flow-like/locales";
+import { useQueryClient } from "@tanstack/react-query";
+import { BellIcon, BellOffIcon, UsersIcon } from "lucide-react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useMemo,
+	useRef,
+	useState,
+	useSyncExternalStore,
+} from "react";
+import { toast } from "sonner";
+import { useBotCallSpeech } from "../../hooks/use-bot-call-speech";
+import { useConversationActivity } from "../../hooks/use-conversation-activity";
+import { useConversationCall } from "../../hooks/use-conversation-call";
+import { useConversationRoom } from "../../hooks/use-conversation-room";
+import {
+	compareInboxCursors,
+	inboxKeys,
+	newInboxMessageId,
+	useConversation,
+	useInboxEntries,
+	useMarkConversationRead,
+	useSendInboxEntry,
+	useSendMessageWithFiles,
+	useSetConversationMuted,
+} from "../../hooks/use-inbox";
+import { useInboxBlocks } from "../../hooks/use-inbox-blocks";
+import { useSpeechModel } from "../../hooks/use-speech-model";
+import { LocalPrincipalsProvider } from "../../hooks/use-user-lookup";
+import { useBackend } from "../../state/backend-state";
+import { type IBot, LOCAL_OWNER_ID } from "../../state/backend-state/bot-state";
+import type {
+	IConversation,
+	IInboxDeleteBody,
+	IInboxEditBody,
+	IInboxEntry,
+	IInboxMessageBody,
+	IInboxReactionBody,
+	ISendInboxEntryRequest,
+} from "../../state/backend-state/inbox-state";
+import { Button } from "../ui/button";
+import { Skeleton } from "../ui/skeleton";
+import {
+	CallButton,
+	ConversationCallBar,
+	useCallErrorText,
+} from "./conversation-call";
+import { ConversationChat } from "./conversation-chat";
+import { ConversationMenu, canMuteConversation } from "./conversation-menu";
+import type {
+	PendingSendActions,
+	ThreadContext,
+} from "./conversation-messages";
+import {
+	awaitingAnswer,
+	conversationComposition,
+	isSelfPrincipal,
+	otherMemberIds,
+} from "./crew-model";
+import { DockHeader } from "./dock-header";
+import {
+	type ConversationItem,
+	foldInboxEntries,
+	groupConversationItems,
+} from "./fold-entries";
+import { useLocalPrincipals } from "./local-principals";
+import { MemberStack } from "./member-stack";
+import { callMentions, mentionablesOf } from "./mentions";
+import { requestMessageJump, useMessageJump } from "./message-jump";
+import {
+	PinnedMessagesBar,
+	StarredMessagesDialog,
+	useThreadMarks,
+} from "./message-marks";
+import { DeleteMessageDialog, type MessageActions } from "./message-row";
+import {
+	discardPendingSend,
+	sendPendingMessage,
+	usePendingSendList,
+	useShowsPendingSends,
+} from "./pending-sends";
+import {
+	conversationBlockTarget,
+	principalBlock,
+} from "./principal-block-action";
+import type { PickerSource } from "./principal-picker";
+import { RoomAvatar } from "./room-avatar";
+import { ConnectedRoomMeetings } from "./room-meetings";
+import { RoomMembersDialog } from "./room-members-dialog";
+import {
+	type ConversationText,
+	useConversationText,
+} from "./use-conversation-text";
+import { useCrewDirectory } from "./use-crew-directory";
+
+type PlainBody =
+	| IInboxMessageBody
+	| IInboxEditBody
+	| IInboxDeleteBody
+	| IInboxReactionBody;
+
+type SendPlain = (
+	kind: ISendInboxEntryRequest["kind"],
+	body: PlainBody,
+	messageId?: string,
+) => Promise<IInboxEntry>;
+
+function useSendPlain(conversationId: string): SendPlain {
+	const { mutateAsync } = useSendInboxEntry();
+	return useCallback(
+		(kind, body, messageId = newInboxMessageId()) =>
+			mutateAsync({
+				conversationId,
+				request: {
+					message_id: messageId,
+					kind,
+					envelope: { v: 1, enc: "none", body },
+				},
+			}),
+		[conversationId, mutateAsync],
+	);
+}
+
+function subscribeVisibility(onChange: () => void) {
+	document.addEventListener("visibilitychange", onChange);
+	return () => document.removeEventListener("visibilitychange", onChange);
+}
+
+function useDocumentVisible() {
+	return useSyncExternalStore(
+		subscribeVisibility,
+		() => document.visibilityState === "visible",
+		() => true,
+	);
+}
+
+/**
+ * Marks what the reader can see as read: on open, and whenever someone else adds something newer
+ * than what this view last marked. The reader's own entries never trigger it.
+ */
+function useMarkReadWhileOpen(
+	conversationId: string,
+	entries: readonly IInboxEntry[],
+	me?: string | null,
+) {
+	const { mutate } = useMarkConversationRead();
+	const visible = useDocumentVisible();
+	const marked = useRef<{ conversationId: string; upTo: string } | null>(null);
+	const newest = entries[0]?.cursor;
+	const newestFromOthers = useMemo(
+		() =>
+			entries.find((entry) => !isSelfPrincipal(entry.sender_id, me))?.cursor,
+		[entries, me],
+	);
+	useEffect(() => {
+		if (!visible || !newest || !newestFromOthers) return;
+		const previous = marked.current;
+		if (
+			previous?.conversationId === conversationId &&
+			compareInboxCursors(newestFromOthers, previous.upTo) <= 0
+		)
+			return;
+		const next = { conversationId, upTo: newest };
+		marked.current = next;
+		mutate(next, {
+			onError: () => {
+				if (marked.current === next) marked.current = previous;
+			},
+		});
+	}, [conversationId, newest, newestFromOthers, visible, mutate]);
+}
+
+/** Reloads the conversation when a rename or picture change arrives, so the header matches it. */
+function useRefreshOnRoomChange(
+	conversationId: string,
+	entries: readonly IInboxEntry[],
+) {
+	const queryClient = useQueryClient();
+	const newest = useMemo(
+		() => entries.find((entry) => entry.kind === "room")?.message_id,
+		[entries],
+	);
+	const seen = useRef(newest);
+	useEffect(() => {
+		if (!newest || newest === seen.current) return;
+		seen.current = newest;
+		void queryClient.invalidateQueries({
+			queryKey: inboxKeys.conversation(conversationId),
+		});
+		void queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
+	}, [conversationId, newest, queryClient]);
+}
+
+const AUTO_LOAD_PAGES = 5;
+
+/** Loads older pages on its own while the loaded ones hold no message, e.g. only reactions. */
+function useFillEmptyHistory(
+	hasMessages: boolean,
+	{
+		data,
+		hasNextPage,
+		isFetching,
+		isError,
+		fetchNextPage,
+	}: Readonly<{
+		data?: { pages: readonly unknown[] };
+		hasNextPage: boolean;
+		isFetching: boolean;
+		isError: boolean;
+		fetchNextPage: () => Promise<unknown>;
+	}>,
+) {
+	const pageCount = data?.pages.length ?? 0;
+	useEffect(() => {
+		if (
+			hasMessages ||
+			!hasNextPage ||
+			isFetching ||
+			isError ||
+			pageCount > AUTO_LOAD_PAGES
+		)
+			return;
+		void fetchNextPage();
+	}, [hasMessages, hasNextPage, isFetching, isError, pageCount, fetchNextPage]);
+}
+
+/** Messages shown right away while they travel; a failed one waits for retry or discard. */
+function usePendingSends(
+	conversationId: string,
+	sendPlain: SendPlain,
+	items: ConversationItem[],
+	onFailedUnseen: () => void,
+) {
+	useShowsPendingSends(conversationId);
+	const pending = usePendingSendList(conversationId);
+	const { mutateAsync: sendWithFiles } = useSendMessageWithFiles();
+
+	const send = useCallback(
+		(
+			text: string,
+			mentions: readonly string[] = [],
+			messageId = newInboxMessageId(),
+			replyTo?: string,
+			files?: readonly File[],
+		) => {
+			const body: IInboxMessageBody = {
+				text,
+				...(mentions.length > 0 ? { mentions: [...mentions] } : {}),
+				...(replyTo ? { reply_to: replyTo } : {}),
+			};
+			return sendPendingMessage(
+				conversationId,
+				{ messageId, text, mentions, replyTo, files },
+				() =>
+					files && files.length > 0
+						? sendWithFiles({ conversationId, body, files, messageId })
+						: sendPlain("message", body, messageId),
+				onFailedUnseen,
+			);
+		},
+		[conversationId, sendPlain, sendWithFiles, onFailedUnseen],
+	);
+
+	const actions = useMemo<PendingSendActions>(
+		() => ({
+			retry: (item) =>
+				void send(
+					item.text,
+					item.mentions,
+					item.messageId,
+					item.replyTo,
+					item.files,
+				),
+			discard: (item) => discardPendingSend(conversationId, item.messageId),
+		}),
+		[conversationId, send],
+	);
+
+	const visible = useMemo(() => {
+		const shown = new Set(items.map((item) => item.id));
+		return pending.filter((item) => !shown.has(item.messageId));
+	}, [items, pending]);
+
+	return { visible, send, actions };
+}
+
+/** Title and subtitle of a conversation. */
+function useConversationHeading(
+	conversation: IConversation,
+	text: ConversationText,
+) {
+	const { t } = useTranslation("bots");
+	const { people, bots } = conversationComposition(conversation);
+	const peopleText = t("crew.rooms.people", "{{count}} people", {
+		count: people,
+		defaultValue_one: "{{count}} person",
+	});
+	const botsText = t("crew.rooms.bots", "{{count}} bots", {
+		count: bots,
+		defaultValue_one: "{{count}} bot",
+	});
+	let subtitle = t("crew.directMessage", "Direct message");
+	if (conversation.kind === "group") {
+		subtitle =
+			bots === 0
+				? t("crew.dock.groupSubtitlePeople", "Group · {{people}}", {
+						people: peopleText,
+					})
+				: t("crew.dock.groupSubtitle", "Group · {{people}}, {{bots}}", {
+						people: peopleText,
+						bots: botsText,
+					});
+	}
+	return {
+		title: text.title(conversation),
+		subtitle: conversation.local
+			? t("local.conversationSubtitle", "{{subtitle}} · On this device", {
+					subtitle,
+				})
+			: subtitle,
+	};
+}
+
+function MuteButton({
+	conversationId,
+	muted,
+}: Readonly<{ conversationId: string; muted: boolean }>) {
+	const { t } = useTranslation("bots");
+	const { mutate, isPending } = useSetConversationMuted();
+	const label = muted
+		? t("crew.mute.unmute", "Unmute notifications")
+		: t("crew.mute.mute", "Mute notifications");
+	return (
+		<Button
+			type="button"
+			variant="ghost"
+			size="icon"
+			className="shrink-0 text-muted-foreground"
+			disabled={isPending}
+			aria-pressed={muted}
+			onClick={() => mutate({ conversationId, muted: !muted })}
+			aria-label={label}
+			title={label}
+		>
+			{muted ? <BellOffIcon aria-hidden /> : <BellIcon aria-hidden />}
+		</Button>
+	);
+}
+
+function ConversationView({
+	conversation,
+	me,
+	bots,
+	onClose,
+}: Readonly<{
+	conversation: IConversation;
+	me?: string | null;
+	bots?: readonly IBot[];
+	onClose: () => void;
+}>) {
+	const { t } = useTranslation("bots");
+	const meetingClient = useBackend().meetingClient;
+	const entriesQuery = useInboxEntries(conversation.id);
+	const pages = entriesQuery.data?.pages;
+	const entries = useMemo(
+		() => pages?.flatMap((page) => page.entries) ?? [],
+		[pages],
+	);
+	const items = useMemo(() => foldInboxEntries(entries, me), [entries, me]);
+	const blocks = useMemo(() => groupConversationItems(items), [items]);
+	useFillEmptyHistory(
+		items.some((item) => item.type === "message"),
+		entriesQuery,
+	);
+	const principalIds = useMemo(
+		() => [
+			...conversation.members.map((member) => member.principal_id),
+			...(conversation.pending ?? []).map((member) => member.principal_id),
+			...entries.map((entry) => entry.sender_id),
+			...items.flatMap((item) =>
+				item.type === "member" ? [item.principalId, item.by] : [],
+			),
+		],
+		[conversation.members, conversation.pending, entries, items],
+	);
+	const directory = useCrewDirectory(principalIds, { me, bots });
+	const blockTarget = conversationBlockTarget(conversation, directory, me);
+	const principalBlocks = useInboxBlocks(Boolean(blockTarget));
+	const blocked = Boolean(principalBlock(principalBlocks.data, blockTarget));
+	const text = useConversationText(directory, me);
+	const heading = useConversationHeading(conversation, text);
+	const [membersOpen, setMembersOpen] = useState(false);
+	const pickerSource = useMemo<PickerSource>(
+		() => ({
+			me,
+			bots: bots ?? [],
+			recentPeopleIds: [],
+			directory,
+			people: true,
+		}),
+		[bots, directory, me],
+	);
+	const manageable = conversation.kind === "group" && !conversation.local;
+	const personChat = canMuteConversation(conversation);
+	useMarkReadWhileOpen(conversation.id, entries, me);
+	useRefreshOnRoomChange(conversation.id, entries);
+	const room = useConversationRoom(conversation, me, !blocked);
+	const activity = useConversationActivity(
+		conversation,
+		me,
+		pages?.[0]?.tail ?? entries[0]?.cursor,
+		room,
+	);
+
+	const callStarts = useMemo(
+		() =>
+			new Map(
+				items.flatMap((item) =>
+					item.type === "call" ? [[item.id, item.time] as const] : [],
+				),
+			),
+		[items],
+	);
+	const speechModel = useSpeechModel(room !== undefined);
+	const listenBots = useMemo(
+		() =>
+			conversation.members
+				.filter((member) => member.kind === "bot")
+				.map((member) => ({
+					id: member.principal_id,
+					name: directory(member.principal_id).name,
+					kind: "bot" as const,
+				})),
+		[conversation.members, directory],
+	);
+	const listen = useMemo(
+		() => ({
+			stt: speechModel,
+			hasBots: listenBots.length > 0,
+			mentionsIn: (spoken: string) =>
+				callMentions(spoken, listenBots, conversation.kind),
+		}),
+		[speechModel, listenBots, conversation.kind],
+	);
+	const call = useConversationCall(conversation, me, room, callStarts, listen);
+	useBotCallSpeech({
+		conversation,
+		entries,
+		items,
+		historyReady: pages !== undefined,
+		directory,
+		call,
+	});
+	const callErrorText = useCallErrorText();
+	useEffect(() => {
+		if (call.error) toast.error(callErrorText(call.error));
+	}, [call.error, callErrorText]);
+	const joinCall = call.join;
+	const threadCall = useMemo(
+		() => ({
+			liveCallId: call.live?.callId ?? null,
+			joined: call.joined,
+			onJoin: () => void joinCall(),
+		}),
+		[call.live?.callId, call.joined, joinCall],
+	);
+
+	const mentionables = useMemo(
+		() => mentionablesOf(conversation, directory, me),
+		[conversation, directory, me],
+	);
+	const requestHint = awaitingAnswer(conversation)
+		? t(
+				"crew.requests.pendingHint",
+				"Pending: they haven't accepted your message yet",
+			)
+		: null;
+
+	const composerPlaceholder =
+		requestHint ??
+		(mentionables.some((option) => option.kind === "bot")
+			? t(
+					"crew.composer.placeholderBots",
+					"Message {{name}} · @mention a bot to make sure it answers",
+					{ name: heading.title },
+				)
+			: t("crew.composer.placeholder", "Message {{name}}", {
+					name: heading.title,
+				}));
+
+	const sendPlain = useSendPlain(conversation.id);
+	const notifyUnseenFailure = useCallback(
+		() =>
+			toast.error(t("crew.messages.notSent", "Not sent"), {
+				description: heading.title,
+			}),
+		[t, heading.title],
+	);
+	const pending = usePendingSends(
+		conversation.id,
+		sendPlain,
+		items,
+		notifyUnseenFailure,
+	);
+	const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+
+	const failed = useCallback(
+		(error: unknown) => {
+			console.warn("Conversation update failed", error);
+			toast.error(
+				t("crew.messages.actionFailed", "That didn't go through. Try again."),
+			);
+		},
+		[t],
+	);
+	const threadMarks = useThreadMarks(conversation.id, failed);
+	const actions = useMemo<MessageActions>(
+		() => ({
+			react: (target, emoji, op) => {
+				sendPlain("reaction", { target, emoji, op }).catch(failed);
+			},
+			edit: (target, body) =>
+				sendPlain("edit", { target, text: body }).catch((error: unknown) => {
+					failed(error);
+					throw error;
+				}),
+			requestDelete: setDeleteTarget,
+			star: threadMarks.star,
+			pin: threadMarks.pin,
+		}),
+		[failed, sendPlain, threadMarks.star, threadMarks.pin],
+	);
+	const [starsOpen, setStarsOpen] = useState(false);
+	const jump = useCallback(
+		(messageId: string) => requestMessageJump(conversation.id, messageId),
+		[conversation.id],
+	);
+	const loadedIds = useMemo(
+		() =>
+			new Set(
+				items.flatMap((item) => (item.type === "message" ? [item.id] : [])),
+			),
+		[items],
+	);
+	const notFound = useCallback(
+		() =>
+			toast.error(
+				t(
+					"crew.marks.notFound",
+					"That message isn't in this conversation's history anymore.",
+				),
+			),
+		[t],
+	);
+	const fetchOlder = entriesQuery.fetchNextPage;
+	const loadOlder = useCallback(() => void fetchOlder(), [fetchOlder]);
+	useMessageJump({
+		conversationId: conversation.id,
+		loadedIds,
+		hasOlder: Boolean(entriesQuery.hasNextPage),
+		loadingOlder: entriesQuery.isFetchingNextPage,
+		pageCount: pages?.length ?? 0,
+		loadOlder,
+		onMissing: notFound,
+	});
+	const confirmDelete = useCallback(() => {
+		if (deleteTarget) {
+			sendPlain("delete", { target: deleteTarget }).catch(failed);
+		}
+		setDeleteTarget(null);
+	}, [deleteTarget, failed, sendPlain]);
+
+	const encrypted = conversation.encryption === "e2e";
+	const thread: ThreadContext = {
+		conversation,
+		me,
+		directory,
+		text,
+		actions,
+		marks: threadMarks.marks,
+		readOnly: encrypted || blocked,
+		call: threadCall,
+	};
+
+	return (
+		<>
+			<DockHeader
+				avatar={
+					conversation.kind === "group" && conversation.image_url ? (
+						<RoomAvatar
+							roomId={conversation.id}
+							title={heading.title}
+							principalIds={otherMemberIds(conversation, me)}
+							imageUrl={conversation.image_url}
+							size={34}
+						/>
+					) : (
+						<MemberStack
+							principalIds={otherMemberIds(conversation, me)}
+							max={3}
+							size={34}
+							hoverCards
+						/>
+					)
+				}
+				title={heading.title}
+				subtitle={heading.subtitle}
+				encrypted={encrypted}
+				actions={
+					<>
+						<ConversationMenu
+							conversation={conversation}
+							me={me}
+							onLeave={onClose}
+							blockTarget={blockTarget}
+							defaultTitle={text.title({ ...conversation, title: null })}
+							onShowStarred={() => setStarsOpen(true)}
+						/>
+						{call.available && !blocked && <CallButton call={call} />}
+						{!conversation.local && !blocked && me && meetingClient && (
+							<ConnectedRoomMeetings
+								conversationId={conversation.id}
+								client={meetingClient}
+								me={me}
+							/>
+						)}
+						{personChat && (
+							<MuteButton
+								conversationId={conversation.id}
+								muted={Boolean(conversation.muted)}
+							/>
+						)}
+						{manageable && (
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon"
+								className="shrink-0 text-muted-foreground"
+								onClick={() => setMembersOpen(true)}
+								aria-label={t("roomMembers.open", "Members and invitations")}
+								title={t("roomMembers.open", "Members and invitations")}
+							>
+								<UsersIcon aria-hidden />
+							</Button>
+						)}
+					</>
+				}
+				onClose={onClose}
+			/>
+			<ConversationCallBar call={call} me={me} directory={directory} />
+			<PinnedMessagesBar
+				conversationId={conversation.id}
+				pins={threadMarks.pins}
+				text={text}
+				onJump={jump}
+			/>
+			<StarredMessagesDialog
+				open={starsOpen}
+				onOpenChange={setStarsOpen}
+				conversationId={conversation.id}
+				text={text}
+				onOpen={(_, messageId) => jump(messageId)}
+			/>
+			{manageable && (
+				<RoomMembersDialog
+					open={membersOpen}
+					onOpenChange={setMembersOpen}
+					conversation={conversation}
+					directory={directory}
+					source={pickerSource}
+					me={me}
+					onLeave={onClose}
+				/>
+			)}
+			<ConversationChat
+				blocks={blocks}
+				pending={pending.visible}
+				thread={thread}
+				history={{
+					isLoading: entriesQuery.isPending,
+					loadError: entriesQuery.isError && !pages,
+					hasOlder: Boolean(entriesQuery.hasNextPage),
+					loadingOlder: entriesQuery.isFetchingNextPage,
+					onLoadOlder: () => void entriesQuery.fetchNextPage(),
+					onRetry: () => void entriesQuery.refetch(),
+				}}
+				sends={pending.actions}
+				placeholder={composerPlaceholder}
+				disabledReason={
+					blocked
+						? t(
+								"crew.blocks.composer",
+								"This conversation is blocked. Manage your blocked users and bots to allow messages again.",
+							)
+						: encrypted
+							? t(
+									"crew.composer.encrypted",
+									"Writing in end-to-end encrypted chats isn't available in this app yet.",
+								)
+							: null
+				}
+				mentionables={mentionables}
+				activity={activity}
+				onSend={(body, mentions, replyTo, files) =>
+					void pending.send(body, mentions, undefined, replyTo, files)
+				}
+			/>
+			<DeleteMessageDialog
+				open={deleteTarget !== null}
+				onOpenChange={(open) => {
+					if (!open) setDeleteTarget(null);
+				}}
+				onConfirm={confirmDelete}
+			/>
+		</>
+	);
+}
+
+function ConversationUnavailable({
+	failed,
+	onRetry,
+	onClose,
+}: Readonly<{ failed: boolean; onRetry: () => void; onClose: () => void }>) {
+	const { t } = useTranslation("bots");
+	return (
+		<>
+			<DockHeader
+				title={
+					failed
+						? t("crew.dock.unavailableTitle", "Conversation unavailable")
+						: t("crew.dock.loading", "Loading…")
+				}
+				onClose={onClose}
+			/>
+			<div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
+				{failed ? (
+					<>
+						<p>
+							{t(
+								"crew.dock.conversationUnavailable",
+								"This conversation isn't available. You may have left it, or it no longer exists.",
+							)}
+						</p>
+						<Button type="button" variant="outline" size="sm" onClick={onRetry}>
+							{t("crew.retry", "Try again")}
+						</Button>
+					</>
+				) : (
+					<div className="flex w-full flex-col gap-3">
+						<Skeleton className="h-10 w-3/4 rounded-xl" />
+						<Skeleton className="ml-auto h-10 w-1/2 rounded-xl" />
+					</div>
+				)}
+			</div>
+		</>
+	);
+}
+
+const everyoneButYou = (principalId: string) => principalId !== LOCAL_OWNER_ID;
+
+/** In a chat on this device everyone but you is a local bot, even one that is gone. */
+function LocalConversationPrincipals({
+	bots,
+	children,
+}: Readonly<{ bots?: readonly IBot[]; children: ReactNode }>) {
+	const resolve = useLocalPrincipals(bots, everyoneButYou);
+	return (
+		<LocalPrincipalsProvider value={resolve}>
+			{children}
+		</LocalPrincipalsProvider>
+	);
+}
+
+export function ConversationPanel({
+	conversationId,
+	me,
+	bots,
+	onClose,
+}: Readonly<{
+	conversationId: string;
+	me?: string | null;
+	bots?: readonly IBot[];
+	onClose: () => void;
+}>) {
+	const query = useConversation(conversationId);
+	if (!query.data) {
+		return (
+			<ConversationUnavailable
+				failed={query.isError}
+				onRetry={() => void query.refetch()}
+				onClose={onClose}
+			/>
+		);
+	}
+	const view = (
+		<ConversationView
+			key={query.data.id}
+			conversation={query.data}
+			me={me}
+			bots={bots}
+			onClose={onClose}
+		/>
+	);
+	return query.data.local ? (
+		<LocalConversationPrincipals bots={bots}>
+			{view}
+		</LocalConversationPrincipals>
+	) : (
+		view
+	);
+}

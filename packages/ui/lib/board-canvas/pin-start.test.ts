@@ -1,5 +1,16 @@
 import { expect, test } from "bun:test";
-import { BoardHitIndex } from "./interaction";
+import { isValidConnection } from "../flow-board-utils";
+import type { ILayer } from "../schema/flow/board";
+import { ICommandType } from "../schema/flow/board/commands/generic-command";
+import type { INode } from "../schema/flow/node";
+import {
+	type IPin,
+	IPinType,
+	IValueType,
+	IVariableType,
+} from "../schema/flow/pin";
+import { buildConnectionCommands } from "./connection-commands";
+import { BoardHitIndex, ConnectionGesture } from "./interaction";
 import { resolvePinStart } from "./pin-start";
 import type { Scene } from "./scene";
 
@@ -77,18 +88,17 @@ test("a high-zoom function-reference handle corner activates its exact handle", 
 	expect(candidate?.pin.id).toBe("ref_out_source");
 });
 
-test("an explicit handle retains reconnect intent for the same selected endpoint", () => {
+test("an explicit handle starts a new wire even when its existing wire is selected", () => {
 	const candidate = resolvePinStart(index, { x: 155, y: 33 }, 3, {
 		canConnect,
 		explicit: { nodeId: "source", pinId: "value" },
 	});
 	expect(candidate?.pin.id).toBe("value");
-	expect(candidate?.reconnect?.edge.id).toBe("edge");
-	expect(candidate?.reconnect?.end).toBe("source");
+	expect(candidate?.reconnect).toBeUndefined();
 });
 
-test("geometric reconnect affordances remain available away from explicit DOM handles", () => {
-	const candidate = resolvePinStart(index, { x: 153, y: 28 }, 1, {
+test("geometric reconnect affordances remain available outside the visible pin", () => {
+	const candidate = resolvePinStart(index, { x: 155, y: 28 }, 1, {
 		canConnect,
 	});
 	expect(candidate?.pin.id).toBe("value");
@@ -160,6 +170,125 @@ function connectedScene(
 		],
 	};
 }
+
+test("selected wires cannot reverse new typed connections between an input and a reroute", () => {
+	const graph = connectedScene();
+	graph.edges[0].selected = true;
+	const reroute = {
+		...structuredClone(graph.nodes[0]),
+		id: "reroute",
+		x: 250,
+		y: 150,
+		kind: "reroute" as const,
+		width: 16,
+		height: 12,
+	};
+	reroute.pins = [{ ...reroute.pins[0], id: "route_out", x: 15, y: 6 }];
+	const other = { ...structuredClone(graph.nodes[1]), id: "other", y: 150 };
+	other.pins[0].id = "other.in";
+	graph.nodes.push(reroute, other);
+	graph.edges.push({
+		...graph.edges[0],
+		id: "rerouted-wire",
+		source: { nodeId: "reroute", pinId: "route_out" },
+		target: { nodeId: "other", pinId: "other.in" },
+	});
+	const boardNodes: Record<string, INode> = {};
+	const pinCache = new Map<string, [IPin, INode | ILayer, boolean]>();
+	const refs = {
+		path: '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}',
+	};
+	for (const rendered of graph.nodes) {
+		const pins = rendered.pins.map(
+			(p): IPin => ({
+				id: p.id,
+				name: p.id,
+				friendly_name: p.id,
+				description: "",
+				index: 1,
+				pin_type: p.direction === "output" ? IPinType.Output : IPinType.Input,
+				data_type: IVariableType.Struct,
+				value_type: IValueType.Normal,
+				schema: "path",
+				options: { enforce_schema: true },
+				connected_to: graph.edges
+					.filter((edge) => edge.source.pinId === p.id)
+					.map((edge) => edge.target.pinId),
+				depends_on: graph.edges
+					.filter((edge) => edge.target.pinId === p.id)
+					.map((edge) => edge.source.pinId),
+			}),
+		);
+		const node: INode = {
+			id: rendered.id,
+			name: rendered.id,
+			friendly_name: rendered.id,
+			description: "",
+			category: "test",
+			pins: Object.fromEntries(pins.map((p) => [p.id, p])),
+		};
+		boardNodes[node.id] = node;
+		for (const p of pins) pinCache.set(p.id, [p, node, true]);
+	}
+	const output = { nodeId: "reroute", pinId: "route_out" };
+	const input = { nodeId: "target", pinId: "in" };
+	for (const [outgoingSelected, explicit] of [
+		[false, false],
+		[false, true],
+		[true, false],
+		[true, true],
+	]) {
+		graph.edges[1].selected = outgoingSelected;
+		const index = new BoardHitIndex(graph);
+		for (const [from, to] of [
+			[output, input],
+			[input, output],
+		]) {
+			const fromPin = index.pin(from);
+			const toPin = index.pin(to);
+			if (!fromPin || !toPin) throw new Error("Missing fixture endpoint");
+			const candidate = resolvePinStart(index, fromPin, 1, {
+				canConnect,
+				explicit: explicit ? from : undefined,
+			});
+			expect(candidate).toBeDefined();
+			if (!candidate) throw new Error("Expected a connection start");
+			const endpoint = candidate.reconnect;
+			const gesture = endpoint
+				? new ConnectionGesture(
+						endpoint.edge[endpoint.end === "source" ? "target" : "source"],
+						{ edgeId: endpoint.edge.id, end: endpoint.end },
+					)
+				: new ConnectionGesture({
+						nodeId: candidate.pin.nodeId,
+						pinId: candidate.pin.id,
+					});
+			const action = gesture.drop(index, toPin, 1, (connection) =>
+				isValidConnection(connection, pinCache, refs),
+			);
+			expect(action.kind).toBe("connect");
+			if (action.kind !== "connect")
+				throw new Error("Expected a connection drop");
+			expect(action.oldEdgeId).toBeUndefined();
+			const commands = buildConnectionCommands({
+				connection: action.connection,
+				boardNodes,
+				pinCache,
+				refs,
+			});
+			expect(
+				commands?.map((command) => [
+					command.command_type,
+					command.from_pin,
+					command.to_pin,
+				]),
+			).toEqual([
+				[ICommandType.DisconnectPin, "out", "in"],
+				[ICommandType.ConnectPin, "route_out", "in"],
+			]);
+		}
+	}
+});
 
 test("unselected wire corridors reconnect either end at every zoom, including function references", () => {
 	for (const kind of ["data", "execution", "reference"] as const) {

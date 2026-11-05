@@ -27,6 +27,15 @@ spec:
     - host: {{ .host | quote }}
       http:
         paths:
+          {{- if and $.Values.channels.nats.enabled (eq $.Values.channels.transport "nats") }}
+          - path: {{ $.Values.channels.nats.websocketPath }}
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "flow-like.fullname" $ }}-nats
+                port:
+                  number: 8080
+          {{- end }}
           {{- range .paths }}
           - path: {{ .path }}
             pathType: {{ .pathType }}
@@ -40,6 +49,10 @@ spec:
                 name: {{ include "flow-like.fullname" $ }}-signaling
                 port:
                   number: {{ $.Values.signaling.service.port }}
+                {{- else if eq .service "nats" }}
+                name: {{ include "flow-like.fullname" $ }}-nats
+                port:
+                  number: 8080
                 {{- else }}
                 name: {{ include "flow-like.fullname" $ }}-api
                 port:

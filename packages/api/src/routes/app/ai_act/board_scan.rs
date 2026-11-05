@@ -86,6 +86,7 @@ fn collect_models_from_value(value: &Value, out: &mut Vec<DetectedModel>) {
                         model_id,
                         provider: Some(provider.to_string()),
                         dynamic_selector: false,
+                        ..Default::default()
                     });
                 }
             }
@@ -110,6 +111,7 @@ fn extract_node_models(node: &Node, out: &mut Vec<DetectedModel>) {
             model_id: "dynamic".to_string(),
             provider: None,
             dynamic_selector: true,
+            ..Default::default()
         });
     }
 
@@ -171,11 +173,13 @@ pub async fn scan_app_signals(
     app: &App,
 ) -> flow_like_types::Result<Signals> {
     let mut acc = ScanAccumulator::default();
+    let mut board_scan_complete = true;
 
     for board_id in &app.boards {
         let board = match state.master_board(sub, app_id, board_id, state, None).await {
             Ok(board) => board,
             Err(err) => {
+                board_scan_complete = false;
                 tracing::warn!(board_id, error = %err, "ai-act scan: skipping unloadable board");
                 continue;
             }
@@ -204,6 +208,7 @@ pub async fn scan_app_signals(
 
     Ok(Signals {
         models: dedup_models(acc.models),
+        board_scan_complete,
         capabilities: acc.capabilities,
         primary_category,
         secondary_category,

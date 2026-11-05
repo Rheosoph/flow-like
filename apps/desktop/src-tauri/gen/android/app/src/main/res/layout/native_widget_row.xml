@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/native_widget_row"
+    android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:paddingTop="5dp" android:paddingBottom="5dp">
+    <TextView android:id="@+id/native_widget_row_title" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:textColor="#FFFFFF" android:textSize="14sp" android:maxLines="1" android:ellipsize="end" />
+    <TextView android:id="@+id/native_widget_row_detail" android:layout_width="match_parent" android:layout_height="wrap_content"
+        android:textColor="#BBBBCC" android:textSize="11sp" android:maxLines="1" android:ellipsize="end" />
+</LinearLayout>

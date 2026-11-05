@@ -716,7 +716,7 @@ async fn instance_quota_fixture(
     .await;
     execute(
         &db,
-        r#"CREATE TYPE "BitType" AS ENUM ('LLM','VLM','EMBEDDING','FILE')"#,
+        r#"CREATE TYPE "BitType" AS ENUM ('LLM','VLM','EMBEDDING','FILE','STT','TTS')"#,
     )
     .await;
     execute(&db, r#"CREATE TABLE "User" (id TEXT PRIMARY KEY,status "UserStatus" NOT NULL,tier "UserTier" NOT NULL,"billingPeriodAnchor" TIMESTAMPTZ,"updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now())"#).await;
@@ -864,6 +864,101 @@ async fn instance_account_totals(db: &DatabaseConnection) -> (QuotaAmounts, Quot
         )
     })
     .unwrap_or_default()
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn instance_audio_quota_charges_the_approved_payer_once() {
+    let (db, usages) = instance_quota_fixture(1000, 1).await;
+    let mut usage = usages[0].clone();
+    let mut used = 0;
+    for (kind, bit_type, path, other) in [
+        (
+            "audio_transcription",
+            "STT",
+            "/instances/audio/transcriptions",
+            "/instances/audio/speech",
+        ),
+        (
+            "audio_speech",
+            "TTS",
+            "/instances/audio/speech",
+            "/instances/audio/transcriptions",
+        ),
+    ] {
+        db.execute_raw(Statement::from_sql_and_values(
+            DatabaseBackend::Postgres,
+            r#"UPDATE "Bit" SET type=$1::"BitType" WHERE id='approved-model'"#,
+            [bit_type.into()],
+        ))
+        .await
+        .unwrap();
+        let mut request = instance_quota_request(kind, 400);
+        request.kind = kind.into();
+        usage.request_path = other.into();
+        assert!(
+            crate::quota::reserve_instance_with_db(
+                &db,
+                DbDialect::Postgres,
+                &overview_tiers(),
+                request.clone(),
+                &usage,
+                "FREE"
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(instance_budget_totals(&db).await, (used, 0));
+        usage.request_path = path.into();
+        assert_eq!(
+            crate::quota::reserve_instance_with_db(
+                &db,
+                DbDialect::Postgres,
+                &overview_tiers(),
+                request,
+                &usage,
+                "FREE"
+            )
+            .await
+            .unwrap(),
+            "instance-payer"
+        );
+        assert_eq!(instance_budget_totals(&db).await, (used, 400));
+        assert!(
+            crate::quota::mark_instance_started_with_db(
+                &db,
+                DbDialect::Postgres,
+                &overview_tiers(),
+                kind,
+                "instance-payer".into()
+            )
+            .await
+            .unwrap()
+        );
+        for _ in 0..2 {
+            settle_with_db(
+                &db,
+                DbDialect::Postgres,
+                kind,
+                "audio-receipt",
+                QuotaAmounts {
+                    ai_cost_micros: 150,
+                    ai_calls: 1,
+                    ..Default::default()
+                },
+                true,
+                json!({"provider":"openrouter"}),
+            )
+            .await
+            .unwrap();
+        }
+        used += 150;
+        assert_eq!(instance_budget_totals(&db).await, (used, 0));
+        let (account_used, account_reserved) = instance_account_totals(&db).await;
+        assert_eq!(account_used.ai_cost_micros, used);
+        assert_eq!(account_reserved, QuotaAmounts::default());
+    }
+    db.close().await.unwrap();
 }
 
 #[tokio::test]

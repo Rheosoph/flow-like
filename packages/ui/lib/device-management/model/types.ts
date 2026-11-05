@@ -153,6 +153,8 @@ export interface DeviceRow extends DeviceStatus {
 	access_expires_at?: number | null;
 	access_rules_expire_at?: number | null;
 	revoked_at?: number | null;
+	/** Epoch milliseconds of the last poll of this device's bot host. */
+	bot_host_seen_at?: number | null;
 	cloud_approvals?: {
 		resource_grants: number;
 		billing_grants: number;
@@ -407,6 +409,8 @@ export const AGENT_FEATURES = [
 	"on_demand_events",
 	"telegram_bots",
 	"discord_bots",
+	"bot_host",
+	"bot_playground",
 	"model_store",
 	"model_host",
 	"model_runtime_manifest",
@@ -638,6 +642,12 @@ export interface NetworkInterface {
 	loopback: boolean;
 }
 
+/** A Docker device: the port its setup package forwards, and the host address Docker publishes it on. */
+export interface PublishedPort {
+	host: string;
+	port: number;
+}
+
 export type HostIsolationMode = "required" | "optional" | "none";
 export interface HostIsolationFacts {
 	platform: string;
@@ -664,7 +674,11 @@ export interface InspectionPlus extends Omit<Inspection, "placements"> {
 	hostIsolation?: HostIsolationMode | null;
 	isolation?: HostIsolationFacts | null;
 	agent?: AgentRelease;
-	host?: { booted_at: number | null; agent_started_at: number };
+	host?: {
+		booted_at: number | null;
+		agent_started_at: number;
+		published?: PublishedPort;
+	};
 	tasks?: TaskHealth[];
 	hostOperation?: HostOperationView | null;
 	network?: { interfaces: NetworkInterface[] };

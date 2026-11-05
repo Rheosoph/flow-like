@@ -18,12 +18,12 @@ use axum::{
 use flow_like_types::Value;
 use flow_like_types::channel::{CHANNEL_TRANSPORT_HTTP, ChannelPush, ChannelPushKind, now_unix};
 use sea_orm::sea_query::Expr;
-use sea_orm::{ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 
 use crate::{
-    channel::{ForwardOutcome, forward_push, store},
+    channel::{ForwardOutcome, forward_push_with_id, store},
     entity::{
         channel,
         prelude::Channel,
@@ -159,6 +159,17 @@ fn waiter_for(user: &AppUser, channel_id: &str) -> Result<Waiter, ApiError> {
 }
 
 fn responder_claims(headers: &HeaderMap, channel_id: &str) -> Result<ChannelClaims, ApiError> {
+    let claims = verify_channel_responder(responder_token(headers)?)
+        .map_err(|e| ApiError::unauthorized(format!("Invalid channel responder token: {e}")))?;
+    if claims.channel_id != channel_id {
+        return Err(ApiError::forbidden(
+            "Channel token does not match this channel",
+        ));
+    }
+    Ok(claims)
+}
+
+fn responder_token(headers: &HeaderMap) -> Result<&str, ApiError> {
     let authorization = viewer_authorization(headers)
         .ok_or_else(|| ApiError::unauthorized("Missing Authorization header"))?;
     let (scheme, token) = authorization
@@ -170,11 +181,18 @@ fn responder_claims(headers: &HeaderMap, channel_id: &str) -> Result<ChannelClai
             "Invalid Authorization header format",
         ));
     }
-    let claims = verify_channel_responder(token.trim())
-        .map_err(|e| ApiError::unauthorized(format!("Invalid channel responder token: {e}")))?;
-    if claims.channel_id != channel_id {
+    Ok(token.trim())
+}
+
+fn client_grant_claims(
+    headers: &HeaderMap,
+    channel_id: &str,
+    side: GrantSide,
+) -> Result<ChannelClaims, ApiError> {
+    let claims = responder_claims(headers, channel_id)?;
+    if side != GrantSide::Client {
         return Err(ApiError::forbidden(
-            "Channel token does not match this channel",
+            "Client credentials cannot mint executor grants",
         ));
     }
     Ok(claims)
@@ -396,7 +414,7 @@ fn decide_reply(
     post,
     path = "/channels/{channel_id}/push",
     tag = "channels",
-    description = "Client → run delivery: answer a request (first reply wins), queue an unsolicited message, or cancel the run. Forwarded onto the cloud transport when the channel uses one.",
+    description = "Client → run delivery: answer a request (first reply wins), queue an unsolicited message, or cancel the run. Forwarded onto the cloud transport when the channel uses one, within that transport's message size limit and the channel's deadline.",
     params(("channel_id" = String, Path, description = "Channel (run) id")),
     request_body(content = Object, description = "`ChannelPush`: `{ channel_id, request_id?, kind: reply|inbound|cancel, value }`"),
     responses(
@@ -404,8 +422,10 @@ fn decide_reply(
         (status = 401, description = "Missing or invalid channel responder token"),
         (status = 403, description = "Token, path and body disagree on the channel, or the request belongs to another subject"),
         (status = 404, description = "No such pending request"),
-        (status = 410, description = "The request expired"),
+        (status = 410, description = "The request or the channel expired"),
+        (status = 413, description = "The message exceeds the channel transport's size limit"),
         (status = 429, description = "Too many unsolicited messages are queued"),
+        (status = 502, description = "The channel transport did not accept the message; retry"),
         (status = 503, description = "The channel uses a cloud transport this API cannot forward to"),
     ),
     security(("channel_responder_jwt" = []))
@@ -428,10 +448,36 @@ pub async fn push_channel(
     }
 
     if claims.transport != CHANNEL_TRANSPORT_HTTP {
+        if claims.transport != state.channels.transport() {
+            return Err(ApiError::service_unavailable(
+                "This channel's transport is not available on this API",
+            ));
+        }
+        let delivery_id = headers
+            .get("x-channel-delivery-id")
+            .map(|value| {
+                value
+                    .to_str()
+                    .map_err(|_| ApiError::bad_request("Invalid channel delivery id"))
+            })
+            .transpose()?;
+        if delivery_id.is_some_and(|id| {
+            id.is_empty()
+                || id.len() > 128
+                || !id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_'))
+        }) {
+            return Err(ApiError::bad_request("Invalid channel delivery id"));
+        }
         return Ok(
-            match forward_push(state.channels.forwarder(), &body).await? {
+            match forward_push_with_id(state.channels.forwarder(), &body, delivery_id, claims.exp)
+                .await?
+            {
                 ForwardOutcome::Delivered => PushResponse::accepted(),
-                ForwardOutcome::Undeliverable(message) => PushResponse::rejected(message),
+                ForwardOutcome::Undeliverable => {
+                    PushResponse::rejected("The run is no longer listening on this channel")
+                }
             },
         );
     }
@@ -538,19 +584,20 @@ async fn inbound(
     Ok(PushResponse::accepted())
 }
 
-/// Re-mint transport credentials for one side of the channel.
+/// Refresh the client's API endpoint within the original channel deadline.
 #[utoipa::path(
     get,
     path = "/channels/{channel_id}/grant",
     tag = "channels",
-    description = "Refresh the client handle (`side=client`) or the executor grant (`side=executor`) with fresh transport credentials; the new expiry never exceeds the channel's.",
+    description = "Return an HTTP API push handle (`side=client`) with the original responder capability and deadline. Its signed transport claim routes pushes to the existing waiter. Client credentials cannot request executor grants.",
     params(
         ("channel_id" = String, Path, description = "Channel (run) id"),
         GrantQuery,
     ),
     responses(
-        (status = 200, description = "`ChannelHandle` for `side=client`, `ChannelGrant` for `side=executor`", body = Object),
+        (status = 200, description = "Refreshed client ChannelHandle", body = Object),
         (status = 401, description = "Missing or invalid channel responder token"),
+        (status = 403, description = "Client credentials cannot mint executor grants"),
         (status = 410, description = "The channel has expired"),
     ),
     security(("channel_responder_jwt" = []))
@@ -561,36 +608,18 @@ pub async fn grant_channel(
     Path(channel_id): Path<String>,
     Query(query): Query<GrantQuery>,
 ) -> Result<Json<Value>, ApiError> {
-    let claims = responder_claims(&headers, &channel_id)?;
+    let claims = client_grant_claims(&headers, &channel_id, query.side)?;
     let remaining = claims.exp - now_unix();
     if remaining <= 0 {
         return Err(ApiError::gone("This channel has expired"));
     }
-    let issuer = &state.channels;
-    let value = match query.side {
-        GrantSide::Client => serde_json::to_value(
-            issuer
-                .client_handle(
-                    &channel_id,
-                    &claims.sub,
-                    claims.app_id.as_deref(),
-                    remaining,
-                )
-                .await
-                .map_err(|e| ApiError::internal(format!("Channel grant failed: {e}")))?,
-        ),
-        GrantSide::Executor => serde_json::to_value(
-            issuer
-                .grant(
-                    &channel_id,
-                    &claims.sub,
-                    claims.app_id.as_deref(),
-                    remaining,
-                )
-                .await
-                .map_err(|e| ApiError::internal(format!("Channel grant failed: {e}")))?,
-        ),
-    }
+    let value = serde_json::to_value(
+        state
+            .channels
+            .refresh_client_handle(&claims, responder_token(&headers)?)
+            .await
+            .map_err(|e| ApiError::internal(format!("Channel grant failed: {e}")))?,
+    )
     .map_err(|e| ApiError::internal(format!("Channel grant serialization failed: {e}")))?;
     Ok(Json(value))
 }
@@ -600,6 +629,29 @@ mod tests {
     use super::*;
     use flow_like_types::channel::hub;
     use serde_json::json;
+
+    #[test]
+    fn responder_cannot_refresh_executor_credentials() {
+        crate::backend_jwt::init_for_tests();
+        let token = crate::execution::sign_channel_responder(crate::execution::ChannelJwtParams {
+            sub: "user-1".into(),
+            channel_id: "run-1".into(),
+            app_id: Some("app-1".into()),
+            transport: "nats".into(),
+            ttl_seconds: Some(60),
+        })
+        .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", format!("Bearer {token}").parse().unwrap());
+        assert!(client_grant_claims(&headers, "run-1", GrantSide::Client).is_ok());
+        assert_eq!(
+            client_grant_claims(&headers, "run-1", GrantSide::Executor)
+                .unwrap_err()
+                .status(),
+            axum::http::StatusCode::FORBIDDEN
+        );
+        assert!(client_grant_claims(&headers, "another-run", GrantSide::Client).is_err());
+    }
 
     fn row(
         kind: ChannelMessageKind,

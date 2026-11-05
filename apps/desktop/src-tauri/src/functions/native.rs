@@ -4,9 +4,17 @@ use tauri::AppHandle;
 #[path = "native_location.rs"]
 mod location;
 
-#[cfg(any(target_os = "ios", target_os = "macos"))]
+#[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
 #[path = "native_shared_files.rs"]
 mod shared_files;
+
+#[cfg(any(target_os = "ios", target_os = "macos"))]
+#[path = "native_actions.rs"]
+mod actions;
+
+#[cfg(target_os = "ios")]
+#[path = "native_bot_refresh.rs"]
+mod bot_refresh;
 
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 mod apple {
@@ -19,6 +27,11 @@ mod apple {
         fn flow_like_native_clear_snapshot() -> i32;
         fn flow_like_native_take_actions() -> *mut c_char;
         fn flow_like_native_pending_actions() -> *mut c_char;
+        fn flow_like_native_claim_background_actions() -> *mut c_char;
+        fn flow_like_native_background_action_active(
+            id: *const c_char,
+            scope: *const c_char,
+        ) -> i32;
         fn flow_like_native_ack_action(id: *const c_char, scope: *const c_char) -> i32;
         fn flow_like_native_publish_app_icons(payload: *const c_char) -> i32;
         fn flow_like_native_complete_action(result: *const c_char) -> i32;
@@ -32,6 +45,7 @@ mod apple {
     }
     extern "C" fn action_ready() {
         if let Some(app) = APP.get() {
+            super::actions::notify(app);
             crate::utils::emit_to_ui(app, "native-action", json!({}));
         }
     }
@@ -47,6 +61,8 @@ mod apple {
     }
     pub fn setup(app: &AppHandle) {
         let _ = APP.set(app.clone());
+        #[cfg(target_os = "ios")]
+        super::bot_refresh::setup(app);
         unsafe {
             flow_like_native_set_action_callback(action_ready);
             flow_like_native_set_inactive_callback(inactive);
@@ -83,6 +99,18 @@ mod apple {
     }
     pub fn pending_actions() -> Result<Value, String> {
         unsafe { take_json(flow_like_native_pending_actions()) }
+    }
+    pub fn claim_background_actions() -> Result<Value, String> {
+        unsafe { take_json(flow_like_native_claim_background_actions()) }
+    }
+    pub fn background_action_active(id: &str, scope: &str) -> Result<bool, String> {
+        let id = CString::new(id).map_err(|e| e.to_string())?;
+        let scope = CString::new(scope).map_err(|e| e.to_string())?;
+        match unsafe { flow_like_native_background_action_active(id.as_ptr(), scope.as_ptr()) } {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err("Could not verify the background action's lifetime".into()),
+        }
     }
     pub fn acknowledge_action(id: String, scope: String) -> Result<(), String> {
         let id = CString::new(id).map_err(|e| e.to_string())?;
@@ -202,7 +230,9 @@ pub async fn native_geofence_permission(mode: String) -> Result<Value, String> {
     }
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::geofence_permission(mode);
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::geofence_permission(mode).await;
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     Ok(
         json!({"authorization":"not_determined","accuracyAuthorization":"reduced","backgroundSupported":false,
         "monitoredRegionCount":0,"maxMonitoredRegions":20,"error":{"code":"unsupported","message":"Native geofencing is unavailable on this platform"}}),
@@ -216,7 +246,9 @@ pub async fn native_publish_snapshot(snapshot: Value) -> Result<(), String> {
     }
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::publish(snapshot);
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::publish(snapshot);
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     {
         let _ = snapshot;
         Ok(())
@@ -227,7 +259,9 @@ pub async fn native_publish_snapshot(snapshot: Value) -> Result<(), String> {
 pub async fn native_clear_snapshot() -> Result<(), String> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::clear();
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::clear();
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     Ok(())
 }
 
@@ -235,7 +269,9 @@ pub async fn native_clear_snapshot() -> Result<(), String> {
 pub async fn native_take_actions() -> Result<Value, String> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::take_actions();
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::take_actions();
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     Ok(json!([]))
 }
 
@@ -243,7 +279,9 @@ pub async fn native_take_actions() -> Result<Value, String> {
 pub async fn native_pending_actions() -> Result<Value, String> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::pending_actions();
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::pending_actions();
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     Ok(json!([]))
 }
 
@@ -251,7 +289,9 @@ pub async fn native_pending_actions() -> Result<Value, String> {
 pub async fn native_ack_action(id: String, scope: String) -> Result<(), String> {
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::acknowledge_action(id, scope);
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::acknowledge_action(id, scope);
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     {
         let _ = (id, scope);
         Ok(())
@@ -277,15 +317,20 @@ pub async fn native_complete_action(result: Value) -> Result<(), String> {
     }
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     return apple::complete_action(result);
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::complete_action(result);
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     Ok(())
 }
 
 #[tauri::command]
 pub async fn native_read_shared_file(path: String) -> Result<Value, String> {
-    #[cfg(any(target_os = "ios", target_os = "macos"))]
+    #[cfg(any(target_os = "ios", target_os = "macos", target_os = "android"))]
     {
+        #[cfg(any(target_os = "ios", target_os = "macos"))]
         let root = apple::shared_files_directory()?;
+        #[cfg(target_os = "android")]
+        let root = crate::android_mobile::shared_files_directory()?;
         return tokio::task::spawn_blocking(move || {
             let (bytes, name) = shared_files::read(&root, std::path::Path::new(&path))?;
             let mime_type = flow_like_types::mime_guess::from_path(&name)
@@ -296,7 +341,7 @@ pub async fn native_read_shared_file(path: String) -> Result<Value, String> {
         .await
         .map_err(|e| e.to_string())?;
     }
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     {
         let _ = path;
         Err("Native shared files are unavailable on this platform".into())
@@ -307,6 +352,12 @@ pub async fn native_read_shared_file(path: String) -> Result<Value, String> {
 pub async fn native_write_clipboard(app: AppHandle, payload: Value) -> Result<Value, String> {
     if payload.to_string().len() > 24 * 1024 * 1024 {
         return Err("Clipboard payload exceeds 24 MiB".into());
+    }
+    #[cfg(not(target_os = "android"))]
+    if payload["appPrivate"] == true {
+        return Ok(
+            json!({"ok":false,"error":{"code":"unsupported_options","message":"Flow Like's private clipboard is available in the Android app"}}),
+        );
     }
     #[cfg(any(target_os = "ios", target_os = "macos"))]
     {
@@ -320,7 +371,12 @@ pub async fn native_write_clipboard(app: AppHandle, payload: Value) -> Result<Va
         .map_err(|e| e.to_string())?;
         return rx.await.map_err(|e| e.to_string())?;
     }
-    #[cfg(not(any(target_os = "ios", target_os = "macos")))]
+    #[cfg(target_os = "android")]
+    {
+        let _ = app;
+        return crate::android_mobile::write_clipboard(payload).await;
+    }
+    #[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
     {
         if let Some(deadline) = payload.get("requestDeadline").and_then(Value::as_u64) {
             let now = std::time::SystemTime::now()
@@ -377,5 +433,26 @@ pub async fn native_write_clipboard(app: AppHandle, payload: Value) -> Result<Va
                 json!({"ok":false,"error":{"code":"clipboard_failed","message":message}})
             }
         })
+    }
+}
+
+#[tauri::command]
+pub async fn native_read_private_clipboard() -> Result<Value, String> {
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::read_private_clipboard().await;
+    #[cfg(not(target_os = "android"))]
+    Ok(
+        json!({"ok":false,"error":{"code":"unsupported","message":"Private clipboard is unavailable on this platform"}}),
+    )
+}
+
+#[tauri::command]
+pub async fn native_automation_current(id: String, scope: String) -> Result<bool, String> {
+    #[cfg(target_os = "android")]
+    return crate::android_mobile::automation_current(&id, &scope);
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = (id, scope);
+        Ok(true)
     }
 }

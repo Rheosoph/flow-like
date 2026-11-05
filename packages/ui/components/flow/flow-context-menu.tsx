@@ -1,7 +1,6 @@
 import { useTranslation } from "@flow-like/locales";
 import { createId } from "@paralleldrive/cuid2";
 import { Slot } from "@radix-ui/react-slot";
-import { toast } from "sonner";
 import {
 	type PointerEvent,
 	useCallback,
@@ -10,6 +9,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import { boardModules } from "../../lib/flow-modules";
 import type { IBoard } from "../../lib/schema/flow/board";
 import type { INode } from "../../lib/schema/flow/node";

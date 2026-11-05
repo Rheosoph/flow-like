@@ -52,6 +52,7 @@ pub struct RequestPublicationResponse {
         (status = 400, description = "Bad request or pending request already exists"),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
+        (status = 409, description = "BOT_WORKSPACE_LOCKED: the app is a bot's workspace, which is never published"),
     ),
     security(
         ("bearer_auth" = []),
@@ -69,6 +70,7 @@ pub async fn request_publication(
     Json(body): Json<RequestPublicationBody>,
 ) -> Result<Json<RequestPublicationResponse>, ApiError> {
     crate::ensure_permission!(user, &app_id, &state, RolePermissions::Owner);
+    crate::routes::bots::workspace::refuse_workspaces(&state.db, [&app_id]).await?;
 
     let target_visibility = match body.target_visibility.to_uppercase().as_str() {
         "PUBLIC" => Visibility::Public,

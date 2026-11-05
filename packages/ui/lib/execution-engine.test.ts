@@ -5,6 +5,13 @@ import {
 	type ExecuteEventFn,
 	ExecutionEngineProvider,
 } from "./execution-engine";
+import { attachExecutionTransportOwner } from "./execution/owners";
+import type { ExecutionRuntimeClient } from "./execution/runtime-client";
+import {
+	ExecutionDetachedError,
+	type ExecutionTask,
+	getExecutionMetadata,
+} from "./execution/types";
 import { buildChatMessageError } from "./flowpilot/chat-error";
 import type { IIntercomEvent } from "./schema/events/intercom-event";
 import type { ILogMetadata } from "./schema/flow/log-metadata";
@@ -93,9 +100,6 @@ describe("ExecutionEngineProvider live events", () => {
 		]);
 		start("run-id");
 		expect(engine.getActiveExecutions()[0].runId).toBe("run-id");
-		engine.setExecutionScope("account-b");
-		expect(engine.getActiveExecutions()).toEqual([]);
-		engine.setExecutionScope("account-a");
 		expect(JSON.stringify(engine.getActiveExecutions())).not.toContain(
 			"private input",
 		);
@@ -105,6 +109,11 @@ describe("ExecutionEngineProvider live events", () => {
 		expect(engine.getActiveExecutions()).toEqual([]);
 		engine.setBackend(backend);
 		expect(engine.getActiveExecutions()).toHaveLength(1);
+		engine.setExecutionScope("account-b");
+		expect(engine.getActiveExecutions()).toEqual([]);
+		// An account switch drops the tab's streams; the account's runtime restores its remote runs.
+		engine.setExecutionScope("account-a");
+		expect(engine.getActiveExecutions()).toEqual([]);
 		finish();
 		await running;
 		expect(engine.getActiveExecutions()).toEqual([]);
@@ -183,6 +192,118 @@ describe("ExecutionEngineProvider live events", () => {
 		engine.subscribeToEventStream("chat-session", "finished-view", onReplay);
 		expect(onLiveEvents).toHaveBeenCalledTimes(2);
 		expect(state.getSnapshot().globalState.count).toBe(4);
+	});
+});
+
+describe("ExecutionEngineProvider detached runtime runs", () => {
+	function fakeRuntime(tasks: ExecutionTask[]) {
+		let listener = () => {};
+		const client = {
+			scope: "account",
+			getTasks: () => tasks,
+			getTask: (taskId: string) => tasks.find((task) => task.taskId === taskId),
+			subscribe: (callback: () => void) => {
+				listener = callback;
+				return () => {};
+			},
+		} as unknown as ExecutionRuntimeClient;
+		return { client, update: () => listener() };
+	}
+	const detachedTask = (
+		overrides: Partial<ExecutionTask> = {},
+	): ExecutionTask => ({
+		taskId: "task",
+		streamId: "session",
+		scope: "account",
+		appId: "app",
+		eventId: "event",
+		title: "Chat",
+		startedAt: new Date().toISOString(),
+		status: "running",
+		detached: true,
+		events: [],
+		pendingInteractions: [],
+		...overrides,
+	});
+	async function settled(engine: ExecutionEngineProvider) {
+		for (
+			let count = 0;
+			count < 100 && engine.isStreamActive("session");
+			count++
+		)
+			await new Promise((resolve) => setTimeout(resolve, 1));
+		expect(engine.isStreamActive("session")).toBe(false);
+	}
+
+	test("a run that detached elsewhere settles its chat stream without a failure, and later updates keep it settled", async () => {
+		const engine = new ExecutionEngineProvider();
+		engine.setBackend({ eventState: {} } as unknown as IBackendState);
+		engine.setExecutionScope("account");
+		const completed = mock(
+			(_events: IIntercomEvent[], _failure?: unknown) => {},
+		);
+		engine.subscribeToEventStream("session", "chat", () => {}, completed);
+		const runtime = fakeRuntime([detachedTask()]);
+		engine.setRuntimeClient(runtime.client);
+		await settled(engine);
+		expect(completed).toHaveBeenCalledWith([], undefined);
+		runtime.update();
+		expect(engine.isStreamActive("session")).toBe(false);
+		engine.unsubscribeFromEventStream("session", "chat");
+		runtime.update();
+		await settled(engine);
+		expect(completed).toHaveBeenCalledTimes(1);
+	});
+
+	test("a run started here that its runtime detaches settles without a failure, and the session takes the next message", async () => {
+		const engine = new ExecutionEngineProvider();
+		const tasks: ExecutionTask[] = [];
+		const runtime = fakeRuntime(tasks);
+		let calls = 0;
+		let detach!: () => void;
+		const executeEvent: ExecuteEventFn = (_app, _event, payload) => {
+			if (calls++ > 0) return Promise.resolve(undefined);
+			const metadata = getExecutionMetadata(payload);
+			if (!metadata) throw new Error("Missing execution metadata");
+			attachExecutionTransportOwner(metadata.taskId, runtime.client);
+			return new Promise((_, reject) => {
+				detach = () => {
+					tasks.push(detachedTask(metadata));
+					runtime.update();
+					reject(new ExecutionDetachedError("run"));
+				};
+			});
+		};
+		engine.setBackend({
+			eventState: { executeEvent },
+		} as unknown as IBackendState);
+		engine.setExecutionScope("account");
+		const completed = mock(
+			(_events: IIntercomEvent[], _failure?: unknown) => {},
+		);
+		const chatSaves = mock(async () => {});
+		const running = engine.executeEvent("session", {
+			appId: "app",
+			eventId: "event",
+			payload: { id: "node" },
+			onIncrementalSave: chatSaves,
+			onUnobservedComplete: chatSaves,
+		});
+		engine.subscribeToEventStream("session", "chat", () => {}, completed);
+		detach();
+		await expect(running).rejects.toBeInstanceOf(ExecutionDetachedError);
+		await settled(engine);
+		expect(completed).toHaveBeenCalledWith([], undefined);
+		// The runtime saved the detached reply; the chat's own saves stay unused.
+		expect(chatSaves).not.toHaveBeenCalled();
+		runtime.update();
+		expect(engine.isStreamActive("session")).toBe(false);
+		await engine.executeEvent("session", {
+			appId: "app",
+			eventId: "event",
+			payload: { id: "node" },
+		});
+		expect(calls).toBe(2);
 	});
 });
 

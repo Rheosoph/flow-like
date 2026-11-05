@@ -9,66 +9,30 @@ use flow_like_types::{async_trait, json::json};
 #[allow(unused_imports)]
 use std::sync::Arc;
 
-// ============================================================================
-// REAL DATABASE PROVIDERS via datafusion-table-providers
-// These implementations use actual TableProviders for full query federation.
-// Each feature flag corresponds to a database backend.
-// ============================================================================
-
-#[cfg(feature = "postgres")]
-use datafusion_table_providers::{
-    postgres::PostgresTableFactory, sql::db_connection_pool::postgrespool::PostgresConnectionPool,
-    util::secrets::to_secret_map,
+#[cfg(feature = "execute")]
+use crate::data::datafusion::connectors::{
+    ClickhouseSource, FileDatabaseSource, FlightSqlSource, MysqlSource, OdbcSource, OracleSource,
+    PostgresSource, clickhouse_provider, duckdb_provider, flight_sql_endpoint, flight_sql_provider,
+    mysql_provider, odbc_provider, oracle_provider, postgres_provider, sqlite_provider,
 };
 
-#[cfg(feature = "mysql")]
-use datafusion_table_providers::{
-    mysql::MySQLTableFactory, sql::db_connection_pool::mysqlpool::MySQLConnectionPool,
-    util::secrets::to_secret_map as mysql_to_secret_map,
-};
-
-#[cfg(feature = "sqlite")]
-use datafusion_table_providers::{
-    sql::db_connection_pool::{Mode as SqliteMode, sqlitepool::SqliteConnectionPoolFactory},
-    sqlite::SqliteTableFactory,
-};
-
-#[cfg(feature = "duckdb")]
-use datafusion_table_providers::{
-    duckdb::DuckDBTableFactory, sql::db_connection_pool::duckdbpool::DuckDbConnectionPoolBuilder,
-};
-
-#[cfg(feature = "clickhouse")]
-use datafusion_table_providers::{
-    clickhouse::ClickHouseTableFactory,
-    sql::db_connection_pool::clickhousepool::ClickHouseConnectionPool,
-    util::secrets::to_secret_map as clickhouse_to_secret_map,
-};
-
-/// HTTP-based drivers (ClickHouse, Flight SQL) bring their own clients, so a
-/// flow-supplied endpoint is vetted against the egress policy before connecting.
-#[cfg(all(feature = "execute", any(feature = "clickhouse", feature = "flight")))]
-async fn ensure_endpoint_allowed(
-    context: &ExecutionContext,
-    driver: &str,
-    endpoint: &str,
-) -> flow_like_types::Result<()> {
-    let url = flow_like_types::reqwest::Url::parse(endpoint).map_err(|error| {
-        flow_like_types::anyhow!("{driver} endpoint '{endpoint}' is not a valid URL: {error}")
-    })?;
-    flow_like::flow::execution::egress::ensure_url_resolves_allowed(
-        context.execution_environment(),
-        &url,
-    )
-    .await
+/// The table providers behind these nodes live in [`crate::data::datafusion::connectors`], so a
+/// flow and a headless caller open a connection the same way, with the same egress checks.
+#[cfg(feature = "execute")]
+fn connector_port(driver: &str, port: i64) -> flow_like_types::Result<u16> {
+    u16::try_from(port)
+        .map_err(|_| flow_like_types::anyhow!("{driver}: port {port} is not between 0 and 65535"))
 }
 
-/// Product binaries compile rustls with both ring and aws-lc-rs, so rustls cannot pick a
-/// process-wide provider itself, and drivers that build their TLS config internally
-/// panic until one is installed. Mirrors the catalog-web TLS nodes.
-#[cfg(all(feature = "execute", any(feature = "postgres", feature = "mysql")))]
-fn ensure_crypto_provider() {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+/// Database files of a flow on a server are the ones it staged in the temp directory.
+#[cfg(feature = "execute")]
+fn flow_file_source(path: &str, table: &str, readonly: bool) -> FileDatabaseSource {
+    FileDatabaseSource {
+        path: path.to_string(),
+        table: table.to_string(),
+        readonly,
+        staged_root: Some(std::env::temp_dir()),
+    }
 }
 
 // ============================================================================
@@ -236,77 +200,28 @@ impl NodeLogic for RegisterPostgresNode {
             username, host, port, database, ssl_mode
         );
 
-        #[cfg(feature = "postgres")]
-        {
-            use flow_like_storage::datafusion::common::TableReference;
-            use std::collections::HashMap;
+        let source = PostgresSource {
+            port: connector_port("PostgreSQL", port)?,
+            host,
+            database,
+            username,
+            password,
+            schema,
+            table: source_table.clone(),
+            ssl_mode,
+            readonly,
+        };
+        let table_provider = postgres_provider(&source, context.execution_environment()).await?;
+        cached_session
+            .replace_table(&table_name, table_provider)
+            .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
-            let mut params = HashMap::new();
-            params.insert("host".to_string(), host.clone());
-            params.insert("port".to_string(), port.to_string());
-            params.insert("user".to_string(), username.clone());
-            params.insert("pass".to_string(), password);
-            params.insert("db".to_string(), database.clone());
-            params.insert("sslmode".to_string(), ssl_mode.clone());
-
-            ensure_crypto_provider();
-            let pool = PostgresConnectionPool::new(to_secret_map(params))
-                .await
-                .map_err(|e| flow_like_types::anyhow!("PostgreSQL connection failed: {}", e))?;
-
-            let factory = PostgresTableFactory::new(Arc::new(pool));
-            let table_ref =
-                TableReference::full(database.clone(), schema.clone(), source_table.clone());
-
-            let table_provider = if readonly {
-                factory.table_provider(table_ref).await
-            } else {
-                factory.read_write_table_provider(table_ref).await
-            }
-            .map_err(|e| {
-                flow_like_types::anyhow!("Failed to create PostgreSQL table provider: {}", e)
-            })?;
-
-            // The provider reads columns from the catalog, so a missing table comes back
-            // as a table without columns instead of an error.
-            if table_provider.schema().fields().is_empty() {
-                return Err(flow_like_types::anyhow!(
-                    "PostgreSQL table '{schema}.{source_table}' was not found in database \
-                     '{database}', or none of its columns has a supported type"
-                ));
-            }
-
-            cached_session
-                .replace_table(&table_name, table_provider)
-                .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
-
-            tracing::info!(
-                "PostgreSQL table '{}' registered as '{}' (readonly: {})",
-                source_table,
-                table_name,
-                readonly
-            );
-        }
-
-        #[cfg(not(feature = "postgres"))]
-        {
-            let _ = (
-                host,
-                port,
-                database,
-                username,
-                password,
-                schema,
-                source_table,
-                table_name,
-                ssl_mode,
-                readonly,
-                cached_session,
-            );
-            return Err(flow_like_types::anyhow!(
-                "PostgreSQL support is not enabled. Rebuild with the 'postgres' feature flag."
-            ));
-        }
+        tracing::info!(
+            "PostgreSQL table '{}' registered as '{}' (readonly: {})",
+            source_table,
+            table_name,
+            readonly
+        );
 
         context.set_pin_value("session_out", json!(session)).await?;
         context
@@ -468,69 +383,27 @@ impl NodeLogic for RegisterMysqlNode {
             username, host, port, database, ssl_mode
         );
 
-        #[cfg(feature = "mysql")]
-        {
-            use flow_like_storage::datafusion::common::TableReference;
-            use std::collections::HashMap;
+        let source = MysqlSource {
+            port: connector_port("MySQL", port)?,
+            host,
+            database,
+            username,
+            password,
+            table: source_table.clone(),
+            ssl_mode,
+            readonly,
+        };
+        let table_provider = mysql_provider(&source, context.execution_environment()).await?;
+        cached_session
+            .replace_table(&table_name, table_provider)
+            .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
-            let connection_string = format!(
-                "mysql://{}:{}@{}:{}/{}",
-                username, password, host, port, database
-            );
-
-            let mut params = HashMap::new();
-            params.insert("connection_string".to_string(), connection_string);
-            params.insert("sslmode".to_string(), ssl_mode.clone());
-
-            ensure_crypto_provider();
-            let pool = MySQLConnectionPool::new(mysql_to_secret_map(params))
-                .await
-                .map_err(|e| flow_like_types::anyhow!("MySQL connection failed: {}", e))?;
-
-            // The pool is already bound to `database`, and the provider's writer resolves
-            // the table by its full display name, so only a bare name reads and writes.
-            let factory = MySQLTableFactory::new(Arc::new(pool));
-            let table_ref = TableReference::bare(source_table.clone());
-
-            let table_provider = if readonly {
-                factory.table_provider(table_ref).await
-            } else {
-                factory.read_write_table_provider(table_ref).await
-            }
-            .map_err(|e| {
-                flow_like_types::anyhow!("Failed to create MySQL table provider: {}", e)
-            })?;
-
-            cached_session
-                .replace_table(&table_name, table_provider)
-                .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
-
-            tracing::info!(
-                "MySQL table '{}' registered as '{}' (readonly: {})",
-                source_table,
-                table_name,
-                readonly
-            );
-        }
-
-        #[cfg(not(feature = "mysql"))]
-        {
-            let _ = (
-                host,
-                port,
-                database,
-                username,
-                password,
-                source_table,
-                table_name,
-                ssl_mode,
-                readonly,
-                cached_session,
-            );
-            return Err(flow_like_types::anyhow!(
-                "MySQL support is not enabled. Rebuild with the 'mysql' feature flag."
-            ));
-        }
+        tracing::info!(
+            "MySQL table '{}' registered as '{}' (readonly: {})",
+            source_table,
+            table_name,
+            readonly
+        );
 
         context.set_pin_value("session_out", json!(session)).await?;
         context
@@ -658,59 +531,19 @@ impl NodeLogic for RegisterSqliteNode {
             ));
         }
 
-        #[cfg(feature = "sqlite")]
-        {
-            use flow_like_storage::datafusion::common::TableReference;
-            use std::time::Duration;
+        let source = flow_file_source(&file_path, &source_table, readonly);
+        let table_provider = sqlite_provider(&source, context.execution_environment()).await?;
+        cached_session
+            .replace_table(&table_name, table_provider)
+            .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
-            let pool_factory = SqliteConnectionPoolFactory::new(
-                &file_path,
-                SqliteMode::File,
-                Duration::from_secs(30),
-            );
-            let pool = pool_factory
-                .build()
-                .await
-                .map_err(|e| flow_like_types::anyhow!("SQLite connection failed: {}", e))?;
-
-            let factory = SqliteTableFactory::new(Arc::new(pool));
-            let table_ref = TableReference::bare(source_table.clone());
-
-            if !readonly {
-                tracing::warn!(
-                    "SQLite read-write mode not supported in this version, using read-only"
-                );
-            }
-            let table_provider = factory.table_provider(table_ref).await.map_err(|e| {
-                flow_like_types::anyhow!("Failed to create SQLite table provider: {}", e)
-            })?;
-
-            cached_session
-                .replace_table(&table_name, table_provider)
-                .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
-
-            tracing::info!(
-                "SQLite table '{}:{}' registered as '{}' (readonly: {})",
-                file_path,
-                source_table,
-                table_name,
-                readonly
-            );
-        }
-
-        #[cfg(not(feature = "sqlite"))]
-        {
-            let _ = (
-                file_path,
-                source_table,
-                table_name,
-                readonly,
-                cached_session,
-            );
-            return Err(flow_like_types::anyhow!(
-                "SQLite support is not enabled. Rebuild with the 'sqlite' feature flag."
-            ));
-        }
+        tracing::info!(
+            "SQLite table '{}:{}' registered as '{}' (readonly: {})",
+            file_path,
+            source_table,
+            table_name,
+            readonly
+        );
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -836,60 +669,19 @@ impl NodeLogic for RegisterDuckdbNode {
             ));
         }
 
-        #[cfg(feature = "duckdb")]
-        {
-            use flow_like_storage::datafusion::common::TableReference;
+        let source = flow_file_source(&file_path, &source_table, readonly);
+        let table_provider = duckdb_provider(&source, context.execution_environment()).await?;
+        cached_session
+            .replace_table(&table_name, table_provider)
+            .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
-            // Use builder pattern - defaults to ReadWrite mode
-            // Note: For true read-only mode, would need the forked duckdb crate's AccessMode
-            let pool_builder = if file_path == ":memory:" {
-                DuckDbConnectionPoolBuilder::memory()
-            } else {
-                DuckDbConnectionPoolBuilder::file(&file_path)
-            };
-
-            let pool = pool_builder
-                .build()
-                .map_err(|e| flow_like_types::anyhow!("DuckDB connection failed: {}", e))?;
-
-            let factory = DuckDBTableFactory::new(Arc::new(pool));
-            let table_ref = TableReference::bare(source_table.clone());
-
-            let table_provider = if readonly {
-                factory.table_provider(table_ref).await
-            } else {
-                factory.read_write_table_provider(table_ref).await
-            }
-            .map_err(|e| {
-                flow_like_types::anyhow!("Failed to create DuckDB table provider: {}", e)
-            })?;
-
-            cached_session
-                .replace_table(&table_name, table_provider)
-                .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
-
-            tracing::info!(
-                "DuckDB table '{}:{}' registered as '{}' (readonly: {})",
-                file_path,
-                source_table,
-                table_name,
-                readonly
-            );
-        }
-
-        #[cfg(not(feature = "duckdb"))]
-        {
-            let _ = (
-                file_path,
-                source_table,
-                table_name,
-                readonly,
-                cached_session,
-            );
-            return Err(flow_like_types::anyhow!(
-                "DuckDB support is not enabled. Rebuild with the 'duckdb' feature flag."
-            ));
-        }
+        tracing::info!(
+            "DuckDB table '{}:{}' registered as '{}' (readonly: {})",
+            file_path,
+            source_table,
+            table_name,
+            readonly
+        );
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -1053,77 +845,32 @@ impl NodeLogic for RegisterClickhouseNode {
         let cached_session = session.load_lazy(context).await?;
         let conn_url = format!("http://{}:****@{}:{}/{}", username, host, port, database);
 
-        #[cfg(feature = "clickhouse")]
-        {
-            use std::collections::HashMap;
-
-            let url = format!("http://{}:{}", host, port);
-            ensure_endpoint_allowed(context, "ClickHouse", &url).await?;
-
-            let mut params = HashMap::new();
-            params.insert("url".to_string(), url);
-            params.insert("database".to_string(), database.clone());
-            params.insert("user".to_string(), username.clone());
-            if !password.is_empty() {
-                params.insert("password".to_string(), password);
-            }
-            // ClickHouse otherwise ships String columns as Arrow Binary, so text surfaces
-            // in rows as byte arrays.
-            params.insert(
-                "option_output_format_arrow_string_as_string".to_string(),
-                "1".to_string(),
-            );
-
-            let pool = ClickHouseConnectionPool::new(clickhouse_to_secret_map(params))
-                .await
-                .map_err(|e| flow_like_types::anyhow!("ClickHouse connection failed: {}", e))?;
-
-            let factory = ClickHouseTableFactory::new(Arc::new(pool));
-            let table_ref = flow_like_storage::datafusion::common::TableReference::partial(
-                database.clone(),
-                source_table.clone(),
-            );
-
-            // ClickHouse only supports read-only access (no read_write_table_provider)
-            if !readonly {
-                tracing::warn!(
-                    "ClickHouse tables are read-only. Write operations will fail at runtime."
-                );
-            }
-
-            let table_provider = factory.table_provider(table_ref, None).await.map_err(|e| {
-                flow_like_types::anyhow!("Failed to create ClickHouse table provider: {}", e)
-            })?;
-
-            cached_session
-                .replace_table(&table_name, table_provider)
-                .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
-
-            tracing::info!(
-                "ClickHouse table '{}' registered as '{}' (readonly: {})",
-                source_table,
-                table_name,
-                readonly
+        // ClickHouse only supports read-only access (no read_write_table_provider)
+        if !readonly {
+            tracing::warn!(
+                "ClickHouse tables are read-only. Write operations will fail at runtime."
             );
         }
 
-        #[cfg(not(feature = "clickhouse"))]
-        {
-            let _ = (
-                host,
-                port,
-                database,
-                username,
-                password,
-                source_table,
-                table_name,
-                readonly,
-                cached_session,
-            );
-            return Err(flow_like_types::anyhow!(
-                "ClickHouse support is not enabled. Rebuild with the 'clickhouse' feature flag."
-            ));
-        }
+        let source = ClickhouseSource {
+            port: connector_port("ClickHouse", port)?,
+            host,
+            database,
+            username,
+            password,
+            table: source_table.clone(),
+        };
+        let table_provider = clickhouse_provider(&source, context.execution_environment()).await?;
+        cached_session
+            .replace_table(&table_name, table_provider)
+            .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
+
+        tracing::info!(
+            "ClickHouse table '{}' registered as '{}' (readonly: {})",
+            source_table,
+            table_name,
+            readonly
+        );
 
         context.set_pin_value("session_out", json!(session)).await?;
         context
@@ -1274,6 +1021,7 @@ impl NodeLogic for RegisterOracleNode {
         node
     }
 
+    #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
         context.deactivate_exec_pin("exec_out").await?;
 
@@ -1295,87 +1043,53 @@ impl NodeLogic for RegisterOracleNode {
             .unwrap_or_else(|_| "Oracle 21 ODBC driver".to_string());
         let readonly: bool = context.evaluate_pin("readonly").await.unwrap_or(true);
 
-        #[cfg(not(feature = "odbc"))]
-        {
-            let _ = (
-                host,
-                port,
-                service_name,
-                username,
-                password,
-                schema,
-                source_table,
-                table_name,
-                odbc_driver,
-                readonly,
-                session,
-            );
-            return Err(flow_like_types::anyhow!(
-                "Oracle/ODBC support is not enabled. Rebuild with the 'odbc' feature flag. \
-                 Note: Oracle requires the Oracle Instant Client with ODBC driver installed on the system."
-            ));
-        }
+        let port = u16::try_from(port).map_err(|_| {
+            flow_like_types::anyhow!("Oracle: port {port} is not between 0 and 65535")
+        })?;
+        let source = OracleSource {
+            host,
+            port,
+            service_name,
+            username,
+            password,
+            schema,
+            source_table,
+            odbc_driver,
+        };
+        let table_provider = oracle_provider(&source, context.execution_environment()).await?;
+        let cached_session = session.load_lazy(context).await?;
+        let conn_url = format!(
+            "oracle://{}:****@{}:{}/{}",
+            source.username, source.host, source.port, source.service_name
+        );
+        let effective_schema = source.effective_schema();
+        let source_table = source.source_table;
 
-        #[cfg(feature = "odbc")]
-        {
-            use datafusion_table_providers::odbc::ODBCTableFactory;
-            use datafusion_table_providers::sql::db_connection_pool::odbcpool::ODBCPool;
-            use datafusion_table_providers::util::secrets::to_secret_map;
-            use flow_like_storage::datafusion::common::TableReference;
-            use std::collections::HashMap;
+        cached_session
+            .replace_table(&table_name, table_provider)
+            .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
-            let cached_session = session.load_lazy(context).await?;
-            let effective_schema = if schema.is_empty() {
-                username.to_uppercase()
-            } else {
-                schema.to_uppercase()
-            };
-            let conn_url = format!(
-                "oracle://{}:****@{}:{}/{}",
-                username, host, port, service_name
-            );
+        tracing::info!(
+            "Oracle table '{}.{}' registered as '{}' via ODBC (readonly: {})",
+            effective_schema,
+            source_table,
+            table_name,
+            readonly
+        );
 
-            let odbc_conn_string = format!(
-                "Driver={{{}}};DBQ={}:{}/{};UID={};PWD={}",
-                odbc_driver, host, port, service_name, username, password
-            );
+        context.set_pin_value("session_out", json!(session)).await?;
+        context
+            .set_pin_value("connection_url", json!(conn_url))
+            .await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
 
-            let mut params = HashMap::new();
-            params.insert("connection_string".to_string(), odbc_conn_string);
-
-            let pool = ODBCPool::new(to_secret_map(params))
-                .map_err(|e| flow_like_types::anyhow!("Oracle ODBC connection failed: {}", e))?;
-
-            let factory = ODBCTableFactory::new(Arc::new(pool));
-            let table_ref = TableReference::full(
-                service_name.clone(),
-                effective_schema.clone(),
-                source_table.clone(),
-            );
-
-            let table_provider = factory.table_provider(table_ref, None).await.map_err(|e| {
-                flow_like_types::anyhow!("Failed to create Oracle table provider: {}", e)
-            })?;
-
-            cached_session
-                .replace_table(&table_name, table_provider)
-                .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
-
-            tracing::info!(
-                "Oracle table '{}.{}' registered as '{}' via ODBC (readonly: {})",
-                effective_schema,
-                source_table,
-                table_name,
-                readonly
-            );
-
-            context.set_pin_value("session_out", json!(session)).await?;
-            context
-                .set_pin_value("connection_url", json!(conn_url))
-                .await?;
-            context.activate_exec_pin("exec_out").await?;
-            Ok(())
-        }
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!(
+            "Node execution is not enabled. Rebuild with the execute feature flag."
+        ))
     }
 }
 
@@ -1383,117 +1097,20 @@ impl NodeLogic for RegisterOracleNode {
 // Generic ODBC Node
 // ============================================================================
 
-/// ODBC connection-string values containing `;`, braces or edge whitespace must be
-/// wrapped in braces, with closing braces doubled.
-#[cfg(feature = "odbc")]
-fn odbc_attribute(key: &str, value: &str) -> String {
-    if value.contains([';', '{', '}']) || value.trim() != value {
-        format!("{key}={{{}}}", value.replace('}', "}}"))
-    } else {
-        format!("{key}={value}")
-    }
-}
-
-/// The resolved inputs of Register ODBC Table.
 #[cfg(feature = "execute")]
-#[cfg_attr(not(feature = "odbc"), allow(dead_code))]
-struct OdbcSource {
-    connection_string: String,
-    username: String,
-    password: String,
-    catalog: String,
-    schema: String,
-    source_table: String,
-    table_name: String,
-    max_text_size: i64,
-}
-
-#[cfg(feature = "execute")]
-impl OdbcSource {
-    async fn from_pins(context: &mut ExecutionContext) -> flow_like_types::Result<Self> {
-        Ok(Self {
-            connection_string: context.evaluate_pin("connection_string").await?,
-            username: context.evaluate_pin("username").await.unwrap_or_default(),
-            password: context.evaluate_pin("password").await.unwrap_or_default(),
-            catalog: context.evaluate_pin("catalog").await.unwrap_or_default(),
-            schema: context.evaluate_pin("schema").await.unwrap_or_default(),
-            source_table: context.evaluate_pin("source_table").await?,
-            table_name: context.evaluate_pin("table_name").await?,
-            max_text_size: context.evaluate_pin("max_text_size").await.unwrap_or(65536),
-        })
-    }
-}
-
-#[cfg(all(feature = "execute", feature = "odbc"))]
-impl OdbcSource {
-    fn connection_string(&self) -> String {
-        let mut full = self
-            .connection_string
-            .trim()
-            .trim_end_matches(';')
-            .to_string();
-        for (key, value) in [("UID", &self.username), ("PWD", &self.password)] {
-            if !value.is_empty() {
-                full.push(';');
-                full.push_str(&odbc_attribute(key, value));
-            }
-        }
-        full
-    }
-
-    /// Built from parts rather than parsed, so source identifiers keep their case.
-    fn table_reference(&self) -> flow_like_storage::datafusion::common::TableReference {
-        use flow_like_storage::datafusion::common::TableReference;
-        let table = self.source_table.clone();
-        match (self.catalog.is_empty(), self.schema.is_empty()) {
-            (true, true) => TableReference::bare(table),
-            (true, false) => TableReference::partial(self.schema.clone(), table),
-            (false, _) => TableReference::full(self.catalog.clone(), self.schema.clone(), table),
-        }
-    }
-
-    async fn register(
-        &self,
-        session: &crate::data::datafusion::session::CachedDataFusionSession,
-    ) -> flow_like_types::Result<()> {
-        use datafusion_table_providers::odbc::ODBCTableFactory;
-        use datafusion_table_providers::sql::db_connection_pool::odbcpool::ODBCPool;
-        use datafusion_table_providers::util::secrets::to_secret_map;
-        use std::collections::HashMap;
-
-        if self.max_text_size <= 0 {
-            return Err(flow_like_types::anyhow!(
-                "Max Text Size must be a positive number of bytes, got {}",
-                self.max_text_size
-            ));
-        }
-        let params = HashMap::from([
-            ("connection_string".to_string(), self.connection_string()),
-            ("max_text_size".to_string(), self.max_text_size.to_string()),
-        ]);
-        let pool = ODBCPool::new(to_secret_map(params))
-            .map_err(|e| flow_like_types::anyhow!("ODBC connection failed: {}", e))?;
-
-        let table_ref = self.table_reference();
-        let table_provider = ODBCTableFactory::new(Arc::new(pool))
-            .table_provider(table_ref.clone(), None)
-            .await
-            .map_err(|e| {
-                flow_like_types::anyhow!(
-                    "Failed to create ODBC table provider for '{table_ref}': {e}"
-                )
-            })?;
-        session
-            .replace_table(&self.table_name, table_provider)
-            .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
-
-        tracing::info!(
-            "ODBC table '{}' registered as '{}'",
-            table_ref,
-            self.table_name
-        );
-        Ok(())
-    }
+async fn odbc_source_from_pins(
+    context: &mut ExecutionContext,
+) -> flow_like_types::Result<OdbcSource> {
+    Ok(OdbcSource {
+        connection_string: context.evaluate_pin("connection_string").await?,
+        username: context.evaluate_pin("username").await.unwrap_or_default(),
+        password: context.evaluate_pin("password").await.unwrap_or_default(),
+        catalog: context.evaluate_pin("catalog").await.unwrap_or_default(),
+        schema: context.evaluate_pin("schema").await.unwrap_or_default(),
+        source_table: context.evaluate_pin("source_table").await?,
+        table_name: context.evaluate_pin("table_name").await?,
+        max_text_size: context.evaluate_pin("max_text_size").await.unwrap_or(65536),
+    })
 }
 
 #[crate::register_node]
@@ -1616,19 +1233,19 @@ impl NodeLogic for RegisterOdbcNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let session: DataFusionSession = context.evaluate_pin("session").await?;
-        let source = OdbcSource::from_pins(context).await?;
+        let source = odbc_source_from_pins(context).await?;
         let cached_session = session.load_lazy(context).await?;
 
-        #[cfg(feature = "odbc")]
-        source.register(&cached_session).await?;
+        let table_provider = odbc_provider(&source, context.execution_environment()).await?;
+        cached_session
+            .replace_table(&source.table_name, table_provider)
+            .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
-        #[cfg(not(feature = "odbc"))]
-        {
-            let _ = (source, cached_session);
-            return Err(flow_like_types::anyhow!(
-                "ODBC support is not enabled. Rebuild with the 'odbc' feature flag."
-            ));
-        }
+        tracing::info!(
+            "ODBC table '{}' registered as '{}'",
+            source.table_reference(),
+            source.table_name
+        );
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.activate_exec_pin("exec_out").await?;
@@ -1814,62 +1431,26 @@ impl NodeLogic for RegisterFlightSqlNode {
         let _skip_verify: bool = context.evaluate_pin("skip_verify").await.unwrap_or(false);
 
         let cached_session = session.load_lazy(context).await?;
-        let scheme = if use_tls { "https" } else { "http" };
-        let endpoint = format!("{}://{}:{}", scheme, host, port);
 
-        #[cfg(feature = "flight")]
-        {
-            use datafusion_table_providers::flight::FlightTableFactory;
-            use datafusion_table_providers::flight::sql::{
-                FlightSqlDriver, PASSWORD, QUERY, USERNAME,
-            };
-            use std::collections::HashMap;
+        let source = FlightSqlSource {
+            port: connector_port("FlightSQL", port)?,
+            host,
+            username,
+            password,
+            query,
+            use_tls,
+        };
+        let endpoint = flight_sql_endpoint(&source);
+        let table_provider = flight_sql_provider(&source, context.execution_environment()).await?;
+        cached_session
+            .replace_table(&table_name, table_provider)
+            .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
 
-            ensure_endpoint_allowed(context, "Flight SQL", &endpoint).await?;
-            let driver = FlightSqlDriver::new();
-            let factory = FlightTableFactory::new(Arc::new(driver));
-
-            let mut options: HashMap<String, String> = HashMap::new();
-            options.insert(QUERY.to_string(), query);
-            if !username.is_empty() {
-                options.insert(USERNAME.to_string(), username);
-            }
-            if !password.is_empty() {
-                options.insert(PASSWORD.to_string(), password);
-            }
-
-            let table = factory
-                .open_table(&endpoint, options)
-                .await
-                .map_err(|e| flow_like_types::anyhow!("Failed to create FlightSQL table: {}", e))?;
-
-            cached_session
-                .replace_table(&table_name, Arc::new(table))
-                .map_err(|e| flow_like_types::anyhow!("Failed to register table: {}", e))?;
-
-            tracing::info!(
-                "FlightSQL query registered as '{}' (endpoint: {})",
-                table_name,
-                endpoint
-            );
-        }
-
-        #[cfg(not(feature = "flight"))]
-        {
-            let _ = (
-                host,
-                port,
-                username,
-                password,
-                query,
-                table_name,
-                use_tls,
-                cached_session,
-            );
-            return Err(flow_like_types::anyhow!(
-                "FlightSQL support is not enabled. Rebuild with the 'flight' feature flag."
-            ));
-        }
+        tracing::info!(
+            "FlightSQL query registered as '{}' (endpoint: {})",
+            table_name,
+            endpoint
+        );
 
         context.set_pin_value("session_out", json!(session)).await?;
         context.set_pin_value("endpoint", json!(endpoint)).await?;
@@ -2484,52 +2065,6 @@ mod tests {
         ] {
             assert!(inputs.contains(&pin), "Register ODBC Table lacks '{pin}'");
         }
-    }
-
-    #[cfg(feature = "odbc")]
-    #[test]
-    fn odbc_attribute_braces_values_that_would_split_the_string() {
-        assert_eq!(odbc_attribute("PWD", "plain"), "PWD=plain");
-        assert_eq!(odbc_attribute("PWD", "a;b"), "PWD={a;b}");
-        assert_eq!(odbc_attribute("PWD", "x}y"), "PWD={x}}y}");
-        assert_eq!(odbc_attribute("UID", " padded "), "UID={ padded }");
-    }
-
-    #[cfg(all(feature = "execute", feature = "odbc"))]
-    fn odbc_source(catalog: &str, schema: &str, password: &str) -> OdbcSource {
-        OdbcSource {
-            connection_string: "Driver={Snowflake};Server=acme.snowflakecomputing.com; ".into(),
-            username: "flow".into(),
-            password: password.into(),
-            catalog: catalog.into(),
-            schema: schema.into(),
-            source_table: "Orders".into(),
-            table_name: "orders".into(),
-            max_text_size: 65536,
-        }
-    }
-
-    #[cfg(all(feature = "execute", feature = "odbc"))]
-    #[test]
-    fn odbc_source_appends_credentials_and_keeps_identifier_case() {
-        let source = odbc_source("SALES", "PUBLIC", "p;w");
-        assert_eq!(
-            source.connection_string(),
-            "Driver={Snowflake};Server=acme.snowflakecomputing.com;UID=flow;PWD={p;w}"
-        );
-        let table = source.table_reference();
-        assert_eq!(
-            (table.catalog(), table.schema(), table.table()),
-            (Some("SALES"), Some("PUBLIC"), "Orders")
-        );
-
-        let bare = odbc_source("", "", "");
-        assert!(!bare.connection_string().contains("PWD"));
-        assert_eq!(bare.table_reference().schema(), None);
-        assert_eq!(
-            odbc_source("", "PUBLIC", "").table_reference().schema(),
-            Some("PUBLIC")
-        );
     }
 
     #[test]

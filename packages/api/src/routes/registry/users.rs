@@ -118,6 +118,7 @@ fn invitation_notification(
     invitation: &wasm_package_invitation::Model,
 ) -> DispatchNotificationInput {
     DispatchNotificationInput {
+        bot_context: None,
         user_id: invitation.invitee_id.clone(),
         app_id: None,
         title: format!("You've been invited to package {}", invitation.package_id),
@@ -329,6 +330,11 @@ pub async fn invite_user(
             package_id = %result.package_id,
             "Failed to dispatch package invitation notification"
         );
+        // dispatch_notification wakes the invitee only once its own write succeeds.
+        state
+            .channels
+            .publish_realtime_invalidation(&result.invitee_id)
+            .await;
     }
 
     Ok(Json(build_invitation_response(result)))
@@ -368,6 +374,10 @@ pub async fn accept_invitation(
         .await?;
 
     state.invalidate_wasm_permission(&caller_id, &pu.package_id);
+    state
+        .channels
+        .publish_realtime_invalidation(&caller_id)
+        .await;
     crate::package_license::refresh_package_access(&state, &caller_id, &pu.package_id).await;
 
     let user_record = user::Entity::find_by_id(&caller_id)
@@ -420,6 +430,10 @@ pub async fn reject_invitation(
         .update(&state.db)
         .await
         .map_err(|e| ApiError::internal(format!("DB error: {}", e)))?;
+    state
+        .channels
+        .publish_realtime_invalidation(&caller_id)
+        .await;
 
     Ok(Json(()))
 }

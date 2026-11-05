@@ -1,4 +1,9 @@
-import { isChannelHandle, replyToChannel } from "../../lib/channel";
+import {
+	claimChannelRequest,
+	isChannelHandle,
+	isSharedChannel,
+	replyToChannel,
+} from "../../lib/channel";
 import { isScopedHttpChannel } from "../../lib/channel/http";
 import type { IChannelHandle } from "../../lib/schema/channel";
 import {
@@ -95,6 +100,16 @@ export function handleWidgetQueryMessage(message: unknown): boolean {
 	inFlight.add(requestKey);
 
 	void (async () => {
+		if (isSharedChannel(channel)) {
+			try {
+				if (!(await claimChannelRequest(channel))) return;
+			} catch (error) {
+				console.warn("[a2ui] widget query could not be claimed", error);
+				return;
+			} finally {
+				inFlight.delete(requestKey);
+			}
+		}
 		let response: WidgetQueryResponse;
 		try {
 			// Package widgets are unavailable in deployed sessions. Never query Studio's global bridges.

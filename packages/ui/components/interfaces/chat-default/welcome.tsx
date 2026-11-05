@@ -1,37 +1,54 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useCallback, useMemo, useRef, useState } from "react";
-import type { IEvent, IEventPayloadChat } from "../../../lib";
+import { type ReactNode, useCallback, useMemo, useRef, useState } from "react";
+import type { IEventPayloadChat } from "../../../lib";
 import { createComposerActivity } from "../../../lib/composer-activity";
 import { VoiceMode } from "./VoiceMode";
 import { ChatAiDisclosure } from "./ai-disclosure";
 import { ChatPlaceholder } from "./chat-placeholder";
 import {
 	ChatBox,
+	type ChatBoxModel,
 	type ChatBoxRef,
 	type ChatBoxThinking,
 	type ISendMessageFunction,
 } from "./chatbox";
 import { isVoiceEnabled, resolveChatVoiceConfig } from "./voice-config";
 
+/** Who the empty conversation greets the user as. */
+export interface ChatWelcomeGreeting {
+	title: string;
+	description?: string;
+	/** Replaces the placeholder mark the config picks. */
+	mark?: ReactNode;
+}
+
+/** The composer's controls besides sending. */
+export interface ChatWelcomeComposer {
+	thinking?: ChatBoxThinking;
+	model?: ChatBoxModel;
+	actions?: ReactNode;
+	onDraftChange?: (content: string) => void;
+}
+
 interface ChatWelcomeProps {
 	onSendMessage: ISendMessageFunction;
-	event: IEvent;
+	greeting: ChatWelcomeGreeting;
+	composer?: ChatWelcomeComposer;
 	config?: Partial<IEventPayloadChat>;
 	isSending?: boolean;
 	/** Needed to resolve a storage-backed placeholder image. */
 	appId?: string;
-	thinking?: ChatBoxThinking;
 }
 
 export function ChatWelcome({
 	onSendMessage,
-	event,
+	greeting,
+	composer = {},
 	config = {},
 	isSending = false,
 	appId,
-	thinking,
 }: Readonly<ChatWelcomeProps>) {
 	const { t } = useTranslation("chat");
 	const [currentMessage, setCurrentMessage] = useState("");
@@ -39,7 +56,7 @@ export function ChatWelcome({
 	const chatBox = useRef<ChatBoxRef>(null);
 	// One channel per welcome screen — the mark must answer this composer, not another chat's.
 	const activity = useRef(createComposerActivity()).current;
-	const description = event.description?.trim();
+	const description = greeting.description?.trim();
 	const voiceConfig = useMemo(() => resolveChatVoiceConfig(config), [config]);
 	const voiceEnabled = isVoiceEnabled(voiceConfig);
 
@@ -278,15 +295,17 @@ export function ChatWelcome({
 						className="flex flex-col items-center gap-3"
 						data-fl-chat-welcome-header
 					>
-						<ChatPlaceholder
-							config={config}
-							appId={appId}
-							size={168}
-							activity={activity}
-						/>
+						{greeting.mark ?? (
+							<ChatPlaceholder
+								config={config}
+								appId={appId}
+								size={168}
+								activity={activity}
+							/>
+						)}
 						<div className="space-y-1 text-center">
 							<h1 className="text-base font-semibold tracking-tight">
-								{event.name}
+								{greeting.title}
 							</h1>
 							{description && (
 								<p className="line-clamp-2 text-sm text-muted-foreground">
@@ -302,10 +321,13 @@ export function ChatWelcome({
 							availableTools={config?.tools ?? []}
 							defaultActiveTools={config?.default_tools ?? []}
 							onSendMessage={onSendMessage}
-							thinking={thinking}
+							thinking={composer.thinking}
+							model={composer.model}
+							actions={composer.actions}
 							onContentChange={(content) => {
 								setCurrentMessage(content);
 								activity.report(content);
+								composer.onDraftChange?.(content);
 							}}
 							fileUpload={config?.allow_file_upload ?? false}
 							audioInput={voiceEnabled}

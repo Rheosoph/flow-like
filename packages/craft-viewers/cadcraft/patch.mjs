@@ -30,19 +30,25 @@ export default function prepare({
 		"            host_command: None,\n            docs: Vec::new(),",
 		"host command default",
 	);
-	engine = replaceOnce(
-		engine,
-		"        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;",
-		"        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;\n        if let Some(result) = self.host_command.and_then(|hook| hook(spec.id)) { return result.map_err(EngineError::Other); }",
-		"programmatic commands",
-	);
-	engine = replaceOnce(
-		engine,
-		"        let spec = find_command(&id).ok_or_else(|| EngineError::UnknownCommand(name.to_string()))?;",
-		"        let spec = find_command(&id).ok_or_else(|| EngineError::UnknownCommand(name.to_string()))?;\n        if let Some(result) = self.host_command.and_then(|hook| hook(spec.id)) { return result.map(|_| ()).map_err(EngineError::Other); }",
-		"interactive commands",
-	);
 	write("crates/engine/src/lib.rs", engine);
+	write(
+		"crates/engine/src/session/execute.rs",
+		replaceOnce(
+			original("crates/engine/src/session/execute.rs"),
+			"        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;",
+			"        let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;\n        if let Some(result) = self.host_command.and_then(|hook| hook(spec.id)) { return result.map_err(EngineError::Other); }",
+			"programmatic commands",
+		),
+	);
+	write(
+		"crates/engine/src/session/interactive.rs",
+		replaceOnce(
+			original("crates/engine/src/session/interactive.rs"),
+			"        if transparent && spec.transparent && self.running.is_some() {",
+			"        if let Some(result) = self.host_command.and_then(|hook| hook(spec.id)) { return result.map(|_| ()).map_err(EngineError::Other); }\n        if transparent && spec.transparent && self.running.is_some() {",
+			"interactive commands",
+		),
+	);
 	let menus = original("crates/ui-egui/src/menus.rs");
 	menus = replaceOnce(
 		menus,
@@ -59,6 +65,15 @@ export default function prepare({
 		original("crates/ui-egui/src/chrome.rs").replaceAll(
 			"CADCraft",
 			"Flows CAD",
+		),
+	);
+	write(
+		"crates/mcp/Cargo.toml",
+		replaceOnce(
+			original("crates/mcp/Cargo.toml"),
+			'getrandom = "0.4"',
+			'getrandom = { version = "0.4", features = ["wasm_js"] }',
+			"browser randomness",
 		),
 	);
 	prepareLiveMcp({ id: "cadcraft", source, write, original, replaceOnce });

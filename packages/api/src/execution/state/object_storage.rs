@@ -6,7 +6,7 @@
 //! Prefers using the meta store from master_credentials when available.
 //! Falls back to environment configuration for backwards compatibility.
 
-use super::{postgres::PostgresStateStore, types::*};
+use super::{postgres::PostgresStateStore, replay::replay_prefix, types::*};
 use async_trait::async_trait;
 use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_storage::{
@@ -622,6 +622,16 @@ impl ExecutionStateStore for ObjectStorageStateStore {
         records.sort_by_key(|e| e.sequence);
 
         Ok(records)
+    }
+
+    /// Events are written one after another in sequence order and listings are
+    /// strongly consistent, so a reader sees a prefix of every write.
+    async fn replay_events(
+        &self,
+        run_id: &str,
+        cursor: ReplayCursor,
+    ) -> Result<EventReplay, StateStoreError> {
+        replay_prefix(self, run_id, cursor).await
     }
 
     async fn get_max_sequence(&self, run_id: &str) -> Result<i32, StateStoreError> {

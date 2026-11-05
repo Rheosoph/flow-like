@@ -1,11 +1,12 @@
 "use client";
 
+import { getDraftCommentKey } from "@platejs/comment";
 import { remarkMdx, remarkMention } from "@platejs/markdown";
 import {
 	Plate,
+	useEditorRef,
 	usePlateEditor,
 	usePluginOption,
-	useEditorRef,
 } from "platejs/react";
 import {
 	type HTMLAttributes,
@@ -21,27 +22,26 @@ import remarkBreaks from "remark-breaks";
 import remarkEmoji from "remark-emoji";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { AIUsageAppContext } from "../editor/ai-usage-context";
-import { createEditorKit } from "../editor/editor-kit";
-import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
-import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
-import { remarkUserMention } from "../editor/plugins/remark-user-mention";
-import { Editor, EditorContainer } from "../editor/ui/editor";
-import { Toolbar } from "../editor/ui/toolbar";
-import { Comment, CommentCreateForm } from "../editor/ui/comment";
-import { commentPlugin } from "../editor/plugins/comment-kit";
-import { getDraftCommentKey } from "@platejs/comment";
-import { CommentToolbarButton } from "../editor/ui/comment-toolbar-button";
-import { safeDeserialize } from "./text-editor";
 import {
 	type EditorUser,
 	parsePlateDocument,
 	serializePlateDocument,
 } from "../../lib/plate-document";
+import { AIUsageAppContext } from "../editor/ai-usage-context";
+import { createEditorKit } from "../editor/editor-kit";
+import { commentPlugin } from "../editor/plugins/comment-kit";
 import {
 	discussionPlugin,
 	getPlateEditorDocument,
 } from "../editor/plugins/discussion-kit";
+import { remarkFocusNodes } from "../editor/plugins/remark-focus-nodes";
+import { remarkInlineSpoiler } from "../editor/plugins/remark-inline-spoiler";
+import { remarkUserMention } from "../editor/plugins/remark-user-mention";
+import { Comment, CommentCreateForm } from "../editor/ui/comment";
+import { CommentToolbarButton } from "../editor/ui/comment-toolbar-button";
+import { Editor, EditorContainer } from "../editor/ui/editor";
+import { Toolbar } from "../editor/ui/toolbar";
+import { safeDeserialize } from "./text-editor";
 
 /**
  * The editable half of `TextEditor`, split out so that read-only markdown does not carry it.

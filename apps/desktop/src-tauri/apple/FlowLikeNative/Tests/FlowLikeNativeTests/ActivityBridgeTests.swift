@@ -58,6 +58,52 @@ private final class ActivityDelegateFixture: NSObject {
     #expect(delegate.forwarded == 1)
 }
 
+@Test @MainActor func coldSceneLaunchPreservesDeepLinksAfterRuntimeStarts() {
+    let spotlight = NSUserActivity(activityType: CSSearchableItemActionType)
+    let universalLink = NSUserActivity(activityType: NSUserActivityTypeBrowsingWeb)
+    universalLink.webpageURL = URL(string: "https://app.flow-like.com/join?id=shared")!
+    let customLink = URL(string: "flow-like://auth?code=callback")!
+    let document = URL(fileURLWithPath: "/tmp/shared.flow")
+    var connected = false
+    var nativeActions = 0
+    var continued: [NSUserActivity] = []
+    var opened: Set<URL> = []
+
+    NativeActivityBridge.connectScene(
+        activities: [spotlight, universalLink], urlContexts: [customLink, document],
+        handle: { activity in
+            guard activity === spotlight else { return false }
+            #expect(!connected)
+            nativeActions += 1
+            return true
+        },
+        connect: { connected = true },
+        continueActivity: { activity in
+            #expect(connected)
+            continued.append(activity)
+        },
+        openURLs: { contexts in
+            #expect(connected)
+            opened = contexts
+        }
+    )
+
+    #expect(nativeActions == 1)
+    #expect(continued == [universalLink])
+    #expect(opened == [customLink, document])
+}
+
+@Test @MainActor func ordinarySceneLaunchOnlyConnectsTheRuntime() {
+    var connected = false
+    NativeActivityBridge.connectScene(
+        activities: [], urlContexts: Set<URL>(),
+        connect: { connected = true },
+        continueActivity: { _ in Issue.record("No launch activity should be forwarded") },
+        openURLs: { _ in Issue.record("No launch URLs should be forwarded") }
+    )
+    #expect(connected)
+}
+
 @Test func handoffPreservesAppRouteAndNestedOrderedQueryValues() throws {
     let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     defer { try? FileManager.default.removeItem(at: directory) }

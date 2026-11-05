@@ -432,15 +432,31 @@ pub(super) fn build_flowpilot_sdk_tools(
             create_board_support_tools, create_board_tools, create_data_studio_tools,
             create_frontend_support_tools, create_frontend_tools, create_global_assistant_tools,
             create_home_tools, create_research_tools, create_scout_tools,
+            delegated_research_session_for_turn,
         },
         frontend_tool_bridge::{FrontendToolBridge, GLOBAL_FRONTEND_TOOL_EVENT},
     };
 
-    // Scopes the turn's web-research budget/ledger. Delegated researchers inherit the same run id
-    // through their tool context, so they join the owning turn's session — and only that one.
     let run_scope_id = tool_context
         .as_ref()
         .and_then(|context| context.run_id.clone());
+    // The explicit brief is model input. Original user text remains the provenance seed and
+    // session identity, including when a follow-up brief changes the research question.
+    let source_user_prompt = tool_context
+        .as_ref()
+        .and_then(|context| context.source_user_prompt.as_deref())
+        .filter(|prompt| !prompt.trim().is_empty())
+        .unwrap_or(user_prompt)
+        .to_owned();
+    let research_session = (scope == CopilotScope::Research).then(|| {
+        crate::functions::ai::native_tool_bridge::research_session(
+            tool_context.as_ref(),
+            &source_user_prompt,
+        )
+        .unwrap_or_else(|| {
+            delegated_research_session_for_turn(&source_user_prompt, run_scope_id.as_deref())
+        })
+    });
 
     // Build the runtime bridge once so every path carries the owning run context. Global and
     // nested tools share the global event listener; ordinary board tools keep the board listener.
@@ -457,7 +473,7 @@ pub(super) fn build_flowpilot_sdk_tools(
         return create_global_assistant_tools(
             runtime_bridge,
             memory,
-            user_prompt,
+            &source_user_prompt,
             run_scope_id.as_deref(),
         );
     }
@@ -512,13 +528,9 @@ pub(super) fn build_flowpilot_sdk_tools(
             tools.extend(create_home_tools(runtime_bridge));
         }
         CopilotScope::Research => {
-            // Seeded from the immutable top-level user message so this researcher joins
-            // the turn's shared session instead of opening a private one with a fresh
-            // budget and an empty citation ledger.
             tools.extend(create_research_tools(
                 runtime_bridge,
-                user_prompt,
-                run_scope_id.as_deref(),
+                research_session.expect("Research scope has a shared session"),
             ));
         }
     }

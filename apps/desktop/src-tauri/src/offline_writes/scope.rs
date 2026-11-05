@@ -73,6 +73,8 @@ const ELLIPSIS: &str = "…";
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ScopeKey {
+    pub(crate) profile_id: Option<String>,
+    pub(crate) issuer: Option<String>,
     pub(crate) hub: String,
     pub(crate) subject: String,
     pub(crate) app_id: String,
@@ -237,6 +239,10 @@ pub(crate) struct SinkBinding {
 pub(crate) struct ScopeDescriptor {
     pub(crate) version: u32,
     pub(crate) scope: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) profile_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) issuer: Option<String>,
     pub(crate) hub: String,
     pub(crate) subject: String,
     pub(crate) app_id: String,
@@ -261,6 +267,8 @@ impl ScopeDescriptor {
         Self {
             version: DESCRIPTOR_VERSION,
             scope: scope.to_owned(),
+            profile_id: key.profile_id.clone(),
+            issuer: key.issuer.clone(),
             hub: key.hub.clone(),
             subject: key.subject.clone(),
             app_id: key.app_id.clone(),
@@ -276,6 +284,8 @@ impl ScopeDescriptor {
 
     pub(crate) fn key(&self) -> ScopeKey {
         ScopeKey {
+            profile_id: self.profile_id.clone(),
+            issuer: self.issuer.clone(),
             hub: self.hub.clone(),
             subject: self.subject.clone(),
             app_id: self.app_id.clone(),
@@ -653,10 +663,11 @@ impl AppOfflineScope {
     }
 
     /// Whether the account of this scope has a signed-in session on this device.
-    pub(crate) fn signed_in(&self) -> bool {
+    pub(crate) async fn signed_in(&self) -> bool {
         self.services
             .tokens
-            .session_token(&self.key.hub, &self.key.subject)
+            .session_token(&self.key)
+            .await
             .is_some()
     }
 
@@ -953,6 +964,10 @@ impl AppOfflineScope {
             fence: self.fence.clone(),
             id,
         }
+    }
+
+    pub(crate) fn has_hosted_runs(&self) -> bool {
+        !self.fence.alive().is_empty()
     }
 
     pub(crate) fn bump_activation_epoch(&self) -> u64 {

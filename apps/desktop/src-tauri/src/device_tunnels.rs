@@ -9,6 +9,8 @@ mod forward;
 #[cfg(desktop)]
 mod keys;
 #[cfg(desktop)]
+mod playground;
+#[cfg(desktop)]
 mod transfer;
 
 /// The tray's "Lock All Devices" ran; the device area locks its sessions too.
@@ -32,6 +34,7 @@ pub fn close_all() {
     #[cfg(desktop)]
     {
         forward::FORWARDS.close_owner(None);
+        playground::SESSIONS.close_all();
         tauri::async_runtime::spawn(keys::MIRRORS.close_all());
     }
 }
@@ -118,6 +121,7 @@ pub(crate) async fn device_keys_lock(
 ) -> Result<(), String> {
     main_webview(&webview)?;
     checked_device(&device_id)?;
+    playground::SESSIONS.close_device(&device_id);
     keys::MIRRORS.lock(&device_id, mode).await;
     Ok(())
 }
@@ -186,4 +190,78 @@ pub(crate) fn device_transfer_cancel(
 ) -> Result<(), String> {
     main_webview(&webview)?;
     transfer::cancel(&transfer)
+}
+
+/// The latest picture and state of a device bot's screen, over the E2E tunnel. The first call
+/// opens the live view; without a call every 30 s it closes.
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) async fn device_bot_view(
+    webview: tauri::Webview,
+    device_id: String,
+    bot_id: String,
+) -> Result<playground::DeviceBotView, String> {
+    main_webview(&webview)?;
+    checked_device(&device_id)?;
+    playground::view(&device_id, &bot_id).await
+}
+
+/// Pauses the bot's browser and computer calls while the owner uses its screen.
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) async fn device_bot_take_over(
+    webview: tauri::Webview,
+    device_id: String,
+    bot_id: String,
+) -> Result<(), String> {
+    main_webview(&webview)?;
+    checked_device(&device_id)?;
+    playground::control(&device_id, &bot_id, flow_like_device_protocol::PlaygroundControl::TakeOver)
+        .await
+}
+
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) async fn device_bot_hand_back(
+    webview: tauri::Webview,
+    device_id: String,
+    bot_id: String,
+) -> Result<(), String> {
+    main_webview(&webview)?;
+    checked_device(&device_id)?;
+    playground::control(&device_id, &bot_id, flow_like_device_protocol::PlaygroundControl::HandBack)
+        .await
+}
+
+/// Ends the bot's browser sessions and any mouse or keyboard action in flight.
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) async fn device_bot_stop(
+    webview: tauri::Webview,
+    device_id: String,
+    bot_id: String,
+) -> Result<(), String> {
+    main_webview(&webview)?;
+    checked_device(&device_id)?;
+    playground::control(&device_id, &bot_id, flow_like_device_protocol::PlaygroundControl::Stop).await
+}
+
+/// One mouse or keyboard event for a taken-over bot screen; positions are pixels of the picture
+/// `device_bot_view` returned.
+#[cfg(desktop)]
+#[tauri::command]
+pub(crate) async fn device_bot_input(
+    webview: tauri::Webview,
+    device_id: String,
+    bot_id: String,
+    event: flow_like_device_protocol::PlaygroundInput,
+) -> Result<(), String> {
+    main_webview(&webview)?;
+    checked_device(&device_id)?;
+    playground::control(
+        &device_id,
+        &bot_id,
+        flow_like_device_protocol::PlaygroundControl::Input { event },
+    )
+    .await
 }

@@ -15,9 +15,11 @@ import { delimiter, dirname, join } from "node:path";
 import test from "node:test";
 import {
 	assertNoBrandArtwork,
+	archiveGitSource,
 	bundleLicenses,
 	parseDependencyTree,
 	selectLicense,
+	selectNoticeOverride,
 	verifyUnmodifiedSource,
 } from "./licenses.mjs";
 
@@ -419,5 +421,67 @@ test("brand verification accepts clean binaries and common short SVG paths", (t)
 	);
 	assert.doesNotThrow(() =>
 		assertNoBrandArtwork(directory, Buffer.from("M0 0L1 1")),
+	);
+});
+
+test("notice overrides distinguish forks of the same package version", () => {
+	const first = { revision: "a".repeat(40) };
+	const second = { revision: "b".repeat(40) };
+	const overrides = {
+		"library@1.0.0": first,
+		[`library@1.0.0#${second.revision}`]: second,
+	};
+	assert.equal(
+		selectNoticeOverride(overrides, "library@1.0.0", first.revision),
+		first,
+	);
+	assert.equal(
+		selectNoticeOverride(overrides, "library@1.0.0", second.revision),
+		second,
+	);
+	assert.equal(
+		selectNoticeOverride(overrides, "library@1.0.0", "c".repeat(40)),
+		first,
+	);
+	assert.equal(
+		selectNoticeOverride(overrides, "library@2.0.0", second.revision),
+		undefined,
+	);
+});
+
+test("Git source archives include the pinned source and refuse modified checkouts", (t) => {
+	const directory = mkdtempSync(join(tmpdir(), "craft-git-license-"));
+	t.after(() => rmSync(directory, { recursive: true, force: true }));
+	const source = join(directory, "source");
+	mkdirSync(source);
+	const git = (...args) =>
+		execFileSync("git", args, { cwd: source, encoding: "utf8" });
+	git("init", "--quiet");
+	put(join(source, "src/lib.rs"), "pub fn answer() -> u8 { 42 }\n");
+	git("add", "src/lib.rs");
+	git(
+		"-c",
+		"commit.gpgsign=false",
+		"-c",
+		"user.name=License test",
+		"-c",
+		"user.email=license-test@example.invalid",
+		"commit",
+		"--quiet",
+		"-m",
+		"Fixture",
+	);
+	const revision = git("rev-parse", "HEAD").trim();
+	const output = join(directory, "source.tar.gz");
+	put(join(source, ".cargo-ok"), "");
+	archiveGitSource(source, revision, output);
+	assert.match(
+		execFileSync("tar", ["-tzf", output], { encoding: "utf8" }),
+		/src\/lib.rs/,
+	);
+	put(join(source, "src/lib.rs"), "pub fn answer() -> u8 { 0 }\n");
+	assert.throws(
+		() => archiveGitSource(source, revision, output),
+		/modified source/,
 	);
 });

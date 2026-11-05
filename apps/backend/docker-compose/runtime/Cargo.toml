@@ -13,7 +13,7 @@ local-ml-tensorrt = ["local-ml-cuda", "flow-like/local-ml-tensorrt", "flow-like-
 flow-like = { workspace = true, features = ["flow-runtime", "model"] }
 flow-like-api = { workspace = true, features = ["kubernetes", "redis", "azure"] }
 flow-like-catalog = { workspace = true, default-features = false, features = ["local-runtime-ml"] }
-flow-like-executor = { workspace = true, features = ["local-runtime-ml"] }
+flow-like-executor = { workspace = true, features = ["channel-nats", "local-runtime-ml"] }
 flow-like-storage.workspace = true
 mimalloc.workspace = true
 axum.workspace = true

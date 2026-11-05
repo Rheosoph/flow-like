@@ -1,0 +1,1258 @@
+{
+	"capabilities": {
+		"browser_use": {
+			"description": "",
+			"label": ""
+		},
+		"channels": {
+			"description": "",
+			"label": ""
+		},
+		"code_execution": {
+			"description": "",
+			"label": ""
+		},
+		"command_line": {
+			"description": "",
+			"label": ""
+		},
+		"computer_use": {
+			"description": "",
+			"label": ""
+		},
+		"connectors": {
+			"description": "",
+			"label": ""
+		},
+		"data_connections": {
+			"description": "",
+			"label": ""
+		},
+		"data_studio": {
+			"description": "",
+			"label": ""
+		},
+		"delegation": {
+			"description": "",
+			"label": ""
+		},
+		"documents": {
+			"description": "",
+			"label": ""
+		},
+		"email": {
+			"description": "",
+			"label": ""
+		},
+		"encryption": {
+			"description": "",
+			"label": ""
+		},
+		"flowpilot": {
+			"description": "",
+			"label": ""
+		},
+		"image_generation": {
+			"description": "",
+			"label": ""
+		},
+		"internet": {
+			"description": "",
+			"label": ""
+		},
+		"knowledge": {
+			"description": "",
+			"label": ""
+		},
+		"memory": {
+			"description": "",
+			"label": ""
+		},
+		"profile_apps": {
+			"description": "",
+			"label": ""
+		},
+		"push_notifications": {
+			"description": "",
+			"label": ""
+		},
+		"scheduling": {
+			"description": "",
+			"label": ""
+		},
+		"selected_apps": {
+			"description": "",
+			"label": ""
+		},
+		"skills": {
+			"description": "",
+			"label": ""
+		},
+		"storage": {
+			"description": "",
+			"label": ""
+		},
+		"web_requests": {
+			"description": "",
+			"label": ""
+		},
+		"webhook": {
+			"description": "",
+			"label": ""
+		}
+	},
+	"chat": {
+		"defaultModelHint": ""
+	},
+	"computer": {
+		"alt": "",
+		"asleep": "",
+		"asleepHint": "",
+		"browser": "",
+		"failed": "",
+		"screen": "",
+		"stop": ""
+	},
+	"crew": {
+		"activity": {
+			"queued": "",
+			"running": "",
+			"typingMany": "",
+			"typingOne": "",
+			"typingTwo": "",
+			"waiting": ""
+		},
+		"approval": {
+			"always": "",
+			"answeredAlways": "",
+			"answeredDeny": "",
+			"answeredOnce": "",
+			"askEveryTime": "",
+			"botFallback": "",
+			"deny": "",
+			"failed": "",
+			"label": "",
+			"once": "",
+			"secret": {
+				"decline": "",
+				"declined": "",
+				"eyebrow": "",
+				"failed": "",
+				"hint": "",
+				"placeholder": "",
+				"replaceHint": "",
+				"save": "",
+				"saved": "",
+				"saving": "",
+				"title": "",
+				"tooLarge": "",
+				"valueLabel": ""
+			},
+			"title": "",
+			"triggeredBy": "",
+			"triggeredByInRoom": ""
+		},
+		"botSettings": "",
+		"botTag": "",
+		"builtIn": "",
+		"call": {
+			"dismiss": "",
+			"incoming": "",
+			"incomingDescription": "",
+			"incomingRoom": "",
+			"durationHours": "",
+			"durationMinutes": "",
+			"durationShort": "",
+			"ended": "",
+			"error": {
+				"denied": "",
+				"failed": "",
+				"full": "",
+				"unavailable": ""
+			},
+			"join": "",
+			"leave": "",
+			"listen": "",
+			"listenHint": "",
+			"listenNeedsModel": "",
+			"live": "",
+			"mute": "",
+			"mutedPerson": "",
+			"speaking": "",
+			"start": "",
+			"started": "",
+			"startedYou": "",
+			"transcribedPerson": "",
+			"unmute": ""
+		},
+		"cancel": "",
+		"composer": {
+			"encrypted": "",
+			"mentionHint": "",
+			"placeholder": "",
+			"to": ""
+		},
+		"conversationMenu": {
+			"open": ""
+		},
+		"directMessage": "",
+		"dock": {
+			"back": "",
+			"botUnavailable": "",
+			"botUnavailableTitle": "",
+			"close": "",
+			"conversationUnavailable": "",
+			"groupSubtitle": "",
+			"groupSubtitlePeople": "",
+			"label": "",
+			"loadFailed": "",
+			"loadFailedTitle": "",
+			"loading": "",
+			"resize": "",
+			"resizeHint": "",
+			"signInForBots": "",
+			"signInForConversations": "",
+			"unavailableTitle": "",
+			"width": ""
+		},
+		"encrypted": "",
+		"eyebrow": "",
+		"greeting": {
+			"afternoon": "",
+			"afternoonAnonymous": "",
+			"evening": "",
+			"eveningAnonymous": "",
+			"morning": "",
+			"morningAnonymous": ""
+		},
+		"intro": {
+			"capabilities": "",
+			"noCapabilities": ""
+		},
+		"invitations": {
+			"aBot": "",
+			"accept": "",
+			"acceptBot": "",
+			"botMeta": "",
+			"botTitle": "",
+			"decline": "",
+			"failed": "",
+			"groupChat": "",
+			"meta": "",
+			"review": "",
+			"title": ""
+		},
+		"loadFailed": "",
+		"loadFailedFlux": "",
+		"marks": {
+			"beforeYouJoined": "",
+			"jump": "",
+			"loadFailed": "",
+			"loadMore": "",
+			"noStars": "",
+			"notFound": "",
+			"pinConversation": "",
+			"pinLimit": "",
+			"pinMessage": "",
+			"pinnedBy": "",
+			"pinnedConversation": "",
+			"pinnedCount_one": "",
+			"pinnedCount_other": "",
+			"pinnedTitle": "",
+			"star": "",
+			"starred": "",
+			"starredDescription": "",
+			"starredShort": "",
+			"starredTitle": "",
+			"unpinConversation": "",
+			"unpinMessage": "",
+			"unstar": ""
+		},
+		"members": {
+			"added": "",
+			"joined": "",
+			"left": "",
+			"removed": ""
+		},
+		"mentions": {
+			"bot": "",
+			"label": ""
+		},
+		"messages": {
+			"actionFailed": "",
+			"delete": "",
+			"deleteDescription": "",
+			"deleteTitle": "",
+			"discard": "",
+			"edit": "",
+			"editLabel": "",
+			"edited": "",
+			"empty": "",
+			"encrypted": "",
+			"label": "",
+			"loadFailed": "",
+			"loadOlder": "",
+			"loadingOlder": "",
+			"more": "",
+			"notSent": "",
+			"reactionLabel": "",
+			"retry": "",
+			"save": "",
+			"sending": "",
+			"sentByEmail": "",
+			"unsupported": ""
+		},
+		"mute": {
+			"mute": "",
+			"unmute": ""
+		},
+		"needs": {
+			"approvalMeta": "",
+			"assistantMeta": "",
+			"assistantTitle": "",
+			"assistantWhere": "",
+			"meta_one": "",
+			"meta_other": "",
+			"title": ""
+		},
+		"newBot": "",
+		"newBotHint": "",
+		"newMessage": "",
+		"newMessageDialog": {
+			"description": "",
+			"failed": "",
+			"title": ""
+		},
+		"newRoom": "",
+		"newRoomDialog": {
+			"create": "",
+			"createInvite": "",
+			"description": "",
+			"failed": "",
+			"full_one": "",
+			"full_other": "",
+			"invitesNote": "",
+			"invitesNote_one": "",
+			"invitesNote_other": "",
+			"members": "",
+			"name": "",
+			"namePlaceholder": "",
+			"remove": "",
+			"title": ""
+		},
+		"note": {
+			"asked": "",
+			"askedBy": "",
+			"body": "",
+			"bodyOfType": "",
+			"clickForDetails": "",
+			"copied": "",
+			"copy": "",
+			"from": "",
+			"instruction": "",
+			"mail": {
+				"attachments": "",
+				"body": "",
+				"cc": "",
+				"from": "",
+				"notKept": "",
+				"to": "",
+				"unverified": "",
+				"verified": ""
+			},
+			"messaged": "",
+			"messagedPrefix": "",
+			"payload": "",
+			"payloadFile": "",
+			"source": {
+				"email": "",
+				"event": "",
+				"schedule": "",
+				"webhook": ""
+			},
+			"untitled": ""
+		},
+		"openChat": "",
+		"picker": {
+			"alreadyInvited": "",
+			"bots": "",
+			"hint": "",
+			"invite": "",
+			"noMatches": "",
+			"ownerAccepts": "",
+			"people": "",
+			"searchFailed": "",
+			"searchLabel": "",
+			"theirBots": ""
+		},
+		"requests": {
+			"acceptBot": "",
+			"block": "",
+			"botTitle": "",
+			"meta": "",
+			"pendingHint": "",
+			"title": "",
+			"where": ""
+		},
+		"retry": "",
+		"roomChange": {
+			"nameRemoved": "",
+			"pictureChanged": "",
+			"pictureRemoved": "",
+			"renamed": ""
+		},
+		"roomSettings": {
+			"change": "",
+			"description": "",
+			"failed": "",
+			"imageFormat": "",
+			"imageHint": "",
+			"imageSize": "",
+			"imageUnreadable": "",
+			"name": "",
+			"namePlaceholder": "",
+			"open": "",
+			"remove": "",
+			"save": "",
+			"title": "",
+			"upload": ""
+		},
+		"roomTag": "",
+		"rooms": {
+			"bots_one": "",
+			"bots_other": "",
+			"composition": "",
+			"empty": "",
+			"justYou": "",
+			"loadFailed": "",
+			"namesAndMore_one": "",
+			"namesAndMore_other": "",
+			"noMessages": "",
+			"people_one": "",
+			"people_other": "",
+			"theyWrote": "",
+			"title": "",
+			"youWrote": ""
+		},
+		"search": {
+			"empty": "",
+			"label": "",
+			"placeholder": ""
+		},
+		"showChat": "",
+		"status": {
+			"desktop": "",
+			"device": "",
+			"ready": "",
+			"server": ""
+		},
+		"summary": {
+			"bots_one": "",
+			"bots_other": "",
+			"line": "",
+			"needsYou_one": "",
+			"needsYou_other": "",
+			"nothingNeedsYou": "",
+			"signedOut": ""
+		},
+		"time": {
+			"today": "",
+			"yesterday": ""
+		},
+		"transcript": {
+			"said": ""
+		},
+		"trigger": {
+			"email": "",
+			"emailFrom": "",
+			"event": "",
+			"schedule": "",
+			"webhook": ""
+		},
+		"unknownMember": "",
+		"unread_one": "",
+		"unread_other": "",
+		"you": "",
+		"youObject": "",
+		"yourCrew": "",
+		"blocks": {
+			"title": "차단한 사용자 및 봇",
+			"description": "나 및 내 봇과 다이렉트 메시지와 초대를 주고받을 수 있는 상대를 관리하세요. 함께 참여한 방에는 영향을 주지 않습니다.",
+			"loading": "차단한 사용자 및 봇 불러오는 중…",
+			"loadFailed": "차단 목록을 불러오지 못했습니다.",
+			"empty": "차단한 상대가 없습니다.",
+			"block": "차단",
+			"unblock": "차단 해제",
+			"blockUser": "사용자 차단",
+			"blockBot": "봇 차단",
+			"ownerBlocked": "소유자가 차단됨",
+			"blockName": "{{name}} 차단",
+			"unblockName": "{{name}} 차단 해제",
+			"blockTitle": "{{name}} 님을 차단할까요?",
+			"unblockTitle": "{{name}} 님의 차단을 해제할까요?",
+			"failed": "차단 설정을 변경하지 못했습니다. 다시 시도하세요.",
+			"userDescription": "나와 이 사용자 사이의 다이렉트 메시지와 초대가 양방향으로 차단됩니다. 양쪽이 소유한 봇에도 적용됩니다. 함께 참여한 방에서는 서로의 내용을 계속 볼 수 있습니다. 방에서 나가기는 별도로 할 수 있습니다.",
+			"botDescription": "나와 내 봇, 그리고 이 봇 사이의 다이렉트 메시지와 초대가 양방향으로 차단됩니다. 이 봇은 함께 참여한 방에 남습니다. 방에서 나가기는 별도로 할 수 있습니다.",
+			"unblockDescription": "이 차단이 해제됩니다. 다른 차단은 계속 적용됩니다.",
+			"composer": "차단된 대화입니다. 메시지를 다시 허용하려면 차단한 사용자 및 봇 설정을 변경하세요."
+		},
+		"leaveRoom": {
+			"action": "방 나가기",
+			"title": "이 방에서 나갈까요?",
+			"description": "나와 이 방에 있는 내 봇이 방에서 나가고 더 이상 이 방의 메시지를 받지 않습니다.",
+			"failed": "방에서 나가지 못했습니다. 다시 시도하세요."
+		}
+	},
+	"editor": {
+		"abilities": {
+			"appsCount_one": "",
+			"appsCount_other": "",
+			"appsEmpty": "",
+			"appsFailed": "",
+			"appsLeft": "",
+			"appsNoMatch": "",
+			"appsRole": "",
+			"appsSearch": "",
+			"appsUntitled": "",
+			"flowpilot": {
+				"badge": "",
+				"subtitle": "",
+				"title": ""
+			},
+			"groups": {
+				"apps": "",
+				"hands": "",
+				"memory": "",
+				"security": "",
+				"talk": "",
+				"web": ""
+			},
+			"needsLocal": "",
+			"profile": "",
+			"profileApps_one": "",
+			"profileApps_other": "",
+			"profileEmpty": "",
+			"profilePlaceholder": "",
+			"subtitle": "",
+			"subtitleMemoryOn": "",
+			"title": ""
+		},
+		"actions": {
+			"back": "",
+			"cancel": "",
+			"create": "",
+			"creating": "",
+			"delete": "",
+			"deleting": "",
+			"duplicate": "",
+			"duplicating": "",
+			"next": "",
+			"save": "",
+			"saving": ""
+		},
+		"appsAttachFailed_one": "",
+		"appsAttachFailed_other": "",
+		"brain": {
+			"addFallback": "",
+			"automatic": "",
+			"automaticHint": "",
+			"fallbackLabel": "",
+			"fallbackLimit": "",
+			"fallbacks": "",
+			"fallbacksHint": "",
+			"free": "",
+			"instructions": "",
+			"instructionsCount": "",
+			"instructionsPlaceholder": "",
+			"local": "",
+			"localOnServer": "",
+			"memoryHint": "",
+			"memoryHost": "",
+			"memoryHostHint": "",
+			"memoryModel": "",
+			"memoryNone": "",
+			"moveDown": "",
+			"moveUp": "",
+			"noModels": "",
+			"pins": {
+				"hint": "",
+				"host": "",
+				"hostHint": "",
+				"image": "",
+				"imageHint": "",
+				"none": "",
+				"stt": "",
+				"sttHint": "",
+				"title": "",
+				"tts": "",
+				"ttsHint": "",
+				"vision": "",
+				"visionHint": ""
+			},
+			"primary": "",
+			"remove": "",
+			"searchModels": "",
+			"subtitle": "",
+			"title": "",
+			"unknownModel": ""
+		},
+		"delete": {
+			"action": "",
+			"confirm": ""
+		},
+		"deleted": "",
+		"describe": {
+			"applied": "",
+			"bestMatch": "",
+			"bestMatches": "",
+			"hint": "",
+			"nextUses": "",
+			"noMatch": "",
+			"placeholder": "",
+			"presets": "",
+			"scratch": "",
+			"selected": "",
+			"showAll": "",
+			"showFewer": "",
+			"subtitle": "",
+			"title": ""
+		},
+		"discard": {
+			"confirm": "",
+			"keep": "",
+			"prompt": ""
+		},
+		"duplicate": {
+			"unsaved": ""
+		},
+		"duplicated": "",
+		"errors": {
+			"appLimit": "",
+			"capabilityLocation": "",
+			"createFailed": "",
+			"deleteFailed": "",
+			"duplicateFailed": "",
+			"fluxCapabilities": "",
+			"limitReached": "",
+			"saveFailed": "",
+			"secretLimit": "",
+			"serverLimitFact": "",
+			"serverLimitReached": "",
+			"systemUndeletable": ""
+		},
+		"loadFailed": "",
+		"loading": "",
+		"location": {
+			"device": "",
+			"deviceEmpty": "",
+			"deviceFailed": "",
+			"devicePlaceholder": "",
+			"subtitle": "",
+			"title": "",
+			"turnedBackOn": "",
+			"turnedOff": ""
+		},
+		"preview": {
+			"blank": "",
+			"defaultHint": "",
+			"description": "",
+			"descriptionPlaceholder": "",
+			"eyebrow": "",
+			"label": "",
+			"name": "",
+			"namePlaceholder": "",
+			"noCapabilities": "",
+			"unnamed": ""
+		},
+		"problems": {
+			"descriptionTooLong": "",
+			"deviceRequired": "",
+			"fix": "",
+			"instructionsTooLong": "",
+			"lookInvalid": "",
+			"lookLocked": "",
+			"nameRequired": "",
+			"nameTooLong": "",
+			"profileRequired": ""
+		},
+		"safety": {
+			"encryptionHint": "",
+			"handles": "",
+			"privacy": "",
+			"subtitle": "",
+			"title": ""
+		},
+		"secrets": {
+			"add": "",
+			"delete": "",
+			"deleteConfirm": "",
+			"deleteFailed": "",
+			"deleted": "",
+			"description": "",
+			"descriptionPlaceholder": "",
+			"empty": "",
+			"lastUsed": "",
+			"limit": "",
+			"loadFailed": "",
+			"name": "",
+			"nameHint": "",
+			"nameInvalid": "",
+			"nameSealed": "",
+			"nameTaken": "",
+			"neverUsed": "",
+			"replaceValue": "",
+			"save": "",
+			"saveFailed": "",
+			"saved": "",
+			"sealed": "",
+			"sealedHint": "",
+			"subtitle": "",
+			"title": "",
+			"updated": "",
+			"value": "",
+			"valueHint": "",
+			"valuePlaceholder": "",
+			"valueTooLarge": "",
+			"writeOnly": ""
+		},
+		"stepNeedsAttention": "",
+		"steps": {
+			"abilities": "",
+			"brain": "",
+			"describe": "",
+			"location": "",
+			"look": "",
+			"safety": "",
+			"secrets": ""
+		},
+		"stepsLabel": "",
+		"subtitle": {
+			"create": "",
+			"edit": ""
+		},
+		"title": {
+			"create": "",
+			"edit": ""
+		},
+		"unavailable": ""
+	},
+	"exchange": {
+		"answered": "",
+		"answeredBy": "",
+		"denied": "",
+		"error": "",
+		"none": "",
+		"open": "",
+		"pending": "",
+		"readOnly": "",
+		"thisBot": "",
+		"title": "",
+		"waiting": "",
+		"with": ""
+	},
+	"grants": {
+		"app": "",
+		"browser": "",
+		"command": "",
+		"computer": "",
+		"connection": "",
+		"documents": "",
+		"email": "",
+		"event": "",
+		"host": "",
+		"other": "",
+		"page": "",
+		"person": "",
+		"personUnknown": "",
+		"table": "",
+		"tool": ""
+	},
+	"history": {
+		"busy": "",
+		"empty": "",
+		"latest": "",
+		"loading": "",
+		"newTopic": "",
+		"newTopicAction": "",
+		"title": "",
+		"topicStarted": "",
+		"untitled": ""
+	},
+	"home": {
+		"chat": {
+			"heading": "",
+			"message": "",
+			"pickBot": "",
+			"placeholder": "",
+			"send": ""
+		},
+		"messages": {
+			"caughtUp": "",
+			"signIn": "",
+			"title": ""
+		},
+		"needs": {
+			"empty": ""
+		},
+		"openBots": "",
+		"rooms": {
+			"empty": "",
+			"title": ""
+		}
+	},
+	"identity": {
+		"actsFor": "",
+		"bot": "",
+		"botId": "",
+		"botOf": "",
+		"deleted": "",
+		"yourBot": ""
+	},
+	"local": {
+		"badge": "",
+		"badgeHint": "",
+		"conversationHint": "",
+		"conversationSubtitle": "",
+		"location": {
+			"description": "",
+			"label": "",
+			"note": ""
+		},
+		"mixedRoom": "",
+		"picker": {
+			"hint": "",
+			"searchLabel": ""
+		},
+		"roomsEmpty": "",
+		"summary": ""
+	},
+	"locations": {
+		"desktop": {
+			"description": "",
+			"label": ""
+		},
+		"device": {
+			"description": "",
+			"label": ""
+		},
+		"server": {
+			"description": "",
+			"label": ""
+		}
+	},
+	"memory": {
+		"clearFailed": "",
+		"cleared": "",
+		"count_one": "",
+		"count_other": "",
+		"deleteFailed": "",
+		"factsEmpty": "",
+		"factsEmptyOff": "",
+		"factsFailed": "",
+		"forget": "",
+		"justNow": "",
+		"loadFailed": "",
+		"noticeCapability": "",
+		"noticeModel": "",
+		"off": "",
+		"turnOn": "",
+		"turnOnFailed": ""
+	},
+	"move": {
+		"account": "",
+		"action_one": "",
+		"action_other": "",
+		"banner": {
+			"action": "",
+			"description": "",
+			"label": "",
+			"title_one": "",
+			"title_other": ""
+		},
+		"checkFailed": "",
+		"close": "",
+		"description": "",
+		"empty": "",
+		"fix": {
+			"automaticModel": "",
+			"dropFallback": "",
+			"dropProfileApps": "",
+			"failed": "",
+			"openSettings": "",
+			"removeApp": "",
+			"removeSecret": "",
+			"useProfile": ""
+		},
+		"intro": {
+			"action": ""
+		},
+		"issues": {
+			"appLimit": "",
+			"appUnavailable": "",
+			"capabilityLocation": "",
+			"deviceUnavailable": "",
+			"fallbackUnavailable": "",
+			"idInvalid": "",
+			"idTaken": "",
+			"invalid": "",
+			"limitReached": "",
+			"localChanged": "",
+			"lookNotOwned": "",
+			"modelUnavailable": "",
+			"profileUnavailable": "",
+			"secretKey": "",
+			"secretUnreadable": "",
+			"serverLimitReached": "",
+			"unknown": ""
+		},
+		"parts": {
+			"apps_one": "",
+			"apps_other": "",
+			"chats_one": "",
+			"chats_other": "",
+			"label": "",
+			"messages_one": "",
+			"messages_other": "",
+			"nothing": "",
+			"secrets_one": "",
+			"secrets_other": "",
+			"skipped_one": "",
+			"skipped_other": "",
+			"waiting_one": "",
+			"waiting_other": ""
+		},
+		"progress": "",
+		"recheck": "",
+		"result": {
+			"failed": "",
+			"unknownError": "",
+			"warnings_one": "",
+			"warnings_other": ""
+		},
+		"status": {
+			"checking": "",
+			"issues_one": "",
+			"issues_other": "",
+			"moved": "",
+			"moving": "",
+			"notChecked": "",
+			"ready": ""
+		},
+		"staysHere": "",
+		"steps": {
+			"apps": "",
+			"check": "",
+			"conversations": "",
+			"done": "",
+			"forget_bot": "",
+			"forget_conversations": "",
+			"forget_workspace": "",
+			"import_bot": "",
+			"rebind": "",
+			"secrets": "",
+			"segments": "",
+			"update_bot": "",
+			"verify": "",
+			"workspace": ""
+		},
+		"title": "",
+		"toast": {
+			"action": "",
+			"title_one": "",
+			"title_other": ""
+		}
+	},
+	"panel": {
+		"back": "",
+		"cancelTurn": "",
+		"close": "",
+		"details": {
+			"abilities": "",
+			"edit": "",
+			"fallbacks_one": "",
+			"fallbacks_other": "",
+			"runs": "",
+			"status": ""
+		},
+		"encryption": {
+			"fingerprint": "",
+			"host": "",
+			"label": "",
+			"on": "",
+			"rotate": "",
+			"rotateFailed": "",
+			"rotated": "",
+			"unpublished": "",
+			"waiting": ""
+		},
+		"grants": {
+			"none": "",
+			"revoke": "",
+			"title": ""
+		},
+		"hide": "",
+		"label": "",
+		"mail": {
+			"addressTitle": "",
+			"afterSave": "",
+			"aliasLabel": "",
+			"aliasPlaceholder": "",
+			"aliasRules": "",
+			"available": "",
+			"back": "",
+			"change": "",
+			"checking": "",
+			"claim": "",
+			"claimed": "",
+			"empty": "",
+			"emptyNoAddress": "",
+			"localNote": "",
+			"noAddress": "",
+			"received": "",
+			"release": "",
+			"sent": "",
+			"taken": "",
+			"unverified": ""
+		},
+		"notifications": {
+			"failed": "",
+			"hint": "",
+			"label": "",
+			"off": "",
+			"on": ""
+		},
+		"openFull": "",
+		"openWorkspace": "",
+		"permissions": {
+			"granted": "",
+			"none": "",
+			"received": "",
+			"revoke": "",
+			"title": ""
+		},
+		"show": "",
+		"tabs": "",
+		"tasks": {
+			"at": "",
+			"create": "",
+			"cron": "",
+			"cronLabel": "",
+			"delete": "",
+			"done": "",
+			"full": "",
+			"full_one": "",
+			"full_other": "",
+			"instruction": "",
+			"instructionLabel": "",
+			"name": "",
+			"nameLabel": "",
+			"next": "",
+			"none": "",
+			"once": "",
+			"pause": "",
+			"paused": "",
+			"repeat": "",
+			"resume": "",
+			"title": "",
+			"tz": ""
+		},
+		"waitingForYou": "",
+		"webhooks": {
+			"authenticatedUrl": "",
+			"authenticatedUrlHint": "",
+			"authenticationHint": "",
+			"closeExamples": "",
+			"copied": "",
+			"copy": "",
+			"create": "",
+			"delete": "",
+			"done": "",
+			"examples": "",
+			"headerExample": "",
+			"instruction": "",
+			"instructionLabel": "",
+			"issued": "",
+			"lastCalled": "",
+			"name": "",
+			"nameLabel": "",
+			"neverCalled": "",
+			"none": "",
+			"once": "",
+			"optionalSigning": "",
+			"placeholderHint": "",
+			"responseHint": "",
+			"rotate": "",
+			"secret": "",
+			"signingHint": "",
+			"signingKey": "",
+			"title": "",
+			"url": "",
+			"urlExample": ""
+		},
+		"working": ""
+	},
+	"presence": {
+		"lastSeen": "",
+		"offline": "",
+		"online": "",
+		"unknown": ""
+	},
+	"presets": {
+		"coder": {
+			"description": "",
+			"instructions": "",
+			"name": ""
+		},
+		"data_analyst": {
+			"description": "",
+			"instructions": "",
+			"name": ""
+		},
+		"everyday_helper": {
+			"description": "",
+			"instructions": "",
+			"name": ""
+		},
+		"inbox_triage": {
+			"description": "",
+			"instructions": "",
+			"name": ""
+		},
+		"ops_watcher": {
+			"description": "",
+			"instructions": "",
+			"name": ""
+		},
+		"research_digest": {
+			"description": "",
+			"instructions": "",
+			"name": ""
+		},
+		"secretary": {
+			"description": "",
+			"instructions": "",
+			"name": ""
+		},
+		"web_tester": {
+			"description": "",
+			"instructions": "",
+			"name": ""
+		}
+	},
+	"restrictions": {
+		"advanced": "",
+		"all": "",
+		"everyChat": "",
+		"failed": "",
+		"folderAdd": "",
+		"folderPlaceholder": "",
+		"foldersAll": "",
+		"foldersOnly": "",
+		"groups": {
+			"boards": "",
+			"events": "",
+			"files": "",
+			"other": "",
+			"tables": ""
+		},
+		"limit": "",
+		"limitedTo": "",
+		"nothingToPick": "",
+		"permissions": {
+			"execute_boards": "",
+			"execute_events": "",
+			"invoke_api": "",
+			"list_events": "",
+			"read_boards": "",
+			"read_config": "",
+			"read_courses": "",
+			"read_database": "",
+			"read_events": "",
+			"read_files": "",
+			"read_logs": "",
+			"read_team": "",
+			"read_templates": "",
+			"read_widgets": "",
+			"write_boards": "",
+			"write_courses": "",
+			"write_database": "",
+			"write_events": "",
+			"write_files": "",
+			"write_templates": "",
+			"write_widgets": ""
+		},
+		"preset": "",
+		"presets": {
+			"custom": "",
+			"full": "",
+			"read_and_call_events": "",
+			"read_only": ""
+		},
+		"readOnlyFiles": "",
+		"removeFolder": "",
+		"title": ""
+	},
+	"roomLimits": {
+		"apps": "",
+		"description": "",
+		"failed": "",
+		"title": ""
+	},
+	"roomMembers": {
+		"bot": "",
+		"cancel": "",
+		"cancelFailed": "",
+		"declined": "",
+		"description": "",
+		"invite": "",
+		"inviteFailed": "",
+		"limits": "",
+		"members": "",
+		"open": "",
+		"pending": "",
+		"saveLimits": "",
+		"send": "",
+		"send_one": "",
+		"send_other": "",
+		"sent": "",
+		"thisRoom": "",
+		"title": "",
+		"waiting": "",
+		"waitingOwner": "",
+		"removeNamed": "방에서 {{name}} 내보내기",
+		"removeTitle": "이 방에서 {{name}} 님을 내보낼까요?",
+		"removePersonDescription": "이 사용자와 이 사용자가 소유한 방 안의 봇이 방에서 나가고 더 이상 이 방의 메시지를 받지 않습니다.",
+		"removeBotDescription": "이 봇이 방에서 나가고 더 이상 이 방의 메시지를 받지 않습니다.",
+		"remove": "방에서 내보내기",
+		"removeFailed": "이 멤버를 내보내지 못했습니다. 다시 시도하세요."
+	},
+	"system": {
+		"flux": {
+			"description": "",
+			"name": ""
+		},
+		"general": {
+			"description": "",
+			"name": ""
+		}
+	},
+	"workspace": {
+		"failed": "",
+		"filesTitle": "",
+		"memoryEmpty": "",
+		"memoryFailed": "",
+		"preparing": "",
+		"refused": "",
+		"tabs": {
+			"chat": "",
+			"computer": "",
+			"data": "",
+			"details": "",
+			"files": "",
+			"label": "",
+			"mail": "",
+			"memory": ""
+		},
+		"unsupported": ""
+	}
+}

@@ -75,12 +75,36 @@ pub struct Authority {
 
 pub async fn current_scope(app: &AppHandle) -> Result<Scope> {
     let scope = Scope::parse(native::scope()?)?;
-    let profile = TauriSettingsState::current_profile(app).await?;
+    let settings = TauriSettingsState::construct(app).await?;
+    let profile = settings.lock().await.profile_by_id(&scope.profile_id)?;
     require!(
-        profile.hub_profile.id == scope.profile_id,
-        "Geofence belongs to another profile"
+        flow_like::hub::hub_origin(&profile.hub_profile.hub, profile.hub_profile.secure).as_deref()
+            == Some(scope.origin.as_str()),
+        "The geofence profile's hub changed"
+    );
+    let binding = crate::native_auth::SessionBinding::capture(&scope.profile_id, &scope.origin)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    require!(
+        binding
+            .as_ref()
+            .map(|binding| binding.subject.as_str())
+            .unwrap_or("local")
+            == scope.subject,
+        "The geofence profile's signed-in account changed"
     );
     Ok(scope)
+}
+
+pub(super) fn registration_matches_scope(registration: &EventRegistration, scope: &Scope) -> bool {
+    registration
+        .profile_binding
+        .as_ref()
+        .is_some_and(|binding| {
+            binding.profile_id == scope.profile_id
+                && binding.hub_origin == scope.origin
+                && binding.subject.as_deref().unwrap_or("local") == scope.subject
+        })
 }
 
 async fn json_response<T: DeserializeOwned>(response: reqwest::Response) -> Result<T> {
@@ -239,6 +263,41 @@ fn hub_sign_ins(
         .collect()
 }
 
+/// Only the native registration bridge receives these secrets. Android keeps the record in Keystore-backed storage.
+#[cfg(target_os = "android")]
+pub(super) fn android_delivery(
+    registration: &EventRegistration,
+    scope: &Scope,
+) -> Result<super::model::AndroidDelivery> {
+    ensure!(
+        registration.remote && registration_matches_scope(registration, scope),
+        "The location trigger account changed"
+    );
+    ensure!(
+        registration.pat_owner_sub.as_deref() == Some(scope.subject.as_str())
+            && registration.hub_origin.as_deref() == Some(scope.origin.as_str()),
+        UNVERIFIED_TOKEN
+    );
+    let token = registration
+        .personal_access_token
+        .as_deref()
+        .filter(|token| has_token(Some(*token)))
+        .ok_or_else(|| anyhow!("Missing Event authentication"))?;
+    ensure!(
+        scope.origin.starts_with("https://"),
+        "Background remote location Events require HTTPS"
+    );
+    Ok(super::model::AndroidDelivery {
+        endpoint: format!(
+            "{}/api/v1/sink/trigger/geofence/{}",
+            scope.origin,
+            urlencoding::encode(&registration.event_id)
+        ),
+        authorization: authorization(token),
+        oauth_tokens: serde_json::to_value(hub_sign_ins(scope, &registration.oauth_tokens))?,
+    })
+}
+
 fn event_matches(event: &Event, registration: &EventRegistration, scope: &Scope) -> Result<()> {
     require!(
         event.id == registration.event_id && event.active && event.event_type == "geolocation",
@@ -274,6 +333,16 @@ pub async fn authorize(
     scope: &Scope,
 ) -> Result<Authority> {
     require_scope(app, scope).await?;
+    require!(
+        registration_matches_scope(registration, scope),
+        "This geofence has no matching profile binding; turn its trigger on again"
+    );
+    registration
+        .profile_binding
+        .as_ref()
+        .expect("checked profile binding")
+        .resolve(app)
+        .await?;
     let local_app = active_local_app(app, &registration.app_id).await?;
     if let Some(local) = local_app
         .as_ref()
@@ -420,7 +489,8 @@ async fn require_local_copy(
         runs_the_same_board(&cached, event),
         "Download the current Event before running its geofence locally"
     );
-    let profile = TauriSettingsState::current_profile(app).await?;
+    let settings = TauriSettingsState::construct(app).await?;
+    let profile = settings.lock().await.profile_by_id(&scope.profile_id)?;
     require!(
         flow_like::hub::hub_origin(&profile.hub_profile.hub, profile.hub_profile.secure).as_deref()
             == Some(scope.origin.as_str()),
@@ -478,6 +548,7 @@ pub async fn execute(
         offline: authority.offline,
         token: registration.personal_access_token.clone(),
         token_owner: registration.token_owner(),
+        profile_binding: registration.profile_binding.clone(),
         callback: Some(run_callback(app, run_id)),
         request_control: None,
         oauth_tokens: registration.oauth_tokens.clone(),

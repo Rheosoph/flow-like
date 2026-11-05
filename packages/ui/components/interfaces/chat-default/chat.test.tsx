@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, mock, test } from "bun:test";
 import { Window } from "happy-dom";
-import { act, forwardRef } from "react";
+import { type ReactNode, act, forwardRef } from "react";
 import { createRoot } from "react-dom/client";
 import type { IChatRef } from "./chat";
 import type { IMessage } from "./chat-db";
@@ -39,7 +39,13 @@ const actual = {
 	answerPlayback: { ...(await import("./use-answer-playback")) },
 	voiceConfig: { ...(await import("./voice-config")) },
 	chatbox: { ...(await import("./chatbox")) },
+	mainWidgetPane: { ...(await import("./main-widget-pane")) },
 };
+
+mock.module("./main-widget-pane", () => ({
+	...actual.mainWidgetPane,
+	MainWidgetPane: ({ children }: { children: ReactNode }) => children,
+}));
 
 mock.module("./VoiceMode", () => ({
 	...actual.voiceMode,
@@ -100,6 +106,7 @@ afterAll(() => {
 	mock.module("./use-answer-playback", () => actual.answerPlayback);
 	mock.module("./voice-config", () => actual.voiceConfig);
 	mock.module("./chatbox", () => actual.chatbox);
+	mock.module("./main-widget-pane", () => actual.mainWidgetPane);
 	for (const [key, descriptor] of globalDescriptors) {
 		if (descriptor) Object.defineProperty(globalThis, key, descriptor);
 		else Reflect.deleteProperty(globalThis, key);
@@ -220,6 +227,16 @@ describe("Chat message inline content", () => {
 			expect(last("other")?.anchoredContent).toBeUndefined();
 			expect(last("live")).toMatchObject({ loading: true });
 			expect(last("live")?.anchoredContent).toBe(liveContent);
+
+			await act(async () => {
+				ref.current?.pushCurrentMessageUpdate([
+					{ ...message("live", 3), stream_root_id: "live" },
+					{ ...message("next", 4), stream_root_id: "live" },
+				]);
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			});
+			expect(last("live")).toMatchObject({ loading: false });
+			expect(last("next")).toMatchObject({ loading: true });
 
 			await act(async () => root.unmount());
 			window.close();

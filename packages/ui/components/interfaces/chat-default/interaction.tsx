@@ -6,12 +6,23 @@ import {
 	CheckCircle2,
 	ChevronRight,
 	ChevronUp,
+	CircleDotIcon,
+	ClipboardListIcon,
 	Clock,
+	ListChecksIcon,
+	type LucideIcon,
 	Plus,
 	Trash2,
 	XCircle,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+	type ReactNode,
+	useCallback,
+	useEffect,
+	useId,
+	useMemo,
+	useState,
+} from "react";
 import { cn } from "../../../lib";
 import {
 	fromDateTimeInputValue,
@@ -27,15 +38,7 @@ import type {
 	IMultipleChoiceInteraction,
 	ISingleChoiceInteraction,
 } from "../../../lib/schema/interaction";
-import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
-import {
-	Card,
-	CardContent,
-	CardDescription,
-	CardHeader,
-	CardTitle,
-} from "../../ui/card";
 import { Checkbox } from "../../ui/checkbox";
 import { Input } from "../../ui/input";
 import { Label } from "../../ui/label";
@@ -50,6 +53,17 @@ import {
 import { Switch } from "../../ui/switch";
 import { TextEditor } from "../../ui/text-editor";
 import { Textarea } from "../../ui/textarea";
+import {
+	RequestCard,
+	RequestCardBody,
+	RequestCardFooter,
+	RequestCardHeader,
+	RequestChoice,
+	RequestMark,
+	RequestPill,
+	type RequestTone,
+	requestButtonClass,
+} from "./request-card";
 
 interface InteractionProps {
 	interaction: IInteractionRequest;
@@ -88,50 +102,82 @@ function formatCountdown(seconds: number): string {
 	return m > 0 ? `${m}m ${s}s` : `${s}s`;
 }
 
-function StatusBadge({ status }: { status: IInteractionStatus }) {
+const STATUS_TONES: Record<IInteractionStatus, RequestTone> = {
+	pending: "primary",
+	responded: "good",
+	expired: "critical",
+	cancelled: "muted",
+};
+
+const STATUS_ICONS: Record<IInteractionStatus, LucideIcon> = {
+	pending: Clock,
+	responded: CheckCircle2,
+	expired: XCircle,
+	cancelled: AlertCircle,
+};
+
+const TYPE_ICONS: Record<IInteractionType["type"], LucideIcon> = {
+	single_choice: CircleDotIcon,
+	multiple_choice: ListChecksIcon,
+	form: ClipboardListIcon,
+};
+
+function useStatusLabel() {
 	const { t } = useTranslation("chat");
-	switch (status) {
-		case "pending":
-			return (
-				<Badge
-					variant="outline"
-					className="gap-1 text-amber-600 border-amber-600/30"
-				>
-					<Clock className="h-3 w-3" />
-					{t("pending", "Pending")}
-				</Badge>
-			);
-		case "responded":
-			return (
-				<Badge
-					variant="outline"
-					className="gap-1 text-emerald-600 border-emerald-600/30"
-				>
-					<CheckCircle2 className="h-3 w-3" />
-					{t("responded", "Responded")}
-				</Badge>
-			);
-		case "expired":
-			return (
-				<Badge
-					variant="outline"
-					className="gap-1 text-red-600 border-red-600/30"
-				>
-					<XCircle className="h-3 w-3" />
-					{t("expired", "Expired")}
-				</Badge>
-			);
-		case "cancelled":
-			return (
-				<Badge
-					variant="outline"
-					className="gap-1 text-muted-foreground border-muted-foreground/30"
-				>
-					<AlertCircle className="h-3 w-3" />
-					{t("cancelled", "Cancelled")}
-				</Badge>
-			);
-	}
+	return (status: IInteractionStatus): string =>
+		({
+			pending: t("pending", "Pending"),
+			responded: t("responded", "Responded"),
+			expired: t("expired", "Expired"),
+			cancelled: t("cancelled", "Cancelled"),
+		})[status];
+}
+
+/** The submit row every interaction form ends in, with its hint or validation note on the left. */
+function InteractionFooter({
+	note,
+	error,
+	disabled,
+	onSubmit,
+}: Readonly<{
+	note?: ReactNode;
+	error?: ReactNode;
+	disabled: boolean;
+	onSubmit: () => void;
+}>) {
+	const { t } = useTranslation("chat");
+	return (
+		<RequestCardFooter
+			start={
+				error ? (
+					<p className="text-xs text-destructive">{error}</p>
+				) : (
+					note && <p className="text-xs text-muted-foreground">{note}</p>
+				)
+			}
+		>
+			<Button
+				size="sm"
+				onClick={onSubmit}
+				disabled={disabled}
+				className={requestButtonClass}
+			>
+				{t("submit", "Submit")}
+			</Button>
+		</RequestCardFooter>
+	);
+}
+
+function SubmittedLine({ withValue }: Readonly<{ withValue: boolean }>) {
+	const { t } = useTranslation("chat");
+	return (
+		<p className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+			<CheckCircle2 className="size-3.5 text-good" />
+			{withValue
+				? t("responseSubmitted2", "Response submitted:")
+				: t("responseSubmitted", "Response submitted.")}
+		</p>
+	);
 }
 
 function ResponseDisplay({
@@ -142,14 +188,7 @@ function ResponseDisplay({
 	responseValue: any;
 }) {
 	const { t } = useTranslation("chat");
-	if (!responseValue) {
-		return (
-			<p className="text-sm text-muted-foreground flex items-center gap-1.5">
-				<CheckCircle2 className="h-4 w-4 text-emerald-500" />
-				{t("responseSubmitted", "Response submitted.")}
-			</p>
-		);
-	}
+	if (!responseValue) return <SubmittedLine withValue={false} />;
 
 	switch (interactionType.type) {
 		case "single_choice": {
@@ -160,18 +199,14 @@ function ResponseDisplay({
 			const freeformValue = responseValue.freeform_value;
 
 			return (
-				<div className="text-sm space-y-1">
-					<p className="text-muted-foreground flex items-center gap-1.5">
-						<CheckCircle2 className="h-4 w-4 text-emerald-500" />
-						{t("responseSubmitted2", "Response submitted:")}
-					</p>
-					<p className="font-medium pl-5">
+				<SubmittedAnswer>
+					<p className="font-medium">
 						{selectedOption?.label ?? selectedId}
 						{freeformValue && (
 							<span className="font-normal text-muted-foreground">{`: ${freeformValue}`}</span>
 						)}
 					</p>
-				</div>
+				</SubmittedAnswer>
 			);
 		}
 		case "multiple_choice": {
@@ -183,15 +218,11 @@ function ResponseDisplay({
 				.join(", ");
 
 			return (
-				<div className="text-sm space-y-1">
-					<p className="text-muted-foreground flex items-center gap-1.5">
-						<CheckCircle2 className="h-4 w-4 text-emerald-500" />
-						{t("responseSubmitted2", "Response submitted:")}
-					</p>
-					<p className="font-medium pl-5">
+				<SubmittedAnswer>
+					<p className="font-medium">
 						{selectedLabels || t("noneSelected", "None selected")}
 					</p>
-				</div>
+				</SubmittedAnswer>
 			);
 		}
 		case "form": {
@@ -200,22 +231,11 @@ function ResponseDisplay({
 				([, v]) => v !== undefined && v !== "",
 			);
 
-			if (entries.length === 0) {
-				return (
-					<p className="text-sm text-muted-foreground flex items-center gap-1.5">
-						<CheckCircle2 className="h-4 w-4 text-emerald-500" />
-						{t("responseSubmitted", "Response submitted.")}
-					</p>
-				);
-			}
+			if (entries.length === 0) return <SubmittedLine withValue={false} />;
 
 			return (
-				<div className="text-sm space-y-1">
-					<p className="text-muted-foreground flex items-center gap-1.5">
-						<CheckCircle2 className="h-4 w-4 text-emerald-500" />
-						{t("responseSubmitted2", "Response submitted:")}
-					</p>
-					<div className="pl-5 space-y-0.5">
+				<SubmittedAnswer>
+					<dl className="grid grid-cols-[minmax(0,auto)_minmax(0,1fr)] gap-x-3 gap-y-1">
 						{entries.map(([fieldId, value]) => {
 							const field = fields.find((f) => f.id === fieldId);
 							const label = field?.label ?? fieldId;
@@ -226,17 +246,30 @@ function ResponseDisplay({
 										: "No"
 									: String(value);
 							return (
-								<p key={fieldId}>
-									<span className="text-muted-foreground">{`${label}:`}</span>{" "}
-									<span className="font-medium">{displayValue}</span>
-								</p>
+								<div key={fieldId} className="contents">
+									<dt className="truncate text-muted-foreground">{label}</dt>
+									<dd className="wrap-break-word font-medium">
+										{displayValue}
+									</dd>
+								</div>
 							);
 						})}
-					</div>
-				</div>
+					</dl>
+				</SubmittedAnswer>
 			);
 		}
 	}
+}
+
+function SubmittedAnswer({ children }: Readonly<{ children: ReactNode }>) {
+	return (
+		<div className="space-y-2">
+			<SubmittedLine withValue />
+			<div className="rounded-lg bg-muted/50 px-3 py-2.5 text-sm">
+				{children}
+			</div>
+		</div>
+	);
 }
 
 function SingleChoiceForm({
@@ -266,56 +299,55 @@ function SingleChoiceForm({
 		if (!config.allow_freeform) return null;
 		return config.options.find((o) => o.freeform) ?? null;
 	}, [config]);
+	const idPrefix = useId();
 
 	return (
-		<div className="space-y-3">
-			<RadioGroup
-				value={selected}
-				onValueChange={setSelected}
-				disabled={isDisabled}
-			>
-				{config.options.map((option) => (
-					<div key={option.id} className="flex items-start gap-2">
-						<RadioGroupItem
-							value={option.id}
-							id={`opt-${option.id}`}
-							className="mt-0.5"
-						/>
-						<div className="grid gap-0.5">
-							<Label
-								htmlFor={`opt-${option.id}`}
-								className="font-normal cursor-pointer"
-							>
-								{option.label}
-							</Label>
-							{option.description && (
-								<span className="text-xs text-muted-foreground">
-									{option.description}
-								</span>
-							)}
-						</div>
-					</div>
-				))}
-			</RadioGroup>
-
-			{activeFreeform && selected === activeFreeform.id && (
-				<Input
-					placeholder={t("enterYourAnswer", "Enter your answer...")}
-					value={freeformValue}
-					onChange={(e) => setFreeformValue(e.target.value)}
+		<>
+			<RequestCardBody>
+				<RadioGroup
+					value={selected}
+					onValueChange={setSelected}
 					disabled={isDisabled}
-					className="mt-2"
-				/>
-			)}
+					className="gap-1.5"
+				>
+					{config.options.map((option) => {
+						const id = `${idPrefix}-${option.id}`;
+						return (
+							<RequestChoice
+								key={option.id}
+								htmlFor={id}
+								active={selected === option.id}
+								disabled={isDisabled}
+								control={
+									<RadioGroupItem
+										value={option.id}
+										id={id}
+										className="mt-0.5"
+									/>
+								}
+								label={option.label}
+								description={option.description}
+							/>
+						);
+					})}
+				</RadioGroup>
 
-			<Button
-				size="sm"
-				onClick={handleSubmit}
+				{activeFreeform && selected === activeFreeform.id && (
+					<Input
+						autoFocus
+						placeholder={t("enterYourAnswer", "Enter your answer...")}
+						value={freeformValue}
+						onChange={(e) => setFreeformValue(e.target.value)}
+						disabled={isDisabled}
+						className="rounded-lg"
+					/>
+				)}
+			</RequestCardBody>
+			<InteractionFooter
+				onSubmit={handleSubmit}
 				disabled={isDisabled || !selected}
-			>
-				{t("submit", "Submit")}
-			</Button>
-		</div>
+			/>
+		</>
 	);
 }
 
@@ -367,63 +399,58 @@ function MultipleChoiceForm({
 		onSubmit({ selected_ids: Array.from(selected) });
 	}, [selected, validationError, onSubmit]);
 
+	const idPrefix = useId();
+	const limits =
+		config.min_selections && config.max_selections
+			? `Select ${config.min_selections}–${config.max_selections} options`
+			: config.min_selections
+				? t(
+						"selectAtLeastMin_selections",
+						"Select at least {{min_selections}}",
+						{ min_selections: config.min_selections },
+					)
+				: config.max_selections
+					? t(
+							"selectAtMostMax_selections",
+							"Select at most {{max_selections}}",
+							{ max_selections: config.max_selections },
+						)
+					: undefined;
+
 	return (
-		<div className="space-y-3">
-			{config.options.map((option) => (
-				<div key={option.id} className="flex items-start gap-2">
-					<Checkbox
-						id={`chk-${option.id}`}
-						checked={selected.has(option.id)}
-						onCheckedChange={() => toggle(option.id)}
-						disabled={isDisabled}
-						className="mt-0.5"
-					/>
-					<div className="grid gap-0.5">
-						<Label
-							htmlFor={`chk-${option.id}`}
-							className="font-normal cursor-pointer"
-						>
-							{option.label}
-						</Label>
-						{option.description && (
-							<span className="text-xs text-muted-foreground">
-								{option.description}
-							</span>
-						)}
-					</div>
-				</div>
-			))}
-
-			{(config.min_selections || config.max_selections) && (
-				<p className="text-xs text-muted-foreground">
-					{config.min_selections && config.max_selections
-						? `Select ${config.min_selections}–${config.max_selections} options`
-						: config.min_selections
-							? t(
-									"selectAtLeastMin_selections",
-									"Select at least {{min_selections}}",
-									{ min_selections: config.min_selections },
-								)
-							: t(
-									"selectAtMostMax_selections",
-									"Select at most {{max_selections}}",
-									{ max_selections: config.max_selections },
-								)}
-				</p>
-			)}
-
-			{validationError && selected.size > 0 && (
-				<p className="text-xs text-destructive">{validationError}</p>
-			)}
-
-			<Button
-				size="sm"
-				onClick={handleSubmit}
+		<>
+			<RequestCardBody className="space-y-1.5">
+				{config.options.map((option) => {
+					const id = `${idPrefix}-${option.id}`;
+					const active = selected.has(option.id);
+					return (
+						<RequestChoice
+							key={option.id}
+							htmlFor={id}
+							active={active}
+							disabled={isDisabled}
+							control={
+								<Checkbox
+									id={id}
+									checked={active}
+									onCheckedChange={() => toggle(option.id)}
+									disabled={isDisabled}
+									className="mt-0.5"
+								/>
+							}
+							label={option.label}
+							description={option.description}
+						/>
+					);
+				})}
+			</RequestCardBody>
+			<InteractionFooter
+				note={limits}
+				error={selected.size > 0 ? validationError : undefined}
+				onSubmit={handleSubmit}
 				disabled={isDisabled || selected.size === 0 || !!validationError}
-			>
-				{t("submit", "Submit")}
-			</Button>
-		</div>
+			/>
+		</>
 	);
 }
 
@@ -1091,78 +1118,68 @@ function FormInteractionForm({
 		onSubmit(values);
 	}, [values, missingRequired, onSubmit]);
 
+	const footer = (
+		<InteractionFooter
+			error={
+				missingRequired.length > 0 &&
+				Object.keys(values).length > 0 &&
+				`${t("fillInRequiredFields", "Fill in required fields:")} ${missingRequired
+					.map((f) => f.label)
+					.join(", ")}`
+			}
+			onSubmit={handleSubmit}
+			disabled={isDisabled || missingRequired.length > 0}
+		/>
+	);
+
 	if (schema?.properties) {
 		return (
-			<div className="space-y-4">
-				{Object.entries(schema.properties).map(([name, property]) =>
-					renderSchemaField({
-						path: [name],
-						property,
-						value: values[name],
-						onChange: setSchemaFieldValue,
-						isDisabled,
-					}),
-				)}
-
-				{missingRequired.length > 0 && Object.keys(values).length > 0 && (
-					<p className="text-xs text-destructive">
-						{t("fillInRequiredFields", "Fill in required fields:")}{" "}
-						{missingRequired.map((f) => f.label).join(", ")}
-					</p>
-				)}
-
-				<Button
-					size="sm"
-					onClick={handleSubmit}
-					disabled={isDisabled || missingRequired.length > 0}
-				>
-					{t("submit", "Submit")}
-				</Button>
-			</div>
+			<>
+				<RequestCardBody className="space-y-4">
+					{Object.entries(schema.properties).map(([name, property]) =>
+						renderSchemaField({
+							path: [name],
+							property,
+							value: values[name],
+							onChange: setSchemaFieldValue,
+							isDisabled,
+						}),
+					)}
+				</RequestCardBody>
+				{footer}
+			</>
 		);
 	}
 
 	return (
-		<div className="space-y-4">
-			{(config.fields ?? []).map((field) => (
-				<div key={field.id} className="space-y-1.5">
-					<Label htmlFor={`field-${field.id}`} className="text-sm">
-						{field.label}
-						{field.required && (
-							<span className="text-destructive ml-0.5">*</span>
-						)}
-					</Label>
-					{field.description &&
-						field.field_type !== "text" &&
-						field.field_type !== "number" && (
-							<p className="text-xs text-muted-foreground">
-								{field.description}
-							</p>
-						)}
-					<FormFieldInput
-						field={field}
-						value={values[field.id]}
-						onChange={(v) => setFieldValue(field.id, v)}
-						isDisabled={isDisabled}
-					/>
-				</div>
-			))}
-
-			{missingRequired.length > 0 && Object.keys(values).length > 0 && (
-				<p className="text-xs text-destructive">
-					{t("fillInRequiredFields", "Fill in required fields:")}{" "}
-					{missingRequired.map((f) => f.label).join(", ")}
-				</p>
-			)}
-
-			<Button
-				size="sm"
-				onClick={handleSubmit}
-				disabled={isDisabled || missingRequired.length > 0}
-			>
-				{t("submit", "Submit")}
-			</Button>
-		</div>
+		<>
+			<RequestCardBody className="space-y-4">
+				{(config.fields ?? []).map((field) => (
+					<div key={field.id} className="space-y-1.5">
+						<Label htmlFor={`field-${field.id}`} className="text-sm">
+							{field.label}
+							{field.required && (
+								<span className="text-destructive ml-0.5">*</span>
+							)}
+						</Label>
+						{field.description &&
+							field.field_type !== "text" &&
+							field.field_type !== "number" && (
+								<p className="text-xs text-muted-foreground">
+									{field.description}
+								</p>
+							)}
+						<FormFieldInput
+							field={field}
+							value={values[field.id]}
+							onChange={(v) => setFieldValue(field.id, v)}
+							isDisabled={isDisabled}
+						/>
+					</div>
+				))}
+			</RequestCardBody>
+			{footer}
+		</>
 	);
 }
 
@@ -1249,6 +1266,16 @@ function getCompactResponseSummary(interaction: IInteractionRequest): string {
 	}
 }
 
+const COMPACT_ICON_TONES: Record<IInteractionStatus, string> = {
+	pending: "text-muted-foreground",
+	responded: "text-good",
+	expired: "text-critical",
+	cancelled: "text-muted-foreground",
+};
+
+const COMPACT_ROW =
+	"flex w-full max-w-lg flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-border/50 bg-muted/20 px-3 py-2";
+
 function CompactInteraction({
 	interaction,
 	onExpand,
@@ -1256,34 +1283,30 @@ function CompactInteraction({
 	interaction: IInteractionRequest;
 	onExpand: () => void;
 }) {
-	const statusIcon =
-		interaction.status === "responded" ? (
-			<CheckCircle2 className="h-3 w-3 shrink-0 text-emerald-500" />
-		) : interaction.status === "expired" ? (
-			<XCircle className="h-3 w-3 shrink-0 text-red-500/70" />
-		) : (
-			<AlertCircle className="h-3 w-3 shrink-0 text-muted-foreground" />
-		);
-
+	const statusLabel = useStatusLabel();
+	const StatusIcon = STATUS_ICONS[interaction.status];
 	const summary =
 		interaction.status === "responded"
 			? getCompactResponseSummary(interaction)
-			: interaction.status === "expired"
-				? "Expired"
-				: "Cancelled";
+			: statusLabel(interaction.status);
 
 	return (
 		<button
 			type="button"
 			onClick={onExpand}
-			className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors group min-w-0"
+			className="group flex min-w-0 items-center gap-2 rounded text-xs text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40"
 		>
-			{statusIcon}
-			<span className="font-medium text-foreground/80 truncate">
+			<StatusIcon
+				className={cn(
+					"size-3.5 shrink-0",
+					COMPACT_ICON_TONES[interaction.status],
+				)}
+			/>
+			<span className="truncate font-medium text-foreground/85">
 				{interaction.name}
 			</span>
 			<span className="truncate">{summary}</span>
-			<ChevronRight className="h-3 w-3 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity" />
+			<ChevronRight className="size-3 shrink-0 opacity-0 transition-opacity group-hover:opacity-100" />
 		</button>
 	);
 }
@@ -1311,7 +1334,7 @@ export function InteractionGroup({
 					forceExpanded
 				/>
 				{interactions.length > 1 && (
-					<div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/30 px-3 py-1.5">
+					<div className={COMPACT_ROW}>
 						{interactions
 							.filter((i) => i.id !== expandedId)
 							.map((i) => (
@@ -1328,7 +1351,7 @@ export function InteractionGroup({
 	}
 
 	return (
-		<div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/30 px-3 py-1.5 max-w-lg w-full">
+		<div className={COMPACT_ROW}>
 			{interactions.map((i) => (
 				<CompactInteraction
 					key={i.id}
@@ -1347,12 +1370,18 @@ export function Interaction({
 	onCollapse,
 	forceExpanded,
 }: InteractionProps & { onCollapse?: () => void; forceExpanded?: boolean }) {
-	const { t } = useTranslation("chat");
+	const { t } = useTranslation(["chat", "common"]);
+	const statusLabel = useStatusLabel();
 	const remaining = useCountdown(interaction.expires_at);
 	const isPending = interaction.status === "pending" && remaining > 0;
 	const isDisabled = disabled || !isPending;
 	const isSettled = !isPending && interaction.status !== "pending";
 	const [expanded, setExpanded] = useState(false);
+	const status: IInteractionStatus =
+		remaining <= 0 && interaction.status === "pending"
+			? "expired"
+			: interaction.status;
+	const tone = STATUS_TONES[status];
 
 	const handleSubmit = useCallback(
 		(value: any) => {
@@ -1365,7 +1394,7 @@ export function Interaction({
 	// Standalone condensed view (not in a group)
 	if (isSettled && !expanded && !forceExpanded) {
 		return (
-			<div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-muted/30 px-3 py-1.5 max-w-lg w-full">
+			<div className={COMPACT_ROW}>
 				<CompactInteraction
 					interaction={interaction}
 					onExpand={() => setExpanded(true)}
@@ -1374,95 +1403,99 @@ export function Interaction({
 		);
 	}
 
+	const collapse = t("common:collapse", "Collapse");
+
 	return (
-		<Card
-			className={cn(
-				"w-full max-w-lg border",
-				isPending && "border-amber-500/40",
-				interaction.status === "responded" &&
-					"border-emerald-500/30 opacity-80",
-				(interaction.status === "expired" ||
-					interaction.status === "cancelled") &&
-					"opacity-60",
-			)}
+		<RequestCard
+			tone={tone}
+			live={isPending}
+			aria-label={interaction.name}
+			className="max-w-lg"
 		>
-			<CardHeader className="pb-2 gap-1">
-				<div className="flex items-center justify-between gap-2">
-					<CardTitle className="text-sm font-semibold">
-						{interaction.name}
-					</CardTitle>
-					<div className="flex items-center gap-2">
-						{isPending && (
-							<span
-								className={cn(
-									"flex items-center gap-1 text-xs tabular-nums",
-									remaining <= 30 ? "text-red-500" : "text-muted-foreground",
-								)}
-							>
-								<Clock className="h-3 w-3" />
-								{formatCountdown(remaining)}
-							</span>
-						)}
-						<StatusBadge
-							status={
-								remaining <= 0 && interaction.status === "pending"
-									? "expired"
-									: interaction.status
-							}
-						/>
-						{isSettled && (
-							<button
-								type="button"
-								onClick={() => {
-									if (onCollapse) onCollapse();
-									else setExpanded(false);
-								}}
-								className="text-muted-foreground hover:text-foreground transition-colors"
-							>
-								<ChevronUp className="h-4 w-4" />
-							</button>
-						)}
-					</div>
-				</div>
-				{interaction.description && (
-					<CardDescription className="text-xs">
+			<RequestCardHeader
+				mark={
+					<RequestMark
+						icon={
+							isPending
+								? TYPE_ICONS[interaction.interaction_type.type]
+								: STATUS_ICONS[status]
+						}
+						tone={tone}
+					/>
+				}
+				tone={tone}
+				live={isPending}
+				eyebrow={
+					isPending
+						? t("needsAnAnswer", "Needs an answer")
+						: statusLabel(status)
+				}
+				title={interaction.name}
+				description={
+					interaction.description && (
 						<TextEditor
 							initialContent={interaction.description}
 							isMarkdown={true}
 							minimal={true}
 						/>
-					</CardDescription>
-				)}
-			</CardHeader>
+					)
+				}
+				aside={
+					isPending ? (
+						<RequestPill
+							icon={Clock}
+							tone={remaining <= 30 ? "critical" : "muted"}
+						>
+							{formatCountdown(remaining)}
+						</RequestPill>
+					) : (
+						isSettled && (
+							<button
+								type="button"
+								aria-label={collapse}
+								title={collapse}
+								onClick={() => {
+									if (onCollapse) onCollapse();
+									else setExpanded(false);
+								}}
+								className="flex size-7 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-muted hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40"
+							>
+								<ChevronUp className="size-4" />
+							</button>
+						)
+					)
+				}
+			/>
 
-			<CardContent className="pt-0">
-				{interaction.status === "expired" ||
-				(interaction.status === "pending" && remaining <= 0) ? (
-					<p className="text-sm text-muted-foreground flex items-center gap-1.5">
-						<XCircle className="h-4 w-4 text-red-500" />
+			{status === "expired" ? (
+				<RequestCardBody>
+					<p className="text-sm text-muted-foreground">
 						{t("thisInteractionHasExpired", "This interaction has expired.")}
 					</p>
-				) : interaction.status === "cancelled" ? (
-					<p className="text-sm text-muted-foreground flex items-center gap-1.5">
-						<AlertCircle className="h-4 w-4" />
+				</RequestCardBody>
+			) : status === "cancelled" ? (
+				<RequestCardBody>
+					<p className="text-sm text-muted-foreground">
 						{t(
 							"thisInteractionWasCancelled",
 							"This interaction was cancelled.",
 						)}
 					</p>
-				) : interaction.status === "responded" ? (
+				</RequestCardBody>
+			) : status === "responded" ? (
+				<RequestCardBody>
 					<ResponseDisplay
 						interactionType={interaction.interaction_type}
 						responseValue={interaction.response_value}
 					/>
-				) : (
-					<InteractionBody
-						interactionType={interaction.interaction_type}
-						onSubmit={handleSubmit}
-						isDisabled={isDisabled}
-					/>
-				)}
-			</CardContent>
-		</Card>
+				</RequestCardBody>
+			) : (
+				<InteractionBody
+					interactionType={interaction.interaction_type}
+					onSubmit={handleSubmit}
+					isDisabled={isDisabled}
+				/>
+			)}
+		</RequestCard>
 	);
 }

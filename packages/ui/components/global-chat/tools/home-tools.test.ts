@@ -114,6 +114,7 @@ describe("Home FlowPilot tools", () => {
 			"data_table_missing",
 			"data_target_missing",
 			"data_xy_fields_missing",
+			"saved_forecast_missing_source",
 		]);
 		for (const preset of catalog.presets) {
 			const validation = validateHomeLayoutCandidate(

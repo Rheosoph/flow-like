@@ -3,6 +3,7 @@
 import { TrailingBlockPlugin, type Value } from "platejs";
 import { type TPlateEditor, useEditorRef } from "platejs/react";
 
+import type { EditorUser, ReviewDiscussion } from "../../lib/plate-document";
 import { AIKit } from "./plugins/ai-kit";
 import { AlignKit } from "./plugins/align-kit";
 import { AutoformatKit } from "./plugins/autoformat-kit";
@@ -18,15 +19,14 @@ import { createCopilotKit } from "./plugins/copilot-kit";
 import { CursorOverlayKit } from "./plugins/cursor-overlay-kit";
 import { DateKit } from "./plugins/date-kit";
 import { discussionPlugin } from "./plugins/discussion-kit";
-import type { EditorUser, ReviewDiscussion } from "../../lib/plate-document";
 import { DndKit } from "./plugins/dnd-kit";
 import { DocxKit } from "./plugins/docx-kit";
 import { EmojiKit } from "./plugins/emoji-kit";
 import { ExitBreakKit } from "./plugins/exit-break-kit";
 import { FixedToolbarKit } from "./plugins/fixed-toolbar-kit";
 import { FloatingToolbarKit } from "./plugins/floating-toolbar-kit";
-import { FootnoteKit } from "./plugins/footnote-kit";
 import { FontKit } from "./plugins/font-kit";
+import { FootnoteKit } from "./plugins/footnote-kit";
 import { LineHeightKit } from "./plugins/line-height-kit";
 import { LinkKit } from "./plugins/link-kit";
 import { ListKit } from "./plugins/list-kit";

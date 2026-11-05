@@ -12,7 +12,8 @@
 		"admin",
 		"audit",
 		"payments",
-		"devices"
+		"devices",
+		"bots"
 	],
 	"languages": ["de", "en", "es", "fr", "ja", "ko", "pl", "pt-BR", "zh"]
 }

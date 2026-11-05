@@ -24,6 +24,7 @@ import { currentRelativeUrl, saveReturnUrl } from "../lib/return-url";
 import { SignInRequired } from "./sign-in-required";
 import { useSessionRecovery } from "./use-session-recovery";
 import { WebBackend } from "./web-provider";
+import { WebRealtimeBridge } from "./web-realtime-bridge";
 
 const PUBLIC_PATHS = [
 	"/payments/return",
@@ -79,6 +80,7 @@ export function WebAuthProvider({
 	const [configurationError, setConfigurationError] = useState(false);
 
 	useEffect(() => {
+		if (configurationError) return;
 		let cancelled = false;
 		let manager: UserManager | undefined;
 		(async () => {
@@ -117,6 +119,8 @@ export function WebAuthProvider({
 				setLoadingProgress(90);
 				setUserManager(userManagerInstance);
 				setOpenIdAuthConfig(settings);
+			} else {
+				setConfigurationError(true);
 			}
 		})().catch(() => {
 			if (!cancelled) setConfigurationError(true);
@@ -125,13 +129,26 @@ export function WebAuthProvider({
 			cancelled = true;
 			manager?.stopSilentRenew();
 		};
-	}, []);
+	}, [configurationError]);
 
 	if (configurationError) {
 		return (
-			<p role="alert">
-				Web configuration is unavailable. Contact your administrator.
-			</p>
+			<div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+				<p role="alert">
+					Web configuration is unavailable. Contact your administrator if the
+					problem continues.
+				</p>
+				<button
+					type="button"
+					className="rounded-md border px-4 py-2"
+					onClick={() => {
+						setConfigurationError(false);
+						setLoadingProgress(10);
+					}}
+				>
+					Try again
+				</button>
+			</div>
 		);
 	}
 
@@ -175,6 +192,8 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 	const [authPushed, setAuthPushed] = useState(false);
 
 	const isPublicPath =
+		pathname === "/meeting" ||
+		pathname === "/meeting/" ||
 		pathname === "/debug/markdown" ||
 		pathname === "/debug/upgrade" ||
 		PUBLIC_PATHS.some((path) => pathname?.startsWith(path));
@@ -487,6 +506,7 @@ function AuthInner({ children }: Readonly<{ children: React.ReactNode }>) {
 
 	return (
 		<OAuthCallbackReadyContext.Provider value={oauthCallbackReady}>
+			<WebRealtimeBridge enabled={auth.isAuthenticated && profileLoaded} />
 			{children}
 		</OAuthCallbackReadyContext.Provider>
 	);

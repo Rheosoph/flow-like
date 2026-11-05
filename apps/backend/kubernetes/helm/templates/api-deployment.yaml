@@ -176,6 +176,19 @@ spec:
               value: {{ .Values.execution.stateTtlSeconds | quote }}
             - name: CHANNEL_TTL_SECONDS
               value: {{ .Values.execution.channelTtlSeconds | quote }}
+            - name: CHANNEL_TRANSPORT
+              value: {{ .Values.channels.transport | quote }}
+            {{- if eq .Values.channels.transport "nats" }}
+            - name: CHANNEL_NATS_URL
+              value: {{ default (printf "nats://%s-nats:4222" (include "flow-like.fullname" .)) .Values.channels.nats.url | quote }}
+            - name: CHANNEL_NATS_WS_URL
+              value: {{ .Values.channels.nats.publicWebsocketUrl | quote }}
+            - name: CHANNEL_NATS_ACCOUNT_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.channels.nats.issuerSecret }}
+                  key: CHANNEL_NATS_ACCOUNT_SEED
+            {{- end }}
             - name: REDIS_EXECUTION_QUEUE
               value: {{ .Values.execution.queueName | quote }}
             - name: EXECUTION_QUEUE_MAX_DEPTH
@@ -246,6 +259,38 @@ spec:
               value: {{ .Values.llm.openai.apiKey | quote }}
             - name: HOSTED_OPENAI_ENDPOINT
               value: {{ .Values.llm.openai.endpoint | quote }}
+            {{- end }}
+            {{- end }}
+            {{- range $name := list "groq" "mistral" "together" "xai" "gemini" }}
+            {{- $provider := index $.Values.llm $name }}
+            {{- $key := printf "HOSTED_%s_API_KEY" (upper $name) }}
+            {{- if $provider.enabled }}
+            {{- if $provider.existingSecret }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $provider.existingSecret | quote }}
+                  key: {{ $key }}
+            {{- else if $provider.apiKey }}
+            - name: {{ $key }}
+              value: {{ $provider.apiKey | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.llm.cloudflare.enabled }}
+            {{- if .Values.llm.cloudflare.existingSecret }}
+            {{- range $key := list "HOSTED_CLOUDFLARE_API_TOKEN" "HOSTED_CLOUDFLARE_ACCOUNT_ID" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.llm.cloudflare.existingSecret | quote }}
+                  key: {{ $key }}
+            {{- end }}
+            {{- else if .Values.llm.cloudflare.apiToken }}
+            - name: HOSTED_CLOUDFLARE_API_TOKEN
+              value: {{ .Values.llm.cloudflare.apiToken | quote }}
+            - name: HOSTED_CLOUDFLARE_ACCOUNT_ID
+              value: {{ required "llm.cloudflare.accountId is required when llm.cloudflare.apiToken is set" .Values.llm.cloudflare.accountId | quote }}
             {{- end }}
             {{- end }}
             {{- if .Values.llm.anthropic.enabled }}

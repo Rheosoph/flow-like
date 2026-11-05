@@ -5,6 +5,8 @@ use std::sync::{OnceLock, RwLock};
 pub fn openers() -> Vec<Opener> {
     Vec::new()
 }
+// Browser sources own their decoder lifetimes; this registry has no idle pool.
+pub fn release_idle() {}
 pub fn reader_openers() -> Vec<ReaderOpener> {
     readers().read().unwrap_or_else(|e| e.into_inner()).clone()
 }

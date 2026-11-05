@@ -34,8 +34,8 @@ fn web_research_policy_matches_current_chat_citations_and_stays_out_of_specialis
         "Disclose\nnear-miss evidence",
         "keep the phases separated",
         "never delegate public-web work to Data Studio",
-        "You never receive app results, private files, memory",
-        "Return public\nevidence to the orchestrator",
+        "You have no direct access to app results, private files, memory",
+        "Return public evidence to the parent",
         "Use `archive_lookup` only",
         "official version history",
         "`selection_method`",
@@ -97,8 +97,9 @@ fn web_research_policy_matches_current_chat_citations_and_stays_out_of_specialis
     let research = research_system_prompt("");
     assert_eq!(research.matches(WEB_RESEARCH_GUIDANCE.trim()).count(), 1);
     assert!(research.contains("`internet_search`, `open_url`, `archive_lookup`"));
-    assert!(research.contains("You have NO private data to leak"));
-    assert!(research.contains("delegates public discovery to you"));
+    assert!(research.contains("directs your work through a research question"));
+    assert!(research.contains("references resolved from earlier conversation"));
+    assert!(research.contains("can send a refined brief for follow-up"));
     assert!(research.contains("requests use an approval flow"));
 
     let data_studio = data_studio_system_prompt("");

@@ -52,6 +52,9 @@ const grantedIdentityScopes = [
 ];
 const execution = {
 	appId: "app",
+	eventId: "chat-event",
+	sessionId: "conversation",
+	requestId: "authorization-request",
 	boardId: "board",
 	nodeId: "event",
 	payload: { message: "Run after authorization" },
@@ -171,4 +174,20 @@ it("keeps the workflow waiting when the callback lacks a required API scope", as
 	);
 	expect(container.textContent).not.toContain("Authorized");
 	expect(retry).not.toHaveBeenCalled();
+});
+
+it("reports the originating request when authorization is cancelled", async () => {
+	const cancelled = vi.fn<(event: Event) => void>();
+	window.addEventListener("flow:oauth-cancelled", cancelled);
+	try {
+		await act(async () => button("Cancel").click());
+		expect(container.querySelector("dialog")).toBeNull();
+		expect(cancelled).toHaveBeenCalledOnce();
+		expect((cancelled.mock.calls[0][0] as CustomEvent).detail).toEqual(
+			execution,
+		);
+		expect(retry).not.toHaveBeenCalled();
+	} finally {
+		window.removeEventListener("flow:oauth-cancelled", cancelled);
+	}
 });

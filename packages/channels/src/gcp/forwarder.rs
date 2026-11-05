@@ -34,9 +34,14 @@ impl FirebaseRtdbForwarder {
         database_url: &str,
         access_token: AccessTokenProvider,
     ) -> flow_like_types::Result<Self> {
+        let root = database_root(database_url)?;
+        let client = reqwest::Client::builder()
+            .redirect(super::redirect_policy(root.host_str().unwrap_or_default()))
+            .build()
+            .map_err(|err| flow_like_types::anyhow!("firebase http client: {err}"))?;
         Ok(Self {
-            client: reqwest::Client::new(),
-            root: database_root(database_url)?,
+            client,
+            root,
             access_token,
         })
     }
@@ -67,6 +72,24 @@ impl FirebaseRtdbForwarder {
             .map(drop)
     }
 
+    /// Overwrite one wakeup marker, so an account never accumulates a second event ledger.
+    pub async fn publish_realtime(
+        &self,
+        scope: &str,
+        payload: &[u8],
+    ) -> flow_like_types::Result<()> {
+        if scope.len() != 64 || !scope.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            flow_like_types::bail!("invalid realtime scope");
+        }
+        if payload.len() > flow_like_types::realtime::MAX_REALTIME_WAKEUP_BYTES {
+            flow_like_types::bail!("realtime wakeup exceeds the size limit");
+        }
+        let body = serde_json::from_slice(payload)?;
+        self.write(Method::PUT, &["realtime", scope, "wake"], Some(&body), None)
+            .await
+            .map(drop)
+    }
+
     async fn write(
         &self,
         method: Method,
@@ -92,7 +115,7 @@ impl FirebaseRtdbForwarder {
         let response = request
             .send()
             .await
-            .map_err(|err| anyhow!("firebase {method} {path} failed: {err}"))?;
+            .map_err(|err| anyhow!("firebase {method} {path} failed: {}", err.without_url()))?;
         let status = response.status();
         if status.is_success() || status == StatusCode::PRECONDITION_FAILED {
             return Ok(status);
@@ -210,5 +233,38 @@ mod tests {
             FirebaseRtdbForwarder::new("nope", Arc::new(|| Box::pin(async { Ok(String::new()) })))
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn transport_failures_never_echo_the_access_token() {
+        let forwarder = FirebaseRtdbForwarder::new(
+            "http://127.0.0.1:0",
+            Arc::new(|| Box::pin(async { Ok("secret-oauth-token".to_string()) })),
+        )
+        .unwrap();
+        let push = ChannelPush {
+            channel_id: "run-1".into(),
+            request_id: None,
+            kind: ChannelPushKind::Inbound,
+            value: Value::Null,
+        };
+        let errors = [
+            forwarder.forward(&push).await.unwrap_err(),
+            forwarder
+                .publish_realtime(&"a".repeat(64), b"{}")
+                .await
+                .unwrap_err(),
+        ];
+        for error in errors {
+            assert!(error.to_string().contains("failed"), "{error}");
+            for rendered in [
+                error.to_string(),
+                format!("{error:#}"),
+                format!("{error:?}"),
+            ] {
+                assert!(!rendered.contains("secret-oauth-token"), "{rendered}");
+                assert!(!rendered.contains("access_token="), "{rendered}");
+            }
+        }
     }
 }

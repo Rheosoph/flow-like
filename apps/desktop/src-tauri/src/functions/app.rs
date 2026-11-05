@@ -59,6 +59,26 @@ async fn presign_meta(
     Ok(())
 }
 
+/// The apps on this device every list shows; a bot's workspace is never among them.
+async fn listed_apps(state: &Arc<FlowLikeState>) -> Result<Vec<App>, TauriFunctionError> {
+    let app_store = FlowLikeState::project_meta_store(state).await?.as_generic();
+    let apps = app_store
+        .list_with_delimiter(Some(&Path::from("apps")))
+        .await
+        .map_err(|e| TauriFunctionError::new(&format!("Failed to list apps: {}", e)))?;
+
+    let mut listed = Vec::new();
+    for app in apps.common_prefixes {
+        let app_id = app.filename().unwrap_or_default().to_string();
+        if let Ok(app) = App::load(app_id, state.clone()).await
+            && app.bot_id.is_none()
+        {
+            listed.push(app);
+        }
+    }
+    Ok(listed)
+}
+
 #[tauri::command(async)]
 pub async fn get_apps(
     app_handle: AppHandle,
@@ -68,38 +88,23 @@ pub async fn get_apps(
 
     let flow_like_state = TauriFlowLikeState::construct(&app_handle).await?;
 
-    let app_dir = Path::from("apps");
-    let app_store = FlowLikeState::project_meta_store(&flow_like_state)
-        .await?
-        .as_generic();
-
-    let apps = app_store
-        .list_with_delimiter(Some(&app_dir))
+    for app in listed_apps(&flow_like_state).await? {
+        let metadata = App::get_meta(
+            app.id.clone(),
+            flow_like_state.clone(),
+            language.clone(),
+            None,
+        )
         .await
-        .map_err(|e| TauriFunctionError::new(&format!("Failed to list apps: {}", e)))?;
-    let apps = apps.common_prefixes;
+        .ok();
 
-    for app in apps {
-        let app_id = app.parts().last().unwrap_or_default().as_ref().to_string();
-        if let Ok(app) = App::load(app_id.clone(), flow_like_state.clone()).await {
-            let app = app;
-            let metadata = App::get_meta(
-                app_id.clone(),
-                flow_like_state.clone(),
-                language.clone(),
-                None,
-            )
-            .await
-            .ok();
-
-            if let Some(mut metadata) = metadata {
-                presign_meta(&app_handle, app_id.clone(), &mut metadata).await?;
-                app_list.push((app, Some(metadata)));
-                continue;
-            }
-
-            app_list.push((app, None));
+        if let Some(mut metadata) = metadata {
+            presign_meta(&app_handle, app.id.clone(), &mut metadata).await?;
+            app_list.push((app, Some(metadata)));
+            continue;
         }
+
+        app_list.push((app, None));
     }
 
     Ok(app_list)
@@ -352,6 +357,9 @@ fn preserve_local_manifest_fields(app: &mut App, existing: App) {
     }
     if app.forked_at.is_none() && existing.forked_at.is_some() {
         app.forked_at = existing.forked_at;
+    }
+    if app.bot_id.is_none() && existing.bot_id.is_some() {
+        app.bot_id = existing.bot_id;
     }
 }
 
@@ -1007,8 +1015,47 @@ pub async fn app_list_packages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flow_like::flow_like_storage::files::store::local_store::LocalObjectStore;
+    use flow_like::{
+        flow_like_storage::files::store::{FlowLikeStore, local_store::LocalObjectStore},
+        state::FlowLikeConfig,
+        utils::http::HTTPClient,
+    };
     use flow_like_types::storage_paths::training_ledger_app_dir;
+
+    #[tokio::test]
+    async fn app_lists_never_show_a_bots_workspace() {
+        let store = FlowLikeStore::Other(Arc::new(object_store::memory::InMemory::new()));
+        let mut config = FlowLikeConfig::new();
+        config.register_app_meta_store(store.clone());
+        config.register_app_storage_store(store);
+        let state = Arc::new(FlowLikeState::new(
+            config,
+            HTTPClient::new_without_refetch(),
+        ));
+        for (app_id, bot_id) in [("app-library", None), ("app-workspace", Some("bot_scout"))] {
+            let mut app = App::new(
+                Some(app_id.into()),
+                Metadata::default(),
+                Vec::new(),
+                state.clone(),
+            )
+            .await
+            .unwrap();
+            app.bot_id = bot_id.map(str::to_string);
+            app.save().await.unwrap();
+        }
+
+        let listed: Vec<String> = listed_apps(&state)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|app| app.id)
+            .collect();
+
+        assert_eq!(listed, ["app-library"]);
+        let workspace = App::load("app-workspace".into(), state).await.unwrap();
+        assert_eq!(workspace.bot_id.as_deref(), Some("bot_scout"));
+    }
 
     #[tokio::test]
     async fn deleting_an_app_removes_its_files_and_its_whole_ledger_tree_but_no_other_app() {

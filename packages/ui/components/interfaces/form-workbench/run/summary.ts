@@ -3,6 +3,7 @@
  * stored): the first line of the answer, else of the result, how far the steps got and how many
  * files came back. Pure.
  */
+import { plainMarkdownLines } from "../../../../lib/markdown-text";
 import type { RunOutcome, RunOutput, RunSummary } from "../contracts";
 import { type ResultFormat, leadRowOf, toResultModel } from "./result-view";
 import { markEndedSteps, stepReachedOf } from "./steps";
@@ -19,26 +20,6 @@ export const EMPTY_RUN_SUMMARY: RunSummary = {
 /** A first line longer than this is cut at a word with "…" (the Runs list shows one line). */
 export const FIRST_LINE_MAX = 160;
 
-const FENCE = /^\s*```/;
-/** Table rows and separators, horizontal rules. */
-const SKIPPED_LINE = /^\s*(?:\||(?:[-*_]\s*){3,}$)/;
-const MARKDOWN_SYNTAX: readonly (readonly [RegExp, string])[] = [
-	[/!\[([^\]]*)\]\([^)]*\)/g, "$1"],
-	[/\[([^\]]+)\]\([^)]*\)/g, "$1"],
-	[/<[^>]+>/g, ""],
-	[/^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/, ""],
-	[/\*\*|__|~~|`/g, ""],
-	[/\*(\S[^*]*)\*/g, "$1"],
-	[/\s+/g, " "],
-];
-
-function plainLine(line: string) {
-	let text = line;
-	for (const [pattern, replacement] of MARKDOWN_SYNTAX)
-		text = text.replace(pattern, replacement);
-	return text.trim();
-}
-
 function clip(text: string) {
 	if (text.length <= FIRST_LINE_MAX) return text;
 	const cut = text.slice(0, FIRST_LINE_MAX - 1);
@@ -48,16 +29,8 @@ function clip(text: string) {
 
 /** The first line of markdown with something to read, as plain text ("## Invoice extracted" → "Invoice extracted"). */
 export function firstTextLine(text: string) {
-	let fenced = false;
-	for (const line of text.split(/\r?\n/)) {
-		if (FENCE.test(line)) {
-			fenced = !fenced;
-			continue;
-		}
-		const plain = fenced || SKIPPED_LINE.test(line) ? "" : plainLine(line);
-		if (plain) return clip(plain);
-	}
-	return null;
+	const line = plainMarkdownLines(text).next().value;
+	return line ? clip(line) : null;
 }
 
 /** A text result's first line, a number as shown, an object's first text or number row ("Return number RET-20931"). */

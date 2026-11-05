@@ -52,8 +52,8 @@ export default function prepare({
 	let menus = original("crates/ui-egui/src/menus.rs");
 	menus = replaceOnce(
 		menus,
-		"pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params: Value) -> Result<Value, String> {",
-		"pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, mut params: Value) -> Result<Value, String> {\n    if let Some(result) = app.session.host_command.and_then(|hook| hook(id)) { return result; }",
+		"pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {",
+		"pub fn invoke(app: &mut FilmcraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {\n    if let Some(result) = app.session.host_command.and_then(|hook| hook(id)) { return result; }",
 		"menu host interception",
 	);
 	menus = menus.replaceAll('"About FilmCraft"', '"About Flows Video"');
@@ -79,8 +79,10 @@ export default function prepare({
     }`,
 		"host export format controls",
 	);
-	exportPanel = replaceOnce(
-		exportPanel,
+	write("crates/ui-egui/src/panels/export_mode.rs", exportPanel);
+	let quickExport = original("crates/ui-egui/src/panels/export_mode/quick.rs");
+	quickExport = replaceOnce(
+		quickExport,
 		"pub fn quick_export(app: &mut FilmcraftApp, ctx: &egui::Context, anchor: egui::Pos2) {",
 		`pub fn quick_export(app: &mut FilmcraftApp, ctx: &egui::Context, anchor: egui::Pos2) {
     if app.session.host_command.is_some() {
@@ -94,7 +96,7 @@ export default function prepare({
     }`,
 		"host quick export controls",
 	);
-	write("crates/ui-egui/src/panels/export_mode.rs", exportPanel);
+	write("crates/ui-egui/src/panels/export_mode/quick.rs", quickExport);
 	write(
 		"crates/ui-egui/src/brand.rs",
 		`pub fn paint_wordmark(ui: &egui::Ui, left_center: egui::Pos2, height: f32, _dark: bool) -> Option<egui::Rect> {

@@ -176,7 +176,7 @@ jobs:
           sudo apt-get update
           # librdkafka 2.12.1 needs curl headers even with WITH_CURL=0.
           # Upstream fix: https://github.com/confluentinc/librdkafka/pull/5309
-          sudo apt-get install -y clang lld cmake pkg-config protobuf-compiler libssl-dev libcurl4-openssl-dev libclang-dev libdbus-1-dev libasound2-dev libudev-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev libvulkan-dev ocl-icd-opencl-dev
+          sudo apt-get install -y clang lld cmake pkg-config protobuf-compiler libssl-dev libcurl4-openssl-dev libclang-dev libdbus-1-dev libasound2-dev libudev-dev libpipewire-0.3-dev libwayland-dev libegl-dev libgbm-dev libvulkan-dev ocl-icd-opencl-dev libx11-dev libxi-dev libxtst-dev libxcb1-dev libxcb-randr0-dev libxrandr-dev libdrm-dev libinput-dev
       - name: Install macOS native dependencies
         if: runner.os == 'macOS'
         run: brew install cmake pkg-config protobuf
@@ -250,6 +250,7 @@ jobs:
         run: |
           mkdir -p image-context/rootfs
           cp apps/standalone/packaging/Dockerfile image-context/Dockerfile
+          cp apps/standalone/packaging/Dockerfile.playground image-context/Dockerfile.playground
           cp downloaded/rootfs-amd64.tar image-context/rootfs/amd64.tar
           cp downloaded/rootfs-arm64.tar image-context/rootfs/arm64.tar
       - id: image
@@ -261,6 +262,16 @@ jobs:
           provenance: false
           build-args: SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.epoch }}
           tags: ${{ needs.prepare.outputs.image }}:sequence-${{ needs.prepare.outputs.sequence }}
+      - name: Build and push the playground variant (virtual display, Chromium)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
+        with:
+          context: image-context
+          file: image-context/Dockerfile.playground
+          platforms: linux/amd64,linux/arm64
+          push: true
+          provenance: false
+          build-args: SOURCE_DATE_EPOCH=${{ needs.prepare.outputs.epoch }}
+          tags: ${{ needs.prepare.outputs.image }}:sequence-${{ needs.prepare.outputs.sequence }}-playground
 
   signed-bundle:
     needs: [prepare, binaries, container]

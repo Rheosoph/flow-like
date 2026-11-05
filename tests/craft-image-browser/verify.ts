@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { gunzipSync, strToU8, unzipSync, zipSync } from "fflate";
@@ -109,7 +109,9 @@ async function verify(id: string) {
 			await page.waitForFunction(
 				(type, requestId) =>
 					window.messages.some(
-						(m) => m.type === type && (!requestId || m.requestId === requestId),
+						(m) =>
+							(m.type === type || m.type === "error") &&
+							(!requestId || m.requestId === requestId),
 					),
 				{ timeout: 120000 },
 				type,
@@ -118,9 +120,12 @@ async function verify(id: string) {
 			return page.evaluate(
 				(type, requestId) => {
 					const m = window.messages.find(
-						(m) => m.type === type && (!requestId || m.requestId === requestId),
+						(m) =>
+							(m.type === type || m.type === "error") &&
+							(!requestId || m.requestId === requestId),
 					);
 					if (!m) throw new Error(`Missing runtime event: ${type}`);
+					if (m.type !== type) throw new Error(`${type}: ${m.error}`);
 					return {
 						...m,
 						bytes: m.bytes ? Array.from(new Uint8Array(m.bytes)) : undefined,
@@ -137,6 +142,7 @@ async function verify(id: string) {
 			readOnly?: boolean;
 			requestId?: string;
 			format?: string;
+			purpose?: "download";
 			revision?: number;
 		}) =>
 			page.evaluate((message) => {
@@ -161,7 +167,7 @@ async function verify(id: string) {
 		if (design)
 			assert.ok(
 				opened.warnings?.some((warning) =>
-					warning.includes("Tables, footnotes"),
+					warning.includes("Review the import warnings"),
 				),
 				"IDML warns about unsupported content before editing",
 			);
@@ -337,6 +343,132 @@ async function verify(id: string) {
 		assert.ok(
 			(await sharp(nativePreview).stats()).channels.some((c) => c.stdev > 20),
 		);
+		const reopen = async (name: string, payload: number[]) => {
+			await page.evaluate(() => {
+				window.messages = [];
+				document.querySelector("iframe")?.contentWindow?.location.reload();
+			});
+			await event("ready");
+			await send({ type: "open", name, bytes: payload, readOnly: true });
+			await event("opened");
+		};
+		if (id === "photocraft") {
+			for (const format of ["dds", "dpx", "cin", "iff"]) {
+				await send({
+					type: "export",
+					requestId: `codec-${format}`,
+					format,
+					purpose: "download",
+				});
+				const encoded = await event("exported", `codec-${format}`);
+				assert.ok(encoded.bytes?.length, `${format} encodes the image`);
+				await reopen(`roundtrip.${format}`, encoded.bytes);
+				await send({
+					type: "export",
+					requestId: `png-${format}`,
+					format: "png",
+					purpose: "download",
+				});
+				const decoded = await event("exported", `png-${format}`);
+				assert.ok(decoded.bytes);
+				const dimensions = await sharp(
+					Uint8Array.from(decoded.bytes),
+				).metadata();
+				assert.equal(dimensions.width, 400, `${format} retains image width`);
+				assert.equal(dimensions.height, 300, `${format} retains image height`);
+			}
+			const xpm = strToU8(
+				'/* XPM */\nstatic char *sample[] = {"2 2 2 1","a c #ff0000","b c #0000ff","ab","ba"};',
+			);
+			// Original 2×2 fixtures: uncompressed XCF v0 and Explicit VR Little Endian DICOM.
+			const xcf = Buffer.from(
+				"Z2ltcCB4Y2YgZmlsZQAAAAACAAAAAgAAAAAAAAARAAAAAQAAAAAAAAAAAAAAADcAAAAAAAAAAAAAAAIAAAACAAAAAQAAAAdQaXhlbHMAAAAABgAAAAQAAAD/AAAACAAAAAQAAAABAAAABwAAAAQAAAAAAAAAAAAAAAAAAACCAAAAAAAAAAIAAAACAAAABAAAAJYAAAAAAAAAAgAAAAIAAACmAAAAAP8AAP8AAP//AAD///8AAP8=",
+				"base64",
+			);
+			const dicom = Buffer.from(
+				"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABESUNNAgACAFVJGgAxLjIuODQwLjEwMDA4LjUuMS40LjEuMS43AAIAEABVSRQAMS4yLjg0MC4xMDAwOC4xLjIuMQAoABAAVVMCAAIAKAARAFVTAgACACgAAgBVUwIAAQAoAAYAVVMCAAAAKAAEAENTDABNT05PQ0hST01FMgAoAAABVVMCAAgAKAABAVVTAgAIACgAAgFVUwIABwAoAAMBVVMCAAAA4H8QAE9CAAAEAAAAAFWq/w==",
+				"base64",
+			);
+			for (const [extension, payload] of [
+				["xpm", xpm],
+				["xcf", xcf],
+				["dcm", dicom],
+			] as const) {
+				await reopen(`pixels.${extension}`, Array.from(payload));
+				await send({
+					type: "export",
+					requestId: "import-native",
+					format: "pcraft",
+					purpose: "download",
+				});
+				const converted = await event("exported", "import-native");
+				assert.ok(
+					converted.bytes?.length,
+					`${extension} imports into an editable native document`,
+				);
+				await reopen("converted.pcraft", converted.bytes);
+				await send({
+					type: "export",
+					requestId: "import-png",
+					format: "png",
+					purpose: "download",
+				});
+				const flattened = await event("exported", "import-png");
+				assert.ok(flattened.bytes);
+				const dimensions = await sharp(
+					Uint8Array.from(flattened.bytes),
+				).metadata();
+				assert.equal(dimensions.width, 2, `${extension} retains image width`);
+				assert.equal(dimensions.height, 2, `${extension} retains image height`);
+			}
+		}
+		if (vector) {
+			// Original synthetic checkers from storytold/vectorcraft, MIT OR Apache-2.0.
+			// Source: crates/engine/tests/fixtures/jpeg2000 at 5628de96f866185d8eb289b167b89691f213c0c3.
+			for (const [name, base64] of [
+				[
+					"checker.jp2",
+					"AAAADGpQICANCocKAAAAFGZ0eXBqcDIgAAAAAGpwMiAAAAAtanAyaAAAABZpaGRyAAAAAgAAAAIAAwgHAAAAAAAPY29scgEAAAAAABAAAACianAyY/9P/1EALwAAAAAAAgAAAAIAAAAAAAAAAAAAAQAAAAEAAAAAAAAAAAAAAwcBAQcBAQcBAf9SAAwAAAABAAYCAgAB/1wAFiBASEhQSEhQSEhQSEhQSEhQSEhQ/2QAEAABTGF2YzYzLjEuMTAy/5AACgAAAAAALQAB/5MAAAAAAAAAAAAAAAAAAAAAAACX5gQA39+ACACvwAQA/9k=",
+				],
+				[
+					"checker-raw.j2k",
+					"/0//UQAvAAAAAAACAAAAAgAAAAAAAAAAAAABAAAAAQAAAAAAAAAAAAADBwEBBwEBBwEB/1IADAAAAAEABgICAAH/XAAWIEBISFBISFBISFBISFBISFBISFD/ZAAQAAFMYXZjNjMuMS4xMDL/kAAKAAAAAAAtAAH/kwAAAAAAAAAAAAAAAAAAAAAAAJfmBADf34AIAK/ABAD/2Q==",
+				],
+			]) {
+				await reopen(name, Array.from(Buffer.from(base64, "base64")));
+				await send({
+					type: "export",
+					requestId: "jp2-native",
+					format: "vectorcraft",
+					purpose: "download",
+				});
+				const converted = await event("exported", "jp2-native");
+				assert.ok(
+					converted.bytes?.length,
+					`${name} imports into a native document`,
+				);
+				await reopen("converted.vectorcraft", converted.bytes);
+			}
+		}
+		// Use a separately downloaded, licensed corpus file for the converter smoke test.
+		if (design && process.env.CRAFT_INDD_FIXTURE) {
+			const indd = Array.from(await readFile(process.env.CRAFT_INDD_FIXTURE));
+			for (const extension of ["indd", "indt"]) {
+				await reopen(`layout.${extension}`, indd);
+				await send({
+					type: "export",
+					requestId: `converted-${extension}`,
+					format: "designcraft",
+					purpose: "download",
+				});
+				const converted = await event("exported", `converted-${extension}`);
+				assert.ok(
+					converted.bytes?.length,
+					`${extension} converts to a native document`,
+				);
+				await reopen("converted.designcraft", converted.bytes);
+			}
+		}
 		assert.deepEqual(errors, []);
 		console.log(
 			`${id}: read-only preview, editing, revision-safe save, same-format reopen (${bytes.length} bytes), and native-format reopen (${nativeBytes.length} bytes) passed.`,

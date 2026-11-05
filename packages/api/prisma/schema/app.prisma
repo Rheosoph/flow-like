@@ -61,8 +61,12 @@ model App {
   forkedFrom   String?
   /// For forked apps: when the fork happened.
   forkedAt     DateTime? @db.Timestamptz(3)
+  /// Set on a bot's workspace: the bot's id, kept as a free-form string like `forkedFrom`.
+  /// One workspace per bot; apps lists hide workspaces with `"botId" IS NULL`.
+  botId        String?   @unique
 
   technicalUsers TechnicalUser[]
+  botApps        BotApp[]
 
   outgoingAppConnections AppConnection[]  @relation("outgoingAppConnections")
   incomingAppConnections AppConnection[]  @relation("incomingAppConnections")

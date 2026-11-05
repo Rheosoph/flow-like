@@ -23,10 +23,38 @@ pub const ARCHIVE_LOOKUP_TOOL: &str = "archive_lookup";
 pub const HTTP_REQUEST_TOOL: &str = "http_request";
 pub const MEMORY_STORE_TOOL: &str = "_memory_store";
 pub const MEMORY_SEARCH_TOOL: &str = "_memory_search";
-/// Sealed public-web fallback. Tool-driven backends delegate it to the nested `Research` scope;
-/// the rig/Bits loop runs an equivalent isolated researcher locally. It deliberately accepts no
-/// model-authored text: the host binds it to the immutable top-level user request.
+/// Public-web research directed by the calling assistant. Tool-driven backends delegate it to
+/// the nested `Research` scope; the rig/Bits loop runs an equivalent researcher locally.
 pub const RESEARCH_AGENT_TOOL: &str = "research_agent";
+
+/// Validate the caller's research brief without falling back to an ambiguous last user message.
+pub fn research_agent_prompt(args: &Value) -> Result<String, String> {
+    let args = args
+        .as_object()
+        .ok_or_else(|| "research_agent expects an object with a question string".to_string())?;
+    if args.keys().any(|key| key != "question" && key != "context") {
+        return Err("research_agent accepts only question and optional context".to_string());
+    }
+    let question = args
+        .get("question")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|question| !question.is_empty())
+        .ok_or_else(|| {
+            "research_agent requires a nonempty question that resolves references from the conversation"
+                .to_string()
+        })?;
+    let context = match args.get("context") {
+        None => "",
+        Some(Value::String(context)) => context.trim(),
+        Some(_) => return Err("research_agent context must be a string when supplied".to_string()),
+    };
+    let mut prompt = format!("Research question:\n{question}");
+    if !context.is_empty() {
+        prompt.push_str(&format!("\n\nRelevant public context:\n{context}"));
+    }
+    Ok(prompt)
+}
 
 /// The externally observable effect of a platform tool call. This is deliberately independent of
 /// when approval is requested: deferred-approval tools are still ordered mutations while they
@@ -210,6 +238,93 @@ fn tool_call_has_read_only_override(spec: &PlatformToolSpec, args: &Value) -> bo
     false
 }
 
+/// Title of the approval on a bot's `database_tool`. Bots reach write operations only in their
+/// own workspace, where changes need no approval except dropping a table.
+pub const BOT_DATABASE_APPROVAL_TITLE: &str = "Approve dropping a workspace table";
+
+pub const BOT_ARGS_APPROVAL_TITLE: &str = "Approve outside access";
+
+/// Title of the approval on a bot's connector calls. Core sets the call's `policy` argument;
+/// a call that carries none runs without asking.
+pub const BOT_CONNECTOR_APPROVAL_TITLE: &str = "Approve connected service";
+
+fn path_is_set(args: &Value, path: &str) -> bool {
+    let value = path.split('.').try_fold(args, |node, part| node.get(part));
+    match value {
+        None | Some(Value::Null) | Some(Value::Bool(false)) => false,
+        Some(Value::String(text)) => !text.trim().is_empty(),
+        Some(Value::Array(items)) => !items.is_empty(),
+        Some(Value::Object(fields)) => !fields.is_empty(),
+        Some(_) => true,
+    }
+}
+
+fn sets_approval_arg(tool: &str, args: &Value) -> bool {
+    flow_like_bot_tools::spec(tool).is_some_and(|spec| {
+        spec.approval_args
+            .iter()
+            .any(|path| path_is_set(args, path))
+    })
+}
+
+fn has_approval_title(spec: &PlatformToolSpec, wanted: &str) -> bool {
+    matches!(spec.approval, ToolApprovalSpec::Mutating { title, .. } if title == wanted)
+}
+
+fn bot_workspace_write_is_unprompted(spec: &PlatformToolSpec, args: &Value) -> bool {
+    if spec.name == "database_tool" {
+        return has_approval_title(spec, BOT_DATABASE_APPROVAL_TITLE)
+            && spec_arg_str(args, "operation", "operation") != "delete_table";
+    }
+    (has_approval_title(spec, BOT_ARGS_APPROVAL_TITLE)
+        || has_approval_title(spec, BOT_CONNECTOR_APPROVAL_TITLE))
+        && !sets_approval_arg(spec.name, args)
+}
+
+fn network_hosts(args: &Value) -> Vec<String> {
+    let mut hosts: Vec<String> = args
+        .get("network_hosts")
+        .and_then(Value::as_array)
+        .map(|hosts| {
+            hosts
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|host| host.trim().to_lowercase())
+                .collect()
+        })
+        .unwrap_or_default();
+    hosts.sort();
+    hosts.dedup();
+    hosts
+}
+
+fn outside_access_message(args: &Value) -> String {
+    format!(
+        "The bot wants to run code that may reach these hosts over the network: {}.",
+        network_hosts(args).join(", ")
+    )
+}
+
+/// Approval of a bot tool whose spec lists `approval_args`: it asks only when a call sets one of
+/// them, and a standing grant covers one destination (see `approval_session_key`).
+pub fn bot_args_approval() -> ToolApprovalSpec {
+    ToolApprovalSpec::Mutating {
+        title: BOT_ARGS_APPROVAL_TITLE,
+        message: outside_access_message,
+        timing: ToolApprovalTiming::BeforeExecution,
+    }
+}
+
+/// Approval of a connector call: it asks only when core marked the call (`policy`), and the
+/// message names the connector and what the call does.
+pub fn bot_connector_approval(message: Option<fn(&Value) -> String>) -> ToolApprovalSpec {
+    ToolApprovalSpec::Mutating {
+        title: BOT_CONNECTOR_APPROVAL_TITLE,
+        message: message.unwrap_or(outside_access_message),
+        timing: ToolApprovalTiming::BeforeExecution,
+    }
+}
+
 /// Per-call "don't ask again this session" key. It defaults to the tool name, but a call that
 /// destroys one irreplaceable target scopes its memory to that target: approving one table drop
 /// must never authorize dropping every other table for the rest of the session.
@@ -230,6 +345,10 @@ fn approval_session_key(spec: &PlatformToolSpec, args: &Value) -> String {
             spec_arg_str(args, "operation", "operation"),
             spec_arg_str(args, "app_id", "appId")
         );
+    }
+    if flow_like_bot_tools::services::POLICY_TOOLS.contains(&spec.name) {
+        let fingerprint = blake3::hash(args.to_string().as_bytes());
+        return format!("{}:{fingerprint}", spec.name);
     }
     if spec.name == HTTP_REQUEST_TOOL {
         // Approval of one request must not authorize another destination, payload, or credential.
@@ -281,6 +400,15 @@ fn approval_session_key(spec: &PlatformToolSpec, args: &Value) -> String {
         };
         return format!("apply_home_layout:{profile_scope}");
     }
+    if spec.name == "code_run" {
+        return format!("code_run:network:{}", network_hosts(args).join(","));
+    }
+    if spec.name == flow_like_bot_tools::web::WEB_REQUEST {
+        let scope = flow_like_bot_tools::web::grant_scopes(args)
+            .map(|scopes| scopes.join(","))
+            .unwrap_or_else(|| blake3::hash(args.to_string().as_bytes()).to_string());
+        return format!("web_request:{scope}");
+    }
     if spec.name != "database_tool" {
         return spec.name.to_string();
     }
@@ -307,7 +435,8 @@ pub fn resolve_tool_approval_timing(
     spec: &PlatformToolSpec,
     args: &Value,
 ) -> Option<ToolApprovalTiming> {
-    if tool_call_has_read_only_override(spec, args) {
+    if tool_call_has_read_only_override(spec, args) || bot_workspace_write_is_unprompted(spec, args)
+    {
         None
     } else {
         spec.approval.timing()
@@ -1213,7 +1342,7 @@ Navigation is a non-destructive UI change and runs without an approval dialog. P
                     "type": "object",
                     "properties": {
                         "view": { "type": "string", "description": "Logical view id: 'home', 'apps', 'store', 'settings', 'profile', 'learn', or 'app' (an app's use surface, requires app_id)." },
-                        "route": { "type": "string", "description": "Explicit router path — ONLY these exist: '/', '/library', '/store', '/settings', '/learn', '/chat', '/use?id=<app>' (an app's pages) or '/flow?id=<board>&app=<app>' (a board). Anything else is invalid." },
+                        "route": { "type": "string", "description": "Explicit router path — ONLY these exist: '/', '/library', '/store', '/settings', '/learn', '/bots', '/use?id=<app>' (an app's pages) or '/flow?id=<board>&app=<app>' (a board). Anything else is invalid." },
                         "app_id": { "type": "string", "description": "App id, when the target view is app-scoped." },
                         "page_route": { "type": "string", "description": "Route path of the app page to open inside the app's use surface (from its route mapping), e.g. '/briefing'. Only with app_id." }
                     },
@@ -1600,22 +1729,35 @@ Call before a from-scratch app/workflow, except for a small existing-target edit
         },
         PlatformToolSpec {
             name: RESEARCH_AGENT_TOOL,
-            description: r#"Run FlowPilot's sealed PUBLIC-WEB fallback for the current top-level user request.
+            description: r#"Research a public-web question directed by the calling assistant and return cited findings.
 
-Call only after `list_apps` returns and existing app capabilities have been checked: no suitable
+When `list_apps` is available, call only after it returns and app capabilities have been checked: no suitable
 app/interface exists, or local research candidates produced no usable public answer.
-Never bypass a declined app call. This tool accepts no question or context
-arguments: the host gives an isolated read-only researcher the immutable user request and date. It
-receives no root history, memory, attachments, app inventory/results, or model-authored arguments;
-from a mixed source request it extracts only safe public factual subquestions and never searches for
-secrets, credentials, or private identifiers. It returns cited findings plus evidence gaps.
+Never bypass a declined app call. Write a self-contained question using the conversation to resolve
+references and name the topic. Include relevant public background, comparisons, constraints, and
+evidence gaps in context. For example, after discussing H3, 'why better than squares' becomes a
+question about H3 hexagonal cells compared with square grids, including their tradeoffs.
 
-It cannot use a local app's output as research context. If the next public query must be derived
-from private output, request a new explicit sanitized public-only turn instead."#,
+The researcher receives your brief and public-web tools, without automatic access to history,
+memory, files, or apps. Keep secrets, credentials, private identifiers, and private app/file contents
+out of the brief. Review its findings and call again with a refined question when evidence is missing
+or the first search misunderstood the task. Calls share the turn's research budget. Preserve verified
+citations, dates, and remaining gaps when answering."#,
             schema: || {
                 json!({
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Self-contained public research question with conversation references resolved."
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": "Relevant public background, constraints, and evidence gaps to guide the research."
+                        }
+                    },
+                    "required": ["question"],
                     "additionalProperties": false
                 })
             },
@@ -1781,7 +1923,7 @@ pub fn http_request_tool_spec() -> PlatformToolSpec {
 /// researcher has no app, database, storage or memory tools. The orchestrator's separate HTTP
 /// requests use execution approval. Provenance and spend share the turn's `WebResearchSession`.
 ///
-/// The rig/Bits orchestrator executes the same sealed fallback in a fresh local research loop; raw
+/// The rig/Bits orchestrator executes the same directed brief in a fresh local research loop; raw
 /// public-web schemas still never enter its root context.
 pub fn public_web_tool_specs() -> Vec<PlatformToolSpec> {
     vec![
@@ -2629,6 +2771,26 @@ GeoJSON and geometry:
     }
 }
 
+fn bot_database_drop_message(args: &Value) -> String {
+    format!(
+        "The bot wants to PERMANENTLY DROP its workspace table '{}', including every row and the schema. This cannot be undone.",
+        spec_arg_str(args, "table_name", "tableName")
+    )
+}
+
+/// `database_tool` as a bot with a workspace runs it: its own tables change without asking, a
+/// table drop asks.
+pub fn bot_workspace_database_tool_spec() -> PlatformToolSpec {
+    PlatformToolSpec {
+        approval: ToolApprovalSpec::Mutating {
+            title: BOT_DATABASE_APPROVAL_TITLE,
+            message: bot_database_drop_message,
+            timing: ToolApprovalTiming::BeforeExecution,
+        },
+        ..data_studio_database_tool_spec()
+    }
+}
+
 fn home_layout_schema() -> Value {
     json!({
         "type": "object",
@@ -2894,6 +3056,42 @@ pub fn find_scout_tool_spec(name: &str) -> Option<PlatformToolSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn research_brief_resolves_a_conversation_followup() {
+        let args = json!({
+            "question": " Why does H3 use hexagonal cells rather than square grids? ",
+            "context": " The conversation is about H3 spatial indexing. Compare neighbor distances and tradeoffs. "
+        });
+        let spec = find_global_tool_spec(RESEARCH_AGENT_TOOL).unwrap();
+        let schema = (spec.schema)();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        assert!(validator.is_valid(&args));
+        assert!(!validator.is_valid(&json!({})));
+        assert_eq!(
+            research_agent_prompt(&args).unwrap(),
+            "Research question:\nWhy does H3 use hexagonal cells rather than square grids?\n\nRelevant public context:\nThe conversation is about H3 spatial indexing. Compare neighbor distances and tradeoffs."
+        );
+        assert_eq!(
+            research_agent_prompt(&json!({"question":"Verify H3 limitations"})).unwrap(),
+            "Research question:\nVerify H3 limitations"
+        );
+    }
+
+    #[test]
+    fn research_brief_rejects_missing_or_malformed_direction() {
+        for args in [
+            json!({}),
+            json!({"question": "  "}),
+            json!({"question": 3}),
+            json!({"question": "H3", "context": null}),
+            json!({"question": "H3", "context": {"secret": "private"}}),
+            json!({"question": "H3", "history": "unexpected"}),
+            json!("H3"),
+        ] {
+            assert!(research_agent_prompt(&args).is_err(), "{args}");
+        }
+    }
 
     /// Data Studio can only store native geometry when the schema it sees offers the type in both
     /// places that declare columns.

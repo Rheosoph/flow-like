@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use wasmtime::{Config, Engine, OptLevel};
 
+mod load_cache;
+use load_cache::LoadCache;
+
 #[cfg(feature = "component-model")]
 use crate::component::WasmComponent;
 
@@ -246,14 +249,14 @@ pub struct WasmEngine {
     /// Configuration
     config: WasmConfig,
     /// Cached compiled modules (hash -> module)
-    module_cache: DashMap<String, Arc<WasmModule>>,
+    module_cache: Arc<LoadCache<WasmModule>>,
     /// Cached compiled components (hash -> component)
     #[cfg(feature = "component-model")]
-    component_cache: DashMap<String, Arc<WasmComponent>>,
+    component_cache: Arc<LoadCache<WasmComponent>>,
     /// Epoch ticker for timeouts
     epoch_ticker: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
     /// AOT disk cache for precompiled artifacts
-    aot_cache: Option<AotCache>,
+    aot_cache: Option<Arc<AotCache>>,
     /// Cached node definitions (wasm_hash -> definitions)
     definitions_cache: DashMap<String, Vec<WasmNodeDefinition>>,
 }
@@ -266,14 +269,17 @@ impl WasmEngine {
             WasmError::compilation(format!("Failed to create wasmtime engine: {}", e))
         })?;
 
-        let aot_cache = config.cache_dir.as_ref().map(AotCache::new);
+        let aot_cache = config
+            .cache_dir
+            .as_ref()
+            .map(|path| Arc::new(AotCache::new(path)));
 
         Ok(Self {
             engine,
             config,
-            module_cache: DashMap::new(),
+            module_cache: Arc::new(LoadCache::new()),
             #[cfg(feature = "component-model")]
-            component_cache: DashMap::new(),
+            component_cache: Arc::new(LoadCache::new()),
             epoch_ticker: Arc::new(RwLock::new(None)),
             aot_cache,
             definitions_cache: DashMap::new(),
@@ -302,7 +308,7 @@ impl WasmEngine {
 
     /// Get a reference to the AOT disk cache, if configured.
     pub fn aot_cache(&self) -> Option<&AotCache> {
-        self.aot_cache.as_ref()
+        self.aot_cache.as_deref()
     }
 
     pub fn get_cached_definitions(&self, wasm_hash: &str) -> Option<Vec<WasmNodeDefinition>> {
@@ -359,39 +365,39 @@ impl WasmEngine {
     /// Load a module from bytes
     pub async fn load_module(&self, bytes: &[u8]) -> WasmResult<Arc<WasmModule>> {
         let hash = blake3::hash(bytes).to_hex().to_string();
-
-        if let Some(cached) = self.module_cache.get(&hash) {
+        if let Some(cached) = self.module_cache.ready.get(&hash) {
             tracing::debug!("In-memory cache hit for module: {}", hash);
             return Ok(cached.clone());
         }
-
-        // 1. Try AOT cache (server-injected or previously compiled)
-        if let Some(aot) = &self.aot_cache {
-            if let Some(precompiled) = aot.load_module(&self.engine, &hash) {
-                let module = Arc::new(WasmModule::from_precompiled(precompiled, hash.clone())?);
-                self.module_cache.insert(hash, module.clone());
-                return Ok(module);
-            }
-        }
-
-        // 2. Compile with the configured engine. On iOS this engine targets
-        // Pulley, so no native executable pages are produced.
-        let module = if self.config.compiler_enabled {
-            let m = WasmModule::from_bytes(self, bytes, hash.clone()).await?;
-            if let Some(aot) = &self.aot_cache {
-                aot.save_module(m.module(), &hash);
-            }
-            m
-        } else {
-            return Err(WasmError::compilation(
-                "Compiler disabled and no precompiled artifact in AOT cache. \
-                 Ensure the precompiled .cwasm is downloaded before loading.",
-            ));
-        };
-
-        let module = Arc::new(module);
-        self.module_cache.insert(hash, module.clone());
-        Ok(module)
+        let engine = self.engine.clone();
+        let aot_cache = self.aot_cache.clone();
+        let compiler_enabled = self.config.compiler_enabled;
+        self.module_cache
+            .load(hash.clone(), || {
+                let bytes = bytes.to_vec();
+                move || {
+                    if let Some(aot) = &aot_cache {
+                        if let Some(precompiled) = aot.load_module(&engine, &hash) {
+                            return WasmModule::from_precompiled(precompiled, hash);
+                        }
+                    }
+                    if !compiler_enabled {
+                        return Err(WasmError::compilation(
+                            "Compiler disabled and no precompiled artifact in AOT cache. \
+                             Ensure the precompiled .cwasm is downloaded before loading.",
+                        ));
+                    }
+                    let compiled = wasmtime::Module::new(&engine, &bytes).map_err(|error| {
+                        WasmError::compilation(format!("Failed to compile WASM module: {error}"))
+                    })?;
+                    let module = WasmModule::from_precompiled(compiled, hash.clone())?;
+                    if let Some(aot) = &aot_cache {
+                        aot.save_module(module.module(), &hash);
+                    }
+                    Ok(module)
+                }
+            })
+            .await
     }
 
     /// Load a module from file
@@ -414,41 +420,43 @@ impl WasmEngine {
     pub async fn load_component(&self, bytes: &[u8]) -> WasmResult<Arc<WasmComponent>> {
         let hash = blake3::hash(bytes).to_hex().to_string();
 
-        if let Some(cached) = self.component_cache.get(&hash) {
+        if let Some(cached) = self.component_cache.ready.get(&hash) {
             tracing::debug!("In-memory cache hit for component: {}", hash);
             return Ok(cached.clone());
         }
 
-        // 1. Try AOT cache
-        if let Some(aot) = &self.aot_cache {
-            if let Some(precompiled) = aot.load_component(&self.engine, &hash) {
-                let component = Arc::new(WasmComponent::from_precompiled(
-                    precompiled,
-                    bytes,
-                    hash.clone(),
-                )?);
-                self.component_cache.insert(hash, component.clone());
-                return Ok(component);
-            }
-        }
-
-        // 2. Compile with the configured engine. On iOS this engine targets
-        // Pulley, so no native executable pages are produced.
-        let component = if self.config.compiler_enabled {
-            let c = WasmComponent::from_bytes(self, bytes, hash.clone()).await?;
-            if let Some(aot) = &self.aot_cache {
-                aot.save_component(c.component(), &hash);
-            }
-            c
-        } else {
-            return Err(WasmError::compilation(
-                "Compiler disabled and no precompiled component in AOT cache.",
-            ));
-        };
-
-        let component = Arc::new(component);
-        self.component_cache.insert(hash, component.clone());
-        Ok(component)
+        let engine = self.engine.clone();
+        let aot_cache = self.aot_cache.clone();
+        let compiler_enabled = self.config.compiler_enabled;
+        self.component_cache
+            .load(hash.clone(), || {
+                let bytes = bytes.to_vec();
+                move || {
+                    if let Some(aot) = &aot_cache {
+                        if let Some(precompiled) = aot.load_component(&engine, &hash) {
+                            return WasmComponent::from_precompiled(precompiled, &bytes, hash);
+                        }
+                    }
+                    if !compiler_enabled {
+                        return Err(WasmError::compilation(
+                            "Compiler disabled and no precompiled component in AOT cache.",
+                        ));
+                    }
+                    let compiled =
+                        wasmtime::component::Component::new(&engine, &bytes).map_err(|error| {
+                            WasmError::compilation(format!(
+                                "Failed to compile WASM component: {error}"
+                            ))
+                        })?;
+                    let component =
+                        WasmComponent::from_precompiled(compiled, &bytes, hash.clone())?;
+                    if let Some(aot) = &aot_cache {
+                        aot.save_component(component.component(), &hash);
+                    }
+                    Ok(component)
+                }
+            })
+            .await
     }
 
     /// Auto-detect format and load either a core module or Component Model binary
@@ -525,22 +533,22 @@ impl WasmEngine {
 
     /// Clear the module cache
     pub fn clear_cache(&self) {
-        self.module_cache.clear();
+        self.module_cache.ready.clear();
         #[cfg(feature = "component-model")]
-        self.component_cache.clear();
+        self.component_cache.ready.clear();
     }
 
     /// Get number of cached modules
     pub fn cached_module_count(&self) -> usize {
-        let count = self.module_cache.len();
+        let count = self.module_cache.ready.len();
         #[cfg(feature = "component-model")]
-        let count = count + self.component_cache.len();
+        let count = count + self.component_cache.ready.len();
         count
     }
 
     /// Remove a specific module from cache
     pub fn evict_module(&self, hash: &str) -> bool {
-        self.module_cache.remove(hash).is_some()
+        self.module_cache.ready.remove(hash).is_some()
     }
 }
 
@@ -557,6 +565,84 @@ unsafe impl Sync for WasmEngine {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn node_module_bytes() -> Vec<u8> {
+        wat::parse_str(
+            r#"(module
+                (func (export "get_nodes") (result i64) i64.const 0)
+                (func (export "run") (param i32 i32) (result i64) i64.const 0))"#,
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn concurrent_module_loads_share_compiled_and_aot_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine =
+            WasmEngine::new(WasmConfig::default().with_cache_dir(directory.path())).unwrap();
+        let bytes = node_module_bytes();
+        let (first, second) = tokio::join!(engine.load_module(&bytes), engine.load_module(&bytes));
+        let first = first.unwrap();
+        assert!(Arc::ptr_eq(&first, &second.unwrap()));
+        assert_eq!(engine.cached_module_count(), 1);
+
+        assert!(engine.evict_module(first.hash()));
+        let aot_engine = WasmEngine::new(
+            WasmConfig::default()
+                .with_cache_dir(directory.path())
+                .without_compiler(),
+        )
+        .unwrap();
+        let (aot_first, aot_second) = tokio::join!(
+            aot_engine.load_module(&bytes),
+            aot_engine.load_module(&bytes)
+        );
+        let aot_first = aot_first.unwrap();
+        assert!(Arc::ptr_eq(&aot_first, &aot_second.unwrap()));
+        assert!(!Arc::ptr_eq(&first, &aot_first));
+        aot_engine.clear_cache();
+        assert_eq!(aot_engine.cached_module_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn rejected_module_loads_preserve_validation_errors() {
+        let engine = WasmEngine::new(WasmConfig::development()).unwrap();
+        let bytes = wat::parse_str("(module)").unwrap();
+        let (first, second) = tokio::join!(engine.load_module(&bytes), engine.load_module(&bytes));
+        for result in [first, second] {
+            assert!(matches!(result, Err(WasmError::MissingExport { .. })));
+        }
+        assert_eq!(engine.cached_module_count(), 0);
+        assert!(engine.load_module(&node_module_bytes()).await.is_ok());
+    }
+
+    #[cfg(feature = "component-model")]
+    #[tokio::test]
+    async fn concurrent_component_loads_share_compiled_and_aot_results() {
+        let directory = tempfile::tempdir().unwrap();
+        let engine =
+            WasmEngine::new(WasmConfig::default().with_cache_dir(directory.path())).unwrap();
+        let bytes = wat::parse_str("(component)").unwrap();
+        let (first, second) =
+            tokio::join!(engine.load_component(&bytes), engine.load_component(&bytes));
+        let first = first.unwrap();
+        assert!(Arc::ptr_eq(&first, &second.unwrap()));
+        engine.clear_cache();
+        let aot_engine = WasmEngine::new(
+            WasmConfig::default()
+                .with_cache_dir(directory.path())
+                .without_compiler(),
+        )
+        .unwrap();
+        let (aot_first, aot_second) = tokio::join!(
+            aot_engine.load_component(&bytes),
+            aot_engine.load_component(&bytes),
+        );
+        let aot_first = aot_first.unwrap();
+        assert!(Arc::ptr_eq(&aot_first, &aot_second.unwrap()));
+        assert!(!Arc::ptr_eq(&first, &aot_first));
+        assert_eq!(aot_engine.cached_module_count(), 1);
+    }
 
     #[tokio::test]
     async fn test_engine_creation() {

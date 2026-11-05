@@ -261,11 +261,19 @@ pub async fn invoke_event_async(
     } else {
         ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
     };
-    let sub = permission.effective_user_id().map_err(|_| {
+    let sub = permission.run_user_id().map_err(|_| {
         crate::error::ApiError::forbidden(
             "Invoking requires a caller that is linked to a user account",
         )
     })?;
+    let bot_run = crate::bot_flow::BotFlowRun::admit_event(
+        &user,
+        &app_id,
+        &state,
+        &event_id,
+        params.page_trigger.is_some(),
+    )
+    .await?;
     let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
     let actor_user_id = account_user_id(&sub).map(ToOwned::to_owned);
     crate::routes::oauth::authorize_incoming_oauth_tokens(&state, &user, &mut params.oauth_tokens)
@@ -419,10 +427,12 @@ pub async fn invoke_event_async(
     // The dispatch inputs do not depend on each other, so they resolve
     // together. Each result is consumed where it was awaited before, which
     // keeps the order in which failures surface.
+    let (credential_sub, credential_mode) =
+        crate::bot_flow::credential_target(bot_run.as_ref(), &sub, get_credentials_access());
     let (wasm_packages, input_payload_key, credentials, (profile, custom_bit_owner)) = flow_like_types::tokio::join!(
         resolve_wasm_packages(&state, &app_id),
         store_input_payload(&state, &app_id, &run_id, params.payload.as_ref()),
-        state.scoped_credentials(&sub, &app_id, get_credentials_access()),
+        state.scoped_credentials(&credential_sub, &app_id, credential_mode),
         caller_dispatch_profile(&state, &user, &sub, params.profile_id.as_deref(), &app_id),
     );
     let wasm_authority_revision =
@@ -511,7 +521,10 @@ pub async fn invoke_event_async(
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().fixed_offset()),
         updated_at: Set(chrono::Utc::now().fixed_offset()),
-        event_version: Set(None),
+        event_version: Set(Some(format!(
+            "{}.{}.{}",
+            event.event_version.0, event.event_version.1, event.event_version.2
+        ))),
         nodes: Set(None),
         logs_count: Set(None),
     };
@@ -600,6 +613,7 @@ pub async fn invoke_event_async(
         tracing::error!(error = %e, "Failed to sign executor JWT");
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
     })?;
+    let executor_jwt = crate::bot_flow::bind_executor(bot_run.as_ref(), executor_jwt)?;
 
     let request = DispatchRequest {
         run_id: run_id.clone(),

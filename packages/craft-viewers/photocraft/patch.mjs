@@ -9,30 +9,38 @@ export default function prepare({
 	write,
 	replaceOnce,
 }) {
-	const uiPath = "crates/ui-egui/src/lib.rs";
+	const uiPath = "crates/ui-egui/src/services.rs";
 	let ui = original(uiPath);
 	ui = replaceOnce(
 		ui,
 		"pub struct Services {",
-		"pub struct Services {\n    pub host_command: Option<Box<dyn FnMut(&str) -> Option<Result<Value, String>>>>,",
+		"pub struct Services {\n    pub host_command: Option<Box<dyn FnMut(&str) -> Option<Result<serde_json::Value, String>>>>,",
 		"host services",
 	);
+	write(uiPath, ui);
+	const commandsPath = "crates/ui-egui/src/app/commands.rs";
 	const run =
 		"    pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {";
-	ui = replaceOnce(
-		ui,
-		run,
-		`${run}\n        if let Some(result) = self.services.host_command.as_mut().and_then(|hook| hook(id)) { return result; }`,
-		"command guard",
+	write(
+		commandsPath,
+		replaceOnce(
+			original(commandsPath),
+			run,
+			`${run}\n        if let Some(result) = self.services.host_command.as_mut().and_then(|hook| hook(id)) { return result; }`,
+			"command guard",
+		),
 	);
-	ui = replaceOnce(
-		ui,
-		"            panels::title_bar(self, ui);",
-		'            egui::Panel::top("flows-photo-menu").show(ui, |ui| { menus::menu_bar(self, ui); });',
-		"embedded menu bar",
+	const appPath = "crates/ui-egui/src/app/frame.rs";
+	write(
+		appPath,
+		replaceOnce(
+			original(appPath),
+			"            panels::title_bar(self, ui);",
+			'            egui::Panel::top("flows-photo-menu").show(ui, |ui| { ui.horizontal(|ui| { crate::menus::menu_bar(self, ui); }); });',
+			"embedded menu bar",
+		),
 	);
-	write(uiPath, ui);
-	const menusPath = "crates/ui-egui/src/menus.rs";
+	const menusPath = "crates/ui-egui/src/menus/invoke.rs";
 	let menus = original(menusPath);
 	const invoke =
 		"pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {";
@@ -42,21 +50,41 @@ export default function prepare({
 		`${invoke}\n    if let Some(result) = app.services.host_command.as_mut().and_then(|hook| hook(id)) { return result; }`,
 		"menu command guard",
 	);
-	menus = replaceOnce(
-		menus,
-		"            for top in TOP_MENUS {",
-		'            for top in TOP_MENUS.into_iter().filter(|top| !matches!(*top, "File" | "Help")) {',
-		"embedded menus",
-	);
 	write(menusPath, menus);
+	const menuRoot = "crates/ui-egui/src/menus.rs";
 	write(
-		"crates/ui-egui/src/panels.rs",
+		menuRoot,
 		replaceOnce(
-			original("crates/ui-egui/src/panels.rs"),
-			"                if t.pro {\n                    crate::chrome_ui::home_button(app, ui);\n                    widgets::vline(ui, 22.0);\n                }\n",
+			original(menuRoot),
+			'pub const TOP_MENUS: [&str; 10] = ["File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help"];',
+			'pub const TOP_MENUS: [&str; 8] = ["Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window"];',
+			"embedded menus",
+		),
+	);
+	const optionsPath = "crates/ui-egui/src/panels/options_bar.rs";
+	write(
+		optionsPath,
+		replaceOnce(
+			original(optionsPath),
+			"                        if t.pro {\n                            crate::chrome_ui::home_button(app, ui);\n                            widgets::vline(ui, 22.0);\n                        }\n",
 			"",
 			"embedded options bar",
 		).replaceAll("PhotoCraft", "Flows Photo"),
+	);
+	const inputPath = "crates/ui-egui/src/app/input.rs";
+	write(
+		inputPath,
+		replaceOnce(
+			original(inputPath),
+			"    fn cancel_synthetic(&mut self, reason: &str) {",
+			"    pub fn cancel_synthetic(&mut self, reason: &str) {",
+			"host input cancellation",
+		),
+	);
+	// The embedded host supplies the app identity, including in hidden dialogs.
+	write(
+		"crates/ui-egui/src/panels/brand.rs",
+		"pub fn paint_mark(_ui: &egui::Ui, _rect: egui::Rect) {}\n",
 	);
 	const cargoPath = "apps/photocraft-web/Cargo.toml";
 	write(

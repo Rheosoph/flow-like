@@ -6,6 +6,7 @@ import ChevronDown from "lucide-react/dist/esm/icons/chevron-down.js";
 import ChevronUp from "lucide-react/dist/esm/icons/chevron-up.js";
 import CopyIcon from "lucide-react/dist/esm/icons/copy.js";
 import MessageSquareIcon from "lucide-react/dist/esm/icons/message-square.js";
+import ReplyIcon from "lucide-react/dist/esm/icons/reply.js";
 import EditIcon from "lucide-react/dist/esm/icons/square-pen.js";
 import ThumbsDownIcon from "lucide-react/dist/esm/icons/thumbs-down.js";
 import ThumbsUpIcon from "lucide-react/dist/esm/icons/thumbs-up.js";
@@ -26,6 +27,7 @@ import { FLOWPILOT_DEBUG_ENABLED } from "../../../lib/flowpilot-debug";
 import { observeResize } from "../../../lib/observe-resize";
 import { IRole } from "../../../lib/schema/llm/history";
 import { cn } from "../../../lib/utils";
+import { ChatApprovalCard } from "../../bots-tab/approval-card";
 import { ThinkingStamp } from "../../thinking/thinking-stamp";
 import { Badge } from "../../ui/badge";
 import { Button } from "../../ui/button";
@@ -62,6 +64,8 @@ import {
 	joinContentText,
 	unanchoredWidgets,
 } from "./inline-segments";
+import { MessageReactionPicker, MessageReactions } from "./message-reactions";
+import { MessageReference } from "./message-reference";
 import { MessageWidgets } from "./message-widgets";
 import {
 	type PendingAsk,
@@ -72,6 +76,7 @@ import { PendingAskRule, PendingAskStatus } from "./pending-ask-status";
 import { InlineStepGroup, PlanSteps } from "./plan-steps";
 import { extractThinkBlocks } from "./reasoning-format";
 import { ReasoningViewer } from "./reasoning-viewer";
+import { RoomMessageActions } from "./room-message-actions";
 import { UsageStats } from "./usage-stats";
 
 /** Lines of a sent message shown before it collapses behind "Show more". */
@@ -100,6 +105,16 @@ interface MessageProps {
 		messageId: string,
 		updates: Partial<IMessage>,
 	) => void | Promise<void>;
+	/** Whether this message can be edited; answers by default, never your own asks. */
+	editable?: boolean;
+	onReply?: (message: IMessage, selectedText?: string) => void;
+	onReaction?: (
+		message: IMessage,
+		emoji: string,
+		operation: "add" | "remove",
+		replacesEmoji?: string,
+	) => Promise<void>;
+	interactionDisabled?: boolean;
 	/** App id owning the chat — needed to render + trigger embedded widgets. */
 	appId?: string;
 	/** Board id of the chat event — target for widget action workflows. */
@@ -112,6 +127,10 @@ interface MessageProps {
 	anchoredContent?: readonly MessageInlineContent[];
 	/** A question whose answer has shown nothing yet carries the wait on its own card. */
 	pending?: PendingAsk;
+	/** `room`: your messages are a compact bubble, others' are flat, actions float on hover. */
+	layout?: "room";
+	/** Your more-menu in a room, rendered with the hover actions. */
+	renderMenu?: (message: IMessage) => ReactNode;
 }
 
 /** A node the chat host renders inside one message, at `offset` into its joined text. */
@@ -414,14 +433,15 @@ const MessageActions = ({
 	onThumbsUp: () => void;
 	onThumbsDown: () => void;
 	onFeedbackClick: () => void;
-	onEdit: () => void;
+	/** Absent when the host can't save an edit. */
+	onEdit?: () => void;
 	onCopy: () => void;
 }) => (
 	<div
 		className={cn(
 			"flex flex-row items-center gap-3",
 			compact
-				? "absolute bottom-3 right-4 z-10 h-auto w-auto gap-2"
+				? "absolute bottom-5 right-8 z-10 h-auto w-auto gap-2"
 				: cn(
 						"h-6 w-full",
 						isUser
@@ -468,7 +488,7 @@ const MessageActions = ({
 				</Badge>
 			</button>
 		)}
-		{!isUser && (
+		{onEdit && (
 			<MessageActionButton
 				onClick={onEdit}
 				title={i18next.t("editMessage2", "Edit message")}
@@ -490,16 +510,23 @@ export const MessageComponent = memo(
 		message,
 		loading,
 		onMessageUpdate,
+		editable,
+		onReply,
+		onReaction,
+		interactionDisabled = false,
 		appId,
 		boardId,
 		eventId,
 		widgetSnapshots = true,
 		anchoredContent,
 		pending,
+		layout,
+		renderMenu,
 	}: Readonly<MessageProps>) {
 		const { t } = useTranslation("chat");
 		const feedbackEnabled = useContext(ChatFeedbackEnabledContext);
 		const isUser = message.inner.role === IRole.User;
+		const room = layout === "room";
 		const [isExpanded, setIsExpanded] = useState(false);
 		const [showToggle, setShowToggle] = useState(false);
 		const [fullscreenFile, setFullscreenFile] =
@@ -507,6 +534,8 @@ export const MessageComponent = memo(
 		const [showFeedbackDialog, setShowFeedbackDialog] = useState(false);
 		const [showEditDialog, setShowEditDialog] = useState(false);
 		const [showFileDialog, setShowFileDialog] = useState(false);
+		const [savingReaction, setSavingReaction] = useState(false);
+		const reactionUpdatePending = useRef(false);
 		const [dialogSelectedFile, setDialogSelectedFile] =
 			useState<ProcessedAttachment | null>(null);
 		const contentRef = useRef<HTMLDivElement>(null);
@@ -653,6 +682,60 @@ export const MessageComponent = memo(
 			[message.id, message.rating, message.ratingSettings, onMessageUpdate],
 		);
 
+		const updateReaction = useCallback(
+			async (
+				emoji: string,
+				operation: "add" | "remove",
+				replacesEmoji?: string,
+			) => {
+				if (!onReaction || interactionDisabled || reactionUpdatePending.current)
+					return;
+				reactionUpdatePending.current = true;
+				setSavingReaction(true);
+				try {
+					if (replacesEmoji) {
+						await onReaction(message, emoji, operation, replacesEmoji);
+					} else {
+						await onReaction(message, emoji, operation);
+					}
+				} catch (error) {
+					console.error("[Chat] Failed to update reaction:", error);
+					toast.error(t("reactionSendFailed", "Failed to send reaction"));
+				} finally {
+					reactionUpdatePending.current = false;
+					setSavingReaction(false);
+				}
+			},
+			[message, onReaction, interactionDisabled, t],
+		);
+		const toggleReaction = useCallback(
+			(emoji: string) =>
+				updateReaction(
+					emoji,
+					message.reactions?.includes(emoji) ? "remove" : "add",
+				),
+			[message.reactions, updateReaction],
+		);
+		const replaceReaction = useCallback(
+			(previousEmoji: string, emoji: string) => {
+				if (previousEmoji !== emoji)
+					return updateReaction(emoji, "add", previousEmoji);
+			},
+			[updateReaction],
+		);
+
+		const replyToMessage = useCallback(() => {
+			if (!onReply || interactionDisabled) return;
+			const selection = window.getSelection();
+			const selectedText =
+				selection &&
+				contentRef.current?.contains(selection.anchorNode) &&
+				contentRef.current?.contains(selection.focusNode)
+					? selection.toString().trim() || undefined
+					: undefined;
+			onReply(message, selectedText);
+		}, [message, onReply, interactionDisabled]);
+
 		const handleFeedbackSubmit = useCallback(
 			async (data: {
 				comment: string;
@@ -683,7 +766,7 @@ export const MessageComponent = memo(
 				if (!onMessageUpdate) return;
 
 				const trimmedContent = content.trim();
-				if (trimmedContent !== messageContent.text) {
+				if (trimmedContent !== (message.source_text ?? messageContent.text)) {
 					onMessageUpdate(message.id, {
 						inner: {
 							...message.inner,
@@ -693,7 +776,13 @@ export const MessageComponent = memo(
 					toast.success("Message updated successfully!");
 				}
 			},
-			[messageContent.text, message.id, message.inner, onMessageUpdate],
+			[
+				messageContent.text,
+				message.id,
+				message.inner,
+				message.source_text,
+				onMessageUpdate,
+			],
 		);
 
 		const gaveMoreFeedback = useMemo(() => {
@@ -788,14 +877,27 @@ export const MessageComponent = memo(
 		const hasUsageStats = usageStats.length > 0;
 		const hasFooterContent =
 			hasUsageStats ||
+			Boolean(message.interaction) ||
 			processedAttachments.length > 0 ||
 			Boolean(FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report);
-		const compactUserActions = isUser && !hasFooterContent;
+		const compactUserActions = !room && isUser && !hasFooterContent;
+		const hasReplyAction = !room && !isUser && Boolean(onReply);
+		const hasSelectedReactions = Boolean(
+			message.reactions?.length ||
+				message.workflowReactions?.length ||
+				Object.keys(message.reactionSummary ?? {}).length,
+		);
+		const hasCornerReactions = Boolean(onReaction || hasSelectedReactions);
 
 		return (
 			<>
 				<div
-					className="flex w-full flex-col items-start gap-1 transition-all duration-300 ease-in-out"
+					data-fl-chat-message-row
+					className={cn(
+						"flex w-full items-start gap-1.5 sm:gap-2",
+						hasCornerReactions && !hasReplyAction && !room && "pr-4",
+						room && isUser && "justify-end",
+					)}
 					style={{
 						maxWidth:
 							"min(var(--fl-chat-content-width, 64rem), var(--fl-chat-wide, 46rem))",
@@ -803,29 +905,69 @@ export const MessageComponent = memo(
 				>
 					<div
 						className={cn(
-							"whitespace-break-spaces transition-all duration-300 ease-in-out",
-							(compactUserActions || pending) && "relative",
-							isUser
-								? "w-full border-l-2 py-2 pr-4 pl-3.5"
-								: "w-full max-w-full p-4 pt-2 pb-0",
+							"relative min-w-0 flex-1 whitespace-break-spaces transition-all duration-300 ease-in-out",
+							room
+								? isUser
+									? "ml-auto mr-4 w-fit max-w-[85%] rounded-2xl rounded-br-md bg-muted px-3.5 py-2 text-foreground outline-none"
+									: "w-full max-w-full py-0 pr-4 pl-[calc(1rem+30px)]"
+								: isUser
+									? "w-full border-l-2 py-2 pr-4 pl-3.5"
+									: "w-full max-w-full p-4 pt-2 pb-0",
+							room && hasSelectedReactions && "mb-3",
 						)}
 						data-fl-chat-message={isUser ? "user" : "assistant"}
-						style={{
-							backgroundColor: isUser
-								? "var(--fl-chat-ask-background, transparent)"
-								: "var(--fl-chat-ai-message-background, var(--background))",
-							borderLeftColor: isUser ? askRuleColor(pending) : undefined,
-							borderRadius: isUser
-								? "0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0"
-								: "var(--fl-chat-message-radius, 0.75rem)",
-							color: isUser
-								? "var(--fl-chat-user-message-foreground, var(--foreground))"
-								: "var(--fl-chat-ai-message-foreground, var(--foreground))",
-							maxWidth: isUser ? "var(--fl-chat-measure, 38rem)" : undefined,
-						}}
+						tabIndex={room ? -1 : undefined}
+						style={
+							room
+								? isUser
+									? undefined
+									: {
+											backgroundColor:
+												"var(--fl-chat-ai-message-background, var(--background))",
+											color:
+												"var(--fl-chat-ai-message-foreground, var(--foreground))",
+										}
+								: {
+										backgroundColor: isUser
+											? "var(--fl-chat-ask-background, transparent)"
+											: "var(--fl-chat-ai-message-background, var(--background))",
+										borderLeftColor: isUser ? askRuleColor(pending) : undefined,
+										borderRadius: isUser
+											? "0 var(--fl-chat-message-radius, 0.75rem) var(--fl-chat-message-radius, 0.75rem) 0"
+											: "var(--fl-chat-message-radius, 0.75rem)",
+										color: isUser
+											? "var(--fl-chat-user-message-foreground, var(--foreground))"
+											: "var(--fl-chat-ai-message-foreground, var(--foreground))",
+										maxWidth: isUser
+											? "var(--fl-chat-measure, 38rem)"
+											: undefined,
+									}
+						}
 					>
-						{isUser && pending?.phase === "waiting" && <PendingAskRule />}
-						{isUser && (
+						{isUser && !room && pending?.phase === "waiting" && (
+							<PendingAskRule />
+						)}
+						{message.interaction && (
+							<MessageReference
+								reference={message.interaction.target}
+								label={
+									message.interaction.type === "reaction"
+										? message.interaction.operation === "add"
+											? t(
+													"addedReactionToMessage",
+													"Added {{emoji}} to this message",
+													{ emoji: message.interaction.emoji },
+												)
+											: t(
+													"removedReactionFromMessage",
+													"Removed {{emoji}} from this message",
+													{ emoji: message.interaction.emoji },
+												)
+										: undefined
+								}
+							/>
+						)}
+						{isUser && !room && (
 							<span className="mb-1.5 flex items-center justify-between gap-3 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/70">
 								<span className="flex min-w-0 items-baseline gap-2">
 									{t("asked", "Asked")}
@@ -1004,6 +1146,9 @@ export const MessageComponent = memo(
 								snapshots={widgetSnapshots}
 							/>
 						)}
+						{message.approval && (
+							<ChatApprovalCard approval={message.approval} />
+						)}
 						{trailingContent?.map((entry) => (
 							<AnchoredContentBlock key={entry.key} entry={entry} />
 						))}
@@ -1016,7 +1161,23 @@ export const MessageComponent = memo(
 						{FLOWPILOT_DEBUG_ENABLED && !isUser && message.debug_report && (
 							<AgentDebugReport report={message.debug_report} />
 						)}
-						{!loading && (
+						{room && !loading && (
+							<RoomMessageActions
+								align={isUser ? "end" : "start"}
+								disabled={interactionDisabled}
+								onReply={
+									onReply && !interactionDisabled ? replyToMessage : undefined
+								}
+								onEdit={
+									onMessageUpdate && (editable ?? !isUser)
+										? () => setShowEditDialog(true)
+										: undefined
+								}
+								onCopy={copyToClipboard}
+								menu={renderMenu?.(message)}
+							/>
+						)}
+						{!room && !loading && (
 							<MessageActions
 								isUser={isUser}
 								feedbackEnabled={feedbackEnabled}
@@ -1027,11 +1188,67 @@ export const MessageComponent = memo(
 								onThumbsUp={() => upsertFeedback(1)}
 								onThumbsDown={() => upsertFeedback(-1)}
 								onFeedbackClick={() => setShowFeedbackDialog(true)}
-								onEdit={() => setShowEditDialog(true)}
+								onEdit={
+									onMessageUpdate && (editable ?? !isUser)
+										? () => setShowEditDialog(true)
+										: undefined
+								}
 								onCopy={copyToClipboard}
 							/>
 						)}
+						{hasCornerReactions && (
+							<div
+								data-fl-chat-reaction-corner
+								className={cn(
+									"absolute z-10 flex items-center justify-end gap-1.5",
+									room ? "-bottom-3 right-2" : "-bottom-4 -right-4",
+								)}
+							>
+								<MessageReactions
+									reactions={message.reactions}
+									workflowReactions={message.workflowReactions}
+									summaries={message.reactionSummary}
+									onToggle={onReaction ? toggleReaction : undefined}
+									onReplace={onReaction ? replaceReaction : undefined}
+									disabled={loading || savingReaction || interactionDisabled}
+									alignEnd
+									className="m-0 flex-nowrap"
+								/>
+								{onReaction && !hasSelectedReactions && (
+									<div data-fl-chat-hover-action className="flex shrink-0">
+										<MessageReactionPicker
+											reactions={message.reactions}
+											onToggle={toggleReaction}
+											disabled={
+												loading || savingReaction || interactionDisabled
+											}
+											triggerClassName="rounded-full border border-border bg-popover shadow-sm"
+										/>
+									</div>
+								)}
+							</div>
+						)}
 					</div>
+					{hasReplyAction && (
+						<div
+							data-fl-chat-message-actions
+							data-fl-chat-hover-action
+							className="flex shrink-0 flex-col gap-0.5 pt-1 text-muted-foreground"
+						>
+							{!isUser && onReply && (
+								<button
+									type="button"
+									title={t("replyToMessage", "Reply to message")}
+									aria-label={t("replyToMessage", "Reply to message")}
+									disabled={loading || interactionDisabled}
+									onClick={replyToMessage}
+									className="inline-flex size-8 items-center justify-center rounded-md transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:opacity-50"
+								>
+									<ReplyIcon className="size-4" />
+								</button>
+							)}
+						</div>
+					)}
 				</div>
 				{fullscreenFile && (
 					<Dialog
@@ -1081,7 +1298,7 @@ export const MessageComponent = memo(
 					appId={appId}
 					open={showEditDialog}
 					onOpenChange={setShowEditDialog}
-					content={messageContent.text}
+					content={message.source_text ?? messageContent.text}
 					onSave={handleEditSave}
 				/>
 				<FeedbackDialog
@@ -1112,6 +1329,9 @@ export const MessageComponent = memo(
 			prev.message.inner.content === next.message.inner.content &&
 			prev.message.files === next.message.files &&
 			prev.message.rating === next.message.rating &&
+			prev.message.reactions === next.message.reactions &&
+			prev.message.workflowReactions === next.message.workflowReactions &&
+			prev.message.interaction === next.message.interaction &&
 			prev.message.ratingSettings === next.message.ratingSettings &&
 			prev.message.plan_steps === next.message.plan_steps &&
 			prev.message.current_step_id === next.message.current_step_id &&
@@ -1120,6 +1340,7 @@ export const MessageComponent = memo(
 			prev.message.app_refs === next.message.app_refs &&
 			prev.message.widgets === next.message.widgets &&
 			prev.message.error === next.message.error &&
+			prev.message.approval === next.message.approval &&
 			prev.appId === next.appId &&
 			prev.boardId === next.boardId &&
 			prev.eventId === next.eventId &&
@@ -1128,7 +1349,13 @@ export const MessageComponent = memo(
 			prev.anchoredContent === next.anchoredContent &&
 			prev.pending?.phase === next.pending?.phase &&
 			prev.pending?.since === next.pending?.since &&
-			prev.onMessageUpdate === next.onMessageUpdate
+			prev.layout === next.layout &&
+			prev.renderMenu === next.renderMenu &&
+			prev.onMessageUpdate === next.onMessageUpdate &&
+			prev.editable === next.editable &&
+			prev.onReply === next.onReply &&
+			prev.onReaction === next.onReaction &&
+			prev.interactionDisabled === next.interactionDisabled
 		);
 	},
 );

@@ -78,6 +78,8 @@ Keep the model identifier configurable rather than scattering it across several 
 
 [Find Model](/nodes/ai/generative/ai-generative-find-model/) selects a model from the active profile using a `BitModelPreference`.
 
+In an app chat, Find Model first uses the user's [chat model selection](/topics/genai/chat/#chat-event-contract) when its weights are unchanged and no model hint is set. The selected model must be active, available to the execution host, and satisfy any multimodal requirement. Without an eligible selection, Find Model uses its usual profile-based selection.
+
 Build the preference with:
 
 | Node | Purpose |
@@ -105,6 +107,39 @@ Use preference-based selection when the board can tolerate a compatible alternat
 
 A provider may expose several model types. A text-generation model is not automatically an embedding, speech, image, or video model.
 
+## Hosted image generation
+
+Select an **ImageGeneration** Bit from the model catalog and connect **Load Bit**
+to the **Provider** input of **Generate Image**. Supply a conversation in
+**History** and a destination in **Output Path**. The node uses the final user
+message as the prompt, generates one image, and returns its saved path and
+metadata. Hosted image Bits use your authenticated Flow-Like account; provider
+keys stay on the server.
+
+Administrators can choose **Hosted** when adding an image model, then select
+Cloudflare Workers AI or OpenRouter, an upstream model, an access tier, and a
+per-image price. Hosted Bits have no downloadable model files. Existing local
+generation and personal provider connections remain available.
+
+Cloudflare supports **FLUX.1 Schnell** with its default square dimensions and
+four steps, and **Stable Diffusion XL Base 1.0** with twenty steps. SDXL also
+accepts a negative prompt and dimensions from 256 to 2048 pixels. OpenRouter
+uses its [dedicated Image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation/)
+with an image model ID. Optional controls depend on the selected model.
+
+Each request accepts a prompt of up to 2,048 characters and returns one PNG,
+JPEG, or WebP image of at most 8 MiB. Reference images, image editing, multiple
+outputs, and arbitrary provider request parameters are outside this hosted
+interface. The returned MIME type determines the saved file extension.
+
+The API reserves credits before generation. Cloudflare uses the catalog's
+configured per-image provider tariff. For OpenRouter, configure the highest
+cost across the model's permitted settings and routed providers; the final
+charge uses its reported cost. Missing cost information or an interrupted
+provider response leaves usage reserved for reconciliation. Check usage before
+retrying a failed call. See [server configuration](/self-hosting/docker-compose/configuration/#hosted-image-providers)
+for credentials and pricing fields.
+
 ## Local models
 
 [Ollama Model](/nodes/ai/generative/provider/ai-generative-build-ollama/) and [LM Studio Model](/nodes/ai/generative/provider/ai-generative-build-lmstudio/) connect to compatible local services.
@@ -118,6 +153,12 @@ Before using a local model:
 - define what should happen when the local service is unavailable.
 
 Hardware requirements depend on model architecture, quantization, context size, and runtime. Use the model and runtime documentation instead of a universal RAM estimate.
+
+### Temporary endpoint failures
+
+Requests through the shared Rig HTTP client, including OpenAI-compatible and Ollama providers, get up to five attempts when a connection fails before the HTTP response opens, or the endpoint returns HTTP 408, 429, 500, 502, 503, or 504. Retries wait 1, 2, 4, then 8 seconds, each with up to 250 milliseconds of random delay. These waits are additional to the time spent on each request. Logs show the failed attempt and the next delay.
+
+Authentication and request-validation errors fail immediately. Once a response opens, a failure while reading its body or stream is returned to the workflow without replaying the request. Multipart uploads and providers with separate transports, such as LM Studio and the built-in llama.cpp client, do not use this retry policy.
 
 ## Embedding models
 

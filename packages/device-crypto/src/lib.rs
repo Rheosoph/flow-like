@@ -4,6 +4,7 @@ pub mod archive;
 pub mod certificate_authority;
 pub mod controller;
 pub mod fleet;
+pub mod inbox;
 mod inventory;
 pub mod mls;
 pub mod mls_store;

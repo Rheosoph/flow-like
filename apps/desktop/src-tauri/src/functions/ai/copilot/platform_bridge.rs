@@ -18,6 +18,7 @@ pub(super) enum FrontendPlatformToolSet {
     Scout,
     Home,
     HomeReadOnly,
+    BotTools,
 }
 
 pub(super) fn frontend_platform_tool_spec(
@@ -41,6 +42,9 @@ pub(super) fn frontend_platform_tool_spec(
         FrontendPlatformToolSet::Scout => find_scout_tool_spec(tool_name),
         FrontendPlatformToolSet::Home => find_home_tool_spec(tool_name),
         FrontendPlatformToolSet::HomeReadOnly => find_home_tool_spec_for_access(tool_name, true),
+        FrontendPlatformToolSet::BotTools => {
+            flow_like::flow::copilot::find_bot_tool_spec(tool_name)
+        }
     }
 }
 

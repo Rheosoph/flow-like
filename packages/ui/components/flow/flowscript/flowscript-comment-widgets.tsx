@@ -24,11 +24,16 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { type PeerUserInfo, colorFromSub } from "../../../hooks/use-peer-users";
+import { useUserIdentity } from "../../../hooks/use-user-lookup";
 import { prepareCommentSave } from "../../../lib/flow-comment-edit";
 import { PLATE_JSON_PREFIX } from "../../../lib/plate-document";
 import { plainTextFromRichContent } from "../../../lib/plate-text";
 import type { IComment } from "../../../lib/schema/flow/board";
-import { userInitials } from "../../../lib/user-display";
+import { looksLikeBotSub, userInitials } from "../../../lib/user-display";
+import {
+	ResolvedIdentityAvatar,
+	identityAccessibleName,
+} from "../../identity/identity-avatar";
 import {
 	Avatar,
 	AvatarFallback,
@@ -253,7 +258,12 @@ function CommentRow({
 			? comment.author
 			: undefined;
 	const info = author ? authors.get(author) : undefined;
-	const name = info?.name ?? t("common:user", "User");
+	const botAuthor = useUserIdentity(
+		looksLikeBotSub(author) ? author : undefined,
+	);
+	const name = botAuthor.bot
+		? botAuthor.label
+		: (info?.name ?? t("common:user", "User"));
 	const canModify = editable && canModifyFlowScriptComment(comment, sub);
 	// Rich comments come from the board editor; a plain textarea would show their JSON and drop formatting.
 	const isRich = comment.content.startsWith(PLATE_JSON_PREFIX);
@@ -296,15 +306,23 @@ function CommentRow({
 	return (
 		<div className="group border-b px-3 py-2 last:border-b-0">
 			<div className="flex items-center gap-2">
-				<Avatar className="h-5 w-5 shrink-0">
-					<AvatarImage src={info?.avatarUrl} alt={name} />
-					<AvatarFallback
-						className="text-[8px] font-semibold text-white"
-						style={{ backgroundColor: colorFromSub(author) }}
-					>
-						{userInitials(name, "?")}
-					</AvatarFallback>
-				</Avatar>
+				{botAuthor.bot ? (
+					<ResolvedIdentityAvatar
+						identity={botAuthor}
+						size={20}
+						title={identityAccessibleName(botAuthor)}
+					/>
+				) : (
+					<Avatar className="h-5 w-5 shrink-0">
+						<AvatarImage src={info?.avatarUrl} alt={name} />
+						<AvatarFallback
+							className="text-[8px] font-semibold text-white"
+							style={{ backgroundColor: colorFromSub(author) }}
+						>
+							{userInitials(name, "?")}
+						</AvatarFallback>
+					</Avatar>
+				)}
 				<span className="min-w-0 truncate text-xs font-medium">{name}</span>
 				<RelativeTime
 					value={commentTimestampMs(comment)}

@@ -708,6 +708,13 @@ pub struct OAuthProviderConfig {
     pub use_implicit_flow: bool,
     /// Optional: Audience claim for token validation
     pub audience: Option<String>,
+    /// Hosts a bot's connector may send this provider's token to (exact names or `*.suffix`).
+    /// Empty uses the built-in list for the provider id.
+    #[serde(default)]
+    pub api_hosts: Vec<String>,
+    /// Optional: the provider's MCP endpoint, which may receive the provider's token.
+    #[serde(default)]
+    pub mcp_url: Option<String>,
 }
 
 pub type OAuthProviderConfigs = HashMap<String, OAuthProviderConfig>;

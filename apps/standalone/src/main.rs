@@ -159,6 +159,18 @@ REST, MCP and daemon placements currently support one replica."#)]
         #[arg(long, value_enum)]
         engine: WorkerEngine,
     },
+    /// Serves one bot's browser and computer; the agent starts it with the bot's own display.
+    #[command(hide = true)]
+    PlaygroundWorker {
+        #[arg(long)]
+        bot: String,
+        #[arg(long)]
+        data_dir: PathBuf,
+        #[arg(long)]
+        display: Option<String>,
+        #[arg(long)]
+        headful: bool,
+    },
     #[command(hide = true)]
     RunPlacement {
         placement: String,
@@ -273,6 +285,16 @@ async fn main() -> Result<()> {
     }
     if let Commands::ModelWorker { engine } = &cli.command {
         return run_model_worker(*engine).await;
+    }
+    if let Commands::PlaygroundWorker {
+        bot,
+        data_dir,
+        display,
+        headful,
+    } = cli.command
+    {
+        return flow_like_standalone::playground::run_worker(bot, data_dir, display, headful)
+            .await;
     }
     if matches!(cli.command, Commands::ReleaseInfo) {
         println!(
@@ -693,6 +715,16 @@ async fn main() -> Result<()> {
                         cancel.child_token(),
                     ),
                 ));
+                #[cfg(feature = "bot-host")]
+                background.push(diagnostics.spawn_monitored(
+                    diagnostics::BOT_HOST,
+                    &cancel,
+                    flow_like_standalone::bot_host::run(
+                        state_dir.clone(),
+                        device.clone(),
+                        cancel.child_token(),
+                    ),
+                ));
             }
             background.push(diagnostics.spawn_monitored(
                 diagnostics::CERTIFICATE_RENEWAL,
@@ -809,6 +841,7 @@ async fn main() -> Result<()> {
         }
         Commands::RunPlacement { .. }
         | Commands::ModelWorker { .. }
+        | Commands::PlaygroundWorker { .. }
         | Commands::ReleaseInfo
         | Commands::CheckUpdate
         | Commands::Update

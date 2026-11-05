@@ -1,3 +1,4 @@
+pub(crate) mod gestures;
 pub mod input;
 #[cfg(target_os = "linux")]
 mod portal;

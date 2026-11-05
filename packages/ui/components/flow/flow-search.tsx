@@ -14,8 +14,8 @@ import {
 } from "lucide-react";
 import MiniSearch from "minisearch";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { plainTextFromRichContent } from "../../lib/plate-text";
 import { resolveBoardRef } from "../../lib/board-refs";
+import { plainTextFromRichContent } from "../../lib/plate-text";
 import type { IBoard, ILayer, INode, IPin } from "../../lib/schema/flow/board";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { cn } from "../../lib/utils";

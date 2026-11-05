@@ -37,11 +37,13 @@ export interface ConformityRecommendationsProps {
 	score: number | null;
 	/** When provided, renders an "Edit assessment" action button. */
 	onEdit?: () => void;
+	/** Opens the question or evidence needed to resolve a recommendation. */
+	onResolve?: (recommendation: Recommendation) => void;
 	className?: string;
 }
 
 /**
- * Shared, read-only presentation of the conformity improvement tips. Used by
+ * Shared presentation of the conformity improvement tips. Used by
  * both the admin governance inventory and the owner publishing wizard so the
  * guidance and estimated uplift are always identical.
  */
@@ -49,21 +51,29 @@ export function ConformityRecommendations({
 	recommendations,
 	score,
 	onEdit,
+	onResolve,
 	className,
 }: Readonly<ConformityRecommendationsProps>) {
 	if (!recommendations || recommendations.length === 0) {
 		return (
 			<Card
-				className={`border-emerald-500/30 bg-emerald-500/5 ${className ?? ""}`}
+				className={`${score === 100 ? "border-emerald-500/30 bg-emerald-500/5" : ""} ${className ?? ""}`}
 			>
 				<CardHeader>
 					<CardTitle className="text-sm flex items-center gap-2">
-						<ShieldCheck className="h-4 w-4 text-emerald-500" />
-						No conformity actions outstanding
+						{score === 100 ? (
+							<ShieldCheck className="h-4 w-4 text-emerald-500" />
+						) : (
+							<Lightbulb className="h-4 w-4 text-muted-foreground" />
+						)}
+						{score === 100
+							? "No conformity actions outstanding"
+							: "No conformity recommendations available"}
 					</CardTitle>
 					<CardDescription>
-						This assessment scores full marks on every weighted factor. Keep the
-						board scores and attached-model registry up to date to maintain it.
+						{score === 100
+							? "This assessment scores full marks on every weighted factor. Keep the board scores and attached-model registry up to date to maintain it."
+							: "Review the assessment and refresh its board and model evidence to check the score."}
 					</CardDescription>
 				</CardHeader>
 			</Card>
@@ -86,8 +96,8 @@ export function ConformityRecommendations({
 						How to improve the conformity score
 					</CardTitle>
 					<CardDescription>
-						Prioritised, actionable steps. Estimated uplift mirrors the exact
-						weighted scoring model.
+						Review each item and record the changes you have implemented. Points
+						depend on your answers and the current board and model evidence.
 					</CardDescription>
 				</div>
 				{projected !== null && totalUplift > 0 && (
@@ -134,6 +144,24 @@ export function ConformityRecommendations({
 								)}
 							</div>
 							<p className="mt-1 text-xs text-muted-foreground">{rec.detail}</p>
+							{onResolve && (
+								<Button
+									type="button"
+									variant="outline"
+									size="sm"
+									className="mt-2"
+									onClick={() => onResolve(rec)}
+									aria-label={`Review: ${rec.title}`}
+								>
+									{rec.answerKey
+										? "Review answer"
+										: rec.category === "Posture"
+											? "Review models"
+											: rec.category === "Board"
+												? "Review board scores"
+												: "Review assessment"}
+								</Button>
+							)}
 						</div>
 					</div>
 				))}

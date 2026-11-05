@@ -3,14 +3,14 @@ import {
 	type DeviceReply,
 	registerDeviceAdapter,
 } from "@flow-like/flow-like-ui/lib/device-bridge";
-import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import {
+	UNSUPPORTED_GEOFENCE_STATUS,
 	browserLocationAvailable,
 	normalizeLocationOptions,
 	readBrowserLocation,
-	UNSUPPORTED_GEOFENCE_STATUS,
 } from "@flow-like/flow-like-ui/lib/location";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 function locationError(error: unknown): DeviceError {
 	if (error instanceof DeviceError) return error;
@@ -28,13 +28,15 @@ function locationError(error: unknown): DeviceError {
 }
 
 export function installNativeDeviceAdapter(): () => void {
-	const apple = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
+	const nativeLocation = /Mac|iPhone|iPad|iPod|Android/.test(
+		navigator.userAgent,
+	);
 	const unregister = registerDeviceAdapter(
 		async (command, args, context) => {
 			if (context.signal?.aborted)
 				throw new DeviceError("cancelled", "The device request ended");
 			if (command === "location.geofencePermission") {
-				if (!apple) return UNSUPPORTED_GEOFENCE_STATUS;
+				if (!nativeLocation) return UNSUPPORTED_GEOFENCE_STATUS;
 				try {
 					return await invoke("native_geofence_permission", {
 						mode: args.mode,
@@ -48,7 +50,7 @@ export function installNativeDeviceAdapter(): () => void {
 					...args,
 					requestDeadline: context.deadline,
 				});
-				if (!apple) return readBrowserLocation(options, context);
+				if (!nativeLocation) return readBrowserLocation(options, context);
 				const requestId = crypto.randomUUID();
 				const cancel = () => {
 					void invoke("native_cancel_location", { requestId }).catch(() => {});
@@ -77,7 +79,7 @@ export function installNativeDeviceAdapter(): () => void {
 				`Device operation ${command} is unavailable`,
 			);
 		},
-		{ location: apple ? "native" : browserLocationAvailable() },
+		{ location: nativeLocation ? "native" : browserLocationAvailable() },
 	);
 	let disposed = false;
 	const unlisteners: Array<() => void> = [];

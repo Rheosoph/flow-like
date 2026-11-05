@@ -19,6 +19,7 @@ use std::{
 mod execution_logs;
 mod model_access;
 mod models;
+pub(crate) mod playground_stream;
 pub mod run_queue;
 pub(crate) mod tunnel;
 
@@ -5268,6 +5269,8 @@ mod tests {
             ("on_demand_events", crate::event_kind::ON_DEMAND_EVENTS),
             ("telegram_bots", crate::event_kind::TELEGRAM_BOTS),
             ("discord_bots", crate::event_kind::DISCORD_BOTS),
+            ("bot_playground", crate::event_kind::BOT_PLAYGROUND),
+            ("bot_host", crate::event_kind::BOT_HOST),
             ("model_store", hosts_models),
             ("model_host", hosts_models),
             ("model_runtime_llamacpp", hosts_models),

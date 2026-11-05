@@ -134,9 +134,8 @@ impl NodeLogic for PdfCreateFromMarkdownNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use super::render::{
-            Block, PdfLayout, PdfMetadata, build_pdf, parse_markdown, render_document,
-        };
+        use super::render::{Block, parse_markdown};
+        use crate::document::service::pdf::{PdfOptions, pdf_from_images};
         use std::collections::HashMap;
 
         context.deactivate_exec_pin("exec_out").await?;
@@ -151,7 +150,6 @@ impl NodeLogic for PdfCreateFromMarkdownNode {
         let cover: bool = context.evaluate_pin("cover").await?;
         let author: String = context.evaluate_pin("author").await?;
 
-        let layout = PdfLayout::for_page_size(&page_size);
         let blocks = parse_markdown(&markdown);
 
         let mut images = HashMap::new();
@@ -166,18 +164,17 @@ impl NodeLogic for PdfCreateFromMarkdownNode {
             images = resolve_images(context, &urls).await;
         }
 
-        let metadata = PdfMetadata {
-            title: (!title.is_empty()).then_some(title),
-            author: (!author.is_empty()).then_some(author),
-            subject: (!subtitle.is_empty()).then_some(subtitle),
-            page_numbers,
+        let options = PdfOptions {
+            title: Some(title),
+            subtitle: Some(subtitle),
+            author: Some(author),
             cover,
+            page_size: Some(page_size),
+            page_numbers,
         };
-
-        let (pages, image_keys) = render_document(&blocks, &layout, &images, &metadata);
-        let page_count = pages.len() as i64;
-
-        let bytes = build_pdf(pages, &image_keys, &images, &layout, &metadata)?;
+        let built = pdf_from_images(&markdown, &options, &images)?;
+        let page_count = built.count.unwrap_or_default() as i64;
+        let bytes = built.bytes;
 
         output.put(context, bytes, false).await?;
         context.set_pin_value("result", json!(output)).await?;

@@ -5,6 +5,7 @@ import { createId } from "@paralleldrive/cuid2";
 import { useLiveQuery } from "dexie-react-hooks";
 import { type RefObject, useCallback, useMemo, useState } from "react";
 import { useIsMobile } from "../../../hooks/use-mobile";
+import { useChatActivityStore } from "../../../state/chat-activity-store";
 import { ChatHistoryList } from "../../chat-history/chat-history-list";
 import type { IHistoryEntry } from "../../chat-history/chat-history-types";
 import { buildSearchCorpus } from "../../chat-history/use-history-search";
@@ -109,9 +110,19 @@ export function ChatHistory({
 			await chatDb.drafts.where("sessionId").equals(idToDelete).delete();
 			await chatDb.sessions.delete(idToDelete);
 			await chatDb.localStage.where("sessionId").equals(idToDelete).delete();
+			const activity = useChatActivityStore.getState();
+			for (const entry of activity.entries) {
+				if (
+					entry.target.kind === "app" &&
+					entry.target.appId === appId &&
+					entry.target.sessionId === idToDelete
+				) {
+					activity.markRead(entry.id);
+				}
+			}
 			if (idToDelete === sessionId) handleNewChat();
 		},
-		[sessionId, handleNewChat],
+		[appId, sessionId, handleNewChat],
 	);
 
 	return (

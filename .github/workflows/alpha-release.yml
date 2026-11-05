@@ -68,6 +68,26 @@ jobs:
       - name: Configure Namespace compiler cache
         uses: ./.github/actions/setup-namespace-cache
 
+      - name: Cache frontend Rust build artifacts
+        uses: actions/cache@d4323d4df104b026a6aa633fdb11d772146be0bf # v4.2.2
+        with:
+          # Keep the WASM fallback separate from the native release archives.
+          # Craft builders verify fingerprints and file hashes before reusing runtimes.
+          path: |
+            target/board-canvas
+            target/board-canvas-tools
+            target/device-crypto-web
+            target/device-crypto-tools
+            target/wordcraft/runtime
+            target/craft-viewers/*/runtime
+            target/craft-viewers/tools/*/bin
+            target/craft-viewers/tools/*/.crates.toml
+            target/craft-viewers/tools/*/.crates2.json
+          # Refresh artifacts on each commit; the cache-prune workflow removes older generations.
+          key: release-wasm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.cargo/config.toml') }}-${{ github.sha }}
+          restore-keys: |
+            release-wasm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml', '.cargo/config.toml') }}-
+
       - name: Build frontend
         working-directory: apps/desktop
         run: bun run build
@@ -217,6 +237,11 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 1
+
+      - name: Setup Bun for updater signature verification
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2
+        with:
+          bun-version: 1.3.1
 
       - name: Generate and publish complete latest.json
         env:

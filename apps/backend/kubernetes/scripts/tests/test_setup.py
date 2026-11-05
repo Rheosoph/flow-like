@@ -23,6 +23,26 @@ class SetupTest(unittest.TestCase):
             self.assertEqual(values["api"]["frontendBaseUrl"], web)
             self.assertIn(web, values["api"]["corsAllowedOrigins"])
 
+    def test_hosted_media_credentials_generate_private_provider_secrets(self):
+        providers = {"openrouter": ["OPENROUTER_API_KEY"],
+                     **{name: [f"HOSTED_{name.upper()}_API_KEY"] for name in ("openai", "groq", "mistral", "together", "xai", "gemini")},
+                     "cloudflare": ["HOSTED_CLOUDFLARE_API_TOKEN", "HOSTED_CLOUDFLARE_ACCOUNT_ID"]}
+        supplied = {key: f"private_media_{key}" for keys in providers.values() for key in keys}
+        with patch.dict(os.environ, supplied, clear=True):
+            objects, values = setup.generate("flow-like", "flow-like")
+        for provider, keys in providers.items():
+            reference = values["llm"][provider]
+            self.assertTrue(reference.get("enabled", provider == "openrouter"))
+            secret = next(item for item in objects["items"] if item["metadata"]["name"] == reference["existingSecret"])
+            for key in keys:
+                self.assertEqual(secret["stringData"][key], supplied[key])
+                self.assertNotIn(supplied[key], json.dumps(values))
+                self.assertFalse(any(key in item["stringData"] for item in objects["items"] if item != secret))
+        for key in providers["cloudflare"]:
+            with patch.dict(os.environ, {key: "incomplete"}, clear=True):
+                with self.assertRaises(ValueError):
+                    setup.generate("flow-like", "flow-like")
+
     def test_stripe_credentials_are_private_api_secret_values(self):
         environment = {key: f"test_{index}" for index, key in enumerate(setup.STRIPE_SETTINGS)}
         with patch.dict(os.environ, environment, clear=True):

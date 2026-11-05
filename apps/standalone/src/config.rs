@@ -246,6 +246,41 @@ impl HostingConfig {
         }
         Ok(())
     }
+
+    /// The address the agent binds. The container's own loopback is unreachable through a
+    /// port Docker publishes, so a loopback listener on the published port binds every
+    /// container address when Docker publishes that port on a host loopback address: the
+    /// service then stays on this device, as asked.
+    pub fn listen_address(&self) -> std::net::SocketAddr {
+        listen_address(self.host, self.port, crate::host::published_port())
+    }
+
+    /// Whether `local` is the address `listen_address` binds. A placement process cannot see
+    /// the container facts, so it also accepts the widened loopback address.
+    pub fn accepts_listener(&self, local: std::net::SocketAddr) -> bool {
+        local == std::net::SocketAddr::new(self.host, self.port)
+            || (self.host.is_loopback()
+                && local.port() == self.port
+                && local.ip() == unspecified(self.host))
+    }
+}
+
+fn unspecified(address: std::net::IpAddr) -> std::net::IpAddr {
+    match address {
+        std::net::IpAddr::V4(_) => std::net::Ipv4Addr::UNSPECIFIED.into(),
+        std::net::IpAddr::V6(_) => std::net::Ipv6Addr::UNSPECIFIED.into(),
+    }
+}
+
+fn listen_address(
+    host: std::net::IpAddr,
+    port: u16,
+    published: Option<crate::host::PublishedPort>,
+) -> std::net::SocketAddr {
+    let widened = host.is_loopback()
+        && published
+            .is_some_and(|published| published.port == port && published.host.is_loopback());
+    std::net::SocketAddr::new(if widened { unspecified(host) } else { host }, port)
 }
 
 fn validate_ui_origin(origin: &str) -> Result<()> {
@@ -558,6 +593,61 @@ pub(crate) fn validate_id(label: &str, id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_loopback_listener_widens_only_on_the_port_docker_publishes_on_host_loopback() {
+        use crate::host::PublishedPort;
+        use std::net::{IpAddr, SocketAddr};
+        let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+        let published = |host: &str, port| {
+            Some(PublishedPort {
+                host: ip(host),
+                port,
+            })
+        };
+        let bound = |host: &str, port, docker| listen_address(ip(host), port, docker);
+        assert_eq!(
+            bound("127.0.0.1", 8080, published("127.0.0.1", 8080)),
+            SocketAddr::new(ip("0.0.0.0"), 8080)
+        );
+        assert_eq!(
+            bound("::1", 8080, published("::1", 8080)),
+            SocketAddr::new(ip("::"), 8080)
+        );
+        for (host, port, docker) in [
+            ("127.0.0.1", 8080, None),
+            ("127.0.0.1", 8081, published("127.0.0.1", 8080)),
+            ("127.0.0.1", 8080, published("0.0.0.0", 8080)),
+            ("127.0.0.1", 8080, published("192.168.1.20", 8080)),
+            ("192.168.1.20", 8080, published("127.0.0.1", 8080)),
+            ("0.0.0.0", 8080, published("127.0.0.1", 8080)),
+        ] {
+            assert_eq!(
+                bound(host, port, docker),
+                SocketAddr::new(ip(host), port),
+                "{host}:{port} {docker:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_placement_process_accepts_the_listener_its_agent_widened() {
+        let hosting = |host: &str| -> HostingConfig {
+            serde_json::from_value(serde_json::json!({"host":host,"port":8080,"max_in_flight":8,"request_timeout_secs":30,"authentication":"none"})).unwrap()
+        };
+        let address = |text: &str| text.parse::<std::net::SocketAddr>().unwrap();
+        let loopback = hosting("127.0.0.1");
+        assert!(loopback.accepts_listener(address("127.0.0.1:8080")));
+        assert!(loopback.accepts_listener(address("0.0.0.0:8080")));
+        assert!(!loopback.accepts_listener(address("0.0.0.0:8081")));
+        assert!(!loopback.accepts_listener(address("[::]:8080")));
+        assert!(!loopback.accepts_listener(address("192.168.1.20:8080")));
+        assert!(hosting("::1").accepts_listener(address("[::]:8080")));
+        let lan = hosting("192.168.1.20");
+        assert!(lan.accepts_listener(address("192.168.1.20:8080")));
+        assert!(!lan.accepts_listener(address("0.0.0.0:8080")));
+        assert!(!hosting("0.0.0.0").accepts_listener(address("127.0.0.1:8080")));
+    }
 
     #[test]
     fn named_tunnel_services_require_loopback_and_explicit_https_identity() -> Result<()> {

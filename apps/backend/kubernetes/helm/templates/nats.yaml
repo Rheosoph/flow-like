@@ -1,0 +1,77 @@
+{{- if and .Values.channels.nats.enabled (eq .Values.channels.transport "nats") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "flow-like.fullname" . }}-nats
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  replicas: 1
+  # Independent brokers cannot share subscriptions without NATS cluster routes.
+  strategy: {type: Recreate}
+  selector:
+    matchLabels:
+      {{- include "flow-like.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: nats
+  template:
+    metadata:
+      labels:
+        {{- include "flow-like.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: nats
+    spec:
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets: {{ toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: nats
+          image: {{ .Values.channels.nats.image | quote }}
+          args: ["--config", "/etc/nats/nats.conf"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          ports:
+            - {name: client, containerPort: 4222}
+            - {name: websocket, containerPort: 8080}
+            - {name: monitor, containerPort: 8222}
+          readinessProbe:
+            httpGet: {path: /healthz, port: monitor}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: monitor}
+            periodSeconds: 15
+          resources: {{ toYaml .Values.channels.nats.resources | nindent 12 }}
+          volumeMounts:
+            - {name: config, mountPath: /etc/nats, readOnly: true}
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ .Values.channels.nats.serverSecret }}
+            defaultMode: 0440
+            items: [{key: nats.conf, path: nats.conf}]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "flow-like.fullname" . }}-nats
+  labels:
+    {{- include "flow-like.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "flow-like.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+  ports:
+    - {name: client, port: 4222, targetPort: client}
+    - {name: websocket, port: 8080, targetPort: websocket}
+{{- end }}

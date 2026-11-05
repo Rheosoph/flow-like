@@ -32,7 +32,11 @@ class RunStatus:
 
 @dataclass
 class PollResult:
-    """Result of polling for run events, with a done flag indicating completion."""
+    """Result of polling for run events, with a done flag indicating completion.
+
+    ``has_more`` means more events follow this page: poll again from
+    ``next_sequence``. A finished run is ``done`` only on its last page.
+    """
 
     events: list[dict[str, Any]] = field(default_factory=list)
     done: bool = False
@@ -43,6 +47,7 @@ class PollResult:
     current_step: str | None = None
     error: str | None = None
     next_sequence: int = -1
+    has_more: bool = False
 
 
 @dataclass

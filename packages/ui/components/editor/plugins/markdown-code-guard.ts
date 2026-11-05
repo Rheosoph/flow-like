@@ -1,7 +1,7 @@
 import {
 	type DeserializeMdOptions,
-	deserializeMd,
 	MarkdownPlugin,
+	deserializeMd,
 } from "@platejs/markdown";
 import type { SlateEditor, Value } from "platejs";
 import { remarkReferenceLinks } from "./remark-reference-links";

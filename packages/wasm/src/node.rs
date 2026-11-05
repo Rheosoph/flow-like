@@ -767,6 +767,95 @@ impl NodeLogic for WasmNodeLogic {
     async fn on_drop(&self) {}
 }
 
+/// What a node run outside a board (a bot skill tool) gets: the workspace as its storage, the
+/// caller's model access and the turn as its run. No OAuth tokens are ever handed over.
+pub struct HeadlessRun {
+    pub app_state: Arc<flow_like::state::FlowLikeState>,
+    pub token: Option<String>,
+    pub workspace: String,
+    pub workspace_store: Option<FlowLikeStore>,
+    pub turn_id: String,
+    pub user_id: String,
+    pub usage: Option<flow_like::models::llm::ModelUsageContext>,
+}
+
+impl WasmNodeLogic {
+    /// The security this node runs with: capabilities, tiers and the allowed hosts.
+    pub fn security(&self) -> &WasmSecurityConfig {
+        &self.security
+    }
+
+    /// The node as a package entry: its pins with names, types and schemas.
+    pub async fn tool_entry(&self) -> WasmResult<crate::manifest::PackageNodeEntry> {
+        Ok(definition_to_package_entry(&self.get_definition().await?))
+    }
+
+    /// Runs the node once with `arguments` mapped to its input pins by name and returns its
+    /// output pins as an object. Storage is the workspace, http is limited by the node's
+    /// security (capabilities and the manifest's allowed hosts).
+    pub async fn run_headless(
+        &self,
+        run: HeadlessRun,
+        arguments: &Value,
+    ) -> std::result::Result<Value, String> {
+        let definition = self.get_definition().await.map_err(|e| e.to_string())?;
+        let entry = definition_to_package_entry(&definition);
+        let inputs = crate::skill_call::inputs_for_arguments(&entry, arguments)?;
+        let security = self.security.clone();
+        let mut host_state = HostState::with_security(&security);
+        host_state.set_inputs(inputs.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+        let node_id = format!("skill-{}", definition.name);
+        host_state.metadata = ExecutionMetadata {
+            node_id: node_id.clone(),
+            run_id: run.turn_id.clone(),
+            app_id: run.workspace.clone(),
+            board_id: String::new(),
+            user_id: run.user_id.clone(),
+            stream_state: false,
+            log_level: 1,
+            execution_environment: security.execution_environment,
+        };
+        let has_storage = security.capabilities.intersects(
+            WasmCapabilities::STORAGE_READ
+                | WasmCapabilities::STORAGE_WRITE
+                | WasmCapabilities::STORAGE_DELETE,
+        );
+        if has_storage {
+            host_state.storage_context = Some(StorageContext {
+                stores: run.app_state.config.read().await.stores.clone(),
+                store_cache: ParkingRwLock::new(HashMap::new()),
+                credentials_store: run.workspace_store.clone(),
+                app_id: run.workspace.clone(),
+                board_dir: Path::from(""),
+                board_id: String::new(),
+                node_id: node_id.clone(),
+                sub: run.user_id.clone(),
+            });
+        }
+        host_state.model_context = Some(ModelContext {
+            app_state: run.app_state.clone(),
+            token: run.token.clone(),
+            cache: None,
+        });
+        host_state.model_usage_context = run.usage.clone();
+        let input = crate::skill_call::run_input(
+            &entry,
+            inputs,
+            &run.workspace,
+            &run.turn_id,
+            &run.user_id,
+        );
+        let call = PackageRuntime::default()
+            .call(&self.loaded, &self.engine, &security, host_state, &input)
+            .await
+            .map_err(|e| format!("The package tool failed: {e}"))?;
+        if let Some(error) = call.error.or(call.result.error) {
+            return Err(format!("The package tool reported an error: {error}"));
+        }
+        Ok(Value::Object(call.result.outputs))
+    }
+}
+
 impl std::fmt::Debug for WasmNodeLogic {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WasmNodeLogic")

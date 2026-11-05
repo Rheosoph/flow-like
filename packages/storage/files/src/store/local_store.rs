@@ -277,6 +277,67 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_delete_removes_the_folders_it_empties_but_never_the_root() {
+        let root = tempfile::tempdir().unwrap();
+        let store = LocalObjectStore::new(root.path().into()).unwrap();
+        for key in [
+            "app/kept.txt",
+            "app/deep/nested/file.txt",
+            "app/deep/sibling/file.txt",
+            "top.txt",
+        ] {
+            store
+                .put(&Path::from(key), PutPayload::from_static(b"data"))
+                .await
+                .unwrap();
+        }
+
+        store
+            .delete(&Path::from("app/deep/nested/file.txt"))
+            .await
+            .unwrap();
+        assert!(!root.path().join("app/deep/nested").exists());
+        assert!(root.path().join("app/deep/sibling/file.txt").is_file());
+
+        store
+            .delete(&Path::from("app/deep/sibling/file.txt"))
+            .await
+            .unwrap();
+        assert!(!root.path().join("app/deep").exists());
+        assert!(
+            root.path().join("app/kept.txt").is_file(),
+            "a folder that still holds a file stays"
+        );
+
+        for key in ["app/kept.txt", "top.txt"] {
+            store.delete(&Path::from(key)).await.unwrap();
+        }
+        assert!(root.path().is_dir(), "the root stays when it is empty");
+        assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+        assert!(
+            store
+                .list_with_delimiter(None)
+                .await
+                .unwrap()
+                .common_prefixes
+                .is_empty()
+        );
+        assert!(matches!(
+            store.delete(&Path::from("app/kept.txt")).await,
+            Err(object_store::Error::NotFound { .. })
+        ));
+
+        store
+            .put(
+                &Path::from("app/deep/again.txt"),
+                PutPayload::from_static(b"data"),
+            )
+            .await
+            .unwrap();
+        assert!(root.path().join("app/deep/again.txt").is_file());
+    }
+
+    #[tokio::test]
     async fn put_update_swaps_on_matching_etag_and_rejects_stale() {
         let (store, dir) = temp_store();
         let location = Path::from("board.board");

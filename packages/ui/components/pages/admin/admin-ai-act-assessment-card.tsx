@@ -7,6 +7,7 @@ import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useFeatures } from "../../../hooks/use-features";
 import { useInvoke } from "../../../hooks/use-invoke";
+import { requestGovernanceAssist } from "../../../lib/governance-assist";
 import { useBackend } from "../../../state/backend-state";
 import {
 	Badge,
@@ -180,7 +181,8 @@ export function AdminAiActAssessmentCard({
 	const validate = useMutation({
 		mutationFn: async () => {
 			if (!profile.data) throw new Error("Profile not loaded");
-			return backend.apiState.post<AssistResponse>(
+			return requestGovernanceAssist<AssistResponse>(
+				backend.apiState,
 				profile.data,
 				`admin/ai-act/assist/${encodeURIComponent(appId)}`,
 				{ profile: profile.data },

@@ -218,9 +218,10 @@ pub async fn resolve_wasm_packages_for_platform(
             .select_only()
             .column(wasm_package::Column::Id)
             .column(wasm_package::Column::Visibility)
+            .column(wasm_package::Column::Permissions)
             .filter(wasm_package::Column::Id.is_in(package_ids))
             .filter(wasm_package::Column::Status.eq(WasmPackageStatus::Active))
-            .into_tuple::<(String, WasmPackageVisibility)>()
+            .into_tuple::<(String, WasmPackageVisibility, serde_json::Value)>()
             .all(&state.db),
     );
     let mut version_records: HashMap<(String, String), wasm_package_version::Model> = version_rows
@@ -228,8 +229,12 @@ pub async fn resolve_wasm_packages_for_platform(
         .into_iter()
         .map(|record| ((record.package_id.clone(), record.version.clone()), record))
         .collect();
-    let active_packages: HashMap<String, WasmPackageVisibility> =
-        active_package_rows.ok()?.into_iter().collect();
+    let mut active_packages: HashMap<String, WasmPackageVisibility> = HashMap::new();
+    let mut package_permissions: HashMap<String, serde_json::Value> = HashMap::new();
+    for (package_id, visibility, permissions) in active_package_rows.ok()? {
+        package_permissions.insert(package_id.clone(), permissions);
+        active_packages.insert(package_id, visibility);
+    }
 
     let mut candidates = Vec::with_capacity(packages.len());
     let mut had_errors = false;
@@ -325,14 +330,17 @@ pub async fn resolve_wasm_packages_for_platform(
     let attempted = candidates.len();
     let storage_scope = state.storage_identity.meta.cache_scope();
     let storage_scope = storage_scope.as_deref();
+    let package_permissions = &package_permissions;
     let signed: Vec<Option<(String, WasmPackageRef)>> = stream::iter(candidates.into_iter().map(
         |(record, selected_platform)| async move {
+            let permissions = package_permissions.get(&record.package_id).cloned();
             sign_package(
                 registry,
                 &selected_platform,
                 record,
                 &state.cache,
                 storage_scope,
+                permissions,
             )
             .await
         },
@@ -366,6 +374,7 @@ async fn sign_package(
     record: wasm_package_version::Model,
     cache: &crate::cache::CacheBackendHandle,
     storage_scope: Option<&str>,
+    permissions: Option<serde_json::Value>,
 ) -> Option<(String, WasmPackageRef)> {
     let wasm_url = match registry.sign_wasm_path(&record.wasm_path).await {
         Ok(url) => url,
@@ -399,6 +408,7 @@ async fn sign_package(
                 wasm_url,
                 cwasm_url,
                 cwasm_checksum,
+                permissions,
             },
         )),
         Err(e) => {

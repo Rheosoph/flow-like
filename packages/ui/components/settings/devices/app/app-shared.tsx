@@ -32,6 +32,7 @@ import type {
 	DevicesScope,
 	GateFailure,
 } from "../../../../lib/device-management/model/types";
+import { ResolvedIdentityAvatar } from "../../../identity/identity-avatar";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -509,6 +510,9 @@ export function Person({
 			you={you}
 			{...(identity.subtitle ? { email: identity.subtitle } : {})}
 			{...(identity.avatarUrl ? { avatarUrl: identity.avatarUrl } : {})}
+			avatar={
+				identity.bot && <ResolvedIdentityAvatar identity={identity} size={20} />
+			}
 			className={className}
 		/>
 	);

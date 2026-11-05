@@ -11,6 +11,7 @@ import { ApiResponseError } from "@flow-like/flow-like-ui/lib/api-error";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { coordinateOidcRenewal } from "@flow-like/flow-like-ui/lib/auth/oidc-renewal";
 import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrent } from "@tauri-apps/plugin-deep-link";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -45,12 +46,16 @@ import {
 	AuthProvider,
 	useAuth,
 } from "react-oidc-context";
+import { toast } from "sonner";
 import { get } from "../lib/api";
 import { bindHubAuth, renewHubAuth, setHubAuthActive } from "../lib/hub-auth";
+import { NativeUserStore, nativeUserStore } from "../lib/native-auth";
 import { SignInLinkDialog } from "./sign-in-link-dialog";
 import { ProfileSyncer, TauriBackend } from "./tauri-provider";
 
 const AUTH_CHANGED_EVENT = "fl-auth-changed";
+const SIGN_IN_FAILED_MESSAGE =
+	"Sign-in could not be completed. Start a new sign-in request.";
 
 function emitAuthChanged() {
 	window.dispatchEvent(new CustomEvent(AUTH_CHANGED_EVENT));
@@ -157,6 +162,7 @@ class TauriRedirectNavigator implements INavigator {
 }
 
 interface AuthConfigState {
+	readonly profileId: string;
 	readonly settings: UserManagerSettings;
 	readonly userManager: UserManager;
 	readonly scope: number;
@@ -204,7 +210,7 @@ export function DesktopAuthProvider({
 	const userManager = authConfig?.userManager;
 	const scope = authConfig?.scope ?? 0;
 	const providerKey = authConfig
-		? `${authConfig.hub}|${authConfig.settings.authority}|${authConfig.settings.client_id}`
+		? `${authConfig.profileId}|${authConfig.hub}|${authConfig.settings.authority}|${authConfig.settings.client_id}`
 		: "loading-auth-config";
 	const backend = useBackend();
 	const currentProfile = useInvoke(
@@ -219,7 +225,9 @@ export function DesktopAuthProvider({
 		hub: hubUrl,
 		secure: hubSecure,
 	} as IProfile);
-	const matchesHub = authConfig?.hub === currentHub;
+	const profileId = currentProfile.data?.id ?? "";
+	const matchesHub =
+		authConfig?.hub === currentHub && authConfig.profileId === profileId;
 	const visibleAuth =
 		lifted?.auth && !matchesHub && authConfig
 			? { ...lifted.auth, user: null, isAuthenticated: false, isLoading: true }
@@ -239,6 +247,7 @@ export function DesktopAuthProvider({
 	}, [matchesHub, userManager]);
 
 	useEffect(() => {
+		if (isTauri() && !profileId) return;
 		const effectiveProfile = {
 			hub: hubUrl,
 			secure: hubSecure,
@@ -262,11 +271,13 @@ export function DesktopAuthProvider({
 			const store = new WebStorageStateStore({
 				store: localStorage,
 			});
-			response.userStore = store;
+			response.userStore = nativeUserStore(profileId, hub, response, store);
 			response.automaticSilentRenew = true;
 			setSignInUrl(undefined);
 			const navigator = new TauriRedirectNavigator(setSignInUrl);
 			const userManagerInstance = new UserManager(response, navigator);
+			if (response.userStore instanceof NativeUserStore)
+				response.userStore.bind(userManagerInstance);
 			coordinateOidcRenewal(userManagerInstance);
 			response.userManager = userManagerInstance;
 			const tokenProvider = new OIDCTokenProvider(userManagerInstance);
@@ -288,6 +299,7 @@ export function DesktopAuthProvider({
 				);
 			console.log("[DESKTOPAUTH] Setting openIdAuthConfig and userManager");
 			setAuthConfig((previous) => ({
+				profileId,
 				settings: response,
 				userManager: userManagerInstance,
 				hub,
@@ -295,7 +307,8 @@ export function DesktopAuthProvider({
 					previous &&
 					(previous.settings.client_id !== response.client_id ||
 						previous.settings.authority !== response.authority ||
-						previous.hub !== hub)
+						previous.hub !== hub ||
+						previous.profileId !== profileId)
 						? previous.scope + 1
 						: (previous?.scope ?? 0),
 			}));
@@ -353,11 +366,20 @@ export function DesktopAuthProvider({
 			clearTimeout(retryTimer);
 			window.removeEventListener("online", retryNow);
 		};
-	}, [hubUrl, hubSecure]);
+	}, [hubUrl, hubSecure, profileId]);
 
 	useEffect(() => {
 		if (!openIdAuthConfig) return;
 		const seenUrls = new Set<string>();
+		let cancelled = false;
+
+		const reloadNativeUser = async () => {
+			if (cancelled) return;
+			const user = await userManager?.getUser(true);
+			if (cancelled) return;
+			if (!user) await userManager?.events.unload();
+			emitAuthChanged();
+		};
 
 		const normalizeTo = (target: string, source: string) => {
 			try {
@@ -438,6 +460,11 @@ export function DesktopAuthProvider({
 			seenUrls.add(rawUrl);
 
 			try {
+				if (
+					isTauri() &&
+					new URL(rawUrl).searchParams.get("state")?.startsWith("fl-native-")
+				)
+					return;
 				const isDeepLink = rawUrl.startsWith("flow-like://");
 				const signinUrl =
 					isDeepLink || isUniversalAuthCallback(rawUrl)
@@ -493,22 +520,68 @@ export function DesktopAuthProvider({
 			const url = (event as CustomEvent<{ url?: string }>).detail?.url;
 			if (!url) return;
 			console.log("Debug OIDC URL received");
-			await handleIncomingOidcUrl(url);
+			if (!isTauri()) {
+				await handleIncomingOidcUrl(url);
+				return;
+			}
+			try {
+				await invoke("deeplink_debug_dispatch", { url });
+				// Dev callbacks also reload directly: an event can be lost during Fast Refresh.
+				await reloadNativeUser();
+			} catch (error) {
+				console.error("Debug OIDC dispatch failed:", error);
+				if (!cancelled) toast.error(SIGN_IN_FAILED_MESSAGE);
+			}
 		}
 
 		window.addEventListener("debug-oidc", debugListener);
 
+		const unlistenNative = listen<{ profileId: string; hub: string }>(
+			"native-auth-changed",
+			async (event) => {
+				if (
+					event.payload.profileId !== profileId ||
+					event.payload.hub !== authConfig?.hub
+				)
+					return;
+				try {
+					await reloadNativeUser();
+				} catch {
+					console.error("Failed to reload the native sign-in session");
+					if (!cancelled) toast.error(SIGN_IN_FAILED_MESSAGE);
+				}
+			},
+		);
+		const unlistenNativeError = listen("native-auth-error", () => {
+			if (!cancelled) toast.error(SIGN_IN_FAILED_MESSAGE);
+		});
 		const unlisten = listen<{ url: string }>("oidc/url", async (event) => {
 			await handleIncomingOidcUrl(event.payload.url);
 		});
+		const subscriptions = [unlisten, unlistenNative, unlistenNativeError];
+		void Promise.all(subscriptions)
+			.then(async () => {
+				// A callback may commit between the initial read and listener attachment.
+				if (isTauri()) await reloadNativeUser();
+			})
+			.catch(() => {
+				if (cancelled) return;
+				console.error("Failed to initialize native sign-in updates");
+				toast.error(SIGN_IN_FAILED_MESSAGE);
+			});
 
 		void processStartupDeepLinks();
 
 		return () => {
-			unlisten.then((unsub) => unsub());
+			cancelled = true;
+			for (const subscription of subscriptions)
+				void subscription.then(
+					(unsub) => unsub(),
+					() => {},
+				);
 			window.removeEventListener("debug-oidc", debugListener);
 		};
-	}, [userManager, openIdAuthConfig]);
+	}, [userManager, openIdAuthConfig, profileId, authConfig?.hub]);
 
 	return (
 		<UserManagerContext.Provider value={userManager ?? null}>
@@ -517,11 +590,7 @@ export function DesktopAuthProvider({
 					key={providerKey}
 					{...openIdAuthConfig}
 					automaticSilentRenew={true}
-					userStore={
-						new WebStorageStateStore({
-							store: localStorage,
-						})
-					}
+					userStore={openIdAuthConfig.userStore}
 				>
 					<AuthContextBridge
 						providerKey={providerKey}
@@ -578,14 +647,16 @@ function AuthInner({ hub }: Readonly<{ hub: string }>) {
 			if (!userManager) return;
 			try {
 				const user = await userManager.getUser();
+				const events = authEventsRef.current;
 				if (user && !user.expired) {
 					console.log(
 						"[AuthInner] fl-auth-changed: reloading user into context",
 					);
-					const events = authEventsRef.current;
 					if (events) {
 						await events.load(user);
 					}
+				} else if (!user) {
+					await events?.unload();
 				}
 			} catch (err) {
 				console.warn("[AuthInner] Failed to reload user on auth change:", err);

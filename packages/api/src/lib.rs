@@ -30,12 +30,21 @@ use utoipa_swagger_ui::SwaggerUi;
 
 pub use flow_like_api_entity as entity;
 mod middleware;
+mod oidc_http;
 pub mod openapi;
 mod routes;
 
 pub mod alerting;
 pub mod audit;
 mod bit_pricing;
+pub(crate) mod bot_caller;
+pub(crate) mod bot_flow;
+pub mod bot_host;
+pub(crate) mod bot_mail;
+pub(crate) mod bot_notify;
+pub(crate) mod bot_people;
+pub mod bot_permission;
+pub(crate) mod bot_tools;
 pub mod cache;
 pub mod capacity;
 pub mod channel;
@@ -197,6 +206,9 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/info", routes::info::routes())
         .nest("/user", routes::user::routes())
         .nest("/profile", routes::profile::routes())
+        .nest("/bots", routes::bots::routes())
+        .nest("/inbox", routes::inbox::routes())
+        .nest("/meetings", routes::meetings::routes())
         .nest("/apps", routes::app::routes())
         .nest("/bit", routes::bit::routes())
         .nest("/store", routes::store::routes())
@@ -217,6 +229,8 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         )
         .nest("/courses", routes::course::routes())
         .nest("/embeddings", routes::embeddings::routes())
+        .nest("/images", routes::images::routes())
+        .nest("/audio", routes::audio::routes())
         .nest("/ai", routes::ai::routes())
         .nest("/admin", routes::admin::routes())
         .nest("/tmp", routes::tmp::routes())
@@ -224,6 +238,7 @@ pub fn construct_router_with_cors(state: Arc<State>, cors: CorsLayer) -> Router 
         .nest("/solution", routes::solution::routes())
         .nest("/execution", routes::execution::routes())
         .nest("/channels", routes::channel::routes())
+        .nest("/realtime", routes::realtime::routes())
         .nest("/maintenance", routes::maintenance::routes())
         .nest("/usage", routes::usage::routes())
         .nest("/registry", routes::registry::routes())

@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 
+import { registerNativeActionRun } from "@flow-like/flow-like-ui/lib/native-action-result";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, createElement } from "react";
 import { type Root, createRoot } from "react-dom/client";
@@ -17,6 +18,8 @@ const mocks = vi.hoisted(() => ({
 	resolveNotificationIcons: vi.fn(),
 	executeWithResult: vi.fn(),
 	setDraft: vi.fn(),
+	setChatState: vi.fn(),
+	cancelChatRun: vi.fn(async () => {}),
 	error: vi.fn(),
 	ready: true,
 	pathname: "/library",
@@ -37,6 +40,7 @@ const mocks = vi.hoisted(() => ({
 		getActiveExecutions: vi.fn(() => []),
 		subscribeToGlobalUpdates: vi.fn(() => () => {}),
 		executeEvent: vi.fn(async () => {}),
+		cancelTask: vi.fn(async () => {}),
 	},
 	listeners: new Map<string, (event: { payload: unknown }) => void>(),
 }));
@@ -56,7 +60,13 @@ vi.mock("@flow-like/flow-like-ui/state/execution-engine-context", () => ({
 	useExecutionEngine: () => mocks.engine,
 }));
 vi.mock("@flow-like/flow-like-ui/state/global-chat/global-chat-store", () => ({
-	useGlobalChatStore: { getState: () => ({ setDraft: mocks.setDraft }) },
+	useGlobalChatStore: {
+		getState: () => ({ setDraft: mocks.setDraft }),
+		setState: mocks.setChatState,
+	},
+}));
+vi.mock("@flow-like/flow-like-ui/state/global-chat/global-chat-stream", () => ({
+	cancelGlobalChatRun: mocks.cancelChatRun,
 }));
 vi.mock("@tauri-apps/api/core", () => ({
 	isTauri: () => true,
@@ -130,6 +140,28 @@ function deferred<T>() {
 	return { promise, resolve };
 }
 
+function prepareResultEvent() {
+	mocks.backend.userState.getProfile.mockResolvedValue({
+		id: "profile-a",
+		apps: [{ app_id: "app" }],
+	});
+	mocks.backend.eventState.getEventAuthoritative.mockResolvedValue({
+		id: "event",
+		node_id: "node",
+		name: "Calculate",
+		active: true,
+		event_type: "api",
+		inputs: [],
+		config: Array.from(
+			new TextEncoder().encode(
+				JSON.stringify({
+					native_integration: { enabled: true, surfaces: ["shortcuts"] },
+				}),
+			),
+		),
+	});
+}
+
 let root: Root;
 let container: HTMLDivElement;
 let queue: NativePendingAction[];
@@ -185,6 +217,7 @@ beforeEach(() => {
 					(item) => item.id !== args?.id || item.scope !== args?.scope,
 				);
 			if (command === "native_pending_actions") return [...queue];
+			if (command === "native_automation_current") return true;
 		},
 	);
 	container = document.createElement("div");
@@ -204,7 +237,7 @@ test("cold launch opens queued FlowPilot without waiting for widget API data", a
 	queue.push(request("cold"));
 	await render();
 	expect(mocks.loadSnapshot).toHaveBeenCalledOnce();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(mocks.error).not.toHaveBeenCalled();
 });
 
@@ -212,7 +245,7 @@ test("warm native callbacks open voice FlowPilot while a snapshot refresh is pen
 	await render();
 	queue.push(request("warm", { kind: "flowpilot", voice: true }));
 	await notify();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat?voice=1");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots?voice=1");
 });
 
 test("launch delivery waits for authentication and backend readiness", async () => {
@@ -226,7 +259,7 @@ test("launch delivery waits for authentication and backend readiness", async () 
 	expect(mocks.invoke).not.toHaveBeenCalledWith("native_pending_actions");
 	mocks.auth.isLoading = false;
 	await render();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 });
 
 test("cold launch waits for the observed profile read without a navigation rerender", async () => {
@@ -242,7 +275,7 @@ test("cold launch waits for the observed profile read without a navigation reren
 	expect(mocks.loadSnapshot).not.toHaveBeenCalled();
 	await act(async () => profile.resolve({ id: "profile-a" }));
 	await flushQueries();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(mocks.setDraft).toHaveBeenCalledWith(
 		expect.objectContaining({
 			prompt: "Hello",
@@ -265,7 +298,7 @@ test("cached profile data cannot drain actions before a fresh startup read", asy
 	expect(mocks.invoke).not.toHaveBeenCalledWith("native_pending_actions");
 	await act(async () => profile.resolve({ id: "profile-a" }));
 	await flushQueries();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(mocks.invoke).not.toHaveBeenCalledWith("native_clear_snapshot");
 });
 
@@ -279,7 +312,7 @@ test("temporary authentication hydration preserves the same account's pending ac
 	mocks.auth.isLoading = false;
 	mocks.auth.isAuthenticated = true;
 	await render();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(mocks.invoke).not.toHaveBeenCalledWith("native_clear_snapshot");
 });
 
@@ -294,7 +327,7 @@ test("route changes preserve an already consumed batch of native actions", async
 	mocks.webOrigin = "https://app.flow-like.com";
 	await render();
 	await act(async () => batch.resolve([request("pending")]));
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(
 		mocks.invoke.mock.calls.filter(
 			([name]) => name === "native_pending_actions",
@@ -318,9 +351,9 @@ test("file-only shares open FlowPilot immediately and survive its route change",
 		},
 	);
 	await render();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(mocks.setDraft).not.toHaveBeenCalled();
-	mocks.pathname = "/chat";
+	mocks.pathname = "/bots";
 	await render();
 	await act(async () =>
 		file.resolve({
@@ -402,7 +435,7 @@ test("replayed actions are deduplicated even when webview session storage is una
 	await render();
 	queue.push(request("repeat"));
 	await notify();
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 });
 
 test("current page publication updates without restarting native action delivery", async () => {
@@ -418,7 +451,7 @@ test("current page publication updates without restarting native action delivery
 	};
 	mocks.loadSnapshot.mockResolvedValue(snapshot);
 	await render();
-	mocks.pathname = "/chat";
+	mocks.pathname = "/bots";
 	mocks.query = "voice=1";
 	await render();
 	expect(mocks.loadSnapshot).toHaveBeenCalledOnce();
@@ -529,32 +562,14 @@ test("failed acknowledgement retries delivery without opening the action twice",
 	expect(queue).toHaveLength(1);
 	await notify();
 	expect(queue).toHaveLength(0);
-	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/chat");
+	expect(mocks.push).toHaveBeenCalledExactlyOnceWith("/bots");
 	expect(attempts).toBe(2);
 });
 
 test("an accepted Event is acknowledged before its typed response completes", async () => {
 	const result = deferred<{ text: string; json: string }>();
 	mocks.executeWithResult.mockReturnValue(result.promise);
-	mocks.backend.userState.getProfile.mockResolvedValue({
-		id: "profile-a",
-		apps: [{ app_id: "app" }],
-	});
-	mocks.backend.eventState.getEventAuthoritative.mockResolvedValue({
-		id: "event",
-		node_id: "node",
-		name: "Calculate",
-		active: true,
-		event_type: "api",
-		inputs: [],
-		config: Array.from(
-			new TextEncoder().encode(
-				JSON.stringify({
-					native_integration: { enabled: true, surfaces: ["shortcuts"] },
-				}),
-			),
-		),
-	});
+	prepareResultEvent();
 	const action = {
 		...request("typed", { kind: "run_event", appId: "app", eventId: "event" }),
 		responseMode: "result" as const,
@@ -563,6 +578,11 @@ test("an accepted Event is acknowledged before its typed response completes", as
 	queue.push(action);
 	await render();
 	expect(queue).toHaveLength(0);
+	expect(
+		mocks.invoke.mock.calls.filter(
+			([command]) => command === "native_automation_current",
+		),
+	).toHaveLength(0);
 	expect(mocks.executeWithResult).toHaveBeenCalledOnce();
 	expect(
 		mocks.invoke.mock.calls.some(
@@ -580,6 +600,113 @@ test("an accepted Event is acknowledged before its typed response completes", as
 			json: '{"total":42}',
 		},
 	});
+});
+
+test("cancelling a typed Event stops its task and discards late output", async () => {
+	prepareResultEvent();
+	const output = deferred<{ text: string }>();
+	mocks.executeWithResult.mockReturnValue(output.promise);
+	const action = {
+		...request("cancel-event", {
+			kind: "run_event",
+			appId: "app",
+			eventId: "event",
+		}),
+		automation: true,
+		responseMode: "text" as const,
+		responseDeadline: new Date(Date.now() + 90_000).toISOString(),
+	};
+	queue.push(action);
+	await render();
+	const execution = mocks.executeWithResult.mock.calls[0][0];
+	expect(execution.isCurrent()).toBe(true);
+	await act(async () =>
+		window.dispatchEvent(
+			new CustomEvent("flow-like-native-action-cancel", {
+				detail: { id: action.id, scope: scope("user-b") },
+			}),
+		),
+	);
+	expect(mocks.engine.cancelTask).not.toHaveBeenCalled();
+	await act(async () =>
+		window.dispatchEvent(
+			new CustomEvent("flow-like-native-action-cancel", {
+				detail: { id: action.id, scope: action.scope },
+			}),
+		),
+	);
+	expect(mocks.engine.cancelTask).toHaveBeenCalledExactlyOnceWith(
+		"native-cancel-event",
+	);
+	expect(execution.isCurrent()).toBe(false);
+	await act(async () => output.resolve({ text: "Late answer" }));
+	expect(
+		mocks.invoke.mock.calls.filter(
+			([command]) => command === "native_complete_action",
+		),
+	).toHaveLength(0);
+});
+
+test("cancellation stops only the matching chat run and removes its queued drafts", async () => {
+	const action = {
+		...request("cancel-chat", { kind: "flowpilot", text: "Summarize my work" }),
+		automation: true,
+		responseMode: "text" as const,
+		responseDeadline: new Date(Date.now() + 90_000).toISOString(),
+	};
+	const other = { ...request("other-chat"), responseMode: "text" as const };
+	queue.push(action);
+	await render();
+	expect(mocks.setDraft).toHaveBeenCalledOnce();
+	registerNativeActionRun(action, "answer-cancel-chat");
+	registerNativeActionRun(other, "answer-other-chat");
+	await act(async () =>
+		window.dispatchEvent(
+			new CustomEvent("flow-like-native-action-cancel", {
+				detail: { id: action.id, scope: action.scope },
+			}),
+		),
+	);
+	expect(mocks.cancelChatRun).toHaveBeenCalledExactlyOnceWith(
+		"answer-cancel-chat",
+	);
+	const same = { prompt: "cancel me", nativeRequest: action };
+	const keep = { prompt: "keep me", nativeRequest: other };
+	const update = mocks.setChatState.mock.calls[0][0];
+	expect(
+		update({ draft: same, nativeDrafts: [keep, same], queue: [same, keep] }),
+	).toEqual({
+		draft: keep,
+		nativeDrafts: [],
+		queue: [keep],
+	});
+});
+
+test("switching account cancels an accepted Event before it can return output", async () => {
+	prepareResultEvent();
+	const output = deferred<{ text: string }>();
+	mocks.executeWithResult.mockReturnValue(output.promise);
+	queue.push({
+		...request("switch-event", {
+			kind: "run_event",
+			appId: "app",
+			eventId: "event",
+		}),
+		automation: true,
+		responseMode: "text",
+		responseDeadline: new Date(Date.now() + 90_000).toISOString(),
+	});
+	await render();
+	mocks.auth.user.profile.sub = "user-b";
+	await render();
+	expect(mocks.engine.cancelTask).toHaveBeenCalledWith("native-switch-event");
+	expect(mocks.executeWithResult.mock.calls[0][0].isCurrent()).toBe(false);
+	await act(async () => output.resolve({ text: "Previous account result" }));
+	expect(
+		mocks.invoke.mock.calls.filter(
+			([command]) => command === "native_complete_action",
+		),
+	).toHaveLength(0);
 });
 
 test("focus and interval refreshes reuse a recent snapshot and one scope-bound event catalog", async () => {

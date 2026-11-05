@@ -48,6 +48,8 @@ export const PING_TTL_MS = 2500;
 export const SUMMON_TTL_MS = 15_000;
 /** A typing heartbeat counts as "typing" this long after it was last seen changing. */
 export const TYPING_TTL_MS = 3000;
+/** The typing heartbeat is republished at most this often while keys keep coming. */
+export const TYPING_HEARTBEAT_MS = 1000;
 
 export interface DragPayload {
 	nodes: { id: string; x: number; y: number }[];

@@ -1,4 +1,13 @@
+pub mod bot_memory_admin;
+pub(crate) mod bot_tools;
 pub mod copilot;
 pub mod copilot_sdk_tools;
 pub mod frontend_tool_bridge;
 pub mod invoke;
+pub mod native_app_build_tools;
+pub mod native_bot_tools;
+pub mod native_forecast_tools;
+pub mod native_platform_tools;
+pub mod native_runtime_tools;
+pub mod native_specialist_tools;
+pub mod native_tool_bridge;

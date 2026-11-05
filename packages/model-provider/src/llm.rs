@@ -721,6 +721,15 @@ impl ModelConstructor {
             }),
         }
     }
+
+    pub(crate) fn with_output_budget(self, budget: Option<u64>) -> Self {
+        Self {
+            inner: Box::new(OutputBudgetClient {
+                inner: self.inner,
+                budget,
+            }),
+        }
+    }
 }
 
 /// Rewrites a request for the named model right before it reaches the provider client.
@@ -832,13 +841,93 @@ pub fn drop_temperature(request: &mut CompletionRequest, model: &str, reason: &s
     }
 }
 
+tokio::task_local! {
+    // HTTP overrides are applied after SDK serialization. Keep the effective limit available
+    // while its response converter is created, including when the override removes a limit.
+    // None restores ordinary request accounting; Some(None) represents an explicit native null.
+    static CONFIGURED_OUTPUT_BUDGET: Option<Option<u64>>;
+}
+
+pub(crate) async fn with_output_budget<F: Future>(budget: Option<u64>, future: F) -> F::Output {
+    CONFIGURED_OUTPUT_BUDGET.scope(Some(budget), future).await
+}
+
+pub(crate) async fn without_output_budget<F: Future>(future: F) -> F::Output {
+    CONFIGURED_OUTPUT_BUDGET.scope(None, future).await
+}
+
 fn requested_output_budget(request: &CompletionRequest) -> Option<u64> {
+    if let Ok(Some(budget)) = CONFIGURED_OUTPUT_BUDGET.try_with(|budget| *budget) {
+        return budget;
+    }
     request.max_tokens.or_else(|| {
         let params = request.additional_params.as_ref()?;
         ["max_completion_tokens", "max_tokens", "num_predict"]
             .iter()
             .find_map(|key| params.get(*key).and_then(Value::as_u64))
     })
+}
+
+struct OutputBudgetClient {
+    inner: Box<dyn CompletionClientDyn + Send + Sync>,
+    budget: Option<u64>,
+}
+
+impl OutputBudgetClient {
+    fn model<'a>(&self, model: &str) -> OutputBudgetModel<'a> {
+        OutputBudgetModel {
+            inner: Arc::from(self.inner.completion_model(model)),
+            budget: self.budget,
+        }
+    }
+}
+
+impl CompletionClientDyn for OutputBudgetClient {
+    fn completion_model<'a>(&self, model: &str) -> Box<dyn CompletionModelDyn + 'a> {
+        Box::new(self.model(model))
+    }
+
+    fn agent<'a>(&self, model: &str) -> AgentBuilder<CompletionModelHandle<'a>> {
+        AgentBuilder::new(CompletionModelHandle::new(Arc::new(self.model(model))))
+    }
+}
+
+#[derive(Clone)]
+struct OutputBudgetModel<'a> {
+    inner: Arc<dyn CompletionModelDyn + 'a>,
+    budget: Option<u64>,
+}
+
+impl CompletionModelDyn for OutputBudgetModel<'_> {
+    fn completion(
+        &self,
+        mut request: CompletionRequest,
+    ) -> WasmBoxedFuture<'_, Result<CompletionResponse<DynamicResponse>, CompletionError>> {
+        request.max_tokens = self.budget;
+        Box::pin(with_output_budget(self.budget, async move {
+            self.inner.completion(request).await
+        }))
+    }
+
+    fn stream(
+        &self,
+        mut request: CompletionRequest,
+    ) -> WasmBoxedFuture<
+        '_,
+        Result<StreamingCompletionResponse<DynamicStreamingResponse>, CompletionError>,
+    > {
+        request.max_tokens = self.budget;
+        Box::pin(with_output_budget(self.budget, async move {
+            self.inner.stream(request).await
+        }))
+    }
+
+    fn completion_request(
+        &self,
+        prompt: Message,
+    ) -> CompletionRequestBuilder<CompletionModelHandle<'_>> {
+        CompletionRequestBuilder::new(CompletionModelHandle::new(Arc::new(self.clone())), prompt)
+    }
 }
 
 /// Copies `CompletionRequest::max_tokens` into the body under the provider's own name.

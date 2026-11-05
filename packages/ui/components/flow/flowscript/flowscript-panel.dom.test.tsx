@@ -406,6 +406,32 @@ test("a failed apply after deletion confirmation keeps the draft and shows a per
 	expect(editor().value).toBe("applied draft");
 });
 
+test.each([0, 1])(
+	"Apply displays lint warnings with %i executed commands",
+	async (commandCount) => {
+		const warning =
+			"Each cacheDir node has a unique path. Reuse one shared path variable or set nodeScope: false.";
+		apply.mockResolvedValueOnce({
+			commands: Array.from(
+				{ length: commandCount },
+				() => ({}),
+			) as IApplyFlowScriptResponse["commands"],
+			board_commands: [],
+			diagnostics: [],
+			warnings: [warning],
+		});
+		await click("Apply to board");
+		expect(container.querySelector('[role="alert"]')).toBeNull();
+		expect(container.querySelector('[role="status"]')?.textContent).toContain(
+			"1 warning",
+		);
+		expect(container.textContent).toContain(warning);
+		expect(container.textContent).not.toContain("nothing was applied");
+		if (commandCount === 0)
+			expect(button("Apply to board").disabled).toBe(false);
+	},
+);
+
 test("a missing apply result is shown as a failure and reset clears it", async () => {
 	apply.mockResolvedValueOnce(undefined);
 	await click("Apply to board");

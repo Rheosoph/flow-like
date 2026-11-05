@@ -1,0 +1,100 @@
+{
+  "inbound_email": {
+    "sink_type": "inbound_email"
+  },
+  "geolocation": {
+    "sink_type": "geolocation",
+    "latitude": 0,
+    "longitude": 0,
+    "radius": 100,
+    "trigger_on": "Both",
+    "background": false
+  },
+  "simple_chat": {
+    "allow_file_upload": true,
+    "allow_voice_input": false,
+    "ai_disclosure": "You’re chatting with AI — brilliant at patterns, occasionally creative with facts. Double-check the important stuff.",
+    "background_image": "",
+    "custom_css": "/* Flow Like — clean, app-aware defaults */\n:root {\n  --fl-chat-content-width: 64rem;\n  --fl-chat-message-radius: 0.75rem;\n  --fl-chat-surface-background: transparent;\n  --fl-chat-composer-background: var(--background);\n  --fl-chat-user-message-background: color-mix(in oklch, var(--muted) 30%, transparent);\n  --fl-chat-user-message-foreground: var(--foreground);\n  --fl-chat-ai-message-background: transparent;\n  --fl-chat-ai-message-foreground: var(--foreground);\n  --fl-chat-disclosure-background: color-mix(in oklch, var(--primary) 10%, var(--background));\n  --fl-chat-disclosure-foreground: var(--foreground);\n  --fl-chat-background-overlay: color-mix(in oklch, var(--background) 38%, transparent);\n  --fl-chat-background-overlay-strong: color-mix(in oklch, var(--background) 56%, transparent);\n  --fl-chat-background-size: cover;\n  --fl-chat-background-position: center;\n  --fl-chat-pad-bottom: 0.75rem;\n}\n\n:root[data-fl-chat-has-background=\"true\"] {\n  --fl-chat-composer-background: color-mix(in oklch, var(--background) 76%, transparent);\n  --fl-chat-user-message-background: color-mix(in oklch, var(--muted) 82%, transparent);\n  --fl-chat-ai-message-background: color-mix(in oklch, var(--background) 76%, transparent);\n  --fl-chat-disclosure-background: color-mix(in oklch, var(--background) 84%, transparent);\n}",
+    "voice": {
+      "mode": "disabled",
+      "invoke": "manual",
+      "variant": "conservative",
+      "size": "md",
+      "playback": "text",
+      "max_duration": 300,
+      "auto_stop": false
+    },
+    "history_elements": 5,
+    "tools": [],
+    "default_tools": [],
+    "example_messages": []
+  },
+  "teams": {
+    "sink_type": "teams"
+  },
+  "discord": {
+    "sink_type": "discord",
+    "token": "",
+    "bot_name": "Flow-Like Bot",
+    "bot_description": "",
+    "intents": [
+      "Guilds",
+      "GuildMessages",
+      "MessageContent"
+    ],
+    "channel_whitelist": [],
+    "channel_blacklist": [],
+    "respond_to_mentions": true,
+    "respond_to_dms": true,
+    "command_prefix": "!"
+  },
+  "telegram": {
+    "sink_type": "telegram",
+    "bot_token": "",
+    "bot_name": "Flow-Like Bot",
+    "bot_description": "",
+    "chat_whitelist": [],
+    "chat_blacklist": [],
+    "respond_to_mentions": true,
+    "respond_to_private": true,
+    "command_prefix": "/"
+  },
+  "email": {
+    "sink_type": "email",
+    "imap_server": "",
+    "imap_port": 993,
+    "username": "",
+    "password": "",
+    "use_tls": true
+  },
+  "generic_form": {},
+  "api": {
+    "sink_type": "http",
+    "method": "GET",
+    "public_endpoint": false
+  },
+  "deeplink": {
+    "sink_type": "deeplink"
+  },
+  "cron": {
+    "sink_type": "cron",
+    "expression": "0 */1 * * *"
+  },
+  "daemon": {
+    "sink_type": "daemon",
+    "restart_policy": "on_failure",
+    "min_restart_delay_ms": 1000,
+    "max_restart_delay_ms": 30000,
+    "board_poll_interval_ms": 3000,
+    "log_flush_interval_ms": 5000,
+    "log_batch_size": 500,
+    "healthy_reset_ms": 60000
+  },
+  "rest": {
+    "sink_type": "rest"
+  },
+  "mcp": {
+    "sink_type": "mcp"
+  }
+}

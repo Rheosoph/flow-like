@@ -1,4 +1,10 @@
-import { describe, expect, it } from "bun:test";
+import { describe, expect, it, spyOn } from "bun:test";
+import {
+	IDBKeyRange as FakeIDBKeyRange,
+	IDBObjectStore as FakeIDBObjectStore,
+	IDBFactory,
+} from "fake-indexeddb";
+import { createStore, keys, setMany } from "idb-keyval";
 import {
 	type QueryStorageBackend,
 	createBoundedStorage,
@@ -300,6 +306,73 @@ describe("createSmartQueryPersister end to end", () => {
 		await new Promise((r) => setTimeout(r, 60));
 		await persister.persisterGc();
 		expect(backend.map.size).toBe(0);
+	});
+
+	it("sweeps the IndexedDB cache in key batches without loading all values", async () => {
+		const previousIndexedDB = Object.getOwnPropertyDescriptor(
+			globalThis,
+			"indexedDB",
+		);
+		const previousKeyRange = Object.getOwnPropertyDescriptor(
+			globalThis,
+			"IDBKeyRange",
+		);
+		Object.defineProperty(globalThis, "indexedDB", {
+			configurable: true,
+			value: new IDBFactory(),
+		});
+		Object.defineProperty(globalThis, "IDBKeyRange", {
+			configurable: true,
+			value: FakeIDBKeyRange,
+		});
+		const getAll = spyOn(FakeIDBObjectStore.prototype, "getAll");
+		const getAllKeys = spyOn(FakeIDBObjectStore.prototype, "getAllKeys");
+		try {
+			const store = createStore("flow-like-query-cache", "queries");
+			const now = Date.now();
+			const entries: [string, string][] = Array.from(
+				{ length: 150 },
+				(_, i) => [
+					`fl-q-${JSON.stringify(["getApps", i])}`,
+					i >= 135
+						? "unreadable"
+						: JSON.stringify({
+								buster: i >= 120 ? "old-policy" : "fl-qp-v1",
+								queryHash: JSON.stringify(["getApps", i]),
+								queryKey: ["getApps", i],
+								state: {
+									data: { payload: "x".repeat(8192) },
+									dataUpdatedAt: i < 60 ? now - 120_000 : now,
+								},
+							}),
+				],
+			);
+			entries.push(['fl-q-["empty"]', ""]);
+			entries.push(["unrelated", "leave this alone"]);
+			await setMany(entries, store);
+
+			await createSmartQueryPersister({ maxAge: 60_000 }).persisterGc();
+
+			expect(getAll).not.toHaveBeenCalled();
+			expect(getAllKeys.mock.calls.length).toBeGreaterThan(2);
+			expect(getAllKeys.mock.calls.every(([, count]) => count === 64)).toBe(
+				true,
+			);
+			const remaining = await keys(store);
+			expect(new Set(remaining)).toEqual(
+				new Set([...entries.slice(60, 120).map(([key]) => key), "unrelated"]),
+			);
+		} finally {
+			getAll.mockRestore();
+			getAllKeys.mockRestore();
+			for (const [name, descriptor] of [
+				["indexedDB", previousIndexedDB],
+				["IDBKeyRange", previousKeyRange],
+			] as const) {
+				if (descriptor) Object.defineProperty(globalThis, name, descriptor);
+				else Reflect.deleteProperty(globalThis, name);
+			}
+		}
 	});
 
 	it("marks restored data until a query function confirms it", async () => {

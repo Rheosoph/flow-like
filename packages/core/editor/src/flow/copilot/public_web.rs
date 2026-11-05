@@ -7,6 +7,7 @@
 use std::{
     collections::HashSet,
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
+    ops::Range,
     sync::{
         Arc, LazyLock, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -44,6 +45,7 @@ const MAX_OPEN_URL_CHARS_PER_SESSION: usize = 120_000;
 pub(crate) const MAX_SEARCH_CALLS_PER_SESSION: usize = 12;
 pub(crate) const MAX_ARCHIVE_CALLS_PER_SESSION: usize = 4;
 const MAX_ARCHIVE_RESPONSE_BYTES: usize = 64 * 1024;
+const WAYBACK_HOST: &str = "web.archive.org";
 const WAYBACK_AVAILABILITY_ENDPOINT: &str = "https://archive.org/wayback/available";
 const WAYBACK_CDX_ENDPOINT: &str = "https://web.archive.org/cdx/search/cdx";
 const WAYBACK_CDX_FIELDS: [&str; 5] = ["timestamp", "original", "statuscode", "mimetype", "digest"];
@@ -53,6 +55,11 @@ const ARCHIVE_CLOSEST_LEAD_CAVEAT: &str = "No qualifying exact-URL HTTP-200 capt
 const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
 const OPERATION_TIMEOUT: Duration = Duration::from_secs(30);
+const MARKDOWN_ALTERNATE_TIMEOUT: Duration = Duration::from_secs(8);
+/// Markdown first: sites that negotiate content (e.g. Cloudflare "Markdown for Agents") only serve
+/// it when it outranks HTML, and it carries the page without navigation chrome.
+const PAGE_ACCEPT: &str = "text/markdown, text/html;q=0.9, application/xhtml+xml;q=0.9, text/plain;q=0.8, application/json;q=0.7, application/xml;q=0.6, text/xml;q=0.6, */*;q=0.1";
+const MARKDOWN_ACCEPT: &str = "text/markdown, text/x-markdown;q=0.9";
 static OPEN_URL_CONCURRENCY: LazyLock<tokio::sync::Semaphore> =
     LazyLock::new(|| tokio::sync::Semaphore::new(MAX_CONCURRENT_OPEN_URL_CALLS));
 static ARCHIVE_LOOKUP_CONCURRENCY: LazyLock<tokio::sync::Semaphore> =
@@ -178,25 +185,30 @@ impl WebResearchSession {
                     }
                 }
             }
-            OPEN_URL_TOOL => {
-                if let Some(url) = result.get("url").and_then(Value::as_str) {
-                    self.authorize_url(url);
-                    let citation_eligible =
-                        result.get("citation_eligible").and_then(Value::as_bool) == Some(true)
-                            && !self.is_non_citable_url(url);
-                    if citation_eligible {
-                        if let Ok(url) = parse_public_url(url) {
-                            self.opened_urls
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                .insert(url.as_str().to_string());
-                        }
-                    } else {
-                        self.mark_non_citable_url(url);
-                    }
-                }
-            }
+            OPEN_URL_TOOL => self.register_opened_page(result),
             _ => {}
+        }
+    }
+
+    fn register_opened_page(&self, result: &Value) {
+        let Some(url) = result.get("url").and_then(Value::as_str) else {
+            return;
+        };
+        self.authorize_url(url);
+        let citation_eligible = result.get("citation_eligible").and_then(Value::as_bool)
+            == Some(true)
+            && !self.is_non_citable_url(url);
+        if !citation_eligible {
+            self.mark_non_citable_url(url);
+            return;
+        }
+        self.mark_opened_url(url);
+        // A redirect lands on the page that was read, so the search-result URL the model asked
+        // for cites it just as well as the final one.
+        if let Some(requested) = result.get("requested_url").and_then(Value::as_str)
+            && !self.is_non_citable_url(requested)
+        {
+            self.mark_opened_url(requested);
         }
     }
 
@@ -240,6 +252,15 @@ impl WebResearchSession {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(url.as_str().to_string());
+    }
+
+    fn mark_opened_url(&self, raw: &str) {
+        if let Ok(url) = parse_public_url(raw) {
+            self.opened_urls
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(url.as_str().to_string());
+        }
     }
 
     fn mark_non_citable_url(&self, raw: &str) {
@@ -344,7 +365,15 @@ fn reserve_capped_call(counter: &AtomicUsize, limit: usize) -> bool {
 }
 
 pub(crate) fn public_urls_in_user_text(text: &str) -> Vec<String> {
-    let mut urls = Vec::new();
+    public_url_spans(text)
+        .into_iter()
+        .map(|span| text[span].to_string())
+        .collect()
+}
+
+/// Byte ranges of the http(s) URLs in free text, with trailing prose and markup punctuation trimmed.
+pub(crate) fn public_url_spans(text: &str) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
     let mut offset = 0usize;
     while offset < text.len() {
         let remaining = &text[offset..];
@@ -363,22 +392,30 @@ pub(crate) fn public_urls_in_user_text(text: &str) -> Vec<String> {
         let scanned_end = candidate
             .char_indices()
             .find_map(|(index, character)| {
-                (index > 0
-                    && (character.is_whitespace() || matches!(character, '<' | '>' | '"' | '\'')))
-                .then_some(index)
+                (index > 0 && (character.is_whitespace() || is_url_terminator(character)))
+                    .then_some(index)
             })
             .unwrap_or(candidate.len());
         let candidate = trim_user_url_candidate(&candidate[..scanned_end]);
         if !candidate.is_empty() {
-            urls.push(candidate.to_string());
+            spans.push(start..start + candidate.len());
         }
         offset = start.saturating_add(scanned_end.max(1));
     }
-    urls
+    spans
 }
 
+fn is_url_terminator(character: char) -> bool {
+    matches!(
+        character,
+        '<' | '>' | '"' | '\'' | '`' | '„' | '“' | '”' | '‘' | '’' | '«' | '»'
+    )
+}
+
+const URL_TRAILING_PUNCTUATION: [char; 7] = ['.', ',', ';', ':', '!', '?', '*'];
+
 fn trim_user_url_candidate(mut candidate: &str) -> &str {
-    candidate = candidate.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+    candidate = candidate.trim_end_matches(URL_TRAILING_PUNCTUATION);
     loop {
         let Some(last) = candidate.chars().last() else {
             return candidate;
@@ -403,7 +440,7 @@ fn trim_user_url_candidate(mut candidate: &str) -> &str {
             return candidate;
         }
         candidate = &candidate[..candidate.len() - last.len_utf8()];
-        candidate = candidate.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        candidate = candidate.trim_end_matches(URL_TRAILING_PUNCTUATION);
     }
 }
 
@@ -549,6 +586,7 @@ fn open_url_budget_error(code: &'static str, message: &'static str, retryable: b
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TextKind {
     Html,
+    Markdown,
     Text,
 }
 
@@ -628,6 +666,27 @@ struct FetchSuccess {
     redirects: Vec<Value>,
     title: String,
     find: Option<Value>,
+    markdown_source: Option<Url>,
+}
+
+/// One validated response body after following every redirect hop.
+struct FetchedBody {
+    final_url: Url,
+    content_type: String,
+    kind: TextKind,
+    body: Vec<u8>,
+    truncated: bool,
+    redirects: Vec<Value>,
+}
+
+/// The evidence text taken from a page, possibly from its declared markdown rendering.
+struct ReadableText {
+    text: String,
+    kind: TextKind,
+    content_type: String,
+    bytes_read: usize,
+    truncated: bool,
+    markdown_source: Option<Url>,
 }
 
 /// Open one public textual URL without exposing a general-purpose network client to the model.
@@ -1358,7 +1417,7 @@ fn validate_wayback_snapshot_url(
         )
     })?;
     if !matches!(snapshot.scheme(), "http" | "https")
-        || snapshot.host_str() != Some("web.archive.org")
+        || snapshot.host_str() != Some(WAYBACK_HOST)
         || !snapshot.username().is_empty()
         || snapshot.password().is_some()
         || snapshot.port().is_some()
@@ -1426,14 +1485,9 @@ fn validate_wayback_snapshot_url(
     Ok(snapshot)
 }
 
-async fn fetch_public_text(
-    raw_url: &str,
-    max_chars: usize,
-    find: Option<&str>,
-) -> Result<FetchSuccess, FetchFailure> {
-    let mut current = parse_public_url(raw_url)?;
-    let requested_url = current.as_str().to_string();
-    let mut seen = HashSet::from([requested_url.clone()]);
+async fn fetch_public_body(start: Url, accept: &str) -> Result<FetchedBody, FetchFailure> {
+    let mut current = start;
+    let mut seen = HashSet::from([current.as_str().to_string()]);
     let mut redirects = Vec::new();
 
     for hop in 0..=MAX_REDIRECTS {
@@ -1441,10 +1495,7 @@ async fn fetch_public_text(
         let client = client_for_hop(&current, &addresses)?;
         let response = client
             .get(current.clone())
-            .header(
-                reqwest::header::ACCEPT,
-                "text/html,application/xhtml+xml,text/plain,text/markdown,application/json,application/xml,text/xml;q=0.9,*/*;q=0.1",
-            )
+            .header(reqwest::header::ACCEPT, accept)
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
             .send()
             .await
@@ -1570,7 +1621,7 @@ async fn fetch_public_text(
             .at(&current)
         })?;
 
-        let (body, body_truncated) = read_bounded_body(response).await.map_err(|error| {
+        let (body, truncated) = read_bounded_body(response).await.map_err(|error| {
             FetchFailure::new(
                 "body_read_failed",
                 format!("Failed to read URL body: {error}"),
@@ -1578,73 +1629,191 @@ async fn fetch_public_text(
             .retryable()
             .at(&current)
         })?;
-        let decoded = String::from_utf8_lossy(&body).into_owned();
-        let title = page_title(&decoded, &current, kind);
-        let converted = match kind {
-            TextKind::Html => {
-                let conversion_permit = tokio::time::timeout(
-                    DNS_TIMEOUT,
-                    HTML_CONVERSION_CONCURRENCY.clone().acquire_owned(),
-                )
-                .await
-                .map_err(|_| {
-                    FetchFailure::new(
-                        "conversion_busy",
-                        "The bounded HTML conversion pool is busy.",
-                    )
-                    .retryable()
-                    .at(&current)
-                })?
-                .map_err(|_| {
-                    FetchFailure::new(
-                        "conversion_unavailable",
-                        "The bounded HTML conversion pool is unavailable.",
-                    )
-                    .retryable()
-                    .at(&current)
-                })?;
-                tokio::task::spawn_blocking(move || {
-                    // Keep the permit inside the blocking task. If the outer request times out,
-                    // the non-cancellable conversion still occupies its slot until it truly ends.
-                    let _conversion_permit = conversion_permit;
-                    html_to_markdown(&decoded)
-                })
-                .await
-                .map_err(|_| {
-                    FetchFailure::new(
-                        "conversion_failed",
-                        "The isolated HTML conversion task did not complete.",
-                    )
-                    .at(&current)
-                })?
-                .map_err(|error| error.at(&current))?
-            }
-            TextKind::Text => decoded,
-        };
-        let converted = remove_control_characters(converted);
-        ensure_sufficient_evidence_text(&converted, &current)?;
-        let find = find.map(|query| find_matches(&converted, query, body_truncated));
-        let (text, output_truncated) = truncate_chars(converted, max_chars);
 
-        return Ok(FetchSuccess {
-            requested_url,
+        return Ok(FetchedBody {
             final_url: current,
             content_type,
-            text,
-            format: if kind == TextKind::Html {
-                "markdown"
-            } else {
-                "text"
-            },
-            bytes_read: body.len(),
-            truncated: body_truncated || output_truncated,
+            kind,
+            body,
+            truncated,
             redirects,
-            title,
-            find,
         });
     }
 
     unreachable!("redirect loop either returns a response or a redirect-limit error")
+}
+
+async fn fetch_public_text(
+    raw_url: &str,
+    max_chars: usize,
+    find: Option<&str>,
+) -> Result<FetchSuccess, FetchFailure> {
+    let requested = parse_public_url(raw_url)?;
+    let requested_url = requested.as_str().to_string();
+    let page = fetch_public_body(requested, PAGE_ACCEPT).await?;
+    let decoded = String::from_utf8_lossy(&page.body).into_owned();
+    let title = page_title(&decoded, &page.final_url, page.kind);
+    let markdown_alternate = match page.kind {
+        TextKind::Html => fetch_markdown_alternate(&decoded, &page.final_url).await,
+        TextKind::Markdown | TextKind::Text => None,
+    };
+    let readable = match markdown_alternate {
+        Some(readable) => readable,
+        None => ReadableText {
+            text: readable_text(decoded, page.kind, &page.final_url).await?,
+            kind: page.kind,
+            content_type: page.content_type,
+            bytes_read: page.body.len(),
+            truncated: page.truncated,
+            markdown_source: None,
+        },
+    };
+    let find = find.map(|query| find_matches(&readable.text, query, readable.truncated));
+    let (text, output_truncated) = truncate_chars(readable.text, max_chars);
+
+    Ok(FetchSuccess {
+        requested_url,
+        final_url: page.final_url,
+        content_type: readable.content_type,
+        text,
+        format: match readable.kind {
+            TextKind::Html | TextKind::Markdown => "markdown",
+            TextKind::Text => "text",
+        },
+        bytes_read: readable.bytes_read,
+        truncated: readable.truncated || output_truncated,
+        redirects: page.redirects,
+        title,
+        find,
+        markdown_source: readable.markdown_source,
+    })
+}
+
+/// Read the markdown rendering a page declares through `<link rel="alternate"
+/// type="text/markdown">` on its own origin. It is the same content without navigation chrome or a
+/// JavaScript shell; any failure falls back to converting the HTML page.
+async fn fetch_markdown_alternate(html: &str, page_url: &Url) -> Option<ReadableText> {
+    let alternate = markdown_alternate_url(html, page_url)?;
+    let fetched = tokio::time::timeout(
+        MARKDOWN_ALTERNATE_TIMEOUT,
+        fetch_public_body(alternate, MARKDOWN_ACCEPT),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if fetched.kind != TextKind::Markdown || fetched.final_url.origin() != page_url.origin() {
+        return None;
+    }
+    let decoded = String::from_utf8_lossy(&fetched.body).into_owned();
+    let text = readable_text(decoded, fetched.kind, &fetched.final_url)
+        .await
+        .ok()?;
+    Some(ReadableText {
+        text,
+        kind: TextKind::Markdown,
+        content_type: fetched.content_type,
+        bytes_read: fetched.body.len(),
+        truncated: fetched.truncated,
+        markdown_source: Some(fetched.final_url),
+    })
+}
+
+fn markdown_alternate_url(html: &str, page_url: &Url) -> Option<Url> {
+    // A snapshot's alternate resolves to whichever capture is nearest, not this one.
+    if page_url.host_str() == Some(WAYBACK_HOST) {
+        return None;
+    }
+    let lower = html.to_ascii_lowercase();
+    let mut offset = 0;
+    while let Some(found) = lower[offset..].find("<link") {
+        let start = offset + found;
+        let end = start + lower[start..].find('>')?;
+        offset = end;
+        let tag = &html[start..end];
+        let is_markdown_alternate = html_attribute(tag, "rel").is_some_and(|rel| {
+            rel.split_ascii_whitespace()
+                .any(|value| value.eq_ignore_ascii_case("alternate"))
+        }) && html_attribute(tag, "type")
+            .is_some_and(|kind| kind.trim().eq_ignore_ascii_case("text/markdown"));
+        if !is_markdown_alternate {
+            continue;
+        }
+        let href = html_attribute(tag, "href")?.trim().replace("&amp;", "&");
+        let url = parse_public_url(page_url.join(&href).ok()?.as_str()).ok()?;
+        return (url.origin() == page_url.origin() && url != *page_url).then_some(url);
+    }
+    None
+}
+
+/// The value of one attribute in a single HTML start tag (without its closing `>`).
+fn html_attribute<'a>(tag: &'a str, name: &'a str) -> Option<&'a str> {
+    let lower = tag.to_ascii_lowercase();
+    let mut search = 0;
+    while let Some(found) = lower[search..].find(name) {
+        let at = search + found;
+        search = at + name.len();
+        if !lower[..at].ends_with(|character: char| character.is_ascii_whitespace()) {
+            continue;
+        }
+        let Some(after_equals) = lower[search..].trim_start().strip_prefix('=') else {
+            continue;
+        };
+        let value = &tag[lower.len() - after_equals.trim_start().len()..];
+        return match value.chars().next()? {
+            quote @ ('"' | '\'') => value[1..].split(quote).next(),
+            _ => value
+                .split(|character: char| character.is_ascii_whitespace())
+                .next(),
+        };
+    }
+    None
+}
+
+async fn readable_text(decoded: String, kind: TextKind, url: &Url) -> Result<String, FetchFailure> {
+    let converted = match kind {
+        TextKind::Html => {
+            let conversion_permit = tokio::time::timeout(
+                DNS_TIMEOUT,
+                HTML_CONVERSION_CONCURRENCY.clone().acquire_owned(),
+            )
+            .await
+            .map_err(|_| {
+                FetchFailure::new(
+                    "conversion_busy",
+                    "The bounded HTML conversion pool is busy.",
+                )
+                .retryable()
+                .at(url)
+            })?
+            .map_err(|_| {
+                FetchFailure::new(
+                    "conversion_unavailable",
+                    "The bounded HTML conversion pool is unavailable.",
+                )
+                .retryable()
+                .at(url)
+            })?;
+            tokio::task::spawn_blocking(move || {
+                // Keep the permit inside the blocking task. If the outer request times out,
+                // the non-cancellable conversion still occupies its slot until it truly ends.
+                let _conversion_permit = conversion_permit;
+                html_to_markdown(&decoded)
+            })
+            .await
+            .map_err(|_| {
+                FetchFailure::new(
+                    "conversion_failed",
+                    "The isolated HTML conversion task did not complete.",
+                )
+                .at(url)
+            })?
+            .map_err(|error| error.at(url))?
+        }
+        TextKind::Markdown | TextKind::Text => decoded,
+    };
+    let converted = remove_control_characters(converted);
+    ensure_sufficient_evidence_text(&converted, url)?;
+    Ok(converted)
 }
 
 fn success_json(result: FetchSuccess) -> Value {
@@ -1666,6 +1835,7 @@ fn success_json(result: FetchSuccess) -> Value {
             "citation_eligible": true,
         },
         "format": result.format,
+        "markdown_source": result.markdown_source.map(String::from),
         "content": result.text,
         "bytes_read": result.bytes_read,
         "truncated": result.truncated,
@@ -1914,6 +2084,7 @@ fn classify_content_type(value: &str) -> Option<TextKind> {
         .to_ascii_lowercase();
     match media_type.as_str() {
         "text/html" | "application/xhtml+xml" => Some(TextKind::Html),
+        "text/markdown" | "text/x-markdown" => Some(TextKind::Markdown),
         "text/event-stream" => None,
         value
             if value.starts_with("text/")
@@ -1964,24 +2135,43 @@ fn ensure_sufficient_evidence_text(value: &str, url: &Url) -> Result<(), FetchFa
 }
 
 fn page_title(text: &str, url: &Url, kind: TextKind) -> String {
-    if kind == TextKind::Html {
-        let lower = text.to_ascii_lowercase();
-        if let Some(open) = lower.find("<title")
-            && let Some(open_end) = lower[open..].find('>').map(|index| open + index + 1)
-            && let Some(close) = lower[open_end..]
-                .find("</title>")
-                .map(|index| open_end + index)
-        {
-            let raw_title = &text[open_end..close];
-            if let Ok(title) = html_to_markdown(raw_title) {
-                let title = remove_control_characters(collapse_whitespace(&title));
-                if !title.is_empty() {
-                    return truncate_chars(title, 200).0;
-                }
+    let title = match kind {
+        TextKind::Html => html_title(text),
+        TextKind::Markdown => markdown_title(text),
+        TextKind::Text => None,
+    };
+    title
+        .map(|title| remove_control_characters(collapse_whitespace(&title)))
+        .filter(|title| !title.is_empty())
+        .map(|title| truncate_chars(title, 200).0)
+        .unwrap_or_else(|| url.host_str().unwrap_or("Web source").to_string())
+}
+
+fn html_title(text: &str) -> Option<String> {
+    let lower = text.to_ascii_lowercase();
+    let open = lower.find("<title")?;
+    let open_end = open + lower[open..].find('>')? + 1;
+    let close = open_end + lower[open_end..].find("</title>")?;
+    html_to_markdown(&text[open_end..close]).ok()
+}
+
+/// The `title:` of a YAML front matter block, else the first level-one heading.
+fn markdown_title(text: &str) -> Option<String> {
+    let mut lines = text.lines().map(str::trim);
+    if text.trim_start().starts_with("---") {
+        for line in lines.by_ref().skip(1) {
+            if line == "---" {
+                break;
+            }
+            if let Some(title) = line.strip_prefix("title:") {
+                return Some(title.trim().trim_matches(['"', '\'']).to_string());
             }
         }
     }
-    url.host_str().unwrap_or("Web source").to_string()
+    lines.find_map(|line| {
+        line.strip_prefix("# ")
+            .map(|title| title.trim().to_string())
+    })
 }
 
 fn remove_control_characters(value: String) -> String {
@@ -2305,6 +2495,18 @@ mod tests {
             vec![
                 "https://en.wikipedia.org/wiki/Foo_(bar)?oldid=123".to_string(),
                 "https://example.com/report_(final)?view=print".to_string(),
+            ]
+        );
+
+        assert_eq!(
+            public_urls_in_user_text(
+                "**https://a.example/x** `https://b.example/y` „https://c.example/z“ «https://d.example/w»"
+            ),
+            vec![
+                "https://a.example/x".to_string(),
+                "https://b.example/y".to_string(),
+                "https://c.example/z".to_string(),
+                "https://d.example/w".to_string(),
             ]
         );
 
@@ -2687,9 +2889,90 @@ mod tests {
             classify_content_type("application/xml"),
             Some(TextKind::Text)
         );
+        assert_eq!(
+            classify_content_type("text/markdown; charset=utf-8"),
+            Some(TextKind::Markdown)
+        );
         assert_eq!(classify_content_type("text/event-stream"), None);
         assert_eq!(classify_content_type("application/pdf"), None);
         assert_eq!(classify_content_type("application/octet-stream"), None);
+    }
+
+    #[test]
+    fn markdown_alternate_is_followed_only_on_the_same_origin() {
+        let page = Url::parse("https://nextjs.org/docs").unwrap();
+        let alternate = |html: &str| markdown_alternate_url(html, &page).map(String::from);
+        assert_eq!(
+            alternate(
+                r#"<head><link rel="alternate" type="text/markdown" href="https://nextjs.org/docs.md"/></head>"#
+            ),
+            Some("https://nextjs.org/docs.md".to_string())
+        );
+        assert_eq!(
+            alternate(r#"<link href="/docs.md?v=1&amp;x=2" rel="alternate" type="text/markdown">"#),
+            Some("https://nextjs.org/docs.md?v=1&x=2".to_string())
+        );
+        assert_eq!(
+            alternate(
+                r#"<link rel="alternate" hreflang="de" href="/de/docs"><link rel="index" type="text/markdown" href="/llms.txt"><link data-type="text/markdown" rel="alternate" href="/x.md"><link rel="alternate" type="text/markdown" href="/docs.md">"#
+            ),
+            Some("https://nextjs.org/docs.md".to_string())
+        );
+        for html in [
+            r#"<link rel="alternate" type="text/markdown" href="https://evil.example/docs.md">"#,
+            r#"<link rel="alternate" type="text/markdown" href="http://nextjs.org/docs.md">"#,
+            r#"<link rel="alternate" type="text/markdown" href="/docs">"#,
+            r#"<link rel="alternate" type="application/rss+xml" href="/feed.xml">"#,
+        ] {
+            assert_eq!(alternate(html), None, "{html}");
+        }
+        let snapshot =
+            Url::parse("https://web.archive.org/web/2024/https://nextjs.org/docs").unwrap();
+        assert_eq!(
+            markdown_alternate_url(
+                r#"<link rel="alternate" type="text/markdown" href="/web/2024/https://nextjs.org/docs.md">"#,
+                &snapshot
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn markdown_titles_come_from_front_matter_or_the_first_heading() {
+        let url = Url::parse("https://vercel.com/docs").unwrap();
+        let title = |text: &str| page_title(text, &url, TextKind::Markdown);
+        assert_eq!(
+            title("---\ndescription: x\ntitle: \"Vercel Documentation\"\n---\n\n# Other"),
+            "Vercel Documentation"
+        );
+        assert_eq!(
+            title("---\nproduct: vercel\n---\n# Get started\n"),
+            "Get started"
+        );
+        assert_eq!(title("Intro\n\n## Section\n# Zahlungen"), "Zahlungen");
+        assert_eq!(title("No heading here"), "vercel.com");
+    }
+
+    #[test]
+    fn a_redirected_open_makes_both_the_requested_and_final_url_citable() {
+        let session = WebResearchSession::new("");
+        session.register_tool_result(
+            OPEN_URL_TOOL,
+            &json!({
+                "status": "ok",
+                "tool": OPEN_URL_TOOL,
+                "requested_url": "https://example.com/product",
+                "url": "https://www.example.com/product/",
+                "citation_eligible": true,
+            }),
+        );
+        assert_eq!(
+            session.opened_urls(),
+            vec![
+                "https://example.com/product".to_string(),
+                "https://www.example.com/product/".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -3090,10 +3373,13 @@ mod tests {
             redirects: Vec::new(),
             title: "A useful source".to_string(),
             find: None,
+            markdown_source: Some(Url::parse("https://example.com/research.md").unwrap()),
         });
         assert_eq!(output["tool"], OPEN_URL_TOOL);
         assert_eq!(output["untrusted_content"], true);
         assert_eq!(output["source"]["url"], url);
+        assert_eq!(output["url"], url);
+        assert_eq!(output["markdown_source"], "https://example.com/research.md");
         assert_eq!(
             output["source"]["citation_markdown"],
             "[A useful source](https://example.com/research?q=a)"

@@ -150,6 +150,8 @@ export const EVENT_DEFINITIONS: EventDefinitionMapping = {
 	events_chat: {
 		configs: {
 			simple_chat: {
+				allow_model_selection: true,
+				require_vlm: false,
 				allow_file_upload: true,
 				allow_voice_input: false,
 				ai_disclosure: DEFAULT_CHAT_AI_DISCLOSURE,

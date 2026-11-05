@@ -92,11 +92,32 @@ impl NodeLogic for DocxCreateNode {
         let theme_color: String = context.evaluate_pin("theme_color").await?;
         let output: FlowPath = context.evaluate_pin("output").await?;
 
-        let accent = hex_to_ooxml(&theme_color);
-        let half_pts = pt_to_half_points(font_size as f32);
-        let heading_color = hex_to_ooxml(defaults::HEADING);
+        let files = docx_package(&font_family, font_size, &theme_color)?;
 
-        let content_types = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        let result_bytes = write_zip(&files)?;
+        output.put(context, result_bytes, false).await?;
+        context.set_pin_value("result", json!(output)).await?;
+        context.activate_exec_pin("exec_out").await?;
+        Ok(())
+    }
+
+    #[cfg(not(feature = "execute"))]
+    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
+        Err(flow_like_types::anyhow!("Requires the 'execute' feature"))
+    }
+}
+
+#[cfg(feature = "execute")]
+pub(crate) fn docx_package(
+    font_family: &str,
+    font_size: f64,
+    theme_color: &str,
+) -> flow_like_types::Result<std::collections::HashMap<String, Vec<u8>>> {
+    let accent = hex_to_ooxml(theme_color);
+    let half_pts = pt_to_half_points(font_size as f32);
+    let heading_color = hex_to_ooxml(defaults::HEADING);
+
+    let content_types = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
@@ -105,20 +126,20 @@ impl NodeLogic for DocxCreateNode {
 <Override PartName="/docProps/core.xml" ContentType="application/vnd.openxmlformats-package.core-properties+xml"/>
 </Types>"#;
 
-        let rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    let rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
 <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties" Target="docProps/core.xml"/>
 </Relationships>"#;
 
-        let word_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    let word_rels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>"#;
 
-        let margin_twips = cm_to_twips(defaults::MARGIN_CM);
-        let document = format!(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    let margin_twips = cm_to_twips(defaults::MARGIN_CM);
+    let document = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp14="http://schemas.microsoft.com/office/word/2010/wordprocessingDrawing" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml" xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml" xmlns:wpg="http://schemas.microsoft.com/office/word/2010/wordprocessingGroup" xmlns:wpi="http://schemas.microsoft.com/office/word/2010/wordprocessingInk" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" mc:Ignorable="w14 w15 wp14">
 <w:body>
 <w:sectPr>
@@ -127,10 +148,10 @@ impl NodeLogic for DocxCreateNode {
 </w:sectPr>
 </w:body>
 </w:document>"#
-        );
+    );
 
-        let styles = format!(
-            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    let styles = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
 <w:docDefaults>
 <w:rPrDefault><w:rPr>
@@ -172,41 +193,30 @@ impl NodeLogic for DocxCreateNode {
 <w:rPr><w:i/><w:color w:val="{muted}"/></w:rPr>
 </w:style>
 </w:styles>"#,
-            font = quick_xml::escape::escape(&font_family),
-            sz = half_pts,
-            text = hex_to_ooxml(defaults::TEXT),
-            heading = heading_color,
-            accent = accent,
-            muted = hex_to_ooxml(defaults::TEXT_MUTED),
-        );
+        font = quick_xml::escape::escape(font_family),
+        sz = half_pts,
+        text = hex_to_ooxml(defaults::TEXT),
+        heading = heading_color,
+        accent = accent,
+        muted = hex_to_ooxml(defaults::TEXT_MUTED),
+    );
 
-        let core = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+    let core = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 </cp:coreProperties>"#;
 
-        let mut files = std::collections::HashMap::new();
-        files.insert(
-            "[Content_Types].xml".to_string(),
-            content_types.as_bytes().to_vec(),
-        );
-        files.insert("_rels/.rels".to_string(), rels.as_bytes().to_vec());
-        files.insert(
-            "word/_rels/document.xml.rels".to_string(),
-            word_rels.as_bytes().to_vec(),
-        );
-        files.insert("word/document.xml".to_string(), document.into_bytes());
-        files.insert("word/styles.xml".to_string(), styles.into_bytes());
-        files.insert("docProps/core.xml".to_string(), core.as_bytes().to_vec());
-
-        let result_bytes = write_zip(&files)?;
-        output.put(context, result_bytes, false).await?;
-        context.set_pin_value("result", json!(output)).await?;
-        context.activate_exec_pin("exec_out").await?;
-        Ok(())
-    }
-
-    #[cfg(not(feature = "execute"))]
-    async fn run(&self, _context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        Err(flow_like_types::anyhow!("Requires the 'execute' feature"))
-    }
+    let mut files = std::collections::HashMap::new();
+    files.insert(
+        "[Content_Types].xml".to_string(),
+        content_types.as_bytes().to_vec(),
+    );
+    files.insert("_rels/.rels".to_string(), rels.as_bytes().to_vec());
+    files.insert(
+        "word/_rels/document.xml.rels".to_string(),
+        word_rels.as_bytes().to_vec(),
+    );
+    files.insert("word/document.xml".to_string(), document.into_bytes());
+    files.insert("word/styles.xml".to_string(), styles.into_bytes());
+    files.insert("docProps/core.xml".to_string(), core.as_bytes().to_vec());
+    Ok(files)
 }

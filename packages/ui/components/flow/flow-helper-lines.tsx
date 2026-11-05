@@ -1,10 +1,10 @@
 "use client";
-import {
-	type InternalNode,
-	type NodeChange,
-	type NodePositionChange,
-	type ReactFlowState,
-	type XYPosition,
+import type {
+	InternalNode,
+	NodeChange,
+	NodePositionChange,
+	ReactFlowState,
+	XYPosition,
 } from "@xyflow/react";
 import {
 	memo,

@@ -11,6 +11,8 @@ export interface IEventPayload {
 	frontend_hosting?: IFrontendHosting | null;
 	ai_disclosure?: string | null;
 	allow_file_upload?: boolean | null;
+	allow_model_selection?: boolean | null;
+	require_vlm?: boolean | null;
 	attach_widget_snapshots?: boolean | null;
 	allow_voice_input?: boolean | null;
 	allow_voice_output?: boolean | null;

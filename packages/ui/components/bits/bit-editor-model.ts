@@ -1,17 +1,27 @@
-import { externalModelProviders } from "../../lib/bit/external-model-providers";
+import {
+	isHostedAudio,
+	validateHostedAudioParameters,
+} from "../../lib/bit/hosted-audio";
+import {
+	supportsCustomRequestParams,
+	validateCustomRequestParams,
+} from "../../lib/bit/custom-request-params";
+import {
+	SECRET_PROVIDER_PARAM_KEYS,
+	externalModelProviders,
+} from "../../lib/bit/external-model-providers";
 import { validateForecastingBit } from "../../lib/bit/forecasting-model";
+import {
+	isHostedImageGeneration,
+	validateHostedImageParameters,
+} from "../../lib/bit/hosted-image-generation";
 import { validateSystemOneParameters } from "../../lib/bit/systemone-model";
 import type { IBit, IMetadata } from "../../lib/schema/bit/bit";
 import { IBitTypes } from "../../lib/schema/bit/bit";
 import type { IApiState } from "../../state/backend-state/api-state";
 import type { IProfile } from "../../types";
 
-export const SECRET_KEYS = [
-	"api_key",
-	"service_account_json",
-	"access_token",
-	"headers",
-];
+export const SECRET_KEYS = SECRET_PROVIDER_PARAM_KEYS;
 export function record(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" && !Array.isArray(value)
 		? (value as Record<string, unknown>)
@@ -266,6 +276,43 @@ export function validateBitDraft(
 	if (scope === "custom" && !bit.meta.en?.name.trim())
 		return "Add an English display name before saving.";
 	const params = record(bit.parameters);
+	if (isHostedAudio(bit)) {
+		if (scope !== "admin")
+			return "Hosted audio models are managed by the server administrator.";
+		const error = validateHostedAudioParameters(params);
+		if (error) return error;
+		if (
+			bit.download_link != null ||
+			bit.file_name != null ||
+			bit.dependencies.length ||
+			Number(bit.size ?? 0) !== 0 ||
+			Object.hasOwn(params, "assets")
+		)
+			return "Hosted audio models cannot include local files or weight dependencies.";
+	}
+	if (isHostedImageGeneration(bit)) {
+		if (scope !== "admin")
+			return "Hosted image models are managed by the server administrator.";
+		const error = validateHostedImageParameters(params);
+		if (error) return error;
+		if (
+			bit.download_link != null ||
+			bit.file_name != null ||
+			bit.dependencies.length ||
+			Number(bit.size ?? 0) !== 0 ||
+			Object.hasOwn(params, "assets")
+		)
+			return "Hosted image models cannot include local files or weight dependencies.";
+	}
+	if (
+		[IBitTypes.Llm, IBitTypes.Vlm, IBitTypes.SystemOne].includes(bit.type) &&
+		supportsCustomRequestParams(record(params.provider).provider_name)
+	) {
+		const requestError = validateCustomRequestParams(
+			record(record(params.provider).params).request_params,
+		);
+		if (requestError) return requestError;
+	}
 	if (bit.type === IBitTypes.Forecasting) {
 		const error = validateForecastingBit(bit, scope);
 		if (error) return error;

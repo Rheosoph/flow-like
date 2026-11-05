@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.flow-like.app.bot-refresh</string>
+	</array>
 	<key>FirebaseAppDelegateProxyEnabled</key>
 	<false/>
 	<key>NSLocationWhenInUseUsageDescription</key>
@@ -25,7 +29,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.13</string>
+	<string>0.1.14</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -38,7 +42,7 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>0.1.13</string>
+	<string>0.1.14</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>LSSupportsOpeningDocumentsInPlace</key>
@@ -53,11 +57,13 @@
 		<string>_https._tcp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
-	<string>Request camera access for WebRTC</string>
+	<string>Flow Like uses the camera when you turn it on in a call, take a photo, scan a document, or start a video workflow.</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Flow-Like needs local network access to connect to your desktop and discover peers.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Request microphone access for WebRTC</string>
+	<string>Flow Like records your voice when you start dictation, a voice chat, or an audio workflow.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Flow Like turns your speech into an editable message when you choose to dictate to a bot.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Allow Flow-Like to save images to your Photos.</string>
 	<key>NSPrivacyAccessedAPITypes</key>
@@ -72,12 +78,29 @@
 		</dict>
 	</array>
 	<key>NSScreenCaptureUsageDescription</key>
-	<string>Flow Like needs Screen Recording access to capture screenshots for visual element matching in your automation workflows.</string>
+	<string>Flow Like captures your screen when you choose to share it in a call or use screenshots in an automation workflow.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
 		<string>fetch</string>
 	</array>
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key>
+		<false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array>
+				<dict>
+					<key>UISceneConfigurationName</key>
+					<string>Default Configuration</string>
+					<key>UISceneDelegateClassName</key>
+					<string>TaoSceneDelegate</string>
+				</dict>
+			</array>
+		</dict>
+	</dict>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
@@ -111,5 +134,32 @@
 	</array>
 	<key>NSLocationUsageDescription</key>
 	<string>Flow Like uses your location when you request it in a workflow or map.</string>
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>flow-app</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>Flow-Like App</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Default</string>
+		</dict>
+		<dict>
+			<key>CFBundleTypeExtensions</key>
+			<array>
+				<string>flow</string>
+			</array>
+			<key>CFBundleTypeName</key>
+			<string>Flow-Like Flow</string>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>LSHandlerRank</key>
+			<string>Default</string>
+		</dict>
+	</array>
 </dict>
 </plist>

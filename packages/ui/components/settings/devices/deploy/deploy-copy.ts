@@ -1200,6 +1200,18 @@ const EXCEPTION_COPY = {
 							{ from: String(p.from), to: String(p.to) },
 						),
 	}),
+	port_unpublished: ({ t, p, device }) => ({
+		differs: t(
+			"devices:deploy.exception.portUnpublished",
+			"Port {{port}} · tunnel only",
+			{ port: String(p.port) },
+		),
+		why: t(
+			"devices:deploy.exception.portUnpublishedWhy",
+			"{{device}} runs in Docker, which forwards only port {{published}} from the computer it runs on. Use port {{published}}, or reach this one through a tunnel.",
+			{ device, published: String(p.published) },
+		),
+	}),
 	no_certificate: ({ t, device }) => ({
 		differs: t(
 			"devices:deploy.exception.noCertificate",

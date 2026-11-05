@@ -247,8 +247,39 @@ if packages:
 
 outputs: dict = {}
 
-_captured_stdout = io.StringIO()
-_captured_stderr = io.StringIO()
+_max_output_bytes = config.get("max_output_bytes")
+
+
+class _CappedText(io.StringIO):
+    """StringIO that keeps the head of the stream and counts what it drops."""
+
+    def __init__(self, cap):
+        super().__init__()
+        self._cap = cap
+        self._kept = 0
+        self.dropped = 0
+
+    def write(self, text):
+        if self._cap is None:
+            return super().write(text)
+        room = self._cap - self._kept
+        if room <= 0:
+            self.dropped += len(text)
+            return len(text)
+        if len(text) > room:
+            self.dropped += len(text) - room
+            text = text[:room]
+        self._kept += len(text)
+        super().write(text)
+        return len(text)
+
+
+_captured_stdout = _CappedText(_max_output_bytes)
+_captured_stderr = _CappedText(_max_output_bytes)
+
+_workdir = config.get("workdir")
+if _workdir and os.path.isdir(_workdir):
+    os.chdir(_workdir)
 _orig_stdout = sys.stdout
 _orig_stderr = sys.stderr
 
@@ -284,6 +315,8 @@ result = {
     "stderr": _captured_stderr.getvalue(),
     "error": _error,
     "success": _error is None,
+    "stdout_dropped": _captured_stdout.dropped,
+    "stderr_dropped": _captured_stderr.dropped,
 }
 
 with open(os.path.join(EXEC_DIR, "outputs.json"), "w") as f:

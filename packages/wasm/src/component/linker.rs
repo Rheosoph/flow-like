@@ -1808,103 +1808,153 @@ fn register_http(linker: &mut Linker<ComponentStoreData>) -> WasmResult<()> {
         |store: wasmtime::StoreContextMut<'_, ComponentStoreData>,
          (method, url, headers_json, body): (u8, String, String, Option<Vec<u8>>)| {
             Box::new(async move {
-                let is_read = matches!(method, 0 | 5 | 6);
-                let required = if is_read {
-                    WasmCapabilities::HTTP_GET
-                } else {
-                    WasmCapabilities::HTTP_WRITE
+                let response = match plan_http_request(store.data(), method, &url) {
+                    Some(plan) => send_http_request(plan, &url, &headers_json, body).await,
+                    None => None,
                 };
-                if !store.data().host_state.has_capability(required) {
-                    return Ok((None::<String>,));
-                }
-
-                let method_str = match method {
-                    0 => reqwest::Method::GET,
-                    1 => reqwest::Method::POST,
-                    2 => reqwest::Method::PUT,
-                    3 => reqwest::Method::DELETE,
-                    4 => reqwest::Method::PATCH,
-                    5 => reqwest::Method::HEAD,
-                    6 => reqwest::Method::OPTIONS,
-                    _ => return Ok((None,)),
-                };
-
-                // Same egress policy as native HTTP nodes: server-side, the
-                // URL, its resolution and every redirect are checked against
-                // the host-plane block list.
-                // The shared client pools connections across calls, so a node
-                // fetching many URLs reuses TCP + TLS instead of paying a
-                // handshake per request. Server-side the pool belongs to the
-                // package's socket registry, which no other package or run
-                // shares, so no connection crosses runs or tenants.
-                // A request cannot usefully outlive its node, so the node's own
-                // execution budget is the request timeout — nothing tighter. It
-                // is set per request (same total deadline, body included, as
-                // `ClientBuilder::timeout`) because the client is shared.
-                let environment = store.data().environment;
-                let node_timeout = store.data().node_timeout;
-                let client = match flow_like::flow::execution::egress::GuardedHttpClient::shared(
-                    environment,
-                    &store.data().host_state.websocket,
-                ) {
-                    Ok(c) => c,
-                    Err(_) => return Ok((None,)),
-                };
-
-                let mut req = match client.request(method_str, &url) {
-                    Ok(req) => req.timeout(node_timeout),
-                    Err(_) => {
-                        tracing::warn!("WASM HTTP request refused by egress policy");
-                        return Ok((None,));
-                    }
-                };
-
-                if let Ok(hdrs) =
-                    serde_json::from_str::<std::collections::HashMap<String, String>>(&headers_json)
-                {
-                    for (k, v) in hdrs {
-                        req = req.header(&k, &v);
-                    }
-                }
-
-                if let Some(b) = body {
-                    req = req.body(b);
-                }
-
-                let resp = match req.send().await {
-                    Ok(r) => r,
-                    Err(e) => {
-                        tracing::warn!("WASM HTTP request failed: {}", e.without_url());
-                        return Ok((None,));
-                    }
-                };
-
-                let status = resp.status().as_u16();
-                let resp_headers: std::collections::HashMap<String, String> = resp
-                    .headers()
-                    .iter()
-                    .filter_map(|(k, v)| {
-                        v.to_str()
-                            .ok()
-                            .map(|s| (k.as_str().to_string(), s.to_string()))
-                    })
-                    .collect();
-                let body_bytes = resp.bytes().await.unwrap_or_default();
-                let body_b64 =
-                    base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &body_bytes);
-
-                let result = serde_json::json!({
-                    "status": status,
-                    "headers": resp_headers,
-                    "body_base64": body_b64,
-                });
-                Ok((Some(result.to_string()),))
+                Ok((response,))
             })
         },
     )
     .map_err(map_err)?;
 
     Ok(())
+}
+
+/// Hosts a package may reach with `flow-like:node/http`: any while the manifest names none.
+fn url_host_allowed(allowed_hosts: Option<&[String]>, url: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    crate::host_functions::websocket::host_allowed(allowed_hosts, host.trim_matches(['[', ']']))
+}
+
+/// What a guest HTTP request needs once the node's permissions allowed it, owned so the
+/// request can be sent without the store.
+struct HttpPlan {
+    method: reqwest::Method,
+    client: flow_like::flow::execution::egress::GuardedHttpClient,
+    timeout: std::time::Duration,
+}
+
+fn plan_http_request(data: &ComponentStoreData, method: u8, url: &str) -> Option<HttpPlan> {
+    let is_read = matches!(method, 0 | 5 | 6);
+    let required = if is_read {
+        WasmCapabilities::HTTP_GET
+    } else {
+        WasmCapabilities::HTTP_WRITE
+    };
+    if !data.host_state.has_capability(required) {
+        return None;
+    }
+
+    let method = match method {
+        0 => reqwest::Method::GET,
+        1 => reqwest::Method::POST,
+        2 => reqwest::Method::PUT,
+        3 => reqwest::Method::DELETE,
+        4 => reqwest::Method::PATCH,
+        5 => reqwest::Method::HEAD,
+        6 => reqwest::Method::OPTIONS,
+        _ => return None,
+    };
+
+    let allowed_hosts = data.host_state.allowed_hosts.as_deref();
+    if !url_host_allowed(allowed_hosts, url) {
+        tracing::warn!("WASM HTTP request refused: host is not in the package's allowed hosts");
+        return None;
+    }
+
+    // Same egress policy as native HTTP nodes: server-side, the
+    // URL, its resolution and every redirect are checked against
+    // the host-plane block list.
+    // The shared client pools connections across calls, so a node
+    // fetching many URLs reuses TCP + TLS instead of paying a
+    // handshake per request. Server-side the pool belongs to the
+    // package's socket registry, which no other package or run
+    // shares, so no connection crosses runs or tenants.
+    // A request cannot usefully outlive its node, so the node's own
+    // execution budget is the request timeout — nothing tighter. It
+    // is set per request (same total deadline, body included, as
+    // `ClientBuilder::timeout`) because the client is shared.
+    // With an allowed-hosts list a redirect is returned, not followed: the
+    // next hop could leave the list, and the guest asks for it as a request
+    // of its own, which is checked again.
+    let client = if allowed_hosts.is_some() {
+        flow_like::flow::execution::egress::GuardedHttpClient::without_redirects(data.environment)
+    } else {
+        flow_like::flow::execution::egress::GuardedHttpClient::shared(
+            data.environment,
+            &data.host_state.websocket,
+        )
+    }
+    .ok()?;
+
+    Some(HttpPlan {
+        method,
+        client,
+        timeout: data.node_timeout,
+    })
+}
+
+async fn send_http_request(
+    plan: HttpPlan,
+    url: &str,
+    headers_json: &str,
+    body: Option<Vec<u8>>,
+) -> Option<String> {
+    let mut req = match plan.client.request(plan.method, url) {
+        Ok(req) => req.timeout(plan.timeout),
+        Err(_) => {
+            tracing::warn!("WASM HTTP request refused by egress policy");
+            return None;
+        }
+    };
+
+    if let Ok(hdrs) =
+        serde_json::from_str::<std::collections::HashMap<String, String>>(headers_json)
+    {
+        for (k, v) in hdrs {
+            req = req.header(&k, &v);
+        }
+    }
+
+    if let Some(b) = body {
+        req = req.body(b);
+    }
+
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!("WASM HTTP request failed: {}", e.without_url());
+            return None;
+        }
+    };
+
+    let status = resp.status().as_u16();
+    let resp_headers: std::collections::HashMap<String, String> = resp
+        .headers()
+        .iter()
+        .filter_map(|(k, v)| {
+            v.to_str()
+                .ok()
+                .map(|s| (k.as_str().to_string(), s.to_string()))
+        })
+        .collect();
+    let body_bytes = resp.bytes().await.unwrap_or_default();
+    let body_b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &body_bytes);
+
+    Some(
+        serde_json::json!({
+            "status": status,
+            "headers": resp_headers,
+            "body_base64": body_b64,
+        })
+        .to_string(),
+    )
 }
 
 /// Helper for storage-dir: builds FlowPath JSON, registers the store.
@@ -2514,5 +2564,130 @@ mod tests {
                 .with_capabilities(WasmCapabilities::HTTP_GET)
                 .with_allowed_hosts(vec!["example.com".to_string()])
         ));
+    }
+    #[test]
+    fn the_host_function_checks_the_url_host_against_the_allowlist() {
+        let allowed = vec!["api.example.com".to_string()];
+        for (url, expected) in [
+            ("https://api.example.com/v1/items?x=1", true),
+            ("https://API.example.com:8443/", true),
+            ("https://other.example.com/", false),
+            ("https://api.example.com.evil.test/", false),
+            ("https://user@evil.test@api.example.com/", true),
+            ("https://api.example.com@evil.test/", false),
+            ("not a url", false),
+            ("file:///etc/passwd", false),
+        ] {
+            assert_eq!(url_host_allowed(Some(&allowed), url), expected, "{url}");
+        }
+        assert!(url_host_allowed(None, "https://anything.example/"));
+        assert!(!url_host_allowed(Some(&[]), "https://anything.example/"));
+    }
+
+    async fn serve_once(response: String) -> (u16, tokio::task::JoinHandle<bool>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            let Ok(Ok((mut stream, _))) =
+                tokio::time::timeout(std::time::Duration::from_millis(800), listener.accept())
+                    .await
+            else {
+                return false;
+            };
+            let mut buffer = [0; 1024];
+            let _ = stream.read(&mut buffer).await;
+            stream.write_all(response.as_bytes()).await.unwrap();
+            true
+        });
+        (port, server)
+    }
+
+    fn http_security(allowed_hosts: Option<Vec<&str>>) -> WasmSecurityConfig {
+        let security = WasmSecurityConfig::default().with_capabilities(WasmCapabilities::HTTP_ALL);
+        match allowed_hosts {
+            Some(hosts) => {
+                security.with_allowed_hosts(hosts.into_iter().map(str::to_owned).collect())
+            }
+            None => security,
+        }
+    }
+
+    async fn request(data: &ComponentStoreData, url: &str) -> Option<String> {
+        let plan = plan_http_request(data, 0, url)?;
+        send_http_request(plan, url, "{}", None).await
+    }
+
+    fn status_of(result: Option<String>) -> Option<u64> {
+        let result: serde_json::Value = serde_json::from_str(&result?).ok()?;
+        result["status"].as_u64()
+    }
+
+    #[tokio::test]
+    async fn an_http_request_to_a_host_outside_the_allowlist_never_connects() {
+        let (port, server) =
+            serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into())
+                .await;
+        let data = ComponentStoreData::new(&http_security(Some(vec!["example.com"])));
+
+        let result = request(&data, &format!("http://127.0.0.1:{port}/probe")).await;
+
+        assert!(result.is_none());
+        assert!(
+            !server.await.unwrap(),
+            "the request must not leave the host"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_http_request_to_an_allowed_host_goes_through() {
+        let (port, server) =
+            serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into())
+                .await;
+        let data = ComponentStoreData::new(&http_security(Some(vec!["127.0.0.1"])));
+
+        let result = request(&data, &format!("http://127.0.0.1:{port}/probe")).await;
+
+        assert_eq!(status_of(result), Some(200));
+        assert!(server.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn a_redirect_off_the_allowlist_is_returned_not_followed() {
+        let (target_port, target) =
+            serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into())
+                .await;
+        let redirect = format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://localhost:{target_port}/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+
+        let (port, origin) = serve_once(redirect.clone()).await;
+        let data = ComponentStoreData::new(&http_security(Some(vec!["127.0.0.1"])));
+        let result = request(&data, &format!("http://127.0.0.1:{port}/")).await;
+        assert_eq!(status_of(result), Some(302));
+        assert!(origin.await.unwrap());
+        assert!(
+            !target.await.unwrap(),
+            "the redirect target is not on the allowlist"
+        );
+    }
+
+    #[tokio::test]
+    async fn without_an_allowlist_redirects_are_followed_as_before() {
+        let (target_port, target) =
+            serve_once("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into())
+                .await;
+        let redirect = format!(
+            "HTTP/1.1 302 Found\r\nLocation: http://localhost:{target_port}/\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        );
+        let (port, origin) = serve_once(redirect).await;
+        let data = ComponentStoreData::new(&http_security(None));
+
+        let result = request(&data, &format!("http://127.0.0.1:{port}/")).await;
+
+        assert_eq!(status_of(result), Some(200));
+        assert!(origin.await.unwrap());
+        assert!(target.await.unwrap());
     }
 }

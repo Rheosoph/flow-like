@@ -5,11 +5,14 @@ use serde_json::{Value, json};
 use solidcraft_engine::{Session, io};
 use solidcraft_ui_egui::{Services, SolveApp};
 use std::cell::{Cell, RefCell};
+use std::sync::mpsc::{Receiver, TryRecvError};
 use wasm_bindgen::prelude::*;
 
 const MAX_BYTES: usize = 100 * 1024 * 1024;
 const EXTENSIONS: &[&str] = &[
     "solidcraft",
+    "fcstd",
+    "3dm",
     "step",
     "stp",
     "iges",
@@ -160,6 +163,7 @@ async fn start_app() -> Result<(), String> {
                     reported_dirty: false,
                     last_exported: None,
                     unsaved_new: false,
+                    pending_open: None,
                 }))
             }),
         )
@@ -178,6 +182,16 @@ struct Host {
     reported_dirty: bool,
     last_exported: Option<u64>,
     unsaved_new: bool,
+    pending_open: Option<PendingOpen>,
+}
+
+struct PendingOpen {
+    path: String,
+    extension: String,
+    request_id: Option<String>,
+    reply: Receiver<Value>,
+    progress: Option<(usize, usize)>,
+    reported_at: f64,
 }
 
 impl Host {
@@ -206,7 +220,7 @@ impl Host {
             }
 
             Some("create") => {
-                if self.opened {
+                if self.opened || self.pending_open.is_some() {
                     return Err("A model is already open.".into());
                 }
                 let name = field(&message, "name")
@@ -236,7 +250,7 @@ impl Host {
                 event("dirty", json!({"dirty": true}));
             }
             Some("open") => {
-                if self.opened {
+                if self.opened || self.pending_open.is_some() {
                     return Err("A model is already open.".into());
                 }
                 let name = field(&message, "name")
@@ -259,32 +273,35 @@ impl Host {
                 let basename = name.rsplit(['/', '\\']).next().unwrap_or("model");
                 let path = format!("/host/{basename}");
                 io::vfs::insert(&path, bytes);
+                if matches!(extension.as_str(), "solidcraft" | "step" | "stp") {
+                    solidcraft_engine::set_host_command(None);
+                    let result = self.app.host_open_staged(&path);
+                    solidcraft_engine::set_host_command(Some(host_command));
+                    let reply = match result {
+                        Ok(reply) => reply,
+                        Err(error) => {
+                            let _ = io::vfs::remove(&path);
+                            return Err(error);
+                        }
+                    };
+                    self.read_only = field(&message, "readOnly").as_bool().unwrap_or(true);
+                    self.pending_open = Some(PendingOpen {
+                        path,
+                        extension,
+                        request_id: field(&message, "requestId").as_string(),
+                        reply,
+                        progress: None,
+                        reported_at: 0.0,
+                    });
+                    return Ok(());
+                }
                 solidcraft_engine::set_host_command(None);
                 let result = self.app.session.execute("doc.open", &json!({"path": path}));
                 solidcraft_engine::set_host_command(Some(host_command));
                 let _ = io::vfs::remove(&path);
                 let result = result.map_err(|e| e.to_string())?;
-                let mut warnings: Vec<String> = result
-                    .get("warnings")
-                    .and_then(Value::as_array)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(Value::as_str)
-                    .map(str::to_owned)
-                    .collect();
-                if result.get("errors").and_then(Value::as_u64).unwrap_or(0) > 0 {
-                    warnings.push("Some features could not rebuild. Review the model's timeline before saving.".into());
-                }
-                self.app.session.mark_saved();
-                self.app.home.open = false;
-                self.app.fit_view();
                 self.read_only = field(&message, "readOnly").as_bool().unwrap_or(true);
-                READ_ONLY.set(self.read_only);
-                self.opened = true;
-                event(
-                    "opened",
-                    json!({"revision": self.app.session.revision, "readOnly": self.read_only, "warnings": warnings}),
-                );
+                self.finish_open(result, &extension);
             }
             Some("set-read-only") => {
                 let read_only = field(&message, "readOnly").as_bool().unwrap_or(true);
@@ -304,7 +321,7 @@ impl Host {
                     self.app.viewport.point_drag = None;
                 }
                 self.read_only = read_only;
-                READ_ONLY.set(read_only);
+                READ_ONLY.set(read_only || !self.opened);
             }
             Some("export") => {
                 let download =
@@ -364,17 +381,94 @@ impl Host {
         }
         Ok(())
     }
+
+    fn finish_open(&mut self, result: Value, extension: &str) {
+        let mut warnings: Vec<String> = result
+            .get("warnings")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .map(str::to_owned)
+            .collect();
+        if matches!(extension, "fcstd" | "3dm") {
+            warnings.insert(0, "Imported geometry does not include the original design history. Edits save as a .solidcraft model.".into());
+        }
+        if result.get("errors").and_then(Value::as_u64).unwrap_or(0) > 0 {
+            warnings.push(
+                "Some features could not rebuild. Review the model's timeline before saving."
+                    .into(),
+            );
+        }
+        self.app.session.mark_saved();
+        self.app.home.open = false;
+        self.app.fit_view();
+        self.opened = true;
+        READ_ONLY.set(self.read_only);
+        event(
+            "opened",
+            json!({"revision": self.app.session.revision, "readOnly": self.read_only, "warnings": warnings}),
+        );
+    }
+
+    fn poll_open(&mut self, ctx: &egui::Context) {
+        let Some(pending) = &mut self.pending_open else {
+            return;
+        };
+        // Only this host-owned loader can temporarily execute file commands.
+        solidcraft_engine::set_host_command(None);
+        let progress = self.app.host_tick_load(ctx);
+        solidcraft_engine::set_host_command(Some(host_command));
+        let result = match pending.reply.try_recv() {
+            Ok(reply) => Some(live_mcp::unwrap_control(reply)),
+            Err(TryRecvError::Empty) => None,
+            Err(TryRecvError::Disconnected) => Some(Err("The model load stopped.".into())),
+        };
+        if let Some(result) = result {
+            let pending = self.pending_open.take().unwrap();
+            let _ = io::vfs::remove(&pending.path);
+            match result {
+                Ok(result) => self.finish_open(result, &pending.extension),
+                Err(error) => event(
+                    "error",
+                    json!({"error": error, "requestId": pending.request_id}),
+                ),
+            }
+        } else {
+            let now = ctx.input(|input| input.time);
+            if pending.progress != Some(progress) || now - pending.reported_at >= 1.0 {
+                pending.progress = Some(progress);
+                pending.reported_at = now;
+                event(
+                    "loading",
+                    json!({"interactive": true, "completed": progress.0.min(progress.1), "total": progress.1}),
+                );
+            }
+            ctx.request_repaint();
+        }
+    }
 }
 
 impl eframe::App for Host {
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
         raw.dropped_files.clear();
-        if self.read_only {
+        if self.read_only || !self.opened {
             self.app.host_cancel_synthetic();
         }
         raw.hovered_files.clear();
-        if self.read_only {
+        if self.read_only || !self.opened {
             raw.events.retain(|event| {
+                if self.pending_open.is_some()
+                    && matches!(
+                        event,
+                        egui::Event::Key {
+                            key: egui::Key::Escape,
+                            ..
+                        }
+                    )
+                {
+                    return true;
+                }
                 !matches!(
                     event,
                     egui::Event::Key { .. }
@@ -399,6 +493,7 @@ impl eframe::App for Host {
             }
         }
         self.app.home.open = false;
+        self.poll_open(ctx);
         self.app.logic(ctx);
         let dirty = self.unsaved_new
             || self.app.session.is_dirty()
@@ -409,7 +504,9 @@ impl eframe::App for Host {
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        if self.read_only || !self.opened {
+        if self.pending_open.is_some() {
+            self.app.host_loading(ui);
+        } else if self.read_only || !self.opened {
             self.app.host_preview(ui);
         } else {
             self.app.ui(ui);

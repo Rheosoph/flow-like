@@ -59,6 +59,8 @@ impl NodeLogic for PushTextToStepNode {
         let text: String = context.evaluate_pin("text").await?;
 
         let cached_response = CachedChatResponse::load(context).await?;
+        let _message_guard = cached_response.emission.lock().await;
+        let message_id = cached_response.message_id().await;
         {
             let mut mutable_reasoning = cached_response.reasoning.lock().await;
             if !mutable_reasoning.current_message.is_empty() {
@@ -69,11 +71,13 @@ impl NodeLogic for PushTextToStepNode {
 
         let reasoning_ref = cached_response.reasoning.lock().await;
         let streaming_response = ChatStreamingResponse {
+            message_id,
             actions: vec![],
             attachments: vec![],
             chunk: None,
             plan: Some(reasoning_ref.clone()),
             widgets: vec![],
+            main_widget: None,
         };
         drop(reasoning_ref);
 

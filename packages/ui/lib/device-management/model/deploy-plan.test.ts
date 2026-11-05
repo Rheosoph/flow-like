@@ -706,6 +706,36 @@ describe("targets (APP §3.7)", () => {
 		).toBe(8081);
 	});
 
+	test("a Docker device notes each served port it doesn't forward", () => {
+		const draft = draftFor(VISITOR_PLAN_APP, ["edge-berlin-01"]);
+		const port =
+			planFor(draft, VISITOR_PLAN_APP).plan.targets[0].endpoint.port ?? 0;
+		const docker = (published: number): Partial<PlanFacts> => ({
+			devices: {
+				...PLAN_DEVICES,
+				"edge-berlin-01": {
+					...PLAN_DEVICES["edge-berlin-01"],
+					published: { host: "127.0.0.1", port: published },
+				},
+			},
+		});
+		const unpublished = (change: Partial<PlanFacts> = {}) =>
+			planFor(draft, VISITOR_PLAN_APP, change).check.exceptions.filter(
+				(exception) => exception.code === "port_unpublished",
+			);
+		expect(unpublished()).toEqual([]);
+		expect(unpublished(docker(port))).toEqual([]);
+		expect(unpublished(docker(9000))).toEqual([
+			{
+				code: "port_unpublished",
+				step: "endpoint",
+				deviceId: "edge-berlin-01",
+				tone: "info",
+				params: { port, published: 9000 },
+			},
+		]);
+	});
+
 	test("two served services of one plan never share a port on a device (A5)", () => {
 		const draft = draftFor(INVOICE_PLAN_APP, ["studio-mac-mini"], {
 			split: "per_event",

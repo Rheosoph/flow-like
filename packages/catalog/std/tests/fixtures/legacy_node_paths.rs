@@ -541,6 +541,7 @@ assert_legacy_registry![
     catalog::utils::types::from_string::FromStringNode,
     catalog::utils::types::inspect::TypeOfNode,
     catalog::utils::types::inspect::IsEmptyValueNode,
+    catalog::utils::types::is_null::IsNullNode,
     catalog::utils::types::select::SelectNode,
     catalog::utils::types::to_bytes::ToBytesNode,
     catalog::utils::types::to_string::ToStringNode,

@@ -8,66 +8,15 @@ import {
 	useUserIdentity,
 } from "../../hooks/use-user-lookup";
 import { cn } from "../../lib/utils";
-import { Avatar, AvatarFallback, AvatarImage } from "./avatar";
+import { BotIdentityCard } from "../identity/bot-identity-card";
+import { ResolvedIdentityAvatar } from "../identity/identity-avatar";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "./hover-card";
 import { RelativeTime } from "./relative-time";
 import { Skeleton } from "./skeleton";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./tooltip";
+import { UserAvatar } from "./user-avatar";
 
-export type UserAvatarSize = "xs" | "sm" | "md" | "lg" | "xl" | "2xl";
-
-const AVATAR_SIZE_CLASSES: Record<string, string> = {
-	xs: "h-5 w-5",
-	sm: "h-6 w-6",
-	md: "h-8 w-8",
-	lg: "h-10 w-10",
-	xl: "h-14 w-14",
-	"2xl": "h-16 w-16",
-};
-
-const AVATAR_FALLBACK_CLASSES: Record<string, string> = {
-	xs: "text-[9px]",
-	sm: "text-[10px]",
-	md: "text-xs",
-	lg: "text-sm",
-	xl: "text-base",
-	"2xl": "text-lg",
-};
-
-/**
- * The avatar every identity surface renders, so a user is the same size and
- * shape in a table cell, a hover card and an a2ui page.
- */
-export function UserAvatar({
-	avatarUrl,
-	initials,
-	label,
-	size = "md",
-	className,
-}: Readonly<{
-	avatarUrl?: string | null;
-	initials: string;
-	label: string;
-	size?: string;
-	className?: string;
-}>) {
-	return (
-		<Avatar
-			className={cn(
-				AVATAR_SIZE_CLASSES[size] ?? AVATAR_SIZE_CLASSES.md,
-				"shrink-0",
-				className,
-			)}
-		>
-			<AvatarImage src={avatarUrl ?? ""} alt={label} />
-			<AvatarFallback
-				className={AVATAR_FALLBACK_CLASSES[size] ?? AVATAR_FALLBACK_CLASSES.md}
-			>
-				{initials}
-			</AvatarFallback>
-		</Avatar>
-	);
-}
+export { UserAvatar, type UserAvatarSize } from "./user-avatar";
 
 export function UserDetailRow({
 	icon,
@@ -221,6 +170,31 @@ function unresolvedReason(
 		: t("noAccountMatchesThisId", "No account matches this id");
 }
 
+/**
+ * The card for whatever a stored id resolved to. A bot has no profile page, mail
+ * or join date of its own, so it shows the bot and the person it acts for.
+ */
+export function IdentityProfileContent({
+	identity,
+	isLoading,
+}: Readonly<{ identity: UserIdentity; isLoading?: boolean }>) {
+	if (identity.bot) return <BotIdentityCard identity={identity} />;
+
+	return (
+		<UserProfileHoverContent
+			userId={identity.accountId}
+			label={identity.label}
+			subtitle={identity.subtitle}
+			avatarUrl={identity.avatarUrl}
+			initials={identity.initials}
+			description={identity.user?.description}
+			createdAt={identity.user?.created_at}
+			email={identity.user?.email}
+			isLoading={isLoading}
+		/>
+	);
+}
+
 const INLINE_TAG_BASE =
 	"inline-flex min-w-0 max-w-full items-center gap-1.5 text-left";
 
@@ -303,13 +277,21 @@ export function UserInlineTag({
 	const triggerClassName = cn(INLINE_TAG_BASE, className);
 	const triggerContent = (
 		<>
-			<UserAvatar
-				avatarUrl={identity.avatarUrl}
-				initials={identity.initials}
-				label={identity.label}
-				size="xs"
-				className={cn("h-4 w-4", avatarClassName)}
-			/>
+			{identity.bot ? (
+				<ResolvedIdentityAvatar
+					identity={identity}
+					size={16}
+					className={avatarClassName}
+				/>
+			) : (
+				<UserAvatar
+					avatarUrl={identity.avatarUrl}
+					initials={identity.initials}
+					label={identity.label}
+					size="xs"
+					className={cn("h-4 w-4", avatarClassName)}
+				/>
+			)}
 			<span className="min-w-0 truncate">{identity.label}</span>
 		</>
 	);
@@ -326,16 +308,7 @@ export function UserInlineTag({
 				)}
 			</HoverCardTrigger>
 			<HoverCardContent align={align} className="w-80 p-0">
-				<UserProfileHoverContent
-					userId={identity.accountId}
-					label={identity.label}
-					subtitle={identity.subtitle}
-					avatarUrl={identity.avatarUrl}
-					initials={identity.initials}
-					description={identity.user?.description}
-					createdAt={identity.user?.created_at}
-					email={identity.user?.email}
-				/>
+				<IdentityProfileContent identity={identity} />
 			</HoverCardContent>
 		</HoverCard>
 	);
@@ -353,15 +326,8 @@ export function UserIdentityCard({
 		<div className={cn("space-y-3", className)}>
 			{identity.isResolved ? (
 				<div className="max-w-sm overflow-hidden rounded-md border">
-					<UserProfileHoverContent
-						userId={identity.accountId}
-						label={identity.label}
-						subtitle={identity.subtitle}
-						avatarUrl={identity.avatarUrl}
-						initials={identity.initials}
-						description={identity.user?.description}
-						createdAt={identity.user?.created_at}
-						email={identity.user?.email}
+					<IdentityProfileContent
+						identity={identity}
 						isLoading={identity.isPending}
 					/>
 				</div>

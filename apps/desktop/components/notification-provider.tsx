@@ -8,8 +8,9 @@ import type {
 	INotificationEvent,
 } from "@flow-like/flow-like-ui";
 import { NotificationIcon } from "@flow-like/flow-like-ui/components/notifications/notification-icon";
-import { remoteNotificationIcon } from "@flow-like/flow-like-ui/lib/notification-icon";
+import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { isScriptNavigationUrl } from "@flow-like/flow-like-ui/lib/navigation-url";
+import { remoteNotificationIcon } from "@flow-like/flow-like-ui/lib/notification-icon";
 import { useQueryClient } from "@tanstack/react-query";
 import { invoke } from "@tauri-apps/api/core";
 import { type Event, type UnlistenFn, listen } from "@tauri-apps/api/event";
@@ -21,6 +22,14 @@ import {
 	FLOW_NOTIFICATION_EVENT,
 	type FlowNotificationBatchDetail,
 } from "../lib/flow-notification-events";
+import {
+	type NativeBotActivityToken,
+	createBotActivityRegistrar,
+} from "../lib/native-bot-activities";
+import {
+	type NativeBotPushIdentity,
+	matchesBotPushIdentity,
+} from "../lib/native-bot-notifications";
 import {
 	type LocalNotificationOptions,
 	presentLocalNotification,
@@ -67,6 +76,22 @@ async function loadNotificationPlugin(): Promise<NotificationApi | null> {
 	} catch {
 		return null;
 	}
+}
+
+const BOT_CHAT_PATH = "/bots";
+
+function isBotChatFocused(link?: string | null): boolean {
+	if (!link || typeof window === "undefined" || !document.hasFocus()) {
+		return false;
+	}
+	const target = new URL(link, window.location.origin);
+	const botId = target.searchParams.get("bot");
+	if (target.pathname !== BOT_CHAT_PATH || !botId) return false;
+	const here = new URL(window.location.href);
+	return (
+		here.pathname.replace(/\/$/, "") === BOT_CHAT_PATH &&
+		here.searchParams.get("bot") === botId
+	);
 }
 
 function showNotificationToast(
@@ -183,6 +208,21 @@ export default function NotificationProvider({
 	const hub = useHub();
 	const queryClient = useQueryClient();
 	const userId = currentUser?.profile?.sub ?? "offline-user";
+	const pushIdentity = useRef<NativeBotPushIdentity | undefined>(undefined);
+	pushIdentity.current =
+		isAuthenticated &&
+		!authContext.isLoading &&
+		backend?.profile?.id &&
+		currentUser?.profile?.sub
+			? {
+					scope: JSON.stringify([
+						getApiOrigin(backend.profile),
+						backend.profile.id,
+						currentUser.profile.sub,
+					]),
+					subject: currentUser.profile.sub,
+				}
+			: undefined;
 	const notificationApi = useRef<NotificationApi | null>(null);
 	const permissionGranted = useRef<boolean>(false);
 	// Signed-in runs persist notifications to the hub (the run carries a token),
@@ -197,6 +237,10 @@ export default function NotificationProvider({
 	> | null>(null);
 	const tapListener = useRef<RemotePushListener | null>(null);
 	const deviceId = useRef<string | null>(null);
+	const [nativePushTarget, setNativePushTarget] = useState<{
+		id: string;
+		scope: string;
+	}>();
 	const [pushDeviceId, setPushDeviceId] = useState<string | null>(null);
 	const [remotePushPluginState, setRemotePushPluginState] =
 		useState<RemotePushPluginState>("loading");
@@ -270,6 +314,7 @@ export default function NotificationProvider({
 	);
 
 	handleTapRef.current = (notification: RemotePushPayload) => {
+		if (!matchesBotPushIdentity(notification, pushIdentity.current)) return;
 		void storeNotification({
 			title: notification.title ?? "Notification",
 			description: notification.body,
@@ -325,7 +370,12 @@ export default function NotificationProvider({
 				deviceId.current = await getPushDeviceId();
 			}
 
-			await fetcher<{ id: string; success: boolean }>(
+			const nativeScope = JSON.stringify([
+				getApiOrigin(backend.profile),
+				backend.profile.id,
+				currentUser.profile.sub,
+			]);
+			const target = await fetcher<{ id: string; success: boolean }>(
 				backend.profile,
 				"user/push-targets/register",
 				{
@@ -341,6 +391,7 @@ export default function NotificationProvider({
 								: undefined,
 						channel_id: pushConfig?.channel_id,
 						metadata: {
+							native_scope: nativeScope,
 							app_id: appId,
 							platform,
 							provider: pushConfig?.provider,
@@ -350,6 +401,8 @@ export default function NotificationProvider({
 				authContext,
 			);
 			if (!signal.aborted) {
+				if (target?.success && target.id)
+					setNativePushTarget({ id: target.id, scope: nativeScope });
 				window.dispatchEvent(
 					new globalThis.Event(REMOTE_PUSH_REGISTRATION_EVENT),
 				);
@@ -357,6 +410,90 @@ export default function NotificationProvider({
 		},
 		[appId, authContext, backend?.profile, currentUser, pushConfig],
 	);
+
+	useEffect(() => {
+		if (
+			!nativePushTarget ||
+			!backend?.profile ||
+			!isAuthenticated ||
+			detectPushPlatform() !== "IOS"
+		)
+			return;
+		const scope = JSON.stringify([
+			getApiOrigin(backend.profile),
+			backend.profile.id,
+			currentUser?.profile.sub,
+		]);
+		if (nativePushTarget.scope !== scope) return;
+		const activityProfile = backend.profile;
+		let active = true;
+		let running = false;
+		const register = createBotActivityRegistrar();
+		const sync = async () => {
+			if (!active || running) return;
+			running = true;
+			try {
+				const tokens = await invoke<NativeBotActivityToken[]>(
+					"native_bot_activity_tokens",
+				);
+				if (!active) return;
+				await register(
+					scope,
+					nativePushTarget.id,
+					tokens,
+					async (token) => {
+						await fetcher(
+							activityProfile,
+							`bots/${encodeURIComponent(token.botId)}/live-activities`,
+							{
+								method: "POST",
+								body: JSON.stringify({
+									activity_id: token.activityId,
+									turn_id: token.turnId,
+									push_target_id: nativePushTarget.id,
+									push_token: token.pushToken,
+									native_scope: token.scope,
+								}),
+							},
+							authContext,
+						);
+					},
+					() => active,
+					async (token) => {
+						await fetcher(
+							activityProfile,
+							`bots/${encodeURIComponent(token.botId)}/live-activities/${encodeURIComponent(token.activityId)}?push_target_id=${encodeURIComponent(nativePushTarget.id)}`,
+							{ method: "DELETE" },
+							authContext,
+						);
+					},
+				);
+			} catch {
+				/* Token registration retries on resume or the next status update. */
+			} finally {
+				running = false;
+			}
+		};
+		const onUpdate = () => {
+			void sync();
+		};
+		const listener = listen("native-action", onUpdate);
+		window.addEventListener("focus", onUpdate);
+		const timer = window.setInterval(onUpdate, 30_000);
+		onUpdate();
+		return () => {
+			active = false;
+			clearInterval(timer);
+			window.removeEventListener("focus", onUpdate);
+			void listener.then((off) => off()).catch(() => {});
+		};
+	}, [
+		nativePushTarget,
+		backend?.profile,
+		authContext,
+		isAuthenticated,
+		currentUser?.profile.sub,
+	]);
 
 	useEffect(() => {
 		let cancelled = false;
@@ -550,6 +687,11 @@ export default function NotificationProvider({
 				);
 			},
 			onNotification: async (notification) => {
+				if (
+					abort.signal.aborted ||
+					!matchesBotPushIdentity(notification, pushIdentity.current)
+				)
+					return;
 				await storeNotification({
 					title: notification.title ?? "Notification",
 					description: notification.body,
@@ -563,7 +705,11 @@ export default function NotificationProvider({
 							| "WORKFLOW"
 							| "SYSTEM") ?? "SYSTEM",
 				});
-				if (shouldShowRemotePushToast(platform)) {
+				if (
+					!abort.signal.aborted &&
+					matchesBotPushIdentity(notification, pushIdentity.current) &&
+					shouldShowRemotePushToast(platform)
+				) {
 					showNotificationToast(
 						notification.title ?? "Notification",
 						notification.body,
@@ -644,6 +790,8 @@ export default function NotificationProvider({
 					sourceRunId: notification.source_run_id,
 					sourceNodeId: notification.source_node_id,
 				});
+
+				if (isBotChatFocused(notification.link)) continue;
 
 				if (
 					notificationApi.current &&

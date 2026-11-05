@@ -46,6 +46,9 @@ const CHAT_PATH: &str = "/instances/chat/completions";
 const RESPONSES_PATH: &str = "/instances/responses";
 const SYSTEMONE_PATH: &str = "/instances/systemone";
 const EMBEDDINGS_PATH: &str = "/instances/embeddings/embed";
+const IMAGES_PATH: &str = "/instances/images/generations";
+const TRANSCRIPTIONS_PATH: &str = "/instances/audio/transcriptions";
+const SPEECH_PATH: &str = "/instances/audio/speech";
 
 /// Spend on one spending approval, in total and by the instances that caused it.
 #[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -151,8 +154,16 @@ fn validate_usage(
         || usage.app_id != grant.app_id
         || !grant.model_ids.contains(&usage.model_id)
         || usage.request_method != "POST"
-        || ![CHAT_PATH, RESPONSES_PATH, SYSTEMONE_PATH, EMBEDDINGS_PATH]
-            .contains(&usage.request_path.as_str())
+        || ![
+            CHAT_PATH,
+            RESPONSES_PATH,
+            SYSTEMONE_PATH,
+            EMBEDDINGS_PATH,
+            IMAGES_PATH,
+            TRANSCRIPTIONS_PATH,
+            SPEECH_PATH,
+        ]
+        .contains(&usage.request_path.as_str())
     {
         return Err(ApiError::forbidden(
             "Request exceeds the current instance resource grant",

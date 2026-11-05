@@ -113,6 +113,24 @@ pub fn deeplink_replay_pending(app_handle: AppHandle) {
     }
 }
 
+/// Dev builds are not registered as the OS handler for `flow-like://` or the app's universal
+/// links, so a pasted callback URL is routed through the same dispatcher a real deep link uses.
+#[cfg(debug_assertions)]
+#[tauri::command]
+pub async fn deeplink_debug_dispatch(app_handle: AppHandle, url: String) -> Result<(), String> {
+    let url = Url::parse(url.trim()).map_err(|error| format!("Invalid deep link URL: {error}"))?;
+    if matches!(
+        classify(&url),
+        DeepLinkIntent::Auth | DeepLinkIntent::Logout
+    ) {
+        // Return the completed exchange result to the dev console. Dispatching in the
+        // background would acknowledge a failed login before its result is known.
+        return process_auth_callback(&app_handle, url.as_str()).await;
+    }
+    dispatch_deep_links(&app_handle, &vec![url], false);
+    Ok(())
+}
+
 fn emit(app_handle: &AppHandle, event: &str, payload: serde_json::Value) {
     crate::utils::emit_to_ui(app_handle, event, payload);
 }
@@ -146,7 +164,7 @@ fn classify(url: &Url) -> DeepLinkIntent {
             "logout" => DeepLinkIntent::Logout,
             "thirdparty" if rest == "callback" => DeepLinkIntent::ThirdParty,
             "trigger" => classify_trigger(rest),
-            "native" => DeepLinkIntent::Native,
+            "native" | "continue" => DeepLinkIntent::Native,
             "store" => classify_store(url, rest),
             "join" => DeepLinkIntent::Join,
             _ => DeepLinkIntent::Unknown,
@@ -264,7 +282,27 @@ fn handle_import_file(app_handle: &AppHandle, url: &Url) {
 
 fn handle_auth(app_handle: &AppHandle, url: &str) {
     tracing::info!("Handling authentication deep link");
-    emit(app_handle, "oidc/url", json::json!({ "url": url }));
+    let app_handle = app_handle.clone();
+    let url = url.to_owned();
+    tauri::async_runtime::spawn(async move {
+        if process_auth_callback(&app_handle, &url).await.is_err() {
+            // Never include a callback URL, code, or provider error body in diagnostics.
+            tracing::warn!("Native sign-in callback was refused");
+            emit(
+                &app_handle,
+                "native-auth-error",
+                json::json!({"message":"Sign-in could not be completed. Start a new sign-in request."}),
+            );
+        }
+    });
+}
+
+async fn process_auth_callback(app_handle: &AppHandle, url: &str) -> Result<(), String> {
+    // Native auth returns application-owned messages, without callback secrets or provider bodies.
+    if !crate::native_auth::handle_callback(app_handle, url).await? {
+        emit(app_handle, "oidc/url", json::json!({ "url": url }));
+    }
+    Ok(())
 }
 
 fn handle_thirdparty_callback(app_handle: &AppHandle, url: &Url) {
@@ -340,18 +378,26 @@ fn handle_trigger(app_handle: &AppHandle, url: &Url, app_id: &str, route: &str) 
     }
 }
 
-fn handle_join(app_handle: &AppHandle, url: &Url, replayed: bool) {
+/// An app invite carries `appId` and `token`; a group chat invite carries only `room`.
+fn join_payload(url: &Url, replayed: bool) -> serde_json::Value {
     let params: std::collections::HashMap<_, _> = url.query_pairs().collect();
-    let app_id = params.get("appId").map(|v| v.to_string());
-    let token = params.get("token").map(|v| v.to_string());
+    let param = |name: &str| params.get(name).map(|value| value.to_string());
+    json::json!({
+        "appId": param("appId"),
+        "token": param("token"),
+        "room": param("room"),
+        "replayed": replayed,
+    })
+}
 
-    tracing::info!("Join deep link: app_id={:?}", app_id);
-
-    emit(
-        app_handle,
-        "deeplink/join",
-        json::json!({ "appId": app_id, "token": token, "replayed": replayed }),
+fn handle_join(app_handle: &AppHandle, url: &Url, replayed: bool) {
+    let payload = join_payload(url, replayed);
+    tracing::info!(
+        app_id = ?payload["appId"].as_str(),
+        room = payload["room"].is_string(),
+        "Join deep link"
     );
+    emit(app_handle, "deeplink/join", payload);
 }
 
 /// A URL the app cannot route. Previously this dropped the URL and left the app sitting on
@@ -399,6 +445,20 @@ mod tests {
             app_id: app_id.map(ToString::to_string),
             package_id: package_id.map(ToString::to_string),
         }
+    }
+
+    #[test]
+    fn continuation_links_reach_the_scoped_native_dispatcher() {
+        assert_eq!(
+            intent(
+                "flow-like://continue?scope=workspace&url=https%3A%2F%2Fapp.flow-like.com%2Fbots"
+            ),
+            DeepLinkIntent::Native
+        );
+        assert_eq!(
+            intent("https://untrusted.example/continue?scope=workspace"),
+            DeepLinkIntent::Unknown
+        );
     }
 
     #[test]
@@ -623,6 +683,27 @@ mod tests {
         assert_eq!(
             intent("flow-like://join?appId=a&token=t"),
             DeepLinkIntent::Join
+        );
+        assert_eq!(intent("flow-like://join?room=r"), DeepLinkIntent::Join);
+    }
+
+    #[test]
+    fn join_payload_carries_app_and_room_invites() {
+        let app = join_payload(
+            &Url::parse("flow-like://join?appId=a&token=t").unwrap(),
+            false,
+        );
+        assert_eq!(
+            app,
+            json::json!({ "appId": "a", "token": "t", "room": null, "replayed": false })
+        );
+        let room = join_payload(
+            &Url::parse(&format!("https://{APP_HOST}/join?room=r-_1")).unwrap(),
+            true,
+        );
+        assert_eq!(
+            room,
+            json::json!({ "appId": null, "token": null, "room": "r-_1", "replayed": true })
         );
     }
 

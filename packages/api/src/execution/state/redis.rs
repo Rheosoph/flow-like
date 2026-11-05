@@ -3,7 +3,7 @@
 //! Uses Redis EXPIRE for automatic TTL cleanup. Records are stored as JSON
 //! in hash structures for efficient access patterns.
 
-use super::{postgres::PostgresStateStore, types::*};
+use super::{postgres::PostgresStateStore, replay::replay_prefix, types::*};
 use async_trait::async_trait;
 use futures::lock::Mutex;
 use redis::{
@@ -674,6 +674,16 @@ impl ExecutionStateStore for RedisStateStore {
         }
 
         Ok(records)
+    }
+
+    /// One primary applies a batch's pipelined scripts in sequence order, so a
+    /// reader sees a prefix of every write.
+    async fn replay_events(
+        &self,
+        run_id: &str,
+        cursor: ReplayCursor,
+    ) -> Result<EventReplay, StateStoreError> {
+        replay_prefix(self, run_id, cursor).await
     }
 
     async fn get_max_sequence(&self, run_id: &str) -> Result<i32, StateStoreError> {

@@ -11,10 +11,10 @@ import { PlateElement, withHOC } from "platejs/react";
 
 import { cn } from "../../../lib/utils";
 
-import { mediaObjectPosition, type MediaMetadata } from "../media-metadata";
-import { MediaAttribution } from "./media-attribution";
 import { useEditorAssetUrl } from "../hooks/use-editor-asset-url";
+import { type MediaMetadata, mediaObjectPosition } from "../media-metadata";
 import { Caption, CaptionTextarea } from "./caption";
+import { MediaAttribution } from "./media-attribution";
 import { MediaToolbar } from "./media-toolbar";
 import {
 	Resizable,

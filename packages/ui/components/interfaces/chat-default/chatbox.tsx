@@ -13,6 +13,7 @@ import SquareIcon from "lucide-react/dist/esm/icons/square.js";
 import WrenchIcon from "lucide-react/dist/esm/icons/wrench.js";
 import X from "lucide-react/dist/esm/icons/x.js";
 import {
+	type ReactNode,
 	forwardRef,
 	useCallback,
 	useEffect,
@@ -21,6 +22,8 @@ import {
 	useState,
 } from "react";
 import { cn, humanFileSize } from "../../../lib/utils";
+import { useMentionPicker } from "../../bots-tab/mention-picker";
+import type { Mentionable } from "../../bots-tab/mentions";
 import type { ThinkingOption } from "../../thinking/thinking-options";
 import { ThinkingPicker } from "../../thinking/thinking-picker";
 import { Button } from "../../ui/button";
@@ -29,14 +32,19 @@ import { Textarea } from "../../ui/textarea";
 import type { VoiceInvokeMode, VoiceMode } from "../../voice/types";
 import { useSpeechRecognition } from "../../voice/use-speech-recognition";
 import { useVoiceRecorder } from "../../voice/use-voice-recorder";
+import type { IChatMessageInteraction } from "./chat-message-interaction";
 import { FileManagerDialog } from "./chatbox/file-dialog";
 import { isImageFile, useImagePreviewUrls } from "./chatbox/image-previews";
+import { type ChatBoxModel, ChatModelPicker } from "./model-picker";
+
+export type { ChatBoxModel } from "./model-picker";
 
 export type ISendMessageFunction = (
 	content: string,
 	filesAttached?: File[],
 	activeTools?: string[],
 	audioFile?: File,
+	interaction?: IChatMessageInteraction,
 ) => Promise<void>;
 
 interface ChatBoxProps {
@@ -64,11 +72,28 @@ interface ChatBoxProps {
 	 * restored so nothing is silently lost.
 	 */
 	onSteer?: (content: string) => Promise<boolean>;
+	/** Responses are generating: with nothing to send, the send button becomes Stop. */
+	stop?: ChatBoxStop;
+	/** Rendered left of the send controls, told whether the send button currently shows Stop. */
+	renderRunStatus?: (stopShown: boolean) => ReactNode;
 	onVoiceModeToggle?: () => void;
 	/** Called when the user starts speaking/recording, to interrupt answer playback. */
 	onInterrupt?: () => void;
 	/** Thinking level picker; omitted when the chat does not offer one. */
 	thinking?: ChatBoxThinking;
+	model?: ChatBoxModel;
+	/** Additional controls alongside the thinking picker. */
+	actions?: ReactNode;
+	/** Who typing `@` suggests; the text keeps `@Name`, so the host reads mentions from it. */
+	mentionables?: readonly Mentionable[];
+	placeholder?: string;
+}
+
+export interface ChatBoxStop {
+	readonly onStop: () => void;
+	readonly label: string;
+	/** Every live response is already cancelling. */
+	readonly stopping: boolean;
 }
 
 export interface ChatBoxThinking {
@@ -108,13 +133,20 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			sendDisabled = false,
 			sendHint,
 			onSteer,
+			stop,
+			renderRunStatus,
 			onVoiceModeToggle,
 			onInterrupt,
 			thinking,
+			model,
+			actions,
+			mentionables,
+			placeholder,
 		}: Readonly<ChatBoxProps>,
 		ref,
 	) => {
 		const [input, setInput] = useState("");
+		const [composing, setComposing] = useState(false);
 		const [activeTools, setActiveTools] =
 			useState<string[]>(defaultActiveTools);
 		const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -130,6 +162,12 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const chatboxRef = useRef<HTMLTextAreaElement | null>(null);
 		const transcriptionBaseRef = useRef("");
+		const mentionPicker = useMentionPicker({
+			mentionables,
+			value: input,
+			onChange: setInput,
+			inputRef: chatboxRef,
+		});
 
 		const recorder = useVoiceRecorder({
 			maxDuration: voiceMaxDuration,
@@ -180,6 +218,10 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 				: "record";
 		const isRecording = recorder.isRecording || recorder.isArming;
 		const isTranscribing = speech.isListening;
+		const hasContent =
+			!!input.trim() || !!recordedAudio || attachedFiles.length > 0;
+		const hasDraft = hasContent || isRecording || isTranscribing;
+		const showStop = !!stop && !hasDraft;
 
 		// biome-ignore lint/correctness/useExhaustiveDependencies: `voiceMode` is the trigger; a newly configured mode clears the previous mode's speech failure and error.
 		useEffect(() => {
@@ -275,12 +317,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 		const handleSubmit = async (e: React.FormEvent) => {
 			e.preventDefault();
-			if (
-				sendDisabled ||
-				isRecording ||
-				isTranscribing ||
-				(!input.trim() && !recordedAudio)
-			) {
+			if (sendDisabled || isRecording || isTranscribing || !hasContent) {
 				return;
 			}
 
@@ -296,10 +333,6 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			setAttachedFiles([]);
 			setRecordedAudio(null);
 			setRecordedDuration(0);
-			// Dismiss the iOS keyboard and revert any zoom
-			try {
-				chatboxRef.current?.blur();
-			} catch {}
 
 			try {
 				await onSendMessage(message, files, activeTools, audio);
@@ -359,7 +392,9 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			return `${mins}:${secs.toString().padStart(2, "0")}`;
 		};
 
-		const handleKeyDown = (e: React.KeyboardEvent) => {
+		const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+			if (e.nativeEvent.isComposing || composing) return;
+			if (mentionPicker.handleKeyDown(e)) return;
 			if (e.key === "Enter" && !e.shiftKey) {
 				e.preventDefault();
 				void handleSubmit(e);
@@ -585,6 +620,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 					className="relative"
 					data-fl-chat-composer
 				>
+					{mentionPicker.menu}
 					<div
 						className="flex flex-col items-start overflow-hidden rounded-xl border border-border shadow-sm transition-all duration-200 focus-within:border-input focus-within:ring-2 focus-within:ring-ring"
 						onDrop={handleDrop}
@@ -597,14 +633,22 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						{/* Text Input */}
 						<div className="flex-1 py-2 w-full pr-2">
 							<Textarea
-								aria-label="Message"
+								aria-label={placeholder ?? "Message"}
 								ref={chatboxRef}
 								value={input}
-								onChange={(e) => setInput(e.target.value)}
+								onChange={(e) => {
+									setInput(e.target.value);
+									mentionPicker.track(e.target);
+								}}
+								onCompositionStart={() => setComposing(true)}
+								onCompositionEnd={() => setComposing(false)}
 								onKeyDown={handleKeyDown}
+								onKeyUp={mentionPicker.handleKeyUp}
 								onPaste={handlePaste}
-								placeholder={i18next.t("typeAMessage", "Type a message...")}
-								className="border-0 focus:ring-0 resize-none bg-transparent! placeholder:text-muted-foreground text-[16px] sm:text-sm leading-relaxed min-h-[44px] max-h-[180px] overflow-y-auto w-full"
+								placeholder={
+									placeholder ?? i18next.t("typeAMessage", "Type a message...")
+								}
+								className="min-w-0 border-0 focus:ring-0 resize-none bg-transparent! placeholder:text-muted-foreground text-[16px] sm:text-sm leading-relaxed min-h-[44px] max-h-[180px] overflow-y-auto w-full"
 								rows={Math.min(5, Math.max(1, input.split("\n").length))}
 								style={{
 									boxShadow: "none",
@@ -622,7 +666,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 						{/* Tool bar and settings */}
 						<div className="flex w-full items-center justify-between rounded-b-xl">
 							{/* Left side buttons */}
-							<div className="flex items-center gap-1 p-2 pt-0">
+							<div className="flex min-w-0 flex-wrap items-center gap-1 p-2 pt-0">
 								{/* File Upload Button */}
 								{fileUpload && (
 									<Popover>
@@ -682,6 +726,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									</Popover>
 								)}
 
+								{model && <ChatModelPicker {...model} />}
+
 								{thinking && thinking.options.length > 0 && (
 									<ThinkingPicker
 										value={thinking.value}
@@ -690,6 +736,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 										className="h-11 w-11 sm:h-8 sm:w-8"
 									/>
 								)}
+
+								{actions}
 
 								{/* Tools Settings Button with Active Tools Badge */}
 								{(availableTools?.length ?? 0) > 0 && (
@@ -780,6 +828,8 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 
 							{/* Send Button & Audio Controls */}
 							<div className="p-2 pt-0 flex items-center gap-2">
+								{renderRunStatus?.(showStop)}
+
 								{/* Voice-to-text transcription button (STT mode) */}
 								{audioInput && effectiveVoiceMode === "stt" && (
 									<Button
@@ -917,7 +967,7 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									</Button>
 								)}
 
-								{onSteer && (
+								{onSteer && !showStop && (
 									<Button
 										aria-label={i18next.t(
 											"addToTheRunningResponse",
@@ -944,26 +994,28 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 									</Button>
 								)}
 
-								<Button
-									aria-label={
-										sendHint ?? i18next.t("sendMessage", "Send message")
-									}
-									title={sendHint}
-									type="submit"
-									size="sm"
-									disabled={
-										sendDisabled ||
-										isRecording ||
-										isTranscribing ||
-										(!input.trim() && !recordedAudio)
-									}
-									variant={
-										input.trim() || recordedAudio ? "default" : "secondary"
-									}
-									className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-all duration-200"
-								>
-									<Send className="w-4 h-4" />
-								</Button>
+								{stop && showStop ? (
+									<StopButton stop={stop} />
+								) : (
+									<Button
+										aria-label={
+											sendHint ?? i18next.t("sendMessage", "Send message")
+										}
+										title={sendHint}
+										type="submit"
+										size="sm"
+										disabled={
+											sendDisabled ||
+											isRecording ||
+											isTranscribing ||
+											!hasContent
+										}
+										variant={hasContent ? "default" : "secondary"}
+										className="h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full transition-all duration-200"
+									>
+										<Send className="w-4 h-4" />
+									</Button>
+								)}
 							</div>
 						</div>
 					</div>
@@ -977,3 +1029,27 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 		);
 	},
 );
+
+/** Send's stand-in while a response streams; the ring spins until every response is cancelling. */
+function StopButton({ stop }: { stop: ChatBoxStop }) {
+	return (
+		<Button
+			aria-label={stop.label}
+			title={stop.label}
+			type="button"
+			size="sm"
+			variant="secondary"
+			disabled={stop.stopping}
+			onClick={stop.onStop}
+			className="relative h-11 w-11 sm:h-8 sm:w-8 p-0 rounded-full"
+		>
+			{!stop.stopping && (
+				<span
+					aria-hidden
+					className="pointer-events-none absolute inset-0 animate-spin rounded-full border-2 border-transparent border-t-primary"
+				/>
+			)}
+			<SquareIcon className="size-3 fill-current" />
+		</Button>
+	);
+}

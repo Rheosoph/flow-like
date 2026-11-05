@@ -392,11 +392,12 @@ fn directive(name: &str, sources: &[&str]) -> String {
     }
 }
 
+// Form events need allow-forms; form-action 'none' still blocks submissions.
 fn sandbox_directive(allow_downloads: bool) -> &'static str {
     if allow_downloads {
-        "sandbox allow-scripts allow-downloads"
+        "sandbox allow-scripts allow-forms allow-downloads"
     } else {
-        "sandbox allow-scripts"
+        "sandbox allow-scripts allow-forms"
     }
 }
 
@@ -536,9 +537,9 @@ pub fn widget_frame_document(
         return None;
     }
     let sandbox = if allow_downloads {
-        "allow-scripts allow-downloads"
+        "allow-scripts allow-forms allow-downloads"
     } else {
-        "allow-scripts"
+        "allow-scripts allow-forms"
     };
     Some(format!(
         "<!doctype html><html><head><meta charset=\"utf-8\">\
@@ -863,7 +864,7 @@ mod tests {
         assert_eq!(
             csp,
             format!(
-                "default-src 'none'; script-src 'unsafe-inline' {bundle}; style-src 'unsafe-inline' {bundle}; img-src data: blob: {bundle}; font-src data: blob: {bundle}; connect-src data: blob:; worker-src 'none'; media-src data: blob:; frame-src 'none'; child-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; sandbox allow-scripts"
+                "default-src 'none'; script-src 'unsafe-inline' {bundle}; style-src 'unsafe-inline' {bundle}; img-src data: blob: {bundle}; font-src data: blob: {bundle}; connect-src data: blob:; worker-src 'none'; media-src data: blob:; frame-src 'none'; child-src 'none'; object-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'; sandbox allow-scripts allow-forms"
             )
         );
         assert_well_formed(&csp, Some(&WidgetPolicy::default()));
@@ -1004,7 +1005,7 @@ mod tests {
             sources_of(&csp, "worker-src"),
             vec!["blob:".to_string(), desktop_bundle()[0].clone()]
         );
-        assert!(csp.ends_with("sandbox allow-scripts allow-downloads"));
+        assert!(csp.ends_with("sandbox allow-scripts allow-forms allow-downloads"));
     }
 
     #[test]
@@ -1100,13 +1101,13 @@ mod tests {
         assert_eq!(
             csp,
             format!(
-                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src {child} {web_child}; base-uri 'none'; form-action 'none'; sandbox allow-scripts"
+                "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; frame-src {child} {web_child}; base-uri 'none'; form-action 'none'; sandbox allow-scripts allow-forms"
             )
         );
         assert_well_formed(&csp, None);
         assert!(
             widget_frame_csp(std::slice::from_ref(&child), true)
-                .ends_with("sandbox allow-scripts allow-downloads")
+                .ends_with("sandbox allow-scripts allow-forms allow-downloads")
         );
 
         let prefixes: Vec<String> = vec![
@@ -1126,7 +1127,7 @@ mod tests {
         let document = widget_frame_document("../../", "live-map", "0", None, false).unwrap();
         assert!(document.contains("<script data-cfasync=\"false\">"));
         assert!(document.contains("attachShadow({mode:'closed'})"));
-        assert!(document.contains("frame.setAttribute('sandbox','allow-scripts');"));
+        assert!(document.contains("frame.setAttribute('sandbox','allow-scripts allow-forms');"));
         assert!(document.contains("frame.setAttribute('referrerpolicy','no-referrer');"));
         assert!(
             document.contains("frame.setAttribute('src','../../widgets/live-map/index.0.html');")
@@ -1147,9 +1148,9 @@ mod tests {
 
         let grant = "f".repeat(64);
         let downloads = widget_frame_document("../../", "live-map", &grant, None, true).unwrap();
-        assert!(
-            downloads.contains("frame.setAttribute('sandbox','allow-scripts allow-downloads');")
-        );
+        assert!(downloads.contains(
+            "frame.setAttribute('sandbox','allow-scripts allow-forms allow-downloads');"
+        ));
         assert!(downloads.contains(&format!(
             "frame.setAttribute('src','../../widgets/live-map/index.{grant}.html');"
         )));

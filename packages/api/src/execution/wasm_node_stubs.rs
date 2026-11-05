@@ -128,6 +128,7 @@ mod tests {
                 wasm_url: String::new(),
                 cwasm_url: String::new(),
                 cwasm_checksum: "same-compiled-binary".into(),
+                permissions: None,
             },
         )]);
         flow_like_types::dispatch::wasm_package_set_revision(Some(&packages))

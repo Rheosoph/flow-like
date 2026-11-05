@@ -498,7 +498,92 @@ describe("ChatBox voice regressions", () => {
 	});
 });
 
+describe("ChatBox while responses are live", () => {
+	test("an empty composer's send button stops, and typing brings send and steer back", async () => {
+		const browser = installVoiceBrowser();
+		let stops = 0;
+		const statusCalls: boolean[] = [];
+		const view = await renderChatBox(browser.window, {
+			audioInput: false,
+			onSteer: async () => true,
+			stop: {
+				label: "Stop response",
+				stopping: false,
+				onStop: () => {
+					stops += 1;
+				},
+			},
+			renderRunStatus: (stopShown) => {
+				statusCalls.push(stopShown);
+				return null;
+			},
+		});
+
+		try {
+			expect(hasButton(view.container, "Send message")).toBeFalse();
+			expect(
+				hasButton(view.container, "Add to the running response"),
+			).toBeFalse();
+			expect(statusCalls.at(-1)).toBeTrue();
+			await click(button(view.container, "Stop response"));
+			expect(stops).toBe(1);
+
+			await act(async () => view.ref.current?.setInput("one more thing"));
+			expect(hasButton(view.container, "Stop response")).toBeFalse();
+			expect(button(view.container, "Send message").disabled).toBeFalse();
+			expect(
+				hasButton(view.container, "Add to the running response"),
+			).toBeTrue();
+			expect(statusCalls.at(-1)).toBeFalse();
+		} finally {
+			await view.close();
+		}
+	});
+
+	test("disables stop once every response is already cancelling", async () => {
+		const browser = installVoiceBrowser();
+		const view = await renderChatBox(browser.window, {
+			audioInput: false,
+			stop: { label: "Stop response", stopping: true, onStop: () => {} },
+		});
+
+		try {
+			expect(button(view.container, "Stop response").disabled).toBeTrue();
+		} finally {
+			await view.close();
+		}
+	});
+});
+
 describe("ChatBox imperative handle", () => {
+	test("keeps an IME confirmation in the draft instead of submitting it", async () => {
+		const browser = installVoiceBrowser();
+		const sent: string[] = [];
+		const view = await renderChatBox(browser.window, {
+			onSendMessage: async (text) => {
+				sent.push(text);
+			},
+		});
+		try {
+			await act(async () => view.ref.current?.setInput("こんにちは"));
+			const input = view.container.querySelector("textarea");
+			expect(input).not.toBeNull();
+			await act(async () => {
+				input?.dispatchEvent(
+					new browser.window.KeyboardEvent("keydown", {
+						key: "Enter",
+						bubbles: true,
+						isComposing: true,
+					}) as unknown as Event,
+				);
+			});
+			expect(sent).toEqual([]);
+			expect(view.ref.current?.getInput()).toBe("こんにちは");
+		} finally {
+			await view.close();
+		}
+	});
+
 	test("getInput returns text set after mount", async () => {
 		const browser = installVoiceBrowser();
 		const view = await renderChatBox(browser.window);

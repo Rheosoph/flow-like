@@ -1421,7 +1421,7 @@ pub async fn run_regression_suite(
         // could not even score its own replays.
         return Err(ApiError::FORBIDDEN);
     }
-    let sub = permission.effective_user_id().map_err(|_| {
+    let sub = permission.person_user_id().map_err(|_| {
         ApiError::forbidden("Running a suite requires a caller that is linked to a user account")
     })?;
     let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);

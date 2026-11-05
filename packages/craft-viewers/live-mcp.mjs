@@ -62,15 +62,27 @@ export function prepareLiveMcp({ id, source, write, original, replaceOnce }) {
 		);
 	}
 	if (id === "soundcraft") {
-		write(
-			"crates/ui-egui/src/control.rs",
-			replaceOnce(
-				original("crates/ui-egui/src/control.rs"),
-				"fn handle(app: &mut SoundApp",
-				"pub fn handle(app: &mut SoundApp",
-				"live control visibility",
-			),
+		let control = replaceOnce(
+			original("crates/ui-egui/src/control.rs"),
+			"fn handle(app: &mut SoundApp",
+			"pub fn handle(app: &mut SoundApp",
+			"live control visibility",
 		);
+		control = replaceOnce(
+			control,
+			`pub(crate) fn expire_gestures(app: &mut SoundApp) {
+    let now = app.clock_now();
+    if !app.gesture_acks.iter().any(|ack| now >= ack.deadline) {
+        return;
+    }`,
+			`pub(crate) fn expire_gestures(app: &mut SoundApp) {
+    let now = app.clock_now();
+    if app.gesture_acks.iter().any(|ack| now >= ack.deadline) { cancel_synthetic(app); }
+}
+pub(crate) fn cancel_synthetic(app: &mut SoundApp) {`,
+			"host input cancellation",
+		);
+		write("crates/ui-egui/src/control.rs", control);
 	}
 	const appType = {
 		wordcraft: "WordApp",
@@ -83,8 +95,21 @@ export function prepareLiveMcp({ id, source, write, original, replaceOnce }) {
 		soundcraft: "SoundApp",
 	}[id];
 	const uiPath = "crates/ui-egui/src/lib.rs";
-	const cancelInput = `\nimpl ${appType} { pub fn host_cancel_synthetic(&mut self) { self.synthetic.clear(); } }\n`;
-	write(uiPath, current(uiPath).replaceAll(cancelInput, "") + cancelInput);
+	const cancel =
+		id === "soundcraft"
+			? "control::cancel_synthetic(self);"
+			: `self.synthetic.clear();${id === "designcraft" ? " self.control_synthetic.clear();" : ""}`;
+	const cancelInput = `\nimpl ${appType} { pub fn host_cancel_synthetic(&mut self) { ${cancel} } }\n`;
+	write(
+		uiPath,
+		current(uiPath).replace(
+			new RegExp(
+				`\\nimpl ${appType} \\{ pub fn host_cancel_synthetic[^\\n]*\\n`,
+				"g",
+			),
+			"",
+		) + cancelInput,
+	);
 	write(
 		`${path}/src/mcp_policy.rs`,
 		readFileSync(join(directory, "mcp-policy.rs"), "utf8"),

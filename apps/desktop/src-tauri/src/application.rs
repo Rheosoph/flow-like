@@ -6,6 +6,9 @@
 // archiving the full desktop dependency graph into those artifacts on every
 // host build.
 mod deeplink;
+mod bot_host;
+#[cfg(feature = "code-sandbox")]
+mod code_sandbox;
 #[cfg(desktop)]
 mod device_models;
 mod device_tunnels;
@@ -23,8 +26,14 @@ mod functions;
 mod local_page_actions;
 #[cfg(any(test, not(debug_assertions)))]
 mod logging;
+mod native_auth;
+#[cfg(target_os = "android")]
+mod android_mobile;
+#[cfg(target_os = "android")]
+mod android_bot_runtime;
 mod offline_writes;
 mod profile;
+mod realtime;
 mod run_index;
 mod run_reports;
 mod settings;
@@ -478,6 +487,7 @@ pub fn run() {
     let project_dir = settings_state.project_dir.clone();
     let logs_dir = settings_state.logs_dir.clone();
     let temporary_dir = settings_state.temporary_dir.clone();
+    let local_bots_db = functions::local_bots::database_path(&project_dir);
 
     let mut config: FlowLikeConfig = FlowLikeConfig::new();
 
@@ -627,18 +637,40 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
+                #[cfg(target_os = "ios")]
+                tracing::info!(webview = webview.label(), "iOS frontend navigation started");
                 execution_credentials::revoke_webview(webview.label());
                 device_tunnels::close_webview(webview.label());
+                realtime::close_webview(webview.label());
             }
         })
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
                 execution_credentials::revoke_window(window.label());
+                realtime::close_window(window.label());
                 if window.label() == "main" {
                     device_tunnels::close_all();
                 }
             }
         });
+
+    #[cfg(target_os = "ios")]
+    {
+        builder = builder.on_web_content_process_terminate(|webview| {
+            tracing::warn!(
+                webview = webview.label(),
+                "iOS web content process terminated; reloading frontend"
+            );
+            // Installing this hook replaces Tauri's automatic recovery.
+            if let Err(error) = webview.reload() {
+                tracing::error!(
+                    webview = webview.label(),
+                    %error,
+                    "Failed to reload iOS frontend after web content process termination"
+                );
+            }
+        });
+    }
 
     // Tauri requires this plugin to be registered first so a secondary process exits before any
     // other plugin or application setup hook runs.
@@ -650,11 +682,16 @@ pub fn run() {
 
     builder = widget_protocol::register(builder);
 
+    #[cfg(target_os = "android")]
+    {
+        builder = builder.plugin(android_mobile::init());
+    }
+
     builder = builder
         .manage(state::TauriSettingsState(settings_state.clone()))
         .manage(state::TauriFlowLikeState(state_ref.clone()))
         .manage(state::TauriBoardSyncState::default())
-        .manage(state::TauriRegistryState(registry_state))
+        .manage(state::TauriRegistryState::new(registry_state))
         .manage(state::TauriWasmEngineState(shared_wasm_engine))
         .manage(state::TauriRecordingState::new())
         .manage(run_report_queue)
@@ -668,6 +705,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .setup(move |app| {
+            native_auth::initialize(app.handle().clone());
             functions::native::setup(app.handle());
             #[cfg(desktop)]
             diffusion_runtime::configure(app)?;
@@ -754,6 +792,13 @@ pub fn run() {
             // Initialize EventBus and register as managed state
             let (event_bus, mut event_receiver) = EventBus::new(app.app_handle().clone());
             app.manage(state::TauriEventBusState(event_bus));
+
+            // Managed before the event loop runs, so no IPC call finds the store missing.
+            app.manage(functions::local_bots::LocalBots::open(
+                app.app_handle(),
+                &local_bots_db,
+            ));
+            bot_host::start(app.app_handle());
 
             // Initialize Event Sink Manager synchronously to ensure it's ready before accepting commands
             let settings_clone = settings_state_for_sink.clone();
@@ -1113,7 +1158,13 @@ pub fn run() {
             e2e_runtime::intake_e2e_runtime_status,
             restart_app,
             deeplink::deeplink_replay_pending,
+            #[cfg(debug_assertions)]
+            deeplink::deeplink_debug_dispatch,
             functions::native::native_publish_snapshot,
+            functions::native_bot_input::native_bot_request,
+            functions::native_bot_input::native_bot_capabilities,
+            functions::native_bot_input::native_bot_cancel_request,
+            functions::native_bot_input::native_bot_activity_tokens,
             functions::native::native_clear_snapshot,
             functions::native::native_take_actions,
             functions::native::native_pending_actions,
@@ -1122,6 +1173,8 @@ pub fn run() {
             functions::native::native_complete_action,
             functions::native::native_read_shared_file,
             functions::native::native_write_clipboard,
+            functions::native::native_read_private_clipboard,
+            functions::native::native_automation_current,
             functions::native::native_get_location,
             functions::native::native_cancel_location,
             functions::native::native_geofence_permission,
@@ -1268,6 +1321,8 @@ pub fn run() {
             functions::tmp::stage_form_file,
             functions::bit::get_bit,
             functions::bit::is_bit_installed,
+            functions::speech::speech_transcribe,
+            functions::speech::speech_synthesize,
             functions::bit::get_bit_size,
             functions::bit::get_pack_from_bit,
             functions::bit::search_bits,
@@ -1369,12 +1424,22 @@ pub fn run() {
             functions::ai::copilot::flowpilot_apply_flow_ir_commit,
             functions::ai::copilot::flowpilot_read_flow_ir_commit_board,
             functions::ai::copilot::global_chat,
+            functions::ai::native_tool_bridge::set_native_run_auto_mode,
+            functions::ai::native_specialist_tools::flowpilot_capture_home_snapshot,
+            functions::ai::native_specialist_tools::flowpilot_capture_widget_snapshot,
+            functions::ai::native_specialist_tools::flowpilot_get_widget_proposal,
+            functions::ai::native_specialist_tools::flowpilot_resolve_widget_proposal,
+            functions::ai::native_specialist_tools::flowpilot_get_home_proposal,
+            functions::ai::native_specialist_tools::flowpilot_resolve_home_proposal,
             functions::ai::copilot::global_chat_resume,
             functions::ai::copilot::global_chat_steer,
             functions::ai::copilot::global_chat_take_unconsumed_steering,
             functions::ai::copilot::global_chat_memory_status,
             functions::ai::copilot::global_chat_clear_memory,
             functions::ai::copilot::global_chat_list_memories,
+            functions::ai::bot_memory_admin::bot_memory_facts,
+            functions::ai::bot_memory_admin::bot_memory_forget,
+            functions::ai::bot_memory_admin::bot_memory_reset,
             functions::ai::copilot::global_chat_delete_memory,
             functions::ai::copilot::copilot_sdk_start,
             functions::ai::copilot::copilot_sdk_stop,
@@ -1390,6 +1455,9 @@ pub fn run() {
             functions::ai::copilot::flowpilot_agent_backend_status,
             functions::ai::copilot::flowpilot_agent_backend_list,
             functions::channel::channel_push,
+            realtime::realtime_subscribe,
+            realtime::realtime_unsubscribe,
+            realtime::realtime_acknowledge,
             functions::a2ui::widget::get_widgets,
             functions::a2ui::widget::get_widget,
             functions::a2ui::widget::create_widget,
@@ -1425,6 +1493,81 @@ pub fn run() {
             functions::event_sink_commands::get_event_sink,
             functions::event_sink_commands::list_event_sinks,
             functions::event_sink_commands::is_event_sink_active,
+            functions::local_bots::local_bots_list,
+            functions::local_bots::local_bots_get,
+            functions::local_bots::local_bots_create,
+            functions::local_bots::local_bots_update,
+            functions::local_bots::local_bots_delete,
+            functions::local_bots::local_bots_apps,
+            functions::local_bots::local_bots_attach_app,
+            functions::local_bots::local_bots_detach_app,
+            functions::local_bots::local_bots_app_restrictions,
+            functions::local_bots::local_bots_set_app_restrictions,
+            functions::local_bots::local_bots_secrets,
+            functions::local_bots::local_bots_set_secret,
+            functions::local_bots::local_bots_delete_secret,
+            functions::local_bots::local_bots_export,
+            functions::local_bots::local_bots_upload_secrets,
+            functions::local_bots::local_bots_rebind,
+            functions::local_bots::local_bots_forget,
+            functions::local_bots::local_bots_permissions,
+            functions::local_bots::local_bots_grant_permission,
+            functions::local_bots::local_bots_revoke_permission,
+            functions::local_bots::local_bots_clone,
+            functions::local_bots::workspace::local_bots_workspace,
+            functions::local_bots::moves::local_bots_check_move,
+            functions::local_bots::moves::local_bots_move,
+            functions::local_bots::local_inbox_conversations,
+            functions::local_bots::local_inbox_conversation,
+            functions::local_bots::local_inbox_create,
+            functions::local_bots::local_inbox_rename,
+            functions::local_bots::local_inbox_set_image,
+            functions::local_bots::local_inbox_add_members,
+            functions::local_bots::local_inbox_remove_member,
+            functions::local_bots::local_inbox_entries,
+            functions::local_bots::local_inbox_send,
+            functions::local_bots::local_inbox_upload_file,
+            functions::local_bots::local_inbox_read_file,
+            functions::local_bots::local_inbox_mark_read,
+            functions::local_bots::local_inbox_set_pinned,
+            functions::local_bots::local_inbox_pins,
+            functions::local_bots::local_inbox_pin_message,
+            functions::local_bots::local_inbox_unpin_message,
+            functions::local_bots::local_inbox_star,
+            functions::local_bots::local_inbox_unstar,
+            functions::local_bots::local_inbox_stars,
+            functions::local_bots::local_inbox_forget,
+            functions::local_bots::history::local_inbox_entries_by_position,
+            functions::local_bots::history::local_inbox_topic,
+            functions::local_bots::history::local_inbox_segments,
+            functions::local_bots::history::local_inbox_import_history,
+            functions::local_bots::history::local_inbox_write_segment,
+            bot_host::commands::bot_host_turns,
+            bot_host::commands::bot_host_e2e_status,
+            bot_host::commands::bot_host_e2e_rotate_key,
+            bot_host::commands::bot_host_cancel_turn,
+            bot_host::grant_commands::local_bot_tool_grants,
+            bot_host::grant_commands::local_bot_put_tool_grant,
+            bot_host::connector_commands::local_bot_connectors,
+            bot_host::connector_commands::local_bot_create_connector,
+            bot_host::connector_commands::local_bot_update_connector,
+            bot_host::connector_commands::local_bot_delete_connector,
+            bot_host::connector_commands::local_bot_refresh_connector,
+            bot_host::grant_commands::local_bot_delete_tool_grant,
+            bot_host::grant_commands::local_bot_answer_approval,
+            bot_host::task_commands::local_bot_tasks,
+            bot_host::task_commands::local_bot_create_task,
+            bot_host::task_commands::local_bot_update_task,
+            bot_host::task_commands::local_bot_delete_task,
+            bot_host::skill_commands::local_bot_skills,
+            bot_host::skill_commands::local_bot_create_skill,
+            bot_host::skill_commands::local_bot_update_skill,
+            bot_host::skill_commands::local_bot_set_skill_status,
+            bot_host::skill_commands::local_bot_delete_skill,
+            bot_host::skill_commands::local_bot_import_skill,
+            bot_host::skill_commands::local_bot_install_skill_package,
+            functions::ai::bot_tools::view::bot_computer_view,
+            functions::ai::bot_tools::view::bot_computer_stop,
             functions::developer::developer_list_projects,
             functions::developer::developer_add_project,
             functions::developer::developer_remove_project,
@@ -1458,6 +1601,15 @@ pub fn run() {
             functions::registry::registry_set_auth_token,
             execution_open_auth_session,
             execution_set_auth,
+            native_auth::native_auth_read,
+            native_auth::native_auth_write,
+            native_auth::native_auth_clear,
+            native_auth::native_auth_refresh,
+            native_auth::begin_login,
+            native_auth::native_auth_logout,
+            native_auth::oauth::native_oauth_sync,
+            native_auth::oauth::native_oauth_list,
+            native_auth::recovery::native_auth_recover_background_work,
             offline_writes::commands::offline_writes_overview,
             offline_writes::commands::offline_writes_set_table,
             offline_writes::commands::offline_writes_remove_table,
@@ -1517,11 +1669,10 @@ pub fn run() {
             functions::telemetry::app_start_elapsed_ms,
         ]);
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
     {
-        // `tauri_plugin_devtools` dynamically mutates tracing-subscriber filters. We have observed
-        // a native SIGABRT in that initialization path on macOS. Keep it available for explicit
-        // diagnostics, but do not make every development launch depend on the unstable layer.
+        // The Cargo feature keeps Tauri's synchronous tracing dispatch out of default builds.
+        // Retain the runtime opt-in because devtools filter initialization can abort on macOS.
         if std::env::var_os("FLOW_LIKE_ENABLE_DEVTOOLS_PLUGIN").is_some() {
             builder = builder.plugin(tauri_plugin_devtools::init());
         }
@@ -1563,6 +1714,7 @@ pub fn run() {
     app.run(|_app, _event| {
         if matches!(_event, tauri::RunEvent::Exit) {
             device_tunnels::close_all();
+            tauri::async_runtime::block_on(bot_host::withdraw(_app));
             #[cfg(desktop)]
             device_models::lock_all();
         }

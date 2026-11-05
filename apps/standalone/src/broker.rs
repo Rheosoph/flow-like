@@ -1043,6 +1043,9 @@ pub(crate) fn allowed_model_request(base: &str, method: &str, url: &str) -> bool
             "/instances/responses",
             "/instances/systemone",
             "/instances/embeddings/embed",
+            "/instances/images/generations",
+            "/instances/audio/transcriptions",
+            "/instances/audio/speech",
         ]
         .iter()
         .any(|path| endpoint_url(base, path).is_ok_and(|target| target == url))
@@ -2779,6 +2782,38 @@ mod tests {
     #[test]
     fn workload_authorization_accepts_only_exact_hosted_model_posts() {
         let base = "https://api.example/api/v1";
+        for path in ["audio/transcriptions", "audio/speech"] {
+            let url = format!("{base}/instances/{path}");
+            assert!(allowed_model_request(base, "POST", &url));
+            assert!(!allowed_model_request(base, "GET", &url));
+            for suffix in ["/", "?model=other", "#fragment"] {
+                assert!(!allowed_model_request(
+                    base,
+                    "POST",
+                    &format!("{url}{suffix}")
+                ));
+            }
+            assert!(!allowed_model_request(
+                base,
+                "POST",
+                &format!("{base}/{path}")
+            ));
+            assert!(!allowed_model_request(
+                base,
+                "POST",
+                &url.replace("api.example", "evil.example")
+            ));
+        }
+        assert!(allowed_model_request(
+            base,
+            "POST",
+            "https://api.example/api/v1/instances/images/generations"
+        ));
+        assert!(!allowed_model_request(
+            base,
+            "GET",
+            "https://api.example/api/v1/instances/images/generations"
+        ));
         assert!(allowed_model_request(
             base,
             "POST",
@@ -2805,6 +2840,8 @@ mod tests {
             "https://api.example/api/v1/instances/../responses",
             "https://api.example/api/v1/chat/completions",
             "https://api.example/api/v1/instances/embeddings/embed/",
+            "https://api.example/api/v1/instances/images/generations?model=other",
+            "https://api.example/api/v1/images/generations",
             "https://api.example/api/v1/instances/responses#x",
         ] {
             assert!(!allowed_model_request(base, "POST", url));

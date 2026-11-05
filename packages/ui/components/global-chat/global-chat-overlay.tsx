@@ -2,23 +2,41 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { AnimatePresence, motion } from "framer-motion";
-import { Maximize2Icon, SparklesIcon, XIcon } from "lucide-react";
+import { Maximize2Icon, XIcon } from "lucide-react";
 import { usePathname, useRouter } from "next/navigation";
 import {
 	type CSSProperties,
 	useCallback,
 	useEffect,
+	useMemo,
 	useRef,
 	useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { Button, useAssistantSurface } from "../../index";
+import { cn } from "../../lib/utils";
+import { useAssistantSurface } from "../../state/assistant-surface";
+import { useBackend, useSignedIn } from "../../state/backend-state";
 import { migrateFlowPilotHistory } from "../../state/global-chat/global-chat-migration";
 import {
 	readPersistedOverlayMode,
+	selectToolPromptHere,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
+import { BotChatFrame, type BotPanelControl } from "../bots-tab/bot-chat-frame";
+import type { BotPanelActions } from "../bots-tab/bot-details";
+import type { BotPanelTab } from "../bots-tab/bot-panel-tabs";
+import {
+	BOTS_ROUTE,
+	dockMoveRoute,
+	dockRoute,
+	dockSelectionForChatBot,
+} from "../bots-tab/dock-selection";
+import { BotEditorDialog } from "../bots-tab/editor/bot-editor-dialog";
+import { Button } from "../ui/button";
+import { useDraftRelay } from "./chat-bot-avatar";
+import { ChatBotReactionProvider } from "./chat-bot-reaction";
 import { GlobalChatBody } from "./global-chat-body";
+import { useAdoptAssistantChat, useGlobalChatBot } from "./use-global-chat-bot";
 
 // Dock geometry. Sizes are in px; MARGIN matches the fixed bottom-6/right-6 inset so the dock never
 // touches the viewport edge (which would hard-cut the panel shadow).
@@ -54,20 +72,73 @@ function loadOverlaySize(): OverlaySize | null {
 }
 
 /**
- * Docked bottom-right overlay for the global FlowPilot assistant. When the agent navigates the user
- * to a different view (via the navigate_view tool), the /chat conversation morphs into this floating
- * panel so the user keeps chatting while seeing the destination. Rendered into document.body so it
- * escapes sidebar/layout transforms, mirroring the RPA recording dock.
+ * The overlay's panel is a sheet over its chat: another bot's chat and a reopened overlay start
+ * with it closed, and it gives way when this chat's run asks for you.
+ */
+function useOverlayPanel(botId: string | null, open: boolean): BotPanelControl {
+	const [shown, setShown] = useState<{
+		botId: string | null;
+		tab: BotPanelTab | null;
+	}>({ botId, tab: null });
+	const onTabChange = useCallback(
+		(tab: BotPanelTab | null) => setShown({ botId, tab }),
+		[botId],
+	);
+	const asking = useGlobalChatStore(selectToolPromptHere);
+	useEffect(() => {
+		if (asking || !open) setShown((current) => ({ ...current, tab: null }));
+	}, [asking, open]);
+	const tab = shown.botId === botId ? shown.tab : null;
+	return useMemo(() => ({ tab, onTabChange }), [tab, onTabChange]);
+}
+
+/** Edit opens the editor over the page; a copy and a move continue on the Bots tab. */
+function useOverlayPanelActions(
+	edit: (botId: string) => void,
+): BotPanelActions {
+	const router = useRouter();
+	const closeOverlay = useGlobalChatStore((s) => s.closeOverlay);
+	const signedIn = useSignedIn();
+	const backend = useBackend();
+	const movable = signedIn && Boolean(backend.botState?.local);
+	return useMemo(() => {
+		const goTo = (href: string) => {
+			router.push(href);
+			closeOverlay();
+		};
+		return {
+			onEdit: (bot) => edit(bot.id),
+			onDuplicated: (copy) => goTo(dockRoute({ type: "bot", botId: copy.id })),
+			onMove: movable
+				? (bot) => goTo(dockMoveRoute({ type: "bot", botId: bot.id }))
+				: undefined,
+		};
+	}, [closeOverlay, edit, movable, router]);
+}
+
+/**
+ * Docked bottom-right overlay for the global chat; its pill shows the bot the open conversation
+ * belongs to (Flux or one of the caller's bots) and opens that bot's panel as a sheet inside the
+ * overlay. When the agent navigates the user to a different view (via the navigate_view tool), the
+ * Bots tab conversation morphs into this floating panel so the user keeps chatting while seeing the
+ * destination. Rendered into document.body so it escapes sidebar/layout transforms, mirroring the
+ * RPA recording dock.
  *
  * The dock is resizable by dragging its top-left corner; dragging the height past ~70% of the viewport
  * snaps it into a full-height sheet. The chosen size persists across sessions (double-click the corner
- * to reset, or double-click the title bar to toggle the sheet).
+ * to reset).
  */
 export function GlobalChatOverlay() {
 	const { t } = useTranslation("chat");
+	const draft = useDraftRelay();
+	const chatBot = useGlobalChatBot();
+	useAdoptAssistantChat();
+	const mode = useGlobalChatStore((s) => s.mode);
+	const panel = useOverlayPanel(chatBot.botId, mode === "overlay");
+	const [editing, setEditing] = useState<string | null>(null);
+	const panelActions = useOverlayPanelActions(setEditing);
 	const router = useRouter();
 	const pathname = usePathname();
-	const mode = useGlobalChatStore((s) => s.mode);
 	const closeOverlay = useGlobalChatStore((s) => s.closeOverlay);
 	const dismissOverlay = useGlobalChatStore((s) => s.dismissOverlay);
 	const openOverlay = useGlobalChatStore((s) => s.openOverlay);
@@ -80,7 +151,7 @@ export function GlobalChatOverlay() {
 		Boolean(s.flowscriptWorkspace),
 	);
 
-	// If the USER navigates away from /chat while a response is streaming, no surface would
+	// If the USER navigates away from the Bots tab while a response is streaming, no surface would
 	// be left showing it — the reply would silently stream into the store. Dock the overlay on
 	// route changes mid-stream (only on actual navigation, so closing the dock stays possible).
 	const prevPathnameRef = useRef(pathname);
@@ -88,7 +159,11 @@ export function GlobalChatOverlay() {
 		if (prevPathnameRef.current === pathname) return;
 		prevPathnameRef.current = pathname;
 		const state = useGlobalChatStore.getState();
-		if (state.isStreaming && state.mode === "closed" && pathname !== "/chat") {
+		if (
+			state.isStreaming &&
+			state.mode === "closed" &&
+			pathname !== BOTS_ROUTE
+		) {
 			openOverlayIfAllowed();
 		}
 	}, [pathname, openOverlayIfAllowed]);
@@ -115,13 +190,13 @@ export function GlobalChatOverlay() {
 	}, []);
 
 	// Restore the dock across a hard reload: if it was open before the reload (and we're not on the
-	// full /chat page, which renders the conversation itself), re-open it. Re-opening re-mounts the
+	// Bots tab, whose own dock renders the conversation), re-open it. Re-opening re-mounts the
 	// chat surface, which then restores the transcript from IndexedDB and re-attaches to any run
 	// that was still streaming when the reload hit (global_chat_resume).
 	useEffect(() => {
 		if (
 			readPersistedOverlayMode() === "overlay" &&
-			window.location.pathname !== "/chat"
+			window.location.pathname !== BOTS_ROUTE
 		) {
 			openOverlay();
 		}
@@ -219,15 +294,36 @@ export function GlobalChatOverlay() {
 		}
 	}, []);
 
-	// Double-clicking the title bar toggles the full-height sheet, like a window title bar.
-	const onTitleDoubleClick = useCallback(
-		(e: React.MouseEvent) => {
-			if ((e.target as HTMLElement).closest("button")) return;
-			setSize((prev) =>
-				prev?.sheet ? null : { w: width, h: fullH, sheet: true },
-			);
-		},
-		[width, fullH],
+	const windowButtonClass =
+		"size-8 rounded-full text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0";
+	const windowButtons = (
+		<>
+			<Button
+				variant="ghost"
+				size="icon"
+				className={windowButtonClass}
+				aria-label={t("openFullChat", "Open full chat")}
+				title={t("openFullChat", "Open full chat")}
+				onClick={() => {
+					router.push(
+						dockRoute(dockSelectionForChatBot(chatBot.botId), panel.tab),
+					);
+					closeOverlay();
+				}}
+			>
+				<Maximize2Icon className="size-3.5" />
+			</Button>
+			<Button
+				variant="ghost"
+				size="icon"
+				className={windowButtonClass}
+				aria-label={t("closeChat", "Close chat")}
+				title={t("close", "Close")}
+				onClick={dismissOverlay}
+			>
+				<XIcon className="size-4" />
+			</Button>
+		</>
 	);
 
 	const content = (
@@ -240,7 +336,10 @@ export function GlobalChatOverlay() {
 					animate={{ opacity: 1, scale: 1 }}
 					exit={{ opacity: 0, scale: 0.32 }}
 					transition={{ type: "spring", stiffness: 340, damping: 30 }}
-					className="fixed bottom-6 right-6 z-9999 pointer-events-none origin-bottom-right"
+					className={cn(
+						"fixed bottom-6 right-6 z-9999 pointer-events-none origin-bottom-right",
+						editing && "invisible",
+					)}
 				>
 					<div
 						style={
@@ -263,7 +362,7 @@ export function GlobalChatOverlay() {
 						className={`pointer-events-auto relative flex max-h-[calc(100vh-3rem)] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-xl border border-border/70 bg-background shadow-2xl shadow-black/25 ring-1 ring-black/5 dark:border-white/10 dark:ring-white/10 ${dragging ? "select-none" : ""}`}
 					>
 						{/* hairline top sheen for a bit of glass depth */}
-						<div className="pointer-events-none absolute inset-x-0 top-0 z-10 h-px bg-linear-to-r from-transparent via-foreground/15 to-transparent" />
+						<div className="pointer-events-none absolute inset-x-0 top-0 z-40 h-px bg-linear-to-r from-transparent via-foreground/15 to-transparent" />
 
 						{/* resize handle — top-left corner */}
 						<button
@@ -277,7 +376,7 @@ export function GlobalChatOverlay() {
 								"dragToResizeDoubleclickToReset",
 								"Drag to resize · double-click to reset",
 							)}
-							className="group absolute left-0 top-0 z-20 flex size-6 cursor-nwse-resize items-start justify-start p-1.5 outline-none"
+							className="group absolute left-0 top-0 z-40 flex size-6 cursor-nwse-resize items-start justify-start p-1.5 outline-none"
 						>
 							<svg
 								width="9"
@@ -296,51 +395,43 @@ export function GlobalChatOverlay() {
 							</svg>
 						</button>
 
-						<header
-							onDoubleClick={onTitleDoubleClick}
-							className="flex shrink-0 items-center justify-between border-b border-border/50 bg-transparent py-2 pl-5 pr-2"
-						>
-							<div className="flex items-center gap-2 text-sm font-semibold tracking-tight">
-								<span className="flex size-6 shrink-0 items-center justify-center rounded-lg bg-linear-to-br from-primary/25 to-purple-600/20 text-primary ring-1 ring-primary/15">
-									<SparklesIcon className="size-3.5" />
-								</span>
-								{t("flowpilot", "FlowPilot")}
-							</div>
-							<div className="flex items-center gap-0.5">
-								<Button
-									variant="ghost"
-									size="icon"
-									className="h-7 w-7 rounded-full text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-									aria-label={t("openFullChat", "Open full chat")}
-									title={t("openFullChat", "Open full chat")}
-									onClick={() => {
-										router.push("/chat");
-										closeOverlay();
-									}}
-								>
-									<Maximize2Icon className="size-3.5" />
-								</Button>
-								<Button
-									variant="ghost"
-									size="icon"
-									className="h-7 w-7 rounded-full text-muted-foreground outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-primary/40 focus-visible:ring-offset-0"
-									aria-label={t("closeChat", "Close chat")}
-									title={t("close", "Close")}
-									onClick={dismissOverlay}
-								>
-									<XIcon className="size-4" />
-								</Button>
-							</div>
-						</header>
-						<div className="min-h-0 flex-1">
-							<GlobalChatBody variant="overlay" />
-						</div>
+						<ChatBotReactionProvider>
+							<BotChatFrame
+								view={chatBot}
+								relay={draft.listener}
+								panel={panel}
+								actions={panelActions}
+								end={windowButtons}
+							>
+								<GlobalChatBody
+									variant="overlay"
+									onDraftChange={draft.report}
+									pillInset
+								/>
+							</BotChatFrame>
+						</ChatBotReactionProvider>
 					</div>
 				</motion.div>
 			)}
 		</AnimatePresence>
 	);
 
+	const editor = (
+		<BotEditorDialog
+			open={editing !== null}
+			onOpenChange={(open) => {
+				if (!open) setEditing(null);
+			}}
+			botId={editing}
+			onDuplicated={panelActions.onDuplicated}
+		/>
+	);
+
 	if (typeof document === "undefined") return content;
-	return createPortal(content, document.body);
+	return (
+		<>
+			{createPortal(content, document.body)}
+			{editor}
+		</>
+	);
 }

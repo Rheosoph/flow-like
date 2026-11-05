@@ -20,7 +20,6 @@ import {
 	HoverCardContent,
 	HoverCardTrigger,
 	IAppVisibility,
-	type IEvent,
 	Input,
 	Label,
 	RolePermissions,
@@ -43,6 +42,11 @@ import {
 	useMobileHeader,
 } from "@flow-like/flow-like-ui";
 import {
+	BotWorkspaceAvatar,
+	BotWorkspaceBlock,
+	useWorkspaceBot,
+} from "@flow-like/flow-like-ui/components/identity/bot-workspace-brand";
+import {
 	ConfigNavRow,
 	PermissionLockDialog,
 	SectionLockedPanel,
@@ -54,6 +58,7 @@ import {
 	normalizeAppPublicationRequests,
 } from "@flow-like/flow-like-ui/components/settings/visibility-status/app-publication-review-card";
 import { VisibilityUpgradeDialog } from "@flow-like/flow-like-ui/components/settings/visibility-status/visibility-upgrade-dialog";
+import { useQuickAction } from "@flow-like/flow-like-ui/hooks/use-quick-action";
 import {
 	type INavigationItem,
 	type INavigationItemState,
@@ -73,6 +78,7 @@ import {
 	EyeIcon,
 	EyeOffIcon,
 	LayoutGridIcon,
+	Loader2Icon,
 	LockIcon,
 	Maximize2Icon,
 	MenuIcon,
@@ -119,6 +125,8 @@ export default function Id({
 		[id ?? ""],
 		typeof id === "string",
 	);
+
+	const workspaceBot = useWorkspaceBot(app.data);
 
 	const [cardMaximized, setCardMaximized] = useState(false);
 	// The deploy wizard opens maximized; its toggle is a choice of its own, so
@@ -433,23 +441,19 @@ export default function Id({
 		});
 	}, []);
 
-	async function executeEventHandler(event: IEvent) {
-		if (!id) return;
-		const runMeta = await executionService.executeEvent(
-			id,
-			event.id,
-			{ id: event.node_id },
-			true,
-			() => {},
-			() => {},
-		);
-		if (!runMeta) {
-			toastError(
-				t("failedToExecuteBoard", "Failed to execute board"),
-				<PlayCircleIcon className="w-4 h-4" />,
-			);
-		}
-	}
+	const { execute: executeEventHandler, isRunning: isQuickActionRunning } =
+		useQuickAction({
+			appId: id,
+			executeEvent: executionService.executeEvent,
+			streamState: true,
+			onError: (error) => {
+				console.warn("Failed to execute quick action", error);
+				toastError(
+					t("failedToExecuteBoard", "Failed to execute board"),
+					<PlayCircleIcon className="w-4 h-4" />,
+				);
+			},
+		});
 
 	// Storage and Data Studio own their vertical space; every other section scrolls.
 	const contentFillsHeight = configRouteFillsHeight(currentRoute);
@@ -515,6 +519,9 @@ export default function Id({
 									<BreadcrumbSeparator />
 									<BreadcrumbItem>
 										<BreadcrumbPage className="font-medium flex flex-row items-center gap-2">
+											{workspaceBot && (
+												<BotWorkspaceAvatar bot={workspaceBot} size={22} />
+											)}
 											{metadata.isFetching ? (
 												<Skeleton className="h-4 w-24" />
 											) : (
@@ -809,6 +816,12 @@ export default function Id({
 						<Card className="h-full max-h-full overflow-hidden py-2 hidden md:flex md:flex-col md:flex-grow order-2 md:order-1">
 							<CardContent className="flex-1 p-0 overflow-hidden">
 								<ScrollArea className="h-full px-3 flex-1">
+									{workspaceBot && (
+										<BotWorkspaceBlock
+											bot={workspaceBot}
+											onNavigate={(href) => router.push(href)}
+										/>
+									)}
 									<nav
 										className="flex flex-col gap-0.5 py-3"
 										key={id + (effectiveVisibility ?? "")}
@@ -905,11 +918,17 @@ export default function Id({
 																	variant="outline"
 																	size="sm"
 																	className="justify-start gap-2 h-auto py-2 px-3"
+																	disabled={isQuickActionRunning(event.id)}
+																	aria-busy={isQuickActionRunning(event.id)}
 																	onClick={async () => {
 																		await executeEventHandler(event);
 																	}}
 																>
-																	<PlayCircleIcon className="w-3 h-3 text-green-600" />
+																	{isQuickActionRunning(event.id) ? (
+																		<Loader2Icon className="w-3 h-3 animate-spin" />
+																	) : (
+																		<PlayCircleIcon className="w-3 h-3 text-green-600" />
+																	)}
 																	<span className="truncate text-xs">
 																		{event.name}
 																	</span>

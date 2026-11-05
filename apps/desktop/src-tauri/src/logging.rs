@@ -339,7 +339,9 @@ pub(crate) mod log_file {
 
         /// Ten bytes per line.
         fn lines(numbers: std::ops::Range<usize>) -> String {
-            numbers.map(|number| format!("line {number:04}\n")).collect()
+            numbers
+                .map(|number| format!("line {number:04}\n"))
+                .collect()
         }
 
         #[test]

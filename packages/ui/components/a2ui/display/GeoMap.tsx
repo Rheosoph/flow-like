@@ -5,7 +5,6 @@ import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { LocationFix } from "../../../lib/location";
 import { cn } from "../../../lib/utils";
-import type { MapLocationError } from "../../ui/map-location";
 import {
 	Map,
 	MapControls,
@@ -16,6 +15,7 @@ import {
 	MarkerContent,
 	MarkerLabel,
 } from "../../ui/map";
+import type { MapLocationError } from "../../ui/map-location";
 import { useActionContext, useComponentEventTrigger } from "../ActionHandler";
 import type { ComponentProps } from "../ComponentRegistry";
 import { useData } from "../DataContext";

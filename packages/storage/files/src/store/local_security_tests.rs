@@ -227,6 +227,37 @@ async fn final_symlink_mutations_never_change_the_target() {
 }
 
 #[tokio::test]
+async fn pruning_after_a_delete_stops_at_links_and_never_reaches_outside() {
+    let fixture = Fixture::new();
+    let nested = Path::from("project/nested/only.txt");
+    fixture
+        .store
+        .put(&nested, PutPayload::from_static(b"inside"))
+        .await
+        .unwrap();
+    fixture.store.delete(&nested).await.unwrap();
+    fixture
+        .store
+        .delete(&Path::from("project/ordinary.txt"))
+        .await
+        .unwrap();
+
+    let project = fixture.root.path().join("project");
+    assert!(!project.join("nested").exists());
+    assert!(
+        project.is_dir(),
+        "a folder that still holds links is not empty"
+    );
+    assert!(
+        fs::symlink_metadata(project.join("link"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    fixture.outside_unchanged();
+}
+
+#[tokio::test]
 async fn listings_never_expose_objects_behind_symlinks() {
     let fixture = Fixture::new();
     for prefix in [Path::from("project"), Path::from("project/link")] {

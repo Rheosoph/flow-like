@@ -221,6 +221,7 @@ export async function streamFetcher<T>(
 	options?: RequestInit,
 	auth?: AuthContextProps,
 	onMessage?: (data: T) => void,
+	onJsonResponse?: (data: unknown) => Promise<void>,
 ): Promise<void> {
 	const method = methodOf(options);
 	const scopedAuth = authForHub(profile, auth);
@@ -250,6 +251,7 @@ export async function streamFetcher<T>(
 			profile,
 			scopedAuth,
 			onMessage,
+			onJsonResponse,
 		);
 		return;
 	}
@@ -293,6 +295,7 @@ async function streamFetcherRaw<T>(
 	profile: IProfile,
 	auth: AuthContextProps | undefined,
 	onMessage?: (data: T) => void,
+	onJsonResponse?: (data: unknown) => Promise<void>,
 ): Promise<void> {
 	const abortController = new AbortController();
 	// The caller's signal cancels the stream for its whole life, not only until
@@ -336,6 +339,25 @@ async function streamFetcherRaw<T>(
 			throw apiResponseError(response, errorText, url);
 		}
 
+		if (
+			response.headers.get("content-type")?.split(";", 1)[0].trim() ===
+			"application/json"
+		) {
+			if (!onJsonResponse) {
+				abortController.abort();
+				throw new Error("Expected an event stream, received a JSON response");
+			}
+			const data = await withRequestDeadline(
+				url,
+				() => readStreamReceipt(response, abortController),
+				{ timeoutMs: STREAM_HEADER_TIMEOUT_MS, controller: abortController },
+			);
+			if (abortController.signal.aborted)
+				throw new DOMException("Execution cancelled", "AbortError");
+			await onJsonResponse(data);
+			return;
+		}
+
 		if (!response.body) {
 			throw new Error("Response body is null - streaming not supported");
 		}
@@ -348,6 +370,32 @@ async function streamFetcherRaw<T>(
 		await readSSEStream(response.body, abortController, onMessage);
 	} finally {
 		upstream?.removeEventListener("abort", forwardAbort);
+	}
+}
+
+async function readStreamReceipt(
+	response: Response,
+	controller: AbortController,
+): Promise<unknown> {
+	const reader = response.body?.getReader();
+	if (!reader) throw new Error("Execution response body is missing");
+	const decoder = new TextDecoder();
+	let bytes = 0;
+	let text = "";
+	try {
+		while (true) {
+			const chunk = await reader.read();
+			if (chunk.done) break;
+			bytes += chunk.value.byteLength;
+			if (bytes > 64 * 1024) {
+				controller.abort();
+				throw new Error("Execution receipt exceeds the size limit");
+			}
+			text += decoder.decode(chunk.value, { stream: true });
+		}
+		return JSON.parse(text + decoder.decode());
+	} finally {
+		reader.releaseLock();
 	}
 }
 
@@ -745,6 +793,48 @@ export async function post<T>(
 		},
 		auth,
 	);
+}
+
+/** POST JSON and read the response as binary, for routes that answer with a file. */
+export async function postBlob(
+	profile: IProfile,
+	path: string,
+	data: unknown,
+	auth?: AuthContextProps,
+): Promise<Blob> {
+	const scopedAuth = authForHub(profile, auth);
+	const route = normalizeApiPath("POST", path);
+	const body = JSON.stringify(data);
+	try {
+		return await withRequestDeadline<Blob>(
+			route,
+			async (deadline) => {
+				const response = await withHubAuth(profile, scopedAuth, (token) =>
+					tauriFetch(constructUrl(profile, path), {
+						method: "POST",
+						body,
+						headers: hubAuthHeaders(
+							{
+								"Content-Type": "application/json",
+								[BOARD_FORMAT_HEADER]: String(CURRENT_BOARD_FORMAT_VERSION),
+							},
+							token,
+						),
+						connectTimeout: DEFAULT_CONNECT_TIMEOUT_MS,
+						signal: deadline.signal,
+					}),
+				);
+				if (!response.ok) {
+					throw apiResponseError(response, await response.text(), path);
+				}
+				return response.blob();
+			},
+			{ timeoutMs: requestTimeoutMs(cleanApiPath(path), "POST", body.length) },
+		);
+	} catch (error) {
+		if (error instanceof ApiResponseError) throw error;
+		throw requestFailure(error, route);
+	}
 }
 
 export async function get<T>(

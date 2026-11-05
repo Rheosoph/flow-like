@@ -176,7 +176,7 @@ const WORKING_TOOLS = new Set([
 ]);
 
 /** Tools that hand control back to the user rather than continuing to work. */
-const WAITING_TOOLS = new Set(["ask_user"]);
+const WAITING_TOOLS = new Set(["ask_user", "secret_request"]);
 
 export function classifyOrbTool(
 	toolName: string | undefined,

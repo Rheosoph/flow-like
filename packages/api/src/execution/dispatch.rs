@@ -139,6 +139,9 @@ use flow_like_types::dispatch::{
 
 use super::compiled_artifacts::{EnsuredArtifact, LocalOnlyBoard};
 
+mod tool_job;
+pub use tool_job::ToolTarget;
+
 use crate::channel::ChannelIssuer;
 use serde::{Deserialize, Serialize};
 use std::pin::Pin;
@@ -430,6 +433,10 @@ pub enum DispatchError {
     Configuration(String),
     #[error("Network error: {0}")]
     Network(String),
+    #[error("Tool executor returned HTTP {status}: {message}")]
+    ToolHttp { status: u16, message: String },
+    #[error("The tool executor did not finish before its deadline")]
+    ToolTimeout,
     #[error("Lambda error: {0}")]
     Lambda(String),
     /// The invoke API or the executor answered 4xx before streaming (throttled,
@@ -1289,6 +1296,14 @@ impl Dispatcher {
             "Lambda tenant isolation active"
         );
         Ok(Some(tenant_id))
+    }
+
+    #[cfg(feature = "lambda")]
+    fn lambda_tenant_id_for_user(&self, user_id: &str) -> Result<Option<String>, DispatchError> {
+        let enabled = *LAMBDA_TENANT_ISOLATION
+            .as_ref()
+            .map_err(|error| DispatchError::Configuration(error.clone()))?;
+        Ok(enabled.then(|| lambda_tenant_id(user_id)))
     }
 
     /// Dispatch through Lambda's native asynchronous delivery queue.
@@ -3756,7 +3771,7 @@ fn lends_private_bits(caller: &crate::middleware::jwt::AppUser) -> bool {
     match caller {
         AppUser::OpenID(_) | AppUser::PAT(_) | AppUser::APIKey(_) => true,
         AppUser::ConnectedApp(app) => app.person().is_some(),
-        AppUser::Executor(_) | AppUser::Unauthorized => false,
+        AppUser::Executor(_) | AppUser::Bot(_) | AppUser::Unauthorized => false,
     }
 }
 

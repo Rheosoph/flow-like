@@ -128,6 +128,23 @@ pub(super) async fn copilot_profile(
     Some(Arc::new(profile.hub_profile))
 }
 
+/// Resolve the model library from the run's captured profile, even during a UI profile switch.
+pub(super) async fn copilot_profile_for(
+    app_handle: &AppHandle,
+    profile_id: &str,
+) -> Option<Arc<flow_like::profile::Profile>> {
+    let state = TauriSettingsState::construct(app_handle).await.ok()?;
+    let settings = state.lock().await;
+    let mut profile = settings.profile_by_id(profile_id).ok()?.hub_profile;
+    profile.custom_bits = settings
+        .custom_bits
+        .iter()
+        .cloned()
+        .map(flow_like::profile::ProfileCustomBit)
+        .collect();
+    Some(Arc::new(profile))
+}
+
 pub(super) fn home_profile_scope_error(
     scope: CopilotScope,
     tool_context: Option<&FrontendToolContext>,
@@ -421,6 +438,156 @@ pub async fn copilot_chat(
     // Streaming channel
     channel: Channel<String>,
 ) -> Result<UnifiedCopilotResponse, String> {
+    copilot_chat_native(
+        app_handle,
+        Some(webview.label().to_owned()),
+        state,
+        scope,
+        board,
+        catalog_nodes,
+        selected_node_ids,
+        current_surface,
+        current_canvas_settings,
+        selected_component_ids,
+        user_prompt,
+        current_images,
+        history,
+        model_id,
+        reasoning_effort,
+        token,
+        run_context,
+        action_context,
+        nested,
+        read_only,
+        app_id,
+        tool_context,
+        request_id,
+        raw_user_prompt,
+        channel,
+    )
+    .await
+}
+
+/// Run a specialist without requiring a mounted webview.
+pub(crate) async fn copilot_chat_native(
+    app_handle: AppHandle,
+    owner_webview: Option<String>,
+    state: State<'_, TauriFlowLikeState>,
+    // Scope selection
+    scope: CopilotScope,
+    // Board context (optional for Frontend scope)
+    board: Option<Board>,
+    catalog_nodes: Option<Vec<Node>>,
+    selected_node_ids: Option<Vec<String>>,
+    // UI context (optional for Board scope)
+    current_surface: Option<Vec<SurfaceComponent>>,
+    // The surface's persisted canvasSettings, customCss included. The UI specialist edits an
+    // existing stylesheet only if it can see it.
+    current_canvas_settings: Option<serde_json::Value>,
+    selected_component_ids: Option<Vec<String>>,
+    // Common parameters
+    user_prompt: String,
+    current_images: Option<Vec<ChatImage>>,
+    history: Option<Vec<UnifiedChatMessage>>,
+    model_id: Option<String>,
+    reasoning_effort: Option<String>,
+    token: Option<String>,
+    // Extended context
+    run_context: Option<RunContext>,
+    action_context: Option<UIActionContext>,
+    // Sub-agent run spawned while another Copilot session is mid-turn (needs its own CLI)
+    nested: Option<bool>,
+    // Read-only specialist sub-run: inspect and answer without mutation tools.
+    read_only: Option<bool>,
+    // App scope for hosted-model usage attribution. Omit for genuine global chat.
+    app_id: Option<String>,
+    // Runtime tools in a detached nested specialist are scoped by the frontend, not model input.
+    tool_context: Option<FrontendToolContext>,
+    // Stable frontend request id used for end-to-end cancellation of detached agent runs.
+    request_id: Option<String>,
+    // Immutable user-authored request, separate from host-added mode/run-context guidance.
+    raw_user_prompt: Option<String>,
+    // Streaming channel
+    channel: Channel<String>,
+) -> Result<UnifiedCopilotResponse, String> {
+    let mut tool_context = tool_context;
+    let _native_run = if crate::functions::ai::native_tool_bridge::run_identity(
+        tool_context.as_ref(),
+    )
+    .is_none()
+    {
+        if nested.unwrap_or(false) {
+            return Err("The owning FlowPilot run is no longer active.".into());
+        }
+        let context = tool_context.get_or_insert_with(Default::default);
+        let id = request_id
+            .clone()
+            .unwrap_or_else(flow_like_types::create_id);
+        context.run_id = Some(id.clone());
+        context.app_id = context.app_id.clone().or_else(|| app_id.clone());
+        context.source_user_prompt = context
+            .source_user_prompt
+            .clone()
+            .or_else(|| raw_user_prompt.clone())
+            .or_else(|| Some(user_prompt.clone()));
+        let claim = crate::functions::ai::native_tool_bridge::claim_run(
+            &app_handle,
+            &id,
+            crate::functions::ai::native_tool_bridge::NativeRunOptions {
+                conversation_id: context.conversation_id.clone(),
+                model_id: model_id.clone(),
+                reasoning_effort: reasoning_effort.clone(),
+                interaction_mode: if owner_webview.is_some() {
+                    crate::functions::ai::native_tool_bridge::NativeInteractionMode::Interactive
+                } else {
+                    crate::functions::ai::native_tool_bridge::NativeInteractionMode::Unavailable
+                },
+                ..Default::default()
+            },
+        )
+        .await?;
+        let identity = crate::functions::ai::native_tool_bridge::run_identity(Some(context))
+            .expect("claimed run");
+        context.profile_id = Some(identity.profile_id);
+        crate::functions::ai::native_tool_bridge::set_run_stream(&id, channel.clone());
+        Some(claim)
+    } else {
+        None
+    };
+    let mut model_state = (*state.0).clone();
+    model_state.device_model_connector = None;
+    let token = match crate::functions::ai::native_tool_bridge::run_identity(tool_context.as_ref())
+        .and_then(|identity| identity.auth)
+    {
+        Some(binding) => {
+            let token = binding.cached_access_token().await?;
+            #[cfg(desktop)]
+            {
+                model_state.device_model_connector =
+                    Some(crate::device_models::connector_for_session(binding.clone()));
+            }
+            model_state.request_authorizer =
+                Some(crate::execution_credentials::native_request_authorizer(
+                    binding,
+                    app_id.as_deref().unwrap_or(""),
+                ));
+            Some(token)
+        }
+        None => {
+            if token.is_some() {
+                if let Some(identity) =
+                    crate::functions::ai::native_tool_bridge::run_identity(tool_context.as_ref())
+                {
+                    crate::native_auth::request_login(identity.profile_id);
+                }
+                return Err(
+                    "The desktop session needs sign-in before this run can continue.".into(),
+                );
+            }
+            None
+        }
+    };
+    let model_state = Arc::new(model_state);
     let nested = nested.unwrap_or(false);
     if matches!(scope, CopilotScope::Home)
         && tool_context
@@ -511,12 +678,12 @@ pub async fn copilot_chat(
     } else {
         None
     };
-    let _tool_owner = claim_run_tool_owner(
-        webview.label(),
-        tool_context.as_ref(),
-        request_id.as_deref(),
-    )
-    .await;
+    let _tool_owner = match owner_webview.as_deref() {
+        Some(webview) => {
+            Some(claim_run_tool_owner(webview, tool_context.as_ref(), request_id.as_deref()).await)
+        }
+        None => None,
+    };
     let model_selection = FlowPilotModelSelection::parse(model_id);
     if let FlowPilotChatBackend::Agent(agent_backend) = model_selection.backend {
         return match agent_backend {
@@ -617,7 +784,7 @@ pub async fn copilot_chat(
     } {
         return run_bits_specialist_chat(
             app_handle,
-            state.0.clone(),
+            model_state.clone(),
             scope,
             specialist,
             user_prompt,
@@ -673,9 +840,14 @@ pub async fn copilot_chat(
     let selected_component_ids = selected_component_ids.unwrap_or_default();
     let history = history.unwrap_or_default();
 
-    let state_clone = state.0.clone();
-
-    let profile = copilot_profile(&app_handle).await;
+    let state_clone = model_state.clone();
+    let identity = crate::functions::ai::native_tool_bridge::run_identity(tool_context.as_ref())
+        .ok_or("The owning FlowPilot run is no longer active.")?;
+    let profile = Some(
+        copilot_profile_for(&app_handle, &identity.profile_id)
+            .await
+            .ok_or("The FlowPilot profile no longer exists.")?,
+    );
 
     let attribution_app_id = resolve_copilot_app_id(
         app_id.as_deref(),

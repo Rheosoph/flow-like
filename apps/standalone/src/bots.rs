@@ -626,16 +626,19 @@ mod tests {
 
     fn partial(text: &str) -> ChatStreamingResponse {
         ChatStreamingResponse {
+            message_id: None,
             chunk: Some(ResponseChunk::from_text(text, "probe")),
             actions: vec![],
             attachments: vec![],
             plan: None,
             widgets: vec![],
+            main_widget: None,
         }
     }
 
     fn answer(text: &str) -> ChatResponse {
         ChatResponse {
+            message_id: None,
             response: Response::from_text(text, "probe"),
             local_session: None,
             global_session: None,
@@ -643,6 +646,7 @@ mod tests {
             attachments: vec![],
             model_id: None,
             widgets: vec![],
+            main_widget: None,
         }
     }
 

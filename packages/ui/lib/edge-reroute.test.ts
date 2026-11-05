@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { buildConnectionCommands } from "./board-canvas/connection-commands";
 import { buildEdgeRerouteCommands } from "./edge-reroute";
 import {
 	ICommandType,
@@ -163,4 +164,95 @@ describe("buildEdgeRerouteCommands", () => {
 			}),
 		).toBeUndefined();
 	});
+
+	for (const schemaOptOut of [false, true]) {
+		test(`keeps typed branches connectable in either direction (schema opt-out: ${schemaOptOut})`, () => {
+			const schema = JSON.stringify({
+				title: "FlowPath",
+				type: "object",
+				properties: {
+					path: { type: "string" },
+					store_ref: { type: "string" },
+					cache_store_ref: { type: ["string", "null"] },
+				},
+				required: ["path", "store_ref"],
+			});
+			const source = pin(
+				"path",
+				"path",
+				IPinType.Output,
+				IVariableType.Struct,
+				{
+					schema: "path-schema",
+					options: schemaOptOut ? { enforce_schema: false } : undefined,
+				},
+			);
+			const input = pin("file", "file", IPinType.Input, IVariableType.Struct, {
+				schema: schemaOptOut
+					? '{"type":"object","properties":{"value":{"type":"number"}}}'
+					: schema,
+			});
+			const { pinCache, edge } = wire(source, input);
+			const refs = { "path-schema": schema };
+			const original = {
+				source: "from",
+				sourceHandle: source.id,
+				target: "to",
+				targetHandle: input.id,
+			};
+			expect(
+				buildConnectionCommands({
+					connection: original,
+					pinCache,
+					refs,
+					boardNodes: {},
+				}),
+			).toBeDefined();
+
+			const reroute = addedNode(
+				buildEdgeRerouteCommands({
+					reroute: rerouteTemplate(),
+					edge,
+					position: { x: 0, y: 0 },
+					currentLayer: undefined,
+					pinCache,
+				}),
+			);
+			for (const p of Object.values(reroute.pins))
+				pinCache.set(p.id, [p, reroute, true]);
+			const output = Object.values(reroute.pins).find(
+				(p) => p.name === "route_out",
+			);
+			if (!output) throw new Error("expected a reroute output");
+			const forward = {
+				...original,
+				source: reroute.id,
+				sourceHandle: output.id,
+			};
+			const expected = buildConnectionCommands({
+				connection: forward,
+				pinCache,
+				refs,
+				boardNodes: {},
+			});
+			expect(expected).toBeDefined();
+			expect(
+				buildConnectionCommands({
+					connection: {
+						source: forward.target,
+						sourceHandle: forward.targetHandle,
+						target: forward.source,
+						targetHandle: forward.sourceHandle,
+					},
+					pinCache,
+					refs,
+					boardNodes: {},
+				}),
+			).toEqual(expected);
+			if (schemaOptOut) {
+				expect(output.options).toEqual(source.options);
+				expect(output.options).not.toBe(source.options);
+			}
+		});
+	}
 });

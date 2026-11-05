@@ -44,11 +44,15 @@ export function ReasoningBody({
 	return (
 		<div
 			className={cn(
-				"overflow-y-auto scroll-smooth rounded-lg border border-border/50 bg-muted/25",
+				// The box sits in the chat transcript: once it reaches its end, the wheel must carry on
+				// scrolling the conversation (the desktop shell contains overflow-y-auto by default).
+				"overflow-y-auto overscroll-auto scroll-smooth rounded-lg border border-border/50 bg-muted/25",
 				compact ? "mt-1.5 max-h-50 px-3 py-2" : "mt-2 max-h-75 px-3.5 py-2.5",
 			)}
 			style={{
-				containIntrinsicSize: compact ? "200px" : "300px",
+				// `auto` keeps the last rendered height while off screen, so the transcript does not
+				// jump as the box is scrolled back into view.
+				containIntrinsicSize: compact ? "auto 200px" : "auto 300px",
 				contentVisibility: "auto",
 				maxWidth: "var(--fl-chat-measure, 38rem)",
 			}}

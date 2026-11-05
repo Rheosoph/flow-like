@@ -266,6 +266,9 @@ impl Host {
                 let request = field(&message, "requestId")
                     .as_string()
                     .ok_or("A save request identifier is required.")?;
+                if !self.read_only {
+                    self.app.host_flush_drafts()?;
+                }
                 let mut copy = Session::new(self.app.session.doc.clone());
                 copy.author = self.app.session.author.clone();
                 copy.stamp_save();
@@ -286,7 +289,8 @@ impl Host {
             }
             Some("saved") => {
                 if let Some(revision) = field(&message, "revision").as_f64() {
-                    if self.last_exported == Some(revision as u64)
+                    if !self.app.host_has_drafts()
+                        && self.last_exported == Some(revision as u64)
                         && self.app.session.rev() as f64 == revision
                     {
                         self.app.session.dirty = false;
@@ -301,7 +305,7 @@ impl Host {
     }
 
     fn report_dirty(&mut self) {
-        let dirty = self.unsaved_new || self.app.session.dirty;
+        let dirty = self.unsaved_new || self.app.session.dirty || self.app.host_has_drafts();
         if dirty != self.reported_dirty {
             self.reported_dirty = dirty;
             event(
@@ -398,7 +402,7 @@ impl eframe::App for Host {
         self.report_dirty();
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         raw.dropped_files.clear();
         if self.read_only {
             self.app.host_cancel_synthetic();
@@ -411,7 +415,7 @@ impl eframe::App for Host {
                 )
             });
         } else {
-            self.app.raw_input_hook(raw);
+            self.app.raw_input_hook(ctx, raw);
         }
     }
 

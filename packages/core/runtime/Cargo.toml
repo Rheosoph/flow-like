@@ -58,8 +58,8 @@ serde_json.workspace = true
 async-trait.workspace = true
 percent-encoding.workspace = true
 utoipa = { version = "5", optional = true }
-any-tts = { version = "0.2.0", default-features = false, optional = true }
-any-speech-to-text = { git = "https://github.com/Rheosoph/any-speech-to-text", rev = "e043cec6935003ad746454d7df5a1d932f6c8ac5", default-features = false, optional = true }
+any-tts = { git = "https://github.com/Rheosoph/any-tts.git", rev = "b915d65850029fe9ce41f6b2f419f49fbf03e937", default-features = false, optional = true }
+any-speech-to-text = { git = "https://github.com/Rheosoph/any-speech-to-text.git", rev = "100983d10a6a43c99bd151e4357f5027abe8cc07", default-features = false, optional = true }
 
 [dev-dependencies]
 proptest = "1"

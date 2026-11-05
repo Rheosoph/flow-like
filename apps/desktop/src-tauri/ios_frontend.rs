@@ -3,20 +3,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use crate::frontend_payload::bundled_mime_type;
+
 pub struct StagedFrontend {
-    pub wasm_paths: Vec<String>,
-    pub wasm_bytes: u64,
+    pub bundled_paths: Vec<String>,
+    pub bundled_bytes: u64,
 }
 
-fn is_wasm_payload(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    name.ends_with(".wasm")
-        || name.ends_with(".wasm.gz")
-        || name.rsplit_once(".wasm.gz.").is_some_and(|(_, part)| {
-            !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
-        })
+fn is_bundled_payload(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| bundled_mime_type(name).is_some())
 }
 
 fn files_under(root: &Path) -> io::Result<Vec<PathBuf>> {
@@ -67,13 +64,14 @@ fn sync_files(source: &Path, destination: &Path, files: &[PathBuf]) -> io::Resul
     Ok(())
 }
 
-/// Keep WASM payloads in the signed app bundle, outside the Mach-O __TEXT limit.
+/// Keep bulky payloads in the signed app bundle, outside the Mach-O __TEXT limit.
 pub fn stage(source: &Path, embedded: &Path, resources: &Path) -> io::Result<StagedFrontend> {
     let files = files_under(source)?;
-    let (wasm, frontend): (Vec<_>, Vec<_>) = files.into_iter().partition(|p| is_wasm_payload(p));
-    let mut wasm_paths = Vec::with_capacity(wasm.len());
-    let mut wasm_bytes = 0;
-    for path in &wasm {
+    let (bundled, frontend): (Vec<_>, Vec<_>) =
+        files.into_iter().partition(|p| is_bundled_payload(p));
+    let mut bundled_paths = Vec::with_capacity(bundled.len());
+    let mut bundled_bytes = 0;
+    for path in &bundled {
         let relative = path.to_str().ok_or_else(|| {
             io::Error::other(format!(
                 "frontend asset path is not UTF-8: {}",
@@ -82,17 +80,17 @@ pub fn stage(source: &Path, embedded: &Path, resources: &Path) -> io::Result<Sta
         })?;
         if relative.contains('\\') || relative.chars().any(char::is_control) {
             return Err(io::Error::other(format!(
-                "invalid WASM asset path: {relative}"
+                "invalid bundled frontend asset path: {relative}"
             )));
         }
-        wasm_paths.push(relative.to_owned());
-        wasm_bytes += fs::metadata(source.join(path))?.len();
+        bundled_paths.push(relative.to_owned());
+        bundled_bytes += fs::metadata(source.join(path))?.len();
     }
-    sync_files(source, resources, &wasm)?;
+    sync_files(source, resources, &bundled)?;
     sync_files(source, embedded, &frontend)?;
     Ok(StagedFrontend {
-        wasm_paths,
-        wasm_bytes,
+        bundled_paths,
+        bundled_bytes,
     })
 }
 
@@ -130,39 +128,40 @@ mod tests {
     }
 
     #[test]
-    fn separates_raw_and_compressed_wasm_without_changing_urls_or_bytes() {
+    fn separates_bundled_payloads_without_changing_urls_or_bytes() {
         let fixture = Fixture::new();
-        for (path, bytes) in [
-            ("index.html", b"<html>app</html>".as_slice()),
-            ("craft/pdfcraft/host.js", b"fetch('./craft.wasm.gz.000')"),
-            ("craft/pdfcraft/craft.wasm.gz.000", b"gzip chunk"),
-            ("craft/pdfcraft/craft.wasm.gz.001", b"second chunk"),
-            ("module.wasm", b"\0asm"),
-            ("module.wasm.gz", b"compressed wasm"),
-            ("module.wasm.map", b"source map"),
-        ] {
-            fs::write(fixture.0.join("out").join(path), bytes).unwrap();
+        let files = [
+            ("_next/static/media/app.css", b"body{}".as_slice(), false),
+            ("_next/static/media/inter.woff2", b"wOF2", true),
+            ("craft/host.js", b"fetch('./c.wasm.gz.0')", false),
+            ("craft/licenses/index.html", b"<html>", false),
+            ("craft/licenses/krilla.tar.gz", b"\x1f\x8b", true),
+            ("craft/pdfcraft/craft.wasm.gz.000", b"gzip chunk", true),
+            ("craft/pdfcraft/craft.wasm.gz.001", b"second chunk", true),
+            ("index.html", b"<html>app</html>", false),
+            ("module.wasm", b"\0asm", true),
+            ("module.wasm.gz", b"compressed wasm", true),
+            ("module.wasm.map", b"source map", false),
+            ("placeholder.png", b"\x89PNG", true),
+        ];
+        for (path, bytes, _) in files {
+            let source = fixture.0.join("out").join(path);
+            fs::create_dir_all(source.parent().unwrap()).unwrap();
+            fs::write(source, bytes).unwrap();
         }
         let staged = fixture.stage();
-        assert_eq!(
-            staged.wasm_paths,
-            [
-                "craft/pdfcraft/craft.wasm.gz.000",
-                "craft/pdfcraft/craft.wasm.gz.001",
-                "module.wasm",
-                "module.wasm.gz",
-            ]
-        );
-        assert_eq!(staged.wasm_bytes, 41);
-        for path in staged.wasm_paths {
-            assert!(!fixture.0.join("embedded").join(&path).exists());
-            assert_eq!(
-                fs::read(fixture.0.join("resources").join(&path)).unwrap(),
-                fs::read(fixture.0.join("out").join(path)).unwrap()
-            );
+        let bundled: Vec<_> = files.iter().filter(|f| f.2).map(|f| f.0).collect();
+        assert_eq!(staged.bundled_paths, bundled);
+        assert_eq!(staged.bundled_bytes, 51);
+        for (path, bytes, bundled) in files {
+            let (kept, skipped) = if bundled {
+                ("resources", "embedded")
+            } else {
+                ("embedded", "resources")
+            };
+            assert_eq!(fs::read(fixture.0.join(kept).join(path)).unwrap(), bytes);
+            assert!(!fixture.0.join(skipped).join(path).exists(), "{path}");
         }
-        assert!(fixture.0.join("embedded/craft/pdfcraft/host.js").exists());
-        assert!(fixture.0.join("embedded/module.wasm.map").exists());
         assert!(fixture.0.join("out/module.wasm").exists());
     }
 

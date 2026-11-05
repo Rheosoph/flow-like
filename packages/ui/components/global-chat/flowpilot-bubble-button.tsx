@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useFabBubbleVisible } from "../../state/fab-bubble";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
+import { BOTS_ROUTE } from "../bots-tab/dock-selection";
 import { FlowPilotBubbleOrb } from "./flowpilot-bubble-orb";
 import { useFlowPilotOrbState, useOrbAckNonce } from "./flowpilot-orb-state";
 
@@ -42,12 +43,12 @@ const ORB_STATE_LABEL: Record<string, string> = {
 	working: "FlowPilot is applying changes",
 };
 
-// Chat already provides FlowPilot. Home requests the launcher when its layout has no assistant widget.
-const HIDDEN_ROUTE_PREFIXES = ["/chat"];
+// The Bots tab already provides FlowPilot. Home requests the launcher when its layout has no assistant widget.
+const HIDDEN_ROUTE_PREFIXES = [BOTS_ROUTE];
 
 /**
  * The movable FlowPilot launcher. Clicking opens the same conversation as the hero bubble and
- * /chat in the docked overlay. Its position is remembered across visits. Desktop only.
+ * the Bots tab in the docked overlay. Its position is remembered across visits. Desktop only.
  *
  * Visibility is opt-in: only surfaces that call `useRequestFabBubble()` get it (see fab-bubble.ts),
  * so it no longer floats over screens it has nothing to do with.

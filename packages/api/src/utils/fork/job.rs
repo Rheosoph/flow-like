@@ -655,6 +655,7 @@ fn hidden_app_shell(
         forked_at: Set(Some(now)),
         created_at: Set(now),
         updated_at: Set(now),
+        bot_id: Set(None),
     }
 }
 

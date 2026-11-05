@@ -59,9 +59,72 @@ pub(crate) fn validate_bit_pricing(bit: &Bit) -> Result<(), ApiError> {
                 read_embedding_pricing(bit)?;
             }
         }
+        BitTypes::ImageGeneration
+            if bit
+                .parameters
+                .pointer("/provider/provider_name")
+                .and_then(|value| value.as_str())
+                .is_some_and(
+                    flow_like::flow_like_model_provider::provider::is_hosted_provider_name,
+                ) =>
+        {
+            crate::routes::images::catalog_provider(bit)?;
+            hosted_image_rate(bit)?;
+        }
+        BitTypes::Stt | BitTypes::Tts
+            if bit
+                .parameters
+                .pointer("/provider/provider_name")
+                .and_then(|value| value.as_str())
+                .is_some_and(
+                    flow_like::flow_like_model_provider::provider::is_hosted_provider_name,
+                ) =>
+        {
+            crate::routes::audio::catalog_provider(bit)?;
+        }
         _ => {}
     }
     Ok(())
+}
+
+/// One bounded image reserves the catalog's published per-request provider cost.
+pub(crate) fn hosted_image_rate(bit: &Bit) -> Result<HostedRateSnapshot, ApiError> {
+    let pricing = bit
+        .parameters
+        .get("pricing")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| ApiError::bad_request("Hosted images require explicit per-image pricing"))?;
+    if pricing.keys().any(|key| key != "request_micro_usd") {
+        return Err(ApiError::bad_request(
+            "Hosted image pricing accepts request_micro_usd only",
+        ));
+    }
+    let request_micro_usd = pricing
+        .get("request_micro_usd")
+        .and_then(|value| value.as_i64())
+        .filter(|value| *value >= 0)
+        .ok_or_else(|| {
+            ApiError::bad_request("Image request_micro_usd must be a nonnegative integer")
+        })?;
+    let digest = blake3::hash(serde_json::to_string(pricing)?.as_bytes());
+    let mut rate = HostedRateSnapshot {
+        version: format!("image-bit:{}:pricing:v1:{digest}", bit.id),
+        provider_pricing_available: true,
+        input_micro_usd_per_million_tokens: 0,
+        input_micro_usd_per_million_bytes: None,
+        max_input_bytes: None,
+        output_micro_usd_per_million_tokens: 0,
+        request_micro_usd,
+        context_tokens: 1,
+        usd_micro_per_eur: 1_159_200,
+        funding_basis_points: 550,
+        api_micro_usd_per_million_ms: 20_001,
+        serving_request_micro_usd: 1,
+        max_request_ms: 240_000,
+    };
+    crate::routes::chat::hosted_worker::apply_worker_tariff(&mut rate);
+    rate.validate()?;
+    Ok(rate)
 }
 
 #[derive(Serialize)]

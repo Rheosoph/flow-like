@@ -12,7 +12,7 @@ use flow_like_types::{Result, anyhow};
 
 use super::policy::{executor_client_id, topic_for, validate_channel_id, validate_topic};
 use super::reply_chunks::reply_payloads;
-use crate::ChannelForwarder;
+use crate::{ChannelForwardError, ChannelForwarder};
 
 /// Seconds AWS IoT waits for the waiter's PUBACK before answering 504 (allowed range 1..=15).
 pub const DIRECT_MESSAGE_TIMEOUT_SECS: i32 = 10;
@@ -72,9 +72,9 @@ fn describe_error(
         let status = context.raw().status().as_u16();
         let service_error = context.err();
         if status == 404 || service_error.is_resource_not_found_exception() {
-            return anyhow!(
+            return flow_like_types::Error::new(ChannelForwardError::NoListener).context(format!(
                 "channel '{channel_id}' has no waiter connected as '{client_id}' (AWS IoT direct message returned 404)"
-            );
+            ));
         }
         if status == 504 || service_error.is_gateway_timeout_exception() {
             return anyhow!(

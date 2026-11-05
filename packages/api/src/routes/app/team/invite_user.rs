@@ -40,7 +40,8 @@ pub struct InviteUserParams {
         (status = 200, description = "Invite created", body = ()),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
-        (status = 404, description = "Not found")
+        (status = 404, description = "Not found"),
+        (status = 409, description = "BOT_WORKSPACE_LOCKED: the app is a bot's workspace, which is never shared")
     ),
     security(
         ("bearer_auth" = []),
@@ -84,6 +85,9 @@ pub async fn invite_user(
                     .one(txn)
                     .await?
                     .ok_or(ApiError::NOT_FOUND)?;
+                if app.bot_id.is_some() {
+                    return Err(crate::routes::bots::workspace::locked(&app_id));
+                }
 
                 if app.price > 0 {
                     return Err(crate::payments::error(
@@ -218,6 +222,7 @@ pub async fn invite_user(
     if let Err(error) = dispatch_notification(
         &state,
         DispatchNotificationInput {
+            bot_context: None,
             user_id: params.sub.clone(),
             app_id: Some(app_id.clone()),
             title: format!("You've been invited to {}", app_name),
@@ -233,6 +238,11 @@ pub async fn invite_user(
     .await
     {
         tracing::warn!(error = %error, "Failed to dispatch invitation notification");
+        // dispatch_notification wakes the invitee only once its own write succeeds.
+        state
+            .channels
+            .publish_realtime_invalidation(&params.sub)
+            .await;
     }
 
     audit_branch!(

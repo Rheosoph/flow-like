@@ -3,6 +3,8 @@ export const MAX_ERROR_BODY_CHARS = 1_000;
 export interface ChannelPushOptions {
 	/** Aborts the delivery; an aborted push is never retried through the fallback. */
 	signal?: AbortSignal;
+	/** Preserved across retries and API forwarding to prevent duplicate delivery. */
+	deliveryId?: string;
 }
 
 export function errorMessage(error: unknown): string {
@@ -11,10 +13,6 @@ export function errorMessage(error: unknown): string {
 
 export function bodyExcerpt(text: string): string {
 	return text.trim().slice(0, MAX_ERROR_BODY_CHARS);
-}
-
-export function unixSeconds(): number {
-	return Math.floor(Date.now() / 1000);
 }
 
 export interface TimeoutSignal {

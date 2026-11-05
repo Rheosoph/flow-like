@@ -21,6 +21,16 @@ for lightweight local models and another for provider-backed reasoning models.
 Changing the Profile changes the active configuration; it does not move or
 duplicate your Apps.
 
+On Desktop, each Profile has its own sign-in session for its configured hub.
+Desktop keeps refresh credentials in encrypted native storage and renews them
+without an open app window. When a login expires or is revoked, Desktop opens
+the browser to sign in to that Profile again. Signing out invalidates that
+Profile's running authenticated work; another Profile's login does not replace it.
+Native sign-in requires HTTPS, with HTTP allowed for loopback development endpoints.
+
+After upgrading, a previously shared browser login can migrate to one Profile.
+Sign in separately to any other Profiles that used that login.
+
 Each Profile can also have a personal Home layout. See
 [Customize your Home](/start/home/) for arranging widgets and choosing between
 personal, published, and bundled defaults.

@@ -164,6 +164,41 @@ pub fn boot_id() -> Result<String> {
     }
 }
 
+/// The port the setup package's Docker Compose file forwards into this container, and the
+/// host address Docker publishes it on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct PublishedPort {
+    pub host: std::net::IpAddr,
+    pub port: u16,
+}
+
+/// Known only inside a container whose environment names both halves of the mapping, as the
+/// setup package's `.env` does. A native agent whose shell exported that file stays unknown.
+pub fn published_port() -> Option<PublishedPort> {
+    static PUBLISHED: std::sync::OnceLock<Option<PublishedPort>> = std::sync::OnceLock::new();
+    *PUBLISHED.get_or_init(|| {
+        let container = ["/.dockerenv", "/run/.containerenv"]
+            .iter()
+            .any(|marker| Path::new(marker).exists());
+        let env = |key| std::env::var(key).ok();
+        container
+            .then(|| {
+                published_from(
+                    env("FLOW_LIKE_PUBLISH_HOST").as_deref(),
+                    env("FLOW_LIKE_SERVICE_PORT").as_deref(),
+                )
+            })
+            .flatten()
+    })
+}
+
+fn published_from(host: Option<&str>, port: Option<&str>) -> Option<PublishedPort> {
+    Some(PublishedPort {
+        host: host?.trim().parse().ok()?,
+        port: port?.trim().parse().ok().filter(|port| *port > 0)?,
+    })
+}
+
 fn open(state_dir: &Path) -> Result<StateStore> {
     StateStore::open(&state_dir.join("management.sqlite"))
 }
@@ -616,6 +651,31 @@ pub async fn dispatch_update(state_dir: &Path, boot_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn published_port_needs_both_halves_of_the_mapping() {
+        let loopback = std::net::IpAddr::from([127, 0, 0, 1]);
+        assert_eq!(
+            published_from(Some("127.0.0.1"), Some(" 8080\n")),
+            Some(PublishedPort {
+                host: loopback,
+                port: 8080
+            })
+        );
+        assert_eq!(
+            published_from(Some("::1"), Some("9000")).map(|published| published.host),
+            Some("::1".parse().unwrap())
+        );
+        for (host, port) in [
+            (None, Some("8080")),
+            (Some("127.0.0.1"), None),
+            (Some("localhost"), Some("8080")),
+            (Some("127.0.0.1"), Some("0")),
+            (Some("127.0.0.1"), Some("70000")),
+        ] {
+            assert_eq!(published_from(host, port), None, "{host:?} {port:?}");
+        }
+    }
 
     #[test]
     fn local_and_remote_updates_share_the_host_operation_slot() -> Result<()> {

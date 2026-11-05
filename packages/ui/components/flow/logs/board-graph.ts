@@ -66,8 +66,31 @@ function inputPins(node: INode | undefined, exec: boolean): IPin[] {
 		.sort((a, b) => a.index - b.index);
 }
 
+/** Match the compiler's splicable_reroute so retained reroutes still need a run. */
+function splicedRerouteInput(node: INode | undefined): string | undefined {
+	if (node?.name !== "reroute" || node.wasm) return undefined;
+	const pins = Object.values(node.pins);
+	if (pins.length !== 2) return undefined;
+	const input = pins.find((pin) => pin.pin_type === IPinType.Input);
+	const output = pins.find((pin) => pin.pin_type === IPinType.Output);
+	if (
+		!input ||
+		!output ||
+		input.data_type === IVariableType.Geometry ||
+		output.data_type === IVariableType.Geometry ||
+		(!input.depends_on?.length && input.default_value != null)
+	) {
+		return undefined;
+	}
+	return input.id;
+}
+
 /** Nodes feeding one pin, looking through collapsed-layer relay pins. */
-function feedingNodes(graph: IBoardGraph, pinId: string): string[] {
+function feedingNodes(
+	graph: IBoardGraph,
+	pinId: string,
+	skipSplicedReroutes = false,
+): string[] {
 	const out: string[] = [];
 	const seen = new Set<string>([pinId]);
 	const stack = [...(graph.sources.get(pinId) ?? [])];
@@ -78,6 +101,13 @@ function feedingNodes(graph: IBoardGraph, pinId: string): string[] {
 		const owner = graph.owners.get(source);
 		if (!owner) continue;
 		if (owner.kind === "node") {
+			const input = skipSplicedReroutes
+				? splicedRerouteInput(graph.nodes[owner.id])
+				: undefined;
+			if (input) {
+				stack.push(...(graph.sources.get(input) ?? []));
+				continue;
+			}
 			if (!out.includes(owner.id)) out.push(owner.id);
 			continue;
 		}
@@ -127,6 +157,7 @@ export interface IMissedNode {
  * Data sources of a node that never executed in the run. The walk passes
  * through sources that did run and stops at the first that did not, so the
  * result names the nearest cause rather than its whole ancestry.
+ * Reroutes removed by the compiler do not have execution logs.
  */
 export function missedUpstream(
 	graph: IBoardGraph,
@@ -139,7 +170,7 @@ export function missedUpstream(
 	while (queue.length > 0) {
 		const current = queue.shift() as string;
 		for (const pin of inputPins(graph.nodes[current], false)) {
-			for (const id of feedingNodes(graph, pin.id)) {
+			for (const id of feedingNodes(graph, pin.id, true)) {
 				if (seen.has(id)) continue;
 				seen.add(id);
 				if (visited.has(id)) queue.push(id);

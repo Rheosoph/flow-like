@@ -61,17 +61,21 @@ impl NodeLogic for PushAttachmentNode {
         context.deactivate_exec_pin("exec_out").await?;
         let attachment: Attachment = context.evaluate_pin("attachment").await?;
         let cached_response = CachedChatResponse::load(context).await?;
+        let _message_guard = cached_response.emission.lock().await;
+        let message_id = cached_response.message_id().await;
         {
             let mut mutable_response = cached_response.response.lock().await;
             mutable_response.attachments.push(attachment.clone());
         }
 
         let streaming_response = ChatStreamingResponse {
+            message_id,
             actions: vec![],
             attachments: vec![attachment],
             chunk: None,
             plan: None,
             widgets: vec![],
+            main_widget: None,
         };
 
         context

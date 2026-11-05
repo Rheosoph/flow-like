@@ -5,9 +5,22 @@ import {
 	type GenerationModelKind,
 	type GenerationModelPreset,
 } from "./generation-model-presets";
+import {
+	buildHostedImageBit,
+	isHostedImageGeneration,
+} from "./hosted-image-generation";
 import { mlxAssetPathError } from "./mlx-model-pack";
 
 export * from "./generation-model-presets";
+
+/** Only local generation models register weight files before the root Bit. */
+export async function prepareGenerationModelRootBit(
+	bit: IBit,
+	registerAssets: () => Promise<GenerationAssetDraft[]>,
+): Promise<IBit> {
+	if (isHostedImageGeneration(bit)) return buildHostedImageBit(bit);
+	return buildGenerationModelRootBit(bit, await registerAssets());
+}
 
 export interface GenerationAssetDraft {
 	key: string;

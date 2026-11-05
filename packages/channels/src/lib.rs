@@ -19,22 +19,82 @@ use flow_like_types::channel::{
 use flow_like_types::tokio::sync::OnceCell;
 use flow_like_types::tokio_util::sync::CancellationToken;
 
-#[cfg(feature = "aws")]
+#[cfg(any(feature = "aws", feature = "aws-receiver"))]
 pub mod aws;
 #[cfg(feature = "azure")]
 pub mod azure;
 #[cfg(feature = "gcp")]
 pub mod gcp;
-#[cfg(any(feature = "aws", feature = "azure"))]
+#[cfg(feature = "nats")]
+pub mod nats;
+pub mod realtime;
+#[cfg(any(
+    feature = "aws",
+    feature = "aws-receiver",
+    feature = "azure",
+    feature = "nats"
+))]
 mod tls;
 
 /// API-side: deliver a push the client could not send itself onto the transport the waiter
 /// listens on.
 #[async_trait]
+#[allow(
+    clippy::double_must_use,
+    reason = "async_trait marks the boxed future it already returns as must_use"
+)]
 pub trait ChannelForwarder: Send + Sync {
     fn transport(&self) -> &'static str;
+    /// Fails with a [`ChannelForwardError`] when the transport answered for the waiter; any
+    /// other error is an infrastructure failure the client may retry.
     async fn forward(&self, push: &ChannelPush) -> flow_like_types::Result<()>;
+    /// Preserve a delivery identifier when a client retries through HTTP.
+    async fn forward_with_id(&self, push: &ChannelPush, _id: &str) -> flow_like_types::Result<()> {
+        self.forward(push).await
+    }
 }
+
+/// A push the transport delivered nowhere, or the waiter turned down. Forwarders return it
+/// inside their error, under any context they attach.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ChannelForwardError {
+    /// Nobody listens on the channel: its waiter finished or never connected.
+    NoListener,
+    /// The waiter received the push and refused it; `reason` is the waiter's own text.
+    Rejected {
+        kind: ChannelRejection,
+        reason: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChannelRejection {
+    AlreadyAnswered,
+    Expired,
+    UnknownRequest,
+    /// The channel closed, or its waiter stopped waiting for the request.
+    Closed,
+    Cancelled,
+    InboundFull,
+    /// The delivery id was already used for a different message.
+    DuplicateDelivery,
+    WrongChannel,
+    /// A reason this build does not know.
+    Other,
+}
+
+impl std::fmt::Display for ChannelForwardError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::NoListener => f.write_str("no waiter listens on the channel"),
+            Self::Rejected { kind, reason } => {
+                write!(f, "the waiter rejected the push ({kind:?}): {reason}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for ChannelForwardError {}
 
 fn transport_name(grant: &ChannelExecutorGrant) -> &'static str {
     match grant {
@@ -42,6 +102,7 @@ fn transport_name(grant: &ChannelExecutorGrant) -> &'static str {
         ChannelExecutorGrant::AwsMqtt { .. } => "aws_mqtt",
         ChannelExecutorGrant::AzureWebPubSub { .. } => "azure_web_pubsub",
         ChannelExecutorGrant::GcpFirebaseRtdb { .. } => "gcp_firebase_rtdb",
+        ChannelExecutorGrant::Nats { .. } => "nats",
     }
 }
 
@@ -50,9 +111,12 @@ fn transport_name(grant: &ChannelExecutorGrant) -> &'static str {
 pub fn transport_compiled(grant: &ChannelExecutorGrant) -> bool {
     match grant {
         ChannelExecutorGrant::Http {} => true,
-        ChannelExecutorGrant::AwsMqtt { .. } => cfg!(feature = "aws"),
+        ChannelExecutorGrant::AwsMqtt { .. } => {
+            cfg!(any(feature = "aws", feature = "aws-receiver"))
+        }
         ChannelExecutorGrant::AzureWebPubSub { .. } => cfg!(feature = "azure"),
         ChannelExecutorGrant::GcpFirebaseRtdb { .. } => cfg!(feature = "gcp"),
+        ChannelExecutorGrant::Nats { .. } => cfg!(feature = "nats"),
     }
 }
 
@@ -66,7 +130,7 @@ pub async fn connect_executor_channel(
         ChannelExecutorGrant::Http {} => Err(flow_like_types::anyhow!(
             "the http channel transport has no connection to open; build a PollingChannel instead"
         )),
-        #[cfg(feature = "aws")]
+        #[cfg(any(feature = "aws", feature = "aws-receiver"))]
         ChannelExecutorGrant::AwsMqtt { .. } => aws::AwsIotChannel::connect(grant).await,
         #[cfg(feature = "azure")]
         ChannelExecutorGrant::AzureWebPubSub { .. } => {
@@ -76,6 +140,8 @@ pub async fn connect_executor_channel(
         ChannelExecutorGrant::GcpFirebaseRtdb { .. } => {
             gcp::FirebaseRtdbChannel::connect(grant).await
         }
+        #[cfg(feature = "nats")]
+        ChannelExecutorGrant::Nats { .. } => nats::NatsChannel::connect(grant).await,
         #[allow(unreachable_patterns)]
         other => Err(flow_like_types::anyhow!(
             "channel transport '{}' is not compiled into this executor",

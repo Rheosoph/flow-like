@@ -12,7 +12,7 @@ use std::fmt;
 use super::DeletionRoot;
 use super::external::ExternalStep;
 use super::graph::{FkAction, FkEdge, FkGraph, fk_graph};
-use super::overrides::{RootOverrides, overrides_for};
+use super::overrides::{RootOverrides, SoftSweep, overrides_for};
 
 const MAX_DEPTH: usize = 8;
 
@@ -243,6 +243,12 @@ pub enum PlanError {
         column: String,
         root: String,
     },
+    /// A soft sweep keyed by the ids of another table names one the plan does not drain, or
+    /// one without a single-column primary key.
+    SweepViaNotDrained {
+        table: String,
+        via: String,
+    },
     Cycle(Vec<String>),
 }
 
@@ -278,6 +284,10 @@ impl fmt::Display for PlanError {
             } => write!(
                 f,
                 "{table}.{column} is compared to the {root} id but is not a foreign key onto the {root} primary key"
+            ),
+            Self::SweepViaNotDrained { table, via } => write!(
+                f,
+                "{table} is swept by {via} ids, but the plan does not drain {via} or {via} has no single-column primary key"
             ),
             Self::Cycle(tables) => write!(f, "cascade constraints form a cycle through {tables:?}"),
         }
@@ -446,8 +456,16 @@ fn build_plan(
             .collect()
     };
 
+    for sweep in &overrides.soft_sweeps {
+        check_sweep(graph, sweep)?;
+    }
     let mut steps = vec![Step::Tombstone];
     steps.extend(overrides.before_drain.iter().copied().map(Step::External));
+    for sweep in &overrides.soft_sweeps {
+        if let Some(via) = sweep.via {
+            steps.push(via_sweep(graph, sweep, via, predicates_for(via))?);
+        }
+    }
     for table in &order {
         steps.extend(null_out_steps(table));
         steps.push(Step::Drain {
@@ -456,33 +474,78 @@ fn build_plan(
         });
     }
     steps.extend(null_out_steps(root_table));
-    for sweep in &overrides.soft_sweeps {
-        let meta = graph
-            .table(sweep.table)
-            .ok_or_else(|| PlanError::UnknownTable(sweep.table.to_owned()))?;
-        if !meta.has_column(sweep.column) {
-            return Err(PlanError::UnknownColumn {
+    steps.extend(
+        overrides
+            .soft_sweeps
+            .iter()
+            .filter(|sweep| sweep.via.is_none())
+            .map(|sweep| Step::SweepSoft {
                 table: sweep.table.to_owned(),
                 column: sweep.column.to_owned(),
-            });
-        }
-        if let Some(column) = meta.primary_key.iter().find(|column| column.kind.is_none()) {
-            return Err(PlanError::UnsupportedPrimaryKey {
-                table: sweep.table.to_owned(),
-                column: column.name.clone(),
-            });
-        }
-        steps.push(Step::SweepSoft {
-            table: sweep.table.to_owned(),
-            column: sweep.column.to_owned(),
-        });
-    }
+            }),
+    );
     steps.extend(overrides.after_drain.iter().copied().map(Step::External));
     steps.push(Step::DeleteRoot);
 
     ensure_rooted(graph, &root_key, &steps)?;
 
     Ok(Plan { root, steps })
+}
+
+fn check_sweep(graph: &FkGraph, sweep: &SoftSweep) -> Result<(), PlanError> {
+    let meta = graph
+        .table(sweep.table)
+        .ok_or_else(|| PlanError::UnknownTable(sweep.table.to_owned()))?;
+    if !meta.has_column(sweep.column) {
+        return Err(PlanError::UnknownColumn {
+            table: sweep.table.to_owned(),
+            column: sweep.column.to_owned(),
+        });
+    }
+    if let Some(column) = meta.primary_key.iter().find(|column| column.kind.is_none()) {
+        return Err(PlanError::UnsupportedPrimaryKey {
+            table: sweep.table.to_owned(),
+            column: column.name.clone(),
+        });
+    }
+    Ok(())
+}
+
+/// The drain of the rows whose `sweep.column` holds the id of a `via` row the plan drains,
+/// with one predicate per path the plan reaches `via` along.
+fn via_sweep(
+    graph: &FkGraph,
+    sweep: &SoftSweep,
+    via: &str,
+    via_predicates: Vec<Predicate>,
+) -> Result<Step, PlanError> {
+    let not_drained = || PlanError::SweepViaNotDrained {
+        table: sweep.table.to_owned(),
+        via: via.to_owned(),
+    };
+    let [key] = graph
+        .table(via)
+        .ok_or_else(not_drained)?
+        .primary_key
+        .as_slice()
+    else {
+        return Err(not_drained());
+    };
+    if via_predicates.is_empty() {
+        return Err(not_drained());
+    }
+    Ok(Step::Drain {
+        table: sweep.table.to_owned(),
+        predicates: via_predicates
+            .into_iter()
+            .map(|inner| Predicate::Via {
+                column: sweep.column.to_owned(),
+                parent: via.to_owned(),
+                parent_column: key.name.clone(),
+                inner: Box::new(inner),
+            })
+            .collect(),
+    })
 }
 
 /// Every predicate must bottom out at the root's primary key, either through
@@ -603,6 +666,16 @@ mod tests {
             .map(|(i, step)| format!("{i:>3}: {step}"))
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// Prints the plans to review before regenerating `edges.snapshot.txt`:
+    /// `cargo test -p flow-like-api --features db-chaos --lib -- deletion::plan::tests::show --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn show_the_user_and_app_plans() {
+        for root in [DeletionRoot::User, DeletionRoot::App] {
+            println!("{root:?}\n{}", render(&plan_for(root).unwrap()));
+        }
     }
 
     #[test]
@@ -1007,6 +1080,244 @@ mod tests {
         assert!(last_drain < warnings);
         assert_eq!(warnings + 1, plan.steps.len() - 1);
         assert_eq!(plan.steps.last(), Some(&Step::DeleteRoot));
+    }
+
+    /// Inbox rows name their principal without a foreign key. The account's own rows go by soft
+    /// sweeps; its bots' rows go through `Bot` while those rows still exist. Memberships go
+    /// first, so no fan-out lands in an inbox after its entries are gone.
+    #[test]
+    fn user_plan_sweeps_the_inboxes_of_the_account_and_its_bots() {
+        let plan = plan_for(DeletionRoot::User).unwrap();
+        let bots = drain_index(&plan, "Bot");
+        let last_drain = plan
+            .steps
+            .iter()
+            .rposition(|step| matches!(step, Step::Drain { .. } | Step::NullOut { .. }))
+            .unwrap();
+        let (mut previous_drain, mut previous_sweep) = (0, last_drain);
+        for (table, column) in [
+            ("ConversationMember", "principalId"),
+            ("InboxEntry", "inboxId"),
+            ("InboxKey", "principalId"),
+        ] {
+            let drain = drain_index(&plan, table);
+            let Step::Drain { predicates, .. } = &plan.steps[drain] else {
+                unreachable!()
+            };
+            assert_eq!(
+                predicates,
+                &[Predicate::Via {
+                    column: column.into(),
+                    parent: "Bot".into(),
+                    parent_column: "id".into(),
+                    inner: Box::new(Predicate::Root {
+                        column: "ownerId".into()
+                    }),
+                }],
+                "{}",
+                render(&plan)
+            );
+            assert!(
+                previous_drain < drain && drain < bots,
+                "the bots' {table} rows go in order and before the bots:\n{}",
+                render(&plan)
+            );
+            let sweep = plan
+                .position(&Step::SweepSoft {
+                    table: table.into(),
+                    column: column.into(),
+                })
+                .unwrap_or_else(|| panic!("{table}.{column} is not swept:\n{}", render(&plan)));
+            assert!(
+                previous_sweep < sweep && sweep < plan.steps.len() - 1,
+                "the account's {table} rows go in order after the last drain:\n{}",
+                render(&plan)
+            );
+            (previous_drain, previous_sweep) = (drain, sweep);
+        }
+    }
+
+    #[test]
+    fn bots_drain_after_their_apps_and_secrets_and_apps_drop_their_bot_attachments() {
+        let plan = plan_for(DeletionRoot::User).unwrap();
+        let through_bots = Predicate::Via {
+            column: "botId".into(),
+            parent: "Bot".into(),
+            parent_column: "id".into(),
+            inner: Box::new(Predicate::Root {
+                column: "ownerId".into(),
+            }),
+        };
+        for table in ["BotApp", "BotSecret"] {
+            assert_before(&plan, table, "Bot");
+            let Step::Drain { predicates, .. } = &plan.steps[drain_index(&plan, table)] else {
+                unreachable!()
+            };
+            assert_eq!(predicates, std::slice::from_ref(&through_bots));
+        }
+
+        let app = app_plan();
+        let Step::Drain { predicates, .. } = &app.steps[drain_index(&app, "BotApp")] else {
+            unreachable!()
+        };
+        assert_eq!(
+            predicates,
+            &[Predicate::Root {
+                column: "appId".into()
+            }]
+        );
+        assert!(app.steps.iter().all(|step| step.table() != Some("Bot")));
+    }
+
+    #[test]
+    fn user_plan_keeps_inbox_attribution() {
+        let overrides = overrides_for(DeletionRoot::User);
+        let plan = plan_for(DeletionRoot::User).unwrap();
+        for (table, column) in [
+            ("InboxEntry", "senderId"),
+            ("Conversation", "createdBy"),
+            ("ConversationMember", "addedBy"),
+            ("ConversationMember", "invitedBy"),
+        ] {
+            assert!(
+                overrides
+                    .keep
+                    .iter()
+                    .any(|kept| kept.table == table && kept.column == column),
+                "{table}.{column} must be kept on purpose"
+            );
+            assert!(
+                !fk_graph()
+                    .edges()
+                    .iter()
+                    .any(|edge| edge.child == table && edge.column == column),
+                "{table}.{column} is a foreign key"
+            );
+            assert!(
+                !plan.steps.iter().any(|step| matches!(
+                    step,
+                    Step::SweepSoft { table: t, column: c } if t == table && c == column
+                )),
+                "{table}.{column} is kept, not swept"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sweep_via_a_table_the_plan_does_not_drain_is_a_plan_error() {
+        let overrides = RootOverrides {
+            soft_sweeps: vec![SoftSweep {
+                table: "InboxEntry",
+                column: "inboxId",
+                via: Some("Bot"),
+            }],
+            ..RootOverrides::default()
+        };
+        assert_eq!(
+            build_plan(fk_graph(), DeletionRoot::App, &overrides),
+            Err(PlanError::SweepViaNotDrained {
+                table: "InboxEntry".into(),
+                via: "Bot".into(),
+            })
+        );
+    }
+
+    /// `column IN (SELECT "id" FROM "Bot" WHERE "ownerId" = $root)`
+    fn of_the_bots(column: &str) -> Predicate {
+        Predicate::Via {
+            column: column.into(),
+            parent: "Bot".into(),
+            parent_column: "id".into(),
+            inner: Box::new(Predicate::Root {
+                column: "ownerId".into(),
+            }),
+        }
+    }
+
+    /// Grants in both directions, heartbeats, turns and the bots' own conversation summaries hang
+    /// off the bots by foreign key, so the account's plan drains them before the bots, and the
+    /// account's own grants and turns by owner as well. Summaries other bots wrote stay with them.
+    #[test]
+    fn user_plan_drains_bot_grants_heartbeats_turns_and_summaries_before_the_bots() {
+        let plan = plan_for(DeletionRoot::User).unwrap();
+        let owner = Predicate::Root {
+            column: "ownerId".into(),
+        };
+        for (table, expected) in [
+            (
+                "BotPermission",
+                vec![
+                    owner.clone(),
+                    of_the_bots("fromBotId"),
+                    of_the_bots("toBotId"),
+                ],
+            ),
+            ("BotHostHeartbeat", vec![of_the_bots("botId")]),
+            ("BotToolGrant", vec![of_the_bots("botId")]),
+            ("BotTurn", vec![of_the_bots("botId"), owner.clone()]),
+            ("ConversationSegment", vec![of_the_bots("authorId")]),
+        ] {
+            assert_before(&plan, table, "Bot");
+            let Step::Drain { predicates, .. } = &plan.steps[drain_index(&plan, table)] else {
+                unreachable!()
+            };
+            let mut predicates = predicates.clone();
+            let mut expected = expected;
+            predicates.sort_by_key(ToString::to_string);
+            expected.sort_by_key(ToString::to_string);
+            assert_eq!(predicates, expected, "{table}:\n{}", render(&plan));
+        }
+    }
+
+    /// Workspaces are found through `Bot`, so they are handed to their own app deletions before
+    /// any row drains.
+    #[test]
+    fn user_plan_queues_its_bots_workspaces_before_anything_drains() {
+        let plan = plan_for(DeletionRoot::User).unwrap();
+        let queued = plan
+            .position(&Step::External(ExternalStep::UserBotWorkspaces))
+            .unwrap_or_else(|| panic!("{}", render(&plan)));
+        let first_drain = plan
+            .steps
+            .iter()
+            .position(|step| matches!(step, Step::Drain { .. } | Step::NullOut { .. }))
+            .unwrap();
+        assert!(queued < first_drain, "{}", render(&plan));
+    }
+
+    #[test]
+    fn user_plan_keeps_the_by_value_bot_references_it_does_not_sweep() {
+        let overrides = overrides_for(DeletionRoot::User);
+        for (table, column) in [("App", "botId"), ("BotPermission", "grantedBy")] {
+            assert!(
+                overrides
+                    .keep
+                    .iter()
+                    .any(|kept| kept.table == table && kept.column == column),
+                "{table}.{column} must be swept or kept on purpose"
+            );
+        }
+    }
+
+    /// A workspace's `botId` is a marker, not a foreign key: deleting an app never reaches a bot
+    /// or anything that hangs off one.
+    #[test]
+    fn app_plan_never_touches_bots_or_their_rows() {
+        let plan = app_plan();
+        for table in [
+            "Bot",
+            "BotPermission",
+            "BotHostHeartbeat",
+            "BotToolGrant",
+            "BotTurn",
+            "ConversationSegment",
+        ] {
+            assert!(
+                plan.steps.iter().all(|step| step.table() != Some(table)),
+                "App deletion must leave {table} alone:\n{}",
+                render(&plan)
+            );
+        }
     }
 
     #[test]

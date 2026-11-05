@@ -8,13 +8,9 @@ import {
 	BanIcon,
 	CheckCircle2Icon,
 	CircleXIcon,
-	CloudIcon,
-	HardDriveIcon,
 	HistoryIcon,
-	InfoIcon,
 	Loader2Icon,
 	MoveRightIcon,
-	ScrollIcon,
 } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -38,7 +34,6 @@ import type {
 	IEventTimelineRun,
 	IRestorePlanResult,
 } from "../../../state/backend-state/event-state";
-import { RunErrorLine } from "../../flow/run-error-message";
 import {
 	Badge,
 	Button,
@@ -70,6 +65,11 @@ import {
 } from "../../ui";
 import { SectionLockedPanel } from "../permission/permission-gate";
 import { PermissionNotice } from "../permission/permission-notice";
+import { HistoryNodes, HistoryRuns } from "./event-history-activity";
+import {
+	type EventHistoryFlowTarget,
+	EventHistoryRunDialog,
+} from "./event-history-run-dialog";
 
 const RUNS_PAGE_LIMIT = 200;
 
@@ -106,23 +106,19 @@ type IRestoreCallOptions = {
 	acceptBlankSecrets?: boolean;
 };
 
-function RunSeverityIcon({ level }: Readonly<{ level: number }>) {
-	if (level >= 4) return <BanIcon className="h-3 w-3 text-red-800" />;
-	if (level === 3) return <CircleXIcon className="h-3 w-3 text-red-500" />;
-	if (level === 2)
-		return <AlertTriangleIcon className="h-3 w-3 text-yellow-500" />;
-	return <CheckCircle2Icon className="h-3 w-3 text-green-500" />;
-}
-
 const microsToMs = (micros: number) => Math.floor(micros / 1000);
 
 export function EventHistory({
 	appId,
 	eventId,
+	eventName,
 	nodes,
+	onNavigateToFlow,
 }: Readonly<{
 	appId: string;
 	eventId: string;
+	eventName?: string;
+	onNavigateToFlow?: (target: EventHistoryFlowTarget) => void;
 	/** Nodes of the event's current board, for friendly names where available. */
 	nodes?: Record<string, INode>;
 }>) {
@@ -176,6 +172,9 @@ export function EventHistory({
 
 	// Selecting a version row focuses the activity below; clicking again clears it.
 	const [selectedKey, setSelectedKey] = useState<string | null>(null);
+	const [activityTab, setActivityTab] = useState("runs");
+	const [selectedNodeId, setSelectedNodeId] = useState<string>();
+	const [selectedRun, setSelectedRun] = useState<IEventTimelineRun>();
 	const [restoreTarget, setRestoreTarget] =
 		useState<IEventTimelineEntry | null>(null);
 
@@ -196,9 +195,20 @@ export function EventHistory({
 	);
 
 	const nodeName = useCallback(
-		(nodeId: string) => nodes?.[nodeId]?.friendly_name ?? nodeId,
+		(nodeId: string) =>
+			nodes?.[nodeId]?.friendly_name?.trim() || nodes?.[nodeId]?.name || nodeId,
 		[nodes],
 	);
+	const runName = (run: IEventTimelineRun) =>
+		nodes?.[run.node_id]?.friendly_name?.trim() ||
+		eventName ||
+		entries.find((entry) => entry.version_key === run.event_version)?.name ||
+		t("event", "Event");
+	const nodeRuns = selectedNodeId
+		? filteredRuns.filter((run) =>
+				run.nodes?.some(([id]) => id === selectedNodeId),
+			)
+		: filteredRuns;
 	const clearSelection = useCallback(() => setSelectedKey(null), []);
 
 	if (!timelineSupported) {
@@ -299,7 +309,7 @@ export function EventHistory({
 						</CardDescription>
 					</CardHeader>
 					<CardContent>
-						<Tabs defaultValue="runs">
+						<Tabs value={activityTab} onValueChange={setActivityTab}>
 							<TabsList className="w-full sm:w-fit">
 								<TabsTrigger value="runs">{t("runs", "Runs")}</TabsTrigger>
 								<TabsTrigger value="nodes">{t("nodes", "Nodes")}</TabsTrigger>
@@ -313,12 +323,28 @@ export function EventHistory({
 									selectedKey={selectedKey}
 									onClear={clearSelection}
 								/>
+								{selectedNodeId && (
+									<div className="flex items-center gap-2 text-xs text-muted-foreground">
+										<Badge variant="secondary">
+											{nodeName(selectedNodeId)}
+										</Badge>
+										<Button
+											variant="link"
+											size="sm"
+											onClick={() => setSelectedNodeId(undefined)}
+										>
+											{t("showAllNodes", "Show all nodes")}
+										</Button>
+									</div>
+								)}
 								<HistoryRuns
-									runs={filteredRuns}
+									runs={nodeRuns}
 									isLoading={runsQuery.isLoading}
 									runsSupported={runsSupported}
 									runsLocked={!canReadBoards}
-									nodeName={nodeName}
+									runName={runName}
+									nodeId={selectedNodeId}
+									onOpenRun={setSelectedRun}
 								/>
 							</TabsContent>
 
@@ -327,7 +353,15 @@ export function EventHistory({
 									selectedKey={selectedKey}
 									onClear={clearSelection}
 								/>
-								<HistoryNodes aggregates={nodeAggregates} nodeName={nodeName} />
+								<HistoryNodes
+									runs={filteredRuns}
+									aggregates={nodeAggregates}
+									nodeName={nodeName}
+									onSelectNode={(nodeId) => {
+										setSelectedNodeId(nodeId);
+										setActivityTab("runs");
+									}}
+								/>
 							</TabsContent>
 
 							<TabsContent value="compare" className="pt-2">
@@ -336,6 +370,17 @@ export function EventHistory({
 						</Tabs>
 					</CardContent>
 				</Card>
+			)}
+
+			{selectedRun && (
+				<EventHistoryRunDialog
+					key={`${selectedRun.board_id}/${selectedRun.run_id}/${selectedNodeId ?? ""}`}
+					run={selectedRun}
+					name={runName(selectedRun)}
+					initialNodeId={selectedNodeId}
+					onNavigateToFlow={onNavigateToFlow}
+					onClose={() => setSelectedRun(undefined)}
+				/>
 			)}
 
 			{restoreTarget && (
@@ -543,7 +588,7 @@ function VersionTable({
 													: row.key === null
 														? t(
 																"unversionedRunsHint",
-																"Runs recorded before version stamping",
+																"Runs without a recorded event version",
 															)
 														: t(
 																"prunedVersionHint",
@@ -1071,180 +1116,6 @@ function VersionFilterNotice({
 			>
 				{t("showAllVersions", "Show all versions")}
 			</button>
-		</div>
-	);
-}
-
-function HistoryRuns({
-	runs,
-	isLoading,
-	runsSupported,
-	runsLocked,
-	nodeName,
-}: Readonly<{
-	runs: IEventTimelineRun[];
-	isLoading: boolean;
-	runsSupported: boolean;
-	runsLocked: boolean;
-	nodeName: (nodeId: string) => string;
-}>) {
-	const { t } = useTranslation("settings");
-
-	if (runsLocked) {
-		return (
-			<PermissionNotice
-				title={t("runHistoryUnavailable", "Run history unavailable")}
-				description={t(
-					"readingAnEventsRunsAlsoNeedsWorkflowAccess",
-					"Runs are read through the flow they executed, so listing them also needs permission to view this project's flows.",
-				)}
-				missing={[RolePermissions.ReadBoards]}
-			/>
-		);
-	}
-	if (!runsSupported) {
-		return (
-			<p className="py-6 text-center text-sm text-muted-foreground">
-				{t(
-					"eventRunHistoryNotAvailableHere",
-					"Run history isn't available on this platform yet — showing versions only.",
-				)}
-			</p>
-		);
-	}
-	if (isLoading) {
-		return (
-			<div className="flex flex-col items-center justify-center gap-2 py-8">
-				<Loader2Icon className="h-6 w-6 animate-spin text-muted-foreground" />
-				<p className="text-sm text-muted-foreground">
-					{t("loadingRuns", "Loading runs...")}
-				</p>
-			</div>
-		);
-	}
-	if (runs.length === 0) {
-		return (
-			<div className="flex flex-col items-center justify-center gap-1 py-8 text-center">
-				<ScrollIcon className="size-5 text-muted-foreground/60" />
-				<p className="text-sm font-medium">{t("noRuns", "No runs")}</p>
-				<p className="text-xs text-muted-foreground">
-					{t(
-						"noRunsRecordedForThisEventYet",
-						"No runs have been recorded for this event yet.",
-					)}
-				</p>
-			</div>
-		);
-	}
-
-	// Row markup copied minimally from FlowRuns so runs read the same everywhere.
-	return (
-		<div className="flex max-h-105 flex-col gap-2 overflow-y-auto">
-			{runs.map((run) => (
-				<div
-					key={run.run_id}
-					className="flex flex-row items-center justify-between gap-2 rounded-md border p-2"
-				>
-					<div className="flex min-w-0 flex-col items-start justify-center gap-2">
-						<div className="flex min-w-0 flex-row flex-wrap items-center gap-2">
-							{run.is_remote ? (
-								<span title={t("remoteExecution", "Remote execution")}>
-									<CloudIcon className="h-3 w-3 text-blue-500" />
-								</span>
-							) : (
-								<span title={t("localExecution", "Local execution")}>
-									<HardDriveIcon className="h-3 w-3 text-muted-foreground" />
-								</span>
-							)}
-							<small className="truncate leading-none">
-								{nodeName(run.node_id)}
-							</small>
-							<small className="font-mono text-muted-foreground">
-								{run.event_version
-									? `v${run.event_version}`
-									: t("unversioned", "Unversioned")}
-							</small>
-							<small className="text-muted-foreground">{run.version}</small>
-						</div>
-						<small className="leading-none text-muted-foreground">
-							{formatRelativeTime(microsToMs(run.start), "narrow")}
-						</small>
-						{run.error_message ? (
-							<RunErrorLine message={run.error_message} />
-						) : null}
-					</div>
-					<div className="flex shrink-0 flex-row items-center gap-2">
-						<small className="text-muted-foreground">
-							{formatDuration(Math.abs(run.end - run.start))}
-						</small>
-						<RunSeverityIcon level={run.log_level} />
-					</div>
-				</div>
-			))}
-		</div>
-	);
-}
-
-function HistoryNodes({
-	aggregates,
-	nodeName,
-}: Readonly<{
-	aggregates: ReturnType<typeof aggregateNodeSeverity>;
-	nodeName: (nodeId: string) => string;
-}>) {
-	const { t } = useTranslation("settings");
-	return (
-		<div className="space-y-3">
-			<div className="flex gap-3 rounded-lg border bg-muted/40 p-3">
-				<InfoIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
-				<p className="text-sm text-muted-foreground">
-					{t(
-						"nodeTimingsNeedDebugLevel",
-						"Visit counts and severity are recorded at every log level. Per-node timings only exist when the flow logs at Debug level, so they are not shown here.",
-					)}
-				</p>
-			</div>
-			{aggregates.length === 0 ? (
-				<p className="py-4 text-center text-sm text-muted-foreground">
-					{t(
-						"noNodeActivityRecorded",
-						"No node activity recorded in the loaded runs.",
-					)}
-				</p>
-			) : (
-				<div className="flex max-h-90 flex-col gap-1.5 overflow-y-auto">
-					{aggregates.map((node) => (
-						<div
-							key={node.nodeId}
-							className="flex flex-row items-center justify-between gap-2 rounded-md border p-2 text-sm"
-						>
-							<div className="flex min-w-0 flex-row items-center gap-2">
-								<RunSeverityIcon level={node.worstLevel} />
-								<span className="truncate">{nodeName(node.nodeId)}</span>
-							</div>
-							<div className="flex shrink-0 flex-row items-center gap-3 text-xs text-muted-foreground">
-								{node.warnRuns > 0 && (
-									<span className="tabular-nums">
-										{t("warnRunCount", "{{num}} warn", {
-											num: node.warnRuns,
-										})}
-									</span>
-								)}
-								{node.failRuns > 0 && (
-									<span className="tabular-nums text-destructive">
-										{t("failedRunCount", "{{num}} failed", {
-											num: node.failRuns,
-										})}
-									</span>
-								)}
-								<span className="tabular-nums">
-									{t("nodeVisitCount", "{{num}} runs", { num: node.visits })}
-								</span>
-							</div>
-						</div>
-					))}
-				</div>
-			)}
 		</div>
 	);
 }

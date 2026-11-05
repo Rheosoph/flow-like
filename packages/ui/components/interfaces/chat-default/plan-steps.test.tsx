@@ -82,7 +82,7 @@ afterAll(() => {
 
 async function renderSteps(
 	steps: IPlanStep[],
-	interact?: (container: HTMLElement) => void,
+	...interactions: ((container: HTMLElement) => void)[]
 ) {
 	const window = new Window();
 	Object.assign(window, { SyntaxError, TypeError });
@@ -107,7 +107,9 @@ async function renderSteps(
 	await act(async () => {
 		root.render(<InlineStepGroup steps={steps} />);
 	});
-	if (interact) await act(async () => interact(container));
+	for (const interact of interactions) {
+		await act(async () => interact(container));
+	}
 	const text = container.textContent ?? "";
 	const html = container.innerHTML;
 	await act(async () => root.unmount());
@@ -480,5 +482,204 @@ describe("tool activity context", () => {
 		expect(text).toContain("weather");
 		expect(text).toContain("0 apps found");
 		expect(text.match(/Looking through installed apps/g)).toHaveLength(1);
+	});
+});
+
+describe("research trail", () => {
+	const sources = Array.from({ length: 8 }, (_, index) => ({
+		url: `https://source${index}.com/review`,
+		hostname: `source${index}.com`,
+		path: "/review",
+		title: `Review ${index}`,
+	}));
+	const search: IPlanStep = {
+		id: "search",
+		title: "↳ Using internet_search",
+		toolName: "internet_search",
+		status: "done",
+		detail: {
+			kind: "tool_activity",
+			category: "search",
+			label: "Searching the web",
+			queries: ["Porsche touring comfort", "Panamera rear seat comfort"],
+			sources,
+		},
+	};
+	const visit = (index: number, status: IPlanStep["status"]): IPlanStep => ({
+		id: `visit-${index}`,
+		title: "↳ Using open_url",
+		toolName: "open_url",
+		status,
+		detail: {
+			kind: "tool_activity",
+			category: "web",
+			label: "Reading a webpage",
+			sources: [sources[index]],
+		},
+	});
+
+	const clickButton = (container: HTMLElement, label: string) => {
+		const button = [...container.querySelectorAll("button")].find(
+			(candidate) => candidate.textContent === label,
+		);
+		if (!button) throw new Error(`Button not found: ${label}`);
+		button.click();
+	};
+
+	test("keeps every query and URL while distinguishing discovery, reads and failures", async () => {
+		const { text } = await renderSteps(
+			[
+				search,
+				visit(0, "done"),
+				visit(1, "progress"),
+				visit(2, "failed"),
+				{ ...visit(3, "done"), toolName: "archive_lookup" },
+				{ ...visit(5, "failed"), toolName: "archive_lookup" },
+				{ ...visit(6, "progress"), toolName: "archive_lookup" },
+				{
+					...search,
+					id: "search-again",
+					detail: {
+						...search.detail,
+						kind: "tool_activity",
+						category: "search",
+						label: "Searching the web",
+						sources: [sources[0]],
+					},
+				},
+			],
+			(container) => {
+				expect(
+					container.querySelectorAll("[data-research-activity]"),
+				).toHaveLength(1);
+				const cards = container.querySelectorAll("[data-research-source]");
+				expect(cards).toHaveLength(4);
+				expect(cards[0].textContent).toContain("Read");
+				expect(cards[1].textContent).toContain("Reading");
+				expect(cards[2].textContent).toContain("Unavailable");
+				expect(cards[3].textContent).toContain("Checked");
+				clickButton(container, "Show all 8 pages");
+			},
+			(container) => {
+				const cards = container.querySelectorAll("[data-research-source]");
+				expect(cards).toHaveLength(8);
+				expect(cards[5].textContent).toContain("Unavailable");
+				expect(cards[6].textContent).toContain("Checking");
+				expect(cards[7].textContent).toContain("Review 7");
+				expect(
+					container.querySelectorAll("[data-research-query]"),
+				).toHaveLength(4);
+			},
+		);
+		expect(text).toContain("Porsche touring comfort");
+		expect(text).toContain("Panamera rear seat comfort");
+		expect(text).not.toContain("↳ Using");
+	});
+
+	test("retains the research history beyond the recent step window without absorbing other tools", async () => {
+		const noise = Array.from(
+			{ length: 12 },
+			(_, index): IPlanStep => ({
+				id: `noise-${index}`,
+				title: `Other work ${index}`,
+				status: "done",
+			}),
+		);
+		await renderSteps(
+			[
+				search,
+				...noise,
+				visit(0, "progress"),
+				{
+					...visit(4, "done"),
+					toolName: "http_request",
+					title: "Sending an HTTP request",
+					detail: {
+						kind: "tool_activity",
+						category: "web",
+						label: "Sending an HTTP request",
+						method: "POST",
+					},
+				},
+			],
+			(container) => {
+				const research = container.querySelector("[data-research-activity]");
+				expect(
+					container.querySelectorAll("[data-research-source]"),
+				).toHaveLength(4);
+				expect(research?.textContent).toContain("Show all 8 pages");
+				expect(
+					container.querySelectorAll("[data-research-query]"),
+				).toHaveLength(2);
+				expect(research?.textContent).not.toContain("Sending an HTTP request");
+				expect(container.textContent).toContain("Sending an HTTP request");
+			},
+		);
+	});
+
+	test("summarises sites with a few icons, counting subdomains of one site once", async () => {
+		const hosts = [
+			"www.adac.de",
+			"adac.de",
+			"de.wikipedia.org",
+			"en.wikipedia.org",
+			"www.autocar.co.uk",
+			"autocar.co.uk",
+			...Array.from({ length: 6 }, (_, index) => `www.site${index}.com`),
+		];
+		await renderSteps(
+			[
+				{
+					...search,
+					detail: {
+						...search.detail,
+						sources: hosts.map((hostname) => ({
+							url: `https://${hostname}/page`,
+							hostname,
+							path: "/page",
+						})),
+					},
+				} as IPlanStep,
+			],
+			(container) => {
+				const sites = container.querySelectorAll("[data-activity-site]");
+				expect(sites).toHaveLength(4);
+				expect(sites[0].parentElement?.parentElement?.textContent).toBe(
+					"9 websites",
+				);
+				expect(
+					container.querySelector("[data-research-activity]")?.textContent,
+				).toContain("9 websites");
+			},
+		);
+	});
+
+	test("folds earlier searches instead of scrolling them, keeping their numbering", async () => {
+		const queries = Array.from({ length: 6 }, (_, index) => `query ${index}`);
+		await renderSteps(
+			[{ ...search, detail: { ...search.detail, queries } } as IPlanStep],
+			(container) => {
+				const rows = container.querySelectorAll("[data-research-query]");
+				expect(rows).toHaveLength(4);
+				expect(rows[0].textContent).toContain("03");
+				expect(rows[0].textContent).toContain("query 2");
+				expect(rows[3].textContent).toContain("query 5");
+				expect(
+					container.querySelector('[aria-label="Search queries"][tabindex]'),
+				).toBeNull();
+				clickButton(container, "Show 2 earlier searches");
+			},
+			(container) => {
+				const rows = container.querySelectorAll("[data-research-query]");
+				expect(rows).toHaveLength(6);
+				expect(rows[0].textContent).toContain("query 0");
+				clickButton(container, "Hide earlier searches");
+			},
+			(container) => {
+				expect(
+					container.querySelectorAll("[data-research-query]"),
+				).toHaveLength(4);
+			},
+		);
 	});
 });

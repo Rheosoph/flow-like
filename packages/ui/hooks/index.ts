@@ -1,6 +1,7 @@
 export * from "./use-asset-image";
 export * from "./use-asset-source";
 export * from "./use-board-bridge";
+export * from "./use-bot-expression";
 export * from "./use-invoke";
 export * from "./use-hub";
 export * from "./use-features";

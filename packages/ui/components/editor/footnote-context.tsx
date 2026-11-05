@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, type ReactNode, useId } from "react";
+import { type ReactNode, createContext, useId } from "react";
 
 export const FootnoteScopeContext = createContext("document");
 

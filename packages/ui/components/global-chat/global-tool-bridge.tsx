@@ -43,6 +43,12 @@ import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-cap
 import { getErrorMessage } from "../../lib/error-message";
 import { EVENT_CONFIG, isChatEventType } from "../../lib/event-config";
 import { flowPilotDebugLog } from "../../lib/flowpilot-debug";
+import {
+	BoardSpecialistRoutingFailures,
+	BoardSpecialistScopeError,
+	assertBoardSpecialistResponse,
+	boardSpecialistRoutingFailure,
+} from "../../lib/flowpilot/board-chat-contract";
 import { buildFlowPilotBoardContextAugmentation } from "../../lib/flowpilot/board-context-manifest";
 import {
 	boardEditJobResolutionHistoryMode,
@@ -66,7 +72,12 @@ import {
 	mergeAttachments,
 	resolveForwardFiles,
 } from "../../lib/forwarded-attachments";
-import { resolveFrontendToolApprovalScope } from "../../lib/frontend-tool-approval-scope";
+import {
+	type ApprovalOwner,
+	StandingApprovals,
+	grantStoreOf,
+	resolveFrontendToolApprovalScope,
+} from "../../lib/frontend-tool-approval-scope";
 import {
 	inspectLiveAppPage,
 	interactWithAppPage,
@@ -74,12 +85,14 @@ import {
 } from "../../lib/interact-app-page";
 import type { IChannelHandle } from "../../lib/schema/channel";
 import type { BoardEditJob, FlowIrCommitToken } from "../../lib/schema/copilot";
+import { grantKeys, grantScopes } from "../../lib/tool-grant-scopes";
 import { parseUint8ArrayToJson } from "../../lib/uint8";
 import { findUndeclaredWidgetActions } from "../../lib/widget-actions";
 import type {
 	IApplyFlowIrCommitResponse,
 	IBoardState,
 } from "../../state/backend-state/board-state";
+import { BOT_SECRET_NAME_PATTERN } from "../../state/backend-state/bot-state";
 import {
 	type FlowPilotFailureKind,
 	type IAgentDebugEvent,
@@ -96,12 +109,18 @@ import {
 	readUsageStat,
 } from "../../state/global-chat/copilot-stream-steps";
 import {
+	conversationBotId,
+	currentConversationId,
+} from "../../state/global-chat/global-chat-bots";
+import {
 	type GlobalChatAgentSelection,
 	type GlobalToolAsk,
 	type GlobalToolPrompt,
 	type GlobalToolPromptResolution,
+	type GlobalToolSecret,
 	SUB_STEP_PREFIX,
 	getGlobalChatTurnSelection,
+	selectAutoMode,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
 import { registerGlobalChatToolExecutor } from "../../state/global-chat/global-chat-tool-registry";
@@ -116,8 +135,10 @@ import type {
 	SurfaceComponent,
 } from "../a2ui/types";
 import { buildWorkflowFrontendContext } from "../a2ui/workflow-payload";
+import { BOTS_ROUTE } from "../bots-tab/dock-selection";
 import {
 	BoardEditRecoveryStore,
+	type BoardEditTarget,
 	BoardZeroProgressRetryGuard,
 	CreatedArtifactJournal,
 	type FlowScriptBaselineFingerprint,
@@ -129,6 +150,7 @@ import {
 	boardEditInterruptionResult,
 	boardEditLockKey,
 	boardEditRecoveryKey,
+	boardEditTargetContext,
 	flowPilotBoardInitialLockKey,
 	flowScriptSnapshotChanged,
 	flowScriptSnapshotFingerprint,
@@ -136,7 +158,7 @@ import {
 	isCancellableNestedCopilotTool,
 	isCreatedAppBuildTargetMismatch,
 	normalizeBoardRepairScope,
-	resolveFlowPilotBoardCreationId,
+	prepareFlowPilotBoardCreation,
 	resolveFrontendToolExecutionDeadline,
 	retainedFlowScriptRecoveryInstruction,
 	retainedFlowScriptReferenceInstruction,
@@ -172,12 +194,18 @@ import { normalizeHomeLayout, resolveHomeLayout } from "../home/home-layout";
 import { homeLayoutFingerprint } from "../home/home-layout-json";
 import type {
 	IBuildLaneDetail,
+	IChatMainWidget,
 	IChatUsageStat,
 	IChatWidget,
 	IPlanStep,
 } from "../interfaces/chat-default/chat-db";
 import type { IAttachment, IMessage } from "../interfaces/chat-default/chat-db";
 import { processChatEvents } from "../interfaces/chat-default/event-processor";
+import { joinContentText } from "../interfaces/chat-default/inline-segments";
+import {
+	refreshMainChatWidget,
+	resolveMainChatWidget,
+} from "../interfaces/chat-default/main-widget-state";
 import { purchasingAllowed } from "../payments/use-payments";
 import {
 	activePageEventCandidates,
@@ -229,6 +257,7 @@ import {
 	sealedResearchRefusal,
 } from "./local-app-discovery";
 import { readFlowScriptSource } from "./read-flowscript-source";
+import { researchAgentPrompt } from "./research-brief";
 import {
 	scoutForkPreview,
 	scoutGetAppDetail,
@@ -331,6 +360,8 @@ export interface FrontendToolRequest {
 	requestId: string;
 	toolName: string;
 	arguments: Record<string, unknown>;
+	/** The native host retains the operation and asks this client only for consent. */
+	approvalOnly?: boolean;
 	/**
 	 * How to answer. Present on every request the backend sends (Tauri event or SSE frame); absent
 	 * only on bridge-internal synthetic requests that are never replied to.
@@ -389,7 +420,25 @@ type DialogState =
 			request: FrontendToolRequest;
 			override?: DialogOverride;
 	  }
-	| { type: "ask"; request: FrontendToolRequest };
+	| { type: "ask"; request: FrontendToolRequest }
+	| {
+			type: "secret";
+			request: FrontendToolRequest;
+			secret: GlobalToolSecret;
+	  };
+
+function parseSecretRequest(
+	args: Record<string, unknown>,
+): { name: string; description: string; replace?: boolean } | null {
+	const name = argString(args, "name");
+	const description = argString(args, "description").trim();
+	if (!BOT_SECRET_NAME_PATTERN.test(name) || !description) return null;
+	return {
+		name,
+		description,
+		...(args.replace === true ? { replace: true } : {}),
+	};
+}
 
 function argString(args: Record<string, unknown>, key: string): string {
 	const value = args[key];
@@ -467,9 +516,8 @@ function sourceUserPrompt(request: FrontendToolRequest): string | undefined {
 }
 
 /**
- * Public research must be bound to the prompt captured by the owning host request. Unlike other
- * delegated specialists, it may never infer a source from mutable global chat state: concurrent
- * runs or later user turns could otherwise change the outbound research brief.
+ * Keep the original request for research budget identity and user-supplied URL provenance.
+ * Mutable global chat state may already belong to another turn.
  */
 function sealedSourceUserPrompt(
 	request: FrontendToolRequest,
@@ -626,6 +674,7 @@ export interface RunScope {
 	setSubPlanSteps(steps: IPlanStep[]): void;
 	addSubUsageStats(stats: IChatUsageStat[]): void;
 	addSubWidgets(widgets: IChatWidget[]): void;
+	setSubMainWidget(mainWidget: IChatMainWidget): void;
 	addSubAttachments(files: IAttachment[]): void;
 	setFlowscriptWorkspace(workspace: FlowScriptWorkspaceCandidate | null): void;
 	setPendingComponents(
@@ -653,7 +702,6 @@ export interface RunScope {
 
 interface SolveRoutingState {
 	appInventoryReturned: boolean;
-	sealedResearchUsed: boolean;
 }
 
 // Host-owned state requires an app inventory before research or HTTP fallback. A partial listing
@@ -697,6 +745,8 @@ function createRunScope(runId: string | undefined): RunScope {
 			guard((id) => store().addSubUsageStats(id, stats)),
 		addSubWidgets: (widgets) =>
 			guard((id) => store().addSubWidgets(id, widgets)),
+		setSubMainWidget: (mainWidget) =>
+			guard((id) => store().setSubMainWidget(id, mainWidget)),
 		addSubAttachments: (files) =>
 			guard((id) => store().addSubAttachments(id, files)),
 		// The workspace/components panels outlive the run that filled them (the user reviews them
@@ -718,7 +768,7 @@ function createRunScope(runId: string | undefined): RunScope {
 
 /** Top-level routes that actually exist in the desktop app. */
 const KNOWN_ROUTE_PREFIXES = [
-	"/chat",
+	BOTS_ROUTE,
 	"/flow",
 	"/learn",
 	"/library",
@@ -1312,9 +1362,37 @@ function extractNestedFlowScriptValidationEvidence(
 	};
 }
 
+/** The run that asks and its chat; together they decide whose standing approvals apply. */
+interface AskingChat {
+	runId?: string;
+	conversationId?: string;
+}
+
+/** The asking chat's bot, `null` for a Flux chat; unknown without a chat, which waives nothing. */
+function approvalOwner({ conversationId }: AskingChat): ApprovalOwner {
+	return conversationId === undefined
+		? undefined
+		: conversationBotId(conversationId);
+}
+
+// A run's chat, kept past the run's end: a board review it left behind still belongs to its owner.
+const conversationByRun = new Map<string, string>();
+const MAX_RUN_CONVERSATIONS = 256;
+
+function rememberRunConversation(runId: string, conversationId: string) {
+	conversationByRun.delete(runId);
+	conversationByRun.set(runId, conversationId);
+	while (conversationByRun.size > MAX_RUN_CONVERSATIONS) {
+		const oldest = conversationByRun.keys().next().value;
+		if (typeof oldest !== "string") break;
+		conversationByRun.delete(oldest);
+	}
+}
+
 function promptForDialog(
 	dialog: DialogState,
 	respond: (value: GlobalToolPromptResolution, promptId?: string) => void,
+	asking: AskingChat,
 ) {
 	const request = dialog.request;
 	// Unique per prompt INSTANCE (one request can spawn several prompts, e.g. tool approval
@@ -1322,11 +1400,24 @@ function promptForDialog(
 	// inline card so its local state (answer text, remember) never leaks between prompts.
 	const promptId = createId();
 	const bound = (value: GlobalToolPromptResolution) => respond(value, promptId);
+	if (dialog.type === "secret") {
+		return {
+			id: promptId,
+			kind: "secret" as const,
+			...asking,
+			toolName: request.toolName,
+			title: i18next.t("secretRequestTitle", "Secret requested"),
+			description: dialog.secret.description,
+			secret: dialog.secret,
+			respond: bound,
+		};
+	}
 	if (dialog.type === "ask") {
 		const ask = parseAsk(request.arguments);
 		return {
 			id: promptId,
 			kind: "ask" as const,
+			...asking,
 			toolName: request.toolName,
 			title: i18next.t("flowpilotNeedsInput", "FlowPilot needs input"),
 			// A lone question reads best as the card's own subtitle; a batched intake form labels
@@ -1353,11 +1444,15 @@ function promptForDialog(
 		approvalSessionKey: request.approval?.sessionKey,
 		contextAppId: request.context?.appId || request.context?.app_id,
 	});
+	const rememberable =
+		approvalScope.rememberable && asking.conversationId !== undefined;
 	return {
 		id: promptId,
 		kind: "approval" as const,
+		...asking,
 		destructive: dialog.override?.destructive ?? false,
-		rememberable: approvalScope.rememberable,
+		rememberable,
+		rememberAppId: rememberable ? approvalScope.appId : undefined,
 		toolName: request.toolName,
 		title:
 			dialog.override?.title ||
@@ -1427,6 +1522,7 @@ export function GlobalToolBridge() {
 	const openOverlayIfAllowed = useGlobalChatStore(
 		(s) => s.openOverlayIfAllowed,
 	);
+	const requestReveal = useGlobalChatStore((s) => s.requestReveal);
 	const addInlineAppChat = useGlobalChatStore((s) => s.addInlineAppChat);
 	const setToolPrompt = useGlobalChatStore((s) => s.setToolPrompt);
 
@@ -1450,18 +1546,19 @@ export function GlobalToolBridge() {
 		router.push(target);
 		// Dock the conversation alongside the destination view so the user keeps chatting there.
 		// Deferred to the navigation moment (not fired when the tool ran) so the dock never pops
-		// open over the full /chat page mid-stream — /chat renders the conversation itself.
-		if (!target.startsWith("/chat")) openOverlayIfAllowed();
+		// open over the Bots tab mid-stream — its own dock renders the conversation.
+		if (!target.startsWith(BOTS_ROUTE)) openOverlayIfAllowed();
 	}, [navigationBlocked, pendingNavigation, router, openOverlayIfAllowed]);
 
-	// The full /chat page already renders the conversation — only dock the overlay elsewhere.
+	// The Bots tab's dock follows requestReveal; everywhere else the overlay shows the conversation.
 	const pathnameRef = useRef(pathname);
 	useEffect(() => {
 		pathnameRef.current = pathname;
 	}, [pathname]);
 	const showConversation = useCallback(() => {
-		if (pathnameRef.current !== "/chat") openOverlayIfAllowed();
-	}, [openOverlayIfAllowed]);
+		if (pathnameRef.current === BOTS_ROUTE) requestReveal();
+		else openOverlayIfAllowed();
+	}, [openOverlayIfAllowed, requestReveal]);
 	const resolverRef = useRef<{
 		request: FrontendToolRequest;
 		promptId: string;
@@ -1476,7 +1573,14 @@ export function GlobalToolBridge() {
 			resolve: (value: GlobalToolPromptResolution) => void;
 		}>
 	>([]);
-	const approvedKeysRef = useRef<Set<string>>(new Set());
+	// "Don't ask again" per owner: one bot's (or Flux's) answer never waives another's calls.
+	const botStateRef = useRef(backend.botState);
+	botStateRef.current = backend.botState;
+	const standingApprovalsRef = useRef(
+		new StandingApprovals(() => grantStoreOf(botStateRef.current)),
+	);
+	// Board reviews already approved, by job and action: one review never asks twice.
+	const approvedBoardReviewsRef = useRef<Set<string>>(new Set());
 	const requestExecutionFenceRef = useRef(
 		new FrontendRequestExecutionFence<FrontendToolRequest>(),
 	);
@@ -1503,6 +1607,10 @@ export function GlobalToolBridge() {
 	const boardRecoveryRef = useRef(new BoardEditRecoveryStore());
 	const workspaceSearchRef = useRef(new WorkspaceSearchSession());
 	const boardZeroProgressRetryRef = useRef(new BoardZeroProgressRetryGuard());
+	const boardRoutingFailuresRef = useRef(new BoardSpecialistRoutingFailures());
+	const boardTargetsByRequestRef = useRef(
+		new WeakMap<FrontendToolRequest, BoardEditTarget>(),
+	);
 	// Crash-durable record of artifacts created per conversation. A retried creating tool (after a
 	// crash, reload, or lost tool response) is answered with the recorded ids instead of a duplicate.
 	const createdArtifactJournalRef = useRef(new CreatedArtifactJournal());
@@ -1605,6 +1713,31 @@ export function GlobalToolBridge() {
 		},
 		[],
 	);
+	/**
+	 * The run that asks and its chat, which decide whose auto mode and standing approvals apply.
+	 * Only a run the request (or its parent) names counts — never the chat on screen or a lone live
+	 * run, which could lend one bot's waiver to another.
+	 */
+	const askingChat = useCallback((request: FrontendToolRequest): AskingChat => {
+		const parentId = parentRequestId(request);
+		const runId =
+			request.context?.runId ??
+			request.context?.run_id ??
+			(parentId ? requestOwnerMessageIdsRef.current.get(parentId) : undefined);
+		const conversationId =
+			(runId
+				? (useGlobalChatStore.getState().runs[runId]?.conversationId ??
+					conversationByRun.get(runId))
+				: undefined) ??
+			request.context?.conversationId ??
+			request.context?.conversation_id;
+		return {
+			runId,
+			conversationId: conversationId
+				? currentConversationId(conversationId)
+				: undefined,
+		};
+	}, []);
 	const recordRequestDebug = useCallback(
 		(
 			request: FrontendToolRequest,
@@ -1724,7 +1857,11 @@ export function GlobalToolBridge() {
 			}
 			const next = dialogQueueRef.current.shift();
 			if (next) {
-				const prompt = promptForDialog(next.dialog, resolveDialogRef.current);
+				const prompt = promptForDialog(
+					next.dialog,
+					resolveDialogRef.current,
+					askingChat(next.dialog.request),
+				);
 				resolverRef.current = {
 					request: next.dialog.request,
 					promptId: prompt.id,
@@ -1744,7 +1881,7 @@ export function GlobalToolBridge() {
 				setToolPrompt(null);
 			}
 		},
-		[recordRequestDebug, setToolPrompt],
+		[askingChat, recordRequestDebug, setToolPrompt],
 	);
 	const resolveDialogRef = useRef(resolveDialog);
 	useEffect(() => {
@@ -1766,7 +1903,11 @@ export function GlobalToolBridge() {
 					});
 					return;
 				}
-				const prompt = promptForDialog(next, resolveDialogRef.current);
+				const prompt = promptForDialog(
+					next,
+					resolveDialogRef.current,
+					askingChat(next.request),
+				);
 				resolverRef.current = {
 					request: next.request,
 					promptId: prompt.id,
@@ -1786,7 +1927,7 @@ export function GlobalToolBridge() {
 				// The prompt lives inside the chat surface — make sure one is visible.
 				showConversation();
 			}),
-		[recordRequestDebug, setToolPrompt, showConversation],
+		[askingChat, recordRequestDebug, setToolPrompt, showConversation],
 	);
 
 	// Native jobs outlive any one renderer request. Versioned presentation state prevents duplicate
@@ -1879,8 +2020,16 @@ export function GlobalToolBridge() {
 	const boardReviewApprovalPromisesRef = useRef(
 		new Map<string, Promise<GlobalToolPromptResolution>>(),
 	);
+	/**
+	 * `askingRunId` is the run that asks now (a review tool call); without it the job's own run
+	 * asks. Either way that run's owner decides what is waived.
+	 */
 	const approveBoardEditJob = useCallback(
-		(job: BoardEditJob, action: "apply" | "dismiss" = "apply") => {
+		(
+			job: BoardEditJob,
+			action: "apply" | "dismiss" = "apply",
+			askingRunId?: string,
+		) => {
 			const key = `${job.jobId}:${action}`;
 			const existing = boardReviewApprovalPromisesRef.current.get(key);
 			if (existing) return existing;
@@ -1916,7 +2065,16 @@ export function GlobalToolBridge() {
 						description: job.approval.description,
 						sessionKey: job.approval.sessionKey,
 					},
+					context: {
+						runId:
+							askingRunId ??
+							(job.requestId
+								? requestOwnerMessageIdsRef.current.get(job.requestId)
+								: undefined),
+					},
 				};
+				const asking = askingChat(syntheticRequest);
+				const owner = approvalOwner(asking);
 				const approvalSessionKey =
 					action === "apply"
 						? job.approval.sessionKey ||
@@ -1930,9 +2088,12 @@ export function GlobalToolBridge() {
 					(job.approval.kind === "mutating" ||
 						job.approval.kind === "execute" ||
 						destructive) &&
-					!useGlobalChatStore.getState().autoMode &&
-					!approvedKeysRef.current.has(exactApprovalKey) &&
-					!approvedKeysRef.current.has(approvalSessionKey);
+					!selectAutoMode(
+						useGlobalChatStore.getState(),
+						asking.conversationId,
+					) &&
+					!approvedBoardReviewsRef.current.has(exactApprovalKey) &&
+					!standingApprovalsRef.current.has(owner, approvalSessionKey);
 				const resolution = !needsApproval
 					? { approved: true, remember: false }
 					: await openDialog({
@@ -1961,9 +2122,9 @@ export function GlobalToolBridge() {
 							},
 						});
 				if (resolution && "approved" in resolution && resolution.approved) {
-					approvedKeysRef.current.add(exactApprovalKey);
+					approvedBoardReviewsRef.current.add(exactApprovalKey);
 					if (resolution.remember)
-						approvedKeysRef.current.add(approvalSessionKey);
+						standingApprovalsRef.current.add(owner, approvalSessionKey);
 				}
 				return resolution;
 			})();
@@ -1975,7 +2136,7 @@ export function GlobalToolBridge() {
 			});
 			return promise;
 		},
-		[openDialog],
+		[askingChat, openDialog],
 	);
 	const presentBoardEditJob = useCallback(
 		async (job: BoardEditJob) => {
@@ -2215,7 +2376,11 @@ export function GlobalToolBridge() {
 			if (!resolverRef.current) {
 				const next = dialogQueueRef.current.shift();
 				if (next) {
-					const prompt = promptForDialog(next.dialog, resolveDialogRef.current);
+					const prompt = promptForDialog(
+						next.dialog,
+						resolveDialogRef.current,
+						askingChat(next.dialog.request),
+					);
 					resolverRef.current = {
 						request: next.dialog.request,
 						promptId: prompt.id,
@@ -2237,7 +2402,7 @@ export function GlobalToolBridge() {
 				}
 			}
 		},
-		[recordRequestDebug, setToolPrompt],
+		[askingChat, recordRequestDebug, setToolPrompt],
 	);
 
 	const assertHomeProfile = useCallback(
@@ -4327,10 +4492,7 @@ export function GlobalToolBridge() {
 					}
 				}
 				case "research_agent": {
-					// This boundary is deliberately sealed. The root model may have seen local app
-					// metadata (and may have recalled memory), so accepting a model-authored question or
-					// context here would let it encode private text into an outbound query. Bind the
-					// researcher only to the immutable top-level user request carried by the host.
+					// The bot supplies a public research brief that resolves conversational references.
 					// The inventory gate separately ensures existing apps are considered first.
 					const routingState = scope.runId
 						? solveRoutingStateByRun.get(scope.runId)
@@ -4344,20 +4506,23 @@ export function GlobalToolBridge() {
 							status: "error",
 							code: "sealed_research_source_missing",
 							message:
-								"The immutable top-level user request is unavailable; sealed public research was not started.",
+								"The owning user request is unavailable; public research was not started.",
 						};
-					setSolveRoutingState(scope.runId, {
-						appInventoryReturned: routingState?.appInventoryReturned ?? false,
-						sealedResearchUsed: true,
-					});
-					const instruction = owningUserPrompt;
+					let instruction: string;
+					try {
+						instruction = researchAgentPrompt(args);
+					} catch (error) {
+						return {
+							status: "error",
+							code: "invalid_research_brief",
+							retryable: true,
+							message: error instanceof Error ? error.message : String(error),
+						};
+					}
 
 					const turnSelection = scope.turnSelection();
 					const owningConversationId = conversationScopeId(request);
-					const rawSpecialistPrompt = composeDelegatedRawUserPrompt(
-						owningUserPrompt,
-						instruction,
-					);
+					const rawSpecialistPrompt = instruction;
 					const modelId = flowPilotModelIdForProvider(
 						normalizeAIProvider(turnSelection.provider),
 						turnSelection.selectedModelId,
@@ -4413,7 +4578,7 @@ export function GlobalToolBridge() {
 								provider: normalizeAIProvider(turnSelection.provider),
 								model_id: modelId,
 								reasoning_effort: turnSelection.reasoningEffort || undefined,
-								sealed_to_source_request: true,
+								instruction,
 							},
 							summary: "Delegated web research started.",
 						}),
@@ -4446,9 +4611,8 @@ export function GlobalToolBridge() {
 									request.context?.profileId ?? request.context?.profile_id,
 								parentRequestId: request.requestId,
 								conversationId: owningConversationId,
-								// Use a sealed child authorization view. It is fresh even when a local
-								// research app already ran, but remains bound to the immutable source
-								// request and cannot receive that app's result.
+								// Follow-up briefs share a public research budget and source ledger.
+								// The original request retains user-supplied URL provenance.
 								runId: scope.runId
 									? `${scope.runId}:sealed-research`
 									: undefined,
@@ -4464,7 +4628,6 @@ export function GlobalToolBridge() {
 							toolName: "research_agent",
 							result: {
 								status: "ok",
-								sealed_to_source_request: true,
 								findings: response.message,
 							},
 							summary: "Delegated web research finished.",
@@ -4672,7 +4835,11 @@ export function GlobalToolBridge() {
 						getActiveRun: (appId, boardId) =>
 							flowPilotBoardActivity.snapshot(appId, boardId),
 						approve: async (job, action) => {
-							const answer = await approveBoardEditJob(job, action);
+							const answer = await approveBoardEditJob(
+								job,
+								action,
+								askingChat(request).runId,
+							);
 							return answer && "approved" in answer ? answer.approved : null;
 						},
 						onJob: (job) => {
@@ -4793,6 +4960,11 @@ export function GlobalToolBridge() {
 							message: "flowpilot_board requires an app_id.",
 						};
 					const ownerMessageId = ownerMessageIdForRequest(request);
+					const boardRunOwnerId =
+						ownerMessageId ?? parentRequestId(request) ?? request.requestId;
+					const routingFailure =
+						boardRoutingFailuresRef.current.get(boardRunOwnerId);
+					if (routingFailure) return routingFailure;
 					const createdAppId = ownerMessageId
 						? createdAppTargetsByOwnerRef.current.get(ownerMessageId)
 						: undefined;
@@ -4810,6 +4982,7 @@ export function GlobalToolBridge() {
 							isReady,
 						});
 					let boardId = liveSurface?.boardId ?? boardIdArg;
+					boardTargetsByRequestRef.current.set(request, { appId, boardId });
 					const createNewBoard = argBoolean(args, "create_new_board") === true;
 					if (boardId) {
 						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
@@ -4829,11 +5002,7 @@ export function GlobalToolBridge() {
 					// same app can overlap. Without a target the app-scoped key serializes board
 					// creation/selection; the board-scoped lock is acquired below once resolved.
 					const lockScopedToBoard = Boolean(boardId) && !createNewBoard;
-					let releaseBoardEdit: (() => void) | undefined =
-						await boardEditCoordinator.acquire(
-							flowPilotBoardInitialLockKey(appId, boardId, createNewBoard),
-							boardEditAcquireOptions(),
-						);
+					let releaseBoardEdit: (() => void) | undefined;
 					let releaseBoardScopedEdit: (() => void) | undefined;
 					let pendingDraftingWorkspace:
 						| FlowScriptWorkspaceCandidate
@@ -4849,9 +5018,17 @@ export function GlobalToolBridge() {
 					let boardActivity:
 						| ReturnType<typeof flowPilotBoardActivity.begin>
 						| undefined;
+					let createdBoard = false;
+					let boardCreationAttempted = false;
 					try {
+						releaseBoardEdit = await boardEditCoordinator.acquire(
+							flowPilotBoardInitialLockKey(appId, boardId, createNewBoard),
+							boardEditAcquireOptions(),
+						);
 						assertRequestActive(request, "serialized board snapshot");
-						let createdBoard = false;
+						const queuedRoutingFailure =
+							boardRoutingFailuresRef.current.get(boardRunOwnerId);
+						if (queuedRoutingFailure) return queuedRoutingFailure;
 						// An ADDITIONAL board is only ever for an independent workflow with its own
 						// trigger: boards of one app cannot call each other, so connected logic must
 						// stay in one board as function layers. Without this opt-in the first-board
@@ -4860,10 +5037,11 @@ export function GlobalToolBridge() {
 						// overlapping run may have created or changed it while this request waited.
 						if (!boardId && !createNewBoard) {
 							const boards = await readCreatedAppWhenReady(
-								() => backend.boardState.getBoardSummaries(appId),
+								() => backend.boardState.getBoardSummariesAuthoritative(appId),
 								(candidates) => candidates.length > 0,
 							);
 							boardId = boards?.[0]?.id ?? "";
+							boardTargetsByRequestRef.current.set(request, { appId, boardId });
 						}
 						// New apps have no board yet — create one instead of bouncing the task back
 						// to the user. An explicit create_new_board also lands here, having skipped
@@ -4891,35 +5069,53 @@ export function GlobalToolBridge() {
 							// Reuse the board this conversation already created for the same request
 							// (e.g. a crash/reload retry whose listing has not propagated) instead of
 							// minting a duplicate; upsert on the recorded id is idempotent.
-							boardId = resolveFlowPilotBoardCreationId({
-								requestedBoardId: callerChosenBoardId,
-								journaledBoardId: boardCreationIdentity
-									? createdArtifactJournalRef.current.find(
-											boardCreationIdentity,
-										)?.artifacts.boardId
-									: undefined,
-								createId,
-							});
-							const boardAlreadyExisted = (
-								await backend.boardState.getBoardSummaries(appId)
-							).some((candidate) => candidate.id === boardId);
-							await backend.boardState.upsertBoard(
+							const created = await prepareFlowPilotBoardCreation({
+								readOnly,
 								appId,
-								boardId,
-								argString(args, "board_name") ||
-									(createNewBoard ? "Workflow Board" : "Main Board"),
-								instruction.slice(0, 140),
-								ILogLevel.Debug,
-								IExecutionStage.Dev,
-							);
-							createdBoard = !boardAlreadyExisted;
-							if (boardCreationIdentity) {
-								createdArtifactJournalRef.current.record(
-									boardCreationIdentity,
-									{ appId, boardId },
-									request.requestId,
-								);
-							}
+								requestedBoardId: callerChosenBoardId,
+								identity: boardCreationIdentity,
+								journal: createdArtifactJournalRef.current,
+								requestId: request.requestId,
+								createId,
+								onTarget: (target) => {
+									boardId = target;
+									boardTargetsByRequestRef.current.set(request, {
+										appId,
+										boardId: target,
+									});
+								},
+								exists: async (target) =>
+									(
+										await backend.boardState.getBoardSummariesAuthoritative(
+											appId,
+										)
+									).some((candidate) => candidate.id === target),
+								create: async (target) => {
+									assertRequestActive(request, "board creation");
+									boardCreationAttempted = true;
+									boardTargetsByRequestRef.current.set(request, {
+										appId,
+										boardId: target,
+										creationStatus: "unconfirmed",
+									});
+									await backend.boardState.upsertBoard(
+										appId,
+										target,
+										argString(args, "board_name") ||
+											(createNewBoard ? "Workflow Board" : "Main Board"),
+										instruction.slice(0, 140),
+										ILogLevel.Debug,
+										IExecutionStage.Dev,
+									);
+									boardTargetsByRequestRef.current.set(request, {
+										appId,
+										boardId: target,
+										creationStatus: "confirmed",
+									});
+								},
+							});
+							boardId = created.boardId;
+							createdBoard = created.createdBoard;
 						}
 						// A create-mode run held only the app-scoped creation lock. Now that it has a
 						// concrete board, also take that board's lock (always app key first, board key
@@ -4937,6 +5133,9 @@ export function GlobalToolBridge() {
 							releaseBoardEdit = undefined;
 							assertRequestActive(request, "board-scoped serialization");
 						}
+						const resolvedRoutingFailure =
+							boardRoutingFailuresRef.current.get(boardRunOwnerId);
+						if (resolvedRoutingFailure) return resolvedRoutingFailure;
 						const boardRecoveryKey = boardEditRecoveryKey(appId, boardId);
 						boardActivity = flowPilotBoardActivity.begin(
 							appId,
@@ -5476,6 +5675,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								appId,
 							);
 							flushSubRun();
+							assertBoardSpecialistResponse(response);
 							flowPilotDebugLog(
 								"[global-tool-bridge] flowpilot_board: nested copilot_chat finished",
 								{ commands: response.commands?.length ?? 0, readOnly },
@@ -5614,7 +5814,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 								const destructive =
 									job.review.replacementMode ||
 									job.review.destructiveEffects.length > 0;
-								if (useGlobalChatStore.getState().autoMode) {
+								if (
+									selectAutoMode(
+										useGlobalChatStore.getState(),
+										askingChat(request).conversationId,
+									)
+								) {
 									boardActivity?.update({
 										stage: "applying",
 										commit_state: "applying",
@@ -6070,8 +6275,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 								flowIrCommit = undefined;
 							}
 						} catch (error) {
+							if (error instanceof BoardSpecialistScopeError) {
+								flowIrCommit = error.flowIrCommit;
+							}
 							if (flowIrCommit) {
-								if (isRequestExpired(request)) {
+								if (
+									isRequestExpired(request) &&
+									!(error instanceof BoardSpecialistScopeError)
+								) {
 									// Bridge deadline / lost response channel: the exact checked
 									// batch stays PENDING on the host so the next run for the same
 									// request redelivers its Apply/Dismiss token instead of
@@ -6109,16 +6320,36 @@ Completion contract: build complete helper logic first and add the Event entry l
 								error,
 								"The queued board change failed without a diagnostic.",
 							);
-							const interruptedResult = boardEditInterruptionResult({
-								status: isRequestExpired(request) ? "timeout" : "error",
-								code: isRequestExpired(request)
-									? "board_edit_interrupted"
-									: "board_subrun_failed",
-								message: errorMessage,
-								candidate: retainedCandidate,
-							});
+							const routingFailure =
+								error instanceof BoardSpecialistScopeError
+									? boardSpecialistRoutingFailure(
+											error,
+											appId,
+											boardId,
+											createdBoard,
+										)
+									: undefined;
+							if (routingFailure) {
+								boardRoutingFailuresRef.current.record(
+									boardRunOwnerId,
+									routingFailure,
+								);
+							}
+							const interruptedResult = routingFailure ?? {
+								...boardEditInterruptionResult({
+									status: isRequestExpired(request) ? "timeout" : "error",
+									code: isRequestExpired(request)
+										? "board_edit_interrupted"
+										: "board_subrun_failed",
+									message: errorMessage,
+									candidate: retainedCandidate,
+								}),
+								app_id: appId,
+								board_id: boardId,
+								...(createdBoard ? { created_board_id: boardId } : {}),
+							};
 							generationOutcome = interruptedResult.status;
-							if (!readOnly) {
+							if (!readOnly && !routingFailure) {
 								boardZeroProgressRetryRef.current.recordRunOutcome(
 									zeroProgressOwnerId,
 									boardRecoveryKey,
@@ -6499,6 +6730,22 @@ Completion contract: build complete helper logic first and add the Event entry l
 						);
 						nestedRunSettled = true;
 						return result;
+					} catch (error) {
+						generationOutcome = "error";
+						return {
+							status: "error",
+							code: "FLOWPILOT_BOARD_OPERATION_FAILED",
+							app_id: appId,
+							...(boardId ? { board_id: boardId } : {}),
+							...(createdBoard ? { created_board_id: boardId } : {}),
+							...(boardCreationAttempted && !createdBoard
+								? { board_creation_status: "unconfirmed" }
+								: {}),
+							message: getErrorMessage(error, "The board operation failed."),
+							...(boardId
+								? { next_action: "inspect_existing_board_before_retry" }
+								: {}),
+						};
 					} finally {
 						generationTrace?.finish({
 							outcome: generationOutcome,
@@ -7570,7 +7817,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 						},
 					};
 
-					const responseMessage: IMessage = {
+					let responseMessage: IMessage = {
 						id: createId(),
 						appId,
 						sessionId: chatId,
@@ -7580,8 +7827,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 						actions: [],
 						timestamp: Date.now(),
 					};
+					const responseMessages = [responseMessage];
 					let intermediate = Response.default();
-					const attachments = new Map<string, IAttachment>();
+					let attachments = new Map<string, IAttachment>();
+					let chatDone = false;
 					// Capture any a2ui UI the app chat pushes (event_type "a2ui"). The app builds this
 					// UI for the user, not the model — processChatEvents ignores it, so we fold the
 					// pushes into surfaces here and render them as an inline card after the run. The
@@ -7600,11 +7849,12 @@ Completion contract: build complete helper logic first and add the Event entry l
 							recordDebugEvent: (event) => recordNestedDebug(request, event),
 						});
 					const syncSubSteps = () => {
-						const steps = responseMessage.plan_steps;
-						if (!steps?.length) return;
-						for (const step of steps) {
-							if (!subAcc.steps.has(step.id)) subAcc.stepOrder.push(step.id);
-							subAcc.steps.set(step.id, step);
+						for (const message of responseMessages) {
+							for (const step of message.plan_steps ?? []) {
+								const id = `${message.id}:${step.id}`;
+								if (!subAcc.steps.has(id)) subAcc.stepOrder.push(id);
+								subAcc.steps.set(id, { ...step, id });
+							}
 						}
 						publishSubSteps();
 					};
@@ -7617,12 +7867,50 @@ Completion contract: build complete helper logic first and add the Event entry l
 						boardId: chatEvent.board_id,
 						eventId: chatEvent.id,
 					};
+					const currentMainWidget = () => {
+						const paneState = useGlobalChatStore.getState();
+						const ownerRun = scope.runId
+							? paneState.runs[scope.runId]
+							: undefined;
+						return ownerRun
+							? resolveMainChatWidget(
+									[
+										...paneState.messages,
+										...Object.values(paneState.runs).flatMap((run) =>
+											run.message ? [run.message] : [],
+										),
+									],
+									ownerRun.conversationId,
+								)
+							: undefined;
+					};
+					const inheritedMainWidget = currentMainWidget();
+					if (
+						inheritedMainWidget?.widget?.origin?.appId === appId &&
+						inheritedMainWidget.widget.origin.boardId === chatEvent.board_id
+					) {
+						responseMessage.main_widget = inheritedMainWidget;
+					}
+					let lastPublishedMainWidget = responseMessage.main_widget;
 					const publishWidgets = () => {
-						const widgets = responseMessage.widgets;
-						if (!widgets?.length) return;
-						scope.addSubWidgets(
-							widgets.map((widget) => ({ ...widget, origin: widgetOrigin })),
+						const widgets = responseMessages.flatMap(
+							(message) => message.widgets ?? [],
 						);
+						if (widgets?.length) {
+							scope.addSubWidgets(
+								widgets.map((widget) => ({ ...widget, origin: widgetOrigin })),
+							);
+						}
+						const mainWidget = responseMessage.main_widget;
+						if (mainWidget && mainWidget !== lastPublishedMainWidget) {
+							lastPublishedMainWidget = mainWidget;
+							scope.setSubMainWidget({
+								...mainWidget,
+								widget: mainWidget.widget
+									? { ...mainWidget.widget, origin: widgetOrigin }
+									: null,
+							});
+						}
 					};
 
 					try {
@@ -7635,18 +7923,23 @@ Completion contract: build complete helper logic first and add the Event entry l
 							false,
 							undefined,
 							(batch) => {
+								refreshMainChatWidget(responseMessage, currentMainWidget());
 								const result = processChatEvents(batch, {
 									intermediateResponse: intermediate,
 									responseMessage,
+									responseMessages,
 									attachments,
 									tmpLocalState: null,
 									tmpGlobalState: null,
-									done: false,
+									done: chatDone,
 									appId,
 									eventId: chatEvent.id,
 									sessionId: chatId,
 								});
 								intermediate = result.intermediateResponse;
+								responseMessage = result.responseMessage;
+								attachments = result.attachments;
+								chatDone = result.done;
 								syncSubSteps();
 								for (const event of batch) {
 									if (event?.event_type === "a2ui" && event.payload) {
@@ -7694,14 +7987,16 @@ Completion contract: build complete helper logic first and add the Event entry l
 						);
 					}
 
-					const text =
-						typeof responseMessage.inner.content === "string"
-							? responseMessage.inner.content
-							: "";
+					const text = responseMessages
+						.map((message) => joinContentText(message.inner.content))
+						.filter(Boolean)
+						.join("\n\n");
 
 					// Fold any attachments the app chat produced into the owning message so they
 					// render, and report them back to the assistant so it can relay/reference them.
-					const files = responseMessage.files ?? [];
+					const files = responseMessages.flatMap(
+						(message) => message.files ?? [],
+					);
 					if (files.length > 0) {
 						scope.addSubAttachments(files);
 					}
@@ -7713,14 +8008,20 @@ Completion contract: build complete helper logic first and add the Event entry l
 
 					// Surface the called app's own model usage (its chat_usage_stat events land on
 					// responseMessage.usage_stats) in the global chat's stats badge.
-					if (responseMessage.usage_stats?.length) {
-						scope.addSubUsageStats(responseMessage.usage_stats);
+					const usageStats = responseMessages.flatMap(
+						(message) => message.usage_stats ?? [],
+					);
+					if (usageStats.length) {
+						scope.addSubUsageStats(usageStats);
 					}
 
 					const forwardedFileNames = forwardedAttachments.map((file) =>
 						typeof file === "string" ? file : (file.name ?? file.url),
 					);
-					const embeddedWidgetCount = responseMessage.widgets?.length ?? 0;
+					const embeddedWidgetCount = responseMessages.reduce(
+						(count, message) => count + (message.widgets?.length ?? 0),
+						0,
+					);
 
 					scope.referenceApp(appId);
 					return {
@@ -7756,12 +8057,66 @@ Completion contract: build complete helper logic first and add the Event entry l
 			recordNestedDebug,
 			settleNestedSpecialist,
 			recordSettledGenerationReceipt,
+			askingChat,
 			assertHomeProfile,
 			assertRequestActive,
 			isRequestExpired,
 			markRequestExpired,
 			ownerMessageIdForRequest,
 		],
+	);
+
+	/**
+	 * Always asks: auto mode, standing approvals and "don't ask again" never apply. The typed value
+	 * goes from the prompt's input to the bot's secret store; the response only acknowledges.
+	 */
+	const requestSecret = useCallback(
+		async (request: FrontendToolRequest): Promise<FrontendToolResponse> => {
+			const details = parseSecretRequest(request.arguments);
+			const botId = approvalOwner(askingChat(request));
+			const store = botStateRef.current;
+			const failure = (code: string, message: string) => ({
+				requestId: request.requestId,
+				approved: true,
+				result: { status: "error", code, message },
+			});
+			if (!details)
+				return failure(
+					"secret_request_invalid",
+					"secret_request needs a `name` like API_KEY and a `description` of what the secret is for.",
+				);
+			if (typeof botId !== "string" || !store)
+				return failure(
+					"secret_request_needs_bot",
+					"Secrets are stored per bot, and this chat has no bot to store one for. Ask the owner to talk to a bot.",
+				);
+			const outcome = await openDialog({
+				type: "secret",
+				request,
+				secret: {
+					...details,
+					store: async (value) => {
+						await store.upsertBotSecret(botId, details.name, {
+							value,
+							description: details.description,
+						});
+					},
+				},
+			});
+			assertRequestActive(request, "secret response");
+			if (!outcome || !("approved" in outcome) || !outcome.approved)
+				return {
+					requestId: request.requestId,
+					approved: false,
+					error: "The owner declined to provide the secret.",
+				};
+			return {
+				requestId: request.requestId,
+				approved: true,
+				result: { status: "ok", native_approved: true },
+			};
+		},
+		[askingChat, assertRequestActive, openDialog],
 	);
 
 	const execute = useCallback(
@@ -7807,6 +8162,9 @@ Completion contract: build complete helper logic first and add the Event entry l
 					};
 				}
 
+				if (request.toolName === "secret_request")
+					return await requestSecret(request);
+
 				const ownerMessageId = ownerMessageIdForRequest(request);
 				const createdAppId = ownerMessageId
 					? createdAppTargetsByOwnerRef.current.get(ownerMessageId)
@@ -7842,7 +8200,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 					};
 				}
 
-				if (request.toolName === "http_request") {
+				if (request.toolName === "http_request" && !request.approvalOnly) {
 					const refusal = httpRequestRefusal(
 						scope.runId,
 						scope.runId ? solveRoutingStateByRun.get(scope.runId) : undefined,
@@ -7865,21 +8223,43 @@ Completion contract: build complete helper logic first and add the Event entry l
 					contextAppId: request.context?.appId || request.context?.app_id,
 				});
 				const sessionKey = approvalScope.sessionKey;
-				// Read through getState() rather than a selector so `execute` keeps a stable
-				// identity. Auto mode is a frontend waiver only: the approval kind sent by the
-				// backend is untouched, so ordered execution of mutating tools still holds.
+				// Waivers belong to the run that asks: its bot's auto mode and "don't ask again", or
+				// Flux's for a Flux chat. Read through getState() rather than a selector so `execute`
+				// keeps a stable identity. Auto mode is a frontend waiver only: the approval kind sent
+				// by the backend is untouched, so ordered execution of mutating tools still holds.
+				const asking = askingChat(request);
+				const owner = approvalOwner(asking);
 				const needsApproval =
-					!useGlobalChatStore.getState().autoMode &&
+					!selectAutoMode(
+						useGlobalChatStore.getState(),
+						asking.conversationId,
+					) &&
 					(approval?.kind === "mutating" || approval?.kind === "execute") &&
 					!shouldSkipUnavailableCreateTableApproval(
 						request.toolName,
 						request.arguments,
 					);
 
+				let remembered = false;
+				const contextAppId = request.context?.appId || request.context?.app_id;
+				const requestGrants = approvalScope.rememberable
+					? grantKeys(request.toolName, request.arguments, contextAppId)
+					: [];
 				if (
 					needsApproval &&
 					(!approvalScope.rememberable ||
-						!approvedKeysRef.current.has(sessionKey))
+						!(
+							standingApprovalsRef.current.has(owner, sessionKey) ||
+							(await standingApprovalsRef.current.coveredByGrant(
+								owner,
+								request.toolName,
+								grantScopes(
+									request.toolName,
+									request.arguments,
+									contextAppId,
+								) ?? [],
+							))
+						))
 				) {
 					const outcome = await openDialog({ type: "approval", request });
 					assertRequestActive(request, "approval response");
@@ -7891,12 +8271,31 @@ Completion contract: build complete helper logic first and add the Event entry l
 						};
 					}
 					if (outcome.remember && approvalScope.rememberable) {
-						approvedKeysRef.current.add(sessionKey);
+						remembered = requestGrants.length > 0;
+						await standingApprovalsRef.current
+							.remember(owner, sessionKey, requestGrants)
+							.catch((error) =>
+								console.warn(
+									`Saving the standing approval for ${request.toolName} failed`,
+									error,
+								),
+							);
 					}
 				}
 
 				assertRequestActive(request, "tool mutation");
 				await assertHomeProfile(request);
+				if (request.approvalOnly) {
+					return {
+						requestId: request.requestId,
+						approved: true,
+						result: {
+							status: "ok",
+							native_approved: true,
+							...(remembered ? { native_remember: true } : {}),
+						},
+					};
+				}
 				const result = await runTool(request, scope);
 				await assertHomeProfile(request);
 				assertRequestActive(request, "tool completion");
@@ -7906,7 +8305,29 @@ Completion contract: build complete helper logic first and add the Event entry l
 					return {
 						requestId: request.requestId,
 						approved: true,
-						result: error.result,
+						result: {
+							...error.result,
+							...(request.toolName === "flowpilot_board"
+								? boardEditTargetContext(
+										boardTargetsByRequestRef.current.get(request),
+									)
+								: {}),
+						},
+					};
+				}
+				if (request.toolName === "flowpilot_board") {
+					return {
+						requestId: request.requestId,
+						approved: true,
+						result: boardEditInterruptionResult({
+							status: isRequestExpired(request) ? "timeout" : "error",
+							code: "FLOWPILOT_BOARD_OPERATION_INTERRUPTED",
+							message: getErrorMessage(
+								error,
+								"Frontend tool execution failed.",
+							),
+							target: boardTargetsByRequestRef.current.get(request),
+						}),
 					};
 				}
 				// approved:true + error => the bridge reports status:"error" (not a user denial).
@@ -7918,10 +8339,13 @@ Completion contract: build complete helper logic first and add the Event entry l
 			}
 		},
 		[
+			askingChat,
 			assertHomeProfile,
 			assertRequestActive,
+			isRequestExpired,
 			openDialog,
 			ownerMessageIdForRequest,
+			requestSecret,
 			runTool,
 		],
 	);
@@ -7932,9 +8356,27 @@ Completion contract: build complete helper logic first and add the Event entry l
 			if (ownerMessageId) {
 				rememberRequestOwner(request.requestId, ownerMessageId);
 			}
+			const asking = askingChat(request);
+			if (asking.runId && asking.conversationId) {
+				rememberRunConversation(asking.runId, asking.conversationId);
+			}
 			// Resolved once, here, and threaded down: every store write this tool performs is
 			// addressed to the run that asked for it.
 			const scope = createRunScope(ownerMessageId);
+			if (request.toolName === "flowpilot_board") {
+				const appId =
+					argString(request.arguments, "app_id") ||
+					argString(request.arguments, "appId");
+				const boardId =
+					argString(request.arguments, "board_id") ||
+					argString(request.arguments, "boardId");
+				if (appId || boardId) {
+					boardTargetsByRequestRef.current.set(request, {
+						appId: appId || undefined,
+						boardId: boardId || undefined,
+					});
+				}
+			}
 			const startedAt = Date.now();
 			recordRequestDebug(request, {
 				id: `frontend:${request.requestId}:request`,
@@ -8011,6 +8453,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 							code: "frontend_execution_deadline",
 							message: reason,
 							candidate: retainedCandidate,
+							target:
+								request.toolName === "flowpilot_board"
+									? boardTargetsByRequestRef.current.get(request)
+									: undefined,
 						});
 						if (
 							request.toolName === "flowpilot_board" &&
@@ -8102,7 +8548,6 @@ Completion contract: build complete helper logic first and add the Event entry l
 					appInventoryReturned:
 						(previousRoutingState?.appInventoryReturned ?? false) ||
 						isReturnedAppInventory(inventory),
-					sealedResearchUsed: previousRoutingState?.sealedResearchUsed ?? false,
 				});
 			}
 			boardRecoveryScopeByRequestRef.current.delete(request.requestId);
@@ -8176,6 +8621,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 			return response;
 		},
 		[
+			askingChat,
 			backend.boardState,
 			cancelRequestDialogs,
 			execute,
@@ -8198,6 +8644,23 @@ Completion contract: build complete helper logic first and add the Event entry l
 		registerGlobalChatToolExecutor((request) => executeRef.current(request));
 		return () => registerGlobalChatToolExecutor(null);
 	}, []);
+
+	useEffect(() => {
+		let disposed = false;
+		let stop: (() => void) | undefined;
+		void listenInCurrentWindow("flowpilot://native-tool-completed", () => {
+			void queryClient.invalidateQueries();
+		})
+			.then((unlisten) => {
+				if (disposed) unlisten();
+				else stop = unlisten;
+			})
+			.catch(() => {});
+		return () => {
+			disposed = true;
+			stop?.();
+		};
+	}, [queryClient]);
 
 	useEffect(() => {
 		if (typeof window === "undefined") return;

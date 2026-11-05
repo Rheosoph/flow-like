@@ -3,6 +3,7 @@ import {
 	isAgentBackendProvider,
 	normalizeAIProvider,
 } from "../../components/flowpilot/types";
+import { joinContentText } from "../../components/interfaces/chat-default/inline-segments";
 import { copilotBackendConnectionCoordinator } from "../../hooks/copilot-backend-coordinator";
 import {
 	FLOWPILOT_DEBUG_ENABLED,
@@ -17,14 +18,29 @@ import { sanitizeFlowScriptForPersistence } from "../../lib/flowscript-persisten
 import { isTauri } from "../../lib/platform";
 import { IRole } from "../../lib/schema/llm/history";
 import {
+	recordChatActivity,
+	removeChatActivity,
+	retargetChatActivity,
+} from "../chat-activity-store";
+import {
 	createAgentDebugStreamRecorder,
 	summarizeAgentDebugRootOutcomes,
 } from "./agent-debug-report";
+import { loadLatest } from "./bot-history";
+import { useBotHistoryStore } from "./bot-history-store";
+import { activeBotTarget, botInbox, resolveBotTarget } from "./bot-inbox";
 import {
 	applyStreamEvent,
 	createStreamAccumulator,
 	orderedSteps,
 } from "./copilot-stream-steps";
+import {
+	addressedNow,
+	botConversationId,
+	conversationBotId,
+	currentConversationId,
+	isBotConversation,
+} from "./global-chat-bots";
 import {
 	GLOBAL_CHAT_APP_ID,
 	type IChatRunContext,
@@ -41,12 +57,20 @@ import {
 import {
 	type GlobalChatAgentSelection,
 	LAST_CONVERSATION_KEY,
+	LAST_FLUX_CONVERSATION_KEY,
 	beginGlobalChatTurnSelection,
+	readLastFluxConversation,
+	rememberGlobalChatConversation,
+	selectAutoMode,
 	useGlobalChatStore,
 } from "./global-chat-store";
+import { createNativeAutoModeControl } from "./native-auto-mode";
+import { createNativeStreamPresentation } from "./native-stream-presentation";
+
+type GlobalChatStoreState = ReturnType<typeof useGlobalChatStore.getState>;
 
 // The global-chat streaming engine lives here — OUTSIDE any React component — so a turn keeps
-// streaming, checkpointing, and finalizing even as the conversation morphs between the /chat page
+// streaming, checkpointing, and finalizing even as the conversation morphs between the Bots tab
 // and the docked overlay (each unmounts the other) or the webview hard-reloads. All state is read
 // from / written to the zustand store, never component-local refs, and every write is addressed by
 // run id so N turns can stream at once. The Rust side mirrors every run into a resumable buffer
@@ -77,7 +101,7 @@ export function setActiveRun(
 	agentSelection?: GlobalChatAgentSelection,
 ) {
 	const entry: ActiveRun = {
-		conversationId,
+		conversationId: currentConversationId(conversationId),
 		runId,
 		...(agentSelection
 			? {
@@ -215,8 +239,10 @@ const deletedConversations = new Set<string>();
 /** Version tag on every persisted {@link IChatRunContext}, so stored ratings survive shape changes. */
 export const RUN_CONTEXT_SCHEMA = "flowpilot.run-context/v1";
 
-export async function persistGlobalChatMessage(message: IMessage) {
-	if (deletedConversations.has(message.sessionId)) return;
+export async function persistGlobalChatMessage(addressed: IMessage) {
+	const message = addressedNow(addressed);
+	if (deletedConversations.has(message.sessionId)) return false;
+	if (activeBotTarget(message.sessionId)) return true;
 	try {
 		let persistedMessage = message;
 		const workspace = message.flowscript_workspace;
@@ -232,24 +258,28 @@ export async function persistGlobalChatMessage(message: IMessage) {
 		}
 		if (FLOWPILOT_DEBUG_ENABLED) {
 			await globalChatDb.messages.put(persistedMessage);
-			return;
+			return true;
 		}
 		// Defense in depth: callers can pass restored or backend-provided messages that still carry
 		// an old report. Production must never write that diagnostic payload back to history.
 		await globalChatDb.messages.put(
 			stripFlowPilotDebugReport(persistedMessage),
 		);
+		return true;
 	} catch {
 		// history persistence is best-effort in v1
+		return false;
 	}
 }
 
 /** Create/update the conversation's session row so it shows up in the history list. */
 export async function persistGlobalChatSession(
-	sessionId: string,
+	addressedTo: string,
 	title: string,
 ) {
+	const sessionId = currentConversationId(addressedTo);
 	if (deletedConversations.has(sessionId)) return;
+	if (activeBotTarget(sessionId)) return;
 	try {
 		const existing = await globalChatDb.sessions.get(sessionId);
 		const now = Date.now();
@@ -313,6 +343,7 @@ export async function deleteGlobalChatConversation(sessionId: string) {
 	// Tombstone first: cancellation is not synchronous, so this is what actually stops a run's
 	// in-flight checkpoint or its closing write from re-creating rows behind the delete.
 	deletedConversations.add(sessionId);
+	removeChatActivity({ kind: "flowpilot", sessionId });
 
 	const state = useGlobalChatStore.getState();
 	const liveRunIds = Object.values(state.runs)
@@ -328,10 +359,76 @@ export async function deleteGlobalChatConversation(sessionId: string) {
 	} catch {
 		// history mutation is best-effort
 	}
+	if (readLastFluxConversation() === sessionId) {
+		try {
+			sessionStorage.removeItem(LAST_FLUX_CONVERSATION_KEY);
+		} catch {
+			// restore pointers are best-effort
+		}
+	}
 
 	// Re-read: cancelling a run mutates the store, so the pre-cancel snapshot is stale here.
 	const current = useGlobalChatStore.getState();
 	if (current.activeConversationId === sessionId) current.newConversation();
+}
+
+/**
+ * The saved side of moving a conversation to a new id (`rebindBotChat`): reload pointers of live
+ * runs, the restore pointer, its activity entry and the rows. Rows already under the new id are
+ * kept, so repeating it changes nothing.
+ */
+export async function rebindSavedConversation(from: string, to: string) {
+	const runs = readActiveRuns();
+	if (runs.some((run) => run.conversationId === from)) {
+		writeActiveRuns(
+			runs.map((run) =>
+				run.conversationId === from ? { ...run, conversationId: to } : run,
+			),
+		);
+	}
+	try {
+		if (sessionStorage.getItem(LAST_CONVERSATION_KEY) === from) {
+			sessionStorage.setItem(LAST_CONVERSATION_KEY, to);
+		}
+	} catch {
+		// restore pointers are best-effort
+	}
+	retargetChatActivity(
+		{ kind: "flowpilot", sessionId: from },
+		{ kind: "flowpilot", sessionId: to },
+	);
+	await globalChatDb.transaction(
+		"rw",
+		globalChatDb.sessions,
+		globalChatDb.messages,
+		async () => {
+			await globalChatDb.messages
+				.where("sessionId")
+				.equals(from)
+				.modify({ sessionId: to });
+			const session = await globalChatDb.sessions.get(from);
+			if (!session) return;
+			const existing = await globalChatDb.sessions.get(to);
+			await globalChatDb.sessions.put({
+				...session,
+				...existing,
+				id: to,
+				createdAt: Math.min(
+					session.createdAt,
+					existing?.createdAt ?? session.createdAt,
+				),
+				updatedAt: Math.max(
+					session.updatedAt,
+					existing?.updatedAt ?? session.updatedAt,
+				),
+			});
+			await globalChatDb.sessions.delete(from);
+		},
+	);
+	// The chat may already show the new id (opened before the rows moved): bring the moved ones in.
+	if (useGlobalChatStore.getState().activeConversationId !== to) return;
+	const saved = await readTranscript(to);
+	useGlobalChatStore.getState().mergeConversationMessages(to, saved);
 }
 
 interface DriveOptions {
@@ -379,8 +476,45 @@ export function tauriStart(
 		const { Channel, invoke } = await import("@tauri-apps/api/core");
 		beforeInvoke?.();
 		const channel = new Channel<string>();
-		channel.onmessage = onChunk;
-		return invoke(command, { ...args, channel });
+		// The run's own chat decides: its bot's auto mode, or Flux's — never the chat on screen.
+		const runAutoMode = (state: GlobalChatStoreState) =>
+			selectAutoMode(
+				state,
+				(typeof args.runId === "string"
+					? state.runs[args.runId]?.conversationId
+					: undefined) ??
+					(typeof args.conversationId === "string"
+						? args.conversationId
+						: undefined),
+			);
+		const autoControl =
+			(command === "global_chat" || command === "global_chat_resume") &&
+			typeof args.runId === "string"
+				? createNativeAutoModeControl({
+						runId: args.runId,
+						read: () => runAutoMode(useGlobalChatStore.getState()),
+						subscribe: (changed) =>
+							useGlobalChatStore.subscribe((state, previous) => {
+								if (runAutoMode(state) !== runAutoMode(previous)) changed();
+							}),
+						update: (request) =>
+							invoke("set_native_run_auto_mode", { ...request }),
+					})
+				: undefined;
+		channel.onmessage = (chunk) => {
+			if (!autoControl?.accept(chunk)) onChunk(chunk);
+		};
+		try {
+			return await invoke(command, {
+				...args,
+				...(command === "global_chat"
+					? { autoApprove: runAutoMode(useGlobalChatStore.getState()) }
+					: {}),
+				channel,
+			});
+		} finally {
+			autoControl?.dispose();
+		}
 	};
 }
 
@@ -502,7 +636,12 @@ export async function driveGlobalChatStream({
 		}
 	};
 
+	const presentNativeOutput = createNativeStreamPresentation(runId);
 	const onChunk = (chunk: string) => {
+		if (presentNativeOutput(chunk)) {
+			syncMessage();
+			return;
+		}
 		for (const event of debugStream.push(chunk)) {
 			applyStreamEvent(acc, event);
 		}
@@ -700,19 +839,43 @@ export async function driveGlobalChatStream({
 				),
 			};
 			store.getState().commitMessage(finalized);
-			void persistGlobalChatMessage(finalized);
+			const saved = await persistGlobalChatMessage(finalized);
+			if (
+				saved &&
+				!deletedConversations.has(finalized.sessionId) &&
+				finalized.error?.kind !== "cancelled"
+			) {
+				const session = await globalChatDb.sessions
+					.get(finalized.sessionId)
+					.catch(() => undefined);
+				const preview =
+					joinContentText(finalized.inner.content).trim() ||
+					finalized.error?.message ||
+					(finalized.files.length > 0 ? "Shared an attachment" : "") ||
+					(finalized.widgets?.length ? "Shared a widget" : "");
+				if (preview && !deletedConversations.has(finalized.sessionId)) {
+					recordChatActivity({
+						target: { kind: "flowpilot", sessionId: finalized.sessionId },
+						messageId: finalized.id,
+						title: session?.summarization || label || "FlowPilot",
+						preview,
+					});
+				}
+			}
 		}
 
 		// A turn can end before it reaches a boundary where steering could be folded in. Recover
 		// anything the backend never consumed and re-send it as its own turn — the user watched
 		// that instruction get accepted, so dropping it here would be the worst outcome.
-		const conversationId = responseMessage.sessionId;
+		const conversationId =
+			store.getState().runs[runId]?.conversationId ?? responseMessage.sessionId;
 		if (isTauri()) {
 			void takeUnconsumedSteering(runId).then((leftovers) => {
+				const target = currentConversationId(conversationId);
 				for (const content of leftovers) {
-					store.getState().enqueueMessage({ conversationId, content });
+					store.getState().enqueueMessage({ conversationId: target, content });
 				}
-				if (leftovers.length > 0) void drainGlobalChatQueue?.(conversationId);
+				if (leftovers.length > 0) void drainGlobalChatQueue?.(target);
 			});
 		}
 
@@ -739,7 +902,7 @@ export function setGlobalChatQueueDrain(drain: GlobalChatQueueDrain) {
 }
 
 /**
- * Release the hook only if `drain` still owns the slot. The /chat page and the docked overlay are
+ * Release the hook only if `drain` still owns the slot. The Bots tab and the docked overlay are
  * both chat surfaces and can be mounted together; without the ownership check, whichever unmounts
  * first would tear out the survivor's hook and the queue would stop draining.
  */
@@ -815,7 +978,7 @@ export async function steerGlobalChatRun(
 	const steerMessage = makeGlobalChatMessage(
 		IRole.User,
 		trimmed,
-		run.conversationId,
+		store.getState().runs[runId]?.conversationId ?? run.conversationId,
 	);
 	store.getState().appendMessage(steerMessage);
 	void persistGlobalChatMessage(steerMessage);
@@ -869,6 +1032,7 @@ export function resumeGlobalChatStream() {
 			responseMessage.usage_stats = checkpoint.usage_stats;
 			responseMessage.files = checkpoint.files ?? [];
 			responseMessage.widgets = checkpoint.widgets;
+			responseMessage.main_widget = checkpoint.main_widget;
 			responseMessage.app_refs = checkpoint.app_refs;
 			responseMessage.flowscript_workspace = checkpoint.flowscript_workspace;
 			responseMessage.timestamp = checkpoint.timestamp;
@@ -902,41 +1066,225 @@ export function normalizeRestoredCheckpoint(message: IMessage): IMessage {
 	};
 }
 
+/** Bumped by every conversation restore and bot switch, so only the newest one lands. */
+let conversationSwitch = 0;
+
+/** The chat shows its loading state from here until a conversation lands or the newest switch gives up. */
+function beginConversationLoading() {
+	useGlobalChatStore.getState().setConversationLoading(true);
+}
+
+/** Only the newest switch ends the loading state; landing a conversation has already done so. */
+function endConversationLoading(ticket: number) {
+	if (ticket === conversationSwitch) {
+		useGlobalChatStore.getState().setConversationLoading(false);
+	}
+}
+
 /**
- * The ONE way to bring a persisted conversation back on screen — used by the mount-restore path
- * and the history popover. Loads + normalizes the transcript, repoints the reload-restore key,
- * and re-attaches any of the conversation's still-live runs.
+ * A bot's chat from its inbox, newest page first, once its earlier chat has moved there; null where
+ * the bot keeps its chat in the saved sessions.
+ */
+async function readBotTranscript(
+	conversationId: string,
+): Promise<IMessage[] | null> {
+	const botId = conversationBotId(conversationId);
+	const inbox = botInbox();
+	if (!botId || !inbox) return null;
+	const target = await resolveBotTarget(botId);
+	if (!target) return null;
+	const page = await loadLatest(inbox, target, conversationId);
+	useBotHistoryStore.getState().show(botId, page, false);
+	return page.messages;
+}
+
+/** A conversation's saved transcript, settled for display. */
+async function readTranscript(conversationId: string): Promise<IMessage[]> {
+	const fromInbox = await readBotTranscript(conversationId).catch((error) => {
+		console.warn("[BotChat] Reading the inbox history failed:", error);
+		return null;
+	});
+	if (fromInbox) return fromInbox;
+	const restored = await globalChatDb.messages
+		.where("sessionId")
+		.equals(conversationId)
+		.sortBy("timestamp");
+	return restored.map(normalizeRestoredCheckpoint);
+}
+
+interface Landing {
+	conversationId: string;
+	messages: IMessage[];
+}
+
+/**
+ * A transcript under the id its conversation answers to now. A bot chat that moved while Dexie
+ * read it is read again under its new id, so the old id never comes back on screen.
+ */
+async function readCurrentTranscript(conversationId: string): Promise<Landing> {
+	let current = currentConversationId(conversationId);
+	let messages = await readTranscript(current);
+	while (currentConversationId(current) !== current) {
+		current = currentConversationId(current);
+		messages = await readTranscript(current);
+	}
+	return { conversationId: current, messages };
+}
+
+/**
+ * The ONE way to bring a persisted conversation back on screen — used by the mount-restore path,
+ * the history popover and chat activity. Loads + normalizes the transcript, repoints the restore
+ * keys, and re-attaches any of the conversation's still-live runs. A bot conversation brings its
+ * bot along, since the id names it.
  *
  * With `skipIfBusy`, the load is dropped when the store picked up messages, a live run, or a
  * pending draft while Dexie was reading — mount-time restore must never clobber those.
  */
 export async function restoreGlobalChatConversation(
-	conversationId: string,
-	options?: { skipIfBusy?: boolean },
+	addressedTo: string,
+	options?: { skipIfBusy?: boolean; signal?: AbortSignal },
 ): Promise<boolean> {
-	const restored = await globalChatDb.messages
-		.where("sessionId")
-		.equals(conversationId)
-		.sortBy("timestamp");
-	const state = useGlobalChatStore.getState();
-	if (
-		options?.skipIfBusy &&
-		(restored.length === 0 ||
-			state.messages.length > 0 ||
-			state.isStreaming ||
-			state.draft !== null)
-	) {
-		return false;
-	}
-	state.loadConversation(
-		conversationId,
-		restored.map(normalizeRestoredCheckpoint),
-	);
+	if (options?.signal?.aborted) return false;
+	const ticket = ++conversationSwitch;
+	if (!options?.skipIfBusy) beginConversationLoading();
 	try {
-		sessionStorage.setItem(LAST_CONVERSATION_KEY, conversationId);
-	} catch {
-		// restore pointer is best-effort
+		const { conversationId, messages: restored } =
+			await readCurrentTranscript(addressedTo);
+		if (ticket !== conversationSwitch || options?.signal?.aborted) return false;
+		const state = useGlobalChatStore.getState();
+		if (
+			options?.skipIfBusy &&
+			(restored.length === 0 ||
+				state.messages.length > 0 ||
+				state.isStreaming ||
+				state.draft !== null)
+		) {
+			return false;
+		}
+		state.loadConversation(conversationId, restored);
+		rememberGlobalChatConversation(conversationId);
+		resumeGlobalChatStream();
+		return true;
+	} finally {
+		endConversationLoading(ticket);
 	}
+}
+
+/** Nothing on screen, nothing streaming, nothing about to be sent: a chat a reload left fresh. */
+function isUntouched(state: GlobalChatStoreState) {
+	return (
+		state.messages.length === 0 && !state.isStreaming && state.draft === null
+	);
+}
+
+/** Where switching to Flux lands, or null to stay on the Flux conversation already shown. */
+function fluxTarget(): { conversationId: string; fresh: boolean } | null {
+	const state = useGlobalChatStore.getState();
+	const last = readLastFluxConversation();
+	const canReturn = last !== null && !deletedConversations.has(last);
+	if (isBotConversation(state.activeConversationId)) {
+		return canReturn
+			? { conversationId: last, fresh: false }
+			: { conversationId: createId(), fresh: true };
+	}
+	// Already on Flux: only a chat a reload left fresh goes back to the last one.
+	return canReturn && isUntouched(state)
+		? { conversationId: last, fresh: false }
+		: null;
+}
+
+/** Where a switch lands: a bot's one conversation, or Flux's (see `fluxTarget`). */
+function switchTarget(botId: string | null) {
+	if (botId === null) return fluxTarget();
+	return {
+		conversationId: currentConversationId(botConversationId(botId)),
+		fresh: false,
+	};
+}
+
+/**
+ * A newer switch, or anything else that changed the chat since `shown` was read, wins. The chat on
+ * screen moving to its bot's new id isn't such a change.
+ */
+function isSuperseded(ticket: number, shown: string) {
+	const active = useGlobalChatStore.getState().activeConversationId;
+	return (
+		ticket !== conversationSwitch ||
+		currentConversationId(active) !== currentConversationId(shown)
+	);
+}
+
+/** Puts a conversation on screen; a Flux conversation left mid-way is where Flux picks up again. */
+function showSwitchedConversation(
+	left: string,
+	conversationId: string,
+	messages: IMessage[],
+) {
+	const state = useGlobalChatStore.getState();
+	if (!isBotConversation(left) && state.messages.length > 0) {
+		rememberGlobalChatConversation(left);
+	}
+	state.loadConversation(conversationId, messages);
+	if (messages.length > 0) rememberGlobalChatConversation(conversationId);
 	resumeGlobalChatStream();
-	return true;
+}
+
+/**
+ * A deleted bot can't answer: its chat gives way to Flux's, a reload no longer restores it and its
+ * queued sends are dropped. The saved rows stay, hidden like every bot conversation.
+ */
+export async function forgetBotChat(botId: string): Promise<void> {
+	const conversationId = botConversationId(botId);
+	try {
+		if (sessionStorage.getItem(LAST_CONVERSATION_KEY) === conversationId) {
+			sessionStorage.removeItem(LAST_CONVERSATION_KEY);
+		}
+	} catch {
+		// restore pointers are best-effort
+	}
+	removeChatActivity({ kind: "flowpilot", sessionId: conversationId });
+	const state = useGlobalChatStore.getState();
+	state.clearQueue(conversationId);
+	if (state.activeConversationId === conversationId) {
+		await switchGlobalChatBot(null);
+	}
+}
+
+/**
+ * Show a bot's chat. A bot opens its one conversation; Flux (`null`) returns to its own last
+ * conversation in this tab, or a fresh one. Runs keep streaming in the conversation they started
+ * in, and the newest switch wins.
+ */
+export async function switchGlobalChatBot(
+	botId: string | null,
+	options?: { signal?: AbortSignal },
+): Promise<void> {
+	if (options?.signal?.aborted) return;
+	const ticket = ++conversationSwitch;
+	const shown = useGlobalChatStore.getState().activeConversationId;
+	const target = switchTarget(botId);
+	try {
+		if (!target || target.conversationId === shown) return;
+		let landing: Landing = {
+			conversationId: target.conversationId,
+			messages: [],
+		};
+		if (!target.fresh) {
+			beginConversationLoading();
+			landing = await readCurrentTranscript(target.conversationId).catch(
+				() => ({
+					conversationId: currentConversationId(target.conversationId),
+					messages: [],
+				}),
+			);
+		}
+		if (isSuperseded(ticket, shown) || options?.signal?.aborted) return;
+		showSwitchedConversation(
+			currentConversationId(shown),
+			landing.conversationId,
+			landing.messages,
+		);
+	} finally {
+		endConversationLoading(ticket);
+	}
 }

@@ -1,0 +1,129 @@
+.moods-preview {
+	max-width: 1160px;
+	padding: 40px;
+}
+.moods-heading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 16px;
+}
+.moods-heading h1 {
+	font-size: 46px;
+	letter-spacing: -1.6px;
+}
+.moods-preview header p {
+	max-width: 640px;
+	font-size: 16px;
+	line-height: 1.6;
+}
+.moods-preview section + section {
+	margin-top: 30px;
+}
+.moods-preview h2 {
+	font-size: 18px;
+	margin: 0 0 15px;
+}
+.moods-grid {
+	display: grid;
+	grid-template-columns: repeat(5, minmax(0, 1fr));
+	gap: 12px;
+}
+.moods-grid figure {
+	margin: 0;
+	padding: 14px;
+	border: 1px solid #e5e2e6;
+	border-radius: 18px;
+	background: #fff;
+}
+.moods-grid figcaption {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	margin-top: 10px;
+}
+.moods-grid strong {
+	font-size: 16px;
+}
+.moods-grid figcaption span,
+.moods-retro figcaption {
+	color: #7b7582;
+	font: 11px ui-monospace, monospace;
+}
+.moods-states {
+	grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+.moods-states figure {
+	padding: 12px;
+}
+.moods-retro {
+	display: flex;
+	justify-content: space-between;
+	flex-wrap: wrap;
+	gap: 12px;
+}
+.moods-retro figure {
+	margin: 0;
+	text-align: center;
+}
+.moods-retro figcaption {
+	margin-top: 8px;
+}
+.moods-footer {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 24px;
+	padding-top: 22px;
+	border-top: 1px solid #e5e2e6;
+}
+.moods-compact > div,
+.moods-state-probe {
+	display: flex;
+	align-items: center;
+	gap: 14px;
+}
+.moods-state-probe label {
+	display: grid;
+	gap: 6px;
+	font-weight: 600;
+}
+.moods-preview select,
+.moods-preview button {
+	padding: 8px 12px;
+	color: inherit;
+	background: white;
+	border: 1px solid #d9d4df;
+	border-radius: 9px;
+	font: inherit;
+}
+.moods-preview button {
+	cursor: pointer;
+}
+@media (max-width: 800px) {
+	.moods-preview {
+		padding: 24px 16px;
+	}
+	.moods-heading h1 {
+		font-size: 32px;
+	}
+	.moods-grid,
+	.moods-states {
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+	}
+}
+@media (max-width: 500px) {
+	.moods-grid,
+	.moods-states {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+	.moods-heading,
+	.moods-footer {
+		align-items: start;
+		flex-direction: column;
+	}
+	.moods-retro {
+		justify-content: start;
+		gap: 18px;
+	}
+}

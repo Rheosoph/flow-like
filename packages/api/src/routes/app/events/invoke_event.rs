@@ -692,16 +692,24 @@ async fn invoke_event_impl(
                 _ => None,
             };
             let actor_user_id = account_user_id(subject).map(ToOwned::to_owned);
-            return Ok((subject.to_string(), None, user_context, actor_user_id));
+            return Ok((subject.to_string(), None, user_context, actor_user_id, None));
         }
         let permission = if params.page_trigger.is_some() {
             ensure_fresh_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
         } else {
             ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents)
         };
-        let sub = permission.effective_user_id().map_err(|_| {
+        let sub = permission.run_user_id().map_err(|_| {
             ApiError::forbidden("Invoking requires a caller that is linked to a user account")
         })?;
+        let bot_run = crate::bot_flow::BotFlowRun::admit_event(
+            &user,
+            &app_id,
+            &state,
+            &event_id,
+            params.page_trigger.is_some(),
+        )
+        .await?;
         let technical_user_id = permission.technical_user_id().map(ToOwned::to_owned);
         let actor_user_id = account_user_id(&sub).map(ToOwned::to_owned);
         Ok((
@@ -709,6 +717,7 @@ async fn invoke_event_impl(
             technical_user_id,
             Some(permission.to_user_context()),
             actor_user_id,
+            bot_run,
         ))
     };
     // A pre-resolved event is accepted only from another crate-private,
@@ -731,11 +740,12 @@ async fn invoke_event_impl(
     };
     let (caller, event) =
         flow_like_types::tokio::join!(caller.instrument(invoke_span!("invoke.authorize")), event);
-    let (sub, technical_user_id, user_context, actor_user_id): (
+    let (sub, technical_user_id, user_context, actor_user_id, bot_run): (
         String,
         Option<String>,
         Option<UserExecutionContext>,
         Option<String>,
+        Option<crate::bot_flow::BotFlowRun>,
     ) = caller?;
     let event = event?;
     // If invoked through an app connection, keep the caller app chain so the
@@ -894,9 +904,14 @@ async fn invoke_event_impl(
         .instrument(invoke_span!("invoke.store_payload")),
         async {
             if remote {
+                let (credential_sub, mode) = crate::bot_flow::credential_target(
+                    bot_run.as_ref(),
+                    &sub,
+                    get_credentials_access(),
+                );
                 Some(
                     state
-                        .scoped_credentials(&sub, &app_id, get_credentials_access())
+                        .scoped_credentials(&credential_sub, &app_id, mode)
                         .await,
                 )
             } else {
@@ -1036,7 +1051,10 @@ async fn invoke_event_impl(
         app_id: Set(app_id.clone()),
         created_at: Set(chrono::Utc::now().fixed_offset()),
         updated_at: Set(chrono::Utc::now().fixed_offset()),
-        event_version: Set(None),
+        event_version: Set(Some(format!(
+            "{}.{}.{}",
+            event.event_version.0, event.event_version.1, event.event_version.2
+        ))),
         nodes: Set(None),
         logs_count: Set(None),
     };
@@ -1187,6 +1205,7 @@ async fn invoke_event_impl(
         ApiError::internal_error(anyhow!("Failed to sign executor JWT: {}", e))
     })?;
 
+    let executor_jwt = crate::bot_flow::bind_executor(bot_run.as_ref(), executor_jwt)?;
     let executor_jwt = if hosted {
         crate::execution::bind_hosted_frontend(&executor_jwt)
             .map_err(|error| ApiError::internal_error(anyhow!(error)))?
@@ -1199,6 +1218,34 @@ async fn invoke_event_impl(
                 .map_err(|error| ApiError::internal_error(anyhow!(error)))?
         }
         _ => executor_jwt,
+    };
+
+    let isolated_poll_token = if query.isolated {
+        Some(
+            sign_execution_jwt(ExecutionJwtParams {
+                user_id: sub.clone(),
+                technical_user_id: technical_user_id.clone(),
+                run_id: run_id.clone(),
+                app_id: app_id.clone(),
+                board_id: board_id.clone(),
+                event_id: Some(event_id.clone()),
+                app_chain: caller_app_chain.clone(),
+                correlation: None,
+                callback_url: String::new(),
+                token_type: TokenType::User,
+                ttl_seconds: Some(if resolved_page_trigger.is_some() {
+                    24 * 60 * 60
+                } else {
+                    60 * 60
+                }),
+                shadow: None,
+            })
+            .map_err(|error| {
+                ApiError::internal_error(anyhow!("Failed to sign user JWT: {error}"))
+            })?,
+        )
+    } else {
+        None
     };
 
     let request = DispatchRequest {
@@ -1267,7 +1314,7 @@ async fn invoke_event_impl(
             run_id,
             status: response.status,
             message: Some(format!("Job dispatched via {} backend", response.backend)),
-            poll_token: None,
+            poll_token: isolated_poll_token,
         })
         .into_response());
     }
@@ -1390,6 +1437,13 @@ fn seal_lambda_page_actions(
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default()
         .to_string();
+    if event_type == "completed"
+        && let Some(payload) = envelope_object
+            .get_mut("payload")
+            .and_then(serde_json::Value::as_object_mut)
+    {
+        payload.remove("error_message");
+    }
     let report = envelope_object
         .get_mut("payload")
         .map(|payload| context.seal_payload(&event_type, &message_id, payload))
@@ -1432,6 +1486,11 @@ fn proxy_lambda_sse_response(
 
                     // Try to parse complete SSE events from buffer
                     while let Some(event) = extract_sse_event(&mut buffer) {
+                        if let Some(db) = &db
+                            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event.data)
+                        {
+                            completion.start(db, &run_id, &parsed);
+                        }
                         let event_data = seal_lambda_page_actions(
                             &event.data,
                             &run_id,
@@ -1439,11 +1498,6 @@ fn proxy_lambda_sse_response(
                             page_actions.as_deref(),
                         );
                         event_ordinal = event_ordinal.saturating_add(1);
-                        if let Some(db) = &db
-                            && let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&event_data)
-                        {
-                            completion.start(db, &run_id, &parsed);
-                        }
 
                         let sse_event = Event::default()
                             .event(&event.event_type)
@@ -2058,7 +2112,7 @@ mod tests {
         let now = chrono::Utc::now().fixed_offset();
         db.execute_raw(sea_orm::Statement::from_sql_and_values(
             DatabaseBackend::Sqlite,
-            r#"INSERT INTO public."ExecutionRun" (id,"boardId","nodeId","logLevel","inputPayloadLen","outputPayloadLen",progress,"appId","createdAt","updatedAt",status,mode,"runVariant") VALUES ('run-1','board-1','node-1',0,0,0,0,'app-1',?,?,'RUNNING','HTTP','PRIMARY')"#,
+            r#"INSERT INTO public."ExecutionRun" (id,"boardId","nodeId","logLevel","inputPayloadLen","outputPayloadLen",progress,"appId","createdAt","updatedAt",status,mode,"runVariant","eventVersion") VALUES ('run-1','board-1','node-1',0,0,0,0,'app-1',?,?,'RUNNING','HTTP','PRIMARY','0.0.0')"#,
             [now.into(), now.into()],
         ))
         .await
@@ -2069,6 +2123,32 @@ mod tests {
             enabled: false,
             state: None,
         }
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn dispatch_failure_preserves_the_event_version_stamped_at_creation() {
+        let context = completion_context().await;
+        sql_dispatch_failure_update(
+            "run-1",
+            "app-1",
+            chrono::Utc::now().fixed_offset(),
+            "Failed to dispatch job: connection refused".into(),
+        )
+        .exec(context.db.as_ref())
+        .await
+        .unwrap();
+
+        let run = execution_run::Entity::find_by_id("run-1")
+            .one(context.db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.status, RunStatus::Failed);
+        assert_eq!(run.event_version.as_deref(), Some("0.0.0"));
+        assert_eq!(
+            run.error_message.as_deref(),
+            Some("Failed to dispatch job: connection refused")
+        );
     }
 
     async fn run_status(context: &crate::audit::ExecutionAuditContext) -> RunStatus {
@@ -2084,6 +2164,214 @@ mod tests {
         bytes::Bytes::from_static(
             b"event: message\ndata: {\"event_type\":\"completed\",\"payload\":{\"status\":\"completed\"}}\n\n",
         )
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn lambda_page_failure_is_stored_before_private_details_are_removed() {
+        page_failure_is_stored_before_private_details_are_removed(true).await;
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn http_page_failure_is_stored_before_private_details_are_removed() {
+        page_failure_is_stored_before_private_details_are_removed(false).await;
+    }
+
+    async fn page_failure_is_stored_before_private_details_are_removed(lambda: bool) {
+        let context = completion_context().await;
+        let page_actions = PageActionSealingContext {
+            sub: "user-1".into(),
+            technical_user_id: None,
+            source_app_id: "app-1".into(),
+            source_event_id: "event-1".into(),
+            source_page_id: "page-1".into(),
+            source_manifest_revision: "manifest-1".into(),
+            target_app_id: "app-1".into(),
+            target_board_id: "board-1".into(),
+            target_board_version: None,
+            target_board_etag: Some("draft-etag".into()),
+            wasm_authority_revision: None,
+            origin_run_id: "run-1".into(),
+            allowed_entry_nodes: Default::default(),
+        };
+        let private_error = "WASM package load failed: private package location";
+        let mut frames = String::new();
+        for (event_type, payload) in [
+            (
+                "generic_result",
+                serde_json::json!({"error_message": "Application field"}),
+            ),
+            (
+                "error",
+                serde_json::json!({"message": "Page execution failed"}),
+            ),
+            (
+                "completed",
+                serde_json::json!({
+                    "status": "failed",
+                    "log_level": 4,
+                    "error_message": private_error,
+                }),
+            ),
+        ] {
+            let envelope = serde_json::json!({"event_type": event_type, "payload": payload});
+            frames.push_str(&format!("event: message\ndata: {envelope}\n\n"));
+        }
+        let body = if lambda {
+            let executor =
+                futures::stream::iter([Ok::<_, DispatchError>(bytes::Bytes::from(frames))]);
+            proxy_lambda_sse_response(
+                Box::pin(executor),
+                "run-1".into(),
+                Some(context.clone()),
+                Some(std::sync::Arc::new(page_actions)),
+            )
+            .into_response()
+            .into_body()
+        } else {
+            let executor =
+                reqwest::Response::from(axum::http::Response::new(reqwest::Body::from(frames)));
+            proxy_sse_response_with_page_actions(
+                executor,
+                "run-1".into(),
+                Some(context.clone()),
+                Some(std::sync::Arc::new(page_actions)),
+            )
+            .into_response()
+            .into_body()
+        };
+        let bytes = axum::body::to_bytes(body, 1024 * 1024).await.unwrap();
+        let response = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(!response.contains(private_error));
+        assert!(response.contains("Page execution failed"));
+        assert!(response.contains("Application field"));
+        let run = execution_run::Entity::find_by_id("run-1")
+            .one(context.db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.status, RunStatus::Failed);
+        assert_eq!(run.event_version.as_deref(), Some("0.0.0"));
+        assert_eq!(run.error_message.as_deref(), Some(private_error));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn timeout_closed_before_completion_receives_error_and_summary() {
+        let context = completion_context().await;
+        let closed_at = chrono::Utc::now().fixed_offset();
+        execution_run::Entity::update_many()
+            .set(execution_run::ActiveModel {
+                status: Set(RunStatus::Timeout),
+                completed_at: Set(Some(closed_at)),
+                ..Default::default()
+            })
+            .filter(execution_run::Column::Id.eq("run-1"))
+            .exec(context.db.as_ref())
+            .await
+            .unwrap();
+        let mut completion = CompletionWrites::default();
+        completion.start(
+            &context,
+            "run-1",
+            &serde_json::json!({
+                "event_type": "completed",
+                "payload": {
+                    "status": "failed",
+                    "error_message": "Execution timeout",
+                    "log_level": 4,
+                    "nodes": [["node-1", 4]],
+                    "logs": 3,
+                },
+            }),
+        );
+        completion.finish().await;
+
+        let run = execution_run::Entity::find_by_id("run-1")
+            .one(context.db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.status, RunStatus::Timeout);
+        assert_eq!(run.completed_at, Some(closed_at));
+        assert_eq!(run.event_version.as_deref(), Some("0.0.0"));
+        assert_eq!(run.error_message.as_deref(), Some("Execution timeout"));
+        assert_eq!(run.log_level, 4);
+        assert_eq!(run.nodes, Some(serde_json::json!([["node-1", 4]])));
+        assert_eq!(run.logs_count, Some(3));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn successful_run_does_not_acquire_a_late_failure_reason() {
+        let context = completion_context().await;
+        execution_run::Entity::update_many()
+            .set(execution_run::ActiveModel {
+                status: Set(RunStatus::Completed),
+                ..Default::default()
+            })
+            .filter(execution_run::Column::Id.eq("run-1"))
+            .exec(context.db.as_ref())
+            .await
+            .unwrap();
+        let mut completion = CompletionWrites::default();
+        completion.start(
+            &context,
+            "run-1",
+            &serde_json::json!({
+                "event_type": "completed",
+                "payload": {
+                    "status": "failed",
+                    "error_message": "Late executor failure",
+                },
+            }),
+        );
+        completion.finish().await;
+
+        let run = execution_run::Entity::find_by_id("run-1")
+            .one(context.db.as_ref())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(run.status, RunStatus::Completed);
+        assert_eq!(run.error_message, None);
+        assert_eq!(run.event_version.as_deref(), Some("0.0.0"));
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn completion_without_error_preserves_existing_failure_details() {
+        for initial_status in [RunStatus::Running, RunStatus::Failed] {
+            let context = completion_context().await;
+            execution_run::Entity::update_many()
+                .set(execution_run::ActiveModel {
+                    status: Set(initial_status),
+                    error_message: Set(Some("WASM package could not be loaded".into())),
+                    ..Default::default()
+                })
+                .filter(execution_run::Column::Id.eq("run-1"))
+                .exec(context.db.as_ref())
+                .await
+                .unwrap();
+            let mut completion = CompletionWrites::default();
+            completion.start(
+                &context,
+                "run-1",
+                &serde_json::json!({
+                    "event_type": "completed",
+                    "payload": {"status": "failed", "log_level": 4},
+                }),
+            );
+            completion.finish().await;
+
+            let run = execution_run::Entity::find_by_id("run-1")
+                .one(context.db.as_ref())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(run.status, RunStatus::Failed);
+            assert_eq!(
+                run.error_message.as_deref(),
+                Some("WASM package could not be loaded")
+            );
+            assert_eq!(run.event_version.as_deref(), Some("0.0.0"));
+        }
     }
 
     #[flow_like_types::tokio::test]

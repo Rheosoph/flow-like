@@ -15,17 +15,14 @@
 //! records carry, and an event payload is stored as an opaque JSON string. Both are
 //! reversed on read so the trait sees the same records every other backend returns.
 
-use super::{PostgresStateStore, types::*};
+use super::{PostgresStateStore, replay::replay_prefix, types::*};
 use async_trait::async_trait;
 use flow_like_gcp_data::firestore::{
     Document, EXPIRES_AT_FIELD, FilterOperator, FirestoreClient, FirestoreError, MutationOutcome,
     QueryFilter, QueryOrder, SortDirection, validate_collection_id,
 };
 use flow_like_storage::object_store::ObjectStoreExt;
-use flow_like_storage::{
-    files::store::FlowLikeStore,
-    object_store::{ObjectStore, path::Path},
-};
+use flow_like_storage::{files::store::FlowLikeStore, object_store::path::Path};
 use flow_like_types::utils::constant_time_eq;
 use futures::{StreamExt, stream};
 use sea_orm::DatabaseConnection;
@@ -1043,6 +1040,16 @@ impl ExecutionStateStore for FirestoreStateStore {
             records.push(self.hydrate_event(document).await?);
         }
         Ok(records)
+    }
+
+    /// A batch is created in sequence order and stops at its first failure, and
+    /// queries are strongly consistent, so a reader sees a prefix of every write.
+    async fn replay_events(
+        &self,
+        run_id: &str,
+        cursor: ReplayCursor,
+    ) -> Result<EventReplay, StateStoreError> {
+        replay_prefix(self, run_id, cursor).await
     }
 
     async fn get_max_sequence(&self, run_id: &str) -> Result<i32, StateStoreError> {

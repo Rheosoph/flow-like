@@ -1,5 +1,9 @@
 //! Durable inbound mail acceptance and asynchronous event dispatch.
 pub mod address;
+mod bot;
+pub mod bot_address;
+#[cfg(test)]
+mod bot_tests;
 pub(crate) mod limits;
 mod payload;
 
@@ -263,9 +267,9 @@ pub(crate) async fn recipient(
     IngressAuth(claims): IngressAuth,
     Path(address): Path<String>,
 ) -> Result<Json<RecipientResponse>, ApiError> {
-    Ok(Json(RecipientResponse {
-        accepted: resolve(&state, &claims, &address).await?.is_some(),
-    }))
+    let accepted = resolve(&state, &claims, &address).await?.is_some()
+        || bot::resolve(&state, &claims, &address).await?.is_some();
+    Ok(Json(RecipientResponse { accepted }))
 }
 
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, ToSchema)]
@@ -583,8 +587,14 @@ pub(crate) async fn ingest(
             targets.entry(key).or_insert(target);
         }
     }
+    let mut bot_targets = std::collections::BTreeMap::new();
+    for recipient in &input.recipients {
+        if let Some(target) = bot::resolve(&state, &claims, recipient).await? {
+            bot_targets.entry(target.bot.id.clone()).or_insert(target);
+        }
+    }
     // SES accepts the domain as a whole. Unknown or disabled recipients are discarded here.
-    if targets.is_empty() {
+    if targets.is_empty() && bot_targets.is_empty() {
         return Ok(ingest_response(message_id, "ignored"));
     }
     if failed(
@@ -595,6 +605,12 @@ pub(crate) async fn ingest(
     ) {
         reject(&state, &input, &message_id, targets).await?;
         return Ok(ingest_response(message_id, "rejected"));
+    }
+    for target in bot_targets.into_values() {
+        bot::ingest_for_bot(&state, &input, target).await?;
+    }
+    if targets.is_empty() {
+        return Ok(ingest_response(message_id, "accepted"));
     }
     let raw_bytes = input
         .raw_mime_base64

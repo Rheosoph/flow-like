@@ -1,5 +1,5 @@
 #[cfg(feature = "execute")]
-use crate::image::pdf::load_pdf_from_flowpath;
+use crate::image::pdf;
 use flow_like::flow::execution::context::ExecutionContext;
 use flow_like::flow::node::{Node, NodeLogic};
 use flow_like::flow::pin::PinOptions;
@@ -58,8 +58,7 @@ impl NodeLogic for PdfPageCountNode {
         context.deactivate_exec_pin("exec_out").await?;
 
         let pdf_path: FlowPath = context.evaluate_pin("pdf").await?;
-        let pdf = load_pdf_from_flowpath(context, &pdf_path).await?;
-        let page_count = pdf.pages().len() as i64;
+        let page_count = pdf::page_count(pdf_path.get(context, false).await?)? as i64;
 
         context
             .set_pin_value("page_count", json!(page_count))

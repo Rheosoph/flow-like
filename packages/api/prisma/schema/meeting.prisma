@@ -1,0 +1,50 @@
+/// A scheduled call with its own participants and chat. Room history is never exposed to guests.
+model Meeting {
+  id             String               @id
+  conversationId String
+  conversation   Conversation         @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  hostId         String
+  title          String
+  startsAt       DateTime             @db.Timestamptz(3)
+  endsAt         DateTime             @db.Timestamptz(3)
+  endedAt        DateTime?            @db.Timestamptz(3)
+  guestsAllowed  Boolean              @default(true)
+  inviteNonce    String
+  roomEpoch      Int                  @default(0)
+  createdAt      DateTime             @default(now()) @db.Timestamptz(3)
+  participants   MeetingParticipant[]
+  messages       MeetingMessage[]
+
+  @@index([conversationId, startsAt])
+  @@index([hostId])
+}
+
+model MeetingParticipant {
+  id          String   @id
+  meetingId   String
+  meeting     Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  /// Null for guests; an account has one participant per meeting.
+  userId      String?
+  displayName String
+  /// WAITING | ADMITTED | LEFT | REMOVED
+  status      String
+  sessionHash String
+  lastSeenAt  DateTime @db.Timestamptz(3)
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([meetingId, userId])
+  @@index([meetingId, status])
+  @@index([userId])
+}
+
+model MeetingMessage {
+  id            String   @id
+  meetingId     String
+  meeting       Meeting  @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  participantId String
+  displayName   String
+  body          String
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([meetingId, createdAt, id])
+}

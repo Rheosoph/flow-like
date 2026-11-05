@@ -1,7 +1,6 @@
 "use client";
-import { LoadingScreen } from "@flow-like/flow-like-ui";
+import { ContentLoadingSkeleton } from "@flow-like/flow-like-ui/components/ui/content-loading";
 
 export default function Loading() {
-	// Or a custom loading skeleton component
-	return <LoadingScreen />;
+	return <ContentLoadingSkeleton />;
 }

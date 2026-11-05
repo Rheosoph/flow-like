@@ -54,6 +54,7 @@ import type {
 	Capability,
 	InventoryScope,
 } from "../../../../lib/device-management/types";
+import { ResolvedIdentityAvatar } from "../../../identity/identity-avatar";
 import {
 	DropdownMenu,
 	DropdownMenuContent,
@@ -173,8 +174,13 @@ export function AccessPerson({
 		return (
 			<PersonChip
 				name={name}
-				email={identity.user?.email}
+				email={identity.bot ? identity.subtitle : identity.user?.email}
 				avatarUrl={identity.avatarUrl}
+				avatar={
+					identity.bot && (
+						<ResolvedIdentityAvatar identity={identity} size={20} />
+					)
+				}
 				you={userId === input.me}
 				fullName
 				className={className}

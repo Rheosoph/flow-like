@@ -87,15 +87,67 @@ mod apple {
 }
 #[cfg(any(target_os = "ios", target_os = "macos"))]
 pub use apple::*;
-#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+#[cfg(target_os = "android")]
+mod android {
+    use super::*;
+    use crate::android_mobile;
+    pub fn setup() {
+        super::super::notify();
+    }
+    pub fn scope() -> Result<String> {
+        android_mobile::geofence_scope().map_err(anyhow::Error::msg)
+    }
+    pub fn sync(scope: &str, registrations: &[NativeRegistration]) -> Result<()> {
+        let reply = android_mobile::geofence_sync(
+            serde_json::json!({"scope":scope,"registrations":registrations}),
+        )
+        .map_err(anyhow::Error::msg)?;
+        if reply["ok"] != true {
+            return Err(anyhow!(
+                "{}",
+                reply["error"]["message"]
+                    .as_str()
+                    .unwrap_or("Android could not register location Events")
+            ));
+        }
+        Ok(())
+    }
+    pub fn peek() -> Result<Vec<Transition>> {
+        let values = android_mobile::geofence_events().map_err(anyhow::Error::msg)?;
+        let values = values
+            .as_array()
+            .ok_or_else(|| anyhow!("Android returned invalid geofence transitions"))?;
+        Ok(values
+            .iter()
+            .filter_map(|value| serde_json::from_value(value.clone()).ok())
+            .collect())
+    }
+    pub fn ack(ids: &[String]) -> Result<()> {
+        android_mobile::geofence_ack(ids.to_vec()).map_err(anyhow::Error::msg)
+    }
+    pub fn remaining() -> f64 {
+        android_mobile::geofence_runtime_state()
+            .ok()
+            .and_then(|value| value["remaining"].as_f64())
+            .unwrap_or(0.0)
+    }
+    pub fn foreground() -> bool {
+        android_mobile::geofence_runtime_state()
+            .ok()
+            .is_some_and(|value| value["foreground"] == true)
+    }
+}
+#[cfg(target_os = "android")]
+pub use android::*;
+#[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
 mod unavailable {
     use super::*;
     pub fn setup() {}
     pub fn scope() -> Result<String> {
-        Err(anyhow!("Native geofences require iOS or macOS"))
+        Err(anyhow!("Native geofences require iOS, Android, or macOS"))
     }
     pub fn sync(_: &str, _: &[NativeRegistration]) -> Result<()> {
-        Err(anyhow!("Native geofences require iOS or macOS"))
+        Err(anyhow!("Native geofences require iOS, Android, or macOS"))
     }
     pub fn peek() -> Result<Vec<Transition>> {
         Ok(vec![])
@@ -110,5 +162,5 @@ mod unavailable {
         false
     }
 }
-#[cfg(not(any(target_os = "ios", target_os = "macos")))]
+#[cfg(not(any(target_os = "ios", target_os = "macos", target_os = "android")))]
 pub use unavailable::*;

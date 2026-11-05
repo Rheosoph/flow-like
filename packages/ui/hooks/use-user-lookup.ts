@@ -1,7 +1,9 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import { queryOptions, useQuery } from "@tanstack/react-query";
-import { useMemo } from "react";
+import { createContext, useCallback, useContext, useMemo } from "react";
+import type { BotAppearance } from "../components/bots/types";
 import {
 	userAvatarUrl,
 	userDisplayName,
@@ -9,12 +11,15 @@ import {
 	userSecondaryLabel,
 } from "../lib/user-display";
 import { useBackend } from "../state/backend-state";
+import type { BotSystemKey } from "../state/backend-state/bot-state";
 import type { IUserLookup } from "../state/backend-state/types";
 import type { IUserState } from "../state/backend-state/user-state";
 import {
+	LOCAL_USER_SUB,
 	isLocalUserSub,
 	resolveAccountId,
 } from "../state/backend-state/user-state";
+import { useBotLabels } from "./use-bots";
 
 /** A resolved account, or `null` when the directory has no such account. */
 export type UserLookupResult = IUserLookup | null;
@@ -144,6 +149,26 @@ export function userLookupQueryOptions(
 }
 
 /**
+ * Answers for principals that live only on this device (local bots), which the
+ * directory has never heard of: a record to show, `null` while it isn't known
+ * yet, or `undefined` to ask the directory as usual.
+ */
+export type LocalPrincipalResolver = (
+	principalId: string,
+) => IUserLookup | null | undefined;
+
+const LocalPrincipalsContext = createContext<LocalPrincipalResolver | null>(
+	null,
+);
+
+/** Views that show local bots provide their resolver, so their ids never reach the API. */
+export const LocalPrincipalsProvider = LocalPrincipalsContext.Provider;
+
+export function useLocalPrincipalResolver(): LocalPrincipalResolver | null {
+	return useContext(LocalPrincipalsContext);
+}
+
+/**
  * Resolves one account, coalescing concurrent callers into a single request.
  *
  * Unlike `lookupUser`, an id nobody matches resolves to `null` instead of
@@ -153,8 +178,39 @@ export function userLookupQueryOptions(
 export function useUserLookup(userId?: string | null) {
 	const backend = useBackend();
 	const source = backend.userState;
+	const resolveLocal = useLocalPrincipalResolver();
+	const local = userId ? resolveLocal?.(userId) : undefined;
 
-	return useQuery(userLookupQueryOptions(source, userId));
+	return useQuery({
+		...userLookupQueryOptions(source, userId),
+		enabled: Boolean(userId) && local === undefined,
+		placeholderData: local ?? undefined,
+	});
+}
+
+/** The person a bot acts for, as far as the directory has answered. */
+export interface BotOwnerIdentity {
+	label: string;
+	/** Handle or email, when it says something the label does not. */
+	subtitle?: string;
+	/** The owner's account to link to; absent until the directory knows it. */
+	accountId?: string;
+	avatarUrl?: string;
+	initials: string;
+	isPending: boolean;
+}
+
+/** A bot's sub, resolved. A bot always acts for its owner. */
+export interface BotIdentity {
+	ownerId: string;
+	system: BotSystemKey | null;
+	appearance: BotAppearance;
+	/** Deleted bots keep their name, so past actions still read as theirs. */
+	deleted: boolean;
+	/** The bot belongs to whoever is signed in. */
+	isOwn: boolean;
+	description?: string;
+	owner: BotOwnerIdentity;
 }
 
 export interface UserIdentity {
@@ -164,10 +220,12 @@ export interface UserIdentity {
 	accountId?: string;
 	/** Best human-readable name, falling back to the stored id. */
 	label: string;
-	/** Handle or email, when it says something the label does not. */
+	/** Handle or email, when it says something the label does not; whose bot it is for a bot. */
 	subtitle?: string;
 	avatarUrl?: string;
 	initials: string;
+	/** Set when the id is a bot's sub. */
+	bot?: BotIdentity;
 	isPending: boolean;
 	/** Whether the directory answered with an account. */
 	isResolved: boolean;
@@ -188,20 +246,103 @@ export function useUserIdentity(userId?: string | null): UserIdentity {
 	const lookup = useUserLookup(userId);
 	const user = lookup.data ?? null;
 	const accountId = resolveAccountId(user?.id, userId);
-	const label = userDisplayName(user, accountId ?? userId ?? "");
+	const bot = useBotIdentity(user);
+	const label = bot?.label || userDisplayName(user, accountId ?? userId ?? "");
 	const initials = useMemo(() => userInitials(label, "??"), [label]);
 
 	return {
 		user,
 		accountId,
 		label,
-		subtitle: userSecondaryLabel(user),
-		avatarUrl: userAvatarUrl(user),
+		subtitle: bot ? bot.subtitle : userSecondaryLabel(user),
+		avatarUrl: bot ? undefined : userAvatarUrl(user),
 		initials,
+		bot: bot?.identity,
 		isPending: lookup.isPending && Boolean(userId),
 		isResolved: Boolean(user),
 		isError: lookup.isError,
 	};
+}
+
+/**
+ * Names a bot and whose it is. The owner is a second lookup and the signed-in
+ * account (the local placeholder) a third; the subtitle waits for both, so a
+ * reader's own bot never flashes up as someone else's.
+ */
+function useBotIdentity(
+	user: UserLookupResult,
+): { label: string; subtitle?: string; identity: BotIdentity } | undefined {
+	const { t } = useTranslation("bots");
+	const botLabels = useBotLabels();
+	const bot = user?.bot;
+	const owner = useUserLookup(bot?.owner_id);
+	const self = useUserLookup(bot ? LOCAL_USER_SUB : undefined);
+	if (!user || !bot) return undefined;
+
+	const names = botLabels({
+		system: bot.system,
+		name: user.name,
+		description: user.description,
+	});
+	const ownerAccount = owner.data ?? null;
+	const ownerLabel = userDisplayName(
+		ownerAccount,
+		resolveAccountId(ownerAccount?.id, bot.owner_id) ?? bot.owner_id,
+	);
+	// A local bot's owner is `local`: whoever uses this device.
+	const isOwn =
+		isLocalUserSub(bot.owner_id) ||
+		(Boolean(bot.owner_id) && self.data?.id === bot.owner_id);
+
+	let subtitle: string | undefined;
+	if (bot.deleted) subtitle = t("identity.deleted");
+	else if (isOwn) subtitle = t("identity.yourBot");
+	else if (!self.isPending && !owner.isPending)
+		subtitle = ownerAccount
+			? t("identity.botOf", { owner: ownerLabel })
+			: t("identity.bot");
+
+	return {
+		label: names.name,
+		subtitle,
+		identity: {
+			ownerId: bot.owner_id,
+			system: bot.system,
+			appearance: bot.appearance,
+			deleted: bot.deleted,
+			isOwn,
+			description: names.description || undefined,
+			owner: {
+				label: ownerLabel,
+				subtitle: userSecondaryLabel(ownerAccount),
+				accountId: ownerAccount
+					? resolveAccountId(ownerAccount.id, bot.owner_id)
+					: undefined,
+				avatarUrl: userAvatarUrl(ownerAccount),
+				initials: userInitials(ownerLabel, "??"),
+				isPending: owner.isPending,
+			},
+		},
+	};
+}
+
+/**
+ * Names a looked-up account the way `useUserIdentity` does, for views that
+ * resolve many ids at once: a built-in bot nobody renamed reads in the reader's
+ * language instead of as its id.
+ */
+export function useLookupDisplayName(): (
+	user: IUserLookup,
+	fallback: string,
+) => string {
+	const botLabels = useBotLabels();
+	return useCallback(
+		(user, fallback) =>
+			(user.bot &&
+				botLabels({ system: user.bot.system, name: user.name }).name) ||
+			userDisplayName(user, fallback),
+		[botLabels],
+	);
 }
 
 /** Exposed for tests: the coalescing layer has no React surface of its own. */

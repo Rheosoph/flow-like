@@ -2,6 +2,7 @@ import { createAppMethods } from "./apps.js";
 import { resolveAuth } from "./auth.js";
 import { createBitMethods } from "./bits.js";
 import { createBoardMethods } from "./boards.js";
+import { createBotMethods } from "./bots.js";
 import { createChatMethods } from "./chat.js";
 import {
 	type HttpClient,
@@ -16,6 +17,7 @@ import { FlowLikeError } from "./errors.js";
 import { createEventMethods } from "./events.js";
 import { createExecutionMethods } from "./execution.js";
 import { createFileMethods } from "./files.js";
+import { createInboxMethods } from "./inbox.js";
 import type { FlowLikeChat, FlowLikeEmbeddingModel } from "./integrations.js";
 import { createProjectMethods } from "./projects.js";
 import { createSinkMethods } from "./sinks.js";
@@ -57,6 +59,8 @@ export class FlowLikeClient {
 			createBoardMethods(this.http),
 			createProjectMethods(this.http),
 			createDeviceMethods(this.http),
+			createBotMethods(this.http),
+			createInboxMethods(this.http),
 		]) {
 			for (const [name, method] of Object.entries(methods))
 				Object.defineProperty(this, name, {
@@ -116,8 +120,18 @@ export interface FlowLikeClient
 		ReturnType<typeof createBitMethods>,
 		ReturnType<typeof createBoardMethods>,
 		ReturnType<typeof createProjectMethods>,
-		ReturnType<typeof createDeviceMethods> {}
+		ReturnType<typeof createDeviceMethods>,
+		ReturnType<typeof createBotMethods>,
+		ReturnType<typeof createInboxMethods> {}
 
 export type { SSEChunk, RequestOptions, QueryParams } from "./client.js";
 export * from "./types.js";
 export * from "./errors.js";
+export type * from "./bots.js";
+export type * from "./inbox.js";
+export {
+	inboxEntryText,
+	newInboxMessageId,
+	plainBody,
+	plainEnvelope,
+} from "./inbox.js";

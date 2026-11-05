@@ -171,6 +171,7 @@ impl Host {
                         workbook,
                         Some(name.clone()),
                         name.clone(),
+                        gridcraft_engine::Trust::FromFile,
                     ));
                 self.app.show_open_warnings(&json!({"warnings": warnings}));
                 self.name = name;
@@ -209,6 +210,17 @@ impl Host {
                     return Err("This format is supported for import only. Choose a supported export format.".into());
                 }
                 if !self.read_only {
+                    if self
+                        .app
+                        .macros
+                        .editor
+                        .as_ref()
+                        .is_some_and(|editor| editor.dirty)
+                    {
+                        return Err(
+                            "Save or close the macro editor before saving the workbook.".into()
+                        );
+                    }
                     if self.app.editor.is_some() && !self.app.commit_edit(0, 0, false, false) {
                         return Err("Finish editing the current cell before saving.".into());
                     }
@@ -234,7 +246,13 @@ impl Host {
             }
             Some("saved") => {
                 if let Some(revision) = field(&message, "revision").as_f64() {
-                    if self.app.editor.is_none()
+                    if !self
+                        .app
+                        .macros
+                        .editor
+                        .as_ref()
+                        .is_some_and(|editor| editor.dirty)
+                        && self.app.editor.is_none()
                         && self.app.text_box_editor.is_none()
                         && self.last_exported == Some(revision as u64)
                         && self.revision() as f64 == revision
@@ -256,6 +274,12 @@ impl Host {
     }
     fn report_dirty(&mut self) {
         let dirty = self.unsaved_new
+            || self
+                .app
+                .macros
+                .editor
+                .as_ref()
+                .is_some_and(|editor| editor.dirty)
             || self.app.editor.is_some()
             || self.app.text_box_editor.is_some()
             || self.app.session.active().is_some_and(|d| d.is_dirty());
@@ -283,7 +307,7 @@ impl Host {
                     .filter(|(_, sheet)| {
                         sheet.visibility == gridcraft_engine::model::Visibility::Visible
                     })
-                    .map(|(index, sheet)| (index, sheet.name.clone(), index == d.wb.active_sheet))
+                    .map(|(index, sheet)| (index, sheet.name.clone(), index == d.wb.active_sheet()))
                     .collect()
             })
             .unwrap_or_default();
@@ -327,7 +351,7 @@ impl eframe::App for Host {
         }
         self.report_dirty();
     }
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         raw.dropped_files.clear();
         if self.read_only {
             self.app.host_cancel_synthetic();
@@ -343,7 +367,7 @@ impl eframe::App for Host {
                 )
             });
         } else {
-            self.app.raw_input_hook(raw);
+            self.app.raw_input_hook(ctx, raw);
         }
     }
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -403,8 +427,12 @@ fn create_app(cc: &eframe::CreationContext<'_>) -> gridcraft_ui_egui::SheetApp {
         ..Default::default()
     };
     let mut app = gridcraft_ui_egui::SheetApp::new(session, services);
+    app.chrome = gridcraft_ui_egui::Chrome {
+        title_bar: false,
+        file_tab: false,
+    };
     app.ui.ribbon_collapsed = true;
     app.ui.system_theme = true;
-    app.grid.autosave = false;
+    app.ui.autosave = false;
     app
 }

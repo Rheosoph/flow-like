@@ -17,6 +17,7 @@ pub const CHANNEL_TRANSPORT_IN_PROCESS: &str = "in_process";
 pub const CHANNEL_TRANSPORT_AWS_MQTT: &str = "aws_mqtt";
 pub const CHANNEL_TRANSPORT_AZURE_WEB_PUBSUB: &str = "azure_web_pubsub";
 pub const CHANNEL_TRANSPORT_GCP_FIREBASE_RTDB: &str = "gcp_firebase_rtdb";
+pub const CHANNEL_TRANSPORT_NATS: &str = "nats";
 
 /// Temporary AWS credentials scoped to one channel.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, JsonSchema)]
@@ -47,6 +48,13 @@ pub enum ChannelClientDescriptor {
     Http { push_url: String, token: String },
     /// Same process as the waiter (desktop): delivered through the host's `channel_push` command.
     InProcess {},
+    /// Publish to one NATS subject over WebSocket and wait for the executor's acknowledgement.
+    Nats {
+        url: String,
+        subject: String,
+        token: String,
+        expires_at: i64,
+    },
     /// AWS IoT Core Direct Messaging: `SendDirectMessage` to `target_client_id` on `topic`,
     /// SigV4-signed with `credentials` (scoped to exactly that client id and topic).
     AwsMqtt {
@@ -88,6 +96,17 @@ impl fmt::Debug for ChannelClientDescriptor {
                 .field("token", &"[REDACTED]")
                 .finish(),
             Self::InProcess {} => f.debug_struct("InProcess").finish(),
+            Self::Nats {
+                subject,
+                expires_at,
+                ..
+            } => f
+                .debug_struct("Nats")
+                .field("url", &"[REDACTED]")
+                .field("subject", subject)
+                .field("token", &"[REDACTED]")
+                .field("expires_at", expires_at)
+                .finish(),
             Self::AwsMqtt {
                 endpoint,
                 region,
@@ -135,6 +154,7 @@ impl ChannelClientDescriptor {
         match self {
             Self::Http { .. } => CHANNEL_TRANSPORT_HTTP,
             Self::InProcess {} => CHANNEL_TRANSPORT_IN_PROCESS,
+            Self::Nats { .. } => CHANNEL_TRANSPORT_NATS,
             Self::AwsMqtt { .. } => CHANNEL_TRANSPORT_AWS_MQTT,
             Self::AzureWebPubSub { .. } => CHANNEL_TRANSPORT_AZURE_WEB_PUBSUB,
             Self::GcpFirebaseRtdb { .. } => CHANNEL_TRANSPORT_GCP_FIREBASE_RTDB,
@@ -202,6 +222,12 @@ pub struct ChannelPush {
 pub enum ChannelExecutorGrant {
     /// Register/poll rows through the API (`profile.hub` + the run's token).
     Http {},
+    /// Subscribe to one NATS subject with a scoped, expiring user JWT.
+    Nats {
+        url: String,
+        subject: String,
+        token: String,
+    },
     /// Hold one MQTT-over-WebSocket connection as `client_id` and receive on `inbox_topic`.
     AwsMqtt {
         endpoint: String,
@@ -226,6 +252,12 @@ impl fmt::Debug for ChannelExecutorGrant {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Http {} => f.debug_struct("Http").finish(),
+            Self::Nats { subject, .. } => f
+                .debug_struct("Nats")
+                .field("url", &"[REDACTED]")
+                .field("subject", subject)
+                .field("token", &"[REDACTED]")
+                .finish(),
             Self::AwsMqtt {
                 endpoint,
                 region,
@@ -276,6 +308,7 @@ impl ChannelGrant {
     pub fn transport(&self) -> &'static str {
         match &self.executor {
             ChannelExecutorGrant::Http {} => CHANNEL_TRANSPORT_HTTP,
+            ChannelExecutorGrant::Nats { .. } => CHANNEL_TRANSPORT_NATS,
             ChannelExecutorGrant::AwsMqtt { .. } => CHANNEL_TRANSPORT_AWS_MQTT,
             ChannelExecutorGrant::AzureWebPubSub { .. } => CHANNEL_TRANSPORT_AZURE_WEB_PUBSUB,
             ChannelExecutorGrant::GcpFirebaseRtdb { .. } => CHANNEL_TRANSPORT_GCP_FIREBASE_RTDB,
@@ -324,6 +357,17 @@ mod tests {
         };
         let values: Vec<Box<dyn fmt::Debug>> = vec![
             Box::new(aws_credentials.clone()),
+            Box::new(ChannelClientDescriptor::Nats {
+                url: "wss://private-nats-endpoint/nats".into(),
+                subject: "channel.run.inbox".into(),
+                token: "private-nats-client-token".into(),
+                expires_at: 10,
+            }),
+            Box::new(ChannelExecutorGrant::Nats {
+                url: "nats://private-nats-endpoint:4222".into(),
+                subject: "channel.run.inbox".into(),
+                token: "private-nats-executor-token".into(),
+            }),
             Box::new(ChannelClientDescriptor::Http {
                 push_url: "https://example.test/push?signature=private-signature".into(),
                 token: "private-http-token".into(),
@@ -371,6 +415,9 @@ mod tests {
             .collect::<Vec<_>>()
             .join(" ");
         for secret in [
+            "private-nats-client-token",
+            "private-nats-executor-token",
+            "private-nats-endpoint",
             "private-access-key",
             "private-secret-key",
             "private-session-token",

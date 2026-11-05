@@ -64,9 +64,15 @@ export async function pushHttp(
 				headers: {
 					"content-type": "application/json",
 					authorization: `Bearer ${descriptor.token}`,
+					...(options.deliveryId
+						? { "x-channel-delivery-id": options.deliveryId }
+						: {}),
 				},
 				body: JSON.stringify(push),
 				signal: timeout.signal,
+				credentials: "omit",
+				cache: "no-store",
+				redirect: "error",
 			});
 		} catch (error) {
 			if (timeout.timedOut()) {
@@ -88,6 +94,22 @@ export async function pushHttp(
 			throw new Error(
 				`Channel push to '${descriptor.push_url}' failed (${response.status}): ${excerpt || response.statusText}`,
 			);
+		}
+		if (response.headers.get("content-type")?.includes("application/json")) {
+			const acknowledgement: unknown = await response.json();
+			if (
+				acknowledgement &&
+				typeof acknowledgement === "object" &&
+				"accepted" in acknowledgement &&
+				acknowledgement.accepted === false
+			) {
+				const message =
+					"message" in acknowledgement &&
+					typeof acknowledgement.message === "string"
+						? acknowledgement.message.slice(0, 1_000)
+						: "The receiver rejected the message.";
+				throw new Error(`Channel push was not accepted: ${message}`);
+			}
 		}
 	} finally {
 		timeout.dispose();
