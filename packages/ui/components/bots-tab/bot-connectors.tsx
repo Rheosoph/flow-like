@@ -16,6 +16,7 @@ import {
 	useBotSecrets,
 	useConnectedAccounts,
 } from "../../hooks/use-bots";
+import { useBackend } from "../../state/backend-state";
 import type {
 	BotConnectorPolicy,
 	IBotConnector,
@@ -34,12 +35,14 @@ import {
 	ACCOUNT_POLICY_KEYS,
 	CONNECTOR_POLICIES,
 	accountPolicy,
+	isDrifted,
 	normalizeMcpUrl,
 	readsWriteTool,
 	toolPolicy,
 	withToolPolicy,
 } from "./bot-connectors-model";
 import { BotNotice, BotTag } from "./editor/bot-editor-parts";
+import { useBotWorkspace } from "./use-bot-workspace";
 
 function usePolicyLabels(): Record<BotConnectorPolicy, string> {
 	const { t } = useTranslation("bots");
@@ -87,14 +90,17 @@ function ToolRow({
 	tool,
 	busy,
 	onChange,
+	onConfirm,
 }: Readonly<{
 	connector: IBotConnector;
 	tool: IBotConnector["tools_snapshot"][number];
 	busy: boolean;
 	onChange: (policies: Record<string, BotConnectorPolicy>) => void;
+	onConfirm: () => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const { policy } = toolPolicy(connector, tool);
+	const drifted = isDrifted(connector, tool);
 	return (
 		<li className="flex flex-col gap-1 py-2">
 			<div className="flex items-center gap-2">
@@ -118,6 +124,25 @@ function ToolRow({
 					}
 				/>
 			</div>
+			{drifted && (
+				<div className="flex items-center gap-2 text-xs text-warning">
+					<span className="flex-1">
+						{t(
+							"connectors.drifted",
+							"This tool changed since you set it, so it asks every time.",
+						)}
+					</span>
+					<Button
+						type="button"
+						variant="outline"
+						size="sm"
+						disabled={busy}
+						onClick={onConfirm}
+					>
+						{t("connectors.confirm", "Accept the change")}
+					</Button>
+				</div>
+			)}
 			{tool.description && (
 				<p className="line-clamp-2 text-xs text-muted-foreground">
 					{tool.description}
@@ -272,6 +297,13 @@ function ConnectorItem({
 										request: { tool_policies: policies },
 									})
 								}
+								onConfirm={() =>
+									run({
+										type: "update",
+										connectorId: connector.id,
+										request: { confirm_tools: [tool.name] },
+									})
+								}
 							/>
 						))}
 					</ul>
@@ -294,6 +326,46 @@ function ConnectorItem({
 }
 
 const NO_SECRET = "__none__";
+
+/** Providers an account connector can use; the hub configures which of them exist. */
+const ACCOUNT_PROVIDERS = [
+	"google",
+	"microsoft",
+	"github",
+	"notion",
+	"atlassian",
+	"linkedin",
+] as const;
+
+/**
+ * Opens the OAuth consent flow for the bot's workspace app: it signs the person in to the
+ * provider when needed and records their consent for the workspace, which is what lets the
+ * desktop send the account's token for this bot. Resolves false when nothing was needed.
+ */
+function useWorkspaceConsent(botId: string) {
+	const backend = useBackend();
+	const { query } = useBotWorkspace(botId);
+	const appId = query.data?.app_id;
+	return async (providerId: string, scopes: string[]): Promise<boolean> => {
+		const check = backend.eventState.checkOAuthRequirements;
+		if (!appId || !check) return false;
+		const result = await check.call(backend.eventState, appId, [
+			{ provider_id: providerId, scopes },
+		]);
+		if (result.missingProviders.length === 0) return false;
+		window.dispatchEvent(
+			new CustomEvent("flow:oauth-required", {
+				detail: {
+					missingProviders: result.missingProviders,
+					appId,
+					boardId: "",
+					nodeId: "",
+				},
+			}),
+		);
+		return true;
+	};
+}
 
 function AddMcpServer({
 	botId,
@@ -403,6 +475,19 @@ function AddAccount({
 	const { t } = useTranslation("bots");
 	const action = useBotConnectorAction();
 	const accounts = useConnectedAccounts();
+	const consent = useWorkspaceConsent(botId);
+	const connectNew = async (providerId: string) => {
+		const started = await consent(providerId, []);
+		if (!started) {
+			toast.message(
+				t(
+					"connectors.account.connected",
+					"{{provider}} is already connected for this bot.",
+					{ provider: providerId },
+				),
+			);
+		}
+	};
 	const usable = (accounts.data ?? []).filter(
 		(account): account is IConnectedAccount & { provider_id: string } =>
 			Boolean(account.provider_id) && account.state === "ready",
@@ -425,7 +510,13 @@ function AddAccount({
 					},
 				},
 			},
-			{ onSuccess: onDone, onError: (error) => toast.error(error.message) },
+			{
+				onSuccess: () => {
+					void consent(chosen.provider_id, chosen.scopes);
+					onDone();
+				},
+				onError: (error) => toast.error(error.message),
+			},
 		);
 	};
 	return (
@@ -459,6 +550,22 @@ function AddAccount({
 					</SelectContent>
 				</Select>
 			)}
+			<div className="flex flex-wrap items-center gap-1.5">
+				<span className="text-xs text-muted-foreground">
+					{t("connectors.account.connectNew", "Connect a new account:")}
+				</span>
+				{ACCOUNT_PROVIDERS.map((provider) => (
+					<Button
+						key={provider}
+						type="button"
+						variant="outline"
+						size="sm"
+						onClick={() => void connectNew(provider)}
+					>
+						{provider}
+					</Button>
+				))}
+			</div>
 			<div className="flex justify-end gap-2">
 				<Button type="button" variant="ghost" size="sm" onClick={onDone}>
 					{t("connectors.cancel", "Cancel")}

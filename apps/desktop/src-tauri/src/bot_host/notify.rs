@@ -19,14 +19,7 @@ const SEEN_KEPT: usize = 256;
 pub(crate) const NOTIFICATION_EVENT: &str = "flow_notification";
 const NO_PREVIEW: &str = "Sent you a message";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Alert {
-    pub bot_id: String,
-    pub title: String,
-    pub body: String,
-    pub link: String,
-    pub key: String,
-}
+pub use flow_like_bot_host::host::Alert;
 
 pub(crate) fn bot_title(bot: &Bot) -> String {
     bot.name
@@ -125,6 +118,7 @@ pub(super) fn test_bot(appearance: Value) -> Bot {
         tts_model: None,
         image_model: None,
         vision_model: None,
+        subtask_model: None,
         classification: Default::default(),
         capabilities: Vec::new(),
         profile_id: None,

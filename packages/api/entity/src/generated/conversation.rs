@@ -38,12 +38,16 @@ pub struct Model {
     pub import_key: Option<String>,
     #[sea_orm(column_name = "lastSeq")]
     pub last_seq: Option<i64>,
+    #[sea_orm(column_type = "Text", nullable)]
+    pub image: Option<String>,
     #[sea_orm(has_many)]
     pub meetings: HasMany<super::meeting::Entity>,
     #[sea_orm(has_many)]
     pub bot_turns: HasMany<super::bot_turn::Entity>,
     #[sea_orm(has_many)]
     pub conversation_files: HasMany<super::conversation_file::Entity>,
+    #[sea_orm(has_many)]
+    pub conversation_invite_links: HasMany<super::conversation_invite_link::Entity>,
     #[sea_orm(has_many)]
     pub conversation_members: HasMany<super::conversation_member::Entity>,
     #[sea_orm(has_many)]

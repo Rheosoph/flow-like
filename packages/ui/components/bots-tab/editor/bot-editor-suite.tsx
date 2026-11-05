@@ -35,6 +35,8 @@ export interface BotEditorSuiteProps {
 	bot: IBot | null;
 	onSaved?: (bot: IBot) => void;
 	onDuplicated?: (bot: IBot) => void;
+	/** A new bot starts on this managed device. */
+	initialDeviceId?: string;
 	/** Closes without asking; used after a save, a duplicate or a confirmed discard. */
 	close: () => void;
 	discard: BotDiscardPrompt;
@@ -56,6 +58,7 @@ export function BotEditorSuite({
 	bot,
 	onSaved,
 	onDuplicated,
+	initialDeviceId,
 	close,
 	discard,
 	onDirtyChange,
@@ -63,7 +66,7 @@ export function BotEditorSuite({
 	const { t } = useTranslation("bots");
 	const labels = useBotLabels();
 	const localOnly = useLivesOnThisComputer(bot);
-	const editor = useBotEditor(mode, bot, { localOnly });
+	const editor = useBotEditor(mode, bot, { localOnly, initialDeviceId });
 	const submit = useBotEditorSubmit(editor, { onSaved, onDuplicated, close });
 	useEffect(() => onDirtyChange(editor.dirty), [editor.dirty, onDirtyChange]);
 	useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
@@ -214,6 +217,7 @@ function BrainView({ editor }: StepViewProps) {
 						ttsModel: draft.ttsModel,
 						imageModel: draft.imageModel,
 						visionModel: draft.visionModel,
+						subtaskModel: draft.subtaskModel,
 					}}
 					onChange={editor.setModelPin}
 				/>

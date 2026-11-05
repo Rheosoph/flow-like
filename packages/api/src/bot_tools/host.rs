@@ -13,7 +13,7 @@ use flow_like::flow::copilot::tool_spec::resolve_tool_approval;
 use flow_like::flow::copilot::{HostTools, find_bot_tool_spec, tool_outcome_output};
 use flow_like_bot_tools::MemorySessions;
 use flow_like_bot_tools_host::{
-    AppAccess, HostEnv, ImageSource, JobConnector, JobModels, JobScope, JobSecrets, ModelSource, SecretSource,
+    AppAccess, HostEnv, JobConnector, JobModels, JobScope, JobSecrets, ModelSource, SecretSource,
     ToolJob,
 };
 use flow_like_types::tokio::sync::OnceCell;
@@ -28,7 +28,6 @@ use super::{
 };
 
 const MAX_EXECUTOR_JOBS_PER_TURN: usize = 30;
-/// Writes its images from the API process: the keys of private image models never leave it.
 const IMAGE_TOOL: &str = "image_generate";
 const EXECUTOR_TIMEOUT: Duration = Duration::from_secs(300);
 
@@ -74,8 +73,9 @@ pub(crate) struct BotToolsHost {
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
     skills: Option<Arc<dyn flow_like_bot_tools::SkillHost>>,
+    skill_jobs: Option<Arc<dyn super::skills::SkillJobs>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
-    images: Option<Arc<dyn ImageSource>>,
+    images: Option<Arc<super::images::ImageBits>>,
 }
 
 fn refusal(tool: &str, code: &str, message: &str) -> String {
@@ -122,12 +122,13 @@ impl BotToolsHost {
             people: None,
             scheduler: None,
             skills: None,
+            skill_jobs: None,
             mail: None,
             images: None,
         }
     }
 
-    pub(crate) fn with_images(mut self, images: Arc<dyn ImageSource>) -> Self {
+    pub(crate) fn with_images(mut self, images: Arc<super::images::ImageBits>) -> Self {
         self.images = Some(images);
         self
     }
@@ -138,6 +139,29 @@ impl BotToolsHost {
     ) -> Self {
         self.mail = Some(mail);
         self
+    }
+
+    pub(crate) fn with_skill_jobs(mut self, jobs: Arc<dyn super::skills::SkillJobs>) -> Self {
+        self.skill_jobs = Some(jobs);
+        self
+    }
+
+    /// What an executor needs to run a package skill's tool: the skill as the database holds it
+    /// (active only) and the package the workspace pins.
+    async fn skill_job(
+        &self,
+        tool: &str,
+        args: &Value,
+    ) -> Result<Option<flow_like_bot_tools_host::SkillCallJob>, String> {
+        if !["skill_call", "skill_run"].contains(&tool) {
+            return Ok(None);
+        }
+        let jobs = self
+            .skill_jobs
+            .as_ref()
+            .ok_or_else(|| "This server cannot run package skills".to_string())?;
+        let name = args.get("skill").and_then(Value::as_str).unwrap_or_default();
+        jobs.job(name.trim()).await.map(Some)
     }
 
     pub(crate) fn with_skills(mut self, skills: Arc<dyn flow_like_bot_tools::SkillHost>) -> Self {
@@ -319,7 +343,7 @@ impl BotToolsHost {
             self.deps.models.source.clone(),
         )
         .with_sessions(self.sessions.clone())
-        .with_object_writes(tool == IMAGE_TOOL)
+        .with_object_writes(false)
         .with_expensive_documents(expensive_documents)
         .with_secrets(self.deps.secrets.clone());
         if let Some(connectors) = &self.deps.connectors {
@@ -339,9 +363,6 @@ impl BotToolsHost {
         }
         if let Some(mail) = &self.mail {
             env = env.with_mail(mail.clone());
-        }
-        if let Some(images) = &self.images {
-            env = env.with_images(images.clone());
         }
         tool_outcome_output(&flow_like_bot_tools::run(tool, args, &env).await)
     }
@@ -366,6 +387,10 @@ impl BotToolsHost {
             let credential = self.deps.directory.credential(app_id).await?;
             credentials.insert(app_id.to_string(), credential);
         }
+        let image = match (&self.images, tool == IMAGE_TOOL) {
+            (Some(images), true) => Some(images.job_image().await?),
+            _ => None,
+        };
         let args_for_connectors = args.clone();
         let mut secrets = BTreeMap::new();
         for name in flow_like_bot_tools::secrets::referenced_secrets(&args) {
@@ -391,10 +416,12 @@ impl BotToolsHost {
             models: JobModels {
                 chat: bit_json(&self.deps.models.chat),
                 embedding: bit_json(&self.deps.models.embedding),
+                image,
             },
             allow_expensive_documents: expensive_documents,
             secrets: JobSecrets(secrets),
             connectors: self.job_connectors(tool, &args_for_connectors).await?,
+            skill_call: self.skill_job(tool, &args_for_connectors).await?,
         };
         serde_json::to_string(&job).map_err(|error| format!("Cannot encode the tool job: {error}"))
     }
@@ -487,7 +514,12 @@ impl BotToolsHost {
             "[bot_tools] executor tool job finished"
         );
         match reply {
-            Ok(reply) => reply.output,
+            Ok(reply) => {
+                if let (Some(images), true) = (&self.images, tool == IMAGE_TOOL) {
+                    images.record(&reply.output);
+                }
+                reply.output
+            }
             Err(message) => {
                 tracing::warn!(tool, turn_id = %self.deps.turn_id, %message, "[bot_tools] executor tool job failed");
                 refusal(

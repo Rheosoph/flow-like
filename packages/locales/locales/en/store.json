@@ -340,6 +340,8 @@
 	"nodes2": "Nodes",
 	"noDescriptionFound": "No description found.",
 	"nodesLength": "Nodes ({{length}})",
+	"skillTools": "Tools: {{tools}}",
+	"skillsLength": "Skills ({{length}})",
 	"nodeStorage": "Node Storage",
 	"noExternalLinksProvided": "No external links provided",
 	"noLinksAvailable": "No links available",

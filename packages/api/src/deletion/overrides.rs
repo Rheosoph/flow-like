@@ -190,6 +190,7 @@ pub fn overrides_for(root: DeletionRoot) -> RootOverrides {
                 sweep_via("Bot", "InboxEntry", "inboxId"),
                 sweep_via("Bot", "InboxKey", "principalId"),
                 sweep("ConversationMember", "principalId"),
+                sweep("ConversationInviteLink", "createdBy"),
                 sweep("Meeting", "hostId"),
                 sweep("MeetingParticipant", "userId"),
                 sweep("InboxEntry", "inboxId"),

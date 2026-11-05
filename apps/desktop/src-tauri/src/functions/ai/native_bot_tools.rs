@@ -97,8 +97,7 @@ fn code_languages() -> Vec<String> {
 pub(crate) fn host_tools() -> HostTools {
     let tools = HostTools::linked()
         .with_code_languages(&code_languages())
-        .with_shell(SHELL_AVAILABLE)
-        .without("skill_call");
+        .with_shell(SHELL_AVAILABLE);
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
     let tools = tools.with_local_machine();
     tools
@@ -154,7 +153,13 @@ pub(crate) async fn execute(
     )
     .with_scheduler(scheduler)
     .with_skills(
-        super::bot_tools::skills::skills_for(app, &runtime.context.bot_id, host.clone()).await,
+        super::bot_tools::skills::skills_for(
+            app,
+            &runtime.context.bot_id,
+            host.clone(),
+            package_runner(app, &runtime, &host).await,
+        )
+        .await,
     )
     .with_mail(
         super::bot_tools::mail::mail_for(app, &runtime.context.bot_id, host.clone()).await,
@@ -200,6 +205,29 @@ pub(crate) async fn execute(
         value = gate.park_for_cost(tool, args, value);
     }
     Ok(value)
+}
+
+/// What a package skill's tool runs with: the bot's workspace store and model access.
+async fn package_runner(
+    app: &AppHandle,
+    runtime: &Arc<BotToolRuntime>,
+    host: &Arc<LiveHost>,
+) -> super::bot_tools::skills::PackageRunner {
+    let workspace = runtime.context.workspace_app_id.clone();
+    let workspace_store = match &workspace {
+        Some(workspace) => host.store(workspace).await.ok(),
+        None => None,
+    };
+    super::bot_tools::skills::PackageRunner {
+        app: app.clone(),
+        state: runtime.state.clone(),
+        token: runtime.token.clone(),
+        workspace,
+        workspace_store,
+        turn_id: runtime.run_id.clone().unwrap_or_default(),
+        user_id: format!("bot:{}", runtime.context.bot_id),
+        usage: host.usage_context(),
+    }
 }
 
 /// Runs `tool` on its own task, so a panic in a heavy backend fails the call and not the turn.

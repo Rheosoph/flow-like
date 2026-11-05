@@ -79,6 +79,26 @@ pub struct JobModels {
     pub chat: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Value>,
+    /// The image model of an `image_generate` job, with the provider key the API opened for
+    /// this one job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<JobImage>,
+}
+
+/// The image Bit of one job, secrets included, and the images the turn may still generate.
+/// It is never printed.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JobImage {
+    pub bit: Value,
+    pub left: u32,
+}
+
+impl std::fmt::Debug for JobImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobImage")
+            .field("left", &self.left)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +126,17 @@ pub struct ToolJob {
     /// job only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connectors: Vec<JobConnector>,
+    /// The package skill a `skill_call` / `skill_run` job runs: the skill as the API read it
+    /// (active, owned by the bot) and the package the workspace pins for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_call: Option<SkillCallJob>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillCallJob {
+    pub skill: flow_like_types::bot_skill::BotSkill,
+    pub package_id: String,
+    pub package: flow_like_types::dispatch::WasmPackageRef,
 }
 
 /// One attached connector and its `Authorization` value inside a signed job; never printed.

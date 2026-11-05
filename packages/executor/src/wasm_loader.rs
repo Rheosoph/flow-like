@@ -226,6 +226,29 @@ async fn load_single_package(
     package_id: &str,
     pkg_ref: &WasmPackageRef,
 ) -> Result<Vec<Arc<dyn NodeLogic>>, ExecutorError> {
+    let nodes = load_package_nodes(engine, http, package_id, pkg_ref).await?;
+    Ok(nodes
+        .into_iter()
+        .map(|logic| Arc::new(logic) as Arc<dyn NodeLogic>)
+        .collect())
+}
+
+/// The nodes of a bot skill's package, loaded like a board run loads them.
+#[cfg(feature = "bot-tools")]
+pub(crate) async fn load_skill_nodes(
+    package_id: &str,
+    pkg_ref: &WasmPackageRef,
+) -> Result<Vec<WasmNodeLogic>, ExecutorError> {
+    let engine = wasm_engine().await?;
+    load_package_nodes(&engine, &WASM_HTTP_CLIENT, package_id, pkg_ref).await
+}
+
+async fn load_package_nodes(
+    engine: &Arc<WasmEngine>,
+    http: &reqwest::Client,
+    package_id: &str,
+    pkg_ref: &WasmPackageRef,
+) -> Result<Vec<WasmNodeLogic>, ExecutorError> {
     let cwasm_resp = http.get(&pkg_ref.cwasm_url).send().await.map_err(|e| {
         ExecutorError::Storage(format!(
             "Failed to download cwasm for {}: {}",
@@ -289,7 +312,7 @@ async fn load_single_package(
         ))
     })?;
 
-    let nodes: Vec<Arc<dyn NodeLogic>> = definitions
+    let nodes: Vec<WasmNodeLogic> = definitions
         .into_iter()
         .map(|def| {
             let node_security = WasmSecurityConfig::from_node_permissions(&def.permissions)
@@ -301,7 +324,7 @@ async fn load_single_package(
                 def,
             )
             .with_package_id(package_id.to_string());
-            Arc::new(logic) as Arc<dyn NodeLogic>
+            logic
         })
         .collect();
 

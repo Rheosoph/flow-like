@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import {
 	accountPolicy,
+	isDrifted,
 	normalizeMcpUrl,
 	readsWriteTool,
 	toolPolicy,
@@ -59,4 +60,12 @@ test("policy changes keep the others and urls get a scheme", () => {
 		"http://127.0.0.1:8931/mcp",
 	);
 	expect(normalizeMcpUrl("  ")).toBe("");
+});
+
+test("a tool whose schema changed since it was confirmed is drifted", () => {
+	const tool = { name: "a", description: "", schema_hash: "v2" };
+	expect(isDrifted({ confirmed_hashes: { a: "v1" } }, tool)).toBe(true);
+	expect(isDrifted({ confirmed_hashes: { a: "v2" } }, tool)).toBe(false);
+	expect(isDrifted({ confirmed_hashes: {} }, tool)).toBe(false);
+	expect(isDrifted({}, tool)).toBe(false);
 });

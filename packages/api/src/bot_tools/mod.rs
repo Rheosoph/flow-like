@@ -81,7 +81,7 @@ pub(crate) async fn turn_host(
         state: flow_like_state.clone(),
         chat: Some(chat.clone()),
         embedding: embedding.clone(),
-        token: token.clone(),
+        token,
         usage: flow_like::models::llm::ModelUsageContext {
             app_id: Some(workspace.clone()),
             run_id: Some(turn_id.to_string()),
@@ -137,14 +137,15 @@ pub(crate) async fn turn_host(
             owner,
             &bot.bot_id,
         )))
-        .with_images(std::sync::Arc::new(images::ApiImages::new(
+        .with_skill_jobs(std::sync::Arc::new(skills::ApiSkillJobs {
+            skills: skills::ApiSkills::new(state, owner, &bot.bot_id),
+            state: state.clone(),
+            workspace: workspace.clone(),
+        }))
+        .with_images(std::sync::Arc::new(images::ImageBits::new(
             std::sync::Arc::new(profile.clone()),
             flow_like_state.clone(),
             bot.image_model.clone(),
-            token,
-            workspace.clone(),
-            turn_id.to_string(),
         )))
-        .with_mail(std::sync::Arc::new(email::ApiMail::new(state, &bot.bot_id))),
     ))
 }

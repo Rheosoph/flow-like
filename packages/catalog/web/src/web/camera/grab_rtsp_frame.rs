@@ -1474,6 +1474,12 @@ mod platform_hevc {
         dimensions: HevcDimensions,
     }
 
+    // SAFETY: The codec runs in synchronous mode without an async notify callback,
+    // so AMediaCodec is not tied to the creating thread. The codec and format are
+    // owned here, released in their `Drop`, and the decoder only drives them through
+    // `&mut` access, so moving it between executor threads creates no shared use.
+    unsafe impl Send for AndroidHevcCodec {}
+
     impl AndroidHevcCodec {
         fn new(
             parameter_sets: &HevcParameterSets,

@@ -3,6 +3,7 @@
 //! The nodes in this crate are bound to an `ExecutionContext`; these functions take bytes and
 //! return bytes, so headless callers (bot tools) share the same typesetting.
 
+pub mod chart;
 pub mod docx;
 pub mod fill;
 pub mod pdf;
@@ -64,6 +65,14 @@ pub(crate) fn ensure_default_content_type(
     files: &mut HashMap<String, Vec<u8>>,
     extension: &str,
 ) {
+    ensure_default_content_type_as(files, extension, content_type_for(extension));
+}
+
+pub(crate) fn ensure_default_content_type_as(
+    files: &mut HashMap<String, Vec<u8>>,
+    extension: &str,
+    content_type: &str,
+) {
     let Some(types) = files.get("[Content_Types].xml") else {
         return;
     };
@@ -71,10 +80,7 @@ pub(crate) fn ensure_default_content_type(
     if xml.contains(&format!("Extension=\"{extension}\"")) {
         return;
     }
-    let entry = format!(
-        "<Default Extension=\"{extension}\" ContentType=\"{}\"/>",
-        content_type_for(extension)
-    );
+    let entry = format!("<Default Extension=\"{extension}\" ContentType=\"{content_type}\"/>");
     if let Some(position) = xml.find("<Override") {
         xml.insert_str(position, &entry);
     } else if let Some(position) = xml.find("</Types>") {

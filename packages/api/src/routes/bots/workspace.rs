@@ -128,7 +128,7 @@ fn refuse_flux(bot: &bot::Model) -> Result<(), ApiError> {
 
 /// The workspace of the caller's live bot, unless its deletion is running. Owner and bot are
 /// checked in SQL, so another person's bot never answers.
-pub(super) async fn live_workspace<C: ConnectionTrait>(
+pub(crate) async fn live_workspace<C: ConnectionTrait>(
     db: &C,
     owner_id: &str,
     bot_id: &str,

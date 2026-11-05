@@ -4,11 +4,8 @@ import type {
 	IBot,
 	IBotApp,
 	IBotAvatar,
-	IBotConnector,
-	IConnectedAccount,
-	ICreateBotConnectorRequest,
-	IUpdateBotConnectorRequest,
 	IBotComputerHost,
+	IBotConnector,
 	IBotEncryptionHost,
 	IBotMailAddress,
 	IBotMailAvailability,
@@ -19,19 +16,22 @@ import type {
 	IBotPresence,
 	IBotRestrictions,
 	IBotSecretInfo,
-	IBotState,
 	IBotSkill,
+	IBotState,
 	IBotTask,
 	IBotToolGrant,
 	IBotTurn,
 	IBotTurnHost,
 	IBotWebhook,
 	IBotWorkspace,
+	IConnectedAccount,
+	ICreateBotConnectorRequest,
 	ICreateBotRequest,
 	ICreateBotSkillRequest,
 	ICreateBotTaskRequest,
 	IIssuedBotWebhook,
 	ILocalBotHost,
+	IUpdateBotConnectorRequest,
 	IUpdateBotRequest,
 	IUpdateBotSkillRequest,
 	IUpdateBotTaskRequest,
@@ -61,11 +61,11 @@ import {
 } from "../../lib/local-bots/commands";
 import { BotComputerHost } from "../../lib/local-bots/computer";
 import { localConnectors } from "../../lib/local-bots/connectors";
-import { localSkills } from "../../lib/local-bots/skills";
 import { BotEncryptionHost } from "../../lib/local-bots/encryption";
 import { mergeBots } from "../../lib/local-bots/merge";
 import { LocalBotMover } from "../../lib/local-bots/move";
 import { idsOf, localRegistries } from "../../lib/local-bots/registry";
+import { localSkills } from "../../lib/local-bots/skills";
 import { BotTurnHost } from "../../lib/local-bots/turns";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -718,6 +718,26 @@ export class BotState implements IBotState {
 		);
 	}
 
+	async installSkillPackage(
+		botId: string,
+		packageId: string,
+		version?: string,
+	): Promise<IBotSkill[]> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () =>
+				localSkills.installPackage(botId, packageId, version),
+			);
+		}
+		const response = await post<{ skills?: IBotSkill[] }>(
+			account.profile,
+			`${botPath(account.id)}/skills/package`,
+			{ package_id: packageId, version },
+			account.auth,
+		);
+		return asArray(response?.skills);
+	}
+
 	async importSkill(botId: string, zip: Uint8Array): Promise<IBotSkill> {
 		const account = await this.accountFor(botId);
 		if (!account) return this.here(botId, () => localSkills.import(botId, zip));
@@ -1033,7 +1053,16 @@ export class BotState implements IBotState {
 	): Promise<IBotConnector> {
 		const account = await this.accountFor(botId);
 		if (!account) {
-			return this.here(botId, () => localConnectors.refresh(botId, connectorId));
+			const session = accountSession(this.backend);
+			return this.here(botId, () =>
+				localConnectors.refresh(
+					botId,
+					connectorId,
+					session?.profile.id && session.profile.hub
+						? { profileId: session.profile.id, hub: session.profile.hub }
+						: undefined,
+				),
+			);
 		}
 		return expectConnector(
 			await post<IBotConnector>(

@@ -7,7 +7,7 @@
 //!
 //! The feature `mcp` links the MCP client; without it `connector_call` answers that it is missing.
 
-mod egress;
+pub(crate) mod egress;
 mod mcp;
 mod rest;
 

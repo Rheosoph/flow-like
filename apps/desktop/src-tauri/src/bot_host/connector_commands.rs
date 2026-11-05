@@ -5,9 +5,11 @@
 use crate::functions::local_bots::{LocalBots, on_store};
 use flow_like_bot_tools::{Environment, services};
 use flow_like_types::bot_connector::{
-    BotConnector, ConnectorAuth, CreateBotConnector, UpdateBotConnector,
+    BotConnector, CreateBotConnector, UpdateBotConnector,
 };
-use tauri::State;
+use crate::functions::ai::bot_tools::connectors::{LocalSecrets, credential_for};
+use crate::native_auth::{SessionBinding, oauth::provider_hosts};
+use tauri::{AppHandle, State};
 
 fn failed(error: impl ToString) -> String {
     error.to_string()
@@ -62,17 +64,24 @@ pub async fn local_bot_delete_connector(
 }
 
 /// Asks the MCP server for its tools and keeps the list with the connector. A bot secret named
-/// in `auth` signs the request in.
+/// in `auth` signs the request in; an OAuth-signed server needs the signed-in `profile_id` and
+/// `hub`, and the person's consent for the bot's workspace.
 #[tauri::command]
 pub async fn local_bot_refresh_connector(
+    app: AppHandle,
     bots: State<'_, LocalBots>,
     bot_id: String,
     connector_id: String,
+    profile_id: Option<String>,
+    hub: Option<String>,
 ) -> Result<BotConnector, String> {
     let lookup = bot_id.clone();
-    let connector = on_store(&bots, move |store| store.connectors(&lookup))
-        .await
-        .map_err(failed)?
+    let (bot, connectors) = on_store(&bots, move |store| {
+        Ok((store.get_bot(&lookup)?, store.connectors(&lookup)?))
+    })
+    .await
+    .map_err(failed)?;
+    let connector = connectors
         .into_iter()
         .find(|connector| connector.id == connector_id)
         .ok_or("This connector does not exist")?;
@@ -80,30 +89,35 @@ pub async fn local_bot_refresh_connector(
         .url
         .clone()
         .ok_or("Only an MCP server has a tool list to refresh")?;
-    let authorization = match &connector.auth {
-        ConnectorAuth::Secret { name } => {
-            let (lookup, name) = (bot_id.clone(), name.clone());
-            let opened = on_store(&bots, move |store| store.open_secrets(&lookup))
-                .await
-                .map_err(failed)?;
-            let value = opened
-                .readable
-                .iter()
-                .find(|secret| secret.name == name)
-                .map(|secret| secret.value.to_string())
-                .ok_or_else(|| format!("The bot has no secret named '{name}'"))?;
-            services::Credential::from_secret(&value)
-                .header()
-                .map(str::to_string)
-        }
-        ConnectorAuth::Oauth { .. } => {
-            return Err("Refresh an OAuth-signed MCP server from a bot turn".to_string());
-        }
-        ConnectorAuth::None => None,
+    let binding = match (profile_id, hub) {
+        (Some(profile_id), Some(hub)) => SessionBinding::capture(&profile_id, &hub).await?,
+        _ => None,
     };
+    let hosts = match &binding {
+        Some(binding) => provider_hosts(binding).await.ok(),
+        None => None,
+    };
+    let hosts: Option<&'static _> = hosts.map(|hosts| &*Box::leak(Box::new(hosts)));
+    let workspace = bot
+        .and_then(|bot| bot.workspace_app_id)
+        .unwrap_or_default();
+    let secrets = LocalSecrets {
+        app: app.clone(),
+        bot_id: bot_id.clone(),
+    };
+    let credential = credential_for(
+        &app,
+        binding.as_ref(),
+        &workspace,
+        &connector,
+        &secrets,
+        hosts,
+    )
+    .await
+    .map_err(failed)?;
     let tools = services::fetch_tools(&services::McpEndpoint {
         url,
-        authorization,
+        authorization: credential.header().map(str::to_string),
         environment: Environment::Local,
     })
     .await?;

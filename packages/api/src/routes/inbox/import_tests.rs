@@ -40,7 +40,7 @@ const INBOX_TABLES: [&str; 5] = [
         "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
         "directKey" TEXT UNIQUE, "createdBy" TEXT NOT NULL, "lastActivityAt" TEXT NOT NULL,
         "createdAt" TEXT NOT NULL, "updatedAt" TEXT NOT NULL, "importKey" TEXT, "lastSeq" INTEGER,
-        UNIQUE ("createdBy", "importKey"))"#,
+        "image" TEXT, UNIQUE ("createdBy", "importKey"))"#,
     r#"CREATE TABLE public."ConversationMember" (
         "conversationId" TEXT NOT NULL, "principalId" TEXT NOT NULL,
         "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
@@ -121,6 +121,7 @@ async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str, deleted: 
         tts_model: Set(None),
         image_model: Set(None),
         vision_model: Set(None),
+        subtask_model: Set(None),
     }
     .insert(db)
     .await

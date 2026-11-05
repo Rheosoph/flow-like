@@ -63,6 +63,12 @@ globalChatDb.version(4).stores({
 	markers: "key",
 });
 
+globalChatDb.version(5).stores({
+	sessions: "id, updatedAt, boardId, mode, pinnedAt",
+	messages: "id, sessionId, timestamp, run_context.ended_at_ms",
+	markers: "key",
+});
+
 export { globalChatDb };
 
 /** A row of Flux's own history: the bots' one conversation each stays out of it. */

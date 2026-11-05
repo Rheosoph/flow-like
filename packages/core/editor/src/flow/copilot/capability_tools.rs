@@ -79,7 +79,9 @@ fn skill_call_ask_message(args: &Value) -> String {
         "The bot wants to run the tool {} of the skill {} with arguments {}.",
         field("tool"),
         field("skill"),
-        args.get("arguments").map(Value::to_string).unwrap_or_default()
+        args.get("arguments")
+            .map(Value::to_string)
+            .unwrap_or_default()
     )
 }
 
@@ -103,7 +105,7 @@ fn ask_message(tool: &str, args: &Value) -> String {
     if tools::services::POLICY_TOOLS.contains(&tool) {
         return connector_ask_message(tool, args);
     }
-    if tool == tools::skills::SKILL_CALL {
+    if tool == tools::skills::SKILL_RUN {
         return skill_call_ask_message(args);
     }
     if tool == "shell_run" {
@@ -117,6 +119,9 @@ fn ask_message(tool: &str, args: &Value) -> String {
     }
     if tool == tools::people::MESSAGE_PERSON {
         return person_ask_message(args);
+    }
+    if tool == tools::web::WEB_REQUEST {
+        return tools::web::ask_summary(args);
     }
     let target = ["index", "path", "name", "url"]
         .iter()
@@ -201,6 +206,9 @@ registered_tools!(
     "computer_screenshot",
     "computer_act",
     "computer_wait",
+    "computer_windows",
+    "computer_window",
+    "computer_launch",
     "email_send",
     "email_reply",
     "image_generate",
@@ -209,9 +217,11 @@ registered_tools!(
     "skill_load",
     "skill_propose",
     "skill_call",
+    "skill_run",
     "connector_tools",
     "connector_call",
     "connector_request",
+    "web_request",
 );
 
 /// Offered beside a tool that takes secrets by name rather than through a capability of their own.
@@ -237,6 +247,9 @@ const LOCAL_MACHINE_TOOLS: &[&str] = &[
     "computer_screenshot",
     "computer_act",
     "computer_wait",
+    "computer_windows",
+    "computer_window",
+    "computer_launch",
 ];
 
 pub const TOOL_IMAGES_FIELD: &str = PLATFORM_TOOL_IMAGE_URLS_FIELD;
@@ -473,10 +486,14 @@ mod tests {
                         | "browser_open"
                         | "computer_screenshot"
                         | "computer_act"
+                        | "computer_window"
+                        | "computer_launch"
                         | "email_send"
+                        | "email_reply"
                         | "message_person"
                         | "secret_request"
-                        | "skill_call"
+                        | "skill_run"
+                        | "web_request"
                 ) || outside,
                 "{name}"
             );
@@ -498,13 +515,36 @@ mod tests {
                 "{name}"
             );
         }
-        for name in ["computer_screenshot", "computer_act", "computer_wait"] {
+        for name in [
+            "computer_screenshot",
+            "computer_act",
+            "computer_wait",
+            "computer_windows",
+            "computer_window",
+            "computer_launch",
+        ] {
             assert_eq!(
                 tool_capability(name),
                 Some(BotCapability::ComputerUse),
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn web_requests_ask_with_the_site_and_need_their_own_capability() {
+        assert_eq!(
+            tool_capability("web_request"),
+            Some(BotCapability::WebRequests)
+        );
+        let spec = bot_tool_spec("web_request").expect("web_request");
+        let ToolApprovalSpec::Mutating { message, .. } = spec.approval else {
+            panic!("web_request must ask");
+        };
+        assert_eq!(
+            message(&json!({ "url": "https://www.cisa.gov/feeds/kev.xml?x=1" })),
+            "The bot wants to send a GET request to www.cisa.gov/feeds/kev.xml."
+        );
     }
 
     #[test]

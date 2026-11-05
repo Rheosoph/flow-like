@@ -44,13 +44,19 @@ export interface RoomsStatus {
 /** A card with its conversation menu in the corner, shown on hover or focus and on touch screens. */
 function WithConversationMenu({
 	conversation,
+	text,
 	children,
-}: Readonly<{ conversation: IConversation; children: ReactNode }>) {
+}: Readonly<{
+	conversation: IConversation;
+	text: ConversationText;
+	children: ReactNode;
+}>) {
 	return (
 		<div className="group/conversation relative min-w-0">
 			{children}
 			<ConversationMenu
 				conversation={conversation}
+				defaultTitle={text.title({ ...conversation, title: null })}
 				withMute
 				className="absolute top-2 right-2 size-7 bg-popover opacity-0 shadow-sm group-focus-within/conversation:opacity-100 group-hover/conversation:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100"
 			/>
@@ -65,8 +71,9 @@ export function RoomCard({
 	const { me, text } = context;
 	const selected = conversation.id === context.selectedConversationId;
 	const last = conversation.last_entry;
+	const image = conversation.image_url;
 	return (
-		<WithConversationMenu conversation={conversation}>
+		<WithConversationMenu conversation={conversation} text={text}>
 			<button
 				type="button"
 				aria-current={selected ? "true" : undefined}
@@ -81,12 +88,22 @@ export function RoomCard({
 						roomId={conversation.id}
 						title={text.title(conversation)}
 						principalIds={otherMemberIds(conversation, me)}
+						imageUrl={image}
 						className="hidden @max-[520px]/crew:inline-flex"
 					/>
-					<span className="@max-[520px]/crew:hidden">
+					<span className="flex min-w-0 items-center gap-2 @max-[520px]/crew:hidden">
+						{image && (
+							<RoomAvatar
+								roomId={conversation.id}
+								title={text.title(conversation)}
+								principalIds={[]}
+								imageUrl={image}
+								size={30}
+							/>
+						)}
 						<MemberStack
 							principalIds={otherMemberIds(conversation, me)}
-							max={7}
+							max={image ? 5 : 7}
 							size={30}
 						/>
 					</span>
@@ -144,7 +161,7 @@ export function ConversationRow({
 			text: preview,
 		});
 	return (
-		<WithConversationMenu conversation={conversation}>
+		<WithConversationMenu conversation={conversation} text={text}>
 			<button
 				type="button"
 				aria-current={selected ? "true" : undefined}
@@ -159,6 +176,7 @@ export function ConversationRow({
 						roomId={conversation.id}
 						title={text.title(conversation)}
 						principalIds={otherMemberIds(conversation, me)}
+						imageUrl={conversation.image_url}
 					/>
 				) : partner ? (
 					<IdentityAvatar subject={partner} size={38} />

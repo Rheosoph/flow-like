@@ -21,9 +21,9 @@ use flow_like_types::{
     bot_turn::{
         BotTurn, ERROR_BATCHED, ERROR_BOT_DELETED, ERROR_HOST_LOST, ERROR_QUEUE_EXPIRED,
         ERROR_SILENT, INTERACTIVE_GRACE_SECS, LEASE_SECS, MAX_ATTEMPTS, MAX_HOPS,
-        MAX_RUNNING_PER_OWNER, QUEUED_EXPIRY_SECS, STORED_CANCELLED, STORED_DESKTOP, STORED_DONE,
-        STORED_FAILED, STORED_QUEUED, STORED_RUNNING, STORED_SERVER, STORED_WAITING, TurnAudience,
-        TurnHostKind, TurnStatus, reply_message_id, turn_id,
+        MAX_RUNNING_PER_OWNER, QUEUED_EXPIRY_SECS, STORED_CANCELLED, STORED_DESKTOP, STORED_DEVICE,
+        STORED_DONE, STORED_FAILED, STORED_QUEUED, STORED_RUNNING, STORED_SERVER, STORED_WAITING,
+        TurnAudience, TurnHostKind, TurnStatus, reply_message_id, turn_id,
     },
     inbox::{ConversationEncryption, ConversationKind, InboxEntryKind},
 };
@@ -357,11 +357,59 @@ pub(crate) async fn queued_heads<C: ConnectionTrait>(
     now: DateTime<FixedOffset>,
     limit: u64,
 ) -> Result<Vec<(bot_turn::Model, Vec<String>)>, DbErr> {
+    queued_heads_scoped(db, owner_id, kind, None, now, limit).await
+}
+
+/// [`queued_heads`] for one device: only turns of the owner's live bots bound to `device_id`,
+/// filtered in SQL so another device's turns never fill the scan.
+pub(crate) async fn queued_device_heads<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    device_id: &str,
+    now: DateTime<FixedOffset>,
+    limit: u64,
+) -> Result<Vec<(bot_turn::Model, Vec<String>)>, DbErr> {
+    let bots = device_bots(owner_id, device_id);
+    queued_heads_scoped(
+        db,
+        Some(owner_id),
+        TurnHostKind::Device,
+        Some(bots),
+        now,
+        limit,
+    )
+    .await
+}
+
+/// The live bots of `owner_id` that run on the device `device_id`.
+pub(crate) fn device_bots(
+    owner_id: &str,
+    device_id: &str,
+) -> sea_orm::sea_query::SelectStatement {
+    use sea_orm::QueryTrait;
+    bot::Entity::find()
+        .select_only()
+        .column(bot::Column::Id)
+        .filter(bot::Column::DeletedAt.is_null())
+        .filter(bot::Column::OwnerId.eq(owner_id))
+        .filter(bot::Column::Location.eq(STORED_DEVICE))
+        .filter(bot::Column::DeviceId.eq(device_id))
+        .into_query()
+}
+
+async fn queued_heads_scoped<C: ConnectionTrait>(
+    db: &C,
+    owner_id: Option<&str>,
+    kind: TurnHostKind,
+    bots: Option<sea_orm::sea_query::SelectStatement>,
+    now: DateTime<FixedOffset>,
+    limit: u64,
+) -> Result<Vec<(bot_turn::Model, Vec<String>)>, DbErr> {
     let mut queued = bot_turn::Entity::find()
         .filter(bot_turn::Column::HostKind.eq(kind.stored()))
         .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
         .filter(ready(now))
-        .filter(bot_turn::Column::BotId.in_subquery(live_bots()));
+        .filter(bot_turn::Column::BotId.in_subquery(bots.unwrap_or_else(live_bots)));
     let mut running = bot_turn::Entity::find()
         .filter(bot_turn::Column::HostKind.eq(kind.stored()))
         .filter(bot_turn::Column::Status.eq(STORED_RUNNING))
@@ -709,6 +757,64 @@ pub(crate) async fn claim_with(
         })
     })
     .await
+}
+
+/// The turn when it belongs to a live bot of `owner_id` bound to the device `device_id`.
+pub(crate) async fn device_turn<C: ConnectionTrait>(
+    db: &C,
+    turn_id: &str,
+    owner_id: &str,
+    device_id: &str,
+) -> Result<Option<bot_turn::Model>, DbErr> {
+    bot_turn::Entity::find_by_id(turn_id)
+        .filter(bot_turn::Column::OwnerId.eq(owner_id))
+        .filter(bot_turn::Column::BotId.in_subquery(device_bots(owner_id, device_id)))
+        .one(db)
+        .await
+}
+
+/// [`claim_with`] for the device `device_id` of `request.owner_id`: a turn whose bot isn't bound
+/// to that device reads as missing, checked in the claim's own transaction.
+pub(crate) async fn claim_for_device(
+    db: &DatabaseConnection,
+    dialect: DbDialect,
+    device_id: &str,
+    request: ClaimRequest,
+) -> Result<ClaimResult, ApiError> {
+    let Some(owner) = request.owner_id.clone() else {
+        return Err(ApiError::internal(
+            "A device claim names the owner the device belongs to",
+        ));
+    };
+    retry_transaction(db, dialect, None, &RetryPolicy::default(), |txn| {
+        let (owner, device_id, request) = (owner.clone(), device_id.to_string(), request.clone());
+        Box::pin(async move {
+            coordinate(txn, "bot-turn-owner", &[owner.as_str()]).await?;
+            claim_device_in(txn, &device_id, &request).await
+        })
+    })
+    .await
+}
+
+/// [`claim_in`] that takes only the turns of bots bound to `device_id`; the caller holds the
+/// owner's `bot-turn-owner` lock.
+pub(crate) async fn claim_device_in<C: ConnectionTrait>(
+    db: &C,
+    device_id: &str,
+    request: &ClaimRequest,
+) -> Result<ClaimResult, ApiError> {
+    let Some(owner) = request.owner_id.as_deref() else {
+        return Err(ApiError::internal(
+            "A device claim names the owner the device belongs to",
+        ));
+    };
+    if device_turn(db, &request.turn_id, owner, device_id)
+        .await?
+        .is_none()
+    {
+        return Ok(Err(Refusal::NotFound));
+    }
+    claim_in(db, request).await
 }
 
 /// An interactive chat's hold on the turn of the message it sent: pushes the not-before that

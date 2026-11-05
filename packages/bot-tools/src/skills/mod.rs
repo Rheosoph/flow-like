@@ -25,6 +25,7 @@ use crate::spec::{Approval, ToolSpec, schema_of};
 pub const SKILL_LOAD: &str = "skill_load";
 pub const SKILL_PROPOSE: &str = "skill_propose";
 pub const SKILL_CALL: &str = "skill_call";
+pub const SKILL_RUN: &str = "skill_run";
 /// Not a model tool: a host runs it for the owner's zip upload. See [`import::run_import`].
 pub const SKILL_IMPORT: &str = "skill_import";
 
@@ -43,6 +44,13 @@ pub struct SkillToolSpec {
     /// The tool writes files or tables.
     #[serde(default)]
     pub writes: bool,
+}
+
+impl SkillToolSpec {
+    /// Whether the owner is asked before the tool runs: it reaches the network or writes.
+    pub fn needs_approval(&self) -> bool {
+        self.network || self.writes
+    }
 }
 
 /// The bot's skills on this host.
@@ -120,7 +128,17 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: SKILL_CALL,
-            description: "Run one tool of a package skill you loaded with `skill_load`, passing its arguments by name. It runs in a sandbox with your workspace as storage and only the network hosts the package declares. Your owner is asked before it runs.",
+            description: "Run one read-only tool of a package skill you loaded with `skill_load` (its `needs_approval` is false), passing its arguments by name. It runs in a sandbox with your workspace as storage.",
+            capability: Some(CAPABILITY),
+            module: "skills",
+            approval: Approval::None,
+            approval_args: &[],
+            mutating: false,
+            input_schema: schema_of::<SkillCallArgs>(),
+        },
+        ToolSpec {
+            name: SKILL_RUN,
+            description: "Run a tool of a package skill that reaches the network or writes files or tables (its `needs_approval` is true in `skill_load`). It runs in a sandbox with your workspace as storage and only the network hosts the package declares. Your owner is asked before it runs.",
             capability: Some(CAPABILITY),
             module: "skills",
             approval: Approval::Ask,
@@ -173,7 +191,14 @@ pub async fn skill_load(env: &dyn ToolEnv, args: SkillLoadArgs) -> ToolResult<To
         "instructions": framed_body(&skill),
         "source": skill.source,
         "references": references,
-        "tools": tools,
+        "tools": tools
+            .iter()
+            .map(|spec| {
+                let mut value = json!(spec);
+                value["needs_approval"] = json!(spec.needs_approval());
+                value
+            })
+            .collect::<Vec<_>>(),
     })))
 }
 
@@ -199,6 +224,18 @@ pub async fn skill_propose(env: &dyn ToolEnv, args: SkillProposeArgs) -> ToolRes
 }
 
 pub async fn skill_call(env: &dyn ToolEnv, args: SkillCallArgs) -> ToolResult<ToolOutput> {
+    call_tool(env, args, false).await
+}
+
+pub async fn skill_run(env: &dyn ToolEnv, args: SkillCallArgs) -> ToolResult<ToolOutput> {
+    call_tool(env, args, true).await
+}
+
+async fn call_tool(
+    env: &dyn ToolEnv,
+    args: SkillCallArgs,
+    asks: bool,
+) -> ToolResult<ToolOutput> {
     let host = host(env)?;
     let skill = active(host.as_ref(), &args.skill).await?;
     let tool = args.tool.trim();
@@ -209,6 +246,23 @@ pub async fn skill_call(env: &dyn ToolEnv, args: SkillCallArgs) -> ToolResult<To
             skill.name,
             skill.tools.join(", ")
         )));
+    }
+    let gated = host
+        .tool_specs(&skill)
+        .await
+        .map_err(|error| ToolError::new(code::FAILED, error.to_string()))?
+        .into_iter()
+        .find(|spec| spec.name == tool)
+        .ok_or_else(|| {
+            ToolError::invalid(format!("Skill '{}' offers no tool '{tool}' on this host", skill.name))
+        })?
+        .needs_approval();
+    if gated != asks {
+        return Err(ToolError::invalid(if gated {
+            format!("'{tool}' reaches the network or writes data: run it with `skill_run`, which asks your owner")
+        } else {
+            format!("'{tool}' is read-only: run it with `skill_call`")
+        }));
     }
     let arguments = match args.arguments {
         None | Some(Value::Null) => Value::Object(Default::default()),

@@ -10,8 +10,11 @@ use serde::{Deserialize, Serialize};
 )]
 #[serde(rename_all = "snake_case")]
 pub enum BotCapability {
-    /// Search, fetch pages and call web APIs.
+    /// Researches the public web: search and read pages through a sealed researcher.
     Internet,
+    /// Calls web APIs and fetches URLs (feeds, JSON, pages) itself, asking the owner before each
+    /// new site.
+    WebRequests,
     /// Every app in one of the owner's profiles; the bot names the profile.
     ProfileApps,
     /// The apps the owner attached to the bot.
@@ -63,8 +66,9 @@ pub enum BotCapability {
 
 impl BotCapability {
     /// Every capability, in the order the settings list them.
-    pub const ALL: [Self; 24] = [
+    pub const ALL: [Self; 25] = [
         Self::Internet,
+        Self::WebRequests,
         Self::ProfileApps,
         Self::SelectedApps,
         Self::CodeExecution,
@@ -93,6 +97,7 @@ impl BotCapability {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Internet => "internet",
+            Self::WebRequests => "web_requests",
             Self::ProfileApps => "profile_apps",
             Self::SelectedApps => "selected_apps",
             Self::CodeExecution => "code_execution",
@@ -407,6 +412,7 @@ mod tests {
             (BotCapability::Skills, "skills"),
             (BotCapability::ImageGeneration, "image_generation"),
             (BotCapability::Delegation, "delegation"),
+            (BotCapability::WebRequests, "web_requests"),
         ];
         for (capability, id) in added {
             assert!(!capability.is_fixed(), "{id}");

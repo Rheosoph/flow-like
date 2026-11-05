@@ -10786,6 +10786,43 @@ dependencies = [
 ]
 
 [[package]]
+name = "flow-like-bot-host"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "flow-like",
+ "flow-like-bot-memory",
+ "flow-like-bot-tools",
+ "flow-like-device-crypto",
+ "flow-like-local-bots",
+ "flow-like-types",
+ "iana-time-zone",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "flow-like-bot-machine"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "dashmap 6.1.0",
+ "flow-like-bot-tools",
+ "flow-like-catalog-automation",
+ "flow-like-types",
+ "image",
+ "libc",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "flow-like-bot-memory"
 version = "0.1.0"
 dependencies = [
@@ -11887,6 +11924,8 @@ dependencies = [
  "dirs-next",
  "enigo",
  "flow-like",
+ "flow-like-bot-host",
+ "flow-like-bot-machine",
  "flow-like-bot-memory",
  "flow-like-bot-tools",
  "flow-like-bots",
@@ -12616,11 +12655,18 @@ dependencies = [
  "croner",
  "dotenvy",
  "flate2",
+ "flow-like",
+ "flow-like-bot-host",
+ "flow-like-bot-machine",
+ "flow-like-bot-tools",
+ "flow-like-bot-tools-host",
  "flow-like-bots",
  "flow-like-catalog",
  "flow-like-device-crypto",
  "flow-like-device-protocol",
+ "flow-like-local-bots",
  "flow-like-model-protocol",
+ "flow-like-model-provider",
  "flow-like-offline-writes",
  "flow-like-runtime",
  "flow-like-storage",

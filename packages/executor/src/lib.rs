@@ -50,6 +50,8 @@ pub mod resolve;
 pub mod router;
 pub mod streaming;
 #[cfg(feature = "bot-tools")]
+pub(crate) mod skill_host;
+#[cfg(feature = "bot-tools")]
 pub(crate) mod tool;
 pub mod types;
 pub mod wasm_loader;

@@ -301,6 +301,7 @@ fn build() -> FkGraph {
             Comment,
             Conversation,
             ConversationFile,
+            ConversationInviteLink,
             ConversationMember,
             ConversationSegment,
             Course,

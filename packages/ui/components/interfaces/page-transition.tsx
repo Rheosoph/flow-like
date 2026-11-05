@@ -8,7 +8,7 @@ import {
 	useState,
 } from "react";
 import { cn } from "../../lib/utils";
-import { LoadingScreen } from "../ui/loading-screen";
+import { ContentLoadingSkeleton } from "../ui/content-loading";
 import { PageInterface, type PageInterfaceProps } from "./page-interface";
 import { PageLoadIndicator, PageLoadStatus } from "./page-load-indicator";
 import { PageTransitionContext } from "./page-transition-context";
@@ -148,9 +148,8 @@ function PageTransitionStack({
 
 /**
  * Moving between pages keeps the page on screen, under a progress bar, until the next one can
- * show content — a browser holds a page the same way until its successor paints. The next page
- * mounts out of sight meanwhile, so its onLoad run starts at once. Opening an app, or leaving any
- * other interface, still shows the loading screens: there is no page to hold.
+ * show content. The next page mounts out of sight so its onLoad run starts at once. Without a
+ * previous page, a content skeleton keeps the surrounding navigation available.
  */
 export function PageTransition({
 	scope,
@@ -184,7 +183,7 @@ export function PageTransition({
 	}, []);
 
 	if (view.kind === "content") return <>{view.node}</>;
-	if (!next && !incoming) return <LoadingScreen />;
+	if (!next && !incoming) return <ContentLoadingSkeleton />;
 	return (
 		<PageTransitionStack shown={next} incoming={incoming} onHold={onHold} />
 	);

@@ -33,6 +33,17 @@ export function toolPolicy(
 	};
 }
 
+/** The tool's schema changed since the owner set or confirmed its policy: it asks every time. */
+export function isDrifted(
+	connector: Pick<IBotConnector, "confirmed_hashes">,
+	tool: IBotConnectorTool,
+): boolean {
+	const confirmed = connector.confirmed_hashes?.[tool.name];
+	return Boolean(
+		confirmed && tool.schema_hash && confirmed !== tool.schema_hash,
+	);
+}
+
 /** A tool that changes things must not run unasked without the owner knowing it. */
 export function readsWriteTool(
 	tool: IBotConnectorTool,

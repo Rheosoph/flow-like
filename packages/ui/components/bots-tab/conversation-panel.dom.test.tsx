@@ -237,6 +237,21 @@ const backend = {
 			roomOf(id).marked.push(upTo);
 			return { last_read_at: new Date().toISOString() };
 		},
+		renamed: [] as { conversationId: string; title: string }[],
+		renameConversation: async (conversationId: string, title: string) => {
+			backend.inboxState.renamed.push({ conversationId, title });
+			const fake = roomOf(conversationId);
+			fake.conversation = { ...fake.conversation, title: title || null };
+			return fake.conversation;
+		},
+		setConversationImage: async (
+			conversationId: string,
+			image: string | null,
+		) => {
+			const fake = roomOf(conversationId);
+			fake.conversation = { ...fake.conversation, image_url: image };
+			return fake.conversation;
+		},
 	},
 	userState: {
 		getProfile: async () => null,
@@ -1075,6 +1090,65 @@ describe("history", () => {
 		expect(panel.text()).toContain("Load older messages");
 		expect(panel.text()).not.toContain("No messages yet");
 		expect(panel.text()).not.toContain("Ancient news");
+		await panel.unmount();
+	});
+});
+
+describe("room settings", () => {
+	async function setInput(input: Element | null, text: string) {
+		const setValue = Object.getOwnPropertyDescriptor(
+			window.HTMLInputElement.prototype,
+			"value",
+		)?.set;
+		await act(async () => {
+			setValue?.call(input, text);
+			input?.dispatchEvent(
+				new window.Event("input", { bubbles: true }) as never,
+			);
+		});
+	}
+
+	test("renaming a group from its menu saves the name and shows it in the header", async () => {
+		room("renamable", newestFirst);
+		const panel = await mountPanel("renamable");
+		await chooseMenuItem(
+			button(panel, "Conversation options"),
+			"Edit name and picture",
+		);
+		const dialog = window.document.querySelector("[role='dialog']");
+		expect(dialog?.textContent).toContain("Edit room");
+		await setInput(
+			dialog?.querySelector("input:not([type='file'])") ?? null,
+			"  Launch crew ",
+		);
+		const form = dialog?.querySelector("form") as unknown as HTMLFormElement;
+		await act(async () => {
+			form.dispatchEvent(
+				new window.Event("submit", {
+					bubbles: true,
+					cancelable: true,
+				}) as never,
+			);
+		});
+		await settle(50);
+		expect(backend.inboxState.renamed).toContainEqual({
+			conversationId: "renamable",
+			title: "Launch crew",
+		});
+		expect(window.document.querySelector("[role='dialog']")).toBeNull();
+		expect(panel.text()).toContain("Launch crew");
+		await panel.unmount();
+	});
+
+	test("a group's picture replaces the member stack in the header", async () => {
+		room("pictured", newestFirst, {
+			image_url: "https://files.test/room.png",
+		});
+		const panel = await mountPanel("pictured");
+		const picture = panel.host.querySelector(
+			"img[src='https://files.test/room.png']",
+		);
+		expect(picture).not.toBeNull();
 		await panel.unmount();
 	});
 });

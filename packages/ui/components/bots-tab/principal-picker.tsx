@@ -179,8 +179,8 @@ export interface PickerSource {
 }
 
 /**
- * Your bots, people you already talk to, and anyone the directory finds. People must share an
- * app with you to be added; the server says so when they don't.
+ * Your bots, people you already talk to, and anyone the directory finds. Anyone can be invited;
+ * with `serverRule` the server's own list of invitable bots and people comes first.
  */
 export function PrincipalPicker({
 	source,
@@ -195,10 +195,15 @@ export function PrincipalPicker({
 	multiple: boolean;
 	full?: boolean;
 	/**
-	 * Offer exactly what the server lets you invite (`/inbox/invitable`) instead of searching the
-	 * directory; `conversationId` hides who is already in that room.
+	 * Offer what the server lists as invitable (`/inbox/invitable`) and also anyone the directory
+	 * finds; `conversationId` hides who is already in that room. The directory has no room state,
+	 * so `memberIds` hides current members and `invitedIds` marks people already invited.
 	 */
-	serverRule?: { conversationId?: string };
+	serverRule?: {
+		conversationId?: string;
+		memberIds?: readonly string[];
+		invitedIds?: readonly string[];
+	};
 	onPick: (principal: PickedPrincipal) => void;
 }>) {
 	const { t } = useTranslation("bots");
@@ -206,7 +211,7 @@ export function PrincipalPicker({
 	const { me, bots, recentPeopleIds, directory, people } = source;
 	const [query, setQuery] = useState("");
 	const ruled = Boolean(serverRule) && people;
-	const search = useProjectUserSearch(undefined, query, people && !ruled);
+	const search = useProjectUserSearch(undefined, query, people);
 	const invitable = useInvitable(useDebounced(query.trim(), 250), {
 		conversationId: serverRule?.conversationId,
 		enabled: ruled,
@@ -289,17 +294,43 @@ export function PrincipalPicker({
 		return [...recent, ...found];
 	}, [directory, me, people, query, recentPeopleIds, ruled, search.results]);
 
+	const directoryRows = useMemo<PickerRow[]>(() => {
+		if (!ruled) return [];
+		const taken = new Set([
+			...(invitable.data ?? []).map((entry) => entry.principal_id),
+			...(serverRule?.memberIds ?? []),
+		]);
+		const invited = new Set(serverRule?.invitedIds ?? []);
+		return search.results
+			.filter(
+				({ user }) =>
+					!taken.has(user.id) && !user.bot && !isSelfPrincipal(user.id, me),
+			)
+			.map(({ user }) => ({
+				id: user.id,
+				kind: "user" as const,
+				label: userDisplayName(user),
+				detail: invited.has(user.id)
+					? t("crew.picker.alreadyInvited", "Already invited")
+					: userSecondaryLabel(user),
+				mode: "invite" as const,
+			}));
+	}, [ruled, invitable.data, serverRule, search.results, me, t]);
+	const invitedPeopleRows = [
+		...ruledRows.filter((row) => row.kind === "user"),
+		...directoryRows,
+	];
 	const ownRows = ruledRows.filter(
 		(row) => row.kind === "bot" && row.mode === "add_now",
 	);
 	const invitedBotRows = ruledRows.filter(
 		(row) => row.kind === "bot" && row.mode === "invite",
 	);
-	const invitedPeopleRows = ruledRows.filter((row) => row.kind === "user");
 	const nothing = ruled
 		? ownRows.length + invitedBotRows.length + invitedPeopleRows.length === 0 &&
 			botRows.length === 0 &&
-			!invitable.isFetching
+			!invitable.isFetching &&
+			!search.isSearchingDirectory
 		: botRows.length === 0 &&
 			peopleRows.length === 0 &&
 			!search.isSearchingDirectory;
@@ -319,7 +350,7 @@ export function PrincipalPicker({
 					placeholder={searchLabel}
 					className="h-8 min-w-0 flex-1 appearance-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
 				/>
-				{(ruled ? invitable.isFetching : search.isSearchingDirectory) && (
+				{((ruled && invitable.isFetching) || search.isSearchingDirectory) && (
 					<Loader2Icon className="size-4 shrink-0 animate-spin" aria-hidden />
 				)}
 			</label>
@@ -350,11 +381,11 @@ export function PrincipalPicker({
 				/>
 				{nothing && people && (
 					<p className="px-2 py-4 text-center text-sm text-muted-foreground">
-						{ruled || search.canSearchDirectory
+						{search.canSearchDirectory
 							? t("crew.picker.noMatches", "No bots or people match.")
 							: t(
-									"crew.picker.hint",
-									"Type a name or email to find people who share an app with you.",
+									"crew.picker.hintAnyone",
+									"Type a name or email to find people.",
 								)}
 					</p>
 				)}
@@ -366,7 +397,7 @@ export function PrincipalPicker({
 						)}
 					</p>
 				)}
-				{(ruled ? invitable.isError : search.directoryError) && (
+				{((ruled && invitable.isError) || search.directoryError) && (
 					<p className="px-2 text-xs text-destructive">
 						{t("crew.picker.searchFailed", "Searching people failed.")}
 					</p>

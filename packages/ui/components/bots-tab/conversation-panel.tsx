@@ -81,6 +81,7 @@ import {
 	useShowsPendingSends,
 } from "./pending-sends";
 import type { PickerSource } from "./principal-picker";
+import { RoomAvatar } from "./room-avatar";
 import { ConnectedRoomMeetings } from "./room-meetings";
 import { RoomMembersDialog } from "./room-members-dialog";
 import {
@@ -557,12 +558,22 @@ function ConversationView({
 		<>
 			<DockHeader
 				avatar={
-					<MemberStack
-						principalIds={otherMemberIds(conversation, me)}
-						max={3}
-						size={34}
-						hoverCards
-					/>
+					conversation.kind === "group" && conversation.image_url ? (
+						<RoomAvatar
+							roomId={conversation.id}
+							title={heading.title}
+							principalIds={otherMemberIds(conversation, me)}
+							imageUrl={conversation.image_url}
+							size={34}
+						/>
+					) : (
+						<MemberStack
+							principalIds={otherMemberIds(conversation, me)}
+							max={3}
+							size={34}
+							hoverCards
+						/>
+					)
 				}
 				title={heading.title}
 				subtitle={heading.subtitle}
@@ -571,6 +582,7 @@ function ConversationView({
 					<>
 						<ConversationMenu
 							conversation={conversation}
+							defaultTitle={text.title({ ...conversation, title: null })}
 							onShowStarred={() => setStarsOpen(true)}
 						/>
 						{call.available && <CallButton call={call} />}

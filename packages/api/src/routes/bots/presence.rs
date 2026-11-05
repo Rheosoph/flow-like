@@ -131,9 +131,14 @@ pub(crate) async fn presence_in<C: ConnectionTrait>(
         .collect())
 }
 
-fn host_kind(report: &HostReport) -> Result<TurnHostKind, ApiError> {
+pub(super) fn host_kind(report: &HostReport) -> Result<TurnHostKind, ApiError> {
     match TurnHostKind::parse(&report.host_kind) {
-        Some(kind @ (TurnHostKind::Desktop | TurnHostKind::Device)) => Ok(kind),
+        Some(TurnHostKind::Desktop) => Ok(TurnHostKind::Desktop),
+        Some(TurnHostKind::Device) => Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            crate::bot_host::ledger::BOT_TURN_HOST_KIND,
+            "Only a managed device reports the presence of its bots, with its own device credentials",
+        )),
         _ => Err(ApiError::bad_request(
             "host_kind is desktop or device; server bots need no report",
         )),
@@ -165,6 +170,39 @@ pub(crate) async fn report_in<C: ConnectionTrait>(
     bot_ids: &[String],
     now: DateTime<FixedOffset>,
 ) -> Result<HostReportResult, ApiError> {
+    report_scoped(db, owner_id, host_id, kind, None, bot_ids, now).await
+}
+
+/// [`report_in`] for a managed device: only the owner's live bots bound to `device_id` count.
+pub(crate) async fn report_device_in<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    device_id: &str,
+    host_id: &str,
+    bot_ids: &[String],
+    now: DateTime<FixedOffset>,
+) -> Result<HostReportResult, ApiError> {
+    report_scoped(
+        db,
+        owner_id,
+        host_id,
+        TurnHostKind::Device,
+        Some(device_id),
+        bot_ids,
+        now,
+    )
+    .await
+}
+
+async fn report_scoped<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    host_id: &str,
+    kind: TurnHostKind,
+    device_id: Option<&str>,
+    bot_ids: &[String],
+    now: DateTime<FixedOffset>,
+) -> Result<HostReportResult, ApiError> {
     let wanted: BTreeSet<&String> = bot_ids.iter().collect();
     let matching: Vec<String> = if wanted.is_empty() {
         Vec::new()
@@ -177,6 +215,7 @@ pub(crate) async fn report_in<C: ConnectionTrait>(
             .await?
             .into_iter()
             .filter(|bot| reportable(bot, kind))
+            .filter(|bot| device_id.is_none_or(|id| bot.device_id.as_deref() == Some(id)))
             .map(|bot| bot.id)
             .collect()
     };
@@ -220,11 +259,33 @@ pub(crate) async fn forget_in<C: ConnectionTrait>(
     owner_id: &str,
     host_id: &str,
 ) -> Result<u64, ApiError> {
-    let mine = Query::select()
+    forget_scoped(db, owner_id, host_id, None).await
+}
+
+/// [`forget_in`] for a managed device: only the reports of its own bots go.
+pub(crate) async fn forget_device_in<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    device_id: &str,
+    host_id: &str,
+) -> Result<u64, ApiError> {
+    forget_scoped(db, owner_id, host_id, Some(device_id)).await
+}
+
+async fn forget_scoped<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    host_id: &str,
+    device_id: Option<&str>,
+) -> Result<u64, ApiError> {
+    let mut mine = Query::select()
         .column(bot::Column::Id)
         .from(bot::Entity)
         .and_where(Expr::col(bot::Column::OwnerId).eq(owner_id))
         .to_owned();
+    if let Some(device_id) = device_id {
+        mine.and_where(Expr::col(bot::Column::DeviceId).eq(device_id));
+    }
     Ok(bot_host_heartbeat::Entity::delete_many()
         .filter(bot_host_heartbeat::Column::HostId.eq(host_id))
         .filter(bot_host_heartbeat::Column::BotId.in_subquery(mine))
@@ -242,7 +303,8 @@ pub(crate) async fn forget_in<C: ConnectionTrait>(
     responses(
         (status = 200, description = "The bots in `accepted` count as seen now. Send the report every 60 seconds while the host runs; a bot a host stops reporting reads offline after 150 seconds. Bots in `refused` aren't yours, were deleted or run on the other kind of host.", body = HostReportResult),
         (status = 400, description = "host_id is empty, too long or has spaces; host_kind is not desktop or device; more than 100 bots"),
-        (status = 401, description = "Not signed in")
+        (status = 401, description = "Not signed in"),
+        (status = 409, description = "BOT_TURN_HOST_KIND: device bots report only through their own device")
     ),
     security(("bearer_auth" = []))
 )]

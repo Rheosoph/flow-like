@@ -32,6 +32,7 @@ pub mod shell;
 pub mod skills;
 pub mod spec;
 pub mod tables;
+pub mod web;
 
 #[cfg(test)]
 mod testing;
@@ -115,6 +116,11 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         }
         computer::COMPUTER_ACT => computer::computer_act(env, parse_args(tool, args)?).await,
         computer::COMPUTER_WAIT => computer::computer_wait(env, parse_args(tool, args)?).await,
+        computer::COMPUTER_WINDOWS => {
+            computer::computer_windows(env, parse_args(tool, args)?).await
+        }
+        computer::COMPUTER_WINDOW => computer::computer_window(env, parse_args(tool, args)?).await,
+        computer::COMPUTER_LAUNCH => computer::computer_launch(env, parse_args(tool, args)?).await,
         shell::SHELL_RUN => shell::shell_run(env, parse_args(tool, args)?).await,
         secrets::SECRET_LIST => secrets::secret_list(env, parse_args(tool, args)?).await,
         secrets::SECRET_REQUEST => secrets::secret_request(env, parse_args(tool, args)?).await,
@@ -129,6 +135,7 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         skills::SKILL_LOAD => skills::skill_load(env, parse_args(tool, args)?).await,
         skills::SKILL_PROPOSE => skills::skill_propose(env, parse_args(tool, args)?).await,
         skills::SKILL_CALL => skills::skill_call(env, parse_args(tool, args)?).await,
+        skills::SKILL_RUN => skills::skill_run(env, parse_args(tool, args)?).await,
         skills::SKILL_IMPORT => skills::import::run_import(env, parse_args(tool, args)?).await,
         email::EMAIL_SEND => email::email_send(env, parse_args(tool, args)?).await,
         email::EMAIL_REPLY => email::email_reply(env, parse_args(tool, args)?).await,
@@ -145,6 +152,7 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         services::CONNECTOR_REQUEST => {
             services::connector_request(env, parse_args(tool, args)?).await
         }
+        web::WEB_REQUEST => web::web_request(env, parse_args(tool, args)?).await,
         other => Err(ToolError::new(
             error::code::UNKNOWN_TOOL,
             format!("This crate has no tool '{other}'"),

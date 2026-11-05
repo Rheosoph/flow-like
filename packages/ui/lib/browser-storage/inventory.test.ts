@@ -241,10 +241,10 @@ describe("runIDBCleanup", () => {
 		);
 		const offlineDelete = vi
 			.spyOn(offlineSyncDB.commands, "bulkDelete")
-			.mockImplementationOnce(async (keys) => {
+			.mockImplementationOnce((async (keys: string[]) => {
 				await paused;
 				return bulkDelete(keys);
-			});
+			}) as never);
 		const error = new Error("snapshot store unavailable");
 		const snapshots = vi
 			.spyOn(boardLastSeenDb.seen, "where")

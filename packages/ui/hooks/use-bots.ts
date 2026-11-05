@@ -46,8 +46,7 @@ export const botKeys = {
 	webhooks: (botId: string) => [...botKeys.all, "webhooks", botId] as const,
 	tasks: (botId: string) => [...botKeys.all, "tasks", botId] as const,
 	skills: (botId: string) => [...botKeys.all, "skills", botId] as const,
-	connectors: (botId: string) =>
-		[...botKeys.all, "connectors", botId] as const,
+	connectors: (botId: string) => [...botKeys.all, "connectors", botId] as const,
 	connectedAccounts: () => [...botKeys.all, "connected-accounts"] as const,
 	mailAddress: (botId: string) =>
 		[...botKeys.all, "mail-address", botId] as const,
@@ -512,7 +511,8 @@ export type BotSkillAction =
 	| { type: "approve"; skillId: string }
 	| { type: "disable"; skillId: string }
 	| { type: "delete"; skillId: string }
-	| { type: "import"; zip: Uint8Array };
+	| { type: "import"; zip: Uint8Array }
+	| { type: "package"; packageId: string; version?: string };
 
 /** Every change to a bot's skills; the list is refetched afterwards. */
 export function useBotSkillAction() {
@@ -525,7 +525,7 @@ export function useBotSkillAction() {
 		}: {
 			botId: string;
 			action: BotSkillAction;
-		}): Promise<IBotSkill | undefined> => {
+		}): Promise<IBotSkill | IBotSkill[] | undefined> => {
 			const bots = requireBotState(state);
 			switch (action.type) {
 				case "create":
@@ -551,6 +551,14 @@ export function useBotSkillAction() {
 				case "import":
 					return (
 						bots.importSkill?.(botId, action.zip) ?? unsupported<IBotSkill>()
+					);
+				case "package":
+					return (
+						bots.installSkillPackage?.(
+							botId,
+							action.packageId,
+							action.version,
+						) ?? unsupported<IBotSkill[]>()
 					);
 				case "delete":
 					await (bots.deleteSkill?.(botId, action.skillId) ?? unsupported());

@@ -123,9 +123,13 @@ pub(super) async fn dispatch(
         let access = hosted.ok_or_else(|| {
             anyhow!("Hosted image generation needs an access token for the API proxy")
         })?;
-        return hosted::generate(access, bit, provider, request, options).await;
+        let images = hosted::generate(access, bit, provider, request, options).await?;
+        capped::ensure_within_caps(images.iter().map(|image| image.bytes.len()))?;
+        return Ok(images);
     }
-    generate_with_provider(environment, provider, request, options).await
+    let images = generate_with_provider(environment, provider, request, options).await?;
+    capped::ensure_within_caps(images.iter().map(|image| image.bytes.len()))?;
+    Ok(images)
 }
 
 fn ai_image(provider: &ModelProvider, image: GeneratedImage) -> AiImage {

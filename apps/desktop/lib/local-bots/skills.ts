@@ -89,6 +89,20 @@ export const localSkills = {
 		);
 	},
 
+	async installPackage(
+		botId: string,
+		packageId: string,
+		version?: string,
+	): Promise<IBotSkill[]> {
+		return asArray(
+			await run<IBotSkill[]>(
+				`install the skills of ${packageId} into local bot ${botId}`,
+				"local_bot_install_skill_package",
+				{ botId, packageId, version: version ?? null },
+			),
+		);
+	},
+
 	async import(botId: string, zip: Uint8Array): Promise<IBotSkill> {
 		const operation = `import a skill into local bot ${botId}`;
 		return expectSkill(

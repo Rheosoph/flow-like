@@ -30,6 +30,8 @@ pub mod bot_notify;
 pub mod bot_task;
 #[cfg(feature = "inbox")]
 pub mod bot_turn;
+#[cfg(feature = "device-bot")]
+pub mod device_bot;
 #[cfg(feature = "inbox")]
 pub mod inbox;
 #[cfg(feature = "inbox")]

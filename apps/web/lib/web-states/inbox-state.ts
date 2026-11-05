@@ -3,9 +3,11 @@ import type {
 	IConversation,
 	IConversationFileDownload,
 	IConversationFileReady,
+	IConversationLink,
 	IConversationPinState,
 	IConversationSegmentList,
 	IConversationTurn,
+	ICreateConversationLinkRequest,
 	ICreateConversationRequest,
 	IInboxEntriesPage,
 	IInboxEntriesQuery,
@@ -19,6 +21,7 @@ import type {
 	IInvitation,
 	IInviteRequest,
 	IInviteResponse,
+	IJoinedConversation,
 	IPinnedMessage,
 	IRealtimeAccess,
 	IRegisterInboxKeyRequest,
@@ -111,6 +114,19 @@ export class WebInboxState implements IInboxState {
 				this.backend.auth,
 			),
 			`rename conversation ${conversationId}`,
+		);
+	}
+
+	async setConversationImage(
+		conversationId: string,
+		image: string | null,
+	): Promise<IConversation> {
+		const path = `${conversationPath(conversationId)}/image`;
+		return expectRecord(
+			image === null
+				? await apiDelete<IConversation>(path, this.backend.auth)
+				: await apiPut<IConversation>(path, { image }, this.backend.auth),
+			`change the picture of conversation ${conversationId}`,
 		);
 	}
 
@@ -480,6 +496,51 @@ export class WebInboxState implements IInboxState {
 		await apiDelete(
 			`${conversationPath(conversationId)}/invitations/${encodeURIComponent(principalId)}`,
 			this.backend.auth,
+		);
+	}
+
+	async createConversationLink(
+		conversationId: string,
+		request: ICreateConversationLinkRequest,
+	): Promise<IConversationLink> {
+		return expectRecord(
+			await apiPost<IConversationLink>(
+				`${conversationPath(conversationId)}/links`,
+				request,
+				this.backend.auth,
+			),
+			`create an invite link for conversation ${conversationId}`,
+		);
+	}
+
+	async listConversationLinks(
+		conversationId: string,
+	): Promise<IConversationLink[]> {
+		const response = await apiGet<{ links?: IConversationLink[] }>(
+			`${conversationPath(conversationId)}/links`,
+			this.backend.auth,
+		);
+		return asArray(response?.links);
+	}
+
+	async revokeConversationLink(
+		conversationId: string,
+		linkId: string,
+	): Promise<void> {
+		await apiDelete(
+			`${conversationPath(conversationId)}/links/${encodeURIComponent(linkId)}`,
+			this.backend.auth,
+		);
+	}
+
+	async joinConversationLink(token: string): Promise<IJoinedConversation> {
+		return expectRecord(
+			await apiPost<IJoinedConversation>(
+				"inbox/links/join",
+				{ token },
+				this.backend.auth,
+			),
+			"join a conversation by invite link",
 		);
 	}
 

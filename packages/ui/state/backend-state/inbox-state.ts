@@ -187,6 +187,8 @@ export interface IConversation {
 	id: string;
 	kind: ConversationKind;
 	title: string | null;
+	/** A group's picture: a signed link, or a data URL for a conversation on this device. */
+	image_url?: string | null;
 	encryption: ConversationEncryption;
 	created_by: string;
 	created_at: string;
@@ -406,6 +408,34 @@ export interface IInviteResponse {
 	conversation: IConversation;
 }
 
+export interface IConversationLink {
+	id: string;
+	conversation_id: string;
+	token: string;
+	name: string | null;
+	/** User sub of the member who made it. */
+	created_by: string;
+	/** -1 is unlimited. */
+	max_uses: number;
+	count_joined: number;
+	expires_at: string | null;
+	created_at: string;
+}
+
+export interface ICreateConversationLinkRequest {
+	name?: string | null;
+	/** Omit or 0 or less for unlimited. */
+	max_uses?: number | null;
+	/** Omit or 0 or less to never expire. */
+	expires_in_hours?: number | null;
+}
+
+export interface IJoinedConversation {
+	conversation: IConversation;
+	/** False when you were already a member. */
+	joined: boolean;
+}
+
 export type ConversationTurnStatus = "queued" | "running" | "waiting";
 
 /** A bot turn on an account conversation that has not finished. */
@@ -429,6 +459,11 @@ export interface IInboxState {
 	renameConversation(
 		conversationId: string,
 		title: string,
+	): Promise<IConversation>;
+	/** Sets a group's picture from an image data URL of at most 512 KiB; `null` removes it. */
+	setConversationImage(
+		conversationId: string,
+		image: string | null,
 	): Promise<IConversation>;
 	addMembers(conversationId: string, members: string[]): Promise<IConversation>;
 	removeMember(conversationId: string, principalId: string): Promise<void>;
@@ -477,6 +512,15 @@ export interface IInboxState {
 	unstarMessage(conversationId: string, messageId: string): Promise<void>;
 	listStars(query?: IStarredMessagesQuery): Promise<IStarredMessagesPage>;
 	cancelInvitation(conversationId: string, principalId: string): Promise<void>;
+	createConversationLink(
+		conversationId: string,
+		request: ICreateConversationLinkRequest,
+	): Promise<IConversationLink>;
+	/** Newest first. */
+	listConversationLinks(conversationId: string): Promise<IConversationLink[]>;
+	revokeConversationLink(conversationId: string, linkId: string): Promise<void>;
+	/** Joining a room you are already in answers `joined: false`. */
+	joinConversationLink(token: string): Promise<IJoinedConversation>;
 	setMemberLimits(
 		conversationId: string,
 		botId: string,

@@ -139,7 +139,7 @@ mod client {
     };
 
     use super::*;
-    use crate::services::egress::ensure_reachable;
+    use crate::services::egress::resolve_reachable;
 
     const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
     const CALL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -148,15 +148,20 @@ mod client {
     type Session = RunningService<RoleClient, ClientInfo>;
 
     async fn connect(endpoint: &McpEndpoint) -> Result<Session, String> {
-        let url = ensure_reachable(endpoint.environment, &endpoint.url).await?;
+        let reachable = resolve_reachable(endpoint.environment, &endpoint.url).await?;
+        let url = reachable.url.clone();
         let mut config = StreamableHttpClientTransportConfig::with_uri(url.to_string());
         config.auth_header = endpoint
             .authorization
             .as_deref()
             .map(|value| value.strip_prefix("Bearer ").unwrap_or(value).to_string());
-        let http = reqwest_mcp::Client::builder()
+        let mut builder = reqwest_mcp::Client::builder()
             .pool_max_idle_per_host(0)
-            .redirect(reqwest_mcp::redirect::Policy::none())
+            .redirect(reqwest_mcp::redirect::Policy::none());
+        if !reachable.addrs.is_empty() {
+            builder = builder.resolve_to_addrs(&reachable.host, &reachable.addrs);
+        }
+        let http = builder
             .build()
             .map_err(|error| format!("The MCP client could not be created: {error}"))?;
         let transport = StreamableHttpClientTransport::with_client(http, config);

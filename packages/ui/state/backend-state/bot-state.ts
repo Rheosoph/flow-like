@@ -4,6 +4,7 @@ import type { IDataSensitivity } from "../../lib/data-classification";
 /** Wire ids, in the order the settings list them. New bots start with `memory`; the rest stays off until switched on. */
 export const BOT_CAPABILITIES = [
 	"internet",
+	"web_requests",
 	"profile_apps",
 	"selected_apps",
 	"code_execution",
@@ -102,6 +103,8 @@ export interface IBot {
 	tts_model?: string | null;
 	image_model?: string | null;
 	vision_model?: string | null;
+	/** Bit id of the model its sub-tasks run on; unset uses the bot's own. */
+	subtask_model?: string | null;
 	classification: IDataSensitivity;
 	capabilities: BotCapability[];
 	/** The profile whose apps `profile_apps` covers. */
@@ -127,6 +130,8 @@ export interface ICreateBotRequest {
 	tts_model?: string | null;
 	image_model?: string | null;
 	vision_model?: string | null;
+	/** Bit id of the model its sub-tasks run on; unset uses the bot's own. */
+	subtask_model?: string | null;
 	classification?: IDataSensitivity;
 	capabilities?: BotCapability[];
 	profile_id?: string | null;
@@ -146,6 +151,8 @@ export interface IUpdateBotRequest {
 	tts_model?: string | null;
 	image_model?: string | null;
 	vision_model?: string | null;
+	/** Bit id of the model its sub-tasks run on; unset uses the bot's own. */
+	subtask_model?: string | null;
 	classification?: IDataSensitivity;
 	capabilities?: BotCapability[];
 	profile_id?: string | null;
@@ -422,13 +429,47 @@ export interface IBotComputerView {
 	/** A `data:` URL of the picture. */
 	image: string | null;
 	age_ms: number | null;
+	/** The owner has paused the bot's computer calls. */
+	taken_over?: boolean;
+	/** The owner can drive the picture with mouse and keyboard (device bots with a screen). */
+	can_control?: boolean;
+	/** Pixels of `image`; input positions are in these. */
+	width?: number | null;
+	height?: number | null;
+	/** A refusal since the last read, such as input the device could not apply. */
+	notice?: string | null;
 }
 
-/** Desktop only: the browser and screen of the bots that run here. */
+/** One mouse or keyboard event for a taken-over screen; positions are pixels of the picture. */
+export type IBotInputEvent =
+	| { type: "pointer_move"; x: number; y: number }
+	| {
+			type: "pointer_down" | "pointer_up";
+			x: number;
+			y: number;
+			button: "left" | "middle" | "right";
+	  }
+	| { type: "scroll"; x: number; y: number; dx: number; dy: number }
+	| { type: "key"; chord: string }
+	| { type: "text"; text: string };
+
+/**
+ * Desktop only: the browser and screen of the bots that run here, and of device bots over the
+ * encrypted device tunnel (pass the bot's `device_id`). A local bot's owner uses their own mouse
+ * and keyboard while taken over; only device bots take `input`.
+ */
 export interface IBotComputerHost {
-	view(botId: string): Promise<IBotComputerView>;
+	view(botId: string, deviceId?: string | null): Promise<IBotComputerView>;
 	/** Closes the bot's browser and stops the mouse and keyboard action in flight. */
-	stop(botId: string): Promise<void>;
+	stop(botId: string, deviceId?: string | null): Promise<void>;
+	/** Pauses the bot's computer calls; they fail with `taken_over` until `handBack`. */
+	takeOver(botId: string, deviceId?: string | null): Promise<void>;
+	handBack(botId: string, deviceId?: string | null): Promise<void>;
+	input(
+		botId: string,
+		event: IBotInputEvent,
+		deviceId?: string | null,
+	): Promise<void>;
 }
 
 /** A bot's own hidden app: its files and databases (and, with the memory phase, its memory). */
@@ -473,6 +514,8 @@ export interface IBotConnector {
 	/** Tool name (`read` / `write` for an account) to policy. */
 	tool_policies: Record<string, BotConnectorPolicy>;
 	tools_snapshot: IBotConnectorTool[];
+	/** Each tool's `schema_hash` when the owner last set or confirmed its policy. */
+	confirmed_hashes?: Record<string, string>;
 	updated_at: string;
 }
 
@@ -493,6 +536,8 @@ export interface IUpdateBotConnectorRequest {
 	tool_policies?: Record<string, BotConnectorPolicy>;
 	grant?: string;
 	scopes?: string[];
+	/** Tools whose changed schema the owner has looked at and accepts. */
+	confirm_tools?: string[];
 }
 
 /** An account the person connected, as the picker lists it. */
@@ -728,6 +773,15 @@ export interface IBotState {
 	approveSkill?(botId: string, skillId: string): Promise<IBotSkill>;
 	disableSkill?(botId: string, skillId: string): Promise<IBotSkill>;
 	deleteSkill?(botId: string, skillId: string): Promise<void>;
+	/**
+	 * Pins a registry package to the bot's workspace and saves the skills it ships as pending.
+	 * Refused (409) when the package needs capabilities the bot does not have.
+	 */
+	installSkillPackage?(
+		botId: string,
+		packageId: string,
+		version?: string,
+	): Promise<IBotSkill[]>;
 	/** A zipped skill folder (SKILL.md plus references); the skill starts pending. */
 	importSkill?(botId: string, zip: Uint8Array): Promise<IBotSkill>;
 	/** MCP servers and accounts attached to the bot. */

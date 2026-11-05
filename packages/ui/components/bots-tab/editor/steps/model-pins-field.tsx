@@ -13,8 +13,9 @@ const IMAGE_TYPES: readonly IBitTypes[] = [
 	IBitTypes.Vlm,
 ];
 const VISION_TYPES: readonly IBitTypes[] = [IBitTypes.Vlm];
+const SUBTASK_TYPES: readonly IBitTypes[] = [IBitTypes.Llm, IBitTypes.Vlm];
 
-type PinKind = "stt" | "tts" | "image" | "vision";
+type PinKind = "stt" | "tts" | "image" | "vision" | "subtask";
 
 const PINS: readonly {
 	pin: BotModelPin;
@@ -31,6 +32,7 @@ const PINS: readonly {
 		accepts: isImageCapableBit,
 	},
 	{ pin: "visionModel", kind: "vision", types: VISION_TYPES },
+	{ pin: "subtaskModel", kind: "subtask", types: SUBTASK_TYPES },
 ];
 
 function BotModelPinField({
@@ -57,10 +59,17 @@ function BotModelPinField({
 				label={label}
 				value={value}
 				options={options}
-				fallback={{
-					label: t("editor.brain.pins.host"),
-					hint: t("editor.brain.pins.hostHint"),
-				}}
+				fallback={
+					kind === "subtask"
+						? {
+								label: t("editor.brain.pins.ownModel"),
+								hint: t("editor.brain.pins.ownModelHint"),
+							}
+						: {
+								label: t("editor.brain.pins.host"),
+								hint: t("editor.brain.pins.hostHint"),
+							}
+				}
 				onChange={onChange}
 			/>
 			<p className="text-xs leading-relaxed text-muted-foreground">

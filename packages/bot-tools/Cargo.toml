@@ -22,9 +22,10 @@ documents = [
     "flow-like-catalog-media-image/execute",
     "flow-like-catalog-media-document/execute",
 ]
+image-resolve = ["dep:flow-like-runtime"]
 image = [
+    "image-resolve",
     "dep:flow-like-catalog-media-image",
-    "dep:flow-like-runtime",
 ]
 data = ["flow-like-storage/graph"]
 connectors = [

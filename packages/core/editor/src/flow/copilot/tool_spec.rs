@@ -375,6 +375,12 @@ fn approval_session_key(spec: &PlatformToolSpec, args: &Value) -> String {
     if spec.name == "code_run" {
         return format!("code_run:network:{}", network_hosts(args).join(","));
     }
+    if spec.name == flow_like_bot_tools::web::WEB_REQUEST {
+        let scope = flow_like_bot_tools::web::grant_scopes(args)
+            .map(|scopes| scopes.join(","))
+            .unwrap_or_else(|| blake3::hash(args.to_string().as_bytes()).to_string());
+        return format!("web_request:{scope}");
+    }
     if spec.name != "database_tool" {
         return spec.name.to_string();
     }

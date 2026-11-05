@@ -47,13 +47,15 @@ mock.module("../../hooks/use-inbox", () => ({
 	}),
 }));
 
+let directoryResults: { user: Record<string, unknown> }[] = [];
+
 const actualSearch = {
 	...(await import("../../hooks/use-project-user-search")),
 };
 mock.module("../../hooks/use-project-user-search", () => ({
 	...actualSearch,
 	useProjectUserSearch: () => ({
-		results: [],
+		results: directoryResults,
 		isSearchingDirectory: false,
 		canSearchDirectory: false,
 		directoryError: null,
@@ -127,5 +129,60 @@ describe("the principal picker names", () => {
 		await act(async () => (rows[1] as unknown as HTMLElement).click());
 		expect(picked[0]?.label).toBe("Mara Albers");
 		await act(async () => root.unmount());
+	});
+});
+
+describe("the principal picker in ruled mode", () => {
+	test("also offers directory people who share no app, minus members, and marks invited ones", async () => {
+		directoryResults = [
+			{ user: { id: "user_stranger", name: "Sam Stranger", created_at: "" } },
+			{ user: { id: "user_member", name: "Mia Member", created_at: "" } },
+			{ user: { id: "user_pending", name: "Pat Pending", created_at: "" } },
+			{ user: { id: "user_nameless", name: "Dupe Invitable", created_at: "" } },
+		];
+		const container = window.document.createElement("div");
+		window.document.body.appendChild(container);
+		const root = createRoot(container as unknown as Element);
+		const picked: { id: string; mode?: string }[] = [];
+		const source = {
+			me: "me",
+			bots: [] as never,
+			recentPeopleIds: [],
+			directory: (id: string) => ({ id, name: id }) as never,
+			people: true,
+		};
+		await act(async () =>
+			root.render(
+				createElement(
+					QueryClientProvider,
+					{ client: new QueryClient() },
+					createElement(PrincipalPicker, {
+						source,
+						selected: new Set<string>(),
+						multiple: true,
+						serverRule: {
+							conversationId: "c1",
+							memberIds: ["user_member"],
+							invitedIds: ["user_pending"],
+						},
+						onPick: (principal) => picked.push(principal),
+					}),
+				),
+			),
+		);
+		await settle(60);
+		const text = window.document.body.textContent ?? "";
+		expect(text).toContain("Sam Stranger");
+		expect(text).toContain("Pat Pending");
+		expect(text).toContain("Already invited");
+		expect(text).not.toContain("Mia Member");
+		expect(text).not.toContain("Dupe Invitable");
+		const stranger = [
+			...window.document.body.querySelectorAll("li button"),
+		].find((row) => row.textContent?.includes("Sam Stranger"));
+		await act(async () => (stranger as unknown as HTMLElement).click());
+		expect(picked[0]).toMatchObject({ id: "user_stranger", mode: "invite" });
+		await act(async () => root.unmount());
+		directoryResults = [];
 	});
 });

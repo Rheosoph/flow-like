@@ -2168,7 +2168,10 @@ fn markdown_title(text: &str) -> Option<String> {
             }
         }
     }
-    lines.find_map(|line| line.strip_prefix("# ").map(|title| title.trim().to_string()))
+    lines.find_map(|line| {
+        line.strip_prefix("# ")
+            .map(|title| title.trim().to_string())
+    })
 }
 
 fn remove_control_characters(value: String) -> String {
@@ -2900,7 +2903,9 @@ mod tests {
         let page = Url::parse("https://nextjs.org/docs").unwrap();
         let alternate = |html: &str| markdown_alternate_url(html, &page).map(String::from);
         assert_eq!(
-            alternate(r#"<head><link rel="alternate" type="text/markdown" href="https://nextjs.org/docs.md"/></head>"#),
+            alternate(
+                r#"<head><link rel="alternate" type="text/markdown" href="https://nextjs.org/docs.md"/></head>"#
+            ),
             Some("https://nextjs.org/docs.md".to_string())
         );
         assert_eq!(
@@ -2921,7 +2926,8 @@ mod tests {
         ] {
             assert_eq!(alternate(html), None, "{html}");
         }
-        let snapshot = Url::parse("https://web.archive.org/web/2024/https://nextjs.org/docs").unwrap();
+        let snapshot =
+            Url::parse("https://web.archive.org/web/2024/https://nextjs.org/docs").unwrap();
         assert_eq!(
             markdown_alternate_url(
                 r#"<link rel="alternate" type="text/markdown" href="/web/2024/https://nextjs.org/docs.md">"#,
@@ -2939,7 +2945,10 @@ mod tests {
             title("---\ndescription: x\ntitle: \"Vercel Documentation\"\n---\n\n# Other"),
             "Vercel Documentation"
         );
-        assert_eq!(title("---\nproduct: vercel\n---\n# Get started\n"), "Get started");
+        assert_eq!(
+            title("---\nproduct: vercel\n---\n# Get started\n"),
+            "Get started"
+        );
         assert_eq!(title("Intro\n\n## Section\n# Zahlungen"), "Zahlungen");
         assert_eq!(title("No heading here"), "vercel.com");
     }
@@ -3364,10 +3373,13 @@ mod tests {
             redirects: Vec::new(),
             title: "A useful source".to_string(),
             find: None,
+            markdown_source: Some(Url::parse("https://example.com/research.md").unwrap()),
         });
         assert_eq!(output["tool"], OPEN_URL_TOOL);
         assert_eq!(output["untrusted_content"], true);
         assert_eq!(output["source"]["url"], url);
+        assert_eq!(output["url"], url);
+        assert_eq!(output["markdown_source"], "https://example.com/research.md");
         assert_eq!(
             output["source"]["citation_markdown"],
             "[A useful source](https://example.com/research?q=a)"

@@ -1,6 +1,7 @@
 use super::{
     INBOX_DIRECT_FIXED, INBOX_MEMBER_LIMIT, MEMBER_ACTIVE, Reader, allocate_seqs,
     delivery::people_to_wake,
+    image::sign_images,
     insert_copies,
     invitations::{self, InviteMode, Invitee},
     lock_conversation, member_conversation,
@@ -11,7 +12,7 @@ use super::{
     },
     now_millis, reader, requests, stored,
     view::{conversations_for, visible_conversation},
-    wake,
+    wake, wake_members,
 };
 use crate::{
     entity::{conversation, conversation_member},
@@ -126,6 +127,7 @@ pub(super) fn conversation_row(
         updated_at: Set(now),
         import_key: Set(None),
         last_seq: Set(Some(0)),
+        image: Set(None),
     }
 }
 
@@ -357,9 +359,9 @@ pub async fn list_conversations(
 ) -> Result<Json<ConversationList>, ApiError> {
     let sub = user.sub()?;
     let reader = reader(&state.db, &sub, query.as_bot.as_deref()).await?;
-    Ok(Json(ConversationList {
-        conversations: conversations_for(&state.db, &reader, None).await?,
-    }))
+    let mut conversations = conversations_for(&state.db, &reader, None).await?;
+    sign_images(&state, &mut conversations).await;
+    Ok(Json(ConversationList { conversations }))
 }
 
 #[utoipa::path(
@@ -385,10 +387,15 @@ pub async fn get_conversation(
     Path(conversation_id): Path<String>,
     Query(query): Query<ReaderQuery>,
 ) -> Result<Json<Conversation>, ApiError> {
-    let sub = user.sub()?;
-    let reader = reader(&state.db, &sub, query.as_bot.as_deref()).await?;
+    let reader = super::acting_reader(
+        &state.db,
+        &user,
+        query.as_bot.as_deref(),
+        &conversation_id,
+    )
+    .await?;
     Ok(Json(
-        visible_conversation(&state.db, &reader, &conversation_id).await?,
+        visible_conversation(&state, &reader, &conversation_id).await?,
     ))
 }
 
@@ -495,7 +502,7 @@ async fn open_group(
         (status = 200, description = "The new conversation. A direct conversation you already have with this member is returned instead of a new one, whatever encryption you asked for.", body = Conversation),
         (status = 400, description = "A direct conversation needs exactly one other member and no title, a group at least one; or the title is too long"),
         (status = 401, description = "Not signed in"),
-        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: you can add your own bots and invite people who share an app with you and their bots; the message names the first id refused"),
+        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: an id is neither a person on this hub nor a live bot; the message names the first id refused"),
         (status = 409, description = "INBOX_MEMBER_LIMIT: a conversation has at most 50 members")
     ),
     security(("bearer_auth" = []))
@@ -513,7 +520,7 @@ pub async fn create_conversation(
         ConversationKind::Group => open_group(&state, &sub, &plan).await?,
     };
     Ok(Json(
-        visible_conversation(&state.db, &Reader::own(&sub), &id).await?,
+        visible_conversation(&state, &Reader::own(&sub), &id).await?,
     ))
 }
 
@@ -545,10 +552,7 @@ pub async fn rename_conversation(
 ) -> Result<Json<Conversation>, ApiError> {
     let sub = user.sub()?;
     let title = normalize_title(body.title)?;
-    let current = member_conversation(&state.db, &conversation_id, &sub).await?;
-    if ConversationKind::parse(&current.kind) != Some(ConversationKind::Group) {
-        return Err(direct_fixed());
-    }
+    let current = member_group(&state.db, &conversation_id, &sub).await?;
     if current.title != title {
         conversation::Entity::update_many()
             .col_expr(conversation::Column::Title, Expr::value(title))
@@ -556,16 +560,30 @@ pub async fn rename_conversation(
             .filter(conversation::Column::Id.eq(&conversation_id))
             .exec(&state.db)
             .await?;
+        wake_members(&state, &conversation_id).await;
     }
     Ok(Json(
-        visible_conversation(&state.db, &Reader::own(&sub), &conversation_id).await?,
+        visible_conversation(&state, &Reader::own(&sub), &conversation_id).await?,
     ))
+}
+
+/// The group `principal_id` is an active member of; a direct conversation is fixed.
+pub(super) async fn member_group<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    principal_id: &str,
+) -> Result<conversation::Model, ApiError> {
+    let current = member_conversation(db, conversation_id, principal_id).await?;
+    if ConversationKind::parse(&current.kind) != Some(ConversationKind::Group) {
+        return Err(direct_fixed());
+    }
+    Ok(current)
 }
 
 pub(super) fn direct_fixed() -> ApiError {
     ApiError::coded(
         StatusCode::CONFLICT,
         INBOX_DIRECT_FIXED,
-        "A direct conversation can't be renamed and its members don't change; start a group instead",
+        "A direct conversation has no title or picture and its members don't change; start a group instead",
     )
 }

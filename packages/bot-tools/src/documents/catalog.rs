@@ -14,6 +14,7 @@ use flow_like_catalog_media_document::document::service::fill::{
     FillInput, TableRows, TemplateKind, fill_template,
 };
 use flow_like_catalog_media_document::document::service::pdf::{PdfOptions, pdf_from_markdown};
+use flow_like_catalog_media_document::document::service::chart::{SHEET_NAME, WorkbookCell};
 use flow_like_catalog_media_document::document::service::pptx::{
     ChartKind as DeckChartKind, DeckOptions, Slide, SlideChart, SlideLayout, pptx_from_slides,
 };
@@ -136,8 +137,31 @@ fn slide_of(slide: DeckSlide) -> Slide {
             },
             categories: chart.categories,
             series: chart.series,
+            ..SlideChart::default()
         }),
     }
+}
+
+/// The workbook behind a chart's "Edit data", built with the same xlsx builder as `document_create`.
+fn chart_workbook(rows: &[Vec<WorkbookCell>]) -> Result<Vec<u8>> {
+    let sheet = XlsxSheet {
+        name: SHEET_NAME.to_string(),
+        rows: rows
+            .iter()
+            .map(|row| {
+                row.iter()
+                    .map(|cell| match cell {
+                        WorkbookCell::Empty => XlsxCell::Empty,
+                        WorkbookCell::Text(text) => XlsxCell::Text(text.clone()),
+                        WorkbookCell::Number(number) => XlsxCell::Number(*number),
+                    })
+                    .collect()
+            })
+            .collect(),
+        header: true,
+        ..XlsxSheet::default()
+    };
+    build_workbook(&[sheet])
 }
 
 fn sheet_of(sheet: SheetData) -> XlsxSheet {
@@ -282,6 +306,7 @@ impl DocumentBackend for CatalogBackend {
             cover: request.cover,
             page_size: request.page_size.clone(),
             page_numbers: request.page_numbers,
+            workbook: Some(chart_workbook),
         };
         docx_from_markdown(&request.markdown, &options, &images_of(&request)).map(built)
     }
@@ -293,7 +318,14 @@ impl DocumentBackend for CatalogBackend {
         slides: Vec<DeckSlide>,
     ) -> Result<BuiltDocument> {
         let slides: Vec<Slide> = slides.into_iter().map(slide_of).collect();
-        pptx_from_slides(&DeckOptions { title, author }, &slides).map(built)
+        pptx_from_slides(
+            &DeckOptions {
+                title,
+                author,
+                workbook: Some(chart_workbook),
+            },
+            &slides,
+        ).map(built)
     }
 
     fn create_xlsx(&self, sheets: Vec<SheetData>) -> Result<BuiltDocument> {
@@ -385,5 +417,55 @@ impl DocumentConverter for MarkitdownConverter {
         CatalogBackend
             .convert(input.bytes.clone(), extension_of(input.name).as_deref())
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::documents::{ChartKind, DeckChart, DeckSlide, SlideLayoutKind};
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|window| window == needle)
+    }
+
+    #[test]
+    fn chart_embeddings_are_real_workbooks_built_with_the_xlsx_builder() {
+        let slide = DeckSlide {
+            layout: SlideLayoutKind::Chart,
+            title: "Sales".into(),
+            bullets: Vec::new(),
+            notes: None,
+            image: None,
+            table: None,
+            chart: Some(DeckChart {
+                kind: ChartKind::Bar,
+                categories: vec!["Q1".into(), "Q2".into()],
+                series: vec![("Sales".into(), vec![1.0, 2.0])],
+            }),
+        };
+        let deck = CatalogBackend
+            .create_pptx(None, None, vec![slide])
+            .expect("deck");
+        let docx = CatalogBackend
+            .create_docx(MarkdownDocument {
+                markdown: "```nivo\ntype: bar\n---\nQ,V\nQ1,1\nQ2,2\n```".into(),
+                ..MarkdownDocument::default()
+            })
+            .expect("docx");
+        for (bytes, part) in [
+            (&deck.bytes, "ppt/embeddings/Microsoft_Excel_Sheet1.xlsx"),
+            (&docx.bytes, "word/embeddings/Microsoft_Excel_Sheet1.xlsx"),
+        ] {
+            assert!(contains(bytes, part.as_bytes()), "{part}");
+        }
+        let files = flow_like_catalog_media_document::document::openxml::read_zip(&deck.bytes)
+            .expect("zip");
+        let workbook = &files["ppt/embeddings/Microsoft_Excel_Sheet1.xlsx"];
+        assert!(workbook.starts_with(b"PK"));
+        assert!(contains(workbook, b"xl/workbook.xml"));
+        let book = flow_like_catalog_data::data::excel::inspect::workbook_overview(workbook.clone())
+            .expect("readable workbook");
+        assert_eq!(book.sheets[0].name, "Sheet1");
     }
 }

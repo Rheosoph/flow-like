@@ -6,6 +6,8 @@ use crate::document::pdf::render::{Block, Span, parse_markdown};
 use crate::document::openxml::write_zip;
 use crate::document::styles::{defaults, hex_to_ooxml};
 
+use super::chart::{ChartKind, ChartSpec, WorkbookFn, add_chart_parts};
+use crate::document::chart::{ChartType, OfficeChartData};
 use super::{
     Built, Images, REL_IMAGE, add_override, add_relationship, ensure_default_content_type,
     office_image, xml_text,
@@ -21,12 +23,20 @@ pub struct DocxOptions {
     /// a4 (default), letter, legal, a5 or a3.
     pub page_size: Option<String>,
     pub page_numbers: bool,
+    /// Embeds each chart's data as a workbook so "Edit data" works.
+    pub workbook: Option<WorkbookFn>,
 }
 
 const EMU_PER_PIXEL: i64 = 9525;
 const MAX_IMAGE_WIDTH_EMU: i64 = 15 * 360_000;
 const MAX_IMAGE_HEIGHT_EMU: i64 = 20 * 360_000;
 const FOOTER_REL_ID: &str = "rIdFooterPageNumbers";
+const NUMBERING_REL_ID: &str = "rIdNumbering";
+const BULLET_NUM_ID: usize = 1;
+const FIRST_ORDERED_NUM_ID: usize = 2;
+const LIST_LEVELS: usize = 9;
+const CHART_WIDTH_EMU: i64 = 5_400_000;
+const CHART_HEIGHT_EMU: i64 = 3_240_000;
 
 const EXTRA_STYLES: &str = r#"<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/><w:pPr><w:spacing w:after="60"/></w:pPr></w:style>
 <w:style w:type="paragraph" w:styleId="CodeBlock"><w:name w:val="Code Block"/><w:pPr><w:shd w:val="clear" w:color="auto" w:fill="F8F8F8"/><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="auto"/><w:ind w:left="240" w:right="240"/></w:pPr><w:rPr><w:rFonts w:ascii="Consolas" w:hAnsi="Consolas" w:cs="Consolas"/><w:sz w:val="19"/><w:szCs w:val="19"/></w:rPr></w:style>
@@ -125,11 +135,104 @@ fn plain_text(spans: &[Span]) -> String {
     spans.iter().map(|span| span.text.as_str()).collect()
 }
 
+#[derive(Default)]
+struct Lists {
+    levels: Vec<Option<(u64, usize)>>,
+    ordered: Vec<(usize, u64)>,
+    bullets: bool,
+}
+
+impl Lists {
+    fn numbering(&mut self, level: usize, ordered: Option<u64>) -> usize {
+        self.levels.truncate(level + 1);
+        self.levels.resize(level + 1, None);
+        let Some(number) = ordered else {
+            self.bullets = true;
+            self.levels[level] = None;
+            return BULLET_NUM_ID;
+        };
+        let id = match self.levels[level] {
+            Some((last, id)) if number > last => id,
+            _ => {
+                self.ordered.push((level, number));
+                FIRST_ORDERED_NUM_ID + self.ordered.len() - 1
+            }
+        };
+        self.levels[level] = Some((number, id));
+        id
+    }
+
+    fn used(&self) -> bool {
+        self.bullets || !self.ordered.is_empty()
+    }
+
+    fn xml(&self) -> String {
+        const BULLETS: [&str; 3] = ["\u{2022}", "\u{25E6}", "\u{25AA}"];
+        const FORMATS: [&str; 3] = ["decimal", "lowerLetter", "lowerRoman"];
+        let levels = |ordered: bool| -> String {
+            (0..LIST_LEVELS)
+                .map(|level| {
+                    let (format, text) = if ordered {
+                        (FORMATS[level % 3], format!("%{}.", level + 1))
+                    } else {
+                        ("bullet", BULLETS[level % 3].to_string())
+                    };
+                    format!(
+                        "<w:lvl w:ilvl=\"{level}\"><w:start w:val=\"1\"/><w:numFmt w:val=\"{format}\"/><w:lvlText w:val=\"{text}\"/><w:lvlJc w:val=\"left\"/><w:pPr><w:ind w:left=\"{}\" w:hanging=\"360\"/></w:pPr></w:lvl>",
+                        720 + 360 * level
+                    )
+                })
+                .collect()
+        };
+        let mut nums = format!("<w:num w:numId=\"{BULLET_NUM_ID}\"><w:abstractNumId w:val=\"0\"/></w:num>");
+        for (index, (level, start)) in self.ordered.iter().enumerate() {
+            nums.push_str(&format!(
+                "<w:num w:numId=\"{}\"><w:abstractNumId w:val=\"1\"/><w:lvlOverride w:ilvl=\"{level}\"><w:startOverride w:val=\"{start}\"/></w:lvlOverride></w:num>",
+                FIRST_ORDERED_NUM_ID + index
+            ));
+        }
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<w:numbering xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"><w:abstractNum w:abstractNumId=\"0\"><w:multiLevelType w:val=\"hybridMultilevel\"/>{}</w:abstractNum><w:abstractNum w:abstractNumId=\"1\"><w:multiLevelType w:val=\"hybridMultilevel\"/>{}</w:abstractNum>{nums}</w:numbering>",
+            levels(false),
+            levels(true)
+        )
+    }
+}
+
+fn ordered_number(marker: &str) -> Option<u64> {
+    marker.strip_suffix('.')?.parse().ok()
+}
+
+fn chart_spec(data: &OfficeChartData) -> Option<ChartSpec> {
+    let kind = match data.chart_type {
+        ChartType::Bar => ChartKind::Bar,
+        ChartType::Line => ChartKind::Line,
+        ChartType::Pie => ChartKind::Pie,
+        _ => return None,
+    };
+    Some(ChartSpec {
+        kind,
+        categories: data.categories.clone(),
+        series: data
+            .series
+            .iter()
+            .map(|series| (series.name.clone(), series.values.clone()))
+            .collect(),
+        title: data.title.clone(),
+        stacked: data.stacked,
+        horizontal: data.layout == crate::document::chart::ChartLayout::Horizontal,
+        colors: data.colors.clone(),
+    })
+}
+
 struct Builder<'a> {
     files: HashMap<String, Vec<u8>>,
     images: &'a Images,
     body: String,
     next_image: u32,
+    charts: u32,
+    lists: Lists,
+    workbook: Option<WorkbookFn>,
     warnings: Vec<String>,
 }
 
@@ -179,7 +282,69 @@ impl Builder<'_> {
         self.body.push_str(&paragraph(None, "", &drawing));
     }
 
+    fn chart(&mut self, data: &OfficeChartData) {
+        let Some(spec) = chart_spec(data) else {
+            self.warnings.push(format!(
+                "A {} chart has no native Word form here, so it is shown as a table",
+                data.chart_type
+            ));
+            self.chart_table(data);
+            return;
+        };
+        self.charts += 1;
+        let number = self.charts;
+        let part = match add_chart_parts(&mut self.files, "word", number, &spec, self.workbook) {
+            Ok(part) => part,
+            Err(error) => {
+                self.warnings
+                    .push(format!("A chart could not be built ({error}), so it is shown as a table"));
+                self.chart_table(data);
+                return;
+            }
+        };
+        let rel_id = format!("rIdChart{number}");
+        add_relationship(
+            &mut self.files,
+            "word/_rels/document.xml.rels",
+            &rel_id,
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart",
+            &part,
+        );
+        let (cx, cy, id) = (CHART_WIDTH_EMU, CHART_HEIGHT_EMU, 1000 + number);
+        let drawing = format!(
+            "<w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\"><wp:extent cx=\"{cx}\" cy=\"{cy}\"/><wp:docPr id=\"{id}\" name=\"Chart {number}\"/><a:graphic xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\"><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/chart\"><c:chart xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" r:id=\"{rel_id}\"/></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"
+        );
+        self.body.push_str(&paragraph(None, "", &drawing));
+    }
+
+    fn chart_table(&mut self, data: &OfficeChartData) {
+        if let Some(title) = data.title.as_deref().filter(|t| !t.is_empty()) {
+            self.body.push_str(&paragraph(None, "", &run_xml(
+                &Span { text: title.to_string(), bold: true, ..Span::default() },
+                false,
+            )));
+        }
+        let mut grid = vec![
+            std::iter::once(String::new())
+                .chain(data.series.iter().map(|s| s.name.clone()))
+                .collect::<Vec<_>>(),
+        ];
+        for (index, category) in data.categories.iter().enumerate() {
+            grid.push(
+                std::iter::once(category.clone())
+                    .chain(data.series.iter().map(|s| s.values.get(index).map_or(String::new(), |v| v.to_string())))
+                    .collect(),
+            );
+        }
+        self.body
+            .push_str(&build_table(&grid, true, true, defaults::BORDER, 10.0));
+        self.body.push_str(&paragraph(None, "", ""));
+    }
+
     fn block(&mut self, block: &Block) {
+        if !matches!(block, Block::ListItem { .. }) {
+            self.lists.levels.clear();
+        }
         match block {
             Block::Heading { level, spans } => {
                 let style = format!("Heading{}", (*level).clamp(1, 4));
@@ -192,16 +357,23 @@ impl Builder<'_> {
                 marker,
                 spans,
             } => {
-                let left = 720 + 360 * *depth;
-                let properties = format!("<w:ind w:left=\"{left}\" w:hanging=\"360\"/>");
-                let runs = format!("{}<w:r><w:tab/></w:r>{}", plain(marker), runs_xml(spans));
+                let level = depth.saturating_sub(1).min(LIST_LEVELS - 1);
+                let num_id = self.lists.numbering(level, ordered_number(marker));
+                let properties =
+                    format!("<w:numPr><w:ilvl w:val=\"{level}\"/><w:numId w:val=\"{num_id}\"/></w:numPr>");
                 self.body
-                    .push_str(&paragraph(Some("ListParagraph"), &properties, &runs));
+                    .push_str(&paragraph(Some("ListParagraph"), &properties, &runs_xml(spans)));
             }
             Block::Quote(spans) => self
                 .body
                 .push_str(&paragraph(Some("Quote"), "", &runs_xml(spans))),
-            Block::Code { lines, .. } => {
+            Block::Code { language, lines } => {
+                if matches!(language.as_deref(), Some("nivo" | "plotly")) {
+                    self.warnings.push(
+                        "A chart block without readable CSV data could not be drawn as a chart and is shown as code"
+                            .to_string(),
+                    );
+                }
                 for line in lines {
                     self.body
                         .push_str(&paragraph(Some("CodeBlock"), "", &plain(line)));
@@ -224,10 +396,7 @@ impl Builder<'_> {
                     .push_str(&build_table(&grid, true, true, defaults::BORDER, 10.0));
                 self.body.push_str(&paragraph(None, "", ""));
             }
-            Block::Chart(_) => self.warnings.push(
-                "A chart block was left out: Word documents do not render markdown charts"
-                    .to_string(),
-            ),
+            Block::Chart(data) => self.chart(data),
         }
     }
 }
@@ -299,6 +468,9 @@ pub fn docx_from_markdown(
         images,
         body: String::new(),
         next_image: 0,
+        charts: 0,
+        lists: Lists::default(),
+        workbook: options.workbook,
         warnings: Vec::new(),
     };
 
@@ -340,6 +512,7 @@ pub fn docx_from_markdown(
         mut files,
         body,
         warnings,
+        lists,
         ..
     } = builder;
 
@@ -363,6 +536,21 @@ pub fn docx_from_markdown(
     );
     if options.page_numbers {
         add_page_number_footer(&mut files);
+    }
+    if lists.used() {
+        files.insert("word/numbering.xml".to_string(), lists.xml().into_bytes());
+        add_override(
+            &mut files,
+            "word/numbering.xml",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml",
+        );
+        add_relationship(
+            &mut files,
+            "word/_rels/document.xml.rels",
+            NUMBERING_REL_ID,
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering",
+            "numbering.xml",
+        );
     }
 
     Ok(Built {

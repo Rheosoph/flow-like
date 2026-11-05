@@ -5,7 +5,6 @@ export {
 export {
 	BOT_CAPABILITY_GROUPS,
 	BOT_CAPABILITY_ICONS,
-	BOT_RUNTIME_PENDING_CAPABILITIES,
 	type BotCapabilityGroupId,
 } from "./bot-capability-groups";
 export {

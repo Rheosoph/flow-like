@@ -3,6 +3,7 @@
 import { useTranslation } from "@flow-like/locales";
 import {
 	CheckIcon,
+	DownloadIcon,
 	Loader2Icon,
 	PauseIcon,
 	PencilIcon,
@@ -12,7 +13,7 @@ import {
 } from "lucide-react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { useBotSkillAction, useBotSkills } from "../../hooks/use-bots";
+import { useBot, useBotSkillAction, useBotSkills } from "../../hooks/use-bots";
 import { getErrorMessage } from "../../lib/error-message";
 import type { IBotSkill } from "../../state/backend-state/bot-state";
 import { Badge } from "../ui/badge";
@@ -28,6 +29,7 @@ import {
 	sortSkills,
 	sourceKind,
 } from "./bot-skill-model";
+import { BotSkillPackagePicker } from "./bot-skill-package-picker";
 
 const EMPTY_DRAFT: SkillDraft = { name: "", description: "", body: "" };
 
@@ -253,6 +255,8 @@ export function BotSkillsCard({ botId }: Readonly<{ botId: string }>) {
 	const act = useBotSkillAction();
 	const fileInput = useRef<HTMLInputElement>(null);
 	const [form, setForm] = useState<{ skill: IBotSkill | null } | null>(null);
+	const bot = useBot(botId);
+	const [picking, setPicking] = useState(false);
 	const sorted = useMemo(() => sortSkills(skills.data ?? []), [skills.data]);
 
 	const run = (
@@ -364,6 +368,23 @@ export function BotSkillsCard({ botId }: Readonly<{ botId: string }>) {
 					}
 				/>
 			)}
+			{picking && (
+				<BotSkillPackagePicker
+					capabilities={bot.data?.capabilities ?? []}
+					busy={act.isPending}
+					onInstall={(packageId) =>
+						run({ type: "package", packageId }, () => {
+							setPicking(false);
+							toast.success(
+								t(
+									"panel.skills.packageInstalled",
+									"Package installed. Review its skills and approve them to use them.",
+								),
+							);
+						})
+					}
+				/>
+			)}
 			<div className="flex flex-wrap gap-2">
 				<Button
 					type="button"
@@ -383,6 +404,15 @@ export function BotSkillsCard({ botId }: Readonly<{ botId: string }>) {
 				>
 					<UploadIcon aria-hidden />
 					{t("panel.skills.import", "Import a zip")}
+				</Button>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					onClick={() => setPicking((open) => !open)}
+				>
+					<DownloadIcon aria-hidden />
+					{t("panel.skills.fromPackage", "From a package")}
 				</Button>
 				<input
 					ref={fileInput}

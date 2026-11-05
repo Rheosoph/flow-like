@@ -80,6 +80,7 @@ export function WebAuthProvider({
 	const [configurationError, setConfigurationError] = useState(false);
 
 	useEffect(() => {
+		if (configurationError) return;
 		let cancelled = false;
 		let manager: UserManager | undefined;
 		(async () => {
@@ -118,6 +119,8 @@ export function WebAuthProvider({
 				setLoadingProgress(90);
 				setUserManager(userManagerInstance);
 				setOpenIdAuthConfig(settings);
+			} else {
+				setConfigurationError(true);
 			}
 		})().catch(() => {
 			if (!cancelled) setConfigurationError(true);
@@ -126,13 +129,26 @@ export function WebAuthProvider({
 			cancelled = true;
 			manager?.stopSilentRenew();
 		};
-	}, []);
+	}, [configurationError]);
 
 	if (configurationError) {
 		return (
-			<p role="alert">
-				Web configuration is unavailable. Contact your administrator.
-			</p>
+			<div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6 text-center">
+				<p role="alert">
+					Web configuration is unavailable. Contact your administrator if the
+					problem continues.
+				</p>
+				<button
+					type="button"
+					className="rounded-md border px-4 py-2"
+					onClick={() => {
+						setConfigurationError(false);
+						setLoadingProgress(10);
+					}}
+				>
+					Try again
+				</button>
+			</div>
 		);
 	}
 

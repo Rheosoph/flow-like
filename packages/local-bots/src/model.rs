@@ -37,6 +37,8 @@ pub struct Bot {
     pub tts_model: Option<String>,
     pub image_model: Option<String>,
     pub vision_model: Option<String>,
+    /// Bit id of the model its sub-tasks run on; null uses its own model.
+    pub subtask_model: Option<String>,
     pub classification: DataSensitivity,
     pub capabilities: Vec<BotCapability>,
     pub profile_id: Option<String>,
@@ -94,6 +96,7 @@ pub struct CreateBotRequest {
     pub tts_model: Option<String>,
     pub image_model: Option<String>,
     pub vision_model: Option<String>,
+    pub subtask_model: Option<String>,
     pub classification: Option<DataSensitivity>,
     pub capabilities: Option<Vec<String>>,
     pub profile_id: Option<String>,
@@ -123,6 +126,8 @@ pub struct UpdateBotRequest {
     pub image_model: Option<Option<String>>,
     #[serde(default, deserialize_with = "nullable")]
     pub vision_model: Option<Option<String>>,
+    #[serde(default, deserialize_with = "nullable")]
+    pub subtask_model: Option<Option<String>>,
     pub classification: Option<DataSensitivity>,
     pub capabilities: Option<Vec<String>>,
     #[serde(default, deserialize_with = "nullable")]
@@ -172,6 +177,8 @@ pub struct Conversation {
     pub id: String,
     pub kind: ConversationKind,
     pub title: Option<String>,
+    /// A group's picture as a PNG data URL.
+    pub image_url: Option<String>,
     /// Always `plain`.
     pub encryption: ConversationEncryption,
     pub created_by: String,
@@ -364,6 +371,11 @@ pub struct LocalBotBundle {
     pub bot: Bot,
     pub app_ids: Vec<String>,
     pub secrets: Vec<ExportedSecret>,
+    /// The MCP servers and accounts attached to the bot. An account's sign-in lives in this
+    /// device's native OAuth store and cannot move.
+    pub connectors: Vec<flow_like_types::bot_connector::BotConnector>,
+    /// The bot's skills with their status. Package skills stay behind: their pin is per device.
+    pub skills: Vec<flow_like_types::bot_skill::BotSkill>,
     /// Every conversation the bot and the person are both active members of.
     pub conversations: Vec<ExportedConversation>,
 }

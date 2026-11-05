@@ -578,7 +578,7 @@ pub(crate) async fn sweep(state: &AppState) -> Result<u64, ApiError> {
     sweep_in(&state.db, store.as_generic().as_ref(), now_millis()).await
 }
 
-async fn content_store(
+pub(super) async fn content_store(
     state: &AppState,
 ) -> Result<flow_like_storage::files::store::FlowLikeStore, ApiError> {
     let master = state.master_credentials().await?;

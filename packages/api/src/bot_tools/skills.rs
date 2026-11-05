@@ -7,11 +7,11 @@ use async_trait::async_trait;
 use axum::http::StatusCode;
 use chrono::Utc;
 use flow_like_bot_tools::{SkillHost, skills::SKILL_IMPORT};
-use flow_like_bot_tools_host::{JobModels, JobScope, ToolJob};
+use flow_like_bot_tools_host::{JobModels, JobScope, SkillCallJob, ToolJob};
 use flow_like_storage::object_store::ObjectStoreExt;
 use flow_like_types::{
     Result, anyhow,
-    bot_skill::{BotSkill, CreateBotSkill, ImportedSkill, SKILLS_DIR},
+    bot_skill::{BotSkill, CreateBotSkill, ImportedSkill, SKILLS_DIR, SkillStatus},
     data_classification::DataClassification,
 };
 use futures::TryStreamExt;
@@ -25,6 +25,50 @@ use crate::{
     routes::bots::skills::{self, Origin, SKILL_IMPORT_NEEDS_EXECUTOR, SKILL_IMPORT_REFUSED},
     state::AppState,
 };
+
+/// Finds the package a skill's job runs in; only the API can read the pins and sign URLs.
+#[async_trait]
+pub(crate) trait SkillJobs: Send + Sync {
+    async fn job(&self, skill: &str) -> std::result::Result<SkillCallJob, String>;
+}
+
+pub(crate) struct ApiSkillJobs {
+    pub skills: ApiSkills,
+    pub state: AppState,
+    pub workspace: String,
+}
+
+#[async_trait]
+impl SkillJobs for ApiSkillJobs {
+    async fn job(&self, name: &str) -> std::result::Result<SkillCallJob, String> {
+        let skill = self
+            .skills
+            .get(name)
+            .await
+            .map_err(|error| error.to_string())?
+            .filter(|skill| skill.status == SkillStatus::Active)
+            .ok_or_else(|| format!("You have no active skill named '{name}'"))?;
+        let package_id = skill
+            .source
+            .package_id()
+            .ok_or_else(|| format!("Skill '{name}' ships no package tools"))?
+            .to_string();
+        let mut packages = crate::execution::wasm_resolve::resolve_wasm_packages(
+            &self.state,
+            &self.workspace,
+        )
+        .await
+        .unwrap_or_default();
+        let package = packages.remove(&package_id).ok_or_else(|| {
+            format!("The package '{package_id}' is not available for this bot's workspace")
+        })?;
+        Ok(SkillCallJob {
+            skill,
+            package_id,
+            package,
+        })
+    }
+}
 
 const IMPORT_TIMEOUT: Duration = Duration::from_secs(90);
 
@@ -166,6 +210,7 @@ async fn run_import_job(
         allow_expensive_documents: false,
         secrets: Default::default(),
         connectors: Vec::new(),
+        skill_call: None,
     };
     let job = serde_json::to_string(&job)
         .map_err(|error| ApiError::internal(format!("Encoding the import job failed: {error}")))?;

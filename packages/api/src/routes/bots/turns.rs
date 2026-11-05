@@ -116,7 +116,7 @@ pub struct TurnHostRequest {
     pub host_id: String,
 }
 
-pub(super) fn checked_host_id(request: TurnHostRequest) -> Result<String, ApiError> {
+pub(crate) fn checked_host_id(request: TurnHostRequest) -> Result<String, ApiError> {
     let host_id = request.host_id.trim().to_string();
     let valid = (1..=MAX_HOST_ID_CHARS).contains(&host_id.chars().count())
         && !host_id
@@ -172,6 +172,21 @@ pub async fn list_turns(
     }))
 }
 
+/// Only a desktop host claims with a person's token: the server answers its own turns and a
+/// device claims with its own credentials.
+pub(crate) fn user_claimable(kind: TurnHostKind, turn_id: &str) -> Result<(), ApiError> {
+    let holder = match kind {
+        TurnHostKind::Server => "the server, which answers it itself",
+        TurnHostKind::Device => "a device, which claims it with its own credentials",
+        TurnHostKind::Desktop => return Ok(()),
+    };
+    Err(ApiError::coded(
+        StatusCode::CONFLICT,
+        BOT_TURN_HOST_KIND,
+        format!("Turn '{turn_id}' belongs to {holder}"),
+    ))
+}
+
 #[utoipa::path(
     post,
     path = "/bots/turns/{turn_id}/claim",
@@ -183,7 +198,7 @@ pub async fn list_turns(
         (status = 400, description = "host_id is empty, too long or has spaces"),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no such turn, or its bot was deleted (the turn is cancelled)"),
-        (status = 409, description = "BOT_TURN_NOT_QUEUED: another host holds it or it is finished; BOT_TURN_BUSY: another turn of this bot is running in this conversation; BOT_TURN_OWNER_BUSY: you already have 3 turns running; BOT_TURN_HOST_KIND: the turn belongs to the server, or its bot moved to another kind of host")
+        (status = 409, description = "BOT_TURN_NOT_QUEUED: another host holds it or it is finished; BOT_TURN_BUSY: another turn of this bot is running in this conversation; BOT_TURN_OWNER_BUSY: you already have 3 turns running; BOT_TURN_HOST_KIND: the turn belongs to the server or to a device, or its bot moved to another kind of host")
     ),
     security(("bearer_auth" = []))
 )]
@@ -200,13 +215,7 @@ pub async fn claim_turn(
         .await?
         .ok_or_else(|| ledger::Refusal::NotFound.into_api(&turn_id))?;
     let kind = TurnHostKind::parse(&turn.host_kind).unwrap_or(TurnHostKind::Server);
-    if kind == TurnHostKind::Server {
-        return Err(ApiError::coded(
-            StatusCode::CONFLICT,
-            BOT_TURN_HOST_KIND,
-            format!("Turn '{turn_id}' belongs to the server, which answers it itself"),
-        ));
-    }
+    user_claimable(kind, &turn_id)?;
     let claimed = ledger::claim(
         &state,
         ClaimRequest {

@@ -1,6 +1,8 @@
 mod backend;
 #[cfg(feature = "image")]
 mod catalog;
+#[cfg(feature = "image-resolve")]
+mod resolve;
 
 use flow_like_types::bot_message::WorkspaceHandle;
 use flow_like_types::create_id;
@@ -21,11 +23,17 @@ pub use backend::{
     MAX_IMAGES_PER_CALL, MAX_IMAGES_PER_TURN,
 };
 #[cfg(feature = "image")]
-pub use catalog::{CatalogImages, hosted_access, resolve_bit};
+pub use catalog::{CatalogImages, hosted_access};
+#[cfg(feature = "image-resolve")]
+pub use resolve::resolve_bit;
 
 pub const IMAGE_GENERATE: &str = "image_generate";
 
 pub const NO_IMAGE_MODEL_MESSAGE: &str = "This bot has no image model. Ask the owner to pick one in the bot's Brain settings (Image model).";
+/// Images one bot may generate in any 24 hours, counted from the files in its `bot/images/`.
+pub const MAX_IMAGES_PER_DAY: usize = 50;
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+const DAY_SCAN_LIMIT: usize = 5000;
 const MAX_PROMPT_CHARS: usize = 4000;
 const MAX_STYLE_CHARS: usize = 200;
 const MAX_NEGATIVE_CHARS: usize = 1000;
@@ -78,7 +86,7 @@ pub struct ImageGenerateArgs {
 pub fn specs() -> Vec<ToolSpec> {
     vec![ToolSpec {
         name: IMAGE_GENERATE,
-        description: "Generate up to 4 images from a text prompt with the bot's image model. The images are saved in the workspace under bot/images/, shown in the chat and returned as handles; you also see them. Generation takes a while and may cost money: at most 4 images per call and 8 per turn. The prompt is sent to the model's provider. Generated images are marked as AI-generated; say so when you share them.",
+        description: "Generate up to 4 images from a text prompt with the bot's image model. The images are saved in the workspace under bot/images/, shown in the chat and returned as handles; you also see them. Generation takes a while and may cost money: at most 4 images per call, 8 per turn and 50 per day. The prompt is sent to the model's provider. Generated images are marked as AI-generated; say so when you share them.",
         capability: Some("image_generation"),
         module: "image",
         approval: Approval::None,
@@ -169,6 +177,54 @@ fn ensure_may_send(env: &dyn ToolEnv, model: &ImageModelInfo) -> ToolResult<()> 
     Ok(())
 }
 
+/// Refuses a call that would take the bot past its daily allowance. The count is the images the
+/// workspace holds from the last 24 hours, so it survives restarts and holds on every host; the
+/// answer says when the oldest of them leaves the window.
+async fn ensure_daily_allowance(
+    env: &dyn ToolEnv,
+    workspace: &str,
+    wanted: u32,
+    now_ms: i64,
+) -> ToolResult<()> {
+    let files = env
+        .list_files(workspace, IMAGES_DIR, DAY_SCAN_LIMIT)
+        .await
+        .map_err(|error| {
+            ToolError::new(
+                code::FAILED,
+                format!("Counting today's images failed: {error:#}"),
+            )
+        })?;
+    if files.len() >= DAY_SCAN_LIMIT {
+        return Err(ToolError::new(
+            code::IMAGE_DAILY_CAP,
+            format!(
+                "The images folder holds {DAY_SCAN_LIMIT} files or more, too many to count today's allowance. Ask the owner to clear old images."
+            ),
+        ));
+    }
+    let mut recent: Vec<i64> = files
+        .iter()
+        .map(|file| file.modified_ms.unwrap_or(now_ms))
+        .filter(|modified| now_ms - modified < DAY_MS)
+        .collect();
+    if recent.len() + wanted as usize <= MAX_IMAGES_PER_DAY {
+        return Ok(());
+    }
+    recent.sort_unstable();
+    let frees = recent.first().copied().unwrap_or(now_ms) + DAY_MS;
+    let resets = chrono::DateTime::from_timestamp_millis(frees)
+        .map(|at| at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default();
+    let left = MAX_IMAGES_PER_DAY.saturating_sub(recent.len());
+    Err(ToolError::new(
+        code::IMAGE_DAILY_CAP,
+        format!(
+            "This bot may generate {MAX_IMAGES_PER_DAY} images per 24 hours and {left} are left; the allowance grows again from {resets}. Tell the owner instead of retrying."
+        ),
+    ))
+}
+
 pub async fn image_generate(env: &dyn ToolEnv, args: ImageGenerateArgs) -> ToolResult<ToolOutput> {
     let Checked { job } = check(args)?;
     let workspace = env.scope().workspace.clone().ok_or_else(|| {
@@ -178,6 +234,13 @@ pub async fn image_generate(env: &dyn ToolEnv, args: ImageGenerateArgs) -> ToolR
         )
     })?;
     let backend = env.images().await.map_err(unavailable)?;
+    ensure_daily_allowance(
+        env,
+        &workspace,
+        job.count,
+        chrono::Utc::now().timestamp_millis(),
+    )
+    .await?;
     let model = backend.model();
     ensure_may_send(env, &model)?;
     let budget = backend.budget();

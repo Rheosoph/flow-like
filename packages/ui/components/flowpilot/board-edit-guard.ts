@@ -453,15 +453,55 @@ export function flowPilotBoardInitialLockKey(
 
 /** Caller-selected ids are authoritative; journal recovery precedes fresh id generation. */
 export function resolveFlowPilotBoardCreationId(options: {
+	readOnly?: boolean;
 	requestedBoardId?: string;
 	journaledBoardId?: string;
 	createId: () => string;
 }) {
+	if (options.readOnly) {
+		throw new Error(
+			"Explaining a board requires an existing target. Read-only requests cannot create boards.",
+		);
+	}
 	return (
 		options.requestedBoardId?.trim() ||
 		options.journaledBoardId?.trim() ||
 		options.createId()
 	);
+}
+
+/** Retain the chosen identity before a remote write whose acknowledgement may be lost. */
+export async function prepareFlowPilotBoardCreation(options: {
+	readOnly: boolean;
+	appId: string;
+	requestedBoardId?: string;
+	identity?: CreatedArtifactRequestIdentity;
+	journal: CreatedArtifactJournal;
+	requestId: string;
+	createId: () => string;
+	onTarget: (boardId: string) => void;
+	exists: (boardId: string) => Promise<boolean>;
+	create: (boardId: string) => Promise<unknown>;
+}) {
+	const boardId = resolveFlowPilotBoardCreationId({
+		readOnly: options.readOnly,
+		requestedBoardId: options.requestedBoardId,
+		journaledBoardId: options.identity
+			? options.journal.find(options.identity)?.artifacts.boardId
+			: undefined,
+		createId: options.createId,
+	});
+	options.onTarget(boardId);
+	if (options.identity) {
+		options.journal.record(
+			options.identity,
+			{ appId: options.appId, boardId },
+			options.requestId,
+		);
+	}
+	const existed = await options.exists(boardId);
+	if (!existed) await options.create(boardId);
+	return { boardId, createdBoard: !existed };
 }
 
 /**
@@ -1600,6 +1640,12 @@ export class BoardEditCoordinator {
 
 export const boardEditCoordinator = new BoardEditCoordinator();
 
+export interface BoardEditTarget {
+	appId?: string;
+	boardId?: string;
+	creationStatus?: "unconfirmed" | "confirmed";
+}
+
 export interface BoardEditInterruptionResult {
 	status: "error" | "timeout";
 	code: string;
@@ -1607,7 +1653,28 @@ export interface BoardEditInterruptionResult {
 	flowscript_status: "retained_for_repair" | "no_recoverable_candidate";
 	retained_flowscript?: string;
 	retained_status?: string;
+	app_id?: string;
+	board_id?: string;
+	created_board_id?: string;
+	board_creation_status?: "unconfirmed";
 	next_action: string;
+}
+
+/** Copy only observed target facts so a late acknowledgement cannot change an earlier failure. */
+export function boardEditTargetContext(target?: BoardEditTarget) {
+	return {
+		...(target?.appId ? { app_id: target.appId } : {}),
+		...(target?.boardId
+			? {
+					board_id: target.boardId,
+					...(target.creationStatus === "confirmed"
+						? { created_board_id: target.boardId }
+						: target.creationStatus === "unconfirmed"
+							? { board_creation_status: "unconfirmed" as const }
+							: {}),
+				}
+			: {}),
+	};
 }
 
 export function boardEditInterruptionResult(options: {
@@ -1615,6 +1682,7 @@ export function boardEditInterruptionResult(options: {
 	code: string;
 	message: string;
 	candidate?: FlowScriptWorkspaceCandidate;
+	target?: BoardEditTarget;
 }): BoardEditInterruptionResult {
 	const retained = options.candidate
 		? sanitizeFlowScriptForPersistence(options.candidate.source)
@@ -1623,6 +1691,7 @@ export function boardEditInterruptionResult(options: {
 		status: options.status,
 		code: options.code,
 		message: options.message,
+		...boardEditTargetContext(options.target),
 		flowscript_status: options.candidate
 			? "retained_for_repair"
 			: "no_recoverable_candidate",
@@ -1636,7 +1705,9 @@ export function boardEditInterruptionResult(options: {
 			? retained?.safe
 				? "Continue from the board-scoped retained FlowScript in a new serialized flowpilot_board run. Repair it in place; do not restart discovery or replace it with a smoke-test Event."
 				: "A candidate remains available only in the active renderer because its @secret syntax was not safe to persist. Retry this board before closing the app; repair it in place."
-			: "Retry flowpilot_board once from the fresh persisted board snapshot.",
+			: options.target?.boardId
+				? "Inspect the existing board before retrying; an interrupted operation may still have changed it. Reuse this board id."
+				: "Retry flowpilot_board once from the fresh persisted board snapshot.",
 	};
 }
 

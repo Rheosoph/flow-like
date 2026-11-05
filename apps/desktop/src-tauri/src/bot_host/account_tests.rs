@@ -327,6 +327,7 @@ fn config() -> AccountConfig {
         send_retries: 2,
         send_retry_delay: Duration::from_millis(5),
         presence: Duration::from_millis(40),
+        fire_tasks: true,
     }
 }
 

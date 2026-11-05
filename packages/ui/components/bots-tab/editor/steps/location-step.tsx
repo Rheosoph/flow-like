@@ -1,12 +1,14 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useQuery } from "@tanstack/react-query";
 import { useId } from "react";
-import { useInvoke } from "../../../../hooks/use-invoke";
-import { listDevices } from "../../../../lib/devices";
+import { useAccountDevices } from "../../../../hooks/use-account-devices";
+import {
+	type BotHostState,
+	botHostState,
+} from "../../../../lib/device-bot-host";
+import type { DeviceRow } from "../../../../lib/devices";
 import { cn } from "../../../../lib/utils";
-import { useBackend } from "../../../../state/backend-state";
 import {
 	BOT_LOCATIONS,
 	type BotCapability,
@@ -22,6 +24,7 @@ import {
 	SelectValue,
 } from "../../../ui/select";
 import { Skeleton } from "../../../ui/skeleton";
+import { useBotHostStatus } from "../../device-host-status";
 import {
 	type BotCopy,
 	useBotCapabilityCopy,
@@ -164,6 +167,27 @@ function LocationCard({
 	);
 }
 
+function hostDot(state: BotHostState) {
+	return state === "ready" ? "text-good-solid" : "text-muted-foreground";
+}
+
+/** One device in the picker: its name and whether its agent hosts bots. */
+export function BotDeviceOption({ device }: Readonly<{ device: DeviceRow }>) {
+	const hostStatus = useBotHostStatus();
+	const status = hostStatus(device.bot_host_seen_at);
+	return (
+		<span className="flex min-w-0 flex-col">
+			<span className="truncate">{device.display_name || device.name}</span>
+			<span
+				data-host-state={status.state}
+				className={cn("truncate text-xs", hostDot(status.state))}
+			>
+				{status.label}
+			</span>
+		</span>
+	);
+}
+
 /** The signed-in user's own active devices; a bot can only live on a device its owner holds. */
 function BotDevicePicker({
 	id,
@@ -175,31 +199,15 @@ function BotDevicePicker({
 	onChange: (deviceId: string) => void;
 }>) {
 	const { t } = useTranslation("bots");
-	const backend = useBackend();
-	const settings = useInvoke(
-		backend.userState.getSettingsProfile,
-		backend.userState,
-		[],
-	);
-	const profile = settings.data?.hub_profile;
-	const devices = useQuery({
-		queryKey: ["bots", "editor", "devices", profile?.id ?? ""],
-		queryFn: () => {
-			if (!profile) throw new Error("No profile to list devices for");
-			return listDevices(backend.apiState, profile);
-		},
-		enabled: !!profile,
-		staleTime: 30_000,
-	});
-	if (settings.isLoading || devices.isLoading)
-		return <Skeleton className="h-9 w-full" />;
-	if (devices.isError)
+	const { devices, isLoading, isError } = useAccountDevices();
+	if (isLoading) return <Skeleton className="h-9 w-full" />;
+	if (isError)
 		return (
 			<p role="alert" className="text-xs text-destructive">
 				{t("editor.location.deviceFailed")}
 			</p>
 		);
-	const owned = (devices.data ?? []).filter(
+	const owned = (devices ?? []).filter(
 		(device) =>
 			device.status === "active" &&
 			(device.relationship ?? "owner") === "owner",
@@ -210,18 +218,31 @@ function BotDevicePicker({
 				{t("editor.location.deviceEmpty")}
 			</p>
 		);
+	const chosen = owned.find((device) => device.device_id === value);
 	return (
-		<Select value={value ?? ""} onValueChange={onChange}>
-			<SelectTrigger id={id} className="w-full">
-				<SelectValue placeholder={t("editor.location.devicePlaceholder")} />
-			</SelectTrigger>
-			<SelectContent>
-				{owned.map((device) => (
-					<SelectItem key={device.device_id} value={device.device_id}>
-						{device.display_name || device.name}
-					</SelectItem>
-				))}
-			</SelectContent>
-		</Select>
+		<>
+			<Select value={value ?? ""} onValueChange={onChange}>
+				<SelectTrigger id={id} className="w-full">
+					<SelectValue placeholder={t("editor.location.devicePlaceholder")}>
+						{chosen ? chosen.display_name || chosen.name : null}
+					</SelectValue>
+				</SelectTrigger>
+				<SelectContent>
+					{owned.map((device) => (
+						<SelectItem key={device.device_id} value={device.device_id}>
+							<BotDeviceOption device={device} />
+						</SelectItem>
+					))}
+				</SelectContent>
+			</Select>
+			{chosen && botHostState(chosen.bot_host_seen_at) !== "ready" && (
+				<BotNotice>
+					{t(
+						"editor.location.hostNotice",
+						"This device isn't hosting bots right now. The bot will answer once the agent runs there.",
+					)}
+				</BotNotice>
+			)}
+		</>
 	);
 }

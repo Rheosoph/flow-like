@@ -13,6 +13,7 @@ import type {
 	IUpdateBotRequest,
 	IUpsertBotSecretRequest,
 } from "../../../state/backend-state/bot-state";
+import { deviceRow } from "../testing/mount-with-backend";
 
 let cleanup: (() => Promise<void>) | undefined;
 afterEach(async () => {
@@ -85,6 +86,8 @@ interface Fixture {
 	/** The host keeps bots on this device (the desktop). */
 	localHost?: boolean;
 	signedOut?: boolean;
+	/** The editor was opened from this managed device. */
+	initialDeviceId?: string;
 	/** The host can copy bots; a message makes the copy fail with it. */
 	clone?: true | string;
 	/** Every create, save and copy is refused with this. */
@@ -192,6 +195,14 @@ function fakeBackend(
 					{ id: app.id, visibility: "Private" },
 					{ name: app.name },
 				]),
+		},
+		apiState: {
+			get: async () => [
+				deviceRow("dev_a", {
+					display_name: "Berlin box",
+					bot_host_seen_at: Date.now(),
+				}),
+			],
 		},
 		dbState: { listTables: async () => [] },
 		eventState: { getEvents: async () => [] },
@@ -356,6 +367,7 @@ async function renderDialog(fixture: Fixture = {}) {
 						<BotEditorDialog
 							open
 							botId={fixture.existing?.id}
+							initialDeviceId={fixture.initialDeviceId}
 							onOpenChange={(open) => calls.openChanges.push(open)}
 							onSaved={(saved) => calls.saved.push(saved)}
 							onDuplicated={(copy) => calls.duplicated.push(copy)}
@@ -740,6 +752,29 @@ describe("BotEditorDialog host", () => {
 		);
 		expect(body.textContent).not.toContain("Switched off because");
 		expect(button("Save changes").disabled).toBe(true);
+	});
+});
+
+describe("BotEditorDialog opened from a device", () => {
+	test("the device is selected at the location step and the bot is created there", async () => {
+		const { body, click, settle, calls } = await renderDialog({
+			initialDeviceId: "dev_a",
+		});
+		await click("Secretary");
+		await click("Runs on");
+		await settle();
+		expect(
+			body
+				.querySelector("[role='radio'][value='device']")
+				?.getAttribute("aria-checked"),
+		).toBe("true");
+		expect(body.textContent).toContain("Berlin box");
+		await click("Data & safety");
+		await click("Create bot");
+		expect(calls.created[0]).toMatchObject({
+			location: "device",
+			device_id: "dev_a",
+		});
 	});
 });
 

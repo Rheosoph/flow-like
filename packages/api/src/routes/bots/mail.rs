@@ -444,7 +444,7 @@ pub async fn send_bot_mail(
     Path(bot_id): Path<String>,
     Json(request): Json<BotSendMail>,
 ) -> Result<Json<BotSentMail>, ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
     let mail = flow_like_bot_tools::email::OutgoingMail {
         to: request.to,
@@ -482,7 +482,7 @@ pub async fn reply_bot_mail(
     Path(bot_id): Path<String>,
     Json(request): Json<BotReplyMail>,
 ) -> Result<Json<BotSentMail>, ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
     let mail = flow_like_bot_tools::email::ReplyMail {
         thread: request.thread,

@@ -31,6 +31,7 @@ import {
 	type PickerSource,
 	PrincipalPicker,
 } from "./principal-picker";
+import { RoomInviteLinks } from "./room-invite-links";
 import { RoomLimitsDialog } from "./room-limits-dialog";
 import type { CrewDirectory } from "./use-crew-directory";
 
@@ -232,7 +233,13 @@ function InviteSection({
 				source={source}
 				selected={selected}
 				multiple
-				serverRule={{ conversationId: conversation.id }}
+				serverRule={{
+					conversationId: conversation.id,
+					memberIds: conversation.members.map((member) => member.principal_id),
+					invitedIds: (conversation.pending ?? []).map(
+						(member) => member.principal_id,
+					),
+				}}
 				onPick={toggle}
 			/>
 			<Button
@@ -301,6 +308,9 @@ export function RoomMembersDialog({
 					/>
 					{open && (
 						<InviteSection conversation={conversation} source={source} />
+					)}
+					{open && conversation.kind === "group" && (
+						<RoomInviteLinks conversation={conversation} me={me} />
 					)}
 				</DialogContent>
 			</Dialog>

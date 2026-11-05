@@ -17,12 +17,12 @@ use super::ir_tools::{
 use super::platform::{PlatformSurface, PlatformToolBridge};
 use super::provider::CatalogProvider;
 use super::tool_spec::{
-    PlatformToolSpec, bot_workspace_database_tool_spec, cross_board_source_tool_specs, data_studio_database_tool_spec,
-    data_studio_specialist_tool_specs, data_studio_tool_specs, global_assistant_tool_specs,
-    home_specialist_tool_specs, home_specialist_tool_specs_for_access, http_request_tool_spec,
-    interact_app_page_tool_spec, public_web_tool_specs, runtime_execution_tool_specs,
-    scoped_call_app_chat_spec, scout_specialist_tool_specs, scout_tool_specs,
-    workflow_context_tool_specs, workspace_research_tool_specs,
+    PlatformToolSpec, bot_workspace_database_tool_spec, cross_board_source_tool_specs,
+    data_studio_database_tool_spec, data_studio_specialist_tool_specs, data_studio_tool_specs,
+    global_assistant_tool_specs, home_specialist_tool_specs, home_specialist_tool_specs_for_access,
+    http_request_tool_spec, interact_app_page_tool_spec, public_web_tool_specs,
+    runtime_execution_tool_specs, scoped_call_app_chat_spec, scout_specialist_tool_specs,
+    scout_tool_specs, workflow_context_tool_specs, workspace_research_tool_specs,
 };
 use super::tools::{
     CatalogTool, CheckFlowScriptTool, CommitFlowScriptTool, DatabaseContextTool, ExecuteEventTool,
@@ -395,6 +395,7 @@ impl BoardCopilotTools {
             QueryLogsTool {
                 state,
                 run_context: None,
+                runtime_bridge: None,
             },
         ]
     }
@@ -599,13 +600,23 @@ async fn schema_guard_covers_every_production_tool_source() {
             );
         }
     }
-    let attached = attached_board_tools(include_str!("mod.rs"))
+    let mut attached = attached_board_tools(include_str!("mod.rs"))
         .into_iter()
         .filter(|tool| !HIDDEN_BOARD_TOOLS.iter().any(|(hidden, _)| hidden == tool))
         .collect::<BTreeSet<_>>();
-    let covered = BoardCopilotTools::new()
-        .definitions()
-        .await
+    let definitions = BoardCopilotTools::new().definitions().await;
+    let bridge: Arc<dyn PlatformToolBridge> = Arc::new(NoBridge);
+    for read_only in [false, true] {
+        for tool in CopilotToolSurface::for_mode(read_only).bridge_tools(&bridge) {
+            let name = tool.name();
+            let (tool_type, _) = definitions
+                .iter()
+                .find(|(_, definition)| definition.name == name)
+                .unwrap_or_else(|| panic!("bridge tool {name} has no checked schema"));
+            attached.insert(*tool_type);
+        }
+    }
+    let covered = definitions
         .into_iter()
         .map(|(tool, _)| tool)
         .filter(|tool| !SDK_ONLY_BOARD_TOOLS.contains(tool))

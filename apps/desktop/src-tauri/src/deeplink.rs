@@ -378,18 +378,26 @@ fn handle_trigger(app_handle: &AppHandle, url: &Url, app_id: &str, route: &str) 
     }
 }
 
-fn handle_join(app_handle: &AppHandle, url: &Url, replayed: bool) {
+/// An app invite carries `appId` and `token`; a group chat invite carries only `room`.
+fn join_payload(url: &Url, replayed: bool) -> serde_json::Value {
     let params: std::collections::HashMap<_, _> = url.query_pairs().collect();
-    let app_id = params.get("appId").map(|v| v.to_string());
-    let token = params.get("token").map(|v| v.to_string());
+    let param = |name: &str| params.get(name).map(|value| value.to_string());
+    json::json!({
+        "appId": param("appId"),
+        "token": param("token"),
+        "room": param("room"),
+        "replayed": replayed,
+    })
+}
 
-    tracing::info!("Join deep link: app_id={:?}", app_id);
-
-    emit(
-        app_handle,
-        "deeplink/join",
-        json::json!({ "appId": app_id, "token": token, "replayed": replayed }),
+fn handle_join(app_handle: &AppHandle, url: &Url, replayed: bool) {
+    let payload = join_payload(url, replayed);
+    tracing::info!(
+        app_id = ?payload["appId"].as_str(),
+        room = payload["room"].is_string(),
+        "Join deep link"
     );
+    emit(app_handle, "deeplink/join", payload);
 }
 
 /// A URL the app cannot route. Previously this dropped the URL and left the app sitting on
@@ -675,6 +683,27 @@ mod tests {
         assert_eq!(
             intent("flow-like://join?appId=a&token=t"),
             DeepLinkIntent::Join
+        );
+        assert_eq!(intent("flow-like://join?room=r"), DeepLinkIntent::Join);
+    }
+
+    #[test]
+    fn join_payload_carries_app_and_room_invites() {
+        let app = join_payload(
+            &Url::parse("flow-like://join?appId=a&token=t").unwrap(),
+            false,
+        );
+        assert_eq!(
+            app,
+            json::json!({ "appId": "a", "token": "t", "room": null, "replayed": false })
+        );
+        let room = join_payload(
+            &Url::parse(&format!("https://{APP_HOST}/join?room=r-_1")).unwrap(),
+            true,
+        );
+        assert_eq!(
+            room,
+            json::json!({ "appId": null, "token": null, "room": "r-_1", "replayed": true })
         );
     }
 

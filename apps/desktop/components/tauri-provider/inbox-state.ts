@@ -3,9 +3,11 @@ import type {
 	IConversation,
 	IConversationFileDownload,
 	IConversationFileReady,
+	IConversationLink,
 	IConversationPinState,
 	IConversationSegmentList,
 	IConversationTurn,
+	ICreateConversationLinkRequest,
 	ICreateConversationRequest,
 	IInboxEntriesPage,
 	IInboxEntriesQuery,
@@ -19,6 +21,7 @@ import type {
 	IInvitation,
 	IInviteRequest,
 	IInviteResponse,
+	IJoinedConversation,
 	IPinnedMessage,
 	IRealtimeAccess,
 	IRegisterInboxKeyRequest,
@@ -288,6 +291,35 @@ export class InboxState implements IInboxState {
 				account.auth,
 			),
 			`rename conversation ${conversationId}`,
+		);
+	}
+
+	async setConversationImage(
+		conversationId: string,
+		image: string | null,
+	): Promise<IConversation> {
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () =>
+				localInbox.setImage(conversationId, image),
+			);
+		}
+		const path = `${conversationPath(account.id)}/image`;
+		return expectRecord(
+			image === null
+				? await del<IConversation>(
+						account.profile,
+						path,
+						undefined,
+						account.auth,
+					)
+				: await put<IConversation>(
+						account.profile,
+						path,
+						{ image },
+						account.auth,
+					),
+			`change the picture of conversation ${conversationId}`,
 		);
 	}
 
@@ -894,6 +926,63 @@ export class InboxState implements IInboxState {
 			`${conversationPath(conversationId)}/invitations/${encodeURIComponent(principalId)}`,
 			undefined,
 			session.auth,
+		);
+	}
+
+	async createConversationLink(
+		conversationId: string,
+		request: ICreateConversationLinkRequest,
+	): Promise<IConversationLink> {
+		const operation = `create an invite link for conversation ${conversationId}`;
+		const session = this.invitationSession(operation);
+		return expectRecord(
+			await post<IConversationLink>(
+				session.profile,
+				`${conversationPath(conversationId)}/links`,
+				request,
+				session.auth,
+			),
+			operation,
+		);
+	}
+
+	async listConversationLinks(
+		conversationId: string,
+	): Promise<IConversationLink[]> {
+		const session = accountSession(this.backend);
+		if (!session) return [];
+		const response = await get<{ links?: IConversationLink[] }>(
+			session.profile,
+			`${conversationPath(conversationId)}/links`,
+			session.auth,
+		);
+		return asArray(response?.links);
+	}
+
+	async revokeConversationLink(
+		conversationId: string,
+		linkId: string,
+	): Promise<void> {
+		const session = this.invitationSession(`revoke invite link ${linkId}`);
+		await del<void>(
+			session.profile,
+			`${conversationPath(conversationId)}/links/${encodeURIComponent(linkId)}`,
+			undefined,
+			session.auth,
+		);
+	}
+
+	async joinConversationLink(token: string): Promise<IJoinedConversation> {
+		const operation = "join a conversation by invite link";
+		const session = this.invitationSession(operation);
+		return expectRecord(
+			await post<IJoinedConversation>(
+				session.profile,
+				"inbox/links/join",
+				{ token },
+				session.auth,
+			),
+			operation,
 		);
 	}
 

@@ -33,6 +33,8 @@ pub struct Model {
     pub tool_policies: Json,
     #[sea_orm(column_name = "toolsSnapshot", column_type = "JsonBinary")]
     pub tools_snapshot: Json,
+    #[sea_orm(column_name = "confirmedHashes", column_type = "JsonBinary")]
+    pub confirmed_hashes: Json,
     #[sea_orm(column_name = "createdAt")]
     pub created_at: DateTimeWithTimeZone,
     #[sea_orm(column_name = "updatedAt")]

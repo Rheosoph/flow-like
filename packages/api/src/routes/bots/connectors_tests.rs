@@ -15,7 +15,7 @@ async fn database() -> DatabaseConnection {
             "label" TEXT NOT NULL, "providerId" TEXT, "url" TEXT, "authKind" TEXT NOT NULL,
             "authRef" TEXT, "grantEncrypted" TEXT, "scopes" TEXT NOT NULL,
             "defaultPolicy" TEXT NOT NULL, "toolPolicies" TEXT NOT NULL,
-            "toolsSnapshot" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "updatedAt" TEXT NOT NULL)"#,
+            "toolsSnapshot" TEXT NOT NULL, "confirmedHashes" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "updatedAt" TEXT NOT NULL)"#,
     )
     .await
     .unwrap();

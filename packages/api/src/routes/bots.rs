@@ -51,6 +51,8 @@ mod tests;
 #[cfg(test)]
 mod connectors_tests;
 #[cfg(test)]
+mod skills_tests;
+#[cfg(test)]
 mod webhooks_tests;
 #[cfg(test)]
 mod workspace_tests;
@@ -147,6 +149,7 @@ pub fn routes() -> Router<AppState> {
                 .layer(DefaultBodyLimit::max(skills::IMPORT_BODY_LIMIT)),
         )
         .route("/{bot_id}/skills/propose", post(skills::propose_bot_skill))
+        .route("/{bot_id}/skills/package", post(skills::install_bot_skill_package))
         .route(
             "/{bot_id}/skills/{skill_id}",
             axum::routing::patch(skills::update_bot_skill).delete(skills::delete_bot_skill),

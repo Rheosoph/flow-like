@@ -26,6 +26,12 @@ pub mod code {
     pub const ALREADY_HERE: &str = "already_here";
     pub const FAILED: &str = "failed";
     pub const NO_IMAGE_MODEL: &str = "no_image_model";
+    pub const IMAGE_DAILY_CAP: &str = "image_daily_cap";
+    pub const TAKEN_OVER: &str = "taken_over";
+    pub const NOT_SUPPORTED: &str = "not_supported";
+    pub const NO_DISPLAY: &str = "no_display";
+    pub const DISPLAY_BUSY: &str = "display_busy";
+    pub const STALE_PAGE: &str = "stale_page";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -82,6 +88,9 @@ impl std::error::Error for ToolError {}
 
 impl From<flow_like_types::Error> for ToolError {
     fn from(error: flow_like_types::Error) -> Self {
-        Self::new(code::FAILED, format!("{error:#}"))
+        match error.downcast::<ToolError>() {
+            Ok(tool_error) => tool_error,
+            Err(error) => Self::new(code::FAILED, format!("{error:#}")),
+        }
     }
 }

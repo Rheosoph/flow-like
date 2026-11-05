@@ -51,8 +51,8 @@ impl SkillHost for FakeHost {
                 name: name.clone(),
                 description: "a tool".into(),
                 input_schema: json!({ "type": "object" }),
-                network: false,
-                writes: false,
+                network: name.starts_with("fetch"),
+                writes: name.starts_with("save"),
             })
             .collect())
     }
@@ -78,10 +78,11 @@ async fn call(env: &FakeEnv, tool: &str, args: Value) -> crate::ToolOutcome {
 
 #[test]
 fn the_specs_need_the_skills_capability_and_call_asks() {
-    for name in [SKILL_LOAD, SKILL_PROPOSE, SKILL_CALL] {
+    for name in [SKILL_LOAD, SKILL_PROPOSE, SKILL_CALL, SKILL_RUN] {
         assert_eq!(crate::spec(name).expect("registered").capability, Some("skills"));
     }
-    assert!(crate::spec(SKILL_CALL).unwrap().approval == Approval::Ask);
+    assert!(crate::spec(SKILL_CALL).unwrap().approval == Approval::None);
+    assert!(crate::spec(SKILL_RUN).unwrap().approval == Approval::Ask);
     assert!(crate::spec(SKILL_LOAD).unwrap().approval == Approval::None);
     assert!(crate::spec(SKILL_IMPORT).is_none(), "import is no model tool");
 }
@@ -172,4 +173,32 @@ async fn a_host_without_skills_says_so() {
     let env = FakeEnv::new().await;
     let outcome = call(&env, SKILL_LOAD, json!({ "name": "pdf" })).await;
     assert!(outcome.error.unwrap().message.contains("does not keep skills"));
+}
+
+#[tokio::test]
+async fn network_and_write_tools_need_skill_run_and_read_only_tools_skill_call() {
+    let host = Arc::new(FakeHost::default());
+    host.skills
+        .lock()
+        .unwrap()
+        .push(skill("web", SkillStatus::Active, &["extract", "fetch_page", "save_note"]));
+    let env = env_with(host.clone()).await;
+    let loaded = call(&env, SKILL_LOAD, json!({ "name": "web" })).await;
+    let flags: Vec<bool> = loaded.result["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["needs_approval"].as_bool().unwrap())
+        .collect();
+    assert_eq!(flags, [false, true, true]);
+
+    for tool in ["fetch_page", "save_note"] {
+        let refused = call(&env, SKILL_CALL, json!({ "skill": "web", "tool": tool })).await;
+        assert!(refused.error.unwrap().message.contains("skill_run"), "{tool}");
+        let ran = call(&env, SKILL_RUN, json!({ "skill": "web", "tool": tool })).await;
+        assert!(ran.is_ok(), "{tool}: {:?}", ran.error);
+    }
+    let refused = call(&env, SKILL_RUN, json!({ "skill": "web", "tool": "extract" })).await;
+    assert!(refused.error.unwrap().message.contains("skill_call"));
+    assert_eq!(host.calls.lock().unwrap().len(), 2);
 }

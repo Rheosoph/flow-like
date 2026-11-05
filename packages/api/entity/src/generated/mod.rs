@@ -53,6 +53,7 @@ pub mod comment;
 pub mod connected_account;
 pub mod conversation;
 pub mod conversation_file;
+pub mod conversation_invite_link;
 pub mod conversation_member;
 pub mod conversation_segment;
 pub mod course;

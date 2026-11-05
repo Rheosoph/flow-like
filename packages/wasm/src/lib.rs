@@ -83,7 +83,9 @@ pub use manifest::{
 };
 pub use memory::WasmMemory;
 pub use module::WasmModule;
-pub use node::{build_node_from_definition, definition_to_package_entry, WasmNodeLogic};
+pub use node::{
+    build_node_from_definition, definition_to_package_entry, HeadlessRun, WasmNodeLogic,
+};
 pub use registry::{
     CachedPackage, DownloadRequest, DownloadResponse, PackageSource, PackageStatus, PackageSummary,
     PackageVersion, PublishRequest, PublishResponse, RegistryConfig, RegistryEntry, SearchFilters,

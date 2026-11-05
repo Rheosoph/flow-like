@@ -5237,6 +5237,12 @@
 			"updateStaged": "Update",
 			"whereElse": "Where else {{app}} runs"
 		},
+		"bots": {
+			"create": "Create a bot on this device",
+			"empty": "No bots live on {{device}} yet. Choose it as the host when you create a bot.",
+			"loading": "Loading bots…",
+			"title": "Bots on this device"
+		},
 		"capacity": {
 			"bytes": "Storage",
 			"certificates": "Certificate slots",

@@ -42,6 +42,7 @@ mock.module("@flow-like/locales", () => ({
 }));
 mock.module("../../hooks/use-bots", () => ({
 	...actualHooks,
+	useBot: () => ({ data: { capabilities: [] } }),
 	useBotSkills: () => ({ data: skills, isLoading: false }),
 	useBotSkillAction: () => ({
 		isPending: false,

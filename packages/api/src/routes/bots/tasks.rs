@@ -330,7 +330,7 @@ pub async fn list_bot_tasks(
     Extension(user): Extension<AppUser>,
     Path(bot_id): Path<String>,
 ) -> Result<Json<BotTaskList>, ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     let tasks = list_in(&state.db, &sub, &bot_id)
         .await?
         .into_iter()
@@ -362,7 +362,7 @@ pub async fn create_bot_task(
     Path(bot_id): Path<String>,
     Json(body): Json<CreateBotTaskRequest>,
 ) -> Result<(StatusCode, Json<BotTaskInfo>), ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     let request = CreateBotTask {
         kind: Some(kind_of(&body)?),
         at: body.at,
@@ -453,7 +453,7 @@ pub async fn delete_bot_task(
     Extension(user): Extension<AppUser>,
     Path((bot_id, task_id)): Path<(String, String)>,
 ) -> Result<StatusCode, ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     delete_in(&state.db, &sub, &bot_id, &task_id).await?;
     task_schedules::remove(&state, &task_id).await;
     Ok(StatusCode::NO_CONTENT)

@@ -3,7 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { useAuth } from "react-oidc-context";
-import { getPendingInvite } from "../lib/pending-invite";
+import { getPendingInvite, pendingInviteUrl } from "../lib/pending-invite";
 
 /**
  * Brings a signed-in user back to /join when an invite is still pending —
@@ -22,9 +22,7 @@ export function PendingInviteRedeemer() {
 			return;
 		const pending = getPendingInvite();
 		if (!pending) return;
-		router.push(
-			`/join?appId=${encodeURIComponent(pending.appId)}&token=${encodeURIComponent(pending.token)}`,
-		);
+		router.push(pendingInviteUrl(pending));
 	}, [auth.isAuthenticated, pathname, router]);
 
 	return null;

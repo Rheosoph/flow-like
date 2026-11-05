@@ -306,4 +306,110 @@ impl LocalBotStore {
             Ok(skill)
         })
     }
+
+    /// Saves the skills of a package as pending: refused when the package needs capabilities
+    /// the bot lacks (`uncovered_tags`), or a skill of that name came from elsewhere. A skill
+    /// the package brought before is replaced and goes back to pending. `installed_here` marks
+    /// a package this device installed for the skills, so the last skill's removal can undo it.
+    pub fn install_package_skills(
+        &self,
+        bot_id: &str,
+        package_id: &str,
+        version: &str,
+        entries: Vec<CreateBotSkill>,
+        tags: &[String],
+        installed_here: bool,
+    ) -> Result<Vec<BotSkill>> {
+        self.write(|tx, _changes| {
+            require_bot(tx, bot_id)?;
+            let stored: Option<String> = tx
+                .query_row("SELECT capabilities FROM bots WHERE id = ?1", [bot_id], |row| row.get(0))
+                .optional()?;
+            let held: Vec<String> = stored
+                .and_then(|stored| serde_json::from_str(&stored).ok())
+                .unwrap_or_default();
+            if !held.iter().any(|id| id == SKILLS_CAPABILITY) {
+                return Err(Error::invalid(format!(
+                    "Bot '{bot_id}' doesn't have the skills capability switched on"
+                )));
+            }
+            let missing = contract::uncovered_tags(tags, &held);
+            if !missing.is_empty() {
+                return Err(Error::invalid(format!(
+                    "'{package_id}' needs what bot '{bot_id}' does not have switched on: {}",
+                    missing.join(", ")
+                )));
+            }
+            if entries.is_empty() {
+                return Err(Error::invalid(format!(
+                    "Version '{version}' of '{package_id}' ships no skills"
+                )));
+            }
+            let source = SkillSource::Package {
+                id: package_id.to_string(),
+                version: version.to_string(),
+            };
+            let now = now_micros();
+            let mut saved = Vec::with_capacity(entries.len());
+            for entry in entries {
+                let (name, description, body) =
+                    contract::check_fields(&entry.name, &entry.description, &entry.body)
+                        .map_err(Error::invalid)?;
+                let tools = contract::check_tools(&entry.tools).map_err(Error::invalid)?;
+                let tools_json = serde_json::json!(tools).to_string();
+                match find_named(tx, bot_id, &name)? {
+                    Some(existing) if existing.source.package_id() == Some(package_id) => {
+                        tx.execute(
+                            "UPDATE skills SET description = ?1, body = ?2, source = ?3,
+                                 status = 'PENDING', tools = ?4, updated_at = ?5 WHERE id = ?6",
+                            params![description, body, source.stored(), tools_json, now, existing.id],
+                        )?;
+                        saved.push(find(tx, bot_id, &existing.id)?);
+                    }
+                    Some(_) => {
+                        return Err(Error::invalid(format!(
+                            "Bot '{bot_id}' already has a skill named '{name}'"
+                        )));
+                    }
+                    None => {
+                        let id = format!("skill_{}", create_id());
+                        tx.execute(
+                            "INSERT INTO skills (id, bot_id, name, description, body, source, status,
+                                 tools, created_at, updated_at)
+                             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'PENDING', ?7, ?8, ?8)",
+                            params![id, bot_id, name, description, body, source.stored(), tools_json, now],
+                        )?;
+                        saved.push(find(tx, bot_id, &id)?);
+                    }
+                }
+            }
+            if installed_here {
+                tx.execute(
+                    "INSERT OR IGNORE INTO skill_package_installs (package_id, installed_at) VALUES (?1, ?2)",
+                    params![package_id, now],
+                )?;
+            }
+            Ok(saved)
+        })
+    }
+
+    /// Whether the package is no longer used by any skill of any bot and this device installed
+    /// it for skills: the caller uninstalls it, and the mark is dropped.
+    pub fn release_package(&self, package_id: &str) -> Result<bool> {
+        self.write(|tx, _changes| {
+            let used: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM skills WHERE source LIKE ?1",
+                [format!("package:{package_id}@%")],
+                |row| row.get(0),
+            )?;
+            if used > 0 {
+                return Ok(false);
+            }
+            let removed = tx.execute(
+                "DELETE FROM skill_package_installs WHERE package_id = ?1",
+                [package_id],
+            )?;
+            Ok(removed > 0)
+        })
+    }
 }

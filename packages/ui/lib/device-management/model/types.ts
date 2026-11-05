@@ -153,6 +153,8 @@ export interface DeviceRow extends DeviceStatus {
 	access_expires_at?: number | null;
 	access_rules_expire_at?: number | null;
 	revoked_at?: number | null;
+	/** Epoch milliseconds of the last poll of this device's bot host. */
+	bot_host_seen_at?: number | null;
 	cloud_approvals?: {
 		resource_grants: number;
 		billing_grants: number;
@@ -407,6 +409,8 @@ export const AGENT_FEATURES = [
 	"on_demand_events",
 	"telegram_bots",
 	"discord_bots",
+	"bot_host",
+	"bot_playground",
 	"model_store",
 	"model_host",
 	"model_runtime_manifest",

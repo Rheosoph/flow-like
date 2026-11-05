@@ -44,6 +44,7 @@ pub(crate) struct BotSettings {
     pub tts_model: Option<String>,
     pub image_model: Option<String>,
     pub vision_model: Option<String>,
+    pub subtask_model: Option<String>,
     pub classification: DataSensitivity,
     pub capabilities: Vec<BotCapability>,
     pub profile_id: Option<String>,
@@ -73,6 +74,7 @@ pub(crate) fn built_in(kind: BotSystemKind) -> BotSettings {
         tts_model: None,
         image_model: None,
         vision_model: None,
+        subtask_model: None,
         classification: DataSensitivity::default(),
         capabilities,
         profile_id: None,
@@ -97,6 +99,7 @@ pub(crate) fn create_settings(request: CreateBotRequest) -> Result<(Option<Strin
         tts_model: model_pin("tts_model", request.tts_model)?,
         image_model: model_pin("image_model", request.image_model)?,
         vision_model: model_pin("vision_model", request.vision_model)?,
+        subtask_model: model_pin("subtask_model", request.subtask_model)?,
         classification: request.classification.unwrap_or_default(),
         capabilities: request
             .capabilities
@@ -149,6 +152,9 @@ pub(crate) fn apply_patch(
     }
     if let Some(model) = patch.vision_model {
         next.vision_model = model_pin("vision_model", model)?;
+    }
+    if let Some(model) = patch.subtask_model {
+        next.subtask_model = model_pin("subtask_model", model)?;
     }
     if let Some(classification) = patch.classification {
         next.classification = classification;

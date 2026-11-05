@@ -305,3 +305,48 @@ fn the_budget_reserves_atomically_and_never_underflows() {
     budget.release(10);
     assert_eq!(budget.left(), 3);
 }
+
+#[tokio::test]
+async fn a_bot_may_generate_fifty_images_per_day_counted_from_its_files() {
+    let images = FakeImages::new();
+    let env = env_with(images.clone()).await;
+    let now = chrono::Utc::now().timestamp_millis();
+    for n in 0..48 {
+        let path = format!("bot/images/old-{n}.png");
+        env.put(WORKSPACE, &path, b"x", "image/png");
+        env.touch(WORKSPACE, &path, now - 3_600_000);
+    }
+    for n in 0..30 {
+        let path = format!("bot/images/yesterday-{n}.png");
+        env.put(WORKSPACE, &path, b"x", "image/png");
+        env.touch(WORKSPACE, &path, now - 25 * 3_600_000);
+    }
+    let over = generate(&env, json!({ "prompt": "a", "count": 3 })).await;
+    assert_eq!(code_of(&over), code::IMAGE_DAILY_CAP);
+    let message = over.error.expect("error").message;
+    assert!(message.contains("2 are left"), "{message}");
+    assert!(message.contains("grows again from"), "{message}");
+    assert_eq!(images.calls.load(Ordering::SeqCst), 0);
+    assert_eq!(images.budget.left(), MAX_IMAGES_PER_TURN);
+    assert!(
+        generate(&env, json!({ "prompt": "a", "count": 2 }))
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        code_of(&generate(&env, json!({ "prompt": "a" })).await),
+        code::IMAGE_DAILY_CAP
+    );
+}
+
+#[tokio::test]
+async fn images_older_than_a_day_do_not_count() {
+    let env = env_with(FakeImages::new()).await;
+    let now = chrono::Utc::now().timestamp_millis();
+    for n in 0..60 {
+        let path = format!("bot/images/old-{n}.png");
+        env.put(WORKSPACE, &path, b"x", "image/png");
+        env.touch(WORKSPACE, &path, now - 30 * 3_600_000);
+    }
+    assert!(generate(&env, json!({ "prompt": "a" })).await.is_ok());
+}

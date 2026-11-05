@@ -62,6 +62,7 @@ fn mcp_entry(url: &str, policies: &[(&str, ConnectorPolicy)]) -> ConnectorEntry 
                 .iter()
                 .map(|(name, policy)| (name.to_string(), *policy))
                 .collect::<BTreeMap<_, _>>(),
+            confirmed_hashes: Default::default(),
             tools: vec![
                 info("search", Some(true), None),
                 info("secret_stuff", None, None),
@@ -83,6 +84,7 @@ fn account_entry() -> ConnectorEntry {
             kind: Some(ConnectorKind::Oauth),
             default_policy: Some(ConnectorPolicy::Ask),
             tool_policies: BTreeMap::new(),
+            confirmed_hashes: Default::default(),
             tools: Vec::new(),
         },
         kind: ConnectorKind::Oauth,

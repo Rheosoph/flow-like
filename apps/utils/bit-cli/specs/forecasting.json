@@ -50,7 +50,8 @@
 			"meta": {
 				"en": {
 					"name": "Timestral 209M: LICENSE",
-					"description": "Pinned LICENSE for Timestral 209M."
+					"description": "Pinned LICENSE for Timestral 209M.",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
 				}
 			}
 		},

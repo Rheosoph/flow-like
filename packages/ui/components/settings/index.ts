@@ -6,6 +6,7 @@ export * from "./roles/permission-groups";
 export * from "./connections/process-graph";
 export * from "./events/events-page";
 export * from "./templates/template-preview";
+export * from "./templates/templates-gallery";
 export * from "./solutions/solutions-page";
 export * from "./subscription/subscription-page";
 export * from "./model-catalog";

@@ -41,7 +41,7 @@ pub struct BotScreen {
 /// The primary display, mouse and keyboard. Coordinates are pixels of the latest screenshot,
 /// which is scaled to what a vision model takes; `stop` ends the action in flight.
 pub struct BotComputer {
-    frame: Mutex<Option<ScreenFrame>>,
+    pub(super) frame: Mutex<Option<ScreenFrame>>,
     cancellation: Mutex<CancellationToken>,
     active: Arc<AtomicBool>,
 }
@@ -81,6 +81,18 @@ impl BotComputer {
     }
 
     pub async fn screenshot(&self) -> flow_like_types::Result<BotScreen> {
+        let (screen, frame) = self.capture().await?;
+        *self.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame);
+        Ok(screen)
+    }
+
+    /// A picture of the screen for a viewer: it leaves the coordinates of the latest
+    /// `screenshot` untouched.
+    pub async fn view(&self) -> flow_like_types::Result<BotScreen> {
+        Ok(self.capture().await?.0)
+    }
+
+    async fn capture(&self) -> flow_like_types::Result<(BotScreen, ScreenFrame)> {
         let (image, frame) =
             tokio::task::spawn_blocking(|| capture_display(PRIMARY_DISPLAY)).await??;
         let (image, frame) = fit_image_for_model(
@@ -95,11 +107,10 @@ impl BotComputer {
             width: image.width(),
             height: image.height(),
         };
-        *self.frame.lock().unwrap_or_else(|e| e.into_inner()) = Some(frame);
-        Ok(screen)
+        Ok((screen, frame))
     }
 
-    fn point(&self, x: f64, y: f64) -> flow_like_types::Result<(i32, i32)> {
+    pub(super) fn point(&self, x: f64, y: f64) -> flow_like_types::Result<(i32, i32)> {
         let frame = self.frame.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let frame = frame.ok_or_else(|| {
             flow_like_types::anyhow!("Take a screenshot first: coordinates are pixels of it")
@@ -109,7 +120,7 @@ impl BotComputer {
             .map_err(|e| flow_like_types::anyhow!("{e}; use coordinates of the latest screenshot"))
     }
 
-    async fn with_input<T: Send + 'static>(
+    pub(super) async fn with_input<T: Send + 'static>(
         &self,
         job: impl FnOnce(&mut DesktopInput, Option<&CancellationToken>) -> flow_like_types::Result<T>
         + Send

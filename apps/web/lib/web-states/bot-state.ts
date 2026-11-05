@@ -5,9 +5,6 @@ import type {
 	IBotApp,
 	IBotAvatar,
 	IBotConnector,
-	IConnectedAccount,
-	ICreateBotConnectorRequest,
-	IUpdateBotConnectorRequest,
 	IBotMailAddress,
 	IBotMailAvailability,
 	IBotMailThread,
@@ -17,16 +14,19 @@ import type {
 	IBotPresence,
 	IBotRestrictions,
 	IBotSecretInfo,
-	IBotState,
 	IBotSkill,
+	IBotState,
 	IBotTask,
 	IBotToolGrant,
 	IBotWebhook,
 	IBotWorkspace,
+	IConnectedAccount,
+	ICreateBotConnectorRequest,
 	ICreateBotRequest,
 	ICreateBotSkillRequest,
 	ICreateBotTaskRequest,
 	IIssuedBotWebhook,
+	IUpdateBotConnectorRequest,
 	IUpdateBotRequest,
 	IUpdateBotSkillRequest,
 	IUpdateBotTaskRequest,
@@ -446,6 +446,19 @@ export class WebBotState implements IBotState {
 			`${botPath(botId)}/skills/${encodeURIComponent(skillId)}`,
 			this.backend.auth,
 		);
+	}
+
+	async installSkillPackage(
+		botId: string,
+		packageId: string,
+		version?: string,
+	): Promise<IBotSkill[]> {
+		const response = await apiPost<{ skills?: IBotSkill[] }>(
+			`${botPath(botId)}/skills/package`,
+			{ package_id: packageId, version },
+			this.backend.auth,
+		);
+		return asArray(response?.skills);
 	}
 
 	async importSkill(botId: string, zip: Uint8Array): Promise<IBotSkill> {

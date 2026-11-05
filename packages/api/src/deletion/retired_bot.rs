@@ -103,6 +103,7 @@ mod tests {
             schema.create_table_from_entity(bot_tool_grant::Entity),
             schema.create_table_from_entity(bot_webhook::Entity),
             schema.create_table_from_entity(crate::entity::bot_skill::Entity),
+            schema.create_table_from_entity(crate::entity::bot_connector::Entity),
             schema.create_table_from_entity(crate::entity::bot_mail_thread::Entity),
             schema.create_table_from_entity(crate::entity::bot_mail_message::Entity),
         ] {

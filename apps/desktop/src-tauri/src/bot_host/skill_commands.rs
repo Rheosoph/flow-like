@@ -2,7 +2,7 @@
 //! references land in the bot's workspace under `bot/skills/<name>/`.
 
 use crate::{
-    functions::local_bots::{CommandError, LocalBots, on_store, workspace::local_workspace},
+    functions::local_bots::{LocalBots, on_store, workspace::local_workspace},
     state::TauriFlowLikeState,
 };
 use flow_like::flow_like_storage::object_store::ObjectStoreExt;
@@ -82,7 +82,81 @@ pub async fn local_bot_delete_skill(
     if let Err(error) = remove_references(&app, &bots, &bot_id, &removed.name).await {
         tracing::warn!(%error, bot_id, name = %removed.name, "A skill's files were not removed");
     }
+    if let Some(package_id) = removed.source.package_id().map(str::to_string) {
+        release_package(&app, &bots, &package_id).await;
+    }
     Ok(())
+}
+
+/// Uninstalls a package this device installed only for skills once no skill uses it.
+async fn release_package(app: &AppHandle, bots: &LocalBots, package_id: &str) {
+    let lookup = package_id.to_string();
+    let release = on_store(bots, move |store| store.release_package(&lookup)).await;
+    if matches!(release, Ok(true))
+        && let Err(error) =
+            crate::functions::registry::registry_uninstall_package(app.clone(), package_id.to_string())
+                .await
+    {
+        tracing::warn!(%error, package_id, "The package of a deleted skill was not uninstalled");
+    }
+}
+
+/// Installs the skills of a registry package for a local bot, as pending. The package is
+/// installed on this device first when it is not (and removed again with its last skill); a
+/// package that needs capabilities the bot lacks is refused.
+#[tauri::command]
+pub async fn local_bot_install_skill_package(
+    app: AppHandle,
+    bots: State<'_, LocalBots>,
+    bot_id: String,
+    package_id: String,
+    version: Option<String>,
+) -> Result<Vec<BotSkill>, String> {
+    let client = crate::state::TauriRegistryState::get_client(&app)
+        .await
+        .map_err(|error| error.to_string())?;
+    let mut installed_here = false;
+    let mut package = client.get_installed(&package_id).await;
+    if package.is_none() || version.as_ref().is_some_and(|v| package.as_ref().is_some_and(|p| &p.version != v)) {
+        crate::functions::registry::registry_install_package(
+            app.clone(),
+            package_id.clone(),
+            version.clone(),
+            None,
+            None,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        installed_here = package.is_none();
+        package = client.get_installed(&package_id).await;
+    }
+    let package = package.ok_or_else(|| format!("Package '{package_id}' could not be installed"))?;
+    let entries: Vec<CreateBotSkill> = package
+        .manifest
+        .skills
+        .iter()
+        .map(|entry| {
+            entry.validate()?;
+            Ok(CreateBotSkill {
+                name: entry.name.clone(),
+                description: entry.description.clone(),
+                body: entry.instructions.clone().unwrap_or_default(),
+                tools: entry.tools.clone(),
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    let tags = package.manifest.permissions.capability_tags();
+    let version = package.manifest.version.clone();
+    let lookup = package_id.clone();
+    let saved = on_store(&bots, move |store| {
+        store.install_package_skills(&bot_id, &lookup, &version, entries, &tags, installed_here)
+    })
+    .await
+    .map_err(|error| error.to_string());
+    if saved.is_err() {
+        release_package(&app, &bots, &package_id).await;
+    }
+    saved
 }
 
 /// Reads a zipped skill folder: the skill is saved as pending and its files go to the bot's
@@ -139,12 +213,12 @@ async fn remove_references(
     bots: &LocalBots,
     bot_id: &str,
     name: &str,
-) -> Result<(), CommandError> {
-    let workspace = local_workspace(app, bots, bot_id).await?;
-    let store = workspace_store(app)
+) -> Result<(), String> {
+    let workspace = local_workspace(app, bots, bot_id)
         .await
-        .map_err(|error| CommandError::new("STORAGE", error))?;
-    let fail = |error: String| CommandError::new("STORAGE", error);
+        .map_err(|error| error.to_string())?;
+    let store = workspace_store(app).await?;
+    let fail = |error: String| error;
     let prefix = store
         .construct_upload(&workspace, &skill_dir(name))
         .await

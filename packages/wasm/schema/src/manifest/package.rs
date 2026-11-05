@@ -300,6 +300,33 @@ impl PackageManifest {
         }
     }
 
+    /// Reads each skill's `instructions_file` (default `skills/<name>/SKILL.md`) from the
+    /// package source folder into `instructions`, so the registry stores the text with the
+    /// manifest. The SKILL.md front matter is dropped; its description fills an empty one.
+    pub fn embed_skill_instructions(&mut self, project_dir: &std::path::Path) -> Result<(), String> {
+        use flow_like_types_contracts::bot_skill as rules;
+        for skill in &mut self.skills {
+            let file = skill
+                .instructions_file
+                .clone()
+                .unwrap_or_else(|| format!("skills/{}/{}", skill.name, rules::SKILL_FILE));
+            let relative = rules::safe_relative_path(&file)?;
+            let text = std::fs::read_to_string(project_dir.join(&relative))
+                .map_err(|error| format!("Skill '{}': cannot read {relative}: {error}", skill.name))?;
+            let parsed = rules::parse_skill_md(&text)
+                .map_err(|error| format!("Skill '{}': {relative}: {error}", skill.name))?;
+            if parsed.name != skill.name {
+                return Err(format!(
+                    "Skill '{}': {relative} is named '{}'",
+                    skill.name, parsed.name
+                ));
+            }
+            skill.instructions = Some(parsed.body);
+            skill.instructions_file = Some(relative);
+        }
+        Ok(())
+    }
+
     pub fn from_toml(content: &str) -> Result<Self, toml::de::Error> {
         toml::from_str(content)
     }
@@ -484,5 +511,64 @@ mod tests {
                 .iter()
                 .any(|error| error.contains("wildcards"))
         );
+    }
+
+    const SKILL_TOML: &str = r#"manifest_version = 3
+id = "com.example.pdf"
+name = "Pdf"
+version = "0.1.0"
+description = "PDF tools"
+
+[[skills]]
+name = "pdf-forms"
+description = "Fill PDF forms"
+tools = ["fill_form"]
+"#;
+
+    #[test]
+    fn skills_are_embedded_from_the_package_source_and_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("skills/pdf-forms");
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(
+            folder.join("SKILL.md"),
+            "---\nname: pdf-forms\ndescription: Fill PDF forms\n---\n1. Call fill_form\n",
+        )
+        .unwrap();
+        let mut manifest = PackageManifest::from_toml(SKILL_TOML).unwrap();
+        assert!(manifest.validate().is_err(), "no instructions are embedded yet");
+        manifest.embed_skill_instructions(dir.path()).unwrap();
+        assert_eq!(manifest.skills[0].instructions.as_deref(), Some("1. Call fill_form"));
+        assert_eq!(
+            manifest.skills[0].instructions_file.as_deref(),
+            Some("skills/pdf-forms/SKILL.md")
+        );
+        manifest.validate().unwrap();
+    }
+
+    #[test]
+    fn a_skill_that_escapes_hides_text_or_is_misnamed_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("skills/pdf-forms");
+        std::fs::create_dir_all(&folder).unwrap();
+        let mut manifest = PackageManifest::from_toml(SKILL_TOML).unwrap();
+        manifest.skills[0].instructions_file = Some("../secrets.md".into());
+        assert!(manifest.embed_skill_instructions(dir.path()).is_err());
+        manifest.skills[0].instructions_file = None;
+        std::fs::write(
+            folder.join("SKILL.md"),
+            "---\nname: other\ndescription: x\n---\nbody",
+        )
+        .unwrap();
+        assert!(manifest.embed_skill_instructions(dir.path()).unwrap_err().contains("named"));
+        std::fs::write(
+            folder.join("SKILL.md"),
+            "---\nname: pdf-forms\ndescription: x\n---\nbody\u{200B}",
+        )
+        .unwrap();
+        assert!(manifest.embed_skill_instructions(dir.path()).is_err());
+        manifest.skills[0].instructions = Some("ok".into());
+        manifest.skills.push(manifest.skills[0].clone());
+        assert!(manifest.validate().unwrap_err().iter().any(|e| e.contains("Duplicate skill")));
     }
 }

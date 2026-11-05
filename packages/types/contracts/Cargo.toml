@@ -5,11 +5,12 @@ edition = "2024"
 
 [features]
 default = ["all"]
-all = ["cache", "channel", "realtime", "dispatch", "maintenance", "geometry", "storage-paths", "data-classification", "bot", "inbox", "bot-task"]
+all = ["cache", "channel", "realtime", "dispatch", "maintenance", "geometry", "storage-paths", "data-classification", "bot", "inbox", "bot-task", "device-bot"]
 geometry = ["dep:serde_json", "dep:schemars"]
 data-classification = ["dep:schemars"]
 bot = ["dep:schemars", "dep:unicode-normalization"]
 bot-task = ["inbox", "dep:chrono", "dep:chrono-tz", "dep:cron"]
+device-bot = ["bot", "inbox", "data-classification", "dep:serde_json"]
 inbox = ["dep:blake3", "dep:serde_json", "dep:schemars"]
 cache = ["dep:schemars"]
 channel = ["dep:serde_json", "dep:schemars"]

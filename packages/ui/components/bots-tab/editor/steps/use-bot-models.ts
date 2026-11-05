@@ -64,7 +64,9 @@ export function isImageCapableBit(bit: IBit): boolean {
 	const provider = (bit.parameters as { provider?: { model_id?: unknown } })
 		?.provider;
 	const modelId =
-		typeof provider?.model_id === "string" ? provider.model_id.toLowerCase() : "";
+		typeof provider?.model_id === "string"
+			? provider.model_id.toLowerCase()
+			: "";
 	return IMAGE_MODEL_NEEDLES.some((needle) => modelId.includes(needle));
 }
 

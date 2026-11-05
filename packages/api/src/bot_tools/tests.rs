@@ -665,54 +665,38 @@ async fn a_declined_or_unacknowledged_approval_runs_nothing() {
     channel.close().await;
 }
 
-struct FakeImageBackend {
-    budget: flow_like_bot_tools::image::ImageBudget,
+fn image_profile() -> flow_like::profile::Profile {
+    let bit = flow_like::bit::Bit {
+        id: "my-image".into(),
+        bit_type: flow_like::bit::BitTypes::ImageGeneration,
+        parameters: json!({"provider": {
+            "provider_name": "custom:openai", "model_id": "gpt-image-1",
+            "params": {"api_key": "sk-private-key"}
+        }}),
+        ..Default::default()
+    };
+    let mut profile = flow_like::profile::Profile::default();
+    profile.custom_bits = vec![flow_like::profile::ProfileCustomBit(bit)];
+    profile
 }
 
-#[async_trait]
-impl flow_like_bot_tools::image::ImageBackend for FakeImageBackend {
-    fn model(&self) -> flow_like_bot_tools::image::ImageModelInfo {
-        flow_like_bot_tools::image::ImageModelInfo {
-            name: "private-image".into(),
-            external: true,
-        }
-    }
-
-    fn budget(&self) -> &flow_like_bot_tools::image::ImageBudget {
-        &self.budget
-    }
-
-    async fn generate(
-        &self,
-        job: flow_like_bot_tools::image::ImageJob,
-    ) -> flow_like_types::Result<Vec<flow_like_bot_tools::image::GeneratedImage>> {
-        Ok((0..job.count)
-            .map(|n| flow_like_bot_tools::image::GeneratedImage {
-                bytes: vec![n as u8; 16].into(),
-                mime: "image/png".into(),
-                metadata: json!({ "ai_generated": true }),
-            })
-            .collect())
-    }
-}
-
-struct FakeImageSource {
-    backend: Result<Arc<dyn flow_like_bot_tools::image::ImageBackend>, flow_like_bot_tools::image::ImageUnavailable>,
-}
-
-#[async_trait]
-impl flow_like_bot_tools_host::ImageSource for FakeImageSource {
-    async fn images(
-        &self,
-    ) -> Result<Arc<dyn flow_like_bot_tools::image::ImageBackend>, flow_like_bot_tools::image::ImageUnavailable>
-    {
-        self.backend.clone()
-    }
+fn image_bits(image_model: Option<&str>) -> Arc<super::images::ImageBits> {
+    let state = Arc::new(flow_like::state::FlowLikeState::new(
+        flow_like::state::FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(
+            InMemory::new(),
+        ))),
+        flow_like::utils::http::HTTPClient::new_without_refetch(),
+    ));
+    Arc::new(super::images::ImageBits::new(
+        Arc::new(image_profile()),
+        state,
+        image_model.map(str::to_string),
+    ))
 }
 
 async fn image_host(
     executor: Option<Arc<FakeExecutor>>,
-    images: Option<FakeImageSource>,
+    images: Option<Arc<super::images::ImageBits>>,
 ) -> Arc<BotToolsHost> {
     let access = Arc::new(Access::new(&[WORKSPACE, DOCS]).await);
     let mut host = BotToolsHost::new(TurnDeps {
@@ -731,61 +715,79 @@ async fn image_host(
         executor: executor.map(|executor| executor as Arc<dyn ToolExecutor>),
         grants: Arc::new(MemoryGrants::default()),
         secrets: Arc::new(JobSecrets::default()),
+        connectors: None,
     });
     if let Some(images) = images {
-        host = host.with_images(Arc::new(images));
+        host = host.with_images(images);
     }
     Arc::new(host)
 }
 
-fn working_images() -> FakeImageSource {
-    FakeImageSource {
-        backend: Ok(Arc::new(FakeImageBackend {
-            budget: flow_like_bot_tools::image::ImageBudget::default(),
-        })),
-    }
-}
-
-#[flow_like_types::tokio::test]
-async fn image_generate_runs_in_the_api_and_writes_into_the_workspace() {
-    let executor = Arc::new(FakeExecutor::default());
-    let host = image_host(Some(executor.clone()), Some(working_images())).await;
-    assert!(host.handles("image_generate"));
-    let output = parse(
-        &host
-            .run("image_generate", json!({ "prompt": "a lighthouse", "count": 2 }))
-            .await,
-    );
-    assert_eq!(output["status"], "ok", "{output}");
-    assert_eq!(output["saved"].as_array().unwrap().len(), 2);
-    assert_eq!(output["ai_generated"], true);
-    assert!(executor.jobs.lock().unwrap().is_empty());
-    let path = output["saved"][0]["path"].as_str().unwrap();
-    assert!(path.starts_with("bot/images/"), "{path}");
-    let listed = parse(&host.run("file_list", json!({ "prefix": "bot/images" })).await);
-    assert_eq!(listed["status"], "ok");
-}
-
-#[flow_like_types::tokio::test]
-async fn image_generate_is_offered_without_an_executor_and_never_sent_to_one() {
-    assert!(routing::host_tools(false, &[]).runs("image_generate"));
-    assert_eq!(
-        routing::route("image_generate", &json!({}), false),
-        Some(routing::Route::InProcess)
-    );
+#[test]
+fn image_generate_is_an_executor_tool() {
+    assert!(!routing::host_tools(false, &[]).runs("image_generate"));
+    assert!(routing::host_tools(true, &[]).runs("image_generate"));
     assert_eq!(
         routing::route("image_generate", &json!({}), true),
-        Some(routing::Route::InProcess)
+        Some(routing::Route::Executor)
     );
+    assert!(matches!(
+        routing::route("image_generate", &json!({}), false),
+        Some(routing::Route::Refuse(_))
+    ));
 }
 
 #[flow_like_types::tokio::test]
-async fn a_server_turn_without_an_image_model_says_where_to_pick_one() {
-    let source = FakeImageSource {
-        backend: Err(flow_like_bot_tools::image::ImageUnavailable::NoModel),
-    };
-    let host = image_host(None, Some(source)).await;
+async fn the_job_carries_the_owners_image_bit_to_the_executor_and_counts_saved_images() {
+    let executor = Arc::new(FakeExecutor::default());
+    let bits = image_bits(Some("my-image"));
+    let host = image_host(Some(executor.clone()), Some(bits.clone())).await;
+    let output = parse(
+        &host
+            .run("image_generate", json!({ "prompt": "a lighthouse" }))
+            .await,
+    );
+    assert_eq!(output["ran_on"], "executor", "{output}");
+    assert!(!output.to_string().contains("sk-private-key"));
+    let jobs = executor.jobs.lock().unwrap();
+    let job: ToolJob = serde_json::from_str(&jobs[0].3).unwrap();
+    let image = job
+        .models
+        .image
+        .as_ref()
+        .expect("the job names the image model");
+    assert_eq!(image.bit["id"], "my-image");
+    assert_eq!(image.bit["parameters"]["provider"]["params"]["api_key"], "sk-private-key");
+    assert_eq!(image.left, 8);
+    assert!(!format!("{:?}", job.models).contains("sk-private-key"));
+    drop(jobs);
+    bits.record(&json!({ "status": "ok", "saved": [{}, {}, {}] }).to_string());
+    bits.record(&json!({ "status": "error", "saved": [{}] }).to_string());
+    assert_eq!(bits.left(), 5);
+}
+
+#[flow_like_types::tokio::test]
+async fn other_jobs_never_carry_the_image_bit() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = image_host(Some(executor.clone()), Some(image_bits(Some("my-image")))).await;
+    host.run("file_write", json!({ "path": "bot/a.md", "content": "x" }))
+        .await;
+    let jobs = executor.jobs.lock().unwrap();
+    assert!(!jobs[0].3.contains("sk-private-key"));
+}
+
+#[flow_like_types::tokio::test]
+async fn an_image_job_without_a_usable_model_is_refused_before_the_executor() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = image_host(Some(executor.clone()), Some(image_bits(None))).await;
     let output = parse(&host.run("image_generate", json!({ "prompt": "a" })).await);
     assert_eq!(output["status"], "error");
-    assert!(output["error"]["message"].as_str().unwrap().contains("Brain settings"));
+    assert!(executor.jobs.lock().unwrap().is_empty());
+}
+
+#[flow_like_types::tokio::test]
+async fn without_an_executor_image_generate_is_refused_plainly() {
+    let host = image_host(None, Some(image_bits(Some("my-image")))).await;
+    let output = parse(&host.run("image_generate", json!({ "prompt": "a" })).await);
+    assert_eq!(output["code"], "bot_tool_needs_executor");
 }

@@ -51,6 +51,7 @@ pub use super::comment::Entity as Comment;
 pub use super::connected_account::Entity as ConnectedAccount;
 pub use super::conversation::Entity as Conversation;
 pub use super::conversation_file::Entity as ConversationFile;
+pub use super::conversation_invite_link::Entity as ConversationInviteLink;
 pub use super::conversation_member::Entity as ConversationMember;
 pub use super::conversation_segment::Entity as ConversationSegment;
 pub use super::course::Entity as Course;

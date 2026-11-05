@@ -44,12 +44,12 @@ use super::public_web::{
     WebResearchSession, normalize_public_discovery_url, parse_public_url, public_url_spans,
     run_archive_lookup_for_session, run_open_url_for_session, source_id_for_url,
 };
-use super::subtasks::{REQUEST_ID_ARGUMENT, SPAWN_SUBTASKS_TOOL};
 use super::stream::{
     FlowScriptToolCallPreviewTracker, detailed_tool_end_frame, detailed_tool_start_frame,
     plan_step_frame, safe_tool_activity_result_preview, tool_result_stream_status,
     tool_result_summary, tool_result_terminal_status, usage_stat_frame,
 };
+use super::subtasks::{REQUEST_ID_ARGUMENT, SPAWN_SUBTASKS_TOOL};
 use super::tool_spec::{
     ARCHIVE_LOOKUP_TOOL, HTTP_REQUEST_TOOL, INTERNET_SEARCH_TOOL, MEMORY_SEARCH_TOOL,
     MEMORY_STORE_TOOL, OPEN_URL_TOOL, PlatformToolSpec, RESEARCH_AGENT_TOOL,
@@ -320,6 +320,12 @@ impl PlatformSurface {
 #[async_trait]
 pub trait PlatformToolBridge: Send + Sync {
     async fn call(&self, tool_name: &str, arguments: Value) -> String;
+
+    /// Whether this host implements a tool. Scoped bridges can expose only the reads they
+    /// support instead of advertising runtime actions that cannot run in that host.
+    fn supports_tool(&self, _tool_name: &str) -> bool {
+        true
+    }
 
     /// Take any user instructions that arrived since the last round and should be folded into the
     /// conversation now. The host owns the queue (an in-process registry on the desktop, a table
@@ -2796,7 +2802,10 @@ mod tests {
     fn sealed_research_keeps_opened_links_and_reduces_the_rest_to_plain_text() {
         let opened = vec!["https://example.com/opened".to_string()];
         let kept = "Use [this](https://example.com/opened).";
-        assert_eq!(strip_unverified_citations(kept, &opened), (kept.to_string(), vec![]));
+        assert_eq!(
+            strip_unverified_citations(kept, &opened),
+            (kept.to_string(), vec![])
+        );
 
         let (text, removed) = strip_unverified_citations(
             "Unsupported [claim](https://example.com/search-only). Lead: https://www.g2.com/x (HTTP 403).",

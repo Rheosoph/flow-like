@@ -13,7 +13,7 @@ pub(crate) mod memory;
 pub(crate) mod talk;
 pub(crate) mod task_schedules;
 pub(crate) mod tasks;
-mod worker;
+pub(crate) mod worker;
 
 #[cfg(test)]
 mod approvals_tests;
@@ -23,6 +23,8 @@ mod cancel_tests;
 mod cap_tests;
 #[cfg(all(test, feature = "db-chaos"))]
 mod chaos_tests;
+#[cfg(test)]
+mod device_tests;
 #[cfg(test)]
 mod fixture;
 #[cfg(test)]

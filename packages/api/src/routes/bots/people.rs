@@ -69,7 +69,8 @@ async fn talking_bot(
     user: &AppUser,
     bot_id: &str,
 ) -> Result<bot::Model, ApiError> {
-    let sub = user.sub()?;
+    crate::bot_caller::ensure_owner_conversation(user)?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, user, bot_id).await?;
     let bot = owned_bot(&state.db, &sub, bot_id).await?;
     if !bot
         .capabilities

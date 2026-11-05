@@ -1,110 +1,72 @@
 use std::sync::Arc;
+use std::sync::Mutex;
 
-use async_trait::async_trait;
-use flow_like::flow::execution::ExecutionEnvironment;
-use flow_like::models::llm::ModelUsageContext;
 use flow_like::profile::Profile;
 use flow_like::state::FlowLikeState;
 use flow_like_bot_tools::image::{
-    CatalogImages, GeneratedImage, ImageBackend, ImageBudget, ImageJob, ImageModelInfo,
-    ImageUnavailable, hosted_access, resolve_bit,
+    ImageUnavailable, MAX_IMAGES_PER_TURN, NO_IMAGE_MODEL_MESSAGE, resolve_bit,
 };
-use flow_like_bot_tools_host::ImageSource;
-use flow_like_types::tokio::sync::OnceCell;
+use flow_like_bot_tools_host::JobImage;
+use serde_json::Value;
 
-/// The bot's image model for one server turn. The profile the API built for the turn holds the
-/// owner's private Bits with their keys, so the call to the provider happens here and no key
-/// travels to an executor.
-pub(crate) struct ApiImages {
+/// The trusted half of `image_generate`: the API resolves the bot's image Bit from the turn's
+/// profile, which holds the owner's private Bits with their keys, and hands it to the one
+/// executor job that generates. The executor makes the provider call and writes the files; the
+/// Bit is never logged, returned or stored. The turn's image allowance lives here because every
+/// call is its own job.
+pub(crate) struct ImageBits {
     profile: Arc<Profile>,
     state: Arc<FlowLikeState>,
     image_model: Option<String>,
-    token: Option<String>,
-    workspace: String,
-    turn_id: String,
-    budget: Arc<ImageBudget>,
-    backend: OnceCell<Arc<dyn ImageBackend>>,
+    used: Mutex<u32>,
 }
 
-impl ApiImages {
+impl ImageBits {
     pub(crate) fn new(
         profile: Arc<Profile>,
         state: Arc<FlowLikeState>,
         image_model: Option<String>,
-        token: Option<String>,
-        workspace: String,
-        turn_id: String,
     ) -> Self {
         Self {
             profile,
             state,
             image_model,
-            token,
-            workspace,
-            turn_id,
-            budget: Arc::new(ImageBudget::default()),
-            backend: OnceCell::new(),
+            used: Mutex::new(0),
         }
     }
 
-    async fn build(&self) -> Result<Arc<dyn ImageBackend>, ImageUnavailable> {
-        let bit = resolve_bit(&self.profile, &self.state, self.image_model.as_deref()).await?;
-        let usage = ModelUsageContext {
-            app_id: Some(self.workspace.clone()),
-            run_id: Some(self.turn_id.clone()),
-            api_base_url: None,
-        };
-        let hosted = hosted_access(&self.state, self.token.clone(), Some(&usage));
-        let backend = CatalogImages::resolve(
+    fn used(&self) -> std::sync::MutexGuard<'_, u32> {
+        self.used.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    pub(crate) fn left(&self) -> u32 {
+        MAX_IMAGES_PER_TURN.saturating_sub(*self.used())
+    }
+
+    /// The Bit and allowance for one job, or what to tell the model when there is none.
+    pub(crate) async fn job_image(&self) -> Result<JobImage, String> {
+        let bit = resolve_bit(&self.profile, &self.state, self.image_model.as_deref())
+            .await
+            .map_err(|reason| match reason {
+                ImageUnavailable::NoModel => NO_IMAGE_MODEL_MESSAGE.to_string(),
+                ImageUnavailable::NotOnThisHost => "This host cannot generate images".to_string(),
+                ImageUnavailable::Unusable(why) => format!("The image model cannot be used: {why}"),
+            })?;
+        let bit = serde_json::to_value(bit).map_err(|error| error.to_string())?;
+        Ok(JobImage {
             bit,
-            &self.profile,
-            &self.state,
-            ExecutionEnvironment::server_default(),
-            Some(hosted),
-            self.budget.clone(),
-        )
-        .await?;
-        Ok(Arc::new(Logged {
-            inner: backend,
-            turn_id: self.turn_id.clone(),
-        }))
-    }
-}
-
-#[async_trait]
-impl ImageSource for ApiImages {
-    async fn images(&self) -> Result<Arc<dyn ImageBackend>, ImageUnavailable> {
-        self.backend.get_or_try_init(|| self.build()).await.cloned()
-    }
-}
-
-struct Logged {
-    inner: CatalogImages,
-    turn_id: String,
-}
-
-#[async_trait]
-impl ImageBackend for Logged {
-    fn model(&self) -> ImageModelInfo {
-        self.inner.model()
+            left: self.left(),
+        })
     }
 
-    fn budget(&self) -> &ImageBudget {
-        self.inner.budget()
-    }
-
-    async fn generate(&self, job: ImageJob) -> flow_like_types::Result<Vec<GeneratedImage>> {
-        let started = std::time::Instant::now();
-        let requested = job.count;
-        let images = self.inner.generate(job).await?;
-        tracing::info!(
-            turn_id = %self.turn_id,
-            model = %self.inner.model().name,
-            requested,
-            images = images.len(),
-            duration_ms = started.elapsed().as_millis() as u64,
-            "[bot_tools] image generation finished"
-        );
-        Ok(images)
+    /// Counts the images a finished job saved against the turn.
+    pub(crate) fn record(&self, output: &str) {
+        let saved = serde_json::from_str::<Value>(output)
+            .ok()
+            .filter(|value| value["status"] == "ok")
+            .and_then(|value| value["saved"].as_array().map(Vec::len))
+            .unwrap_or(0);
+        let mut used = self.used();
+        *used = used.saturating_add(saved as u32);
     }
 }

@@ -29,6 +29,12 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{sync::mpsc, time::Instant};
 use tokio_util::sync::CancellationToken;
 
+#[cfg(all(
+    feature = "playground",
+    any(target_os = "macos", windows, target_os = "linux")
+))]
+const PLAYGROUND_PIPE_BYTES: usize = 512 * 1024;
+
 pub(super) struct Connection {
     authority: TunnelAuthority,
     handshake: noise::Handshake,
@@ -202,6 +208,8 @@ impl Pump {
                                 streams::Target::Internal(target) => self.authority.check_internal(target).is_ok(),
                                 #[cfg(feature = "runtime")]
                                 streams::Target::Gateway(target) => *gateway.get_or_insert_with(|| self.authority.check_gateway(target).is_ok()),
+                                #[cfg(all(feature = "playground", any(target_os = "macos", windows, target_os = "linux")))]
+                                streams::Target::Playground => self.authority.check_playground().is_ok(),
                                 streams::Target::Pending => true,
                             };
                             (!allowed).then_some(*id)

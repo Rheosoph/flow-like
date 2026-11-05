@@ -174,6 +174,8 @@ pub(super) struct BotRecord {
     #[serde(default)]
     pub(super) vision_model: Option<String>,
     #[serde(default)]
+    pub(super) subtask_model: Option<String>,
+    #[serde(default)]
     pub(super) classification: DataSensitivity,
     #[serde(default)]
     pub(super) capabilities: Vec<String>,
@@ -195,6 +197,7 @@ impl From<flow_like_local_bots::Bot> for BotRecord {
             tts_model: bot.tts_model,
             image_model: bot.image_model,
             vision_model: bot.vision_model,
+            subtask_model: bot.subtask_model,
             classification: bot.classification,
             capabilities: bot
                 .capabilities
@@ -375,12 +378,14 @@ pub(super) fn desktop_bot(
         tts_model: record.tts_model,
         image_model: record.image_model,
         vision_model: record.vision_model,
+        subtask_model: record.subtask_model,
         tool_host,
         host_tools: super::super::super::native_bot_tools::host_tools(),
         skills: Vec::new(),
         requester: None,
         permissions: Default::default(),
         connectors: Vec::new(),
+        compute: Default::default(),
     };
     DesktopBot {
         context: Arc::new(context),
@@ -1286,6 +1291,7 @@ mod tests {
             tts_model: None,
             image_model: None,
             vision_model: None,
+            subtask_model: None,
             classification: DataSensitivity::default(),
             capabilities: vec![BotCapability::SelectedApps, BotCapability::Storage],
             profile_id: None,

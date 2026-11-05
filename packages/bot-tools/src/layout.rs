@@ -8,6 +8,7 @@ pub const NOTES_DIR: &str = "bot/notes";
 pub const EXTRACTIONS_DIR: &str = "bot/extractions";
 pub const EXPORTS_DIR: &str = "bot/exports";
 pub const FILES_DIR: &str = "bot/files";
+pub const WEB_DIR: &str = "bot/web";
 
 pub fn inbox_path(seq: u64, part: &str, name: &str) -> String {
     format!("{INBOX_DIR}/{seq}/{part}-{}", sanitize_name(name))

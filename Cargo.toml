@@ -21,6 +21,8 @@ members = [
     "packages/bot-memory",
     "packages/bot-tools",
     "packages/bot-tools-host",
+    "packages/bot-machine",
+    "packages/bot-host",
     "apps/desktop/src-tauri",
     "apps/backend/local/api",
     "apps/backend/local/runtime",
@@ -234,6 +236,8 @@ flow-like-local-bots = { path = "packages/local-bots" }
 flow-like-bot-memory = { path = "packages/bot-memory" }
 flow-like-bot-tools = { path = "packages/bot-tools" }
 flow-like-bot-tools-host = { path = "packages/bot-tools-host" }
+flow-like-bot-machine = { path = "packages/bot-machine" }
+flow-like-bot-host = { path = "packages/bot-host" }
 flow-like-device-crypto = { path = "packages/device-crypto" }
 flow-like-azure-data = { path = "packages/azure-data" }
 flow-like-gcp-data = { path = "packages/gcp-data" }

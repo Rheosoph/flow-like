@@ -7,7 +7,7 @@
 use super::{lock_bot, owned_bot, workspace};
 use crate::{
     bot_tools::skills as skill_jobs,
-    entity::{bot, bot_skill},
+    entity::{app_package, bot, bot_skill, membership, wasm_package, wasm_package_version},
     error::ApiError,
     middleware::jwt::AppUser,
     state::AppState,
@@ -28,6 +28,9 @@ use sea_orm::{
 };
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
+
+pub(crate) const SKILL_PACKAGE_UNCOVERED: &str = "BOT_SKILL_PACKAGE_UNCOVERED";
+pub(crate) const SKILL_PACKAGE_EMPTY: &str = "BOT_SKILL_PACKAGE_HAS_NO_SKILLS";
 
 pub(crate) const SKILLS_CAPABILITY: &str = "skills";
 pub(crate) const SKILL_CAPABILITY_OFF: &str = "BOT_SKILL_CAPABILITY_OFF";
@@ -111,6 +114,14 @@ pub struct CreateBotSkillRequest {
     /// Package node names the instructions call.
     #[serde(default)]
     pub tools: Vec<String>,
+    /// `active`, `pending` or `disabled`; active when missing. A skill moved from a device keeps
+    /// the status it had.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// `owner`, `import` or `bot_proposed`; owner when missing. A package skill comes only from
+    /// a package install.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -210,9 +221,33 @@ pub(crate) async fn active_index<C: ConnectionTrait>(
 }
 
 /// How a new skill gets in: who made it and whether the owner already approved it.
+#[derive(Clone)]
 pub(crate) struct Origin {
     pub source: SkillSource,
     pub status: SkillStatus,
+}
+
+/// The origin a create request names: an owner skill, or a skill moved from a device with the
+/// status it had. A package source cannot be claimed here.
+pub(crate) fn origin_of(source: Option<&str>, status: Option<&str>) -> Result<Origin, ApiError> {
+    let source = match source.map(str::trim).filter(|source| !source.is_empty()) {
+        None => SkillSource::Owner,
+        Some(text) => match SkillSource::parse(text) {
+            Some(parsed) if parsed.package_id().is_none() => parsed,
+            _ => {
+                return Err(bad_request(format!(
+                    "A skill source is owner, import or bot_proposed; got '{text}'"
+                )));
+            }
+        },
+    };
+    let status = match status.map(str::trim).filter(|status| !status.is_empty()) {
+        None => SkillStatus::Active,
+        Some(text) => SkillStatus::parse(text).ok_or_else(|| {
+            bad_request(format!("A skill status is active, pending or disabled; got '{text}'"))
+        })?,
+    };
+    Ok(Origin { source, status })
 }
 
 impl Origin {
@@ -421,6 +456,7 @@ pub async fn create_bot_skill(
     Json(body): Json<CreateBotSkillRequest>,
 ) -> Result<(StatusCode, Json<BotSkillInfo>), ApiError> {
     let sub = user.sub()?;
+    let origin = origin_of(body.source.as_deref(), body.status.as_deref())?;
     let request = CreateBotSkill {
         name: body.name,
         description: body.description,
@@ -429,11 +465,12 @@ pub async fn create_bot_skill(
     };
     let row = state
         .transaction(|txn| {
-            let (sub, bot_id, request) = (sub.clone(), bot_id.clone(), request.clone());
+            let (sub, bot_id, request, origin) =
+                (sub.clone(), bot_id.clone(), request.clone(), origin.clone());
             Box::pin(async move {
                 lock_bot(txn, &bot_id).await?;
                 let now = Utc::now().fixed_offset();
-                create_in(txn, &sub, &bot_id, request, Origin::owner(), now).await
+                create_in(txn, &sub, &bot_id, request, origin.clone(), now).await
             })
         })
         .await?;
@@ -550,6 +587,12 @@ pub async fn delete_bot_skill(
     let sub = user.sub()?;
     let row = delete_in(&state.db, &sub, &bot_id, &skill_id).await?;
     skill_jobs::remove_references(&state, &sub, &bot_id, &row.name).await;
+    if let Some(package_id) = SkillSource::parse(&row.source)
+        .and_then(|source| source.package_id().map(str::to_string))
+    {
+        let workspace_id = workspace::ensure(&state, &sub, &bot_id).await?.app_id;
+        release_package_pin_in(&state.db, &bot_id, &workspace_id, &package_id).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -711,4 +754,273 @@ pub(crate) async fn reimport_in<C: ConnectionTrait>(
     active.status = Set(origin.status.stored().to_string());
     active.updated_at = Set(now);
     Ok(active.update(db).await?)
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct InstallBotSkillPackageRequest {
+    /// The registry package that ships the skills.
+    pub package_id: String,
+    /// The version to pin; the package's current version when missing.
+    pub version: Option<String>,
+}
+
+/// The package capability tags the bot's capabilities do not cover, or an empty list.
+pub(crate) fn uncovered_for(bot: &bot::Model, tags: &[String]) -> Vec<String> {
+    let held: Vec<String> = bot.capabilities.iter().map(|id| id.to_string()).collect();
+    contract::uncovered_tags(tags, &held)
+}
+
+/// Pins `package_id` to the bot's workspace and saves its skills as pending, one per skill
+/// the pinned version ships. The package must be held by the owner, cover only capabilities
+/// the bot has, and ship skills. A skill a package already brought is replaced and goes back
+/// to pending; a skill of another origin under the same name is never overwritten.
+pub(crate) async fn install_package_in<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    workspace_id: &str,
+    request: &InstallBotSkillPackageRequest,
+    now: DateTime<FixedOffset>,
+) -> Result<Vec<bot_skill::Model>, ApiError> {
+    let bot = owned_bot(db, owner_id, bot_id).await?;
+    refuse_without_capability(&bot)?;
+    let package = wasm_package::Entity::find_by_id(&request.package_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Package not found"))?;
+    crate::package_license::ensure_holds(db, owner_id, &package).await?;
+    let version = request.version.clone().unwrap_or_else(|| package.version.clone());
+    let row = wasm_package_version::Entity::find()
+        .filter(wasm_package_version::Column::PackageId.eq(&package.id))
+        .filter(wasm_package_version::Column::Version.eq(&version))
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("Version '{version}' of the package is not published")))?;
+    if row.status != crate::entity::sea_orm_active_enums::WasmPackageStatus::Active {
+        return Err(ApiError::bad_request(format!(
+            "Version '{version}' of '{}' has not been approved by the registry yet",
+            package.id
+        )));
+    }
+    let entries: Vec<flow_like_wasm_schema::manifest::PackageSkillEntry> = row
+        .skills
+        .clone()
+        .and_then(|stored| serde_json::from_value(stored).ok())
+        .unwrap_or_default();
+    if entries.is_empty() {
+        return Err(ApiError::coded(
+            StatusCode::BAD_REQUEST,
+            SKILL_PACKAGE_EMPTY,
+            format!("Version '{version}' of '{}' ships no skills", package.id),
+        ));
+    }
+    let tags = serde_json::from_value::<flow_like_wasm_schema::manifest::PackagePermissions>(
+        package.permissions.clone(),
+    )
+    .map(|permissions| permissions.capability_tags())
+    .unwrap_or_default();
+    let missing = uncovered_for(&bot, &tags);
+    if !missing.is_empty() {
+        return Err(ApiError::coded(
+            StatusCode::CONFLICT,
+            SKILL_PACKAGE_UNCOVERED,
+            format!(
+                "'{}' needs what bot '{bot_id}' does not have switched on: {}",
+                package.id,
+                missing.join(", ")
+            ),
+        ));
+    }
+    for entry in &entries {
+        entry.validate().map_err(bad_request)?;
+        if let Some(existing) = by_name(db, bot_id, &entry.name).await?
+            && SkillSource::parse(&existing.source).and_then(|s| s.package_id().map(str::to_string))
+                != Some(package.id.clone())
+        {
+            return Err(ApiError::coded(
+                StatusCode::CONFLICT,
+                SKILL_EXISTS,
+                format!("Bot '{bot_id}' already has a skill named '{}'", entry.name),
+            ));
+        }
+    }
+    pin_to_workspace(db, owner_id, workspace_id, &package.id, &version, now).await?;
+    let source = SkillSource::Package {
+        id: package.id.clone(),
+        version: version.clone(),
+    }
+    .stored();
+    let mut saved = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let tools = contract::check_tools(&entry.tools).map_err(bad_request)?;
+        let description = contract::check_description(&entry.description).map_err(bad_request)?;
+        let body = entry.instructions.clone().unwrap_or_default();
+        let model = match by_name(db, bot_id, &entry.name).await? {
+            Some(existing) => {
+                let mut active: bot_skill::ActiveModel = existing.into();
+                active.description = Set(description);
+                active.body = Set(body);
+                active.source = Set(source.clone());
+                active.status = Set(SkillStatus::Pending.stored().to_string());
+                active.tools = Set(serde_json::json!(tools));
+                active.updated_at = Set(now);
+                active.update(db).await?
+            }
+            None => {
+                bot_skill::ActiveModel {
+                    id: Set(format!("skill_{}", uuid::Uuid::new_v4().simple())),
+                    bot_id: Set(bot_id.to_string()),
+                    name: Set(entry.name.clone()),
+                    description: Set(description),
+                    body: Set(body),
+                    source: Set(source.clone()),
+                    status: Set(SkillStatus::Pending.stored().to_string()),
+                    tools: Set(serde_json::json!(tools)),
+                    created_at: Set(now),
+                    updated_at: Set(now),
+                }
+                .insert(db)
+                .await?
+            }
+        };
+        saved.push(model);
+    }
+    Ok(saved)
+}
+
+/// Removes the package's pin from the workspace once no skill of the bot comes from it; while
+/// another one does, the pin stays. Returns whether the pin went.
+pub(crate) async fn release_package_pin_in<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    workspace_id: &str,
+    package_id: &str,
+) -> Result<bool, ApiError> {
+    let prefix = format!("package:{package_id}@");
+    let remaining = bot_skill::Entity::find()
+        .filter(bot_skill::Column::BotId.eq(bot_id))
+        .filter(bot_skill::Column::Source.starts_with(&prefix))
+        .count(db)
+        .await?;
+    if remaining > 0 {
+        return Ok(false);
+    }
+    let removed = app_package::Entity::delete_many()
+        .filter(app_package::Column::AppId.eq(workspace_id))
+        .filter(app_package::Column::PackageId.eq(package_id))
+        .exec(db)
+        .await?;
+    Ok(removed.rows_affected > 0)
+}
+
+async fn pin_to_workspace<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    workspace_id: &str,
+    package_id: &str,
+    version: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<(), ApiError> {
+    let existing = app_package::Entity::find()
+        .filter(app_package::Column::AppId.eq(workspace_id))
+        .filter(app_package::Column::PackageId.eq(package_id))
+        .one(db)
+        .await?;
+    if let Some(existing) = existing {
+        let mut active: app_package::ActiveModel = existing.into();
+        active.version = Set(version.to_string());
+        active.update(db).await?;
+        return Ok(());
+    }
+    let member = membership::Entity::find()
+        .filter(membership::Column::AppId.eq(workspace_id))
+        .filter(membership::Column::UserId.eq(owner_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::bad_request("The bot's workspace has no owner membership"))?;
+    app_package::ActiveModel {
+        id: Set(flow_like_types::create_id()),
+        app_id: Set(workspace_id.to_string()),
+        membership_id: Set(Some(member.id)),
+        package_id: Set(package_id.to_string()),
+        version: Set(version.to_string()),
+        added_at: Set(now),
+        auto_update: Set(false),
+        stale: Set(false),
+        stale_since: Set(None),
+    }
+    .insert(db)
+    .await?;
+    Ok(())
+}
+
+#[utoipa::path(
+    post,
+    path = "/bots/{bot_id}/skills/package",
+    tag = "Bots",
+    params(("bot_id" = String, Path, description = "Your bot's id")),
+    request_body = InstallBotSkillPackageRequest,
+    responses(
+        (status = 201, description = "The package is pinned to the bot's workspace and its skills are saved as pending. Approve them to use them.", body = BotSkillList),
+        (status = 400, description = "The package ships no skills (BOT_SKILL_PACKAGE_HAS_NO_SKILLS) or a skill breaks the rules"),
+        (status = 401, description = "Not signed in"),
+        (status = 402, description = "A paid package you have not bought"),
+        (status = 403, description = "BOT_SKILL_CAPABILITY_OFF, or no access to the package"),
+        (status = 404, description = "You have no bot with this id, or the package or version does not exist"),
+        (status = 409, description = "BOT_SKILL_PACKAGE_UNCOVERED: the package needs capabilities the bot does not have (for example internet or connectors), or BOT_SKILL_EXISTS")
+    ),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "POST /bots/{bot_id}/skills/package", skip(state, user, body))]
+pub async fn install_bot_skill_package(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+    Path(bot_id): Path<String>,
+    Json(body): Json<InstallBotSkillPackageRequest>,
+) -> Result<(StatusCode, Json<BotSkillList>), ApiError> {
+    let sub = user.sub()?;
+    owned_bot(&state.db, &sub, &bot_id).await?;
+    let workspace_id = workspace::ensure(&state, &sub, &bot_id).await?.app_id;
+    let rows = state
+        .transaction(|txn| {
+            let (sub, bot_id, workspace_id, body) =
+                (sub.clone(), bot_id.clone(), workspace_id.clone(), body.clone_request());
+            Box::pin(async move {
+                lock_bot(txn, &bot_id).await?;
+                install_package_in(txn, &sub, &bot_id, &workspace_id, &body, Utc::now().fixed_offset())
+                    .await
+            })
+        })
+        .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(BotSkillList {
+            skills: rows.into_iter().map(BotSkillInfo::from).collect(),
+        }),
+    ))
+}
+
+impl InstallBotSkillPackageRequest {
+    fn clone_request(&self) -> Self {
+        Self {
+            package_id: self.package_id.clone(),
+            version: self.version.clone(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_create_request_names_an_owner_import_or_proposed_origin_never_a_package() {
+        let owner = origin_of(None, None).unwrap();
+        assert_eq!((owner.source, owner.status), (SkillSource::Owner, SkillStatus::Active));
+        let moved = origin_of(Some("bot_proposed"), Some("PENDING")).unwrap();
+        assert_eq!((moved.source, moved.status), (SkillSource::BotProposed, SkillStatus::Pending));
+        assert!(origin_of(Some("package:evil@1.0.0"), None).is_err());
+        assert!(origin_of(Some("nonsense"), None).is_err());
+        assert!(origin_of(None, Some("live")).is_err());
+    }
 }

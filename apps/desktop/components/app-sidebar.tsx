@@ -64,6 +64,7 @@ import {
 import { AccountMenu } from "@flow-like/flow-like-ui/components/account/account-menu";
 import { AccountMenuProvider } from "@flow-like/flow-like-ui/components/account/account-menu-context";
 import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
+import { BotsNavAvatar } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-avatar";
 import { BotsNavBadge } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-badge";
 import { ProfileAvatar } from "@flow-like/flow-like-ui/components/profile/profile-avatar";
 import {
@@ -87,7 +88,6 @@ import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { motion } from "framer-motion";
 import {
-	BotIcon,
 	Check,
 	ChevronRight,
 	ChevronsUpDown,
@@ -136,7 +136,7 @@ function useNavData() {
 				{
 					title: t("nav:bots", "Bots"),
 					url: BOTS_ROUTE,
-					icon: BotIcon,
+					icon: BotsNavAvatar,
 					isActive: false,
 					permission: false,
 					items: [],
@@ -833,7 +833,11 @@ function NavFlatItem({
 				asChild
 				isActive={active}
 				tooltip={item.title}
-				className={item.url === BOTS_ROUTE ? "pr-9" : undefined}
+				className={
+					item.url === BOTS_ROUTE
+						? "overflow-visible pl-0.5 pr-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!"
+						: undefined
+				}
 			>
 				<MotionLink
 					href={item.url}
@@ -841,12 +845,26 @@ function NavFlatItem({
 					initial="initial"
 					whileHover="hover"
 				>
-					{item.icon && (
-						<motion.div variants={iconVariants}>
-							<item.icon className="size-4" />
-						</motion.div>
+					{item.url === BOTS_ROUTE ? (
+						<div className="flex size-7 shrink-0 items-center justify-center">
+							<BotsNavAvatar size={28} />
+						</div>
+					) : (
+						item.icon && (
+							<motion.div variants={iconVariants}>
+								<item.icon className="size-4" />
+							</motion.div>
+						)
 					)}
-					<span>{item.title}</span>
+					<span
+						className={
+							item.url === BOTS_ROUTE
+								? "group-data-[collapsible=icon]:sr-only"
+								: undefined
+						}
+					>
+						{item.title}
+					</span>
 				</MotionLink>
 			</SidebarMenuButton>
 			{item.url === BOTS_ROUTE && (

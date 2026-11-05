@@ -20,19 +20,19 @@ use async_trait::async_trait;
 use flow_like_model_provider::history::HistoryThinking;
 use flow_like_types::bot::BotCapability;
 use flow_like_types::bot_message::SECRET_REQUEST_TOOL;
-use flow_like_types::data_classification::{DataClassification, DataSensitivity};
 use flow_like_types::tokio;
 use futures::{StreamExt, stream};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::bot_run::{BotRunContext, BotToolBridge, BotToolHost, BotToolset, bot_system_prompt};
-use super::bot_talk::{ASK_BOT_TOOL, BotTalk};
+use super::bot_talk::ASK_BOT_TOOL;
 use super::platform::{PlatformCopilot, PlatformSurface, PlatformToolBridge};
 use super::tool_spec::{
     MEMORY_SEARCH_TOOL, MEMORY_STORE_TOOL, PlatformToolSpec, ToolApprovalSpec,
     resolve_tool_approval_timing,
 };
+use super::turn_label::{LabelBridge, TurnCompute, TurnLabel};
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
 
@@ -59,14 +59,13 @@ const TOOL_TIMEOUT_SECS: u64 = 660;
 const DESCRIPTION: &str = r#"Run 1 to 6 independent parts of a big job in parallel and get one result per part. Each worker is a copy of you that sees only its `instruction` (complete and self-contained), the `files` you name and the capabilities in `tools` (a subset of yours; omit it to give all it may have). Workers can't ask questions, remember, message people, send email, schedule, start sub-tasks or do anything that needs your owner's approval; do those yourself from their results. Set `output_schema` (a JSON Schema) when you need structured output; the result is then validated and `output` is the JSON value. `max_parallel` is 1 to 4 (default 3). Each result has `status` (done, failed, timeout or budget), `output`, `saved` handles and `usage`. A worker's output is unverified until you've read it."#;
 
 /// Capabilities a sub-task never gets: they act beyond the job, keep state, or need the owner.
-const CHILD_EXCLUDED_CAPABILITIES: [BotCapability; 8] = [
+const CHILD_EXCLUDED_CAPABILITIES: [BotCapability; 7] = [
     BotCapability::Memory,
     BotCapability::Delegation,
     BotCapability::Scheduling,
     BotCapability::Email,
     BotCapability::Channels,
     BotCapability::PushNotifications,
-    BotCapability::Connectors,
     BotCapability::Flowpilot,
 ];
 
@@ -164,8 +163,66 @@ pub struct ModelSubtaskRunner {
     pub state: Arc<FlowLikeState>,
     pub profile: Option<Arc<Profile>>,
     pub model_id: Option<String>,
+    /// The bot's sub-task model; used when this host can run it.
+    pub subtask_model: Option<String>,
     pub thinking: Option<HistoryThinking>,
     pub token: Option<String>,
+    chosen: tokio::sync::OnceCell<Option<String>>,
+}
+
+/// The model a child runs on: the bot's sub-task model when this host can run it, else the
+/// parent's.
+fn child_model(
+    subtask_model: Option<&str>,
+    runnable: bool,
+    parent: Option<&str>,
+) -> Option<String> {
+    match subtask_model {
+        Some(model) if runnable => Some(model.to_string()),
+        _ => parent.map(str::to_string),
+    }
+}
+
+impl ModelSubtaskRunner {
+    pub fn new(
+        state: Arc<FlowLikeState>,
+        profile: Option<Arc<Profile>>,
+        model_id: Option<String>,
+        subtask_model: Option<String>,
+        thinking: Option<HistoryThinking>,
+        token: Option<String>,
+    ) -> Self {
+        Self {
+            state,
+            profile,
+            model_id,
+            subtask_model,
+            thinking,
+            token,
+            chosen: Default::default(),
+        }
+    }
+
+    async fn model(&self) -> Option<String> {
+        self.chosen
+            .get_or_init(|| async {
+                let runnable = match (&self.subtask_model, &self.profile) {
+                    (Some(model), Some(profile)) => {
+                        super::bot_run::runnable_completion_model(&self.state, profile, model)
+                            .await
+                            .is_some()
+                    }
+                    _ => false,
+                };
+                child_model(
+                    self.subtask_model.as_deref(),
+                    runnable,
+                    self.model_id.as_deref(),
+                )
+            })
+            .await
+            .clone()
+    }
 }
 
 #[async_trait]
@@ -182,7 +239,7 @@ impl SubtaskRunner for ModelSubtaskRunner {
                 child.user_prompt,
                 None,
                 Vec::new(),
-                self.model_id.clone(),
+                self.model().await,
                 self.token.clone(),
                 child.bridge,
                 None,
@@ -196,7 +253,8 @@ impl SubtaskRunner for ModelSubtaskRunner {
 pub struct SubtaskEnv {
     pub runner: Arc<dyn SubtaskRunner>,
     pub on_token: Option<Arc<dyn Fn(String) + Send + Sync>>,
-    pub talk: Option<Arc<BotTalk>>,
+    pub label: Arc<TurnLabel>,
+    pub compute: TurnCompute,
     pub started: Instant,
     pub turn_budget: Duration,
     pub min_child_time: Duration,
@@ -207,12 +265,14 @@ impl SubtaskEnv {
     pub fn new(
         runner: Arc<dyn SubtaskRunner>,
         on_token: Option<Arc<dyn Fn(String) + Send + Sync>>,
-        talk: Option<Arc<BotTalk>>,
+        label: Arc<TurnLabel>,
+        compute: TurnCompute,
     ) -> Self {
         Self {
             runner,
             on_token,
-            talk,
+            label,
+            compute,
             started: Instant::now(),
             turn_budget: TURN_TIME_BUDGET,
             min_child_time: MIN_CHILD_TIME,
@@ -225,12 +285,20 @@ impl SubtaskEnv {
     }
 }
 
-/// Wraps `inner` so `spawn_subtasks` is answered in core; a bot not offered the tool keeps `inner`.
+/// Wraps `inner` in the turn's label check and, for a bot offered the tool, answers
+/// `spawn_subtasks` in core.
 pub(super) fn attach(
     inner: Arc<dyn PlatformToolBridge>,
     bot: &Arc<BotRunContext>,
     env: SubtaskEnv,
 ) -> Arc<dyn PlatformToolBridge> {
+    if bot.toolset != BotToolset::Capabilities {
+        return inner;
+    }
+    let inner: Arc<dyn PlatformToolBridge> = Arc::new(LabelBridge {
+        label: env.label.clone(),
+        inner,
+    });
     if !offered_to(bot) {
         return inner;
     }
@@ -290,6 +358,7 @@ struct Task {
     instruction: String,
     tools: Option<Vec<String>>,
     files: Vec<String>,
+    handles: Vec<Value>,
     schema: Option<Value>,
 }
 
@@ -388,6 +457,7 @@ fn plan(arguments: Value) -> Result<Plan, String> {
             instruction,
             tools: task.tools,
             files: task.files,
+            handles: Vec::new(),
             schema: task.output_schema,
         });
     }
@@ -467,20 +537,38 @@ fn child_tool_specs(child: &BotRunContext) -> Vec<PlatformToolSpec> {
     specs
 }
 
-/// Why a child may not make this call, if it may not: by name, or because the call would ask the
-/// owner for approval (a child never parks the turn).
-fn child_refusal(tool_name: &str, arguments: &Value) -> Option<String> {
-    if CHILD_REFUSED_TOOLS.contains(&tool_name) {
-        return Some(format!(
-            "A sub-task can't use {tool_name}: it needs a person, keeps state or acts outside the job. Finish the rest, and say in your result what you could not do so the main bot can."
-        ));
-    }
+const FINISH_THE_REST: &str =
+    "Finish the rest, and say in your result what you could not do so the main bot can.";
+
+/// Why a child may not call this tool at all.
+fn child_name_refusal(tool_name: &str) -> Option<String> {
+    CHILD_REFUSED_TOOLS.contains(&tool_name).then(|| {
+        format!(
+            "A sub-task can't use {tool_name}: it needs a person, keeps state or acts outside the job. {FINISH_THE_REST}"
+        )
+    })
+}
+
+/// Why a child may not make this call once the bot's guard has set its final arguments: it would
+/// ask the owner for approval, and a child never parks the turn.
+fn child_approval_refusal(tool_name: &str, arguments: &Value) -> Option<String> {
     let spec = super::bot_run::find_bot_tool_spec(tool_name)?;
     resolve_tool_approval_timing(&spec, arguments).map(|_| {
         format!(
-            "{tool_name} needs your owner's approval, which a sub-task can't ask for. It was not run: finish the rest, and say in your result what you could not do so the main bot can."
+            "{tool_name} needs your owner's approval, which a sub-task can't ask for. It was not run. {FINISH_THE_REST}"
         )
     })
+}
+
+fn refusal_json(tool_name: &str, message: &str) -> String {
+    json!({
+        "status": "error",
+        "tool": tool_name,
+        "code": "subtask_tool_refused",
+        "retryable": false,
+        "message": message,
+    })
+    .to_string()
 }
 
 #[derive(Default)]
@@ -490,7 +578,6 @@ struct ChildMeter {
     tool_calls: AtomicU64,
     saved: Mutex<Vec<Value>>,
     refused: Mutex<Vec<String>>,
-    taint: Mutex<DataSensitivity>,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -511,17 +598,6 @@ impl ChildMeter {
                     all.push(handle.clone());
                 }
             }
-        }
-        let level = result
-            .get("classification")
-            .and_then(Value::as_str)
-            .and_then(DataClassification::parse);
-        if let Some(level) = level {
-            let mut taint = locked(&self.taint);
-            *taint = taint.combine(DataSensitivity {
-                classification: Some(level),
-                pii: false,
-            });
         }
     }
 
@@ -561,21 +637,36 @@ struct ChildGuard {
 #[async_trait]
 impl PlatformToolBridge for ChildGuard {
     async fn call(&self, tool_name: &str, arguments: Value) -> String {
-        if let Some(message) = child_refusal(tool_name, &arguments) {
+        if let Some(message) = child_name_refusal(tool_name) {
             locked(&self.meter.refused).push(format!("{tool_name}: {message}"));
-            return json!({
-                "status": "error",
-                "tool": tool_name,
-                "code": "subtask_tool_refused",
-                "retryable": false,
-                "message": message,
-            })
-            .to_string();
+            return refusal_json(tool_name, &message);
         }
         self.meter.tool_calls.fetch_add(1, Ordering::Relaxed);
         let output = self.inner.call(tool_name, arguments).await;
         self.meter.observe_result(&output);
         output
+    }
+
+    async fn is_cancelled(&self) -> bool {
+        self.inner.is_cancelled().await
+    }
+}
+
+/// Sits right above the parent's bridge, below the child's app guard: the arguments it sees are
+/// final (a connector call carries its policy), so a call that would ask the owner is refused.
+struct ApprovalGate {
+    inner: Arc<dyn PlatformToolBridge>,
+    meter: Arc<ChildMeter>,
+}
+
+#[async_trait]
+impl PlatformToolBridge for ApprovalGate {
+    async fn call(&self, tool_name: &str, arguments: Value) -> String {
+        if let Some(message) = child_approval_refusal(tool_name, &arguments) {
+            locked(&self.meter.refused).push(format!("{tool_name}: {message}"));
+            return refusal_json(tool_name, &message);
+        }
+        self.inner.call(tool_name, arguments).await
     }
 
     async fn is_cancelled(&self) -> bool {
@@ -663,11 +754,15 @@ impl SubtaskBridge {
             .and_then(|object| object.remove(REQUEST_ID_ARGUMENT))
             .and_then(|id| id.as_str().map(str::to_string))
             .unwrap_or_else(|| SPAWN_SUBTASKS_TOOL.to_string());
-        let plan = match plan(arguments) {
+        let mut plan = match plan(arguments) {
             Ok(plan) => plan,
             Err(rejection) => return rejection,
         };
+        if let Err(rejection) = self.resolve_files(&mut plan).await {
+            return rejection;
+        }
         let parent_request = parent_request.as_str();
+        let spawned = Instant::now();
         let mut results: Vec<(usize, TaskResult)> = stream::iter(
             plan.tasks.into_iter().enumerate(),
         )
@@ -675,6 +770,9 @@ impl SubtaskBridge {
         .buffer_unordered(plan.max_parallel)
         .collect()
         .await;
+        self.env
+            .compute
+            .add_waited(spawned.elapsed().as_millis().min(u64::MAX as u128) as u64);
         results.sort_by_key(|(index, _)| *index);
         let results: Vec<TaskResult> = results.into_iter().map(|(_, result)| result).collect();
         json!({
@@ -691,6 +789,41 @@ impl SubtaskBridge {
             },
         })
         .to_string()
+    }
+
+    /// Opens every named file through the parent's own `file_read`, which applies the bot's
+    /// scope, and keeps the handle it returns for the child. One unreadable or out-of-scope
+    /// reference refuses the whole call before any child runs.
+    async fn resolve_files(&self, plan: &mut Plan) -> Result<(), String> {
+        let mut resolved: std::collections::HashMap<String, Value> = Default::default();
+        for task in &mut plan.tasks {
+            for file in &task.files {
+                if !resolved.contains_key(file) {
+                    let output = self
+                        .inner
+                        .call("file_read", json!({ "file": file, "max_bytes": 1 }))
+                        .await;
+                    let result: Value = serde_json::from_str(&output).unwrap_or_default();
+                    let handle = result.get("handle").filter(|handle| !handle.is_null());
+                    let Some(handle) = handle.filter(|_| result["status"] == "ok") else {
+                        let reason = result["error"]["message"]
+                            .as_str()
+                            .or_else(|| result["message"].as_str())
+                            .unwrap_or("it is not readable here");
+                        return Err(rejection(
+                            "subtasks_file_unresolved",
+                            format!(
+                                "Task '{}' names the file '{file}', which a sub-task cannot be given: {reason}.",
+                                task.id
+                            ),
+                        ));
+                    };
+                    resolved.insert(file.clone(), handle.clone());
+                }
+                task.handles.push(resolved[file].clone());
+            }
+        }
+        Ok(())
     }
 
     fn emit(
@@ -761,9 +894,9 @@ impl SubtaskBridge {
             );
             outcome
         };
-        if let Some(talk) = &self.env.talk {
-            talk.raise_taint(*locked(&meter.taint));
-        }
+        self.env
+            .compute
+            .add_child(started.elapsed().as_millis().min(u64::MAX as u128) as u64);
         TaskResult {
             id: task.id,
             outcome,
@@ -835,7 +968,10 @@ impl SubtaskBridge {
         let guard: Arc<dyn PlatformToolBridge> = Arc::new(ChildGuard {
             inner: Arc::new(BotToolBridge {
                 bot: child.clone(),
-                inner: self.inner.clone(),
+                inner: Arc::new(ApprovalGate {
+                    inner: self.inner.clone(),
+                    meter: meter.clone(),
+                }),
             }),
             meter: meter.clone(),
         });
@@ -944,7 +1080,8 @@ fn child_user_prompt(task: &Task, can_read_files: bool) -> String {
         let listing = task
             .files
             .iter()
-            .map(|file| format!("- {file}"))
+            .zip(&task.handles)
+            .map(|(file, handle)| format!("- {file}: pass this handle to file_read: {handle}"))
             .collect::<Vec<_>>()
             .join("\n");
         let how = if can_read_files {
@@ -1012,9 +1149,10 @@ fn check_output(schema: &Value, text: &str) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::flow::copilot::bot_talk::{BotTalkHost, CrewMember, NestedBotTurn};
+    use crate::flow::copilot::bot_talk::{BotTalk, BotTalkHost, CrewMember, NestedBotTurn};
     use crate::flow::copilot::capability_tools::HostTools;
     use flow_like_types::bot::BotLocation;
+    use flow_like_types::data_classification::{DataClassification, DataSensitivity};
     use std::sync::atomic::AtomicBool;
 
     #[derive(Clone)]
@@ -1123,8 +1261,26 @@ mod tests {
 
     #[async_trait]
     impl PlatformToolBridge for ParentBridge {
-        async fn call(&self, tool_name: &str, _: Value) -> String {
+        async fn call(&self, tool_name: &str, arguments: Value) -> String {
             locked(&self.calls).push(tool_name.to_string());
+            if tool_name == "file_read" {
+                let file = arguments["file"].as_str().unwrap_or_default();
+                if file.contains("missing") || file.starts_with("app:other") {
+                    return json!({
+                        "status": "error",
+                        "tool": tool_name,
+                        "error": { "code": "not_found", "message": format!("'{file}' is not readable") },
+                    })
+                    .to_string();
+                }
+                return json!({
+                    "status": "ok",
+                    "tool": tool_name,
+                    "handle": { "app_id": "app-workspace", "path": file },
+                    "classification": self.classification,
+                })
+                .to_string();
+            }
             json!({
                 "status": "ok",
                 "tool": tool_name,
@@ -1199,7 +1355,9 @@ mod tests {
         bridge: Arc<dyn PlatformToolBridge>,
         parent: Arc<ParentBridge>,
         runner: Arc<FakeRunner>,
-        talk: Arc<BotTalk>,
+        talk: Option<Arc<BotTalk>>,
+        label: Arc<TurnLabel>,
+        compute: TurnCompute,
         events: Arc<Mutex<Vec<String>>>,
     }
 
@@ -1210,18 +1368,33 @@ mod tests {
         budget: Duration,
         child_limit: Duration,
     ) -> Rig {
+        build_rig(bot, runner, parent, budget, child_limit, true)
+    }
+
+    fn build_rig(
+        bot: BotRunContext,
+        runner: Arc<FakeRunner>,
+        parent: Arc<ParentBridge>,
+        budget: Duration,
+        child_limit: Duration,
+        with_talk: bool,
+    ) -> Rig {
         let bot = Arc::new(bot);
-        let talk = Arc::new(BotTalk::for_run(
-            Arc::new(NoCrew),
-            &bot,
-            BotLocation::Desktop,
-        ));
+        let talk = with_talk.then(|| {
+            Arc::new(BotTalk::for_run(
+                Arc::new(NoCrew),
+                &bot,
+                BotLocation::Desktop,
+            ))
+        });
+        let label = TurnLabel::new(&bot, talk.clone());
         let events = Arc::new(Mutex::new(Vec::new()));
         let sink_events = events.clone();
         let mut env = SubtaskEnv::new(
             runner.clone(),
             Some(Arc::new(move |frame| locked(&sink_events).push(frame))),
-            Some(talk.clone()),
+            label.clone(),
+            bot.compute.clone(),
         );
         env.turn_budget = budget;
         env.min_child_time = Duration::from_millis(100);
@@ -1232,6 +1405,8 @@ mod tests {
             parent,
             runner,
             talk,
+            label,
+            compute: bot.compute.clone(),
             events,
         }
     }
@@ -1475,7 +1650,7 @@ mod tests {
         assert_eq!(locked(&runner.seen).len(), 1);
         assert!(locked(&rig.parent.calls).is_empty());
         for tool in CHILD_REFUSED_TOOLS {
-            assert!(child_refusal(tool, &json!({})).is_some(), "{tool}");
+            assert!(child_name_refusal(tool).is_some(), "{tool}");
         }
     }
 
@@ -1490,7 +1665,9 @@ mod tests {
         assert!(output.contains("subtask_tool_refused"), "{output}");
         assert!(locked(&rig.parent.calls).is_empty());
         assert_eq!(result["results"][0]["refused"].as_array().unwrap().len(), 1);
-        assert!(child_refusal("file_write", &json!({"path":"a.txt","content":"x"})).is_none());
+        assert!(
+            child_approval_refusal("file_write", &json!({"path":"a.txt","content":"x"})).is_none()
+        );
     }
 
     #[tokio::test]
@@ -1592,7 +1769,7 @@ mod tests {
     async fn the_highest_classification_a_child_saw_becomes_the_parents_taint() {
         let runner = FakeRunner::new(|prompt| {
             if prompt.contains("part 1") {
-                Behavior::CallThenReply("file_read", json!({"file":"a"}), "x".into())
+                Behavior::CallThenReply("file_list", json!({}), "x".into())
             } else {
                 Behavior::Reply("x".into())
             }
@@ -1609,10 +1786,10 @@ mod tests {
             TURN_TIME_BUDGET,
             CHILD_TIME_LIMIT,
         );
-        assert!(rig.talk.taint().is_empty());
+        assert!(rig.talk.as_ref().unwrap().taint().is_empty());
         let result = spawn(&rig, tasks(2)).await;
         assert_eq!(
-            rig.talk.taint().classification,
+            rig.talk.as_ref().unwrap().taint().classification,
             Some(DataClassification::Confidential)
         );
         assert_eq!(result["results"][1]["saved"], json!(["handle-1"]));
@@ -1672,5 +1849,215 @@ mod tests {
         let rig = make_rig(FakeRunner::replying("ok"));
         rig.bridge.call("list_apps", json!({})).await;
         assert_eq!(*locked(&rig.parent.calls), ["list_apps"]);
+    }
+
+    fn connector_rules() -> Vec<flow_like_types::bot_connector::ConnectorRule> {
+        use flow_like_types::bot_connector::{ConnectorKind, ConnectorRule, ConnectorToolInfo};
+        let tool = |name: &str, read_only| ConnectorToolInfo {
+            name: name.into(),
+            description: String::new(),
+            read_only_hint: read_only,
+            destructive_hint: None,
+            schema_hash: String::new(),
+        };
+        vec![ConnectorRule {
+            id: "c-docs".into(),
+            label: "Docs".into(),
+            kind: Some(ConnectorKind::Mcp),
+            default_policy: None,
+            tool_policies: Default::default(),
+            confirmed_hashes: Default::default(),
+            tools: vec![tool("search", Some(true)), tool("create", None)],
+        }]
+    }
+
+    #[tokio::test]
+    async fn a_child_may_use_a_connector_call_that_runs_but_not_one_that_asks() {
+        let calls = |tool: &'static str| {
+            FakeRunner::new(move |_| {
+                Behavior::CallThenReply(
+                    "connector_call",
+                    json!({"connector": "Docs", "tool": tool, "arguments": {}}),
+                    "x".into(),
+                )
+            })
+        };
+        let bot = || BotRunContext {
+            connectors: connector_rules(),
+            ..parent_bot()
+        };
+        let reading = calls("search");
+        let rig = rig_with(
+            bot(),
+            reading.clone(),
+            ParentBridge::new(),
+            TURN_TIME_BUDGET,
+            CHILD_TIME_LIMIT,
+        );
+        let result = spawn(&rig, tasks(1)).await;
+        assert!(result["results"][0].get("refused").is_none(), "{result}");
+        assert_eq!(*locked(&rig.parent.calls), ["connector_call"]);
+
+        let writing = calls("create");
+        let rig = rig_with(
+            bot(),
+            writing.clone(),
+            ParentBridge::new(),
+            TURN_TIME_BUDGET,
+            CHILD_TIME_LIMIT,
+        );
+        let result = spawn(&rig, tasks(1)).await;
+        assert!(locked(&rig.parent.calls).is_empty());
+        assert_eq!(result["results"][0]["refused"].as_array().unwrap().len(), 1);
+        let (_, output) = locked(&writing.calls)[0].clone();
+        assert!(output.contains("subtask_tool_refused"), "{output}");
+    }
+
+    #[tokio::test]
+    async fn a_child_classification_raises_the_turn_label_without_bot_talk() {
+        let runner = FakeRunner::new(|_| {
+            Behavior::CallThenReply("file_read", json!({"file": "a"}), "x".into())
+        });
+        let parent = Arc::new(ParentBridge {
+            cancelled: AtomicBool::new(false),
+            calls: Mutex::new(Vec::new()),
+            classification: Some("restricted"),
+        });
+        let rig = build_rig(
+            parent_bot(),
+            runner,
+            parent,
+            TURN_TIME_BUDGET,
+            CHILD_TIME_LIMIT,
+            false,
+        );
+        assert!(rig.talk.is_none() && rig.label.get().is_empty());
+        spawn(&rig, tasks(1)).await;
+        assert_eq!(
+            rig.label.get().classification,
+            Some(flow_like_types::data_classification::DataClassification::Restricted)
+        );
+        let refused = rig
+            .bridge
+            .call(
+                "email_send",
+                json!({"to": ["a@b.c"], "subject": "s", "body": "b"}),
+            )
+            .await;
+        assert!(refused.contains("turn_label_outbound_refused"), "{refused}");
+        assert!(!locked(&rig.parent.calls).contains(&"email_send".to_string()));
+        let fine = rig.bridge.call("list_apps", json!({})).await;
+        assert!(!fine.contains("turn_label_outbound_refused"));
+    }
+
+    #[tokio::test]
+    async fn data_at_the_bots_own_level_does_not_block_outbound_calls() {
+        let bot = BotRunContext {
+            classification: DataSensitivity {
+                classification: Some(DataClassification::Confidential),
+                pii: false,
+            },
+            ..parent_bot()
+        };
+        let parent = Arc::new(ParentBridge {
+            cancelled: AtomicBool::new(false),
+            calls: Mutex::new(Vec::new()),
+            classification: Some("confidential"),
+        });
+        let rig = build_rig(
+            bot,
+            FakeRunner::replying("x"),
+            parent,
+            TURN_TIME_BUDGET,
+            CHILD_TIME_LIMIT,
+            false,
+        );
+        rig.bridge.call("file_read", json!({"file": "a"})).await;
+        rig.bridge.call("email_send", json!({})).await;
+        assert!(locked(&rig.parent.calls).contains(&"email_send".to_string()));
+    }
+
+    #[tokio::test]
+    async fn parallel_children_are_charged_their_summed_compute() {
+        let runner = FakeRunner::new(|_| Behavior::Sleep(Duration::from_millis(300)));
+        let rig = make_rig(runner);
+        assert_eq!(rig.compute.extra_millis(), 0);
+        let result = spawn(&rig, tasks(3)).await;
+        let summed: u64 = result["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["usage"]["elapsed_ms"].as_u64().unwrap())
+            .sum();
+        assert!(summed >= 900, "{summed}");
+        let extra = rig.compute.extra_millis() as u64;
+        assert!(
+            extra >= 500,
+            "three parallel 300 ms children must cost about 600 ms extra: {extra}"
+        );
+        assert!(extra <= summed);
+    }
+
+    #[test]
+    fn compute_without_children_adds_nothing_and_never_goes_negative() {
+        let compute = TurnCompute::default();
+        compute.add_waited(500);
+        assert_eq!(compute.extra_millis(), 0);
+        compute.add_child(1_500);
+        assert_eq!(compute.extra_millis(), 1_000);
+    }
+
+    #[tokio::test]
+    async fn named_files_are_opened_through_the_parent_and_given_to_the_child_as_handles() {
+        let runner = FakeRunner::replying("ok");
+        let rig = make_rig(runner.clone());
+        let result = spawn(
+            &rig,
+            json!({"tasks": [{"instruction": "read it", "files": ["notes/a.txt"]}]}),
+        )
+        .await;
+        assert_eq!(result["results"][0]["status"], "done");
+        assert_eq!(*locked(&rig.parent.calls), ["file_read"]);
+        let seen = locked(&runner.seen)[0].clone();
+        assert!(
+            seen.user_prompt.contains("notes/a.txt"),
+            "{}",
+            seen.user_prompt
+        );
+        assert!(
+            seen.user_prompt.contains("\"app_id\":\"app-workspace\""),
+            "{}",
+            seen.user_prompt
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_or_out_of_scope_file_refuses_the_call_before_any_child_runs() {
+        let runner = FakeRunner::replying("ok");
+        let rig = make_rig(runner.clone());
+        for file in ["missing.txt", "app:other/secret.txt"] {
+            let result = spawn(
+                &rig,
+                json!({"tasks": [{"instruction": "a"}, {"instruction": "b", "files": ["ok.txt", file]}]}),
+            )
+            .await;
+            assert_eq!(result["code"], "subtasks_file_unresolved", "{file}");
+            assert!(result["message"].as_str().unwrap().contains(file));
+        }
+        assert!(locked(&runner.seen).is_empty());
+    }
+
+    #[test]
+    fn the_sub_task_model_is_used_only_where_the_host_can_run_it() {
+        assert_eq!(
+            child_model(Some("small"), true, Some("big")),
+            Some("small".into())
+        );
+        assert_eq!(
+            child_model(Some("small"), false, Some("big")),
+            Some("big".into())
+        );
+        assert_eq!(child_model(None, true, Some("big")), Some("big".into()));
+        assert_eq!(child_model(Some("small"), false, None), None);
     }
 }

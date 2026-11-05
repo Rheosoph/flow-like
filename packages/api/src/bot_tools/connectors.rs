@@ -51,6 +51,7 @@ pub(crate) fn to_contract(row: &bot_connector::Model) -> Option<BotConnector> {
         default_policy: ConnectorPolicy::from_column(&row.default_policy)?,
         tool_policies: parse::<BTreeMap<String, ConnectorPolicy>>(&row.tool_policies),
         tools_snapshot: parse::<Vec<ConnectorToolInfo>>(&row.tools_snapshot),
+        confirmed_hashes: parse::<BTreeMap<String, String>>(&row.confirmed_hashes),
         updated_at: row.updated_at.to_rfc3339(),
     })
 }

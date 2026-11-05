@@ -65,12 +65,18 @@ export const localConnectors = {
 		);
 	},
 
-	async refresh(botId: string, connectorId: string): Promise<IBotConnector> {
+	async refresh(
+		botId: string,
+		connectorId: string,
+		session?: { profileId: string; hub: string },
+	): Promise<IBotConnector> {
 		const operation = `refresh connector ${connectorId} of local bot ${botId}`;
 		return expectConnector(
 			await run(operation, "local_bot_refresh_connector", {
 				botId,
 				connectorId,
+				profileId: session?.profileId ?? null,
+				hub: session?.hub ?? null,
 			}),
 			operation,
 		);

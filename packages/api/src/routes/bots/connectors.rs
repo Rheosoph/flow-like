@@ -197,15 +197,15 @@ pub async fn list_bot_connectors(
 
 #[derive(Clone)]
 pub(crate) struct NewConnector {
-    kind: ConnectorKind,
-    label: String,
-    url: Option<String>,
-    provider_id: Option<String>,
-    auth_kind: &'static str,
-    auth_ref: Option<String>,
-    grant_encrypted: Option<String>,
-    scopes: Vec<String>,
-    policy: ConnectorPolicy,
+    pub(super) kind: ConnectorKind,
+    pub(super) label: String,
+    pub(super) url: Option<String>,
+    pub(super) provider_id: Option<String>,
+    pub(super) auth_kind: &'static str,
+    pub(super) auth_ref: Option<String>,
+    pub(super) grant_encrypted: Option<String>,
+    pub(super) scopes: Vec<String>,
+    pub(super) policy: ConnectorPolicy,
 }
 
 /// Inserts the connector once the bot is the caller's and has room.
@@ -250,6 +250,7 @@ pub(crate) async fn create_in<C: ConnectionTrait>(
         default_policy: Set(new.policy.column().to_string()),
         tool_policies: Set(serde_json::json!({})),
         tools_snapshot: Set(serde_json::json!([])),
+        confirmed_hashes: Set(serde_json::json!({})),
         created_at: Set(now),
         updated_at: Set(now),
     }
@@ -362,6 +363,35 @@ pub async fn create_bot_connector(
     Ok((StatusCode::CREATED, Json(info(row)?)))
 }
 
+/// The confirmed hashes after an update: a tool whose policy the owner just set, or that they
+/// confirmed, takes its current schema hash; every other tool keeps what it had.
+fn confirmed_after(current: &BotConnector, body: &UpdateBotConnector) -> BTreeMap<String, String> {
+    let mut hashes = current.confirmed_hashes.clone();
+    let hash_of = |name: &str| {
+        current
+            .tools_snapshot
+            .iter()
+            .find(|tool| tool.name == name)
+            .map(|tool| tool.schema_hash.clone())
+    };
+    if let Some(policies) = &body.tool_policies {
+        for (name, policy) in policies {
+            if current.tool_policies.get(name) != Some(policy)
+                && let Some(hash) = hash_of(name)
+            {
+                hashes.insert(name.clone(), hash);
+            }
+        }
+        hashes.retain(|name, _| policies.contains_key(name));
+    }
+    for name in &body.confirm_tools {
+        if let Some(hash) = hash_of(name) {
+            hashes.insert(name.clone(), hash);
+        }
+    }
+    hashes
+}
+
 #[utoipa::path(
     patch,
     path = "/bots/{bot_id}/connectors/{connector_id}",
@@ -401,6 +431,8 @@ pub async fn update_bot_connector(
     if let Some(policy) = body.default_policy {
         active.default_policy = Set(policy.column().to_string());
     }
+    let current = to_contract(&row)
+        .ok_or_else(|| ApiError::internal("The connector has an unknown kind or policy"))?;
     if let Some(policies) = &body.tool_policies {
         validate_tool_policies(policies).map_err(invalid)?;
         let stored: BTreeMap<&String, &str> = policies
@@ -408,6 +440,10 @@ pub async fn update_bot_connector(
             .map(|(name, policy)| (name, policy.column()))
             .collect();
         active.tool_policies = Set(serde_json::json!(stored));
+    }
+    if body.tool_policies.is_some() || !body.confirm_tools.is_empty() {
+        let hashes = confirmed_after(&current, &body);
+        active.confirmed_hashes = Set(serde_json::json!(hashes));
     }
     if let Some(grant) = grant_of(body.grant.as_deref())? {
         if row.auth_kind != AUTH_OAUTH {
@@ -488,7 +524,7 @@ fn tools_from(output: &str) -> Result<Vec<ConnectorToolInfo>, ApiError> {
         (status = 400, description = "Only MCP servers have a tool list"),
         (status = 401, description = "Not signed in"),
         (status = 404, description = "You have no such bot or connector"),
-        (status = 409, description = "The bot needs a workspace first"),
+        (status = 409, description = "The bot cannot have a workspace (Flux), or its workspace is being deleted"),
         (status = 502, description = "BOT_CONNECTOR_UNREACHABLE: the server did not answer"),
         (status = 503, description = "This server has no executor for connector calls")
     ),
@@ -511,9 +547,7 @@ pub async fn refresh_bot_connector(
     let executor = crate::bot_tools::executor_for(&state).ok_or_else(|| {
         ApiError::service_unavailable("This server has no executor, so it cannot reach MCP servers")
     })?;
-    let workspace = workspace::live_workspace(&state.db, &sub, &bot_id)
-        .await?
-        .ok_or_else(|| ApiError::conflict("Give the bot a workspace first"))?;
+    let workspace = workspace::ensure(&state, &sub, &bot_id).await?.app_id;
     let entry = entry_of(&state, &row)
         .ok_or_else(|| ApiError::internal("The connector has an unknown kind or policy"))?;
     let authorization = authorization_of(&state, &sub, &row)
@@ -550,6 +584,7 @@ pub async fn refresh_bot_connector(
             entry,
             authorization,
         }],
+        skill_call: None,
     };
     let principal = BotUser {
         bot_id: bot_id.clone(),

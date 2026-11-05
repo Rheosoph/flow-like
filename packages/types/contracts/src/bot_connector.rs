@@ -119,6 +119,10 @@ pub struct BotConnector {
     pub tool_policies: BTreeMap<String, ConnectorPolicy>,
     #[serde(default)]
     pub tools_snapshot: Vec<ConnectorToolInfo>,
+    /// The `schema_hash` each tool had when the owner last set or confirmed its policy. A tool
+    /// whose schema changed since then asks every time until the owner confirms it again.
+    #[serde(default)]
+    pub confirmed_hashes: BTreeMap<String, String>,
     /// RFC 3339.
     pub updated_at: String,
 }
@@ -132,6 +136,7 @@ impl BotConnector {
             default_policy: Some(self.default_policy),
             tool_policies: self.tool_policies.clone(),
             tools: self.tools_snapshot.clone(),
+            confirmed_hashes: self.confirmed_hashes.clone(),
         }
     }
 }
@@ -168,6 +173,9 @@ pub struct UpdateBotConnector {
     pub grant: Option<String>,
     #[serde(default)]
     pub scopes: Option<Vec<String>>,
+    /// Tools whose changed schema the owner has looked at and accepts.
+    #[serde(default)]
+    pub confirm_tools: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -203,6 +211,7 @@ pub struct ConnectorRule {
     pub default_policy: Option<ConnectorPolicy>,
     pub tool_policies: BTreeMap<String, ConnectorPolicy>,
     pub tools: Vec<ConnectorToolInfo>,
+    pub confirmed_hashes: BTreeMap<String, String>,
 }
 
 /// How one call is handled.
@@ -239,6 +248,16 @@ impl ConnectorRule {
         }
     }
 
+    /// Whether the tool's schema changed since the owner set or confirmed its policy.
+    pub fn drifted(&self, name: &str) -> bool {
+        match (self.confirmed_hashes.get(name), self.tool(name)) {
+            (Some(confirmed), Some(tool)) => {
+                !tool.schema_hash.is_empty() && *confirmed != tool.schema_hash
+            }
+            _ => false,
+        }
+    }
+
     pub fn tool_is_destructive(&self, name: &str) -> bool {
         self.tool(name)
             .is_some_and(|tool| tool.destructive_hint == Some(true))
@@ -261,6 +280,7 @@ impl ConnectorRule {
     pub fn call_policy(&self, tool: &str) -> CallPolicy {
         match self.tool_policy(tool) {
             ConnectorPolicy::Never => CallPolicy::Never,
+            _ if self.drifted(tool) => CallPolicy::AskEach,
             ConnectorPolicy::Ask if self.tool_is_destructive(tool) => CallPolicy::AskEach,
             ConnectorPolicy::Ask => CallPolicy::Ask,
             ConnectorPolicy::Read if self.tool_is_destructive(tool) => CallPolicy::Ask,
@@ -360,6 +380,7 @@ mod tests {
             kind: Some(ConnectorKind::Mcp),
             default_policy: None,
             tool_policies: BTreeMap::new(),
+            confirmed_hashes: BTreeMap::new(),
             tools: vec![
                 tool("search", Some(true), None),
                 tool("drop", None, Some(true)),
@@ -367,6 +388,22 @@ mod tests {
                 tool("odd", Some(true), Some(true)),
             ],
         }
+    }
+
+    #[test]
+    fn a_changed_schema_asks_every_time_until_confirmed() {
+        let mut rule = rule();
+        rule.tools[0].schema_hash = "v2".into();
+        rule.tool_policies
+            .insert("search".into(), ConnectorPolicy::Read);
+        rule.confirmed_hashes.insert("search".into(), "v1".into());
+        assert_eq!(rule.call_policy("search"), CallPolicy::AskEach);
+        rule.confirmed_hashes.insert("search".into(), "v2".into());
+        assert_eq!(rule.call_policy("search"), CallPolicy::Run);
+        rule.confirmed_hashes.insert("search".into(), "v1".into());
+        rule.tool_policies
+            .insert("search".into(), ConnectorPolicy::Never);
+        assert_eq!(rule.call_policy("search"), CallPolicy::Never);
     }
 
     #[test]

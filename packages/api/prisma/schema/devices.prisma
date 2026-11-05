@@ -11,6 +11,8 @@ model ManagedDevice {
   lastSeenAt   BigInt?
   revokedAt    BigInt?
   displayName  String?
+  /// When the device's bot host last polled the hub (unix ms); written at most once a minute.
+  botHostSeenAt BigInt?
 
   @@index([ownerId, status])
 }

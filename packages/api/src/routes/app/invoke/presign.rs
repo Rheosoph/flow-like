@@ -39,7 +39,9 @@ pub async fn presign(
 ) -> Result<Json<SharedCredentials>, ApiError> {
     let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ExecuteEvents);
 
-    let sub = user.sub()?;
+    let sub =
+        crate::bot_caller::acting_owner(&state.db, &user, &crate::bot_caller::Names::default())
+            .await?;
     let access = invoke_access(&permission.permissions).ok_or(ApiError::FORBIDDEN)?;
 
     let credentials = state.scoped_credentials(&sub, &app_id, access).await?;

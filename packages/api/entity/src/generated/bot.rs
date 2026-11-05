@@ -65,6 +65,8 @@ pub struct Model {
     pub image_model: Option<String>,
     #[sea_orm(column_name = "visionModel", column_type = "Text", nullable)]
     pub vision_model: Option<String>,
+    #[sea_orm(column_name = "subtaskModel", column_type = "Text", nullable)]
+    pub subtask_model: Option<String>,
     #[sea_orm(has_many)]
     pub bot_host_heartbeats: HasMany<super::bot_host_heartbeat::Entity>,
     #[sea_orm(has_many)]

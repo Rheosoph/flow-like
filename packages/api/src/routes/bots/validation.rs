@@ -57,6 +57,7 @@ fn new_bot(
         tts_model: None,
         image_model: None,
         vision_model: None,
+        subtask_model: None,
         classification: DataSensitivity::default(),
         capabilities: Vec::new(),
         profile_id: None,
@@ -74,6 +75,7 @@ fn new_bot(
         tts_model: Some(request.tts_model),
         image_model: Some(request.image_model),
         vision_model: Some(request.vision_model),
+        subtask_model: Some(request.subtask_model),
         classification: request.classification,
         capabilities: request.capabilities,
         profile_id: Some(request.profile_id),
@@ -174,6 +176,9 @@ fn patch_look(next: &mut BotSettings, patch: &mut UpdateBotRequest) -> Result<()
     })?;
     replace(&mut next.vision_model, patch.vision_model.take(), |id| {
         optional_text("vision_model", id, MODEL_ID_MAX_CHARS)
+    })?;
+    replace(&mut next.subtask_model, patch.subtask_model.take(), |id| {
+        optional_text("subtask_model", id, MODEL_ID_MAX_CHARS)
     })?;
     replace(&mut next.classification, patch.classification.take(), Ok)
 }
@@ -413,6 +418,7 @@ pub(super) fn system_defaults(kind: BotSystemKind) -> BotSettings {
         tts_model: None,
         image_model: None,
         vision_model: None,
+        subtask_model: None,
         classification: DataSensitivity::default(),
         capabilities,
         profile_id: None,
@@ -841,16 +847,19 @@ mod tests {
             "tts_model": "tts-a",
             "image_model": "image-a",
             "vision_model": "vision-a",
+            "subtask_model": " small-a ",
         }))
         .unwrap();
         assert_eq!(pinned.stt_model.as_deref(), Some("stt-a"));
         assert_eq!(pinned.tts_model.as_deref(), Some("tts-a"));
         assert_eq!(pinned.image_model.as_deref(), Some("image-a"));
         assert_eq!(pinned.vision_model.as_deref(), Some("vision-a"));
+        assert_eq!(pinned.subtask_model.as_deref(), Some("small-a"));
 
         let renamed = patch(&pinned, None, json!({ "name": "Pinned 2" })).unwrap();
         assert_eq!(renamed.stt_model.as_deref(), Some("stt-a"));
         assert_eq!(renamed.vision_model.as_deref(), Some("vision-a"));
+        assert_eq!(renamed.subtask_model.as_deref(), Some("small-a"));
 
         let set = patch(&pinned, None, json!({ "tts_model": "tts-b" })).unwrap();
         assert_eq!(set.tts_model.as_deref(), Some("tts-b"));
@@ -859,19 +868,26 @@ mod tests {
         let cleared = patch(
             &pinned,
             None,
-            json!({ "stt_model": null, "image_model": " ", "vision_model": null }),
+            json!({ "stt_model": null, "image_model": " ", "vision_model": null, "subtask_model": null }),
         )
         .unwrap();
         assert_eq!(cleared.stt_model, None);
         assert_eq!(cleared.image_model, None);
         assert_eq!(cleared.vision_model, None);
+        assert_eq!(cleared.subtask_model, None);
         assert_eq!(cleared.tts_model.as_deref(), Some("tts-a"));
         assert_eq!(
             pinned.changed_fields(&cleared),
-            ["stt_model", "image_model", "vision_model"]
+            ["stt_model", "image_model", "vision_model", "subtask_model"]
         );
 
-        for field in ["stt_model", "tts_model", "image_model", "vision_model"] {
+        for field in [
+            "stt_model",
+            "tts_model",
+            "image_model",
+            "vision_model",
+            "subtask_model",
+        ] {
             let error = patch(
                 &pinned,
                 None,

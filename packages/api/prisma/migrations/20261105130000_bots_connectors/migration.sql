@@ -13,6 +13,7 @@ CREATE TABLE "BotConnector" (
     "defaultPolicy" TEXT NOT NULL DEFAULT 'ask',
     "toolPolicies" JSONB NOT NULL DEFAULT '{}',
     "toolsSnapshot" JSONB NOT NULL DEFAULT '[]',
+    "confirmedHashes" JSONB NOT NULL DEFAULT '{}',
     "createdAt" TIMESTAMPTZ(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ(3) NOT NULL,
 

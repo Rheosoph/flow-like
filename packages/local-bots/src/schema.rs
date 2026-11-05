@@ -277,6 +277,17 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         updated_at INTEGER NOT NULL
     ) STRICT;
     CREATE INDEX bot_connectors_bot ON bot_connectors (bot_id, created_at);",
+    // The schema hash each tool had when the person set or confirmed its policy.
+    "ALTER TABLE bot_connectors ADD COLUMN confirmed_hashes TEXT NOT NULL DEFAULT '{}';",
+    // The Bit a bot's sub-tasks run on; null uses the bot's own model.
+    "ALTER TABLE bots ADD COLUMN subtask_model TEXT;",
+    // A group's picture as a PNG data URL of at most 256 px.
+    "ALTER TABLE conversations ADD COLUMN image TEXT;",
+    // Packages this device installed only to give a bot its skills: removed again with the last skill.
+    "CREATE TABLE skill_package_installs (
+        package_id TEXT PRIMARY KEY NOT NULL,
+        installed_at INTEGER NOT NULL
+    ) STRICT;",
 ];
 
 pub(crate) fn open(path: &Path) -> Result<Connection> {

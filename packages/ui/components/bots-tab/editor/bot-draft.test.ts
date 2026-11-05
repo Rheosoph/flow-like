@@ -221,6 +221,23 @@ describe("requests", () => {
 		).toEqual({ stt_model: "stt_b", image_model: "image_b" });
 	});
 
+	test("the sub-task model is created, changed and cleared like a pin", () => {
+		expect(
+			buildCreateBotRequest({
+				...createEmptyBotDraft(),
+				name: "Scout",
+				subtaskModel: "small_a",
+			}),
+		).toMatchObject({ subtask_model: "small_a" });
+		const original = bot({ subtask_model: "small_a" });
+		const draft = botDraftFromBot(original);
+		expect(draft.subtaskModel).toBe("small_a");
+		expect(buildUpdateBotRequest(original, draft)).toEqual({});
+		expect(
+			buildUpdateBotRequest(original, { ...draft, subtaskModel: null }),
+		).toEqual({ subtask_model: null });
+	});
+
 	test("update sends nothing when nothing changed", () => {
 		const original = bot();
 		expect(buildUpdateBotRequest(original, botDraftFromBot(original))).toEqual(

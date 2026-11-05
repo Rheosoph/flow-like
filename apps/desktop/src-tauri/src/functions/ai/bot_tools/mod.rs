@@ -1,5 +1,5 @@
-//! The browser and the computer of a bot on this device (`browser_*`, `computer_*`): the nodes'
-//! logic behind `flow-like-bot-tools`' backends, plus what the bot panel's Computer tab shows.
+//! The browser and the computer of a bot on this device (`browser_*`, `computer_*`): the
+//! machines of `flow-like-bot-machine` in this process, plus what the bot panel's Computer tab shows.
 
 pub mod view;
 pub(crate) mod connectors;
@@ -8,11 +8,6 @@ pub(crate) mod mail;
 pub(crate) mod people;
 pub(crate) mod schedule;
 pub(crate) mod skills;
-
-#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
-mod browser;
-#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
-mod computer;
 
 use std::sync::Arc;
 
@@ -49,10 +44,11 @@ pub(crate) fn local_machine(
     browser_use: bool,
     computer_use: bool,
 ) -> LocalMachine {
+    let machine =
+        view::machine_host(app).machine(bot_id, conversation_id, browser_use, computer_use);
     LocalMachine {
-        browser: browser_use
-            .then(|| browser::session(app, bot_id, conversation_id) as Arc<dyn BrowserBackend>),
-        computer: computer_use.then(|| computer::session(bot_id) as Arc<dyn ComputerBackend>),
+        browser: machine.browser,
+        computer: machine.computer,
     }
 }
 

@@ -24,7 +24,8 @@ export type BotModelPin =
 	| "sttModel"
 	| "ttsModel"
 	| "imageModel"
-	| "visionModel";
+	| "visionModel"
+	| "subtaskModel";
 
 export interface BotDraft {
 	presetId: string | null;
@@ -40,6 +41,8 @@ export interface BotDraft {
 	ttsModel: string | null;
 	imageModel: string | null;
 	visionModel: string | null;
+	/** Bit id of the model its sub-tasks run on; `null` uses its own model. */
+	subtaskModel: string | null;
 	classification: IDataSensitivity;
 	capabilities: BotCapability[];
 	profileId: string | null;
@@ -129,12 +132,19 @@ export function createEmptyBotDraft(): BotDraft {
 		ttsModel: null,
 		imageModel: null,
 		visionModel: null,
+		subtaskModel: null,
 		classification: { pii: false },
 		capabilities: [...NEW_BOT_CAPABILITIES],
 		profileId: null,
 		location: "server",
 		deviceId: null,
 	};
+}
+
+/** The draft on that managed device; unchanged without a device id. */
+export function botDraftOnDevice(draft: BotDraft, deviceId?: string): BotDraft {
+	if (!deviceId) return draft;
+	return { ...setBotDraftLocation(draft, "device").draft, deviceId };
 }
 
 export function botDraftFromBot(bot: IBot): BotDraft {
@@ -150,6 +160,7 @@ export function botDraftFromBot(bot: IBot): BotDraft {
 		ttsModel: text(bot.tts_model),
 		imageModel: text(bot.image_model),
 		visionModel: text(bot.vision_model),
+		subtaskModel: text(bot.subtask_model),
 		classification: normalizeBotClassification(bot.classification),
 		capabilities: orderBotCapabilities(bot.capabilities),
 		profileId: bot.profile_id,
@@ -267,6 +278,7 @@ function draftFields(draft: BotDraft): BotFields {
 		tts_model: text(draft.ttsModel),
 		image_model: text(draft.imageModel),
 		vision_model: text(draft.visionModel),
+		subtask_model: text(draft.subtaskModel),
 		classification: normalizeBotClassification(draft.classification),
 		capabilities: ordered,
 		profile_id: ordered.includes("profile_apps") ? draft.profileId : null,
@@ -287,6 +299,7 @@ function botFields(bot: IBot): BotFields {
 		tts_model: text(bot.tts_model),
 		image_model: text(bot.image_model),
 		vision_model: text(bot.vision_model),
+		subtask_model: text(bot.subtask_model),
 		classification: normalizeBotClassification(bot.classification),
 		capabilities: orderBotCapabilities(bot.capabilities),
 		profile_id: bot.profile_id ?? null,
@@ -313,6 +326,7 @@ export function buildCreateBotRequest(draft: BotDraft): ICreateBotRequest {
 		tts_model,
 		image_model,
 		vision_model,
+		subtask_model,
 		...fields
 	} = draftFields(draft);
 	return {
@@ -322,6 +336,7 @@ export function buildCreateBotRequest(draft: BotDraft): ICreateBotRequest {
 		...(tts_model ? { tts_model } : {}),
 		...(image_model ? { image_model } : {}),
 		...(vision_model ? { vision_model } : {}),
+		...(subtask_model ? { subtask_model } : {}),
 		name: draft.name.trim(),
 		preset_id: draft.presetId,
 	};

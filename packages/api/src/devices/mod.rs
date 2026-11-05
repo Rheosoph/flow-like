@@ -3,6 +3,8 @@
 
 mod archive_payload;
 pub(crate) mod archives;
+pub(crate) mod bots;
+pub(crate) mod bots_grant;
 pub(crate) mod certificates;
 pub(crate) mod fleet;
 pub(crate) mod inventory;

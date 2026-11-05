@@ -92,6 +92,10 @@
 			"description": "",
 			"label": ""
 		},
+		"web_requests": {
+			"description": "",
+			"label": ""
+		},
 		"webhook": {
 			"description": "",
 			"label": ""
@@ -387,6 +391,22 @@
 			"where": ""
 		},
 		"retry": "",
+		"roomSettings": {
+			"change": "",
+			"description": "",
+			"failed": "",
+			"imageFormat": "",
+			"imageHint": "",
+			"imageSize": "",
+			"imageUnreadable": "",
+			"name": "",
+			"namePlaceholder": "",
+			"open": "",
+			"remove": "",
+			"save": "",
+			"title": "",
+			"upload": ""
+		},
 		"roomTag": "",
 		"rooms": {
 			"bots_one": "",
@@ -476,7 +496,6 @@
 			"profileApps_other": "",
 			"profileEmpty": "",
 			"profilePlaceholder": "",
-			"runtime": "",
 			"subtitle": "",
 			"subtitleMemoryOn": "",
 			"title": ""

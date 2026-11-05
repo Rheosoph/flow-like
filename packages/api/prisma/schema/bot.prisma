@@ -38,6 +38,8 @@ model Bot {
   ttsModel        String?
   imageModel      String?
   visionModel     String?
+  /// Bit id of the model the bot's sub-tasks run on; null uses the bot's own.
+  subtaskModel    String?
   permissionsFrom BotPermission[]       @relation("BotPermissionFrom")
   permissionsTo   BotPermission[]       @relation("BotPermissionTo")
   hostHeartbeats  BotHostHeartbeat[]
@@ -116,6 +118,8 @@ model BotConnector {
   toolPolicies     Json     @default("{}")
   /// `[{name, description, read_only_hint, destructive_hint, schema_hash}]` from the last refresh.
   toolsSnapshot    Json     @default("[]")
+  /// Tool name to the `schema_hash` it had when the owner set or confirmed its policy.
+  confirmedHashes  Json     @default("{}")
   createdAt        DateTime @default(now()) @db.Timestamptz(3)
   updatedAt        DateTime @updatedAt @db.Timestamptz(3)
 

@@ -144,7 +144,10 @@ export function resolveDockSelection(
 	return bot ? dockSelectionForBot(bot, bots) : selection;
 }
 
-/** The owner's bot on the other end of a direct conversation, which opens as that bot's chat. */
+/**
+ * The owner's bot on the other end of a direct conversation, which opens as that bot's chat. Flux's
+ * chat shows its own sessions, not this conversation, so Flux's stays a conversation.
+ */
 function ownBotOfDirectConversation(
 	conversation: IConversation | undefined,
 	bots: readonly IBot[] | undefined,
@@ -155,7 +158,9 @@ function ownBotOfDirectConversation(
 	if (!partner) return undefined;
 	return bots?.find(
 		(bot) =>
-			bot.id === partner && (bot.local || isSelfPrincipal(bot.owner_id, me)),
+			bot.id === partner &&
+			chatBotIdOf(bot) !== null &&
+			(bot.local || isSelfPrincipal(bot.owner_id, me)),
 	);
 }
 

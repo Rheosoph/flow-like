@@ -16,6 +16,7 @@ import {
 	XIcon,
 } from "lucide-react";
 import { type ReactNode, useState } from "react";
+import { useAccountDevices } from "../../hooks/use-account-devices";
 import { botPresence, useBotPresence } from "../../hooks/use-bot-presence";
 import { useRunningBotTurn } from "../../hooks/use-bot-turn";
 import { formatRelativeTime } from "../../lib/date";
@@ -44,6 +45,7 @@ import { BotExchanges, BotPermissions } from "./bot-permissions";
 import { BotTasks, offersTasks } from "./bot-tasks";
 import { BotToolGrants } from "./bot-tool-grants";
 import { BotWebhooks, offersWebhooks } from "./bot-webhooks";
+import { useBotHostStatus } from "./device-host-status";
 import { BOT_CAPABILITY_ICONS } from "./editor/bot-capability-groups";
 import { hasFixedLocation, hasFlowPilot } from "./editor/bot-draft";
 import { BotTag } from "./editor/bot-editor-parts";
@@ -94,7 +96,7 @@ function DetailRow({
 	);
 }
 
-function WhereItRuns({ bot }: Readonly<{ bot: IBot }>) {
+export function WhereItRuns({ bot }: Readonly<{ bot: IBot }>) {
 	const { t } = useTranslation("bots");
 	const locationText = useBotLocationText();
 	const label = t("panel.details.runs", "Where it runs");
@@ -113,6 +115,8 @@ function WhereItRuns({ bot }: Readonly<{ bot: IBot }>) {
 		);
 	}
 	const location = locationText(bot.location);
+	if (bot.location === "device" && bot.device_id)
+		return <OnDevice bot={bot} deviceId={bot.device_id} label={label} />;
 	return (
 		<DetailRow
 			icon={BOT_LOCATION_ICONS[bot.location]}
@@ -120,6 +124,37 @@ function WhereItRuns({ bot }: Readonly<{ bot: IBot }>) {
 			hint={location.description}
 		>
 			{location.label}
+		</DetailRow>
+	);
+}
+
+/** A bot on a managed device names it and says whether that device's agent hosts bots. */
+function OnDevice({
+	bot,
+	deviceId,
+	label,
+}: Readonly<{ bot: IBot; deviceId: string; label: string }>) {
+	const { t } = useTranslation("bots");
+	const locationText = useBotLocationText();
+	const hostStatus = useBotHostStatus();
+	const { devices } = useAccountDevices();
+	const device = devices?.find((entry) => entry.device_id === deviceId);
+	const location = locationText(bot.location);
+	return (
+		<DetailRow
+			icon={BOT_LOCATION_ICONS.device}
+			label={label}
+			hint={
+				device
+					? hostStatus(device.bot_host_seen_at).label
+					: location.description
+			}
+		>
+			{device
+				? t("panel.details.onDevice", "On {{device}}", {
+						device: device.display_name || device.name,
+					})
+				: location.label}
 		</DetailRow>
 	);
 }

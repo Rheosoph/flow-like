@@ -1,14 +1,17 @@
 use super::{
     INBOX_DIRECT_FIXED, INBOX_ENVELOPES_MISMATCH, INBOX_KEY_EXISTS, INBOX_KEY_LIMIT,
-    INBOX_MEMBER_LIMIT, INBOX_MEMBER_NOT_ALLOWED, INBOX_MESSAGE_ID_TAKEN, INBOX_NOT_YOUR_MESSAGE,
-    INBOX_REMOVE_NOT_ALLOWED, INBOX_TARGET_NOT_FOUND, Reader, active_membership,
-    conversations::{NewConversation, start_direct, start_group, validate_new_conversation},
+    INBOX_MEMBER_LIMIT, INBOX_MESSAGE_ID_TAKEN, INBOX_NOT_YOUR_MESSAGE, INBOX_REMOVE_NOT_ALLOWED,
+    INBOX_TARGET_NOT_FOUND, Reader, active_membership,
+    conversations::{
+        NewConversation, member_group, start_direct, start_group, validate_new_conversation,
+    },
     entries::{Outgoing, entries_page, mark_read_in, page_bounds, send_in, validate_send},
+    image::compare_and_set,
     insert_copies,
     keys::{
         MAX_ACTIVE_KEYS, active_keys, register_in, requested_principals, revoke_in, validate_key,
     },
-    members::{Principal, add_in, allowed_principals, end_memberships, member_copies, remove_in},
+    members::{Principal, add_in, end_memberships, member_copies, remove_in},
     model::{
         CreateConversationRequest, EntriesQuery, InboxEntriesPage, InboxEntry,
         RegisterInboxKeyRequest, SendEntryRequest,
@@ -41,7 +44,8 @@ const INBOX_TABLES: [&str; 5] = [
     r#"CREATE TABLE public."Conversation" (
         "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
         "directKey" TEXT UNIQUE, "createdBy" TEXT NOT NULL, "lastActivityAt" TEXT NOT NULL,
-        "createdAt" TEXT NOT NULL, "updatedAt" TEXT NOT NULL, "importKey" TEXT, "lastSeq" INTEGER)"#,
+        "createdAt" TEXT NOT NULL, "updatedAt" TEXT NOT NULL, "importKey" TEXT, "lastSeq" INTEGER,
+        "image" TEXT)"#,
     r#"CREATE TABLE public."ConversationMember" (
         "conversationId" TEXT NOT NULL, "principalId" TEXT NOT NULL,
         "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
@@ -155,21 +159,7 @@ async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str, deleted: 
         tts_model: Set(None),
         image_model: Set(None),
         vision_model: Set(None),
-    }
-    .insert(db)
-    .await
-    .unwrap();
-}
-
-async fn insert_membership(db: &DatabaseConnection, user_id: &str, app_id: &str) {
-    membership::ActiveModel {
-        id: Set(format!("{user_id}-{app_id}")),
-        user_id: Set(user_id.into()),
-        app_id: Set(app_id.into()),
-        role_id: Set("role".into()),
-        created_at: Set(at(0)),
-        updated_at: Set(at(0)),
-        joined_via: Set(None),
+        subtask_model: Set(None),
     }
     .insert(db)
     .await
@@ -303,45 +293,6 @@ async fn unread(db: &DatabaseConnection, reader: &str, conversation_id: &str) ->
         .await
         .unwrap()[0]
         .unread_count
-}
-
-#[tokio::test]
-async fn members_are_own_live_bots_and_people_sharing_an_app() {
-    let db = database().await;
-    insert_bot(&db, "bot_mine", "owner", false).await;
-    insert_bot(&db, "bot_gone", "owner", true).await;
-    insert_bot(&db, "bot_theirs", "friend", false).await;
-    for (user_id, app_id) in [
-        ("owner", "app-1"),
-        ("owner", "app-3"),
-        ("friend", "app-1"),
-        ("friend", "app-3"),
-        ("stranger", "app-2"),
-    ] {
-        insert_membership(&db, user_id, app_id).await;
-    }
-
-    let allowed = allowed_principals(&db, "owner", &["friend".into(), "bot_mine".into()])
-        .await
-        .unwrap();
-    assert_eq!(allowed, [user("friend"), bot_principal("bot_mine")]);
-    for (asked, refused) in [
-        (vec!["friend", "stranger", "bot_theirs"], "stranger"),
-        (vec!["bot_gone"], "bot_gone"),
-        (vec!["bot_theirs"], "bot_theirs"),
-        (vec!["nobody"], "nobody"),
-    ] {
-        let asked: Vec<String> = asked.into_iter().map(str::to_string).collect();
-        let error = allowed_principals(&db, "owner", &asked).await.unwrap_err();
-        assert_code(&error, StatusCode::FORBIDDEN, INBOX_MEMBER_NOT_ALLOWED);
-        assert!(names(&error, refused), "{error:?}");
-    }
-    assert!(
-        allowed_principals(&db, "owner", &[])
-            .await
-            .unwrap()
-            .is_empty()
-    );
 }
 
 fn create(
@@ -1027,6 +978,58 @@ async fn a_member_who_left_reads_nothing_until_added_back() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+#[tokio::test]
+async fn a_group_picture_changes_only_from_the_one_that_was_read() {
+    let db = database().await;
+    group(
+        &db,
+        "pictured",
+        ConversationEncryption::Plain,
+        &[user("user-b")],
+    )
+    .await;
+    assert!(member_group(&db, "pictured", "user-b").await.is_ok());
+
+    assert!(
+        compare_and_set(&db, "pictured", None, Some("aa"))
+            .await
+            .unwrap()
+    );
+    assert!(
+        !compare_and_set(&db, "pictured", None, Some("bb"))
+            .await
+            .unwrap(),
+        "a writer that read no picture loses to the one that set it"
+    );
+    let seen = conversations_for(&db, &Reader::own("user-b"), Some("pictured"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (seen[0].image.as_deref(), seen[0].image_url.as_deref()),
+        (Some("aa"), None)
+    );
+    assert!(
+        compare_and_set(&db, "pictured", Some("aa"), None)
+            .await
+            .unwrap()
+    );
+    let cleared = conversations_for(&db, &Reader::own("user-a"), Some("pictured"))
+        .await
+        .unwrap();
+    assert_eq!(cleared[0].image, None);
+
+    let pair = direct(&db, "user-a", &user("user-d"), 40).await;
+    let fixed = member_group(&db, &pair, "user-a").await.unwrap_err();
+    assert_code(&fixed, StatusCode::CONFLICT, INBOX_DIRECT_FIXED);
+    assert_eq!(
+        member_group(&db, "pictured", "user-z")
+            .await
+            .unwrap_err()
+            .status(),
+        StatusCode::NOT_FOUND
     );
 }
 

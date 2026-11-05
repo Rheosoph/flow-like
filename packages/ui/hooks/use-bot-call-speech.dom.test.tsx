@@ -124,7 +124,7 @@ async function fixture(
 				...controls,
 				joined,
 				live: joined ? { callId: "call" } : null,
-			} as ConversationCallState,
+			} as unknown as ConversationCallState,
 		});
 		return null;
 	}

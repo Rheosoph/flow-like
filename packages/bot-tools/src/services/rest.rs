@@ -8,7 +8,7 @@ use flow_like_types::reqwest::{self, Method, Url, header};
 use serde_json::{Map, Value};
 
 use super::Credential;
-use super::egress::ensure_reachable;
+use super::egress::resolve_reachable;
 use crate::env::Environment;
 
 const MAX_BODY_BYTES: usize = 1024 * 1024;
@@ -117,10 +117,14 @@ pub async fn send(
     body: Option<Value>,
 ) -> Result<RestResponse, String> {
     let method = method_of(method)?;
-    ensure_reachable(environment, url.as_str()).await?;
-    let client = reqwest::Client::builder()
+    let reachable = resolve_reachable(environment, url.as_str()).await?;
+    let mut builder = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(TIMEOUT)
+        .timeout(TIMEOUT);
+    if !reachable.addrs.is_empty() {
+        builder = builder.resolve_to_addrs(&reachable.host, &reachable.addrs);
+    }
+    let client = builder
         .build()
         .map_err(|error| format!("The HTTP client could not be created: {error}"))?;
     let mut request = client

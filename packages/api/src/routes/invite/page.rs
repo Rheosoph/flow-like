@@ -1,4 +1,21 @@
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum InvitationKind {
+    Project,
+    Room,
+}
+
+impl InvitationKind {
+    fn caption(self) -> &'static str {
+        match self {
+            Self::Project => "Project invitation",
+            Self::Room => "Group chat invitation",
+        }
+    }
+}
+
+/// `image` is a large cover; without one, `icon` is the preview image unfurls show.
 pub(super) struct InvitationPage {
+    pub kind: InvitationKind,
     pub name: String,
     pub description: String,
     pub image: Option<String>,
@@ -52,7 +69,15 @@ fn escape(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-fn document(title: &str, description: &str, head: &str, body: &str, script: bool) -> String {
+fn document(
+    caption: &str,
+    title: &str,
+    description: &str,
+    head: &str,
+    body: &str,
+    script: bool,
+) -> String {
+    let caption = escape(caption);
     let title = escape(title);
     let description = escape(description);
     let style = include_str!("style.css");
@@ -84,7 +109,7 @@ fn document(title: &str, description: &str, head: &str, body: &str, script: bool
 </head>
 <body>
 <div class="shell">
-<header class="brand">Flow-Like<span class="brand-caption">Project invitation</span></header>
+<header class="brand">Flow-Like<span class="brand-caption">{caption}</span></header>
 <main>{body}</main>
 <footer>Shared with you on Flow-Like.</footer>
 </div>
@@ -104,21 +129,29 @@ pub(super) fn render_invitation(page: &InvitationPage) -> String {
         r#"<link rel="canonical" href="{share_url}">
 <meta property="og:url" content="{share_url}">"#
     );
-    let cover = if let Some(image) = &page.image {
-        let image = escape(image);
+    let (preview, card) = match (&page.image, &page.icon) {
+        (Some(image), _) => (Some(escape(image)), "summary_large_image"),
+        (None, Some(icon)) => (Some(escape(icon)), "summary"),
+        (None, None) => (None, "summary"),
+    };
+    if let Some(preview) = &preview {
         head.push_str(&format!(
             r#"
-<meta property="og:image" content="{image}">
-<meta property="og:image:alt" content="Cover for {name}">
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="{image}">
-<meta name="twitter:image:alt" content="Cover for {name}">"#
+<meta property="og:image" content="{preview}">
+<meta property="og:image:alt" content="Picture for {name}">
+<meta name="twitter:image" content="{preview}">
+<meta name="twitter:image:alt" content="Picture for {name}">"#
         ));
-        format!(r#"<img class="cover-image" src="{image}" alt="" referrerpolicy="no-referrer">"#)
-    } else {
-        head.push_str("\n<meta name=\"twitter:card\" content=\"summary\">");
-        String::new()
-    };
+    }
+    head.push_str(&format!(
+        "\n<meta name=\"twitter:card\" content=\"{card}\">"
+    ));
+    let cover = page.image.as_ref().map_or_else(String::new, |image| {
+        format!(
+            r#"<img class="cover-image" src="{}" alt="" referrerpolicy="no-referrer">"#,
+            escape(image)
+        )
+    });
     let icon = page.icon.as_ref().map_or_else(String::new, |icon| {
         format!(
             r#"<img class="project-icon" src="{}" alt="" width="56" height="56" referrerpolicy="no-referrer">"#,
@@ -146,6 +179,7 @@ pub(super) fn render_invitation(page: &InvitationPage) -> String {
 </article>"#
     );
     document(
+        page.kind.caption(),
         &format!("You’re invited to {}", page.name),
         &format!("Join {} on Flow-Like. {}", page.name, page.description),
         &head,
@@ -177,6 +211,7 @@ pub(super) fn render_unavailable(temporary: bool) -> String {
 </article>"#
     );
     document(
+        "Invitation",
         title,
         description,
         "<meta name=\"twitter:card\" content=\"summary\">",
@@ -192,6 +227,7 @@ mod tests {
     #[test]
     fn untrusted_metadata_is_text_in_both_head_and_body() {
         let page = InvitationPage {
+            kind: InvitationKind::Project,
             name: "<script>alert('name')</script>".into(),
             description: "\" onload=\"alert('description')".into(),
             image: Some("https://images.example/cover?x=\"/><script>evil()</script>".into()),
@@ -208,6 +244,29 @@ mod tests {
         assert!(html.contains("appId=a&amp;token=t&amp;web=1"));
         assert_eq!(html.matches("<script>").count(), 1);
         assert!(html.contains(&format!("<script>{SCRIPT}</script>")));
+    }
+
+    #[test]
+    fn a_room_without_a_cover_previews_the_inviters_avatar() {
+        let page = InvitationPage {
+            kind: InvitationKind::Room,
+            name: "Climbing crew".into(),
+            description: "Ada invited you to this group chat. 4 members.".into(),
+            image: None,
+            icon: Some("https://cdn.example/avatar.png?sig=1".into()),
+            desktop_url: "flow-like://join?room=r".into(),
+            web_url: "https://app.example/join?room=r".into(),
+            share_url: "https://api.example/join?room=r".into(),
+        };
+        let html = render_invitation(&page);
+        assert!(html.contains("Group chat invitation"));
+        assert!(html.contains(
+            r#"<meta property="og:image" content="https://cdn.example/avatar.png?sig=1">"#
+        ));
+        assert!(html.contains(r#"<meta name="twitter:card" content="summary">"#));
+        assert!(!html.contains("summary_large_image"));
+        assert!(!html.contains(r#"<img class="cover-image""#));
+        assert!(html.contains(r#"<img class="project-icon""#));
     }
 
     #[test]

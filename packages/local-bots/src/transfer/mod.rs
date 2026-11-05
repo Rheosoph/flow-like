@@ -17,6 +17,7 @@ pub(crate) mod requests;
 
 pub use hub::{AccountHub, HubBody, HubCall, HubError, HubMethod, WorkspaceSummary};
 
+use flow_like_types::bot_connector::{BotConnector, ConnectorAuth, CreateBotConnector};
 use crate::{
     LocalBotStore,
     error::codes,
@@ -197,6 +198,15 @@ impl fmt::Display for MoveError {
 
 impl std::error::Error for MoveError {}
 
+fn is_unmovable(connector: &BotConnector) -> bool {
+    matches!(connector.auth, ConnectorAuth::Oauth { .. })
+}
+
+/// Connectors whose OAuth sign-in cannot leave this device; the move reports them.
+fn unmovable_connectors(bundle: &LocalBotBundle) -> usize {
+    bundle.connectors.iter().filter(|c| is_unmovable(c)).count()
+}
+
 fn unreadable_secret(name: &str) -> MoveIssue {
     MoveIssue {
         part: "secret".into(),
@@ -258,6 +268,11 @@ fn built_in_edits(bot: &Bot, kind: BotSystemKind) -> Map<String, Value> {
         "vision_model",
         bot.vision_model != defaults.vision_model,
         json!(bot.vision_model),
+    );
+    edit(
+        "subtask_model",
+        bot.subtask_model != defaults.subtask_model,
+        json!(bot.subtask_model),
     );
     edit(
         "classification",
@@ -545,6 +560,7 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
             segments += item.segments.len() - unmovable;
             warnings += unmovable + foreign_handles(&kept, bundle.bot.workspace_app_id.as_deref());
         }
+        warnings += unmovable_connectors(&bundle);
         issues.extend(
             bundle
                 .secrets
@@ -652,7 +668,7 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
                 return Ok(MovedBot {
                     bot,
                     conversations: std::mem::take(&mut self.moved),
-                    warnings: self.warnings(),
+                    warnings: self.warnings() + unmovable_connectors(&latest),
                 });
             }
             bundle = latest;
@@ -693,7 +709,100 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
         self.sync_apps(&bundle.app_ids, bundle.bot.system.is_none())
             .await?;
         self.upload_secrets(bundle).await?;
+        self.move_connectors(bundle).await?;
+        self.move_skills(bundle).await?;
         Ok(updated.filter(Value::is_object))
+    }
+
+    /// Creates the skills the account bot lacks (by name) with the status they had here. A
+    /// package skill stays behind: its package is pinned per device. The files they brought
+    /// travel with the workspace.
+    async fn move_skills(&mut self, bundle: &LocalBotBundle) -> Result<(), MoveError> {
+        let movable: Vec<&flow_like_types::bot_skill::BotSkill> = bundle
+            .skills
+            .iter()
+            .filter(|skill| skill.source.package_id().is_none())
+            .collect();
+        if movable.is_empty() {
+            return Ok(());
+        }
+        let account_id = self.account_id.clone();
+        let listed = self
+            .call(
+                &format!("list the skills of bot {account_id}"),
+                HubCall::new(HubMethod::Get, &["bots", &account_id, "skills"]),
+            )
+            .await?;
+        let present: Vec<String> = records(listed.as_ref(), "skills")
+            .filter_map(|skill| text(skill, "name"))
+            .map(str::to_string)
+            .collect();
+        for skill in movable {
+            if present.contains(&skill.name) {
+                continue;
+            }
+            let request = serde_json::json!({
+                "name": skill.name,
+                "description": skill.description,
+                "body": skill.body,
+                "tools": skill.tools,
+                "status": skill.status.as_str(),
+                "source": skill.source.stored(),
+            });
+            self.call(
+                &format!("move skill {} of bot {}", skill.name, self.bot_id),
+                HubCall::new(HubMethod::Post, &["bots", &account_id, "skills"])
+                    .with(HubBody::Json(&request)),
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Creates the connectors the account bot lacks (by label). A connector signed in by an
+    /// account's OAuth grant stays behind: the grant is sealed on this device and the move
+    /// reports it as a warning. A secret named in `auth` moved with the secrets.
+    async fn move_connectors(&mut self, bundle: &LocalBotBundle) -> Result<(), MoveError> {
+        let movable: Vec<&BotConnector> = bundle
+            .connectors
+            .iter()
+            .filter(|connector| !is_unmovable(connector))
+            .collect();
+        if movable.is_empty() {
+            return Ok(());
+        }
+        let account_id = self.account_id.clone();
+        let listed = self
+            .call(
+                &format!("list the connectors of bot {account_id}"),
+                HubCall::new(HubMethod::Get, &["bots", &account_id, "connectors"]),
+            )
+            .await?;
+        let present: Vec<String> = records(listed.as_ref(), "connectors")
+            .filter_map(|connector| text(connector, "label"))
+            .map(str::to_lowercase)
+            .collect();
+        for connector in movable {
+            if present.contains(&connector.label.to_lowercase()) {
+                continue;
+            }
+            let request = serde_json::json!(CreateBotConnector {
+                kind: connector.kind,
+                label: connector.label.clone(),
+                url: connector.url.clone(),
+                auth: connector.auth.clone(),
+                grant: None,
+                scopes: connector.scopes.clone(),
+                default_policy: Some(connector.default_policy),
+            });
+            self.call(
+                &format!("move connector {} of bot {}", connector.label, self.bot_id),
+                HubCall::new(HubMethod::Post, &["bots", &account_id, "connectors"])
+                    .with(HubBody::Json(&request)),
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     /// Attaches the apps the account bot lacks and, with `detach`, detaches the ones this

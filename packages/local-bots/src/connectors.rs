@@ -21,7 +21,7 @@ use flow_like_types::{
 };
 use rusqlite::{Connection, OptionalExtension, Row, params};
 
-const COLUMNS: &str = "id, bot_id, kind, label, provider_id, url, auth, scopes, default_policy, tool_policies, tools_snapshot, updated_at";
+const COLUMNS: &str = "id, bot_id, kind, label, provider_id, url, auth, scopes, default_policy, tool_policies, tools_snapshot, updated_at, confirmed_hashes";
 
 fn json_or_default<T: serde::de::DeserializeOwned + Default>(stored: &str) -> T {
     serde_json::from_str(stored).unwrap_or_default()
@@ -48,6 +48,7 @@ fn read_connector(row: &Row<'_>) -> rusqlite::Result<BotConnector> {
         tool_policies: json_or_default::<BTreeMap<String, ConnectorPolicy>>(&policies),
         tools_snapshot: json_or_default::<Vec<ConnectorToolInfo>>(&tools),
         updated_at: timestamp(row.get(11)?).to_rfc3339(),
+        confirmed_hashes: json_or_default::<BTreeMap<String, String>>(&row.get::<_, String>(12)?),
     })
 }
 
@@ -213,6 +214,29 @@ impl LocalBotStore {
                 }
                 None => current.tool_policies.clone(),
             };
+            let mut hashes = current.confirmed_hashes.clone();
+            let hash_of = |name: &str| {
+                current
+                    .tools_snapshot
+                    .iter()
+                    .find(|tool| tool.name == name)
+                    .map(|tool| tool.schema_hash.clone())
+            };
+            if request.tool_policies.is_some() {
+                for (name, policy) in &policies {
+                    if current.tool_policies.get(name) != Some(policy)
+                        && let Some(hash) = hash_of(name)
+                    {
+                        hashes.insert(name.clone(), hash);
+                    }
+                }
+                hashes.retain(|name, _| policies.contains_key(name));
+            }
+            for name in &request.confirm_tools {
+                if let Some(hash) = hash_of(name) {
+                    hashes.insert(name.clone(), hash);
+                }
+            }
             let scopes = match &request.scopes {
                 Some(scopes) if scopes.len() > MAX_SCOPES => {
                     return Err(Error::invalid(format!("At most {MAX_SCOPES} scopes")));
@@ -222,7 +246,7 @@ impl LocalBotStore {
             };
             tx.execute(
                 "UPDATE bot_connectors SET label = ?1, default_policy = ?2, tool_policies = ?3,
-                     scopes = ?4, updated_at = ?5 WHERE id = ?6",
+                     scopes = ?4, updated_at = ?5, confirmed_hashes = ?7 WHERE id = ?6",
                 params![
                     label,
                     request
@@ -232,7 +256,8 @@ impl LocalBotStore {
                     serde_json::json!(policies).to_string(),
                     serde_json::json!(scopes).to_string(),
                     now_micros(),
-                    connector_id
+                    connector_id,
+                    serde_json::json!(hashes).to_string()
                 ],
             )?;
             find(tx, bot_id, connector_id)

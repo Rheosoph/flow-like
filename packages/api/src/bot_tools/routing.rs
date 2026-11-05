@@ -1,9 +1,8 @@
 use flow_like::flow::copilot::HostTools;
 use serde_json::Value;
 
-/// Tools the API runs itself: they touch Lance tables and read objects, nothing heavy. `image_generate`
-/// runs here because only the API holds the keys of the owner's private image models.
-const IN_PROCESS: [&str; 23] = [
+/// Tools the API runs itself: they touch Lance tables and read objects, nothing heavy.
+const IN_PROCESS: [&str; 22] = [
     "skill_load",
     "skill_propose",
     "secret_list",
@@ -25,12 +24,13 @@ const IN_PROCESS: [&str; 23] = [
     "knowledge_drop",
     "data_sources",
     "data_query",
-    "image_generate",
     "connector_tools",
 ];
 
-/// Tools that write files, parse documents or run code: the executor only.
-const EXECUTOR_ONLY: [&str; 11] = [
+/// Tools that write files, parse documents, run code or call a provider whose answer is untrusted: the executor only.
+const EXECUTOR_ONLY: [&str; 15] = [
+    "skill_call",
+    "skill_run",
     "file_save",
     "file_write",
     "file_summarize",
@@ -40,8 +40,10 @@ const EXECUTOR_ONLY: [&str; 11] = [
     "document_create",
     "document_fill",
     "code_run",
+    "image_generate",
     "connector_call",
     "connector_request",
+    "web_request",
 ];
 
 /// File types the API cannot turn into text; reading or indexing one needs the converters.
@@ -184,6 +186,47 @@ mod tests {
                 Some(Route::Refuse(_))
             ));
         }
+    }
+
+    #[test]
+    fn every_untrusted_tool_is_executor_only_and_never_in_process() {
+        let untrusted = [
+            "document_create",
+            "document_fill",
+            "skill_call",
+            "skill_run",
+            "connector_call",
+            "connector_request",
+            "image_generate",
+        ];
+        for tool in untrusted {
+            assert!(
+                EXECUTOR_ONLY.contains(&tool),
+                "{tool} must be executor-only"
+            );
+            assert!(
+                !IN_PROCESS.contains(&tool),
+                "{tool} must not run in the API"
+            );
+            assert_eq!(
+                route(tool, &json!({}), true),
+                Some(Route::Executor),
+                "{tool}"
+            );
+            assert!(matches!(
+                route(tool, &json!({}), false),
+                Some(Route::Refuse(_))
+            ));
+        }
+        assert!(!IN_PROCESS.contains(&"skill_import") && !EXECUTOR_ONLY.contains(&"skill_import"));
+        assert_eq!(
+            route("connector_tools", &json!({ "names": ["a"] }), true),
+            Some(Route::Executor)
+        );
+        assert_eq!(
+            route("connector_tools", &json!({}), true),
+            Some(Route::InProcess)
+        );
     }
 
     #[test]

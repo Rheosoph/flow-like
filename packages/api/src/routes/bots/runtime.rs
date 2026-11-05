@@ -160,12 +160,14 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             tts_model: settings.tts_model,
             image_model: settings.image_model,
             vision_model: settings.vision_model,
+            subtask_model: settings.subtask_model,
             tool_host: BotToolHost::Chat,
             host_tools: Default::default(),
             skills: Vec::new(),
             requester: None,
             permissions: Default::default(),
             connectors,
+            compute: Default::default(),
         },
         model: settings.model,
     }))
@@ -267,6 +269,29 @@ pub(crate) async fn server_bot_model(
     profile: &Profile,
     policy: &BotModelPolicy,
 ) -> Option<String> {
+    bot_model_where(state, owner_id, flow_like_state, profile, policy, false).await
+}
+
+/// [`server_bot_model`] for a model that leaves the server: only hosted models qualify, since a
+/// customer provider's Bit carries the owner's credentials.
+pub(crate) async fn hosted_bot_model(
+    state: &AppState,
+    owner_id: &str,
+    flow_like_state: &Arc<FlowLikeState>,
+    profile: &Profile,
+    policy: &BotModelPolicy,
+) -> Option<String> {
+    bot_model_where(state, owner_id, flow_like_state, profile, policy, true).await
+}
+
+async fn bot_model_where(
+    state: &AppState,
+    owner_id: &str,
+    flow_like_state: &Arc<FlowLikeState>,
+    profile: &Profile,
+    policy: &BotModelPolicy,
+    hosted_only: bool,
+) -> Option<String> {
     if policy.primary.is_none() && policy.fallbacks.is_empty() {
         return None;
     }
@@ -282,6 +307,7 @@ pub(crate) async fn server_bot_model(
             return false;
         };
         ensure_metered_or_customer_provider(&provider.provider_name).is_ok()
+            && (!hosted_only || is_hosted_provider_name(&provider.provider_name))
             && (!is_hosted_provider_name(&provider.provider_name)
                 || tier.is_none_or(|tier| crate::model_tier::llm_bit_allowed(&bit, tier)))
     })

@@ -57,7 +57,7 @@
 			"label": ""
 		},
 		"internet": {
-			"description": "Im Web suchen, Seiten lesen und Web-APIs aufrufen",
+			"description": "Im Web suchen und Seiten lesen, über einen separaten Rechercheur",
 			"label": "Internet"
 		},
 		"knowledge": {
@@ -91,6 +91,10 @@
 		"storage": {
 			"description": "Dateien aufbewahren, wie im Speicher einer App",
 			"label": "Dateien"
+		},
+		"web_requests": {
+			"description": "Ruft Web-APIs auf und lädt URLs wie Feeds selbst; jede neue Website gibst du frei",
+			"label": "Web-Anfragen"
 		},
 		"webhook": {
 			"description": "Eine URL, die den Bot weckt, wenn etwas sie aufruft",
@@ -387,6 +391,22 @@
 			"where": ""
 		},
 		"retry": "Erneut versuchen",
+		"roomSettings": {
+			"change": "",
+			"description": "",
+			"failed": "",
+			"imageFormat": "",
+			"imageHint": "",
+			"imageSize": "",
+			"imageUnreadable": "",
+			"name": "",
+			"namePlaceholder": "",
+			"open": "",
+			"remove": "",
+			"save": "",
+			"title": "",
+			"upload": ""
+		},
 		"roomTag": "Raum",
 		"rooms": {
 			"bots_one": "{{count}} Bot",
@@ -476,7 +496,6 @@
 			"profileApps_other": "{{count}} Apps",
 			"profileEmpty": "Keine Profile gefunden.",
 			"profilePlaceholder": "Wähle ein Profil",
-			"runtime": "Kommt mit der Bot-Laufzeitumgebung",
 			"subtitle": "Anfangs ist alles ausgeschaltet. In einer App hat der Bot nie mehr Rechte als du.",
 			"subtitleMemoryOn": "",
 			"title": "Wähle, was er tun darf"

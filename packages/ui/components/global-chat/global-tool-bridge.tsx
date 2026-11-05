@@ -43,6 +43,12 @@ import { shouldSkipUnavailableCreateTableApproval } from "../../lib/database-cap
 import { getErrorMessage } from "../../lib/error-message";
 import { EVENT_CONFIG, isChatEventType } from "../../lib/event-config";
 import { flowPilotDebugLog } from "../../lib/flowpilot-debug";
+import {
+	BoardSpecialistRoutingFailures,
+	BoardSpecialistScopeError,
+	assertBoardSpecialistResponse,
+	boardSpecialistRoutingFailure,
+} from "../../lib/flowpilot/board-chat-contract";
 import { buildFlowPilotBoardContextAugmentation } from "../../lib/flowpilot/board-context-manifest";
 import {
 	boardEditJobResolutionHistoryMode,
@@ -132,6 +138,7 @@ import { buildWorkflowFrontendContext } from "../a2ui/workflow-payload";
 import { BOTS_ROUTE } from "../bots-tab/dock-selection";
 import {
 	BoardEditRecoveryStore,
+	type BoardEditTarget,
 	BoardZeroProgressRetryGuard,
 	CreatedArtifactJournal,
 	type FlowScriptBaselineFingerprint,
@@ -143,6 +150,7 @@ import {
 	boardEditInterruptionResult,
 	boardEditLockKey,
 	boardEditRecoveryKey,
+	boardEditTargetContext,
 	flowPilotBoardInitialLockKey,
 	flowScriptSnapshotChanged,
 	flowScriptSnapshotFingerprint,
@@ -150,7 +158,7 @@ import {
 	isCancellableNestedCopilotTool,
 	isCreatedAppBuildTargetMismatch,
 	normalizeBoardRepairScope,
-	resolveFlowPilotBoardCreationId,
+	prepareFlowPilotBoardCreation,
 	resolveFrontendToolExecutionDeadline,
 	retainedFlowScriptRecoveryInstruction,
 	retainedFlowScriptReferenceInstruction,
@@ -1600,6 +1608,10 @@ export function GlobalToolBridge() {
 	const boardRecoveryRef = useRef(new BoardEditRecoveryStore());
 	const workspaceSearchRef = useRef(new WorkspaceSearchSession());
 	const boardZeroProgressRetryRef = useRef(new BoardZeroProgressRetryGuard());
+	const boardRoutingFailuresRef = useRef(new BoardSpecialistRoutingFailures());
+	const boardTargetsByRequestRef = useRef(
+		new WeakMap<FrontendToolRequest, BoardEditTarget>(),
+	);
 	// Crash-durable record of artifacts created per conversation. A retried creating tool (after a
 	// crash, reload, or lost tool response) is answered with the recorded ids instead of a duplicate.
 	const createdArtifactJournalRef = useRef(new CreatedArtifactJournal());
@@ -4951,6 +4963,11 @@ export function GlobalToolBridge() {
 							message: "flowpilot_board requires an app_id.",
 						};
 					const ownerMessageId = ownerMessageIdForRequest(request);
+					const boardRunOwnerId =
+						ownerMessageId ?? parentRequestId(request) ?? request.requestId;
+					const routingFailure =
+						boardRoutingFailuresRef.current.get(boardRunOwnerId);
+					if (routingFailure) return routingFailure;
 					const createdAppId = ownerMessageId
 						? createdAppTargetsByOwnerRef.current.get(ownerMessageId)
 						: undefined;
@@ -4968,6 +4985,7 @@ export function GlobalToolBridge() {
 							isReady,
 						});
 					let boardId = liveSurface?.boardId ?? boardIdArg;
+					boardTargetsByRequestRef.current.set(request, { appId, boardId });
 					const createNewBoard = argBoolean(args, "create_new_board") === true;
 					if (boardId) {
 						boardRecoveryScopeByRequestRef.current.set(request.requestId, {
@@ -4987,11 +5005,7 @@ export function GlobalToolBridge() {
 					// same app can overlap. Without a target the app-scoped key serializes board
 					// creation/selection; the board-scoped lock is acquired below once resolved.
 					const lockScopedToBoard = Boolean(boardId) && !createNewBoard;
-					let releaseBoardEdit: (() => void) | undefined =
-						await boardEditCoordinator.acquire(
-							flowPilotBoardInitialLockKey(appId, boardId, createNewBoard),
-							boardEditAcquireOptions(),
-						);
+					let releaseBoardEdit: (() => void) | undefined;
 					let releaseBoardScopedEdit: (() => void) | undefined;
 					let pendingDraftingWorkspace:
 						| FlowScriptWorkspaceCandidate
@@ -5007,9 +5021,17 @@ export function GlobalToolBridge() {
 					let boardActivity:
 						| ReturnType<typeof flowPilotBoardActivity.begin>
 						| undefined;
+					let createdBoard = false;
+					let boardCreationAttempted = false;
 					try {
+						releaseBoardEdit = await boardEditCoordinator.acquire(
+							flowPilotBoardInitialLockKey(appId, boardId, createNewBoard),
+							boardEditAcquireOptions(),
+						);
 						assertRequestActive(request, "serialized board snapshot");
-						let createdBoard = false;
+						const queuedRoutingFailure =
+							boardRoutingFailuresRef.current.get(boardRunOwnerId);
+						if (queuedRoutingFailure) return queuedRoutingFailure;
 						// An ADDITIONAL board is only ever for an independent workflow with its own
 						// trigger: boards of one app cannot call each other, so connected logic must
 						// stay in one board as function layers. Without this opt-in the first-board
@@ -5018,10 +5040,11 @@ export function GlobalToolBridge() {
 						// overlapping run may have created or changed it while this request waited.
 						if (!boardId && !createNewBoard) {
 							const boards = await readCreatedAppWhenReady(
-								() => backend.boardState.getBoardSummaries(appId),
+								() => backend.boardState.getBoardSummariesAuthoritative(appId),
 								(candidates) => candidates.length > 0,
 							);
 							boardId = boards?.[0]?.id ?? "";
+							boardTargetsByRequestRef.current.set(request, { appId, boardId });
 						}
 						// New apps have no board yet — create one instead of bouncing the task back
 						// to the user. An explicit create_new_board also lands here, having skipped
@@ -5049,35 +5072,53 @@ export function GlobalToolBridge() {
 							// Reuse the board this conversation already created for the same request
 							// (e.g. a crash/reload retry whose listing has not propagated) instead of
 							// minting a duplicate; upsert on the recorded id is idempotent.
-							boardId = resolveFlowPilotBoardCreationId({
-								requestedBoardId: callerChosenBoardId,
-								journaledBoardId: boardCreationIdentity
-									? createdArtifactJournalRef.current.find(
-											boardCreationIdentity,
-										)?.artifacts.boardId
-									: undefined,
-								createId,
-							});
-							const boardAlreadyExisted = (
-								await backend.boardState.getBoardSummaries(appId)
-							).some((candidate) => candidate.id === boardId);
-							await backend.boardState.upsertBoard(
+							const created = await prepareFlowPilotBoardCreation({
+								readOnly,
 								appId,
-								boardId,
-								argString(args, "board_name") ||
-									(createNewBoard ? "Workflow Board" : "Main Board"),
-								instruction.slice(0, 140),
-								ILogLevel.Debug,
-								IExecutionStage.Dev,
-							);
-							createdBoard = !boardAlreadyExisted;
-							if (boardCreationIdentity) {
-								createdArtifactJournalRef.current.record(
-									boardCreationIdentity,
-									{ appId, boardId },
-									request.requestId,
-								);
-							}
+								requestedBoardId: callerChosenBoardId,
+								identity: boardCreationIdentity,
+								journal: createdArtifactJournalRef.current,
+								requestId: request.requestId,
+								createId,
+								onTarget: (target) => {
+									boardId = target;
+									boardTargetsByRequestRef.current.set(request, {
+										appId,
+										boardId: target,
+									});
+								},
+								exists: async (target) =>
+									(
+										await backend.boardState.getBoardSummariesAuthoritative(
+											appId,
+										)
+									).some((candidate) => candidate.id === target),
+								create: async (target) => {
+									assertRequestActive(request, "board creation");
+									boardCreationAttempted = true;
+									boardTargetsByRequestRef.current.set(request, {
+										appId,
+										boardId: target,
+										creationStatus: "unconfirmed",
+									});
+									await backend.boardState.upsertBoard(
+										appId,
+										target,
+										argString(args, "board_name") ||
+											(createNewBoard ? "Workflow Board" : "Main Board"),
+										instruction.slice(0, 140),
+										ILogLevel.Debug,
+										IExecutionStage.Dev,
+									);
+									boardTargetsByRequestRef.current.set(request, {
+										appId,
+										boardId: target,
+										creationStatus: "confirmed",
+									});
+								},
+							});
+							boardId = created.boardId;
+							createdBoard = created.createdBoard;
 						}
 						// A create-mode run held only the app-scoped creation lock. Now that it has a
 						// concrete board, also take that board's lock (always app key first, board key
@@ -5095,6 +5136,9 @@ export function GlobalToolBridge() {
 							releaseBoardEdit = undefined;
 							assertRequestActive(request, "board-scoped serialization");
 						}
+						const resolvedRoutingFailure =
+							boardRoutingFailuresRef.current.get(boardRunOwnerId);
+						if (resolvedRoutingFailure) return resolvedRoutingFailure;
 						const boardRecoveryKey = boardEditRecoveryKey(appId, boardId);
 						boardActivity = flowPilotBoardActivity.begin(
 							appId,
@@ -5634,6 +5678,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 								appId,
 							);
 							flushSubRun();
+							assertBoardSpecialistResponse(response);
 							flowPilotDebugLog(
 								"[global-tool-bridge] flowpilot_board: nested copilot_chat finished",
 								{ commands: response.commands?.length ?? 0, readOnly },
@@ -6233,8 +6278,14 @@ Completion contract: build complete helper logic first and add the Event entry l
 								flowIrCommit = undefined;
 							}
 						} catch (error) {
+							if (error instanceof BoardSpecialistScopeError) {
+								flowIrCommit = error.flowIrCommit;
+							}
 							if (flowIrCommit) {
-								if (isRequestExpired(request)) {
+								if (
+									isRequestExpired(request) &&
+									!(error instanceof BoardSpecialistScopeError)
+								) {
 									// Bridge deadline / lost response channel: the exact checked
 									// batch stays PENDING on the host so the next run for the same
 									// request redelivers its Apply/Dismiss token instead of
@@ -6272,16 +6323,36 @@ Completion contract: build complete helper logic first and add the Event entry l
 								error,
 								"The queued board change failed without a diagnostic.",
 							);
-							const interruptedResult = boardEditInterruptionResult({
-								status: isRequestExpired(request) ? "timeout" : "error",
-								code: isRequestExpired(request)
-									? "board_edit_interrupted"
-									: "board_subrun_failed",
-								message: errorMessage,
-								candidate: retainedCandidate,
-							});
+							const routingFailure =
+								error instanceof BoardSpecialistScopeError
+									? boardSpecialistRoutingFailure(
+											error,
+											appId,
+											boardId,
+											createdBoard,
+										)
+									: undefined;
+							if (routingFailure) {
+								boardRoutingFailuresRef.current.record(
+									boardRunOwnerId,
+									routingFailure,
+								);
+							}
+							const interruptedResult = routingFailure ?? {
+								...boardEditInterruptionResult({
+									status: isRequestExpired(request) ? "timeout" : "error",
+									code: isRequestExpired(request)
+										? "board_edit_interrupted"
+										: "board_subrun_failed",
+									message: errorMessage,
+									candidate: retainedCandidate,
+								}),
+								app_id: appId,
+								board_id: boardId,
+								...(createdBoard ? { created_board_id: boardId } : {}),
+							};
 							generationOutcome = interruptedResult.status;
-							if (!readOnly) {
+							if (!readOnly && !routingFailure) {
 								boardZeroProgressRetryRef.current.recordRunOutcome(
 									zeroProgressOwnerId,
 									boardRecoveryKey,
@@ -6662,6 +6733,22 @@ Completion contract: build complete helper logic first and add the Event entry l
 						);
 						nestedRunSettled = true;
 						return result;
+					} catch (error) {
+						generationOutcome = "error";
+						return {
+							status: "error",
+							code: "FLOWPILOT_BOARD_OPERATION_FAILED",
+							app_id: appId,
+							...(boardId ? { board_id: boardId } : {}),
+							...(createdBoard ? { created_board_id: boardId } : {}),
+							...(boardCreationAttempted && !createdBoard
+								? { board_creation_status: "unconfirmed" }
+								: {}),
+							message: getErrorMessage(error, "The board operation failed."),
+							...(boardId
+								? { next_action: "inspect_existing_board_before_retry" }
+								: {}),
+						};
 					} finally {
 						generationTrace?.finish({
 							outcome: generationOutcome,
@@ -8221,7 +8308,29 @@ Completion contract: build complete helper logic first and add the Event entry l
 					return {
 						requestId: request.requestId,
 						approved: true,
-						result: error.result,
+						result: {
+							...error.result,
+							...(request.toolName === "flowpilot_board"
+								? boardEditTargetContext(
+										boardTargetsByRequestRef.current.get(request),
+									)
+								: {}),
+						},
+					};
+				}
+				if (request.toolName === "flowpilot_board") {
+					return {
+						requestId: request.requestId,
+						approved: true,
+						result: boardEditInterruptionResult({
+							status: isRequestExpired(request) ? "timeout" : "error",
+							code: "FLOWPILOT_BOARD_OPERATION_INTERRUPTED",
+							message: getErrorMessage(
+								error,
+								"Frontend tool execution failed.",
+							),
+							target: boardTargetsByRequestRef.current.get(request),
+						}),
 					};
 				}
 				// approved:true + error => the bridge reports status:"error" (not a user denial).
@@ -8236,6 +8345,7 @@ Completion contract: build complete helper logic first and add the Event entry l
 			askingChat,
 			assertHomeProfile,
 			assertRequestActive,
+			isRequestExpired,
 			openDialog,
 			ownerMessageIdForRequest,
 			requestSecret,
@@ -8256,6 +8366,20 @@ Completion contract: build complete helper logic first and add the Event entry l
 			// Resolved once, here, and threaded down: every store write this tool performs is
 			// addressed to the run that asked for it.
 			const scope = createRunScope(ownerMessageId);
+			if (request.toolName === "flowpilot_board") {
+				const appId =
+					argString(request.arguments, "app_id") ||
+					argString(request.arguments, "appId");
+				const boardId =
+					argString(request.arguments, "board_id") ||
+					argString(request.arguments, "boardId");
+				if (appId || boardId) {
+					boardTargetsByRequestRef.current.set(request, {
+						appId: appId || undefined,
+						boardId: boardId || undefined,
+					});
+				}
+			}
 			const startedAt = Date.now();
 			recordRequestDebug(request, {
 				id: `frontend:${request.requestId}:request`,
@@ -8332,6 +8456,10 @@ Completion contract: build complete helper logic first and add the Event entry l
 							code: "frontend_execution_deadline",
 							message: reason,
 							candidate: retainedCandidate,
+							target:
+								request.toolName === "flowpilot_board"
+									? boardTargetsByRequestRef.current.get(request)
+									: undefined,
 						});
 						if (
 							request.toolName === "flowpilot_board" &&

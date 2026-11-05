@@ -126,3 +126,52 @@ fn urls_and_accounts_are_checked() {
     };
     assert!(f.store.create_connector(&bot.id, bare).is_err());
 }
+
+#[test]
+fn a_changed_tool_schema_is_not_trusted_until_confirmed() {
+    let f = fixture();
+    let bot = f.bot("Scout");
+    let made = f
+        .store
+        .create_connector(&bot.id, mcp("Docs", "https://mcp.example.com/mcp"))
+        .unwrap();
+    let tool = |hash: &str| ConnectorToolInfo {
+        name: "search".into(),
+        description: String::new(),
+        read_only_hint: Some(true),
+        destructive_hint: None,
+        schema_hash: hash.into(),
+    };
+    f.store
+        .set_connector_tools(&bot.id, &made.id, vec![tool("v1")])
+        .unwrap();
+    let set = f
+        .store
+        .update_connector(
+            &bot.id,
+            &made.id,
+            UpdateBotConnector {
+                tool_policies: Some([("search".to_string(), ConnectorPolicy::Read)].into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(set.confirmed_hashes["search"], "v1");
+    let drifted = f
+        .store
+        .set_connector_tools(&bot.id, &made.id, vec![tool("v2")])
+        .unwrap();
+    assert!(drifted.rule().drifted("search"));
+    let confirmed = f
+        .store
+        .update_connector(
+            &bot.id,
+            &made.id,
+            UpdateBotConnector {
+                confirm_tools: vec!["search".into()],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert!(!confirmed.rule().drifted("search"));
+}

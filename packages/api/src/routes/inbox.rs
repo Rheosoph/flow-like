@@ -35,9 +35,11 @@ pub mod delivery;
 pub mod entries;
 pub mod files;
 pub(crate) mod exchange;
+pub mod image;
 pub mod import;
 pub mod invitations;
 pub mod keys;
+pub mod links;
 pub(crate) mod mail_threads;
 pub(crate) mod marks;
 pub mod members;
@@ -73,6 +75,8 @@ mod import_tests;
 #[cfg(test)]
 mod invitations_tests;
 #[cfg(test)]
+mod links_tests;
+#[cfg(test)]
 mod mail_threads_tests;
 #[cfg(test)]
 mod marks_tests;
@@ -100,6 +104,10 @@ pub(crate) const INBOX_INVITE_LIMIT: &str = "INBOX_INVITE_LIMIT";
 pub(crate) const INBOX_INVITE_NOT_ALLOWED: &str = "INBOX_INVITE_NOT_ALLOWED";
 pub(crate) const INBOX_REQUEST_LIMIT: &str = "INBOX_REQUEST_LIMIT";
 pub(crate) const INBOX_PIN_LIMIT: &str = "INBOX_PIN_LIMIT";
+pub(crate) const INBOX_LINK_NOT_ALLOWED: &str = "INBOX_LINK_NOT_ALLOWED";
+pub(crate) const INBOX_LINK_LIMIT: &str = "INBOX_LINK_LIMIT";
+pub(crate) const INBOX_LINK_NOT_FOUND: &str = "INBOX_LINK_NOT_FOUND";
+pub(crate) const INBOX_LINK_USED_UP: &str = "INBOX_LINK_USED_UP";
 
 pub(crate) const MEMBER_ACTIVE: &str = "ACTIVE";
 pub(crate) const MEMBER_PENDING: &str = "PENDING";
@@ -130,6 +138,10 @@ pub fn routes() -> Router<AppState> {
             get(conversations::get_conversation).patch(conversations::rename_conversation),
         )
         .route(
+            "/conversations/{conversation_id}/image",
+            put(image::set_conversation_image).delete(image::remove_conversation_image),
+        )
+        .route(
             "/conversations/{conversation_id}/members",
             post(members::add_members),
         )
@@ -149,6 +161,15 @@ pub fn routes() -> Router<AppState> {
             "/conversations/{conversation_id}/members/{principal_id}/limits",
             patch(invitations::set_limits),
         )
+        .route(
+            "/conversations/{conversation_id}/links",
+            get(links::list_links).post(links::create_link),
+        )
+        .route(
+            "/conversations/{conversation_id}/links/{link_id}",
+            delete(links::revoke_link),
+        )
+        .route("/links/join", post(links::join_link))
         .route("/invitations", get(invitations::list_invitations))
         .route(
             "/invitations/{invitation_id}/accept",
@@ -475,6 +496,25 @@ fn message_id_taken() -> ApiError {
         INBOX_MESSAGE_ID_TAKEN,
         "This message id was already used for another event; send with a new one",
     )
+}
+
+/// Wakes everyone whose view of the conversation changed: its people and the owners of its bots.
+pub(crate) async fn wake_members(state: &AppState, conversation_id: &str) {
+    let woken = async {
+        let members: Vec<members::Principal> =
+            active_members(&state.db, &[conversation_id.to_string()])
+                .await?
+                .iter()
+                .map(members::Principal::from)
+                .collect();
+        delivery::people_to_wake(&state.db, &members).await
+    };
+    match woken.await {
+        Ok(people) => wake(state, people).await,
+        Err(error) => {
+            tracing::warn!(%error, %conversation_id, "Failed to find who to tell about a conversation change");
+        }
+    }
 }
 
 /// Payload-free realtime wakeups for the people whose inbox changed, and for the owners of the

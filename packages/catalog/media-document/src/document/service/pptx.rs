@@ -4,6 +4,7 @@ use crate::document::openxml::write_zip;
 use crate::document::pptx::create::{THEME, pptx_package};
 use crate::document::styles::{defaults, hex_to_ooxml};
 
+use super::chart::add_chart_parts;
 use super::{
     Built, add_override, add_relationship, ensure_default_content_type, office_image,
     xml_text,
@@ -18,19 +19,7 @@ pub enum SlideLayout {
     Chart,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChartKind {
-    Bar,
-    Line,
-    Pie,
-}
-
-#[derive(Debug, Clone)]
-pub struct SlideChart {
-    pub kind: ChartKind,
-    pub categories: Vec<String>,
-    pub series: Vec<(String, Vec<f64>)>,
-}
+pub use super::chart::{ChartKind, ChartSpec as SlideChart, WorkbookFn};
 
 #[derive(Debug, Clone)]
 pub struct Slide {
@@ -47,6 +36,8 @@ pub struct Slide {
 pub struct DeckOptions {
     pub title: Option<String>,
     pub author: Option<String>,
+    /// Embeds each chart's data as a workbook so "Edit data" works.
+    pub workbook: Option<WorkbookFn>,
 }
 
 const SLIDE_WIDTH: i64 = 12_192_000;
@@ -221,80 +212,6 @@ fn chart_graphic(rel_id: &str) -> String {
     )
 }
 
-fn chart_xml(chart: &SlideChart) -> String {
-    let count = chart.categories.len();
-    let categories: String = chart
-        .categories
-        .iter()
-        .enumerate()
-        .map(|(index, name)| format!("<c:pt idx=\"{index}\"><c:v>{}</c:v></c:pt>", xml_text(name)))
-        .collect();
-    let colors = defaults::CHART_COLORS;
-    let series: String = chart
-        .series
-        .iter()
-        .enumerate()
-        .map(|(index, (name, values))| {
-            let color = hex_to_ooxml(colors[index % colors.len()]);
-            let points: String = values
-                .iter()
-                .enumerate()
-                .map(|(i, value)| format!("<c:pt idx=\"{i}\"><c:v>{value}</c:v></c:pt>"))
-                .collect();
-            let style = match chart.kind {
-                ChartKind::Line => format!(
-                    "<c:spPr><a:ln w=\"28575\"><a:solidFill><a:srgbClr val=\"{color}\"/></a:solidFill></a:ln></c:spPr><c:marker><c:symbol val=\"circle\"/><c:size val=\"6\"/></c:marker>"
-                ),
-                ChartKind::Pie => {
-                    let slices: String = (0..count)
-                        .map(|i| {
-                            format!(
-                                "<c:dPt><c:idx val=\"{i}\"/><c:bubble3D val=\"0\"/><c:spPr><a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill></c:spPr></c:dPt>",
-                                hex_to_ooxml(colors[i % colors.len()])
-                            )
-                        })
-                        .collect();
-                    format!("<c:spPr><a:solidFill><a:srgbClr val=\"{color}\"/></a:solidFill></c:spPr>{slices}")
-                }
-                ChartKind::Bar => format!(
-                    "<c:spPr><a:solidFill><a:srgbClr val=\"{color}\"/></a:solidFill></c:spPr><c:invertIfNegative val=\"0\"/>"
-                ),
-            };
-            format!(
-                "<c:ser><c:idx val=\"{index}\"/><c:order val=\"{index}\"/><c:tx><c:v>{}</c:v></c:tx>{style}<c:cat><c:strLit><c:ptCount val=\"{count}\"/>{categories}</c:strLit></c:cat><c:val><c:numLit><c:ptCount val=\"{}\"/>{points}</c:numLit></c:val>{}</c:ser>",
-                xml_text(name),
-                values.len(),
-                if chart.kind == ChartKind::Line { "<c:smooth val=\"0\"/>" } else { "" },
-            )
-        })
-        .collect();
-    let axes = "<c:axId val=\"111111\"/><c:axId val=\"222222\"/>";
-    let plot = match chart.kind {
-        ChartKind::Bar => format!(
-            "<c:barChart><c:barDir val=\"col\"/><c:grouping val=\"clustered\"/><c:varyColors val=\"0\"/>{series}<c:gapWidth val=\"80\"/>{axes}</c:barChart>"
-        ),
-        ChartKind::Line => format!(
-            "<c:lineChart><c:grouping val=\"standard\"/><c:varyColors val=\"0\"/>{series}<c:marker val=\"1\"/>{axes}</c:lineChart>"
-        ),
-        ChartKind::Pie => format!(
-            "<c:pieChart><c:varyColors val=\"1\"/>{series}<c:firstSliceAng val=\"0\"/></c:pieChart>"
-        ),
-    };
-    let axis_defs = if chart.kind == ChartKind::Pie {
-        String::new()
-    } else {
-        "<c:catAx><c:axId val=\"111111\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"b\"/><c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"222222\"/><c:crosses val=\"autoZero\"/><c:auto val=\"1\"/><c:lblAlgn val=\"ctr\"/><c:lblOffset val=\"100\"/><c:noMultiLvlLbl val=\"0\"/></c:catAx><c:valAx><c:axId val=\"222222\"/><c:scaling><c:orientation val=\"minMax\"/></c:scaling><c:delete val=\"0\"/><c:axPos val=\"l\"/><c:majorGridlines/><c:numFmt formatCode=\"General\" sourceLinked=\"0\"/><c:majorTickMark val=\"none\"/><c:minorTickMark val=\"none\"/><c:tickLblPos val=\"nextTo\"/><c:crossAx val=\"111111\"/><c:crosses val=\"autoZero\"/><c:crossBetween val=\"between\"/></c:valAx>".to_string()
-    };
-    let legend = if chart.series.len() > 1 || chart.kind == ChartKind::Pie {
-        "<c:legend><c:legendPos val=\"b\"/><c:overlay val=\"0\"/></c:legend>"
-    } else {
-        ""
-    };
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<c:chartSpace xmlns:c=\"http://schemas.openxmlformats.org/drawingml/2006/chart\" xmlns:a=\"http://schemas.openxmlformats.org/drawingml/2006/main\" xmlns:r=\"http://schemas.openxmlformats.org/officeDocument/2006/relationships\"><c:roundedCorners val=\"0\"/><c:chart><c:autoTitleDeleted val=\"1\"/><c:plotArea><c:layout/>{plot}{axis_defs}</c:plotArea>{legend}<c:plotVisOnly val=\"1\"/></c:chart></c:chartSpace>"
-    )
-}
-
 fn notes_xml(text: &str) -> String {
     let paragraphs: String = text
         .lines()
@@ -323,6 +240,7 @@ struct Deck {
     warnings: Vec<String>,
     charts: u32,
     images: u32,
+    workbook: Option<WorkbookFn>,
 }
 
 impl Deck {
@@ -426,15 +344,15 @@ impl Deck {
         }
         if let Some(chart) = &slide.chart {
             self.charts += 1;
-            let part = format!("ppt/charts/chart{}.xml", self.charts);
-            self.files.insert(part.clone(), chart_xml(chart).into_bytes());
-            add_override(
-                &mut self.files,
-                &part,
-                "application/vnd.openxmlformats-officedocument.drawingml.chart+xml",
-            );
-            let rel = xml.relate("chart", format!("../charts/chart{}.xml", self.charts));
-            xml.frame("Chart", &chart_graphic(&rel));
+            match add_chart_parts(&mut self.files, "ppt", self.charts, chart, self.workbook) {
+                Ok(part) => {
+                    let rel = xml.relate("chart", format!("../{part}"));
+                    xml.frame("Chart", &chart_graphic(&rel));
+                }
+                Err(error) => self
+                    .warnings
+                    .push(format!("Slide {number}: the chart was skipped: {error}")),
+            }
             bullets_area.3 = 0;
         }
         if !slide.bullets.is_empty() && bullets_area.3 > 0 {
@@ -531,6 +449,7 @@ pub fn pptx_from_slides(options: &DeckOptions, slides: &[Slide]) -> flow_like_ty
         warnings: Vec::new(),
         charts: 0,
         images: 0,
+        workbook: options.workbook,
     };
     let has_notes = slides
         .iter()

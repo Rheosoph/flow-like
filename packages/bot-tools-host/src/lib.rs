@@ -9,7 +9,8 @@ mod wire;
 pub use env::{AppAccess, HostEnv, ImageSource, SecretSource};
 pub use models::{ModelSource, StateModels};
 pub use wire::{
-    IMAGES_FIELD, JobApp, JobConnector, JobModels, JobScope, JobSecrets, ToolJob, ToolJobEnvelope, ToolReply,
+    SkillCallJob,
+    IMAGES_FIELD, JobApp, JobImage, JobConnector, JobModels, JobScope, JobSecrets, ToolJob, ToolJobEnvelope, ToolReply,
     connector_source, job_hash, outcome_output,
 };
 

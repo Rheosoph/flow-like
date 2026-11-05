@@ -862,6 +862,7 @@ mod tests {
             tts_model: None,
             image_model: None,
             vision_model: None,
+            subtask_model: None,
         }
     }
 
