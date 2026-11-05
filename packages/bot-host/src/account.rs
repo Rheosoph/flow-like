@@ -15,6 +15,7 @@ use crate::{
     },
     hub::{Claimed, HubFailure, HubGrants, TurnHub, TurnSession},
     memory::{self, JobMemory},
+    room_updates::{HubRoomUpdates, RoomUpdateTracker},
     transcript,
 };
 use flow_like::flow::copilot::{
@@ -510,9 +511,16 @@ impl Inner {
         let memory = if sealed {
             None
         } else {
-            memory::hub_source_for(owner_hub, &hub, bot_id, conversation_id, trigger_seq)
-                .await
-                .map(JobMemory)
+            memory::hub_source_for(
+                owner_hub,
+                &hub,
+                bot_id,
+                conversation_id,
+                trigger_seq,
+                Some(&lead.owner_id),
+            )
+            .await
+            .map(JobMemory)
         };
         let grants: Arc<dyn GrantStore> = Arc::new(HubGrants {
             hub: owner_hub.clone(),
@@ -542,6 +550,26 @@ impl Inner {
         }
         let (runner, stop_id) = (self.runner.clone(), lead.id.clone());
         let gate = ApprovalGate::new(grants.clone(), &lead.id, move || runner.cancel(&stop_id));
+        let room_updates = (kind == ConversationKind::Group && answered_round.is_none())
+            .then(|| {
+                if reacting {
+                    entries.last()
+                } else {
+                    entries
+                        .iter()
+                        .find(|entry| entry.message_id == lead.trigger_message_id)
+                }
+            })
+            .flatten()
+            .map(|trigger| {
+                Arc::new(HubRoomUpdates::new(
+                    hub.clone(),
+                    bot_id,
+                    conversation_id,
+                    sealed.then(|| self.e2e.get().cloned()).flatten(),
+                    RoomUpdateTracker::new(bot_id, &lead.owner_id, trigger, names.clone()),
+                )) as Arc<dyn flow_like::flow::copilot::platform::RoomUpdates>
+            });
         let job = TurnJob {
             run_id: lead.id.clone(),
             bot_id: bot_id.clone(),
@@ -549,6 +577,7 @@ impl Inner {
             profile_id: None,
             prompt,
             history: transcript.history,
+            room_updates,
             memory: memory.clone(),
             gate: gate.clone(),
             requester: Some(requester.clone()),

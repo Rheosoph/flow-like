@@ -21,10 +21,10 @@ pub async fn bot_memory_facts(
 ) -> Result<Vec<FactView>, String> {
     let facts = admin(&state, &app_id)
         .await?
-        .list(include_superseded.unwrap_or(false))
+        .list_views(include_superseded.unwrap_or(false))
         .await
         .map_err(|error| error.to_string())?;
-    Ok(facts.into_iter().map(FactView::from).collect())
+    Ok(facts)
 }
 
 #[tauri::command]

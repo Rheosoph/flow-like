@@ -256,6 +256,7 @@ mod tests {
             ids,
             [
                 "internet",
+                "web_requests",
                 "profile_apps",
                 "selected_apps",
                 "code_execution",

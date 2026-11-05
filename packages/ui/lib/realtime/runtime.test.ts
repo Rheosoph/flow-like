@@ -4,6 +4,7 @@ import {
 	type RealtimeFetch,
 	RealtimeRuntime,
 	parseRealtimeResponse,
+	validRealtimeSubscription,
 } from "./runtime";
 import type {
 	RealtimeCommand,
@@ -802,6 +803,59 @@ describe("shared realtime runtime", () => {
 		first.activity(true);
 		await vi.advanceTimersByTimeAsync(1);
 		expect(fetcher).toHaveBeenCalledTimes(1);
+	});
+
+	test("background notifications do not keep other accounts or offline tabs active", async () => {
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		const fetcher = vi.fn<RealtimeFetch>(async () => response());
+		const runtime = create(fetcher, { portLeaseMs: 300_000 });
+		const first = connect(runtime, "first", "account-a");
+		const second = connect(runtime, "second", "account-b");
+		first.subscribe({
+			notifications: true,
+			backgroundNotifications: true,
+			runs: [],
+		});
+		second.subscribe();
+		first.activity(true, false);
+		second.activity(true, false);
+		await vi.advanceTimersByTimeAsync(60_001);
+		fetcher.mockClear();
+		await vi.advanceTimersByTimeAsync(30_001);
+		expect(fetcher).toHaveBeenCalled();
+		for (const [, init] of fetcher.mock.calls) {
+			expect(new Headers(init?.headers).get("Authorization")).toBe(
+				"Bearer account-a",
+			);
+		}
+		first.activity(false, false);
+		fetcher.mockClear();
+		await vi.advanceTimersByTimeAsync(30_001);
+		expect(fetcher).not.toHaveBeenCalled();
+	});
+
+	test("background delivery requires a notification subscription and a boolean opt-in", async () => {
+		expect(
+			validRealtimeSubscription({
+				notifications: true,
+				backgroundNotifications: "true" as unknown as boolean,
+				runs: [],
+			}),
+		).toBe(false);
+		const fetcher = vi.fn(async () => response());
+		const runtime = create(fetcher, { portLeaseMs: 300_000 });
+		const first = connect(runtime, "first");
+		first.subscribe({
+			notifications: false,
+			backgroundNotifications: true,
+			runs: [],
+			conversations: [{ conversation_id: "chat" }],
+		});
+		first.activity(true, false);
+		await vi.advanceTimersByTimeAsync(60_001);
+		fetcher.mockClear();
+		await vi.advanceTimersByTimeAsync(30_001);
+		expect(fetcher).not.toHaveBeenCalled();
 	});
 
 	test("instructs a suspended tab to register again after its lease expires", async () => {

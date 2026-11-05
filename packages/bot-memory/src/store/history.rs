@@ -44,7 +44,11 @@ struct HistoryRow {
 /// What `history_search` matches: the text, then each tool's name and gist and each UI
 /// block's projection.
 pub fn projection(item: &HistoryItem) -> String {
-    let mut parts = vec![one_line(&item.text)];
+    let mut parts = Vec::new();
+    if let Some(speaker) = &item.speaker {
+        parts.push(format!("speaker {}", speaker.label()));
+    }
+    parts.push(one_line(&item.text));
     for tool in &item.tools {
         let gist = tool
             .result
@@ -108,8 +112,16 @@ impl HistoryIndex {
     pub const TABLE: &'static str = "history";
 
     pub(crate) async fn open(connection: Connection, write_options: Option<WriteOptions>) -> Self {
+        Self::open_named(connection, write_options, Self::TABLE.to_string()).await
+    }
+
+    pub(crate) async fn open_named(
+        connection: Connection,
+        write_options: Option<WriteOptions>,
+        name: String,
+    ) -> Self {
         Self {
-            table: Table::open(connection, Self::TABLE, Some("text"), write_options).await,
+            table: Table::open(connection, name, Some("text"), write_options).await,
         }
     }
 

@@ -48,9 +48,10 @@ pub(super) fn workspace_apps(kind: InboxEntryKind, envelope: &Value) -> Result<B
         InboxEntryKind::Transcript => TranscriptBody::parse(body)
             .map(|_| BTreeSet::new())
             .map_err(Error::invalid),
-        InboxEntryKind::Reaction | InboxEntryKind::Delete | InboxEntryKind::Member => {
-            Ok(BTreeSet::new())
-        }
+        InboxEntryKind::Reaction
+        | InboxEntryKind::Delete
+        | InboxEntryKind::Member
+        | InboxEntryKind::Room => Ok(BTreeSet::new()),
     }
 }
 

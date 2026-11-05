@@ -1121,6 +1121,7 @@ mod tests {
     ) {
         let save = MemorySaveArgs {
             text: "text".into(),
+            evidence_seq: None,
             kind: None,
             subject: None,
             valid_from: None,

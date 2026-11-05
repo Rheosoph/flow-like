@@ -3,6 +3,11 @@
 import { act, createElement } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+	clearIncomingCallJoin,
+	registerIncomingCallScope,
+	requestIncomingCallJoin,
+} from "../lib/realtime/incoming-call-join";
 import type { IConversation } from "../state/backend-state/inbox-state";
 import type { ConversationRoom, RoomAwareness } from "./use-conversation-room";
 
@@ -15,9 +20,10 @@ const mocks = vi.hoisted(() => ({
 	setAllowedPeers: vi.fn(),
 	disposeEngine: vi.fn(),
 }));
-vi.mock("../state/backend-state", () => ({
-	useBackend: () => ({ audioState: { transcribe: mocks.transcribe } }),
-}));
+vi.mock("../state/backend-state", () => {
+	const backend = { audioState: { transcribe: mocks.transcribe } };
+	return { useBackend: () => backend };
+});
 vi.mock("./use-inbox", () => ({
 	useSendInboxEntry: () => ({ mutateAsync: mocks.sendEntry }),
 	newInboxMessageId: () => "message-id",
@@ -38,6 +44,7 @@ vi.mock("../lib/realtime/conversation-call", async (importOriginal) => ({
 	}),
 }));
 
+import { useBackend } from "../state/backend-state";
 import {
 	type ConversationCallState,
 	useConversationCall,
@@ -143,6 +150,7 @@ let root: Root | undefined;
 let latest: ConversationCallState;
 let microphone: ReturnType<typeof media>;
 let getUserMedia: ReturnType<typeof vi.fn>;
+let retireScope: () => void;
 let listener: {
 	setPaused: ReturnType<typeof vi.fn>;
 	stop: ReturnType<typeof vi.fn>;
@@ -155,6 +163,7 @@ beforeEach(() => {
 	vi.stubGlobal("AudioContext", FakeAudioContext);
 	initialContextState = "running";
 	contexts.length = 0;
+	retireScope = registerIncomingCallScope(useBackend(), "hub:me");
 	microphone = media("microphone");
 	getUserMedia = vi.fn(async () => microphone.stream);
 	Object.defineProperty(navigator, "mediaDevices", {
@@ -168,6 +177,8 @@ beforeEach(() => {
 
 afterEach(async () => {
 	await act(async () => root?.unmount());
+	clearIncomingCallJoin();
+	retireScope();
 	root = undefined;
 	document.body.innerHTML = "";
 	vi.useRealTimers();
@@ -214,6 +225,90 @@ async function joined() {
 	});
 	return presence;
 }
+
+test("an incoming Join waits for live presence, reuses click audio, and joins only once", async () => {
+	requestIncomingCallJoin({
+		scope: "hub:me",
+		userId: "me",
+		conversationId: "conversation",
+		callId: "call-one",
+	});
+	const presence = await setup();
+	expect(getUserMedia).not.toHaveBeenCalled();
+	await act(async () => {
+		presence.states.set(2, {
+			sub: "other",
+			call: { id: "call-one", peer: "remote-peer", joined: true },
+		});
+		presence.changed();
+	});
+	expect(latest.joined).toBe(true);
+	expect(getUserMedia).toHaveBeenCalledOnce();
+	expect(contexts).toHaveLength(1);
+	await act(async () => {
+		presence.changed();
+	});
+	expect(getUserMedia).toHaveBeenCalledOnce();
+});
+
+test("incoming Join reports denied microphone access without retrying automatically", async () => {
+	getUserMedia.mockRejectedValue(new DOMException("Denied", "NotAllowedError"));
+	const presence = await setup();
+	await act(async () => {
+		presence.states.set(2, {
+			sub: "other",
+			call: { id: "call-one", peer: "remote-peer", joined: true },
+		});
+		presence.changed();
+		requestIncomingCallJoin({
+			scope: "hub:me",
+			userId: "me",
+			conversationId: "conversation",
+			callId: "call-one",
+		});
+	});
+	expect(latest.joined).toBe(false);
+	expect(latest.error).toBe("denied");
+	expect(contexts[0].close).toHaveBeenCalledOnce();
+	await act(async () => {
+		presence.changed();
+	});
+	expect(getUserMedia).toHaveBeenCalledOnce();
+});
+
+test("a call ending during microphone permission does not leave an orphaned call", async () => {
+	let allow!: (stream: MediaStream) => void;
+	getUserMedia.mockImplementation(
+		() =>
+			new Promise<MediaStream>((resolve) => {
+				allow = resolve;
+			}),
+	);
+	const presence = await setup();
+	await act(async () => {
+		presence.states.set(2, {
+			sub: "other",
+			call: { id: "call-one", peer: "remote-peer", joined: true },
+		});
+		presence.changed();
+		requestIncomingCallJoin({
+			scope: "hub:me",
+			userId: "me",
+			conversationId: "conversation",
+			callId: "call-one",
+		});
+	});
+	await act(async () => {
+		presence.states.delete(2);
+		presence.changed();
+	});
+	await act(async () => {
+		allow(microphone.stream);
+	});
+	expect(latest.joined).toBe(false);
+	expect(microphone.track.stop).toHaveBeenCalledOnce();
+	expect(contexts[0].close).toHaveBeenCalledOnce();
+});
 
 async function listen() {
 	await act(async () => {

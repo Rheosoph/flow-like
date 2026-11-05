@@ -2828,6 +2828,21 @@ model Conversation {
   @@unique([createdBy, importKey])
 }
 
+/// A person's inbox block. User blocks also cover that user's bots. The owner's bots inherit
+/// these blocks; shared group membership is unchanged.
+model InboxBlock {
+  /// The person who set the block; no foreign key, like ConversationMember.principalId.
+  ownerId       String
+  /// A user sub or bot id.
+  principalId   String
+  /// USER | BOT
+  principalKind String
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([ownerId, principalId])
+  @@index([principalId])
+}
+
 /// A shareable link anyone signed in uses to join a plain group at once. It works while its
 /// creator is an active member, until it expires or reaches `maxUses`; at most 20 per group.
 model ConversationInviteLink {

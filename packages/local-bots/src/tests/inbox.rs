@@ -321,6 +321,30 @@ fn a_group_keeps_its_picture_as_a_small_png() {
 
     let cleared = f.store.set_conversation_image(&group.id, None).unwrap();
     assert_eq!(cleared.image_url, None);
+    f.store
+        .rename_conversation(&group.id, Some("Crew".into()))
+        .unwrap();
+
+    let mut changes: Vec<Value> = f
+        .all_entries(&group.id)
+        .into_iter()
+        .filter(|entry| entry.kind == InboxEntryKind::Room)
+        .map(|entry| {
+            assert!(entry.message_id.starts_with("room:"));
+            entry.envelope["body"].clone()
+        })
+        .collect();
+    changes.reverse();
+    assert_eq!(
+        changes,
+        [
+            json!({ "change": "image", "by": "local" }),
+            json!({ "change": "image", "removed": true, "by": "local" }),
+            json!({ "change": "title", "title": "Crew", "by": "local" }),
+        ],
+        "one line per change, none for the unchanged picture"
+    );
+    assert_eq!(f.visible(&group.id).unread_count, 0);
 }
 
 #[test]
@@ -1065,7 +1089,14 @@ fn the_bundle_holds_the_bot_its_apps_secrets_and_shared_conversations() {
     let wire = serde_json::to_value(&bundle).unwrap();
     assert_eq!(
         sorted_keys(&wire),
-        ["app_ids", "bot", "conversations", "secrets"]
+        [
+            "app_ids",
+            "bot",
+            "connectors",
+            "conversations",
+            "secrets",
+            "skills"
+        ]
     );
     assert_eq!(
         wire["secrets"],

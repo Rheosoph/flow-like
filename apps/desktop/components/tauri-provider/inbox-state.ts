@@ -1,4 +1,5 @@
 import type {
+	IBlockedPrincipal,
 	IBotRoomLimits,
 	IConversation,
 	IConversationFileDownload,
@@ -829,6 +830,39 @@ export class InboxState implements IInboxState {
 			session.auth,
 		);
 		return asArray(response?.invitations);
+	}
+
+	async listBlocks(): Promise<IBlockedPrincipal[]> {
+		const session = accountSession(this.backend);
+		if (!session) return [];
+		const response = await get<{ blocks?: IBlockedPrincipal[] }>(
+			session.profile,
+			"inbox/blocks",
+			session.auth,
+		);
+		return asArray(response?.blocks);
+	}
+
+	async blockPrincipal(principalId: string): Promise<void> {
+		const session = accountSession(this.backend);
+		if (!session) throw new Error("Sign in to block a person or bot.");
+		await put(
+			session.profile,
+			`inbox/blocks/${encodeURIComponent(principalId)}`,
+			{},
+			session.auth,
+		);
+	}
+
+	async unblockPrincipal(principalId: string): Promise<void> {
+		const session = accountSession(this.backend);
+		if (!session) throw new Error("Sign in to unblock a person or bot.");
+		await del<void>(
+			session.profile,
+			`inbox/blocks/${encodeURIComponent(principalId)}`,
+			undefined,
+			session.auth,
+		);
 	}
 
 	async listInvitable(

@@ -437,6 +437,7 @@ function CrewLayout(data: Readonly<CrewData>) {
 			>
 				<div className="mx-auto flex max-w-280 flex-col gap-8.5 px-9 pt-7 pb-14 @max-[640px]/crew:px-4 @max-[640px]/crew:pt-5 @max-[640px]/crew:pb-10 @max-[520px]/crew:gap-5">
 					<CrewHeader
+						canManageBlocks={signedIn}
 						name={greetingName}
 						summary={summary}
 						search={search}
@@ -530,6 +531,13 @@ function CrewLayout(data: Readonly<CrewData>) {
 										? resolved.conversationId
 										: null,
 								onOpen: openConversation,
+								onLeave: (conversationId) => {
+									if (
+										resolved.type === "conversation" &&
+										resolved.conversationId === conversationId
+									)
+										closeDock();
+								},
 							}}
 							status={{
 								searching: Boolean(query),

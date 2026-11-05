@@ -10,6 +10,7 @@ pub mod host;
 pub mod hub;
 pub mod memory;
 pub mod rule;
+pub mod room_updates;
 pub mod tasks;
 pub mod transcript;
 

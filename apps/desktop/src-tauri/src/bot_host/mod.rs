@@ -28,6 +28,7 @@ mod memory;
 mod notify;
 mod owner_notify;
 mod rule;
+mod room_updates;
 pub(crate) mod skill_commands;
 pub(crate) mod task_commands;
 mod task_tick;

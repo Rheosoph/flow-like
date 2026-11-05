@@ -37,6 +37,21 @@ async fn open(dir: &TempDir, model: &str, dimension: usize) -> MemoryStores {
         .unwrap()
 }
 
+async fn room(dir: &TempDir, key: &str) -> MemoryStores {
+    let connection =
+        flow_like_storage::databases::vector::lancedb::connect_lance(dir.path().to_str().unwrap())
+            .execute()
+            .await
+            .unwrap();
+    MemoryStores::open_room(
+        connection,
+        Arc::new(HashEmbedder::new("hash", 64)),
+        None,
+        key,
+    )
+    .await
+}
+
 /// An engine over `stores`, for maintenance, which runs under the engine's lease.
 fn engine(stores: MemoryStores) -> MemoryEngine {
     MemoryEngine::new(
@@ -60,6 +75,7 @@ fn fact(id: &str, text: &str, kind: FactKind, subject: &str, seqs: &[Seq], on: i
         evidence: seqs
             .iter()
             .map(|seq| Evidence {
+                speaker: None,
                 seq: *seq,
                 message_id: format!("msg_{seq}"),
                 part: None,
@@ -640,6 +656,7 @@ fn summary(level: u8, from: Seq, to: Seq, claims: &[(&str, Seq)]) -> SegmentSumm
         body.push(
             Section::Decisions,
             Claim {
+                speakers: Vec::new(),
                 text: (*text).into(),
                 seqs: vec![*seq],
                 unverified: false,
@@ -967,4 +984,131 @@ async fn state_and_facts_survive_reopening_and_drop_all_clears_everything() {
     );
     assert_eq!(stores.facts.count(&FactFilter::default()).await.unwrap(), 0);
     assert!(stores.segments.all().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn rooms_keep_colliding_positions_separate_and_recall_owner_facts() {
+    let dir = tempfile::tempdir().unwrap();
+    let owner = open(&dir, "hash", 64).await;
+    owner
+        .facts
+        .insert(&[fact(
+            "f_owner_rule",
+            "Include source filenames in answers.",
+            FactKind::Preference,
+            "user",
+            &[1],
+            0,
+        )])
+        .await
+        .unwrap();
+    assert!(owner.owner_facts.is_none());
+
+    for (key, text, through) in [
+        ("account/room-a", "Alpha plan", 100),
+        ("account/room-b", "Beta plan", 3),
+    ] {
+        let stores = room(&dir, key).await;
+        stores
+            .facts
+            .insert(&[fact(
+                "f_same_id",
+                text,
+                FactKind::Knowledge,
+                "project",
+                &[1],
+                0,
+            )])
+            .await
+            .unwrap();
+        stores
+            .segments
+            .put(&[summary(0, 1, 2, &[(text, 1)])])
+            .await
+            .unwrap();
+        stores
+            .history
+            .index(&[HistoryItem::new(1, key, Role::User, day(0), text)])
+            .await
+            .unwrap();
+        stores
+            .state
+            .save(&CompactionState {
+                compacted_through: Some(through),
+                mined_through: Some(through),
+                deletions_through: Some(through),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+    }
+
+    let first = room(&dir, "account/room-a").await;
+    let second = room(&dir, "account/room-b").await;
+    for (stores, text, through) in [(&first, "Alpha plan", 100), (&second, "Beta plan", 3)] {
+        assert_eq!(
+            stores.facts.get("f_same_id").await.unwrap().unwrap().text,
+            text
+        );
+        assert_eq!(
+            stores.state.load().await.unwrap().compacted_through,
+            Some(through)
+        );
+        let segments = stores.segments.all().await.unwrap();
+        assert_eq!(segments.len(), 1);
+        assert!(
+            segments[0]
+                .body
+                .claims()
+                .any(|(_, claim)| claim.text == text)
+        );
+        let history = stores
+            .history
+            .search(&HistoryQuery {
+                text: "plan".into(),
+                role: None,
+                time_range: None,
+                time_hint: None,
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .unwrap();
+        assert_eq!(history.len(), 1);
+        assert!(history[0].text.contains(text));
+        assert!(
+            stores
+                .owner_facts
+                .as_ref()
+                .unwrap()
+                .get("f_owner_rule")
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(stores.facts.get("f_owner_rule").await.unwrap().is_none());
+    }
+    assert_eq!(
+        owner.state.load().await.unwrap(),
+        CompactionState::default()
+    );
+    assert!(owner.facts.get("f_same_id").await.unwrap().is_none());
+
+    first.drop_all().await.unwrap();
+    let cleared = room(&dir, "account/room-a").await;
+    assert_eq!(
+        cleared.facts.count(&FactFilter::default()).await.unwrap(),
+        0
+    );
+    assert_eq!(cleared.history.count().await.unwrap(), 0);
+    assert!(cleared.segments.all().await.unwrap().is_empty());
+    assert_eq!(
+        cleared.state.load().await.unwrap(),
+        CompactionState::default()
+    );
+    assert!(owner.facts.get("f_owner_rule").await.unwrap().is_some());
+    assert_eq!(
+        second.facts.get("f_same_id").await.unwrap().unwrap().text,
+        "Beta plan"
+    );
 }

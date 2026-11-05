@@ -328,6 +328,14 @@ impl PlatformToolBridge for SubtaskBridge {
         self.inner.drain_steering().await
     }
 
+    fn watches_room(&self) -> bool {
+        self.inner.watches_room()
+    }
+
+    async fn drain_room_updates(&self) -> Vec<String> {
+        self.inner.drain_room_updates().await
+    }
+
     async fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled().await
     }
@@ -629,6 +637,7 @@ impl ChildMeter {
 }
 
 /// The outermost bridge of a child: refuses what a child may not do and meters the rest.
+/// Steering and room updates stay with the parent turn, which owns their cursors.
 struct ChildGuard {
     inner: Arc<dyn PlatformToolBridge>,
     meter: Arc<ChildMeter>,
@@ -1149,6 +1158,34 @@ fn check_output(schema: &Value, text: &str) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn child_does_not_consume_the_parent_room_updates() {
+        struct RoomBridge;
+        #[async_trait]
+        impl PlatformToolBridge for RoomBridge {
+            async fn call(&self, _: &str, _: Value) -> String {
+                "ok".into()
+            }
+            fn watches_room(&self) -> bool {
+                true
+            }
+            async fn drain_room_updates(&self) -> Vec<String> {
+                vec!["participant message for the parent".into()]
+            }
+        }
+        let parent: Arc<dyn PlatformToolBridge> = Arc::new(RoomBridge);
+        let child = ChildGuard {
+            inner: parent.clone(),
+            meter: Arc::new(ChildMeter::default()),
+        };
+        assert!(!child.watches_room());
+        assert!(child.drain_room_updates().await.is_empty());
+        assert_eq!(
+            parent.drain_room_updates().await,
+            ["participant message for the parent"]
+        );
+    }
     use crate::flow::copilot::bot_talk::{BotTalk, BotTalkHost, CrewMember, NestedBotTurn};
     use crate::flow::copilot::capability_tools::HostTools;
     use flow_like_types::bot::BotLocation;

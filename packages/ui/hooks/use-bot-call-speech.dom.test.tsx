@@ -54,6 +54,7 @@ const directory: CrewDirectory = (id) => ({
 	isMe: false,
 	isBot: true,
 	isPending: false,
+	isResolved: true,
 	ttsModel: "voice",
 });
 

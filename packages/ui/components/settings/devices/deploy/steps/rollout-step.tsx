@@ -14,6 +14,7 @@ import {
 	Lock,
 	LockOpen,
 	type LucideIcon,
+	Network,
 	OctagonX,
 	Pencil,
 	Plus,
@@ -73,9 +74,12 @@ import {
 	useHostLink,
 	useRouteLink,
 } from "../../routing/use-devices-route";
+import { Mono } from "../../service/config-parts";
+import { AddressLine, CurlLine, addressOf } from "../../service/requests-block";
 import { useActivityTray } from "../../shell/activity-tray";
 import { useDeviceWorkspace, useOverlay } from "../../workspace";
 import { RUN_REFUSALS } from "../deploy-copy";
+import { type EndpointCall, endpointCalls } from "../endpoint-calls";
 import { ModelFilesBlock } from "../model-files-block";
 import type { DeployStepProps } from "../step-props";
 import { secretCount } from "../update-path";
@@ -913,6 +917,78 @@ function TokenRow({ detail }: Readonly<TokenRowProps>) {
 						"Shown once · not kept after you left this page",
 					)}
 				</span>
+			)}
+		</li>
+	);
+}
+
+/** The Endpoints the run's services answer now: address and a `curl` line, with the new token while this page holds it. */
+function CallsBlock({
+	plan,
+	check,
+	state,
+	details,
+}: Readonly<{
+	plan: DeployPlan;
+	check: DeployStepProps["check"];
+	state: DeployRunState;
+	details: DeployRunDetails;
+}>) {
+	const { t } = useTranslation("devices");
+	const calls = useMemo(
+		() => endpointCalls(plan, state.rows, details, check),
+		[plan, state.rows, details, check],
+	);
+	if (!calls.length) return null;
+	return (
+		<Block
+			id="dp-calls"
+			icon={Network}
+			title={t("deployShip.calls.title", "Call your endpoints")}
+			foot={t(
+				"deployShip.calls.foot",
+				"127.0.0.1 answers only on the device itself. For a service on all networks, put in an address of the device that the client can reach.",
+			)}
+		>
+			<ul className="flex flex-col">
+				{calls.map((call) => (
+					<CallRow key={call.key} call={call} />
+				))}
+			</ul>
+		</Block>
+	);
+}
+
+function CallRow({ call }: Readonly<{ call: EndpointCall }>) {
+	const { t } = useTranslation("devices");
+	const address = addressOf(call.where, call.route.path);
+	return (
+		<li
+			data-call={call.key}
+			className="flex min-w-0 flex-col gap-1.5 border-t border-hairline py-2.5 text-ui first:border-t-0 first:pt-0 last:pb-0"
+		>
+			<p className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+				<b className="font-semibold">{call.eventName}</b>
+				<Mono>{`${call.route.method} ${call.route.path}`}</Mono>
+				<span className="text-muted-foreground">
+					{call.deviceName} › {call.serviceId}
+				</span>
+			</p>
+			<AddressLine address={address} copyable={!!call.where.origin} />
+			<CurlLine
+				route={call.route}
+				address={address}
+				requiresToken={call.requiresToken}
+				{...(call.token ? { token: call.token } : {})}
+			/>
+			{call.publishedPort === undefined ? null : (
+				<p data-call-unpublished="" className="text-xs text-muted-foreground">
+					{t(
+						"deployShip.calls.unpublished",
+						"Docker forwards only port {{published}} on this device, so this address answers only through a tunnel.",
+						{ published: call.publishedPort },
+					)}
+				</p>
 			)}
 		</li>
 	);
@@ -1873,6 +1949,12 @@ function RolloutBody({
 			) : null}
 			<TokenBlock
 				deploymentId={draft.deploymentId}
+				state={state}
+				details={details}
+			/>
+			<CallsBlock
+				plan={plan}
+				check={props.check}
 				state={state}
 				details={details}
 			/>

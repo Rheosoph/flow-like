@@ -144,6 +144,30 @@ impl InteractiveRun {
         &self.args.conversation_id
     }
 
+    /// A missing trigger position must not give a shared room writable owner memory.
+    pub async fn owner_direct(&self) -> bool {
+        match &self.home {
+            Home::Local(store) => store
+                .conversation(&self.args.conversation_id)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|conversation| {
+                    super::memory::is_owner_direct(&conversation, &self.bot_id)
+                }),
+            Home::Account(hub) => hub
+                .read(
+                    &format!("inbox/conversations/{}", self.args.conversation_id),
+                    Vec::new(),
+                )
+                .await
+                .ok()
+                .is_some_and(|conversation| {
+                    super::memory::hub_owner_direct(&conversation, &self.bot_id)
+                }),
+        }
+    }
+
     pub fn host_id(&self) -> String {
         format!("{INTERACTIVE_HOST_PREFIX}{}", self.args.client_run_id)
     }
@@ -171,7 +195,15 @@ impl InteractiveRun {
                     .await
                     .ok()?;
                 let seq = trigger_of(entries, &self.args.trigger_message_id)?.seq;
-                hub_source_for(hub, hub, &self.bot_id, &self.args.conversation_id, seq).await
+                hub_source_for(
+                    hub,
+                    hub,
+                    &self.bot_id,
+                    &self.args.conversation_id,
+                    seq,
+                    None,
+                )
+                .await
             }
         }
     }

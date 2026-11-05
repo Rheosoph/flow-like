@@ -144,6 +144,8 @@ export type RealtimeConnectionState =
 
 export interface RealtimeSubscription {
 	notifications: boolean;
+	/** Keep notification delivery active while every tab in this account is hidden. */
+	backgroundNotifications?: boolean;
 	runs: RealtimeRunSubscription[];
 	conversations?: RealtimeConversationSubscription[];
 }

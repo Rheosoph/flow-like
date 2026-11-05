@@ -130,21 +130,66 @@ function conversation(
 async function setup() {
 	const { createRoot } = await import("react-dom/client");
 	const { useConversationRoom } = await import("./use-conversation-room");
-	function Probe({ item, me }: { item: IConversation; me: string | null }) {
-		latest = useConversationRoom(item, me);
+	function Probe({
+		item,
+		me,
+		enabled,
+	}: { item: IConversation; me: string | null; enabled: boolean }) {
+		latest = useConversationRoom(item, me, enabled);
 		return null;
 	}
 	const container = document.createElement("div");
 	document.body.append(container);
 	const root = createRoot(container);
 	roots.push(root);
-	return async (item: IConversation, me: string | null = "me") => {
-		await act(async () => root.render(createElement(Probe, { item, me })));
+	return async (
+		item: IConversation,
+		me: string | null = "me",
+		enabled = true,
+	) => {
+		await act(async () =>
+			root.render(createElement(Probe, { item, me, enabled })),
+		);
 		await settle();
 	};
 }
 
 describe("conversation room eligibility", () => {
+	test("blocking while access is loading never opens the stale peer session", async () => {
+		let release!: (access: {
+			jwt: string;
+			encryption_key: string;
+			key_id: string;
+		}) => void;
+		getAccess.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					release = resolve;
+				}),
+		);
+		const render = await setup();
+		const item = conversation([person("me"), person("other")]);
+		await render(item);
+		await render(item, "me", false);
+		await act(async () =>
+			release({ jwt: "jwt", encryption_key: "key", key_id: "epoch-1" }),
+		);
+		expect(created).toHaveLength(0);
+		expect(latest).toBeUndefined();
+	});
+	test("blocking disconnects an existing call room and unblocking permits a new session", async () => {
+		const render = await setup();
+		const item = conversation([person("me"), person("other")]);
+		await render(item);
+		expect(latest).toBeDefined();
+		await render(item, "me", false);
+		expect(latest).toBeUndefined();
+		expect(created[0]?.dispose).toHaveBeenCalledTimes(1);
+		expect(getAccess).toHaveBeenCalledTimes(1);
+		await render(item);
+		expect(created).toHaveLength(2);
+		expect(latest).toBeDefined();
+	});
 	test("opens the shared account room for a person calling a bot", async () => {
 		const render = await setup();
 		await render(conversation([person("me"), person("bot-1", "bot")]));

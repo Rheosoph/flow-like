@@ -61,7 +61,18 @@ fn stable_id(recipient: &str, message_id: &str) -> String {
 }
 
 pub(crate) fn chat_link(conversation_id: &str) -> String {
-    format!("/bots?conversation={conversation_id}")
+    format!(
+        "/bots?conversation={}",
+        urlencoding::encode(conversation_id)
+    )
+}
+
+fn call_link(conversation_id: &str, message_id: &str) -> String {
+    format!(
+        "{}&call={}",
+        chat_link(conversation_id),
+        urlencoding::encode(message_id)
+    )
 }
 
 pub(crate) fn group_key(conversation_id: &str) -> String {
@@ -109,6 +120,11 @@ pub(crate) async fn notify_message<C: ConnectionTrait>(
     let Some(body) = push_body(entry) else {
         return Ok(0);
     };
+    let link = if InboxEntryKind::parse(&entry.kind) == Some(InboxEntryKind::Call) {
+        call_link(&entry.conversation_id, &entry.message_id)
+    } else {
+        chat_link(&entry.conversation_id)
+    };
     let members = conversation_member::Entity::find()
         .filter(conversation_member::Column::ConversationId.eq(entry.conversation_id.as_str()))
         .all(db)
@@ -142,7 +158,7 @@ pub(crate) async fn notify_message<C: ConnectionTrait>(
                 description: Some(body.clone()),
                 icon: None,
                 image: None,
-                link: Some(chat_link(&entry.conversation_id)),
+                link: Some(link.clone()),
                 notification_type: NotificationType::System,
                 source_run_id: Some(group_key(&entry.conversation_id)),
                 source_node_id: Some(entry.message_id.clone()),
@@ -221,4 +237,19 @@ pub async fn set_mute(
         conversation_id,
         muted: body.muted,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn notification_links_keep_identifiers_in_their_query_parameters() {
+        assert_eq!(
+            super::chat_link("room&call=other"),
+            "/bots?conversation=room%26call%3Dother"
+        );
+        assert_eq!(
+            super::call_link("room&call=other", "call#1?"),
+            "/bots?conversation=room%26call%3Dother&call=call%231%3F"
+        );
+    }
 }

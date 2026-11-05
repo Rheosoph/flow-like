@@ -28,6 +28,7 @@ fn fact(id: &str, text: &str, seq: Seq) -> Fact {
         recorded_at: now(),
         expired_at: None,
         evidence: vec![Evidence {
+            speaker: None,
             seq,
             message_id: format!("msg_{seq}"),
             part: None,
@@ -92,4 +93,77 @@ async fn forgetting_an_unknown_fact_is_an_error_and_reset_empties_the_memory() {
 
     admin.reset().await.unwrap();
     assert!(admin.list(false).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn administration_finds_room_facts_and_resets_every_room() {
+    let dir = TempDir::new().unwrap();
+    let connection =
+        flow_like_storage::databases::vector::lancedb::connect_lance(dir.path().to_str().unwrap())
+            .execute()
+            .await
+            .unwrap();
+    let admin = FactAdmin::open(connection.clone(), None).await;
+    let unrelated = format!("memory_room_{}_files", "a".repeat(64));
+    connection
+        .create_empty_table(
+            &unrelated,
+            Arc::new(flow_like_storage::arrow_schema::Schema::new(vec![
+                flow_like_storage::arrow_schema::Field::new(
+                    "id",
+                    flow_like_storage::arrow_schema::DataType::Utf8,
+                    false,
+                ),
+            ])),
+        )
+        .execute()
+        .await
+        .unwrap();
+    stores(&dir)
+        .await
+        .facts
+        .insert(&[fact("f_owner", "Owner preference", 1)])
+        .await
+        .unwrap();
+    for (key, id) in [("room-a", "f_room_a"), ("room-b", "f_room_b")] {
+        let room = MemoryStores::open_room(
+            connection.clone(),
+            Arc::new(HashEmbedder::new("hash", 16)),
+            None,
+            key,
+        )
+        .await;
+        room.facts.insert(&[fact(id, key, 1)]).await.unwrap();
+        room.state.save(&Default::default()).await.unwrap();
+    }
+    let listed = admin.list_views(false).await.unwrap();
+    assert_eq!(listed.len(), 3);
+    assert!(
+        listed
+            .iter()
+            .find(|fact| fact.id == "f_owner")
+            .unwrap()
+            .conversation_scope
+            .is_none()
+    );
+    for id in ["f_room_a", "f_room_b"] {
+        let scope = listed
+            .iter()
+            .find(|fact| fact.id == id)
+            .unwrap()
+            .conversation_scope
+            .as_deref()
+            .unwrap();
+        assert_eq!(scope.len(), 64);
+    }
+    assert!(admin.forget("f_room").await.is_err());
+    assert_eq!(admin.forget("f_room_a").await.unwrap().id, "f_room_a");
+    assert_eq!(admin.list(false).await.unwrap().len(), 2);
+
+    admin.reset().await.unwrap();
+    assert!(admin.list(false).await.unwrap().is_empty());
+    assert_eq!(
+        connection.table_names().execute().await.unwrap(),
+        [unrelated]
+    );
 }

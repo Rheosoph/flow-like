@@ -642,6 +642,12 @@ export interface NetworkInterface {
 	loopback: boolean;
 }
 
+/** A Docker device: the port its setup package forwards, and the host address Docker publishes it on. */
+export interface PublishedPort {
+	host: string;
+	port: number;
+}
+
 export type HostIsolationMode = "required" | "optional" | "none";
 export interface HostIsolationFacts {
 	platform: string;
@@ -668,7 +674,11 @@ export interface InspectionPlus extends Omit<Inspection, "placements"> {
 	hostIsolation?: HostIsolationMode | null;
 	isolation?: HostIsolationFacts | null;
 	agent?: AgentRelease;
-	host?: { booted_at: number | null; agent_started_at: number };
+	host?: {
+		booted_at: number | null;
+		agent_started_at: number;
+		published?: PublishedPort;
+	};
 	tasks?: TaskHealth[];
 	hostOperation?: HostOperationView | null;
 	network?: { interfaces: NetworkInterface[] };

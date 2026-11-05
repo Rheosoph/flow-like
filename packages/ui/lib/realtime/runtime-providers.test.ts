@@ -250,6 +250,40 @@ describe("shared provider lifecycle", () => {
 		expect(open).toHaveBeenCalledTimes(2);
 	});
 
+	test("background notifications keep a hidden account connected until the subscription opts out", async () => {
+		const close = vi.fn();
+		const open = vi.fn<RealtimeProviderOpener>(async () => ({ close }));
+		const fetcher = vi.fn<RealtimeFetch>(async (url) =>
+			String(url).endsWith("/connect") ? grant() : empty(),
+		);
+		const runtime = create(fetcher, open, longLease);
+		const first = port(runtime, "first");
+		first.send({
+			type: "subscribe",
+			id: "first",
+			subscription: {
+				notifications: true,
+				backgroundNotifications: true,
+				runs: [],
+			},
+		});
+		await vi.advanceTimersByTimeAsync(2);
+		first.send({
+			type: "heartbeat",
+			id: "first",
+			activity: { online: true, visible: false },
+		});
+		await vi.advanceTimersByTimeAsync(60_001);
+		expect(open).toHaveBeenCalledTimes(1);
+		expect(close).not.toHaveBeenCalled();
+		const previousPolls = polls(fetcher).length;
+		await vi.advanceTimersByTimeAsync(30_001);
+		expect(polls(fetcher).length).toBeGreaterThan(previousPolls);
+		first.subscribe();
+		await vi.advanceTimersByTimeAsync(2);
+		expect(close).toHaveBeenCalledTimes(1);
+	});
+
 	test("an account blocked as unauthorized forgets its grant", async () => {
 		let forbidden = false;
 		const open = vi.fn<RealtimeProviderOpener>(async () => ({ close() {} }));

@@ -55,6 +55,7 @@ function iceExpiryMs(access: IRealtimeAccess): number | null {
 export function useConversationRoom(
 	conversation: IConversation,
 	me: string | null | undefined,
+	enabled = true,
 ): ConversationRoom | undefined {
 	const inbox = useBackend().inboxState;
 	const canFetchAccess = inbox?.getConversationRealtimeAccess !== undefined;
@@ -80,6 +81,7 @@ export function useConversationRoom(
 	);
 
 	const connect =
+		enabled &&
 		!conversation.local &&
 		canFetchAccess &&
 		!!me &&
@@ -185,6 +187,7 @@ export function useConversationRoom(
 		const start = async (prefetched?: IRealtimeAccess) => {
 			try {
 				const access = prefetched ?? (await fetchAccess(conversationId));
+				if (disposed) return;
 				const next = await createRealtimeSession({
 					room: conversationRealtimeRoom(conversationId),
 					access,
@@ -224,5 +227,5 @@ export function useConversationRoom(
 		};
 	}, [connect, inbox, conversationId, me, memberKey]);
 
-	return room;
+	return connect ? room : undefined;
 }

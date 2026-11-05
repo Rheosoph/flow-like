@@ -973,10 +973,14 @@ impl Diagnostics {
     }
 
     pub(crate) fn host_json(&self) -> Value {
-        json!({
+        let mut host = json!({
             "booted_at": credible_boot_time(sysinfo::System::boot_time()),
             "agent_started_at": self.agent_started_at(),
-        })
+        });
+        if let Some(published) = crate::host::published_port() {
+            host["published"] = json!(published);
+        }
+        host
     }
 
     /// Logs a background task as soon as it fails or stops before agent shutdown, and

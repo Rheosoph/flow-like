@@ -7,6 +7,7 @@
 use super::{
     gate::ApprovalGate,
     memory::{self, JobMemory},
+    room_updates::LocalRoomUpdates,
     rule::{self, Waiting},
     store::{HostStore, StoreGrants},
     transcript::{self, Unreadable},
@@ -15,6 +16,7 @@ use chrono::{Duration as Age, Utc};
 use flow_like::{
     flow::copilot::{
         memory_open::follow_up,
+        platform::RoomUpdates,
         tool_grants::{GrantStore, clear_tokens, resume_note},
     },
 };
@@ -545,18 +547,26 @@ impl Inner {
         if reacting && transcript.prompt.is_empty() {
             return End::silent();
         }
-        let requester = (reacting || !transcript.addressed).then(|| {
-            flow_like::flow::copilot::TurnRequester {
-                requester_id: LOCAL_OWNER_ID.to_owned(),
-                requester_name: None,
-                owner_id: LOCAL_OWNER_ID.to_owned(),
-                owner_name: None,
-                audience: waiting.audience,
-                room: None,
-                addressed: transcript.addressed,
-                reactions,
-            }
-        });
+        let requester = (conversation.kind == ConversationKind::Group
+            || reacting
+            || !transcript.addressed)
+            .then(|| {
+                let requester_id = oldest_first
+                    .iter()
+                    .find(|entry| entry.message_id == waiting.message_id)
+                    .map_or(LOCAL_OWNER_ID, |entry| entry.sender_id.as_str())
+                    .to_owned();
+                flow_like::flow::copilot::TurnRequester {
+                    requester_name: names.get(&requester_id).cloned(),
+                    requester_id,
+                    owner_id: LOCAL_OWNER_ID.to_owned(),
+                    owner_name: names.get(LOCAL_OWNER_ID).cloned(),
+                    audience: waiting.audience,
+                    room: conversation.title.clone(),
+                    addressed: transcript.addressed,
+                    reactions,
+                }
+            });
         let grants: Arc<dyn GrantStore> = Arc::new(StoreGrants {
             store: self.store.clone(),
             bot_id: bot_id.clone(),
@@ -573,6 +583,25 @@ impl Inner {
         };
         let (runner, stop_id) = (self.runner.clone(), run_id.clone());
         let gate = ApprovalGate::new(grants.clone(), &run_id, move || runner.cancel(&stop_id));
+        let room_updates = (conversation.kind == ConversationKind::Group)
+            .then(|| {
+                let through = if reacting {
+                    oldest_first.last()
+                } else {
+                    oldest_first
+                        .iter()
+                        .find(|entry| entry.message_id == waiting.message_id)
+                };
+                through.map(|trigger| {
+                    Arc::new(LocalRoomUpdates::new(
+                        self.store.clone(),
+                        bot_id,
+                        trigger,
+                        names,
+                    )) as Arc<dyn RoomUpdates>
+                })
+            })
+            .flatten();
         let job = TurnJob {
             run_id: run_id.clone(),
             bot_id: bot_id.clone(),
@@ -581,6 +610,7 @@ impl Inner {
             prompt,
             history: transcript.history,
             memory: memory.clone(),
+            room_updates,
             gate: gate.clone(),
             requester: requester.clone(),
             hub_token: None,

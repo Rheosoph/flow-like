@@ -303,6 +303,7 @@ fn build() -> FkGraph {
             ConversationFile,
             ConversationInviteLink,
             ConversationMember,
+            InboxBlock,
             ConversationSegment,
             Course,
             CourseAppLink,

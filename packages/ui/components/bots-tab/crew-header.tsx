@@ -4,6 +4,7 @@ import { useTranslation } from "@flow-like/locales";
 import { BotIcon, MessageSquareIcon, PlusIcon, SearchIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "../ui/button";
+import { BlockedPrincipalsButton } from "./blocked-principals";
 
 function useHour() {
 	const [hour, setHour] = useState<number | null>(null);
@@ -42,6 +43,7 @@ export function CrewHeader({
 	onSearchChange,
 	onNewBot,
 	onShowChat,
+	canManageBlocks = false,
 }: Readonly<{
 	name?: string;
 	summary: string;
@@ -49,6 +51,7 @@ export function CrewHeader({
 	onSearchChange: (value: string) => void;
 	onNewBot?: () => void;
 	onShowChat?: () => void;
+	canManageBlocks?: boolean;
 }>) {
 	const { t } = useTranslation("bots");
 	const greeting = useGreeting(name);
@@ -67,6 +70,7 @@ export function CrewHeader({
 				</p>
 			</div>
 			<div className="flex flex-wrap items-center gap-2 @max-[520px]/crew:w-full @max-[520px]/crew:flex-nowrap">
+				{canManageBlocks && <BlockedPrincipalsButton />}
 				{onShowChat && (
 					<Button
 						type="button"

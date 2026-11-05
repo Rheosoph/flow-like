@@ -30,11 +30,12 @@ use sea_orm::{
 
 pub(crate) mod activity;
 pub(crate) mod approvals;
+pub mod blocks;
 pub mod conversations;
 pub mod delivery;
 pub mod entries;
-pub mod files;
 pub(crate) mod exchange;
+pub mod files;
 pub mod image;
 pub mod import;
 pub mod invitations;
@@ -59,15 +60,17 @@ pub mod turns;
 mod view;
 
 #[cfg(test)]
+mod blocks_tests;
+#[cfg(test)]
 mod bot_tests;
 #[cfg(test)]
 mod bot_token_tests;
 #[cfg(all(test, feature = "db-chaos"))]
 mod concurrency_tests;
 #[cfg(test)]
-pub(crate) mod fixture;
-#[cfg(test)]
 mod files_tests;
+#[cfg(test)]
+pub(crate) mod fixture;
 #[cfg(test)]
 mod history_tests;
 #[cfg(test)]
@@ -129,6 +132,11 @@ const SEND_BODY_LIMIT: usize = MAX_CONVERSATION_MEMBERS * (MAX_ENVELOPE_BYTES + 
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/blocks", get(blocks::list_blocks))
+        .route(
+            "/blocks/{principal_id}",
+            put(blocks::block_principal).delete(blocks::unblock_principal),
+        )
         .route(
             "/conversations",
             get(conversations::list_conversations).post(conversations::create_conversation),

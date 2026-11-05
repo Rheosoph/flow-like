@@ -3739,6 +3739,8 @@
 			"portMovedService": "{{service}} of this deploy takes the next free port, {{to}}: one service per port.",
 			"portMovedUsedBy": "Port {{from}} is used by {{service}} there, so it uses {{to}} instead.",
 			"portMovedWhy": "Port {{from}} is in use there, so it uses {{to}} instead.",
+			"portUnpublished": "Port {{port}} · tunnel only",
+			"portUnpublishedWhy": "{{device}} runs in Docker, which forwards only port {{published}} from the computer it runs on. Use port {{published}}, or reach this one through a tunnel.",
 			"refuseWhy": "Can't run here: {{reason}}",
 			"renamed": "Service {{to}}",
 			"renamedWhy": "{{from}} is taken on {{device}}; this one becomes {{to}}.",
@@ -4559,6 +4561,11 @@
 			"timings": "Fix the two safe-update times above.",
 			"tooLarge": "The settings for {{device}} are too large to send."
 		},
+		"calls": {
+			"foot": "127.0.0.1 answers only on the device itself. For a service on all networks, put in an address of the device that the client can reach.",
+			"title": "Call your endpoints",
+			"unpublished": "Docker forwards only port {{published}} on this device, so this address answers only through a tunnel."
+		},
 		"conseq": {
 			"answersAt": "{{address}} starts answering on {{devices}}.",
 			"background": "Runs {{events}} in the background on {{devices}}.",
@@ -4722,6 +4729,7 @@
 			"endpointSharedToken": "{{event}} uses {{service}}'s access settings; its token from Events is not used",
 			"onceSoon": "{{event}} runs in less than 5 minutes; it doesn't run if the deploy takes longer",
 			"portMoved": "Port {{to}}: {{from}} is in use there",
+			"portUnpublished": "Port {{port}}: Docker forwards only {{published}}",
 			"refuse": "Leaves out {{event}}: the device can't run it",
 			"renamed": "Named {{to}} here: {{from}} is taken",
 			"scheduleLocalTrigger": "This computer also runs {{event}}",

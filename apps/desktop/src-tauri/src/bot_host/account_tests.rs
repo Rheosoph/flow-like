@@ -766,19 +766,17 @@ async fn a_bot_that_reads_along_and_stays_silent_posts_nothing_and_ends_done() {
 }
 
 #[tokio::test]
-async fn a_mentioned_bot_always_answers_even_with_the_silent_reply() {
+async fn a_mentioned_room_bot_can_explicitly_stay_silent_when_nothing_remains_to_answer() {
     let f = Fixture::start(true, config());
     *f.runner.mode.lock().unwrap() = Mode::Silent;
     f.queue(
         room_turn("bt_a", "m1"),
         vec![mentioning(1, "m1", "botA, lunch?", &["botA"])],
     );
-    until("the reply", || f.status("botA") == Some(TurnStatus::Done)).await;
+    until("the silent end", || f.status("botA") == Some(TurnStatus::Done)).await;
 
-    assert!(f.hub.silenced.lock().unwrap().is_empty());
-    let sent = f.hub.sent.lock().unwrap().clone();
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].message["envelope"]["body"]["text"], "NO_REPLY");
+    assert_eq!(f.hub.silenced.lock().unwrap().len(), 1);
+    assert!(f.hub.sent.lock().unwrap().is_empty());
     let job = f.runner.jobs.lock().unwrap()[0].clone();
     assert!(job.requester.unwrap().addressed);
 }

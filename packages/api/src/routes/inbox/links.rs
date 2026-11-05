@@ -418,6 +418,7 @@ pub(crate) async fn join_link_in<C: ConnectionTrait>(
     if current.iter().any(|member| member.principal_id == joiner) {
         return Ok(unchanged);
     }
+    super::blocks::ensure_allowed(txn, joiner, &link.created_by).await?;
     let creator_present = current
         .iter()
         .any(|member| member.principal_id == link.created_by);

@@ -33,6 +33,7 @@ enum Call {
 
 #[derive(Default)]
 struct DeviceHub {
+    room: bool,
     turns: Mutex<Vec<BotTurn>>,
     entries: Mutex<Vec<InboxEntry>>,
     calls: Mutex<Vec<Call>>,
@@ -73,6 +74,9 @@ impl TurnHub for DeviceHub {
     async fn claim_turn(&self, turn_id: &str, _: &str) -> Result<Claimed, HubFailure> {
         self.record(Call::Claim);
         let mut claimed = turn(turn_id);
+        if self.room {
+            claimed.audience = TurnAudience::Room;
+        }
         claimed.attempts = *self.attempts.lock().unwrap();
         Ok(Claimed {
             turn: claimed,
@@ -214,6 +218,7 @@ struct Runner {
     seen_claim: Mutex<Option<u32>>,
     cancelled: Mutex<Vec<String>>,
     started: Mutex<usize>,
+    room_updates: Mutex<Option<Arc<dyn flow_like::flow::copilot::platform::RoomUpdates>>>,
 }
 
 impl Runner {
@@ -223,6 +228,7 @@ impl Runner {
             seen_claim: Mutex::default(),
             cancelled: Mutex::default(),
             started: Mutex::default(),
+            room_updates: Mutex::default(),
         })
     }
 }
@@ -232,6 +238,7 @@ impl TurnRunner for Runner {
     async fn run(&self, job: TurnJob) -> Result<String, RunError> {
         *self.started.lock().unwrap() += 1;
         *self.seen_claim.lock().unwrap() = job.claim_as::<u32>().map(|claim| *claim);
+        *self.room_updates.lock().unwrap() = job.room_updates.clone();
         match &self.mode {
             Mode::Reply(text) => Ok((*text).to_owned()),
             Mode::Retry => Err(RunError::Retry {
@@ -337,6 +344,57 @@ async fn a_claim_hands_its_run_spec_to_the_runner_and_the_reply_is_posted() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["message_id"], reply_message_id("bot", "m1"));
     assert_eq!(sent[0]["envelope"]["body"]["text"], "hello");
+    assert!(f.runner.room_updates.lock().unwrap().is_none());
+}
+
+#[tokio::test]
+async fn a_running_room_turn_reads_peer_messages_already_after_its_trigger_and_later_owner_messages()
+ {
+    let hub = Arc::new(DeviceHub {
+        room: true,
+        ..Default::default()
+    });
+    let trigger = plain("introduce yourselves");
+    let mut peer = plain("I am Flux");
+    peer.id = "peer-entry".into();
+    peer.message_id = "m2".into();
+    peer.sender_id = "peer".into();
+    peer.seq = Some(2);
+    *hub.entries.lock().unwrap() = vec![peer, trigger];
+    let mut queued = turn("bt_1");
+    queued.audience = TurnAudience::Room;
+    hub.turns.lock().unwrap().push(queued);
+    let runner = Runner::new(Mode::Hang);
+    let host = AccountHost::new(
+        hub.clone(),
+        runner.clone(),
+        Arc::new(Quiet),
+        Arc::new(Semaphore::new(1)),
+        config(),
+    );
+    tokio::spawn(host.clone().run());
+    let f = Fixture { hub, runner, host };
+    f.until("room updates attached to the running turn", |f| {
+        f.runner.room_updates.lock().unwrap().is_some()
+    })
+    .await;
+    let updates = f.runner.room_updates.lock().unwrap().clone().unwrap();
+    assert_eq!(
+        updates.drain().await,
+        ["[Message m2] peer (member, not your owner) wrote: I am Flux"]
+    );
+    assert!(updates.drain().await.is_empty());
+    let mut later = plain("keep it short");
+    later.id = "later-entry".into();
+    later.message_id = "m3".into();
+    later.seq = Some(3);
+    f.hub.entries.lock().unwrap().insert(0, later);
+    assert_eq!(
+        updates.drain().await,
+        ["[Message m3] owner (your owner) wrote: keep it short"]
+    );
+    assert!(updates.drain().await.is_empty());
+    f.host.cancel("bt_1").await;
 }
 
 #[tokio::test]

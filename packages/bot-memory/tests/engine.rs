@@ -501,6 +501,7 @@ fn stored(
         recorded_at: said,
         expired_at: None,
         evidence: vec![Evidence {
+            speaker: None,
             seq: 1,
             message_id: "msg_1".into(),
             part: None,
@@ -653,6 +654,7 @@ async fn deletions_recompute_trust_from_the_remaining_evidence() {
         transcript.user("Support is open 9-17 on weekdays, and I prefer morning calls.");
     let now = transcript.now();
     let evidence = |seq: Seq, part: Option<PartRef>, quote: &str| Evidence {
+        speaker: None,
         seq,
         message_id: format!("msg_{seq}"),
         part,
@@ -950,6 +952,7 @@ async fn tool_writes_and_maintenance_respect_the_lease() {
 
     let save = MemorySaveArgs {
         text: "The user is allergic to peanuts.".into(),
+        evidence_seq: None,
         kind: Some("profile".into()),
         subject: None,
         valid_from: None,

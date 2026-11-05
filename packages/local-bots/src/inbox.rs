@@ -29,7 +29,8 @@ use flow_like_types::{
     inbox::{
         ActivityBody, ConversationEncryption, ConversationKind, EntryCursor, EnvelopeKind,
         InboxEntryKind, MAX_CONVERSATION_MEMBERS, MemberEventBody, MemberOp, PrincipalKind,
-        TriggerBody, body_target, check_envelope, direct_pair_key, is_valid_message_id,
+        RoomEventBody, TriggerBody, body_target, check_envelope, direct_pair_key,
+        is_valid_message_id,
     },
 };
 use rusqlite::{Connection, OptionalExtension, Params, Row, params};
@@ -464,6 +465,22 @@ fn member_event(
         LOCAL_OWNER_ID,
         InboxEntryKind::Member,
         envelope,
+        at,
+    )?;
+    Ok(())
+}
+
+/// A rename or picture change the person made, in the group's history like the API's `room`
+/// entries.
+fn room_event(db: &Connection, conversation_id: &str, change: &RoomEventBody) -> Result<()> {
+    let at = next_event_time(db, conversation_id)?;
+    insert_event(
+        db,
+        conversation_id,
+        &format!("room:{}", create_id()),
+        LOCAL_OWNER_ID,
+        InboxEntryKind::Room,
+        change.envelope(),
         at,
     )?;
     Ok(())
@@ -1074,6 +1091,11 @@ impl LocalBotStore {
                     "UPDATE conversations SET title = ?2, updated_at = ?3 WHERE id = ?1",
                     params![conversation_id, title, now_micros()],
                 )?;
+                room_event(
+                    tx,
+                    conversation_id,
+                    &RoomEventBody::title(title.clone(), LOCAL_OWNER_ID),
+                )?;
                 changes.conversation(conversation_id);
             }
             visible(tx, conversation_id)
@@ -1094,6 +1116,11 @@ impl LocalBotStore {
                 tx.execute(
                     "UPDATE conversations SET image = ?2, updated_at = ?3 WHERE id = ?1",
                     params![conversation_id, image, now_micros()],
+                )?;
+                room_event(
+                    tx,
+                    conversation_id,
+                    &RoomEventBody::image(image.is_none(), LOCAL_OWNER_ID),
                 )?;
                 changes.conversation(conversation_id);
             }

@@ -26,7 +26,7 @@ pub use engine::{CompactionInput, CompactionOutcome, DeletionReport, MemoryBusy,
 pub use facts::{Evidence, Fact, FactKind};
 pub use llm::{Embedder, LlmRequest, LlmTask, MemoryLlm};
 pub use model::{
-    FactSource, HistoryItem, ItemKind, Role, Seq, SeqSpan, ToolPart, ToolResult, UiPart,
+    FactSource, HistoryItem, ItemKind, Role, Seq, SeqSpan, Speaker, ToolPart, ToolResult, UiPart,
 };
 pub use pointer::{PartRef, Pointer};
 pub use prompt::{AssembledPrompt, ModelBudget, ModelProfile, PromptInput, assemble};

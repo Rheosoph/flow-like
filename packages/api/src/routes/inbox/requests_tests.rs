@@ -622,7 +622,10 @@ async fn a_started_call_pushes_once_and_neither_call_entry_counts_as_unread() {
     assert_eq!(input.user_id, "user-b");
     assert_eq!(input.title, "Ada in Launch");
     assert_eq!(input.description.as_deref(), Some("Started a call"));
-    assert_eq!(input.link.as_deref(), Some("/bots?conversation=room"));
+    assert_eq!(
+        input.link.as_deref(),
+        Some("/bots?conversation=room&call=call_1")
+    );
 
     let told = notify_message(&db, &sink, &entry(&db, "end_1", "user-a").await)
         .await

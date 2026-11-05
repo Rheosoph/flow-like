@@ -156,6 +156,10 @@
 		"botTag": "",
 		"builtIn": "",
 		"call": {
+			"dismiss": "",
+			"incoming": "",
+			"incomingDescription": "",
+			"incomingRoom": "",
 			"durationHours": "",
 			"durationMinutes": "",
 			"durationShort": "",
@@ -395,6 +399,12 @@
 			"where": ""
 		},
 		"retry": "",
+		"roomChange": {
+			"nameRemoved": "",
+			"pictureChanged": "",
+			"pictureRemoved": "",
+			"renamed": ""
+		},
 		"roomSettings": {
 			"change": "",
 			"description": "",
@@ -474,7 +484,34 @@
 		"unread_other": "",
 		"you": "",
 		"youObject": "",
-		"yourCrew": ""
+		"yourCrew": "",
+		"blocks": {
+			"title": "Usuários e bots bloqueados",
+			"description": "Gerencie quem pode trocar mensagens diretas e convites com você e seus bots. As salas compartilhadas permanecem iguais.",
+			"loading": "Carregando usuários e bots bloqueados…",
+			"loadFailed": "Não foi possível carregar sua lista de bloqueios.",
+			"empty": "Você não bloqueou ninguém.",
+			"block": "Bloquear",
+			"unblock": "Desbloquear",
+			"blockUser": "Bloquear usuário",
+			"blockBot": "Bloquear bot",
+			"ownerBlocked": "Proprietário bloqueado",
+			"blockName": "Bloquear {{name}}",
+			"unblockName": "Desbloquear {{name}}",
+			"blockTitle": "Bloquear {{name}}?",
+			"unblockTitle": "Desbloquear {{name}}?",
+			"failed": "Não foi possível alterar o bloqueio. Tente novamente.",
+			"userDescription": "As mensagens diretas e os convites entre você e esta pessoa serão bloqueados nos dois sentidos, incluindo seus bots e os dela. Vocês continuarão se vendo nas salas compartilhadas. Você pode sair dessas salas separadamente.",
+			"botDescription": "As mensagens diretas e os convites entre você, seus bots e este bot serão bloqueados nos dois sentidos. O bot continuará nas salas compartilhadas. Você pode sair dessas salas separadamente.",
+			"unblockDescription": "Este bloqueio será removido. Os outros bloqueios continuarão valendo.",
+			"composer": "Esta conversa está bloqueada. Gerencie seus usuários e bots bloqueados para permitir mensagens novamente."
+		},
+		"leaveRoom": {
+			"action": "Sair da sala",
+			"title": "Sair desta sala?",
+			"description": "Você e seus bots que estão nesta sala sairão dela e deixarão de receber suas mensagens.",
+			"failed": "Não foi possível sair da sala. Tente novamente."
+		}
 	},
 	"editor": {
 		"abilities": {
@@ -1209,7 +1246,13 @@
 		"thisRoom": "",
 		"title": "",
 		"waiting": "",
-		"waitingOwner": ""
+		"waitingOwner": "",
+		"removeNamed": "Remover {{name}} da sala",
+		"removeTitle": "Remover {{name}} desta sala?",
+		"removePersonDescription": "Esta pessoa e os bots dela que estão na sala sairão dela e deixarão de receber suas mensagens.",
+		"removeBotDescription": "Este bot sairá da sala e deixará de receber suas mensagens.",
+		"remove": "Remover da sala",
+		"removeFailed": "Não foi possível remover este membro. Tente novamente."
 	},
 	"system": {
 		"flux": {

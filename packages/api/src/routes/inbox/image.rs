@@ -1,12 +1,14 @@
 //! A group's picture: any active member sets or removes it. It is stored as a PNG of at most
 //! 256 px under `conversations/<id>/image/`, named by its content hash, so its link changes
 //! whenever the picture does. A swap is a compare-and-set on the stored hash, so of two members
-//! changing it at once one wins and the other is told to try again.
+//! changing it at once one wins and the other is told to try again; the winner's change lands in
+//! every member's history as a `room` entry.
 
 use super::{
     Reader,
-    conversations::member_group,
+    conversations::{member_group, record_room_change},
     files::content_store,
+    lock_conversation,
     model::{Conversation, SetConversationImageRequest},
     now_millis,
     view::visible_conversation,
@@ -17,12 +19,15 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
+use chrono::{DateTime, FixedOffset};
 use flow_like_storage::{
     files::store::FlowLikeStore,
     object_store::{self, ObjectStoreExt, path::Path as ObjectPath},
 };
-use flow_like_types::images::inline_image_thumbnail;
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, sea_query::Expr};
+use flow_like_types::{images::inline_image_thumbnail, inbox::RoomEventBody};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter, sea_query::Expr,
+};
 use std::time::Duration;
 
 const IMAGE_URL_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
@@ -110,6 +115,7 @@ pub(super) async fn compare_and_set<C: ConnectionTrait>(
     conversation_id: &str,
     previous: Option<&str>,
     next: Option<&str>,
+    now: DateTime<FixedOffset>,
 ) -> Result<bool, ApiError> {
     let expected = match previous {
         Some(image) => conversation::Column::Image.eq(image),
@@ -120,7 +126,7 @@ pub(super) async fn compare_and_set<C: ConnectionTrait>(
             conversation::Column::Image,
             Expr::value(next.map(str::to_string)),
         )
-        .col_expr(conversation::Column::UpdatedAt, Expr::value(now_millis()))
+        .col_expr(conversation::Column::UpdatedAt, Expr::value(now))
         .filter(conversation::Column::Id.eq(conversation_id))
         .filter(expected)
         .exec(db)
@@ -135,20 +141,25 @@ async fn swap_image(
     state: &AppState,
     store: &FlowLikeStore,
     conversation_id: &str,
+    by: &str,
     previous: Option<String>,
     next: Option<String>,
 ) -> Result<(), ApiError> {
     if previous == next {
         return Ok(());
     }
-    if !compare_and_set(
-        &state.db,
-        conversation_id,
-        previous.as_deref(),
-        next.as_deref(),
-    )
-    .await?
-    {
+    let swapped = state
+        .transaction(|txn| {
+            let (id, by, previous, next) = (
+                conversation_id.to_string(),
+                by.to_string(),
+                previous.clone(),
+                next.clone(),
+            );
+            Box::pin(async move { swap_in(txn, &id, &by, previous, next, now_millis()).await })
+        })
+        .await?;
+    if !swapped {
         let latest = conversation::Entity::find_by_id(conversation_id)
             .one(&state.db)
             .await?
@@ -168,6 +179,39 @@ async fn swap_image(
     }
     wake_members(state, conversation_id).await;
     Ok(())
+}
+
+/// Points the group at `next` if its picture is still `previous` and records the change in every
+/// member's history; false when someone changed it first.
+pub(super) async fn swap_in(
+    txn: &DatabaseTransaction,
+    conversation_id: &str,
+    by: &str,
+    previous: Option<String>,
+    next: Option<String>,
+    now: DateTime<FixedOffset>,
+) -> Result<bool, ApiError> {
+    lock_conversation(txn, conversation_id).await?;
+    member_group(txn, conversation_id, by).await?;
+    if !compare_and_set(
+        txn,
+        conversation_id,
+        previous.as_deref(),
+        next.as_deref(),
+        now,
+    )
+    .await?
+    {
+        return Ok(false);
+    }
+    record_room_change(
+        txn,
+        conversation_id,
+        &RoomEventBody::image(next.is_none(), by),
+        now,
+    )
+    .await?;
+    Ok(true)
 }
 
 async fn thumbnail(conversation_id: &str, image: String) -> Result<Vec<u8>, ApiError> {
@@ -217,7 +261,15 @@ pub async fn set_conversation_image(
         .as_generic()
         .put(&image_path(&conversation_id, &image), png.into())
         .await?;
-    swap_image(&state, &store, &conversation_id, current.image, Some(image)).await?;
+    swap_image(
+        &state,
+        &store,
+        &conversation_id,
+        &sub,
+        current.image,
+        Some(image),
+    )
+    .await?;
     Ok(Json(
         visible_conversation(&state, &Reader::own(&sub), &conversation_id).await?,
     ))
@@ -251,7 +303,7 @@ pub async fn remove_conversation_image(
     let current = member_group(&state.db, &conversation_id, &sub).await?;
     if current.image.is_some() {
         let store = content_store(&state).await?;
-        swap_image(&state, &store, &conversation_id, current.image, None).await?;
+        swap_image(&state, &store, &conversation_id, &sub, current.image, None).await?;
     }
     Ok(Json(
         visible_conversation(&state, &Reader::own(&sub), &conversation_id).await?,

@@ -20,7 +20,7 @@ use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::model::{Seq, SeqSpan};
+use crate::model::{Seq, SeqSpan, Speaker};
 use crate::pointer::{Pointer, scan_pointers};
 use crate::text::{estimate_tokens, format_day_range, normalize, one_line, truncate_chars};
 
@@ -103,6 +103,9 @@ pub struct Claim {
     pub seqs: Vec<Seq>,
     #[serde(default)]
     pub unverified: bool,
+    /// External participants identified from the cited history, never from model output.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub speakers: Vec<Speaker>,
 }
 
 impl Claim {
@@ -116,12 +119,25 @@ impl Claim {
         if self.unverified {
             line.push_str("UNVERIFIED: ");
         }
-        line.push_str(&self.text);
+        line.push_str(&crate::facts::attribute_statements(
+            &self.text,
+            &self.speakers,
+        ));
         if !self.seqs.is_empty() {
             let cites: Vec<String> = self.seqs.iter().map(|seq| format!("#{seq}")).collect();
             line.push_str(&format!(" ({})", cites.join(", ")));
         }
         line
+    }
+
+    fn identity_key(&self) -> String {
+        let mut speakers = self
+            .speakers
+            .iter()
+            .map(|speaker| speaker.id.as_str())
+            .collect::<Vec<_>>();
+        speakers.sort_unstable();
+        format!("{speakers:?}:{}", normalize(&self.text))
     }
 }
 
@@ -241,6 +257,7 @@ fn parse_claim_line(content: &str) -> Claim {
         }
     }
     Claim {
+        speakers: Vec::new(),
         text: text.to_string(),
         seqs,
         unverified,
@@ -299,6 +316,7 @@ pub(crate) fn validate_body(
                     text,
                     seqs,
                     unverified,
+                    speakers: claim.speakers,
                 },
             );
         }
@@ -312,19 +330,19 @@ pub(crate) fn consolidate(body: SummaryBody) -> SummaryBody {
     let superseded: BTreeSet<String> = body
         .sections
         .get(&Section::Superseded)
-        .map(|claims| claims.iter().map(|claim| normalize(&claim.text)).collect())
+        .map(|claims| claims.iter().map(Claim::identity_key).collect())
         .unwrap_or_default();
     let mut sections = BTreeMap::new();
     for (section, claims) in body.sections {
         let mut merged: Vec<Claim> = Vec::new();
         for claim in claims {
-            let key = normalize(&claim.text);
+            let key = claim.identity_key();
             if section != Section::Superseded && superseded.contains(&key) {
                 continue;
             }
             match merged
                 .iter_mut()
-                .find(|existing| normalize(&existing.text) == key)
+                .find(|existing| existing.identity_key() == key)
             {
                 Some(existing) => {
                     existing.seqs.extend(claim.seqs);
@@ -492,10 +510,25 @@ mod tests {
 
     fn claim(text: &str, seqs: &[Seq]) -> Claim {
         Claim {
+            speakers: Vec::new(),
             text: text.into(),
             seqs: seqs.to_vec(),
             unverified: false,
         }
+    }
+
+    #[test]
+    fn a_participant_cannot_supersede_another_speakers_summary_claim() {
+        let mut owner = claim("Delivery is Friday", &[1]);
+        owner.speakers = Vec::new();
+        let mut participant = claim("Delivery is Friday", &[2]);
+        participant.speakers = vec![Speaker::new("alice")];
+        let mut body = SummaryBody::default();
+        body.push(Section::Decisions, owner);
+        body.push(Section::Superseded, participant);
+        let consolidated = consolidate(body);
+        assert_eq!(consolidated.sections[&Section::Decisions].len(), 1);
+        assert_eq!(consolidated.sections[&Section::Superseded].len(), 1);
     }
 
     fn sample(level: u8, from: Seq, to: Seq) -> SegmentSummary {

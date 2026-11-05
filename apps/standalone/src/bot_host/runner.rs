@@ -15,6 +15,7 @@ use flow_like::{
         BotRunContext, BotToolHost, BotToolset, ChatMessage, HostTools, PlatformContextInput,
         bot_platform_context,
         memory_open::{MemoryModels, open_headless_memory},
+        platform::{PlatformToolBridge, RoomUpdatesBridge},
         run_bot_chat_with_talk,
     },
     models::llm::ModelUsageContext,
@@ -379,13 +380,17 @@ impl TurnRunner for DeviceRunner {
                 attachments: &[],
             },
         );
-        let bridge = Arc::new(ToolEnvBridge::new(
+        let bridge: Arc<dyn PlatformToolBridge> = Arc::new(ToolEnvBridge::new(
             factory,
             context.host_tools.clone(),
             job.gate.clone(),
             mutating.clone(),
             control.stopped.clone(),
         ));
+        let bridge: Arc<dyn PlatformToolBridge> = match &job.room_updates {
+            Some(updates) => Arc::new(RoomUpdatesBridge::new(bridge, updates.clone())),
+            None => bridge,
+        };
         let chat = run_bot_chat_with_talk(
             self.state.clone(),
             Some(profile),

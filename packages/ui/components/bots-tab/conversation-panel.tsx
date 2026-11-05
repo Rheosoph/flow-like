@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { useQueryClient } from "@tanstack/react-query";
 import { BellIcon, BellOffIcon, UsersIcon } from "lucide-react";
 import {
 	type ReactNode,
@@ -18,6 +19,7 @@ import { useConversationCall } from "../../hooks/use-conversation-call";
 import { useConversationRoom } from "../../hooks/use-conversation-room";
 import {
 	compareInboxCursors,
+	inboxKeys,
 	newInboxMessageId,
 	useConversation,
 	useInboxEntries,
@@ -26,6 +28,7 @@ import {
 	useSendMessageWithFiles,
 	useSetConversationMuted,
 } from "../../hooks/use-inbox";
+import { useInboxBlocks } from "../../hooks/use-inbox-blocks";
 import { useSpeechModel } from "../../hooks/use-speech-model";
 import { LocalPrincipalsProvider } from "../../hooks/use-user-lookup";
 import { useBackend } from "../../state/backend-state";
@@ -80,6 +83,10 @@ import {
 	usePendingSendList,
 	useShowsPendingSends,
 } from "./pending-sends";
+import {
+	conversationBlockTarget,
+	principalBlock,
+} from "./principal-block-action";
 import type { PickerSource } from "./principal-picker";
 import { RoomAvatar } from "./room-avatar";
 import { ConnectedRoomMeetings } from "./room-meetings";
@@ -165,6 +172,27 @@ function useMarkReadWhileOpen(
 			},
 		});
 	}, [conversationId, newest, newestFromOthers, visible, mutate]);
+}
+
+/** Reloads the conversation when a rename or picture change arrives, so the header matches it. */
+function useRefreshOnRoomChange(
+	conversationId: string,
+	entries: readonly IInboxEntry[],
+) {
+	const queryClient = useQueryClient();
+	const newest = useMemo(
+		() => entries.find((entry) => entry.kind === "room")?.message_id,
+		[entries],
+	);
+	const seen = useRef(newest);
+	useEffect(() => {
+		if (!newest || newest === seen.current) return;
+		seen.current = newest;
+		void queryClient.invalidateQueries({
+			queryKey: inboxKeys.conversation(conversationId),
+		});
+		void queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
+	}, [conversationId, newest, queryClient]);
 }
 
 const AUTO_LOAD_PAGES = 5;
@@ -360,6 +388,9 @@ function ConversationView({
 		[conversation.members, conversation.pending, entries, items],
 	);
 	const directory = useCrewDirectory(principalIds, { me, bots });
+	const blockTarget = conversationBlockTarget(conversation, directory, me);
+	const principalBlocks = useInboxBlocks(Boolean(blockTarget));
+	const blocked = Boolean(principalBlock(principalBlocks.data, blockTarget));
 	const text = useConversationText(directory, me);
 	const heading = useConversationHeading(conversation, text);
 	const [membersOpen, setMembersOpen] = useState(false);
@@ -376,7 +407,8 @@ function ConversationView({
 	const manageable = conversation.kind === "group" && !conversation.local;
 	const personChat = canMuteConversation(conversation);
 	useMarkReadWhileOpen(conversation.id, entries, me);
-	const room = useConversationRoom(conversation, me);
+	useRefreshOnRoomChange(conversation.id, entries);
+	const room = useConversationRoom(conversation, me, !blocked);
 	const activity = useConversationActivity(
 		conversation,
 		me,
@@ -550,7 +582,7 @@ function ConversationView({
 		text,
 		actions,
 		marks: threadMarks.marks,
-		readOnly: encrypted,
+		readOnly: encrypted || blocked,
 		call: threadCall,
 	};
 
@@ -582,11 +614,14 @@ function ConversationView({
 					<>
 						<ConversationMenu
 							conversation={conversation}
+							me={me}
+							onLeave={onClose}
+							blockTarget={blockTarget}
 							defaultTitle={text.title({ ...conversation, title: null })}
 							onShowStarred={() => setStarsOpen(true)}
 						/>
-						{call.available && <CallButton call={call} />}
-						{!conversation.local && me && meetingClient && (
+						{call.available && !blocked && <CallButton call={call} />}
+						{!conversation.local && !blocked && me && meetingClient && (
 							<ConnectedRoomMeetings
 								conversationId={conversation.id}
 								client={meetingClient}
@@ -638,6 +673,7 @@ function ConversationView({
 					directory={directory}
 					source={pickerSource}
 					me={me}
+					onLeave={onClose}
 				/>
 			)}
 			<ConversationChat
@@ -655,12 +691,17 @@ function ConversationView({
 				sends={pending.actions}
 				placeholder={composerPlaceholder}
 				disabledReason={
-					encrypted
+					blocked
 						? t(
-								"crew.composer.encrypted",
-								"Writing in end-to-end encrypted chats isn't available in this app yet.",
+								"crew.blocks.composer",
+								"This conversation is blocked. Manage your blocked users and bots to allow messages again.",
 							)
-						: null
+						: encrypted
+							? t(
+									"crew.composer.encrypted",
+									"Writing in end-to-end encrypted chats isn't available in this app yet.",
+								)
+							: null
 				}
 				mentionables={mentionables}
 				activity={activity}

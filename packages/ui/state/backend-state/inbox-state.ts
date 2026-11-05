@@ -14,7 +14,8 @@ export type InboxEntryKind =
 	| "trigger"
 	| "activity"
 	| "call"
-	| "transcript";
+	| "transcript"
+	| "room";
 
 /** At most this many members, so one fan-out stays far below the database's transaction cap. */
 export const MAX_CONVERSATION_MEMBERS = 50;
@@ -264,7 +265,7 @@ export interface ICreateConversationRequest {
 export interface ISendInboxEntryRequest {
 	/** Chosen by the sender; sending the same id again returns the first result. */
 	message_id: string;
-	kind: Exclude<InboxEntryKind, "member" | "trigger" | "activity">;
+	kind: Exclude<InboxEntryKind, "member" | "trigger" | "activity" | "room">;
 	/** Plain conversations. */
 	envelope?: IInboxPlainEnvelope;
 	/** End-to-end encrypted conversations: one sealed envelope per active member. */
@@ -354,6 +355,13 @@ export interface IRegisterInboxKeyRequest {
 	key_id: string;
 	algorithm: string;
 	public_key: string;
+}
+
+/** A person or bot blocked by the signed-in account. */
+export interface IBlockedPrincipal {
+	principal_id: string;
+	kind: InboxPrincipalKind;
+	created_at: string;
 }
 
 /** An invitation to a room for you or for one of your bots. */
@@ -473,6 +481,10 @@ export interface IInboxState {
 	): Promise<IInboxEntriesPage>;
 	/** Pending invitations for you and your bots, newest first. */
 	listInvitations(): Promise<IInvitation[]>;
+	listBlocks(): Promise<IBlockedPrincipal[]>;
+	/** Prevents direct contact and invitations; blocking a person also covers their bots. */
+	blockPrincipal(principalId: string): Promise<void>;
+	unblockPrincipal(principalId: string): Promise<void>;
 	/** Exactly who the server lets you bring into a room. */
 	listInvitable(query?: {
 		q?: string;

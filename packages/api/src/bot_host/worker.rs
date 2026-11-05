@@ -46,7 +46,7 @@ use flow_like::{
         bot_talk::{AnsweredRound, BotPresence, BotTalk},
         find_bot_tool_spec,
         memory::{AssistantMemory, MemoryScope},
-        platform::PlatformToolBridge,
+        platform::{PlatformToolBridge, RoomUpdatesBridge},
         run_bot_chat_with_talk,
         tool_grants::{GrantStore, clear_tokens, resume_note},
         tool_spec::{MEMORY_STORE_TOOL, ToolEffect},
@@ -140,7 +140,12 @@ pub(crate) struct Failure {
 }
 
 impl Failure {
-    pub(crate) fn new(code: &'static str, text: impl Into<String>, retryable: bool, post: bool) -> Self {
+    pub(crate) fn new(
+        code: &'static str,
+        text: impl Into<String>,
+        retryable: bool,
+        post: bool,
+    ) -> Self {
         Self {
             code,
             text: text.into(),
@@ -566,6 +571,7 @@ async fn attempt(
     .await?
         == Some(InboxEntryKind::Reaction);
     let mut reactions = Vec::new();
+    let mut room_cursor = turn.trigger_message_id.clone();
     let mut transcript = if reacting {
         let answered: Vec<String> = std::iter::once(turn.trigger_message_id.clone())
             .chain(batched.iter().cloned())
@@ -580,6 +586,9 @@ async fn attempt(
         )
         .await?;
         reactions = found.reactions;
+        if let Some(newest) = found.newest_message_id {
+            room_cursor = newest;
+        }
         found.transcript
     } else {
         history::transcript(
@@ -611,6 +620,18 @@ async fn attempt(
         });
     }
     let asked_by = super::talk::asked_by(&state.db, turn).await?;
+    let room_updates = if kind == ConversationKind::Group && answered_round.is_none() {
+        super::room_updates::ServerRoomUpdates::after(
+            &state.db,
+            &turn.bot_id,
+            &turn.conversation_id,
+            &room_cursor,
+            owner,
+        )
+        .await?
+    } else {
+        None
+    };
     let ancestors: Vec<String> = asked_by.iter().map(|member| member.id.clone()).collect();
     let asker = (!asked_by.is_empty()).then_some(asked_by);
     let addressed = transcript.addressed || asker.is_some();
@@ -730,7 +751,11 @@ async fn attempt(
         bot.context.host_tools =
             memory_turn.host_tools(std::mem::take(&mut bot.context.host_tools));
     }
-    let memory = match memory_model.as_deref().filter(|_| memory_turn.is_none()) {
+    let room_memory = kind == ConversationKind::Group;
+    let memory = match memory_model
+        .as_deref()
+        .filter(|_| memory_turn.is_none() || room_memory)
+    {
         Some(id) => {
             open_memory(
                 &flow_like_state,
@@ -804,6 +829,10 @@ async fn attempt(
         mutating: mutating.clone(),
         bot_tools: bot_tools.clone(),
     });
+    let bridge: Arc<dyn PlatformToolBridge> = match room_updates {
+        Some(updates) => Arc::new(RoomUpdatesBridge::new(bridge, updates)),
+        None => bridge,
+    };
     let talk_host = Arc::new(super::talk::ServerTalkHost::for_turn(
         state.clone(),
         super::talk::HeldTurn {
@@ -946,6 +975,18 @@ async fn open_memory(
         }),
     )
     .await
+    .map(|memory| {
+        if bot
+            .context
+            .requester
+            .as_ref()
+            .is_some_and(|requester| requester.audience == TurnAudience::Room)
+        {
+            memory.read_only()
+        } else {
+            memory
+        }
+    })
     .map(Arc::new)
     .map_err(|error| tracing::warn!(%error, "Bot turn: memory init failed"))
     .ok()

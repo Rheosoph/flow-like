@@ -18,6 +18,7 @@ const state = vi.hoisted(() => ({
 	watch: vi.fn(),
 	close: vi.fn(),
 	invalidateQueries: vi.fn().mockResolvedValue(undefined),
+	incomingCall: vi.fn(() => null),
 }));
 
 vi.mock("./tauri-provider", () => ({
@@ -39,6 +40,9 @@ vi.mock("@tanstack/react-query", () => ({
 	useQueryClient: () => ({ invalidateQueries: state.invalidateQueries }),
 }));
 vi.mock("../lib/native-realtime", () => ({ watchNativeRealtime: state.watch }));
+vi.mock("@flow-like/flow-like-ui/components/incoming-call-provider", () => ({
+	IncomingCallProvider: state.incomingCall,
+}));
 
 import { NativeRealtimeBridge } from "./native-realtime-bridge";
 
@@ -51,6 +55,7 @@ beforeEach(() => {
 	state.auth.isAuthenticated = true;
 	state.watch.mockReset().mockReturnValue(state.close);
 	state.close.mockReset();
+	state.incomingCall.mockClear();
 	state.invalidateQueries.mockReset().mockResolvedValue(undefined);
 	host = document.createElement("div");
 	document.body.append(host);
@@ -66,6 +71,10 @@ describe("native realtime shell bridge", () => {
 		state.ready = false;
 		await act(async () => root.render(<NativeRealtimeBridge />));
 		expect(state.watch).not.toHaveBeenCalled();
+		expect(state.incomingCall).toHaveBeenLastCalledWith(
+			expect.objectContaining({ enabled: false }),
+			undefined,
+		);
 		state.ready = true;
 		state.auth.isAuthenticated = false;
 		await act(async () => root.render(<NativeRealtimeBridge />));
@@ -78,6 +87,14 @@ describe("native realtime shell bridge", () => {
 				subject: "user-a",
 				issuer: "https://issuer.test",
 			}),
+		);
+		expect(state.incomingCall).toHaveBeenLastCalledWith(
+			expect.objectContaining({
+				enabled: true,
+				userId: "user-a",
+				scope: JSON.stringify(["profile-a", "https://issuer.test", "user-a"]),
+			}),
+			undefined,
 		);
 	});
 

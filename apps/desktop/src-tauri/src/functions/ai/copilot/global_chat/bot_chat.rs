@@ -532,7 +532,10 @@ async fn connector_rules(
         .await;
         match local {
             Ok(Some(connectors)) => {
-                return connectors.iter().map(|connector| connector.rule()).collect();
+                return connectors
+                    .iter()
+                    .map(|connector| connector.rule())
+                    .collect();
             }
             Ok(None) => {}
             Err(error) => {
@@ -1262,8 +1265,16 @@ mod tests {
             .iter()
             .map(|spec| spec.name)
             .collect();
-        for builds in ["create_app", "flowpilot_board", "flowpilot_widget", "upsert_event"] {
-            assert!(offered.contains(&builds), "{builds} missing from {offered:?}");
+        for builds in [
+            "create_app",
+            "flowpilot_board",
+            "flowpilot_widget",
+            "upsert_event",
+        ] {
+            assert!(
+                offered.contains(&builds),
+                "{builds} missing from {offered:?}"
+            );
         }
         let core_runs = flow_like::flow::copilot::tool_spec::RESEARCH_AGENT_TOOL;
         for tool_name in offered.iter().filter(|name| **name != core_runs) {

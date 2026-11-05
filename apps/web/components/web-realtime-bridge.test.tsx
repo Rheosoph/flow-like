@@ -39,8 +39,12 @@ const harness = vi.hoisted(() => ({
 	},
 	prepare: vi.fn(),
 	getClient: vi.fn(),
+	incomingCalls: vi.fn(() => null),
 }));
 
+vi.mock("@flow-like/flow-like-ui/components/incoming-call-provider", () => ({
+	IncomingCallProvider: harness.incomingCalls,
+}));
 vi.mock("@flow-like/flow-like-ui/state/backend-state", () => ({
 	useBackend: () => harness.backend,
 }));
@@ -103,6 +107,7 @@ beforeEach(() => {
 		return client;
 	});
 	harness.queryClient.invalidateQueries.mockClear();
+	harness.incomingCalls.mockClear();
 	host = document.createElement("div");
 	document.body.append(host);
 	root = createRoot(host);
@@ -135,7 +140,9 @@ describe("authenticated web realtime bridge", () => {
 		await render();
 		expect(connections[0].setSubscriptions).toHaveBeenCalledWith({
 			notifications: true,
+			backgroundNotifications: true,
 			runs: [],
+			conversations: [],
 		});
 		await connections[0].emit(changed);
 		expect(
@@ -204,7 +211,7 @@ describe("authenticated web realtime bridge", () => {
 		reject(new Error("notification refresh failed"));
 		await expect(acceptance).rejects.toThrow("notification refresh failed");
 		await expect(connections[0].emit(changed)).resolves.toBeUndefined();
-		expect(harness.queryClient.invalidateQueries).toHaveBeenCalledTimes(10);
+		expect(harness.queryClient.invalidateQueries).toHaveBeenCalledTimes(12);
 	});
 
 	test("rotates credentials without opening another connection", async () => {
@@ -240,7 +247,9 @@ describe("authenticated web realtime bridge", () => {
 		);
 		expect(client.setSubscriptions).toHaveBeenCalledWith({
 			notifications: true,
+			backgroundNotifications: true,
 			runs: [],
+			conversations: [],
 		});
 	});
 
@@ -264,9 +273,39 @@ describe("authenticated web realtime bridge", () => {
 	test("stays off until the authenticated shell is ready", async () => {
 		await render(false);
 		expect(harness.getClient).not.toHaveBeenCalled();
+		expect(harness.incomingCalls).toHaveBeenLastCalledWith(
+			expect.objectContaining({ enabled: false }),
+			undefined,
+		);
 		harness.auth.isAuthenticated = false;
 		await render(true);
 		expect(harness.getClient).not.toHaveBeenCalled();
+		expect(harness.incomingCalls).toHaveBeenLastCalledWith(
+			expect.objectContaining({ enabled: false }),
+			undefined,
+		);
+	});
+
+	test("scopes incoming calls to the current authenticated account", async () => {
+		await render();
+		expect(harness.incomingCalls).toHaveBeenLastCalledWith(
+			{
+				enabled: true,
+				scope: JSON.stringify(["https://hub.test", "issuer", "user-a"]),
+				userId: "user-a",
+			},
+			undefined,
+		);
+		harness.auth.user.profile.sub = "user-b";
+		await render();
+		expect(harness.incomingCalls).toHaveBeenLastCalledWith(
+			{
+				enabled: true,
+				scope: JSON.stringify(["https://hub.test", "issuer", "user-b"]),
+				userId: "user-b",
+			},
+			undefined,
+		);
 	});
 
 	test("retries a transient startup failure", async () => {
@@ -297,7 +336,9 @@ describe("authenticated web realtime bridge", () => {
 		expect(connections).toHaveLength(2);
 		expect(connections[1].setSubscriptions).toHaveBeenCalledWith({
 			notifications: true,
+			backgroundNotifications: true,
 			runs: [],
+			conversations: [],
 		});
 		expect(connections[0].close).toHaveBeenCalledTimes(1);
 	});

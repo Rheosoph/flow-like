@@ -1,7 +1,7 @@
 //! Bot memory on headless turns: the memory engine (`flow-like-bot-memory`) opened on the bot's
 //! workspace, the prompt it assembles instead of "the last entries", and the memory tools the
 //! turn offers. Hosts supply the inbox ([`MemoryTurnSource`]); everything else is resolved from the
-//! host's own state. The interactive chat does not use this: it keeps [`super::memory`].
+//! host's own state. Interactive inbox turns use the same source and tools.
 
 use std::fmt;
 use std::sync::Arc;
@@ -117,6 +117,14 @@ impl PlatformToolBridge for MemoryBridge {
         self.inner.drain_steering().await
     }
 
+    fn watches_room(&self) -> bool {
+        self.inner.watches_room()
+    }
+
+    async fn drain_room_updates(&self) -> Vec<String> {
+        self.inner.drain_room_updates().await
+    }
+
     async fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled().await
     }
@@ -125,12 +133,14 @@ impl PlatformToolBridge for MemoryBridge {
 /// What a host knows about the conversation a turn answers.
 #[derive(Clone)]
 pub struct MemoryTurnSource {
-    /// The bot's copy of its conversation with its owner.
+    /// The bot's copy of the conversation, with each speaker identified.
     pub reader: Arc<dyn HistoryReader>,
     /// Where the bot's summaries are written, as the bot.
     pub sink: Arc<dyn SegmentSink>,
     /// Names the bot, the conversation and the stores; a session is kept per key.
     pub key: String,
+    /// Group history has its own positions and stores, and recalls owner memory read-only.
+    pub room: bool,
     /// The position of the message the turn answers.
     pub trigger_seq: Seq,
     pub timezone: flow_like_bot_memory::host::Tz,

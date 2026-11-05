@@ -106,11 +106,11 @@ const VALUE =
 	"rounded-md border border-border bg-surface-sunken px-2 py-1 font-mono text-xs";
 
 /** The address a route is called at; the host stays "…" while the name people use isn't known. */
-const addressOf = (where: RequestOrigin, path: string) =>
+export const addressOf = (where: RequestOrigin, path: string) =>
 	(where.origin ?? [where.scheme, "://…:", where.port].join("")) + path;
 
 /** The full address with Copy, once the host is known. */
-function AddressLine({
+export function AddressLine({
 	address,
 	copyable,
 }: Readonly<{ address: string; copyable: boolean }>) {
@@ -135,18 +135,25 @@ function AddressLine({
 	);
 }
 
-/** A `curl` line that calls the route, with Copy. */
-function CurlLine({
+/** A `curl` line that calls the route, with Copy; `token` replaces the placeholder while it is known. */
+export function CurlLine({
 	route,
 	address,
 	requiresToken,
-}: Readonly<{ route: EventRoute; address: string; requiresToken: boolean }>) {
+	token,
+}: Readonly<{
+	route: EventRoute;
+	address: string;
+	requiresToken: boolean;
+	token?: string;
+}>) {
 	const { t } = useTranslation("devices");
 	const command = curlLine(
 		route.method,
 		address,
 		requiresToken
-			? t("serviceEndpoint.requests.tokenPlaceholder", "<access token>")
+			? (token ??
+					t("serviceEndpoint.requests.tokenPlaceholder", "<access token>"))
 			: undefined,
 	);
 	return (

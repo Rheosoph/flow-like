@@ -39,6 +39,7 @@ import type { IAudioState } from "../state/backend-state/audio-state";
 import type { IConversation } from "../state/backend-state/inbox-state";
 import type { ConversationRoom, RoomAwareness } from "./use-conversation-room";
 import { newInboxMessageId, useSendInboxEntry } from "./use-inbox";
+import { useIncomingCallJoin } from "./use-incoming-call-join";
 
 export type CallError = "denied" | "unavailable" | "full" | "failed";
 
@@ -518,7 +519,10 @@ export function useConversationCall(
 	useEffect(() => () => void leaveRef.current(), [conversationId]);
 
 	const joinCall = useCallback(
-		async (callId: string): Promise<boolean> => {
+		async (
+			callId: string,
+			preparedContext?: AudioContext | null,
+		): Promise<boolean> => {
 			const target = roomRef.current;
 			const peer = target?.provider.room?.peerId;
 			if (
@@ -527,10 +531,14 @@ export function useConversationCall(
 				!me ||
 				sessionRef.current ||
 				joining.current ||
-				!peopleRef.current.has(me)
-			)
+				!peopleRef.current.has(me) ||
+				(preparedContext !== undefined && liveRef.current?.callId !== callId)
+			) {
+				void preparedContext?.close().catch(() => {});
 				return false;
+			}
 			if (callIsFull(liveRef.current, me)) {
+				void preparedContext?.close().catch(() => {});
 				setError("full");
 				return false;
 			}
@@ -538,15 +546,16 @@ export function useConversationCall(
 			const attempt = ++joinAttempt.current;
 			joining.current = true;
 			let stream: MediaStream;
-			let context: AudioContext | null = null;
+			let context: AudioContext | null = preparedContext ?? null;
 			try {
 				if (!navigator.mediaDevices?.getUserMedia) {
+					void context?.close().catch(() => {});
 					setError("unavailable");
 					joining.current = false;
 					return false;
 				}
 				try {
-					context = new AudioContext();
+					context ??= new AudioContext();
 					void context.resume().catch(() => {});
 				} catch (cause) {
 					console.warn("Audio analysis unavailable", cause);
@@ -573,6 +582,7 @@ export function useConversationCall(
 				sessionRef.current ||
 				roomRef.current !== target ||
 				!peopleRef.current.has(me) ||
+				(preparedContext !== undefined && liveRef.current?.callId !== callId) ||
 				callIsFull(liveRef.current, me)
 			) {
 				for (const track of stream.getTracks()) track.stop();
@@ -652,6 +662,14 @@ export function useConversationCall(
 		},
 		[conversationId, me, refreshSpeechPause],
 	);
+
+	useIncomingCallJoin({
+		userId: me,
+		conversationId,
+		liveCallId: live?.callId,
+		ready: Boolean(room?.provider.room?.peerId) && !joined,
+		join: joinCall,
+	});
 
 	const join = useCallback(async () => {
 		const target = optionsRef.current?.stableCallId ?? liveRef.current?.callId;

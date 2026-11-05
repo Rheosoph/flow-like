@@ -217,6 +217,34 @@ async fn anyone_signed_in_joins_at_once_and_everyone_sees_it() {
 }
 
 #[tokio::test]
+async fn blocked_people_cannot_join_each_others_links_or_consume_a_use() {
+    use super::blocks::{INBOX_BLOCKED, block_in, unblock_in};
+
+    let db = world().await;
+    db.execute_unprepared(r#"INSERT INTO public."User" ("id", "name") VALUES ('user-b', 'Bea')"#)
+        .await
+        .unwrap();
+    let made = link(&db, "user-b", &UNLIMITED).await;
+    for (owner, principal) in [("user-b", "stranger"), ("stranger", "user-b")] {
+        block_in(&db, owner, principal, at(15)).await.unwrap();
+        let error = join_link_in(&db, &made.token, "stranger", at(20))
+            .await
+            .unwrap_err();
+        assert_code(&error, StatusCode::FORBIDDEN, INBOX_BLOCKED);
+        assert!(member(&db, "stranger").await.is_none());
+        assert_eq!(uses(&db, &made.id).await, 0);
+        unblock_in(&db, owner, principal).await.unwrap();
+    }
+    assert!(
+        join_link_in(&db, &made.token, "stranger", at(30))
+            .await
+            .unwrap()
+            .joined
+    );
+    assert_eq!(uses(&db, &made.id).await, 1);
+}
+
+#[tokio::test]
 async fn a_limited_link_lets_exactly_that_many_in() {
     let db = world().await;
     let once = link(

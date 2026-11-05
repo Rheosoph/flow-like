@@ -795,6 +795,7 @@ async fn a_message_gets_one_reply_posted_as_the_bot() {
     let job = f.runner.jobs.lock().unwrap()[0].clone();
     assert_eq!(job.run_id, turn_id(&bot.id, "m1"));
     assert_eq!(job.prompt, "hello");
+    assert!(job.room_updates.is_none());
 
     settle().await;
     assert_eq!(f.runner.started(), 1);
@@ -810,6 +811,31 @@ async fn a_message_gets_one_reply_posted_as_the_bot() {
         states,
         [TurnStatus::Queued, TurnStatus::Running, TurnStatus::Done]
     );
+}
+
+#[tokio::test]
+async fn an_addressed_group_turn_keeps_the_actual_requester_and_room() {
+    let mut f = Fixture::gated();
+    let (ada, bob) = (f.bot("Ada"), f.bot("Bob"));
+    let group = f.conversation("group", &[&ada.id, &bob.id]);
+    f.answer_only_when_mentioned(&group, &[&ada, &bob]);
+    f.send(
+        &group.id,
+        &bob.id,
+        "b1",
+        "message",
+        json!({ "text": "Please check the manual", "mentions": [ada.id], "hops": 1 }),
+    );
+    f.start();
+    until("the group turn", || f.runner.started() == 1).await;
+    let jobs = f.runner.jobs.lock().unwrap();
+    let requester = jobs[0].requester.as_ref().expect("group requester");
+    assert_eq!(requester.requester_id, bob.id);
+    assert_eq!(requester.requester_name.as_deref(), Some("Bob"));
+    assert_eq!(requester.owner_id, LOCAL_OWNER_ID);
+    assert_eq!(requester.audience, flow_like_types::bot_turn::TurnAudience::Room);
+    assert_eq!(requester.room.as_deref(), Some("Team"));
+    assert!(requester.addressed);
 }
 
 #[tokio::test]
@@ -883,6 +909,53 @@ async fn messages_that_arrive_during_a_turn_are_answered_by_one_later_turn() {
             reply_message_id(&bot.id, "m3")
         ]
     );
+}
+
+#[tokio::test]
+async fn a_running_room_turn_reads_new_participant_messages_once() {
+    let mut f = Fixture::gated();
+    let (ada, bob) = (f.bot("Ada"), f.bot("Bob"));
+    let room = f.conversation("group", &[&ada.id, &bob.id]);
+    f.answer_only_when_mentioned(&room, &[&ada, &bob]);
+    f.start();
+    f.send(
+        &room.id,
+        LOCAL_OWNER_ID,
+        "introduce",
+        "message",
+        json!({ "text": "Ada, introduce yourself", "mentions": [ada.id] }),
+    );
+    f.host.poke(Some(&room.id));
+    until("the room turn", || f.runner.started() == 1).await;
+    let updates = f.runner.jobs.lock().unwrap()[0]
+        .room_updates
+        .clone()
+        .expect("room turns read new activity");
+    assert!(updates.drain().await.is_empty());
+
+    f.send(
+        &room.id,
+        &bob.id,
+        "bob-introduction",
+        "message",
+        json!({ "text": "I'm Bob and I already introduced myself." }),
+    );
+    f.say(&room.id, "shorter", "Keep your introduction brief.");
+    let fresh = updates.drain().await.join("\n");
+    assert!(fresh.contains("Bob"));
+    assert!(fresh.contains("I already introduced myself."));
+    assert!(fresh.contains("Keep your introduction brief."));
+    assert!(!fresh.contains("Ada, introduce yourself"));
+    assert!(updates.drain().await.is_empty());
+
+    f.store.remove_member(&room.id, &ada.id).unwrap();
+    f.say(&room.id, "after-leaving", "This is for the remaining members.");
+    assert!(updates.drain().await.is_empty());
+    f.host.poke(Some(&room.id));
+    until("the removed bot's cancellation", || {
+        f.status_of(&ada.id, "introduce") == Some(TurnStatus::Cancelled)
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -1723,6 +1796,20 @@ mod interactive {
         let replies = f.messages_of(&chat.id, &bot.id);
         assert_eq!(replies.len(), 1);
         assert_eq!(replies[0].envelope["body"]["text"], json!("first"));
+    }
+
+    #[tokio::test]
+    async fn interactive_room_detection_does_not_need_a_memory_trigger() {
+        let f = Fixture::open();
+        let bot = f.bot("Ada");
+        let direct = f.direct(&bot);
+        let group = f.conversation("group", &[&bot.id]);
+        let direct_run = run_for(&f, &bot, &direct).await;
+        let group_run = run_for(&f, &bot, &group).await;
+        assert!(direct_run.memory().await.is_none());
+        assert!(group_run.memory().await.is_none());
+        assert!(direct_run.owner_direct().await);
+        assert!(!group_run.owner_direct().await);
     }
 
     #[tokio::test]

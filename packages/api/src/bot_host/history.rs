@@ -79,14 +79,14 @@ fn addressed_to(lines: &[Line], bot_id: &str) -> bool {
     })
 }
 
-fn plain_body(envelope: &serde_json::Value) -> Option<&serde_json::Value> {
+pub(super) fn plain_body(envelope: &serde_json::Value) -> Option<&serde_json::Value> {
     (envelope.get("enc").and_then(serde_json::Value::as_str) == Some(PLAIN_ENCRYPTION))
         .then(|| envelope.get("body"))
         .flatten()
 }
 
 /// The message's text with a line for each UI block and file it carries.
-fn render(body: &MessageBody) -> String {
+pub(super) fn render(body: &MessageBody) -> String {
     let mut text = body.text.clone();
     for part in &body.parts {
         let note = match part {
@@ -292,6 +292,7 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
 pub(crate) struct ReactionTurn {
     pub transcript: Transcript,
     pub reactions: Vec<ReactionNote>,
+    pub newest_message_id: Option<String>,
 }
 
 const EXCERPT_CHARS: usize = 120;
@@ -421,6 +422,7 @@ pub(crate) async fn reaction_turn<C: ConnectionTrait>(
         ),
     };
     Ok(ReactionTurn {
+        newest_message_id: window.last().map(|entry| entry.message_id.clone()),
         transcript: Transcript {
             prompt,
             history,

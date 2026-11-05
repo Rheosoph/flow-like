@@ -105,12 +105,18 @@ wire_enum!(
         /// A line a person spoke in a call, transcribed on their device. It wakes only the
         /// bots it mentions and counts as unread for no one.
         Transcript => "transcript",
+        /// A group was renamed or its picture changed. The server writes it; clients never send
+        /// it, it wakes no one and counts as unread for no one.
+        Room => "room",
     }
 );
 
 impl InboxEntryKind {
     pub fn client_sendable(self) -> bool {
-        !matches!(self, Self::Member | Self::Trigger | Self::Activity)
+        !matches!(
+            self,
+            Self::Member | Self::Trigger | Self::Activity | Self::Room
+        )
     }
 
     /// Entries that ask a bot to act, as a message from its owner does.
@@ -763,6 +769,55 @@ impl MemberEventBody {
     }
 }
 
+/// What a `room` entry says changed about a group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RoomChange {
+    Title,
+    Image,
+}
+
+/// The body of a `room` entry: a member renamed a group or changed its picture. Plain, also in
+/// end-to-end encrypted conversations, like `member` entries: the server holds both anyway.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RoomEventBody {
+    pub change: RoomChange,
+    /// The new name, on a `title` change that set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The name or picture was removed rather than set.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
+    /// Who changed it.
+    pub by: String,
+}
+
+impl RoomEventBody {
+    /// A rename to `title`, or with `None` the removal of the name.
+    pub fn title(title: Option<String>, by: &str) -> Self {
+        Self {
+            change: RoomChange::Title,
+            removed: title.is_none(),
+            title,
+            by: by.to_string(),
+        }
+    }
+
+    /// A new picture, or with `removed` the removal of the picture.
+    pub fn image(removed: bool, by: &str) -> Self {
+        Self {
+            change: RoomChange::Image,
+            title: None,
+            removed,
+            by: by.to_string(),
+        }
+    }
+
+    pub fn envelope(&self) -> Value {
+        plain_envelope(serde_json::to_value(self).unwrap_or_default())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1162,6 +1217,34 @@ mod tests {
         assert_eq!(
             serde_json::from_value::<MemberEventBody>(envelope["body"].clone()).unwrap(),
             body
+        );
+    }
+
+    #[test]
+    fn room_entries_are_server_written_plain_envelopes() {
+        assert!(!InboxEntryKind::Room.client_sendable());
+        assert!(!InboxEntryKind::Room.wakes_bot());
+        let renamed = RoomEventBody::title(Some("Launch crew".into()), "user-1");
+        assert_eq!(
+            renamed.envelope(),
+            json!({
+                "v": 1,
+                "enc": "none",
+                "body": { "change": "title", "title": "Launch crew", "by": "user-1" },
+            })
+        );
+        let cleared = RoomEventBody::image(true, "user-2");
+        assert_eq!(
+            cleared.envelope()["body"],
+            json!({ "change": "image", "removed": true, "by": "user-2" })
+        );
+        assert_eq!(check_envelope(&cleared.envelope()), Ok(EnvelopeKind::Plain));
+        assert_eq!(
+            serde_json::from_value::<RoomEventBody>(
+                json!({ "change": "title", "removed": true, "by": "u" })
+            )
+            .unwrap(),
+            RoomEventBody::title(None, "u")
         );
     }
 

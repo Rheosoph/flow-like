@@ -1,5 +1,6 @@
 use super::{
-    INBOX_DIRECT_FIXED, INBOX_MEMBER_LIMIT, MEMBER_ACTIVE, Reader, allocate_seqs,
+    Event, INBOX_DIRECT_FIXED, INBOX_MEMBER_LIMIT, MEMBER_ACTIVE, Reader, active_members,
+    allocate_seqs,
     delivery::people_to_wake,
     image::sign_images,
     insert_copies,
@@ -29,14 +30,14 @@ use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     create_id,
     inbox::{
-        ConversationEncryption, ConversationKind, MAX_CONVERSATION_MEMBERS, PrincipalKind,
-        direct_pair_key,
+        ConversationEncryption, ConversationKind, InboxEntryKind, MAX_CONVERSATION_MEMBERS,
+        PrincipalKind, RoomEventBody, direct_pair_key,
     },
 };
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::Set,
-    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
+    ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter,
     sea_query::{Expr, OnConflict},
 };
 
@@ -175,6 +176,7 @@ pub(crate) async fn start_direct_as<C: ConnectionTrait>(
     request: bool,
     now: DateTime<FixedOffset>,
 ) -> Result<String, ApiError> {
+    super::blocks::ensure_allowed(db, creator, &other.id).await?;
     let key = direct_pair_key(creator, &other.id);
     let plan = NewConversation {
         kind: ConversationKind::Direct,
@@ -552,19 +554,71 @@ pub async fn rename_conversation(
 ) -> Result<Json<Conversation>, ApiError> {
     let sub = user.sub()?;
     let title = normalize_title(body.title)?;
-    let current = member_group(&state.db, &conversation_id, &sub).await?;
-    if current.title != title {
-        conversation::Entity::update_many()
-            .col_expr(conversation::Column::Title, Expr::value(title))
-            .col_expr(conversation::Column::UpdatedAt, Expr::value(now_millis()))
-            .filter(conversation::Column::Id.eq(&conversation_id))
-            .exec(&state.db)
-            .await?;
+    let renamed = state
+        .transaction(|txn| {
+            let (id, sub, title) = (conversation_id.clone(), sub.clone(), title.clone());
+            Box::pin(async move { rename_in(txn, &id, &sub, title, now_millis()).await })
+        })
+        .await?;
+    if renamed {
         wake_members(&state, &conversation_id).await;
     }
     Ok(Json(
         visible_conversation(&state, &Reader::own(&sub), &conversation_id).await?,
     ))
+}
+
+/// Renames the group and records it in every member's history; false when the name is unchanged.
+pub(super) async fn rename_in(
+    txn: &DatabaseTransaction,
+    conversation_id: &str,
+    by: &str,
+    title: Option<String>,
+    now: DateTime<FixedOffset>,
+) -> Result<bool, ApiError> {
+    lock_conversation(txn, conversation_id).await?;
+    let current = member_group(txn, conversation_id, by).await?;
+    if current.title == title {
+        return Ok(false);
+    }
+    conversation::Entity::update_many()
+        .col_expr(conversation::Column::Title, Expr::value(title.clone()))
+        .col_expr(conversation::Column::UpdatedAt, Expr::value(now))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .exec(txn)
+        .await?;
+    record_room_change(txn, conversation_id, &RoomEventBody::title(title, by), now).await?;
+    Ok(true)
+}
+
+/// Writes a `room` entry into the inbox of every active member at the group's next position.
+/// The caller holds the conversation's lock.
+pub(super) async fn record_room_change<C: ConnectionTrait>(
+    txn: &C,
+    conversation_id: &str,
+    change: &RoomEventBody,
+    now: DateTime<FixedOffset>,
+) -> Result<(), ApiError> {
+    let members = active_members(txn, &[conversation_id.to_string()]).await?;
+    let seq = allocate_seqs(txn, conversation_id, 1).await?;
+    let message_id = format!("room:{}", create_id());
+    let event = Event {
+        conversation_id,
+        message_id: &message_id,
+        sender_id: &change.by,
+        kind: InboxEntryKind::Room,
+        created_at: now,
+        seq,
+    };
+    let envelope = change.envelope();
+    insert_copies(
+        txn,
+        members
+            .iter()
+            .map(|member| event.copy_for(&member.principal_id, envelope.clone()))
+            .collect(),
+    )
+    .await
 }
 
 /// The group `principal_id` is an active member of; a direct conversation is fixed.

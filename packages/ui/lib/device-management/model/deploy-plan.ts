@@ -56,6 +56,7 @@ import type {
 	GateFailure,
 	HostIsolationMode,
 	OnlineAccess,
+	PublishedPort,
 } from "./types";
 
 /* One plan for every deploy entry (APP §3.3, A4/A5): the draft holds choices, the plan derives services and targets. */
@@ -217,6 +218,8 @@ export interface PlanDevice {
 	reservedIds?: readonly string[];
 	refusals?: Readonly<Record<string, string>>;
 	portsInUse?: readonly { port: number; serviceId?: string }[];
+	/** A Docker device: only this port reaches its services from outside the container. */
+	published?: PublishedPort;
 	isolation?: HostIsolationMode;
 	memoryBytes?: number;
 	/** The agent's flags from a live read; absent = unknown, never "too old". */
@@ -407,6 +410,7 @@ export type PlanExceptionCode =
 	| "left_out_duplicate"
 	| "renamed"
 	| "port_moved"
+	| "port_unpublished"
 	| "no_certificate"
 	| "runs_as_agent"
 	| "schedule_two_devices"
@@ -1702,6 +1706,33 @@ function portExceptions(target: PlanTarget): PlanException[] {
 	return [...first, ...further];
 }
 
+/** A Docker device forwards one port into its container: a service on another one is reached only through a tunnel. */
+function unpublishedExceptions(
+	target: PlanTarget,
+	device: PlanDevice | undefined,
+): PlanException[] {
+	const published = device?.published?.port;
+	if (published === undefined) return [];
+	const { port } = target.endpoint;
+	const served = [
+		...(port === null ? [] : [{ port }]),
+		...target.services.flatMap((service) =>
+			service.port === undefined
+				? []
+				: [{ port: service.port, service: service.serviceId }],
+		),
+	];
+	return served
+		.filter((row) => row.port !== published)
+		.map((row) => ({
+			code: "port_unpublished",
+			step: "endpoint",
+			deviceId: target.deviceId,
+			tone: "info",
+			params: { ...row, published },
+		}));
+}
+
 function servesUnencrypted(target: PlanTarget) {
 	const { host, certificateId } = target.endpoint;
 	return (
@@ -1721,7 +1752,10 @@ function checkEndpoint(
 ) {
 	const deviceId = target.deviceId;
 	checkAddress(target, facts.devices[deviceId], issues);
-	exceptions.push(...portExceptions(target));
+	exceptions.push(
+		...portExceptions(target),
+		...unpublishedExceptions(target, facts.devices[deviceId]),
+	);
 	checkToken(plan.draft, target, issues);
 	if (!servesUnencrypted(target)) return;
 	exceptions.push({

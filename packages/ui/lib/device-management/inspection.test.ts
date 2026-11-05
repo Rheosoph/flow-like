@@ -279,6 +279,27 @@ test("inspection keeps every agent fact a newer agent sends", async () => {
 	expect(result.network).toEqual(deviceScope.network);
 });
 
+test("a Docker device's published port is read, and a malformed one is dropped alone", async () => {
+	const read = (published: unknown) =>
+		readDeviceInspection(
+			page({
+				host: { ...deviceScope.host, published },
+				placements: [],
+			}),
+			"device",
+		);
+	expect((await read({ host: "127.0.0.1", port: 8080 })).host).toEqual({
+		...deviceScope.host,
+		published: { host: "127.0.0.1", port: 8080 },
+	});
+	for (const malformed of [
+		{ host: "127.0.0.1", port: 0 },
+		{ port: 8080 },
+		"8080",
+	])
+		expect((await read(malformed)).host).toEqual(deviceScope.host);
+});
+
 test("an older agent's page passes unchanged with no feature flags", async () => {
 	const result = await readDeviceInspection(
 		page({ placements: [row("old")] }),

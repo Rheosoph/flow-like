@@ -101,6 +101,7 @@ fn fact(id: &str, text: &str, seq: Seq) -> Fact {
         recorded_at: start(),
         expired_at: None,
         evidence: vec![Evidence {
+            speaker: None,
             seq,
             message_id: format!("msg_{seq}"),
             part: None,
@@ -263,6 +264,7 @@ fn summary(level: u8, from: Seq, to: Seq, text: &str) -> SegmentSummary {
     body.push(
         Section::Decisions,
         Claim {
+            speakers: Vec::new(),
             text: text.into(),
             seqs: vec![from],
             unverified: false,
@@ -564,6 +566,7 @@ async fn memory_save_keeps_the_users_words_once() {
     let evidence = transcript.history.get(asked).unwrap();
     let args = MemorySaveArgs {
         text: "The user is allergic to peanuts.".into(),
+        evidence_seq: None,
         kind: Some("profile".into()),
         subject: Some("me".into()),
         valid_from: None,

@@ -246,6 +246,7 @@ async fn open_session(
     let mut options = SessionOptions::new(budget, source.timezone);
     options.config = config;
     options.model = Some(models.completion.id.clone());
+    options.room_key = source.room.then(|| source.key.clone());
     let session = Arc::new(
         MemorySession::open(
             connection,

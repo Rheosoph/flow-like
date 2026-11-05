@@ -1,6 +1,6 @@
 //! The memory wiring of an account bot's turn: its conversation over the hub as the engine's
-//! history, summaries written to the hub as the bot. Only the direct conversation between a bot
-//! and its owner has a memory; other conversations answer from their last entries.
+//! history, summaries written to the hub as the bot. Groups keep separate history and recall
+//! the bot's owner-taught memory without changing it.
 
 use crate::hub::TurnHub;
 use async_trait::async_trait;
@@ -332,8 +332,7 @@ impl SegmentSink for HubSegments {
     }
 }
 
-/// Whether the hub's conversation is the direct conversation of `bot_id` and one person, its
-/// owner (an account bot answers nobody else).
+/// Whether the hub's conversation is a direct chat between `bot_id` and one person.
 pub fn hub_owner_direct(conversation: &Value, bot_id: &str) -> bool {
     if conversation.get("kind").and_then(Value::as_str) != Some("direct") {
         return false;
@@ -359,14 +358,40 @@ pub fn hub_owner_direct(conversation: &Value, bot_id: &str) -> bool {
             .any(|(_, kind)| kind.eq_ignore_ascii_case("user"))
 }
 
-/// The memory source of an account bot's turn on this desktop, `None` unless the turn answers
-/// the bot's direct conversation with its owner.
+fn hub_memory_room(conversation: &Value, bot_id: &str, owner_id: Option<&str>) -> Option<bool> {
+    let members = conversation.get("members")?.as_array()?;
+    if hub_owner_direct(conversation, bot_id) {
+        let owner_matches = owner_id.is_none_or(|owner| {
+            members.iter().any(|member| {
+                member.get("principal_id").and_then(Value::as_str) == Some(owner)
+                    && member
+                        .get("kind")
+                        .and_then(Value::as_str)
+                        .is_some_and(|kind| kind.eq_ignore_ascii_case("user"))
+            })
+        });
+        return owner_matches.then_some(false);
+    }
+    let room = conversation.get("kind").and_then(Value::as_str) == Some("group");
+    let bot_member = members.iter().any(|member| {
+        member.get("principal_id").and_then(Value::as_str) == Some(bot_id)
+            && member
+                .get("kind")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("bot"))
+    });
+    (room && bot_member).then_some(true)
+}
+
+/// The memory source of an account bot's direct or group turn. The host supplies the owner
+/// from its claim; interactive hosts resolve it from the bot's account record.
 pub async fn hub_source_for(
     owner_hub: &Arc<dyn TurnHub>,
     hub: &Arc<dyn TurnHub>,
     bot_id: &str,
     conversation_id: &str,
     trigger_seq: Option<i64>,
+    owner_id: Option<&str>,
 ) -> Option<MemoryTurnSource> {
     let trigger_seq = Seq::try_from(trigger_seq?).ok()?;
     let conversation = owner_hub
@@ -376,15 +401,27 @@ pub async fn hub_source_for(
         )
         .await
         .ok()?;
-    if !hub_owner_direct(&conversation, bot_id) {
-        return None;
-    }
+    let room = hub_memory_room(&conversation, bot_id, owner_id)?;
     let entries = PositionEntries::new(HubPages {
         hub: hub.clone(),
         bot_id: bot_id.to_string(),
         conversation_id: conversation_id.to_string(),
     });
-    let reader: Arc<dyn HistoryReader> = Arc::new(InboxReader::new(entries, bot_id));
+    let reader: Arc<dyn HistoryReader> = Arc::new(if room {
+        let owner = match owner_id {
+            Some(owner) => owner.to_string(),
+            None => owner_hub
+                .read(&format!("bots/{bot_id}"), Vec::new())
+                .await
+                .ok()?
+                .get("owner_id")?
+                .as_str()?
+                .to_string(),
+        };
+        InboxReader::for_room(entries, bot_id, owner)
+    } else {
+        InboxReader::new(entries, bot_id)
+    });
     Some(MemoryTurnSource {
         reader,
         sink: Arc::new(HubSegments {
@@ -393,6 +430,7 @@ pub async fn hub_source_for(
             conversation_id: conversation_id.to_string(),
         }),
         key: format!("account/{conversation_id}"),
+        room,
         trigger_seq,
         timezone: local_timezone(),
         state_block: String::new(),
@@ -405,4 +443,36 @@ pub fn local_timezone() -> Tz {
         .ok()
         .and_then(|name| name.parse().ok())
         .unwrap_or(Tz::UTC)
+}
+
+#[cfg(test)]
+mod eligibility_tests {
+    use super::*;
+
+    #[test]
+    fn groups_use_room_memory_and_only_owner_direct_chats_use_owner_stores() {
+        let mut conversation = json!({"kind": "group", "members": [
+            {"principal_id": "owner", "kind": "user"},
+            {"principal_id": "bot", "kind": "bot"}
+        ]});
+        assert_eq!(
+            hub_memory_room(&conversation, "bot", Some("owner")),
+            Some(true)
+        );
+        assert_eq!(
+            hub_memory_room(&conversation, "missing", Some("owner")),
+            None
+        );
+        conversation["kind"] = json!("direct");
+        assert_eq!(
+            hub_memory_room(&conversation, "bot", Some("owner")),
+            Some(false)
+        );
+        assert_eq!(
+            hub_memory_room(&conversation, "bot", Some("someone_else")),
+            None
+        );
+        conversation["members"][0]["kind"] = json!("bot");
+        assert_eq!(hub_memory_room(&conversation, "bot", Some("owner")), None);
+    }
 }

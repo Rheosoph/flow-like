@@ -1,4 +1,5 @@
 import type {
+	IBlockedPrincipal,
 	IBotRoomLimits,
 	IConversation,
 	IConversationFileDownload,
@@ -331,6 +332,29 @@ export class WebInboxState implements IInboxState {
 			this.backend.auth,
 		);
 		return asArray(response?.invitations);
+	}
+
+	async listBlocks(): Promise<IBlockedPrincipal[]> {
+		const response = await apiGet<{ blocks?: IBlockedPrincipal[] }>(
+			"inbox/blocks",
+			this.backend.auth,
+		);
+		return asArray(response?.blocks);
+	}
+
+	async blockPrincipal(principalId: string): Promise<void> {
+		await apiPut(
+			`inbox/blocks/${encodeURIComponent(principalId)}`,
+			{},
+			this.backend.auth,
+		);
+	}
+
+	async unblockPrincipal(principalId: string): Promise<void> {
+		await apiDelete(
+			`inbox/blocks/${encodeURIComponent(principalId)}`,
+			this.backend.auth,
+		);
 	}
 
 	async listInvitable(

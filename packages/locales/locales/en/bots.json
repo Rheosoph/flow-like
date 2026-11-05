@@ -212,6 +212,10 @@
 		"botTag": "Bot",
 		"builtIn": "Built in",
 		"call": {
+			"dismiss": "Dismiss",
+			"incoming": "Incoming call",
+			"incomingDescription": "Join the conversation call.",
+			"incomingRoom": "Join the call in {{room}}.",
 			"durationHours": "{{hours}} h {{minutes}} min",
 			"durationMinutes": "{{minutes}} min",
 			"durationShort": "under 1 min",
@@ -466,6 +470,12 @@
 			"where": "Message request"
 		},
 		"retry": "Try again",
+		"roomChange": {
+			"nameRemoved": "{{by}} removed the room's name",
+			"pictureChanged": "{{by}} changed the room's picture",
+			"pictureRemoved": "{{by}} removed the room's picture",
+			"renamed": "{{by}} renamed the room to “{{title}}”"
+		},
 		"roomSettings": {
 			"change": "Change picture",
 			"description": "Everyone in the room sees its name and picture.",
@@ -605,6 +615,33 @@
 			"browserScreenSharing": "For screen sharing, open this meeting in your browser.",
 			"browserOpenFailed": "The browser could not be opened. Copy the meeting link from the room and open it in your browser.",
 			"openBrowser": "Open meeting in browser"
+		},
+		"blocks": {
+			"title": "Blocked users and bots",
+			"description": "Manage who can exchange direct messages and invitations with you and your bots. Shared rooms are unchanged.",
+			"loading": "Loading blocked users and bots…",
+			"loadFailed": "Couldn't load your blocked list.",
+			"empty": "You haven't blocked anyone.",
+			"block": "Block",
+			"unblock": "Unblock",
+			"blockUser": "Block user",
+			"blockBot": "Block bot",
+			"ownerBlocked": "Owner blocked",
+			"blockName": "Block {{name}}",
+			"unblockName": "Unblock {{name}}",
+			"blockTitle": "Block {{name}}?",
+			"unblockTitle": "Unblock {{name}}?",
+			"failed": "Couldn't update the block. Try again.",
+			"userDescription": "Direct messages and invitations between you and this person, including your bots and theirs, will be blocked. You will still see each other in shared rooms. You can leave those rooms separately.",
+			"botDescription": "Direct messages and invitations between you, your bots and this bot will be blocked. The bot will remain in shared rooms. You can leave those rooms separately.",
+			"unblockDescription": "This block will be removed. Other blocks will still apply.",
+			"composer": "This conversation is blocked. Manage your blocked users and bots to allow messages again."
+		},
+		"leaveRoom": {
+			"action": "Leave room",
+			"title": "Leave this room?",
+			"description": "You and your bots in this room will leave and stop receiving its messages.",
+			"failed": "Couldn't leave the room. Try again."
 		}
 	},
 	"deviceHost": {
@@ -1406,7 +1443,13 @@
 		"thisRoom": "this room",
 		"title": "Room members",
 		"waiting": "Waiting for an answer",
-		"waitingOwner": "Waiting for the bot's owner"
+		"waitingOwner": "Waiting for the bot's owner",
+		"removeNamed": "Remove {{name}} from room",
+		"removeTitle": "Remove {{name}} from this room?",
+		"removePersonDescription": "This person and their bots in the room will leave and stop receiving its messages.",
+		"removeBotDescription": "This bot will leave the room and stop receiving its messages.",
+		"remove": "Remove from room",
+		"removeFailed": "Couldn't remove this member. Try again."
 	},
 	"system": {
 		"flux": {

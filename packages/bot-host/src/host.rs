@@ -32,6 +32,8 @@ pub struct TurnJob {
     pub profile_id: Option<String>,
     pub prompt: String,
     pub history: Vec<UnifiedChatMessage>,
+    /// New messages and events from this room, checked while the turn is running.
+    pub room_updates: Option<Arc<dyn flow_like::flow::copilot::platform::RoomUpdates>>,
     /// The conversation's memory when this turn remembers.
     pub memory: Option<JobMemory>,
     /// Where a call that asks the owner runs under a grant or parks the turn.

@@ -915,6 +915,7 @@ async fn the_check_sends_the_local_id_as_import_key_with_settings_apps_and_creat
             "tts_model": "bit-tts",
             "image_model": "bit-image",
             "vision_model": "bit-vision",
+            "subtask_model": null,
             "classification": { "classification": "internal", "pii": false },
             "capabilities": ["internet", "computer_use"],
             "profile_id": "profile-1",

@@ -156,6 +156,10 @@
 		"botTag": "",
 		"builtIn": "",
 		"call": {
+			"dismiss": "",
+			"incoming": "",
+			"incomingDescription": "",
+			"incomingRoom": "",
 			"durationHours": "",
 			"durationMinutes": "",
 			"durationShort": "",
@@ -391,6 +395,12 @@
 			"where": ""
 		},
 		"retry": "",
+		"roomChange": {
+			"nameRemoved": "",
+			"pictureChanged": "",
+			"pictureRemoved": "",
+			"renamed": ""
+		},
 		"roomSettings": {
 			"change": "",
 			"description": "",
@@ -464,7 +474,34 @@
 		"unread_other": "",
 		"you": "",
 		"youObject": "",
-		"yourCrew": ""
+		"yourCrew": "",
+		"blocks": {
+			"title": "ブロック中のユーザーとボット",
+			"description": "あなたやあなたのボットとダイレクトメッセージや招待をやり取りできる相手を管理します。共有ルームには影響しません。",
+			"loading": "ブロック中のユーザーとボットを読み込み中…",
+			"loadFailed": "ブロックリストを読み込めませんでした。",
+			"empty": "ブロックしている相手はいません。",
+			"block": "ブロック",
+			"unblock": "ブロック解除",
+			"blockUser": "ユーザーをブロック",
+			"blockBot": "ボットをブロック",
+			"ownerBlocked": "所有者をブロック中",
+			"blockName": "{{name}}をブロック",
+			"unblockName": "{{name}}のブロックを解除",
+			"blockTitle": "{{name}}をブロックしますか？",
+			"unblockTitle": "{{name}}のブロックを解除しますか？",
+			"failed": "ブロック設定を更新できませんでした。もう一度お試しください。",
+			"userDescription": "あなたとこのユーザーの間で、双方のボットも含め、ダイレクトメッセージと招待の送受信がブロックされます。共有ルームでは引き続きお互いの内容が表示されます。ルームからの退出は別途行えます。",
+			"botDescription": "あなたやあなたのボットと、このボットとの間で、ダイレクトメッセージと招待の送受信がブロックされます。このボットは共有ルームに残ります。ルームからの退出は別途行えます。",
+			"unblockDescription": "このブロックを解除します。他のブロックは引き続き適用されます。",
+			"composer": "この会話はブロックされています。メッセージを再び許可するには、ブロック中のユーザーとボットの設定を変更してください。"
+		},
+		"leaveRoom": {
+			"action": "ルームを退出",
+			"title": "このルームを退出しますか？",
+			"description": "あなたと、このルームにいるあなたのボットが退出し、ルームのメッセージを受信しなくなります。",
+			"failed": "ルームを退出できませんでした。もう一度お試しください。"
+		}
 	},
 	"editor": {
 		"abilities": {
@@ -1181,7 +1218,13 @@
 		"thisRoom": "",
 		"title": "",
 		"waiting": "",
-		"waitingOwner": ""
+		"waitingOwner": "",
+		"removeNamed": "{{name}}をルームから削除",
+		"removeTitle": "{{name}}をこのルームから削除しますか？",
+		"removePersonDescription": "このユーザーと、そのユーザーが所有するルーム内のボットが退出し、ルームのメッセージを受信しなくなります。",
+		"removeBotDescription": "このボットはルームを退出し、ルームのメッセージを受信しなくなります。",
+		"remove": "ルームから削除",
+		"removeFailed": "このメンバーを削除できませんでした。もう一度お試しください。"
 	},
 	"system": {
 		"flux": {

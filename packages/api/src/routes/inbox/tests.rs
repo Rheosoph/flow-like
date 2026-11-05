@@ -3,7 +3,8 @@ use super::{
     INBOX_MEMBER_LIMIT, INBOX_MESSAGE_ID_TAKEN, INBOX_NOT_YOUR_MESSAGE, INBOX_REMOVE_NOT_ALLOWED,
     INBOX_TARGET_NOT_FOUND, Reader, active_membership,
     conversations::{
-        NewConversation, member_group, start_direct, start_group, validate_new_conversation,
+        NewConversation, member_group, record_room_change, start_direct, start_group,
+        validate_new_conversation,
     },
     entries::{Outgoing, entries_page, mark_read_in, page_bounds, send_in, validate_send},
     image::compare_and_set,
@@ -30,7 +31,7 @@ use axum::http::StatusCode;
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::inbox::{
     ConversationEncryption, ConversationKind, EntryCursor, InboxEntryKind,
-    MAX_CONVERSATION_MEMBERS, MemberOp, PrincipalKind,
+    MAX_CONVERSATION_MEMBERS, MemberOp, PrincipalKind, RoomEventBody,
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectOptions, ConnectionTrait, Database,
@@ -79,6 +80,7 @@ async fn database() -> DatabaseConnection {
     for source in [
         schema.create_table_from_entity(bot::Entity),
         schema.create_table_from_entity(membership::Entity),
+        schema.create_table_from_entity(crate::entity::mutation_lock::Entity),
     ] {
         let mut table = Table::create();
         table.table(source.get_table_name().unwrap().clone());
@@ -87,7 +89,11 @@ async fn database() -> DatabaseConnection {
         }
         db.execute(&table).await.unwrap();
     }
-    for statement in INBOX_TABLES.iter().chain(&super::marks::TEST_TABLES) {
+    for statement in INBOX_TABLES
+        .iter()
+        .chain(&super::marks::TEST_TABLES)
+        .chain(&super::blocks::TEST_TABLES)
+    {
         db.execute_unprepared(statement).await.unwrap();
     }
     db
@@ -994,12 +1000,12 @@ async fn a_group_picture_changes_only_from_the_one_that_was_read() {
     assert!(member_group(&db, "pictured", "user-b").await.is_ok());
 
     assert!(
-        compare_and_set(&db, "pictured", None, Some("aa"))
+        compare_and_set(&db, "pictured", None, Some("aa"), at(1))
             .await
             .unwrap()
     );
     assert!(
-        !compare_and_set(&db, "pictured", None, Some("bb"))
+        !compare_and_set(&db, "pictured", None, Some("bb"), at(2))
             .await
             .unwrap(),
         "a writer that read no picture loses to the one that set it"
@@ -1012,7 +1018,7 @@ async fn a_group_picture_changes_only_from_the_one_that_was_read() {
         (Some("aa"), None)
     );
     assert!(
-        compare_and_set(&db, "pictured", Some("aa"), None)
+        compare_and_set(&db, "pictured", Some("aa"), None, at(3))
             .await
             .unwrap()
     );
@@ -1030,6 +1036,55 @@ async fn a_group_picture_changes_only_from_the_one_that_was_read() {
             .unwrap_err()
             .status(),
         StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn a_room_change_lands_in_every_members_history_at_the_next_position() {
+    let db = database().await;
+    group(&db, "named", ConversationEncryption::E2e, &[user("user-b")]).await;
+    let before = last_activity(&db, "named").await;
+    record_room_change(
+        &db,
+        "named",
+        &RoomEventBody::title(Some("Launch crew".into()), "user-b"),
+        at(5),
+    )
+    .await
+    .unwrap();
+    let written = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::Kind.eq("ROOM"))
+        .order_by_asc(inbox_entry::Column::InboxId)
+        .all(&db)
+        .await
+        .unwrap();
+    assert_eq!(
+        written
+            .iter()
+            .map(|entry| entry.inbox_id.as_str())
+            .collect::<Vec<_>>(),
+        ["user-a", "user-b"]
+    );
+    assert!(written[0].message_id.starts_with("room:"));
+    assert_eq!(written[0].message_id, written[1].message_id);
+    assert_eq!(written[0].sender_id, "user-b");
+    assert_eq!(written[0].seq, Some(2), "after the one join");
+    assert_eq!(
+        written[0].envelope,
+        json!({
+            "v": 1,
+            "enc": "none",
+            "body": { "change": "title", "title": "Launch crew", "by": "user-b" },
+        }),
+        "plain even in an end-to-end encrypted room"
+    );
+    assert_eq!(last_activity(&db, "named").await, before);
+    let listed = conversations_for(&db, &Reader::own("user-a"), Some("named"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (listed[0].unread_count, listed[0].last_entry.as_ref()),
+        (0, None)
     );
 }
 

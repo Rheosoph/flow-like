@@ -1212,6 +1212,14 @@ impl PlatformToolBridge for BotTalkBridge {
         self.inner.drain_steering().await
     }
 
+    fn watches_room(&self) -> bool {
+        self.inner.watches_room()
+    }
+
+    async fn drain_room_updates(&self) -> Vec<String> {
+        self.inner.drain_room_updates().await
+    }
+
     async fn is_cancelled(&self) -> bool {
         self.inner.is_cancelled().await
     }

@@ -106,15 +106,21 @@ pub fn is_owner_direct(conversation: &Conversation, bot_id: &str) -> bool {
             .any(|member| member.principal_id == bot_id && member.kind == PrincipalKind::Bot)
 }
 
-/// The memory source of a turn that answers `trigger` in the bot's direct conversation, `None`
-/// for any other conversation or a trigger without a position.
+/// The memory source of a turn in the owner's direct chat or a group the bot belongs to.
 pub fn source_for(
     store: &Arc<dyn HostStore>,
     conversation: &Conversation,
     bot_id: &str,
     trigger: Option<&InboxEntry>,
 ) -> Option<MemoryTurnSource> {
-    if !is_owner_direct(conversation, bot_id) {
+    let room = conversation.kind == ConversationKind::Group;
+    if !is_owner_direct(conversation, bot_id)
+        && !(room
+            && conversation
+                .members
+                .iter()
+                .any(|member| member.principal_id == bot_id && member.kind == PrincipalKind::Bot))
+    {
         return None;
     }
     let trigger_seq = Seq::try_from(trigger?.seq?).ok()?;
@@ -122,7 +128,11 @@ pub fn source_for(
         store: store.clone(),
         conversation_id: conversation.id.clone(),
     });
-    let reader: Arc<dyn HistoryReader> = Arc::new(InboxReader::new(entries, bot_id));
+    let reader: Arc<dyn HistoryReader> = Arc::new(if room {
+        InboxReader::for_room(entries, bot_id, LOCAL_OWNER_ID)
+    } else {
+        InboxReader::new(entries, bot_id)
+    });
     Some(MemoryTurnSource {
         reader,
         sink: Arc::new(LocalSegments {
@@ -131,6 +141,7 @@ pub fn source_for(
             bot_id: bot_id.to_string(),
         }),
         key: conversation.id.clone(),
+        room,
         trigger_seq,
         timezone: local_timezone(),
         state_block: String::new(),

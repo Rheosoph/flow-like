@@ -147,9 +147,11 @@ pub(crate) async fn contacts_in<C: ConnectionTrait>(
     owner_id: &str,
 ) -> Result<Vec<Contact>, ApiError> {
     let people = people_in(db, &directs_of(db, owner_id).await?, owner_id).await?;
+    let blocked = super::blocks::blocked_between(db, owner_id, &people, false).await?;
     let mut names = person_names(db, &people).await?;
     Ok(people
         .into_iter()
+        .filter(|id| !blocked.contains(id))
         .map(|id| {
             let name = names.remove(&id).unwrap_or_else(|| UNNAMED.to_string());
             Contact { id, name }
@@ -164,6 +166,12 @@ pub(crate) async fn is_contact_in<C: ConnectionTrait>(
     person_id: &str,
 ) -> Result<bool, ApiError> {
     if owner_id == person_id {
+        return Ok(false);
+    }
+    if !super::blocks::blocked_between(db, owner_id, &[person_id.to_string()], false)
+        .await?
+        .is_empty()
+    {
         return Ok(false);
     }
     let Some(direct) = conversation::Entity::find()
@@ -232,6 +240,7 @@ pub(crate) async fn start_outreach_in<C: ConnectionTrait>(
     title: String,
     now: DateTime<FixedOffset>,
 ) -> Result<String, ApiError> {
+    super::blocks::ensure_allowed(db, bot_id, person_id).await?;
     let key = outreach_key(bot_id, person_id);
     let plan = NewConversation {
         kind: ConversationKind::Group,

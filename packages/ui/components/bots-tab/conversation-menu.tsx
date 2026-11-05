@@ -2,8 +2,10 @@
 
 import { useTranslation } from "@flow-like/locales";
 import {
+	BanIcon,
 	BellIcon,
 	BellOffIcon,
+	LogOutIcon,
 	MoreHorizontalIcon,
 	PencilIcon,
 	PinIcon,
@@ -13,6 +15,7 @@ import {
 import { useState } from "react";
 import { toast } from "sonner";
 import { useSetConversationMuted } from "../../hooks/use-inbox";
+import { useInboxBlocks } from "../../hooks/use-inbox-blocks";
 import { useSetConversationPinned } from "../../hooks/use-inbox-marks";
 import { cn } from "../../lib/utils";
 import type { IConversation } from "../../state/backend-state/inbox-state";
@@ -21,8 +24,16 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import { isSelfPrincipal } from "./crew-model";
+import { LeaveRoomDialog } from "./leave-room-dialog";
+import {
+	type BlockTarget,
+	PrincipalBlockDialog,
+	principalBlock,
+} from "./principal-block-action";
 import { RoomSettingsDialog } from "./room-settings-dialog";
 
 /** Mute applies to chats with other people; a chat with only your bots never pushes. */
@@ -53,6 +64,9 @@ export function ConversationMenu({
 	defaultTitle,
 	withMute = false,
 	onShowStarred,
+	me,
+	onLeave,
+	blockTarget,
 	className,
 }: Readonly<{
 	conversation: IConversation;
@@ -60,6 +74,9 @@ export function ConversationMenu({
 	defaultTitle?: string;
 	withMute?: boolean;
 	onShowStarred?: () => void;
+	me?: string | null;
+	onLeave?: () => void;
+	blockTarget?: BlockTarget;
 	className?: string;
 }>) {
 	const { t } = useTranslation("bots");
@@ -67,9 +84,19 @@ export function ConversationMenu({
 	const mute = useSetConversationMuted();
 	const failed = useFailedToast();
 	const [editing, setEditing] = useState(false);
+	const [leaving, setLeaving] = useState(false);
+	const [blocking, setBlocking] = useState(false);
+	const blocks = useInboxBlocks(Boolean(blockTarget));
+	const existingBlock = principalBlock(blocks.data, blockTarget);
+	const inheritedBlock =
+		existingBlock && existingBlock.principal_id !== blockTarget?.id;
 	const pinned = Boolean(conversation.pinned_at);
 	const muted = Boolean(conversation.muted);
 	const group = conversation.kind === "group";
+	const self = conversation.members.find(
+		(member) =>
+			member.kind === "user" && isSelfPrincipal(member.principal_id, me),
+	);
 	const label = t("crew.conversationMenu.open", "Conversation options");
 	return (
 		<>
@@ -127,14 +154,57 @@ export function ConversationMenu({
 							{t("crew.roomSettings.open", "Edit name and picture")}
 						</DropdownMenuItem>
 					)}
+					{blockTarget && (
+						<DropdownMenuItem
+							disabled={!blocks.data || Boolean(inheritedBlock)}
+							onSelect={() => setBlocking(true)}
+						>
+							<BanIcon aria-hidden />
+							{inheritedBlock
+								? t("crew.blocks.ownerBlocked", "Owner blocked")
+								: existingBlock
+									? t("crew.blocks.unblock", "Unblock")
+									: blockTarget.kind === "bot"
+										? t("crew.blocks.blockBot", "Block bot")
+										: t("crew.blocks.blockUser", "Block user")}
+						</DropdownMenuItem>
+					)}
+					{group && self && (
+						<>
+							<DropdownMenuSeparator />
+							<DropdownMenuItem
+								className="text-destructive focus:text-destructive"
+								onSelect={() => setLeaving(true)}
+							>
+								<LogOutIcon aria-hidden />
+								{t("crew.leaveRoom.action", "Leave room")}
+							</DropdownMenuItem>
+						</>
+					)}
 				</DropdownMenuContent>
 			</DropdownMenu>
+			{blocking && blockTarget && (
+				<PrincipalBlockDialog
+					principal={blockTarget}
+					blocked={Boolean(existingBlock)}
+					onOpenChange={setBlocking}
+				/>
+			)}
 			{group && (
 				<RoomSettingsDialog
 					open={editing}
 					onOpenChange={setEditing}
 					conversation={conversation}
 					defaultTitle={defaultTitle}
+				/>
+			)}
+			{group && self && leaving && (
+				<LeaveRoomDialog
+					open
+					onOpenChange={setLeaving}
+					conversationId={conversation.id}
+					principalId={self.principal_id}
+					onLeave={onLeave}
 				/>
 			)}
 		</>

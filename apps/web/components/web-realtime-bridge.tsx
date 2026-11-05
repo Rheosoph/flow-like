@@ -1,5 +1,6 @@
 "use client";
 
+import { IncomingCallProvider } from "@flow-like/flow-like-ui/components/incoming-call-provider";
 import { unwatchedInboxPredicate } from "@flow-like/flow-like-ui/hooks/use-inbox";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
 import { registerConversationFeed } from "@flow-like/flow-like-ui/lib/realtime/conversation-feed";
@@ -37,6 +38,7 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 		const syncSubscriptions = () =>
 			client?.setSubscriptions({
 				notifications: true,
+				backgroundNotifications: true,
 				runs: [],
 				conversations: feedHub.targets().map((target) => ({
 					conversation_id: target.conversationId,
@@ -185,5 +187,11 @@ export function WebRealtimeBridge({ enabled }: { enabled: boolean }) {
 		});
 	}, [token, enabled, scope, hub]);
 
-	return null;
+	return (
+		<IncomingCallProvider
+			enabled={enabled && auth.isAuthenticated && Boolean(subject)}
+			scope={scope}
+			userId={subject ?? ""}
+		/>
+	);
 }

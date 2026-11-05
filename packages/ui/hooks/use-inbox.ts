@@ -393,9 +393,11 @@ export function useRemoveConversationMember() {
 		}) => requireInboxState(state).removeMember(conversationId, principalId),
 		onSettled: (_, __, { conversationId }) => {
 			queryClient.invalidateQueries({
-				queryKey: inboxKeys.conversation(conversationId),
+				queryKey: [...inboxKeys.all, "conversation", conversationId],
 			});
-			queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
+			queryClient.invalidateQueries({
+				queryKey: [...inboxKeys.all, "conversations"],
+			});
 		},
 	});
 }
@@ -471,6 +473,7 @@ export function useAnswerInvitation() {
 				: inbox.declineInvitation(invitation);
 		},
 		onSettled: () => {
+			queryClient.invalidateQueries({ queryKey: [...inboxKeys.all, "blocks"] });
 			queryClient.invalidateQueries({ queryKey: inboxKeys.invitations() });
 			queryClient.invalidateQueries({
 				queryKey: [...inboxKeys.all, "conversation"],

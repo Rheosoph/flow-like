@@ -84,6 +84,7 @@ pub mod file_accounting_object;
 pub mod flow_script_apply_failure;
 pub mod fork_job;
 pub mod home_default;
+pub mod inbox_block;
 pub mod inbox_entry;
 pub mod inbox_key;
 pub mod invitation;

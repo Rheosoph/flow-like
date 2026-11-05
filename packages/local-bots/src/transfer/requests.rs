@@ -215,13 +215,13 @@ pub(crate) fn split_conversations<'a>(
     ConversationSplit { movable, waiting }
 }
 
-/// Join and leave events are the server's to write, an activity points into a local exchange
-/// that stays behind, and an edit of a deleted message lost the
+/// Join, leave and room events are the server's to write, an activity points into a local
+/// exchange that stays behind, and an edit of a deleted message lost the
 /// message it edited, which the account's deletion scrubs from the edits it imports anyway.
 fn is_imported(entry: &InboxEntry) -> bool {
     !matches!(
         entry.kind,
-        InboxEntryKind::Member | InboxEntryKind::Activity
+        InboxEntryKind::Member | InboxEntryKind::Activity | InboxEntryKind::Room
     ) && !(entry.kind == InboxEntryKind::Edit && is_tombstone(&entry.envelope))
 }
 

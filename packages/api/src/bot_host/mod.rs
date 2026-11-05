@@ -10,6 +10,7 @@ pub(crate) mod history;
 pub(crate) mod interactive;
 pub(crate) mod ledger;
 pub(crate) mod memory;
+mod room_updates;
 pub(crate) mod talk;
 pub(crate) mod task_schedules;
 pub(crate) mod tasks;

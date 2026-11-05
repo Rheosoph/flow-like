@@ -230,6 +230,30 @@ impl E2eHost {
         Ok(opened)
     }
 
+    /// Opens a later window of the same conversation without requiring the original trigger
+    /// to remain in that window. Entries this host cannot decrypt are left out.
+    pub(crate) async fn open_updates(
+        &self,
+        bot_id: &str,
+        entries: Vec<InboxEntry>,
+    ) -> Result<Vec<InboxEntry>, E2eFailure> {
+        if !self.is_enabled(bot_id).await {
+            return Err(E2eFailure::new(
+                CODE_E2E_UNAVAILABLE,
+                "This bot holds no encryption key on this desktop",
+            ));
+        }
+        Ok(entries
+            .into_iter()
+            .filter_map(|mut entry| {
+                if is_sealed(&entry) {
+                    entry.envelope = plain_envelope(self.open_body(bot_id, &entry)?);
+                }
+                Some(entry)
+            })
+            .collect())
+    }
+
     fn open_body(&self, bot_id: &str, entry: &InboxEntry) -> Option<Value> {
         let scope = Scope {
             conversation_id: &entry.conversation_id,

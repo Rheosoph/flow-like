@@ -165,7 +165,8 @@ pub(crate) async fn room_key_in<C: ConnectionTrait>(
     sub: &str,
     today: NaiveDate,
 ) -> Result<RoomKey, ApiError> {
-    active_membership(db, conversation_id, sub).await?;
+    let conversation = super::member_conversation(db, conversation_id, sub).await?;
+    super::blocks::ensure_direct_allowed(db, &conversation, sub).await?;
     let members = active_members(db, &[conversation_id.to_string()]).await?;
     let ids = members
         .into_iter()

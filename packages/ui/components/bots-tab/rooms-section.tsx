@@ -17,6 +17,7 @@ import { ConversationMenu, PinnedMark } from "./conversation-menu";
 import { directPartnerId, isSelfPrincipal, otherMemberIds } from "./crew-model";
 import { CrewSection, UnreadBadge, crewCardClass } from "./crew-section";
 import { MemberStack } from "./member-stack";
+import { conversationBlockTarget } from "./principal-block-action";
 import { RoomAvatar } from "./room-avatar";
 import type { ConversationText } from "./use-conversation-text";
 import type { CrewDirectory } from "./use-crew-directory";
@@ -30,6 +31,7 @@ export interface RoomCardContext {
 	directory: CrewDirectory;
 	selectedConversationId?: string | null;
 	onOpen: (conversationId: string) => void;
+	onLeave?: (conversationId: string) => void;
 }
 
 export interface RoomsStatus {
@@ -45,10 +47,16 @@ export interface RoomsStatus {
 function WithConversationMenu({
 	conversation,
 	text,
+	me,
+	onLeave,
+	directory,
 	children,
 }: Readonly<{
 	conversation: IConversation;
 	text: ConversationText;
+	me?: string | null;
+	onLeave?: (conversationId: string) => void;
+	directory: CrewDirectory;
 	children: ReactNode;
 }>) {
 	return (
@@ -58,6 +66,9 @@ function WithConversationMenu({
 				conversation={conversation}
 				defaultTitle={text.title({ ...conversation, title: null })}
 				withMute
+				me={me}
+				blockTarget={conversationBlockTarget(conversation, directory, me)}
+				onLeave={() => onLeave?.(conversation.id)}
 				className="absolute top-2 right-2 size-7 bg-popover opacity-0 shadow-sm group-focus-within/conversation:opacity-100 group-hover/conversation:opacity-100 data-[state=open]:opacity-100 [@media(hover:none)]:opacity-100"
 			/>
 		</div>
@@ -73,7 +84,13 @@ export function RoomCard({
 	const last = conversation.last_entry;
 	const image = conversation.image_url;
 	return (
-		<WithConversationMenu conversation={conversation} text={text}>
+		<WithConversationMenu
+			conversation={conversation}
+			text={text}
+			directory={context.directory}
+			me={me}
+			onLeave={context.onLeave}
+		>
 			<button
 				type="button"
 				aria-current={selected ? "true" : undefined}
@@ -161,7 +178,13 @@ export function ConversationRow({
 			text: preview,
 		});
 	return (
-		<WithConversationMenu conversation={conversation} text={text}>
+		<WithConversationMenu
+			conversation={conversation}
+			text={text}
+			directory={context.directory}
+			me={me}
+			onLeave={context.onLeave}
+		>
 			<button
 				type="button"
 				aria-current={selected ? "true" : undefined}

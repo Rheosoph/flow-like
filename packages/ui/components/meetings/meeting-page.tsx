@@ -563,6 +563,9 @@ function LiveMeeting({
 			isMe: id === snapshot.me.id,
 			isBot: false,
 			isPending: false,
+			isResolved: snapshot.participants.some(
+				(participant) => participant.id === id,
+			),
 		}),
 		[snapshot.participants, snapshot.me.id, t],
 	);

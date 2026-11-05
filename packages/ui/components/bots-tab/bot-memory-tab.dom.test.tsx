@@ -189,6 +189,26 @@ describe("the Memory tab's facts", () => {
 		expect(host.textContent).toContain("Lives in Hamburg");
 	});
 
+	test("room evidence does not jump into an unrelated owner chat", async () => {
+		mocks.listFacts.mockResolvedValue([
+			{ ...facts[0], conversation_scope: "room-scope" },
+			facts[1],
+		]);
+		const onJump = vi.fn();
+		await render(
+			<BotFactsList botId="bot_ada" appId="app_1" name="Ada" onJump={onJump} />,
+		);
+
+		expect(host.textContent).toContain("a group chat · #12");
+		expect(
+			[...host.querySelectorAll("button")].some((item) =>
+				item.textContent?.includes("#12"),
+			),
+		).toBe(false);
+		await click(button("#40"));
+		expect(onJump).toHaveBeenCalledExactlyOnceWith(40);
+	});
+
 	test("a failed delete keeps the row and says why", async () => {
 		mocks.listFacts.mockResolvedValue(facts);
 		mocks.forgetFact.mockRejectedValue(new Error("busy"));

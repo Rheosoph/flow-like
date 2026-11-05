@@ -475,7 +475,7 @@ pub fn inherited_listener(
     let duplicate = duplicate_launch_descriptor(fd)?;
     let probe = std::net::TcpListener::from(duplicate);
     ensure!(
-        probe.local_addr()? == std::net::SocketAddr::new(hosting.host, hosting.port),
+        hosting.accepts_listener(probe.local_addr()?),
         "Inherited service listener address differs"
     );
     drop(probe);

@@ -82,6 +82,7 @@ pub use super::file_accounting_object::Entity as FileAccountingObject;
 pub use super::flow_script_apply_failure::Entity as FlowScriptApplyFailure;
 pub use super::fork_job::Entity as ForkJob;
 pub use super::home_default::Entity as HomeDefault;
+pub use super::inbox_block::Entity as InboxBlock;
 pub use super::inbox_entry::Entity as InboxEntry;
 pub use super::inbox_key::Entity as InboxKey;
 pub use super::invitation::Entity as Invitation;

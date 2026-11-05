@@ -3,7 +3,7 @@
 
 use super::{
     fixture::{conversation, database, insert_bot, message},
-    memory::{ServerEntries, ServerSegments, is_owner_direct},
+    memory::{ServerEntries, ServerSegments, is_owner_direct, memory_room},
 };
 use crate::{
     db::DbDialect,
@@ -87,7 +87,7 @@ fn sink(db: &DatabaseConnection) -> ServerSegments {
 }
 
 #[tokio::test]
-async fn only_the_owners_direct_conversation_remembers() {
+async fn direct_and_group_memory_use_different_scopes() {
     let db = database().await;
     insert_bot(&db, BOT, OWNER, "SERVER").await;
     insert_bot(&db, "bot_2", OWNER, "SERVER").await;
@@ -99,6 +99,20 @@ async fn only_the_owners_direct_conversation_remembers() {
     assert!(!is_owner_direct(&db, "bots", OWNER, BOT).await.unwrap());
     assert!(!is_owner_direct(&db, "gone", OWNER, BOT).await.unwrap());
     assert!(!is_owner_direct(&db, "c1", "user-b", BOT).await.unwrap());
+    assert_eq!(
+        memory_room(&db, "c1", OWNER, BOT).await.unwrap(),
+        Some(false)
+    );
+    assert_eq!(
+        memory_room(&db, "group", OWNER, BOT).await.unwrap(),
+        Some(true)
+    );
+    assert_eq!(
+        memory_room(&db, "group", OWNER, "bot_2").await.unwrap(),
+        None
+    );
+    assert_eq!(memory_room(&db, "bots", OWNER, BOT).await.unwrap(), None);
+    assert_eq!(memory_room(&db, "gone", OWNER, BOT).await.unwrap(), None);
 }
 
 #[tokio::test]

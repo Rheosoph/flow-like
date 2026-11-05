@@ -8,7 +8,7 @@ use super::{
     model::SendEntryRequest,
 };
 use crate::{
-    entity::{bot, bot_turn, inbox_entry, membership},
+    entity::{bot, bot_turn, inbox_entry, membership, mutation_lock},
     error::ApiError,
 };
 use axum::http::StatusCode;
@@ -71,6 +71,7 @@ pub(crate) async fn database() -> DatabaseConnection {
     for source in [
         schema.create_table_from_entity(bot::Entity),
         schema.create_table_from_entity(membership::Entity),
+        schema.create_table_from_entity(mutation_lock::Entity),
     ] {
         let mut table = Table::create();
         table.table(source.get_table_name().unwrap().clone());
@@ -79,7 +80,11 @@ pub(crate) async fn database() -> DatabaseConnection {
         }
         db.execute(&table).await.unwrap();
     }
-    for statement in TABLES.iter().chain(&super::marks::TEST_TABLES) {
+    for statement in TABLES
+        .iter()
+        .chain(&super::marks::TEST_TABLES)
+        .chain(&super::blocks::TEST_TABLES)
+    {
         db.execute_unprepared(statement).await.unwrap();
     }
     db

@@ -106,17 +106,38 @@ pub struct AssistantMemory {
     embedding: Arc<dyn EmbeddingModelLogic>,
     embedding_model_id: String,
     scope: MemoryScope,
+    read_only: bool,
 }
 
 #[cfg(not(feature = "flow-runtime"))]
 pub struct AssistantMemory {
     scope: MemoryScope,
+    read_only: bool,
 }
 
 impl AssistantMemory {
     /// Whose memory this is; a run only accepts a store of its own scope.
     pub fn scope(&self) -> &MemoryScope {
         &self.scope
+    }
+
+    /// Recall existing owner guidance without saving unattributed statements from a room.
+    pub fn read_only(mut self) -> Self {
+        self.read_only = true;
+        self
+    }
+
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    fn ensure_writable(&self) -> Result<()> {
+        if self.read_only {
+            bail!(
+                "Legacy memory is read-only in shared rooms. Existing memories can be recalled, but this turn cannot save to this store."
+            );
+        }
+        Ok(())
     }
 }
 
@@ -177,6 +198,7 @@ impl AssistantMemory {
             embedding,
             embedding_model_id: embedding_bit.id.clone(),
             scope: scope.clone(),
+            read_only: false,
         })
     }
 
@@ -281,6 +303,7 @@ impl AssistantMemory {
 
     /// Embed `content` and append it as a memory observation. Returns the total observation count.
     pub async fn store(&self, role: &str, content: &str) -> Result<usize> {
+        self.ensure_writable()?;
         let content = content.trim();
         if content.is_empty() {
             return Ok(0);
@@ -340,6 +363,10 @@ impl AssistantMemory {
                 remaining = remaining.saturating_sub(bounded.chars().count());
                 sections.push_str(&format!("- {bounded}\n"));
             }
+        }
+        if self.is_read_only() {
+            sections.push_str("\n\n## MEMORY\nYou can recall existing owner guidance with `_memory_search`. This legacy memory is read-only in this shared room. Follow relevant guidance when answering within your configured role, and keep unrelated private information out of shared answers. You cannot save memories to this store in this turn; never claim that you did.");
+            return sections;
         }
         sections.push_str(match self.scope {
             MemoryScope::Profile(_) => {
@@ -448,6 +475,7 @@ impl AssistantMemory {
     }
 
     pub async fn store(&self, _role: &str, _content: &str) -> Result<usize> {
+        self.ensure_writable()?;
         Self::unavailable()
     }
 
@@ -463,6 +491,33 @@ impl AssistantMemory {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(feature = "flow-runtime"))]
+    #[tokio::test]
+    async fn read_only_memory_refuses_tool_writes_before_opening_storage() {
+        let memory = AssistantMemory {
+            scope: MemoryScope::Bot("bot_a".into()),
+            read_only: false,
+        }
+        .read_only();
+        assert!(memory.is_read_only());
+        assert_eq!(memory.scope(), &MemoryScope::Bot("bot_a".into()));
+        let result = super::super::platform::run_memory_tool(
+            super::super::tool_spec::MEMORY_STORE_TOOL,
+            &serde_json::json!({ "role": "user", "content": "A room member's claim" }),
+            Some(&memory),
+        )
+        .await;
+        let result: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(result["status"], "error");
+        assert!(
+            result["error"]
+                .as_str()
+                .unwrap()
+                .contains("read-only in shared rooms")
+        );
+        assert!(!result["error"].as_str().unwrap().contains("flow-runtime"));
+    }
 
     #[test]
     fn recalled_memory_text_is_unicode_safe_and_bounded() {

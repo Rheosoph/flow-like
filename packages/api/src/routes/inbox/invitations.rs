@@ -316,7 +316,7 @@ pub(crate) async fn invite_in<C: ConnectionTrait>(
         .iter()
         .map(|invitee| invitee.principal.id.clone())
         .collect();
-    let blocked = super::requests::blocked_by(txn, inviter, &asked_ids).await?;
+    let blocked = super::blocks::blocked_between(txn, inviter, &asked_ids, true).await?;
     let asked: Vec<&Invitee> = asked
         .into_iter()
         .filter(|invitee| {
@@ -423,6 +423,9 @@ pub(crate) async fn accept_in<C: ConnectionTrait>(
 ) -> Result<Vec<String>, ApiError> {
     let member = pending_member(txn, conversation_id, principal_id).await?;
     ensure_may_answer(txn, &member, actor).await?;
+    if let Some(inviter) = &member.invited_by {
+        super::blocks::ensure_allowed(txn, principal_id, inviter).await?;
+    }
     let is_bot = PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::Bot);
     if !is_bot && limits.is_some() {
         return Err(ApiError::bad_request(
@@ -618,13 +621,40 @@ pub(crate) async fn invitations_for<C: ConnectionTrait>(
         .collect();
     let mut mine: Vec<String> = bots.keys().cloned().collect();
     mine.push(me.to_string());
-    let rows = conversation_member::Entity::find()
+    let pages = conversation_member::Entity::find()
         .filter(conversation_member::Column::Status.eq(MEMBER_PENDING))
         .filter(conversation_member::Column::PrincipalId.is_in(mine))
         .order_by_desc(conversation_member::Column::InvitedAt)
-        .limit(200)
-        .all(db)
-        .await?;
+        .order_by_asc(conversation_member::Column::ConversationId)
+        .order_by_asc(conversation_member::Column::PrincipalId)
+        .paginate(db, 200);
+    let mut rows = Vec::new();
+    let mut page = 0;
+    // Hidden invitations must not consume the visible list's limit.
+    loop {
+        let batch = pages.fetch_page(page).await?;
+        let last_page = batch.len() < 200;
+        let pairs: Vec<_> = batch
+            .iter()
+            .filter_map(|row| Some((row.principal_id.clone(), row.invited_by.clone()?)))
+            .collect();
+        let blocked = super::blocks::blocked_pairs(db, &pairs, false).await?;
+        let remaining = 200 - rows.len();
+        rows.extend(
+            batch
+                .into_iter()
+                .filter(|row| {
+                    !row.invited_by.as_ref().is_some_and(|inviter| {
+                        blocked.contains(&(row.principal_id.clone(), inviter.clone()))
+                    })
+                })
+                .take(remaining),
+        );
+        if rows.len() == 200 || last_page {
+            break;
+        }
+        page += 1;
+    }
     let described: HashMap<String, (Option<String>, String)> = if rows.is_empty() {
         HashMap::new()
     } else {
@@ -799,6 +829,12 @@ pub(crate) async fn invitable<C: ConnectionTrait>(
                 .map(|row| bot_entry(row, InviteMode::Invite)),
         )
         .collect();
+    let ids: Vec<String> = entries
+        .iter()
+        .map(|entry| entry.principal_id.clone())
+        .collect();
+    let blocked = super::blocks::blocked_between(db, caller, &ids, false).await?;
+    entries.retain(|entry| !blocked.contains(&entry.principal_id));
     if let Some(conversation_id) = conversation_id {
         let states = member_states(db, conversation_id, &entries).await?;
         for entry in &mut entries {
