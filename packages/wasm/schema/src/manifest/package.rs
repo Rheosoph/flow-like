@@ -4,8 +4,8 @@ use crate::widget_frame::is_valid_package_id;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Current manifest version (v2 adds micro-frontend widget support).
-pub const MANIFEST_VERSION: u32 = 2;
+/// Current manifest version (v2 adds micro-frontend widget support, v3 bot skills).
+pub const MANIFEST_VERSION: u32 = 3;
 
 /// Widget entry embedded in a package manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,6 +25,48 @@ pub struct PackageWidgetEntry {
     /// store badge. Display-only; never taken from a publisher manifest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<crate::widget_sources::WidgetNetwork>,
+}
+
+/// A skill a package ships for bots: instructions plus the package nodes they call. The
+/// instructions are embedded when the package is built (`instructions_file` names where they
+/// came from), so the registry stores and reviews them with the manifest.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct PackageSkillEntry {
+    /// agentskills name: lowercase letters, digits and single hyphens, at most 64 characters.
+    pub name: String,
+    pub description: String,
+    /// `skills/<name>/SKILL.md` in the package source.
+    #[serde(default)]
+    pub instructions_file: Option<String>,
+    /// The markdown instructions, at most 32 KiB; filled in by the CLI or the compiler.
+    #[serde(default)]
+    pub instructions: Option<String>,
+    /// Names of the package nodes the instructions call.
+    #[serde(default)]
+    pub tools: Vec<String>,
+}
+
+impl PackageSkillEntry {
+    /// Every rule a skill text must keep, hidden Unicode included.
+    pub fn validate(&self) -> Result<(), String> {
+        use flow_like_types_contracts::bot_skill as rules;
+        rules::check_name(&self.name)?;
+        rules::check_description(&self.description)?;
+        match self.instructions.as_deref() {
+            Some(body) if !body.trim().is_empty() => rules::check_body(body).map(drop)?,
+            _ => {
+                return Err(format!(
+                    "Skill '{}' has no embedded instructions; build the package with its SKILL.md",
+                    self.name
+                ));
+            }
+        }
+        if let Some(file) = self.instructions_file.as_deref() {
+            rules::safe_relative_path(file)?;
+        }
+        rules::check_tools(&self.tools).map(drop)
+    }
 }
 
 /// Domain category for WASM packages.
@@ -137,6 +179,8 @@ pub struct PackageManifest {
     #[serde(default)]
     pub widget_bundle_hash: Option<String>,
     #[serde(default)]
+    pub skills: Vec<PackageSkillEntry>,
+    #[serde(default)]
     pub metadata: HashMap<String, serde_json::Value>,
 }
 
@@ -162,6 +206,7 @@ impl PackageManifest {
             widgets: Vec::new(),
             widget_bundle_path: None,
             widget_bundle_hash: None,
+            skills: Vec::new(),
             metadata: HashMap::new(),
         }
     }
@@ -236,6 +281,16 @@ impl PackageManifest {
                 "Manifest declares widgets but neither widget_bundle_path nor widget_bundle_hash"
                     .to_string(),
             );
+        }
+
+        let mut seen_skills = std::collections::HashSet::new();
+        for skill in &self.skills {
+            if !seen_skills.insert(skill.name.clone()) {
+                errors.push(format!("Duplicate skill name in manifest: {}", skill.name));
+            }
+            if let Err(error) = skill.validate() {
+                errors.push(error);
+            }
         }
 
         if errors.is_empty() {

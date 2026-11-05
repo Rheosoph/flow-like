@@ -13,7 +13,8 @@ use flow_like::flow::copilot::tool_spec::resolve_tool_approval;
 use flow_like::flow::copilot::{HostTools, find_bot_tool_spec, tool_outcome_output};
 use flow_like_bot_tools::MemorySessions;
 use flow_like_bot_tools_host::{
-    AppAccess, HostEnv, JobModels, JobScope, JobSecrets, ModelSource, SecretSource, ToolJob,
+    AppAccess, HostEnv, ImageSource, JobConnector, JobModels, JobScope, JobSecrets, ModelSource, SecretSource,
+    ToolJob,
 };
 use flow_like_types::tokio::sync::OnceCell;
 use flow_like_types::{bot_message::ApprovalRequest, tool_grant::ApprovalDecision};
@@ -27,6 +28,8 @@ use super::{
 };
 
 const MAX_EXECUTOR_JOBS_PER_TURN: usize = 30;
+/// Writes its images from the API process: the keys of private image models never leave it.
+const IMAGE_TOOL: &str = "image_generate";
 const EXECUTOR_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// What the owner holds, resolved when the first tool runs: which apps the bot reaches with
@@ -56,6 +59,7 @@ pub(crate) struct TurnDeps {
     pub executor: Option<Arc<dyn ToolExecutor>>,
     pub grants: Arc<dyn GrantStore>,
     pub secrets: Arc<dyn SecretSource>,
+    pub connectors: Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>>,
 }
 
 /// One bot turn's bot tools on the server: the in-process set runs here, the rest goes to the
@@ -69,7 +73,9 @@ pub(crate) struct BotToolsHost {
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
+    skills: Option<Arc<dyn flow_like_bot_tools::SkillHost>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
+    images: Option<Arc<dyn ImageSource>>,
 }
 
 fn refusal(tool: &str, code: &str, message: &str) -> String {
@@ -115,8 +121,15 @@ impl BotToolsHost {
             notifier: None,
             people: None,
             scheduler: None,
+            skills: None,
             mail: None,
+            images: None,
         }
+    }
+
+    pub(crate) fn with_images(mut self, images: Arc<dyn ImageSource>) -> Self {
+        self.images = Some(images);
+        self
     }
 
     pub(crate) fn with_mail(
@@ -124,6 +137,11 @@ impl BotToolsHost {
         mail: Arc<dyn flow_like_bot_tools::email::MailBackend>,
     ) -> Self {
         self.mail = Some(mail);
+        self
+    }
+
+    pub(crate) fn with_skills(mut self, skills: Arc<dyn flow_like_bot_tools::SkillHost>) -> Self {
+        self.skills = Some(skills);
         self
     }
 
@@ -301,9 +319,12 @@ impl BotToolsHost {
             self.deps.models.source.clone(),
         )
         .with_sessions(self.sessions.clone())
-        .with_object_writes(false)
+        .with_object_writes(tool == IMAGE_TOOL)
         .with_expensive_documents(expensive_documents)
         .with_secrets(self.deps.secrets.clone());
+        if let Some(connectors) = &self.deps.connectors {
+            env = env.with_connectors(connectors.clone());
+        }
         if let Some(notifier) = &self.notifier {
             env = env.with_notifier(notifier.clone());
         }
@@ -313,8 +334,14 @@ impl BotToolsHost {
         if let Some(scheduler) = &self.scheduler {
             env = env.with_scheduler(scheduler.clone());
         }
+        if let Some(skills) = &self.skills {
+            env = env.with_skills(skills.clone());
+        }
         if let Some(mail) = &self.mail {
             env = env.with_mail(mail.clone());
+        }
+        if let Some(images) = &self.images {
+            env = env.with_images(images.clone());
         }
         tool_outcome_output(&flow_like_bot_tools::run(tool, args, &env).await)
     }
@@ -339,6 +366,7 @@ impl BotToolsHost {
             let credential = self.deps.directory.credential(app_id).await?;
             credentials.insert(app_id.to_string(), credential);
         }
+        let args_for_connectors = args.clone();
         let mut secrets = BTreeMap::new();
         for name in flow_like_bot_tools::secrets::referenced_secrets(&args) {
             let value = self
@@ -366,8 +394,56 @@ impl BotToolsHost {
             },
             allow_expensive_documents: expensive_documents,
             secrets: JobSecrets(secrets),
+            connectors: self.job_connectors(tool, &args_for_connectors).await?,
         };
         serde_json::to_string(&job).map_err(|error| format!("Cannot encode the tool job: {error}"))
+    }
+
+    /// The connector a connector call uses, with the sign-in resolved for this job only. A
+    /// call takes one connector; a schema lookup without one takes every MCP server.
+    async fn job_connectors(&self, tool: &str, args: &Value) -> Result<Vec<JobConnector>, String> {
+        use flow_like_bot_tools::services::{
+            CONNECTOR_CALL, CONNECTOR_REQUEST, CONNECTOR_TOOLS, ConnectorEntry,
+        };
+        use flow_like_types::bot_connector::ConnectorKind;
+        if ![CONNECTOR_TOOLS, CONNECTOR_CALL, CONNECTOR_REQUEST].contains(&tool) {
+            return Ok(Vec::new());
+        }
+        let Some(source) = &self.deps.connectors else {
+            return Ok(Vec::new());
+        };
+        let wanted = args
+            .get("connector")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|wanted| !wanted.is_empty());
+        let chosen = |entry: &ConnectorEntry| match wanted {
+            Some(wanted) => {
+                entry.rule.id == wanted || entry.rule.label.eq_ignore_ascii_case(wanted)
+            }
+            None => tool == CONNECTOR_TOOLS && entry.kind == ConnectorKind::Mcp,
+        };
+        if tool != CONNECTOR_TOOLS && !source.budget().take() {
+            return Err("At most 20 connector calls per turn".to_string());
+        }
+        let mut connectors = Vec::new();
+        for entry in source
+            .entries()
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(chosen)
+        {
+            let credential = source
+                .credential(&entry.rule.id)
+                .await
+                .map_err(|error| error.to_string())?;
+            connectors.push(JobConnector {
+                authorization: credential.header().map(str::to_string),
+                entry,
+            });
+        }
+        Ok(connectors)
     }
 
     async fn run_on_executor(&self, tool: &str, args: Value, expensive_documents: bool) -> String {

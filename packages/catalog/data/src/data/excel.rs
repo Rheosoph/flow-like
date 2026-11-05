@@ -22,6 +22,8 @@ pub mod sheet_compressor;
 #[cfg(feature = "execute")]
 pub mod styles;
 pub mod table_detect;
+#[cfg(feature = "execute")]
+pub mod workbook;
 pub mod try_extract_tables;
 pub mod try_extract_tables_ai;
 pub mod write_cell;

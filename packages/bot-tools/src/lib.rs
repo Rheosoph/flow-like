@@ -18,6 +18,7 @@ pub mod embed;
 pub mod env;
 pub mod error;
 pub mod files;
+pub mod image;
 pub mod knowledge;
 pub mod layout;
 pub mod notify;
@@ -26,7 +27,9 @@ pub mod people;
 pub mod schedule;
 pub mod secret_text;
 pub mod secrets;
+pub mod services;
 pub mod shell;
+pub mod skills;
 pub mod spec;
 pub mod tables;
 
@@ -59,6 +62,7 @@ pub use people::{Contact, Delivery, PeopleBackend, PersonMessage};
 pub use schedule::Scheduler;
 pub use secrets::SecretInfo;
 pub use shell::{LocalShell, ShellBackend, ShellRequest, ShellResponse};
+pub use skills::{SkillHost, SkillToolSpec};
 pub use spec::{Approval, ToolSpec, spec, specs};
 
 fn parse_args<T: DeserializeOwned>(tool: &str, args: Value) -> ToolResult<T> {
@@ -95,6 +99,7 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         documents::FILE_SUMMARIZE => documents::file_summarize(env, parse_args(tool, args)?).await,
         documents::FILE_EXTRACT => documents::file_extract(env, parse_args(tool, args)?).await,
         code::CODE_RUN => code::code_run(env, parse_args(tool, args)?).await,
+        image::IMAGE_GENERATE => image::image_generate(env, parse_args(tool, args)?).await,
         notify::MESSAGE_OWNER => notify::message_owner(env, parse_args(tool, args)?).await,
         people::LIST_PEOPLE => people::list_people(env, parse_args(tool, args)?).await,
         people::MESSAGE_PERSON => people::message_person(env, parse_args(tool, args)?).await,
@@ -121,9 +126,25 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         schedule::SCHEDULE_TASK => schedule::schedule_task(env, parse_args(tool, args)?).await,
         schedule::LIST_TASKS => schedule::list_tasks(env, parse_args(tool, args)?).await,
         schedule::CANCEL_TASK => schedule::cancel_task(env, parse_args(tool, args)?).await,
+        skills::SKILL_LOAD => skills::skill_load(env, parse_args(tool, args)?).await,
+        skills::SKILL_PROPOSE => skills::skill_propose(env, parse_args(tool, args)?).await,
+        skills::SKILL_CALL => skills::skill_call(env, parse_args(tool, args)?).await,
+        skills::SKILL_IMPORT => skills::import::run_import(env, parse_args(tool, args)?).await,
         email::EMAIL_SEND => email::email_send(env, parse_args(tool, args)?).await,
         email::EMAIL_REPLY => email::email_reply(env, parse_args(tool, args)?).await,
         documents::PDF_RENDER => documents::pdf_render(env, parse_args(tool, args)?).await,
+        documents::DOCUMENT_CREATE => {
+            documents::document_create(env, parse_args(tool, args)?).await
+        }
+        documents::DOCUMENT_FILL => documents::document_fill(env, parse_args(tool, args)?).await,
+        services::CONNECTOR_TOOLS => services::connector_tools(env, parse_args(tool, args)?).await,
+        services::CONNECTOR_CALL => services::connector_call(env, parse_args(tool, args)?).await,
+        services::CONNECTOR_REFRESH => {
+            services::connector_refresh(env, parse_args(tool, args)?).await
+        }
+        services::CONNECTOR_REQUEST => {
+            services::connector_request(env, parse_args(tool, args)?).await
+        }
         other => Err(ToolError::new(
             error::code::UNKNOWN_TOOL,
             format!("This crate has no tool '{other}'"),

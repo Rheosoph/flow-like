@@ -11,11 +11,13 @@
 
 mod bots;
 mod cipher;
+mod connectors;
 mod error;
 mod inbox;
 mod model;
 mod permissions;
 mod schema;
+mod skills;
 mod store;
 mod tasks;
 mod tool_grants;
@@ -36,6 +38,7 @@ pub use model::{
     PinnedMessage, PositionQuery, SecretValue, SegmentsQuery, SendEntryRequest, StarredMessage,
     StarredMessagesPage, UpdateBotRequest, WriteSegmentRequest,
 };
+pub use skills::SkillOrigin;
 pub use store::{ChangeNotifier, KeyError, LocalBotStore, SecretKeyProvider};
 pub use tool_grants::ParkedTurn;
 pub use transfer::{

@@ -2469,6 +2469,7 @@
 	"removeFromDevice": "",
 	"removeFromList": "",
 	"removeFromListFilesStayOnDisk": "",
+	"removeFromProfile": "",
 	"removeMlxFileVal": "MLXファイル {{val}} を削除",
 	"removeName": "{{name}} を削除",
 	"removingStaleFiles": "",

@@ -293,6 +293,21 @@ impl DesktopBot {
         self
     }
 
+    /// The bot with the connectors its owner attached, for the policy checks.
+    fn with_connectors(
+        mut self,
+        connectors: Vec<flow_like_types::bot_connector::ConnectorRule>,
+    ) -> Self {
+        Arc::make_mut(&mut self.context).connectors = connectors;
+        self
+    }
+
+    /// The bot with its active skills for the prompt.
+    fn with_skills(mut self, skills: Vec<flow_like_types::bot_skill::SkillIndexEntry>) -> Self {
+        Arc::make_mut(&mut self.context).skills = skills;
+        self
+    }
+
     /// Lets the tools of run `run_id` use the bot's workspace, an app no profile lists, until the
     /// guard drops.
     pub(super) fn admit_workspace(&self, run_id: &str) -> Option<RunWorkspace> {
@@ -362,8 +377,10 @@ pub(super) fn desktop_bot(
         vision_model: record.vision_model,
         tool_host,
         host_tools: super::super::super::native_bot_tools::host_tools(),
+        skills: Vec::new(),
         requester: None,
         permissions: Default::default(),
+        connectors: Vec::new(),
     };
     DesktopBot {
         context: Arc::new(context),
@@ -408,9 +425,133 @@ pub(super) async fn load_bot(
     } else {
         BTreeSet::new()
     };
+    let skills = if record.capabilities().contains(&BotCapability::Skills) {
+        active_skills(app, signed_in, &record.id).await
+    } else {
+        Vec::new()
+    };
+    let connectors = if record.capabilities().contains(&BotCapability::Connectors) {
+        connector_rules(app, signed_in, &record.id).await
+    } else {
+        Vec::new()
+    };
     Ok(Some(
-        desktop_bot(record, apps, profile_app_ids, tool_host).with_workspace(workspace),
+        desktop_bot(record, apps, profile_app_ids, tool_host)
+            .with_workspace(workspace)
+            .with_skills(skills)
+            .with_connectors(connectors),
     ))
+}
+
+#[derive(Deserialize)]
+struct HubSkills {
+    #[serde(default)]
+    skills: Vec<HubSkill>,
+}
+
+#[derive(Deserialize)]
+struct HubSkill {
+    name: String,
+    description: String,
+    status: String,
+}
+
+/// The names and descriptions of the bot's active skills: this device's store for a local bot,
+/// else the account's. Where they can't be read the bot runs without skills.
+async fn active_skills(
+    app: &AppHandle,
+    identity: Option<&NativeRunIdentity>,
+    bot_id: &str,
+) -> Vec<flow_like_types::bot_skill::SkillIndexEntry> {
+    if let Some(store) = app.try_state::<LocalBots>() {
+        let lookup = bot_id.to_string();
+        let local = crate::functions::local_bots::on_store(&store, move |store| {
+            store
+                .get_bot(&lookup)?
+                .map(|_| store.active_skill_index(&lookup))
+                .transpose()
+        })
+        .await;
+        match local {
+            Ok(Some(skills)) => return skills,
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, bot_id, "A local bot's skills are unavailable");
+                return Vec::new();
+            }
+        }
+    }
+    let Some(identity) = identity else {
+        return Vec::new();
+    };
+    let path = format!("bots/{}/skills", segment(bot_id));
+    match hub_json::<HubSkills>(identity, Method::GET, &path).await {
+        Ok(listed) => listed
+            .map(|listed| listed.skills)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|skill| skill.status == "active")
+            .map(|skill| flow_like_types::bot_skill::SkillIndexEntry {
+                name: skill.name,
+                description: skill.description,
+            })
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, bot_id, "The account bot's skills are unavailable");
+            Vec::new()
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct HubConnectors {
+    #[serde(default)]
+    connectors: Vec<flow_like_types::bot_connector::BotConnector>,
+}
+
+/// What the bot's connector calls are checked against: this device's store for a local bot, else
+/// the account's. Where they can't be read the bot runs with none, so every call is refused.
+async fn connector_rules(
+    app: &AppHandle,
+    identity: Option<&NativeRunIdentity>,
+    bot_id: &str,
+) -> Vec<flow_like_types::bot_connector::ConnectorRule> {
+    if let Some(store) = app.try_state::<LocalBots>() {
+        let lookup = bot_id.to_string();
+        let local = crate::functions::local_bots::on_store(&store, move |store| {
+            store
+                .get_bot(&lookup)?
+                .map(|_| store.connectors(&lookup))
+                .transpose()
+        })
+        .await;
+        match local {
+            Ok(Some(connectors)) => {
+                return connectors.iter().map(|connector| connector.rule()).collect();
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, bot_id, "A local bot's connectors are unavailable");
+                return Vec::new();
+            }
+        }
+    }
+    let Some(identity) = identity else {
+        return Vec::new();
+    };
+    let path = format!("bots/{}/connectors", segment(bot_id));
+    match hub_json::<HubConnectors>(identity, Method::GET, &path).await {
+        Ok(listed) => listed
+            .map(|listed| listed.connectors)
+            .unwrap_or_default()
+            .iter()
+            .map(|connector| connector.rule())
+            .collect(),
+        Err(error) => {
+            tracing::warn!(%error, bot_id, "The account bot's connectors are unavailable");
+            Vec::new()
+        }
+    }
 }
 
 /// The workspace app of a bot on this device, made on its first run.

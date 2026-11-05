@@ -212,6 +212,81 @@ describe("deleteBrowserStorageEntries", () => {
 });
 
 describe("runIDBCleanup", () => {
+	it("finishes one store before starting another and continues after a failure", async () => {
+		const old = Date.now() - 40 * DAY_MS;
+		await offlineSyncDB.commands.bulkPut([
+			{
+				commandId: "settled",
+				appId: "app",
+				boardId: "board",
+				commands: [],
+				createdAt: new Date(old),
+			} as never,
+			{
+				commandId: "pending",
+				appId: "app",
+				boardId: "board",
+				commands: ["unsynced"],
+				createdAt: new Date(old),
+			} as never,
+		]);
+		await globalChatDb.sessions.put({ id: "old", updatedAt: old } as never);
+
+		let release = () => {};
+		const paused = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const bulkDelete = offlineSyncDB.commands.bulkDelete.bind(
+			offlineSyncDB.commands,
+		);
+		const offlineDelete = vi
+			.spyOn(offlineSyncDB.commands, "bulkDelete")
+			.mockImplementationOnce(async (keys) => {
+				await paused;
+				return bulkDelete(keys);
+			});
+		const error = new Error("snapshot store unavailable");
+		const snapshots = vi
+			.spyOn(boardLastSeenDb.seen, "where")
+			.mockImplementationOnce(() => {
+				throw error;
+			});
+		const globalChats = vi.spyOn(globalChatDb.sessions, "filter");
+		const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+		const cleanup = runIDBCleanup({
+			undoHistory: null,
+			boardSnapshots: 30,
+			chats: null,
+			globalChat: 30,
+			flowpilot: null,
+			discardedSync: null,
+			temporaryFiles: null,
+			viewports: null,
+		});
+		try {
+			await vi.waitFor(() => expect(offlineDelete).toHaveBeenCalledOnce());
+			expect(snapshots).not.toHaveBeenCalled();
+			expect(globalChats).not.toHaveBeenCalled();
+			release();
+			expect(await cleanup).toEqual({ globalChat: 1 });
+			expect(warning).toHaveBeenCalledWith(
+				"[IDB Cleanup] partial failure:",
+				error,
+			);
+			expect(await offlineSyncDB.commands.toCollection().primaryKeys()).toEqual(
+				["pending"],
+			);
+			expect(await globalChatDb.sessions.count()).toBe(0);
+		} finally {
+			release();
+			await cleanup;
+			offlineDelete.mockRestore();
+			snapshots.mockRestore();
+			globalChats.mockRestore();
+			warning.mockRestore();
+		}
+	});
+
 	it("prunes by the policy and skips kinds kept forever", async () => {
 		const old = Date.now() - 40 * DAY_MS;
 		await recordHistory("app", "stale", old);

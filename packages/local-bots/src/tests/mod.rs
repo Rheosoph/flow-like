@@ -1,4 +1,5 @@
 mod bots;
+mod connectors;
 mod files;
 mod history;
 mod inbox;
@@ -6,6 +7,7 @@ mod paging;
 mod permissions;
 mod pins;
 mod secrets;
+mod skills;
 mod storage;
 mod tasks;
 mod tool_grants;

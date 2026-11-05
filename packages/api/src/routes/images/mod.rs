@@ -109,6 +109,27 @@ async fn lookup_catalog(db: &sea_orm::DatabaseConnection, id: &str) -> Result<Bi
         })
 }
 
+/// Generate one image using an official catalog model and the caller's plan quota.
+#[utoipa::path(
+    post,
+    path = "/images/generations",
+    tag = "images",
+    request_body(content = serde_json::Value, example = json!({
+        "model": "catalog-image-bit-id",
+        "prompt": "A lighthouse beside a calm sea",
+        "aspect_ratio": "16:9"
+    })),
+    description = "Generate one image with a hosted OpenRouter or Cloudflare model. The model field is an official catalog Bit ID. Prompts accept up to 2048 characters; the response contains one base64 PNG, JPEG or WebP image with its MIME type. Requires the model's access tier and available quota.",
+    responses(
+        (status = 200, description = "The catalog model ID and one image in data, with b64_json and mime_type fields", body = serde_json::Value),
+        (status = 400, description = "The request or selected model configuration is invalid"),
+        (status = 401, description = "Authentication is required"),
+        (status = 402, description = "Insufficient quota for the image request"),
+        (status = 403, description = "The model is not an official image model or is unavailable on the caller's plan"),
+        (status = 503, description = "The image provider is unavailable or rejected the request")
+    )
+)]
+#[tracing::instrument(name = "POST /images/generations", skip_all)]
 pub async fn generate_image(
     State(state): State<AppState>,
     Extension(user): Extension<AppUser>,

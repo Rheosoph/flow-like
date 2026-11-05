@@ -16,7 +16,10 @@ use serde_json::{Value, json};
 use super::memory_tools::MemoryHandle;
 use super::platform::PLATFORM_TOOL_IMAGE_URLS_FIELD;
 
-use super::tool_spec::{PlatformToolSpec, ToolApprovalSpec, ToolApprovalTiming, bot_args_approval};
+use super::tool_spec::{
+    PlatformToolSpec, ToolApprovalSpec, ToolApprovalTiming, bot_args_approval,
+    bot_connector_approval,
+};
 
 const TOOL_TIMEOUT_SECS: u64 = 180;
 
@@ -65,7 +68,44 @@ fn secret_ask_message(args: &Value) -> String {
     )
 }
 
+fn skill_call_ask_message(args: &Value) -> String {
+    let field = |key: &str| {
+        args.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+    };
+    format!(
+        "The bot wants to run the tool {} of the skill {} with arguments {}.",
+        field("tool"),
+        field("skill"),
+        args.get("arguments").map(Value::to_string).unwrap_or_default()
+    )
+}
+
+fn connector_ask_message(tool: &str, args: &Value) -> String {
+    let field = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("?");
+    let label = field(tools::services::LABEL_FIELD);
+    if tool == tools::services::CONNECTOR_CALL {
+        return format!(
+            "The bot wants to call the tool '{}' on your connected service '{label}'.",
+            field("tool")
+        );
+    }
+    let path = field("path").split('?').next().unwrap_or("?");
+    format!(
+        "The bot wants to send a {} request to '{label}': {path}",
+        field("method").to_ascii_uppercase()
+    )
+}
+
 fn ask_message(tool: &str, args: &Value) -> String {
+    if tools::services::POLICY_TOOLS.contains(&tool) {
+        return connector_ask_message(tool, args);
+    }
+    if tool == tools::skills::SKILL_CALL {
+        return skill_call_ask_message(args);
+    }
     if tool == "shell_run" {
         return shell_ask_message(args);
     }
@@ -141,6 +181,8 @@ registered_tools!(
     "file_extract",
     "pdf_render",
     "excel_inspect",
+    "document_create",
+    "document_fill",
     "data_sources",
     "data_query",
     "code_run",
@@ -164,6 +206,12 @@ registered_tools!(
     "image_generate",
     "secret_list",
     "secret_request",
+    "skill_load",
+    "skill_propose",
+    "skill_call",
+    "connector_tools",
+    "connector_call",
+    "connector_request",
 );
 
 /// Offered beside a tool that takes secrets by name rather than through a capability of their own.
@@ -255,6 +303,9 @@ pub fn bot_tool_spec(name: &str) -> Option<PlatformToolSpec> {
                 message,
                 timing: ToolApprovalTiming::BeforeExecution,
             },
+            _ if tools::services::POLICY_TOOLS.contains(&name) => {
+                bot_connector_approval(ask_fn(name))
+            }
             _ if !spec.approval_args.is_empty() => bot_args_approval(),
             _ => ToolApprovalSpec::None,
         },
@@ -307,6 +358,12 @@ impl HostTools {
                 .into_iter()
                 .filter(|name| LOCAL_MACHINE_TOOLS.contains(name)),
         );
+        self
+    }
+
+    /// Stops running `name`: a host that links a tool but cannot run it here leaves it out.
+    pub fn without(mut self, name: &str) -> Self {
+        self.names.remove(name);
         self
     }
 
@@ -419,6 +476,7 @@ mod tests {
                         | "email_send"
                         | "message_person"
                         | "secret_request"
+                        | "skill_call"
                 ) || outside,
                 "{name}"
             );

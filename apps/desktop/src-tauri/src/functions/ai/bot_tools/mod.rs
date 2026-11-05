@@ -2,9 +2,12 @@
 //! logic behind `flow-like-bot-tools`' backends, plus what the bot panel's Computer tab shows.
 
 pub mod view;
+pub(crate) mod connectors;
+pub(crate) mod images;
 pub(crate) mod mail;
 pub(crate) mod people;
 pub(crate) mod schedule;
+pub(crate) mod skills;
 
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod browser;

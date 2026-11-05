@@ -200,6 +200,49 @@ describe("resolveSttChoice", () => {
 		).toBeNull();
 		expect(resolveSttChoice([], { desktop: true, installed: none })).toBeNull();
 	});
+
+	test("skips custom keys, legacy aliases and unsupported hosted providers", () => {
+		const unsupported = [
+			"custom:openai",
+			"Hosted",
+			"Premium",
+			"hosted:anthropic",
+			"",
+		].map((provider, index) => bit(`unsupported-${index}`, provider));
+		for (const desktop of [true, false]) {
+			expect(
+				resolveSttChoice(unsupported, { desktop, installed: none }),
+			).toBeNull();
+			expect(
+				resolveSttChoice([...unsupported, hosted], {
+					desktop,
+					installed: none,
+				}),
+			).toEqual({ bitId: hosted.id, route: "remote" });
+		}
+	});
+
+	test("accepts each hosted speech provider with normalized names", () => {
+		for (const provider of [
+			"openrouter",
+			"openai",
+			"groq",
+			"mistral",
+			"together",
+			"xai",
+			"gemini",
+		]) {
+			expect(
+				resolveSttChoice(
+					[bit("speech", ` HOSTED:${provider.toUpperCase()} `)],
+					{
+						desktop: false,
+						installed: none,
+					},
+				),
+			).toEqual({ bitId: "speech", route: "remote" });
+		}
+	});
 });
 
 describe("createSerialQueue", () => {

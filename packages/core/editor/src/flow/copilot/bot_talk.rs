@@ -483,7 +483,7 @@ impl BotTalk {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn raise_taint(&self, level: DataSensitivity) {
+    pub(super) fn raise_taint(&self, level: DataSensitivity) {
         let mut taint = self
             .taint
             .lock()

@@ -266,3 +266,30 @@ test("forecasting parameters expose checkpoint families and assets without chat 
 	expect(markup).not.toContain("Context length");
 	expect(markup).not.toContain("Hosted model pricing");
 });
+
+test("hosted speech editors use the audio provider list without LLM API settings", () => {
+	for (const bitType of [IBitTypes.Stt, IBitTypes.Tts]) {
+		const markup = renderEditor({ bitType, provider: "hosted:openrouter" });
+		for (const provider of [
+			"openrouter",
+			"openai",
+			"groq",
+			"mistral",
+			"together",
+			"xai",
+			"gemini",
+		])
+			expect(markup).toContain(`value="hosted:${provider}"`);
+		expect(markup).not.toContain('value="hosted:anthropic"');
+		expect(markup).not.toContain("API surface");
+		expect(markup).not.toContain("USD per 1M");
+		expect(markup).toContain("OPENROUTER_API_KEY");
+		if (bitType === IBitTypes.Tts) {
+			expect(markup).toContain("Default voice");
+			expect(markup).not.toContain("Default language");
+		} else {
+			expect(markup).toContain("Default language");
+			expect(markup).not.toContain("Default voice");
+		}
+	}
+});

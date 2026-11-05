@@ -97,7 +97,6 @@
         </activity>
         <activity android:name=".BotActionActivity" android:exported="false" android:excludeFromRecents="true" />
         <activity android:name=".BotDocumentActivity" android:exported="false" android:excludeFromRecents="true" />
-        <activity android:name=".NativeLocationActivity" android:exported="false" android:excludeFromRecents="true" />
         <activity android:name=".NativeGeofencePermissionActivity" android:exported="false" android:excludeFromRecents="true" />
         <receiver android:name=".NativeGeofenceReceiver" android:exported="false" />
         <receiver android:name=".NativeGeofenceBootReceiver" android:exported="false">

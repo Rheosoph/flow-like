@@ -2516,6 +2516,7 @@
 	"removeFromDevice": "",
 	"removeFromList": "",
 	"removeFromListFilesStayOnDisk": "",
+	"removeFromProfile": "",
 	"removeMlxFileVal": "Quitar archivo MLX {{val}}",
 	"removeName": "Quitar {{name}}",
 	"removingStaleFiles": "",

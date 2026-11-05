@@ -10,6 +10,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    ops::Range,
     sync::{Arc, LazyLock},
     time::Duration,
 };
@@ -40,9 +41,10 @@ use url::Url;
 
 use super::memory::AssistantMemory;
 use super::public_web::{
-    WebResearchSession, normalize_public_discovery_url, public_urls_in_user_text,
+    WebResearchSession, normalize_public_discovery_url, parse_public_url, public_url_spans,
     run_archive_lookup_for_session, run_open_url_for_session, source_id_for_url,
 };
+use super::subtasks::{REQUEST_ID_ARGUMENT, SPAWN_SUBTASKS_TOOL};
 use super::stream::{
     FlowScriptToolCallPreviewTracker, detailed_tool_end_frame, detailed_tool_start_frame,
     plan_step_frame, safe_tool_activity_result_preview, tool_result_stream_status,
@@ -252,6 +254,8 @@ pub enum PlatformSurface {
     HomeReadOnly,
     /// Tool-free planner used by the embedded ontology natural-language query input.
     OntologyQuery,
+    /// One worker of a bot's `spawn_subtasks`; the bot's narrowed tools are supplied per call.
+    Subtask,
 }
 
 impl PlatformSurface {
@@ -262,7 +266,7 @@ impl PlatformSurface {
             Self::DataStudio => data_studio_specialist_tool_specs(),
             Self::Home => home_specialist_tool_specs(),
             Self::HomeReadOnly => home_specialist_tool_specs_for_access(true),
-            Self::OntologyQuery => Vec::new(),
+            Self::OntologyQuery | Self::Subtask => Vec::new(),
         }
     }
 
@@ -272,7 +276,7 @@ impl PlatformSurface {
     fn max_tool_rounds(self) -> usize {
         match self {
             Self::Orchestrator => MAX_PLATFORM_TOOL_ROUNDS,
-            Self::Scout | Self::DataStudio | Self::Home | Self::HomeReadOnly => {
+            Self::Scout | Self::DataStudio | Self::Home | Self::HomeReadOnly | Self::Subtask => {
                 MAX_SPECIALIST_TOOL_ROUNDS
             }
             Self::OntologyQuery => 0,
@@ -284,7 +288,7 @@ impl PlatformSurface {
             Self::Orchestrator => {
                 "The research tools completed, but the model did not produce a final synthesis within the tool budget."
             }
-            Self::Scout | Self::DataStudio | Self::Home | Self::HomeReadOnly => {
+            Self::Scout | Self::DataStudio | Self::Home | Self::HomeReadOnly | Self::Subtask => {
                 "The specialist's tools completed, but it did not produce a final report within the tool budget. Treat any work it started as unverified."
             }
             Self::OntologyQuery => {
@@ -615,6 +619,13 @@ fn same_round_page_dependency_guard_result(
         })
         .to_string(),
     )
+}
+
+fn with_request_id(mut arguments: Value, request_id: &str) -> Value {
+    if let Some(object) = arguments.as_object_mut() {
+        object.insert(REQUEST_ID_ARGUMENT.to_string(), json!(request_id));
+    }
+    arguments
 }
 
 /// Global platform assistant. Holds just the state + profile needed to resolve a model; the tools and
@@ -1062,12 +1073,6 @@ impl PlatformCopilot {
                 frame_ids.push(frame_id);
             }
 
-            let round_has_research_fallback = tool_calls
-                .iter()
-                .any(|tool_call| tool_call.function.name == RESEARCH_AGENT_TOOL);
-            let round_has_private_call = tool_calls
-                .iter()
-                .any(|tool_call| platform_tool_enters_private_context(&tool_call.function.name));
             let mut prepared_arguments = Vec::with_capacity(tool_calls.len());
             for (tool_index, tool_call) in tool_calls.iter().enumerate() {
                 let tool_name = tool_call.function.name.as_str();
@@ -1098,7 +1103,6 @@ impl PlatformCopilot {
                 let prepared = match tool_name {
                     RESEARCH_AGENT_TOOL => {
                         let output = if let Some(refusal) = sealed_research_gate_error(
-                            round_has_private_call,
                             local_app_discovery_returned,
                             sealed_research_used,
                         ) {
@@ -1147,26 +1151,37 @@ impl PlatformCopilot {
                                     // that may cite nothing behind them is worse than no research.
                                     web_research_session
                                         .adopt_opened_urls(&outcome.opened_urls);
-                                    json!({
+                                    let mut result = json!({
                                         "status": "ok",
                                         "sealed_to_source_request": true,
                                         "findings": outcome.findings,
                                         "citable_urls": outcome.opened_urls,
-                                    })
-                                    .to_string()
+                                    });
+                                    if outcome.unverified_links_removed > 0 {
+                                        result["unverified_links_removed"] =
+                                            json!(outcome.unverified_links_removed);
+                                        result["note"] = json!("Links to pages the researcher could not open were reduced to their site name and marked 'unverified source'. Treat those as leads, never as evidence, and never rebuild their URLs.");
+                                    }
+                                    result.to_string()
                                 }
                                 // An immediate failure is cheap to retry and leaves the run with no
                                 // research at all, so it does not burn the one shot. A timeout does:
                                 // the user already waited the full budget for it.
-                                Ok(Err(error)) => json!({
-                                    "status": "error",
-                                    "code": "sealed_research_failed",
-                                    "retryable": true,
-                                    "message": error.to_string(),
-                                })
-                                .to_string(),
+                                Ok(Err(error)) => {
+                                    tracing::warn!("Sealed research failed: {error:#}");
+                                    json!({
+                                        "status": "error",
+                                        "code": "sealed_research_failed",
+                                        "retryable": true,
+                                        "message": error.to_string(),
+                                    })
+                                    .to_string()
+                                }
                                 Err(_) => {
                                     sealed_research_used = true;
+                                    tracing::warn!(
+                                        "Sealed research exceeded its {timeout_secs}-second limit"
+                                    );
                                     json!({
                                         "status": "timeout",
                                         "code": "sealed_research_timeout",
@@ -1188,18 +1203,10 @@ impl PlatformCopilot {
                         "message": "Raw public-web tools are unavailable to the root assistant; use the sealed no-argument research_agent fallback."
                     })
                     .to_string()),
-                    _ if round_has_research_fallback
-                        && platform_tool_enters_private_context(tool_name) =>
-                    {
-                        Err(json!({
-                            "status": "error",
-                            "tool": tool_name,
-                            "code": "private_call_deferred_for_sealed_research",
-                            "retryable": true,
-                            "message": "This private/local call was not executed because research_agent must run in a separate earlier wave. Retry it after the research result."
-                        })
-                        .to_string())
-                    }
+                    SPAWN_SUBTASKS_TOOL => Ok(with_request_id(
+                        tool_call.function.arguments.clone(),
+                        &frame_ids[tool_index],
+                    )),
                     _ => Ok(tool_call.function.arguments.clone()),
                 };
                 prepared_arguments.push(prepared);
@@ -1500,16 +1507,56 @@ fn citation_allowlist_text(opened_urls: &[String]) -> String {
         .join("\n")
 }
 
-fn unverified_citation_urls(text: &str, opened_urls: &[String]) -> Vec<String> {
-    let allowed = opened_urls.iter().cloned().collect::<HashSet<_>>();
-    let mut unverified = public_urls_in_user_text(text)
-        .into_iter()
-        .filter_map(|raw| Url::parse(&raw).ok().map(|url| url.as_str().to_string()))
-        .filter(|url| !allowed.contains(url))
-        .collect::<Vec<_>>();
-    unverified.sort();
-    unverified.dedup();
-    unverified
+/// Reduce every link to a page the researcher did not open to plain text naming its site, so an
+/// unopened lead costs one link instead of the whole synthesis. Returns the rewritten text and the
+/// removed URLs. URLs are compared in the normalized form the session records opened pages in.
+fn strip_unverified_citations(text: &str, opened_urls: &[String]) -> (String, Vec<String>) {
+    let opened = opened_urls
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    let mut rewritten = String::with_capacity(text.len());
+    let mut removed = Vec::new();
+    let mut cursor = 0;
+    for span in public_url_spans(text) {
+        let raw = &text[span.clone()];
+        let Ok(url) = Url::parse(raw) else {
+            continue;
+        };
+        let normalized = parse_public_url(raw)
+            .map(|url| url.to_string())
+            .unwrap_or_else(|_| url.to_string());
+        if opened.contains(normalized.as_str()) {
+            continue;
+        }
+        let site = url.host_str().unwrap_or("unknown site");
+        let (start, end, replacement) = match markdown_link_label(text, span.clone()) {
+            Some((label_start, label)) if label_start >= cursor => (
+                label_start,
+                span.end + 1,
+                format!("{label} (unverified source: {site})"),
+            ),
+            _ => (span.start, span.end, format!("{site} (unverified source)")),
+        };
+        rewritten.push_str(&text[cursor..start]);
+        rewritten.push_str(&replacement);
+        cursor = end;
+        removed.push(normalized);
+    }
+    rewritten.push_str(&text[cursor..]);
+    removed.sort();
+    removed.dedup();
+    (rewritten, removed)
+}
+
+/// For a URL that is the target of `[label](url)`, the byte offset of `[` and the label.
+fn markdown_link_label(text: &str, url: Range<usize>) -> Option<(usize, &str)> {
+    let before = text[..url.start].strip_suffix("](")?;
+    if !text[url.end..].starts_with(')') {
+        return None;
+    }
+    let open = before.rfind(['[', '\n'])?;
+    (before.as_bytes()[open] == b'[').then(|| (open, &before[open + 1..]))
 }
 
 /// Tools advertised to the rig/Bits platform loop. The root receives the same sealed
@@ -1528,6 +1575,7 @@ struct SealedResearchOutcome {
     findings: String,
     stats: LLMUsageStats,
     opened_urls: Vec<String>,
+    unverified_links_removed: usize,
 }
 
 /// Public tool activity uses the same nested stream envelope as host-managed specialists.
@@ -1666,17 +1714,20 @@ async fn run_sealed_research_agent(
                     "The sealed researcher returned no synthesis"
                 ));
             }
-            let unverified = unverified_citation_urls(&round_text, &web_session.opened_urls());
+            let opened_urls = web_session.opened_urls();
+            let (findings, unverified) = strip_unverified_citations(&round_text, &opened_urls);
             if !unverified.is_empty() {
-                return Err(flow_like_types::anyhow!(
-                    "The sealed researcher cited URLs it did not successfully open: {}",
-                    unverified.join(", ")
-                ));
+                tracing::warn!(
+                    unverified = ?unverified,
+                    opened = ?opened_urls,
+                    "Sealed research linked URLs it did not open; the links were reduced to plain text"
+                );
             }
             return Ok(SealedResearchOutcome {
-                findings: round_text,
+                findings,
                 stats: research_stats,
-                opened_urls: web_session.opened_urls(),
+                opened_urls,
+                unverified_links_removed: unverified.len(),
             });
         }
         if iteration == MAX_SEALED_RESEARCH_ROUNDS {
@@ -1795,21 +1846,13 @@ fn local_app_discovery_gate_error(
     }))
 }
 
-/// Research requires a returned app inventory, its own call wave, and an unused research budget.
-/// Its input remains sealed to the immutable user request even after local app discovery or use.
+/// Research requires a returned app inventory and an unused research budget. It may share a wave
+/// with private calls: its input is sealed to the immutable user request, so nothing they return
+/// can reach its queries.
 fn sealed_research_gate_error(
-    round_has_private_call: bool,
     local_app_discovery_returned: bool,
     sealed_research_used: bool,
 ) -> Option<Value> {
-    if round_has_private_call {
-        return Some(json!({
-            "status": "error",
-            "code": "sealed_research_must_be_separate_wave",
-            "retryable": true,
-            "message": "Run sealed public research in its own assistant wave, separate from local app, data, memory, file, or interactive calls."
-        }));
-    }
     if let Some(refusal) =
         local_app_discovery_gate_error(RESEARCH_AGENT_TOOL, local_app_discovery_returned)
     {
@@ -2642,32 +2685,25 @@ mod tests {
         assert!(!returned_app_inventory_result("not json"));
     }
 
-    fn gate_code(
-        round_has_private_call: bool,
-        local_app_discovery_returned: bool,
-        sealed_research_used: bool,
-    ) -> Option<String> {
-        sealed_research_gate_error(
-            round_has_private_call,
-            local_app_discovery_returned,
-            sealed_research_used,
+    fn gate_code(local_app_discovery_returned: bool, sealed_research_used: bool) -> Option<String> {
+        sealed_research_gate_error(local_app_discovery_returned, sealed_research_used).map(
+            |refusal| {
+                refusal
+                    .get("code")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string()
+            },
         )
-        .map(|refusal| {
-            refusal
-                .get("code")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string()
-        })
     }
 
     #[test]
     fn public_research_and_http_require_app_discovery_first() {
         assert_eq!(
-            gate_code(false, false, false).as_deref(),
+            gate_code(false, false).as_deref(),
             Some("local_app_discovery_required")
         );
-        assert_eq!(gate_code(false, true, false), None);
+        assert_eq!(gate_code(true, false), None);
         let refusal = local_app_discovery_gate_error(HTTP_REQUEST_TOOL, false).unwrap();
         assert_eq!(refusal["code"], "local_app_discovery_required");
         assert_eq!(refusal["retryable"], true);
@@ -2677,21 +2713,16 @@ mod tests {
 
     #[test]
     fn sealed_research_gate_refuses_in_priority_order() {
-        // Sharing a wave with a private call outranks every other reason.
-        assert_eq!(
-            gate_code(true, false, true).as_deref(),
-            Some("sealed_research_must_be_separate_wave")
-        );
         // Every request checks local apps before public fallback, including a fresh run.
         assert_eq!(
-            gate_code(false, false, false).as_deref(),
+            gate_code(false, true).as_deref(),
             Some("local_app_discovery_required")
         );
         // ...and an inventory clears it.
-        assert_eq!(gate_code(false, true, false), None);
+        assert_eq!(gate_code(true, false), None);
         // One shot per run, however it was earned.
         assert_eq!(
-            gate_code(false, true, true).as_deref(),
+            gate_code(true, true).as_deref(),
             Some("sealed_research_already_used")
         );
     }
@@ -2700,12 +2731,8 @@ mod tests {
     /// or the model burns rounds retrying a call that can never succeed.
     #[test]
     fn only_the_recoverable_sealed_research_refusals_are_retryable() {
-        for (args, retryable) in [
-            ((true, false, false), true),
-            ((false, false, false), true),
-            ((false, true, true), false),
-        ] {
-            let refusal = sealed_research_gate_error(args.0, args.1, args.2).expect("a refusal");
+        for (args, retryable) in [((false, false), true), ((true, true), false)] {
+            let refusal = sealed_research_gate_error(args.0, args.1).expect("a refusal");
             assert_eq!(
                 refusal.get("retryable").and_then(Value::as_bool),
                 Some(retryable),
@@ -2766,18 +2793,43 @@ mod tests {
     }
 
     #[test]
-    fn sealed_research_rejects_urls_outside_the_opened_allowlist() {
+    fn sealed_research_keeps_opened_links_and_reduces_the_rest_to_plain_text() {
         let opened = vec!["https://example.com/opened".to_string()];
-        assert!(
-            unverified_citation_urls("Use [this](https://example.com/opened).", &opened).is_empty()
+        let kept = "Use [this](https://example.com/opened).";
+        assert_eq!(strip_unverified_citations(kept, &opened), (kept.to_string(), vec![]));
+
+        let (text, removed) = strip_unverified_citations(
+            "Unsupported [claim](https://example.com/search-only). Lead: https://www.g2.com/x (HTTP 403).",
+            &opened,
         );
         assert_eq!(
-            unverified_citation_urls(
-                "Unsupported [claim](https://example.com/search-only).",
-                &opened
-            ),
-            vec!["https://example.com/search-only".to_string()]
+            text,
+            "Unsupported claim (unverified source: example.com). Lead: www.g2.com (unverified source) (HTTP 403)."
         );
+        assert_eq!(
+            removed,
+            vec![
+                "https://example.com/search-only".to_string(),
+                "https://www.g2.com/x".to_string()
+            ]
+        );
+    }
+
+    /// The session records opened pages without fragment, so an anchored citation of an opened
+    /// page is verified, and markdown emphasis or quotes around a URL are not part of it.
+    #[test]
+    fn sealed_research_matches_citations_in_normalized_form() {
+        let opened = vec!["https://example.com/opened".to_string()];
+        for text in [
+            "See [pricing](https://example.com/opened#pricing).",
+            "See **https://example.com/opened**.",
+            "See `https://example.com/opened`.",
+            "Siehe „https://example.com/opened“.",
+        ] {
+            let (rewritten, removed) = strip_unverified_citations(text, &opened);
+            assert_eq!(rewritten, text);
+            assert!(removed.is_empty(), "{text}: {removed:?}");
+        }
     }
 
     #[test]

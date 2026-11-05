@@ -3,6 +3,7 @@ import {
 	CALL_FIELD,
 	type CallPeerLike,
 	MAX_CALL_PARTICIPANTS,
+	botVoiceSource,
 	byteLevel,
 	callIsFull,
 	callLiveKey,
@@ -67,6 +68,50 @@ describe("sanitizeCallPresence", () => {
 			{ id: "ok", peer: { a: 1 } },
 		]) {
 			expect(sanitizeCallPresence(bad)).toBeNull();
+		}
+	});
+
+	test("bounds, deduplicates and sorts advertised bot voices", () => {
+		const value = sanitizeCallPresence({
+			...presence("c", "p"),
+			voiceBots: [
+				"bot:z",
+				"bot:a",
+				"bot:z",
+				"bad id",
+				null,
+				7,
+				"x".repeat(161),
+			],
+			speakingBot: "bot:a",
+		});
+		expect(value?.voiceBots).toEqual(["bot:a", "bot:z"]);
+		expect(value?.speakingBot).toBe("bot:a");
+		expect(
+			sanitizeCallPresence({
+				...presence("c", "p"),
+				voiceBots: Array.from({ length: 100 }, (_, i) => `bot-${i}`),
+			})?.voiceBots,
+		).toHaveLength(64);
+	});
+
+	test("accepts speaking state only for an advertised voice", () => {
+		for (const voiceBots of [undefined, "bot-1", {}, [], ["bot-2"]]) {
+			const value = sanitizeCallPresence({
+				...presence("c", "p"),
+				voiceBots,
+				speakingBot: "bot-1",
+			});
+			expect(value?.speakingBot).toBeUndefined();
+		}
+		for (const speakingBot of [null, true, {}, "bad id"]) {
+			expect(
+				sanitizeCallPresence({
+					...presence("c", "p"),
+					voiceBots: ["bot-1"],
+					speakingBot,
+				})?.speakingBot,
+			).toBeUndefined();
 		}
 	});
 });
@@ -178,6 +223,74 @@ describe("deriveLiveCall", () => {
 	});
 });
 
+describe("botVoiceSource", () => {
+	const members = new Set(["anna", "paul", "me"]);
+	const read = (entries: [number, unknown][], localClientId = 3) =>
+		deriveLiveCall(states(entries), localClientId, members);
+	const voice = (sub: string, peer: string, extra = {}) =>
+		member(sub, presence("c", peer, { voiceBots: ["bot-1"], ...extra }));
+
+	test("elects the lowest capable client consistently for every participant", () => {
+		const entries: [number, unknown][] = [
+			[9, voice("paul", "pp")],
+			[3, voice("me", "pm")],
+			[1, member("anna", presence("c", "pa"))],
+		];
+		for (const local of [1, 3, 9]) {
+			expect(botVoiceSource(read(entries, local), "bot-1")?.sub).toBe("me");
+		}
+		expect(botVoiceSource(read(entries), "other-bot")).toBeNull();
+		expect(botVoiceSource(null, "bot-1")).toBeNull();
+	});
+
+	test("a muted participant can supply the bot voice without enabling their microphone", () => {
+		const live = read([
+			[3, voice("me", "pm", { muted: true, listening: false })],
+		]);
+		expect(botVoiceSource(live, "bot-1")?.sub).toBe("me");
+	});
+
+	test("fails over when the source leaves or withdraws its model", () => {
+		const other: [number, unknown] = [9, voice("paul", "pp")];
+		for (const extra of [{ joined: false }, { voiceBots: [] }]) {
+			expect(
+				botVoiceSource(read([[3, voice("me", "pm", extra)], other]), "bot-1")
+					?.sub,
+			).toBe("paul");
+		}
+	});
+
+	test("ignores non-members, another call and duplicate peer claims", () => {
+		const live = read([
+			[0, voice("outsider", "po")],
+			[1, voice("anna", "shared")],
+			[2, voice("paul", "shared")],
+			[3, voice("me", "pm")],
+			[4, voice("anna", "other-call", { id: "other" })],
+		]);
+		expect(botVoiceSource(live, "bot-1")?.sub).toBe("me");
+	});
+
+	test("a second tab cannot supply a voice for a person's admitted first tab", () => {
+		const live = read([
+			[1, member("anna", presence("c", "first"))],
+			[2, voice("anna", "second")],
+			[3, voice("me", "pm")],
+		]);
+		expect(botVoiceSource(live, "bot-1")?.sub).toBe("me");
+	});
+
+	test("voice capability and speaking updates change the live key", () => {
+		const base = read([[3, voice("me", "pm")]]);
+		const speaking = read([[3, voice("me", "pm", { speakingBot: "bot-1" })]]);
+		const withdrawn = read([[3, voice("me", "pm", { voiceBots: [] })]]);
+		expect(base?.participants[0]?.voiceBots).toEqual(["bot-1"]);
+		expect(speaking?.participants[0]?.speakingBot).toBe("bot-1");
+		expect(callLiveKey(base)).not.toBe(callLiveKey(speaking));
+		expect(callLiveKey(base)).not.toBe(callLiveKey(withdrawn));
+	});
+});
+
 describe("call helpers", () => {
 	test("callIsFull is false for someone already in the call", () => {
 		const subs = Array.from(
@@ -199,7 +312,7 @@ describe("call helpers", () => {
 		expect(callIsFull(null, "me")).toBe(false);
 	});
 
-	test("callLiveKey changes with mute and peers only", () => {
+	test("callLiveKey changes with mute and peers", () => {
 		const members = new Set(["anna"]);
 		const key = (muted: boolean) =>
 			callLiveKey(

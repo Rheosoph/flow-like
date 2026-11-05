@@ -2,6 +2,7 @@ use crate::error::ToolError;
 
 pub const INBOX_DIR: &str = "bot/inbox";
 pub const CODE_DIR: &str = "bot/code";
+pub const IMAGES_DIR: &str = "bot/images";
 pub const RENDERS_DIR: &str = "bot/renders";
 pub const NOTES_DIR: &str = "bot/notes";
 pub const EXTRACTIONS_DIR: &str = "bot/extractions";

@@ -6,7 +6,7 @@ import type {
 } from "@flow-like/flow-like-ui";
 import { post, postBlob } from "../../lib/api";
 import type { TauriBackend } from "../tauri-provider";
-import { transcribeLocally } from "./local-speech";
+import { speakLocally, transcribeLocally } from "./local-speech";
 
 export class AudioState implements IAudioState {
 	constructor(private readonly backend: TauriBackend) {}
@@ -29,6 +29,13 @@ export class AudioState implements IAudioState {
 	}
 
 	async speak(request: ISpeakRequest): Promise<Blob> {
-		return postBlob(this.profile(), "audio/speech", request, this.backend.auth);
+		if (request.local) return speakLocally(request);
+		const { bit_id, text, voice, format } = request;
+		return postBlob(
+			this.profile(),
+			"audio/speech",
+			{ bit_id, text, voice, format },
+			this.backend.auth,
+		);
 	}
 }

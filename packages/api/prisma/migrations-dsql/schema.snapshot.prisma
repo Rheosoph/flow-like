@@ -1598,7 +1598,9 @@ model Bot {
   mailThreads     BotMailThread[]
   mailMessages    BotMailMessage[]
   webhooks        BotWebhook[]
+  connectors      BotConnector[]
   tasks           BotTask[]
+  skills          BotSkill[]
   segments        ConversationSegment[]
 
   @@unique([ownerId, systemKey])
@@ -1640,6 +1642,36 @@ model BotSecret {
   lastUsedAt  DateTime? @db.Timestamptz(3)
 
   @@id([botId, name])
+}
+
+/// A service the owner attached to a bot: an MCP server (`kind` MCP, `url`) or an OAuth account
+/// (`kind` OAUTH, `providerId`). `grantEncrypted` is the sealed OAuth handle (like
+/// `EventSink.oauthTokensEncrypted`); no response or prompt carries it. `authKind` NONE | SECRET |
+/// OAUTH with `authRef` the secret name or provider id.
+model BotConnector {
+  id               String   @id
+  botId            String
+  bot              Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  /// MCP | OAUTH
+  kind             String
+  label            String
+  providerId       String?
+  url              String?
+  /// NONE | SECRET | OAUTH
+  authKind         String   @default("NONE")
+  authRef          String?
+  grantEncrypted   String?
+  scopes           Json     @default("[]")
+  /// read | ask | never
+  defaultPolicy    String   @default("ask")
+  /// Tool name (or `read` / `write` for OAUTH) to policy.
+  toolPolicies     Json     @default("{}")
+  /// `[{name, description, read_only_hint, destructive_hint, schema_hash}]` from the last refresh.
+  toolsSnapshot    Json     @default("[]")
+  createdAt        DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([botId])
 }
 
 /// A standing grant: bot `fromBotId` may ask bot `toBotId` without asking the owner again.
@@ -1725,6 +1757,32 @@ model BotTask {
 
   @@index([botId])
   @@index([enabled, nextRunAt])
+}
+
+/// A skill the owner installed on a bot: guidance the bot loads before a task it describes.
+/// `source` is `owner`, `import`, `bot_proposed` or `package:<id>@<version>`. Only an ACTIVE skill
+/// reaches the bot's prompt or tools; a proposed, imported or package skill starts PENDING until the
+/// owner approves it. References live in the bot's workspace under `bot/skills/<name>/`.
+model BotSkill {
+  id          String   @id
+  botId       String
+  bot         Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  /// agentskills name: lowercase letters, digits, single hyphens; at most 64 characters.
+  name        String
+  /// One line, at most 1,024 characters.
+  description String
+  /// Markdown instructions, at most 32 KiB.
+  body        String
+  source      String
+  /// ACTIVE | PENDING | DISABLED
+  status      String   @default("PENDING")
+  /// Package node names the skill's tools call.
+  tools       Json     @default("[]")
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([botId, name])
+  @@index([botId, status])
 }
 
 /// A host that runs the bot and said so recently. Presence reads the newest `lastSeenAt`.

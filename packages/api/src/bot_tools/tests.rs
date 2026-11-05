@@ -224,6 +224,7 @@ async fn host_with_grants(
                 .map(|(name, value)| (name.to_string(), value.to_string()))
                 .collect(),
         )),
+        connectors: None,
     }))
 }
 
@@ -662,4 +663,129 @@ async fn a_declined_or_unacknowledged_approval_runs_nothing() {
     }
     assert!(executor.jobs.lock().unwrap().is_empty());
     channel.close().await;
+}
+
+struct FakeImageBackend {
+    budget: flow_like_bot_tools::image::ImageBudget,
+}
+
+#[async_trait]
+impl flow_like_bot_tools::image::ImageBackend for FakeImageBackend {
+    fn model(&self) -> flow_like_bot_tools::image::ImageModelInfo {
+        flow_like_bot_tools::image::ImageModelInfo {
+            name: "private-image".into(),
+            external: true,
+        }
+    }
+
+    fn budget(&self) -> &flow_like_bot_tools::image::ImageBudget {
+        &self.budget
+    }
+
+    async fn generate(
+        &self,
+        job: flow_like_bot_tools::image::ImageJob,
+    ) -> flow_like_types::Result<Vec<flow_like_bot_tools::image::GeneratedImage>> {
+        Ok((0..job.count)
+            .map(|n| flow_like_bot_tools::image::GeneratedImage {
+                bytes: vec![n as u8; 16].into(),
+                mime: "image/png".into(),
+                metadata: json!({ "ai_generated": true }),
+            })
+            .collect())
+    }
+}
+
+struct FakeImageSource {
+    backend: Result<Arc<dyn flow_like_bot_tools::image::ImageBackend>, flow_like_bot_tools::image::ImageUnavailable>,
+}
+
+#[async_trait]
+impl flow_like_bot_tools_host::ImageSource for FakeImageSource {
+    async fn images(
+        &self,
+    ) -> Result<Arc<dyn flow_like_bot_tools::image::ImageBackend>, flow_like_bot_tools::image::ImageUnavailable>
+    {
+        self.backend.clone()
+    }
+}
+
+async fn image_host(
+    executor: Option<Arc<FakeExecutor>>,
+    images: Option<FakeImageSource>,
+) -> Arc<BotToolsHost> {
+    let access = Arc::new(Access::new(&[WORKSPACE, DOCS]).await);
+    let mut host = BotToolsHost::new(TurnDeps {
+        owner: OWNER.into(),
+        bot: bot_user(),
+        turn_id: TURN.into(),
+        workspace: WORKSPACE.into(),
+        host_tools: routing::host_tools(executor.is_some(), &[]),
+        directory: Arc::new(Directory { scope: job_scope() }),
+        access,
+        models: TurnModels {
+            source: Arc::new(NoModels),
+            chat: None,
+            embedding: None,
+        },
+        executor: executor.map(|executor| executor as Arc<dyn ToolExecutor>),
+        grants: Arc::new(MemoryGrants::default()),
+        secrets: Arc::new(JobSecrets::default()),
+    });
+    if let Some(images) = images {
+        host = host.with_images(Arc::new(images));
+    }
+    Arc::new(host)
+}
+
+fn working_images() -> FakeImageSource {
+    FakeImageSource {
+        backend: Ok(Arc::new(FakeImageBackend {
+            budget: flow_like_bot_tools::image::ImageBudget::default(),
+        })),
+    }
+}
+
+#[flow_like_types::tokio::test]
+async fn image_generate_runs_in_the_api_and_writes_into_the_workspace() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = image_host(Some(executor.clone()), Some(working_images())).await;
+    assert!(host.handles("image_generate"));
+    let output = parse(
+        &host
+            .run("image_generate", json!({ "prompt": "a lighthouse", "count": 2 }))
+            .await,
+    );
+    assert_eq!(output["status"], "ok", "{output}");
+    assert_eq!(output["saved"].as_array().unwrap().len(), 2);
+    assert_eq!(output["ai_generated"], true);
+    assert!(executor.jobs.lock().unwrap().is_empty());
+    let path = output["saved"][0]["path"].as_str().unwrap();
+    assert!(path.starts_with("bot/images/"), "{path}");
+    let listed = parse(&host.run("file_list", json!({ "prefix": "bot/images" })).await);
+    assert_eq!(listed["status"], "ok");
+}
+
+#[flow_like_types::tokio::test]
+async fn image_generate_is_offered_without_an_executor_and_never_sent_to_one() {
+    assert!(routing::host_tools(false, &[]).runs("image_generate"));
+    assert_eq!(
+        routing::route("image_generate", &json!({}), false),
+        Some(routing::Route::InProcess)
+    );
+    assert_eq!(
+        routing::route("image_generate", &json!({}), true),
+        Some(routing::Route::InProcess)
+    );
+}
+
+#[flow_like_types::tokio::test]
+async fn a_server_turn_without_an_image_model_says_where_to_pick_one() {
+    let source = FakeImageSource {
+        backend: Err(flow_like_bot_tools::image::ImageUnavailable::NoModel),
+    };
+    let host = image_host(None, Some(source)).await;
+    let output = parse(&host.run("image_generate", json!({ "prompt": "a" })).await);
+    assert_eq!(output["status"], "error");
+    assert!(output["error"]["message"].as_str().unwrap().contains("Brain settings"));
 }

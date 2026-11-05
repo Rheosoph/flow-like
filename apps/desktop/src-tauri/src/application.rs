@@ -6,10 +6,10 @@
 // archiving the full desktop dependency graph into those artifacts on every
 // host build.
 mod deeplink;
-#[cfg(desktop)]
 mod bot_host;
 #[cfg(feature = "code-sandbox")]
 mod code_sandbox;
+#[cfg(desktop)]
 mod device_models;
 mod device_tunnels;
 #[cfg(desktop)]
@@ -637,6 +637,8 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
+                #[cfg(target_os = "ios")]
+                tracing::info!(webview = webview.label(), "iOS frontend navigation started");
                 execution_credentials::revoke_webview(webview.label());
                 device_tunnels::close_webview(webview.label());
                 realtime::close_webview(webview.label());
@@ -651,6 +653,24 @@ pub fn run() {
                 }
             }
         });
+
+    #[cfg(target_os = "ios")]
+    {
+        builder = builder.on_web_content_process_terminate(|webview| {
+            tracing::warn!(
+                webview = webview.label(),
+                "iOS web content process terminated; reloading frontend"
+            );
+            // Installing this hook replaces Tauri's automatic recovery.
+            if let Err(error) = webview.reload() {
+                tracing::error!(
+                    webview = webview.label(),
+                    %error,
+                    "Failed to reload iOS frontend after web content process termination"
+                );
+            }
+        });
+    }
 
     // Tauri requires this plugin to be registered first so a secondary process exits before any
     // other plugin or application setup hook runs.
@@ -1302,6 +1322,7 @@ pub fn run() {
             functions::bit::get_bit,
             functions::bit::is_bit_installed,
             functions::speech::speech_transcribe,
+            functions::speech::speech_synthesize,
             functions::bit::get_bit_size,
             functions::bit::get_pack_from_bit,
             functions::bit::search_bits,

@@ -5,7 +5,14 @@ import {
 	experimental_createQueryPersister,
 } from "@tanstack/query-persist-client-core";
 import { type QueryState, notifyManager } from "@tanstack/react-query";
-import { createStore, del, entries, get, set } from "idb-keyval";
+import {
+	createStore,
+	del,
+	entries,
+	get,
+	promisifyRequest,
+	set,
+} from "idb-keyval";
 import { isRecord } from "./response-shape";
 
 /**
@@ -81,6 +88,7 @@ export interface QueryStorageBackend {
 	set: (key: string, value: string) => Promise<void>;
 	del: (key: string) => Promise<void>;
 	entries: () => Promise<Array<[string, string]>>;
+	iterateKeys?: () => AsyncIterable<string>;
 }
 
 export interface BoundedQueryStorage {
@@ -107,7 +115,12 @@ export function createBoundedStorage(
 	return {
 		getItem: async (key) => {
 			try {
-				return await backend.get(key);
+				const value = await backend.get(key);
+				if (value === "") {
+					await backend.del(key);
+					return undefined;
+				}
+				return value;
 			} catch {
 				return undefined;
 			}
@@ -173,6 +186,26 @@ function createIdbBackend(): QueryStorageBackend {
 		set: (key, value) => set(key, value, getStore()),
 		del: (key) => del(key, getStore()),
 		entries: () => entries<string, string>(getStore()),
+		async *iterateKeys() {
+			let after: IDBValidKey | undefined;
+			for (;;) {
+				const batch = await getStore()("readonly", (store) =>
+					promisifyRequest(
+						store.getAllKeys(
+							after === undefined
+								? undefined
+								: IDBKeyRange.lowerBound(after, true),
+							64,
+						),
+					),
+				);
+				if (batch.length === 0) return;
+				for (const key of batch) {
+					if (typeof key === "string") yield key;
+				}
+				after = batch[batch.length - 1];
+			}
+		},
 	};
 }
 
@@ -262,8 +295,9 @@ export function isUnconfirmedRestore(data: unknown): boolean {
 export function createSmartQueryPersister(
 	options: SmartQueryPersisterOptions = {},
 ) {
+	const backend = options.backend ?? createIdbBackend();
 	const storage = createBoundedStorage(
-		options.backend ?? createIdbBackend(),
+		backend,
 		options.maxEntryBytes ?? maxPersistedQueryEntryBytes,
 	);
 	const persister = experimental_createQueryPersister({
@@ -308,7 +342,23 @@ export function createSmartQueryPersister(
 		});
 		return data;
 	};
-	return { ...persister, persisterFn };
+	const persisterGc = async () => {
+		if (!backend.iterateKeys) return persister.persisterGc();
+		// Loading every cached value together can exhaust a mobile webview during
+		// the startup sweep. Read one entry at a time through the same expiry and
+		// validation path used when a query restores its cached answer.
+		try {
+			const prefix = `${QUERY_STORAGE_PREFIX}-`;
+			for await (const key of backend.iterateKeys()) {
+				if (key.startsWith(prefix)) {
+					await persister.retrieveQuery(key.slice(prefix.length));
+				}
+			}
+		} catch {
+			// Cleanup is best effort when storage becomes unavailable.
+		}
+	};
+	return { ...persister, persisterFn, persisterGc };
 }
 
 /**

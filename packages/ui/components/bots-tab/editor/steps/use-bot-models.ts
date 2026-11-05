@@ -44,8 +44,35 @@ function useSettingsProfile() {
 	return useInvoke(backend.userState.getSettingsProfile, backend.userState, []);
 }
 
+const IMAGE_MODEL_NEEDLES = [
+	"image",
+	"imagen",
+	"flux",
+	"kontext",
+	"stable-diffusion",
+	"diffusion",
+	"sdxl",
+	"dall-e",
+	"sourceful",
+	"riverflow",
+];
+
+/** An image generation Bit, or a Vlm whose upstream model id names an image model (as the image tool accepts). */
+export function isImageCapableBit(bit: IBit): boolean {
+	if (bit.type === IBitTypes.ImageGeneration) return true;
+	if (bit.type !== IBitTypes.Vlm) return false;
+	const provider = (bit.parameters as { provider?: { model_id?: unknown } })
+		?.provider;
+	const modelId =
+		typeof provider?.model_id === "string" ? provider.model_id.toLowerCase() : "";
+	return IMAGE_MODEL_NEEDLES.some((needle) => modelId.includes(needle));
+}
+
 /** The profile's models of these Bit types, from the same queries as the chat's memory picker. */
-export function useBotBitOptions(types: readonly IBitTypes[]): {
+export function useBotBitOptions(
+	types: readonly IBitTypes[],
+	accepts?: (bit: IBit) => boolean,
+): {
 	options: BotEmbeddingModelOption[];
 	isLoading: boolean;
 } {
@@ -63,9 +90,9 @@ export function useBotBitOptions(types: readonly IBitTypes[]): {
 	const options = useMemo(
 		() =>
 			asArray(profileBits.data)
-				.filter((bit) => types.includes(bit.type))
+				.filter((bit) => types.includes(bit.type) && (accepts?.(bit) ?? true))
 				.map((bit) => ({ id: bit.id, label: bitName(bit, language) })),
-		[profileBits.data, language, types],
+		[profileBits.data, language, types, accepts],
 	);
 	return {
 		options,

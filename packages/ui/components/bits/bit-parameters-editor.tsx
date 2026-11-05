@@ -1,5 +1,7 @@
 "use client";
 
+import { isHostedAudio } from "../../lib/bit/hosted-audio";
+import { HostedAudioConfiguration } from "./hosted-audio-configuration";
 import {
 	Braces,
 	ChevronDown,
@@ -453,6 +455,8 @@ export function BitParametersEditor({
 	);
 	const showHostedEmbedding =
 		scope === "admin" && bitType === IBitTypes.Embedding;
+	const showHostedAudio =
+		scope === "admin" && isHostedAudio({ type: bitType, parameters: params });
 	const showHostedImage =
 		scope === "admin" &&
 		isHostedImageGeneration({ type: bitType, parameters: params });
@@ -565,6 +569,13 @@ export function BitParametersEditor({
 								onChange={onChange}
 							/>
 						)}
+						{showHostedAudio && (
+							<HostedAudioConfiguration
+								bitType={bitType}
+								parameters={params}
+								onChange={onChange}
+							/>
+						)}
 						{showHostedImage && (
 							<HostedImageGenerationConfiguration
 								parameters={params}
@@ -618,7 +629,7 @@ export function BitParametersEditor({
 								onChange={onChange}
 								path="parameter"
 								hiddenKeys={
-									showHostedImage
+									showHostedImage || showHostedAudio
 										? ["provider", "pricing"]
 										: isSystemOne
 											? ["provider", "context_length", "pricing"]

@@ -420,6 +420,42 @@ Model-provider keys and endpoint variables are listed in `.env.example`.
 Populate only the providers your installation uses, and keep their secrets out
 of hub JSON.
 
+### Hosted speech providers
+
+Speech-to-text and text-to-speech requests use the API's provider credentials.
+Set the keys for the providers you use in the private `.env`, then recreate the
+API container. Compose and Swarm pass them only to the API.
+
+| Provider | API key variable |
+| --- | --- |
+| `hosted:openrouter` | `OPENROUTER_API_KEY` |
+| `hosted:openai` | `HOSTED_OPENAI_API_KEY` |
+| `hosted:groq` | `HOSTED_GROQ_API_KEY` |
+| `hosted:mistral` | `HOSTED_MISTRAL_API_KEY` |
+| `hosted:together` | `HOSTED_TOGETHER_API_KEY` |
+| `hosted:xai` | `HOSTED_XAI_API_KEY` |
+| `hosted:gemini` | `HOSTED_GEMINI_API_KEY` |
+
+Register an official **Stt** or **Tts** catalog Bit with
+`parameters.provider.provider_name` and the upstream model ID in
+`parameters.provider.model_id`. The model must support the selected speech
+operation. Set `parameters.provider.params.tier` for access control; an omitted
+tier uses `ENTERPRISE`. Provider keys belong in the server's secret store.
+Hosted speech uses fixed upstream URLs, so chat endpoint overrides do not
+change speech routing.
+
+Clients send the catalog ID as `bit_id` to
+`POST /api/v1/audio/transcriptions` or `POST /api/v1/audio/speech`.
+Transcription accepts base64 audio up to 25 MiB decoded. Speech synthesis
+accepts up to 4,096 text characters and returns audio bytes. Requests need
+available quota and a model allowed by the caller's plan. A missing provider
+key returns `503` with the code `AUDIO_PROVIDER_UNCONFIGURED`.
+
+Device instances use `/api/v1/instances/audio/transcriptions` and
+`/api/v1/instances/audio/speech` with their approved model and spending grants.
+The API verifies that a transcription grant names an **Stt** model and a speech
+grant names a **Tts** model before starting provider work.
+
 ### Hosted image providers
 
 Install the provider credentials on the API before registering a hosted

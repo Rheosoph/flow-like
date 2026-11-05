@@ -63,6 +63,10 @@ pub struct BotLookup {
     /// The look from the bot builder: an object with a string `kind`.
     #[schema(value_type = Object, example = json!({ "kind": "pip" }))]
     pub appearance: Value,
+    /// The pinned text-to-speech Bit ID, so call participants can use the bot's voice.
+    /// Provider configuration and credentials stay private. Deleted bots expose no voice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tts_model: Option<String>,
     /// The bot was deleted; what it did still shows it.
     pub deleted: bool,
 }
@@ -91,6 +95,11 @@ impl UserLookupResponse {
                 owner_id: row.owner_id,
                 system: row.system_key.as_deref().and_then(BotSystemKind::parse),
                 appearance: row.appearance,
+                tts_model: if row.deleted_at.is_none() {
+                    row.tts_model
+                } else {
+                    None
+                },
                 deleted: row.deleted_at.is_some(),
             }),
         }
@@ -888,6 +897,59 @@ mod tests {
             })
         );
         assert!(!wire.to_string().contains("private instructions"));
+    }
+
+    #[test]
+    fn a_live_bot_shares_only_its_pinned_voice_model() {
+        let row = bot::Model {
+            deleted_at: None,
+            tts_model: Some("catalog-voice-bit".into()),
+            stt_model: Some("private-transcription-bit".into()),
+            model_policy: serde_json::json!({"api_key": "private-provider-key"}),
+            ..bot_row()
+        };
+        let hidden = Lookup {
+            description: false,
+            created_at: false,
+            ..Lookup::default()
+        };
+        let wire = serde_json::to_value(UserLookupResponse::from_bot(row, &hidden)).unwrap();
+        assert_eq!(wire["bot"]["tts_model"], "catalog-voice-bit");
+        assert_eq!(wire["bot"]["deleted"], false);
+        assert_eq!(wire["description"], Value::Null);
+        assert_eq!(wire["created_at"], Value::Null);
+        for private in [
+            "private instructions",
+            "private-provider-key",
+            "private-transcription-bit",
+            "model_policy",
+        ] {
+            assert!(!wire.to_string().contains(private), "{private}");
+        }
+    }
+
+    #[test]
+    fn unpinned_and_deleted_bots_expose_no_voice_model() {
+        for row in [
+            bot::Model {
+                deleted_at: None,
+                tts_model: None,
+                ..bot_row()
+            },
+            bot::Model {
+                tts_model: Some("removed-voice-bit".into()),
+                ..bot_row()
+            },
+        ] {
+            let wire = serde_json::to_value(UserLookupResponse::from_bot(row, &Lookup::default()))
+                .unwrap();
+            assert!(wire["bot"].get("tts_model").is_none());
+        }
+        let older: BotLookup = serde_json::from_value(serde_json::json!({
+            "owner_id": "user-1", "system": null, "appearance": {}, "deleted": false,
+        }))
+        .unwrap();
+        assert!(older.tts_model.is_none());
     }
 
     #[test]

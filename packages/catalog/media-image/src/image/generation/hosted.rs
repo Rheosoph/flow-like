@@ -46,48 +46,65 @@ fn bearer_token<'a>(scoped: Option<&'a str>, run: Option<&'a str>) -> Option<&'a
         .find(|token| !token.is_empty())
 }
 
+/// What a caller outside a flow run supplies for a hosted image call: the API proxy's address,
+/// the credential that reaches it and the usage labels.
+#[derive(Clone, Default)]
+pub struct HostedAccess {
+    pub token: Option<String>,
+    pub authorizer: Option<std::sync::Arc<dyn flow_like_types::authorization::RequestAuthorizer>>,
+    pub api_base_url: Option<String>,
+    pub app_id: Option<String>,
+    pub run_id: Option<String>,
+}
+
+pub(super) fn access_from(context: &ExecutionContext) -> HostedAccess {
+    let state = &context.app_state;
+    let usage = context.model_usage_context();
+    HostedAccess {
+        token: bearer_token(
+            state.hosted_model_token.as_deref(),
+            context.token.as_deref(),
+        )
+        .map(ToOwned::to_owned),
+        authorizer: state.request_authorizer.clone(),
+        api_base_url: usage.as_ref().and_then(|usage| usage.api_base_url.clone()),
+        app_id: usage.as_ref().and_then(|usage| usage.app_id.clone()),
+        run_id: usage.as_ref().and_then(|usage| usage.run_id.clone()),
+    }
+}
+
 pub(super) async fn generate(
-    context: &ExecutionContext,
+    access: &HostedAccess,
     bit: &Bit,
     provider: &ModelProvider,
     request: &ImageGenerationRequest,
     options: &ImageGenerationProviderOptions,
 ) -> flow_like_types::Result<Vec<GeneratedImage>> {
     let request = request_for(bit, provider, request, options)?;
-    let state = &context.app_state;
-    let authorizer = state.request_authorizer.clone();
-    let token = bearer_token(
-        state.hosted_model_token.as_deref(),
-        context.token.as_deref(),
-    );
+    let authorizer = access.authorizer.clone();
+    let token = bearer_token(None, access.token.as_deref());
     if token.is_none() && authorizer.is_none() {
         bail!("Hosted image generation requires an access token for the API proxy");
     }
-    let usage = context.model_usage_context();
-    let base = usage
-        .as_ref()
-        .and_then(|usage| usage.api_base_url.as_deref())
+    let base = access
+        .api_base_url
+        .as_deref()
         .map(str::trim)
         .filter(|base| !base.is_empty())
         .map(ToOwned::to_owned)
         .unwrap_or_else(flow_like_model_provider::embedding::proxy_config::api_base_url);
-    let headers = usage
-        .as_ref()
-        .map(|usage| {
-            [
-                ("x-flow-like-app-id", usage.app_id.as_deref()),
-                ("x-flow-like-run-id", usage.run_id.as_deref()),
-            ]
-            .into_iter()
-            .filter_map(|(name, value)| {
-                value
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| (name.to_string(), value.to_owned()))
-            })
-            .collect()
-        })
-        .unwrap_or_default();
+    let headers: Vec<(String, String)> = [
+        ("x-flow-like-app-id", access.app_id.as_deref()),
+        ("x-flow-like-run-id", access.run_id.as_deref()),
+    ]
+    .into_iter()
+    .filter_map(|(name, value)| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| (name.to_string(), value.to_owned()))
+    })
+    .collect();
     // Only the runtime and credential broker select the destination of this token.
     let mut client =
         HostedImageClient::new(&base, token.unwrap_or_default())?.with_usage_headers(headers);

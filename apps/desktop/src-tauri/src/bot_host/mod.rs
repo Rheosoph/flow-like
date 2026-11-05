@@ -16,6 +16,7 @@
 mod account;
 mod approvals;
 pub(crate) mod commands;
+pub(crate) mod connector_commands;
 pub(crate) mod grant_commands;
 mod e2e;
 mod e2e_vault;
@@ -27,6 +28,7 @@ mod memory;
 mod notify;
 mod owner_notify;
 mod rule;
+pub(crate) mod skill_commands;
 pub(crate) mod task_commands;
 mod task_tick;
 mod runner;

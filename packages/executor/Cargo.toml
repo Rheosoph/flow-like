@@ -43,7 +43,7 @@ tauri = ["flow-like-catalog/tauri"]
 code-sandbox = ["dep:flow-like-catalog-code-interpreter", "flow-like-bot-tools?/code"]
 # `POST /tool`: bot tool jobs. The light set (files, knowledge, data on Lance tables) needs only this;
 # `bot-tools-heavy` adds documents, file sources and the database drivers.
-bot-tools = ["dep:flow-like-bot-tools", "dep:flow-like-bot-tools-host", "dep:async-trait"]
+bot-tools = ["dep:flow-like-bot-tools", "dep:flow-like-bot-tools-host", "dep:async-trait", "flow-like-bot-tools/mcp"]
 bot-tools-heavy = ["bot-tools", "flow-like-bot-tools/documents", "flow-like-bot-tools/connectors"]
 # Cloud channel transports; each executor binary enables exactly its own cloud.
 channel-aws = ["flow-like-channels/aws"]

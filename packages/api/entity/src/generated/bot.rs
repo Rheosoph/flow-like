@@ -74,11 +74,15 @@ pub struct Model {
     #[sea_orm(has_many)]
     pub bot_secrets: HasMany<super::bot_secret::Entity>,
     #[sea_orm(has_many)]
+    pub bot_skills: HasMany<super::bot_skill::Entity>,
+    #[sea_orm(has_many)]
     pub bot_tasks: HasMany<super::bot_task::Entity>,
     #[sea_orm(has_many)]
     pub bot_tool_grants: HasMany<super::bot_tool_grant::Entity>,
     #[sea_orm(has_many)]
     pub bot_turns: HasMany<super::bot_turn::Entity>,
+    #[sea_orm(has_many)]
+    pub bot_connectors: HasMany<super::bot_connector::Entity>,
     #[sea_orm(has_many)]
     pub bot_webhooks: HasMany<super::bot_webhook::Entity>,
     #[sea_orm(has_many)]

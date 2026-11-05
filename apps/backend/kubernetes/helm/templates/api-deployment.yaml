@@ -261,6 +261,38 @@ spec:
               value: {{ .Values.llm.openai.endpoint | quote }}
             {{- end }}
             {{- end }}
+            {{- range $name := list "groq" "mistral" "together" "xai" "gemini" }}
+            {{- $provider := index $.Values.llm $name }}
+            {{- $key := printf "HOSTED_%s_API_KEY" (upper $name) }}
+            {{- if $provider.enabled }}
+            {{- if $provider.existingSecret }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $provider.existingSecret | quote }}
+                  key: {{ $key }}
+            {{- else if $provider.apiKey }}
+            - name: {{ $key }}
+              value: {{ $provider.apiKey | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
+            {{- if .Values.llm.cloudflare.enabled }}
+            {{- if .Values.llm.cloudflare.existingSecret }}
+            {{- range $key := list "HOSTED_CLOUDFLARE_API_TOKEN" "HOSTED_CLOUDFLARE_ACCOUNT_ID" }}
+            - name: {{ $key }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $.Values.llm.cloudflare.existingSecret | quote }}
+                  key: {{ $key }}
+            {{- end }}
+            {{- else if .Values.llm.cloudflare.apiToken }}
+            - name: HOSTED_CLOUDFLARE_API_TOKEN
+              value: {{ .Values.llm.cloudflare.apiToken | quote }}
+            - name: HOSTED_CLOUDFLARE_ACCOUNT_ID
+              value: {{ required "llm.cloudflare.accountId is required when llm.cloudflare.apiToken is set" .Values.llm.cloudflare.accountId | quote }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.llm.anthropic.enabled }}
             {{- if .Values.llm.anthropic.existingSecret }}
             - name: HOSTED_ANTHROPIC_API_KEY

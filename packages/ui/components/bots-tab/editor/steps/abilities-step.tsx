@@ -12,7 +12,9 @@ import {
 } from "../../../../state/backend-state/bot-state";
 import { Label } from "../../../ui/label";
 import { Switch } from "../../../ui/switch";
+import { BotConnectorsCard } from "../../bot-connectors";
 import { BotEmailAddress } from "../../bot-mail";
+import { BotSkillsCard } from "../../bot-skills";
 import {
 	BOT_CAPABILITY_GROUPS,
 	BOT_CAPABILITY_ICONS,
@@ -122,6 +124,17 @@ export function AbilitiesStep({
 				{t(
 					"panel.mail.afterSave",
 					"Save the bot first, then pick its address here or in its Details.",
+				)}
+			</p>
+		),
+		connectors: <BotConnectorsCard botId={botId} />,
+		skills: botId ? (
+			<BotSkillsCard botId={botId} />
+		) : (
+			<p className="text-xs text-muted-foreground">
+				{t(
+					"panel.skills.afterSave",
+					"Save the bot first, then add or import its skills here.",
 				)}
 			</p>
 		),

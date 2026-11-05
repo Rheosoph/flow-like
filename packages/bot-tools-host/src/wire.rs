@@ -102,6 +102,46 @@ pub struct ToolJob {
     /// The secrets the call's arguments name, opened by the API for this job only.
     #[serde(default, skip_serializing_if = "JobSecrets::is_empty")]
     pub secrets: JobSecrets,
+    /// The connector(s) a connector tool call uses, with the sign-in the API resolved for this
+    /// job only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connectors: Vec<JobConnector>,
+}
+
+/// One attached connector and its `Authorization` value inside a signed job; never printed.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JobConnector {
+    pub entry: flow_like_bot_tools::services::ConnectorEntry,
+    #[serde(default)]
+    pub authorization: Option<String>,
+}
+
+impl std::fmt::Debug for JobConnector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobConnector")
+            .field("id", &self.entry.rule.id)
+            .field("authorization", &self.authorization.as_ref().map(|_| "..."))
+            .finish()
+    }
+}
+
+/// The connectors of a job as the tools read them.
+pub fn connector_source(
+    connectors: &[JobConnector],
+) -> std::sync::Arc<dyn flow_like_bot_tools::services::ConnectorSource> {
+    use flow_like_bot_tools::services::{Credential, StaticSource};
+    std::sync::Arc::new(StaticSource::new(
+        connectors
+            .iter()
+            .map(|connector| {
+                let credential = connector
+                    .authorization
+                    .clone()
+                    .map_or_else(Credential::none, Credential::authorization);
+                (connector.entry.clone(), credential)
+            })
+            .collect(),
+    ))
 }
 
 /// Secret values by name that travel inside one signed job; never printed.

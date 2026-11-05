@@ -44,6 +44,7 @@ describe("hosted audio", () => {
 			text: "Hello",
 			voice: "nova",
 			format: "mp3",
+			local: false,
 		});
 		expect(mocks.apiPostBlob).toHaveBeenCalledWith(
 			"audio/speech",
@@ -51,5 +52,12 @@ describe("hosted audio", () => {
 			auth,
 		);
 		expect(result).toBe(blob);
+	});
+
+	test("refuses local synthesis without sending a hosted request", async () => {
+		await expect(
+			audio().speak({ bit_id: "local-tts", text: "Hello", local: true }),
+		).rejects.toThrow("requires the desktop app");
+		expect(mocks.apiPostBlob).not.toHaveBeenCalled();
 	});
 });

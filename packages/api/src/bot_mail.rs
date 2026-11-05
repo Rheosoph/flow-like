@@ -1,7 +1,8 @@
 //! A bot's outbound mail and the owner's view of its mail threads. Sending uses the platform
-//! mail client with the bot's own address as From; every sent mail is recorded in the thread's
-//! conversation, and a mail to a new recipient domain waits for the owner's approval before the
-//! tool gets here (grant scope `email:<domain>`).
+//! mail client with the bot's own address as From, within the per-bot and per-account daily
+//! recipient limits; every sent mail is recorded in the owner's conversation with the bot. The
+//! owner approves before the tool gets here: a send once per new recipient domain (grant scope
+//! `email:<domain>`), replies once or for good.
 
 use crate::{
     entity::{bot, bot_mail_message, bot_mail_thread, inbox_entry},
@@ -19,7 +20,8 @@ use crate::{
         },
         inbox::{
             mail_threads::{
-                Direction, link_message_in, record_outbound_in, start_thread_in, touch_thread_in,
+                Direction, link_message_in, mail_conversation_in, record_outbound_in,
+                start_thread_in, touch_thread_in,
             },
             now_millis, wake,
         },
@@ -315,9 +317,18 @@ async fn record_sent(
                     received,
                 )
                 .await?;
-                let record = record_outbound_in(
+                let conversation = mail_conversation_in(
                     txn,
                     &sent.thread,
+                    &bot.owner_id,
+                    &bot.id,
+                    &composed_subject,
+                    received,
+                )
+                .await?;
+                let record = record_outbound_in(
+                    txn,
+                    &conversation,
                     &bot.id,
                     &sent.message_id,
                     &text,

@@ -205,7 +205,7 @@ const SEALED_ROUTING_INTRO: &str =
 
 Local apps are the first choice, including installed research/search apps. Check app capabilities before public research or HTTP fallback.";
 
-const SEALED_PUBLIC_WEB_ROUTE: &str = "4. Call `research_agent` only after `list_apps` returns: no suitable app/interface exists, or local research candidates were tried in best-fit order with no usable answer and no useful, nonredundant candidate remained. Partial listings (`complete: false`, truncation, event-read errors) do not prove absence. A declined local call is a stop. Never run research in the same wave as local app/content/action calls. Research receives only the immutable source request, never app inventory/results, memory, attachments, or root history. It must extract only safe public factual subquestions, never query or repeat secrets, credentials, or private identifiers. Queries derived from private output require a new sanitized user request.";
+const SEALED_PUBLIC_WEB_ROUTE: &str = "4. Call `research_agent` only after `list_apps` returns: no suitable app/interface exists, or local research candidates were tried in best-fit order with no usable answer and no useful, nonredundant candidate remained. Partial listings (`complete: false`, truncation, event-read errors) do not prove absence. A declined local call is a stop. Research may share a wave with independent calls. Research receives only the immutable source request, never app inventory/results, memory, attachments, or root history. It must extract only safe public factual subquestions, never query or repeat secrets, credentials, or private identifiers. Queries derived from private output require a new sanitized user request.";
 
 const NATIVE_ROUTING_INTRO: &str = SEALED_ROUTING_INTRO;
 

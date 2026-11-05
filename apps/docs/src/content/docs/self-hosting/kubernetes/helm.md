@@ -92,10 +92,23 @@ All referenced Secrets must exist in the release namespace.
 | `audit.entrySecret` | `AUDIT_ENTRY_KEY`, optionally `AUDIT_ENTRY_KEY_PREVIOUS` |
 | `audit.existingSecret` | `AUDIT_SIGNING_KEY`, or the chosen key service's credentials |
 | `audit.bucketSecret` | `AUDIT_BUCKET_ACCESS_KEY_ID`, `AUDIT_BUCKET_SECRET_ACCESS_KEY` |
+| `llm.openrouter.existingSecret` | `OPENROUTER_API_KEY`, optionally `OPENROUTER_ENDPOINT` for chat |
+| `llm.openai.existingSecret` | `HOSTED_OPENAI_API_KEY`, optionally `HOSTED_OPENAI_ENDPOINT` for chat |
+| `llm.groq.existingSecret` | `HOSTED_GROQ_API_KEY` |
+| `llm.mistral.existingSecret` | `HOSTED_MISTRAL_API_KEY` |
+| `llm.together.existingSecret` | `HOSTED_TOGETHER_API_KEY` |
+| `llm.xai.existingSecret` | `HOSTED_XAI_API_KEY` |
+| `llm.gemini.existingSecret` | `HOSTED_GEMINI_API_KEY` |
+| `llm.cloudflare.existingSecret` | `HOSTED_CLOUDFLARE_API_TOKEN`, `HOSTED_CLOUDFLARE_ACCOUNT_ID` |
 
 Setup generates these contracts together. `BACKEND_KEY` and `BACKEND_PUB`
 contain base64-encoded ES256 PEM material; Kubernetes Secret encoding is a
 separate layer. Executors receive the public material only.
+
+Provider Secrets are mounted only into the API. Set the matching
+`llm.<provider>.enabled` flag to `true`. Speech and image requests use fixed
+upstream URLs; the optional OpenRouter and OpenAI endpoints above apply to
+their chat routes.
 
 External Redis requires `redis.enabled=false`. External SQL requires
 `database.type=external`; set `database.external.provider` to `postgresql`

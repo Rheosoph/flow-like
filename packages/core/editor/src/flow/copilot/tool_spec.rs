@@ -216,6 +216,10 @@ pub const BOT_DATABASE_APPROVAL_TITLE: &str = "Approve dropping a workspace tabl
 
 pub const BOT_ARGS_APPROVAL_TITLE: &str = "Approve outside access";
 
+/// Title of the approval on a bot's connector calls. Core sets the call's `policy` argument;
+/// a call that carries none runs without asking.
+pub const BOT_CONNECTOR_APPROVAL_TITLE: &str = "Approve connected service";
+
 fn path_is_set(args: &Value, path: &str) -> bool {
     let value = path.split('.').try_fold(args, |node, part| node.get(part));
     match value {
@@ -244,7 +248,9 @@ fn bot_workspace_write_is_unprompted(spec: &PlatformToolSpec, args: &Value) -> b
         return has_approval_title(spec, BOT_DATABASE_APPROVAL_TITLE)
             && spec_arg_str(args, "operation", "operation") != "delete_table";
     }
-    has_approval_title(spec, BOT_ARGS_APPROVAL_TITLE) && !sets_approval_arg(spec.name, args)
+    (has_approval_title(spec, BOT_ARGS_APPROVAL_TITLE)
+        || has_approval_title(spec, BOT_CONNECTOR_APPROVAL_TITLE))
+        && !sets_approval_arg(spec.name, args)
 }
 
 fn network_hosts(args: &Value) -> Vec<String> {
@@ -281,6 +287,16 @@ pub fn bot_args_approval() -> ToolApprovalSpec {
     }
 }
 
+/// Approval of a connector call: it asks only when core marked the call (`policy`), and the
+/// message names the connector and what the call does.
+pub fn bot_connector_approval(message: Option<fn(&Value) -> String>) -> ToolApprovalSpec {
+    ToolApprovalSpec::Mutating {
+        title: BOT_CONNECTOR_APPROVAL_TITLE,
+        message: message.unwrap_or(outside_access_message),
+        timing: ToolApprovalTiming::BeforeExecution,
+    }
+}
+
 /// Per-call "don't ask again this session" key. It defaults to the tool name, but a call that
 /// destroys one irreplaceable target scopes its memory to that target: approving one table drop
 /// must never authorize dropping every other table for the rest of the session.
@@ -301,6 +317,10 @@ fn approval_session_key(spec: &PlatformToolSpec, args: &Value) -> String {
             spec_arg_str(args, "operation", "operation"),
             spec_arg_str(args, "app_id", "appId")
         );
+    }
+    if flow_like_bot_tools::services::POLICY_TOOLS.contains(&spec.name) {
+        let fingerprint = blake3::hash(args.to_string().as_bytes());
+        return format!("{}:{fingerprint}", spec.name);
     }
     if spec.name == HTTP_REQUEST_TOOL {
         // Approval of one request must not authorize another destination, payload, or credential.

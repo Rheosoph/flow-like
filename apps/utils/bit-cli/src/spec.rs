@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use anyhow::{Result, anyhow, bail};
 use flow_like::{
     bit::{Bit, BitTypes, ForecastingAssetRef, ForecastingModelParameters, Metadata},
+    flow_like_model_provider::provider::is_hosted_provider_name,
     flow_like_types::create_id,
 };
 use serde::{Deserialize, Serialize};
@@ -61,6 +62,43 @@ impl Planned {
         }
         Ok(payload)
     }
+}
+
+/// The hub may reuse a hosted Bit by its authoring hash without applying the new
+/// parameters. Address that stored ID directly while keeping its catalog identity.
+pub fn hosted_update_payload(payload: &Value, stored: &Bit) -> Option<Value> {
+    let authoring_id = payload.get("id")?.as_str()?;
+    if authoring_id == stored.id
+        || stored.hash != authoring_id
+        || !payload
+            .get("hash")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        || !payload
+            .pointer("/parameters/provider/provider_name")
+            .and_then(Value::as_str)
+            .is_some_and(is_hosted_provider_name)
+        || payload
+            .get("download_link")
+            .is_some_and(|link| !link.is_null())
+        || payload.get("file_name").is_some_and(|name| !name.is_null())
+        || !payload
+            .get("dependencies")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+        || stored.download_link.is_some()
+        || stored.file_name.is_some()
+        || !stored.dependencies.is_empty()
+    {
+        return None;
+    }
+
+    let mut update = payload.clone();
+    update["id"] = Value::String(stored.id.clone());
+    update["hub"] = Value::String(stored.hub.clone());
+    update["hash"] = Value::String(stored.hash.clone());
+    update["dependency_tree_hash"] = Value::String(stored.dependency_tree_hash.clone());
+    Some(update)
 }
 
 fn reference(dependency: &Dependency, stored: &BTreeMap<String, Bit>, hub: &str) -> Result<String> {

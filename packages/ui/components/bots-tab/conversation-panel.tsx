@@ -12,6 +12,7 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
+import { useBotCallSpeech } from "../../hooks/use-bot-call-speech";
 import { useConversationActivity } from "../../hooks/use-conversation-activity";
 import { useConversationCall } from "../../hooks/use-conversation-call";
 import { useConversationRoom } from "../../hooks/use-conversation-room";
@@ -65,7 +66,7 @@ import {
 } from "./fold-entries";
 import { useLocalPrincipals } from "./local-principals";
 import { MemberStack } from "./member-stack";
-import { mentionablesOf, spokenMentions } from "./mentions";
+import { callMentions, mentionablesOf } from "./mentions";
 import { requestMessageJump, useMessageJump } from "./message-jump";
 import {
 	PinnedMessagesBar,
@@ -407,11 +408,20 @@ function ConversationView({
 		() => ({
 			stt: speechModel,
 			hasBots: listenBots.length > 0,
-			mentionsIn: (spoken: string) => spokenMentions(spoken, listenBots),
+			mentionsIn: (spoken: string) =>
+				callMentions(spoken, listenBots, conversation.kind),
 		}),
-		[speechModel, listenBots],
+		[speechModel, listenBots, conversation.kind],
 	);
 	const call = useConversationCall(conversation, me, room, callStarts, listen);
+	useBotCallSpeech({
+		conversation,
+		entries,
+		items,
+		historyReady: pages !== undefined,
+		directory,
+		call,
+	});
 	const callErrorText = useCallErrorText();
 	useEffect(() => {
 		if (call.error) toast.error(callErrorText(call.error));

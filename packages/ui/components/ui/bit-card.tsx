@@ -286,6 +286,7 @@ export function BitCard({
 		backend.bitState,
 		tierInfo,
 		refetchCurrentProfile,
+		t,
 	]);
 
 	const openRepository = useCallback(() => {
@@ -400,7 +401,7 @@ export function BitCard({
 									{isInProfile ? (
 										<>
 											<MinusIcon className="h-4 w-4" />
-											{`Remove from Profile`}
+											{t("removeFromProfile", "Remove from Profile")}
 										</>
 									) : (
 										<>
@@ -463,7 +464,7 @@ export function BitCard({
 								)}
 								{bit.repository?.startsWith("https://huggingface.co/") && (
 									<img
-										src="/hf-logo.png"
+										src="/hf-logo.webp"
 										width={20}
 										height={20}
 										alt={t("huggingFace", "Hugging Face")}
@@ -557,9 +558,7 @@ export function BitTypeIcon({
 	type,
 	className,
 }: Readonly<{ type: IBitTypes; className?: string }>): JSX.Element | null {
-	const combinedClass =
-		"min-h-4 min-w-4 h-4 w-4 text-foreground" +
-		(className ? ` ${className}` : "");
+	const combinedClass = `min-h-4 min-w-4 h-4 w-4 text-foreground${className ? ` ${className}` : ""}`;
 
 	switch (type) {
 		case IBitTypes.Forecasting:

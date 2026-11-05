@@ -8,7 +8,7 @@ default = ["all"]
 all = ["cache", "channel", "realtime", "dispatch", "maintenance", "geometry", "storage-paths", "data-classification", "bot", "inbox", "bot-task"]
 geometry = ["dep:serde_json", "dep:schemars"]
 data-classification = ["dep:schemars"]
-bot = ["dep:schemars"]
+bot = ["dep:schemars", "dep:unicode-normalization"]
 bot-task = ["inbox", "dep:chrono", "dep:chrono-tz", "dep:cron"]
 inbox = ["dep:blake3", "dep:serde_json", "dep:schemars"]
 cache = ["dep:schemars"]
@@ -26,6 +26,7 @@ cron = { version = "0.15.0", optional = true }
 schemars = { version = "1.1.0", features = ["preserve_order"], optional = true }
 serde = { version = "1.0.219", features = ["derive", "rc"] }
 serde_json = { version = "1.0.134", optional = true }
+unicode-normalization = { version = "0.1.25", optional = true }
 
 [dev-dependencies]
 serde_json = "1.0.134"

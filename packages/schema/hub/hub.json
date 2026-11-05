@@ -862,6 +862,18 @@
 				"audience": {
 					"description": "Optional: Audience claim for token validation",
 					"type": ["string", "null"]
+				},
+				"api_hosts": {
+					"description": "Hosts a bot's connector may send this provider's token to (exact names or `*.suffix`).\nEmpty uses the built-in list for the provider id.",
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": []
+				},
+				"mcp_url": {
+					"description": "Optional: the provider's MCP endpoint, which may receive the provider's token.",
+					"type": ["string", "null"]
 				}
 			},
 			"required": ["name", "auth_url", "token_url"]

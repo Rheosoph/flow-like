@@ -6,7 +6,7 @@ import {
 } from "./call-listening";
 
 export interface CallListener {
-	/** While paused (muted) captured audio is discarded and a half-heard utterance is dropped. */
+	/** While paused, captured audio is discarded and a half-heard utterance is dropped. */
 	setPaused(paused: boolean): void;
 	stop(): void;
 }

@@ -21,11 +21,13 @@ export interface ISpeakRequest {
 	voice?: string;
 	/** mp3 (default), wav, opus, aac, flac or pcm. */
 	format?: string;
+	/** Use an installed local TTS model on desktop. Local synthesis returns WAV. */
+	local?: boolean;
 }
 
 export interface IAudioState {
 	/** Local STT bits run on this machine (desktop); every other bit goes to the hosted relay. */
 	transcribe(request: ITranscribeRequest): Promise<ITranscribeResponse>;
-	/** Synthesizes speech through the hosted relay; the blob carries the provider's audio type. */
+	/** Local TTS bits run on desktop; other bits use the hosted relay. The blob carries the audio type. */
 	speak(request: ISpeakRequest): Promise<Blob>;
 }

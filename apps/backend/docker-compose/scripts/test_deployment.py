@@ -139,6 +139,19 @@ class DeploymentTest(unittest.TestCase):
                     _, config = self.render({"S3_KMS_BUCKET_KEY": value}, compose_file=compose_file)
                     self.assertEqual(config["services"]["api"]["environment"]["S3_KMS_BUCKET_KEY"], value)
 
+    def test_hosted_media_credentials_only_reach_api(self):
+        keys = ["OPENROUTER_API_KEY", "HOSTED_OPENAI_API_KEY", "HOSTED_GROQ_API_KEY",
+                "HOSTED_MISTRAL_API_KEY", "HOSTED_TOGETHER_API_KEY", "HOSTED_XAI_API_KEY",
+                "HOSTED_GEMINI_API_KEY", "HOSTED_CLOUDFLARE_API_TOKEN", "HOSTED_CLOUDFLARE_ACCOUNT_ID"]
+        supplied = {key: f"media_test_{index}" for index, key in enumerate(keys)}
+        for compose_file in ("docker-compose.yml", "docker-stack.yml"):
+            _, config = self.render(supplied, compose_file=compose_file)
+            for key, value in supplied.items():
+                self.assertEqual(config["services"]["api"]["environment"][key], value)
+                for name, service in config["services"].items():
+                    if name != "api":
+                        self.assertNotIn(key, service.get("environment", {}))
+
     def test_stripe_credentials_survive_setup_and_only_reach_api(self):
         supplied = {key: f"test_{index}" for index, key in enumerate(setup.STRIPE_SETTINGS)}
         self.text = setup.generate((ROOT / ".env.example").read_text(), "per-run", "http://localhost:3001", "http://localhost:8080", "http://s3.localhost:9000", stripe=supplied)

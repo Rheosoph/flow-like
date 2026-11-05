@@ -11,7 +11,7 @@ describe("meeting transport", () => {
 			fetch: send as never,
 		});
 		expect(
-			await request(
+			await request<{ ok: boolean }>(
 				"meetings/m/session",
 				{
 					method: "GET",

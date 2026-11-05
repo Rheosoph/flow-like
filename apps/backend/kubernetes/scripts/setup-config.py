@@ -333,6 +333,17 @@ def generate(namespace, release, image_pull_secrets=()):
         values["redis"] = {"auth": {"existingSecret": secret("redis", {"REDIS_PASSWORD": password, "REDIS_URL": redis_url})}}
     if os.environ.get("OPENROUTER_API_KEY"):
         values["llm"] = {"openrouter": {"existingSecret": secret("openrouter", {"OPENROUTER_API_KEY": required("OPENROUTER_API_KEY"), "OPENROUTER_ENDPOINT": os.environ.get("OPENROUTER_ENDPOINT", "https://openrouter.ai/api")})}}
+    for provider in ("openai", "groq", "mistral", "together", "xai", "gemini"):
+        key = f"HOSTED_{provider.upper()}_API_KEY"
+        if os.environ.get(key):
+            credentials = {key: required(key)}
+            if provider == "openai":
+                credentials["HOSTED_OPENAI_ENDPOINT"] = os.environ.get("HOSTED_OPENAI_ENDPOINT", "https://api.openai.com")
+            values.setdefault("llm", {})[provider] = {"enabled": True, "existingSecret": secret(provider, credentials)}
+    cloudflare = ("HOSTED_CLOUDFLARE_API_TOKEN", "HOSTED_CLOUDFLARE_ACCOUNT_ID")
+    if any(os.environ.get(key) for key in cloudflare):
+        credentials = {key: required(key) for key in cloudflare}
+        values.setdefault("llm", {})["cloudflare"] = {"enabled": True, "existingSecret": secret("cloudflare", credentials)}
     for name in image_pull_secrets:
         if len(name) > 253 or not re.fullmatch(r"[a-z0-9]([-a-z0-9.]*[a-z0-9])?", name):
             raise ValueError("image pull secret names must be DNS subdomain names")

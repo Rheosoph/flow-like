@@ -120,7 +120,7 @@ impl NodeLogic for DocxReplaceTableRowNode {
 }
 
 #[cfg(feature = "execute")]
-fn replace_table_rows(
+pub(crate) fn replace_table_rows(
     xml: &str,
     placeholder: &str,
     rows: &[std::collections::HashMap<String, String>],

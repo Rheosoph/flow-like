@@ -14,13 +14,19 @@ import type {
 	BotApprovalDecision,
 	BotSystemKey,
 	IBot,
+	IBotConnector,
 	IBotRestrictions,
+	IBotSkill,
 	IBotState,
 	IBotWebhook,
+	ICreateBotConnectorRequest,
 	ICreateBotRequest,
+	ICreateBotSkillRequest,
 	ICreateBotTaskRequest,
 	IIssuedBotWebhook,
+	IUpdateBotConnectorRequest,
 	IUpdateBotRequest,
+	IUpdateBotSkillRequest,
 	IUpdateBotTaskRequest,
 	IUpsertBotSecretRequest,
 } from "../state/backend-state/bot-state";
@@ -39,6 +45,10 @@ export const botKeys = {
 	presence: () => [...botKeys.all, "presence"] as const,
 	webhooks: (botId: string) => [...botKeys.all, "webhooks", botId] as const,
 	tasks: (botId: string) => [...botKeys.all, "tasks", botId] as const,
+	skills: (botId: string) => [...botKeys.all, "skills", botId] as const,
+	connectors: (botId: string) =>
+		[...botKeys.all, "connectors", botId] as const,
+	connectedAccounts: () => [...botKeys.all, "connected-accounts"] as const,
 	mailAddress: (botId: string) =>
 		[...botKeys.all, "mail-address", botId] as const,
 	mailThreads: (botId: string) =>
@@ -482,6 +492,141 @@ export function useDeleteBotTask() {
 			requireBotState(state).deleteTask?.(botId, taskId) ?? unsupported(),
 		onSettled: (_, __, { botId }) =>
 			queryClient.invalidateQueries({ queryKey: botKeys.tasks(botId) }),
+	});
+}
+
+/** The bot's skills with their status; empty where skills are not kept. */
+export function useBotSkills(botId?: string | null) {
+	const state = useBackend().botState;
+	return useQuery({
+		queryKey: botKeys.skills(botId ?? ""),
+		queryFn: async () =>
+			(await requireBotState(state).listSkills?.(botId as string)) ?? [],
+		enabled: Boolean(state?.listSkills && botId),
+	});
+}
+
+export type BotSkillAction =
+	| { type: "create"; request: ICreateBotSkillRequest }
+	| { type: "update"; skillId: string; request: IUpdateBotSkillRequest }
+	| { type: "approve"; skillId: string }
+	| { type: "disable"; skillId: string }
+	| { type: "delete"; skillId: string }
+	| { type: "import"; zip: Uint8Array };
+
+/** Every change to a bot's skills; the list is refetched afterwards. */
+export function useBotSkillAction() {
+	const state = useBackend().botState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async ({
+			botId,
+			action,
+		}: {
+			botId: string;
+			action: BotSkillAction;
+		}): Promise<IBotSkill | undefined> => {
+			const bots = requireBotState(state);
+			switch (action.type) {
+				case "create":
+					return (
+						bots.createSkill?.(botId, action.request) ??
+						unsupported<IBotSkill>()
+					);
+				case "update":
+					return (
+						bots.updateSkill?.(botId, action.skillId, action.request) ??
+						unsupported<IBotSkill>()
+					);
+				case "approve":
+					return (
+						bots.approveSkill?.(botId, action.skillId) ??
+						unsupported<IBotSkill>()
+					);
+				case "disable":
+					return (
+						bots.disableSkill?.(botId, action.skillId) ??
+						unsupported<IBotSkill>()
+					);
+				case "import":
+					return (
+						bots.importSkill?.(botId, action.zip) ?? unsupported<IBotSkill>()
+					);
+				case "delete":
+					await (bots.deleteSkill?.(botId, action.skillId) ?? unsupported());
+					return undefined;
+			}
+		},
+		onSettled: (_, __, { botId }) =>
+			queryClient.invalidateQueries({ queryKey: botKeys.skills(botId) }),
+	});
+}
+
+/** The MCP servers and accounts attached to a bot. */
+export function useBotConnectors(botId?: string | null) {
+	const state = useBackend().botState;
+	return useQuery({
+		queryKey: botKeys.connectors(botId ?? ""),
+		queryFn: async () =>
+			(await requireBotState(state).listConnectors?.(botId as string)) ?? [],
+		enabled: Boolean(state?.listConnectors && botId),
+	});
+}
+
+/** The accounts the person connected, for the connector picker. */
+export function useConnectedAccounts(enabled = true) {
+	const state = useBackend().botState;
+	return useQuery({
+		queryKey: botKeys.connectedAccounts(),
+		queryFn: async () =>
+			(await requireBotState(state).listConnectedAccounts?.()) ?? [],
+		enabled: enabled && Boolean(state?.listConnectedAccounts),
+	});
+}
+
+export type BotConnectorAction =
+	| { type: "create"; request: ICreateBotConnectorRequest }
+	| { type: "update"; connectorId: string; request: IUpdateBotConnectorRequest }
+	| { type: "refresh"; connectorId: string }
+	| { type: "delete"; connectorId: string };
+
+/** Every change to a bot's connectors; the list is refetched afterwards. */
+export function useBotConnectorAction() {
+	const state = useBackend().botState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: async ({
+			botId,
+			action,
+		}: {
+			botId: string;
+			action: BotConnectorAction;
+		}): Promise<IBotConnector | undefined> => {
+			const bots = requireBotState(state);
+			switch (action.type) {
+				case "create":
+					return (
+						bots.createConnector?.(botId, action.request) ??
+						unsupported<IBotConnector>()
+					);
+				case "update":
+					return (
+						bots.updateConnector?.(botId, action.connectorId, action.request) ??
+						unsupported<IBotConnector>()
+					);
+				case "refresh":
+					return (
+						bots.refreshConnector?.(botId, action.connectorId) ??
+						unsupported<IBotConnector>()
+					);
+				case "delete":
+					await (bots.deleteConnector?.(botId, action.connectorId) ??
+						unsupported());
+					return undefined;
+			}
+		},
+		onSettled: (_, __, { botId }) =>
+			queryClient.invalidateQueries({ queryKey: botKeys.connectors(botId) }),
 	});
 }
 

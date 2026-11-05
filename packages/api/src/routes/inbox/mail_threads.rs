@@ -1,18 +1,21 @@
-//! A bot's mail threads: each thread of mail is one group conversation owned by the bot with its
-//! owner as the other member, and a `BotMailThread` row marks it as a mail thread. Inbound mail
-//! is a `trigger` entry from the owner that names the bot; a mail the bot sends is recorded as a
-//! message from the bot. Later mails reach their thread through the `Message-ID` rows in
-//! `BotMailMessage`.
+//! A bot's mail threads. A `BotMailThread` row groups one thread's mails; the mails themselves
+//! are written into the owner's direct conversation with the bot, so a mail turn runs with the
+//! bot's whole history and memory. Inbound mail is a `trigger` entry from the owner that names
+//! the bot; a mail the bot sends is recorded as a message from the bot. Later mails reach their
+//! thread through the `Message-ID` rows in `BotMailMessage`. The server can't write into an
+//! end-to-end encrypted direct conversation; the thread's mails then go to a group of the owner
+//! and the bot under the thread's id, as threads created before mail moved into the direct
+//! conversation already do.
 
 use super::{
     conversations::{NewConversation, normalize_title, start_group},
     entries::{Content, Outgoing, Sent, fan_out, plain_links, repeat_of},
     lock_conversation,
     members::Principal,
-    triggers::trigger_outgoing,
+    triggers::{trigger_conversation, write_trigger_in},
 };
 use crate::{
-    entity::{bot_mail_message, bot_mail_thread},
+    entity::{bot_mail_message, bot_mail_thread, conversation},
     error::ApiError,
 };
 use chrono::{DateTime, FixedOffset};
@@ -93,7 +96,7 @@ pub(crate) async fn holds_message<C: ConnectionTrait>(
         .is_some())
 }
 
-/// Starts the thread's conversation (the owner and the bot) and its marker row.
+/// Starts the thread's row; its mails go where [`mail_conversation_in`] says.
 pub(crate) async fn start_thread_in<C: ConnectionTrait>(
     txn: &C,
     owner_id: &str,
@@ -104,18 +107,6 @@ pub(crate) async fn start_thread_in<C: ConnectionTrait>(
     now: DateTime<FixedOffset>,
 ) -> Result<String, ApiError> {
     let id = id.unwrap_or_else(create_id);
-    let title = normalize_title(Some(format!("Mail: {}", subject.trim())))?;
-    let plan = NewConversation {
-        kind: ConversationKind::Group,
-        title,
-        members: vec![bot_id.to_owned()],
-        encryption: ConversationEncryption::Plain,
-    };
-    let bot = Principal {
-        id: bot_id.to_owned(),
-        kind: PrincipalKind::Bot,
-    };
-    start_group(txn, &id, owner_id, &plan, &[bot], now).await?;
     bot_mail_thread::Entity::insert(bot_mail_thread::ActiveModel {
         id: Set(id.clone()),
         bot_id: Set(bot_id.to_owned()),
@@ -135,6 +126,39 @@ pub(crate) async fn start_thread_in<C: ConnectionTrait>(
     .exec_without_returning(txn)
     .await?;
     Ok(id)
+}
+
+/// The conversation a thread's next mail is written into: the owner's direct conversation with
+/// the bot, started when missing, else the thread's own group, started on first use.
+pub(crate) async fn mail_conversation_in<C: ConnectionTrait>(
+    db: &C,
+    thread_id: &str,
+    owner_id: &str,
+    bot_id: &str,
+    subject: &str,
+    now: DateTime<FixedOffset>,
+) -> Result<String, ApiError> {
+    if let Some(direct) = trigger_conversation(db, owner_id, bot_id, now).await? {
+        return Ok(direct);
+    }
+    if conversation::Entity::find_by_id(thread_id)
+        .one(db)
+        .await?
+        .is_none()
+    {
+        let plan = NewConversation {
+            kind: ConversationKind::Group,
+            title: normalize_title(Some(format!("Mail: {}", subject.trim())))?,
+            members: vec![bot_id.to_owned()],
+            encryption: ConversationEncryption::Plain,
+        };
+        let bot = Principal {
+            id: bot_id.to_owned(),
+            kind: PrincipalKind::Bot,
+        };
+        start_group(db, thread_id, owner_id, &plan, &[bot], now).await?;
+    }
+    Ok(thread_id.to_owned())
 }
 
 /// Records one mail under its `Message-ID`; `false` when the bot already holds that mail.
@@ -216,23 +240,8 @@ pub(crate) async fn post_thread_trigger_in(
     write_trigger_in(txn, conversation_id, owner_id, message_id, body, now).await
 }
 
-pub(crate) async fn write_trigger_in<C: ConnectionTrait>(
-    txn: &C,
-    conversation_id: &str,
-    owner_id: &str,
-    message_id: &str,
-    body: &TriggerBody,
-    now: DateTime<FixedOffset>,
-) -> Result<Sent, ApiError> {
-    let outgoing = trigger_outgoing(message_id, body)?;
-    if let Some(sent) = repeat_of(txn, conversation_id, owner_id, message_id).await? {
-        return Ok(sent);
-    }
-    fan_out(txn, conversation_id, owner_id, 0, &outgoing, now).await
-}
-
-/// Records a mail the bot sent as a message from the bot, so the owner reads both directions in
-/// one thread. `mail` rides in the body next to the markdown text.
+/// Records a mail the bot sent as a message from the bot, so the owner reads both directions
+/// where the bot works. `mail` rides in the body next to the markdown text.
 pub(crate) async fn record_outbound_in(
     txn: &DatabaseTransaction,
     conversation_id: &str,

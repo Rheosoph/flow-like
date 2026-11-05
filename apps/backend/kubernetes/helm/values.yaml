@@ -521,6 +521,42 @@ llm:
     # HOSTED_OPENAI_ENDPOINT
     existingSecret: ""
 
+  # Hosted speech providers use fixed upstream endpoints. OpenRouter and
+  # OpenAI speech reuse the credentials configured above.
+  groq:
+    enabled: false
+    apiKey: ""
+    # Existing Secret key: HOSTED_GROQ_API_KEY
+    existingSecret: ""
+  mistral:
+    enabled: false
+    apiKey: ""
+    # Existing Secret key: HOSTED_MISTRAL_API_KEY
+    existingSecret: ""
+  together:
+    enabled: false
+    apiKey: ""
+    # Existing Secret key: HOSTED_TOGETHER_API_KEY
+    existingSecret: ""
+  xai:
+    enabled: false
+    apiKey: ""
+    # Existing Secret key: HOSTED_XAI_API_KEY
+    existingSecret: ""
+  gemini:
+    enabled: false
+    apiKey: ""
+    # Existing Secret key: HOSTED_GEMINI_API_KEY
+    existingSecret: ""
+
+  # Shared by hosted images, embeddings and SystemOne decisions.
+  cloudflare:
+    enabled: false
+    apiToken: ""
+    accountId: ""
+    # Existing Secret keys: HOSTED_CLOUDFLARE_API_TOKEN and HOSTED_CLOUDFLARE_ACCOUNT_ID
+    existingSecret: ""
+
   # Hosted Anthropic Configuration
   anthropic:
     enabled: false

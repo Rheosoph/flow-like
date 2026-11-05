@@ -2430,6 +2430,7 @@
 	"removeFromDevice": "Remove from this device",
 	"removeFromList": "Remove from list",
 	"removeFromListFilesStayOnDisk": "Remove from list · files stay on disk",
+	"removeFromProfile": "Remove from Profile",
 	"removeMlxFileVal": "Remove MLX file {{val}}",
 	"removeName": "Remove {{name}}",
 	"removingStaleFiles": "Removing stale files…",

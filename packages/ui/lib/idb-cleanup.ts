@@ -177,21 +177,23 @@ export async function runIDBCleanup(
 ): Promise<IDBCleanupResult> {
 	const now = Date.now();
 	const kinds = RETENTION_KINDS.filter((kind) => policy[kind] !== null);
-	const results = await Promise.allSettled([
-		pruneOldOfflineSync(retentionCutoff(OFFLINE_SYNC_MAX_AGE_DAYS, now)),
-		...kinds.map((kind) =>
-			PRUNERS[kind](retentionCutoff(policy[kind] as number, now)),
-		),
-	]);
-
 	const removed: IDBCleanupResult = {};
-	results.forEach((result, index) => {
-		if (result.status === "rejected") {
-			console.warn("[IDB Cleanup] partial failure:", result.reason);
-			return;
+	try {
+		await pruneOldOfflineSync(retentionCutoff(OFFLINE_SYNC_MAX_AGE_DAYS, now));
+	} catch (error) {
+		console.warn("[IDB Cleanup] partial failure:", error);
+	}
+	// Each cursor can retain a batch of full rows. Finish one store before
+	// opening another so their payloads do not accumulate in mobile webviews.
+	for (const kind of kinds) {
+		try {
+			removed[kind] = await PRUNERS[kind](
+				retentionCutoff(policy[kind] as number, now),
+			);
+		} catch (error) {
+			console.warn("[IDB Cleanup] partial failure:", error);
 		}
-		if (index > 0) removed[kinds[index - 1]] = result.value;
-	});
+	}
 	writeLastRetentionRun(now);
 	return removed;
 }

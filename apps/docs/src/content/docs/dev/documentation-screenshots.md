@@ -259,7 +259,7 @@ through its actions. Application WebSockets retain their normal behavior.
 
 Browser Chromium does not have a native Tauri runtime. A desktop plan can
 provide a JSON fixture which installs a deterministic IPC mock before any app
-code runs. The onboarding fixture uses only checked-in `/swimlanes/*.jpg`
+code runs. The onboarding fixture uses only checked-in `/swimlanes/*.webp`
 thumbnails and `/flow/icons/*.svg` bit icons, so profile cards do not depend on
 remote media.
 

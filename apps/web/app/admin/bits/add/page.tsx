@@ -1,5 +1,13 @@
 "use client";
 
+import { HostedAudioConfiguration } from "@flow-like/flow-like-ui/components/bits/hosted-audio-configuration";
+import {
+	buildHostedAudioBit,
+	createHostedAudioParameters,
+	isHostedAudio,
+	updateHostedAudioBit,
+	validateHostedAudioParameters,
+} from "@flow-like/flow-like-ui/lib/bit/hosted-audio";
 import {
 	Button,
 	Card,
@@ -236,6 +244,10 @@ export default function Page() {
 	);
 	const [type, setType] = useState<IBitTypes>(IBitTypes.Llm);
 	const [localStt, setLocalStt] = useState<boolean>(false);
+	const [hostedTts, setHostedTts] = useState(false);
+	const hostedAudioMode =
+		(type === IBitTypes.Stt && !localStt) ||
+		(type === IBitTypes.Tts && hostedTts);
 	const [bit, setBit] = useState<IBit>(DEFAULT_BIT);
 	const [loading, setLoading] = useState<boolean>(false);
 	const [projection, setProjection] = useState<IBit | undefined>(undefined);
@@ -267,6 +279,9 @@ export default function Page() {
 		GenerationAssetDraft[]
 	>([]);
 	const completedGenerationAssets = useRef(new Map<string, string>());
+	const hostedAudioError = hostedAudioMode
+		? validateHostedAudioParameters(bit.parameters)
+		: null;
 	const hostedImageError = isHostedImageGeneration(bit)
 		? validateHostedImageParameters(bit.parameters)
 		: null;
@@ -790,6 +805,19 @@ export default function Page() {
 			setDefaultDependencies(type);
 			return;
 		}
+		if (hostedAudioMode) {
+			setBit(
+				updateHostedAudioBit(
+					{ ...getDefaultBit(type), type },
+					createHostedAudioParameters(),
+				),
+			);
+			setTtsAssets([]);
+			setSttAssets([]);
+			setMlxAssets([]);
+			setDefaultDependencies(type);
+			return;
+		}
 		if (type === IBitTypes.SystemOne) {
 			setBit((old) => ({
 				...old,
@@ -869,7 +897,7 @@ export default function Page() {
 
 		setMlxAssets([]);
 		setDefaultDependencies(type);
-	}, [type, localStt]);
+	}, [type, localStt, hostedTts]);
 
 	useEffect(() => {
 		if (!isMlxModel) return;
@@ -902,7 +930,8 @@ export default function Page() {
 			(bit.type === IBitTypes.Llm ||
 				bit.type === IBitTypes.Vlm ||
 				bit.type === IBitTypes.Stt) &&
-			!isLocalSttBit
+			!isLocalSttBit &&
+			!isHostedAudio(bit)
 		) {
 			prefillLLM();
 		}
@@ -947,10 +976,13 @@ export default function Page() {
 						VLM
 					</button>
 					<button
-						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Tts ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
-						onClick={() => setType(IBitTypes.Tts)}
+						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Tts && !hostedTts ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
+						onClick={() => {
+							setHostedTts(false);
+							setType(IBitTypes.Tts);
+						}}
 					>
-						TTS
+						Local TTS
 					</button>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Stt && !localStt ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
@@ -960,6 +992,16 @@ export default function Page() {
 						}}
 					>
 						{t("hostedStt", "Hosted STT")}
+					</button>
+					<button
+						type="button"
+						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Tts && hostedTts ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
+						onClick={() => {
+							setHostedTts(true);
+							setType(IBitTypes.Tts);
+						}}
+					>
+						Hosted TTS
 					</button>
 					<button
 						className={`p-4 transition-all border bg-card hover:bg-card/80 rounded-lg ${type === IBitTypes.Stt && localStt ? "border-primary bg-primary/50 text-primary-foreground" : ""}`}
@@ -1025,6 +1067,7 @@ export default function Page() {
 				) : null}
 				{bit.type !== IBitTypes.Tts &&
 				!isLocalSttBit &&
+				!hostedAudioMode &&
 				!isMlxModel &&
 				!isHostedSystemOne(bit) &&
 				!generationKind ? (
@@ -1061,6 +1104,15 @@ export default function Page() {
 						}
 					/>
 				)}
+				{hostedAudioMode && (
+					<HostedAudioConfiguration
+						bitType={bit.type}
+						parameters={bit.parameters ?? {}}
+						onChange={(parameters) =>
+							setBit((current) => updateHostedAudioBit(current, parameters))
+						}
+					/>
+				)}
 				{bit.type === IBitTypes.SystemOne && (
 					<SystemOneConfiguration
 						parameters={bit.parameters ?? {}}
@@ -1073,7 +1125,7 @@ export default function Page() {
 				)}
 				{bit.type === IBitTypes.Llm ||
 				bit.type === IBitTypes.Vlm ||
-				(bit.type === IBitTypes.Stt && !isLocalSttBit) ? (
+				(bit.type === IBitTypes.Stt && !isLocalSttBit && !hostedAudioMode) ? (
 					<>
 						<LLMConfiguration bit={bit} setBit={setBit} />
 						<Separator className="my-4" />
@@ -1145,7 +1197,7 @@ export default function Page() {
 						<Separator className="my-4" />
 					</>
 				) : null}
-				{bit.type === IBitTypes.Tts ? (
+				{bit.type === IBitTypes.Tts && !hostedAudioMode ? (
 					<>
 						<TTSConfiguration
 							bit={bit}
@@ -1238,7 +1290,9 @@ export default function Page() {
 					<MetaConfiguration
 						bit={bit}
 						setBit={setBit}
-						hideFileFields={!!generationKind || isHostedSystemOne(bit)}
+						hideFileFields={
+							!!generationKind || isHostedSystemOne(bit) || hostedAudioMode
+						}
 					/>
 				</fieldset>
 				{(progress > 0 || loading) && (
@@ -1254,7 +1308,7 @@ export default function Page() {
 				)}
 				<Button
 					className="mt-4 w-full max-w-screen-lg"
-					disabled={loading || !!hostedImageError}
+					disabled={loading || !!hostedImageError || !!hostedAudioError}
 					onClick={async () => {
 						if (!profile.data) {
 							toast.error("You must be logged in to add a bit.");
@@ -1479,7 +1533,7 @@ export default function Page() {
 								dependencies.push(projectionRegistration);
 							}
 
-							if (bit.type === IBitTypes.Tts) {
+							if (bit.type === IBitTypes.Tts && !isHostedAudio(bit)) {
 								if (ttsAssets.length === 0) {
 									throw new Error("TTS models require at least one asset");
 								}
@@ -1585,16 +1639,19 @@ export default function Page() {
 								bit.type === IBitTypes.SystemOne ||
 								bit.type === IBitTypes.Vlm ||
 								bit.type === IBitTypes.Llm ||
-								(bit.type === IBitTypes.Stt && !isLocalSttBit)
+								(bit.type === IBitTypes.Stt && !isLocalSttBit) ||
+								isHostedAudio(bit)
 							) {
-								const bitToUpload = isMlxModel
-									? buildMlxModelRootBit(bit, dependencies)
-									: {
-											...bit,
-											dependencies: dependencies.map(
-												(dep) => `${dep.hub}:${dep.id}`,
-											),
-										};
+								const bitToUpload = isHostedAudio(bit)
+									? buildHostedAudioBit(bit)
+									: isMlxModel
+										? buildMlxModelRootBit(bit, dependencies)
+										: {
+												...bit,
+												dependencies: dependencies.map(
+													(dep) => `${dep.hub}:${dep.id}`,
+												),
+											};
 								if (isMlxModel) {
 									setProgressLabel("Registering the virtual MLX model");
 									setProgressBit(bit);

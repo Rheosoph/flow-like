@@ -23,6 +23,14 @@ export class WebAudioState implements IAudioState {
 	}
 
 	async speak(request: ISpeakRequest): Promise<Blob> {
-		return apiPostBlob("audio/speech", request, this.backend.auth);
+		if (request.local) {
+			throw new Error("Local speech synthesis requires the desktop app");
+		}
+		const { bit_id, text, voice, format } = request;
+		return apiPostBlob(
+			"audio/speech",
+			{ bit_id, text, voice, format },
+			this.backend.auth,
+		);
 	}
 }

@@ -2970,3 +2970,189 @@ mod real_sandbox {
         assert!(outcome.saved.iter().any(|h| h.path.ends_with("out/d.csv")));
     }
 }
+
+mod authoring {
+    use super::*;
+
+    #[tokio::test]
+    async fn create_writes_a_new_export_and_never_overwrites() {
+        let env = FakeEnv::new().await;
+        let args = json!({ "format": "docx", "name": "Quarterly Report.docx", "markdown": "# Hi" });
+        let first = call(&env, "document_create", args.clone()).await;
+        ok(&first);
+        assert_eq!(first.saved[0].path, "bot/exports/Quarterly Report.docx");
+        assert_eq!(first.saved[0].app_id, WORKSPACE);
+        assert!(first.saved[0].mime.contains("wordprocessingml"));
+        assert_eq!(first.result["handle"]["path"], "bot/exports/Quarterly Report.docx");
+        assert_eq!(first.result["handle"]["bytes"], first.saved[0].bytes);
+        assert_eq!(first.result["handle"]["sha256"], first.saved[0].sha256);
+        assert!(first.warnings.iter().any(|w| w.contains("fake docx warning")));
+
+        env.put(WORKSPACE, "bot/exports/Quarterly Report.docx", b"MINE", "text/plain");
+        let second = call(&env, "document_create", args.clone()).await;
+        ok(&second);
+        assert_eq!(second.saved[0].path, "bot/exports/Quarterly Report-2.docx");
+        let third = call(&env, "document_create", args).await;
+        assert_eq!(third.saved[0].path, "bot/exports/Quarterly Report-3.docx");
+        assert_eq!(
+            env.get(WORKSPACE, "bot/exports/Quarterly Report.docx").expect("kept"),
+            "MINE".as_bytes()
+        );
+    }
+
+    #[tokio::test]
+    async fn create_pdf_shows_page_one_and_reports_pages() {
+        let env = FakeEnv::new().await;
+        let outcome = call(
+            &env,
+            "document_create",
+            json!({ "format": "pdf", "name": "brief", "markdown": "# Hi", "title": "Brief" }),
+        )
+        .await;
+        ok(&outcome);
+        assert_eq!(outcome.result["pages"], 2);
+        assert_eq!(outcome.images.len(), 1);
+        assert!(outcome.images[0].label.contains("page 1"));
+        assert_eq!(outcome.saved[0].path, "bot/exports/brief.pdf");
+        assert_eq!(env.backend().rendered.lock().expect("r")[0], vec![1]);
+    }
+
+    #[tokio::test]
+    async fn create_pptx_and_xlsx_report_their_counts() {
+        let env = FakeEnv::new().await;
+        let deck = call(
+            &env,
+            "document_create",
+            json!({ "format": "pptx", "name": "deck", "slides": [
+                { "title": "One", "bullets": ["a"] },
+                { "title": "Two", "layout": "chart", "chart": { "kind": "bar", "categories": ["a", "b"], "series": [{ "name": "s", "values": [1, 2] }] } }
+            ] }),
+        )
+        .await;
+        assert_eq!(ok(&deck).result["slides"], 2);
+        let book = call(
+            &env,
+            "document_create",
+            json!({ "format": "xlsx", "name": "book", "sheets": [
+                { "name": "Data", "header": true, "rows": [["Item", "Price"], ["A", 2.5], ["Total", "=SUM(B2:B2)"], [null, true]] }
+            ] }),
+        )
+        .await;
+        assert_eq!(ok(&book).result["sheets"], 1);
+        let created = env.backend().created.lock().expect("c").clone();
+        assert_eq!(created[1], "xlsx|Data:4:1");
+    }
+
+    #[tokio::test]
+    async fn create_validates_its_input_and_caps() {
+        let mut env = FakeEnv::new().await;
+        let code_of = |outcome: ToolOutcome| err_code(&outcome);
+        for (args, expected) in [
+            (json!({ "format": "pdf", "name": "a" }), "invalid_args"),
+            (json!({ "format": "pdf", "name": "a", "markdown": "  " }), "invalid_args"),
+            (json!({ "format": "pdf", "name": "  ", "markdown": "x" }), "invalid_args"),
+            (json!({ "format": "pdf", "name": "a", "markdown": "x", "sheets": [] }), "invalid_args"),
+            (json!({ "format": "docx", "name": "a", "markdown": "x".repeat(500_001) }), "too_large"),
+            (json!({ "format": "pptx", "name": "a" }), "invalid_args"),
+            (json!({ "format": "pptx", "name": "a", "slides": [] }), "invalid_args"),
+            (json!({ "format": "pptx", "name": "a", "slides": (0..101).map(|i| json!({ "title": i.to_string() })).collect::<Vec<_>>() }), "invalid_args"),
+            (json!({ "format": "pptx", "name": "a", "slides": [{ "title": "t", "layout": "table" }] }), "invalid_args"),
+            (json!({ "format": "pptx", "name": "a", "slides": [{ "title": "t", "chart": { "kind": "line", "categories": ["a"], "series": [{ "name": "s", "values": [1, 2] }] } }] }), "invalid_args"),
+            (json!({ "format": "xlsx", "name": "a", "sheets": [] }), "invalid_args"),
+            (json!({ "format": "xlsx", "name": "a", "sheets": (0..51).map(|i| json!({ "name": i.to_string(), "rows": [] })).collect::<Vec<_>>() }), "invalid_args"),
+            (json!({ "format": "xlsx", "name": "a", "sheets": [{ "name": "s", "rows": [[{ "nested": 1 }]] }] }), "invalid_args"),
+            (json!({ "format": "xlsx", "name": "a", "sheets": [{ "name": "s", "rows": (0..101).map(|_| vec![1; 1000]).collect::<Vec<_>>() }] }), "invalid_args"),
+            (json!({ "format": "odt", "name": "a" }), "invalid_args"),
+        ] {
+            assert_eq!(code_of(call(&env, "document_create", args.clone()).await), expected, "{args}");
+        }
+        assert!(env.backend().created.lock().expect("c").is_empty());
+        assert!(env.writes.lock().expect("w").is_empty());
+        env.scope.workspace = None;
+        let none = call(&env, "document_create", json!({ "format": "pdf", "name": "a", "markdown": "x" })).await;
+        assert_eq!(err_code(&none), "no_workspace");
+    }
+
+    #[tokio::test]
+    async fn markdown_images_come_from_workspace_files_and_missing_ones_warn() {
+        let env = FakeEnv::new().await;
+        env.put(WORKSPACE, "bot/images/a.png", b"png", "image/png");
+        let outcome = call(
+            &env,
+            "document_create",
+            json!({ "format": "docx", "name": "pics", "markdown": "![a](bot/images/a.png)\n\n![b](bot/images/none.png)\n\n![c](https://x.test/c.png)" }),
+        )
+        .await;
+        ok(&outcome);
+        assert!(env.backend().created.lock().expect("c")[0].ends_with("|1"));
+        assert_eq!(
+            outcome.warnings.iter().filter(|w| w.contains("none.png") || w.contains("x.test")).count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn fill_writes_a_new_file_and_names_what_did_not_match() {
+        let env = FakeEnv::new().await;
+        env.put(WORKSPACE, "bot/files/letter.docx", b"DOCX:Dear {{name}}", "application/octet-stream");
+        let outcome = call(
+            &env,
+            "document_fill",
+            json!({ "template": "bot/files/letter.docx", "values": { "name": "Ada", "ghost1": "x" },
+                    "tables": { "item": [{ "item": "a", "qty": 1 }] } }),
+        )
+        .await;
+        ok(&outcome);
+        assert_eq!(outcome.saved[0].path, "bot/exports/letter-filled.docx");
+        assert_eq!(outcome.result["filled"], json!(["name", "item"]));
+        assert_eq!(outcome.result["missing"], json!(["ghost1"]));
+        assert!(!outcome.warnings.is_empty());
+        assert_eq!(
+            env.get(WORKSPACE, "bot/files/letter.docx").expect("template"),
+            "DOCX:Dear {{name}}".as_bytes()
+        );
+        let again = call(
+            &env,
+            "document_fill",
+            json!({ "template": "bot/files/letter.docx", "values": { "name": "Bob" }, "name": "reply" }),
+        )
+        .await;
+        assert_eq!(ok(&again).saved[0].path, "bot/exports/reply.docx");
+    }
+
+    #[tokio::test]
+    async fn fill_rejects_empty_unmatched_and_foreign_templates() {
+        let env = FakeEnv::new().await;
+        env.put(WORKSPACE, "t.docx", b"DOCX:x", "application/octet-stream");
+        env.put(WORKSPACE, "t.txt", b"hello", "text/plain");
+        env.put(OTHER_APP, "t.docx", b"DOCX:x", "application/octet-stream");
+        for (args, expected) in [
+            (json!({ "template": "t.docx" }), "invalid_args"),
+            (json!({ "template": "t.docx", "values": { "ghost": "x" } }), "invalid_args"),
+            (json!({ "template": "t.txt", "values": { "a": "x" } }), "unsupported_file"),
+            (json!({ "template": "gone.docx", "values": { "a": "x" } }), "not_found"),
+            (json!({ "template": "t.docx", "tables": { "a": [{ "x": 1 }, [1]] } }), "invalid_args"),
+            (json!({ "template": format!("app:{OTHER_APP}/t.docx"), "values": { "a": "x" } }), "scope_refused"),
+        ] {
+            assert_eq!(err_code(&call(&env, "document_fill", args.clone()).await), expected, "{args}");
+        }
+        assert!(env.get(WORKSPACE, "bot/exports/t-filled.docx").is_none());
+    }
+
+    #[test]
+    fn export_names_are_cleaned() {
+        use crate::documents::export_stem;
+        assert_eq!(export_stem("../evil/Report.PDF", "pdf").expect("stem"), "Report");
+        assert_eq!(export_stem("a:b?.docx", "docx").expect("stem"), "a_b_");
+        assert!(export_stem("  ", "pdf").is_err());
+    }
+
+    #[test]
+    fn both_tools_are_specified_for_the_documents_capability() {
+        for name in ["document_create", "document_fill"] {
+            let spec = crate::spec(name).expect("spec");
+            assert_eq!(spec.capability, Some("documents"));
+            assert_eq!(spec.approval, Approval::None);
+        }
+    }
+}

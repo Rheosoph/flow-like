@@ -64,6 +64,22 @@ pub fn routes() -> Router<AppState> {
                 .layer(DefaultBodyLimit::max(32 * 1024))
                 .layer(from_fn(embedding_headers)),
         )
+        .route(
+            "/audio/transcriptions",
+            post(transcribe_audio)
+                .layer(DefaultBodyLimit::max(
+                    crate::routes::audio::MAX_TRANSCRIPTION_BODY_BYTES,
+                ))
+                .layer(from_fn(embedding_headers)),
+        )
+        .route(
+            "/audio/speech",
+            post(synthesize_speech)
+                .layer(DefaultBodyLimit::max(
+                    crate::routes::audio::MAX_SPEECH_BODY_BYTES,
+                ))
+                .layer(from_fn(embedding_headers)),
+        )
         .layer(DefaultBodyLimit::max(2 * 1024 * 1024))
         .layer(from_fn(no_store))
 }
@@ -87,6 +103,48 @@ async fn generate_image(
     )
     .await?;
     crate::routes::images::generate_instance_image(state, payload, instance).await
+}
+
+async fn transcribe_audio(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<flow_like::flow_like_model_provider::audio::HostedTranscriptionRequest>,
+) -> Result<Response, ApiError> {
+    let instance = instances::authenticate_model_request(
+        &state,
+        &headers,
+        "POST",
+        "/instances/audio/transcriptions",
+        &payload.bit_id,
+    )
+    .await?;
+    crate::routes::audio::instance_audio(
+        state,
+        crate::routes::audio::AudioPayload::Transcription(payload),
+        instance,
+    )
+    .await
+}
+
+async fn synthesize_speech(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<flow_like::flow_like_model_provider::audio::HostedSpeechRequest>,
+) -> Result<Response, ApiError> {
+    let instance = instances::authenticate_model_request(
+        &state,
+        &headers,
+        "POST",
+        "/instances/audio/speech",
+        &payload.bit_id,
+    )
+    .await?;
+    crate::routes::audio::instance_audio(
+        state,
+        crate::routes::audio::AudioPayload::Speech(payload),
+        instance,
+    )
+    .await
 }
 
 /// Takes the raw request so the device proof is verified before the body is buffered.
@@ -189,6 +247,10 @@ mod embedding_media_tests {
             ("/embeddings/embed", Some("DPoP invalid-token")),
             ("/images/generations", None),
             ("/images/generations", Some("DPoP invalid-token")),
+            ("/audio/transcriptions", None),
+            ("/audio/transcriptions", Some("DPoP invalid-token")),
+            ("/audio/speech", None),
+            ("/audio/speech", Some("DPoP invalid-token")),
         ] {
             let app = Router::new().route(
                 path,

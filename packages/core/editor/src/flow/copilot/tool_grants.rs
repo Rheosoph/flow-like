@@ -165,6 +165,9 @@ pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Opti
             })
         }
         "data_sources" => one(connection_scope(args)),
+        "connector_call" | "connector_request" => {
+            one(flow_like_bot_tools::services::grant_scope(tool, args))
+        }
         "browser_open" => one(clean(arg(args, "url", "url"))
             .and_then(|url| tools::browser::site_of(&url))
             .map(|site| format!("browser:{site}"))),
@@ -445,6 +448,14 @@ mod tests {
         assert_eq!(
             grant_scopes("email_send", &json!({"to": ["nope"]}), None),
             None
+        );
+    }
+
+    #[test]
+    fn one_standing_grant_lets_the_bot_answer_every_mail() {
+        assert_eq!(
+            grant_scopes("email_reply", &json!({"thread": "t1", "body": "x"}), None),
+            Some(vec![SCOPE_ALL.to_string()])
         );
     }
 

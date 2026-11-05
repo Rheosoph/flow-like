@@ -1,8 +1,11 @@
 use flow_like::flow::copilot::HostTools;
 use serde_json::Value;
 
-/// Tools the API runs itself: they touch Lance tables and read objects, nothing heavy.
-const IN_PROCESS: [&str; 19] = [
+/// Tools the API runs itself: they touch Lance tables and read objects, nothing heavy. `image_generate`
+/// runs here because only the API holds the keys of the owner's private image models.
+const IN_PROCESS: [&str; 23] = [
+    "skill_load",
+    "skill_propose",
     "secret_list",
     "secret_request",
     "message_owner",
@@ -22,17 +25,23 @@ const IN_PROCESS: [&str; 19] = [
     "knowledge_drop",
     "data_sources",
     "data_query",
+    "image_generate",
+    "connector_tools",
 ];
 
 /// Tools that write files, parse documents or run code: the executor only.
-const EXECUTOR_ONLY: [&str; 7] = [
+const EXECUTOR_ONLY: [&str; 11] = [
     "file_save",
     "file_write",
     "file_summarize",
     "file_extract",
     "pdf_render",
     "excel_inspect",
+    "document_create",
+    "document_fill",
     "code_run",
+    "connector_call",
+    "connector_request",
 ];
 
 /// File types the API cannot turn into text; reading or indexing one needs the converters.
@@ -58,7 +67,8 @@ pub(crate) fn route(tool: &str, args: &Value, has_executor: bool) -> Option<Rout
     if !is_bot_tool(tool) {
         return None;
     }
-    let heavy = EXECUTOR_ONLY.contains(&tool) || wants_executor(tool, args);
+    let heavy = EXECUTOR_ONLY.contains(&tool)
+        || (wants_executor(tool, args) && !(tool == "connector_tools" && !has_executor));
     Some(match (heavy, has_executor) {
         (false, _) => Route::InProcess,
         (true, true) => Route::Executor,
@@ -76,6 +86,10 @@ fn wants_executor(tool: &str, args: &Value) -> bool {
         "data_query" => args
             .get("save_as")
             .is_some_and(|save_as| save_as.get("file").is_some()),
+        "connector_tools" => args
+            .get("names")
+            .and_then(Value::as_array)
+            .is_some_and(|names| !names.is_empty()),
         "data_sources" => args.get("operation").and_then(Value::as_str) == Some("attach"),
         _ => false,
     }

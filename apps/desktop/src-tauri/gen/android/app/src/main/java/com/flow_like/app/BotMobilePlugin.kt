@@ -1,5 +1,6 @@
 package com.flow_like.app
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
@@ -16,6 +17,8 @@ import androidx.activity.result.ActivityResult
 import androidx.core.content.FileProvider
 import app.tauri.annotation.ActivityCallback
 import app.tauri.annotation.Command
+import app.tauri.annotation.Permission
+import app.tauri.annotation.PermissionCallback
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.JSObject
@@ -27,7 +30,7 @@ import java.util.UUID
 import java.util.concurrent.Executors
 import java.util.concurrent.ConcurrentHashMap
 
-@TauriPlugin
+@TauriPlugin(permissions = [Permission(alias = "deviceLocation", strings = [Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION])])
 class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
     private val store = BotNativeStore(activity)
     private val secure = BotSecureStore(activity)
@@ -120,15 +123,23 @@ class BotMobilePlugin(private val activity: Activity) : Plugin(activity) {
     @Command fun locationRequest(invoke: Invoke) {
         val args = invoke.getArgs()
         activity.runOnUiThread {
-            NativeDeviceLocation.request(activity, args.getString("requestId"), args.getJSONObject("options")) {
+            NativeDeviceLocation.request(activity, args.getString("requestId"), args.getJSONObject("options"),
+                requestPermissions = { requestPermissionForAlias("deviceLocation", invoke, "locationPermissionResult") }) {
                 invoke.resolve(JSObject(it.toString()))
             }
         }
+    }
+    @PermissionCallback fun locationPermissionResult(invoke: Invoke) {
+        NativeDeviceLocation.permissionResult(activity, invoke.getArgs().getString("requestId"))
     }
     @Command fun locationCancel(invoke: Invoke) = execute(invoke) {
         NativeDeviceLocation.cancel(invoke.getArgs().getString("requestId")); JSONObject()
     }
     @Command fun geofencePermission(invoke: Invoke) {
+        if (invoke.getArgs().getString("mode") == "status") {
+            execute(invoke) { deviceSuccess(NativeGeofences.status(activity)) }
+            return
+        }
         activity.runOnUiThread {
             NativeGeofencePermissions.request(activity, invoke.getArgs().getString("mode")) {
                 invoke.resolve(JSObject(it.toString()))

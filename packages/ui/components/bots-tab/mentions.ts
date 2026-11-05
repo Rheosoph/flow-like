@@ -146,3 +146,15 @@ export function inlineMentions(
 	}
 	return missing.length > 0 ? `${missing.join(" ")} ${body}` : body;
 }
+
+/** Direct calls address their sole bot; a group call requires a spoken bot name. */
+export function callMentions(
+	text: string,
+	options: readonly Mentionable[],
+	kind: IConversation["kind"],
+): string[] {
+	const bots = options.filter((option) => option.kind === "bot");
+	if (kind === "direct" && bots.length === 1 && text.trim())
+		return [bots[0].id];
+	return spokenMentions(text, options);
+}

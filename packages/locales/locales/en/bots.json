@@ -109,6 +109,50 @@
 		"screen": "Screen",
 		"stop": "Stop"
 	},
+	"connectors": {
+		"account": {
+			"add": "Add account",
+			"none": "No connected accounts yet. Connect one under Settings, Connected accounts, then pick it here.",
+			"pick": "Account",
+			"pickPlaceholder": "Pick an account",
+			"read": "Reading (GET, HEAD)",
+			"write": "Changing things (POST, PUT, PATCH, DELETE)"
+		},
+		"addAccount": "Add account",
+		"addMcp": "Add MCP server",
+		"afterSave": "Save the bot first, then connect services here.",
+		"cancel": "Cancel",
+		"default": "Tools without a hint of their own",
+		"defaultPolicy": "Default access",
+		"destructive": "Can delete",
+		"failed": "The connector could not be changed.",
+		"kind": {
+			"mcp": "MCP server",
+			"oauth": "Account"
+		},
+		"mcp": {
+			"add": "Add server",
+			"auth": "Sign-in",
+			"authNone": "No sign-in",
+			"authSecret": "Bearer token from secret {{name}}",
+			"label": "Name",
+			"labelPlaceholder": "Name, e.g. Docs",
+			"url": "Server URL",
+			"urlPlaceholder": "https://example.com/mcp"
+		},
+		"noTools": "No tools yet. Refresh to ask the server for them.",
+		"notice": "What these services send back is treated as data, never as instructions. Anything that changes things asks you first unless you allow it.",
+		"policy": {
+			"ask": "Ask me",
+			"never": "Never",
+			"read": "Always allow"
+		},
+		"readOnly": "Read only",
+		"refresh": "Refresh tools",
+		"remove": "Remove {{label}}",
+		"toolPolicy": "Access for {{name}}",
+		"writeWarning": "This tool can change things and will run without asking."
+	},
 	"crew": {
 		"activity": {
 			"queued": "Waiting for {{name}}",
@@ -1061,6 +1105,41 @@
 		},
 		"show": "Show {{name}}'s details",
 		"tabs": "{{name}}'s details",
+		"skills": {
+			"add": "Add a skill",
+			"afterSave": "Save the bot first, then add or import its skills here.",
+			"approve": "Approve",
+			"body": "The steps the bot follows, in markdown",
+			"bodyLabel": "Instructions",
+			"cancel": "Cancel",
+			"delete": "Delete {{name}}",
+			"description": "What it does and when to use it",
+			"descriptionLabel": "Description",
+			"disable": "Switch off",
+			"edit": "Edit {{name}}",
+			"enable": "Switch on",
+			"hint": "Skills are instructions the bot loads before a task they describe. Only skills you approved reach the bot.",
+			"import": "Import a zip",
+			"imported": "Imported. Review the skill and approve it to use it.",
+			"name": "Name, e.g. weekly-report",
+			"nameLabel": "Skill name",
+			"none": "No skills yet.",
+			"pendingNote": "The bot can't see this skill until you approve it.",
+			"problemBody": "The instructions are missing.",
+			"problemDescription": "Describe the skill in one line.",
+			"problemLength": "The description is limited to 1,024 characters and the instructions to 32 KiB.",
+			"problemName": "Use lowercase letters, digits and single hyphens, at most 64 characters.",
+			"save": "Save skill",
+			"sourceBot": "Proposed by the bot",
+			"sourceImport": "Imported",
+			"sourceOwner": "Written by you",
+			"sourcePackage": "Package",
+			"statusActive": "Active",
+			"statusDisabled": "Off",
+			"statusPending": "Waiting for you",
+			"title": "Skills",
+			"zipTooLarge": "A skill zip is at most 8 MiB."
+		},
 		"tasks": {
 			"at": "When",
 			"create": "Add task",

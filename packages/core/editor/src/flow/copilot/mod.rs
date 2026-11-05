@@ -32,6 +32,7 @@ pub mod public_web;
 mod search;
 pub mod session;
 pub mod stream;
+mod subtasks;
 pub mod tool_grants;
 #[cfg(test)]
 mod tool_schema_tests;

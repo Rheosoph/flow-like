@@ -25,6 +25,7 @@ pub mod code {
     pub const RATE_LIMITED: &str = "rate_limited";
     pub const ALREADY_HERE: &str = "already_here";
     pub const FAILED: &str = "failed";
+    pub const NO_IMAGE_MODEL: &str = "no_image_model";
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

@@ -163,6 +163,25 @@ fn speech_wire_matches_each_provider() {
 }
 
 #[test]
+fn openrouter_uses_provider_default_voice_unless_one_is_selected() {
+    let mut request = speech();
+    let upstream = speech_request(OpenRouter, "fish-audio/s2.1-pro", &request).unwrap();
+    assert_eq!(
+        json_body(&upstream),
+        &json!({
+            "model": "fish-audio/s2.1-pro",
+            "input": "Hello there",
+            "response_format": "mp3",
+        })
+    );
+    request.voice = Some("af_heart".into());
+    let upstream = speech_request(OpenRouter, "hexgrad/kokoro-82m", &request).unwrap();
+    assert_eq!(json_body(&upstream)["voice"], "af_heart");
+    let upstream = speech_request(OpenAi, "tts-1", &speech()).unwrap();
+    assert_eq!(json_body(&upstream)["voice"], "alloy");
+}
+
+#[test]
 fn transcription_wire_matches_each_provider() {
     let mut request = transcription();
     request.language = Some("de".into());
@@ -186,11 +205,24 @@ fn transcription_wire_matches_each_provider() {
         if fields.contains(&("response_format".into(), "verbose_json".into()))));
     let xai = transcription_request(Xai, "grok", &request).unwrap();
     assert_eq!(xai.url, "https://api.x.ai/v1/stt");
-    let router = transcription_request(OpenRouter, "google/gemini-2.5-flash", &request).unwrap();
-    assert_eq!(router.url, "https://openrouter.ai/api/v1/chat/completions");
-    let content = &json_body(&router)["messages"][0]["content"];
-    assert_eq!(content[1]["input_audio"]["format"], "wav");
-    assert!(content[0]["text"].as_str().unwrap().contains("de"));
+    let router = transcription_request(OpenRouter, "openai/whisper-1", &request).unwrap();
+    assert_eq!(
+        router.url,
+        "https://openrouter.ai/api/v1/audio/transcriptions"
+    );
+    assert_eq!(
+        json_body(&router),
+        &json!({
+            "model": "openai/whisper-1",
+            "input_audio": {"data": request.audio_base64, "format": "wav"},
+            "language": "de",
+        })
+    );
+    let mut aac = transcription();
+    aac.mime = "audio/aac".into();
+    let router = transcription_request(OpenRouter, "openai/whisper-1", &aac).unwrap();
+    assert_eq!(json_body(&router)["input_audio"]["format"], "aac");
+    assert!(json_body(&router).get("language").is_none());
     let gemini = transcription_request(Gemini, "gemini-2.5-flash", &request).unwrap();
     assert_eq!(
         json_body(&gemini)["contents"][0]["parts"][1]["inlineData"]["mimeType"],
@@ -221,18 +253,13 @@ fn transcription_responses_parse_per_provider() {
     assert_eq!(usage.billed_seconds, Some(7.0));
     let router = parse(
         OpenRouter,
-        json!({"choices":[{"message":{"content":"spoken words"}}],"usage":{"cost":0.0012}}),
+        json!({"text":"spoken words","usage":{"seconds":3.25,"cost":0.0012}}),
     )
     .unwrap();
     assert_eq!(router.transcription.text, "spoken words");
     assert_eq!(router.provider_cost_usd, Some(0.0012));
-    assert_eq!(router.billed_seconds, None);
-    let parts = parse(
-        OpenRouter,
-        json!({"choices":[{"message":{"content":[{"type":"text","text":"a "},{"type":"text","text":"b"}]}}]}),
-    )
-    .unwrap();
-    assert_eq!(parts.transcription.text, "a b");
+    assert_eq!(router.billed_seconds, Some(3.25));
+    assert_eq!(router.transcription.duration_ms, Some(3250));
     let gemini = parse(
         Gemini,
         json!({"candidates":[{"content":{"parts":[{"text":"one"},{"text":"two"}]}}]}),
@@ -323,4 +350,82 @@ fn client_base_resolves_the_audio_resource() {
     );
     assert!(audio_base("https://user:pw@example.com", false).is_err());
     assert!(audio_base("ftp://example.com", false).is_err());
+}
+
+struct AudioAuthorizer(std::sync::atomic::AtomicUsize);
+
+impl RequestAuthorizer for AudioAuthorizer {
+    fn attribution(&self) -> AuthorizationAttribution {
+        AuthorizationAttribution::InstanceGrant
+    }
+
+    fn resource_base_url(&self, audience: ResourceAudience) -> Option<String> {
+        assert_eq!(audience, ResourceAudience::HostedModels);
+        Some("https://broker.example/custom/instances".into())
+    }
+
+    fn authorize<'a>(
+        &'a self,
+        request: flow_like_types_contracts::authorization::AuthorizationRequest<'a>,
+    ) -> flow_like_types_contracts::authorization::AuthorizationFuture<'a> {
+        use flow_like_types_contracts::authorization::{AuthorizationError, RequestAuthorization};
+        Box::pin(async move {
+            assert_eq!(request.audience, ResourceAudience::HostedModels);
+            assert_eq!(request.method, "POST");
+            assert!(
+                [
+                    "https://broker.example/custom/instances/audio/transcriptions",
+                    "https://broker.example/custom/instances/audio/speech",
+                ]
+                .contains(&request.url)
+            );
+            let generation = self.0.load(std::sync::atomic::Ordering::SeqCst);
+            if generation == 2 {
+                return Err(AuthorizationError::Denied);
+            }
+            RequestAuthorization::new(
+                format!("DPoP token-{generation}"),
+                Some(format!("proof-{generation}")),
+                std::time::SystemTime::now() + Duration::from_secs(60),
+            )
+        })
+    }
+}
+
+#[tokio::test]
+async fn instance_audio_uses_exact_paths_fresh_proofs_and_grant_attribution() {
+    let authorizer = Arc::new(AudioAuthorizer(std::sync::atomic::AtomicUsize::new(0)));
+    let client = HostedAudioClient::new("https://stale.example/api/v1", "stale-token")
+        .unwrap()
+        .with_usage_headers(vec![
+            ("x-flow-like-app-id".into(), "caller-app".into()),
+            ("x-flow-like-run-id".into(), "caller-run".into()),
+        ])
+        .with_authorizer(authorizer.clone())
+        .unwrap();
+    for (generation, path, payload) in [
+        (0, "transcriptions", json!(transcription())),
+        (1, "speech", json!(speech())),
+    ] {
+        authorizer
+            .0
+            .store(generation, std::sync::atomic::Ordering::SeqCst);
+        let request = client.build_request(path, &payload).await.unwrap();
+        assert_eq!(
+            request.url().as_str(),
+            format!("https://broker.example/custom/instances/audio/{path}")
+        );
+        assert_eq!(
+            request.headers()["authorization"],
+            format!("DPoP token-{generation}")
+        );
+        assert_eq!(request.headers()["dpop"], format!("proof-{generation}"));
+        assert!(!request.headers().contains_key("x-flow-like-app-id"));
+        assert!(!request.headers().contains_key("x-flow-like-run-id"));
+        let body: Value =
+            serde_json::from_slice(request.body().unwrap().as_bytes().unwrap()).unwrap();
+        assert_eq!(body, payload);
+    }
+    authorizer.0.store(2, std::sync::atomic::Ordering::SeqCst);
+    assert!(client.build_request("speech", &speech()).await.is_err());
 }

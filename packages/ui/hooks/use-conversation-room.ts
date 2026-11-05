@@ -48,7 +48,7 @@ function iceExpiryMs(access: IRealtimeAccess): number | null {
 
 /**
  * The live peer room of an account conversation, or undefined while there is none (local
- * conversations, a missing hub or one member). Token and ICE rotation happen inside; a membership
+ * conversations, a missing hub or no other member). Token and ICE rotation happen inside; a membership
  * change rotates the room key and rebuilds the session, so a returned room stays valid until
  * the hook returns another one.
  */
@@ -83,7 +83,8 @@ export function useConversationRoom(
 		!conversation.local &&
 		canFetchAccess &&
 		!!me &&
-		people.length >= 2 &&
+		(people.length >= 2 ||
+			conversation.members.some((member) => member.kind === "bot")) &&
 		people.includes(me) &&
 		hasSignaling;
 

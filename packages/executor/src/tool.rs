@@ -219,7 +219,8 @@ pub(crate) async fn run_job(
     let env = HostEnv::new(&job.workspace, &job.scope, access, models)
         .with_sessions(Arc::new(MemorySessions::default()))
         .with_expensive_documents(job.allow_expensive_documents)
-        .with_secrets(Arc::new(job.secrets.clone()));
+        .with_secrets(Arc::new(job.secrets.clone()))
+        .with_connectors(flow_like_bot_tools_host::connector_source(&job.connectors));
     let started = Instant::now();
     let outcome = tokio::time::timeout(deadline(claims), run(&job.tool, job.args.clone(), &env))
         .await
@@ -276,6 +277,7 @@ mod tests {
             models: JobModels::default(),
             allow_expensive_documents: false,
             secrets: Default::default(),
+            connectors: Vec::new(),
         }
     }
 

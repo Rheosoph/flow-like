@@ -61,7 +61,8 @@ fn audio_extension(mime: &str) -> &'static str {
     match base_mime(mime).as_str() {
         "audio/wav" | "audio/x-wav" | "audio/wave" | "audio/vnd.wave" => "wav",
         "audio/mpeg" | "audio/mp3" => "mp3",
-        "audio/mp4" | "audio/m4a" | "audio/x-m4a" | "audio/aac" | "video/mp4" => "m4a",
+        "audio/mp4" | "audio/m4a" | "audio/x-m4a" | "video/mp4" => "m4a",
+        "audio/aac" => "aac",
         "audio/webm" | "video/webm" => "webm",
         "audio/ogg" | "audio/opus" => "ogg",
         "audio/flac" | "audio/x-flac" => "flac",
@@ -346,7 +347,21 @@ pub fn speech_request(
         })),
     };
     Ok(match provider {
-        HostedAudioProvider::OpenRouter => openai_like("alloy", format),
+        HostedAudioProvider::OpenRouter => {
+            let mut body = json!({
+                "model": model,
+                "input": request.text,
+                "response_format": format,
+            });
+            // Models without a voice catalog use their provider's default voice.
+            if let Some(voice) = voice {
+                body["voice"] = json!(voice);
+            }
+            UpstreamRequest {
+                url: format!("{base}/audio/speech"),
+                body: UpstreamBody::Json(body),
+            }
+        }
         HostedAudioProvider::OpenAi => openai_like("alloy", format),
         HostedAudioProvider::Groq => openai_like("troy", format),
         HostedAudioProvider::Together => {
@@ -436,20 +451,22 @@ pub fn transcription_request(
             )
         }
         HostedAudioProvider::Xai => multipart("stt", vec![("format".into(), "true".into())]),
-        HostedAudioProvider::OpenRouter => UpstreamRequest {
-            url: format!("{base}/chat/completions"),
-            body: UpstreamBody::Json(json!({
+        HostedAudioProvider::OpenRouter => {
+            let mut body = json!({
                 "model": model,
-                "stream": false,
-                "messages": [{"role": "user", "content": [
-                    {"type": "text", "text": prompt},
-                    {"type": "input_audio", "input_audio": {
-                        "data": request.audio_base64,
-                        "format": audio_extension(&request.mime),
-                    }},
-                ]}],
-            })),
-        },
+                "input_audio": {
+                    "data": request.audio_base64,
+                    "format": audio_extension(&request.mime),
+                },
+            });
+            if let Some(language) = &request.language {
+                body["language"] = json!(language);
+            }
+            UpstreamRequest {
+                url: format!("{base}/audio/transcriptions"),
+                body: UpstreamBody::Json(body),
+            }
+        }
         HostedAudioProvider::Gemini => {
             ensure_path_safe_model(model)?;
             UpstreamRequest {
@@ -610,20 +627,6 @@ fn non_negative(value: Option<&Value>) -> Option<f64> {
         .filter(|number| number.is_finite() && *number >= 0.0)
 }
 
-fn message_text(content: &Value) -> Option<String> {
-    match content {
-        Value::String(text) => Some(text.clone()),
-        Value::Array(parts) => Some(
-            parts
-                .iter()
-                .filter_map(|part| part.get("text").and_then(Value::as_str))
-                .collect::<Vec<_>>()
-                .join(""),
-        ),
-        _ => None,
-    }
-}
-
 fn gemini_text(value: &Value) -> Option<String> {
     let parts: Vec<&str> = value
         .get("candidates")?
@@ -643,9 +646,6 @@ pub fn parse_transcription_response(
     let value: Value = serde_json::from_slice(body)
         .with_context(|| format!("{} transcription returned invalid JSON", provider.label()))?;
     let text = match provider {
-        HostedAudioProvider::OpenRouter => value
-            .pointer("/choices/0/message/content")
-            .and_then(message_text),
         HostedAudioProvider::Gemini => gemini_text(&value),
         _ => ["text", "transcript", "transcription"]
             .into_iter()
@@ -750,12 +750,7 @@ impl HostedAudioClient {
         Ok(self)
     }
 
-    async fn post(
-        &self,
-        path: &str,
-        body: &impl Serialize,
-        limit: usize,
-    ) -> Result<(Vec<u8>, Option<String>)> {
+    async fn build_request(&self, path: &str, body: &impl Serialize) -> Result<reqwest::Request> {
         let url = format!("{}/{path}", self.base.as_str().trim_end_matches('/'));
         let mut builder = self.client.post(&url).json(body);
         if !self.bearer.is_empty() {
@@ -770,6 +765,16 @@ impl HostedAudioClient {
                 .authorize("POST", &url, request.headers_mut())
                 .await?;
         }
+        Ok(request)
+    }
+
+    async fn post(
+        &self,
+        path: &str,
+        body: &impl Serialize,
+        limit: usize,
+    ) -> Result<(Vec<u8>, Option<String>)> {
+        let request = self.build_request(path, body).await?;
         let mut response = self
             .client
             .execute(request)

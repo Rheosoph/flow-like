@@ -110,40 +110,7 @@ impl NodeLogic for DocxReplaceTextNode {
 
         let template_bytes = template_path.get(context, false).await?;
         let mut files = read_zip(&template_bytes)?;
-
-        let xml_targets: Vec<String> = files
-            .keys()
-            .filter(|k| {
-                *k == "word/document.xml"
-                    || (k.starts_with("word/header") && k.ends_with(".xml"))
-                    || (k.starts_with("word/footer") && k.ends_with(".xml"))
-            })
-            .cloned()
-            .collect();
-
-        for target in xml_targets {
-            let xml_bytes = files
-                .get(&target)
-                .ok_or_else(|| flow_like_types::anyhow!("Missing XML part: {}", target))?
-                .clone();
-
-            let replaced = if use_markdown {
-                replace_text_in_xml_markdown(
-                    &xml_bytes,
-                    &placeholder,
-                    &replacement,
-                    "w:t",
-                    "w:r",
-                    "w:rPr",
-                    "w:p",
-                    OpenXmlFormat::Docx,
-                )?
-            } else {
-                replace_text_in_xml(&xml_bytes, &placeholder, &replacement, "w:t", "w:r", "w:p")?
-            };
-
-            files.insert(target, replaced);
-        }
+        replace_docx_text(&mut files, &placeholder, &replacement, use_markdown)?;
 
         let result_bytes = write_zip(&files)?;
         output_path.put(context, result_bytes, false).await?;
@@ -160,4 +127,47 @@ impl NodeLogic for DocxReplaceTextNode {
             "DOCX processing requires the 'execute' feature"
         ))
     }
+}
+
+#[cfg(feature = "execute")]
+pub(crate) fn replace_docx_text(
+    files: &mut std::collections::HashMap<String, Vec<u8>>,
+    placeholder: &str,
+    replacement: &str,
+    use_markdown: bool,
+) -> flow_like_types::Result<()> {
+    let xml_targets: Vec<String> = files
+        .keys()
+        .filter(|k| {
+            *k == "word/document.xml"
+                || (k.starts_with("word/header") && k.ends_with(".xml"))
+                || (k.starts_with("word/footer") && k.ends_with(".xml"))
+        })
+        .cloned()
+        .collect();
+
+    for target in xml_targets {
+        let xml_bytes = files
+            .get(&target)
+            .ok_or_else(|| flow_like_types::anyhow!("Missing XML part: {}", target))?
+            .clone();
+
+        let replaced = if use_markdown {
+            replace_text_in_xml_markdown(
+                &xml_bytes,
+                placeholder,
+                replacement,
+                "w:t",
+                "w:r",
+                "w:rPr",
+                "w:p",
+                OpenXmlFormat::Docx,
+            )?
+        } else {
+            replace_text_in_xml(&xml_bytes, placeholder, replacement, "w:t", "w:r", "w:p")?
+        };
+
+        files.insert(target, replaced);
+    }
+    Ok(())
 }

@@ -1,4 +1,8 @@
 import {
+	isHostedAudio,
+	validateHostedAudioParameters,
+} from "../../lib/bit/hosted-audio";
+import {
 	supportsCustomRequestParams,
 	validateCustomRequestParams,
 } from "../../lib/bit/custom-request-params";
@@ -272,6 +276,20 @@ export function validateBitDraft(
 	if (scope === "custom" && !bit.meta.en?.name.trim())
 		return "Add an English display name before saving.";
 	const params = record(bit.parameters);
+	if (isHostedAudio(bit)) {
+		if (scope !== "admin")
+			return "Hosted audio models are managed by the server administrator.";
+		const error = validateHostedAudioParameters(params);
+		if (error) return error;
+		if (
+			bit.download_link != null ||
+			bit.file_name != null ||
+			bit.dependencies.length ||
+			Number(bit.size ?? 0) !== 0 ||
+			Object.hasOwn(params, "assets")
+		)
+			return "Hosted audio models cannot include local files or weight dependencies.";
+	}
 	if (isHostedImageGeneration(bit)) {
 		if (scope !== "admin")
 			return "Hosted image models are managed by the server administrator.";

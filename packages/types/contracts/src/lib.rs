@@ -14,7 +14,11 @@ pub mod data_classification;
 #[cfg(feature = "bot")]
 pub mod bot;
 #[cfg(feature = "bot")]
+pub mod bot_connector;
+#[cfg(feature = "bot")]
 pub mod bot_effective;
+#[cfg(feature = "bot")]
+pub mod bot_skill;
 #[cfg(feature = "bot")]
 pub mod bot_restrictions;
 

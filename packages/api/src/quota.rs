@@ -390,7 +390,7 @@ pub(crate) async fn reserve_instance_with_db(
         || request.model_id.as_deref() != Some(usage.model_id.as_str())
         || !matches!(
             request.kind.as_str(),
-            "llm" | "embedding" | "image_generation"
+            "llm" | "embedding" | "image_generation" | "audio_transcription" | "audio_speech"
         )
         || request.funding_class != "hosted"
         || request.execution_mode != "instance_hosted_ai"
@@ -1208,11 +1208,7 @@ pub async fn release_unstarted_with_db(
         {
             if matches!(
                 row.try_get::<String>("", "kind")?.as_str(),
-                "llm"
-                    | "embedding"
-                    | "image_generation"
-                    | "audio_transcription"
-                    | "audio_speech"
+                "llm" | "embedding" | "image_generation" | "audio_transcription" | "audio_speech"
             ) {
                 crate::usage_accounting::release_unstarted_hosted(db, dialect, operation_id)
                     .await?;

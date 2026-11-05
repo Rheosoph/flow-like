@@ -612,11 +612,19 @@ pub async fn hub_push(ctx: &Context, path: &Path, dry_run: bool) -> Result<()> {
         let payload = entry.push_payload(&stored_bits, &ctx.hub_domain)?;
 
         let mut last = 0.0;
-        let stored = admin
+        let mut stored = admin
             .upsert_bit(&payload, |progress| {
                 report_stage(progress, &mut last);
             })
             .await?;
+
+        if let Some(update) = spec::hosted_update_payload(&payload, &stored) {
+            stored = admin
+                .upsert_bit(&update, |progress| {
+                    report_stage(progress, &mut last);
+                })
+                .await?;
+        }
 
         for (language, meta) in &entry.meta {
             admin.push_meta(&stored.id, language, meta).await?;

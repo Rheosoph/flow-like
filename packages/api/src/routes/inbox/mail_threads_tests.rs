@@ -1,15 +1,20 @@
 use super::{
-    fixture::{at, copies, database, insert_bot},
+    conversations::start_direct,
+    fixture::{at, bot_principal, copies, database, insert_bot},
     mail_threads::{
-        Direction, holds_message, link_message_in, normalize_message_id, start_thread_in,
-        thread_of_any, touch_thread_in, write_outbound_in, write_trigger_in,
+        Direction, holds_message, link_message_in, mail_conversation_in, normalize_message_id,
+        start_thread_in, thread_of_any, touch_thread_in, write_outbound_in,
     },
+    triggers::write_trigger_in,
 };
 use crate::{
-    entity::{bot_mail_message, bot_mail_thread, bot_turn, conversation_member},
+    bot_host::memory::is_owner_direct,
+    entity::{bot_mail_message, bot_mail_thread, bot_turn, conversation, conversation_member},
     routes::bots::mail::mail_item,
 };
-use flow_like_types::inbox::{TriggerBody, TriggerSource};
+use flow_like_types::inbox::{
+    ConversationEncryption, ConversationKind, TriggerBody, TriggerSource,
+};
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, Schema,
     sea_query::Table,
@@ -69,18 +74,16 @@ async fn thread(db: &DatabaseConnection) -> String {
     .unwrap()
 }
 
+async fn mail_conversation(db: &DatabaseConnection, thread: &str) -> String {
+    mail_conversation_in(db, thread, "user-a", "bot_m", "Invoice", at(2))
+        .await
+        .unwrap()
+}
+
 #[tokio::test]
-async fn a_thread_is_a_group_of_the_owner_and_the_bot_marked_as_mail() {
+async fn a_thread_is_a_row_of_the_bot_and_owner_without_a_conversation_of_its_own() {
     let db = setup().await;
     let id = thread(&db).await;
-    let members = conversation_member::Entity::find()
-        .filter(conversation_member::Column::ConversationId.eq(id.as_str()))
-        .all(&db)
-        .await
-        .unwrap();
-    let mut ids: Vec<_> = members.iter().map(|m| m.principal_id.as_str()).collect();
-    ids.sort();
-    assert_eq!(ids, ["bot_m", "user-a"]);
     let row = bot_mail_thread::Entity::find_by_id(id.as_str())
         .one(&db)
         .await
@@ -91,12 +94,64 @@ async fn a_thread_is_a_group_of_the_owner_and_the_bot_marked_as_mail() {
         ("bot_m", "user-a")
     );
     assert_eq!(row.subject, "Invoice");
+    assert!(
+        conversation::Entity::find_by_id(id.as_str())
+            .one(&db)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn mail_is_written_into_the_owners_direct_conversation_with_the_bot() {
+    let db = setup().await;
+    let first = mail_conversation(&db, &thread(&db).await).await;
+    let second = mail_conversation(&db, &thread(&db).await).await;
+    assert_eq!(first, second, "every thread shares the one direct conversation");
+    assert!(is_owner_direct(&db, &first, "user-a", "bot_m").await.unwrap());
+}
+
+#[tokio::test]
+async fn an_encrypted_direct_conversation_sends_the_threads_mail_to_its_own_group() {
+    let db = setup().await;
+    start_direct(
+        &db,
+        "user-a",
+        &bot_principal("bot_m"),
+        ConversationEncryption::E2e,
+        at(1),
+    )
+    .await
+    .unwrap();
+    let id = thread(&db).await;
+    assert_eq!(mail_conversation(&db, &id).await, id);
+    assert_eq!(mail_conversation(&db, &id).await, id, "the group is started once");
+    let room = conversation::Entity::find_by_id(id.as_str())
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        ConversationKind::parse(&room.kind),
+        Some(ConversationKind::Group)
+    );
+    let mut members: Vec<String> = conversation_member::Entity::find()
+        .filter(conversation_member::Column::ConversationId.eq(id.as_str()))
+        .all(&db)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|member| member.principal_id)
+        .collect();
+    members.sort();
+    assert_eq!(members, ["bot_m", "user-a"]);
 }
 
 #[tokio::test]
 async fn an_inbound_mail_is_a_trigger_from_the_owner_that_queues_the_bots_turn() {
     let db = setup().await;
-    let id = thread(&db).await;
+    let id = mail_conversation(&db, &thread(&db).await).await;
     let sent = write_trigger_in(&db, &id, "user-a", "mail-1", &trigger("m1"), at(2))
         .await
         .unwrap();
@@ -118,7 +173,7 @@ async fn an_inbound_mail_is_a_trigger_from_the_owner_that_queues_the_bots_turn()
 #[tokio::test]
 async fn a_repeated_delivery_writes_the_trigger_once() {
     let db = setup().await;
-    let id = thread(&db).await;
+    let id = mail_conversation(&db, &thread(&db).await).await;
     write_trigger_in(&db, &id, "user-a", "mail-1", &trigger("m1"), at(2))
         .await
         .unwrap();
@@ -226,7 +281,7 @@ fn message_ids_are_normalized_and_hostile_ones_refused() {
 #[tokio::test]
 async fn a_sent_mail_is_recorded_for_the_owner_and_wakes_no_turn() {
     let db = setup().await;
-    let id = thread(&db).await;
+    let id = mail_conversation(&db, &thread(&db).await).await;
     let sent = write_outbound_in(
         &db,
         &id,
@@ -256,7 +311,7 @@ async fn a_sent_mail_is_recorded_for_the_owner_and_wakes_no_turn() {
 #[tokio::test]
 async fn the_thread_view_reads_inbound_triggers_and_ignores_other_chatter() {
     let db = setup().await;
-    let id = thread(&db).await;
+    let id = mail_conversation(&db, &thread(&db).await).await;
     write_trigger_in(&db, &id, "user-a", "mail-1", &trigger("m1"), at(2))
         .await
         .unwrap();

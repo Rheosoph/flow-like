@@ -17,7 +17,7 @@ use super::ir_tools::{
 use super::platform::{PlatformSurface, PlatformToolBridge};
 use super::provider::CatalogProvider;
 use super::tool_spec::{
-    PlatformToolSpec, cross_board_source_tool_specs, data_studio_database_tool_spec,
+    PlatformToolSpec, bot_workspace_database_tool_spec, cross_board_source_tool_specs, data_studio_database_tool_spec,
     data_studio_specialist_tool_specs, data_studio_tool_specs, global_assistant_tool_specs,
     home_specialist_tool_specs, home_specialist_tool_specs_for_access, http_request_tool_spec,
     interact_app_page_tool_spec, public_web_tool_specs, runtime_execution_tool_specs,
@@ -213,6 +213,7 @@ fn spec_builder_definitions() -> Vec<(&'static str, Vec<ToolDefinition>)> {
         workspace_research_tool_specs(),
         data_studio_tool_specs(),
         data_studio_database_tool_spec(),
+        bot_workspace_database_tool_spec(),
         data_studio_specialist_tool_specs(),
         home_specialist_tool_specs(),
         home_specialist_tool_specs_for_access(true),
@@ -224,13 +225,14 @@ fn spec_builder_definitions() -> Vec<(&'static str, Vec<ToolDefinition>)> {
     ]
 }
 
-const PLATFORM_SURFACES: [PlatformSurface; 6] = [
+const PLATFORM_SURFACES: [PlatformSurface; 7] = [
     PlatformSurface::Orchestrator,
     PlatformSurface::Scout,
     PlatformSurface::DataStudio,
     PlatformSurface::Home,
     PlatformSurface::HomeReadOnly,
     PlatformSurface::OntologyQuery,
+    PlatformSurface::Subtask,
 ];
 
 /// Exhaustive, so a new surface fails to compile until it is named here and in `PLATFORM_SURFACES`.
@@ -242,6 +244,7 @@ fn surface_label(surface: PlatformSurface) -> &'static str {
         PlatformSurface::Home => "home",
         PlatformSurface::HomeReadOnly => "home_read_only",
         PlatformSurface::OntologyQuery => "ontology_query",
+        PlatformSurface::Subtask => "subtask",
     }
 }
 

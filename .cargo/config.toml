@@ -13,6 +13,11 @@ protocol = "sparse"
 CMAKE_TOOLCHAIN_FILE_aarch64_apple_ios = { value = ".cargo/ios-toolchain.cmake", relative = true }
 CMAKE_TOOLCHAIN_FILE_aarch64_apple_ios_sim = { value = ".cargo/ios-toolchain.cmake", relative = true }
 CMAKE_TOOLCHAIN_FILE_x86_64_apple_ios = { value = ".cargo/ios-toolchain.cmake", relative = true }
+# Same for Android, where the NDK limits find_package to its sysroot.
+CMAKE_TOOLCHAIN_FILE_aarch64_linux_android = { value = ".cargo/android-toolchain.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_armv7_linux_androideabi = { value = ".cargo/android-toolchain.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_i686_linux_android = { value = ".cargo/android-toolchain.cmake", relative = true }
+CMAKE_TOOLCHAIN_FILE_x86_64_linux_android = { value = ".cargo/android-toolchain.cmake", relative = true }
 
 [alias]
 # Stable, memorable entry points for the common developer loops. Explicit

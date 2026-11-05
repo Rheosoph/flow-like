@@ -62,46 +62,7 @@ impl NodeLogic for PptxCreateNode {
 
         let output: FlowPath = context.evaluate_pin("output").await?;
 
-        let mut files = std::collections::HashMap::new();
-
-        files.insert(
-            "[Content_Types].xml".to_string(),
-            CONTENT_TYPES.as_bytes().to_vec(),
-        );
-        files.insert("_rels/.rels".to_string(), TOP_RELS.as_bytes().to_vec());
-        files.insert(
-            "ppt/presentation.xml".to_string(),
-            PRESENTATION.as_bytes().to_vec(),
-        );
-        files.insert(
-            "ppt/_rels/presentation.xml.rels".to_string(),
-            PRESENTATION_RELS.as_bytes().to_vec(),
-        );
-        files.insert(
-            "ppt/slideMasters/slideMaster1.xml".to_string(),
-            SLIDE_MASTER.as_bytes().to_vec(),
-        );
-        files.insert(
-            "ppt/slideMasters/_rels/slideMaster1.xml.rels".to_string(),
-            SLIDE_MASTER_RELS.as_bytes().to_vec(),
-        );
-        files.insert(
-            "ppt/slideLayouts/slideLayout1.xml".to_string(),
-            SLIDE_LAYOUT.as_bytes().to_vec(),
-        );
-        files.insert(
-            "ppt/slideLayouts/_rels/slideLayout1.xml.rels".to_string(),
-            SLIDE_LAYOUT_RELS.as_bytes().to_vec(),
-        );
-        files.insert(
-            "ppt/theme/theme1.xml".to_string(),
-            THEME.as_bytes().to_vec(),
-        );
-        files.insert("docProps/app.xml".to_string(), APP_XML.as_bytes().to_vec());
-        files.insert(
-            "docProps/core.xml".to_string(),
-            CORE_XML.as_bytes().to_vec(),
-        );
+        let files = pptx_package();
 
         let buf = write_zip(&files)?;
         output.put(context, buf, false).await?;
@@ -207,7 +168,7 @@ const SLIDE_LAYOUT_RELS: &str = r#"<?xml version="1.0" encoding="UTF-8" standalo
 </Relationships>"#;
 
 #[cfg(feature = "execute")]
-const THEME: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+pub(crate) const THEME: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <a:theme xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" name="Flow Like">
   <a:themeElements>
     <a:clrScheme name="Flow Like">
@@ -270,3 +231,48 @@ const CORE_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?
   <dc:creator>Flow Like</dc:creator>
   <dc:title/>
 </cp:coreProperties>"#;
+
+#[cfg(feature = "execute")]
+pub(crate) fn pptx_package() -> std::collections::HashMap<String, Vec<u8>> {
+    let mut files = std::collections::HashMap::new();
+
+    files.insert(
+        "[Content_Types].xml".to_string(),
+        CONTENT_TYPES.as_bytes().to_vec(),
+    );
+    files.insert("_rels/.rels".to_string(), TOP_RELS.as_bytes().to_vec());
+    files.insert(
+        "ppt/presentation.xml".to_string(),
+        PRESENTATION.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/_rels/presentation.xml.rels".to_string(),
+        PRESENTATION_RELS.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/slideMasters/slideMaster1.xml".to_string(),
+        SLIDE_MASTER.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/slideMasters/_rels/slideMaster1.xml.rels".to_string(),
+        SLIDE_MASTER_RELS.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/slideLayouts/slideLayout1.xml".to_string(),
+        SLIDE_LAYOUT.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/slideLayouts/_rels/slideLayout1.xml.rels".to_string(),
+        SLIDE_LAYOUT_RELS.as_bytes().to_vec(),
+    );
+    files.insert(
+        "ppt/theme/theme1.xml".to_string(),
+        THEME.as_bytes().to_vec(),
+    );
+    files.insert("docProps/app.xml".to_string(), APP_XML.as_bytes().to_vec());
+    files.insert(
+        "docProps/core.xml".to_string(),
+        CORE_XML.as_bytes().to_vec(),
+    );
+    files
+}

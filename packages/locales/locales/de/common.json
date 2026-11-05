@@ -2424,6 +2424,7 @@
 	"removeFromDevice": "Von diesem Gerät entfernen",
 	"removeFromList": "Aus der Liste entfernen",
 	"removeFromListFilesStayOnDisk": "Aus der Liste entfernen · Dateien bleiben auf der Festplatte",
+	"removeFromProfile": "Aus Profil entfernen",
 	"removeMlxFileVal": "MLX-Datei {{val}} entfernen",
 	"removeName": "{{name}} entfernen",
 	"removingStaleFiles": "Veraltete Dateien werden entfernt…",

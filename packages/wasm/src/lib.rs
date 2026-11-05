@@ -60,6 +60,7 @@ pub mod module;
 pub mod node;
 pub mod package_runtime;
 pub mod registry;
+pub mod skill_call;
 pub mod unified;
 pub mod wasi;
 pub mod widget;

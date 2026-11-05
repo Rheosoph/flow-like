@@ -12,6 +12,14 @@ pub fn ensure_vertex_credentials_explicit(
     context: &flow_like::flow::execution::context::ExecutionContext,
     provider: &flow_like_model_provider::provider::ModelProvider,
 ) -> flow_like_types::Result<()> {
+    ensure_vertex_credentials_explicit_in(context.execution_environment(), provider)
+}
+
+/// [`ensure_vertex_credentials_explicit`] for a caller that holds no execution context.
+pub fn ensure_vertex_credentials_explicit_in(
+    environment: flow_like::flow::execution::ExecutionEnvironment,
+    provider: &flow_like_model_provider::provider::ModelProvider,
+) -> flow_like_types::Result<()> {
     if provider.provider_name != "custom:vertex" {
         return Ok(());
     }
@@ -32,7 +40,5 @@ pub fn ensure_vertex_credentials_explicit(
     if has_explicit {
         return Ok(());
     }
-    context
-        .execution_environment()
-        .ensure_no_ambient_credentials("custom:vertex", "application_default")
+    environment.ensure_no_ambient_credentials("custom:vertex", "application_default")
 }

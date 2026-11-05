@@ -1,7 +1,8 @@
 //! Inbound mail for a bot's own address. Every mail joins the thread its headers name (or starts
-//! one) and becomes a `trigger` entry from the owner that wakes the bot. Mail is untrusted
-//! input: only text is handed over, attachments become workspace files, and mail that fails
-//! authentication or is machine-generated never wakes the bot.
+//! one) and becomes a `trigger` entry from the owner in the owner's direct conversation with the
+//! bot, which wakes the bot with its history and memory. Mail is untrusted input: only text is
+//! handed over, attachments become workspace files, and mail that fails authentication or is
+//! machine-generated never wakes the bot.
 
 use super::{
     Envelope, IngestRequest, bot_address, digest,
@@ -14,8 +15,8 @@ use crate::{
     error::ApiError,
     routes::inbox::{
         mail_threads::{
-            Direction, link_message_in, normalize_message_id, post_thread_trigger_in,
-            start_thread_in, thread_of_any, touch_thread_in,
+            Direction, link_message_in, mail_conversation_in, normalize_message_id,
+            post_thread_trigger_in, start_thread_in, thread_of_any, touch_thread_in,
         },
         now_millis, wake,
     },
@@ -472,9 +473,24 @@ pub(super) async fn ingest_for_bot(
                     payload_handle: None,
                     bot_id: Some(bot.id.clone()),
                 };
-                let sent =
-                    post_thread_trigger_in(txn, &thread, &bot.owner_id, &entry_id, &body, received)
-                        .await?;
+                let conversation = mail_conversation_in(
+                    txn,
+                    &thread,
+                    &bot.owner_id,
+                    &bot.id,
+                    &subject,
+                    received,
+                )
+                .await?;
+                let sent = post_thread_trigger_in(
+                    txn,
+                    &conversation,
+                    &bot.owner_id,
+                    &entry_id,
+                    &body,
+                    received,
+                )
+                .await?;
                 touch_thread_in(
                     txn,
                     &thread,

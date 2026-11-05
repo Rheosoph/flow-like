@@ -130,6 +130,27 @@ class ChartTest(unittest.TestCase):
         docs = self.render(*args, "--set", "storage.aws.kmsBucketKey=false")
         self.assertEqual(self.resource("Secret", "storage", docs)["stringData"]["S3_KMS_BUCKET_KEY"], "false")
 
+    def test_hosted_media_provider_secrets_only_reach_api(self):
+        providers = {"openrouter": ["OPENROUTER_API_KEY"],
+                     **{name: [f"HOSTED_{name.upper()}_API_KEY"] for name in ("openai", "groq", "mistral", "together", "xai", "gemini")},
+                     "cloudflare": ["HOSTED_CLOUDFLARE_API_TOKEN", "HOSTED_CLOUDFLARE_ACCOUNT_ID"]}
+        settings = ",".join(f"llm.{name}.enabled=true,llm.{name}.existingSecret=media-{name}" for name in providers)
+        docs = self.render("--set", settings)
+        api = self.env("api", docs)
+        for name, keys in providers.items():
+            for key in keys:
+                self.assertEqual(api[key]["valueFrom"]["secretKeyRef"], {"name": f"media-{name}", "key": key})
+            for resource in docs:
+                if resource["kind"] in {"Deployment", "StatefulSet", "Job"} and resource["metadata"]["name"] != "flow-like-api":
+                    self.assertNotIn(f"media-{name}", json.dumps(resource))
+        disabled = self.render("--set", settings, "--set", "llm.groq.enabled=false")
+        self.assertNotIn("HOSTED_GROQ_API_KEY", self.env("api", disabled))
+        inline = self.render("--set", "llm.groq.enabled=true,llm.groq.apiKey=fixture-key,llm.cloudflare.enabled=true,llm.cloudflare.apiToken=fixture-token,llm.cloudflare.accountId=fixture-account")
+        self.assertEqual(self.env("api", inline)["HOSTED_GROQ_API_KEY"]["value"], "fixture-key")
+        self.assertEqual(self.env("api", inline)["HOSTED_CLOUDFLARE_ACCOUNT_ID"]["value"], "fixture-account")
+        error = self.render("--set", "llm.cloudflare.enabled=true,llm.cloudflare.apiToken=fixture-token", valid=False)
+        self.assertIn("llm.cloudflare.accountId is required", error)
+
     def test_stripe_api_secret_is_not_inherited_by_other_workloads(self):
         api_secret = {"secretRef": {"name": self.values["api"]["existingSecret"]}}
         api = self.resource("Deployment", "api")["spec"]["template"]["spec"]

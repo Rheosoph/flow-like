@@ -20,6 +20,8 @@ export interface CallPresence {
 	listening: boolean;
 	camera?: string;
 	screen?: string;
+	voiceBots?: readonly string[];
+	speakingBot?: string;
 }
 
 export interface CallParticipant {
@@ -31,6 +33,8 @@ export interface CallParticipant {
 	local: boolean;
 	camera?: string;
 	screen?: string;
+	voiceBots?: readonly string[];
+	speakingBot?: string;
 }
 
 export interface LiveCall {
@@ -51,6 +55,18 @@ export function sanitizeCallPresence(value: unknown): CallPresence | null {
 	const { id, joined, muted, peer, listening } = value;
 	if (typeof id !== "string" || !CALL_ID_PATTERN.test(id)) return null;
 	if (typeof peer !== "string" || !PEER_ID_PATTERN.test(peer)) return null;
+	const voiceBots = Array.isArray(value.voiceBots)
+		? [
+				...new Set(
+					value.voiceBots.filter(
+						(id): id is string =>
+							typeof id === "string" && /^[A-Za-z0-9:_-]{1,160}$/.test(id),
+					),
+				),
+			]
+				.slice(0, 64)
+				.sort()
+		: [];
 	return {
 		id,
 		joined: joined === true,
@@ -59,6 +75,11 @@ export function sanitizeCallPresence(value: unknown): CallPresence | null {
 		listening: listening === true,
 		...(streamId(value.camera) ? { camera: value.camera as string } : {}),
 		...(streamId(value.screen) ? { screen: value.screen as string } : {}),
+		...(voiceBots.length ? { voiceBots } : {}),
+		...(typeof value.speakingBot === "string" &&
+		voiceBots.includes(value.speakingBot)
+			? { speakingBot: value.speakingBot }
+			: {}),
 	};
 }
 
@@ -88,6 +109,8 @@ function candidatesOf(
 			local: clientId === localClientId,
 			camera: presence.camera,
 			screen: presence.screen,
+			voiceBots: presence.voiceBots,
+			speakingBot: presence.speakingBot,
 		});
 	}
 	return found.sort((a, b) => a.clientId - b.clientId);
@@ -139,7 +162,7 @@ export function callLiveKey(live: LiveCall | null): string {
 	return `${live.callId}|${live.participants
 		.map(
 			(p) =>
-				`${p.sub}:${p.peer}:${p.muted ? 1 : 0}${p.listening ? 1 : 0}:${p.camera ?? ""}:${p.screen ?? ""}`,
+				`${p.sub}:${p.peer}:${p.muted ? 1 : 0}${p.listening ? 1 : 0}:${p.camera ?? ""}:${p.screen ?? ""}:${p.voiceBots?.join(";") ?? ""}:${p.speakingBot ?? ""}`,
 		)
 		.join(",")}`;
 }
@@ -164,6 +187,20 @@ export function peerSubs(
 		if (counts.get(p.peer) === 1) map.set(p.peer, p.sub);
 	}
 	return map;
+}
+
+/** One capable participant supplies a bot's voice to the call, including listeners without that model. */
+export function botVoiceSource(
+	live: LiveCall | null,
+	botId: string,
+): CallParticipant | null {
+	if (!live) return null;
+	const peers = peerSubs(live.participants);
+	return (
+		live.participants
+			.filter((p) => peers.has(p.peer) && p.voiceBots?.includes(botId))
+			.sort((a, b) => a.clientId - b.clientId)[0] ?? null
+	);
 }
 
 /** "12 min" pieces for a duration: whole hours and minutes, with under a minute as 0 and 0. */

@@ -26,9 +26,14 @@ export function scheduleIDBCleanup(): void {
 	// Defer cleanup to avoid competing with startup I/O
 	setTimeout(async () => {
 		try {
-			await Promise.allSettled([runIDBCleanup(), pruneReadNotifications()]);
+			await runIDBCleanup();
 		} catch (e) {
 			console.warn("[IDB Cleanup] error:", e);
+		}
+		try {
+			await pruneReadNotifications();
+		} catch (e) {
+			console.warn("[IDB Cleanup] notification cleanup failed:", e);
 		}
 	}, 5_000);
 }

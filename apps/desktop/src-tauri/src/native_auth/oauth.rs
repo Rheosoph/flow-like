@@ -301,6 +301,61 @@ pub(crate) async fn native_oauth_sync(
     .map_err(|_| "OAuth persistence worker failed")?
 }
 
+/// One connected account in this profile's native store: what it covers, never a token.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeOAuthAccount {
+    provider_id: String,
+    scopes: Vec<String>,
+    /// The apps the person consented to use the account in.
+    consented_apps: Vec<String>,
+}
+
+fn accounts_of(snapshot: &Snapshot) -> Vec<NativeOAuthAccount> {
+    snapshot
+        .tokens
+        .iter()
+        .filter_map(|token| {
+            let provider_id = token.get("providerId").and_then(Value::as_str)?.to_owned();
+            let consented_apps = snapshot
+                .consents
+                .iter()
+                .filter(|consent| {
+                    consent.get("providerId").and_then(Value::as_str) == Some(provider_id.as_str())
+                })
+                .filter_map(|consent| consent.get("appId").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect();
+            Some(NativeOAuthAccount {
+                scopes: scopes(token),
+                provider_id,
+                consented_apps,
+            })
+        })
+        .collect()
+}
+
+/// The accounts this profile connected on this device, for the bot editor's connector picker.
+#[tauri::command]
+pub(crate) async fn native_oauth_list(
+    profile_id: String,
+    hub: String,
+) -> Result<Vec<NativeOAuthAccount>, String> {
+    let binding = SessionBinding::capture(&profile_id, &hub)
+        .await?
+        .ok_or("Sign in to list OAuth connections")?;
+    let key = key(&binding);
+    let lock = scope_lock(&key).await?;
+    let _guard = lock.lock().await;
+    let Some(bytes) = store::read(&key).await? else {
+        return Ok(Vec::new());
+    };
+    let snapshot: Snapshot =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid saved OAuth connections")?;
+    validate(&snapshot, &binding)?;
+    Ok(accounts_of(&snapshot))
+}
+
 fn scopes(value: &Value) -> Vec<String> {
     value
         .get("scopes")

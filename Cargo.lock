@@ -10815,6 +10815,7 @@ dependencies = [
  "flow-like-catalog-code-interpreter",
  "flow-like-catalog-data",
  "flow-like-catalog-llm",
+ "flow-like-catalog-media-document",
  "flow-like-catalog-media-image",
  "flow-like-catalog-processing",
  "flow-like-model-provider",
@@ -10823,12 +10824,15 @@ dependencies = [
  "flow-like-types",
  "libc",
  "pulldown-cmark 0.13.5",
+ "reqwest 0.13.4",
+ "rmcp",
  "schemars 1.2.1",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
  "tokio",
+ "zip",
 ]
 
 [[package]]
@@ -12075,6 +12079,7 @@ dependencies = [
  "flow-like-types",
  "futures 0.3.32",
  "htmd",
+ "jsonschema",
  "proptest",
  "rig-core",
  "schemars 1.2.1",
@@ -12798,6 +12803,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -12872,6 +12878,7 @@ dependencies = [
  "base64 0.22.1",
  "bitflags 2.13.2",
  "flow-like-runtime",
+ "flow-like-types-contracts",
  "serde",
  "serde_json",
  "sha2 0.10.9",

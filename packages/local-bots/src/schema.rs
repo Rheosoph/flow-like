@@ -244,6 +244,39 @@ pub(crate) const MIGRATIONS: &[&str] = &[
     ALTER TABLE bots ADD COLUMN tts_model TEXT;
     ALTER TABLE bots ADD COLUMN image_model TEXT;
     ALTER TABLE bots ADD COLUMN vision_model TEXT;",
+    // Skills the person installed on a bot; only ACTIVE ones reach the bot.
+    "CREATE TABLE skills (
+        id TEXT PRIMARY KEY NOT NULL,
+        bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+        name TEXT NOT NULL,
+        description TEXT NOT NULL,
+        body TEXT NOT NULL,
+        source TEXT NOT NULL,
+        status TEXT NOT NULL,
+        tools TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        UNIQUE (bot_id, name)
+    ) STRICT;
+    CREATE INDEX skills_bot_status ON skills (bot_id, status);",
+    // MCP servers and OAuth accounts the person attached to a bot. The account's sign-in stays
+    // in the desktop's native OAuth store.
+    "CREATE TABLE bot_connectors (
+        id TEXT PRIMARY KEY NOT NULL,
+        bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        label TEXT NOT NULL,
+        provider_id TEXT,
+        url TEXT,
+        auth TEXT NOT NULL DEFAULT '{\"type\":\"none\"}',
+        scopes TEXT NOT NULL DEFAULT '[]',
+        default_policy TEXT NOT NULL DEFAULT 'ask',
+        tool_policies TEXT NOT NULL DEFAULT '{}',
+        tools_snapshot TEXT NOT NULL DEFAULT '[]',
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX bot_connectors_bot ON bot_connectors (bot_id, created_at);",
 ];
 
 pub(crate) fn open(path: &Path) -> Result<Connection> {

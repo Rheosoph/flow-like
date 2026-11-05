@@ -60,10 +60,10 @@ pub fn specs() -> Vec<ToolSpec> {
         },
         ToolSpec {
             name: EMAIL_REPLY,
-            description: "Reply in a mail thread, to the sender of its latest mail, from the bot's own address. Use it to answer an email trigger.",
+            description: "Reply in a mail thread, to the sender of its latest mail, from the bot's own address. Use it to answer an email trigger. The owner approves replies, once or for good.",
             capability: Some("email"),
             module: "email",
-            approval: Approval::None,
+            approval: Approval::Ask,
             approval_args: &[],
             mutating: true,
             input_schema: schema_of::<EmailReplyArgs>(),

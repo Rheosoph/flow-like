@@ -200,6 +200,10 @@ const RULES: &[Rule] = &[
     rule(M::POST, "/api/v1/systemone", Ai),
     rule(M::POST, "/api/v1/images/generations", Ai),
     rule(M::POST, "/api/v1/instances/images/generations", Ai),
+    rule(M::POST, "/api/v1/audio/transcriptions", Ai),
+    rule(M::POST, "/api/v1/audio/speech", Ai),
+    rule(M::POST, "/api/v1/instances/audio/transcriptions", Ai),
+    rule(M::POST, "/api/v1/instances/audio/speech", Ai),
     // The executor relay for private model Bits makes the same provider calls.
     rule(
         M::POST,
@@ -661,6 +665,10 @@ mod tests {
         ("POST", "/api/v1/systemone", Ai, None),
         ("POST", "/api/v1/images/generations", Ai, None),
         ("POST", "/api/v1/instances/images/generations", Ai, None),
+        ("POST", "/api/v1/audio/transcriptions", Ai, None),
+        ("POST", "/api/v1/audio/speech", Ai, None),
+        ("POST", "/api/v1/instances/audio/transcriptions", Ai, None),
+        ("POST", "/api/v1/instances/audio/speech", Ai, None),
         (
             "POST",
             "/api/v1/execution/apps/{app_id}/models/chat/completions",

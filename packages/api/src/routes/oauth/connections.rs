@@ -84,6 +84,14 @@ impl StoredToken {
     }
 }
 
+pub(super) struct ListedConnection {
+    pub handle: String,
+    pub provider_id: Option<String>,
+    pub state: String,
+    pub scopes: Vec<String>,
+    pub updated_at: i64,
+}
+
 struct Connection {
     id: String,
     state: String,
@@ -119,6 +127,55 @@ impl<'a> Connections<'a> {
             client_id: client_id.to_owned(),
             owner,
         }
+    }
+
+    /// The owner's grants with the provider each belongs to, recomputed from the fingerprint over
+    /// the configured providers `(id, token_url)`. Handles and scopes only, never a token.
+    pub(super) async fn list_owned(
+        db: &DatabaseConnection,
+        key: &[u8; 32],
+        owner: &str,
+        providers: &[(String, String)],
+    ) -> Result<Vec<ListedConnection>, OAuthProxyError> {
+        let rows = db
+            .query_all_raw(Statement::from_sql_and_values(
+                db.get_database_backend(),
+                r#"SELECT "id", "providerFingerprint", "clientId", "tokenEncrypted", "state", "updatedAt" FROM "OAuthConnection" WHERE "ownerSub" = $1 ORDER BY "updatedAt" DESC LIMIT 200"#,
+                [owner.into()],
+            ))
+            .await
+            .map_err(storage_error)?;
+        let mut listed = Vec::with_capacity(rows.len());
+        for row in rows {
+            let fingerprint: String = row
+                .try_get("", "providerFingerprint")
+                .map_err(storage_error)?;
+            let client_id: Option<String> = row.try_get("", "clientId").ok();
+            let provider_id = providers.iter().find_map(|(provider_id, token_url)| {
+                let identity = serde_json::to_vec(&(
+                    provider_id.as_str(),
+                    client_id.as_deref().unwrap_or_default(),
+                    token_url.as_str(),
+                ))
+                .ok()?;
+                (blake3::hash(&identity).to_hex().to_string() == fingerprint)
+                    .then(|| provider_id.clone())
+            });
+            let encrypted: String = row.try_get("", "tokenEncrypted").map_err(storage_error)?;
+            let scopes = crate::utils::crypto::decrypt_secret(&encrypted, key)
+                .and_then(|json| serde_json::from_str::<StoredToken>(&json).ok())
+                .and_then(|token| token.response.scope)
+                .map(|scope| scope.split_whitespace().map(str::to_owned).collect())
+                .unwrap_or_default();
+            listed.push(ListedConnection {
+                handle: row.try_get("", "id").map_err(storage_error)?,
+                provider_id,
+                state: row.try_get("", "state").map_err(storage_error)?,
+                scopes,
+                updated_at: row.try_get("", "updatedAt").map_err(storage_error)?,
+            });
+        }
+        Ok(listed)
     }
 
     pub(super) async fn client_id(

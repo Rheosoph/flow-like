@@ -9,6 +9,7 @@ import {
 	mentionablesOf,
 	mentionedIn,
 	spokenMentions,
+	callMentions,
 } from "./mentions";
 
 const options: Mentionable[] = [
@@ -176,4 +177,14 @@ describe("spokenMentions", () => {
 			"b2",
 		]);
 	});
+});
+
+test("direct bot calls address the bot without its name while group calls still require it", () => {
+	const bots = [{ id: "bot", name: "Scout", kind: "bot" as const }];
+	expect(callMentions("What time is it?", bots, "direct")).toEqual(["bot"]);
+	expect(callMentions("What time is it?", bots, "group")).toEqual([]);
+	expect(callMentions("Scout, what time is it?", bots, "group")).toEqual([
+		"bot",
+	]);
+	expect(callMentions("   ", bots, "direct")).toEqual([]);
 });

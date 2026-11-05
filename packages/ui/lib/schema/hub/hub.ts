@@ -196,6 +196,10 @@ export interface IOAuthProviderConfig {
 	use_implicit_flow?: boolean;
 	/** Audience claim for token validation */
 	audience?: string | null;
+	/** Hosts a bot's connector may send this provider's token to (exact names or `*.suffix`). Empty uses the built-in list for the provider id. */
+	api_hosts?: string[];
+	/** The provider's MCP endpoint, which may receive the provider's token. */
+	mcp_url?: string | null;
 }
 
 export interface IAuthentication {

@@ -153,13 +153,13 @@ async fn reply_passes_thread_and_html() {
 }
 
 #[test]
-fn specs_gate_on_the_email_capability_and_only_send_asks() {
+fn specs_gate_on_the_email_capability_and_both_ask_the_owner() {
     let send = spec(EMAIL_SEND).unwrap();
     let reply = spec(EMAIL_REPLY).unwrap();
     assert_eq!(send.capability, Some("email"));
     assert_eq!(reply.capability, Some("email"));
     assert_eq!(send.approval, Approval::Ask);
-    assert_eq!(reply.approval, Approval::None);
+    assert_eq!(reply.approval, Approval::Ask);
     assert!(send.mutating && reply.mutating);
 }
 

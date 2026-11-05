@@ -72,6 +72,14 @@ pub(crate) async fn chat_bot(
         bot.context.workspace_app_id =
             super::workspace::chat_workspace(state, owner_id, &bot.context).await;
         bot.context.host_tools = crate::bot_tools::host_tools(state);
+        if bot.context.has(BotCapability::Skills) {
+            bot.context.skills = super::skills::active_index(&state.db, &bot.context.bot_id)
+                .await
+                .unwrap_or_else(|error| {
+                    tracing::warn!(%error, "Bot skills: the active skills were not loaded");
+                    Vec::new()
+                });
+        }
     }
     Ok(bot)
 }
@@ -116,6 +124,11 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
     } else {
         BTreeSet::new()
     };
+    let connectors = if settings.has(BotCapability::Connectors) {
+        crate::bot_tools::connectors::rules_of(db, &row.id).await?
+    } else {
+        Vec::new()
+    };
     let general = system == Some(BotSystemKind::General);
     let text = |value: Option<String>| {
         value
@@ -149,8 +162,10 @@ pub(super) async fn load_chat_bot<C: ConnectionTrait>(
             vision_model: settings.vision_model,
             tool_host: BotToolHost::Chat,
             host_tools: Default::default(),
+            skills: Vec::new(),
             requester: None,
             permissions: Default::default(),
+            connectors,
         },
         model: settings.model,
     }))

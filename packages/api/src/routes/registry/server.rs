@@ -1608,6 +1608,7 @@ impl ServerRegistry {
             widgets,
             widget_bundle_path: None,
             widget_bundle_hash,
+            skills: Vec::new(),
             metadata: Default::default(),
         };
 

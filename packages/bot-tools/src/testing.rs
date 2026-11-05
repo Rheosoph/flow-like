@@ -47,6 +47,7 @@ pub struct FakeEnv {
     pub real_sandbox: Mutex<Option<Arc<dyn SandboxBackend>>>,
     pub shell: Mutex<Option<Arc<dyn crate::shell::ShellBackend>>>,
     pub mail: Mutex<Option<Arc<dyn crate::email::MailBackend>>>,
+    pub connectors: Mutex<Option<Arc<dyn crate::services::ConnectorSource>>>,
     pub sessions: Arc<MemorySessions>,
     pub use_sessions: AtomicBool,
     pub table_opens: std::sync::atomic::AtomicUsize,
@@ -55,6 +56,8 @@ pub struct FakeEnv {
     pub notifier: Mutex<Option<Arc<dyn crate::notify::OwnerNotifier>>>,
     pub people: Mutex<Option<Arc<dyn crate::people::PeopleBackend>>>,
     pub scheduler: Mutex<Option<Arc<dyn crate::schedule::Scheduler>>>,
+    pub skills: Mutex<Option<Arc<dyn crate::skills::SkillHost>>>,
+    pub images: Mutex<Result<Arc<dyn crate::image::ImageBackend>, crate::image::ImageUnavailable>>,
     app_dbs: Mutex<
         HashMap<
             String,
@@ -102,6 +105,7 @@ impl FakeEnv {
             real_sandbox: Mutex::new(None),
             shell: Mutex::new(None),
             mail: Mutex::new(None),
+            connectors: Mutex::new(None),
             sessions: Arc::new(MemorySessions::default()),
             use_sessions: AtomicBool::new(true),
             table_opens: std::sync::atomic::AtomicUsize::new(0),
@@ -110,6 +114,8 @@ impl FakeEnv {
             notifier: Mutex::new(None),
             people: Mutex::new(None),
             scheduler: Mutex::new(None),
+            skills: Mutex::new(None),
+            images: Mutex::new(Err(crate::image::ImageUnavailable::NoModel)),
             app_dbs: Mutex::default(),
             expensive_ok: AtomicBool::new(false),
             writable: AtomicBool::new(true),
@@ -261,6 +267,10 @@ impl ToolEnv for FakeEnv {
         self.scheduler.lock().expect("scheduler").clone()
     }
 
+    fn skills(&self) -> Option<Arc<dyn crate::skills::SkillHost>> {
+        self.skills.lock().expect("skills").clone()
+    }
+
     fn notifier(&self) -> Option<Arc<dyn crate::notify::OwnerNotifier>> {
         self.notifier.lock().expect("notifier").clone()
     }
@@ -282,6 +292,17 @@ impl ToolEnv for FakeEnv {
 
     fn mail(&self) -> Option<Arc<dyn crate::email::MailBackend>> {
         self.mail.lock().expect("mail").clone()
+    }
+
+    async fn images(
+        &self,
+    ) -> std::result::Result<Arc<dyn crate::image::ImageBackend>, crate::image::ImageUnavailable>
+    {
+        self.images.lock().expect("images").clone()
+    }
+
+    fn connectors(&self) -> Option<Arc<dyn crate::services::ConnectorSource>> {
+        self.connectors.lock().expect("connectors").clone()
     }
 
     fn shell(&self) -> Option<Arc<dyn crate::shell::ShellBackend>> {
@@ -542,6 +563,7 @@ pub struct FakeBackend {
     pub rendered: Mutex<Vec<Vec<usize>>>,
     pub failed_pages: Mutex<Vec<u32>>,
     pub excel_requests: Mutex<Vec<String>>,
+    pub created: Mutex<Vec<String>>,
 }
 
 impl FakeBackend {
@@ -626,6 +648,99 @@ impl DocumentBackend for FakeBackend {
             request.operation, request.sheet, request.range, request.style.bold
         ));
         Ok("sheet text".to_string())
+    }
+
+    fn create_pdf(&self, request: crate::documents::MarkdownDocument) -> Result<crate::documents::BuiltDocument> {
+        self.created.lock().expect("created").push(format!(
+            "pdf|{}|{}|{:?}",
+            request.markdown,
+            request.images.len(),
+            request.title
+        ));
+        Ok(crate::documents::BuiltDocument {
+            bytes: Bytes::from_static(b"%PDF-1.7 PAGES:2"),
+            count: Some(2),
+            warnings: Vec::new(),
+        })
+    }
+
+    fn create_docx(&self, request: crate::documents::MarkdownDocument) -> Result<crate::documents::BuiltDocument> {
+        self.created
+            .lock()
+            .expect("created")
+            .push(format!("docx|{}|{}", request.markdown, request.images.len()));
+        Ok(crate::documents::BuiltDocument {
+            bytes: Bytes::from(format!("DOCX:{}", request.markdown)),
+            count: None,
+            warnings: vec!["fake docx warning".to_string()],
+        })
+    }
+
+    fn create_pptx(
+        &self,
+        _title: Option<String>,
+        _author: Option<String>,
+        slides: Vec<crate::documents::DeckSlide>,
+    ) -> Result<crate::documents::BuiltDocument> {
+        self.created
+            .lock()
+            .expect("created")
+            .push(format!("pptx|{}", slides.len()));
+        Ok(crate::documents::BuiltDocument {
+            bytes: Bytes::from_static(b"PPTX"),
+            count: Some(slides.len()),
+            warnings: Vec::new(),
+        })
+    }
+
+    fn create_xlsx(&self, sheets: Vec<crate::documents::SheetData>) -> Result<crate::documents::BuiltDocument> {
+        self.created.lock().expect("created").push(format!(
+            "xlsx|{}",
+            sheets
+                .iter()
+                .map(|s| format!("{}:{}:{:?}", s.name, s.rows.len(), s.rows.iter().flatten().filter(|c| matches!(c, crate::documents::SheetCell::Formula(_))).count()))
+                .collect::<Vec<_>>()
+                .join(",")
+        ));
+        Ok(crate::documents::BuiltDocument {
+            bytes: Bytes::from_static(b"XLSX"),
+            count: Some(sheets.len()),
+            warnings: Vec::new(),
+        })
+    }
+
+    fn fill_template(
+        &self,
+        template: Bytes,
+        fill: crate::documents::TemplateFill,
+    ) -> Result<crate::documents::FilledDocument> {
+        let format = if template.starts_with(b"DOCX") {
+            "docx"
+        } else if template.starts_with(b"%PDF") {
+            "pdf"
+        } else {
+            return Err(anyhow!("not a template"));
+        };
+        let names: Vec<String> = fill
+            .values
+            .iter()
+            .map(|(name, _)| name.clone())
+            .chain(fill.images.iter().map(|(name, _)| name.clone()))
+            .chain(fill.tables.iter().map(|(name, _)| name.clone()))
+            .collect();
+        let (missing, filled): (Vec<_>, Vec<_>) = names.into_iter().partition(|n| n.starts_with("ghost"));
+        self.created
+            .lock()
+            .expect("created")
+            .push(format!("fill|{format}|{}", filled.join(",")));
+        let mut bytes = template.to_vec();
+        bytes.extend_from_slice(b"|filled");
+        Ok(crate::documents::FilledDocument {
+            bytes: Bytes::from(bytes),
+            format: format.to_string(),
+            filled,
+            missing,
+        })
     }
 
     fn page_count(&self, pdf: Vec<u8>) -> Result<usize> {
