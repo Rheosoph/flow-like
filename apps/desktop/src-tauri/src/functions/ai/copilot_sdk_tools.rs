@@ -951,9 +951,8 @@ pub fn sdk_tool_from_spec(
                     approval_from_spec(&spec, args),
                     Duration::from_secs(spec.timeout_secs),
                 );
-                // Close the parent's raw-web authorization before any frontend dispatch. The
-                // local-app-first fallback does not reopen it: `research_agent` receives a fresh
-                // sealed child view bound only to the immutable source request.
+                // The parent's raw-web authorization stays closed after frontend dispatch.
+                // Research uses a separate public session shared across the turn's briefs.
                 result
             }
         }
@@ -1018,20 +1017,25 @@ pub fn create_global_assistant_tools(
     user_prompt: &str,
     run_id: Option<&str>,
 ) -> Vec<(Tool, ToolHandler)> {
-    // The orchestrator no longer holds raw public-web tools. Keep a parent session so any
-    // accidentally surfaced raw handler still fails closed after local/private work. The sealed
-    // `research_agent` child uses a separate authorization view bound only to the immutable source
-    // request, so it can safely be the last fallback after a local research app returned no answer.
+    // Keep raw-web authorization separate from the delegated research budget. Retain the
+    // research session with the parent handlers so sequential frontend delegations cannot reset it.
     let web_research_session = web_research_session_for_turn(user_prompt, run_id);
+    let research_session = delegated_research_session_for_turn(user_prompt, run_id);
     global_assistant_tool_specs(memory.is_some())
         .iter()
         .map(|spec| {
-            sdk_tool_from_spec(
+            let (tool, handler) = sdk_tool_from_spec(
                 spec,
                 bridge.clone(),
                 memory.clone(),
                 Some(web_research_session.clone()),
-            )
+            );
+            let research_session = research_session.clone();
+            let handler: ToolHandler = Arc::new(move |name, args| {
+                let _keep_alive = &research_session;
+                handler(name, args)
+            });
+            (tool, handler)
         })
         .collect()
 }
@@ -1048,10 +1052,8 @@ static WEB_RESEARCH_SESSIONS: LazyLock<Mutex<HashMap<String, Arc<WebResearchSess
 
 /// Resolve the shared session for one turn.
 ///
-/// The key is the owning run plus the immutable top-level user message. Both sides can compute it
-/// without new plumbing: the orchestrator has its own run id and prompt, and a delegated researcher
-/// receives the same `runId` and `sourceUserPrompt` in its tool context — so they share a budget
-/// and a provenance ledger, which is the point.
+/// The key is the owning run plus the immutable top-level user message. Research briefs change
+/// the question without changing that identity or replenishing the budget.
 ///
 /// The run id is what keeps that sharing *bounded*. Several chat turns can now generate at once,
 /// and keying on the prompt alone made two turns asking the same question share one spend budget
@@ -1103,21 +1105,27 @@ pub fn create_data_studio_tools(bridge: FrontendToolBridge) -> Vec<(Tool, ToolHa
     tools
 }
 
-/// Tool set for the nested Research specialist: the public-web tools, and nothing else.
-///
-/// This is the only scope that holds them. The isolation is the security story as much as the
-/// context story — a researcher that cannot read app databases, storage or memory has no private
-/// data to leak into an outbound query, and the orchestrator that does hold that data cannot make
-/// outbound requests itself.
-///
-/// `user_prompt` must be the immutable top-level user message so the researcher joins the turn's
-/// shared session rather than opening a private one with a fresh budget.
+/// Shared session for frontend-managed research. Its stable child id is also used by the parent
+/// handlers, which retain the session until the parent turn ends.
+pub fn delegated_research_session_for_turn(
+    source_user_prompt: &str,
+    run_id: Option<&str>,
+) -> Arc<WebResearchSession> {
+    let id = run_id.unwrap_or_default();
+    let research_run_id = if id.ends_with(":sealed-research") {
+        id.to_owned()
+    } else {
+        format!("{id}:sealed-research")
+    };
+    web_research_session_for_turn(source_user_prompt, Some(&research_run_id))
+}
+
+/// Tool set for the nested Research specialist. Callers supply the turn's shared research session;
+/// only original user URLs and search/archive results authorize page reads.
 pub fn create_research_tools(
     bridge: FrontendToolBridge,
-    user_prompt: &str,
-    run_id: Option<&str>,
+    session: Arc<WebResearchSession>,
 ) -> Vec<(Tool, ToolHandler)> {
-    let session = web_research_session_for_turn(user_prompt, run_id);
     public_web_tool_specs()
         .iter()
         .map(|spec| sdk_tool_from_spec(spec, bridge.clone(), None, Some(session.clone())))
@@ -4512,6 +4520,35 @@ mod tests {
                 "{private_tool} must close outbound public research"
             );
         }
+    }
+
+    #[test]
+    fn delegated_research_followups_keep_budget_after_parent_private_reads() {
+        let run_id = flow_like_types::create_id();
+        let source = "warum besser als quadrate zb";
+        let parent_raw = web_research_session_for_turn(source, Some(&run_id));
+        let retained = delegated_research_session_for_turn(source, Some(&run_id));
+        parent_raw.close_public_web_phase();
+        let child_id = format!("{run_id}:sealed-research");
+        let first = delegated_research_session_for_turn(source, Some(&child_id));
+        assert!(Arc::ptr_eq(&retained, &first));
+        assert!(first.public_web_phase_error(INTERNET_SEARCH_TOOL).is_none());
+        assert!(first.reserve_search_call());
+        first.adopt_opened_urls(&["https://h3geo.org/docs/".into()]);
+        drop(first);
+
+        let followup = delegated_research_session_for_turn(source, Some(&child_id));
+        assert_eq!(followup.spend_summary()["search_calls_used"], 1);
+        assert_eq!(followup.opened_urls(), vec!["https://h3geo.org/docs/"]);
+        assert!(
+            parent_raw
+                .public_web_phase_error(INTERNET_SEARCH_TOOL)
+                .is_some()
+        );
+        let other_turn =
+            delegated_research_session_for_turn(source, Some(&flow_like_types::create_id()));
+        assert_eq!(other_turn.spend_summary()["search_calls_used"], 0);
+        assert!(other_turn.opened_urls().is_empty());
     }
 
     #[test]

@@ -695,7 +695,8 @@ fn mcp_server_instructions_are_derived_from_specialist_tools() {
     assert!(global.contains("flowpilot_home"));
     assert!(global.contains("only when the user explicitly requests"));
     assert!(global.contains("Keep it out of ordinary app builds"));
-    assert!(global.contains("sealed no-argument research_agent"));
+    assert!(global.contains("research_agent with a self-contained public question"));
+    assert!(global.contains("Resolve follow-up references"));
     assert!(global.contains("current weather stay DIRECT"));
     assert!(global.contains("missing apps or failed lookup never authorize BUILD"));
     assert!(global.contains("check existing app capabilities before research or HTTP fallback"));

@@ -116,6 +116,8 @@ impl ModelSource for NoModels {
 struct FakeExecutor {
     jobs: Mutex<Vec<(String, String, String, String)>>,
     fail: AtomicBool,
+    skill_proposal: Mutex<Option<flow_like_types::bot_skill::CreateBotSkill>>,
+    output: Mutex<Option<Value>>,
 }
 
 #[async_trait]
@@ -127,7 +129,7 @@ impl ToolExecutor for FakeExecutor {
         workspace: &str,
         job: String,
         _timeout: Duration,
-    ) -> Result<ToolReply, String> {
+    ) -> Result<ToolReply, super::executor::ToolExecutorError> {
         self.jobs.lock().unwrap().push((
             owner.into(),
             bot.turn_id.clone(),
@@ -135,12 +137,24 @@ impl ToolExecutor for FakeExecutor {
             job.clone(),
         ));
         if self.fail.load(Ordering::SeqCst) {
-            return Err("connection refused at 10.0.0.7".into());
+            return Err(crate::execution::dispatch::DispatchError::Network(
+                "connection refused at 10.0.0.7".into(),
+            ).into());
         }
         let job: ToolJob = serde_json::from_str(&job).unwrap();
+        let proposal = self.skill_proposal.lock().unwrap().clone();
+        let output = self.output.lock().unwrap().clone().unwrap_or_else(|| {
+            let mut output = json!({ "status": "ok", "tool": job.tool, "ran_on": "executor" });
+            if job.tool == "skill_propose" {
+                output["proposed"] = json!(true);
+                output["name"] = json!(proposal.as_ref().map(|proposal| proposal.name.as_str()));
+            }
+            output
+        });
         Ok(ToolReply {
-            output: json!({ "status": "ok", "tool": job.tool, "ran_on": "executor" }).to_string(),
+            output: output.to_string(),
             cpu_ms: 7,
+            skill_proposal: proposal,
         })
     }
 }
@@ -241,6 +255,184 @@ async fn light_tools_run_in_the_api_and_never_reach_the_executor() {
     assert!(executor.jobs.lock().unwrap().is_empty());
 }
 
+struct Skills(
+    flow_like_types::bot_skill::BotSkill,
+    Mutex<Vec<flow_like_types::bot_skill::CreateBotSkill>>,
+    AtomicBool,
+);
+
+#[async_trait]
+impl flow_like_bot_tools::SkillHost for Skills {
+    async fn get(
+        &self,
+        name: &str,
+    ) -> flow_like_types::Result<Option<flow_like_types::bot_skill::BotSkill>> {
+        Ok((self.0.name == name).then(|| self.0.clone()))
+    }
+
+    async fn propose(
+        &self,
+        request: flow_like_types::bot_skill::CreateBotSkill,
+    ) -> flow_like_types::Result<flow_like_types::bot_skill::BotSkill> {
+        if self.2.load(Ordering::SeqCst) {
+            return Err(flow_like_types::anyhow!("The bot already has 20 skills waiting for approval"));
+        }
+        self.1.lock().unwrap().push(request);
+        Ok(self.0.clone())
+    }
+}
+
+#[async_trait]
+impl super::skills::SkillJobs for Skills {
+    async fn job(&self, name: &str) -> Result<flow_like_bot_tools_host::SkillCallJob, String> {
+        assert_eq!(name, self.0.name);
+        if self.0.status != flow_like_types::bot_skill::SkillStatus::Active {
+            return Err(format!("You have no active skill named '{name}'"));
+        }
+        Ok(flow_like_bot_tools_host::SkillCallJob {
+            skill: self.0.clone(),
+            package_id: self.0.source.package_id().unwrap_or_default().into(),
+            package: self.0.source.package_id().map(|_| flow_like_types::dispatch::WasmPackageRef {
+                version: "1.0.0".into(),
+                wasm_hash: "hash".into(),
+                wasm_url: "https://example.test/skill.wasm".into(),
+                cwasm_url: "https://example.test/skill.cwasm".into(),
+                cwasm_checksum: "checksum".into(),
+                permissions: None,
+            }),
+        })
+    }
+}
+
+fn package_skill() -> flow_like_types::bot_skill::BotSkill {
+    use flow_like_types::bot_skill::{BotSkill, SkillSource, SkillStatus};
+    BotSkill {
+        id: "skill-1".into(),
+        bot_id: BOT.into(),
+        name: "report".into(),
+        description: "Build a report".into(),
+        body: "Use the report tool.".into(),
+        source: SkillSource::Package {
+            id: "com.example.reports".into(),
+            version: "1.0.0".into(),
+        },
+        status: SkillStatus::Active,
+        tools: vec!["build_report".into()],
+        updated_at: "2026-11-05T00:00:00Z".into(),
+    }
+}
+
+async fn skill_host(
+    executor: Option<Arc<FakeExecutor>>,
+    skill: flow_like_types::bot_skill::BotSkill,
+) -> (BotToolsHost, Arc<Skills>) {
+    let tools = routing::host_tools(executor.is_some(), &[]);
+    let host = host_with(executor, tools).await;
+    let host = Arc::try_unwrap(host).unwrap_or_else(|_| panic!("host is not shared"));
+    let skills = Arc::new(Skills(skill, Mutex::new(Vec::new()), AtomicBool::new(false)));
+    (host.with_skills(skills.clone()).with_skill_jobs(skills.clone()), skills)
+}
+
+#[flow_like_types::tokio::test]
+async fn package_skill_load_discovers_tools_on_the_executor() {
+    let executor = Arc::new(FakeExecutor::default());
+    let (host, _) = skill_host(Some(executor.clone()), package_skill()).await;
+    let output = parse(&host.run("skill_load", json!({ "name": " report " })).await);
+    assert_eq!(output["ran_on"], "executor", "{output}");
+    let jobs = executor.jobs.lock().unwrap();
+    assert_eq!(jobs.len(), 1);
+    let job: ToolJob = serde_json::from_str(&jobs[0].3).unwrap();
+    assert_eq!(job.tool, "skill_load");
+    let package = job.skill_call.expect("the executor needs the skill package");
+    assert_eq!(package.skill.name, "report");
+    assert_eq!(package.skill.tools, ["build_report"]);
+    assert_eq!(package.package_id, "com.example.reports");
+}
+
+#[flow_like_types::tokio::test]
+async fn instruction_skill_load_also_runs_on_the_executor() {
+    let executor = Arc::new(FakeExecutor::default());
+    let mut skill = package_skill();
+    skill.source = flow_like_types::bot_skill::SkillSource::Owner;
+    skill.tools.clear();
+    let (host, _) = skill_host(Some(executor.clone()), skill).await;
+    let output = parse(&host.run("skill_load", json!({ "name": "report" })).await);
+    assert_eq!(output["ran_on"], "executor", "{output}");
+    let jobs = executor.jobs.lock().unwrap();
+    let job: ToolJob = serde_json::from_str(&jobs[0].3).unwrap();
+    let skill = job.skill_call.expect("the executor receives the approved instructions");
+    assert_eq!(skill.skill.name, "report");
+    assert!(skill.package.is_none());
+}
+
+#[flow_like_types::tokio::test]
+async fn inactive_package_skills_are_hidden_without_dispatching() {
+    use flow_like_types::bot_skill::SkillStatus;
+    for status in [SkillStatus::Pending, SkillStatus::Disabled] {
+        let executor = Arc::new(FakeExecutor::default());
+        let mut skill = package_skill();
+        skill.status = status;
+        let (host, _) = skill_host(Some(executor.clone()), skill).await;
+        let output = parse(&host.run("skill_load", json!({ "name": "report" })).await);
+        assert_eq!(output["code"], "bot_tool_job_failed", "{output}");
+        assert!(executor.jobs.lock().unwrap().is_empty());
+    }
+}
+
+#[flow_like_types::tokio::test]
+async fn skill_tools_without_an_executor_never_fall_back_to_the_api() {
+    let (host, skills) = skill_host(None, package_skill()).await;
+    for tool in ["skill_load", "skill_propose", "skill_call", "skill_run"] {
+        let output = parse(&host.run(tool, json!({ "name": "report" })).await);
+        assert_eq!(output["code"], "bot_tool_needs_executor", "{tool}: {output}");
+    }
+    assert!(skills.1.lock().unwrap().is_empty());
+}
+
+#[flow_like_types::tokio::test]
+async fn skill_proposals_are_persisted_only_after_executor_validation() {
+    let executor = Arc::new(FakeExecutor::default());
+    *executor.skill_proposal.lock().unwrap() = Some(flow_like_types::bot_skill::CreateBotSkill {
+        name: "validated".into(),
+        description: "Validated on the executor".into(),
+        body: "Follow this procedure.".into(),
+        tools: Vec::new(),
+    });
+    let (host, skills) = skill_host(Some(executor.clone()), package_skill()).await;
+    let output = parse(&host.run("skill_propose", json!({ "name": "raw" })).await);
+    assert_eq!(output["ran_on"], "executor", "{output}");
+    assert_eq!(skills.1.lock().unwrap()[0].name, "validated");
+    executor.fail.store(true, Ordering::SeqCst);
+    let failed = parse(&host.run("skill_propose", json!({ "name": "raw" })).await);
+    assert_eq!(failed["status"], "error");
+    assert_eq!(skills.1.lock().unwrap().len(), 1);
+}
+
+#[flow_like_types::tokio::test]
+async fn missing_or_failed_skill_proposals_are_never_persisted() {
+    let executor = Arc::new(FakeExecutor::default());
+    let (host, skills) = skill_host(Some(executor.clone()), package_skill()).await;
+    let missing = parse(&host.run("skill_propose", json!({ "name": "report" })).await);
+    assert_eq!(missing["code"], "bot_tool_invalid_reply", "{missing}");
+    *executor.skill_proposal.lock().unwrap() = Some(flow_like_types::bot_skill::CreateBotSkill {
+        name: "report".into(),
+        description: "A report".into(),
+        body: "Collect the facts.".into(),
+        tools: Vec::new(),
+    });
+    *executor.output.lock().unwrap() = Some(json!({ "status": "error", "error": { "code": "invalid_args" } }));
+    let failed = parse(&host.run("skill_propose", json!({ "name": "report" })).await);
+    assert_eq!(failed["status"], "error", "{failed}");
+    assert!(skills.1.lock().unwrap().is_empty());
+
+    *executor.output.lock().unwrap() = None;
+    skills.2.store(true, Ordering::SeqCst);
+    let refused = parse(&host.run("skill_propose", json!({ "name": "report" })).await);
+    assert_eq!(refused["status"], "error", "{refused}");
+    assert!(refused["message"].as_str().unwrap().contains("20 skills"));
+    assert!(skills.1.lock().unwrap().is_empty());
+}
+
 #[flow_like_types::tokio::test]
 async fn heavy_tools_become_a_job_that_carries_only_the_scoped_credentials() {
     let executor = Arc::new(FakeExecutor::default());
@@ -326,6 +518,8 @@ async fn an_executor_failure_is_reported_without_its_details() {
         .await;
     assert_eq!(parse(&output)["code"], "bot_tool_executor_failed");
     assert!(!output.contains("10.0.0.7"));
+    assert!(output.contains("Execution and saved files are unconfirmed"));
+    assert!(!output.contains("Nothing was changed"));
 }
 
 #[flow_like_types::tokio::test]

@@ -1235,7 +1235,7 @@ fn ability_lines(bot: &BotRunContext, offered: &[&str]) -> Vec<String> {
     }];
     lines.push(if offers(RESEARCH_AGENT_TOOL) {
         format!(
-            "- Public web: `research_agent` hands your owner's current request to an isolated researcher and returns cited findings{}. It receives that request only: no history, memory, files or app data. Keep its verified links, dates and gaps; never present a search snippet as fact.",
+            "- Public web: you direct `research_agent` by writing a self-contained `question` and optional public `context`; it returns cited findings{}. Resolve references using the conversation: a follow-up comparing H3 with square grids must name H3 explicitly. Include relevant public background, the user's constraints, and what needs verification. The researcher sees your brief without the full conversation, memory, files or app data, so keep private content out. Check its findings and call again with a refined question if it misunderstood or left an evidence gap; calls share the turn's research budget. Keep verified links, dates and gaps; never present a search snippet as fact.",
             if offers("list_apps") {
                 ", once `list_apps` showed no app that answers"
             } else {
@@ -2117,6 +2117,10 @@ mod tests {
         assert!(prompt.contains("## YOUR OWNER'S INSTRUCTIONS"));
         assert!(prompt.contains("Answer in German and keep replies short."));
         assert!(prompt.contains("`research_agent`"));
+        assert!(prompt.contains("self-contained `question` and optional public `context`"));
+        assert!(prompt.contains("must name H3 explicitly"));
+        assert!(prompt.contains("call again with a refined question"));
+        assert!(!prompt.contains("It receives that request only"));
         assert!(prompt.contains("`list_apps` lists the apps your owner attached to you"));
         assert!(prompt.contains("`database_tool` reads the tables"));
         assert!(prompt.contains(

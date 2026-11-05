@@ -48,11 +48,13 @@ impl SkillJobs for ApiSkillJobs {
             .map_err(|error| error.to_string())?
             .filter(|skill| skill.status == SkillStatus::Active)
             .ok_or_else(|| format!("You have no active skill named '{name}'"))?;
-        let package_id = skill
-            .source
-            .package_id()
-            .ok_or_else(|| format!("Skill '{name}' ships no package tools"))?
-            .to_string();
+        let Some(package_id) = skill.source.package_id().map(str::to_string) else {
+            return Ok(SkillCallJob {
+                skill,
+                package_id: String::new(),
+                package: None,
+            });
+        };
         let mut packages = crate::execution::wasm_resolve::resolve_wasm_packages(
             &self.state,
             &self.workspace,
@@ -65,7 +67,7 @@ impl SkillJobs for ApiSkillJobs {
         Ok(SkillCallJob {
             skill,
             package_id,
-            package,
+            package: Some(package),
         })
     }
 }

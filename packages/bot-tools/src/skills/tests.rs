@@ -131,7 +131,8 @@ async fn a_proposal_is_saved_pending_and_checked() {
     )
     .await;
     assert!(outcome.is_ok(), "{:?}", outcome.error);
-    assert_eq!(outcome.result["status"], "pending");
+    assert_eq!(outcome.result["skill_status"], "pending");
+    assert_eq!(outcome.envelope()["status"], "ok");
     let loaded = call(&env, SKILL_LOAD, json!({ "name": "weekly-report" })).await;
     assert!(!loaded.is_ok(), "the proposal stays invisible until approved");
 

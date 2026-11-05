@@ -5,7 +5,7 @@ use flow_like_bot_tools_host::{ToolJobEnvelope, ToolReply, job_hash};
 
 use crate::{
     execution::{
-        ExecutionJwtParams, TokenType, bind_bot_identity, bind_tool_job,
+        ExecutionJwtParams, TokenType, bind_bot_identity, bind_tool_job, dispatch::DispatchError,
         sign_unattended_execution_jwt,
     },
     middleware::jwt::BotUser,
@@ -13,6 +13,70 @@ use crate::{
 };
 
 const TOKEN_TTL_SECS: i64 = 330;
+
+/// Keeps private transport details in server logs while giving the bot a useful diagnosis.
+#[derive(Debug, thiserror::Error)]
+#[error("{detail}")]
+pub(crate) struct ToolExecutorError {
+    detail: String,
+    pub(crate) code: &'static str,
+    pub(crate) message: &'static str,
+}
+
+impl From<DispatchError> for ToolExecutorError {
+    fn from(error: DispatchError) -> Self {
+        let (code, message) = match &error {
+            DispatchError::ToolHttp {
+                status: 404 | 501, ..
+            } => (
+                "bot_tool_executor_unsupported",
+                "The configured executor does not support bot tools. The server needs an executor build with bot tools enabled and the correct tool endpoint. This request did not run; changing the script or its packages will not fix this.",
+            ),
+            DispatchError::ToolHttp {
+                status: 401 | 403, ..
+            } => (
+                "bot_tool_executor_unauthorized",
+                "The executor rejected the server's authorization. This request did not run. The server's executor credentials or signing configuration need to be checked.",
+            ),
+            DispatchError::ToolHttp { status: 429, .. } => (
+                "bot_tool_executor_busy",
+                "The executor has no capacity for this request. It did not run; try again later.",
+            ),
+            DispatchError::ToolHttp {
+                status: 408 | 504, ..
+            }
+            | DispatchError::ToolTimeout => (
+                "bot_tool_executor_timeout",
+                "The executor did not finish before its deadline. Execution and saved files are unconfirmed; check the workspace before retrying.",
+            ),
+            DispatchError::Configuration(_) => (
+                "bot_tool_executor_configuration",
+                "The server could not configure or authorize the tool job. It did not run. Check the server's executor configuration.",
+            ),
+            DispatchError::Rejected(_) => (
+                "bot_tool_executor_rejected",
+                "The execution service rejected the tool job before it started. Check the server logs for the rejection reason; changing the script's packages is not a supported diagnosis.",
+            ),
+            DispatchError::Serialization(_) => (
+                "bot_tool_executor_invalid_reply",
+                "The server could not encode the job or read the executor's reply. Execution and saved files are unconfirmed. Check that the API and executor use compatible versions.",
+            ),
+            DispatchError::ExecutorFailed(_) => (
+                "bot_tool_executor_crashed",
+                "The execution service reported that the executor stopped unexpectedly. Saved files are unconfirmed. Check the executor logs before retrying.",
+            ),
+            _ => (
+                "bot_tool_executor_failed",
+                "Communication with the executor failed. Execution and saved files are unconfirmed. The server logs contain the failure reason; this does not establish a problem with the script or its packages.",
+            ),
+        };
+        Self {
+            detail: error.to_string(),
+            code,
+            message,
+        }
+    }
+}
 
 /// Where a bot turn's heavy tool calls run.
 #[async_trait]
@@ -25,7 +89,7 @@ pub(crate) trait ToolExecutor: Send + Sync {
         workspace: &str,
         job: String,
         timeout: Duration,
-    ) -> Result<ToolReply, String>;
+    ) -> Result<ToolReply, ToolExecutorError>;
 }
 
 /// The deployment's executor, reached through the dispatcher.
@@ -88,13 +152,53 @@ impl ToolExecutor for DispatcherExecutor {
         workspace: &str,
         job: String,
         timeout: Duration,
-    ) -> Result<ToolReply, String> {
-        let executor_jwt = mint(owner, bot, workspace, &job)?;
+    ) -> Result<ToolReply, ToolExecutorError> {
+        let executor_jwt =
+            mint(owner, bot, workspace, &job).map_err(DispatchError::Configuration)?;
         let envelope = ToolJobEnvelope { executor_jwt, job };
         self.state
             .dispatcher
             .invoke_tool(owner, &envelope, timeout)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(Into::into)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tool_http_failures_explain_the_cause_without_exposing_private_details() {
+        for (status, code) in [
+            (404, "bot_tool_executor_unsupported"),
+            (501, "bot_tool_executor_unsupported"),
+            (401, "bot_tool_executor_unauthorized"),
+            (403, "bot_tool_executor_unauthorized"),
+            (429, "bot_tool_executor_busy"),
+            (504, "bot_tool_executor_timeout"),
+        ] {
+            let error = ToolExecutorError::from(DispatchError::ToolHttp {
+                status,
+                message: "private upstream address and token".into(),
+            });
+            assert_eq!(error.code, code);
+            assert!(!error.message.contains("private upstream"));
+            assert!(error.to_string().contains("private upstream"));
+        }
+    }
+
+    #[test]
+    fn lost_results_never_claim_that_nothing_was_saved() {
+        for failure in [
+            DispatchError::ToolTimeout,
+            DispatchError::Network("connection lost".into()),
+            DispatchError::Serialization("bad response".into()),
+            DispatchError::ExecutorFailed("worker died".into()),
+        ] {
+            let error = ToolExecutorError::from(failure);
+            assert!(error.message.contains("unconfirmed"));
+            assert!(!error.message.contains("Nothing was changed"));
+        }
     }
 }

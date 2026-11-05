@@ -15,7 +15,7 @@ use view::{
 const API_BASE: &str = "https://device-test.example/api/v1";
 const HEARTBEAT: &str = "/devices/device/heartbeat";
 
-const VIEW_FIELDS: [&str; 15] = [
+const VIEW_FIELDS: [&str; 16] = [
     "device_id",
     "owner_id",
     "name",
@@ -31,6 +31,7 @@ const VIEW_FIELDS: [&str; 15] = [
     "access_rules_expire_at",
     "cloud_approvals",
     "auth_rejection",
+    "bot_host_seen_at",
 ];
 
 fn sql(query: &str, values: impl IntoIterator<Item = Value>) -> Statement {

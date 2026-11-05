@@ -83,6 +83,22 @@ fn refusal(tool: &str, code: &str, message: &str) -> String {
         .to_string()
 }
 
+fn checked_skill_proposal(
+    reply: &flow_like_bot_tools_host::ToolReply,
+) -> Result<Option<&flow_like_types::bot_skill::CreateBotSkill>, &'static str> {
+    let output = serde_json::from_str::<Value>(&reply.output).unwrap_or(Value::Null);
+    match output["status"].as_str() {
+        Some("ok") => reply
+            .skill_proposal
+            .as_ref()
+            .filter(|proposal| output["proposed"] == true && output["name"] == proposal.name)
+            .map(Some)
+            .ok_or("The executor did not return a validated skill proposal. Nothing was saved."),
+        Some("error" | "needs_approval") => Ok(None),
+        _ => Err("The executor returned an invalid skill proposal result. Nothing was saved."),
+    }
+}
+
 fn needs_cost_approval(output: &str) -> bool {
     serde_json::from_str::<Value>(output)
         .ok()
@@ -146,21 +162,23 @@ impl BotToolsHost {
         self
     }
 
-    /// What an executor needs to run a package skill's tool: the skill as the database holds it
-    /// (active only) and the package the workspace pins.
+    /// What an executor needs to discover or run a package skill's tools: the active skill
+    /// and the package the workspace pins.
     async fn skill_job(
         &self,
         tool: &str,
         args: &Value,
     ) -> Result<Option<flow_like_bot_tools_host::SkillCallJob>, String> {
-        if !["skill_call", "skill_run"].contains(&tool) {
-            return Ok(None);
-        }
+        let name_arg = match tool {
+            "skill_load" => "name",
+            "skill_call" | "skill_run" => "skill",
+            _ => return Ok(None),
+        };
         let jobs = self
             .skill_jobs
             .as_ref()
             .ok_or_else(|| "This server cannot run package skills".to_string())?;
-        let name = args.get("skill").and_then(Value::as_str).unwrap_or_default();
+        let name = args.get(name_arg).and_then(Value::as_str).unwrap_or_default();
         jobs.job(name.trim()).await.map(Some)
     }
 
@@ -358,9 +376,6 @@ impl BotToolsHost {
         if let Some(scheduler) = &self.scheduler {
             env = env.with_scheduler(scheduler.clone());
         }
-        if let Some(skills) = &self.skills {
-            env = env.with_skills(skills.clone());
-        }
         if let Some(mail) = &self.mail {
             env = env.with_mail(mail.clone());
         }
@@ -515,18 +530,32 @@ impl BotToolsHost {
         );
         match reply {
             Ok(reply) => {
+                if tool == "skill_propose" {
+                    match checked_skill_proposal(&reply) {
+                        Ok(Some(proposal)) => {
+                            let Some(skills) = &self.skills else {
+                                return refusal(
+                                    tool,
+                                    "failed",
+                                    "This server does not keep skills for the bot",
+                                );
+                            };
+                            if let Err(error) = skills.propose(proposal.clone()).await {
+                                return refusal(tool, "failed", &error.to_string());
+                            }
+                        }
+                        Ok(None) => {}
+                        Err(message) => return refusal(tool, "bot_tool_invalid_reply", message),
+                    }
+                }
                 if let (Some(images), true) = (&self.images, tool == IMAGE_TOOL) {
                     images.record(&reply.output);
                 }
                 reply.output
             }
-            Err(message) => {
-                tracing::warn!(tool, turn_id = %self.deps.turn_id, %message, "[bot_tools] executor tool job failed");
-                refusal(
-                    tool,
-                    "bot_tool_executor_failed",
-                    "The executor could not run this tool. Nothing was changed unless the result says so.",
-                )
+            Err(error) => {
+                tracing::warn!(tool, turn_id = %self.deps.turn_id, %error, "[bot_tools] executor tool job failed");
+                refusal(tool, error.code, error.message)
             }
         }
     }

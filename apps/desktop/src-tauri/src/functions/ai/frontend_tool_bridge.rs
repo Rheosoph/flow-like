@@ -1421,6 +1421,11 @@ fn apply_tool_context(
     let Value::Object(arguments) = arguments else {
         return;
     };
+    // Research accepts only the caller's public brief. Ambient workspace IDs are neither
+    // research context nor fields in its strict argument schema.
+    if tool_name == "research_agent" {
+        return;
+    }
     // Source identity is carried by the search hit. Ambient authoring context must never retarget
     // it or force a workspace search onto the current board, hiding reusable sibling helpers.
     if tool_name == "read_symbol" {
@@ -2553,6 +2558,28 @@ mod tests {
             defaulted.get("overlay_id").and_then(Value::as_str),
             Some("seed-overlay")
         );
+    }
+
+    #[test]
+    fn research_brief_does_not_inherit_ambient_workspace_identifiers() {
+        let context = FrontendToolContext {
+            app_id: Some("private-app".into()),
+            board_id: Some("private-board".into()),
+            overlay_id: Some("private-overlay".into()),
+            source_user_prompt: Some("warum besser als quadrate zb".into()),
+            ..Default::default()
+        };
+        let brief = json!({
+            "question": "Why does H3 use hexagons instead of squares?",
+            "context": "Compare geographic grid neighbor distances and limitations."
+        });
+        let mut arguments = brief.clone();
+        apply_tool_context("research_agent", &mut arguments, Some(&context));
+        assert_eq!(arguments, brief);
+        let prompt = flow_like::flow::copilot::tool_spec::research_agent_prompt(&arguments)
+            .expect("the explicit brief remains valid after bridge context binding");
+        assert!(prompt.contains("H3"));
+        assert!(!prompt.contains("private-app"));
     }
 
     #[test]

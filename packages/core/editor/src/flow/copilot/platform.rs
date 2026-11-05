@@ -56,7 +56,7 @@ use super::tool_spec::{
     data_studio_specialist_tool_specs, find_data_studio_tool_spec, find_global_tool_spec,
     find_home_tool_spec, find_scout_tool_spec, global_assistant_tool_specs,
     home_specialist_tool_specs, home_specialist_tool_specs_for_access, public_web_tool_specs,
-    resolve_tool_effect, scout_specialist_tool_specs, spec_arg_str,
+    research_agent_prompt, resolve_tool_effect, scout_specialist_tool_specs, spec_arg_str,
 };
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
 use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters};
@@ -999,9 +999,11 @@ impl PlatformCopilot {
         let mut session_stats = LLMUsageStats::default();
         let mut current_prompt = prompt_message;
         let web_research_session = Arc::new(WebResearchSession::new(&user_prompt));
+        // Research calls share spend and source provenance while the root's own web phase can
+        // close after private tools. Only the caller's explicit public brief reaches the child.
+        let delegated_research_session = WebResearchSession::new(&user_prompt);
         // A run without an app inventory has no local apps to check before research.
         let mut local_app_discovery_returned = !advertised_tool_names.contains("list_apps");
-        let mut sealed_research_used = false;
         let watches_room = bridge.watches_room();
         let mut room_refreshes_remaining = MAX_ROOM_REFRESHES;
         let mut iteration = 0;
@@ -1286,12 +1288,21 @@ impl PlatformCopilot {
                 }
                 let prepared = match tool_name {
                     RESEARCH_AGENT_TOOL => {
-                        let output = if let Some(refusal) = sealed_research_gate_error(
+                        let brief = research_agent_prompt(&tool_call.function.arguments);
+                        let output = if let Some(refusal) = local_app_discovery_gate_error(
+                            RESEARCH_AGENT_TOOL,
                             local_app_discovery_returned,
-                            sealed_research_used,
                         ) {
                             refusal.to_string()
+                        } else if let Err(error) = &brief {
+                            json!({
+                                "status": "error",
+                                "code": "invalid_research_brief",
+                                "retryable": true,
+                                "message": error,
+                            }).to_string()
                         } else {
+                            let brief = brief.expect("the research brief was validated above");
                             let timeout_secs = find_global_tool_spec(RESEARCH_AGENT_TOOL)
                                 .map(|spec| spec.timeout_secs)
                                 .unwrap_or(900);
@@ -1308,7 +1319,8 @@ impl PlatformCopilot {
                                     completion_client,
                                     &model_name,
                                     thinking.clone(),
-                                    &user_prompt,
+                                    &brief,
+                                    &delegated_research_session,
                                     &progress,
                                 ),
                             )
@@ -1323,7 +1335,6 @@ impl PlatformCopilot {
                             );
                             match outcome {
                                 Ok(Ok(outcome)) => {
-                                    sealed_research_used = true;
                                     for call in &outcome.stats.calls {
                                         session_stats.accumulate(
                                             &call.usage,
@@ -1337,7 +1348,7 @@ impl PlatformCopilot {
                                         .adopt_opened_urls(&outcome.opened_urls);
                                     let mut result = json!({
                                         "status": "ok",
-                                        "sealed_to_source_request": true,
+                                        "directed_by_assistant": true,
                                         "findings": outcome.findings,
                                         "citable_urls": outcome.opened_urls,
                                     });
@@ -1348,9 +1359,8 @@ impl PlatformCopilot {
                                     }
                                     result.to_string()
                                 }
-                                // An immediate failure is cheap to retry and leaves the run with no
-                                // research at all, so it does not burn the one shot. A timeout does:
-                                // the user already waited the full budget for it.
+                                // Failed calls keep their spent allowance. The assistant can refine
+                                // the brief while the shared turn budget still permits research.
                                 Ok(Err(error)) => {
                                     tracing::warn!("Sealed research failed: {error:#}");
                                     json!({
@@ -1362,7 +1372,6 @@ impl PlatformCopilot {
                                     .to_string()
                                 }
                                 Err(_) => {
-                                    sealed_research_used = true;
                                     tracing::warn!(
                                         "Sealed research exceeded its {timeout_secs}-second limit"
                                     );
@@ -1384,7 +1393,7 @@ impl PlatformCopilot {
                         "tool": tool_name,
                         "code": "raw_public_web_tool_unavailable",
                         "retryable": false,
-                        "message": "Raw public-web tools are unavailable to the root assistant; use the sealed no-argument research_agent fallback."
+                        "message": "Raw public-web tools are unavailable to the root assistant; direct research_agent with a self-contained question and relevant public context."
                     })
                     .to_string()),
                     SPAWN_SUBTASKS_TOOL => Ok(with_request_id(
@@ -1518,9 +1527,8 @@ impl PlatformCopilot {
             }
             let tool_results: Vec<PlatformToolResult> = ordered.into_iter().flatten().collect();
 
-            // All calls in one model-authored batch may complete. Once that batch has introduced
-            // app, memory, or interactive data, later model rounds lose public-network access so
-            // private values cannot be transformed into a new query or outbound URL.
+            // All calls in one model-authored batch may complete. Private tools close the root's
+            // raw web phase. Further delegated research receives only an explicit public brief.
             if tool_results.iter().any(|(_id, name, output, _images)| {
                 name == "list_apps" && returned_app_inventory_result(output)
             }) {
@@ -1621,7 +1629,7 @@ impl PlatformCopilot {
                 }
                 if round_entered_private_context {
                     image_contents.push(UserContent::text(
-                        "Host privacy boundary: app, memory, or interactive user data has now entered the working context. Automatic public-web search and page-reading tools are closed for this assistant run. Finish from public evidence already collected; sealed research receives only the immutable user request. Direct http_request calls still require the existing execution approval controls and a user-authorized destination and purpose for any private data.",
+                        "App, memory, or interactive user data has entered the working context. Raw public-web tools are closed for this assistant run. You can still direct research_agent with a self-contained public question and relevant public context; keep secrets, credentials, private identifiers, and private app/file contents out of its brief. Direct http_request calls still require the existing execution approval controls and a user-authorized destination and purpose for any private data.",
                     ));
                 }
                 if !tool_images.is_empty() {
@@ -1816,15 +1824,15 @@ impl SealedResearchProgress<'_> {
     }
 }
 
-/// Run public research in a context that can see only the immutable source request and public-web
-/// tools. This is the rig/Bits equivalent of the frontend-managed Research specialist. The root
-/// model cannot supply arguments, history, recalled memory, attachments, or app inventory to this
-/// loop, so local-app discovery cannot be encoded into an outbound query.
+/// Run public research using the caller's explicit brief and public-web tools. The child receives
+/// no automatic history, memory, attachments, or app results. Follow-up calls share the turn's
+/// research allowance and URL provenance, but each gets a fresh model transcript for its brief.
 async fn run_sealed_research_agent(
     completion_client: &(dyn CompletionClientDyn + Send + Sync),
     model_name: &str,
     thinking: Option<Value>,
-    source_user_prompt: &str,
+    research_brief: &str,
+    web_session: &WebResearchSession,
     progress: &SealedResearchProgress<'_>,
 ) -> Result<SealedResearchOutcome> {
     let research_date = format!(
@@ -1839,13 +1847,9 @@ async fn run_sealed_research_agent(
         .into_iter()
         .map(|spec| spec.to_tool_definition())
         .collect();
-    // This sealed child gets a fresh authorization view even when the parent has already called a
-    // local research app. It still receives only the immutable source request, never the parent's
-    // app result, so local-first fallback remains possible without reopening the root context.
-    let web_session = WebResearchSession::new(source_user_prompt);
     let mut history = Vec::new();
     let mut current_prompt = rig::message::Message::User {
-        content: OneOrMany::one(UserContent::text(source_user_prompt.to_string())),
+        content: OneOrMany::one(UserContent::text(research_brief.to_string())),
     };
     let mut research_stats = LLMUsageStats::default();
 
@@ -1921,7 +1925,7 @@ async fn run_sealed_research_agent(
             ));
         }
 
-        // Preserve a valid alternating transcript: the original source request and every later
+        // Preserve a valid alternating transcript: the research brief and every later
         // tool-result prompt must precede the assistant turn that answered it. Without this, the
         // second research round loses the user's question and later providers may reject orphaned
         // tool calls/results.
@@ -1960,14 +1964,14 @@ async fn run_sealed_research_agent(
                     }
                 }
                 OPEN_URL_TOOL => match web_session.prepare_open_url_call(arguments) {
-                    Ok(arguments) => run_open_url_for_session(&arguments, &web_session).await,
+                    Ok(arguments) => run_open_url_for_session(&arguments, web_session).await,
                     Err(output) => serde_json::from_str(&output).unwrap_or_else(
                         |_| json!({ "status": "error", "tool": name, "error": output }),
                     ),
                 },
                 ARCHIVE_LOOKUP_TOOL => {
                     if web_session.reserve_archive_call() {
-                        run_archive_lookup_for_session(&arguments, &web_session).await
+                        run_archive_lookup_for_session(&arguments, web_session).await
                     } else {
                         json!({
                             "status": "error",
@@ -2009,9 +2013,8 @@ fn is_public_web_tool(name: &str) -> bool {
     )
 }
 
-/// Root-context tools whose results can contain private/user-controlled data. App inventory is a
-/// routing exception only because the root has no raw web tools and the sealed researcher accepts
-/// no model text. Its metadata therefore cannot cross the outbound boundary.
+/// Root-context tools whose results can contain private/user-controlled data. The root has no raw
+/// web tools; app inventory is for routing and must stay out of its public research briefs.
 fn platform_tool_enters_private_context(name: &str) -> bool {
     !is_public_web_tool(name) && !matches!(name, "list_apps" | RESEARCH_AGENT_TOOL)
 }
@@ -2029,29 +2032,6 @@ fn local_app_discovery_gate_error(
         "retryable": true,
         "message": "Call list_apps and wait for its result first. Use an existing app if a configured interface handles the request; otherwise use web research or a direct API request. A partial inventory counts as discovery, but a failed listing does not.",
     }))
-}
-
-/// Research requires a returned app inventory and an unused research budget. It may share a wave
-/// with private calls: its input is sealed to the immutable user request, so nothing they return
-/// can reach its queries.
-fn sealed_research_gate_error(
-    local_app_discovery_returned: bool,
-    sealed_research_used: bool,
-) -> Option<Value> {
-    if let Some(refusal) =
-        local_app_discovery_gate_error(RESEARCH_AGENT_TOOL, local_app_discovery_returned)
-    {
-        return Some(refusal);
-    }
-    if sealed_research_used {
-        return Some(json!({
-            "status": "error",
-            "code": "sealed_research_already_used",
-            "retryable": false,
-            "message": "The sealed public researcher is one-shot for this run; synthesize its findings and disclose remaining gaps."
-        }));
-    }
-    None
 }
 
 /// Whether a `list_apps` result opens the sealed public-web fallback. The question is only whether
@@ -2621,6 +2601,10 @@ fn search_query_contains_likely_secret(query: &str) -> bool {
 mod room_tests;
 
 #[cfg(test)]
+#[path = "platform_research_tests.rs"]
+mod research_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -2832,8 +2816,8 @@ mod tests {
         assert_eq!(events[5]["status"], "error");
     }
 
-    /// Raw public-web schemas must stay out of the root context. The sealed no-argument fallback
-    /// runs an isolated local research loop instead.
+    /// Raw public-web schemas stay out of the root context. The assistant directs a research loop
+    /// with a public brief instead.
     #[test]
     fn platform_loop_exposes_only_the_sealed_research_fallback() {
         let names: Vec<&str> = platform_loop_tool_specs(true)
@@ -3010,8 +2994,8 @@ mod tests {
         assert!(!returned_app_inventory_result("not json"));
     }
 
-    fn gate_code(local_app_discovery_returned: bool, sealed_research_used: bool) -> Option<String> {
-        sealed_research_gate_error(local_app_discovery_returned, sealed_research_used).map(
+    fn gate_code(local_app_discovery_returned: bool) -> Option<String> {
+        local_app_discovery_gate_error(RESEARCH_AGENT_TOOL, local_app_discovery_returned).map(
             |refusal| {
                 refusal
                     .get("code")
@@ -3025,10 +3009,10 @@ mod tests {
     #[test]
     fn public_research_and_http_require_app_discovery_first() {
         assert_eq!(
-            gate_code(false, false).as_deref(),
+            gate_code(false).as_deref(),
             Some("local_app_discovery_required")
         );
-        assert_eq!(gate_code(true, false), None);
+        assert_eq!(gate_code(true), None);
         let refusal = local_app_discovery_gate_error(HTTP_REQUEST_TOOL, false).unwrap();
         assert_eq!(refusal["code"], "local_app_discovery_required");
         assert_eq!(refusal["retryable"], true);
@@ -3037,34 +3021,10 @@ mod tests {
     }
 
     #[test]
-    fn sealed_research_gate_refuses_in_priority_order() {
-        // Every request checks local apps before public fallback, including a fresh run.
-        assert_eq!(
-            gate_code(false, true).as_deref(),
-            Some("local_app_discovery_required")
-        );
-        // ...and an inventory clears it.
-        assert_eq!(gate_code(true, false), None);
-        // One shot per run, however it was earned.
-        assert_eq!(
-            gate_code(true, true).as_deref(),
-            Some("sealed_research_already_used")
-        );
-    }
-
-    /// Every refusal the model is expected to act on must say so; the one-shot refusal must not,
-    /// or the model burns rounds retrying a call that can never succeed.
-    #[test]
-    fn only_the_recoverable_sealed_research_refusals_are_retryable() {
-        for (args, retryable) in [((false, false), true), ((true, true), false)] {
-            let refusal = sealed_research_gate_error(args.0, args.1).expect("a refusal");
-            assert_eq!(
-                refusal.get("retryable").and_then(Value::as_bool),
-                Some(retryable),
-                "wrong retryability for {refusal}"
-            );
-            assert_eq!(refusal.get("status").and_then(Value::as_str), Some("error"));
-        }
+    fn research_discovery_refusal_is_retryable() {
+        let refusal = local_app_discovery_gate_error(RESEARCH_AGENT_TOOL, false).unwrap();
+        assert_eq!(refusal["retryable"], true);
+        assert_eq!(refusal["status"], "error");
     }
 
     /// A listing the host could only partly read is still a listing. Sealing the public fallback on

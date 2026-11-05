@@ -2,9 +2,7 @@ use flow_like::flow::copilot::HostTools;
 use serde_json::Value;
 
 /// Tools the API runs itself: they touch Lance tables and read objects, nothing heavy.
-const IN_PROCESS: [&str; 22] = [
-    "skill_load",
-    "skill_propose",
+const IN_PROCESS: [&str; 20] = [
     "secret_list",
     "secret_request",
     "message_owner",
@@ -28,7 +26,9 @@ const IN_PROCESS: [&str; 22] = [
 ];
 
 /// Tools that write files, parse documents, run code or call a provider whose answer is untrusted: the executor only.
-const EXECUTOR_ONLY: [&str; 15] = [
+const EXECUTOR_ONLY: [&str; 17] = [
+    "skill_load",
+    "skill_propose",
     "skill_call",
     "skill_run",
     "file_save",
@@ -193,6 +193,8 @@ mod tests {
         let untrusted = [
             "document_create",
             "document_fill",
+            "skill_load",
+            "skill_propose",
             "skill_call",
             "skill_run",
             "connector_call",

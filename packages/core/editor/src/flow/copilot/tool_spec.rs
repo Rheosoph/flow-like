@@ -23,10 +23,38 @@ pub const ARCHIVE_LOOKUP_TOOL: &str = "archive_lookup";
 pub const HTTP_REQUEST_TOOL: &str = "http_request";
 pub const MEMORY_STORE_TOOL: &str = "_memory_store";
 pub const MEMORY_SEARCH_TOOL: &str = "_memory_search";
-/// Sealed public-web fallback. Tool-driven backends delegate it to the nested `Research` scope;
-/// the rig/Bits loop runs an equivalent isolated researcher locally. It deliberately accepts no
-/// model-authored text: the host binds it to the immutable top-level user request.
+/// Public-web research directed by the calling assistant. Tool-driven backends delegate it to
+/// the nested `Research` scope; the rig/Bits loop runs an equivalent researcher locally.
 pub const RESEARCH_AGENT_TOOL: &str = "research_agent";
+
+/// Validate the caller's research brief without falling back to an ambiguous last user message.
+pub fn research_agent_prompt(args: &Value) -> Result<String, String> {
+    let args = args
+        .as_object()
+        .ok_or_else(|| "research_agent expects an object with a question string".to_string())?;
+    if args.keys().any(|key| key != "question" && key != "context") {
+        return Err("research_agent accepts only question and optional context".to_string());
+    }
+    let question = args
+        .get("question")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|question| !question.is_empty())
+        .ok_or_else(|| {
+            "research_agent requires a nonempty question that resolves references from the conversation"
+                .to_string()
+        })?;
+    let context = match args.get("context") {
+        None => "",
+        Some(Value::String(context)) => context.trim(),
+        Some(_) => return Err("research_agent context must be a string when supplied".to_string()),
+    };
+    let mut prompt = format!("Research question:\n{question}");
+    if !context.is_empty() {
+        prompt.push_str(&format!("\n\nRelevant public context:\n{context}"));
+    }
+    Ok(prompt)
+}
 
 /// The externally observable effect of a platform tool call. This is deliberately independent of
 /// when approval is requested: deferred-approval tools are still ordered mutations while they
@@ -1701,22 +1729,35 @@ Call before a from-scratch app/workflow, except for a small existing-target edit
         },
         PlatformToolSpec {
             name: RESEARCH_AGENT_TOOL,
-            description: r#"Run FlowPilot's sealed PUBLIC-WEB fallback for the current top-level user request.
+            description: r#"Research a public-web question directed by the calling assistant and return cited findings.
 
-Call only after `list_apps` returns and existing app capabilities have been checked: no suitable
+When `list_apps` is available, call only after it returns and app capabilities have been checked: no suitable
 app/interface exists, or local research candidates produced no usable public answer.
-Never bypass a declined app call. This tool accepts no question or context
-arguments: the host gives an isolated read-only researcher the immutable user request and date. It
-receives no root history, memory, attachments, app inventory/results, or model-authored arguments;
-from a mixed source request it extracts only safe public factual subquestions and never searches for
-secrets, credentials, or private identifiers. It returns cited findings plus evidence gaps.
+Never bypass a declined app call. Write a self-contained question using the conversation to resolve
+references and name the topic. Include relevant public background, comparisons, constraints, and
+evidence gaps in context. For example, after discussing H3, 'why better than squares' becomes a
+question about H3 hexagonal cells compared with square grids, including their tradeoffs.
 
-It cannot use a local app's output as research context. If the next public query must be derived
-from private output, request a new explicit sanitized public-only turn instead."#,
+The researcher receives your brief and public-web tools, without automatic access to history,
+memory, files, or apps. Keep secrets, credentials, private identifiers, and private app/file contents
+out of the brief. Review its findings and call again with a refined question when evidence is missing
+or the first search misunderstood the task. Calls share the turn's research budget. Preserve verified
+citations, dates, and remaining gaps when answering."#,
             schema: || {
                 json!({
                     "type": "object",
-                    "properties": {},
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "minLength": 1,
+                            "description": "Self-contained public research question with conversation references resolved."
+                        },
+                        "context": {
+                            "type": "string",
+                            "description": "Relevant public background, constraints, and evidence gaps to guide the research."
+                        }
+                    },
+                    "required": ["question"],
                     "additionalProperties": false
                 })
             },
@@ -1882,7 +1923,7 @@ pub fn http_request_tool_spec() -> PlatformToolSpec {
 /// researcher has no app, database, storage or memory tools. The orchestrator's separate HTTP
 /// requests use execution approval. Provenance and spend share the turn's `WebResearchSession`.
 ///
-/// The rig/Bits orchestrator executes the same sealed fallback in a fresh local research loop; raw
+/// The rig/Bits orchestrator executes the same directed brief in a fresh local research loop; raw
 /// public-web schemas still never enter its root context.
 pub fn public_web_tool_specs() -> Vec<PlatformToolSpec> {
     vec![
@@ -3015,6 +3056,42 @@ pub fn find_scout_tool_spec(name: &str) -> Option<PlatformToolSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn research_brief_resolves_a_conversation_followup() {
+        let args = json!({
+            "question": " Why does H3 use hexagonal cells rather than square grids? ",
+            "context": " The conversation is about H3 spatial indexing. Compare neighbor distances and tradeoffs. "
+        });
+        let spec = find_global_tool_spec(RESEARCH_AGENT_TOOL).unwrap();
+        let schema = (spec.schema)();
+        let validator = jsonschema::validator_for(&schema).unwrap();
+        assert!(validator.is_valid(&args));
+        assert!(!validator.is_valid(&json!({})));
+        assert_eq!(
+            research_agent_prompt(&args).unwrap(),
+            "Research question:\nWhy does H3 use hexagonal cells rather than square grids?\n\nRelevant public context:\nThe conversation is about H3 spatial indexing. Compare neighbor distances and tradeoffs."
+        );
+        assert_eq!(
+            research_agent_prompt(&json!({"question":"Verify H3 limitations"})).unwrap(),
+            "Research question:\nVerify H3 limitations"
+        );
+    }
+
+    #[test]
+    fn research_brief_rejects_missing_or_malformed_direction() {
+        for args in [
+            json!({}),
+            json!({"question": "  "}),
+            json!({"question": 3}),
+            json!({"question": "H3", "context": null}),
+            json!({"question": "H3", "context": {"secret": "private"}}),
+            json!({"question": "H3", "history": "unexpected"}),
+            json!("H3"),
+        ] {
+            assert!(research_agent_prompt(&args).is_err(), "{args}");
+        }
+    }
 
     /// Data Studio can only store native geometry when the schema it sees offers the type in both
     /// places that declare columns.

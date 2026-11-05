@@ -109,7 +109,7 @@ function room(createdBy = "them"): IConversation {
 		id: "room-1",
 		kind: "group",
 		title: "Launch",
-		encryption: "none",
+		encryption: "plain",
 		created_by: createdBy,
 		created_at: "2026-11-05T12:00:00Z",
 		last_activity_at: "2026-11-05T12:00:00Z",

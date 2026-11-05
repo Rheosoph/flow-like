@@ -218,7 +218,7 @@ pub async fn skill_propose(env: &dyn ToolEnv, args: SkillProposeArgs) -> ToolRes
     Ok(ToolOutput::new(json!({
         "proposed": true,
         "name": skill.name,
-        "status": skill.status,
+        "skill_status": skill.status,
         "note": "Saved as pending. Your owner has to approve it in your settings before you can load it.",
     })))
 }

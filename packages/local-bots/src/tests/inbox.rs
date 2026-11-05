@@ -324,6 +324,9 @@ fn a_group_keeps_its_picture_as_a_small_png() {
     f.store
         .rename_conversation(&group.id, Some("Crew".into()))
         .unwrap();
+    f.store
+        .rename_conversation(&group.id, Some("Launch crew".into()))
+        .unwrap();
 
     let mut changes: Vec<Value> = f
         .all_entries(&group.id)
@@ -340,9 +343,9 @@ fn a_group_keeps_its_picture_as_a_small_png() {
         [
             json!({ "change": "image", "by": "local" }),
             json!({ "change": "image", "removed": true, "by": "local" }),
-            json!({ "change": "title", "title": "Crew", "by": "local" }),
+            json!({ "change": "title", "title": "Launch crew", "by": "local" }),
         ],
-        "one line per change, none for the unchanged picture"
+        "one line per change, none for the unchanged picture or name"
     );
     assert_eq!(f.visible(&group.id).unread_count, 0);
 }
