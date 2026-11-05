@@ -169,6 +169,7 @@ pub(crate) async fn card_in<C: ConnectionTrait>(
     approval_id: &str,
 ) -> Result<Option<ApprovalRequest>, ApiError> {
     let row = inbox_entry::Entity::find()
+        .filter(super::deletion::visible_entries())
         .filter(inbox_entry::Column::InboxId.eq(owner_id))
         .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
         .filter(inbox_entry::Column::MessageId.eq(approval_id))

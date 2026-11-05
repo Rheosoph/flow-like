@@ -578,8 +578,12 @@ pub async fn local_bots_revoke_permission(
 #[tauri::command]
 pub async fn local_inbox_conversations(
     state: State<'_, LocalBots>,
+    principal_id: Option<String>,
 ) -> Result<Vec<Conversation>, CommandError> {
-    with_store(state, |store| store.conversations()).await
+    with_store(state, move |store| {
+        store.conversations_as(principal_id.as_deref().unwrap_or(LOCAL_OWNER_ID))
+    })
+    .await
 }
 
 /// `null` for a conversation that isn't on this device, so callers tell it from a failure.
@@ -587,8 +591,15 @@ pub async fn local_inbox_conversations(
 pub async fn local_inbox_conversation(
     state: State<'_, LocalBots>,
     conversation_id: String,
+    principal_id: Option<String>,
 ) -> Result<Option<Conversation>, CommandError> {
-    with_store(state, move |store| store.conversation(&conversation_id)).await
+    with_store(state, move |store| {
+        store.conversation_as(
+            &conversation_id,
+            principal_id.as_deref().unwrap_or(LOCAL_OWNER_ID),
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -648,9 +659,21 @@ pub async fn local_inbox_remove_member(
 }
 
 #[tauri::command]
+pub async fn local_inbox_delete_conversation(
+    state: State<'_, LocalBots>,
+    conversation_id: String,
+) -> Result<(), CommandError> {
+    with_store(state, move |store| {
+        store.delete_conversation(&conversation_id)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn local_inbox_entries(
     state: State<'_, LocalBots>,
     conversation_id: String,
+    principal_id: Option<String>,
     before: Option<String>,
     after: Option<String>,
     limit: Option<u64>,
@@ -660,7 +683,16 @@ pub async fn local_inbox_entries(
         after,
         limit,
     };
-    with_store(state, move |store| store.entries(&conversation_id, &query)).await
+    with_store(state, move |store| {
+        store.entries_as(
+            &conversation_id,
+            principal_id
+                .as_deref()
+                .unwrap_or(flow_like_local_bots::LOCAL_OWNER_ID),
+            &query,
+        )
+    })
+    .await
 }
 
 #[tauri::command]
@@ -691,7 +723,10 @@ pub async fn local_inbox_upload_file(
         urlencoding::decode(value)
             .map(|decoded| decoded.into_owned())
             .map_err(|error| {
-                CommandError::new(codes::INVALID, format!("Header '{name}' is not valid: {error}"))
+                CommandError::new(
+                    codes::INVALID,
+                    format!("Header '{name}' is not valid: {error}"),
+                )
             })
     };
     let conversation_id = header("x-conversation-id")?;
@@ -721,10 +756,15 @@ pub async fn local_inbox_upload_file(
 pub async fn local_inbox_read_file(
     state: State<'_, LocalBots>,
     conversation_id: String,
+    principal_id: Option<String>,
     path: String,
 ) -> Result<tauri::ipc::Response, CommandError> {
     let found = with_store(state, move |store| {
-        store.read_conversation_file(&conversation_id, LOCAL_OWNER_ID, &path)
+        store.read_conversation_file(
+            &conversation_id,
+            principal_id.as_deref().unwrap_or(LOCAL_OWNER_ID),
+            &path,
+        )
     })
     .await?;
     match found {
@@ -764,8 +804,15 @@ pub async fn local_inbox_set_pinned(
 pub async fn local_inbox_pins(
     state: State<'_, LocalBots>,
     conversation_id: String,
+    principal_id: Option<String>,
 ) -> Result<Vec<PinnedMessage>, CommandError> {
-    with_store(state, move |store| store.pins(&conversation_id)).await
+    with_store(state, move |store| {
+        store.pins_as(
+            &conversation_id,
+            principal_id.as_deref().unwrap_or(LOCAL_OWNER_ID),
+        )
+    })
+    .await
 }
 
 #[tauri::command]

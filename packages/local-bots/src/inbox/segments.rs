@@ -411,10 +411,14 @@ fn bind(values: &mut Vec<Value>, value: impl Into<Value>) -> String {
 fn segments_page(
     db: &Connection,
     conversation_id: &str,
+    principal_id: &str,
     page: &SegmentPage,
 ) -> Result<ConversationSegmentList> {
     let mut values: Vec<Value> = vec![conversation_id.to_string().into()];
     let mut filter = String::new();
+    if principal_id == LOCAL_OWNER_ID {
+        filter.push_str(" AND s.seq_from > COALESCE((SELECT owner_cleared_seq FROM conversations WHERE id = s.conversation_id), 0)");
+    }
     if let Some(author) = &page.author {
         let author = bind(&mut values, author.clone());
         filter.push_str(&format!(" AND s.author_id = {author}"));
@@ -504,13 +508,23 @@ impl LocalBotStore {
         conversation_id: &str,
         query: &SegmentsQuery,
     ) -> Result<ConversationSegmentList> {
+        self.segments_as(conversation_id, LOCAL_OWNER_ID, query)
+    }
+
+    /// Reads summaries as an active member; clearing owner history leaves bot summaries intact.
+    pub fn segments_as(
+        &self,
+        conversation_id: &str,
+        principal_id: &str,
+        query: &SegmentsQuery,
+    ) -> Result<ConversationSegmentList> {
         let mut page = segment_page(query)?;
         self.read(|db| {
-            active_membership(db, conversation_id, LOCAL_OWNER_ID)?;
+            active_membership(db, conversation_id, principal_id)?;
             if page.author.is_none() {
                 page.author = default_author(db, conversation_id)?;
             }
-            segments_page(db, conversation_id, &page)
+            segments_page(db, conversation_id, principal_id, &page)
         })
     }
 

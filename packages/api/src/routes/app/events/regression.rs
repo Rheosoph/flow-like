@@ -1633,6 +1633,7 @@ mod tests {
     fn connected_apps_cannot_start_suite_runs_as_their_passed_through_subject() {
         use crate::middleware::jwt::{ApiKey, ConnectedAppUser, OpenIDUser, PATUser};
         let connected = AppUser::ConnectedApp(ConnectedAppUser {
+            bot: None,
             sub: Some("member-of-both".to_string()),
             origin_app_id: "source".to_string(),
             target_app_id: "target".to_string(),

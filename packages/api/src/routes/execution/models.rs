@@ -255,6 +255,8 @@ async fn relay(
         app_id: Some(app_id.to_owned()),
         user_id: executor.sub,
         technical_user_id: executor.technical_user_id,
+        bot_id: executor.bot.as_ref().map(|bot| bot.bot_id.clone()),
+        conversation_id: executor.bot.as_ref().and_then(|bot| bot.conv_id.clone()),
     };
     let deadline = call_deadline(Utc::now(), run.expires_at, DeadlineClass::Ai.budget());
     if hosted_worker::enabled() {
@@ -495,6 +497,8 @@ async fn queue(
             payer_id,
             actor_id,
             app_id,
+            bot_id: call.context.bot_id.clone(),
+            conversation_id: call.context.conversation_id.clone(),
             model_id: Some(call.bit_id.clone()),
             provider: Some(provider.trim().to_ascii_lowercase()),
             kind: "assistant".into(),
@@ -1211,6 +1215,7 @@ mod tests {
                 creator_user_id: Some("owner-1".into()),
             }),
             AppUser::ConnectedApp(ConnectedAppUser {
+                bot: None,
                 sub: Some("owner-1".into()),
                 origin_app_id: "app-0".into(),
                 target_app_id: "app-1".into(),
@@ -1392,6 +1397,7 @@ mod tests {
                 app_id: Some("app-1".into()),
                 user_id: "person".into(),
                 technical_user_id: None,
+                ..Default::default()
             },
             person,
         };

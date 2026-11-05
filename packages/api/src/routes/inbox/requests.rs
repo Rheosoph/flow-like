@@ -176,6 +176,7 @@ pub(super) async fn backfill_held<C: ConnectionTrait>(
         .map(|entry| inbox_entry::Model {
             id: create_id(),
             inbox_id: accepted.principal_id.clone(),
+            cleared: Some(false),
             ..entry
         })
         .collect();

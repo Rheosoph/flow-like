@@ -41,6 +41,7 @@ import {
 	DialogHeader,
 	DialogTitle,
 } from "../ui/dialog";
+import { BotUsageButton } from "./bot-usage";
 import { isSelfPrincipal } from "./crew-model";
 import { LeaveRoomDialog } from "./leave-room-dialog";
 import { PrincipalBlockButton } from "./principal-block-action";
@@ -115,6 +116,16 @@ function MembersList({
 					directory={directory}
 					note={member.kind === "bot" ? t("roomMembers.bot", "Bot") : undefined}
 				>
+					{member.kind === "bot" &&
+						conversation.kind === "group" &&
+						!conversation.local && (
+							<BotUsageButton
+								botId={member.principal_id}
+								groupId={conversation.id}
+								name={directory(member.principal_id).name}
+								canEdit={ownBotIds.has(member.principal_id)}
+							/>
+						)}
 					{member.kind === "bot" && ownBotIds.has(member.principal_id) && (
 						<Button
 							type="button"

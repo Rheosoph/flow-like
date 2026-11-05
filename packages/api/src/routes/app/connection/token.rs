@@ -95,9 +95,12 @@ pub async fn create_app_connection_token(
         return Err(ApiError::FORBIDDEN);
     }
 
-    if let AppUser::Executor(executor) = &user
-        && let Some(bot) = &executor.bot
-    {
+    let bot = match &user {
+        AppUser::Executor(executor) => executor.bot.as_ref(),
+        AppUser::Bot(bot) => Some(bot),
+        _ => None,
+    };
+    if let Some(bot) = bot {
         let grant = crate::bot_permission::bot_grant_in(&state.db, bot, &target_app_id).await?;
         if !grant
             .permissions
@@ -193,6 +196,8 @@ pub async fn create_app_connection_token(
         .clamp(60, MAX_APP_CONNECTION_TTL_SECONDS);
 
     let token = app_connection_jwt::sign(AppConnectionJwtParams {
+        bot_id: bot.map(|bot| bot.bot_id.clone()),
+        conv_id: bot.and_then(|bot| bot.conv_id.clone()),
         sub,
         origin_app_id: app_id.clone(),
         target_app_id: target_app_id.clone(),
@@ -293,6 +298,7 @@ mod tests {
     /// The person the connected app acts for, read from a token minted with `subject`.
     fn person_in_target(subject: Option<String>) -> Option<String> {
         let target = ConnectedAppUser {
+            bot: None,
             sub: subject,
             origin_app_id: "app-1".into(),
             target_app_id: "app-2".into(),

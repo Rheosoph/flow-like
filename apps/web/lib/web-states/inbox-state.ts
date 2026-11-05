@@ -118,6 +118,10 @@ export class WebInboxState implements IInboxState {
 		);
 	}
 
+	async deleteConversation(conversationId: string): Promise<void> {
+		await apiDelete(conversationPath(conversationId), this.backend.auth);
+	}
+
 	async setConversationImage(
 		conversationId: string,
 		image: string | null,

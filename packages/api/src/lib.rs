@@ -74,6 +74,7 @@ pub mod permission;
 pub mod publication;
 pub mod push_notifications;
 pub mod quota;
+pub mod scoped_usage;
 #[cfg(test)]
 mod quota_integration_tests;
 pub mod quota_payloads;

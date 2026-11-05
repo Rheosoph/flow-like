@@ -447,9 +447,23 @@ fn segments_statement(
     conversation_id: &str,
     author: Option<&str>,
     page: &SegmentPage,
+    cleared_seq: Option<i64>,
+    reader: Option<&str>,
 ) -> Statement {
     let mut values: Vec<Value> = vec![conversation_id.into()];
     let mut filter = String::new();
+    if let Some(reader) = reader {
+        let reader = bind(&mut values, reader);
+        filter.push_str(&format!(
+            r#" AND NOT EXISTS (SELECT 1 FROM "InboxEntry" cleared
+          WHERE cleared."inboxId" = {reader} AND cleared."conversationId" = s."conversationId"
+            AND cleared."seq" BETWEEN s."seqFrom" AND s."seqTo" AND cleared."cleared" = true)"#
+        ));
+    }
+    if let Some(cleared_seq) = cleared_seq {
+        let cutoff = bind(&mut values, cleared_seq);
+        filter.push_str(&format!(r#" AND s."seqFrom" > {cutoff}"#));
+    }
     if let Some(author) = author {
         let author = bind(&mut values, author);
         filter.push_str(&format!(r#" AND s."authorId" = {author}"#));
@@ -495,8 +509,26 @@ pub(super) async fn segments_page<C: ConnectionTrait>(
     author: Option<&str>,
     page: &SegmentPage,
 ) -> Result<ConversationSegmentList, DbErr> {
+    segments_page_after(db, conversation_id, author, page, None, None).await
+}
+
+pub(super) async fn segments_page_after<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    author: Option<&str>,
+    page: &SegmentPage,
+    cleared_seq: Option<i64>,
+    reader: Option<&str>,
+) -> Result<ConversationSegmentList, DbErr> {
     let mut rows = conversation_segment::Entity::find()
-        .from_raw_sql(segments_statement(db, conversation_id, author, page))
+        .from_raw_sql(segments_statement(
+            db,
+            conversation_id,
+            author,
+            page,
+            cleared_seq,
+            reader,
+        ))
         .all(db)
         .await?;
     let more = rows.len() as u64 > page.limit;
@@ -565,8 +597,17 @@ pub async fn list_segments(
         Some(author) => Some(author.to_string()),
         None => default_author(&state.db, &conversation, &reader).await?,
     };
+    let membership = super::active_membership(&state.db, &conversation_id, &reader.inbox).await?;
     Ok(Json(
-        segments_page(&state.db, &conversation_id, author.as_deref(), &page).await?,
+        segments_page_after(
+            &state.db,
+            &conversation_id,
+            author.as_deref(),
+            &page,
+            membership.cleared_seq,
+            Some(&reader.inbox),
+        )
+        .await?,
     ))
 }
 

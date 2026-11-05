@@ -31,11 +31,11 @@ const TABLES: [&str; 8] = [
         "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
         "leftAt" TEXT, "lastReadAt" TEXT,
         "status" TEXT NOT NULL DEFAULT 'ACTIVE', "limits" TEXT, "invitedBy" TEXT, "invitedAt" TEXT,
-        "acceptedAt" TEXT, PRIMARY KEY ("conversationId", "principalId"))"#,
+        "acceptedAt" TEXT, "hiddenAt" TEXT, "clearedAt" TEXT, "clearedLegacyAt" TEXT, "clearedSeq" INTEGER, PRIMARY KEY ("conversationId", "principalId"))"#,
     r#"CREATE TABLE public."InboxEntry" (
         "id" TEXT PRIMARY KEY, "inboxId" TEXT NOT NULL, "conversationId" TEXT NOT NULL,
         "messageId" TEXT NOT NULL, "senderId" TEXT NOT NULL, "kind" TEXT NOT NULL,
-        "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER,
+        "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER, "cleared" BOOLEAN NOT NULL DEFAULT false,
         UNIQUE ("inboxId", "messageId"), UNIQUE ("inboxId", "conversationId", "seq"))"#,
     r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE)"#,
     r#"CREATE TABLE public."User" (

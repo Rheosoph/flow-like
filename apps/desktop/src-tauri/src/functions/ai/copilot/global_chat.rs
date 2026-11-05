@@ -593,7 +593,6 @@ pub async fn global_chat_native(
             None
         }
     };
-    let model_state = Arc::new(model_state);
     let model_selection = FlowPilotModelSelection::parse(model_id);
     // Without a webview nobody can answer questions or see inline pages, so a bot gets only the
     // tools this desktop runs natively.
@@ -609,6 +608,19 @@ pub async fn global_chat_native(
         tool_host,
     )
     .await?;
+    if let Some(bot) = bot.as_ref().filter(|bot| bot.account)
+        && let Some(binding) = identity
+            .as_ref()
+            .and_then(|identity| identity.auth.as_ref())
+    {
+        model_state.request_authorizer =
+            Some(crate::execution_credentials::native_bot_model_authorizer(
+                binding.clone(),
+                bot.context.bot_id.clone(),
+                bot_turn_id.clone(),
+            ));
+    }
+    let model_state = Arc::new(model_state);
     if let (Some(bot), Some(requester)) = (bot.as_mut(), requester) {
         std::sync::Arc::make_mut(&mut bot.context).requester = Some(requester);
     }
@@ -847,6 +859,7 @@ pub async fn global_chat_native(
     global_tool_context.conversation_id = conversation_id;
     global_tool_context.bot = bot.as_ref().map(|bot| {
         Arc::new(crate::functions::ai::native_bot_tools::BotToolRuntime {
+            account: bot.account,
             context: bot.context.clone(),
             state: model_state.clone(),
             profile: profile.clone(),

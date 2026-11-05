@@ -13,7 +13,8 @@ const fixture = vi.hoisted(() => ({
 	get: vi.fn(),
 }));
 
-vi.mock("@flow-like/locales", () => ({
+vi.mock("@flow-like/locales", async (importOriginal) => ({
+	...(await importOriginal<typeof import("@flow-like/locales")>()),
 	useTranslation: () => ({
 		t: (key: string, fallback?: string, values?: Record<string, unknown>) =>
 			(fallback ?? key).replace(/\{\{(\w+)\}\}/g, (_, name) =>

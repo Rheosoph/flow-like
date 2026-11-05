@@ -31,7 +31,14 @@ pub mod usage;
 pub mod users;
 
 pub fn routes() -> Router<AppState> {
+    use super::usage_budgets;
     Router::new()
+        .route("/usage/defaults", get(usage_budgets::get_defaults).put(usage_budgets::put_defaults))
+        .route("/usage/bots", get(usage_budgets::list_bots))
+        .route("/usage/bots/{bot_id}/limits", put(usage_budgets::put_admin_bot))
+        .route("/usage/bots/{bot_id}/rooms/{group_id}/limits", put(usage_budgets::put_admin_room))
+        .route("/usage/apps/{app_id}/budget", get(usage_budgets::get_admin_app))
+        .route("/usage/apps/{app_id}/budget/limits", put(usage_budgets::put_admin_app))
         .route("/home-defaults/{id}", put(home_defaults::save_home_default))
         .route("/explore", get(explore::get_explore_editor))
         .route(

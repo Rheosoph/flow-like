@@ -273,3 +273,40 @@ async fn dropping_a_message_marks_only_its_files() {
     assert!(marked(first.file_id).await);
     assert!(!marked(second.file_id).await);
 }
+
+#[tokio::test]
+async fn deleting_conversation_keeps_files_for_others_but_revokes_cleared_readers() {
+    let db = database().await;
+    room(&db, "team", ConversationEncryption::Plain).await;
+    let store = InMemory::new();
+    let ready = uploaded(&db, &store, "team", "user-a", b"private history").await;
+    send_in(
+        &db,
+        "team",
+        "user-a",
+        &message("before-clear", &ready),
+        at(5),
+    )
+    .await
+    .unwrap();
+    super::deletion::delete_in(&db, "team", "user-b", at(6))
+        .await
+        .unwrap();
+    super::members::add_in(&db, "team", "user-a", &[user("user-b")], at(7))
+        .await
+        .unwrap();
+    assert!(
+        readable_file(&db, "team", &Reader::own("user-b"), &ready.file_id)
+            .await
+            .is_err()
+    );
+    readable_file(&db, "team", &Reader::own("user-a"), &ready.file_id)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .head(&ObjectPath::from(object_key("team", &ready.path)))
+            .await
+            .is_ok()
+    );
+}

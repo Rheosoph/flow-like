@@ -1,8 +1,8 @@
 "use client";
 
-import type { QuotaDetail } from "../lib/quota";
 import { create } from "zustand";
 import { isUpgradeRequiredError } from "../lib/api-error";
+import { type QuotaDetail, isScopedUsageLimit } from "../lib/quota";
 
 export type UpgradeReason =
 	| "project-limit"
@@ -30,7 +30,8 @@ interface UpgradeDialogState {
 	/**
 	 * Mirrors `conversion.enabled` from the hub config; synced by the mounted
 	 * GlobalUpgradeDialog. While false, plan-limit errors fall back to plain
-	 * toasts instead of the dialog.
+	 * toasts instead of the dialog. Scoped usage budgets still show their
+	 * administrator contact and reset details.
 	 */
 	enabled: boolean;
 	open: (trigger?: UpgradeDialogTrigger) => void;
@@ -65,7 +66,7 @@ export function openUpgradeDialogIfEnabled(
 	trigger?: UpgradeDialogTrigger,
 ): boolean {
 	const store = useUpgradeDialogStore.getState();
-	if (!store.enabled) return false;
+	if (!store.enabled && !isScopedUsageLimit(trigger?.quota)) return false;
 	store.open(trigger);
 	return true;
 }
@@ -81,7 +82,7 @@ export function handleUpgradeRequiredError(
 ): boolean {
 	if (!isUpgradeRequiredError(error)) return false;
 	const store = useUpgradeDialogStore.getState();
-	if (!store.enabled) return false;
+	if (!store.enabled && !isScopedUsageLimit(error.quota)) return false;
 	const quotaReasons: Record<string, UpgradeReason> = {
 		cloud_runtime_ms: "runtime",
 		concurrent_cloud_executions: "concurrency",

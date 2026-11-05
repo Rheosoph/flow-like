@@ -126,8 +126,15 @@ async fn write_segment(
 pub async fn local_inbox_entries_by_position(
     state: State<'_, LocalBots>,
     conversation_id: String,
+    principal_id: Option<String>,
     query: PositionQuery,
 ) -> Result<InboxEntriesPage, CommandError> {
+    if let Some(principal_id) = principal_id {
+        return on_store(&state, move |store| {
+            store.entries_by_position_as(&conversation_id, &principal_id, &query)
+        })
+        .await;
+    }
     read_by_position(&state, conversation_id, query).await
 }
 
@@ -149,8 +156,15 @@ pub async fn local_inbox_topic(
 pub async fn local_inbox_segments(
     state: State<'_, LocalBots>,
     conversation_id: String,
+    principal_id: Option<String>,
     query: SegmentsQuery,
 ) -> Result<ConversationSegmentList, CommandError> {
+    if let Some(principal_id) = principal_id {
+        return on_store(&state, move |store| {
+            store.segments_as(&conversation_id, &principal_id, &query)
+        })
+        .await;
+    }
     list_segments(&state, conversation_id, query).await
 }
 

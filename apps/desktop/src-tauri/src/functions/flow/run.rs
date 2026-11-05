@@ -423,6 +423,7 @@ pub(crate) async fn resolve_run_template(
 
 #[derive(Default)]
 struct ExecutionOverrides {
+    metered_bot: Option<(String, Option<String>)>,
     native_auth: Option<crate::native_auth::SessionBinding>,
     resolved_event: Option<Event>,
     emit_terminal_event: bool,
@@ -730,7 +731,14 @@ async fn execute_prepared(
     timer.lap("profile");
 
     let request_authorizer = if let Some(binding) = overrides.native_auth.clone() {
-        crate::execution_credentials::native_request_authorizer(binding, &app_id)
+        match overrides.metered_bot.clone() {
+            Some((bot_id, turn_id)) => {
+                crate::execution_credentials::native_bot_model_authorizer_for_project(
+                    binding, bot_id, turn_id, &app_id,
+                )
+            }
+            None => crate::execution_credentials::native_request_authorizer(binding, &app_id),
+        }
     } else {
         crate::execution_credentials::request_authorizer(
             &profile.hub_profile.hub,
@@ -1369,6 +1377,7 @@ pub(crate) async fn execute_daemon_event(
                 execution_session_id: None,
                 execution_webview: None,
                 local_bot: None,
+                metered_bot: None,
             },
         ),
     )
@@ -1388,6 +1397,7 @@ pub(crate) async fn execute_flowpilot(
     execution_profile: crate::profile::UserProfile,
     cancellation: CancellationToken,
     stream_state: bool,
+    metered_bot: Option<(String, Option<String>)>,
 ) -> Result<Option<LogMeta>, TauriFunctionError> {
     let token = match native_auth.as_ref() {
         Some(binding) => Some(
@@ -1444,6 +1454,7 @@ pub(crate) async fn execute_flowpilot(
         token,
         Some(oauth_tokens),
         ExecutionOverrides {
+            metered_bot,
             native_auth,
             execution_profile: Some(execution_profile),
             resolved_event,

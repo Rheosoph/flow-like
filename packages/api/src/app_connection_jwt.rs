@@ -22,6 +22,11 @@ pub const MAX_APP_CONNECTION_CHAIN: usize = 8;
 /// Claims contained in an app-connection JWT
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConnectionClaims {
+    /// The bot and group that started the chain, retained through every hop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bot_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conv_id: Option<String>,
     /// The user that originally initiated the call chain, passed through
     /// end-to-end so the called app can attribute the call even if the user
     /// is not a member of it. None if the chain was started by an unattended
@@ -67,6 +72,8 @@ pub struct AppConnectionClaims {
 /// Parameters for creating an app-connection JWT
 #[derive(Debug, Clone)]
 pub struct AppConnectionJwtParams {
+    pub bot_id: Option<String>,
+    pub conv_id: Option<String>,
     /// The user that originally initiated the call chain, if any
     pub sub: Option<String>,
     pub origin_app_id: String,
@@ -109,6 +116,11 @@ pub fn sign(params: AppConnectionJwtParams) -> Result<String, AppConnectionJwtEr
         app_chain.push(params.origin_app_id.clone());
     }
     validate_chain(&app_chain, &params.origin_app_id)?;
+    validate_bot_claims(
+        params.bot_id.as_deref(),
+        params.conv_id.as_deref(),
+        params.technical_user_id.as_deref(),
+    )?;
 
     let ttl = params
         .ttl_seconds
@@ -117,6 +129,8 @@ pub fn sign(params: AppConnectionJwtParams) -> Result<String, AppConnectionJwtEr
     let time = make_time_claims(TokenType::AppConnection, Some(ttl));
 
     let claims = AppConnectionClaims {
+        bot_id: params.bot_id,
+        conv_id: params.conv_id,
         sub: params.sub,
         origin_app_id: params.origin_app_id,
         target_app_id: params.target_app_id,
@@ -158,12 +172,39 @@ pub fn verify(token: &str) -> Result<AppConnectionClaims, AppConnectionJwtError>
         ));
     }
 
+    validate_bot_claims(
+        claims.bot_id.as_deref(),
+        claims.conv_id.as_deref(),
+        claims.technical_user_id.as_deref(),
+    )?;
     Ok(claims)
+}
+
+fn validate_bot_claims(
+    bot: Option<&str>,
+    room: Option<&str>,
+    technical_user: Option<&str>,
+) -> Result<(), AppConnectionJwtError> {
+    if bot.is_some_and(|bot| !bot.starts_with("bot_") || Some(bot) != technical_user)
+        || (room.is_some() && bot.is_none())
+    {
+        return Err(BackendJwtError::DecodingError(
+            "Invalid bot attribution in app connection token".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bot_attribution_must_match_the_technical_principal() {
+        assert!(validate_bot_claims(Some("bot_a"), Some("group"), Some("bot_a")).is_ok());
+        assert!(validate_bot_claims(Some("bot_a"), None, Some("bot_b")).is_err());
+        assert!(validate_bot_claims(None, Some("group"), None).is_err());
+    }
 
     #[test]
     fn test_chain_must_end_with_origin() {
@@ -200,6 +241,8 @@ mod tests {
         }"#;
         let claims: AppConnectionClaims =
             flow_like_types::json::from_str(legacy).expect("legacy claims must deserialize");
+        assert_eq!(claims.bot_id, None);
+        assert_eq!(claims.conv_id, None);
         assert_eq!(claims.sub, None);
         assert!(claims.app_chain.is_empty());
         assert_eq!(claims.technical_user_id, None);
@@ -218,11 +261,13 @@ mod tests {
             keys: std::collections::HashMap::from([("order_id".to_string(), "1234".to_string())]),
         };
         let params = AppConnectionJwtParams {
+            bot_id: Some("bot_chain".into()),
+            conv_id: Some("group_chain".into()),
             sub: Some("user123".to_string()),
             origin_app_id: "app_origin".to_string(),
             target_app_id: "app_target".to_string(),
             app_chain: vec!["app_first".to_string(), "app_origin".to_string()],
-            technical_user_id: None,
+            technical_user_id: Some("bot_chain".into()),
             run_id: Some("run456".to_string()),
             correlation: Some(correlation.clone()),
             ttl_seconds: Some(300),
@@ -231,6 +276,8 @@ mod tests {
         let token = sign(params.clone()).expect("Failed to sign JWT");
         let claims = verify(&token).expect("Failed to verify JWT");
 
+        assert_eq!(claims.bot_id, params.bot_id);
+        assert_eq!(claims.conv_id, params.conv_id);
         assert_eq!(claims.sub, params.sub);
         assert_eq!(claims.origin_app_id, params.origin_app_id);
         assert_eq!(claims.target_app_id, params.target_app_id);

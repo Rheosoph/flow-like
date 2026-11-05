@@ -36,6 +36,7 @@ struct ConversationRow {
     created_at: DateTime<FixedOffset>,
     last_activity_at: DateTime<FixedOffset>,
     pinned_at: Option<DateTime<FixedOffset>>,
+    history_cleared_at: Option<DateTime<FixedOffset>>,
     unread_count: i64,
     last_entry_id: Option<String>,
 }
@@ -54,26 +55,31 @@ fn conversations_statement(
         reader.inbox.as_str().into(),
         stored(InboxEntryKind::Message.as_str()).into(),
     ];
-    let mut filter = String::new();
+    let mut filter = if only.is_none() {
+        r#" AND m."hiddenAt" IS NULL"#.to_string()
+    } else {
+        String::new()
+    };
     if let Some(conversation_id) = only {
         values.push(conversation_id.into());
         filter.push_str(&format!(r#" AND c."id" = ${}"#, values.len()));
     }
+    let visible = super::deletion::visible_entries_sql("e");
     let sql = format!(
         r#"SELECT p."id" AS id, p."kind" AS kind, p."title" AS title, p."image" AS image,
        p."encryption" AS encryption,
        p."createdBy" AS created_by, p."createdAt" AS created_at,
-       p."lastActivityAt" AS last_activity_at, p."pinnedAt" AS pinned_at,
+       p."lastActivityAt" AS last_activity_at, p."pinnedAt" AS pinned_at, p."clearedAt" AS history_cleared_at,
        (SELECT COUNT(*) FROM "InboxEntry" e
-         WHERE e."inboxId" = $1 AND e."conversationId" = p."id" AND e."kind" = $2
+         WHERE e."inboxId" = $1 AND e."conversationId" = p."id" AND e."kind" = $2 AND {visible}
            AND e."senderId" <> $1
            AND (p."lastReadAt" IS NULL OR e."createdAt" > p."lastReadAt")) AS unread_count,
        (SELECT e."id" FROM "InboxEntry" e
-         WHERE e."inboxId" = $1 AND e."conversationId" = p."id" AND e."kind" = $2
+         WHERE e."inboxId" = $1 AND e."conversationId" = p."id" AND e."kind" = $2 AND {visible}
          ORDER BY e."createdAt" DESC, e."id" DESC LIMIT 1) AS last_entry_id
 FROM (
     SELECT c."id", c."kind", c."title", c."image", c."encryption", c."createdBy", c."createdAt",
-           c."lastActivityAt", m."lastReadAt", pc."pinnedAt"
+           c."lastActivityAt", m."lastReadAt", m."clearedAt", pc."pinnedAt"
     FROM "ConversationMember" m
     JOIN "Conversation" c ON c."id" = m."conversationId"
     LEFT JOIN "PinnedConversation" pc
@@ -122,6 +128,7 @@ pub(super) async fn conversations_for<C: ConnectionTrait>(
                 .unwrap_or_default(),
             muted: muted.contains(&row.id),
             pinned_at: row.pinned_at,
+            history_cleared_at: row.history_cleared_at,
             unread_count: u64::try_from(row.unread_count).unwrap_or(0),
             last_entry: row
                 .last_entry_id
@@ -248,6 +255,7 @@ async fn entries_by_id<C: ConnectionTrait>(
         return Ok(HashMap::new());
     }
     Ok(inbox_entry::Entity::find()
+        .filter(super::deletion::visible_entries())
         .filter(inbox_entry::Column::Id.is_in(ids))
         .filter(inbox_entry::Column::InboxId.eq(reader))
         .all(db)

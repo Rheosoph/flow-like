@@ -24,6 +24,8 @@ model QuotaOperation {
   periodId           String
   actorId            String?
   appId              String?
+  botId              String?
+  conversationId     String?
   modelId            String?
   provider           String?
   kind               String
@@ -48,6 +50,8 @@ model QuotaOperation {
   @@index([status, payloadsDeletedAt, deadline])
   @@index([payerId, id])
   @@index([appId, id])
+  @@index([botId, createdAt])
+  @@index([botId, conversationId, createdAt])
   @@index([status, deadline])
   @@index([status, updatedAt])
 }
@@ -76,4 +80,43 @@ model QuotaDailyUsage {
   updatedAt     BigInt
 
   @@index([payerId, day, id])
+}
+
+/// Enterprise ceilings and owner reductions for one monthly budget scope.
+model UsageBudgetPolicy {
+  id          String @id
+  scope       String
+  subjectId   String
+  groupId     String?
+  ownerLimits String?
+  adminLimits String?
+  updatedAt   BigInt
+
+  @@index([scope, subjectId])
+}
+
+/// UTC calendar-month counters, including capacity held by running operations.
+model UsageBudgetPeriod {
+  id          String @id
+  scopeId     String
+  scope       String
+  subjectId   String
+  groupId     String?
+  periodStart BigInt
+  periodEnd   BigInt
+  used        String
+  reserved    String
+  updatedAt   BigInt
+
+  @@index([scope, periodStart, subjectId])
+  @@index([scopeId, periodStart])
+}
+
+/// Immutable links keep corrections in the month that admitted the operation.
+model UsageBudgetReservation {
+  id          String @id
+  operationId String
+  periodId    String
+
+  @@index([operationId])
 }

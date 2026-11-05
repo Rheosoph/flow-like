@@ -288,6 +288,30 @@ pub(crate) const MIGRATIONS: &[&str] = &[
         package_id TEXT PRIMARY KEY NOT NULL,
         installed_at INTEGER NOT NULL
     ) STRICT;",
+    // Clearing the owner's history keeps the shared events available to bots.
+    "ALTER TABLE conversations ADD COLUMN owner_cleared_seq INTEGER;
+    ALTER TABLE conversations ADD COLUMN owner_cleared_at INTEGER;
+    ALTER TABLE conversations ADD COLUMN owner_hidden INTEGER NOT NULL DEFAULT 0;
+    CREATE TABLE conversation_transfers (
+        conversation_id TEXT NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+        bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+        owner_id TEXT NOT NULL,
+        account_bot_id TEXT NOT NULL,
+        account_conversation_id TEXT NOT NULL,
+        PRIMARY KEY (conversation_id, bot_id, owner_id, account_bot_id)
+    ) STRICT;
+    CREATE VIEW owner_entries AS
+        SELECT e.* FROM entries e JOIN conversations c ON c.id = e.conversation_id
+        WHERE c.owner_cleared_seq IS NULL OR (
+            (e.seq > c.owner_cleared_seq OR (e.seq IS NULL AND e.created_at > c.owner_cleared_at))
+            AND (e.kind NOT IN ('edit', 'reaction', 'delete') OR EXISTS (
+                SELECT 1 FROM entries target
+                WHERE target.conversation_id = e.conversation_id
+                  AND target.message_id = json_extract(e.envelope, '$.body.target')
+                  AND (target.seq > c.owner_cleared_seq
+                       OR (target.seq IS NULL AND target.created_at > c.owner_cleared_at))
+            ))
+        );",
 ];
 
 pub(crate) fn open(path: &Path) -> Result<Connection> {

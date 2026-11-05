@@ -277,9 +277,15 @@ fn wants_workspace(record: &BotRecord) -> bool {
 pub(super) struct DesktopBot {
     pub(super) context: Arc<BotRunContext>,
     pub(super) model: BotModelPolicy,
+    pub(super) account: bool,
 }
 
 impl DesktopBot {
+    fn with_account(mut self, account: bool) -> Self {
+        self.account = account;
+        self
+    }
+
     fn general(tool_host: BotToolHost) -> Self {
         Self {
             context: Arc::new(BotRunContext {
@@ -287,6 +293,7 @@ impl DesktopBot {
                 ..BotRunContext::general()
             }),
             model: BotModelPolicy::default(),
+            account: false,
         }
     }
 
@@ -390,6 +397,7 @@ pub(super) fn desktop_bot(
     DesktopBot {
         context: Arc::new(context),
         model: record.model,
+        account: false,
     }
 }
 
@@ -410,18 +418,40 @@ pub(super) async fn load_bot(
     let bot_id = match bot_request(bot_id) {
         BotRequest::FlowPilot => return Ok(None),
         BotRequest::Flux => return Ok(flux_bot(app, signed_in, tool_host).await),
-        BotRequest::General => return Ok(Some(DesktopBot::general(tool_host))),
+        BotRequest::General => {
+            let Some(identity) = signed_in else {
+                return Ok(Some(DesktopBot::general(tool_host)));
+            };
+            let listed = hub_get::<BotRecordList>(identity, "bots").await;
+            let record = listed.ok().flatten().and_then(|list| {
+                list.bots
+                    .into_iter()
+                    .find(|record| record.system() == Some(BotSystemKind::General))
+            });
+            return Ok(Some(match record {
+                Some(record) => {
+                    desktop_bot(record, Vec::new(), BTreeSet::new(), tool_host).with_account(true)
+                }
+                // Offline models can keep running. A hosted call resolves the account alias
+                // through model-token before dispatch, so this fallback keeps its bot budget.
+                None => DesktopBot::general(tool_host).with_account(true),
+            }));
+        }
         BotRequest::Bot(bot_id) => bot_id,
     };
-    let (record, apps, workspace) = match local_bot(app, bot_id).await {
+    let (record, apps, workspace, account) = match local_bot(app, bot_id).await {
         Ok(Some((record, apps))) => {
             let workspace = device_workspace(app, &record).await;
-            (record, apps, workspace)
+            (record, apps, workspace, false)
         }
-        Ok(None) => account_bot_with_workspace(signed_in, bot_id).await?,
+        Ok(None) => {
+            let (record, apps, workspace) = account_bot_with_workspace(signed_in, bot_id).await?;
+            (record, apps, workspace, true)
+        }
         Err(error) if signed_in.is_some() => {
             tracing::warn!(%error, bot_id, "Bots on this device are unavailable; trying the account");
-            account_bot_with_workspace(signed_in, bot_id).await?
+            let (record, apps, workspace) = account_bot_with_workspace(signed_in, bot_id).await?;
+            (record, apps, workspace, true)
         }
         Err(error) => return Err(format!("Bot '{bot_id}' can't be loaded: {error}")),
     };
@@ -442,6 +472,7 @@ pub(super) async fn load_bot(
     };
     Ok(Some(
         desktop_bot(record, apps, profile_app_ids, tool_host)
+            .with_account(account)
             .with_workspace(workspace)
             .with_skills(skills)
             .with_connectors(connectors),
@@ -643,15 +674,20 @@ async fn flux_bot(
     let Some(identity) = identity else {
         return device_flux(app, tool_host).await;
     };
-    match account_flux(identity).await {
-        Ok(record) => {
-            record.map(|record| desktop_bot(record, Vec::new(), BTreeSet::new(), tool_host))
-        }
+    let record = match account_flux(identity).await {
+        Ok(record) => record,
         Err(error) => {
             tracing::warn!(%error, "Flux's account row is unavailable; Flux runs without its edits");
             None
         }
-    }
+    };
+    let record = record.unwrap_or_else(|| BotRecord {
+        id: FLUX_BOT_ID.to_string(),
+        system: Some(BotSystemKind::Flux.as_str().to_string()),
+        capabilities: vec![BotCapability::Flowpilot.as_str().to_string()],
+        ..Default::default()
+    });
+    Some(desktop_bot(record, Vec::new(), BTreeSet::new(), tool_host).with_account(true))
 }
 
 /// Flux's row on this device, edited or not; FlowPilot's own memory stays the bot's memory.

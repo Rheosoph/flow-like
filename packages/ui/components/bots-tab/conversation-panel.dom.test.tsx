@@ -9,6 +9,11 @@ import {
 	test,
 } from "bun:test";
 import { act, createElement } from "react";
+import { ApiResponseError } from "../../lib/api-error";
+import {
+	type ConversationFeedListener,
+	registerConversationFeed,
+} from "../../lib/realtime/conversation-feed";
 import type {
 	IBlockedPrincipal,
 	IConversation,
@@ -140,6 +145,8 @@ interface FakeRoom {
 	minute: number;
 	beforeList?: (query: IInboxEntriesQuery) => Promise<void>;
 	beforeSend?: (request: ISendInboxEntryRequest) => Promise<void>;
+	beforeGet?: () => Promise<void>;
+	getError?: Error;
 }
 
 const rooms = new Map<string, FakeRoom>();
@@ -205,7 +212,12 @@ const backend = {
 				(block) => block.principal_id !== principalId,
 			);
 		},
-		getConversation: async (id: string) => roomOf(id).conversation,
+		getConversation: async (id: string) => {
+			const fake = roomOf(id);
+			await fake.beforeGet?.();
+			if (fake.getError) throw fake.getError;
+			return fake.conversation;
+		},
 		listEntries: async (id: string, query: IInboxEntriesQuery = {}) => {
 			const fake = roomOf(id);
 			fake.queries.push(query);
@@ -335,7 +347,11 @@ interface Panel {
 	unmount: () => Promise<void>;
 }
 
-async function mountPanel(conversationId: string, me = "me"): Promise<Panel> {
+async function mountPanel(
+	conversationId: string,
+	me = "me",
+	onClose = () => {},
+): Promise<Panel> {
 	const host = window.document.createElement("div") as unknown as HTMLElement;
 	window.document.body.appendChild(host as never);
 	const panelRoot = createRoot(host);
@@ -343,7 +359,7 @@ async function mountPanel(conversationId: string, me = "me"): Promise<Panel> {
 		conversationId,
 		me,
 		bots: [],
-		onClose: () => {},
+		onClose,
 	});
 	await act(async () =>
 		panelRoot.render(createElement(QueryClientProvider, { client }, panel)),
@@ -1041,6 +1057,234 @@ describe("live updates", () => {
 		expect(panel.text()).toContain("Still here");
 		await panel.unmount();
 	});
+});
+
+describe("deletion on another client", () => {
+	test("a canceled detail request's delayed 404 cannot clear a rejoined conversation", async () => {
+		const fake = room("remote-canceled-detail", [
+			entry("message", "anna", { text: "Rejoined conversation history" }, 0),
+		]);
+		let closed = 0;
+		const panel = await mountPanel(fake.conversation.id, "me", () => {
+			closed += 1;
+		});
+		let rejectOld: (error: Error) => void = () => {};
+		try {
+			fake.beforeGet = () =>
+				new Promise<void>((_, reject) => {
+					rejectOld = reject;
+				});
+			let staleRead: Promise<void> | undefined;
+			await act(async () => {
+				staleRead = client.refetchQueries({
+					queryKey: inboxKeys.conversation(fake.conversation.id),
+					exact: true,
+				});
+			});
+			fake.beforeGet = undefined;
+			await act(async () => {
+				await client.cancelQueries({
+					queryKey: inboxKeys.conversation(fake.conversation.id),
+					exact: true,
+				});
+				await client.refetchQueries({
+					queryKey: inboxKeys.conversation(fake.conversation.id),
+					exact: true,
+				});
+			});
+			await act(async () => {
+				rejectOld(
+					new ApiResponseError({
+						status: 404,
+						code: "NOT_FOUND",
+						message: "Old missing membership",
+					}),
+				);
+				await staleRead;
+			});
+			await settle();
+			expect(panel.text()).toContain("Rejoined conversation history");
+			expect(
+				client.getQueryData<unknown>(inboxKeys.entries(fake.conversation.id)),
+			).toBeDefined();
+			expect(closed).toBe(0);
+		} finally {
+			await panel.unmount();
+		}
+	});
+
+	test("rechecks a previously missing room before closing it after a rejoin", async () => {
+		const fake = room("remote-rejoin", [
+			entry("message", "anna", { text: "After rejoining" }, 0),
+		]);
+		client.setQueryData(inboxKeys.conversation(fake.conversation.id), null);
+		let closed = 0;
+		const panel = await mountPanel(fake.conversation.id, "me", () => {
+			closed += 1;
+		});
+		try {
+			expect(panel.text()).toContain("After rejoining");
+			expect(closed).toBe(0);
+		} finally {
+			await panel.unmount();
+		}
+	});
+
+	test("a refreshed list cannot seed a new boundary over old cached history", async () => {
+		const fake = room("remote-list", [], {
+			kind: "direct",
+			history_cleared_at: new Date(BASE + 1000).toISOString(),
+		});
+		client.setQueryData(inboxKeys.conversations(), [fake.conversation]);
+		client.setQueryData(inboxKeys.entries(fake.conversation.id), {
+			pages: [
+				{
+					entries: [
+						entry("message", "anna", { text: "Old list-seeded history" }, 0),
+					],
+					next_before: null,
+				},
+			],
+			pageParams: [undefined],
+		});
+		const panel = await mountPanel(fake.conversation.id);
+		try {
+			expect(panel.text()).not.toContain("Old list-seeded history");
+		} finally {
+			await panel.unmount();
+		}
+	});
+
+	test("a changed history boundary clears the open chat and detaches its old feed", async () => {
+		const fake = room(
+			"remote-clear",
+			[entry("message", "anna", { text: "History to clear" }, 0)],
+			{ kind: "direct" },
+		);
+		let oldFeed: ConversationFeedListener | undefined;
+		registerConversationFeed({
+			watch(target, listener) {
+				if (target.conversationId === fake.conversation.id && !oldFeed)
+					oldFeed = listener;
+				return () => {};
+			},
+		});
+		const panel = await mountPanel(fake.conversation.id);
+		try {
+			expect(panel.text()).toContain("History to clear");
+			client.setQueryData(
+				inboxKeys.entries(fake.conversation.id, "bot_scout"),
+				{ copy: "bot history" },
+			);
+			fake.entries = [];
+			fake.conversation = {
+				...fake.conversation,
+				history_cleared_at: new Date(BASE + 1000).toISOString(),
+			};
+			await act(async () => {
+				await client.invalidateQueries({
+					queryKey: inboxKeys.conversation(fake.conversation.id),
+				});
+			});
+			await settle(100);
+			expect(panel.text()).not.toContain("History to clear");
+			expect(
+				client.getQueryData<unknown>(
+					inboxKeys.entries(fake.conversation.id, "bot_scout"),
+				),
+			).toEqual({ copy: "bot history" });
+			await act(async () =>
+				oldFeed?.([entry("message", "anna", { text: "Delayed old feed" }, 10)]),
+			);
+			await settle();
+			expect(panel.text()).not.toContain("Delayed old feed");
+			fake.entries.push(
+				entry("message", "anna", { text: "After deletion" }, 20),
+			);
+			await act(async () => {
+				await client.invalidateQueries({
+					queryKey: inboxKeys.entries(fake.conversation.id),
+					exact: true,
+				});
+			});
+			await settle();
+			expect(panel.text()).toContain("After deletion");
+		} finally {
+			await panel.unmount();
+			registerConversationFeed(null);
+		}
+	});
+
+	test.each([
+		new ApiResponseError({
+			status: 404,
+			code: "NOT_FOUND",
+			message: "Conversation not found",
+		}),
+		Object.assign(new Error("Local conversation not found"), {
+			name: "LocalStoreError",
+			code: "NOT_FOUND",
+		}),
+	])(
+		"a confirmed missing group clears cached history and closes the panel",
+		async (error) => {
+			const fake = room(`remote-left-${error.name}`, [
+				entry("message", "anna", { text: "Former room history" }, 0),
+			]);
+			let closed = 0;
+			const panel = await mountPanel(fake.conversation.id, "me", () => {
+				closed += 1;
+			});
+			try {
+				fake.getError = error;
+				await act(async () => {
+					await client.invalidateQueries({
+						queryKey: inboxKeys.conversation(fake.conversation.id),
+					});
+				});
+				await settle();
+				expect(panel.text()).not.toContain("Former room history");
+				expect(
+					client.getQueryData<unknown>(inboxKeys.entries(fake.conversation.id)),
+				).toBeUndefined();
+				expect(closed).toBe(1);
+			} finally {
+				await panel.unmount();
+			}
+		},
+	);
+
+	test.each([
+		new Error("offline"),
+		new ApiResponseError({ status: 404, message: "Proxy route missing" }),
+	])(
+		"keeps the open history on a temporary or uncoded error",
+		async (error) => {
+			const fake = room(`remote-error-${error.name}`, [
+				entry("message", "anna", { text: "Keep this history" }, 0),
+			]);
+			let closed = 0;
+			const panel = await mountPanel(fake.conversation.id, "me", () => {
+				closed += 1;
+			});
+			try {
+				fake.getError = error;
+				await act(async () => {
+					await client.invalidateQueries({
+						queryKey: inboxKeys.conversation(fake.conversation.id),
+					});
+				});
+				await settle();
+				expect(panel.text()).toContain("Keep this history");
+				expect(
+					client.getQueryData<unknown>(inboxKeys.entries(fake.conversation.id)),
+				).toBeDefined();
+				expect(closed).toBe(0);
+			} finally {
+				await panel.unmount();
+			}
+		},
+	);
 });
 
 describe("marking read", () => {

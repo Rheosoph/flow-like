@@ -52,11 +52,11 @@ const INBOX_TABLES: [&str; 5] = [
         "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
         "leftAt" TEXT, "lastReadAt" TEXT,
         "status" TEXT NOT NULL DEFAULT 'ACTIVE', "limits" TEXT, "invitedBy" TEXT, "invitedAt" TEXT,
-        "acceptedAt" TEXT, PRIMARY KEY ("conversationId", "principalId"))"#,
+        "acceptedAt" TEXT, "hiddenAt" TEXT, "clearedAt" TEXT, "clearedLegacyAt" TEXT, "clearedSeq" INTEGER, PRIMARY KEY ("conversationId", "principalId"))"#,
     r#"CREATE TABLE public."InboxEntry" (
         "id" TEXT PRIMARY KEY, "inboxId" TEXT NOT NULL, "conversationId" TEXT NOT NULL,
         "messageId" TEXT NOT NULL, "senderId" TEXT NOT NULL, "kind" TEXT NOT NULL,
-        "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER, UNIQUE ("inboxId", "messageId"),
+        "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER, "cleared" BOOLEAN NOT NULL DEFAULT false, UNIQUE ("inboxId", "messageId"),
         UNIQUE ("inboxId", "conversationId", "seq"))"#,
     r#"CREATE TABLE public."InboxKey" (
         "principalId" TEXT NOT NULL, "keyId" TEXT NOT NULL, "algorithm" TEXT NOT NULL,

@@ -59,6 +59,7 @@ pub(super) async fn copies_of<C: ConnectionTrait>(
         return Ok(Vec::new());
     }
     inbox_entry::Entity::find()
+        .filter(super::deletion::visible_entries())
         .filter(inbox_entry::Column::InboxId.eq(reader))
         .filter(inbox_entry::Column::MessageId.is_in(message_ids.iter().cloned()))
         .filter(inbox_entry::Column::Kind.eq(stored(InboxEntryKind::Message.as_str())))
@@ -100,8 +101,9 @@ fn edits_statement(
             .map(|message| message.message_id.as_str().into())
             .collect(),
     );
+    let visible = super::deletion::visible_entries_sql("\"InboxEntry\"");
     let sql = format!(
-        r#"SELECT * FROM "InboxEntry" WHERE "inboxId" = $1 AND "kind" = $2 AND "createdAt" >= $3 AND "conversationId" IN ({in_conversations}) AND ("envelope" -> 'body' ->> 'target') IN ({in_targets})"#
+        r#"SELECT * FROM "InboxEntry" WHERE {visible} AND "inboxId" = $1 AND "kind" = $2 AND "createdAt" >= $3 AND "conversationId" IN ({in_conversations}) AND ("envelope" -> 'body' ->> 'target') IN ({in_targets})"#
     );
     Statement::from_sql_and_values(db.get_database_backend(), sql, values)
 }

@@ -5218,6 +5218,7 @@ mod tests {
     /// A call from `app-a` through the connection proxy, as `remote_proxy` builds it.
     fn connection(sub: Option<&str>, technical_user_id: Option<&str>) -> ProxyCallerContext {
         let app = super::ConnectedAppUser {
+            bot: None,
             sub: sub.map(str::to_owned),
             origin_app_id: "app-a".to_string(),
             target_app_id: "app-b".to_string(),

@@ -17,7 +17,6 @@ pub(crate) mod requests;
 
 pub use hub::{AccountHub, HubBody, HubCall, HubError, HubMethod, WorkspaceSummary};
 
-use flow_like_types::bot_connector::{BotConnector, ConnectorAuth, CreateBotConnector};
 use crate::{
     LocalBotStore,
     error::codes,
@@ -25,6 +24,7 @@ use crate::{
     validation,
 };
 use flow_like_types::bot::{BotLocation, BotSystemKind};
+use flow_like_types::bot_connector::{BotConnector, ConnectorAuth, CreateBotConnector};
 use requests::{
     AccountIds, BotSettingsRequest, ImportBotRequest, PositionMap, count_messages, entries_to_move,
     foreign_handles, import_conversation_requests, segment_requests, split_conversations,
@@ -388,6 +388,7 @@ struct SentChat {
     /// Segments written to the account or left out.
     segment_ids: HashSet<String>,
     dropped_segments: usize,
+    deletion: Option<crate::OwnerConversationDeletion>,
 }
 
 /// One bot's way into the account. Each pass copies what changed here since the last; the
@@ -1016,6 +1017,7 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
     async fn move_chats(&mut self, bundle: &LocalBotBundle) -> Result<(), MoveError> {
         let movable = split_conversations(bundle, &self.account_bots).movable;
         self.enter(MoveStep::Conversations);
+        self.delete_transferred_groups().await?;
         for item in &movable {
             self.import_chat(item).await?;
         }
@@ -1029,6 +1031,37 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
         for item in &movable {
             self.forget_chat(item).await?;
         }
+        self.delete_transferred_groups().await?;
+        Ok(())
+    }
+
+    async fn delete_transferred_groups(&self) -> Result<(), MoveError> {
+        let (bot, owner, account_bot) = (
+            self.bot_id.to_string(),
+            self.hub.caller().to_string(),
+            self.account_id.clone(),
+        );
+        let pending = self
+            .local("check groups deleted while moving", move |store| {
+                store.pending_transferred_deletions(&bot, &owner, &account_bot)
+            })
+            .await?;
+        for (local_id, account_id) in pending {
+            self.call(
+                "delete a group removed while moving",
+                HubCall::new(HubMethod::Delete, &["inbox", "conversations", &account_id]),
+            )
+            .await?;
+            let (bot, owner, account_bot) = (
+                self.bot_id.to_string(),
+                self.hub.caller().to_string(),
+                self.account_id.clone(),
+            );
+            self.local("record the transferred group deletion", move |store| {
+                store.acknowledge_transferred_deletion(&local_id, &bot, &owner, &account_bot)
+            })
+            .await?;
+        }
         Ok(())
     }
 
@@ -1036,19 +1069,20 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
         let conversation = &item.conversation;
         let sent = self.chats.entry(conversation.id.clone()).or_default();
         let created = sent.account_id.is_some();
+        let deletion_changed = sent.deletion != item.deletion;
         let fresh: Vec<&InboxEntry> = entries_to_move(item, &self.account_bots)
             .0
             .into_iter()
-            .filter(|entry| !sent.message_ids.contains(&entry.message_id))
+            .filter(|entry| deletion_changed || !sent.message_ids.contains(&entry.message_id))
             .collect();
-        if created && fresh.is_empty() {
+        if created && fresh.is_empty() && !deletion_changed {
             return Ok(());
         }
         let operation = format!(
             "move conversation {} of bot {}",
             conversation.id, self.bot_id
         );
-        for request in import_conversation_requests(conversation, &fresh, &self.ids) {
+        for request in import_conversation_requests(item, &fresh, &self.ids) {
             let body = self.body(&request)?;
             let answer = self
                 .call(
@@ -1068,6 +1102,25 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
                     format!("Could not {operation}: the hub returned no conversation"),
                 ));
             };
+            if conversation.kind == flow_like_types::inbox::ConversationKind::Group {
+                let (local_id, bot, owner, account_bot, account_chat) = (
+                    conversation.id.clone(),
+                    self.bot_id.to_string(),
+                    self.hub.caller().to_string(),
+                    self.account_id.clone(),
+                    account_id.clone(),
+                );
+                self.local("record the imported group", move |store| {
+                    store.record_conversation_transfer(
+                        &local_id,
+                        &bot,
+                        &owner,
+                        &account_bot,
+                        &account_chat,
+                    )
+                })
+                .await?;
+            }
             let sent = self.chats.entry(conversation.id.clone()).or_default();
             sent.account_id = Some(account_id);
             for entry in &request.entries {
@@ -1076,6 +1129,10 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
                     .insert(entry.message_id.to_string(), entry.stripped);
             }
         }
+        self.chats
+            .entry(conversation.id.clone())
+            .or_default()
+            .deletion = item.deletion.clone();
         Ok(())
     }
 
@@ -1112,7 +1169,11 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
                         HubMethod::Get,
                         &["inbox", "conversations", account_chat, "entries"],
                     )
-                    .query(&[("from_seq", from_seq.as_str()), ("limit", "100")]),
+                    .query(&[
+                        ("from_seq", from_seq.as_str()),
+                        ("limit", "100"),
+                        ("as", self.account_id.as_str()),
+                    ]),
                 )
                 .await?;
             for entry in records(page.as_ref(), "entries") {
@@ -1196,10 +1257,17 @@ impl<'a, H: AccountHub> BotMove<'a, H> {
             |entry| entry.cursor.clone(),
         );
         let conversation_id = local_id.clone();
+        let deletion = item.deletion.clone();
         let forgotten = self
             .local(
                 &format!("remove local conversation {local_id} from this computer"),
-                move |store| store.forget_conversation(&conversation_id, Some(newest.as_str())),
+                move |store| {
+                    store.forget_exported_conversation(
+                        &conversation_id,
+                        Some(newest.as_str()),
+                        deletion.as_ref(),
+                    )
+                },
             )
             .await;
         match forgotten {

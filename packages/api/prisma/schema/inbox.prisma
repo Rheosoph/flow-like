@@ -134,6 +134,14 @@ model ConversationMember {
   invitedAt      DateTime?    @db.Timestamptz(3)
   acceptedAt     DateTime?    @db.Timestamptz(3)
 
+  /// Hidden until a new message or explicit reopening; the history boundaries survive reopening.
+  hiddenAt        DateTime? @db.Timestamptz(3)
+  /// Changes whenever this principal clears history, including history imported from a device.
+  clearedAt       DateTime? @db.Timestamptz(3)
+  /// The timestamp boundary for old entries without positions and delayed history imports.
+  clearedLegacyAt DateTime? @db.Timestamptz(3)
+  clearedSeq      BigInt?
+
   @@id([conversationId, principalId])
   @@index([principalId, leftAt])
   @@index([principalId, status])
@@ -156,6 +164,9 @@ model InboxEntry {
   /// The event's position in its conversation, the same in every copy and never reused. Null
   /// on events written before positions existed.
   seq            BigInt?
+
+  /// An imported event cleared only from this inbox; null has the same meaning as false.
+  cleared        Boolean?
 
   @@unique([inboxId, messageId])
   /// Reads by position (`seq BETWEEN …`) in one copy; a position appears once per copy. NULLs

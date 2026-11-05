@@ -5,7 +5,7 @@ use flow_like_bot_tools_host::{ToolJobEnvelope, ToolReply, job_hash};
 
 use crate::{
     execution::{
-        ExecutionJwtParams, TokenType, bind_bot_identity, bind_tool_job, dispatch::DispatchError,
+        DispatchError, ExecutionJwtParams, TokenType, bind_bot_identity, bind_tool_job,
         sign_unattended_execution_jwt,
     },
     middleware::jwt::BotUser,

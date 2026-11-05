@@ -109,12 +109,13 @@ fn first(mut rows: Vec<InboxEntry>, keep: u64) -> (Vec<InboxEntry>, bool) {
 
 fn query_entries(
     db: &Connection,
+    source: &str,
     filter: &str,
     tail: &str,
     values: impl rusqlite::Params,
 ) -> Result<Vec<InboxEntry>> {
     let mut statement = db.prepare_cached(&format!(
-        "SELECT {ENTRY_COLUMNS} FROM entries WHERE conversation_id = ?1 AND {filter} {tail}"
+        "SELECT {ENTRY_COLUMNS} FROM {source} WHERE conversation_id = ?1 AND {filter} {tail}"
     ))?;
     let rows = statement
         .query_map(values, read_entry)?
@@ -125,12 +126,14 @@ fn query_entries(
 /// Up to `count` entries right before `seq`, oldest first, and whether older ones remain.
 fn before(
     db: &Connection,
+    source: &str,
     conversation_id: &str,
     seq: i64,
     count: u64,
 ) -> Result<(Vec<InboxEntry>, bool)> {
     let rows = query_entries(
         db,
+        source,
         "seq < ?2",
         "ORDER BY seq DESC LIMIT ?3",
         params![conversation_id, seq, count.saturating_add(1) as i64],
@@ -143,6 +146,7 @@ fn before(
 /// Up to `count` entries from `seq` on, up to `to`, and whether more remain.
 fn from(
     db: &Connection,
+    source: &str,
     conversation_id: &str,
     seq: i64,
     to: Option<i64>,
@@ -150,6 +154,7 @@ fn from(
 ) -> Result<(Vec<InboxEntry>, bool)> {
     let rows = query_entries(
         db,
+        source,
         "seq >= ?2 AND seq <= ?3",
         "ORDER BY seq ASC LIMIT ?4",
         params![
@@ -186,6 +191,7 @@ fn last_seq(rows: &[InboxEntry]) -> Option<i64> {
 /// The conversation's entries that `read` names, oldest first.
 pub(crate) fn entries_by_position(
     db: &Connection,
+    source: &str,
     conversation_id: &str,
     read: &PositionRead,
 ) -> Result<InboxEntriesPage> {
@@ -195,7 +201,7 @@ pub(crate) fn entries_by_position(
             to,
             limit,
         } => {
-            let (rows, more) = from(db, conversation_id, start, to, limit)?;
+            let (rows, more) = from(db, source, conversation_id, start, to, limit)?;
             let next = more.then(|| last_seq(&rows).map(|seq| seq + 1)).flatten();
             Ok(page(rows, None, next))
         }
@@ -205,12 +211,12 @@ pub(crate) fn entries_by_position(
             limit,
         } => {
             let end = to.unwrap_or(i64::MAX).saturating_add(1);
-            let (rows, more) = before(db, conversation_id, end, limit)?;
+            let (rows, more) = before(db, source, conversation_id, end, limit)?;
             let next = more.then(|| first_seq(&rows).map(|seq| seq - 1)).flatten();
             Ok(page(rows, next, None))
         }
         PositionRead::Around { seq, before, after } => {
-            around_position(db, conversation_id, seq, before, after)
+            around_position(db, source, conversation_id, seq, before, after)
         }
     }
 }
@@ -219,15 +225,16 @@ pub(crate) fn entries_by_position(
 /// neighbours.
 fn around_position(
     db: &Connection,
+    source: &str,
     conversation_id: &str,
     seq: i64,
     count_before: u64,
     count_after: u64,
 ) -> Result<InboxEntriesPage> {
-    let (mut rows, older) = before(db, conversation_id, seq, count_before)?;
+    let (mut rows, older) = before(db, source, conversation_id, seq, count_before)?;
     let next_to_seq = older.then(|| first_seq(&rows).map_or(seq - 1, |first| first - 1));
-    let held = query_entries(db, "seq = ?2", "", params![conversation_id, seq])?;
-    let (newer, more) = from(db, conversation_id, seq + 1, None, count_after)?;
+    let held = query_entries(db, source, "seq = ?2", "", params![conversation_id, seq])?;
+    let (newer, more) = from(db, source, conversation_id, seq + 1, None, count_after)?;
     rows.extend(held);
     rows.extend(newer);
     let next_from_seq = more.then(|| last_seq(&rows).map_or(seq + 1, |last| last + 1));
@@ -244,10 +251,25 @@ impl LocalBotStore {
         conversation_id: &str,
         query: &PositionQuery,
     ) -> Result<InboxEntriesPage> {
+        self.entries_by_position_as(conversation_id, LOCAL_OWNER_ID, query)
+    }
+
+    /// Reads one active member's history without applying the owner's boundary to bots.
+    pub fn entries_by_position_as(
+        &self,
+        conversation_id: &str,
+        principal_id: &str,
+        query: &PositionQuery,
+    ) -> Result<InboxEntriesPage> {
         let read = position_read(query)?;
         self.read(|db| {
-            active_membership(db, conversation_id, LOCAL_OWNER_ID)?;
-            entries_by_position(db, conversation_id, &read)
+            active_membership(db, conversation_id, principal_id)?;
+            entries_by_position(
+                db,
+                super::deletion::entry_source(principal_id),
+                conversation_id,
+                &read,
+            )
         })
     }
 }

@@ -1,5 +1,6 @@
 mod bots;
 mod connectors;
+mod deletion;
 mod files;
 mod history;
 mod inbox;

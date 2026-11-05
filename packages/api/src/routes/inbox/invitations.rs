@@ -215,6 +215,10 @@ pub(super) fn pending_row(
         invited_by: Set(Some(inviter.to_string())),
         invited_at: Set(Some(now)),
         accepted_at: Set(None),
+        hidden_at: Set(None),
+        cleared_at: Set(None),
+        cleared_legacy_at: Set(None),
+        cleared_seq: Set(None),
     }
 }
 
@@ -443,6 +447,10 @@ pub(crate) async fn accept_in<C: ConnectionTrait>(
         .col_expr(
             conversation_member::Column::Status,
             Expr::value(MEMBER_ACTIVE),
+        )
+        .col_expr(
+            conversation_member::Column::HiddenAt,
+            Expr::value(None::<DateTime<FixedOffset>>),
         )
         .col_expr(conversation_member::Column::AcceptedAt, Expr::value(now))
         .col_expr(conversation_member::Column::JoinedAt, Expr::value(now))

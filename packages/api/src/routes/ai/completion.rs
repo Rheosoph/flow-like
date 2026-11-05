@@ -168,6 +168,7 @@ async fn complete(
         payload.app_id.as_deref(),
         MAX_RUNTIME.as_millis() as i64,
         false,
+        None,
     )
     .await?;
     if !crate::quota::mark_started(&state, &usage.operation_id).await? {

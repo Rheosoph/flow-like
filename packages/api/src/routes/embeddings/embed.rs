@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use crate::entity::{bit, embedding_usage_tracking};
 use crate::error::ApiError;
 use crate::execution::subject::account_user_id;
-use crate::middleware::jwt::{AppUser, ExecutorUse};
+use crate::middleware::jwt::AppUser;
 use crate::state::AppState;
 use crate::usage_accounting::{
     HostedRateSnapshot, UsageInvocationSettlement, UsageInvocationStart,
@@ -28,59 +28,7 @@ use sea_orm::{EntityTrait, Set};
 
 use super::providers;
 
-const APP_ID_HEADER: &str = "x-flow-like-app-id";
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
-pub(crate) struct UsageRequestContext {
-    app_id: Option<String>,
-    user_id: String,
-    technical_user_id: Option<String>,
-}
-
-fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers
-        .get(name)
-        .and_then(|header| header.to_str().ok())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-async fn resolve_usage_context(
-    state: &AppState,
-    user: &AppUser,
-    headers: &HeaderMap,
-) -> Result<UsageRequestContext, ApiError> {
-    if let AppUser::Executor(executor) = user {
-        return Ok(UsageRequestContext {
-            app_id: executor.usage_app_id(),
-            user_id: executor.sub.clone(),
-            technical_user_id: executor.technical_user_id.clone(),
-        });
-    }
-
-    if let AppUser::APIKey(api_key) = user {
-        user.execution_app_permission(&api_key.app_id, state, ExecutorUse::Read)
-            .await?;
-        return Ok(UsageRequestContext {
-            app_id: Some(api_key.app_id.clone()),
-            user_id: user.effective_user_id()?,
-            technical_user_id: Some(api_key.key_id.clone()),
-        });
-    }
-
-    let app_id = header_string(headers, APP_ID_HEADER);
-    if let Some(app_id) = app_id.as_deref() {
-        user.execution_app_permission(app_id, state, ExecutorUse::Read)
-            .await?;
-    }
-
-    Ok(UsageRequestContext {
-        app_id,
-        user_id: user.effective_user_id()?,
-        technical_user_id: None,
-    })
-}
+use crate::routes::chat::{UsageRequestContext, resolve_usage_context};
 
 /// Bit cache entry with expiration
 struct CachedBit {
@@ -349,6 +297,7 @@ pub async fn embed_instance_text(
         app_id: instance.app_id.clone(),
         user_id: instance.delegated_user_id.clone(),
         technical_user_id: None,
+        ..Default::default()
     };
     embed_authorized_text(
         state,
@@ -406,6 +355,8 @@ async fn embed_authorized_text(
         user_id: Some(&user_id),
         technical_user_id: usage_context.technical_user_id.as_deref(),
         app_id: usage_context.app_id.as_deref(),
+        bot_id: usage_context.bot_id.as_deref(),
+        conversation_id: usage_context.conversation_id.as_deref(),
         provider: Some(upstream),
         endpoint: Some(upstream),
         model_id: remote_config.model_id.as_deref().or(Some(&payload.model)),

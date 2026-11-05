@@ -48,6 +48,8 @@ pub mod widget;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/{app_id}/usage/budget", get(super::usage_budgets::get_app))
+        .route("/{app_id}/usage/budget/limits", axum::routing::put(super::usage_budgets::put_app))
         .route("/", get(internal::get_apps::get_apps))
         .route("/nodes", get(internal::get_nodes::get_nodes))
         .route("/{app_id}/nodes", get(internal::get_nodes::get_app_nodes))
