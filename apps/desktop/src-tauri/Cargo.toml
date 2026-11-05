@@ -94,7 +94,7 @@ tauri-plugin-shell = "2.5.0"
 tauri-plugin-log = "2.10.1"
 tauri-plugin-notification = "2.7.0"
 tauri-plugin-dialog = "2.8.3"
-tauri-plugin-deep-link = "2.6.2"
+tauri-plugin-deep-link = "2.6.3"
 tauri-plugin-clipboard-manager = "2.5.0"
 tauri-plugin-http = "2.8.3"
 # Devtools enables Tauri's synchronous tracing dispatch even before plugin init.
