@@ -145,6 +145,8 @@ pub struct UsageInvocationStart<'a> {
     pub user_id: Option<&'a str>,
     pub technical_user_id: Option<&'a str>,
     pub app_id: Option<&'a str>,
+    pub bot_id: Option<&'a str>,
+    pub conversation_id: Option<&'a str>,
     pub provider: Option<&'a str>,
     pub endpoint: Option<&'a str>,
     pub model_id: Option<&'a str>,
@@ -190,6 +192,8 @@ pub(crate) async fn start_instance_usage_invocation(
     if start.user_id != Some(instance.delegated_user_id.as_str())
         || start.app_id != instance.app_id.as_deref()
         || start.technical_user_id.is_some()
+        || start.bot_id.is_some()
+        || start.conversation_id.is_some()
     {
         return Err(ApiError::forbidden(
             "Instance usage attribution does not match its grant",
@@ -213,6 +217,8 @@ async fn start_usage_invocation_authorized(
         payer_id: String::new(),
         actor_id: start.user_id.map(ToOwned::to_owned),
         app_id: start.app_id.map(ToOwned::to_owned),
+        bot_id: start.bot_id.map(ToOwned::to_owned),
+        conversation_id: start.conversation_id.map(ToOwned::to_owned),
         // Provider model names may differ from the approved Bit identifier.
         // Instance authorization and account quota retain the granted Bit.
         model_id: instance
@@ -302,6 +308,8 @@ async fn admit_usage_invocation(
         user_id: Set(start.user_id.map(ToOwned::to_owned)),
         technical_user_id: Set(start.technical_user_id.map(ToOwned::to_owned)),
         app_id: Set(app_id.map(ToOwned::to_owned)),
+        bot_id: Set(start.bot_id.map(ToOwned::to_owned)),
+        conversation_id: Set(start.conversation_id.map(ToOwned::to_owned)),
         provider: Set(start.provider.map(ToOwned::to_owned)),
         endpoint: Set(start.endpoint.map(ToOwned::to_owned)),
         model_id: Set(start.model_id.map(ToOwned::to_owned)),
@@ -862,6 +870,8 @@ mod tests {
             status: settlement.status.into(),
             user_id: None,
             app_id: Some("app".into()),
+            bot_id: None,
+            conversation_id: None,
             provider: Some("openrouter".into()),
             endpoint: None,
             model_id: None,

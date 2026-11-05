@@ -148,6 +148,20 @@ Maintain a representative test set for:
 
 Track answer correctness, source grounding, tool success, latency, cost, and escalation or refusal quality. Review traces by failure category instead of relying only on an average score.
 
+## Meter usage and set monthly budgets
+
+For an account bot, open **Details → Usage & limits** to see its hosted model calls, token counts, and monthly spending. In a group's member list, open the bot's usage to inspect the part attributed to that conversation. Group members can read that group's usage; the bot's owner controls its budget.
+
+Owners can set monthly limits for hosted AI spending, model calls, and cloud runtime. A blank field inherits the applicable ceiling; zero prevents further consumption of that resource. A group budget applies to one bot in that group. The bot's total budget also covers its work in other groups and direct chats. Account quotas and existing app limits continue to apply alongside these budgets.
+
+Enterprise administrators set default app and bot ceilings in the admin usage view. These defaults apply to existing and new resources unless an administrator saves an individual override. Owners can lower their limits, but an administrator must approve a ceiling above the default. Removing an admin override restores the current default. App owners can inspect their budget on the project dashboard.
+
+Budget windows start on the first day of each month at 00:00 UTC. Before starting hosted work, the API reserves capacity against each applicable budget. Pending work counts toward the limit until its usage settles or its reservation is released. Reducing a limit does not cancel work already admitted. The usage view shows spent and reserved amounts separately.
+
+Budget spending uses euros and includes the hosted service's accounting costs. The model breakdown reports provider costs in US dollars and separates input, output, and embedding tokens. These totals have different purposes and should not be compared as the same price.
+
+Metering starts when this feature is deployed. Historical calls do not gain bot or group attribution retroactively. Direct calls to local models, command-line providers, or a provider using your own key do not pass through the enterprise model API, so their provider usage is outside these hosted budgets. Locally stored bots also need an account identity before their usage can appear in the enterprise overview.
+
 ## Production checklist
 
 - [ ] System instructions and model settings are versioned

@@ -72,6 +72,7 @@ async fn fixture() -> DatabaseConnection {
         ],
     )
     .await;
+    execute(&db, r#"ALTER TABLE "UsageInvocation" ADD COLUMN "botId" TEXT, ADD COLUMN "conversationId" TEXT"#).await;
     create_tables(
         &db,
         include_str!("../../prisma/migrations-dsql/20260919120001_audit_seals/migration.sql"),
@@ -195,6 +196,8 @@ async fn budgets(db: &DatabaseConnection) {
             db,
             DbDialect::Postgres,
             UsageInvocationStart {
+                bot_id: None,
+                conversation_id: None,
                 kind: "llm",
                 user_id: Some("user"),
                 technical_user_id: None,
@@ -414,6 +417,8 @@ async fn rolling_budgets(db: &DatabaseConnection) {
         db,
         DbDialect::Postgres,
         UsageInvocationStart {
+            bot_id: None,
+            conversation_id: None,
             kind: "llm",
             user_id: Some("user"),
             technical_user_id: None,

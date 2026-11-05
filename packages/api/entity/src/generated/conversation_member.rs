@@ -41,6 +41,14 @@ pub struct Model {
     pub invited_at: Option<DateTimeWithTimeZone>,
     #[sea_orm(column_name = "acceptedAt")]
     pub accepted_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_name = "hiddenAt")]
+    pub hidden_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_name = "clearedAt")]
+    pub cleared_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_name = "clearedLegacyAt")]
+    pub cleared_legacy_at: Option<DateTimeWithTimeZone>,
+    #[sea_orm(column_name = "clearedSeq")]
+    pub cleared_seq: Option<i64>,
     #[sea_orm(
         belongs_to,
         from = "conversation_id",

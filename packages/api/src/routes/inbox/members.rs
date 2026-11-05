@@ -250,6 +250,7 @@ pub(super) async fn upsert_members<C: ConnectionTrait>(
             conversation_member::Column::AddedBy,
             conversation_member::Column::JoinedAt,
             conversation_member::Column::LeftAt,
+            conversation_member::Column::HiddenAt,
             conversation_member::Column::Status,
             conversation_member::Column::Limits,
         ])

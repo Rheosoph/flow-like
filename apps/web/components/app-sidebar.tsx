@@ -718,7 +718,7 @@ function NavFlatItem({
 				tooltip={item.title}
 				className={
 					item.url === BOTS_ROUTE
-						? "overflow-visible pl-0.5 pr-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!"
+						? "overflow-visible pr-9 group-data-[collapsible=icon]:justify-center group-data-[collapsible=icon]:p-0!"
 						: undefined
 				}
 			>
@@ -729,8 +729,8 @@ function NavFlatItem({
 					whileHover="hover"
 				>
 					{item.url === BOTS_ROUTE ? (
-						<div className="flex size-7 shrink-0 items-center justify-center">
-							<BotsNavAvatar size={28} />
+						<div className="flex size-4 shrink-0 items-center justify-center">
+							<BotsNavAvatar />
 						</div>
 					) : (
 						item.icon && (

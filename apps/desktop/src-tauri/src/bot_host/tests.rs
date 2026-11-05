@@ -71,7 +71,7 @@ pub(super) struct Direct(pub(super) Arc<LocalBotStore>);
 #[async_trait]
 impl HostStore for Direct {
     async fn conversations(&self) -> Result<Vec<Conversation>, String> {
-        self.0.conversations().map_err(|e| e.to_string())
+        self.0.host_conversations().map_err(|e| e.to_string())
     }
 
     async fn conversation(&self, id: &str) -> Result<Option<Conversation>, String> {
@@ -79,9 +79,23 @@ impl HostStore for Direct {
     }
 
     async fn newest(&self, id: &str) -> Result<Vec<InboxEntry>, String> {
+        let Some(bot_id) = self
+            .0
+            .conversation(id)
+            .map_err(|e| e.to_string())?
+            .and_then(|conversation| {
+                conversation.members.into_iter().find_map(|member| {
+                    (member.kind == flow_like_types::inbox::PrincipalKind::Bot)
+                        .then_some(member.principal_id)
+                })
+            })
+        else {
+            return Ok(Vec::new());
+        };
         self.0
-            .entries(
+            .entries_as(
                 id,
+                &bot_id,
                 &EntriesQuery {
                     limit: Some(WINDOW),
                     ..Default::default()
@@ -119,20 +133,22 @@ impl HostStore for Direct {
     async fn positions(
         &self,
         conversation_id: &str,
+        bot_id: &str,
         query: PositionQuery,
     ) -> Result<InboxEntriesPage, String> {
         self.0
-            .entries_by_position(conversation_id, &query)
+            .entries_by_position_as(conversation_id, bot_id, &query)
             .map_err(|e| e.to_string())
     }
 
     async fn segments(
         &self,
         conversation_id: &str,
+        bot_id: &str,
         query: SegmentsQuery,
     ) -> Result<ConversationSegmentList, String> {
         self.0
-            .segments(conversation_id, &query)
+            .segments_as(conversation_id, bot_id, &query)
             .map_err(|e| e.to_string())
     }
 

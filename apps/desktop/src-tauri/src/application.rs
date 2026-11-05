@@ -1524,6 +1524,7 @@ pub fn run() {
             functions::local_bots::local_inbox_set_image,
             functions::local_bots::local_inbox_add_members,
             functions::local_bots::local_inbox_remove_member,
+            functions::local_bots::local_inbox_delete_conversation,
             functions::local_bots::local_inbox_entries,
             functions::local_bots::local_inbox_send,
             functions::local_bots::local_inbox_upload_file,

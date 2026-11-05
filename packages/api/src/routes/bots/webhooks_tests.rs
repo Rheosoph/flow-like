@@ -621,6 +621,7 @@ async fn finish(db: &DatabaseConnection, id: &str, text: &str) {
         envelope: Set(json!({"v": 1, "enc": "none", "body": {"text": text}})),
         created_at: Set(at(5)),
         seq: Set(Some(2)),
+        cleared: Set(Some(false)),
     }
     .insert(db)
     .await

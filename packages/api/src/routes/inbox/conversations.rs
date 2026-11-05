@@ -151,6 +151,10 @@ pub(super) fn member_row(
         invited_by: Set(None),
         invited_at: Set(None),
         accepted_at: Set(None),
+        hidden_at: Set(None),
+        cleared_at: Set(None),
+        cleared_legacy_at: Set(None),
+        cleared_seq: Set(None),
     }
 }
 
@@ -416,7 +420,11 @@ async fn open_direct(
                 let (id, sub) = (id.clone(), sub.to_string());
                 Box::pin(async move {
                     lock_conversation(txn, &id).await?;
-                    requests::answer_by_writing(txn, &id, &sub, now_millis()).await
+                    let mut people =
+                        requests::answer_by_writing(txn, &id, &sub, now_millis()).await?;
+                    super::deletion::reopen(txn, &id, &sub).await?;
+                    people.push(sub);
+                    Ok::<_, ApiError>(people)
                 })
             })
             .await?;
@@ -431,7 +439,7 @@ async fn open_direct(
                 if !direct.request {
                     lock_live_bots(txn, &sub, std::slice::from_ref(&direct.other)).await?;
                 }
-                start_direct_as(
+                let id = start_direct_as(
                     txn,
                     &sub,
                     &direct.other,
@@ -439,10 +447,14 @@ async fn open_direct(
                     direct.request,
                     now_millis(),
                 )
-                .await
+                .await?;
+                lock_conversation(txn, &id).await?;
+                super::deletion::reopen(txn, &id, &sub).await?;
+                Ok::<_, ApiError>(id)
             })
         })
         .await?;
+    wake(state, [sub.to_string()]).await;
     if direct.request {
         wake(
             state,

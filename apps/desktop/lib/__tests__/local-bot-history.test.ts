@@ -39,6 +39,30 @@ describe("a local bot's chat history", () => {
 		expect(mocks.invoke.mock.calls[0][0]).toBe("local_inbox_entries");
 	});
 
+	test("passes the bot reader through without applying the person's deleted history", async () => {
+		mocks.invoke.mockResolvedValue({ entries: [], next_before: null });
+		await localInbox.entries("c1", { as: "bot_1", limit: 20 });
+		expect(mocks.invoke).toHaveBeenLastCalledWith(
+			"local_inbox_entries",
+			expect.objectContaining({ conversationId: "c1", principalId: "bot_1" }),
+		);
+		await localInbox.entries("c1", { as: "bot_1", from_seq: 1 });
+		expect(mocks.invoke).toHaveBeenLastCalledWith(
+			"local_inbox_entries_by_position",
+			expect.objectContaining({ conversationId: "c1", principalId: "bot_1" }),
+		);
+		await localInbox.segments("c1", { as: "bot_1" });
+		expect(mocks.invoke).toHaveBeenLastCalledWith(
+			"local_inbox_segments",
+			expect.objectContaining({ conversationId: "c1", principalId: "bot_1" }),
+		);
+		await localInbox.pins("c1", "bot_1");
+		expect(mocks.invoke).toHaveBeenLastCalledWith("local_inbox_pins", {
+			conversationId: "c1",
+			principalId: "bot_1",
+		});
+	});
+
 	test("lists the segments of the local conversation", async () => {
 		mocks.invoke.mockResolvedValue({
 			segments: [{ id: "s0-1-5" }],

@@ -6,6 +6,7 @@ import { useAuth } from "react-oidc-context";
 import { useShallow } from "zustand/react/shallow";
 import { useConversations } from "../../hooks/use-inbox";
 import { useUserLookup } from "../../hooks/use-user-lookup";
+import { cn } from "../../lib/utils";
 import { useSignedIn } from "../../state/backend-state";
 import { ASSISTANT_BOT_ID } from "../../state/global-chat/global-chat-bots";
 import { useGlobalChatStore } from "../../state/global-chat/global-chat-store";
@@ -37,7 +38,7 @@ function useLatestLiveActivity() {
 
 /** The last bot you exchanged messages with, drawn with its current saved look. */
 export function BotsNavAvatar({
-	size = 28,
+	size = 20,
 	className,
 }: Readonly<{ size?: number; className?: string }>) {
 	const conversations = useConversations().data;
@@ -66,7 +67,7 @@ export function BotsNavAvatar({
 			agentState={agentState}
 			animated
 			decorative
-			className={className}
+			className={cn("[&_.fl-bot-badges]:hidden", className)}
 		/>
 	);
 }

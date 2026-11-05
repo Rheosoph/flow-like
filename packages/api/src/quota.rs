@@ -47,7 +47,7 @@ impl QuotaAmounts {
         }
     }
 
-    fn checked_add(self, other: Self) -> Result<Self, ApiError> {
+    pub(crate) fn checked_add(self, other: Self) -> Result<Self, ApiError> {
         let a = self.values();
         let b = other.values();
         let mut result = [0; 4];
@@ -95,6 +95,8 @@ pub struct QuotaRequest {
     pub payer_id: String,
     pub actor_id: Option<String>,
     pub app_id: Option<String>,
+    pub bot_id: Option<String>,
+    pub conversation_id: Option<String>,
     pub model_id: Option<String>,
     pub provider: Option<String>,
     pub kind: String,
@@ -130,6 +132,10 @@ struct OperationRow {
     period_id: String,
     #[sea_orm(from_alias = "appId")]
     app_id: Option<String>,
+    #[sea_orm(from_alias = "botId")]
+    bot_id: Option<String>,
+    #[sea_orm(from_alias = "conversationId")]
+    conversation_id: Option<String>,
     #[sea_orm(from_alias = "modelId")]
     model_id: Option<String>,
     provider: Option<String>,
@@ -404,6 +410,8 @@ pub(crate) async fn reserve_instance_with_db(
 ) -> Result<String, ApiError> {
     if request.actor_id.as_deref() != Some(usage.delegated_user_id.as_str())
         || request.app_id != usage.app_id
+        || request.bot_id.is_some()
+        || request.conversation_id.is_some()
         || request.model_id.as_deref() != Some(usage.model_id.as_str())
         || !matches!(
             request.kind.as_str(),
@@ -460,7 +468,10 @@ async fn reserve_as_with_db(
     instance: Option<(crate::instances::VerifiedInstanceUsage, String)>,
     records: AdmissionRecords,
 ) -> Result<Admission, ApiError> {
-    if request.amounts.values().iter().any(|v| *v < 0) || request.operation_id.is_empty() {
+    if request.amounts.values().iter().any(|v| *v < 0)
+        || request.operation_id.is_empty()
+        || (request.conversation_id.is_some() && request.bot_id.is_none())
+    {
         return Err(ApiError::bad_request("Invalid quota reservation"));
     }
     if request.funding_class != "hosted"
@@ -501,7 +512,7 @@ async fn reserve_as_with_db(
                 let ceiling = decode(&existing.ceiling)?;
                 // A cloud ceiling is derived below, so a repeated admission keeps the committed one.
                 let expected = if mode==ReserveMode::CloudRuntime { QuotaAmounts { runtime_ms: ceiling.runtime_ms, ..request.amounts } } else { request.amounts };
-                if existing.payer_id != request.payer_id || existing.app_id != request.app_id || existing.kind != request.kind || existing.actor_id != request.actor_id || existing.model_id != request.model_id || existing.provider != request.provider || existing.funding_class != request.funding_class || existing.execution_mode != request.execution_mode || ceiling != expected {
+                if existing.payer_id != request.payer_id || existing.app_id != request.app_id || existing.bot_id != request.bot_id || existing.conversation_id != request.conversation_id || existing.kind != request.kind || existing.actor_id != request.actor_id || existing.model_id != request.model_id || existing.provider != request.provider || existing.funding_class != request.funding_class || existing.execution_mode != request.execution_mode || ceiling != expected {
                     return Err(ApiError::conflict("Operation identity already has a different reservation"));
                 }
                 require_live_instance_proof(instance.as_ref())?;
@@ -524,7 +535,6 @@ async fn reserve_as_with_db(
             if mode==ReserveMode::CloudRuntime {
                 request.amounts.runtime_ms = if !enforce || tier.max_runtime_ms < 0 { 900_000 } else { tier.max_runtime_ms.saturating_sub(used.runtime_ms.saturating_add(reserved.runtime_ms)).clamp(1, 900_000) };
             }
-            let admitted = Admission { payer_id: request.payer_id.clone(), amounts: request.amounts, created_at: now.timestamp_millis(), fresh: true };
             let next = used.checked_add(reserved)?.checked_add(request.amounts)?;
             for (i, limit) in limits(&tier).values().into_iter().enumerate() {
                 if enforce && limit >= 0 && next.values()[i] > limit {
@@ -548,11 +558,14 @@ async fn reserve_as_with_db(
                     }));
                 }
             }
+            crate::scoped_usage::reserve(txn, &mut request, mode == ReserveMode::CloudRuntime).await?;
+            let admitted = Admission { payer_id: request.payer_id.clone(), amounts: request.amounts, created_at: now.timestamp_millis(), fresh: true };
+
             let amounts = encode(request.amounts);
             let entitlement_version=blake3::hash(&serde_json::to_vec(&tier)?).to_hex().to_string();
-            txn.execute_raw(sql("INSERT INTO \"QuotaOperation\" (id,\"payerId\",\"periodId\",\"actorId\",\"appId\",\"modelId\",provider,kind,\"fundingClass\",\"executionMode\",status,ceiling,used,reserved,deadline,\"createdAt\",\"updatedAt\",generation,plan,\"entitlementVersion\") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reserved',$11,$12,$11,$13,$14,$14,0,$15,$16)", vec![
+            txn.execute_raw(sql("INSERT INTO \"QuotaOperation\" (id,\"payerId\",\"periodId\",\"actorId\",\"appId\",\"modelId\",provider,kind,\"fundingClass\",\"executionMode\",status,ceiling,used,reserved,deadline,\"createdAt\",\"updatedAt\",generation,plan,\"entitlementVersion\",\"botId\",\"conversationId\") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'reserved',$11,$12,$11,$13,$14,$14,0,$15,$16,$17,$18)", vec![
                 request.operation_id.into(), request.payer_id.into(), period.id.clone().into(), request.actor_id.into(), request.app_id.into(), request.model_id.into(), request.provider.into(), request.kind.into(), request.funding_class.into(), request.execution_mode.into(), amounts.into(), encode(QuotaAmounts::default()).into(), request.deadline.timestamp_millis().into(), now.timestamp_millis().into(),
-                plan.into(),entitlement_version.into(),
+                plan.into(),entitlement_version.into(), request.bot_id.into(), request.conversation_id.into(),
             ])).await?;
             txn.execute_raw(sql("UPDATE \"QuotaPeriod\" SET reserved=$2,\"updatedAt\"=$3 WHERE id=$1", vec![period.id.into(), encode(reserved.checked_add(request.amounts)?).into(), now.timestamp_millis().into()])).await?;
             if let Some(run) = &records.run {
@@ -688,6 +701,8 @@ fn cloud_readmission(
     request: &QuotaRequest,
 ) -> Result<Admission, ApiError> {
     if existing.app_id != request.app_id
+        || existing.bot_id != request.bot_id
+        || existing.conversation_id != request.conversation_id
         || existing.kind != request.kind
         || existing.actor_id != request.actor_id
         || existing.execution_mode != request.execution_mode
@@ -761,7 +776,7 @@ pub(crate) async fn reserve_cloud_with_db(
         db,
         dialect,
         tiers,
-        cloud_quota_request(request, mode),
+        cloud_quota_request(request, mode)?,
         ReserveMode::CloudRuntime,
         None,
         records,
@@ -783,12 +798,28 @@ pub(crate) async fn reserve_cloud_with_db(
     })
 }
 
-fn cloud_quota_request(request: &crate::execution::DispatchRequest, mode: &str) -> QuotaRequest {
-    QuotaRequest {
+fn cloud_quota_request(
+    request: &crate::execution::DispatchRequest,
+    mode: &str,
+) -> Result<QuotaRequest, ApiError> {
+    let claims = crate::execution::verify_execution_jwt(&request.jwt).map_err(|_| {
+        ApiError::forbidden("A verified executor identity is required for cloud admission")
+    })?;
+    if claims.token_type != crate::execution::TokenType::Executor
+        || claims.run_id != request.run_id
+        || claims.app_id != request.app_id
+    {
+        return Err(ApiError::forbidden(
+            "Executor identity does not match the requested run",
+        ));
+    }
+    Ok(QuotaRequest {
         operation_id: request.run_id.clone(),
         payer_id: String::new(),
         actor_id: Some(request.user_id.clone()),
         app_id: Some(request.app_id.clone()),
+        bot_id: claims.bot_id,
+        conversation_id: claims.conv_id,
         model_id: None,
         provider: None,
         kind: "workflow".into(),
@@ -799,7 +830,7 @@ fn cloud_quota_request(request: &crate::execution::DispatchRequest, mode: &str) 
             ..Default::default()
         },
         deadline: Utc::now() + chrono::Duration::hours(24),
-    }
+    })
 }
 
 pub fn enforcing() -> bool {
@@ -1146,7 +1177,9 @@ async fn settle_for_payer(
             }
             let delta = used.delta(used_before);
             let period_used = decode(&period.used)?.checked_add(delta)?;
-            let period_reserved = decode(&period.reserved)?.checked_add(reserved.delta(reserved_before))?;
+            let reserved_delta = reserved.delta(reserved_before);
+            let period_reserved = decode(&period.reserved)?.checked_add(reserved_delta)?;
+            crate::scoped_usage::settle(txn, &operation_id, delta, reserved_delta).await?;
             let now = Utc::now().timestamp_millis();
             txn.execute_raw(sql("UPDATE \"QuotaPeriod\" SET used=$2,reserved=$3,\"updatedAt\"=$4 WHERE id=$1", vec![period.id.into(), encode(period_used).into(), encode(period_reserved).into(), now.into()])).await?;
             txn.execute_raw(sql("UPDATE \"QuotaOperation\" SET used=$2,reserved=$3,status=$4,\"updatedAt\"=$5 WHERE id=$1", vec![operation_id.clone().into(), encode(used).into(), encode(reserved).into(), if is_final { "finalized" } else { "unknown" }.into(), now.into()])).await?;
@@ -1447,6 +1480,40 @@ pub async fn flag_stale(db: &DatabaseConnection, limit: u64) -> Result<u64, ApiE
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cloud_budgets_require_verified_matching_bot_attribution() {
+        crate::backend_jwt::init_for_tests();
+        let jwt = crate::execution::sign_execution_jwt(crate::execution::ExecutionJwtParams {
+            user_id: "owner".into(),
+            technical_user_id: None,
+            run_id: "run".into(),
+            app_id: "app".into(),
+            board_id: "board".into(),
+            event_id: None,
+            app_chain: None,
+            correlation: None,
+            callback_url: "https://api.test".into(),
+            token_type: crate::execution::TokenType::Executor,
+            ttl_seconds: Some(3600),
+            shadow: None,
+        })
+        .unwrap();
+        let jwt = crate::execution::bind_bot_identity(&jwt, "bot", Some("group")).unwrap();
+        let mut request: crate::execution::DispatchRequest = serde_json::from_value(json!({
+            "run_id":"run", "app_id":"app", "board_id":"board", "node_id":"node",
+            "user_id":"owner", "credentials_json":"{}", "jwt":jwt, "callback_url":"https://api.test"
+        }))
+        .unwrap();
+        let quota = cloud_quota_request(&request, "cloud").unwrap();
+        assert_eq!(quota.bot_id.as_deref(), Some("bot"));
+        assert_eq!(quota.conversation_id.as_deref(), Some("group"));
+        request.app_id = "another-app".into();
+        assert!(cloud_quota_request(&request, "cloud").is_err());
+        request.app_id = "app".into();
+        request.jwt.clear();
+        assert!(cloud_quota_request(&request, "cloud").is_err());
+    }
 
     #[test]
     fn anniversaries_keep_original_day_after_short_months() {

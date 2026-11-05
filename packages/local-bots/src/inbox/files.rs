@@ -345,6 +345,23 @@ impl LocalBotStore {
             let Some(row) = file_row(db, conversation_id, file_id)? else {
                 return Ok(None);
             };
+            if principal_id == crate::LOCAL_OWNER_ID {
+                let visible = match &row.message_id {
+                    Some(message_id) => {
+                        super::deletion::message_visible(db, conversation_id, message_id)?
+                    }
+                    None => db.query_row(
+                        "SELECT c.owner_cleared_at IS NULL OR f.created_at > c.owner_cleared_at
+                         FROM conversation_files f JOIN conversations c ON c.id = f.conversation_id
+                         WHERE f.id = ?1 AND c.id = ?2",
+                        params![file_id, conversation_id],
+                        |row| row.get(0),
+                    )?,
+                };
+                if !visible {
+                    return Ok(None);
+                }
+            }
             let ready = row.ready(conversation_id);
             let location = file_location(&self.files_dir, conversation_id, &ready.path);
             match std::fs::read(&location) {

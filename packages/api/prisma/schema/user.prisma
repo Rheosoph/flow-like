@@ -330,6 +330,8 @@ model UsageInvocation {
   userId          String?
   technicalUserId String?
   appId           String?
+  botId           String?
+  conversationId  String?
 
   provider          String?
   endpoint          String?
@@ -356,6 +358,8 @@ model UsageInvocation {
   @@index([status, createdAt])
   @@index([kind, createdAt])
   @@index([appId, createdAt])
+  @@index([botId, createdAt])
+  @@index([botId, conversationId, createdAt])
   @@index([userId, createdAt])
   @@index([technicalUserId, createdAt])
   @@index([provider, modelId, createdAt])

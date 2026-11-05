@@ -2929,6 +2929,14 @@ model ConversationMember {
   invitedAt      DateTime?    @db.Timestamptz(3)
   acceptedAt     DateTime?    @db.Timestamptz(3)
 
+  /// Hidden until a new message or explicit reopening; the history boundaries survive reopening.
+  hiddenAt        DateTime? @db.Timestamptz(3)
+  /// Changes whenever this principal clears history, including history imported from a device.
+  clearedAt       DateTime? @db.Timestamptz(3)
+  /// The timestamp boundary for old entries without positions and delayed history imports.
+  clearedLegacyAt DateTime? @db.Timestamptz(3)
+  clearedSeq      BigInt?
+
   @@id([conversationId, principalId])
   @@index([principalId, leftAt])
   @@index([principalId, status])
@@ -2951,6 +2959,9 @@ model InboxEntry {
   /// The event's position in its conversation, the same in every copy and never reused. Null
   /// on events written before positions existed.
   seq            BigInt?
+
+  /// An imported event cleared only from this inbox; null has the same meaning as false.
+  cleared        Boolean?
 
   @@unique([inboxId, messageId])
   /// Reads by position (`seq BETWEEN …`) in one copy; a position appears once per copy. NULLs
@@ -4116,6 +4127,8 @@ model QuotaOperation {
   periodId           String
   actorId            String?
   appId              String?
+  botId              String?
+  conversationId     String?
   modelId            String?
   provider           String?
   kind               String
@@ -4140,6 +4153,8 @@ model QuotaOperation {
   @@index([status, payloadsDeletedAt, deadline])
   @@index([payerId, id])
   @@index([appId, id])
+  @@index([botId, createdAt])
+  @@index([botId, conversationId, createdAt])
   @@index([status, deadline])
   @@index([status, updatedAt])
 }
@@ -5184,6 +5199,8 @@ model UsageInvocation {
   userId          String?
   technicalUserId String?
   appId           String?
+  botId           String?
+  conversationId  String?
 
   provider          String?
   endpoint          String?
@@ -5210,6 +5227,8 @@ model UsageInvocation {
   @@index([status, createdAt])
   @@index([kind, createdAt])
   @@index([appId, createdAt])
+  @@index([botId, createdAt])
+  @@index([botId, conversationId, createdAt])
   @@index([userId, createdAt])
   @@index([technicalUserId, createdAt])
   @@index([provider, modelId, createdAt])
@@ -5687,4 +5706,43 @@ model WasmPackagePurchase {
   @@index([packageId, completedAt])
   @@index([stripeSessionId])
   @@index([paymentOrderId])
+}
+
+/// Enterprise ceilings and owner reductions for one monthly budget scope.
+model UsageBudgetPolicy {
+  id          String @id
+  scope       String
+  subjectId   String
+  groupId     String?
+  ownerLimits String?
+  adminLimits String?
+  updatedAt   BigInt
+
+  @@index([scope, subjectId])
+}
+
+/// UTC calendar-month counters, including capacity held by running operations.
+model UsageBudgetPeriod {
+  id          String @id
+  scopeId     String
+  scope       String
+  subjectId   String
+  groupId     String?
+  periodStart BigInt
+  periodEnd   BigInt
+  used        String
+  reserved    String
+  updatedAt   BigInt
+
+  @@index([scope, periodStart, subjectId])
+  @@index([scopeId, periodStart])
+}
+
+/// Immutable links keep corrections in the month that admitted the operation.
+model UsageBudgetReservation {
+  id          String @id
+  operationId String
+  periodId    String
+
+  @@index([operationId])
 }

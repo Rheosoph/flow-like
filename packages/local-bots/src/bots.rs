@@ -695,6 +695,14 @@ impl LocalBotStore {
                     "Bot '{bot_id}' changed on this device after it was exported, so it stays here; move it again"
                 )));
             }
+            let pending_deletion: bool = tx.query_row(
+                "SELECT EXISTS (SELECT 1 FROM conversation_transfers t JOIN conversations c ON c.id = t.conversation_id
+                 WHERE t.bot_id = ?1 AND c.kind = 'group' AND c.owner_hidden = 1 AND c.owner_cleared_seq IS NOT NULL)",
+                [bot_id], |row| row.get(0),
+            )?;
+            if pending_deletion {
+                return Err(Error::local_changed("A group deleted during this move still needs to be deleted in the account"));
+            }
             tx.execute("DELETE FROM bots WHERE id = ?1", [bot_id])?;
             changes.bot(bot_id);
             changes.scrub();

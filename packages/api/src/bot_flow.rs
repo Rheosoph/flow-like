@@ -18,26 +18,24 @@ const BOT_ID_PREFIX: &str = "bot_";
 
 pub(crate) struct BotFlowRun {
     bot: BotUser,
-    direct: bool,
     grant: BotGrant,
 }
 
 /// The bot an authenticated caller stands for: the token's own bot, or the bot a connection
 /// token was minted for by a bot-run flow (its `technical_user_id`).
-fn bot_behind(user: &AppUser) -> Option<(BotUser, bool)> {
+fn bot_behind(user: &AppUser) -> Option<BotUser> {
     match user {
-        AppUser::Bot(bot) => Some((bot.clone(), true)),
-        AppUser::ConnectedApp(connected) => connected
-            .technical_user_id
-            .as_deref()
-            .and_then(bot_from_technical_id)
-            .map(|bot| {
-                let bot = BotUser {
+        AppUser::Bot(bot) => Some(bot.clone()),
+        AppUser::ConnectedApp(connected) => connected.bot.clone().or_else(|| {
+            connected
+                .technical_user_id
+                .as_deref()
+                .and_then(bot_from_technical_id)
+                .map(|bot| BotUser {
                     turn_id: connected.run_id.clone().unwrap_or_default(),
                     ..bot
-                };
-                (bot, false)
-            }),
+                })
+        }),
         _ => None,
     }
 }
@@ -84,8 +82,8 @@ pub(crate) fn credentials_access_for(effective: &EffectivePermissions) -> Creden
 }
 
 impl BotFlowRun {
-    pub(crate) fn new(bot: BotUser, direct: bool, grant: BotGrant) -> Self {
-        Self { bot, direct, grant }
+    pub(crate) fn new(bot: BotUser, grant: BotGrant) -> Self {
+        Self { bot, grant }
     }
 
     pub(crate) fn bot_id(&self) -> &str {
@@ -135,11 +133,11 @@ impl BotFlowRun {
         app_id: &str,
         required: RolePermissions,
     ) -> Result<Option<Self>, ApiError> {
-        let Some((bot, direct)) = bot_behind(user) else {
+        let Some(bot) = bot_behind(user) else {
             return Ok(None);
         };
         let grant = bot_grant_in(db, &bot, app_id).await?;
-        let run = Self::new(bot, direct, grant);
+        let run = Self::new(bot, grant);
         run.ensure_holds(required)?;
         Ok(Some(run))
     }
@@ -207,10 +205,10 @@ pub(crate) fn credential_target(
     }
 }
 
-/// Binds the bot to the executor token so its callbacks resolve through the bot's grant. A
-/// bot behind an app connection stays on the connection path, which intersects the bot itself.
+/// Retains bot and group attribution through every hop. Chained executors keep the connection
+/// permission path, which intersects the connection role with the bot's current grant.
 pub(crate) fn bind_executor(bot: Option<&BotFlowRun>, token: String) -> Result<String, ApiError> {
-    let Some(bot) = bot.filter(|bot| bot.direct) else {
+    let Some(bot) = bot else {
         return Ok(token);
     };
     crate::execution::bind_bot_identity(&token, &bot.bot.bot_id, bot.bot.conv_id.as_deref())

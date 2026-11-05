@@ -44,6 +44,7 @@ import {
 import { BotExchanges, BotPermissions } from "./bot-permissions";
 import { BotTasks, offersTasks } from "./bot-tasks";
 import { BotToolGrants } from "./bot-tool-grants";
+import { BotUsageButton } from "./bot-usage";
 import { BotWebhooks, offersWebhooks } from "./bot-webhooks";
 import { useBotHostStatus } from "./device-host-status";
 import { BOT_CAPABILITY_ICONS } from "./editor/bot-capability-groups";
@@ -356,6 +357,12 @@ function BotActions({
 	const { onEdit, onMove } = actions;
 	return (
 		<div className="flex flex-wrap gap-2">
+			{!bot.local && (
+				<BotUsageButton
+					botId={bot.id}
+					name={bot.name ?? t("crew.bot", "Bot")}
+				/>
+			)}
 			{onEdit && (
 				<Button
 					type="button"

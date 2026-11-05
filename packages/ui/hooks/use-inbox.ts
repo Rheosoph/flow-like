@@ -11,6 +11,7 @@ import {
 } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 import { personUnreadTotal } from "../components/bots-tab/crew-model";
+import { isMissingResourceError } from "../lib/api-error";
 import {
 	attachmentParts,
 	conversationFileId,
@@ -36,6 +37,7 @@ import type {
 	IInvitation,
 	IInviteRequest,
 	ISendInboxEntryRequest,
+	IStarredMessagesPage,
 } from "../state/backend-state/inbox-state";
 
 export const inboxKeys = {
@@ -210,13 +212,59 @@ export function useConversation(conversationId?: string | null, as?: string) {
 	const queryClient = useQueryClient();
 	return useQuery({
 		queryKey: inboxKeys.conversation(conversationId ?? "", as),
-		queryFn: () =>
-			requireInboxState(state).getConversation(conversationId as string, as),
+		queryFn: async ({ signal }) => {
+			const id = conversationId as string;
+			try {
+				const conversation = await requireInboxState(state).getConversation(
+					id,
+					as,
+				);
+				if (signal.aborted) return conversation;
+				const previous = queryClient.getQueryData<IConversation | null>(
+					inboxKeys.conversation(id, as),
+				);
+				if (
+					!as &&
+					conversation.history_cleared_at &&
+					conversation.history_cleared_at !== previous?.history_cleared_at
+				) {
+					await clearPersonalConversationCache(
+						queryClient,
+						id,
+						false,
+						false,
+						signal,
+					);
+				}
+				return conversation;
+			} catch (error) {
+				if (signal.aborted) throw error;
+				const localMissing =
+					error instanceof Error &&
+					error.name === "LocalStoreError" &&
+					"code" in error &&
+					error.code === "NOT_FOUND";
+				if (!isMissingResourceError(error) && !localMissing) throw error;
+				if (!as)
+					await clearPersonalConversationCache(
+						queryClient,
+						id,
+						false,
+						true,
+						signal,
+					);
+				return null;
+			}
+		},
 		enabled: Boolean(state && conversationId),
-		initialData: () =>
-			queryClient
+		initialData: () => {
+			const listed = queryClient
 				.getQueryData<IConversation[]>(inboxKeys.conversations(as))
-				?.find((conversation) => conversation.id === conversationId),
+				?.find((conversation) => conversation.id === conversationId);
+			// A list can already carry a newer boundary while old entry pages remain cached.
+			// Let the detail read clear those pages before it commits the boundary.
+			return listed?.history_cleared_at ? undefined : listed;
+		},
 	});
 }
 
@@ -399,6 +447,89 @@ export function useRemoveConversationMember() {
 				queryKey: [...inboxKeys.all, "conversations"],
 			});
 		},
+	});
+}
+
+async function clearPersonalConversationCache(
+	queryClient: QueryClient,
+	conversationId: string,
+	removeDetail: boolean,
+	removeFromList: boolean,
+	signal?: AbortSignal,
+) {
+	if (signal?.aborted) return;
+	const personalConversation = ({ queryKey }: { queryKey: QueryKey }) => {
+		if (queryKey[0] !== inboxKeys.all[0] || queryKey[2] !== conversationId)
+			return false;
+		switch (queryKey[1]) {
+			case "conversation":
+				return removeDetail && queryKey[3] === "me";
+			case "entries":
+			case "pins":
+				return queryKey[3] === "me";
+			case "file":
+				return queryKey[4] === "me";
+			case "stars":
+			case "links":
+			case "turns":
+				return true;
+			default:
+				return false;
+		}
+	};
+	// Cancel reads started before deletion so their old history cannot refill the cache.
+	await Promise.all([
+		queryClient.cancelQueries({ predicate: personalConversation }),
+		queryClient.cancelQueries({
+			queryKey: inboxKeys.conversations(),
+			exact: true,
+		}),
+		queryClient.cancelQueries({
+			queryKey: [...inboxKeys.all, "stars", "all"],
+			exact: true,
+		}),
+	]);
+	if (signal?.aborted) return;
+	queryClient.removeQueries({ predicate: personalConversation });
+	if (removeFromList)
+		queryClient.setQueryData<IConversation[]>(
+			inboxKeys.conversations(),
+			(conversations) =>
+				conversations?.filter((item) => item.id !== conversationId),
+		);
+	queryClient.setQueryData<InfiniteData<IStarredMessagesPage>>(
+		[...inboxKeys.all, "stars", "all"],
+		(data) =>
+			data && {
+				...data,
+				pages: data.pages.map((page) => ({
+					...page,
+					stars: page.stars.filter(
+						(star) => star.conversation_id !== conversationId,
+					),
+				})),
+			},
+	);
+	void queryClient.invalidateQueries({
+		queryKey: inboxKeys.conversations(),
+		exact: true,
+	});
+	void queryClient.invalidateQueries({
+		queryKey: [...inboxKeys.all, "stars", "all"],
+		exact: true,
+	});
+	void queryClient.invalidateQueries({ queryKey: inboxKeys.invitations() });
+}
+
+/** Deletes your view of a conversation, leaving other participants' cached copies alone. */
+export function useDeleteConversation() {
+	const state = useBackend().inboxState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: (conversationId: string) =>
+			requireInboxState(state).deleteConversation(conversationId),
+		onSuccess: (_, conversationId) =>
+			clearPersonalConversationCache(queryClient, conversationId, true, true),
 	});
 }
 

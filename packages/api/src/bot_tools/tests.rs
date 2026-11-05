@@ -137,9 +137,10 @@ impl ToolExecutor for FakeExecutor {
             job.clone(),
         ));
         if self.fail.load(Ordering::SeqCst) {
-            return Err(crate::execution::dispatch::DispatchError::Network(
+            return Err(crate::execution::DispatchError::Network(
                 "connection refused at 10.0.0.7".into(),
-            ).into());
+            )
+            .into());
         }
         let job: ToolJob = serde_json::from_str(&job).unwrap();
         let proposal = self.skill_proposal.lock().unwrap().clone();

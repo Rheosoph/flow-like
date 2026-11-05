@@ -11,6 +11,7 @@ import {
 	PinIcon,
 	PinOffIcon,
 	StarIcon,
+	Trash2Icon,
 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
@@ -28,6 +29,7 @@ import {
 	DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
 import { isSelfPrincipal } from "./crew-model";
+import { DeleteConversationDialog } from "./delete-conversation-dialog";
 import { LeaveRoomDialog } from "./leave-room-dialog";
 import {
 	type BlockTarget,
@@ -75,6 +77,7 @@ export function ConversationMenu({
 	withMute?: boolean;
 	onShowStarred?: () => void;
 	me?: string | null;
+	/** Closes the conversation after leaving or deleting it. */
 	onLeave?: () => void;
 	blockTarget?: BlockTarget;
 	className?: string;
@@ -85,6 +88,7 @@ export function ConversationMenu({
 	const failed = useFailedToast();
 	const [editing, setEditing] = useState(false);
 	const [leaving, setLeaving] = useState(false);
+	const [deleting, setDeleting] = useState(false);
 	const [blocking, setBlocking] = useState(false);
 	const blocks = useInboxBlocks(Boolean(blockTarget));
 	const existingBlock = principalBlock(blocks.data, blockTarget);
@@ -181,6 +185,20 @@ export function ConversationMenu({
 							</DropdownMenuItem>
 						</>
 					)}
+					{self && (
+						<>
+							{!group && <DropdownMenuSeparator />}
+							<DropdownMenuItem
+								className="text-destructive focus:text-destructive"
+								onSelect={() => setDeleting(true)}
+							>
+								<Trash2Icon aria-hidden />
+								{group
+									? t("crew.deleteConversation.groupAction", "Leave and delete")
+									: t("crew.deleteConversation.action", "Delete conversation")}
+							</DropdownMenuItem>
+						</>
+					)}
 				</DropdownMenuContent>
 			</DropdownMenu>
 			{blocking && blockTarget && (
@@ -205,6 +223,15 @@ export function ConversationMenu({
 					conversationId={conversation.id}
 					principalId={self.principal_id}
 					onLeave={onLeave}
+				/>
+			)}
+			{self && deleting && (
+				<DeleteConversationDialog
+					open
+					onOpenChange={setDeleting}
+					conversationId={conversation.id}
+					kind={conversation.kind}
+					onDelete={onLeave}
 				/>
 			)}
 		</>

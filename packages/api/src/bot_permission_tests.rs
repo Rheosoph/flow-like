@@ -48,7 +48,7 @@ async fn database() -> DatabaseConnection {
             "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
             "leftAt" TEXT, "lastReadAt" TEXT,
         "status" TEXT NOT NULL DEFAULT 'ACTIVE', "limits" TEXT, "invitedBy" TEXT, "invitedAt" TEXT,
-        "acceptedAt" TEXT, PRIMARY KEY ("conversationId", "principalId"))"#,
+        "acceptedAt" TEXT, "hiddenAt" TEXT, "clearedAt" TEXT, "clearedLegacyAt" TEXT, "clearedSeq" INTEGER, PRIMARY KEY ("conversationId", "principalId"))"#,
     )
     .await
     .unwrap();
@@ -330,6 +330,8 @@ fn tokens_round_trip_without_a_sub_and_reject_other_token_types() {
 
     let connection =
         crate::app_connection_jwt::sign(crate::app_connection_jwt::AppConnectionJwtParams {
+            bot_id: None,
+            conv_id: None,
             sub: Some("user".into()),
             origin_app_id: "a".into(),
             target_app_id: "b".into(),
@@ -566,6 +568,7 @@ mod flow_runs {
 
     fn connection_of_bot(target: &str) -> AppUser {
         AppUser::ConnectedApp(ConnectedAppUser {
+            bot: None,
             sub: Some(OWNER.into()),
             origin_app_id: "origin".into(),
             target_app_id: target.into(),
@@ -652,12 +655,25 @@ mod flow_runs {
     }
 
     #[tokio::test]
-    async fn a_bot_behind_a_connection_stays_on_the_connection_path() {
+    async fn a_bot_behind_a_connection_keeps_its_group_and_connection_path() {
         let db = flow_world(None, "{}").await;
-        let run = admit(&db, &connection_of_bot(APP), "any").await.unwrap();
-        let token = bind_executor(run.as_ref(), signed_executor_token()).unwrap();
+        join_room(&db, false).await;
+        let AppUser::ConnectedApp(mut connected) = connection_of_bot(APP) else {
+            unreachable!()
+        };
+        connected.bot = Some(bot_user(Some(ROOM)));
+        let run = admit(&db, &AppUser::ConnectedApp(connected), "any")
+            .await
+            .unwrap();
+        let mut original =
+            crate::execution::verify_execution_jwt(&signed_executor_token()).unwrap();
+        original.app_chain = Some(vec!["origin".into()]);
+        let token =
+            bind_executor(run.as_ref(), crate::backend_jwt::sign(&original).unwrap()).unwrap();
         let claims = crate::execution::verify_execution_jwt(&token).unwrap();
-        assert!(claims.bot_id.is_none());
+        assert_eq!(claims.bot_id.as_deref(), Some(BOT));
+        assert_eq!(claims.conv_id.as_deref(), Some(ROOM));
+        assert_eq!(claims.app_chain, Some(vec!["origin".into()]));
         assert_eq!(claims.technical_user_id.as_deref(), Some(BOT));
     }
 

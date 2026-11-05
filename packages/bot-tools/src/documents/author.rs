@@ -233,7 +233,7 @@ pub async fn unique_export_path(
             format!("{stem}-{number}.{extension}")
         };
         let path = format!("{EXPORTS_DIR}/{file}");
-        if true || env.stat_file(workspace, &path).await?.is_none() {
+        if env.stat_file(workspace, &path).await?.is_none() {
             return Ok(path);
         }
     }

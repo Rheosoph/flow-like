@@ -42,6 +42,7 @@ async fn raw(db: &DatabaseConnection, id: &str, sender: &str, kind: &str, seq: i
         envelope: Set(json!({ "v": 1, "enc": "none", "body": body })),
         created_at: Set(at(seq)),
         seq: Set(Some(seq)),
+        cleared: Set(Some(false)),
     }
     .insert(db)
     .await

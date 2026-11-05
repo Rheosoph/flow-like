@@ -41,6 +41,11 @@ pub(crate) fn ensure_turn(bot: &BotUser, turn_id: &str) -> Result<(), ApiError> 
 }
 
 pub(crate) fn ensure_room(bot: &BotUser, conversation_id: &str) -> Result<(), ApiError> {
+    if bot.turn_id.starts_with("direct:") {
+        return Err(ApiError::forbidden(
+            "A direct bot app token cannot access inbox conversations",
+        ));
+    }
     match bot.conv_id.as_deref() {
         Some(room) if !room.eq_ignore_ascii_case(conversation_id) => Err(ApiError::forbidden(
             "This bot token belongs to another conversation",
@@ -70,6 +75,19 @@ pub(crate) async fn live_owner<C: ConnectionTrait>(
         .await?
         .map(|row| row.owner_id)
         .ok_or_else(|| ApiError::unauthorized("Bot is no longer available"))
+}
+
+/// Hosted inference retains the signed bot identity and rechecks live ownership and membership.
+/// The room comes only from a server-issued token, never from caller-supplied usage headers.
+pub(crate) async fn usage_identity<C: ConnectionTrait>(
+    db: &C,
+    bot: &BotUser,
+) -> Result<(String, Option<String>), ApiError> {
+    let owner = live_owner(db, &bot.bot_id).await?;
+    if let Some(room) = bot.conv_id.as_deref() {
+        crate::bot_permission::room_limits(db, &bot.bot_id, room).await?;
+    }
+    Ok((owner, bot.conv_id.clone()))
 }
 
 /// The person on whose behalf a route runs: the caller themselves, or the owner of the bot the

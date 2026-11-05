@@ -149,6 +149,7 @@ pub(crate) async fn generate_instance_image(
         app_id: instance.app_id.clone(),
         user_id: instance.delegated_user_id.clone(),
         technical_user_id: None,
+        ..Default::default()
     };
     generate_authorized_image(state, payload, context, Some(instance)).await
 }
@@ -179,6 +180,8 @@ async fn generate_authorized_image(
         user_id: Some(&context.user_id),
         technical_user_id: context.technical_user_id.as_deref(),
         app_id: context.app_id.as_deref(),
+        bot_id: context.bot_id.as_deref(),
+        conversation_id: context.conversation_id.as_deref(),
         provider: Some(implementation.label()),
         endpoint: Some(implementation.label()),
         model_id: Some(&model_id),

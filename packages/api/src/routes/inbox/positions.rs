@@ -105,6 +105,7 @@ fn range(query: &EntriesQuery, limit: u64) -> Result<PositionRead, ApiError> {
 
 fn copy_of(reader: &str, conversation_id: &str) -> Select<inbox_entry::Entity> {
     inbox_entry::Entity::find()
+        .filter(super::deletion::visible_entries())
         .filter(inbox_entry::Column::InboxId.eq(reader))
         .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
 }

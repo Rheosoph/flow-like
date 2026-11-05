@@ -194,6 +194,8 @@ export interface IConversation {
 	created_by: string;
 	created_at: string;
 	last_activity_at: string;
+	/** The reader's latest history deletion; changes make clients discard older cached history. */
+	history_cleared_at?: string | null;
 	/** Active members only. */
 	members: IConversationMember[];
 	/** Invitations nobody accepted yet; they read and receive nothing. */
@@ -460,6 +462,8 @@ export interface IInboxState {
 	/** Newest activity first. `as` reads one of your bots' inboxes. */
 	listConversations(as?: string): Promise<IConversation[]>;
 	getConversation(conversationId: string, as?: string): Promise<IConversation>;
+	/** Clears your visible history and removes the conversation from your list. In groups, you and your bots also leave. */
+	deleteConversation(conversationId: string): Promise<void>;
 	/** A direct conversation that already exists is returned instead of a new one. */
 	createConversation(
 		request: ICreateConversationRequest,

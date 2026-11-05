@@ -134,6 +134,8 @@ pub struct Conversation {
     pub muted: bool,
     /// When the reader pinned it to the top of their list; null when it isn't pinned.
     pub pinned_at: Option<DateTime<FixedOffset>>,
+    /// The reader's last history deletion; clients discard cached entries when it changes.
+    pub history_cleared_at: Option<DateTime<FixedOffset>>,
     /// The newest message in the reader's inbox.
     pub last_entry: Option<InboxEntry>,
 }

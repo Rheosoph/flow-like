@@ -254,6 +254,7 @@ async fn reserve(
     state: &AppState,
     owner: &str,
     resolved: &Resolved,
+    bot: &crate::middleware::jwt::BotUser,
 ) -> Result<AssistantUsage, ApiError> {
     let usage = reserve_assistant_usage_with_max_runtime(
         state,
@@ -264,6 +265,7 @@ async fn reserve(
         None,
         MAX_TURN_RUNTIME_MS,
         false,
+        Some(bot),
     )
     .await?;
     if !crate::quota::mark_started(state, &usage.operation_id).await? {
@@ -313,7 +315,17 @@ pub(crate) async fn build(
     let resolved = resolve_models(state, owner, &bot, &profile, &access, &fls).await?;
     let requester = requester_of(state, turn, kind, conversation.title.as_deref()).await?;
     let workspace = bot.context.workspace_app_id.clone();
-    let usage = reserve(state, owner, &resolved).await?;
+    let usage = reserve(
+        state,
+        owner,
+        &resolved,
+        &crate::middleware::jwt::BotUser {
+            bot_id: turn.bot_id.clone(),
+            turn_id: turn.id.clone(),
+            conv_id: room.map(ToOwned::to_owned),
+        },
+    )
+    .await?;
     let ttl = ((usage.deadline - chrono::Utc::now()).num_seconds()).clamp(60, 86_400);
     let tokens = async {
         Ok::<_, ApiError>((

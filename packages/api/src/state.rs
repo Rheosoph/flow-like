@@ -498,6 +498,7 @@ pub enum CachedAuth {
     /// `exp` is re-checked on cache hits so short-lived tokens cannot outlive
     /// their expiry through the auth cache.
     AppConnection {
+        bot: Option<crate::middleware::jwt::BotUser>,
         sub: Option<String>,
         origin_app_id: String,
         target_app_id: String,

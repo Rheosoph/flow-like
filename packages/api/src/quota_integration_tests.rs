@@ -17,7 +17,7 @@ async fn execute(db: &DatabaseConnection, sql: &str) {
         .unwrap();
 }
 
-async fn fixture() -> DatabaseConnection {
+pub(crate) async fn fixture() -> DatabaseConnection {
     let url = std::env::var("FLOW_LIKE_QUOTA_TEST_DATABASE_URL")
         .expect("Use a disposable quota test database");
     let setup = Database::connect(&url).await.unwrap();
@@ -51,6 +51,14 @@ async fn fixture() -> DatabaseConnection {
     {
         execute(&db, statement).await;
     }
+    for statement in
+        include_str!("../prisma/migrations/20261105220000_scoped_usage_budgets/migration.sql")
+            .split(';')
+            .filter(|s| !s.trim().is_empty() && !s.contains("UsageInvocation"))
+    {
+        execute(&db, statement).await;
+    }
+    execute(&db, r#"CREATE TABLE "UsageLimitAuditLog" (id TEXT PRIMARY KEY,"appId" TEXT,"userId" TEXT,"actorUserId" TEXT,action TEXT NOT NULL,before JSONB,after JSONB,"createdAt" TIMESTAMPTZ NOT NULL)"#).await;
     db
 }
 
@@ -809,6 +817,8 @@ fn instance_quota_request(id: &str, micros: i64) -> crate::quota::QuotaRequest {
         payer_id: "caller-supplied-payer-is-ignored".into(),
         actor_id: Some("instance-payer".into()),
         app_id: None,
+        bot_id: None,
+        conversation_id: None,
         model_id: Some("approved-model".into()),
         provider: Some("hosted:openrouter".into()),
         kind: "llm".into(),
@@ -1117,7 +1127,7 @@ async fn instance_quota_replicas_share_one_placement_budget() {
         results
             .iter()
             .filter_map(|result| result.as_ref().err())
-            .all(|error| error.status() == axum::http::StatusCode::TOO_MANY_REQUESTS)
+            .all(|error| error.status() == axum::http::StatusCode::PAYMENT_REQUIRED)
     );
     assert_eq!(instance_budget_totals(&db).await, (0, 900));
     let (used, reserved) = instance_account_totals(&db).await;
@@ -1478,9 +1488,25 @@ async fn admission_fixture() -> DatabaseConnection {
 }
 
 fn admission_request(run_id: &str, app_id: &str) -> crate::execution::DispatchRequest {
+    crate::backend_jwt::init_for_tests();
+    let jwt = crate::execution::sign_execution_jwt(crate::execution::ExecutionJwtParams {
+        user_id: "actor".into(),
+        technical_user_id: None,
+        run_id: run_id.into(),
+        app_id: app_id.into(),
+        board_id: "board-1".into(),
+        event_id: None,
+        app_chain: None,
+        correlation: None,
+        callback_url: "https://api.test".into(),
+        token_type: crate::execution::TokenType::Executor,
+        ttl_seconds: Some(3600),
+        shadow: None,
+    })
+    .unwrap();
     serde_json::from_value(json!({
         "run_id": run_id, "app_id": app_id, "board_id": "board-1", "node_id": "node-1",
-        "user_id": "actor", "credentials_json": "{}", "jwt": "", "callback_url": "https://api.test",
+        "user_id": "actor", "credentials_json": "{}", "jwt": jwt, "callback_url": "https://api.test",
     }))
     .unwrap()
 }
@@ -1650,5 +1676,197 @@ async fn cloud_admission_commits_run_and_attempt_in_one_transaction() {
         .err()
         .unwrap();
     assert_eq!(started.status(), axum::http::StatusCode::CONFLICT);
+    db.close().await.unwrap();
+}
+
+async fn enterprise_bot_budget(db: &DatabaseConnection, calls: i64) {
+    let scope = crate::scoped_usage::BudgetScope::default_bot();
+    db.execute_raw(Statement::from_sql_and_values(
+        DatabaseBackend::Postgres,
+        r#"INSERT INTO "UsageBudgetPolicy" (id,scope,"subjectId","adminLimits","updatedAt") VALUES ($1,'default_bot','',$2,0)"#,
+        vec![scope.id().into(), json!({"aiCalls": calls}).to_string().into()],
+    )).await.unwrap();
+}
+
+fn scoped_request(id: &str, group: &str, calls: i64) -> crate::quota::QuotaRequest {
+    crate::quota::QuotaRequest {
+        operation_id: id.into(),
+        payer_id: "payer".into(),
+        actor_id: Some("owner".into()),
+        app_id: None,
+        bot_id: Some("bot".into()),
+        conversation_id: Some(group.into()),
+        model_id: Some("model".into()),
+        provider: Some("provider".into()),
+        kind: "llm".into(),
+        funding_class: "hosted".into(),
+        execution_mode: "hosted_ai".into(),
+        amounts: QuotaAmounts {
+            ai_calls: calls,
+            ..Default::default()
+        },
+        deadline: chrono::Utc::now() + chrono::Duration::minutes(5),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn concurrent_bot_groups_share_the_enterprise_bot_budget() {
+    let db = fixture().await;
+    enterprise_bot_budget(&db, 6).await;
+    let outcomes = join_all((0..10).map(|index| {
+        let db = &db;
+        async move {
+            let request = scoped_request(&format!("scoped-{index}"), &format!("group-{index}"), 2);
+            crate::db::retry_transaction(
+                db,
+                DbDialect::Postgres,
+                None,
+                &crate::db::RetryPolicy::idempotent(),
+                move |txn| {
+                    let mut request = request.clone();
+                    Box::pin(
+                        async move { crate::scoped_usage::reserve(txn, &mut request, false).await },
+                    )
+                },
+            )
+            .await
+        }
+    }))
+    .await;
+    assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 3);
+    assert!(
+        outcomes
+            .iter()
+            .filter_map(|outcome| outcome.as_ref().err())
+            .all(|error| error.status() == axum::http::StatusCode::PAYMENT_REQUIRED)
+    );
+    let (used, reserved) =
+        crate::scoped_usage::current_usage(&db, &crate::scoped_usage::BudgetScope::bot("bot"))
+            .await
+            .unwrap();
+    assert_eq!(used.ai_calls, 0);
+    assert_eq!(reserved.ai_calls, 6);
+    let row = db
+        .query_one_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            r#"SELECT COUNT(*) AS total FROM "UsageBudgetReservation""#,
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    // Each admitted request reserves both the bot and its group. Rejections leave neither row.
+    assert_eq!(row.try_get::<i64>("", "total").unwrap(), 6);
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn bot_budget_settlement_replays_and_release_keep_scope_counters_consistent() {
+    let db = fixture().await;
+    enterprise_bot_budget(&db, 10).await;
+    seed(&db, "scoped-settlement", "running").await;
+    let txn = db.begin().await.unwrap();
+    let mut request = scoped_request("scoped-settlement", "group", 10);
+    request.amounts.runtime_ms = 1000;
+    request.amounts.ai_cost_micros = 500;
+    request.amounts.cloud_starts = 1;
+    crate::scoped_usage::reserve(&txn, &mut request, false)
+        .await
+        .unwrap();
+    txn.commit().await.unwrap();
+    let actual = QuotaAmounts {
+        ai_calls: 4,
+        ..Default::default()
+    };
+    for _ in 0..2 {
+        settle_with_db(
+            &db,
+            DbDialect::Postgres,
+            "scoped-settlement",
+            "complete",
+            actual,
+            true,
+            json!({}),
+        )
+        .await
+        .unwrap();
+    }
+    for scope in [
+        crate::scoped_usage::BudgetScope::bot("bot"),
+        crate::scoped_usage::BudgetScope::bot_group("bot", "group"),
+    ] {
+        let (used, reserved) = crate::scoped_usage::current_usage(&db, &scope)
+            .await
+            .unwrap();
+        assert_eq!(used.ai_calls, 4);
+        assert_eq!(reserved.ai_calls, 0);
+    }
+    // A retained link also lets a later administrator correction refund the same month.
+    settle_with_db(
+        &db,
+        DbDialect::Postgres,
+        "scoped-settlement",
+        "refund",
+        QuotaAmounts::default(),
+        true,
+        json!({"adjustment":true}),
+    )
+    .await
+    .unwrap();
+    let (used, reserved) =
+        crate::scoped_usage::current_usage(&db, &crate::scoped_usage::BudgetScope::bot("bot"))
+            .await
+            .unwrap();
+    assert_eq!(used.ai_calls, 0);
+    assert_eq!(reserved.ai_calls, 0);
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires a disposable PostgreSQL database"]
+async fn bot_runtime_admission_uses_the_smallest_available_scope_budget() {
+    let db = fixture().await;
+    for (scope, runtime) in [
+        (crate::scoped_usage::BudgetScope::default_bot(), 60_000),
+        (
+            crate::scoped_usage::BudgetScope::bot_group("bot", "group"),
+            20_000,
+        ),
+    ] {
+        db.execute_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
+            r#"INSERT INTO "UsageBudgetPolicy" (id,scope,"subjectId","groupId","adminLimits","updatedAt") VALUES ($1,$2,$3,$4,$5,0)"#,
+            vec![scope.id().into(),scope.scope.into(),scope.subject_id.into(),scope.group_id.into(),json!({"runtimeMs":runtime}).to_string().into()])).await.unwrap();
+    }
+    let mut request = scoped_request("runtime-one", "group", 0);
+    request.amounts.runtime_ms = 900_000;
+    let txn = db.begin().await.unwrap();
+    crate::scoped_usage::reserve(&txn, &mut request, true)
+        .await
+        .unwrap();
+    assert_eq!(request.amounts.runtime_ms, 20_000);
+    txn.commit().await.unwrap();
+    for scope in [
+        crate::scoped_usage::BudgetScope::bot("bot"),
+        crate::scoped_usage::BudgetScope::bot_group("bot", "group"),
+    ] {
+        let (_, reserved) = crate::scoped_usage::current_usage(&db, &scope)
+            .await
+            .unwrap();
+        assert_eq!(reserved.runtime_ms, 20_000);
+    }
+    let mut another = scoped_request("runtime-two", "group", 0);
+    another.amounts.runtime_ms = 900_000;
+    let txn = db.begin().await.unwrap();
+    let error = crate::scoped_usage::reserve(&txn, &mut another, true)
+        .await
+        .unwrap_err();
+    assert_eq!(error.status(), axum::http::StatusCode::PAYMENT_REQUIRED);
+    txn.rollback().await.unwrap();
+    let (_, reserved) =
+        crate::scoped_usage::current_usage(&db, &crate::scoped_usage::BudgetScope::bot("bot"))
+            .await
+            .unwrap();
+    assert_eq!(reserved.runtime_ms, 20_000);
     db.close().await.unwrap();
 }

@@ -339,6 +339,7 @@ mod tests {
     #[test]
     fn connected_apps_cannot_invoke_arbitrary_boards_directly() {
         let connected = AppUser::ConnectedApp(ConnectedAppUser {
+            bot: None,
             sub: Some("user".to_string()),
             origin_app_id: "source".to_string(),
             target_app_id: "target".to_string(),

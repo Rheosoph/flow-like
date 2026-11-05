@@ -10,6 +10,7 @@ import { detectAppType } from "../../../lib/app-type";
 import { asArray, isRecord } from "../../../lib/response-shape";
 import { boardListing } from "../../../lib/schema/flow/board-summary";
 import { useBackend } from "../../../state/backend-state";
+import { IAppVisibility } from "../../../types";
 import { Button } from "../../ui/button";
 import { Skeleton } from "../../ui/skeleton";
 import {
@@ -18,6 +19,7 @@ import {
 	TooltipProvider,
 	TooltipTrigger,
 } from "../../ui/tooltip";
+import { AppUsageBudget } from "../app-usage-budget";
 import { AttentionQueue } from "./attention-queue";
 import { LaunchPath } from "./launch-path";
 import { MissionControl } from "./mission-control";
@@ -371,6 +373,12 @@ export function ProjectDashboard({
 						onOpenPanel={openPanel}
 					/>
 				)}
+
+				{permissions.known &&
+					permissions.canReadCompliance &&
+					app.data.visibility !== IAppVisibility.Offline && (
+						<AppUsageBudget appId={appId} canEdit={permissions.canWriteApp} />
+					)}
 
 				<SettingsInspector
 					appId={appId}

@@ -1137,6 +1137,7 @@ mod tests {
                 app_id: Some("app-1".into()),
                 user_id: "frontend:event-1:run-run-1".into(),
                 technical_user_id: None,
+                ..Default::default()
             },
             person: None,
         };

@@ -637,6 +637,16 @@
 			"unblockDescription": "This block will be removed. Other blocks will still apply.",
 			"composer": "This conversation is blocked. Manage your blocked users and bots to allow messages again."
 		},
+		"deleteConversation": {
+			"action": "Delete conversation",
+			"groupAction": "Leave and delete",
+			"title": "Delete this conversation?",
+			"groupTitle": "Leave and delete this room?",
+			"description": "This conversation and its history will be removed from your view. Other participants keep their copies. A new message or starting this chat again brings it back with your old history still cleared. This cannot be undone.",
+			"groupDescription": "You and your bots will leave this room and stop receiving its messages. The room and its history will be removed from your view. Other participants keep their copies. This cannot be undone.",
+			"pending": "Deleting…",
+			"failed": "Couldn't delete the conversation. Try again."
+		},
 		"leaveRoom": {
 			"action": "Leave room",
 			"title": "Leave this room?",

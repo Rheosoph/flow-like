@@ -404,6 +404,7 @@ mod tests {
                 unattended: false,
             }),
             AppUser::ConnectedApp(ConnectedAppUser {
+                bot: None,
                 sub: person(),
                 origin_app_id: "origin".to_string(),
                 target_app_id: "app".to_string(),

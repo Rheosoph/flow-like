@@ -713,6 +713,11 @@ async fn attempt(
         None,
         MAX_TURN_RUNTIME_MS,
         hosted_worker::enabled(),
+        Some(&crate::middleware::jwt::BotUser {
+            bot_id: turn.bot_id.clone(),
+            turn_id: turn.id.clone(),
+            conv_id: room_of(kind, &turn.conversation_id).map(ToOwned::to_owned),
+        }),
     )
     .await?;
     if !crate::quota::mark_started(state, &usage.operation_id).await? {

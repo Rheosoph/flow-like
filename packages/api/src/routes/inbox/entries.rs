@@ -149,7 +149,8 @@ pub(super) async fn entries_page<C: ConnectionTrait>(
 ) -> Result<InboxEntriesPage, DbErr> {
     let mut query = inbox_entry::Entity::find()
         .filter(inbox_entry::Column::InboxId.eq(reader))
-        .filter(inbox_entry::Column::ConversationId.eq(conversation_id));
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(super::deletion::visible_entries());
     if let Some(before) = &bounds.before {
         query = query.filter(older_than(before));
     }
@@ -199,6 +200,7 @@ pub(crate) async fn entries_following<C: ConnectionTrait>(
     let mut rows = inbox_entry::Entity::find()
         .filter(inbox_entry::Column::InboxId.eq(reader))
         .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(super::deletion::visible_entries())
         .filter(newer_than(&after))
         .order_by_asc(inbox_entry::Column::CreatedAt)
         .order_by_asc(inbox_entry::Column::Id)
@@ -451,11 +453,21 @@ pub(super) async fn repeat_of<C: ConnectionTrait>(
     message_id: &str,
 ) -> Result<Option<Sent>, ApiError> {
     match sender_copy(db, sender, message_id).await? {
-        Some(existing) => Ok(Some(Sent::repeat(repeated(
-            existing,
-            conversation_id,
-            sender,
-        )?))),
+        Some(mut existing) => {
+            let visible = inbox_entry::Entity::find_by_id(existing.id.clone())
+                .filter(super::deletion::visible_entries())
+                .one(db)
+                .await?
+                .is_some();
+            if !visible {
+                existing.envelope = flow_like_types::inbox::tombstone_envelope();
+            }
+            Ok(Some(Sent::repeat(repeated(
+                existing,
+                conversation_id,
+                sender,
+            )?)))
+        }
         None => Ok(None),
     }
 }
@@ -612,6 +624,18 @@ async fn write_event<'e, C: ConnectionTrait>(
     let entry = sender_entry(&copies, event.conversation_id, event.sender_id)?;
     insert_copies(txn, copies).await?;
     touch_activity(txn, event.conversation_id, event.kind, event.created_at).await?;
+    if event.kind == InboxEntryKind::Message {
+        conversation_member::Entity::update_many()
+            .col_expr(
+                conversation_member::Column::HiddenAt,
+                Expr::value(None::<DateTime<FixedOffset>>),
+            )
+            .filter(conversation_member::Column::ConversationId.eq(event.conversation_id))
+            .filter(conversation_member::Column::HiddenAt.is_not_null())
+            .filter(super::active_member())
+            .exec(txn)
+            .await?;
+    }
     if let (InboxEntryKind::Delete, Content::Plain(envelope)) = (event.kind, &outgoing.content) {
         let (conversation_id, sender) = (event.conversation_id, event.sender_id);
         let target = body_target(envelope).unwrap_or_default();
@@ -911,6 +935,7 @@ async fn entry_time<C: ConnectionTrait>(
     cursor: &EntryCursor,
 ) -> Result<DateTime<FixedOffset>, ApiError> {
     inbox_entry::Entity::find_by_id(cursor.entry_id.as_str())
+        .filter(super::deletion::visible_entries())
         .filter(inbox_entry::Column::InboxId.eq(reader))
         .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
         .one(db)

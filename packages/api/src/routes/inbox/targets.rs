@@ -74,6 +74,7 @@ async fn live_message<C: ConnectionTrait>(
     target: &str,
 ) -> Result<inbox_entry::Model, ApiError> {
     let message = inbox_entry::Entity::find()
+        .filter(super::deletion::visible_entries())
         .filter(inbox_entry::Column::InboxId.eq(reader))
         .filter(inbox_entry::Column::MessageId.eq(target))
         .filter(inbox_entry::Column::ConversationId.eq(conversation_id))

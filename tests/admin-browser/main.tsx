@@ -147,6 +147,14 @@ function Fixture() {
 			},
 			apiState: {
 				...backend.apiState,
+				fetch: async (_: unknown, path: string, options?: RequestInit) =>
+					request(
+						options?.method ?? "GET",
+						path,
+						typeof options?.body === "string"
+							? JSON.parse(options.body)
+							: undefined,
+					),
 				get: async (_: unknown, path: string) => request("GET", path),
 				post: async (_: unknown, path: string, body: unknown) =>
 					request("POST", path, body),
