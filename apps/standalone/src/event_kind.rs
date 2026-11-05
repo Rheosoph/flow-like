@@ -15,6 +15,10 @@ pub const ON_DEMAND_EVENTS: bool = cfg!(all(feature = "runtime", feature = "on-d
 pub const TELEGRAM_BOTS: bool = cfg!(all(feature = "runtime", feature = "bots-telegram"));
 /// Whether this build runs Discord bots, and so the flag `discord_bots`.
 pub const DISCORD_BOTS: bool = cfg!(all(feature = "runtime", feature = "bots-discord"));
+/// Whether this build gives bots a browser and a computer, and so the flag `bot_playground`.
+pub const BOT_PLAYGROUND: bool = crate::playground::AVAILABLE;
+/// Whether this build answers the turns of device-hosted bots, and so the flag `bot_host`.
+pub const BOT_HOST: bool = cfg!(all(feature = "runtime", feature = "bot-host"));
 
 /// The first matching row wins: an event with a default Page is served as a Page whatever
 /// its type, so every other row means "and no default Page".
@@ -162,6 +166,8 @@ pub fn flags() -> impl Iterator<Item = &'static str> {
         ("execution_logs", cfg!(feature = "runtime")),
         ("telegram_bots", TELEGRAM_BOTS),
         ("discord_bots", DISCORD_BOTS),
+        ("bot_playground", BOT_PLAYGROUND),
+        ("bot_host", BOT_HOST),
     ]
     .into_iter()
     .filter_map(|(flag, built)| built.then_some(flag))

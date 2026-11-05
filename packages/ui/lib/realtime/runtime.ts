@@ -46,6 +46,7 @@ interface PortState {
 	activity: RealtimeActivity;
 	seen: number;
 	notifications: boolean;
+	backgroundNotifications: boolean;
 	transport: "configured" | "http";
 	notificationRevision?: string;
 	subscriptionVersion?: number;
@@ -178,6 +179,8 @@ export function validRealtimeSubscription(
 ): boolean {
 	if (
 		typeof value.notifications !== "boolean" ||
+		(value.backgroundNotifications !== undefined &&
+			typeof value.backgroundNotifications !== "boolean") ||
 		!Array.isArray(value.runs) ||
 		value.runs.length > MAX_REALTIME_RUNS
 	)
@@ -440,6 +443,7 @@ export class RealtimeRuntime {
 				activity: command.activity,
 				seen: Date.now(),
 				notifications: false,
+				backgroundNotifications: false,
 				transport: command.session.transport ?? "configured",
 				runs: new Map(),
 				conversations: new Map(),
@@ -555,6 +559,8 @@ export class RealtimeRuntime {
 				connected.conversations = conversations;
 				connected.subscriptionVersion = command.subscription_version;
 				connected.notifications = desired.notifications;
+				connected.backgroundNotifications =
+					desired.notifications && desired.backgroundNotifications === true;
 				connected.pending = undefined;
 				connected.skipped = false;
 				this.offerNotification(connected);
@@ -742,9 +748,13 @@ export class RealtimeRuntime {
 		if (visible) scope.hiddenSince = undefined;
 		else scope.hiddenSince ??= Date.now();
 		const activeRuns = online.some((port) => port.runs.size > 0);
+		const backgroundNotifications = online.some(
+			(port) => port.backgroundNotifications,
+		);
 		if (
 			!online.length ||
 			(!activeRuns &&
+				!backgroundNotifications &&
 				!visible &&
 				Date.now() - (scope.hiddenSince ?? Date.now()) >=
 					this.options.hiddenGraceMs)

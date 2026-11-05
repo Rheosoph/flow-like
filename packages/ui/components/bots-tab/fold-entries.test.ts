@@ -188,6 +188,56 @@ describe("foldInboxEntries", () => {
 		]);
 	});
 
+	test("renders renames and picture changes as room lines that break a run", () => {
+		const items = foldInboxEntries(
+			[
+				entry("message", "anna", { text: "before" }, 0, "a"),
+				entry(
+					"room",
+					"anna",
+					{ change: "title", title: " Launch crew ", by: "anna" },
+					1,
+					"r1",
+				),
+				entry("room", "me", { change: "title", removed: true, by: "me" }, 2, "r2"),
+				entry("room", "me", { change: "image", by: "me" }, 3, "r3"),
+				entry(
+					"room",
+					"me",
+					{ change: "image", removed: true, by: "me" },
+					4,
+					"r4",
+				),
+				entry("room", "me", { change: "colour", by: "me" }, 5, "r5"),
+				entry("message", "anna", { text: "after" }, 6, "b"),
+			],
+			"me",
+		);
+		const rooms = items.filter((item) => item.type === "room");
+		expect(
+			rooms.map((item) =>
+				item.type === "room"
+					? [item.id, item.change, item.title, item.removed, item.by]
+					: [],
+			),
+		).toEqual([
+			["r1", "title", "Launch crew", false, "anna"],
+			["r2", "title", undefined, true, "me"],
+			["r3", "image", undefined, false, "me"],
+			["r4", "image", undefined, true, "me"],
+		]);
+		const blocks = groupConversationItems(items, { dayKey: () => "day" });
+		expect(blocks.map((block) => block.type)).toEqual([
+			"day",
+			"group",
+			"room",
+			"room",
+			"room",
+			"room",
+			"group",
+		]);
+	});
+
 	test("keeps sealed and unreadable messages as placeholders", () => {
 		const sealed: IInboxEntry = {
 			...entry("message", "anna", {}, 0, "s"),

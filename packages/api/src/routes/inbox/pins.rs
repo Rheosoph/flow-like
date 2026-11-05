@@ -3,12 +3,10 @@
 //! [`MAX_PINNED_MESSAGES`] messages stay pinned per conversation.
 
 use super::{
-    INBOX_PIN_LIMIT, Reader, active_members, active_membership, conversation_not_found,
-    delivery::people_to_wake,
+    INBOX_PIN_LIMIT, Reader, active_membership, conversation_not_found,
     marks::{copies_of, latest_edits, live_copy},
-    members::Principal,
     model::{InboxEntry, ReaderQuery},
-    now_millis, reader, reader_membership, wake,
+    now_millis, reader, reader_membership, wake, wake_members,
 };
 use crate::{
     entity::{inbox_entry, pinned_conversation, pinned_message},
@@ -253,24 +251,6 @@ pub(crate) async fn unpin_message_in<C: ConnectionTrait>(
             .await?
             .rows_affected;
     Ok(removed > 0)
-}
-
-/// Everyone whose view of the conversation's pins changed: its people and the owners of its bots.
-async fn wake_members(state: &AppState, conversation_id: &str) {
-    let woken = async {
-        let members: Vec<Principal> = active_members(&state.db, &[conversation_id.to_string()])
-            .await?
-            .iter()
-            .map(Principal::from)
-            .collect();
-        people_to_wake(&state.db, &members).await
-    };
-    match woken.await {
-        Ok(people) => wake(state, people).await,
-        Err(error) => {
-            tracing::warn!(%error, %conversation_id, "Failed to find who to tell about a pin change");
-        }
-    }
 }
 
 #[utoipa::path(

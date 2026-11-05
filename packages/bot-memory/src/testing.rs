@@ -29,8 +29,9 @@ pub struct StubLlm {
     answers: Mutex<HashMap<LlmTask, Answer>>,
 }
 
-static MESSAGE_LINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^#(\d+) \[\S+ \S+ (\w+)\] (.*)$").expect("pattern"));
+static MESSAGE_LINE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^#(\d+) \[\S+ \S+ (\w+)(?: speaker \{.*?\})?\] (.*)$").expect("pattern")
+});
 static PART_LINE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^\s+#(\d+)\.((?:t|ui)\d+) \[(?:tool|ui) ([^\]]*)\]\s*(.*)$").expect("pattern")
 });

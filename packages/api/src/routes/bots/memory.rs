@@ -80,12 +80,10 @@ pub async fn list_facts(
         return Ok(Json(BotFactList { facts: Vec::new() }));
     };
     let facts = admin
-        .list(query.include_superseded.unwrap_or(false))
+        .list_views(query.include_superseded.unwrap_or(false))
         .await
         .map_err(|error| ApiError::internal(format!("Listing the bot's facts failed: {error}")))?;
-    Ok(Json(BotFactList {
-        facts: facts.into_iter().map(FactView::from).collect(),
-    }))
+    Ok(Json(BotFactList { facts }))
 }
 
 #[utoipa::path(

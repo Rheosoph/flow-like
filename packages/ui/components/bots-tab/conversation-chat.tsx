@@ -5,7 +5,10 @@ import { type ReactNode, useCallback, useMemo, useRef } from "react";
 import type { ConversationActivity } from "../../hooks/use-conversation-activity";
 import { IRole } from "../../lib/schema/llm/history";
 import { GLOBAL_CHAT_APP_ID } from "../../state/global-chat/global-chat-db";
-import { PlainUnresolvedMentionsContext } from "../editor/ui/mention-node-static";
+import {
+	MentionReaderContext,
+	PlainUnresolvedMentionsContext,
+} from "../editor/ui/mention-node-static";
 import type { IChatRef } from "../interfaces/chat-default/chat";
 import type { IChatGroup } from "../interfaces/chat-default/chat";
 import type { IMessage } from "../interfaces/chat-default/chat-db";
@@ -26,7 +29,7 @@ import {
 	ThreadNote,
 } from "./conversation-messages";
 import type { ConversationBlock, ConversationMessage } from "./fold-entries";
-import { type Mentionable, mentionedIn } from "./mentions";
+import { type Mentionable, inlineMentions, mentionedIn } from "./mentions";
 import { MessageMarkLine, MessageMenu } from "./message-marks";
 import { roomChatMessage } from "./room-message-body";
 import { useRoomAttachments } from "./use-room-attachments";
@@ -92,6 +95,16 @@ export function ConversationChat({
 		() => ({ allow_file_upload: !readOnly }),
 		[readOnly],
 	);
+	const mentionCandidates = useMemo(
+		() =>
+			thread.conversation.members.flatMap(({ principal_id }) => {
+				const member = directory(principal_id);
+				return member.isResolved
+					? [{ id: principal_id, name: member.name }]
+					: [];
+			}),
+		[thread.conversation.members, directory],
+	);
 
 	const { messages, byId, headers, trailing, runStarts, lastMine } =
 		useMemo(() => {
@@ -137,6 +150,7 @@ export function ConversationChat({
 						id,
 						name: directory(id).name,
 					})),
+					mentionCandidates,
 				}),
 			);
 			return {
@@ -152,6 +166,7 @@ export function ConversationChat({
 			thread,
 			conversationId,
 			directory,
+			mentionCandidates,
 			errorTitle,
 			editedLabel,
 			sealed,
@@ -170,8 +185,16 @@ export function ConversationChat({
 					sessionId: conversationId,
 					inner: {
 						role: IRole.User,
-						content: send.text,
+						content: inlineMentions(
+							send.text,
+							(send.mentions ?? []).map((id) => ({
+								id,
+								name: directory(id).name,
+							})),
+							mentionCandidates,
+						),
 					},
+					source_text: send.text,
 					...(target?.content.kind === "text"
 						? {
 								interaction: {
@@ -188,7 +211,7 @@ export function ConversationChat({
 					timestamp: Number.MAX_SAFE_INTEGER - pending.length + index,
 				};
 			}),
-		[pending, conversationId, byId],
+		[pending, conversationId, byId, directory, mentionCandidates],
 	);
 
 	const firstPendingId = pending[0]?.messageId;
@@ -325,37 +348,44 @@ export function ConversationChat({
 			{messages.length === 0 && olderButton}
 			{trailing}
 			{pending.map((item) => (
-				<PendingStatus key={item.messageId} send={item} actions={sends} />
+				<PendingStatus
+					key={item.messageId}
+					send={item}
+					actions={sends}
+					retryDisabled={readOnly}
+				/>
 			))}
 			<HistoryState history={{ ...history, isLoading: false }} empty={empty} />
 		</div>
 	);
 
 	return (
-		<PlainUnresolvedMentionsContext.Provider value={true}>
-			<ChatFeedbackEnabledContext.Provider value={false}>
-				<ChatSurface
-					chatRef={chatRef}
-					loading={history.isLoading}
-					runWidgetAction={noWidgetAction}
-					sessionId={conversationId}
-					config={chatConfig}
-					messages={[...messages, ...pendingMessages]}
-					onSendMessage={send}
-					onMessageReaction={readOnly ? undefined : react}
-					onMessageUpdate={readOnly ? undefined : update}
-					inlineContent={inline}
-					inlinePrompt={
-						<ConversationActivityLine
-							bots={activity?.bots ?? NO_BOTS}
-							typing={activity?.typing ?? NO_TYPING}
-							directory={directory}
-						/>
-					}
-					onDraftChange={activity?.notifyTyping}
-					group={group}
-				/>
-			</ChatFeedbackEnabledContext.Provider>
-		</PlainUnresolvedMentionsContext.Provider>
+		<MentionReaderContext.Provider value={thread.me ?? null}>
+			<PlainUnresolvedMentionsContext.Provider value={true}>
+				<ChatFeedbackEnabledContext.Provider value={false}>
+					<ChatSurface
+						chatRef={chatRef}
+						loading={history.isLoading}
+						runWidgetAction={noWidgetAction}
+						sessionId={conversationId}
+						config={chatConfig}
+						messages={[...messages, ...pendingMessages]}
+						onSendMessage={send}
+						onMessageReaction={readOnly ? undefined : react}
+						onMessageUpdate={readOnly ? undefined : update}
+						inlineContent={inline}
+						inlinePrompt={
+							<ConversationActivityLine
+								bots={activity?.bots ?? NO_BOTS}
+								typing={activity?.typing ?? NO_TYPING}
+								directory={directory}
+							/>
+						}
+						onDraftChange={activity?.notifyTyping}
+						group={group}
+					/>
+				</ChatFeedbackEnabledContext.Provider>
+			</PlainUnresolvedMentionsContext.Provider>
+		</MentionReaderContext.Provider>
 	);
 }

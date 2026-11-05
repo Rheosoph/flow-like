@@ -60,6 +60,7 @@ pub mod module;
 pub mod node;
 pub mod package_runtime;
 pub mod registry;
+pub mod skill_call;
 pub mod unified;
 pub mod wasi;
 pub mod widget;
@@ -82,7 +83,9 @@ pub use manifest::{
 };
 pub use memory::WasmMemory;
 pub use module::WasmModule;
-pub use node::{build_node_from_definition, definition_to_package_entry, WasmNodeLogic};
+pub use node::{
+    build_node_from_definition, definition_to_package_entry, HeadlessRun, WasmNodeLogic,
+};
 pub use registry::{
     CachedPackage, DownloadRequest, DownloadResponse, PackageSource, PackageStatus, PackageSummary,
     PackageVersion, PublishRequest, PublishResponse, RegistryConfig, RegistryEntry, SearchFilters,

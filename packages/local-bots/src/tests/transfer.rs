@@ -69,6 +69,8 @@ struct Account {
     fail_delete: bool,
     deleted_workspaces: Vec<String>,
     upload_requests: Vec<Value>,
+    /// Every connector created on the account, in order.
+    connectors: Vec<Value>,
 }
 
 fn not_found(what: String) -> HubError {
@@ -150,6 +152,15 @@ impl Account {
                 self.secrets
                     .push((id.to_string(), name.to_string(), secret.value.to_string()));
                 Ok(Some(json!({ "name": name })))
+            }
+            (HubMethod::Get, ["bots", id, "connectors"]) => {
+                self.bot(id)?;
+                Ok(Some(json!({ "connectors": self.connectors })))
+            }
+            (HubMethod::Post, ["bots", id, "connectors"]) => {
+                self.bot(id)?;
+                self.connectors.push(body.clone());
+                Ok(Some(body))
             }
             (HubMethod::Post, ["inbox", "import"]) => self.import_chat(body),
             (HubMethod::Post, ["bots", id, "workspace"]) => {
@@ -904,6 +915,7 @@ async fn the_check_sends_the_local_id_as_import_key_with_settings_apps_and_creat
             "tts_model": "bit-tts",
             "image_model": "bit-image",
             "vision_model": "bit-vision",
+            "subtask_model": null,
             "classification": { "classification": "internal", "pii": false },
             "capabilities": ["internet", "computer_use"],
             "profile_id": "profile-1",
@@ -1027,6 +1039,55 @@ async fn entries_from_senders_outside_the_chat_and_the_account_stay_out_and_are_
         })
         .collect();
     assert_eq!(senders, [("g1", "bot_b"), ("g2", SUB), ("x3", "bot_old")]);
+}
+
+#[tokio::test]
+async fn a_move_carries_connectors_and_leaves_oauth_grants_behind_with_a_warning() {
+    use flow_like_types::bot_connector::{ConnectorAuth, ConnectorKind, CreateBotConnector};
+    let w = world();
+    let connector = |label: &str, auth: ConnectorAuth, grant: Option<&str>| CreateBotConnector {
+        kind: ConnectorKind::Mcp,
+        label: label.into(),
+        url: Some(format!("https://{}.example.com/mcp", label.to_lowercase())),
+        auth,
+        grant: grant.map(str::to_string),
+        scopes: Vec::new(),
+        default_policy: None,
+    };
+    for request in [
+        connector("Docs", ConnectorAuth::None, None),
+        connector(
+            "Search",
+            ConnectorAuth::Secret {
+                name: "API_KEY".into(),
+            },
+            None,
+        ),
+        connector(
+            "Mail",
+            ConnectorAuth::Oauth {
+                provider_id: "microsoft".into(),
+            },
+            Some("fl_oauth_sealed"),
+        ),
+    ] {
+        w.f.store.create_connector(&w.ada.id, request).unwrap();
+    }
+    let report = w.check(&w.ada.id).await.unwrap();
+    assert_eq!(report.warnings, 1);
+
+    let moved = w.move_bot(&w.ada.id).await.unwrap();
+    assert_eq!(moved.warnings, 1);
+    let posted = w.hub.account().connectors.clone();
+    let labels: Vec<&str> = posted.iter().filter_map(|c| c["label"].as_str()).collect();
+    assert_eq!(labels, ["Docs", "Search"]);
+    assert_eq!(posted[1]["auth"]["name"], json!("API_KEY"));
+    assert_eq!(posted[0]["url"], json!("https://docs.example.com/mcp"));
+    assert!(
+        posted
+            .iter()
+            .all(|c| c["grant"].is_null() && !c.to_string().contains("fl_oauth_sealed"))
+    );
 }
 
 #[tokio::test]

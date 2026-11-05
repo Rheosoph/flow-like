@@ -26,6 +26,7 @@ import type {
 	IBotRoomLimits,
 	IConversation,
 	IConversationFileDownload,
+	ICreateConversationLinkRequest,
 	ICreateConversationRequest,
 	IInboxEntriesPage,
 	IInboxEntry,
@@ -50,6 +51,8 @@ export const inboxKeys = {
 	invitations: () => [...inboxKeys.all, "invitations"] as const,
 	invitable: (q: string, conversationId?: string) =>
 		[...inboxKeys.all, "invitable", conversationId ?? "", q] as const,
+	links: (conversationId: string) =>
+		[...inboxKeys.all, "links", conversationId] as const,
 };
 
 /**
@@ -347,6 +350,21 @@ export function useRenameConversation() {
 	});
 }
 
+export function useSetConversationImage() {
+	const state = useBackend().inboxState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			conversationId,
+			image,
+		}: {
+			conversationId: string;
+			image: string | null;
+		}) => requireInboxState(state).setConversationImage(conversationId, image),
+		onSuccess: (conversation) => storeConversation(queryClient, conversation),
+	});
+}
+
 export function useAddConversationMembers() {
 	const state = useBackend().inboxState;
 	const queryClient = useQueryClient();
@@ -375,9 +393,11 @@ export function useRemoveConversationMember() {
 		}) => requireInboxState(state).removeMember(conversationId, principalId),
 		onSettled: (_, __, { conversationId }) => {
 			queryClient.invalidateQueries({
-				queryKey: inboxKeys.conversation(conversationId),
+				queryKey: [...inboxKeys.all, "conversation", conversationId],
 			});
-			queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
+			queryClient.invalidateQueries({
+				queryKey: [...inboxKeys.all, "conversations"],
+			});
 		},
 	});
 }
@@ -453,6 +473,7 @@ export function useAnswerInvitation() {
 				: inbox.declineInvitation(invitation);
 		},
 		onSettled: () => {
+			queryClient.invalidateQueries({ queryKey: [...inboxKeys.all, "blocks"] });
 			queryClient.invalidateQueries({ queryKey: inboxKeys.invitations() });
 			queryClient.invalidateQueries({
 				queryKey: [...inboxKeys.all, "conversation"],
@@ -500,6 +521,54 @@ export function useCancelInvitation() {
 			});
 			queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
 		},
+	});
+}
+
+export function useConversationLinks(conversationId: string, enabled = true) {
+	const state = useBackend().inboxState;
+	return useQuery({
+		queryKey: inboxKeys.links(conversationId),
+		queryFn: () =>
+			requireInboxState(state).listConversationLinks(conversationId),
+		enabled: Boolean(state) && enabled,
+	});
+}
+
+export function useCreateConversationLink() {
+	const state = useBackend().inboxState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			conversationId,
+			request,
+		}: {
+			conversationId: string;
+			request: ICreateConversationLinkRequest;
+		}) =>
+			requireInboxState(state).createConversationLink(conversationId, request),
+		onSuccess: (_, { conversationId }) =>
+			queryClient.invalidateQueries({
+				queryKey: inboxKeys.links(conversationId),
+			}),
+	});
+}
+
+export function useRevokeConversationLink() {
+	const state = useBackend().inboxState;
+	const queryClient = useQueryClient();
+	return useMutation({
+		mutationFn: ({
+			conversationId,
+			linkId,
+		}: {
+			conversationId: string;
+			linkId: string;
+		}) =>
+			requireInboxState(state).revokeConversationLink(conversationId, linkId),
+		onSettled: (_, __, { conversationId }) =>
+			queryClient.invalidateQueries({
+				queryKey: inboxKeys.links(conversationId),
+			}),
 	});
 }
 

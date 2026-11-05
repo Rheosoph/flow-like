@@ -293,6 +293,13 @@ export function AdminPackageDetailView({
 									length: (pkg.nodes as unknown[]).length,
 								})}
 							</TabsTrigger>
+							{(pkg.skills?.length ?? 0) > 0 && (
+								<TabsTrigger value="skills">
+									{t("skillsLength", "Skills ({{length}})", {
+										length: pkg.skills?.length ?? 0,
+									})}
+								</TabsTrigger>
+							)}
 							<TabsTrigger value="reviews">
 								{t("reviewsLength", "Reviews ({{length}})", {
 									length: reviews.length,
@@ -425,6 +432,29 @@ export function AdminPackageDetailView({
 									</pre>
 								</CardContent>
 							</Card>
+						</TabsContent>
+
+						<TabsContent value="skills" className="mt-4 space-y-4">
+							{(pkg.skills ?? []).map((skill) => (
+								<Card key={skill.name} data-slot="admin-package-skill">
+									<CardHeader>
+										<CardTitle className="font-mono text-base">
+											{skill.name}
+										</CardTitle>
+										<CardDescription>{skill.description}</CardDescription>
+									</CardHeader>
+									<CardContent className="space-y-2">
+										<p className="text-xs text-muted-foreground">
+											{t("skillTools", "Tools: {{tools}}", {
+												tools: skill.tools.join(", ") || "-",
+											})}
+										</p>
+										<pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-lg bg-muted p-4 text-sm">
+											{skill.instructions ?? ""}
+										</pre>
+									</CardContent>
+								</Card>
+							))}
 						</TabsContent>
 
 						<TabsContent value="reviews" className="mt-4 space-y-4">

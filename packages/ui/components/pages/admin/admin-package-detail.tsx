@@ -37,6 +37,7 @@ interface RawPackageDetails {
 	wasmSize?: number;
 	wasm_size?: number;
 	nodes: unknown;
+	skills?: unknown;
 	permissions: unknown;
 	price?: number;
 	primaryCategory?: string;
@@ -101,6 +102,18 @@ function normalizeAuthors(authors: RawPackageDetails["authors"]): string[] {
 		.filter((author): author is string => Boolean(author));
 }
 
+function normalizeSkills(raw: unknown): PackageDetails["skills"] {
+	if (!Array.isArray(raw)) return [];
+	return raw.map((skill) => ({
+		name: String(skill?.name ?? ""),
+		description: String(skill?.description ?? ""),
+		instructionsFile:
+			skill?.instructions_file ?? skill?.instructionsFile ?? null,
+		instructions: skill?.instructions ?? null,
+		tools: Array.isArray(skill?.tools) ? skill.tools.map(String) : [],
+	}));
+}
+
 function normalizePackage(pkg: RawPackageDetails): PackageDetails {
 	return {
 		id: pkg.id,
@@ -118,6 +131,7 @@ function normalizePackage(pkg: RawPackageDetails): PackageDetails {
 		downloadCount: pkg.downloadCount ?? pkg.download_count ?? 0,
 		wasmSize: pkg.wasmSize ?? pkg.wasm_size ?? 0,
 		nodes: Array.isArray(pkg.nodes) ? pkg.nodes : [],
+		skills: normalizeSkills(pkg.skills),
 		permissions: (pkg.permissions ?? {}) as PackageDetails["permissions"],
 		price: pkg.price ?? 0,
 		primaryCategory: (pkg.primaryCategory ??

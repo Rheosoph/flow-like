@@ -152,12 +152,36 @@ pub(crate) async fn execute(
         auto_approved,
     )
     .with_scheduler(scheduler)
+    .with_skills(
+        super::bot_tools::skills::skills_for(
+            app,
+            &runtime.context.bot_id,
+            host.clone(),
+            package_runner(app, &runtime, &host).await,
+        )
+        .await,
+    )
     .with_mail(
         super::bot_tools::mail::mail_for(app, &runtime.context.bot_id, host.clone()).await,
     )
     .with_people(
         super::bot_tools::people::people_for(app, &runtime.context.bot_id, host.clone()).await,
     )
+    .with_images(Arc::new(super::bot_tools::images::DesktopImages::new(
+        runtime.clone(),
+        context.and_then(|context| context.conversation_id.as_deref()),
+    )))
+    .with_connectors(Arc::new(
+        super::bot_tools::connectors::DesktopConnectors::new(
+            app,
+            host.session.auth.clone(),
+            runtime.context.workspace_app_id.as_deref().unwrap_or_default(),
+            &runtime.context.bot_id,
+            host.clone(),
+            Arc::new(HostSecrets(host.clone())),
+        )
+        .await,
+    ))
     .with_shell(shell_backend(app, &runtime.context.bot_id).await)
     .with_notifier(crate::bot_host::notifier_for(
         app,
@@ -181,6 +205,29 @@ pub(crate) async fn execute(
         value = gate.park_for_cost(tool, args, value);
     }
     Ok(value)
+}
+
+/// What a package skill's tool runs with: the bot's workspace store and model access.
+async fn package_runner(
+    app: &AppHandle,
+    runtime: &Arc<BotToolRuntime>,
+    host: &Arc<LiveHost>,
+) -> super::bot_tools::skills::PackageRunner {
+    let workspace = runtime.context.workspace_app_id.clone();
+    let workspace_store = match &workspace {
+        Some(workspace) => host.store(workspace).await.ok(),
+        None => None,
+    };
+    super::bot_tools::skills::PackageRunner {
+        app: app.clone(),
+        state: runtime.state.clone(),
+        token: runtime.token.clone(),
+        workspace,
+        workspace_store,
+        turn_id: runtime.run_id.clone().unwrap_or_default(),
+        user_id: format!("bot:{}", runtime.context.bot_id),
+        usage: host.usage_context(),
+    }
 }
 
 /// Runs `tool` on its own task, so a panic in a heavy backend fails the call and not the turn.
@@ -302,9 +349,12 @@ pub(crate) struct DesktopToolEnv {
     shell: Option<Arc<dyn ShellBackend>>,
     machine: LocalMachine,
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
+    skills: Option<Arc<dyn flow_like_bot_tools::SkillHost>>,
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
+    images: Option<Arc<super::bot_tools::images::DesktopImages>>,
+    connectors: Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>>,
 }
 
 /// One working directory per bot next to the project directory, on local and account bots alike:
@@ -354,10 +404,21 @@ impl DesktopToolEnv {
             shell: None,
             machine: LocalMachine::default(),
             scheduler: None,
+            skills: None,
             notifier: None,
             mail: None,
             people: None,
+            images: None,
+            connectors: None,
         }
+    }
+
+    pub(crate) fn with_connectors(
+        mut self,
+        connectors: Arc<dyn flow_like_bot_tools::services::ConnectorSource>,
+    ) -> Self {
+        self.connectors = Some(connectors);
+        self
     }
 
     pub(crate) fn with_notifier(
@@ -384,8 +445,21 @@ impl DesktopToolEnv {
         self
     }
 
+    pub(crate) fn with_images(
+        mut self,
+        images: Arc<super::bot_tools::images::DesktopImages>,
+    ) -> Self {
+        self.images = Some(images);
+        self
+    }
+
     pub(crate) fn with_machine(mut self, machine: LocalMachine) -> Self {
         self.machine = machine;
+        self
+    }
+
+    pub(crate) fn with_skills(mut self, skills: Arc<dyn flow_like_bot_tools::SkillHost>) -> Self {
+        self.skills = Some(skills);
         self
     }
 
@@ -589,6 +663,14 @@ impl ToolEnv for DesktopToolEnv {
         self.scheduler.clone()
     }
 
+    fn connectors(&self) -> Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>> {
+        self.connectors.clone()
+    }
+
+    fn skills(&self) -> Option<Arc<dyn flow_like_bot_tools::SkillHost>> {
+        self.skills.clone()
+    }
+
     fn shell(&self) -> Option<Arc<dyn ShellBackend>> {
         self.shell.clone()
     }
@@ -599,6 +681,18 @@ impl ToolEnv for DesktopToolEnv {
 
     fn people(&self) -> Option<Arc<dyn flow_like_bot_tools::PeopleBackend>> {
         self.people.clone()
+    }
+
+    async fn images(
+        &self,
+    ) -> std::result::Result<
+        Arc<dyn flow_like_bot_tools::image::ImageBackend>,
+        flow_like_bot_tools::image::ImageUnavailable,
+    > {
+        match &self.images {
+            Some(images) => images.backend().await,
+            None => Err(flow_like_bot_tools::image::ImageUnavailable::NotOnThisHost),
+        }
     }
 
     fn browser(&self) -> Option<Arc<dyn flow_like_bot_tools::BrowserBackend>> {
@@ -615,6 +709,16 @@ impl ToolEnv for DesktopToolEnv {
 
     async fn secrets(&self) -> Result<Vec<SecretInfo>> {
         self.host.secrets().await
+    }
+}
+
+/// The bot's secrets for a connector's sign-in.
+struct HostSecrets(Arc<LiveHost>);
+
+#[async_trait]
+impl super::bot_tools::connectors::SecretReader for HostSecrets {
+    async fn secret(&self, name: &str) -> Result<Option<String>> {
+        ToolHost::secret(self.0.as_ref(), name).await
     }
 }
 

@@ -24,6 +24,7 @@ export function roomChatMessage(
 	conversationId: string,
 	options: {
 		mentions?: readonly MentionTarget[];
+		mentionCandidates?: readonly MentionTarget[];
 		errorTitle?: string;
 		notice?: string;
 		editedLabel?: string;
@@ -75,7 +76,11 @@ export function roomChatMessage(
 			role: message.mine ? IRole.User : IRole.Assistant,
 			content: error
 				? ""
-				: inlineMentions(text, options.mentions ?? []) +
+				: inlineMentions(
+						text,
+						options.mentions ?? [],
+						options.mentionCandidates,
+					) +
 					(message.edited && options.editedLabel
 						? `\n\n*${options.editedLabel}*`
 						: ""),

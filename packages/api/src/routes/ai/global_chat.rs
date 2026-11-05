@@ -1240,6 +1240,31 @@ pub(crate) async fn reserve_assistant_usage(
     .await
 }
 
+pub(crate) fn assistant_rate(
+    max_runtime_ms: i64,
+    use_worker: bool,
+) -> crate::usage_accounting::HostedRateSnapshot {
+    let mut rate = crate::usage_accounting::HostedRateSnapshot {
+        version: "assistant-api-2026-09-13".into(),
+        provider_pricing_available: true,
+        input_micro_usd_per_million_tokens: 0,
+        input_micro_usd_per_million_bytes: None,
+        max_input_bytes: None,
+        output_micro_usd_per_million_tokens: 0,
+        request_micro_usd: 0,
+        context_tokens: 1,
+        usd_micro_per_eur: 1_159_200,
+        funding_basis_points: 0,
+        api_micro_usd_per_million_ms: 20_001,
+        serving_request_micro_usd: 1,
+        max_request_ms: max_runtime_ms,
+    };
+    if use_worker {
+        crate::routes::chat::hosted_worker::apply_worker_tariff(&mut rate);
+    }
+    rate
+}
+
 pub(crate) async fn reserve_assistant_usage_with_max_runtime(
     state: &AppState,
     sub: &str,
@@ -1267,24 +1292,7 @@ pub(crate) async fn reserve_assistant_usage_with_max_runtime(
         occupied.runtime_ms = used.runtime_ms.saturating_add(reserved.runtime_ms);
         occupied.ai_cost_micros = used.ai_cost_micros.saturating_add(reserved.ai_cost_micros);
     }
-    let mut rate = crate::usage_accounting::HostedRateSnapshot {
-        version: "assistant-api-2026-09-13".into(),
-        provider_pricing_available: true,
-        input_micro_usd_per_million_tokens: 0,
-        input_micro_usd_per_million_bytes: None,
-        max_input_bytes: None,
-        output_micro_usd_per_million_tokens: 0,
-        request_micro_usd: 0,
-        context_tokens: 1,
-        usd_micro_per_eur: 1_159_200,
-        funding_basis_points: 0,
-        api_micro_usd_per_million_ms: 20_001,
-        serving_request_micro_usd: 1,
-        max_request_ms: max_runtime_ms,
-    };
-    if use_worker {
-        crate::routes::chat::hosted_worker::apply_worker_tariff(&mut rate);
-    }
+    let rate = assistant_rate(max_runtime_ms, use_worker);
     let runtime_ms = if funding == "hosted" || !crate::quota::enforcing() {
         max_runtime_ms
     } else if tier.max_runtime_ms < 0 {
@@ -1681,6 +1689,7 @@ pub(crate) async fn run_global_chat(
         ))
     });
     let usage_state = state.clone();
+    let sub_task_compute = bot.as_ref().map(|bot| bot.context.compute.clone());
     flow_like_types::tokio::spawn(async move {
         let remaining = (usage.deadline - chrono::Utc::now())
             .num_milliseconds()
@@ -1745,7 +1754,11 @@ pub(crate) async fn run_global_chat(
         if let Err(error) = settle_assistant_usage(
             &usage_state,
             &usage,
-            usage_started.elapsed().as_millis().min(i64::MAX as u128) as i64,
+            usage_started
+                .elapsed()
+                .as_millis()
+                .min(i64::MAX as u128) as i64
+                + sub_task_compute.map_or(0, |compute| compute.extra_millis()),
             result.is_ok(),
         )
         .await

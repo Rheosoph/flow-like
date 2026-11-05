@@ -19,6 +19,8 @@ model Conversation {
   importKey      String?
   /// The newest `InboxEntry.seq` handed out, allocated under the conversation's lock; null is 0.
   lastSeq        BigInt?
+  /// A group's picture: the blake3 hex of the PNG at `conversations/<id>/image/<image>.png`.
+  image          String?
   segments       ConversationSegment[]
   files          ConversationFile[]
   botTurns       BotTurn[]
@@ -26,8 +28,45 @@ model Conversation {
   pinnedMessages PinnedMessage[]
   stars          StarredMessage[]
   meetings       Meeting[]
+  inviteLinks    ConversationInviteLink[]
 
   @@unique([createdBy, importKey])
+}
+
+/// A person's inbox block. User blocks also cover that user's bots. The owner's bots inherit
+/// these blocks; shared group membership is unchanged.
+model InboxBlock {
+  /// The person who set the block; no foreign key, like ConversationMember.principalId.
+  ownerId       String
+  /// A user sub or bot id.
+  principalId   String
+  /// USER | BOT
+  principalKind String
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([ownerId, principalId])
+  @@index([principalId])
+}
+
+/// A shareable link anyone signed in uses to join a plain group at once. It works while its
+/// creator is an active member, until it expires or reaches `maxUses`; at most 20 per group.
+model ConversationInviteLink {
+  id             String       @id
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  token          String       @unique
+  name           String?
+  /// The member who made it, a user sub; no foreign key.
+  createdBy      String
+  /// -1 is unlimited.
+  maxUses        BigInt       @default(-1)
+  countJoined    BigInt       @default(0)
+  expiresAt      DateTime?    @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @db.Timestamptz(3)
+
+  @@index([conversationId, createdAt])
+  @@index([createdBy])
 }
 
 /// A conversation a person pinned to the top of their list. A member who leaves keeps the row;

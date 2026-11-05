@@ -260,6 +260,23 @@ pub async fn operation_payer(state: &AppState, id: &str) -> Result<String, ApiEr
         .payer_id)
 }
 
+/// The funding class of a running assistant operation that `actor_id` started, `None` for any
+/// other operation: a device may settle only what the hub reserved for its owner's turn.
+pub(crate) async fn running_assistant_funding(
+    state: &AppState,
+    operation_id: &str,
+    actor_id: &str,
+) -> Result<Option<String>, ApiError> {
+    Ok(operation(&state.db, operation_id)
+        .await?
+        .filter(|row| {
+            row.kind == "assistant"
+                && row.status == "running"
+                && row.actor_id.as_deref() == Some(actor_id)
+        })
+        .map(|row| row.funding_class))
+}
+
 async fn find_active_period<C: ConnectionTrait>(
     db: &C,
     payer: &str,
@@ -390,7 +407,7 @@ pub(crate) async fn reserve_instance_with_db(
         || request.model_id.as_deref() != Some(usage.model_id.as_str())
         || !matches!(
             request.kind.as_str(),
-            "llm" | "embedding" | "image_generation"
+            "llm" | "embedding" | "image_generation" | "audio_transcription" | "audio_speech"
         )
         || request.funding_class != "hosted"
         || request.execution_mode != "instance_hosted_ai"
@@ -1208,11 +1225,7 @@ pub async fn release_unstarted_with_db(
         {
             if matches!(
                 row.try_get::<String>("", "kind")?.as_str(),
-                "llm"
-                    | "embedding"
-                    | "image_generation"
-                    | "audio_transcription"
-                    | "audio_speech"
+                "llm" | "embedding" | "image_generation" | "audio_transcription" | "audio_speech"
             ) {
                 crate::usage_accounting::release_unstarted_hosted(db, dialect, operation_id)
                     .await?;

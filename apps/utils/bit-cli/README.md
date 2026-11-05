@@ -123,3 +123,39 @@ The second command uses the catalog-write credentials described above and
 publishes the artifacts. Review each checkpoint's license before using it;
 the Timestral entries include a revenue restriction in their metadata and
 license files.
+
+### Publish the OpenRouter catalog
+
+`specs/hosted-openrouter.json` contains 127 hosted Bits: 31 text-to-speech,
+27 speech-to-text, 31 image generation, and 38 embedding models.
+The target Hub needs the corresponding hosted API routes and a
+server-side `OPENROUTER_API_KEY`. The bundle contains
+model identifiers and metadata, with no credentials or model downloads.
+
+```bash
+cargo run -p bit-cli -- --hub api.flow-like.com hub push apps/utils/bit-cli/specs/hosted-openrouter.json --dry-run
+cargo run -p bit-cli -- --hub api.flow-like.com hub push apps/utils/bit-cli/specs/hosted-openrouter.json
+```
+
+Keep the bundle's IDs when updating its entries. A Hub can return its own stored
+ID on the first push. For hosted entries without files, the CLI uses that ID to
+apply parameter updates when the Hub reuses an existing entry. The printed IDs
+are the catalog IDs to select in a profile or pin to a bot.
+
+Model IDs, default voices, embedding dimensions, and upstream tariffs were checked against
+OpenRouter on 2026-11-05. Each entry links to its upstream model. These catalog
+prices feed usage accounting. Audio prices use integer micro-USD per million
+input characters, UTF-8 bytes, or audio seconds. Deploy the Hub's catalog audio
+tariff support before relying on these rates; older servers use their built-in
+audio tariff. Models without a voice catalog use the provider's default voice.
+Speech clients must honor a Bit's `max_input_characters` when splitting text.
+
+Image prices reserve the highest supported per-image charge, including resolution
+and quality variants. OpenRouter's reported cost determines the final charge when
+available. Embedding Bits include model dimensions, input limits, and retrieval
+prefixes. Free variants remain subject to upstream capacity and usage limits.
+
+The bundle excludes PCM-only speech, audio priced by output duration or tokens,
+image models that require reference images or SVG output, image models without a
+bounded output tariff, batch-only embeddings, and models with no available
+endpoint. Review availability, retirement dates, and rates when updating it.

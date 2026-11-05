@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { MailIcon } from "lucide-react";
+import { ImageIcon, MailIcon, PencilIcon } from "lucide-react";
 import { useMemo } from "react";
 import type { IConversation } from "../../state/backend-state/inbox-state";
 import { IdentityAvatar } from "../identity/identity-avatar";
@@ -15,6 +15,7 @@ import type {
 	ConversationBlock,
 	ConversationMemberEvent,
 	ConversationMessage,
+	ConversationRoomEvent,
 } from "./fold-entries";
 import { BotSenderChip, type MessageActions } from "./message-row";
 import { SpokenLines } from "./spoken-lines";
@@ -112,6 +113,53 @@ function MemberLine({
 	);
 }
 
+/** A centered pill for a rename or picture change of the group. */
+function RoomChangePill({
+	event,
+	directory,
+}: Readonly<{ event: ConversationRoomEvent; directory: CrewDirectory }>) {
+	const { t } = useTranslation("bots");
+	const by = directory(event.by).isMe
+		? t("crew.you", "You")
+		: directory(event.by).name;
+	let line: string;
+	if (event.change === "title") {
+		line = event.title
+			? t("crew.roomChange.renamed", "{{by}} renamed the room to “{{title}}”", {
+					by,
+					title: event.title,
+				})
+			: t("crew.roomChange.nameRemoved", "{{by}} removed the room's name", {
+					by,
+				});
+	} else {
+		line = event.removed
+			? t(
+					"crew.roomChange.pictureRemoved",
+					"{{by}} removed the room's picture",
+					{
+						by,
+					},
+				)
+			: t(
+					"crew.roomChange.pictureChanged",
+					"{{by}} changed the room's picture",
+					{
+						by,
+					},
+				);
+	}
+	const Icon = event.change === "title" ? PencilIcon : ImageIcon;
+	return (
+		<div data-slot="room-change" className="flex w-full justify-center px-3">
+			<span className="inline-flex min-w-0 max-w-full items-center gap-1.5 rounded-full bg-muted px-2.5 py-1 text-xs text-muted-foreground">
+				<Icon className="size-3 shrink-0" aria-hidden />
+				<span className="truncate">{line}</span>
+			</span>
+		</div>
+	);
+}
+
 /** The bot of a direct conversation, whose point of view its notes take. */
 function directBotOf(conversation: IConversation): string | undefined {
 	if (conversation.kind !== "direct") return undefined;
@@ -177,7 +225,12 @@ export function MailSentLine({ to }: Readonly<{ to: readonly string[] }>) {
 export function PendingStatus({
 	send,
 	actions,
-}: Readonly<{ send: PendingSend; actions: PendingSendActions }>) {
+	retryDisabled = false,
+}: Readonly<{
+	send: PendingSend;
+	actions: PendingSendActions;
+	retryDisabled?: boolean;
+}>) {
 	const { t } = useTranslation("bots");
 	return send.failed ? (
 		<span className="flex items-center gap-1 px-4 text-[11px] text-destructive">
@@ -187,6 +240,7 @@ export function PendingStatus({
 				variant="link"
 				size="sm"
 				className="h-auto p-0 text-[11px]"
+				disabled={retryDisabled}
 				onClick={() => actions.retry(send)}
 			>
 				{t("crew.messages.retry", "Retry")}
@@ -253,6 +307,9 @@ export function ThreadNote({
 	if (block.type === "day") return <DayDivider time={block.time} />;
 	if (block.type === "member") {
 		return <MemberLine event={block.event} directory={thread.directory} />;
+	}
+	if (block.type === "room") {
+		return <RoomChangePill event={block.event} directory={thread.directory} />;
 	}
 	if (block.type === "call") {
 		return (

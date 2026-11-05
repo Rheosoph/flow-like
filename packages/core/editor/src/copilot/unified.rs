@@ -270,7 +270,7 @@ impl UnifiedCopilot {
                 ));
             }
         } else {
-            self.determine_effective_scope(scope, board, current_surface)
+            self.determine_effective_scope(scope, board, current_surface)?
         };
 
         // Send scope decision event
@@ -352,36 +352,46 @@ impl UnifiedCopilot {
         }
     }
 
-    /// Determine the effective scope based on available data
+    /// An explicit board request requires workflow context. Only combined requests may select
+    /// the frontend from the available context.
     fn determine_effective_scope(
         &self,
         requested_scope: CopilotScope,
         board: Option<&Board>,
-        current_surface: Option<&Vec<SurfaceComponent>>,
-    ) -> CopilotScope {
-        match requested_scope {
+        _current_surface: Option<&Vec<SurfaceComponent>>,
+    ) -> Result<CopilotScope> {
+        Ok(match requested_scope {
             CopilotScope::Board => {
-                if board.is_some() && self.catalog_provider.is_some() {
-                    CopilotScope::Board
-                } else {
-                    CopilotScope::Frontend
+                if board.is_none() {
+                    return Err(flow_like_types::anyhow!(
+                        "Board scope requires board context. Reload the target board before retrying."
+                    ));
                 }
+                if self.catalog_provider.is_none() {
+                    return Err(flow_like_types::anyhow!(
+                        "Board scope requires a workflow catalog. This host cannot run the board specialist."
+                    ));
+                }
+                CopilotScope::Board
             }
             CopilotScope::Frontend => CopilotScope::Frontend,
             CopilotScope::Both => {
-                if board.is_some() && self.catalog_provider.is_some() {
+                if board.is_some() {
+                    if self.catalog_provider.is_none() {
+                        return Err(flow_like_types::anyhow!(
+                            "Combined scope includes a board but its workflow catalog is unavailable."
+                        ));
+                    }
                     CopilotScope::Both
-                } else if current_surface.is_some() || board.is_none() {
-                    CopilotScope::Frontend
                 } else {
-                    CopilotScope::Board
+                    CopilotScope::Frontend
                 }
             }
             CopilotScope::Home => CopilotScope::Home,
             CopilotScope::DataStudio => CopilotScope::DataStudio,
             CopilotScope::Scout => CopilotScope::Scout,
             CopilotScope::Research => CopilotScope::Research,
-        }
+        })
     }
 
     /// Delegate to the flow Copilot for board operations
@@ -1095,6 +1105,79 @@ mod tests {
 
         assert_eq!(raw_plan.target, CombinedScopeTarget::Frontend);
         assert_eq!(contaminated_plan.target, CombinedScopeTarget::Both);
+    }
+
+    #[tokio::test]
+    async fn board_authoring_rejects_missing_context_before_running_a_specialist() {
+        use crate::{state::FlowLikeConfig, utils::http::HTTPClient};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let state = Arc::new(FlowLikeState::new(
+            FlowLikeConfig::new(),
+            HTTPClient::new_without_refetch(),
+        ));
+        let copilot = UnifiedCopilot::new(state, None, None, None, None)
+            .await
+            .unwrap();
+        let board = claim_test_board();
+        let surface = Vec::new();
+        for board_context in [None, Some(&board)] {
+            for ui_context in [None, Some(&surface)] {
+                let emitted = Arc::new(AtomicUsize::new(0));
+                let observed = emitted.clone();
+                let error = copilot
+                    .chat_with_raw_user_prompt(
+                        CopilotScope::Board,
+                        board_context,
+                        &[],
+                        ui_context,
+                        None,
+                        &[],
+                        "Build a scan workflow".into(),
+                        None,
+                        None,
+                        vec![],
+                        None,
+                        None,
+                        None,
+                        Some(move |_| {
+                            observed.fetch_add(1, Ordering::SeqCst);
+                        }),
+                    )
+                    .await
+                    .unwrap_err();
+                let expected = if board_context.is_none() {
+                    "Board scope requires board context. Reload the target board before retrying."
+                } else {
+                    "Board scope requires a workflow catalog. This host cannot run the board specialist."
+                };
+                assert_eq!(error.to_string(), expected);
+                assert_eq!(emitted.load(Ordering::SeqCst), 0);
+            }
+        }
+
+        // Pages still run without a workflow board or catalog when requested explicitly.
+        assert_eq!(
+            copilot
+                .determine_effective_scope(CopilotScope::Frontend, None, Some(&surface))
+                .unwrap(),
+            CopilotScope::Frontend
+        );
+        for ui_context in [None, Some(&surface)] {
+            assert_eq!(
+                copilot
+                    .determine_effective_scope(CopilotScope::Both, Some(&board), ui_context)
+                    .unwrap_err()
+                    .to_string(),
+                "Combined scope includes a board but its workflow catalog is unavailable."
+            );
+        }
+        assert_eq!(
+            copilot
+                .determine_effective_scope(CopilotScope::Both, None, Some(&surface))
+                .unwrap(),
+            CopilotScope::Frontend
+        );
     }
 
     #[test]

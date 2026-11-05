@@ -20,7 +20,13 @@ pub const SECRET_LIST: &str = "secret_list";
 pub const SECRET_REQUEST: &str = flow_like_types::bot_message::SECRET_REQUEST_TOOL;
 
 /// The tools that take a secret by name; the secret tools are offered beside them.
-pub const SECRET_USERS: &[&str] = &["shell_run", "browser_act", "computer_act", "data_sources"];
+pub const SECRET_USERS: &[&str] = &[
+    "shell_run",
+    "browser_act",
+    "computer_act",
+    "data_sources",
+    "web_request",
+];
 
 /// A stored secret as the model may see it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -44,7 +50,7 @@ pub struct SecretRequestArgs {
     pub replace: bool,
 }
 
-const USAGE: &str = "Write {{secret:NAME}} where a tool takes a secret (the text of browser_act or computer_act, the secrets list of shell_run, a data connection's secret); the host fills the value in and you never see it.";
+const USAGE: &str = "Write {{secret:NAME}} where a tool takes a secret (the text of browser_act or computer_act, the secrets list of shell_run, a data connection's secret, a header or the URL of web_request); the host fills the value in and you never see it.";
 
 pub fn specs() -> Vec<ToolSpec> {
     vec![

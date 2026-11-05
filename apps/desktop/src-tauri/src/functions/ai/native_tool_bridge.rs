@@ -56,6 +56,10 @@ pub struct NativeRunOptions {
     /// A headless bot turn's conversation: when the bot remembers, its memory replaces the last
     /// entries as the turn's history.
     pub bot_memory: Option<flow_like::flow::copilot::MemoryTurnSource>,
+    /// Shared or unreadable interactive conversation metadata forbids legacy memory writes.
+    pub legacy_memory_read_only: bool,
+    /// New room activity for the top-level turn to consider before it answers.
+    pub room_updates: Option<Arc<dyn flow_like::flow::copilot::platform::RoomUpdates>>,
     /// A headless bot turn's approval gate: a call that asks the owner runs under a standing
     /// grant and otherwise parks the turn behind an approval card.
     pub approval_gate: Option<Arc<crate::bot_host::ApprovalGate>>,

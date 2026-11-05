@@ -209,6 +209,8 @@ pub(super) enum Mode {
     Ask,
     /// Asks another bot through the turn's approval gate.
     AskBot,
+    /// Calls a connector tool that core marked as asking, through the turn's approval gate.
+    AskConnector,
 }
 
 pub(super) struct FakeRunner {
@@ -284,6 +286,22 @@ impl TurnRunner for FakeRunner {
                 {
                     Ok(()) => Ok("ran the drop".into()),
                     Err(_) => Ok("could not run the drop".into()),
+                }
+            }
+            Mode::AskConnector => {
+                let args = json!({
+                    "connector": "c-docs",
+                    "tool": "create",
+                    "policy": "ask",
+                    "connector_label": "Docs",
+                });
+                match job
+                    .gate
+                    .clear("connector_call", &args, None, "Calls create on Docs.")
+                    .await
+                {
+                    Ok(()) => Ok("ran the connector call".into()),
+                    Err(_) => Ok("could not run the connector call".into()),
                 }
             }
             Mode::AskBot => {
@@ -460,6 +478,18 @@ impl Fixture {
             far_past(),
             false,
         )
+    }
+
+    fn answer_only_when_mentioned(&self, conversation: &Conversation, bots: &[&Bot]) {
+        let limits = flow_like_types::bot_effective::BotRoomLimits {
+            mentioned_only: true,
+            ..Default::default()
+        };
+        for bot in bots {
+            self.store
+                .set_member_limits(&conversation.id, &bot.id, Some(limits.clone()))
+                .unwrap();
+        }
     }
 
     fn waiting_mentioned_only(&self, conversation: &Conversation, bot: &str) -> Option<Waiting> {
@@ -765,6 +795,7 @@ async fn a_message_gets_one_reply_posted_as_the_bot() {
     let job = f.runner.jobs.lock().unwrap()[0].clone();
     assert_eq!(job.run_id, turn_id(&bot.id, "m1"));
     assert_eq!(job.prompt, "hello");
+    assert!(job.room_updates.is_none());
 
     settle().await;
     assert_eq!(f.runner.started(), 1);
@@ -783,12 +814,38 @@ async fn a_message_gets_one_reply_posted_as_the_bot() {
 }
 
 #[tokio::test]
+async fn an_addressed_group_turn_keeps_the_actual_requester_and_room() {
+    let mut f = Fixture::gated();
+    let (ada, bob) = (f.bot("Ada"), f.bot("Bob"));
+    let group = f.conversation("group", &[&ada.id, &bob.id]);
+    f.answer_only_when_mentioned(&group, &[&ada, &bob]);
+    f.send(
+        &group.id,
+        &bob.id,
+        "b1",
+        "message",
+        json!({ "text": "Please check the manual", "mentions": [ada.id], "hops": 1 }),
+    );
+    f.start();
+    until("the group turn", || f.runner.started() == 1).await;
+    let jobs = f.runner.jobs.lock().unwrap();
+    let requester = jobs[0].requester.as_ref().expect("group requester");
+    assert_eq!(requester.requester_id, bob.id);
+    assert_eq!(requester.requester_name.as_deref(), Some("Bob"));
+    assert_eq!(requester.owner_id, LOCAL_OWNER_ID);
+    assert_eq!(requester.audience, flow_like_types::bot_turn::TurnAudience::Room);
+    assert_eq!(requester.room.as_deref(), Some("Team"));
+    assert!(requester.addressed);
+}
+
+#[tokio::test]
 async fn the_startup_scan_answers_what_waited_and_leaves_the_rest() {
     let mut f = Fixture::open();
     let (ada, bob) = (f.bot("Ada"), f.bot("Bob"));
     let waiting_chat = f.direct(&ada);
     let answered_chat = f.direct(&bob);
     let group = f.conversation("group", &[&ada.id, &bob.id]);
+    f.answer_only_when_mentioned(&group, &[&ada, &bob]);
     f.say(&waiting_chat.id, "w1", "are you there");
     f.say(&answered_chat.id, "a1", "hi");
     f.send(
@@ -852,6 +909,53 @@ async fn messages_that_arrive_during_a_turn_are_answered_by_one_later_turn() {
             reply_message_id(&bot.id, "m3")
         ]
     );
+}
+
+#[tokio::test]
+async fn a_running_room_turn_reads_new_participant_messages_once() {
+    let mut f = Fixture::gated();
+    let (ada, bob) = (f.bot("Ada"), f.bot("Bob"));
+    let room = f.conversation("group", &[&ada.id, &bob.id]);
+    f.answer_only_when_mentioned(&room, &[&ada, &bob]);
+    f.start();
+    f.send(
+        &room.id,
+        LOCAL_OWNER_ID,
+        "introduce",
+        "message",
+        json!({ "text": "Ada, introduce yourself", "mentions": [ada.id] }),
+    );
+    f.host.poke(Some(&room.id));
+    until("the room turn", || f.runner.started() == 1).await;
+    let updates = f.runner.jobs.lock().unwrap()[0]
+        .room_updates
+        .clone()
+        .expect("room turns read new activity");
+    assert!(updates.drain().await.is_empty());
+
+    f.send(
+        &room.id,
+        &bob.id,
+        "bob-introduction",
+        "message",
+        json!({ "text": "I'm Bob and I already introduced myself." }),
+    );
+    f.say(&room.id, "shorter", "Keep your introduction brief.");
+    let fresh = updates.drain().await.join("\n");
+    assert!(fresh.contains("Bob"));
+    assert!(fresh.contains("I already introduced myself."));
+    assert!(fresh.contains("Keep your introduction brief."));
+    assert!(!fresh.contains("Ada, introduce yourself"));
+    assert!(updates.drain().await.is_empty());
+
+    f.store.remove_member(&room.id, &ada.id).unwrap();
+    f.say(&room.id, "after-leaving", "This is for the remaining members.");
+    assert!(updates.drain().await.is_empty());
+    f.host.poke(Some(&room.id));
+    until("the removed bot's cancellation", || {
+        f.status_of(&ada.id, "introduce") == Some(TurnStatus::Cancelled)
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -1101,6 +1205,7 @@ async fn a_turn_whose_bot_left_the_conversation_is_cancelled() {
     let mut f = Fixture::gated();
     let (ada, bob) = (f.bot("Ada"), f.bot("Bob"));
     let group = f.conversation("group", &[&ada.id, &bob.id]);
+    f.answer_only_when_mentioned(&group, &[&ada, &bob]);
     f.start();
     f.send(
         &group.id,
@@ -1131,6 +1236,50 @@ mod grants {
         *f.runner.mode.lock().unwrap() = Mode::Ask;
         f.start();
         f
+    }
+
+    fn asking_a_connector() -> Fixture {
+        let mut f = Fixture::open();
+        *f.runner.mode.lock().unwrap() = Mode::AskConnector;
+        f.start();
+        f
+    }
+
+    #[tokio::test]
+    async fn a_connector_call_that_asks_parks_resumes_on_approval_and_runs() {
+        let f = asking_a_connector();
+        let bot = f.bot("Ada");
+        let chat = f.direct(&bot);
+        let card = parked(&f, &bot, &chat, "m1").await;
+        let approval = &body(&card)["approval"];
+        assert_eq!(approval["tool"], "connector_call");
+        assert_eq!(approval["scope"], "connector:c-docs:create");
+        assert!(f.runner.cancelled.lock().unwrap().contains(&turn_id(&bot.id, "m1")));
+        settle().await;
+        assert!(replies(&f, &bot, &chat).is_empty());
+        answer(&f, &bot, "m1", &card, ApprovalDecision::Always).await;
+        until("the resumed reply", || !replies(&f, &bot, &chat).is_empty()).await;
+        assert_eq!(replies(&f, &bot, &chat), ["ran the connector call"]);
+        let grants = f.store.tool_grants(&bot.id).unwrap();
+        assert_eq!(
+            (grants[0].tool.as_str(), grants[0].scope.as_str()),
+            ("connector_call", "connector:c-docs:create")
+        );
+        f.say(&chat.id, "m2", "and again");
+        f.host.poke(Some(&chat.id));
+        until("the second reply", || replies(&f, &bot, &chat).len() == 2).await;
+    }
+
+    #[tokio::test]
+    async fn a_refused_connector_call_resumes_with_the_refusal_and_runs_nothing() {
+        let f = asking_a_connector();
+        let bot = f.bot("Ada");
+        let chat = f.direct(&bot);
+        let card = parked(&f, &bot, &chat, "m1").await;
+        answer(&f, &bot, "m1", &card, ApprovalDecision::Deny).await;
+        until("the resumed reply", || !replies(&f, &bot, &chat).is_empty()).await;
+        assert_eq!(replies(&f, &bot, &chat), ["could not run the connector call"]);
+        assert!(f.store.tool_grants(&bot.id).unwrap().is_empty());
     }
 
     fn asking_a_bot() -> Fixture {
@@ -1647,6 +1796,20 @@ mod interactive {
         let replies = f.messages_of(&chat.id, &bot.id);
         assert_eq!(replies.len(), 1);
         assert_eq!(replies[0].envelope["body"]["text"], json!("first"));
+    }
+
+    #[tokio::test]
+    async fn interactive_room_detection_does_not_need_a_memory_trigger() {
+        let f = Fixture::open();
+        let bot = f.bot("Ada");
+        let direct = f.direct(&bot);
+        let group = f.conversation("group", &[&bot.id]);
+        let direct_run = run_for(&f, &bot, &direct).await;
+        let group_run = run_for(&f, &bot, &group).await;
+        assert!(direct_run.memory().await.is_none());
+        assert!(group_run.memory().await.is_none());
+        assert!(direct_run.owner_direct().await);
+        assert!(!group_run.owner_direct().await);
     }
 
     #[tokio::test]

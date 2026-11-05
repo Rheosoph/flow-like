@@ -296,3 +296,18 @@ async fn forgetting_a_host_removes_only_its_reports_for_the_caller() {
     let mine = presence_in(&db, "user-a", now).await.unwrap();
     assert_eq!(state(&mine, "bot_desktop"), PresenceState::Unknown);
 }
+
+#[test]
+fn a_person_token_cannot_report_device_presence() {
+    let report = |kind: &str| super::presence::HostReport {
+        host_kind: kind.into(),
+        bot_ids: Vec::new(),
+    };
+    let refused = super::presence::host_kind(&report("device")).unwrap_err();
+    assert_eq!(refused.status(), axum::http::StatusCode::CONFLICT);
+    assert_eq!(refused.public_code(), "BOT_TURN_HOST_KIND");
+    assert_eq!(
+        super::presence::host_kind(&report("desktop")).unwrap(),
+        TurnHostKind::Desktop
+    );
+}

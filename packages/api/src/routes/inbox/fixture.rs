@@ -8,7 +8,7 @@ use super::{
     model::SendEntryRequest,
 };
 use crate::{
-    entity::{bot, bot_turn, inbox_entry, membership},
+    entity::{bot, bot_turn, inbox_entry, membership, mutation_lock},
     error::ApiError,
 };
 use axum::http::StatusCode;
@@ -25,7 +25,7 @@ const TABLES: [&str; 8] = [
         "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
         "directKey" TEXT UNIQUE, "createdBy" TEXT NOT NULL, "lastActivityAt" TEXT NOT NULL,
         "createdAt" TEXT NOT NULL, "updatedAt" TEXT NOT NULL, "importKey" TEXT, "lastSeq" INTEGER,
-        UNIQUE ("createdBy", "importKey"))"#,
+        "image" TEXT, UNIQUE ("createdBy", "importKey"))"#,
     r#"CREATE TABLE public."ConversationMember" (
         "conversationId" TEXT NOT NULL, "principalId" TEXT NOT NULL,
         "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
@@ -71,6 +71,7 @@ pub(crate) async fn database() -> DatabaseConnection {
     for source in [
         schema.create_table_from_entity(bot::Entity),
         schema.create_table_from_entity(membership::Entity),
+        schema.create_table_from_entity(mutation_lock::Entity),
     ] {
         let mut table = Table::create();
         table.table(source.get_table_name().unwrap().clone());
@@ -79,7 +80,11 @@ pub(crate) async fn database() -> DatabaseConnection {
         }
         db.execute(&table).await.unwrap();
     }
-    for statement in TABLES.iter().chain(&super::marks::TEST_TABLES) {
+    for statement in TABLES
+        .iter()
+        .chain(&super::marks::TEST_TABLES)
+        .chain(&super::blocks::TEST_TABLES)
+    {
         db.execute_unprepared(statement).await.unwrap();
     }
     db
@@ -147,6 +152,7 @@ pub(crate) async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str
         tts_model: Set(None),
         image_model: Set(None),
         vision_model: Set(None),
+        subtask_model: Set(None),
     }
     .insert(db)
     .await

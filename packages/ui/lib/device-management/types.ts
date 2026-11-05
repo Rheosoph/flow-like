@@ -583,7 +583,11 @@ export interface InspectionPageWire {
 		release_version: string | null;
 		release_sequence: number | null;
 	};
-	host?: { booted_at: number | null; agent_started_at: number };
+	host?: {
+		booted_at: number | null;
+		agent_started_at: number;
+		published?: { host: string; port: number };
+	};
 	tasks?: unknown[];
 	host_operation?: unknown;
 	network?: { interfaces: unknown[] };

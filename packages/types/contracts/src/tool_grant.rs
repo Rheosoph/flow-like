@@ -26,7 +26,14 @@ pub const ERROR_APPROVAL_EXPIRED: &str = "BOT_APPROVAL_EXPIRED";
 /// Longest tool name or scope.
 pub const MAX_KEY_CHARS: usize = 256;
 
-const SCOPE_PREFIXES: [&str; 5] = ["app:", "host:", "connection:", "table:", "target:"];
+const SCOPE_PREFIXES: [&str; 6] = [
+    "app:",
+    "host:",
+    "connection:",
+    "table:",
+    "target:",
+    "connector:",
+];
 
 /// A grant as the owner lists it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

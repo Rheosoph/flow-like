@@ -28,7 +28,7 @@ use zeroize::Zeroizing;
 const BOT_COLUMNS: &str = "id, system, preset_id, name, description, instructions, appearance, \
                            model, embedding_model, classification, pii, capabilities, profile_id, \
                            workspace_app_id, created_at, updated_at, stt_model, tts_model, \
-                           image_model, vision_model";
+                           image_model, vision_model, subtask_model";
 
 const OWNER_ROLE: &str = "owner";
 
@@ -66,6 +66,7 @@ impl StoredBot {
                 tts_model: row.get("tts_model")?,
                 image_model: row.get("image_model")?,
                 vision_model: row.get("vision_model")?,
+                subtask_model: row.get("subtask_model")?,
                 classification: DataSensitivity {
                     classification: classification
                         .as_deref()
@@ -107,6 +108,7 @@ impl StoredBot {
             tts_model: settings.tts_model,
             image_model: settings.image_model,
             vision_model: settings.vision_model,
+            subtask_model: settings.subtask_model,
             classification: settings.classification,
             capabilities: settings.capabilities,
             profile_id: settings.profile_id,
@@ -226,9 +228,9 @@ fn insert_bot(db: &Connection, bot: NewBot<'_>, now: i64) -> Result<()> {
     db.execute(
         "INSERT INTO bots (id, system, preset_id, name, description, instructions, appearance,
              model, embedding_model, classification, pii, capabilities, profile_id, created_at,
-             updated_at, stt_model, tts_model, image_model, vision_model)
+             updated_at, stt_model, tts_model, image_model, vision_model, subtask_model)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?14, ?15, ?16, ?17,
-             ?18)",
+             ?18, ?19)",
         params![
             bot.id,
             bot.system.map(BotSystemKind::as_str),
@@ -248,6 +250,7 @@ fn insert_bot(db: &Connection, bot: NewBot<'_>, now: i64) -> Result<()> {
             settings.tts_model,
             settings.image_model,
             settings.vision_model,
+            settings.subtask_model,
         ],
     )?;
     Ok(())
@@ -261,7 +264,7 @@ fn save_settings(db: &Connection, bot_id: &str, settings: &BotSettings, now: i64
         "UPDATE bots SET name = ?2, description = ?3, instructions = ?4, appearance = ?5,
              model = ?6, embedding_model = ?7, classification = ?8, pii = ?9, capabilities = ?10,
              profile_id = ?11, updated_at = MAX(?12, updated_at + ?13), stt_model = ?14,
-             tts_model = ?15, image_model = ?16, vision_model = ?17
+             tts_model = ?15, image_model = ?16, vision_model = ?17, subtask_model = ?18
          WHERE id = ?1",
         params![
             bot_id,
@@ -281,6 +284,7 @@ fn save_settings(db: &Connection, bot_id: &str, settings: &BotSettings, now: i64
             settings.tts_model,
             settings.image_model,
             settings.vision_model,
+            settings.subtask_model,
         ],
     )?;
     Ok(())
@@ -909,10 +913,14 @@ impl LocalBotStore {
                 readable: value.is_some(),
             })
             .collect();
+        let connectors = self.connectors(bot_id)?;
+        let skills = self.skills(bot_id)?;
         Ok(LocalBotBundle {
             bot,
             app_ids,
             secrets,
+            connectors,
+            skills,
             conversations,
         })
     }

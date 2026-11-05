@@ -17,7 +17,7 @@ use crate::{
 use axum::http::StatusCode;
 use flow_like_types::{
     bot_effective::BotRoomLimits,
-    inbox::{ConversationEncryption, ConversationKind},
+    inbox::{ConversationEncryption, ConversationKind, PrincipalKind},
 };
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, ConnectionTrait, DatabaseConnection,
@@ -28,6 +28,11 @@ use std::collections::BTreeMap;
 const NO_LIMITS: BTreeMap<String, BotRoomLimits> = BTreeMap::new();
 
 async fn share_app(db: &DatabaseConnection, user_id: &str, app_id: &str) {
+    db.execute_unprepared(&format!(
+        r#"INSERT INTO public."User" ("id") VALUES ('{user_id}') ON CONFLICT DO NOTHING"#
+    ))
+    .await
+    .unwrap();
     membership::ActiveModel {
         id: Set(format!("{user_id}-{app_id}")),
         user_id: Set(user_id.into()),
@@ -44,14 +49,15 @@ async fn share_app(db: &DatabaseConnection, user_id: &str, app_id: &str) {
 
 async fn insert_user(db: &DatabaseConnection, id: &str, name: &str) {
     db.execute_unprepared(&format!(
-        r#"INSERT INTO public."User" ("id", "name") VALUES ('{id}', '{name}')"#
+        r#"INSERT INTO public."User" ("id", "name") VALUES ('{id}', '{name}')
+           ON CONFLICT ("id") DO UPDATE SET "name" = excluded."name""#
     ))
     .await
     .unwrap();
 }
 
-/// `room`: started by user-a alone. user-a and user-b share an app; user-c shares none. bot_a is
-/// user-a's, bot_b user-b's, bot_c user-c's.
+/// `room`: started by user-a alone. user-a and user-b share an app; user-c shares none but is on
+/// the hub. bot_a is user-a's, bot_b user-b's, bot_c user-c's.
 async fn world() -> DatabaseConnection {
     let db = database().await;
     for (id, owner) in [
@@ -421,7 +427,7 @@ async fn a_persons_invitation_takes_no_limits_and_own_bots_join_at_once() {
 }
 
 #[tokio::test]
-async fn invitable_is_exactly_what_the_server_accepts() {
+async fn invitable_suggests_what_the_server_accepts_and_strangers_are_invited_too() {
     let db = world().await;
     insert_bot(&db, "bot_gone", "user-b", "SERVER").await;
     delete_bot(&db, "bot_gone").await;
@@ -444,7 +450,17 @@ async fn invitable_is_exactly_what_the_server_accepts() {
             .unwrap();
         assert_eq!(accepted[0].mode, entry.mode, "{}", entry.principal_id);
     }
-    for refused in ["user-c", "bot_c", "bot_gone", "nobody"] {
+    for (stranger, kind) in [
+        ("user-c", PrincipalKind::User),
+        ("bot_c", PrincipalKind::Bot),
+    ] {
+        let invitee = classify(&db, "user-a", &[stranger.to_string()])
+            .await
+            .unwrap();
+        assert_eq!(invitee[0].mode, InviteMode::Invite, "{stranger}");
+        assert_eq!(invitee[0].principal.kind, kind, "{stranger}");
+    }
+    for refused in ["bot_gone", "nobody"] {
         let error = classify(&db, "user-a", &[refused.to_string()])
             .await
             .unwrap_err();

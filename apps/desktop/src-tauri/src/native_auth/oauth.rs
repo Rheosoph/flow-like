@@ -301,6 +301,116 @@ pub(crate) async fn native_oauth_sync(
     .map_err(|_| "OAuth persistence worker failed")?
 }
 
+/// What the hub configured for a provider's connectors: the hosts its token may go to and its
+/// MCP endpoint. Read from the hub's public configuration.
+#[derive(Clone, Default)]
+pub(crate) struct ProviderHosts {
+    pub api_hosts: Vec<String>,
+    pub mcp_url: Option<String>,
+}
+
+pub(crate) async fn provider_hosts(
+    binding: &SessionBinding,
+) -> Result<HashMap<String, ProviderHosts>, String> {
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|_| "Cannot initialize OAuth client")?;
+    let base = if binding.hub.ends_with("/api/v1") {
+        binding.hub.clone()
+    } else {
+        format!("{}/api/v1", binding.hub)
+    };
+    let response = client
+        .get(&base)
+        .send()
+        .await
+        .map_err(|_| "The hub configuration is unavailable")?;
+    if !response.status().is_success() {
+        return Err("The hub configuration was refused".into());
+    }
+    let config = super::response_json(response).await?;
+    let providers = config
+        .get("oauth_providers")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    Ok(providers
+        .into_iter()
+        .map(|(id, provider)| {
+            let api_hosts = provider
+                .get("api_hosts")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect();
+            let mcp_url = provider
+                .get("mcp_url")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            (id, ProviderHosts { api_hosts, mcp_url })
+        })
+        .collect())
+}
+
+/// One connected account in this profile's native store: what it covers, never a token.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct NativeOAuthAccount {
+    provider_id: String,
+    scopes: Vec<String>,
+    /// The apps the person consented to use the account in.
+    consented_apps: Vec<String>,
+}
+
+fn accounts_of(snapshot: &Snapshot) -> Vec<NativeOAuthAccount> {
+    snapshot
+        .tokens
+        .iter()
+        .filter_map(|token| {
+            let provider_id = token.get("providerId").and_then(Value::as_str)?.to_owned();
+            let consented_apps = snapshot
+                .consents
+                .iter()
+                .filter(|consent| {
+                    consent.get("providerId").and_then(Value::as_str) == Some(provider_id.as_str())
+                })
+                .filter_map(|consent| consent.get("appId").and_then(Value::as_str))
+                .map(str::to_owned)
+                .collect();
+            Some(NativeOAuthAccount {
+                scopes: scopes(token),
+                provider_id,
+                consented_apps,
+            })
+        })
+        .collect()
+}
+
+/// The accounts this profile connected on this device, for the bot editor's connector picker.
+#[tauri::command]
+pub(crate) async fn native_oauth_list(
+    profile_id: String,
+    hub: String,
+) -> Result<Vec<NativeOAuthAccount>, String> {
+    let binding = SessionBinding::capture(&profile_id, &hub)
+        .await?
+        .ok_or("Sign in to list OAuth connections")?;
+    let key = key(&binding);
+    let lock = scope_lock(&key).await?;
+    let _guard = lock.lock().await;
+    let Some(bytes) = store::read(&key).await? else {
+        return Ok(Vec::new());
+    };
+    let snapshot: Snapshot =
+        serde_json::from_slice(&bytes).map_err(|_| "Invalid saved OAuth connections")?;
+    validate(&snapshot, &binding)?;
+    Ok(accounts_of(&snapshot))
+}
+
 fn scopes(value: &Value) -> Vec<String> {
     value
         .get("scopes")

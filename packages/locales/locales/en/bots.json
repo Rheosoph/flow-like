@@ -57,7 +57,7 @@
 			"label": "Image generation"
 		},
 		"internet": {
-			"description": "Search the web, read pages and call web APIs",
+			"description": "Search the web and read pages through a separate researcher",
 			"label": "Internet"
 		},
 		"knowledge": {
@@ -92,6 +92,10 @@
 			"description": "Keep files, like an app's storage",
 			"label": "Files"
 		},
+		"web_requests": {
+			"description": "Calls web APIs and fetches URLs like feeds itself; you approve each new site",
+			"label": "Web requests"
+		},
 		"webhook": {
 			"description": "A URL that wakes the bot when something calls it",
 			"label": "Webhook"
@@ -106,8 +110,64 @@
 		"asleepHint": "{{name}} wakes it when it opens a browser or uses this computer.",
 		"browser": "Browser",
 		"failed": "Couldn't reach {{name}}'s computer.",
+		"handBack": "Hand back",
+		"inControl": "You're in control",
+		"inControlHint": "Click the picture, then use your mouse and keyboard. Hold Esc to hand back.",
+		"inControlLocal": "{{name}} is paused. Use your own mouse and keyboard, then hand back.",
 		"screen": "Screen",
-		"stop": "Stop"
+		"stop": "Stop",
+		"takeOver": "Take over",
+		"watchOnly": "Watch only",
+		"webOnlyDesktop": "Watch and take over in the desktop app",
+		"webOnlyDesktopHint": "{{name}} runs on a device. Its screen is end-to-end encrypted and opens only in the desktop app."
+	},
+	"connectors": {
+		"account": {
+			"add": "Add account",
+			"connectNew": "Connect a new account:",
+			"connected": "{{provider}} is already connected for this bot.",
+			"none": "No connected accounts yet. Connect one under Settings, Connected accounts, then pick it here.",
+			"pick": "Account",
+			"pickPlaceholder": "Pick an account",
+			"read": "Reading (GET, HEAD)",
+			"write": "Changing things (POST, PUT, PATCH, DELETE)"
+		},
+		"addAccount": "Add account",
+		"addMcp": "Add MCP server",
+		"afterSave": "Save the bot first, then connect services here.",
+		"cancel": "Cancel",
+		"confirm": "Accept the change",
+		"default": "Tools without a hint of their own",
+		"defaultPolicy": "Default access",
+		"destructive": "Can delete",
+		"drifted": "This tool changed since you set it, so it asks every time.",
+		"failed": "The connector could not be changed.",
+		"kind": {
+			"mcp": "MCP server",
+			"oauth": "Account"
+		},
+		"mcp": {
+			"add": "Add server",
+			"auth": "Sign-in",
+			"authNone": "No sign-in",
+			"authSecret": "Bearer token from secret {{name}}",
+			"label": "Name",
+			"labelPlaceholder": "Name, e.g. Docs",
+			"url": "Server URL",
+			"urlPlaceholder": "https://example.com/mcp"
+		},
+		"noTools": "No tools yet. Refresh to ask the server for them.",
+		"notice": "What these services send back is treated as data, never as instructions. Anything that changes things asks you first unless you allow it.",
+		"policy": {
+			"ask": "Ask me",
+			"never": "Never",
+			"read": "Always allow"
+		},
+		"readOnly": "Read only",
+		"refresh": "Refresh tools",
+		"remove": "Remove {{label}}",
+		"toolPolicy": "Access for {{name}}",
+		"writeWarning": "This tool can change things and will run without asking."
 	},
 	"crew": {
 		"activity": {
@@ -152,6 +212,10 @@
 		"botTag": "Bot",
 		"builtIn": "Built in",
 		"call": {
+			"dismiss": "Dismiss",
+			"incoming": "Incoming call",
+			"incomingDescription": "Join the conversation call.",
+			"incomingRoom": "Join the call in {{room}}.",
 			"durationHours": "{{hours}} h {{minutes}} min",
 			"durationMinutes": "{{minutes}} min",
 			"durationShort": "under 1 min",
@@ -387,6 +451,7 @@
 			"alreadyInvited": "Already invited",
 			"bots": "Your bots",
 			"hint": "Type a name or email to find people who share an app with you.",
+			"hintAnyone": "Type a name or email to find people.",
 			"invite": "Invite",
 			"noMatches": "No bots or people match.",
 			"ownerAccepts": "Owner accepts",
@@ -405,6 +470,28 @@
 			"where": "Message request"
 		},
 		"retry": "Try again",
+		"roomChange": {
+			"nameRemoved": "{{by}} removed the room's name",
+			"pictureChanged": "{{by}} changed the room's picture",
+			"pictureRemoved": "{{by}} removed the room's picture",
+			"renamed": "{{by}} renamed the room to “{{title}}”"
+		},
+		"roomSettings": {
+			"change": "Change picture",
+			"description": "Everyone in the room sees its name and picture.",
+			"failed": "Couldn't save the room's changes.",
+			"imageFormat": "Choose a PNG, JPEG, WebP or GIF image.",
+			"imageHint": "PNG, JPEG, WebP or GIF, cropped to a square.",
+			"imageSize": "Choose an image smaller than 20 MB.",
+			"imageUnreadable": "This image couldn't be read. Choose another one.",
+			"name": "Name",
+			"namePlaceholder": "Name this room",
+			"open": "Edit name and picture",
+			"remove": "Remove",
+			"save": "Save",
+			"title": "Edit room",
+			"upload": "Upload picture"
+		},
 		"roomTag": "Room",
 		"rooms": {
 			"bots_one": "{{count}} bot",
@@ -528,7 +615,39 @@
 			"browserScreenSharing": "For screen sharing, open this meeting in your browser.",
 			"browserOpenFailed": "The browser could not be opened. Copy the meeting link from the room and open it in your browser.",
 			"openBrowser": "Open meeting in browser"
+		},
+		"blocks": {
+			"title": "Blocked users and bots",
+			"description": "Manage who can exchange direct messages and invitations with you and your bots. Shared rooms are unchanged.",
+			"loading": "Loading blocked users and bots…",
+			"loadFailed": "Couldn't load your blocked list.",
+			"empty": "You haven't blocked anyone.",
+			"block": "Block",
+			"unblock": "Unblock",
+			"blockUser": "Block user",
+			"blockBot": "Block bot",
+			"ownerBlocked": "Owner blocked",
+			"blockName": "Block {{name}}",
+			"unblockName": "Unblock {{name}}",
+			"blockTitle": "Block {{name}}?",
+			"unblockTitle": "Unblock {{name}}?",
+			"failed": "Couldn't update the block. Try again.",
+			"userDescription": "Direct messages and invitations between you and this person, including your bots and theirs, will be blocked. You will still see each other in shared rooms. You can leave those rooms separately.",
+			"botDescription": "Direct messages and invitations between you, your bots and this bot will be blocked. The bot will remain in shared rooms. You can leave those rooms separately.",
+			"unblockDescription": "This block will be removed. Other blocks will still apply.",
+			"composer": "This conversation is blocked. Manage your blocked users and bots to allow messages again."
+		},
+		"leaveRoom": {
+			"action": "Leave room",
+			"title": "Leave this room?",
+			"description": "You and your bots in this room will leave and stop receiving its messages.",
+			"failed": "Couldn't leave the room. Try again."
 		}
+	},
+	"deviceHost": {
+		"never": "Update or start the agent to host bots",
+		"offline": "Bot host offline — last seen {{when}}",
+		"ready": "Ready for bots"
 	},
 	"editor": {
 		"abilities": {
@@ -560,7 +679,6 @@
 			"profileApps_other": "{{count}} apps",
 			"profileEmpty": "No profiles found.",
 			"profilePlaceholder": "Choose a profile",
-			"runtime": "Coming with the bot runtime",
 			"subtitle": "Everything starts switched off. In an app, the bot never has more rights than you.",
 			"subtitleMemoryOn": "New bots start with Memory on and everything else off. In an app, the bot never has more rights than you.",
 			"title": "Choose what it may do"
@@ -609,8 +727,12 @@
 				"image": "Image generation",
 				"imageHint": "Draws the images it creates.",
 				"none": "Add a matching model to your profile to choose one here.",
+				"ownModel": "Use its own model",
+				"ownModelHint": "Sub-tasks run on the model it thinks with",
 				"stt": "Speech to text",
 				"sttHint": "Transcribes the voice messages and calls it hears.",
+				"subtask": "Sub-tasks",
+				"subtaskHint": "Runs the parallel parts of a big job; a smaller, faster model keeps them cheap. Used only where the host can run it.",
 				"title": "Pinned models",
 				"tts": "Text to speech",
 				"ttsHint": "Speaks its replies aloud.",
@@ -675,6 +797,7 @@
 			"deviceEmpty": "You have no managed devices yet. Add one under Devices.",
 			"deviceFailed": "Your devices couldn't be loaded.",
 			"devicePlaceholder": "Choose a device",
+			"hostNotice": "This device isn't hosting bots right now. The bot will answer once the agent runs there.",
 			"subtitle": "A bot lives on one host. Pick the one that has what it needs.",
 			"title": "Choose where it runs",
 			"turnedBackOn": "Switched back on because this host has a screen and shell: {{capabilities}}.",
@@ -999,6 +1122,7 @@
 			"edit": "Edit",
 			"fallbacks_one": "Then {{count}} fallback",
 			"fallbacks_other": "Then {{count}} fallbacks",
+			"onDevice": "On {{device}}",
 			"runs": "Where it runs",
 			"status": "Status"
 		},
@@ -1061,6 +1185,48 @@
 		},
 		"show": "Show {{name}}'s details",
 		"tabs": "{{name}}'s details",
+		"skills": {
+			"add": "Add a skill",
+			"afterSave": "Save the bot first, then add or import its skills here.",
+			"approve": "Approve",
+			"body": "The steps the bot follows, in markdown",
+			"bodyLabel": "Instructions",
+			"cancel": "Cancel",
+			"delete": "Delete {{name}}",
+			"description": "What it does and when to use it",
+			"descriptionLabel": "Description",
+			"disable": "Switch off",
+			"edit": "Edit {{name}}",
+			"enable": "Switch on",
+			"hint": "Skills are instructions the bot loads before a task they describe. Only skills you approved reach the bot.",
+			"import": "Import a zip",
+			"imported": "Imported. Review the skill and approve it to use it.",
+			"installPackage": "Install package skills",
+			"name": "Name, e.g. weekly-report",
+			"nameLabel": "Skill name",
+			"none": "No skills yet.",
+			"fromPackage": "From a package",
+			"packageInstalled": "Package installed. Review its skills and approve them to use them.",
+			"packageInstalledBadge": "Installed",
+			"packageNeeds": "Needs what this bot lacks: {{list}}. Switch it on first.",
+			"packageNone": "No package with skills found.",
+			"packageSearch": "Search packages with skills",
+			"pendingNote": "The bot can't see this skill until you approve it.",
+			"problemBody": "The instructions are missing.",
+			"problemDescription": "Describe the skill in one line.",
+			"problemLength": "The description is limited to 1,024 characters and the instructions to 32 KiB.",
+			"problemName": "Use lowercase letters, digits and single hyphens, at most 64 characters.",
+			"save": "Save skill",
+			"sourceBot": "Proposed by the bot",
+			"sourceImport": "Imported",
+			"sourceOwner": "Written by you",
+			"sourcePackage": "Package",
+			"statusActive": "Active",
+			"statusDisabled": "Off",
+			"statusPending": "Waiting for you",
+			"title": "Skills",
+			"zipTooLarge": "A skill zip is at most 8 MiB."
+		},
 		"tasks": {
 			"at": "When",
 			"create": "Add task",
@@ -1229,6 +1395,34 @@
 		"mentionedOnlyHint": "Without this, the bot reads along with messages from people in this room and decides itself whether to answer.",
 		"title": "{{bot}} in {{room}}"
 	},
+	"roomLinks": {
+		"copied": "Link copied",
+		"copy": "Copy link",
+		"copyFailed": "Couldn't copy the link.",
+		"create": "Create link",
+		"createFailed": "Couldn't create the link.",
+		"created": "Link created and copied",
+		"defaultName": "Invite link",
+		"encrypted": "Encrypted rooms can't have invite links yet.",
+		"expired": "Expired",
+		"expiresIn": "Expires in {{time}}",
+		"expiry": "Expires",
+		"keep": "Keep link",
+		"loadFailed": "Couldn't load the links.",
+		"maxUses": "Max uses",
+		"never": "Never",
+		"noLimit": "No limit",
+		"revoke": "Revoke link",
+		"revokeDescription": "Nobody can join with it afterwards. People who already joined stay in the room.",
+		"revokeFailed": "Couldn't revoke the link.",
+		"revokeTitle": "Revoke this link?",
+		"revoked": "Link revoked",
+		"title": "Invite link",
+		"usedUp": "Used up",
+		"uses_one": "{{count}} use",
+		"uses_other": "{{count}} uses",
+		"usesOf": "{{count}} of {{max}} uses"
+	},
 	"roomMembers": {
 		"bot": "Bot",
 		"cancel": "Withdraw invitation of {{name}}",
@@ -1249,7 +1443,13 @@
 		"thisRoom": "this room",
 		"title": "Room members",
 		"waiting": "Waiting for an answer",
-		"waitingOwner": "Waiting for the bot's owner"
+		"waitingOwner": "Waiting for the bot's owner",
+		"removeNamed": "Remove {{name}} from room",
+		"removeTitle": "Remove {{name}} from this room?",
+		"removePersonDescription": "This person and their bots in the room will leave and stop receiving its messages.",
+		"removeBotDescription": "This bot will leave the room and stop receiving its messages.",
+		"remove": "Remove from room",
+		"removeFailed": "Couldn't remove this member. Try again."
 	},
 	"system": {
 		"flux": {

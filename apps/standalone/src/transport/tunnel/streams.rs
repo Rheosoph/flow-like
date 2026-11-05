@@ -22,6 +22,11 @@ pub(super) enum Target {
     Internal(InternalTarget),
     #[cfg(feature = "runtime")]
     Gateway(GatewayTarget),
+    #[cfg(all(
+        feature = "playground",
+        any(target_os = "macos", windows, target_os = "linux")
+    ))]
+    Playground,
     Pending,
 }
 
@@ -117,6 +122,11 @@ impl Stream {
             OpenTarget::Service(target) => Self::start(id, target, output, parent),
             #[cfg(feature = "runtime")]
             OpenTarget::ModelGateway(target) => Self::start_gateway(id, target, output, parent),
+            #[cfg(all(
+                feature = "playground",
+                any(target_os = "macos", windows, target_os = "linux")
+            ))]
+            OpenTarget::BotPlayground(target) => Self::start_playground(id, target, output, parent),
         }
     }
 
@@ -186,6 +196,55 @@ impl Stream {
                     tokio::select! {
                         result = pipe => result.map(|_| ()),
                         () = super::gateway::serve(gateway, target) => Ok(()),
+                    }
+                }
+                .await;
+                let event = if result.is_ok() {
+                    Event::Closed(id)
+                } else {
+                    Event::Failed(id, Reset::Failed)
+                };
+                tokio::select! { _ = task_cancel.cancelled() => {}, _ = output.send(event) => {} }
+            }
+            .with_cancel(stream.cancel.clone()),
+        );
+        stream
+    }
+
+    /// The live view of a bot's screen speaks length-prefixed messages over an in-memory pipe.
+    #[cfg(all(
+        feature = "playground",
+        any(target_os = "macos", windows, target_os = "linux")
+    ))]
+    pub fn start_playground(
+        id: u32,
+        target: crate::management::tunnel::PlaygroundTarget,
+        output: mpsc::Sender<Event>,
+        parent: &CancellationToken,
+    ) -> Self {
+        let (stream, receiver) = Self::new(Target::Playground, true, parent);
+        let task_writer = stream.writer.clone();
+        let task_cancel = stream.cancel.clone();
+        tokio::spawn(
+            async move {
+                let result: Result<()> = async {
+                    let (tunnel, view) = tokio::io::duplex(super::PLAYGROUND_PIPE_BYTES);
+                    output.send(Event::Opened(id)).await?;
+                    let (read, write) = tokio::io::split(tunnel);
+                    let pipe = async {
+                        tokio::try_join!(
+                            read_service(id, read, receiver, output.clone()),
+                            write_service(id, write, task_writer, output.clone())
+                        )
+                    };
+                    tokio::select! {
+                        result = pipe => result.map(|_| ()),
+                        result = crate::management::playground_stream::serve(
+                            view,
+                            target.host,
+                            target.bot_id,
+                            Default::default(),
+                        ) => result,
                     }
                 }
                 .await;

@@ -26,6 +26,8 @@ pub struct EvidenceView {
     pub message_id: String,
     pub quote: String,
     pub at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<crate::model::Speaker>,
 }
 
 /// A fact as the memory tab shows it.
@@ -42,6 +44,9 @@ pub struct FactView {
     pub valid_to: Option<String>,
     pub superseded_by: Option<String>,
     pub evidence: Vec<EvidenceView>,
+    /// An opaque room scope. Its positions cannot be opened in the owner's direct chat.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation_scope: Option<String>,
 }
 
 fn wire<T: Serialize>(value: &T) -> String {
@@ -72,8 +77,10 @@ impl From<Fact> for FactView {
                     message_id: evidence.message_id,
                     quote: evidence.quote,
                     at: evidence.at.to_rfc3339(),
+                    speaker: evidence.speaker,
                 })
                 .collect(),
+            conversation_scope: None,
         }
     }
 }
@@ -125,13 +132,61 @@ impl FactAdmin {
 
     /// The facts the bot holds, newest first; with `include_superseded` the replaced ones too.
     pub async fn list(&self, include_superseded: bool) -> Result<Vec<Fact>> {
-        let stores = self.engine.stores();
-        stores.refresh().await?;
+        Ok(self
+            .listed(include_superseded)
+            .await?
+            .into_iter()
+            .map(|(fact, _)| fact)
+            .collect())
+    }
+
+    /// Facts for the memory tab, with room evidence distinguished from direct-chat positions.
+    pub async fn list_views(&self, include_superseded: bool) -> Result<Vec<FactView>> {
+        Ok(self
+            .listed(include_superseded)
+            .await?
+            .into_iter()
+            .map(|(fact, scope)| {
+                let mut view = FactView::from(fact);
+                view.conversation_scope = scope;
+                view
+            })
+            .collect())
+    }
+
+    async fn room_engines(&self) -> Result<Vec<MemoryEngine>> {
+        Ok(self
+            .engine
+            .stores()
+            .rooms(Arc::new(Offline))
+            .await?
+            .into_iter()
+            .filter(|stores| stores.room_scope() != self.engine.stores().room_scope())
+            .map(|stores| Self::over(stores).engine)
+            .collect())
+    }
+
+    async fn listed(&self, include_superseded: bool) -> Result<Vec<(Fact, Option<String>)>> {
         let filter = FactFilter {
             include_superseded,
             ..FactFilter::default()
         };
-        let mut facts = stores.facts.all(&filter).await?;
+        let rooms = self.room_engines().await?;
+        let mut facts = Vec::new();
+        for engine in std::iter::once(&self.engine).chain(rooms.iter()) {
+            let stores = engine.stores();
+            stores.refresh().await?;
+            let scope = stores.room_scope().map(str::to_owned);
+            facts.extend(
+                stores
+                    .facts
+                    .all(&filter)
+                    .await?
+                    .into_iter()
+                    .map(|fact| (fact, scope.clone())),
+            );
+        }
+        facts.sort_by(|a, b| b.0.anchor().cmp(&a.0.anchor()).then(a.0.id.cmp(&b.0.id)));
         facts.truncate(MAX_LISTED_FACTS);
         Ok(facts)
     }
@@ -139,8 +194,35 @@ impl FactAdmin {
     /// Deletes one fact (a unique id prefix is enough) under the engine's lease, old table
     /// versions included. The fact's evidence stays in the history.
     pub async fn forget(&self, id: &str) -> Result<Fact> {
-        let args = MemoryForgetArgs { id: id.to_owned() };
-        match memory_forget(&self.engine, &args, WriteGate::default(), Utc::now()).await? {
+        let rooms = self.room_engines().await?;
+        let engines: Vec<_> = std::iter::once(&self.engine).chain(rooms.iter()).collect();
+        let mut found = Vec::new();
+        for engine in &engines {
+            engine.stores().refresh().await?;
+            if let Some(fact) = engine.stores().facts.get(id).await? {
+                found.push((*engine, fact));
+            }
+        }
+        if found.is_empty() {
+            for engine in engines {
+                found.extend(
+                    engine
+                        .stores()
+                        .facts
+                        .find_prefix(id)
+                        .await?
+                        .into_iter()
+                        .map(|fact| (engine, fact)),
+                );
+            }
+        }
+        let (engine, fact) = match found.len() {
+            0 => return Err(anyhow!("No fact {id}")),
+            1 => found.remove(0),
+            count => return Err(anyhow!("{count} facts match {id}; give a unique full id")),
+        };
+        let args = MemoryForgetArgs { id: fact.id };
+        match memory_forget(engine, &args, WriteGate::default(), Utc::now()).await? {
             WriteOutcome::Done(fact) => Ok(fact),
             WriteOutcome::NeedsConfirmation { .. } | WriteOutcome::Rejected { .. } => {
                 Err(anyhow!("Forgetting fact {id} was refused"))
@@ -150,6 +232,9 @@ impl FactAdmin {
 
     /// Drops every table of the memory.
     pub async fn reset(&self) -> Result<()> {
+        for room in self.room_engines().await? {
+            room.stores().drop_all().await?;
+        }
         self.engine.stores().drop_all().await
     }
 }

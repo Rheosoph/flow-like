@@ -1,6 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
+import { useQueryClient } from "@tanstack/react-query";
 import { BellIcon, BellOffIcon, UsersIcon } from "lucide-react";
 import {
 	type ReactNode,
@@ -12,11 +13,13 @@ import {
 	useSyncExternalStore,
 } from "react";
 import { toast } from "sonner";
+import { useBotCallSpeech } from "../../hooks/use-bot-call-speech";
 import { useConversationActivity } from "../../hooks/use-conversation-activity";
 import { useConversationCall } from "../../hooks/use-conversation-call";
 import { useConversationRoom } from "../../hooks/use-conversation-room";
 import {
 	compareInboxCursors,
+	inboxKeys,
 	newInboxMessageId,
 	useConversation,
 	useInboxEntries,
@@ -25,6 +28,7 @@ import {
 	useSendMessageWithFiles,
 	useSetConversationMuted,
 } from "../../hooks/use-inbox";
+import { useInboxBlocks } from "../../hooks/use-inbox-blocks";
 import { useSpeechModel } from "../../hooks/use-speech-model";
 import { LocalPrincipalsProvider } from "../../hooks/use-user-lookup";
 import { useBackend } from "../../state/backend-state";
@@ -65,7 +69,7 @@ import {
 } from "./fold-entries";
 import { useLocalPrincipals } from "./local-principals";
 import { MemberStack } from "./member-stack";
-import { mentionablesOf, spokenMentions } from "./mentions";
+import { callMentions, mentionablesOf } from "./mentions";
 import { requestMessageJump, useMessageJump } from "./message-jump";
 import {
 	PinnedMessagesBar,
@@ -79,7 +83,12 @@ import {
 	usePendingSendList,
 	useShowsPendingSends,
 } from "./pending-sends";
+import {
+	conversationBlockTarget,
+	principalBlock,
+} from "./principal-block-action";
 import type { PickerSource } from "./principal-picker";
+import { RoomAvatar } from "./room-avatar";
 import { ConnectedRoomMeetings } from "./room-meetings";
 import { RoomMembersDialog } from "./room-members-dialog";
 import {
@@ -163,6 +172,27 @@ function useMarkReadWhileOpen(
 			},
 		});
 	}, [conversationId, newest, newestFromOthers, visible, mutate]);
+}
+
+/** Reloads the conversation when a rename or picture change arrives, so the header matches it. */
+function useRefreshOnRoomChange(
+	conversationId: string,
+	entries: readonly IInboxEntry[],
+) {
+	const queryClient = useQueryClient();
+	const newest = useMemo(
+		() => entries.find((entry) => entry.kind === "room")?.message_id,
+		[entries],
+	);
+	const seen = useRef(newest);
+	useEffect(() => {
+		if (!newest || newest === seen.current) return;
+		seen.current = newest;
+		void queryClient.invalidateQueries({
+			queryKey: inboxKeys.conversation(conversationId),
+		});
+		void queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
+	}, [conversationId, newest, queryClient]);
 }
 
 const AUTO_LOAD_PAGES = 5;
@@ -358,6 +388,9 @@ function ConversationView({
 		[conversation.members, conversation.pending, entries, items],
 	);
 	const directory = useCrewDirectory(principalIds, { me, bots });
+	const blockTarget = conversationBlockTarget(conversation, directory, me);
+	const principalBlocks = useInboxBlocks(Boolean(blockTarget));
+	const blocked = Boolean(principalBlock(principalBlocks.data, blockTarget));
 	const text = useConversationText(directory, me);
 	const heading = useConversationHeading(conversation, text);
 	const [membersOpen, setMembersOpen] = useState(false);
@@ -374,7 +407,8 @@ function ConversationView({
 	const manageable = conversation.kind === "group" && !conversation.local;
 	const personChat = canMuteConversation(conversation);
 	useMarkReadWhileOpen(conversation.id, entries, me);
-	const room = useConversationRoom(conversation, me);
+	useRefreshOnRoomChange(conversation.id, entries);
+	const room = useConversationRoom(conversation, me, !blocked);
 	const activity = useConversationActivity(
 		conversation,
 		me,
@@ -407,11 +441,20 @@ function ConversationView({
 		() => ({
 			stt: speechModel,
 			hasBots: listenBots.length > 0,
-			mentionsIn: (spoken: string) => spokenMentions(spoken, listenBots),
+			mentionsIn: (spoken: string) =>
+				callMentions(spoken, listenBots, conversation.kind),
 		}),
-		[speechModel, listenBots],
+		[speechModel, listenBots, conversation.kind],
 	);
 	const call = useConversationCall(conversation, me, room, callStarts, listen);
+	useBotCallSpeech({
+		conversation,
+		entries,
+		items,
+		historyReady: pages !== undefined,
+		directory,
+		call,
+	});
 	const callErrorText = useCallErrorText();
 	useEffect(() => {
 		if (call.error) toast.error(callErrorText(call.error));
@@ -539,7 +582,7 @@ function ConversationView({
 		text,
 		actions,
 		marks: threadMarks.marks,
-		readOnly: encrypted,
+		readOnly: encrypted || blocked,
 		call: threadCall,
 	};
 
@@ -547,12 +590,22 @@ function ConversationView({
 		<>
 			<DockHeader
 				avatar={
-					<MemberStack
-						principalIds={otherMemberIds(conversation, me)}
-						max={3}
-						size={34}
-						hoverCards
-					/>
+					conversation.kind === "group" && conversation.image_url ? (
+						<RoomAvatar
+							roomId={conversation.id}
+							title={heading.title}
+							principalIds={otherMemberIds(conversation, me)}
+							imageUrl={conversation.image_url}
+							size={34}
+						/>
+					) : (
+						<MemberStack
+							principalIds={otherMemberIds(conversation, me)}
+							max={3}
+							size={34}
+							hoverCards
+						/>
+					)
 				}
 				title={heading.title}
 				subtitle={heading.subtitle}
@@ -561,10 +614,14 @@ function ConversationView({
 					<>
 						<ConversationMenu
 							conversation={conversation}
+							me={me}
+							onLeave={onClose}
+							blockTarget={blockTarget}
+							defaultTitle={text.title({ ...conversation, title: null })}
 							onShowStarred={() => setStarsOpen(true)}
 						/>
-						{call.available && <CallButton call={call} />}
-						{!conversation.local && me && meetingClient && (
+						{call.available && !blocked && <CallButton call={call} />}
+						{!conversation.local && !blocked && me && meetingClient && (
 							<ConnectedRoomMeetings
 								conversationId={conversation.id}
 								client={meetingClient}
@@ -616,6 +673,7 @@ function ConversationView({
 					directory={directory}
 					source={pickerSource}
 					me={me}
+					onLeave={onClose}
 				/>
 			)}
 			<ConversationChat
@@ -633,12 +691,17 @@ function ConversationView({
 				sends={pending.actions}
 				placeholder={composerPlaceholder}
 				disabledReason={
-					encrypted
+					blocked
 						? t(
-								"crew.composer.encrypted",
-								"Writing in end-to-end encrypted chats isn't available in this app yet.",
+								"crew.blocks.composer",
+								"This conversation is blocked. Manage your blocked users and bots to allow messages again.",
 							)
-						: null
+						: encrypted
+							? t(
+									"crew.composer.encrypted",
+									"Writing in end-to-end encrypted chats isn't available in this app yet.",
+								)
+							: null
 				}
 				mentionables={mentionables}
 				activity={activity}

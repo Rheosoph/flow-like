@@ -47,6 +47,9 @@ pub struct Bot {
     pub image_model: Option<String>,
     /// Bit id of the vision model the bot reads images with; null leaves the choice to the host.
     pub vision_model: Option<String>,
+    /// Bit id of the model the bot's sub-tasks run on; null uses the bot's own model.
+    #[serde(default)]
+    pub subtask_model: Option<String>,
     /// How sensitive the data the bot handles is.
     #[schema(value_type = Object, example = json!({ "classification": "internal", "pii": false }))]
     pub classification: DataSensitivity,
@@ -105,6 +108,9 @@ pub struct CreateBotRequest {
     pub image_model: Option<String>,
     /// Bit id of the vision model, at most 256 characters; omitted leaves the choice to the host.
     pub vision_model: Option<String>,
+    /// Bit id of the model sub-tasks run on, at most 256 characters; omitted uses the bot's own.
+    #[serde(default)]
+    pub subtask_model: Option<String>,
     #[schema(value_type = Option<Object>, example = json!({ "classification": "internal", "pii": false }))]
     pub classification: Option<DataSensitivity>,
     /// Capability ids. `computer_use`, `browser_use` and `command_line` need a desktop or
@@ -158,6 +164,10 @@ pub struct UpdateBotRequest {
     #[serde(default, deserialize_with = "deserialize_nullable")]
     #[schema(value_type = Option<String>)]
     pub vision_model: Option<Option<String>>,
+    /// `null` has sub-tasks run on the bot's own model.
+    #[serde(default, deserialize_with = "deserialize_nullable")]
+    #[schema(value_type = Option<String>)]
+    pub subtask_model: Option<Option<String>>,
     #[schema(value_type = Option<Object>)]
     pub classification: Option<DataSensitivity>,
     /// Replaces the whole set. The capabilities of Flux and of bots with `flowpilot` can't be
@@ -175,7 +185,7 @@ pub struct UpdateBotRequest {
 
 /// Everything an owner can change on a bot, validated and normalized.
 #[derive(Debug, Clone, PartialEq)]
-pub(super) struct BotSettings {
+pub(crate) struct BotSettings {
     pub name: Option<String>,
     pub description: Option<String>,
     pub instructions: Option<String>,
@@ -186,6 +196,7 @@ pub(super) struct BotSettings {
     pub tts_model: Option<String>,
     pub image_model: Option<String>,
     pub vision_model: Option<String>,
+    pub subtask_model: Option<String>,
     pub classification: DataSensitivity,
     pub capabilities: Vec<BotCapability>,
     pub profile_id: Option<String>,
@@ -206,6 +217,7 @@ impl BotSettings {
             tts_model: row.tts_model.clone(),
             image_model: row.image_model.clone(),
             vision_model: row.vision_model.clone(),
+            subtask_model: row.subtask_model.clone(),
             classification: DataSensitivity {
                 classification: row
                     .classification
@@ -243,6 +255,7 @@ impl BotSettings {
             ("tts_model", self.tts_model != next.tts_model),
             ("image_model", self.image_model != next.image_model),
             ("vision_model", self.vision_model != next.vision_model),
+            ("subtask_model", self.subtask_model != next.subtask_model),
             ("classification", self.classification != next.classification),
             ("capabilities", self.capabilities != next.capabilities),
             ("profile_id", self.profile_id != next.profile_id),
@@ -265,6 +278,7 @@ impl BotSettings {
         row.tts_model = Set(self.tts_model.clone());
         row.image_model = Set(self.image_model.clone());
         row.vision_model = Set(self.vision_model.clone());
+        row.subtask_model = Set(self.subtask_model.clone());
         row.classification = Set(self
             .classification
             .classification
@@ -294,6 +308,7 @@ impl From<bot::Model> for Bot {
             tts_model: settings.tts_model,
             image_model: settings.image_model,
             vision_model: settings.vision_model,
+            subtask_model: settings.subtask_model,
             classification: settings.classification,
             capabilities: settings.capabilities,
             profile_id: settings.profile_id,

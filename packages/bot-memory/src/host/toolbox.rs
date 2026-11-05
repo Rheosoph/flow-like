@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use super::session::MemorySession;
 use crate::engine::MemoryBusy;
 use crate::facts::{RejectReason, UpdateAction};
-use crate::model::{HistoryItem, Role};
+use crate::model::{HistoryItem, ItemKind, Role};
 use crate::tools::{
     self, HistoryReadArgs, HistoryReader, HistorySearchArgs, MemoryForgetArgs, MemorySaveArgs,
     MemorySearchArgs, MessageGetArgs, SummaryExpandArgs, ToolOutput, WriteGate, WriteOutcome,
@@ -183,14 +183,48 @@ impl MemoryToolbox {
         arguments: MemorySaveArgs,
         now: chrono::DateTime<Utc>,
     ) -> flow_like_types::Result<String> {
-        let outcome = tools::memory_save(
-            self.session.engine(),
-            &arguments,
-            &self.trigger,
-            self.gate(),
-            now,
-        )
-        .await?;
+        let evidence = match arguments.evidence_seq {
+            Some(seq) => {
+                if seq == 0 || seq > self.trigger.seq {
+                    return Ok(failure(
+                        "memory_evidence_invalid",
+                        "Memory evidence must be an existing message at or before the current message in this conversation.",
+                    ));
+                }
+                let Some(item) = self.reader.message(seq).await?.filter(|item| {
+                    !item.deleted
+                        && item.kind == ItemKind::Message
+                        && item.speaker.is_some()
+                        && matches!(item.role, Role::User | Role::Assistant | Role::External)
+                }) else {
+                    return Ok(failure(
+                        "memory_evidence_invalid",
+                        "That position does not contain a live participant message in this conversation.",
+                    ));
+                };
+                if self.trigger.role != Role::User && item.role == Role::User {
+                    return Ok(failure(
+                        "memory_evidence_owner_only",
+                        "Only the owner may save a memory using the owner's words as its evidence. Save the participant's own statement instead.",
+                    ));
+                }
+                item
+            }
+            None => self.trigger.clone(),
+        };
+        let mut gate = self.gate();
+        // A room participant may contribute an attributed statement. Outside tool content
+        // still waits for confirmation, and forgetting remains restricted to the owner.
+        if evidence.role == Role::External
+            && evidence.speaker.is_some()
+            && (self.trigger.role == Role::User
+                || (self.trigger.role == Role::External && self.trigger.speaker.is_some()))
+            && !self.foreign_calls.load(Ordering::SeqCst)
+        {
+            gate.untrusted_in_context = false;
+        }
+        let outcome =
+            tools::memory_save(self.session.engine(), &arguments, &evidence, gate, now).await?;
         Ok(match outcome {
             WriteOutcome::Done((fact, action)) => {
                 if !matches!(action, UpdateAction::Noop) {

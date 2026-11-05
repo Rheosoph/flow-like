@@ -55,6 +55,7 @@ const directory = (id: string) => ({
 	isMe: id === "me",
 	isBot: false,
 	isPending: false,
+	isResolved: Boolean(names[id]),
 });
 
 async function render(node: (create: typeof createElement) => unknown) {

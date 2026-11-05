@@ -1,8 +1,8 @@
 use super::model::*;
 use crate::{
-    entity::{meeting, meeting_message, meeting_participant},
+    entity::{conversation, meeting, meeting_message, meeting_participant},
     error::ApiError,
-    routes::inbox::active_membership,
+    routes::inbox::{active_membership, blocks::ensure_direct_allowed},
 };
 use chrono::{DateTime, Duration, FixedOffset};
 use flow_like_types::create_id;
@@ -95,7 +95,20 @@ pub(super) async fn member<C: ConnectionTrait>(
     if membership.principal_kind != "USER" {
         return Err(ApiError::FORBIDDEN);
     }
+    contact_allowed(db, &row.conversation_id, sub).await?;
     Ok(())
+}
+
+async fn contact_allowed<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    sub: &str,
+) -> Result<(), ApiError> {
+    let conversation = conversation::Entity::find_by_id(conversation_id)
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::not_found("Conversation not found"))?;
+    ensure_direct_allowed(db, &conversation, sub).await
 }
 
 pub(super) async fn create_in<C: ConnectionTrait>(
@@ -109,6 +122,7 @@ pub(super) async fn create_in<C: ConnectionTrait>(
     if membership.principal_kind != "USER" {
         return Err(ApiError::FORBIDDEN);
     }
+    contact_allowed(db, &request.conversation_id, sub).await?;
     let upcoming = meeting::Entity::find()
         .filter(meeting::Column::ConversationId.eq(&request.conversation_id))
         .filter(meeting::Column::EndsAt.gt(now))
@@ -160,6 +174,8 @@ pub(super) async fn session_in<C: ConnectionTrait>(
     }
     if let Some(sub) = &participant.user_id {
         member(db, row, sub).await?;
+    } else {
+        contact_allowed(db, &row.conversation_id, &row.host_id).await?;
     }
     Ok(participant)
 }
@@ -305,6 +321,8 @@ pub(super) async fn join_in<C: ConnectionTrait>(
     open(row, now)?;
     if let Some(sub) = sub {
         member(db, row, sub).await?;
+    } else {
+        contact_allowed(db, &row.conversation_id, &row.host_id).await?;
     }
     if sub.is_none() && !row.guests_allowed {
         return Err(ApiError::forbidden("Guests are disabled for this meeting"));

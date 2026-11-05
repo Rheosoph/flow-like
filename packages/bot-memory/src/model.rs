@@ -243,6 +243,33 @@ pub enum ItemKind {
     Topic,
 }
 
+/// The account that wrote a message. Names are display hints; the account ID is the identity.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Speaker {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+impl Speaker {
+    pub fn new(id: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: None,
+        }
+    }
+
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// JSON keeps names and IDs from changing the surrounding history labels.
+    pub fn label(&self) -> String {
+        serde_json::to_string(self).expect("a speaker serializes")
+    }
+}
+
 /// One entry of the bot's history.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HistoryItem {
@@ -251,6 +278,8 @@ pub struct HistoryItem {
     #[serde(default)]
     pub kind: ItemKind,
     pub role: Role,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<Speaker>,
     pub created_at: DateTime<Utc>,
     #[serde(default)]
     pub edited_at: Option<DateTime<Utc>>,
@@ -288,6 +317,7 @@ impl HistoryItem {
             message_id: message_id.into(),
             kind: ItemKind::Message,
             role,
+            speaker: None,
             created_at,
             edited_at: None,
             text_tokens: estimate_tokens(&text),
@@ -319,6 +349,11 @@ impl HistoryItem {
         self
     }
 
+    pub fn with_speaker(mut self, speaker: Speaker) -> Self {
+        self.speaker = Some(speaker);
+        self
+    }
+
     pub fn with_ui(mut self, part: UiPart) -> Self {
         self.ui.push(part);
         self
@@ -343,9 +378,11 @@ impl HistoryItem {
         Pointer::Message(self.seq)
     }
 
-    /// A user message opens a turn.
+    /// An owner or an identified room participant's message opens a turn.
     pub fn starts_turn(&self) -> bool {
-        self.role == Role::User && !self.deleted && self.kind == ItemKind::Message
+        (self.role == Role::User || (self.role == Role::External && self.speaker.is_some()))
+            && !self.deleted
+            && self.kind == ItemKind::Message
     }
 
     /// A new segment starts here: a topic marker, or an entry flagged "New topic".

@@ -40,7 +40,7 @@ const INBOX_TABLES: [&str; 5] = [
         "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
         "directKey" TEXT UNIQUE, "createdBy" TEXT NOT NULL, "lastActivityAt" TEXT NOT NULL,
         "createdAt" TEXT NOT NULL, "updatedAt" TEXT NOT NULL, "importKey" TEXT, "lastSeq" INTEGER,
-        UNIQUE ("createdBy", "importKey"))"#,
+        "image" TEXT, UNIQUE ("createdBy", "importKey"))"#,
     r#"CREATE TABLE public."ConversationMember" (
         "conversationId" TEXT NOT NULL, "principalId" TEXT NOT NULL,
         "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
@@ -71,14 +71,22 @@ async fn database() -> DatabaseConnection {
         .await
         .unwrap();
     let schema = Schema::new(db.get_database_backend());
-    let source = schema.create_table_from_entity(bot::Entity);
-    let mut table = Table::create();
-    table.table(source.get_table_name().unwrap().clone());
-    for column in source.get_columns() {
-        table.col(column.clone());
+    for source in [
+        schema.create_table_from_entity(bot::Entity),
+        schema.create_table_from_entity(crate::entity::mutation_lock::Entity),
+    ] {
+        let mut table = Table::create();
+        table.table(source.get_table_name().unwrap().clone());
+        for column in source.get_columns() {
+            table.col(column.clone());
+        }
+        db.execute(&table).await.unwrap();
     }
-    db.execute(&table).await.unwrap();
-    for statement in INBOX_TABLES.iter().chain(&super::marks::TEST_TABLES) {
+    for statement in INBOX_TABLES
+        .iter()
+        .chain(&super::marks::TEST_TABLES)
+        .chain(&super::blocks::TEST_TABLES)
+    {
         db.execute_unprepared(statement).await.unwrap();
     }
     db
@@ -121,6 +129,7 @@ async fn insert_bot(db: &DatabaseConnection, id: &str, owner_id: &str, deleted: 
         tts_model: Set(None),
         image_model: Set(None),
         vision_model: Set(None),
+        subtask_model: Set(None),
     }
     .insert(db)
     .await

@@ -224,6 +224,7 @@ async fn host_with_grants(
                 .map(|(name, value)| (name.to_string(), value.to_string()))
                 .collect(),
         )),
+        connectors: None,
     }))
 }
 
@@ -662,4 +663,131 @@ async fn a_declined_or_unacknowledged_approval_runs_nothing() {
     }
     assert!(executor.jobs.lock().unwrap().is_empty());
     channel.close().await;
+}
+
+fn image_profile() -> flow_like::profile::Profile {
+    let bit = flow_like::bit::Bit {
+        id: "my-image".into(),
+        bit_type: flow_like::bit::BitTypes::ImageGeneration,
+        parameters: json!({"provider": {
+            "provider_name": "custom:openai", "model_id": "gpt-image-1",
+            "params": {"api_key": "sk-private-key"}
+        }}),
+        ..Default::default()
+    };
+    let mut profile = flow_like::profile::Profile::default();
+    profile.custom_bits = vec![flow_like::profile::ProfileCustomBit(bit)];
+    profile
+}
+
+fn image_bits(image_model: Option<&str>) -> Arc<super::images::ImageBits> {
+    let state = Arc::new(flow_like::state::FlowLikeState::new(
+        flow_like::state::FlowLikeConfig::with_default_store(FlowLikeStore::Memory(Arc::new(
+            InMemory::new(),
+        ))),
+        flow_like::utils::http::HTTPClient::new_without_refetch(),
+    ));
+    Arc::new(super::images::ImageBits::new(
+        Arc::new(image_profile()),
+        state,
+        image_model.map(str::to_string),
+    ))
+}
+
+async fn image_host(
+    executor: Option<Arc<FakeExecutor>>,
+    images: Option<Arc<super::images::ImageBits>>,
+) -> Arc<BotToolsHost> {
+    let access = Arc::new(Access::new(&[WORKSPACE, DOCS]).await);
+    let mut host = BotToolsHost::new(TurnDeps {
+        owner: OWNER.into(),
+        bot: bot_user(),
+        turn_id: TURN.into(),
+        workspace: WORKSPACE.into(),
+        host_tools: routing::host_tools(executor.is_some(), &[]),
+        directory: Arc::new(Directory { scope: job_scope() }),
+        access,
+        models: TurnModels {
+            source: Arc::new(NoModels),
+            chat: None,
+            embedding: None,
+        },
+        executor: executor.map(|executor| executor as Arc<dyn ToolExecutor>),
+        grants: Arc::new(MemoryGrants::default()),
+        secrets: Arc::new(JobSecrets::default()),
+        connectors: None,
+    });
+    if let Some(images) = images {
+        host = host.with_images(images);
+    }
+    Arc::new(host)
+}
+
+#[test]
+fn image_generate_is_an_executor_tool() {
+    assert!(!routing::host_tools(false, &[]).runs("image_generate"));
+    assert!(routing::host_tools(true, &[]).runs("image_generate"));
+    assert_eq!(
+        routing::route("image_generate", &json!({}), true),
+        Some(routing::Route::Executor)
+    );
+    assert!(matches!(
+        routing::route("image_generate", &json!({}), false),
+        Some(routing::Route::Refuse(_))
+    ));
+}
+
+#[flow_like_types::tokio::test]
+async fn the_job_carries_the_owners_image_bit_to_the_executor_and_counts_saved_images() {
+    let executor = Arc::new(FakeExecutor::default());
+    let bits = image_bits(Some("my-image"));
+    let host = image_host(Some(executor.clone()), Some(bits.clone())).await;
+    let output = parse(
+        &host
+            .run("image_generate", json!({ "prompt": "a lighthouse" }))
+            .await,
+    );
+    assert_eq!(output["ran_on"], "executor", "{output}");
+    assert!(!output.to_string().contains("sk-private-key"));
+    let jobs = executor.jobs.lock().unwrap();
+    let job: ToolJob = serde_json::from_str(&jobs[0].3).unwrap();
+    let image = job
+        .models
+        .image
+        .as_ref()
+        .expect("the job names the image model");
+    assert_eq!(image.bit["id"], "my-image");
+    assert_eq!(image.bit["parameters"]["provider"]["params"]["api_key"], "sk-private-key");
+    assert_eq!(image.left, 8);
+    assert!(!format!("{:?}", job.models).contains("sk-private-key"));
+    drop(jobs);
+    bits.record(&json!({ "status": "ok", "saved": [{}, {}, {}] }).to_string());
+    bits.record(&json!({ "status": "error", "saved": [{}] }).to_string());
+    assert_eq!(bits.left(), 5);
+}
+
+#[flow_like_types::tokio::test]
+async fn other_jobs_never_carry_the_image_bit() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = image_host(Some(executor.clone()), Some(image_bits(Some("my-image")))).await;
+    host.run("file_write", json!({ "path": "bot/a.md", "content": "x" }))
+        .await;
+    let jobs = executor.jobs.lock().unwrap();
+    assert!(!jobs[0].3.contains("sk-private-key"));
+}
+
+#[flow_like_types::tokio::test]
+async fn an_image_job_without_a_usable_model_is_refused_before_the_executor() {
+    let executor = Arc::new(FakeExecutor::default());
+    let host = image_host(Some(executor.clone()), Some(image_bits(None))).await;
+    let output = parse(&host.run("image_generate", json!({ "prompt": "a" })).await);
+    assert_eq!(output["status"], "error");
+    assert!(executor.jobs.lock().unwrap().is_empty());
+}
+
+#[flow_like_types::tokio::test]
+async fn without_an_executor_image_generate_is_refused_plainly() {
+    let host = image_host(None, Some(image_bits(Some("my-image")))).await;
+    let output = parse(&host.run("image_generate", json!({ "prompt": "a" })).await);
+    assert_eq!(output["code"], "bot_tool_needs_executor");
 }

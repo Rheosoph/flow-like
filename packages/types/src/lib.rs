@@ -1,12 +1,15 @@
 pub use flow_like_types_contracts::authorization;
 pub use flow_like_types_contracts::bot;
+pub use flow_like_types_contracts::bot_connector;
 pub use flow_like_types_contracts::bot_effective;
 pub use flow_like_types_contracts::bot_message;
 pub use flow_like_types_contracts::bot_notify;
 pub use flow_like_types_contracts::bot_restrictions;
+pub use flow_like_types_contracts::bot_skill;
 pub use flow_like_types_contracts::bot_task;
 pub use flow_like_types_contracts::bot_turn;
 pub use flow_like_types_contracts::data_classification;
+pub use flow_like_types_contracts::device_bot;
 pub use flow_like_types_contracts::egress;
 pub use flow_like_types_contracts::inbox;
 pub use flow_like_types_contracts::realtime;

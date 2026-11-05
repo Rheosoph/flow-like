@@ -32,7 +32,7 @@ use flow_like::{
         AttachmentManifestEntry, BotToolHost, GlobalDataStudioContext, GlobalOpenBoardContext,
         PlatformContextInput, bot_platform_context,
         memory::{AssistantMemory, MemoryEntry, MemoryScope, MemoryStatus},
-        platform::PlatformToolBridge,
+        platform::{PlatformToolBridge, RoomUpdatesBridge},
         run_bot_chat_with_talk, run_platform_chat,
     },
     models::llm::ModelUsageContext,
@@ -425,6 +425,7 @@ pub async fn global_chat(
 ) -> Result<UnifiedCopilotResponse, String> {
     let mut finish = None;
     let mut bot_memory = None;
+    let mut legacy_memory_read_only = interactive.is_some();
     let bot_turn_id = interactive
         .as_ref()
         .zip(bot_id.as_deref())
@@ -432,11 +433,9 @@ pub async fn global_chat(
     if let (Some(args), Some(bot)) = (interactive, bot_id.as_deref())
         && let Some(run) = crate::bot_host::interactive::open_for_app(&app_handle, bot, args).await
     {
-        let guard = crate::bot_host::interactive::begin(
-            Some(&app_handle),
-            bot,
-            run.conversation_id(),
-        );
+        let guard =
+            crate::bot_host::interactive::begin(Some(&app_handle), bot, run.conversation_id());
+        legacy_memory_read_only = !run.owner_direct().await;
         bot_memory = run.memory().await;
         let hold = run.hold();
         finish = Some(crate::bot_host::interactive::Finish {
@@ -473,6 +472,7 @@ pub async fn global_chat(
             interaction_mode:
                 crate::functions::ai::native_tool_bridge::NativeInteractionMode::Interactive,
             bot_memory,
+            legacy_memory_read_only,
             bot_turn_id,
             ..Default::default()
         },
@@ -522,12 +522,19 @@ pub async fn global_chat_native(
     let nested_talk = options.bot_talk.take();
     let answered_round = options.answered_round.take();
     let bot_memory = options.bot_memory.take();
+    let room_updates = options.room_updates.take();
     let requester = options.requester.take();
+    let room_memory = options.legacy_memory_read_only
+        || bot_memory.as_ref().is_some_and(|source| source.room)
+        || requester.as_ref().is_some_and(|requester| {
+            requester.audience == flow_like_types::bot_turn::TurnAudience::Room
+        });
     let approval_gate = options.approval_gate.clone();
-    let bot_turn_id = options
-        .bot_turn_id
-        .clone()
-        .or_else(|| approval_gate.as_ref().map(|gate| gate.turn_id().to_string()));
+    let bot_turn_id = options.bot_turn_id.clone().or_else(|| {
+        approval_gate
+            .as_ref()
+            .map(|gate| gate.turn_id().to_string())
+    });
     options.attachments = attachments_manifest.clone().unwrap_or_default();
     let conversation_id = options.conversation_id.clone();
     let run_id = Some(run_id.unwrap_or_else(flow_like_types::create_id));
@@ -732,7 +739,8 @@ pub async fn global_chat_native(
             .map(str::to_string),
         None => embedding_model_id,
     };
-    let embedding_model_id = embedding_model_id.filter(|_| headless_memory.is_none());
+    let embedding_model_id =
+        embedding_model_id.filter(|_| headless_memory.is_none() || room_memory);
     let memory =
         if let (Some(profile_arc), Some(embedding_id)) = (&profile, embedding_model_id.as_ref()) {
             match profile_arc
@@ -760,7 +768,11 @@ pub async fn global_chat_native(
                     )
                     .await
                     {
-                        Ok(memory) => Some(Arc::new(memory)),
+                        Ok(memory) => Some(Arc::new(if room_memory {
+                            memory.read_only()
+                        } else {
+                            memory
+                        })),
                         Err(error) => {
                             eprintln!("[global_chat] memory init failed: {error}");
                             None
@@ -839,7 +851,9 @@ pub async fn global_chat_native(
             state: model_state.clone(),
             profile: profile.clone(),
             token: token.clone(),
-            model_id: bot_model.clone().or_else(|| model_selection.model_id.clone()),
+            model_id: bot_model
+                .clone()
+                .or_else(|| model_selection.model_id.clone()),
             embedding_model_id: bot
                 .context
                 .embedding_model
@@ -978,6 +992,10 @@ pub async fn global_chat_native(
                         Arc::new(bot_chat::BotDesktopBridge(desktop_bridge))
                     }
                     _ => Arc::new(desktop_bridge),
+                };
+                let bridge: Arc<dyn PlatformToolBridge> = match room_updates {
+                    Some(updates) => Arc::new(RoomUpdatesBridge::new(bridge, updates)),
+                    None => bridge,
                 };
 
                 let board_history: Vec<flow_like::flow::copilot::ChatMessage> = history

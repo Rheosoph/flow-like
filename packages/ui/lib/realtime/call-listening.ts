@@ -1,3 +1,4 @@
+import { isHostedAudioProvider } from "../bit/hosted-audio";
 import { type IBit, IBitTypes } from "../schema";
 
 export const STT_LOCAL_PROVIDER = "local:any-speech-to-text";
@@ -211,7 +212,7 @@ export function isLocalSttBit(bit: IBit): boolean {
 
 /**
  * Which speech-to-text bit of the profile transcribes the speaker: on desktop an installed local
- * model first, then any hosted or API model; null when the profile has neither.
+ * model first, then a model supported by the hosted audio gateway; null when the profile has neither.
  */
 export function resolveSttChoice(
 	bits: readonly IBit[],
@@ -229,7 +230,7 @@ export function resolveSttChoice(
 			};
 		}
 	}
-	const remote = stt.find((bit) => !providerName(bit).startsWith("local:"));
+	const remote = stt.find((bit) => isHostedAudioProvider(providerName(bit)));
 	return remote ? { bitId: remote.id, route: "remote" } : null;
 }
 

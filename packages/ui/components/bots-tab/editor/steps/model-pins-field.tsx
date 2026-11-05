@@ -1,42 +1,55 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { IBitTypes } from "../../../../lib/schema/bit/bit";
+import { type IBit, IBitTypes } from "../../../../lib/schema/bit/bit";
 import type { BotModelPin } from "../bot-draft";
 import { BotModelPicker } from "./model-picker";
-import { useBotBitOptions } from "./use-bot-models";
+import { isImageCapableBit, useBotBitOptions } from "./use-bot-models";
 
 const STT_TYPES: readonly IBitTypes[] = [IBitTypes.Stt];
 const TTS_TYPES: readonly IBitTypes[] = [IBitTypes.Tts];
-const IMAGE_TYPES: readonly IBitTypes[] = [IBitTypes.ImageGeneration];
+const IMAGE_TYPES: readonly IBitTypes[] = [
+	IBitTypes.ImageGeneration,
+	IBitTypes.Vlm,
+];
 const VISION_TYPES: readonly IBitTypes[] = [IBitTypes.Vlm];
+const SUBTASK_TYPES: readonly IBitTypes[] = [IBitTypes.Llm, IBitTypes.Vlm];
 
-type PinKind = "stt" | "tts" | "image" | "vision";
+type PinKind = "stt" | "tts" | "image" | "vision" | "subtask";
 
 const PINS: readonly {
 	pin: BotModelPin;
 	kind: PinKind;
 	types: readonly IBitTypes[];
+	accepts?: (bit: IBit) => boolean;
 }[] = [
 	{ pin: "sttModel", kind: "stt", types: STT_TYPES },
 	{ pin: "ttsModel", kind: "tts", types: TTS_TYPES },
-	{ pin: "imageModel", kind: "image", types: IMAGE_TYPES },
+	{
+		pin: "imageModel",
+		kind: "image",
+		types: IMAGE_TYPES,
+		accepts: isImageCapableBit,
+	},
 	{ pin: "visionModel", kind: "vision", types: VISION_TYPES },
+	{ pin: "subtaskModel", kind: "subtask", types: SUBTASK_TYPES },
 ];
 
 function BotModelPinField({
 	kind,
 	types,
+	accepts,
 	value,
 	onChange,
 }: Readonly<{
 	kind: PinKind;
 	types: readonly IBitTypes[];
+	accepts?: (bit: IBit) => boolean;
 	value: string | null;
 	onChange: (bitId: string | null) => void;
 }>) {
 	const { t } = useTranslation("bots");
-	const { options, isLoading } = useBotBitOptions(types);
+	const { options, isLoading } = useBotBitOptions(types, accepts);
 	const label = t(`editor.brain.pins.${kind}`);
 	const none = !isLoading && options.length === 0;
 	return (
@@ -46,10 +59,17 @@ function BotModelPinField({
 				label={label}
 				value={value}
 				options={options}
-				fallback={{
-					label: t("editor.brain.pins.host"),
-					hint: t("editor.brain.pins.hostHint"),
-				}}
+				fallback={
+					kind === "subtask"
+						? {
+								label: t("editor.brain.pins.ownModel"),
+								hint: t("editor.brain.pins.ownModelHint"),
+							}
+						: {
+								label: t("editor.brain.pins.host"),
+								hint: t("editor.brain.pins.hostHint"),
+							}
+				}
 				onChange={onChange}
 			/>
 			<p className="text-xs leading-relaxed text-muted-foreground">
@@ -80,11 +100,12 @@ export function BotModelPinsField({
 					{t("editor.brain.pins.hint")}
 				</p>
 			</div>
-			{PINS.map(({ pin, kind, types }) => (
+			{PINS.map(({ pin, kind, types, accepts }) => (
 				<BotModelPinField
 					key={pin}
 					kind={kind}
 					types={types}
+					accepts={accepts}
 					value={values[pin]}
 					onChange={(bitId) => onChange(pin, bitId)}
 				/>

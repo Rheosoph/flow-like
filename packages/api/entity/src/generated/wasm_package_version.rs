@@ -51,6 +51,8 @@ pub struct Model {
     pub widget_bundle_size: Option<i64>,
     #[sea_orm(column_type = "JsonBinary")]
     pub widgets: Json,
+    #[sea_orm(column_type = "JsonBinary", nullable)]
+    pub skills: Option<Json>,
     #[sea_orm(column_type = "Text")]
     pub status: crate::sea_orm_active_enums::WasmPackageStatus,
     #[sea_orm(column_name = "compilationStatus", column_type = "Text")]

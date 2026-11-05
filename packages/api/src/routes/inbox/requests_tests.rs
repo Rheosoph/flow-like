@@ -45,7 +45,7 @@ async fn share_app(db: &DatabaseConnection, user_id: &str, app_id: &str) {
     .unwrap();
 }
 
-/// user-a and user-b share an app; user-c shares none. bot_a is user-a's, bot_b user-b's.
+/// user-a and user-b share an app; user-c has no account yet. bot_a is user-a's, bot_b user-b's.
 async fn world() -> DatabaseConnection {
     let db = database().await;
     insert_bot(&db, "bot_a", "user-a", "SERVER").await;
@@ -307,10 +307,17 @@ async fn your_own_bot_and_encrypted_chats_with_people_are_not_requests() {
         .await
         .unwrap_err();
     assert_eq!(sealed_bot.status(), StatusCode::FORBIDDEN);
-    let stranger = plan_direct(&db, "user-a", "user-c", ConversationEncryption::Plain)
+    let nobody = plan_direct(&db, "user-a", "user-c", ConversationEncryption::Plain)
         .await
         .unwrap_err();
-    assert_eq!(stranger.status(), StatusCode::FORBIDDEN);
+    assert_eq!(nobody.status(), StatusCode::FORBIDDEN);
+    db.execute_unprepared(r#"INSERT INTO public."User" ("id", "name") VALUES ('user-c', 'Cy')"#)
+        .await
+        .unwrap();
+    let stranger = plan_direct(&db, "user-a", "user-c", ConversationEncryption::Plain)
+        .await
+        .unwrap();
+    assert!(stranger.request, "a person sharing no app gets a request");
 }
 
 #[tokio::test]
@@ -615,7 +622,10 @@ async fn a_started_call_pushes_once_and_neither_call_entry_counts_as_unread() {
     assert_eq!(input.user_id, "user-b");
     assert_eq!(input.title, "Ada in Launch");
     assert_eq!(input.description.as_deref(), Some("Started a call"));
-    assert_eq!(input.link.as_deref(), Some("/bots?conversation=room"));
+    assert_eq!(
+        input.link.as_deref(),
+        Some("/bots?conversation=room&call=call_1")
+    );
 
     let told = notify_message(&db, &sink, &entry(&db, "end_1", "user-a").await)
         .await

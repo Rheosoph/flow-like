@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { Hourglass, Lock } from "lucide-react";
+import { Lock } from "lucide-react";
 import { type ReactNode, useId, useMemo } from "react";
 import { cn } from "../../../../lib/utils";
 import {
@@ -12,11 +12,12 @@ import {
 } from "../../../../state/backend-state/bot-state";
 import { Label } from "../../../ui/label";
 import { Switch } from "../../../ui/switch";
+import { BotConnectorsCard } from "../../bot-connectors";
 import { BotEmailAddress } from "../../bot-mail";
+import { BotSkillsCard } from "../../bot-skills";
 import {
 	BOT_CAPABILITY_GROUPS,
 	BOT_CAPABILITY_ICONS,
-	BOT_RUNTIME_PENDING_CAPABILITIES,
 	type BotCapabilityGroupId,
 } from "../bot-capability-groups";
 import type { BotDraft } from "../bot-draft";
@@ -125,6 +126,17 @@ export function AbilitiesStep({
 				)}
 			</p>
 		),
+		connectors: <BotConnectorsCard botId={botId} />,
+		skills: botId ? (
+			<BotSkillsCard botId={botId} />
+		) : (
+			<p className="text-xs text-muted-foreground">
+				{t(
+					"panel.skills.afterSave",
+					"Save the bot first, then add or import its skills here.",
+				)}
+			</p>
+		),
 		selected_apps: botId ? (
 			<AttachedAppPicker botId={botId} />
 		) : (
@@ -186,7 +198,6 @@ export function BotCapabilityRow({
 	const switchId = useId();
 	const Icon = BOT_CAPABILITY_ICONS[capability];
 	const available = isBotCapabilityAvailable(capability, location);
-	const pendingRuntime = BOT_RUNTIME_PENDING_CAPABILITIES.has(capability);
 	return (
 		<div className="flex flex-col gap-3 px-4 py-3.5">
 			<div className="flex items-start gap-3">
@@ -203,12 +214,6 @@ export function BotCapabilityRow({
 						<Label htmlFor={switchId} className="text-sm font-medium">
 							{copy.label}
 						</Label>
-						{pendingRuntime && (
-							<BotTag className="text-[0.625rem]">
-								<Hourglass className="size-3" aria-hidden />
-								{t("editor.abilities.runtime")}
-							</BotTag>
-						)}
 					</div>
 					<p
 						id={`${switchId}-description`}

@@ -61,8 +61,9 @@ flow-like-device-protocol.workspace = true
 flow-like-device-crypto.workspace = true
 flow-like-local-bots.workspace = true
 flow-like-bot-memory.workspace = true
+flow-like-bot-host.workspace = true
 iana-time-zone.workspace = true
-flow-like-bot-tools = { workspace = true, features = ["documents", "connectors"] }
+flow-like-bot-tools = { workspace = true, features = ["documents", "connectors", "image", "mcp"] }
 
 # Tauri 2.12 uses Tao's corrected iOS scene lifecycle and configuration ownership.
 tauri = { version = "2.12.5", features = [
@@ -134,6 +135,7 @@ tauri-plugin-remote-push = { git = "https://github.com/Rheosoph/tauri-plugin-rem
 [target."cfg(any(target_os = \"macos\", windows, target_os = \"linux\"))".dependencies]
 flow-like-browser.workspace = true
 flow-like-catalog-automation = { workspace = true, features = ["execute"] }
+flow-like-bot-machine.workspace = true
 flow-like-device-client.workspace = true
 flow-like-device-crypto.workspace = true
 tauri-plugin-single-instance = { version = "2.5.4", features = ["deep-link"] }

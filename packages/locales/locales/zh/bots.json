@@ -92,6 +92,10 @@
 			"description": "",
 			"label": ""
 		},
+		"web_requests": {
+			"description": "",
+			"label": ""
+		},
 		"webhook": {
 			"description": "",
 			"label": ""
@@ -152,6 +156,10 @@
 		"botTag": "",
 		"builtIn": "",
 		"call": {
+			"dismiss": "",
+			"incoming": "",
+			"incomingDescription": "",
+			"incomingRoom": "",
 			"durationHours": "",
 			"durationMinutes": "",
 			"durationShort": "",
@@ -387,6 +395,28 @@
 			"where": ""
 		},
 		"retry": "",
+		"roomChange": {
+			"nameRemoved": "",
+			"pictureChanged": "",
+			"pictureRemoved": "",
+			"renamed": ""
+		},
+		"roomSettings": {
+			"change": "",
+			"description": "",
+			"failed": "",
+			"imageFormat": "",
+			"imageHint": "",
+			"imageSize": "",
+			"imageUnreadable": "",
+			"name": "",
+			"namePlaceholder": "",
+			"open": "",
+			"remove": "",
+			"save": "",
+			"title": "",
+			"upload": ""
+		},
 		"roomTag": "",
 		"rooms": {
 			"bots_one": "",
@@ -444,7 +474,34 @@
 		"unread_other": "",
 		"you": "",
 		"youObject": "",
-		"yourCrew": ""
+		"yourCrew": "",
+		"blocks": {
+			"title": "已屏蔽的用户和机器人",
+			"description": "管理谁可以与你及你的机器人互发私信和邀请。共同参与的聊天室不受影响。",
+			"loading": "正在加载已屏蔽的用户和机器人…",
+			"loadFailed": "无法加载屏蔽列表。",
+			"empty": "你尚未屏蔽任何人。",
+			"block": "屏蔽",
+			"unblock": "取消屏蔽",
+			"blockUser": "屏蔽用户",
+			"blockBot": "屏蔽机器人",
+			"ownerBlocked": "所有者已被屏蔽",
+			"blockName": "屏蔽 {{name}}",
+			"unblockName": "取消屏蔽 {{name}}",
+			"blockTitle": "屏蔽 {{name}}？",
+			"unblockTitle": "取消屏蔽 {{name}}？",
+			"failed": "无法更新屏蔽设置，请重试。",
+			"userDescription": "你与此用户之间的私信和邀请将被双向屏蔽，包括双方的机器人。你们仍可在共同参与的聊天室中看到彼此。你可以单独退出这些聊天室。",
+			"botDescription": "你及你的机器人与此机器人之间的私信和邀请将被双向屏蔽。此机器人仍会留在共同参与的聊天室中。你可以单独退出这些聊天室。",
+			"unblockDescription": "将取消此项屏蔽。其他屏蔽仍然有效。",
+			"composer": "此对话已被屏蔽。请管理已屏蔽的用户和机器人，以重新允许收发消息。"
+		},
+		"leaveRoom": {
+			"action": "退出聊天室",
+			"title": "退出此聊天室？",
+			"description": "你和你在此聊天室中的机器人将退出，并停止接收该聊天室的消息。",
+			"failed": "无法退出聊天室，请重试。"
+		}
 	},
 	"editor": {
 		"abilities": {
@@ -476,7 +533,6 @@
 			"profileApps_other": "",
 			"profileEmpty": "",
 			"profilePlaceholder": "",
-			"runtime": "",
 			"subtitle": "",
 			"subtitleMemoryOn": "",
 			"title": ""
@@ -1162,7 +1218,13 @@
 		"thisRoom": "",
 		"title": "",
 		"waiting": "",
-		"waitingOwner": ""
+		"waitingOwner": "",
+		"removeNamed": "将 {{name}} 移出聊天室",
+		"removeTitle": "将 {{name}} 移出此聊天室？",
+		"removePersonDescription": "此用户及其在聊天室中的机器人将退出，并停止接收该聊天室的消息。",
+		"removeBotDescription": "此机器人将退出聊天室，并停止接收该聊天室的消息。",
+		"remove": "移出聊天室",
+		"removeFailed": "无法移除此成员，请重试。"
 	},
 	"system": {
 		"flux": {

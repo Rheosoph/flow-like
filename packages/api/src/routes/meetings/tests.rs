@@ -45,6 +45,40 @@ async fn meeting(db: &DatabaseConnection) -> meeting::Model {
 }
 
 #[tokio::test]
+async fn a_direct_chat_block_stops_meeting_members_and_guest_sessions() {
+    let db = database().await;
+    db.execute_unprepared(
+        r#"UPDATE public."Conversation" SET "kind" = 'DIRECT' WHERE "id" = 'room'"#,
+    )
+    .await
+    .unwrap();
+    db.execute_unprepared(
+        r#"INSERT INTO public."User" ("id", "name") VALUES ('host', 'Host'), ('member', 'Member')"#,
+    )
+    .await
+    .unwrap();
+    let row = meeting(&db).await;
+    let guest = join_in(&db, &row, None, "Guest", fixture::at(0))
+        .await
+        .unwrap();
+    crate::routes::inbox::blocks::block_in(&db, "member", "host", fixture::at(1))
+        .await
+        .unwrap();
+    assert!(member(&db, &row, "host").await.is_err());
+    assert!(
+        create_in(&db, "host", &request(), fixture::at(2))
+            .await
+            .is_err()
+    );
+    assert!(
+        join_in(&db, &row, None, "Another guest", fixture::at(2))
+            .await
+            .is_err()
+    );
+    assert!(session_in(&db, &row, &guest.session_token).await.is_err());
+}
+
+#[tokio::test]
 async fn waiting_guests_cannot_read_chat_publish_or_join_media_and_never_join_parent_room() {
     let db = database().await;
     let row = meeting(&db).await;

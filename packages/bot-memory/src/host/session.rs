@@ -23,7 +23,8 @@ use crate::model::{HistoryItem, Role, Seq};
 use crate::prompt::{
     BudgetReport, ModelBudget, PromptInput, SectionKind, assemble, render_tail_item,
 };
-use crate::store::MemoryStores;
+use crate::retrieval::Recency;
+use crate::store::{FactFilter, FactQuery, MemoryStores};
 use crate::tools::HistoryReader;
 
 const DELETIONS_PER_SWEEP: usize = 200;
@@ -40,6 +41,8 @@ pub struct SessionOptions {
     pub mine_after: u64,
     /// The model summaries are written with, recorded next to them.
     pub model: Option<String>,
+    /// Groups keep their history and learned statements apart from the owner's direct chat.
+    pub room_key: Option<String>,
 }
 
 impl SessionOptions {
@@ -51,6 +54,7 @@ impl SessionOptions {
             tool_tokens: 0,
             mine_after: 6,
             model: None,
+            room_key: None,
         }
     }
 }
@@ -149,7 +153,12 @@ impl MemorySession {
     ) -> Self {
         let llm = Arc::new(SwitchLlm::new(llm));
         let embedder = Arc::new(SwitchEmbedder::new(embedder));
-        let stores = MemoryStores::open(connection, embedder.clone(), write_options).await;
+        let stores = match options.room_key.as_deref() {
+            Some(key) => {
+                MemoryStores::open_room(connection, embedder.clone(), write_options, key).await
+            }
+            None => MemoryStores::open(connection, embedder.clone(), write_options).await,
+        };
         Self::new(stores, llm, embedder, sink, options)
     }
 
@@ -333,11 +342,37 @@ impl MemorySession {
                 tracing::warn!("Recalling facts failed: {error:#}");
                 Vec::new()
             });
+        let owner_memory = super::recall::owner_memory(
+            self.engine.stores(),
+            &FactQuery {
+                text: trigger.text.clone(),
+                filter: FactFilter::default(),
+                time_hint: None,
+                limit: self.options.budget.facts_count,
+                offset: 0,
+                now: request.now,
+                recency: Recency::default(),
+            },
+            true,
+            self.options.timezone,
+            self.options.budget.about_state,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!("Recalling owner memory failed: {error:#}");
+            Default::default()
+        });
+        let about_you = [request.about_you, &owner_memory.text]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let user_message = attributed_message(&trigger);
         let assembled = assemble(
             &PromptInput {
                 system_and_tools: "",
                 tool_tokens: self.options.tool_tokens,
-                about_you: request.about_you,
+                about_you: &about_you,
                 summaries: &summaries,
                 now_block: state.now.as_ref(),
                 state_block: request.state_block,
@@ -345,7 +380,7 @@ impl MemorySession {
                 open_task_seqs: request.open_task_seqs,
                 masking: &plan.masking,
                 facts: &facts,
-                user_message: &trigger.text,
+                user_message: &user_message,
                 timezone: self.options.timezone,
             },
             &self.options.budget,
@@ -466,6 +501,9 @@ impl MemorySession {
 }
 
 fn render_message(item: &HistoryItem, masking: &crate::compaction::Masking, tz: Tz) -> String {
+    if item.speaker.is_some() {
+        return render_tail_item(item, masking, tz);
+    }
     let rendered = render_tail_item(item, masking, tz);
     let mut lines = rendered.lines();
     let _header = lines.next();
@@ -475,4 +513,20 @@ fn render_message(item: &HistoryItem, masking: &crate::compaction::Masking, tz: 
         text.push_str(line);
     }
     text
+}
+
+fn attributed_message(item: &HistoryItem) -> String {
+    match &item.speaker {
+        Some(speaker) => format!(
+            "{} ({}) wrote: {}",
+            speaker.label(),
+            match item.role {
+                Role::User => "your owner",
+                Role::Assistant => "bot",
+                _ => "participant statement",
+            },
+            item.text
+        ),
+        None => item.text.clone(),
+    }
 }

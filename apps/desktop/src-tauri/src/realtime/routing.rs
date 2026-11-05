@@ -364,9 +364,11 @@ mod tests {
         assert_eq!(routed(&older)[0].entries.len(), 3);
         assert_eq!(routed(&newer)[0].entries.len(), 1);
         let caught_up = watching("c", Some(4), None);
+        let other = watching("other", Some(1), None);
+        let as_bot = watching("c", Some(1), Some("bot"));
         assert!(routed(&caught_up).is_empty());
-        assert!(routed(&watching("other", Some(1), None)).is_empty());
-        assert!(routed(&watching("c", Some(1), Some("bot"))).is_empty());
+        assert!(routed(&other).is_empty());
+        assert!(routed(&as_bot).is_empty());
     }
 
     #[test]

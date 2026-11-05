@@ -2,6 +2,33 @@ pub use image;
 use image::GenericImageView;
 
 pub const MAX_NOTIFICATION_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+/// The longest image data URL an inline upload takes; a 256 px RGBA PNG fits well below it.
+pub const MAX_INLINE_IMAGE_LENGTH: usize = 512 * 1024;
+
+/// Re-encodes a PNG, JPEG, GIF or WebP data URL as a PNG of at most 256 px; refuses anything else.
+pub fn inline_image_thumbnail(data_url: &str) -> anyhow::Result<Vec<u8>> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    anyhow::ensure!(
+        data_url.len() <= MAX_INLINE_IMAGE_LENGTH,
+        "The image data URL has {} bytes; inline images have at most 512 KiB",
+        data_url.len()
+    );
+    let (header, encoded) = data_url
+        .split_once(',')
+        .ok_or_else(|| anyhow::anyhow!("The image is not a base64 data URL"))?;
+    anyhow::ensure!(
+        matches!(
+            header,
+            "data:image/png;base64"
+                | "data:image/jpeg;base64"
+                | "data:image/gif;base64"
+                | "data:image/webp;base64"
+        ),
+        "The image must be a PNG, JPEG, GIF or WebP data URL, not '{}'",
+        header.chars().take(48).collect::<String>()
+    );
+    notification_thumbnail(&STANDARD.decode(encoded)?)
+}
 
 /// Produce a portable notification attachment without retaining a large source image.
 pub fn notification_thumbnail(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {

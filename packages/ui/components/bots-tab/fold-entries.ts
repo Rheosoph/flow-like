@@ -107,6 +107,20 @@ export interface ConversationMemberEvent {
 	by: string;
 }
 
+/** Someone renamed the group or changed its picture. */
+export interface ConversationRoomEvent {
+	type: "room";
+	id: string;
+	createdAt: string;
+	time: number;
+	change: "title" | "image";
+	/** The new name, when a rename set one. */
+	title?: string;
+	/** The name or picture was removed rather than set. */
+	removed: boolean;
+	by: string;
+}
+
 export type TriggerSource = "schedule" | "webhook" | "email" | "event";
 
 /** Work that woke a bot: a schedule firing, a webhook, an email or an event. */
@@ -172,6 +186,7 @@ export interface ConversationTranscript {
 export type ConversationItem =
 	| ConversationMessage
 	| ConversationMemberEvent
+	| ConversationRoomEvent
 	| ConversationNote
 	| ConversationCall
 	| ConversationTranscript;
@@ -179,6 +194,7 @@ export type ConversationItem =
 export type ConversationBlock =
 	| { type: "day"; key: string; time: number }
 	| { type: "member"; key: string; event: ConversationMemberEvent }
+	| { type: "room"; key: string; event: ConversationRoomEvent }
 	| { type: "note"; key: string; note: ConversationNote }
 	| { type: "call"; key: string; call: ConversationCall }
 	| {
@@ -236,6 +252,24 @@ function memberEvent(entry: IInboxEntry): ConversationMemberEvent | null {
 		op,
 		principalId,
 		by: text(body?.by) || principalId,
+	};
+}
+
+function roomEvent(entry: IInboxEntry): ConversationRoomEvent | null {
+	const body = plainBody(entry);
+	const change = body?.change;
+	if (change !== "title" && change !== "image") return null;
+	const title = text(body?.title)?.trim();
+	const removed = body?.removed === true || (change === "title" && !title);
+	return {
+		type: "room",
+		id: entry.message_id,
+		createdAt: entry.created_at,
+		time: entryTime(entry),
+		change,
+		...(title && !removed ? { title } : {}),
+		removed,
+		by: text(body?.by) || entry.sender_id,
 	};
 }
 
@@ -451,6 +485,11 @@ export function foldInboxEntries(
 			if (event) items.push(event);
 			continue;
 		}
+		if (entry.kind === "room") {
+			const event = roomEvent(entry);
+			if (event) items.push(event);
+			continue;
+		}
 		const body = plainBody(entry);
 		const target = messages.get(text(body?.target) ?? "");
 		if (!body || !target) continue;
@@ -526,6 +565,11 @@ export function groupConversationItems(
 		if (item.type === "member") {
 			group = undefined;
 			blocks.push({ type: "member", key: `member:${item.id}`, event: item });
+			continue;
+		}
+		if (item.type === "room") {
+			group = undefined;
+			blocks.push({ type: "room", key: `room:${item.id}`, event: item });
 			continue;
 		}
 		if (item.type === "trigger" || item.type === "bot_ask") {

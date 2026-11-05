@@ -161,6 +161,11 @@ const RULES: &[Rule] = &[
     rule(M::POST, "/api/v1/execution/apps/{app_id}/bots/ask", Data),
     rule(M::POST, "/api/v1/bots/hooks/{hook_id}", Data),
     rule(M::POST, "/api/v1/bots/{bot_id}/ask", Data),
+    rule(
+        M::POST,
+        "/api/v1/devices/{id}/bots/turns/{turn_id}/claim",
+        Data,
+    ),
     rule(M::POST, "/api/v1/execution/apps/{app_id}/teams/send", Data),
     rule(
         M::POST,
@@ -200,6 +205,10 @@ const RULES: &[Rule] = &[
     rule(M::POST, "/api/v1/systemone", Ai),
     rule(M::POST, "/api/v1/images/generations", Ai),
     rule(M::POST, "/api/v1/instances/images/generations", Ai),
+    rule(M::POST, "/api/v1/audio/transcriptions", Ai),
+    rule(M::POST, "/api/v1/audio/speech", Ai),
+    rule(M::POST, "/api/v1/instances/audio/transcriptions", Ai),
+    rule(M::POST, "/api/v1/instances/audio/speech", Ai),
     // The executor relay for private model Bits makes the same provider calls.
     rule(
         M::POST,
@@ -661,6 +670,10 @@ mod tests {
         ("POST", "/api/v1/systemone", Ai, None),
         ("POST", "/api/v1/images/generations", Ai, None),
         ("POST", "/api/v1/instances/images/generations", Ai, None),
+        ("POST", "/api/v1/audio/transcriptions", Ai, None),
+        ("POST", "/api/v1/audio/speech", Ai, None),
+        ("POST", "/api/v1/instances/audio/transcriptions", Ai, None),
+        ("POST", "/api/v1/instances/audio/speech", Ai, None),
         (
             "POST",
             "/api/v1/execution/apps/{app_id}/models/chat/completions",
@@ -1074,6 +1087,19 @@ mod tests {
         ),
         ("POST", "/api/v1/bots/hooks/{hook_id}", Data, None),
         ("POST", "/api/v1/bots/{bot_id}/ask", Data, None),
+        (
+            "POST",
+            "/api/v1/devices/{id}/bots/turns/{turn_id}/claim",
+            Data,
+            None,
+        ),
+        ("POST", "/api/v1/devices/{id}/bots/poll", Write, None),
+        (
+            "POST",
+            "/api/v1/devices/{id}/bots/turns/{turn_id}/reply",
+            Write,
+            None,
+        ),
         ("GET", "/api/v1/audit/verify/epochs", Data, None),
         ("GET", "/api/v1/audit/records", Read, None),
         ("POST", "/api/v1/oauth/token/{provider_id}", Data, None),

@@ -13,7 +13,8 @@ use flow_like::flow::copilot::tool_spec::resolve_tool_approval;
 use flow_like::flow::copilot::{HostTools, find_bot_tool_spec, tool_outcome_output};
 use flow_like_bot_tools::MemorySessions;
 use flow_like_bot_tools_host::{
-    AppAccess, HostEnv, JobModels, JobScope, JobSecrets, ModelSource, SecretSource, ToolJob,
+    AppAccess, HostEnv, JobConnector, JobModels, JobScope, JobSecrets, ModelSource, SecretSource,
+    ToolJob,
 };
 use flow_like_types::tokio::sync::OnceCell;
 use flow_like_types::{bot_message::ApprovalRequest, tool_grant::ApprovalDecision};
@@ -27,6 +28,7 @@ use super::{
 };
 
 const MAX_EXECUTOR_JOBS_PER_TURN: usize = 30;
+const IMAGE_TOOL: &str = "image_generate";
 const EXECUTOR_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// What the owner holds, resolved when the first tool runs: which apps the bot reaches with
@@ -56,6 +58,7 @@ pub(crate) struct TurnDeps {
     pub executor: Option<Arc<dyn ToolExecutor>>,
     pub grants: Arc<dyn GrantStore>,
     pub secrets: Arc<dyn SecretSource>,
+    pub connectors: Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>>,
 }
 
 /// One bot turn's bot tools on the server: the in-process set runs here, the rest goes to the
@@ -69,7 +72,10 @@ pub(crate) struct BotToolsHost {
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
+    skills: Option<Arc<dyn flow_like_bot_tools::SkillHost>>,
+    skill_jobs: Option<Arc<dyn super::skills::SkillJobs>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
+    images: Option<Arc<super::images::ImageBits>>,
 }
 
 fn refusal(tool: &str, code: &str, message: &str) -> String {
@@ -115,8 +121,16 @@ impl BotToolsHost {
             notifier: None,
             people: None,
             scheduler: None,
+            skills: None,
+            skill_jobs: None,
             mail: None,
+            images: None,
         }
+    }
+
+    pub(crate) fn with_images(mut self, images: Arc<super::images::ImageBits>) -> Self {
+        self.images = Some(images);
+        self
     }
 
     pub(crate) fn with_mail(
@@ -124,6 +138,34 @@ impl BotToolsHost {
         mail: Arc<dyn flow_like_bot_tools::email::MailBackend>,
     ) -> Self {
         self.mail = Some(mail);
+        self
+    }
+
+    pub(crate) fn with_skill_jobs(mut self, jobs: Arc<dyn super::skills::SkillJobs>) -> Self {
+        self.skill_jobs = Some(jobs);
+        self
+    }
+
+    /// What an executor needs to run a package skill's tool: the skill as the database holds it
+    /// (active only) and the package the workspace pins.
+    async fn skill_job(
+        &self,
+        tool: &str,
+        args: &Value,
+    ) -> Result<Option<flow_like_bot_tools_host::SkillCallJob>, String> {
+        if !["skill_call", "skill_run"].contains(&tool) {
+            return Ok(None);
+        }
+        let jobs = self
+            .skill_jobs
+            .as_ref()
+            .ok_or_else(|| "This server cannot run package skills".to_string())?;
+        let name = args.get("skill").and_then(Value::as_str).unwrap_or_default();
+        jobs.job(name.trim()).await.map(Some)
+    }
+
+    pub(crate) fn with_skills(mut self, skills: Arc<dyn flow_like_bot_tools::SkillHost>) -> Self {
+        self.skills = Some(skills);
         self
     }
 
@@ -304,6 +346,9 @@ impl BotToolsHost {
         .with_object_writes(false)
         .with_expensive_documents(expensive_documents)
         .with_secrets(self.deps.secrets.clone());
+        if let Some(connectors) = &self.deps.connectors {
+            env = env.with_connectors(connectors.clone());
+        }
         if let Some(notifier) = &self.notifier {
             env = env.with_notifier(notifier.clone());
         }
@@ -312,6 +357,9 @@ impl BotToolsHost {
         }
         if let Some(scheduler) = &self.scheduler {
             env = env.with_scheduler(scheduler.clone());
+        }
+        if let Some(skills) = &self.skills {
+            env = env.with_skills(skills.clone());
         }
         if let Some(mail) = &self.mail {
             env = env.with_mail(mail.clone());
@@ -339,6 +387,11 @@ impl BotToolsHost {
             let credential = self.deps.directory.credential(app_id).await?;
             credentials.insert(app_id.to_string(), credential);
         }
+        let image = match (&self.images, tool == IMAGE_TOOL) {
+            (Some(images), true) => Some(images.job_image().await?),
+            _ => None,
+        };
+        let args_for_connectors = args.clone();
         let mut secrets = BTreeMap::new();
         for name in flow_like_bot_tools::secrets::referenced_secrets(&args) {
             let value = self
@@ -363,11 +416,61 @@ impl BotToolsHost {
             models: JobModels {
                 chat: bit_json(&self.deps.models.chat),
                 embedding: bit_json(&self.deps.models.embedding),
+                image,
             },
             allow_expensive_documents: expensive_documents,
             secrets: JobSecrets(secrets),
+            connectors: self.job_connectors(tool, &args_for_connectors).await?,
+            skill_call: self.skill_job(tool, &args_for_connectors).await?,
         };
         serde_json::to_string(&job).map_err(|error| format!("Cannot encode the tool job: {error}"))
+    }
+
+    /// The connector a connector call uses, with the sign-in resolved for this job only. A
+    /// call takes one connector; a schema lookup without one takes every MCP server.
+    async fn job_connectors(&self, tool: &str, args: &Value) -> Result<Vec<JobConnector>, String> {
+        use flow_like_bot_tools::services::{
+            CONNECTOR_CALL, CONNECTOR_REQUEST, CONNECTOR_TOOLS, ConnectorEntry,
+        };
+        use flow_like_types::bot_connector::ConnectorKind;
+        if ![CONNECTOR_TOOLS, CONNECTOR_CALL, CONNECTOR_REQUEST].contains(&tool) {
+            return Ok(Vec::new());
+        }
+        let Some(source) = &self.deps.connectors else {
+            return Ok(Vec::new());
+        };
+        let wanted = args
+            .get("connector")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|wanted| !wanted.is_empty());
+        let chosen = |entry: &ConnectorEntry| match wanted {
+            Some(wanted) => {
+                entry.rule.id == wanted || entry.rule.label.eq_ignore_ascii_case(wanted)
+            }
+            None => tool == CONNECTOR_TOOLS && entry.kind == ConnectorKind::Mcp,
+        };
+        if tool != CONNECTOR_TOOLS && !source.budget().take() {
+            return Err("At most 20 connector calls per turn".to_string());
+        }
+        let mut connectors = Vec::new();
+        for entry in source
+            .entries()
+            .await
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .filter(chosen)
+        {
+            let credential = source
+                .credential(&entry.rule.id)
+                .await
+                .map_err(|error| error.to_string())?;
+            connectors.push(JobConnector {
+                authorization: credential.header().map(str::to_string),
+                entry,
+            });
+        }
+        Ok(connectors)
     }
 
     async fn run_on_executor(&self, tool: &str, args: Value, expensive_documents: bool) -> String {
@@ -411,7 +514,12 @@ impl BotToolsHost {
             "[bot_tools] executor tool job finished"
         );
         match reply {
-            Ok(reply) => reply.output,
+            Ok(reply) => {
+                if let (Some(images), true) = (&self.images, tool == IMAGE_TOOL) {
+                    images.record(&reply.output);
+                }
+                reply.output
+            }
             Err(message) => {
                 tracing::warn!(tool, turn_id = %self.deps.turn_id, %message, "[bot_tools] executor tool job failed");
                 refusal(

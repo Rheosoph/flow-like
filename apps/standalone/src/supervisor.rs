@@ -937,7 +937,7 @@ impl Reconciler<'_> {
             return Ok(());
         }
         if let Some(hosting) = &config.hosting {
-            let address = std::net::SocketAddr::new(hosting.host, hosting.port);
+            let address = hosting.listen_address();
             if self
                 .listeners
                 .get(&record.id)

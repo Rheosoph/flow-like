@@ -480,6 +480,7 @@ mod tests {
             recorded_at: at,
             expired_at: None,
             evidence: vec![Evidence {
+                speaker: None,
                 seq,
                 message_id: format!("m{seq}"),
                 part: None,

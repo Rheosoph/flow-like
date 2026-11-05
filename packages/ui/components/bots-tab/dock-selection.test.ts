@@ -189,8 +189,14 @@ describe("a bot's direct conversation opens as the bot's chat", () => {
 
 	test("an owned bot's DM becomes its bot selection, built-ins by key", () => {
 		expect(resolve("c_pip")).toEqual({ type: "bot", botId: "bot_pip" });
-		expect(resolve("c_flux")).toEqual({ type: "system", system: "flux" });
 		expect(resolve("c_local")).toEqual({ type: "system", system: "general" });
+	});
+
+	test("Flux's DM stays a conversation: Flux's chat shows its own sessions, not the DM", () => {
+		expect(resolve("c_flux")).toEqual({
+			type: "conversation",
+			conversationId: "c_flux",
+		});
 	});
 
 	test("people, rooms, other people's bots and unknown ids stay conversations", () => {

@@ -17,7 +17,7 @@ use flow_like_types::inbox::{
 };
 use serde_json::Value;
 
-use crate::model::{HistoryItem, Role, Seq, SeqSpan, ToolPart, UiPart};
+use crate::model::{HistoryItem, Role, Seq, SeqSpan, Speaker, ToolPart, UiPart};
 use crate::pointer::PartRef;
 use crate::text::estimate_tokens;
 use crate::tools::{Deleted, HistoryReader};
@@ -146,10 +146,12 @@ fn apply_body(item: &mut HistoryItem, body: &MessageBody) {
     item.failed = body.error.is_some();
 }
 
-fn role_of(sender: &str, bot_id: &str, body: Option<&MessageBody>) -> Role {
+fn role_of(sender: &str, bot_id: &str, owner_id: Option<&str>, body: Option<&MessageBody>) -> Role {
     if sender == bot_id {
         Role::Assistant
-    } else if body.is_some_and(|body| body.hops.unwrap_or(0) > 0) {
+    } else if body.is_some_and(|body| body.hops.unwrap_or(0) > 0)
+        || owner_id.is_some_and(|owner| sender != owner)
+    {
         Role::External
     } else {
         Role::User
@@ -159,6 +161,19 @@ fn role_of(sender: &str, bot_id: &str, body: Option<&MessageBody>) -> Role {
 /// The history item an entry stands for: a message, a "New topic" marker or a tombstone.
 /// Edits, reactions, member events and sealed entries are not items.
 pub fn item_of(entry: &StoredEntry, bot_id: &str) -> Option<HistoryItem> {
+    item_with_owner(entry, bot_id, None)
+}
+
+/// A room message keeps its sender, and only the bot's owner receives the owner role.
+pub fn room_item_of(entry: &StoredEntry, bot_id: &str, owner_id: &str) -> Option<HistoryItem> {
+    item_with_owner(entry, bot_id, Some(owner_id))
+}
+
+fn item_with_owner(
+    entry: &StoredEntry,
+    bot_id: &str,
+    owner_id: Option<&str>,
+) -> Option<HistoryItem> {
     let body = plain_body(&entry.envelope)?;
     match entry.kind {
         InboxEntryKind::Message => {
@@ -166,22 +181,30 @@ pub fn item_of(entry: &StoredEntry, bot_id: &str) -> Option<HistoryItem> {
                 let mut item = HistoryItem::new(
                     entry.seq,
                     entry.message_id.clone(),
-                    role_of(&entry.sender_id, bot_id, None),
+                    role_of(&entry.sender_id, bot_id, owner_id, None),
                     entry.created_at,
                     "",
                 );
                 item.deleted = true;
+                item.speaker = Some(Speaker::new(&entry.sender_id));
                 return Some(item);
             }
             let parsed: MessageBody = serde_json::from_value(body.clone()).ok()?;
             let mut item = HistoryItem::new(
                 entry.seq,
                 entry.message_id.clone(),
-                role_of(&entry.sender_id, bot_id, Some(&parsed)),
+                role_of(&entry.sender_id, bot_id, owner_id, Some(&parsed)),
                 entry.created_at,
                 "",
             );
             apply_body(&mut item, &parsed);
+            // Room bot replies also carry a hop count. Their authenticated sender still
+            // identifies the claim's author, while the role remains lower trust.
+            if parsed.hops.unwrap_or(0) == 0
+                || owner_id.is_some_and(|owner| entry.sender_id != owner)
+            {
+                item.speaker = Some(Speaker::new(&entry.sender_id));
+            }
             Some(item)
         }
         InboxEntryKind::Trigger => {
@@ -189,7 +212,7 @@ pub fn item_of(entry: &StoredEntry, bot_id: &str) -> Option<HistoryItem> {
             let role = if trigger.source == TriggerSource::Email {
                 Role::External
             } else {
-                role_of(&entry.sender_id, bot_id, None)
+                role_of(&entry.sender_id, bot_id, owner_id, None)
             };
             let parsed = MessageBody {
                 text: trigger.render(),
@@ -215,11 +238,12 @@ pub fn item_of(entry: &StoredEntry, bot_id: &str) -> Option<HistoryItem> {
             let mut item = HistoryItem::new(
                 entry.seq,
                 entry.message_id.clone(),
-                role_of(&entry.sender_id, bot_id, None),
+                role_of(&entry.sender_id, bot_id, owner_id, None),
                 entry.created_at,
                 "",
             );
             apply_body(&mut item, &parsed);
+            item.speaker = Some(Speaker::new(&entry.sender_id));
             Some(item)
         }
         InboxEntryKind::Topic => {
@@ -272,6 +296,8 @@ pub fn apply_edits(
 pub struct InboxReader<S> {
     source: S,
     bot_id: String,
+    owner_id: Option<String>,
+    speaker_names: HashMap<String, String>,
     handles: Option<Arc<dyn HandleReader>>,
 }
 
@@ -280,8 +306,22 @@ impl<S: EntrySource> InboxReader<S> {
         Self {
             source,
             bot_id: bot_id.into(),
+            owner_id: None,
+            speaker_names: HashMap::new(),
             handles: None,
         }
+    }
+
+    pub fn for_room(source: S, bot_id: impl Into<String>, owner_id: impl Into<String>) -> Self {
+        Self {
+            owner_id: Some(owner_id.into()),
+            ..Self::new(source, bot_id)
+        }
+    }
+
+    pub fn with_speaker_names(mut self, names: HashMap<String, String>) -> Self {
+        self.speaker_names = names;
+        self
     }
 
     pub fn with_handles(mut self, handles: Arc<dyn HandleReader>) -> Self {
@@ -292,7 +332,13 @@ impl<S: EntrySource> InboxReader<S> {
     async fn items(&self, entries: &[StoredEntry]) -> Result<Vec<HistoryItem>> {
         let mut items: Vec<HistoryItem> = entries
             .iter()
-            .filter_map(|entry| item_of(entry, &self.bot_id))
+            .filter_map(|entry| item_with_owner(entry, &self.bot_id, self.owner_id.as_deref()))
+            .map(|mut item| {
+                if let Some(speaker) = &mut item.speaker {
+                    speaker.name = self.speaker_names.get(&speaker.id).cloned();
+                }
+                item
+            })
             .collect();
         let Some(first) = items.first().map(|item| item.seq) else {
             return Ok(items);
@@ -479,5 +525,45 @@ mod email_trigger_tests {
             item_of(&trigger_entry("schedule"), "bot").unwrap().role,
             Role::User
         );
+    }
+
+    #[test]
+    fn room_history_distinguishes_the_owner_from_other_speakers() {
+        let mut entry = trigger_entry("schedule");
+        entry.kind = InboxEntryKind::Message;
+        entry.envelope = json!({"v": 1, "enc": "none", "body": {"text": "I prefer tea."}});
+        let owner = room_item_of(&entry, "bot", "owner").unwrap();
+        assert_eq!(owner.role, Role::User);
+        entry.sender_id = "alice".into();
+        let participant = room_item_of(&entry, "bot", "owner").unwrap();
+        assert_eq!(participant.role, Role::External);
+        assert_eq!(participant.speaker.unwrap().id, "alice");
+        entry.sender_id = "bot".into();
+        assert_eq!(
+            room_item_of(&entry, "bot", "owner").unwrap().role,
+            Role::Assistant
+        );
+    }
+
+    #[test]
+    fn mail_and_owner_forwarded_content_stay_external_while_room_bots_keep_their_identity() {
+        let mut entry = trigger_entry("email");
+        assert!(
+            room_item_of(&entry, "bot", "owner")
+                .unwrap()
+                .speaker
+                .is_none()
+        );
+        entry.kind = InboxEntryKind::Message;
+        entry.sender_id = "owner".into();
+        entry.envelope =
+            json!({"v": 1, "enc": "none", "body": {"text": "Remember this.", "hops": 1}});
+        let forwarded = room_item_of(&entry, "bot", "owner").unwrap();
+        assert_eq!(forwarded.role, Role::External);
+        assert!(forwarded.speaker.is_none());
+        entry.sender_id = "another_bot".into();
+        let reply = room_item_of(&entry, "bot", "owner").unwrap();
+        assert_eq!(reply.role, Role::External);
+        assert_eq!(reply.speaker.unwrap().id, "another_bot");
     }
 }

@@ -1,7 +1,6 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useQueryClient } from "@tanstack/react-query";
 import {
 	ArrowLeftIcon,
 	CheckIcon,
@@ -15,7 +14,6 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
-	botKeys,
 	useBotMailAddress,
 	useBotMailThread,
 	useBotMailThreads,
@@ -25,7 +23,6 @@ import {
 } from "../../hooks/use-bots";
 import { formatRelativeTime } from "../../lib/date";
 import { getErrorMessage } from "../../lib/error-message";
-import { useBackend } from "../../state/backend-state";
 import type {
 	IBot,
 	IBotMail,
@@ -333,19 +330,6 @@ function ThreadView({
 }: Readonly<{ bot: IBot; thread: IBotMailThread; onBack: () => void }>) {
 	const { t } = useTranslation("bots");
 	const view = useBotMailThread(bot.id, thread.id);
-	const inbox = useBackend().inboxState;
-	const queryClient = useQueryClient();
-	useEffect(() => {
-		if (thread.unread === 0) return;
-		void inbox
-			?.markRead(thread.id)
-			.then(() =>
-				queryClient.invalidateQueries({
-					queryKey: botKeys.mailThreads(bot.id),
-				}),
-			)
-			.catch(() => undefined);
-	}, [bot.id, inbox, queryClient, thread.id, thread.unread]);
 	return (
 		<div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-4 pb-6">
 			<div className="flex items-center gap-2">

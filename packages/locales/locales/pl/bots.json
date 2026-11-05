@@ -92,6 +92,10 @@
 			"description": "",
 			"label": ""
 		},
+		"web_requests": {
+			"description": "",
+			"label": ""
+		},
 		"webhook": {
 			"description": "",
 			"label": ""
@@ -152,6 +156,10 @@
 		"botTag": "",
 		"builtIn": "",
 		"call": {
+			"dismiss": "",
+			"incoming": "",
+			"incomingDescription": "",
+			"incomingRoom": "",
 			"durationHours": "",
 			"durationMinutes": "",
 			"durationShort": "",
@@ -395,6 +403,28 @@
 			"where": ""
 		},
 		"retry": "",
+		"roomChange": {
+			"nameRemoved": "",
+			"pictureChanged": "",
+			"pictureRemoved": "",
+			"renamed": ""
+		},
+		"roomSettings": {
+			"change": "",
+			"description": "",
+			"failed": "",
+			"imageFormat": "",
+			"imageHint": "",
+			"imageSize": "",
+			"imageUnreadable": "",
+			"name": "",
+			"namePlaceholder": "",
+			"open": "",
+			"remove": "",
+			"save": "",
+			"title": "",
+			"upload": ""
+		},
 		"roomTag": "",
 		"rooms": {
 			"bots_few": "",
@@ -464,7 +494,34 @@
 		"unread_other": "",
 		"you": "",
 		"youObject": "",
-		"yourCrew": ""
+		"yourCrew": "",
+		"blocks": {
+			"title": "Zablokowani użytkownicy i boty",
+			"description": "Zarządzaj tym, kto może wymieniać wiadomości bezpośrednie i zaproszenia z Tobą i Twoimi botami. Wspólne pokoje pozostają bez zmian.",
+			"loading": "Wczytywanie zablokowanych użytkowników i botów…",
+			"loadFailed": "Nie udało się wczytać listy blokad.",
+			"empty": "Twoja lista blokad jest pusta.",
+			"block": "Zablokuj",
+			"unblock": "Odblokuj",
+			"blockUser": "Zablokuj użytkownika",
+			"blockBot": "Zablokuj bota",
+			"ownerBlocked": "Właściciel zablokowany",
+			"blockName": "Zablokuj {{name}}",
+			"unblockName": "Odblokuj {{name}}",
+			"blockTitle": "Zablokować {{name}}?",
+			"unblockTitle": "Odblokować {{name}}?",
+			"failed": "Nie udało się zmienić blokady. Spróbuj ponownie.",
+			"userDescription": "Wiadomości bezpośrednie i zaproszenia między Tobą a tą osobą zostaną zablokowane w obu kierunkach. Dotyczy to także Twoich botów i botów tej osoby. Nadal będziecie się widzieć we wspólnych pokojach. Możesz opuścić te pokoje osobno.",
+			"botDescription": "Wiadomości bezpośrednie i zaproszenia między Tobą, Twoimi botami a tym botem zostaną zablokowane w obu kierunkach. Bot pozostanie we wspólnych pokojach. Możesz opuścić te pokoje osobno.",
+			"unblockDescription": "Ta blokada zostanie usunięta. Pozostałe blokady nadal będą obowiązywać.",
+			"composer": "Ta rozmowa jest zablokowana. Zmień ustawienia zablokowanych użytkowników i botów, aby ponownie zezwolić na wiadomości."
+		},
+		"leaveRoom": {
+			"action": "Opuść pokój",
+			"title": "Opuścić ten pokój?",
+			"description": "Ty i Twoje boty obecne w tym pokoju opuścicie go i przestaniecie otrzymywać z niego wiadomości.",
+			"failed": "Nie udało się opuścić pokoju. Spróbuj ponownie."
+		}
 	},
 	"editor": {
 		"abilities": {
@@ -500,7 +557,6 @@
 			"profileApps_other": "",
 			"profileEmpty": "",
 			"profilePlaceholder": "",
-			"runtime": "",
 			"subtitle": "",
 			"subtitleMemoryOn": "",
 			"title": ""
@@ -1218,7 +1274,13 @@
 		"thisRoom": "",
 		"title": "",
 		"waiting": "",
-		"waitingOwner": ""
+		"waitingOwner": "",
+		"removeNamed": "Usuń {{name}} z pokoju",
+		"removeTitle": "Usunąć {{name}} z tego pokoju?",
+		"removePersonDescription": "Ta osoba i jej boty obecne w pokoju opuszczą go i przestaną otrzymywać z niego wiadomości.",
+		"removeBotDescription": "Ten bot opuści pokój i przestanie otrzymywać z niego wiadomości.",
+		"remove": "Usuń z pokoju",
+		"removeFailed": "Nie udało się usunąć tego członka. Spróbuj ponownie."
 	},
 	"system": {
 		"flux": {

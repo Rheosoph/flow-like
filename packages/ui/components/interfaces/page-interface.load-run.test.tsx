@@ -74,7 +74,6 @@ const actual = {
 		...(await import("./native-widget-page-capture")),
 	},
 	pageLoadingSkeleton: { ...(await import("./page-loading-skeleton")) },
-	loadingScreen: { ...(await import("../ui/loading-screen")) },
 };
 
 const persistence = {
@@ -216,10 +215,6 @@ mock.module("./page-loading-skeleton", () => ({
 		<div data-page-skeleton="">{title}</div>
 	),
 }));
-mock.module("../ui/loading-screen", () => ({
-	...actual.loadingScreen,
-	LoadingScreen: () => <div data-loading-screen="" />,
-}));
 
 const { PageInterface } = await import("./page-interface");
 const { PageTransition } = await import("./page-transition");
@@ -289,7 +284,6 @@ afterAll(() => {
 		() => actual.nativeWidgetPageCapture,
 	);
 	mock.module("./page-loading-skeleton", () => actual.pageLoadingSkeleton);
-	mock.module("../ui/loading-screen", () => actual.loadingScreen);
 });
 
 function createPage(overrides: Partial<IPage> = {}): IPage {
@@ -937,14 +931,17 @@ describe("page transitions", () => {
 					Boolean(element.closest('[aria-hidden="true"]')) !== visible,
 			)
 			.map((element) => element.getAttribute("data-surface-id"));
-	const loadingScreen = () => host?.querySelector("[data-loading-screen]");
+	const contentLoading = () =>
+		host?.querySelector('[data-slot="content-loading"]');
 
-	test("opening the first page still shows the loading screens", async () => {
+	test("opening the first page shows a local skeleton until its content is ready", async () => {
 		const { show } = await mountTransition(loadingView);
-		expect(loadingScreen()).not.toBeNull();
+		expect(contentLoading()?.querySelector("output")).not.toBeNull();
+		expect(contentLoading()?.textContent).toBe("Loading page...");
+		expect(host?.textContent).not.toContain("Loading your workspace");
 
 		await show(pageView(createPage({ noCache: true })));
-		expect(loadingScreen()).toBeNull();
+		expect(contentLoading()).toBeNull();
 		expect(skeleton()?.textContent).toBe("Running workflow");
 	});
 
@@ -953,7 +950,7 @@ describe("page transitions", () => {
 		expect(loadIndicator()).toBeNull();
 
 		await show(loadingView);
-		expect(loadingScreen()).toBeNull();
+		expect(contentLoading()).toBeNull();
 		expect(surfaces(true)).toEqual(["page-a"]);
 		expect(loadIndicator()).not.toBeNull();
 		expect(loadStatus()?.textContent).toBe("Loading page data…");
@@ -1015,7 +1012,7 @@ describe("page transitions", () => {
 			"account-1",
 		);
 		await show(loadingView, "account-2");
-		expect(loadingScreen()).not.toBeNull();
+		expect(contentLoading()).not.toBeNull();
 		expect(surfaces(true)).toEqual([]);
 	});
 
@@ -1026,7 +1023,7 @@ describe("page transitions", () => {
 		expect(host?.querySelector("[data-chat]")).not.toBeNull();
 
 		await show(loadingView);
-		expect(loadingScreen()).not.toBeNull();
+		expect(contentLoading()).not.toBeNull();
 	});
 });
 

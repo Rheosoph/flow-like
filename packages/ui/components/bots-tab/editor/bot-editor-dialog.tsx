@@ -23,11 +23,14 @@ export interface BotEditorDialogProps {
 	onSaved?: (bot: IBot) => void;
 	/** Gets the copy made by Duplicate, after the dialog closed; the Bots tab opens it. */
 	onDuplicated?: (bot: IBot) => void;
+	/** A new bot starts on this managed device. */
+	initialDeviceId?: string;
 }
 
 interface BodyProps {
 	onSaved?: (bot: IBot) => void;
 	onDuplicated?: (bot: IBot) => void;
+	initialDeviceId?: string;
 	close: () => void;
 	discard: BotDiscardPrompt;
 	onDirtyChange: (dirty: boolean) => void;
@@ -43,6 +46,7 @@ export function BotEditorDialog({
 	botId,
 	onSaved,
 	onDuplicated,
+	initialDeviceId,
 }: Readonly<BotEditorDialogProps>) {
 	const dirty = useRef(false);
 	const [discardRequested, setDiscardRequested] = useState(false);
@@ -69,6 +73,7 @@ export function BotEditorDialog({
 	const body: BodyProps = {
 		onSaved,
 		onDuplicated,
+		initialDeviceId,
 		close,
 		discard: {
 			requested: discardRequested,

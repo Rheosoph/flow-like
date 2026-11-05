@@ -167,7 +167,7 @@ async fn session(desk: &Desk, budget: ModelBudget) -> Arc<MemorySession> {
 }
 
 #[test]
-fn only_the_direct_conversation_with_the_owner_remembers() {
+fn direct_and_group_conversations_remember() {
     let desk = Desk::new();
     let group = desk
         .store
@@ -183,7 +183,17 @@ fn only_the_direct_conversation_with_the_owner_remembers() {
     assert!(!is_owner_direct(&desk.conversation, "bot_other"));
     let trigger = desk.send(LOCAL_OWNER_ID, "t", "message", json!({ "text": "hi" }));
     assert!(source_for(&desk.host, &desk.conversation, &desk.bot.id, Some(&trigger)).is_some());
-    assert!(source_for(&desk.host, &group, &desk.bot.id, Some(&trigger)).is_none());
+    assert!(
+        source_for(&desk.host, &group, &desk.bot.id, Some(&trigger))
+            .unwrap()
+            .room
+    );
+    assert!(
+        !source_for(&desk.host, &desk.conversation, &desk.bot.id, Some(&trigger))
+            .unwrap()
+            .room
+    );
+    assert!(source_for(&desk.host, &group, "bot_other", Some(&trigger)).is_none());
     assert!(source_for(&desk.host, &desk.conversation, &desk.bot.id, None).is_none());
 }
 
@@ -321,7 +331,7 @@ async fn a_long_local_history_compacts_before_the_turn_and_a_deletion_drops_fact
 }
 
 #[test]
-fn an_account_bot_remembers_only_its_direct_conversation_with_a_person() {
+fn the_owner_direct_check_distinguishes_groups_and_other_bots() {
     let direct = json!({
         "kind": "direct",
         "members": [

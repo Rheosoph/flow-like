@@ -79,6 +79,26 @@ pub struct JobModels {
     pub chat: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub embedding: Option<Value>,
+    /// The image model of an `image_generate` job, with the provider key the API opened for
+    /// this one job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<JobImage>,
+}
+
+/// The image Bit of one job, secrets included, and the images the turn may still generate.
+/// It is never printed.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JobImage {
+    pub bit: Value,
+    pub left: u32,
+}
+
+impl std::fmt::Debug for JobImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobImage")
+            .field("left", &self.left)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +122,57 @@ pub struct ToolJob {
     /// The secrets the call's arguments name, opened by the API for this job only.
     #[serde(default, skip_serializing_if = "JobSecrets::is_empty")]
     pub secrets: JobSecrets,
+    /// The connector(s) a connector tool call uses, with the sign-in the API resolved for this
+    /// job only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connectors: Vec<JobConnector>,
+    /// The package skill a `skill_call` / `skill_run` job runs: the skill as the API read it
+    /// (active, owned by the bot) and the package the workspace pins for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_call: Option<SkillCallJob>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillCallJob {
+    pub skill: flow_like_types::bot_skill::BotSkill,
+    pub package_id: String,
+    pub package: flow_like_types::dispatch::WasmPackageRef,
+}
+
+/// One attached connector and its `Authorization` value inside a signed job; never printed.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JobConnector {
+    pub entry: flow_like_bot_tools::services::ConnectorEntry,
+    #[serde(default)]
+    pub authorization: Option<String>,
+}
+
+impl std::fmt::Debug for JobConnector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JobConnector")
+            .field("id", &self.entry.rule.id)
+            .field("authorization", &self.authorization.as_ref().map(|_| "..."))
+            .finish()
+    }
+}
+
+/// The connectors of a job as the tools read them.
+pub fn connector_source(
+    connectors: &[JobConnector],
+) -> std::sync::Arc<dyn flow_like_bot_tools::services::ConnectorSource> {
+    use flow_like_bot_tools::services::{Credential, StaticSource};
+    std::sync::Arc::new(StaticSource::new(
+        connectors
+            .iter()
+            .map(|connector| {
+                let credential = connector
+                    .authorization
+                    .clone()
+                    .map_or_else(Credential::none, Credential::authorization);
+                (connector.entry.clone(), credential)
+            })
+            .collect(),
+    ))
 }
 
 /// Secret values by name that travel inside one signed job; never printed.

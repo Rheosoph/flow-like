@@ -1,0 +1,28 @@
+FROM scratch AS agent
+ARG TARGETARCH
+ADD rootfs/${TARGETARCH}.tar /
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    ca-certificates chromium xvfb xauth openbox \
+    fonts-liberation fonts-dejavu-core fonts-noto-color-emoji fonts-wqy-microhei \
+    libx11-6 libxi6 libxtst6 libxcb1 libxcb-randr0 libxrandr2 libdrm2 libinput10 libgbm1 \
+    libwayland-client0 libwayland-egl1 libpipewire-0.3-0 libdbus-1-3 libudev1 libasound2 \
+    libssl3 libcurl4 ocl-icd-libopencl1 \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd --gid 65532 agent \
+ && useradd --uid 65532 --gid 65532 --home-dir /var/lib/flow-like --no-create-home --shell /bin/sh agent \
+ && mkdir -p /var/lib/flow-like /tmp/.X11-unix \
+ && chown 65532:65532 /var/lib/flow-like \
+ && chmod 0700 /var/lib/flow-like \
+ && chmod 1777 /tmp /tmp/.X11-unix
+COPY --from=agent /usr/local/bin/flow-like-standalone /usr/local/bin/flow-like-standalone
+RUN if ldd /usr/local/bin/flow-like-standalone 2>/dev/null | grep 'not found'; then exit 1; fi
+ENV HOME=/var/lib/flow-like
+ENV FLOW_LIKE_PLAYGROUND=virtual
+USER 65532:65532
+WORKDIR /var/lib/flow-like
+VOLUME ["/var/lib/flow-like"]
+ENTRYPOINT ["/usr/local/bin/flow-like-standalone"]
+CMD ["run"]

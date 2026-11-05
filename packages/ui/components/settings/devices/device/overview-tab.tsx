@@ -73,6 +73,7 @@ import {
 	useOverlay,
 	usePolicy,
 } from "../workspace";
+import { BotsOnDevice } from "./bots-on-device";
 import { DeviceDataState, desiredRun, observedRun } from "./services-tab";
 import { TrustPanel, fingerprintOf } from "./trust-panel";
 import {
@@ -1481,6 +1482,7 @@ export function DeviceOverviewTab({
 				<div className="flex min-w-0 flex-col gap-4">
 					<OnThisDevice page={page} />
 					{minimal ? null : <ServicesSummary page={page} onTab={onTab} />}
+					{minimal || page.revoked ? null : <BotsOnDevice page={page} />}
 					{minimal || page.revoked ? null : <Resources page={page} />}
 				</div>
 				<div className="flex min-w-0 flex-col gap-4">

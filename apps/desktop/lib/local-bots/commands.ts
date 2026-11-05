@@ -413,6 +413,17 @@ export const localInbox = {
 		);
 	},
 
+	async setImage(
+		conversationId: string,
+		image: string | null,
+	): Promise<IConversation> {
+		const operation = `change the picture of local conversation ${conversationId}`;
+		return expectLocal<IConversation>(
+			await run(operation, "local_inbox_set_image", { conversationId, image }),
+			operation,
+		);
+	},
+
 	async addMembers(
 		conversationId: string,
 		members: string[],

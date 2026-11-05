@@ -21,26 +21,21 @@ impl PptxReplaceTableDataNode {
 }
 
 #[cfg(feature = "execute")]
-fn build_cell_xml(text: &str, template_tc_pr: &str) -> String {
+fn build_cell_xml(text: &str, tc_pr: &str) -> String {
     let escaped = text
         .replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('>', "&gt;");
-    let tc_pr = if template_tc_pr.is_empty() {
-        String::new()
-    } else {
-        format!("<a:tcPr{template_tc_pr}/>")
-    };
     format!(
-        "<a:tc>{tc_pr}<a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{escaped}</a:t></a:r></a:p></a:txBody></a:tc>"
+        "<a:tc><a:txBody><a:bodyPr/><a:lstStyle/><a:p><a:r><a:t>{escaped}</a:t></a:r></a:p></a:txBody>{tc_pr}</a:tc>"
     )
 }
 
 #[cfg(feature = "execute")]
-fn build_row_xml(cells: &[String], template_tc_pr: &str) -> String {
+fn build_row_xml(cells: &[String], tc_pr: &str) -> String {
     let mut row = String::from(r#"<a:tr h="370840">"#);
     for cell in cells {
-        row.push_str(&build_cell_xml(cell, template_tc_pr));
+        row.push_str(&build_cell_xml(cell, tc_pr));
     }
     row.push_str("</a:tr>");
     row
@@ -144,8 +139,6 @@ impl NodeLogic for PptxReplaceTableDataNode {
 
     #[cfg(feature = "execute")]
     async fn run(&self, context: &mut ExecutionContext) -> flow_like_types::Result<()> {
-        use flow_like_types::regex::Regex;
-
         context.deactivate_exec_pin("exec_out").await?;
 
         let template: FlowPath = context.evaluate_pin("template").await?;
@@ -166,73 +159,10 @@ impl NodeLogic for PptxReplaceTableDataNode {
             return Err(flow_like_types::anyhow!("Data array is empty"));
         }
 
-        let num_cols = data.iter().map(|r| r.len()).max().unwrap_or(0);
-
         let template_bytes = template.get(context, false).await?;
         let mut files = read_zip(&template_bytes)?;
 
-        let slide_key = format!("ppt/slides/slide{}.xml", slide_index);
-        let slide_bytes = files
-            .get(&slide_key)
-            .ok_or_else(|| flow_like_types::anyhow!("Slide {} not found", slide_index))?
-            .clone();
-        let mut slide_xml = String::from_utf8_lossy(&slide_bytes).to_string();
-
-        let tbl_re = Regex::new(r"(?s)<a:tbl>(.*?)</a:tbl>")?;
-        let mut found_table = false;
-
-        let tables: Vec<(usize, usize, String)> = tbl_re
-            .find_iter(&slide_xml)
-            .map(|m| (m.start(), m.end(), m.as_str().to_string()))
-            .collect();
-
-        let tc_pr_re = Regex::new(r"<a:tcPr([^/]*)/>")?;
-        let tbl_pr_re = Regex::new(r"(?s)<a:tblPr[^>]*>.*?</a:tblPr>|<a:tblPr[^/]*/>")?;
-
-        for (start, end, tbl_content) in tables.iter().rev() {
-            if !tbl_content.contains(&placeholder) {
-                continue;
-            }
-            found_table = true;
-
-            let template_tc_pr = tc_pr_re
-                .captures(tbl_content)
-                .and_then(|c| c.get(1))
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_default();
-
-            let tbl_pr = tbl_pr_re
-                .find(tbl_content)
-                .map(|m| m.as_str().to_string())
-                .unwrap_or_else(|| "<a:tblPr/>".to_string());
-
-            let grid_cols: String = (0..num_cols)
-                .map(|_| r#"<a:gridCol w="1000000"/>"#)
-                .collect::<Vec<_>>()
-                .join("");
-            let tbl_grid = format!("<a:tblGrid>{grid_cols}</a:tblGrid>");
-
-            let mut rows_xml = String::new();
-            for row in &data {
-                let mut padded = row.clone();
-                padded.resize(num_cols, String::new());
-                rows_xml.push_str(&build_row_xml(&padded, &template_tc_pr));
-            }
-
-            let new_tbl = format!("<a:tbl>{tbl_pr}{tbl_grid}{rows_xml}</a:tbl>");
-            slide_xml = format!("{}{}{}", &slide_xml[..*start], new_tbl, &slide_xml[*end..]);
-            break;
-        }
-
-        if !found_table {
-            return Err(flow_like_types::anyhow!(
-                "No table containing placeholder '{}' found on slide {}",
-                placeholder,
-                slide_index
-            ));
-        }
-
-        files.insert(slide_key, slide_xml.into_bytes());
+        replace_table_on_slide(&mut files, slide_index, &placeholder, &data)?;
 
         let result_bytes = write_zip(&files)?;
         output.put(context, result_bytes, false).await?;
@@ -249,4 +179,79 @@ impl NodeLogic for PptxReplaceTableDataNode {
             "This node requires the 'execute' feature"
         ))
     }
+}
+
+#[cfg(feature = "execute")]
+pub(crate) fn replace_table_on_slide(
+    files: &mut std::collections::HashMap<String, Vec<u8>>,
+    slide_index: i64,
+    placeholder: &str,
+    data: &[Vec<String>],
+) -> flow_like_types::Result<()> {
+    use flow_like_types::regex::Regex;
+
+    let num_cols = data.iter().map(|r| r.len()).max().unwrap_or(0);
+    let slide_key = format!("ppt/slides/slide{}.xml", slide_index);
+    let slide_bytes = files
+        .get(&slide_key)
+        .ok_or_else(|| flow_like_types::anyhow!("Slide {} not found", slide_index))?
+        .clone();
+    let mut slide_xml = String::from_utf8_lossy(&slide_bytes).to_string();
+
+    let tbl_re = Regex::new(r"(?s)<a:tbl>(.*?)</a:tbl>")?;
+    let mut found_table = false;
+
+    let tables: Vec<(usize, usize, String)> = tbl_re
+        .find_iter(&slide_xml)
+        .map(|m| (m.start(), m.end(), m.as_str().to_string()))
+        .collect();
+
+    let tc_pr_re = Regex::new(r"(?s)<a:tcPr\b[^>]*/>|<a:tcPr\b[^>]*>.*?</a:tcPr>")?;
+    let tbl_pr_re = Regex::new(r"(?s)<a:tblPr[^>]*>.*?</a:tblPr>|<a:tblPr[^/]*/>")?;
+
+    for (start, end, tbl_content) in tables.iter().rev() {
+        if !tbl_content.contains(placeholder) {
+            continue;
+        }
+        found_table = true;
+
+        let template_tc_pr = tc_pr_re
+            .find_iter(tbl_content)
+            .last()
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default();
+
+        let tbl_pr = tbl_pr_re
+            .find(tbl_content)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_else(|| "<a:tblPr/>".to_string());
+
+        let grid_cols: String = (0..num_cols)
+            .map(|_| r#"<a:gridCol w="1000000"/>"#)
+            .collect::<Vec<_>>()
+            .join("");
+        let tbl_grid = format!("<a:tblGrid>{grid_cols}</a:tblGrid>");
+
+        let mut rows_xml = String::new();
+        for row in data {
+            let mut padded = row.clone();
+            padded.resize(num_cols, String::new());
+            rows_xml.push_str(&build_row_xml(&padded, &template_tc_pr));
+        }
+
+        let new_tbl = format!("<a:tbl>{tbl_pr}{tbl_grid}{rows_xml}</a:tbl>");
+        slide_xml = format!("{}{}{}", &slide_xml[..*start], new_tbl, &slide_xml[*end..]);
+        break;
+    }
+
+    if !found_table {
+        return Err(flow_like_types::anyhow!(
+            "No table containing placeholder '{}' found on slide {}",
+            placeholder,
+            slide_index
+        ));
+    }
+
+    files.insert(slide_key, slide_xml.into_bytes());
+    Ok(())
 }

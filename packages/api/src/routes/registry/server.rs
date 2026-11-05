@@ -24,7 +24,7 @@ use flow_like_storage::object_store::PutPayload;
 use flow_like_storage::object_store::path::Path;
 use flow_like_types::create_id;
 use flow_like_wasm_schema::manifest::{
-    PackageManifest, PackageNodeEntry, PackagePermissions, PackageWidgetEntry,
+    PackageManifest, PackageNodeEntry, PackagePermissions, PackageSkillEntry, PackageWidgetEntry,
 };
 use flow_like_wasm_schema::widget::WidgetContract;
 use flow_like_wasm_schema::widget_bundle::{WidgetBundleReader, sha256_hex};
@@ -451,6 +451,16 @@ pub fn widget_network_publish_problems(contract: &WidgetContract) -> Vec<String>
 
 /// Widgets as stored on version rows: `network` is derived by the hub on
 /// read and never taken from the publisher's manifest.
+/// The skills stored with a version: `None` when it ships none, so existing rows stay as they are.
+fn stored_skills_json(
+    skills: &[PackageSkillEntry],
+) -> Result<Option<serde_json::Value>, serde_json::Error> {
+    if skills.is_empty() {
+        return Ok(None);
+    }
+    serde_json::to_value(skills).map(Some)
+}
+
 fn stored_widgets_json(
     widgets: &[PackageWidgetEntry],
 ) -> flow_like_types::Result<serde_json::Value> {
@@ -653,6 +663,9 @@ pub struct PackageDetails {
     pub nodes: serde_json::Value,
     #[serde(default)]
     pub widgets: serde_json::Value,
+    /// The skills this version ships (`PackageSkillEntry[]`, instructions included) for review.
+    #[serde(default)]
+    pub skills: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub widget_bundle_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -766,6 +779,7 @@ struct VersionRow {
     yanked: bool,
     widget_bundle_hash: Option<String>,
     widget_bundle_size: Option<i64>,
+    skills: Option<serde_json::Value>,
 }
 
 fn package_version_from_row(v: VersionRow) -> PackageVersion {
@@ -1321,6 +1335,10 @@ impl ServerRegistry {
         manifest.wasm_hash = Some(row.wasm_hash);
         manifest.min_flow_like_version = row.min_flow_like_version;
         manifest.widgets = widgets;
+        manifest.skills = row
+            .skills
+            .and_then(|stored| serde_json::from_value(stored).ok())
+            .unwrap_or_default();
         manifest.widget_bundle_hash = row.widget_bundle_hash.filter(|hash| !hash.is_empty());
         entry.nodes = serde_json::from_value(row.nodes).unwrap_or_default();
         Ok(())
@@ -1347,6 +1365,15 @@ impl ServerRegistry {
         review_version: Option<wasm_package_version::Model>,
     ) -> flow_like_types::Result<PackageDetails> {
         let authors = self.get_package_authors(&pkg.id).await?;
+        let skills = match review_version.as_ref() {
+            Some(version) => version.skills.clone(),
+            None => wasm_package_version::Entity::find()
+                .filter(wasm_package_version::Column::PackageId.eq(&pkg.id))
+                .filter(wasm_package_version::Column::Version.eq(&pkg.version))
+                .one(&self.db)
+                .await?
+                .and_then(|version| version.skills),
+        };
 
         let (
             version,
@@ -1397,6 +1424,7 @@ impl ServerRegistry {
             wasm_size,
             nodes,
             widgets: widgets_with_network(widgets),
+            skills: skills.unwrap_or_else(|| serde_json::Value::Array(Vec::new())),
             widget_bundle_hash,
             widget_bundle_size,
             permissions: pkg.permissions,
@@ -1501,6 +1529,7 @@ impl ServerRegistry {
             .column_as(Column::Yanked, "yanked")
             .column_as(Column::WidgetBundleHash, "widget_bundle_hash")
             .column_as(Column::WidgetBundleSize, "widget_bundle_size")
+            .column_as(Column::Skills, "skills")
             .filter(Column::PackageId.eq(package_id))
             .order_by_desc(Column::PublishedAt);
 
@@ -1608,6 +1637,11 @@ impl ServerRegistry {
             widgets,
             widget_bundle_path: None,
             widget_bundle_hash,
+            skills: versions
+                .first()
+                .and_then(|version| version.skills.clone())
+                .and_then(|stored| serde_json::from_value::<Vec<PackageSkillEntry>>(stored).ok())
+                .unwrap_or_default(),
             metadata: Default::default(),
         };
 
@@ -2230,6 +2264,7 @@ impl ServerRegistry {
 
         // Validate, store, and unpack the widget bundle when widgets are declared
         let widgets_json = stored_widgets_json(&manifest.widgets)?;
+        let skills_json = stored_skills_json(&manifest.skills)?;
         let mut widget_bundle_hash: Option<String> = None;
         let mut widget_bundle_size: Option<i64> = None;
         if !manifest.widgets.is_empty() {
@@ -2432,6 +2467,7 @@ impl ServerRegistry {
             widget_bundle_size: Set(widget_bundle_size),
             nodes: Set(serde_json::Value::Array(vec![])),
             widgets: Set(widgets_json.clone()),
+            skills: Set(skills_json.clone()),
             release_notes: Set(None),
             min_flow_like_version: Set(None),
             yanked: Set(false),
@@ -3261,6 +3297,22 @@ impl PackageWidgetSource for ServerRegistry {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_version_without_skills_stores_null_and_one_with_skills_keeps_them() {
+        use flow_like_wasm_schema::manifest::PackageSkillEntry;
+        assert!(super::stored_skills_json(&[]).unwrap().is_none());
+        let entry = PackageSkillEntry {
+            name: "pdf-forms".into(),
+            description: "Fill PDF forms".into(),
+            instructions_file: None,
+            instructions: Some("1. Fill".into()),
+            tools: vec!["fill_form".into()],
+        };
+        let stored = super::stored_skills_json(&[entry.clone()]).unwrap().unwrap();
+        let back: Vec<PackageSkillEntry> = serde_json::from_value(stored).unwrap();
+        assert_eq!(back, vec![entry]);
+    }
+
     use super::*;
     use flow_like_storage::object_store::ObjectStore;
     use flow_like_wasm_schema::widget::{ContractInput, ContractInputType, WidgetContract};

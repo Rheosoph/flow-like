@@ -108,6 +108,7 @@ export function useBotCapabilityLabel() {
 	const labels = useMemo<Record<BotCapability, string>>(
 		() => ({
 			internet: t("capabilities.internet.label", "Internet"),
+			web_requests: t("capabilities.web_requests.label", "Web requests"),
 			profile_apps: t(
 				"capabilities.profile_apps.label",
 				"All apps in a profile",

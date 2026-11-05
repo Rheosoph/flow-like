@@ -29,7 +29,8 @@ use flow_like_types::{
     inbox::{
         ActivityBody, ConversationEncryption, ConversationKind, EntryCursor, EnvelopeKind,
         InboxEntryKind, MAX_CONVERSATION_MEMBERS, MemberEventBody, MemberOp, PrincipalKind,
-        TriggerBody, body_target, check_envelope, direct_pair_key, is_valid_message_id,
+        RoomEventBody, TriggerBody, body_target, check_envelope, direct_pair_key,
+        is_valid_message_id,
     },
 };
 use rusqlite::{Connection, OptionalExtension, Params, Row, params};
@@ -66,6 +67,7 @@ impl Principal {
 struct ConversationRow {
     kind: ConversationKind,
     title: Option<String>,
+    image: Option<String>,
     encryption: ConversationEncryption,
     created_by: String,
     created_at: i64,
@@ -77,6 +79,7 @@ impl ConversationRow {
         Ok(Self {
             kind: wire(row, "kind", ConversationKind::parse)?,
             title: row.get("title")?,
+            image: row.get("image")?,
             encryption: wire(row, "encryption", ConversationEncryption::parse)?,
             created_by: row.get("created_by")?,
             created_at: row.get("created_at")?,
@@ -156,8 +159,25 @@ fn bot_not_in_room(bot_id: &str, conversation_id: &str) -> Error {
 fn direct_fixed() -> Error {
     Error::new(
         codes::INBOX_DIRECT_FIXED,
-        "A direct conversation can't be renamed and its members don't change; start a group instead",
+        "A direct conversation has no title or picture and its members don't change; start a group instead",
     )
+}
+
+/// The group the person is an active member of; a direct conversation is fixed.
+fn member_group(db: &Connection, conversation_id: &str) -> Result<ConversationRow> {
+    let conversation = member_conversation(db, conversation_id, LOCAL_OWNER_ID)?;
+    if conversation.kind != ConversationKind::Group {
+        return Err(direct_fixed());
+    }
+    Ok(conversation)
+}
+
+/// A group picture as stored: the image re-encoded as a PNG data URL of at most 256 px.
+fn picture_data_url(image: &str) -> Result<String> {
+    use flow_like_types::base64::{Engine, engine::general_purpose::STANDARD};
+    let png = flow_like_types::images::inline_image_thumbnail(image)
+        .map_err(|error| Error::invalid(format!("The group picture is unusable: {error}")))?;
+    Ok(format!("data:image/png;base64,{}", STANDARD.encode(png)))
 }
 
 fn membership(
@@ -187,7 +207,7 @@ fn active_membership(
 
 fn conversation_row(db: &Connection, conversation_id: &str) -> Result<ConversationRow> {
     db.prepare_cached(
-        "SELECT kind, title, encryption, created_by, created_at, last_activity_at
+        "SELECT kind, title, image, encryption, created_by, created_at, last_activity_at
          FROM conversations WHERE id = ?1",
     )?
     .query_row([conversation_id], ConversationRow::read)
@@ -219,10 +239,7 @@ fn active_members(db: &Connection, conversation_id: &str) -> Result<Vec<MemberRo
 
 /// The active members of a group the person is in. Direct conversations never change members.
 fn group_members(db: &Connection, conversation_id: &str) -> Result<Vec<MemberRow>> {
-    let conversation = member_conversation(db, conversation_id, LOCAL_OWNER_ID)?;
-    if conversation.kind != ConversationKind::Group {
-        return Err(direct_fixed());
-    }
+    member_group(db, conversation_id)?;
     active_members(db, conversation_id)
 }
 
@@ -261,6 +278,7 @@ fn view(db: &Connection, conversation_id: &str) -> Result<Option<Conversation>> 
         id: conversation_id.to_string(),
         kind: row.kind,
         title: row.title,
+        image_url: row.image,
         encryption: row.encryption,
         created_by: row.created_by,
         created_at: timestamp(row.created_at),
@@ -447,6 +465,22 @@ fn member_event(
         LOCAL_OWNER_ID,
         InboxEntryKind::Member,
         envelope,
+        at,
+    )?;
+    Ok(())
+}
+
+/// A rename or picture change the person made, in the group's history like the API's `room`
+/// entries.
+fn room_event(db: &Connection, conversation_id: &str, change: &RoomEventBody) -> Result<()> {
+    let at = next_event_time(db, conversation_id)?;
+    insert_event(
+        db,
+        conversation_id,
+        &format!("room:{}", create_id()),
+        LOCAL_OWNER_ID,
+        InboxEntryKind::Room,
+        change.envelope(),
         at,
     )?;
     Ok(())
@@ -1051,14 +1085,42 @@ impl LocalBotStore {
     ) -> Result<Conversation> {
         let title = normalize_title(title)?;
         self.write(|tx, changes| {
-            let current = member_conversation(tx, conversation_id, LOCAL_OWNER_ID)?;
-            if current.kind != ConversationKind::Group {
-                return Err(direct_fixed());
-            }
+            let current = member_group(tx, conversation_id)?;
             if current.title != title {
                 tx.execute(
                     "UPDATE conversations SET title = ?2, updated_at = ?3 WHERE id = ?1",
                     params![conversation_id, title, now_micros()],
+                )?;
+                room_event(
+                    tx,
+                    conversation_id,
+                    &RoomEventBody::title(title.clone(), LOCAL_OWNER_ID),
+                )?;
+                changes.conversation(conversation_id);
+            }
+            visible(tx, conversation_id)
+        })
+    }
+
+    /// Sets a group's picture from a PNG, JPEG, GIF or WebP data URL, stored as a PNG of at most
+    /// 256 px; `None` removes it.
+    pub fn set_conversation_image(
+        &self,
+        conversation_id: &str,
+        image: Option<String>,
+    ) -> Result<Conversation> {
+        let image = image.as_deref().map(picture_data_url).transpose()?;
+        self.write(|tx, changes| {
+            let current = member_group(tx, conversation_id)?;
+            if current.image != image {
+                tx.execute(
+                    "UPDATE conversations SET image = ?2, updated_at = ?3 WHERE id = ?1",
+                    params![conversation_id, image, now_micros()],
+                )?;
+                room_event(
+                    tx,
+                    conversation_id,
+                    &RoomEventBody::image(image.is_none(), LOCAL_OWNER_ID),
                 )?;
                 changes.conversation(conversation_id);
             }

@@ -12,6 +12,10 @@ use tauri::{
     },
 };
 
+#[cfg(any(target_os = "ios", test))]
+#[path = "../frontend_payload.rs"]
+mod frontend_payload;
+
 const USE_PAGE: &str = "/use.html";
 
 pub(crate) fn register<R: Runtime>(builder: Builder<R>, context: &Context<R>) -> Builder<R> {
@@ -25,15 +29,15 @@ pub(crate) fn register<R: Runtime>(builder: Builder<R>, context: &Context<R>) ->
         .map(|(path, _)| path.into_owned())
         .collect();
     #[cfg(target_os = "ios")]
-    let bundled_wasm: HashSet<String> = serde_json::from_str(include_str!(concat!(
+    let bundled: HashSet<String> = serde_json::from_str(include_str!(concat!(
         env!("OUT_DIR"),
-        "/frontend-wasm-manifest.json"
+        "/frontend-bundle-manifest.json"
     )))
-    .expect("valid bundled frontend WASM manifest");
+    .expect("valid bundled frontend manifest");
     #[cfg(target_os = "ios")]
     let exported = exported
         .into_iter()
-        .chain(bundled_wasm.iter().map(|path| format!("/{path}")))
+        .chain(bundled.iter().map(|path| format!("/{path}")))
         .collect();
     builder.register_uri_scheme_protocol("tauri", move |ctx, request| {
         let app = ctx.app_handle();
@@ -59,17 +63,13 @@ pub(crate) fn register<R: Runtime>(builder: Builder<R>, context: &Context<R>) ->
         );
         let path = frontend_asset_path(request.uri().path(), &exported);
         #[cfg(target_os = "ios")]
-        if let Some(resource) = bundled_wasm_path(&path, &bundled_wasm) {
+        if let Some(resource) = bundled_path(&path, &bundled) {
             let headers = app.config().app.security.headers.as_ref();
             return match resource {
                 Ok((relative_path, mime_type)) => match app.path().resource_dir() {
-                    Ok(resources) => bundled_wasm_response(
-                        &resources.join("frontend-wasm"),
-                        &relative_path,
-                        mime_type,
-                        &origin,
-                        headers,
-                    ),
+                    Ok(resources) => {
+                        bundled_response(&resources, &relative_path, mime_type, &origin, headers)
+                    }
                     Err(_) => {
                         asset_error_response(StatusCode::INTERNAL_SERVER_ERROR, &origin, headers)
                     }
@@ -97,7 +97,7 @@ pub(crate) fn register<R: Runtime>(builder: Builder<R>, context: &Context<R>) ->
 }
 
 #[cfg(any(target_os = "ios", test))]
-fn bundled_wasm_path(
+fn bundled_path(
     path: &str,
     manifest: &HashSet<String>,
 ) -> Option<Result<(String, &'static str), StatusCode>> {
@@ -115,19 +115,8 @@ fn bundled_wasm_path(
         Ok(decoded) => decoded,
         Err(_) => return Some(Err(StatusCode::BAD_REQUEST)),
     };
-    let candidate = decoded.trim_end_matches('/');
-    let mime_type = if candidate.ends_with(".wasm") {
-        "application/wasm"
-    } else if candidate.ends_with(".wasm.gz")
-        || candidate.rsplit_once(".wasm.gz.").is_some_and(|(_, part)| {
-            !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
-        })
-    {
-        // The viewer decompresses these files after fetching and joining chunks.
-        "application/octet-stream"
-    } else {
-        return None;
-    };
+    // Tauri falls back to index.html, so a missing bundled file must stay a 404.
+    let mime_type = frontend_payload::bundled_mime_type(decoded.trim_end_matches('/'))?;
     let Some(relative_path) = decoded.strip_prefix('/') else {
         return Some(Err(StatusCode::BAD_REQUEST));
     };
@@ -146,14 +135,17 @@ fn bundled_wasm_path(
 }
 
 #[cfg(any(target_os = "ios", test))]
-fn bundled_wasm_response(
-    resource_root: &Path,
+fn bundled_response(
+    resource_dir: &Path,
     relative_path: &str,
     mime_type: &str,
     origin: &str,
     headers: Option<&HeaderConfig>,
 ) -> Response<Vec<u8>> {
-    match std::fs::read(resource_root.join(relative_path)) {
+    let file = resource_dir
+        .join(frontend_payload::RESOURCE_DIR)
+        .join(relative_path);
+    match std::fs::read(file) {
         Ok(bytes) => asset_response(bytes, mime_type, None, origin, headers).unwrap_or_else(|_| {
             asset_error_response(StatusCode::INTERNAL_SERVER_ERROR, origin, headers)
         }),
@@ -266,12 +258,14 @@ mod tests {
     }
 
     #[test]
-    fn bundled_wasm_requires_an_exact_manifest_entry() {
+    fn bundled_payloads_require_an_exact_manifest_entry() {
         let manifest: HashSet<String> = [
             "viewer/engine.wasm",
             "viewer/engine.wasm.gz",
             "viewer/engine.wasm.gz.3",
             "viewer/café engine.wasm",
+            "_next/static/media/inter.woff2",
+            "craft/pdfcraft/licenses/sources/krilla.tar.gz",
         ]
         .into_iter()
         .map(str::to_owned)
@@ -297,16 +291,31 @@ mod tests {
                 "viewer/café engine.wasm",
                 "application/wasm",
             ),
+            (
+                "/_next/static/media/inter.woff2",
+                "_next/static/media/inter.woff2",
+                "font/woff2",
+            ),
+            (
+                "/craft/pdfcraft/licenses/sources/krilla.tar.gz",
+                "craft/pdfcraft/licenses/sources/krilla.tar.gz",
+                "application/gzip",
+            ),
         ] {
             assert_eq!(
-                bundled_wasm_path(path, &manifest),
+                bundled_path(path, &manifest),
                 Some(Ok((expected_path.into(), mime_type))),
                 "{path}"
             );
         }
-        for path in ["/viewer/missing.wasm", "/viewer/engine.wasm.gz.4"] {
+        for path in [
+            "/viewer/missing.wasm",
+            "/viewer/engine.wasm.gz.4",
+            "/_next/static/media/missing.woff2",
+            "/missing.png",
+        ] {
             assert_eq!(
-                bundled_wasm_path(path, &manifest),
+                bundled_path(path, &manifest),
                 Some(Err(StatusCode::NOT_FOUND)),
                 "{path}"
             );
@@ -315,14 +324,16 @@ mod tests {
             "/use/orders/123",
             "/viewer/engine.wasm.js",
             "/viewer/engine.wasm.gz.manifest.json",
+            "/_next/static/chunks/app.js",
+            "/craft/pdfcraft/licenses/index.html",
             "/index.html",
         ] {
-            assert!(bundled_wasm_path(path, &manifest).is_none(), "{path}");
+            assert!(bundled_path(path, &manifest).is_none(), "{path}");
         }
     }
 
     #[test]
-    fn bundled_wasm_rejects_traversal_and_malformed_paths() {
+    fn bundled_payloads_reject_traversal_and_malformed_paths() {
         for path in [
             "/../engine.wasm",
             "/viewer/../engine.wasm",
@@ -343,7 +354,7 @@ mod tests {
             // Even a malformed entry in the manifest must not authorize traversal.
             let manifest = [path.trim_start_matches('/').to_owned()].into();
             assert_eq!(
-                bundled_wasm_path(path, &manifest),
+                bundled_path(path, &manifest),
                 Some(Err(StatusCode::BAD_REQUEST)),
                 "{path}"
             );
@@ -351,17 +362,19 @@ mod tests {
     }
 
     #[test]
-    fn bundled_wasm_preserves_binary_bodies_and_headers_and_does_not_fall_back() {
+    fn bundled_payloads_preserve_binary_bodies_and_headers_and_do_not_fall_back() {
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let resource_root = std::env::temp_dir().join(format!(
-            "flow-like-frontend-wasm-{}-{unique}",
+        let resource_dir = std::env::temp_dir().join(format!(
+            "flow-like-frontend-bundle-{}-{unique}",
             std::process::id()
         ));
-        std::fs::create_dir_all(resource_root.join("viewer")).unwrap();
-        std::fs::write(resource_root.join("index.html"), b"fallback document").unwrap();
+        let payload_root = resource_dir.join(frontend_payload::RESOURCE_DIR);
+        std::fs::create_dir_all(payload_root.join("viewer")).unwrap();
+        std::fs::create_dir_all(payload_root.join("_next/static/media")).unwrap();
+        std::fs::write(payload_root.join("index.html"), b"fallback document").unwrap();
         let headers = HeaderConfig {
             x_content_type_options: Some(HeaderSource::Inline("nosniff".into())),
             ..Default::default()
@@ -377,10 +390,15 @@ mod tests {
                 &b"\x1f\x8b\x08\x00\xff\x80"[..],
                 "application/octet-stream",
             ),
+            (
+                "_next/static/media/inter.woff2",
+                &b"wOF2\0\x01\0\0"[..],
+                "font/woff2",
+            ),
         ] {
-            std::fs::write(resource_root.join(relative_path), bytes).unwrap();
-            let response = bundled_wasm_response(
-                &resource_root,
+            std::fs::write(payload_root.join(relative_path), bytes).unwrap();
+            let response = bundled_response(
+                &resource_dir,
                 relative_path,
                 mime_type,
                 "tauri://localhost",
@@ -399,8 +417,8 @@ mod tests {
                 "tauri://localhost"
             );
         }
-        let missing = bundled_wasm_response(
-            &resource_root,
+        let missing = bundled_response(
+            &resource_dir,
             "viewer/missing.wasm",
             "application/wasm",
             "tauri://localhost",
@@ -410,7 +428,7 @@ mod tests {
         assert_eq!(missing.headers()[header::CONTENT_TYPE], "text/plain");
         assert_eq!(missing.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
         assert_eq!(missing.body(), b"Frontend asset unavailable");
-        std::fs::remove_dir_all(resource_root).unwrap();
+        std::fs::remove_dir_all(resource_dir).unwrap();
     }
 
     #[test]
@@ -431,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_wasm_exports_under_app_routes_keep_their_resource_urls() {
+    fn bundled_exports_under_app_routes_keep_their_resource_urls() {
         let manifest: HashSet<String> = ["use/engine.wasm", "use/engine.wasm.gz.0"]
             .into_iter()
             .map(str::to_owned)
@@ -443,11 +461,11 @@ mod tests {
         for path in ["/use/engine.wasm", "/use/engine.wasm.gz.0"] {
             let resolved = frontend_asset_path(path, &exported);
             assert_eq!(resolved, path);
-            assert!(bundled_wasm_path(&resolved, &manifest).unwrap().is_ok());
+            assert!(bundled_path(&resolved, &manifest).unwrap().is_ok());
         }
         let app_route = frontend_asset_path("/use/report.wasm", &exported);
         assert_eq!(app_route, USE_PAGE);
-        assert!(bundled_wasm_path(&app_route, &manifest).is_none());
+        assert!(bundled_path(&app_route, &manifest).is_none());
     }
 
     #[test]

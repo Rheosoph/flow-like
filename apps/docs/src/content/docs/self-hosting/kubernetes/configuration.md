@@ -241,8 +241,16 @@ Add extra configuration through `api.env` and `api.envFrom`. Avoid duplicating
 chart-owned names such as `DATABASE_URL`, `REDIS_URL` or `BACKEND_KEY`.
 
 Hosted-model provider credentials belong to the API's authenticated model proxy.
-The chart's `llm.*` Secret references configure that proxy. Runner Pods receive
-execution capabilities, not installation-wide model-provider keys. Grant direct
+The chart's `llm.*` Secret references configure that proxy. Speech uses
+`llm.openrouter`, `llm.openai`, `llm.groq`, `llm.mistral`, `llm.together`,
+`llm.xai` or `llm.gemini`; hosted images use `llm.openrouter` or
+`llm.cloudflare`. Set `enabled: true` and `existingSecret` for each provider
+you use. The setup script creates these Secrets and references when the
+corresponding provider variables are present in its environment. See the
+[required Secret keys](/self-hosting/kubernetes/helm/#existing-secret-contracts)
+and [speech and image catalog setup](/self-hosting/docker-compose/configuration/#hosted-speech-providers).
+
+Runner Pods receive execution capabilities for the model proxy. Grant direct
 HTTPS integrations with exact hostnames in
 `executionManager.allowedHttpsHosts`. Integration destinations that resolve to
 private or reserved addresses are rejected even if a NetworkPolicy permits them.

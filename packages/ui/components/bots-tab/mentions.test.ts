@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { IConversation } from "../../state/backend-state/inbox-state";
 import {
 	type Mentionable,
+	callMentions,
 	filterMentionables,
 	inlineMentions,
 	insertMention,
@@ -83,6 +84,30 @@ describe("mentionedIn", () => {
 			"p2",
 		]);
 	});
+
+	test("recognizes formatted names, parentheses and Unicode without case sensitivity", () => {
+		const people: Mentionable[] = [
+			{ id: "u1", name: "The G", kind: "user" },
+			{ id: "u2", name: "Élodie", kind: "user" },
+		];
+		expect(mentionedIn("**@the g** and (_@ÉLODIE_)", people)).toEqual([
+			"u1",
+			"u2",
+		]);
+	});
+
+	test("skips examples, links, addresses and escaped mentions", () => {
+		const text =
+			"`@Ada` [@Scout](https://example.com) \\@Mascot foo@Ada www.example.com/@Ada\n\n```\n@Ada\n```";
+		expect(mentionedIn(text, options)).toEqual([]);
+	});
+
+	test("formatting does not split a longer word into a mention", () => {
+		for (const text of ["**x**@Ada", "@Ada**x**", "x_@Ada_", "**@Ada**x"]) {
+			expect(mentionedIn(text, options)).toEqual([]);
+			expect(inlineMentions(text, [], options)).toBe(text);
+		}
+	});
 });
 
 describe("mentionablesOf", () => {
@@ -139,6 +164,91 @@ describe("inlineMentions", () => {
 			"[@Scout](mention://bot_scout) @Scouting",
 		);
 	});
+
+	test("links a bot's plain mention of a known member without metadata", () => {
+		const member = { id: "person_g", name: "The G" };
+		expect(inlineMentions("@The G: please decide", [], [member])).toBe(
+			"[@The G](mention://person_g): please decide",
+		);
+		expect(inlineMentions("Please decide", [], [member])).toBe("Please decide");
+	});
+
+	test("preserves emphasis and punctuation around the whole mention", () => {
+		const member = { id: "person_g", name: "The G" };
+		expect(
+			inlineMentions("(**@the g**) and _@SCOUT_", [], [member, scout]),
+		).toBe(
+			"(**[@The G](mention://person_g)**) and _[@Scout](mention://bot_scout)_",
+		);
+	});
+
+	test("matches the longest name once, regardless of option order", () => {
+		const short = { id: "ann", name: "Ann" };
+		const long = { id: "ann_lee", name: "Ann Lee" };
+		const people = [short, long];
+		expect(inlineMentions("@Ann Lee and @Ann", [], people)).toBe(
+			"[@Ann Lee](mention://ann_lee) and [@Ann](mention://ann)",
+		);
+		expect(
+			mentionedIn(
+				"@Ann Lee",
+				people.map((p) => ({ ...p, kind: "user" })),
+			),
+		).toEqual(["ann_lee"]);
+	});
+
+	test("does not guess between members with the same name", () => {
+		const first = { id: "ada1", name: "Ada" };
+		const second = { id: "ada2", name: "ADA" };
+		expect(inlineMentions("@Ada", [], [first, second])).toBe("@Ada");
+		expect(inlineMentions("@Ada", [first], [first, second])).toBe(
+			"[@Ada](mention://ada1)",
+		);
+	});
+
+	test("leaves code, links, images, HTML and URLs intact", () => {
+		const text =
+			"`@Scout` [@Scout](https://example.com) ![@Scout](a.png) <span title='@Scout'>x</span> https://example.com/@Scout\n\n```txt\n@Scout\n```";
+		expect(inlineMentions(text, [], [scout])).toBe(text);
+	});
+
+	test("does not duplicate or nest existing mention links", () => {
+		const text = "[@Scout](mention://bot_scout), hello";
+		expect(inlineMentions(text, [scout, scout], [scout])).toBe(text);
+		const linked = inlineMentions("@Scout and @Scout", [scout], [scout]);
+		expect(inlineMentions(linked, [scout], [scout])).toBe(linked);
+	});
+
+	test("escapes Markdown in labels and parentheses in principal IDs", () => {
+		const member = { id: "person)team(%", name: "A[B]*C*" };
+		const linked = "[@A\\[B\\]\\*C\\*](mention://person%29team%28%25)";
+		expect(inlineMentions("@A[B]*C*", [member])).toBe(linked);
+		expect(inlineMentions(linked, [member])).toBe(linked);
+		expect(
+			inlineMentions("@~~Ada~~", [], [{ id: "ada", name: "~~Ada~~" }]),
+		).toBe("[@\\~\\~Ada\\~\\~](mention://ada)");
+		expect(inlineMentions("", [{ id: "ada", name: "A {b} $$Ada$$" }])).toBe(
+			"[@A \\{b\\} \\$\\$Ada\\$\\$](mention://ada)",
+		);
+	});
+
+	test("leaves math syntax intact", () => {
+		const text = "$$@Scout$$\n\n$$\n@Scout\n$$";
+		expect(inlineMentions(text, [], [scout])).toBe(text);
+	});
+
+	test("keeps block syntax when prepending an explicit mention", () => {
+		for (const text of [
+			"# Decision",
+			"- First item",
+			"```txt\nExample\n```",
+			"> Quoted text",
+		]) {
+			expect(inlineMentions(text, [scout])).toBe(
+				`[@Scout](mention://bot_scout)\n\n${text}`,
+			);
+		}
+	});
 });
 
 describe("spokenMentions", () => {
@@ -176,4 +286,14 @@ describe("spokenMentions", () => {
 			"b2",
 		]);
 	});
+});
+
+test("direct bot calls address the bot without its name while group calls still require it", () => {
+	const bots = [{ id: "bot", name: "Scout", kind: "bot" as const }];
+	expect(callMentions("What time is it?", bots, "direct")).toEqual(["bot"]);
+	expect(callMentions("What time is it?", bots, "group")).toEqual([]);
+	expect(callMentions("Scout, what time is it?", bots, "group")).toEqual([
+		"bot",
+	]);
+	expect(callMentions("   ", bots, "direct")).toEqual([]);
 });

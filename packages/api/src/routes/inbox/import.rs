@@ -673,6 +673,7 @@ async fn start<C: ConnectionTrait>(
         updated_at: Set(now),
         import_key: Set(Some(plan.local_id.clone())),
         last_seq: Set(Some(0)),
+        image: Set(None),
     })
     .exec_without_returning(db)
     .await
@@ -951,7 +952,7 @@ pub async fn import_conversation(
         );
     }
     let conversation =
-        visible_conversation(&state.db, &Reader::own(&sub), &imported.conversation_id).await?;
+        visible_conversation(&state, &Reader::own(&sub), &imported.conversation_id).await?;
     Ok(Json(ImportConversationResponse {
         conversation,
         imported: imported.imported,

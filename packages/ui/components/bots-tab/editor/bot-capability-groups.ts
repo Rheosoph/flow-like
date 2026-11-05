@@ -16,6 +16,7 @@ import {
 	Mail,
 	MessagesSquare,
 	MonitorSmartphone,
+	Network,
 	Plug,
 	Sparkles,
 	Split,
@@ -39,7 +40,7 @@ export const BOT_CAPABILITY_GROUPS: readonly {
 	readonly id: BotCapabilityGroupId;
 	readonly capabilities: readonly BotCapability[];
 }[] = [
-	{ id: "web", capabilities: ["internet"] },
+	{ id: "web", capabilities: ["internet", "web_requests"] },
 	{ id: "apps", capabilities: ["profile_apps", "selected_apps"] },
 	{
 		id: "hands",
@@ -78,13 +79,10 @@ export const BOT_CAPABILITY_GROUPS: readonly {
 	{ id: "security", capabilities: ["encryption"] },
 ];
 
-/** Configured today; the bot starts using them once the bot runtime lands. */
-export const BOT_RUNTIME_PENDING_CAPABILITIES: ReadonlySet<BotCapability> =
-	new Set(["connectors", "skills", "image_generation", "delegation"]);
-
 export const BOT_CAPABILITY_ICONS: Readonly<Record<BotCapability, LucideIcon>> =
 	{
 		internet: Globe,
+		web_requests: Network,
 		profile_apps: LayoutGrid,
 		selected_apps: AppWindow,
 		code_execution: CodeXml,

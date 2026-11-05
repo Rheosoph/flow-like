@@ -1,6 +1,7 @@
 "use client";
 
 import { useBackend, useBackendReady } from "@flow-like/flow-like-ui";
+import { IncomingCallProvider } from "@flow-like/flow-like-ui/components/incoming-call-provider";
 import { unwatchedInboxPredicate } from "@flow-like/flow-like-ui/hooks/use-inbox";
 import type { RealtimeConversationSubscription } from "@flow-like/flow-like-ui/lib/realtime/types";
 import { useQueryClient } from "@tanstack/react-query";
@@ -156,5 +157,11 @@ export function NativeRealtimeBridge() {
 		queryClient,
 		backend,
 	]);
-	return null;
+	return (
+		<IncomingCallProvider
+			enabled={ready && signedIn && Boolean(profileId && subject && hasToken)}
+			scope={JSON.stringify([profileId, issuer, subject])}
+			userId={subject ?? ""}
+		/>
+	);
 }

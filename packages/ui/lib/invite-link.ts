@@ -1,10 +1,8 @@
 import type { IProfile } from "../types";
 import { getApiOrigin } from "./api-url";
 
-/** Shared invitations start at the API's public preview and app handoff page. */
-export function getInviteLink(
-	appId: string,
-	token: string,
+function joinPageUrl(
+	params: Record<string, string>,
 	profile?: Partial<IProfile> | null,
 ): string {
 	const url = new URL(getApiOrigin(profile));
@@ -19,8 +17,25 @@ export function getInviteLink(
 	}
 	// A deployment may provide its API origin or its versioned API base.
 	url.pathname = `${url.pathname.replace(/\/+$/, "").replace(/\/api\/v1$/, "")}/join`;
-	url.search = new URLSearchParams({ appId, token }).toString();
+	url.search = new URLSearchParams(params).toString();
 	return url.href;
+}
+
+/** Shared invitations start at the API's public preview and app handoff page. */
+export function getInviteLink(
+	appId: string,
+	token: string,
+	profile?: Partial<IProfile> | null,
+): string {
+	return joinPageUrl({ appId, token }, profile);
+}
+
+/** A room invite link opens the same public handoff page, keyed by `room`. */
+export function getRoomInviteLink(
+	token: string,
+	profile?: Partial<IProfile> | null,
+): string {
+	return joinPageUrl({ room: token }, profile);
 }
 
 export function getInviteDeepLink(appId: string, token: string): string {

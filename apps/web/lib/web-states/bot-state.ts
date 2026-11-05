@@ -4,6 +4,7 @@ import type {
 	IBot,
 	IBotApp,
 	IBotAvatar,
+	IBotConnector,
 	IBotMailAddress,
 	IBotMailAvailability,
 	IBotMailThread,
@@ -13,15 +14,21 @@ import type {
 	IBotPresence,
 	IBotRestrictions,
 	IBotSecretInfo,
+	IBotSkill,
 	IBotState,
 	IBotTask,
 	IBotToolGrant,
 	IBotWebhook,
 	IBotWorkspace,
+	IConnectedAccount,
+	ICreateBotConnectorRequest,
 	ICreateBotRequest,
+	ICreateBotSkillRequest,
 	ICreateBotTaskRequest,
 	IIssuedBotWebhook,
+	IUpdateBotConnectorRequest,
 	IUpdateBotRequest,
+	IUpdateBotSkillRequest,
 	IUpdateBotTaskRequest,
 	IUpsertBotSecretRequest,
 } from "@flow-like/flow-like-ui";
@@ -86,6 +93,29 @@ function expectIssued(response: unknown): IIssuedBotWebhook {
 		throw new Error("Unexpected response while issuing a webhook");
 	}
 	return response as unknown as IIssuedBotWebhook;
+}
+
+function expectSkill(response: unknown): IBotSkill {
+	if (!isRecord(response) || typeof response.id !== "string") {
+		throw new Error("Unexpected response while saving a skill");
+	}
+	return response as unknown as IBotSkill;
+}
+
+function expectConnector(response: unknown): IBotConnector {
+	if (!isRecord(response) || typeof response.id !== "string") {
+		throw new Error("Unexpected response while saving a connector");
+	}
+	return response as unknown as IBotConnector;
+}
+
+function base64Of(bytes: Uint8Array): string {
+	let binary = "";
+	const chunk = 0x8000;
+	for (let index = 0; index < bytes.length; index += chunk) {
+		binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+	}
+	return btoa(binary);
 }
 
 function expectTask(response: unknown): IBotTask {
@@ -356,6 +386,91 @@ export class WebBotState implements IBotState {
 		);
 	}
 
+	async listSkills(botId: string): Promise<IBotSkill[]> {
+		const response = await apiGet<{ skills?: IBotSkill[] }>(
+			`${botPath(botId)}/skills`,
+			this.backend.auth,
+		);
+		return asArray(response?.skills);
+	}
+
+	async createSkill(
+		botId: string,
+		request: ICreateBotSkillRequest,
+	): Promise<IBotSkill> {
+		return expectSkill(
+			await apiPost<IBotSkill>(
+				`${botPath(botId)}/skills`,
+				request,
+				this.backend.auth,
+			),
+		);
+	}
+
+	async updateSkill(
+		botId: string,
+		skillId: string,
+		request: IUpdateBotSkillRequest,
+	): Promise<IBotSkill> {
+		return expectSkill(
+			await apiPatch<IBotSkill>(
+				`${botPath(botId)}/skills/${encodeURIComponent(skillId)}`,
+				request,
+				this.backend.auth,
+			),
+		);
+	}
+
+	async approveSkill(botId: string, skillId: string): Promise<IBotSkill> {
+		return expectSkill(
+			await apiPost<IBotSkill>(
+				`${botPath(botId)}/skills/${encodeURIComponent(skillId)}/approve`,
+				undefined,
+				this.backend.auth,
+			),
+		);
+	}
+
+	async disableSkill(botId: string, skillId: string): Promise<IBotSkill> {
+		return expectSkill(
+			await apiPost<IBotSkill>(
+				`${botPath(botId)}/skills/${encodeURIComponent(skillId)}/disable`,
+				undefined,
+				this.backend.auth,
+			),
+		);
+	}
+
+	async deleteSkill(botId: string, skillId: string): Promise<void> {
+		await apiDelete(
+			`${botPath(botId)}/skills/${encodeURIComponent(skillId)}`,
+			this.backend.auth,
+		);
+	}
+
+	async installSkillPackage(
+		botId: string,
+		packageId: string,
+		version?: string,
+	): Promise<IBotSkill[]> {
+		const response = await apiPost<{ skills?: IBotSkill[] }>(
+			`${botPath(botId)}/skills/package`,
+			{ package_id: packageId, version },
+			this.backend.auth,
+		);
+		return asArray(response?.skills);
+	}
+
+	async importSkill(botId: string, zip: Uint8Array): Promise<IBotSkill> {
+		return expectSkill(
+			await apiPost<IBotSkill>(
+				`${botPath(botId)}/skills/import`,
+				{ zip_base64: base64Of(zip) },
+				this.backend.auth,
+			),
+		);
+	}
+
 	async listBots(): Promise<IBot[]> {
 		const response = await apiGet<{ bots?: IBot[] }>("bots", this.backend.auth);
 		return asArray(response?.bots);
@@ -463,5 +578,77 @@ export class WebBotState implements IBotState {
 			`${botPath(botId)}/secrets/${encodeURIComponent(name)}`,
 			this.backend.auth,
 		);
+	}
+
+	async listConnectors(botId: string): Promise<IBotConnector[]> {
+		const response = await apiGet<{ connectors?: IBotConnector[] }>(
+			`${botPath(botId)}/connectors`,
+			this.backend.auth,
+		);
+		return asArray(response?.connectors);
+	}
+
+	async createConnector(
+		botId: string,
+		request: ICreateBotConnectorRequest,
+	): Promise<IBotConnector> {
+		return expectConnector(
+			await apiPost<IBotConnector>(
+				`${botPath(botId)}/connectors`,
+				request,
+				this.backend.auth,
+			),
+		);
+	}
+
+	async updateConnector(
+		botId: string,
+		connectorId: string,
+		request: IUpdateBotConnectorRequest,
+	): Promise<IBotConnector> {
+		return expectConnector(
+			await apiPatch<IBotConnector>(
+				`${botPath(botId)}/connectors/${encodeURIComponent(connectorId)}`,
+				request,
+				this.backend.auth,
+			),
+		);
+	}
+
+	async deleteConnector(botId: string, connectorId: string): Promise<void> {
+		await apiDelete(
+			`${botPath(botId)}/connectors/${encodeURIComponent(connectorId)}`,
+			this.backend.auth,
+		);
+	}
+
+	async refreshConnector(
+		botId: string,
+		connectorId: string,
+	): Promise<IBotConnector> {
+		return expectConnector(
+			await apiPost<IBotConnector>(
+				`${botPath(botId)}/connectors/${encodeURIComponent(connectorId)}/refresh`,
+				undefined,
+				this.backend.auth,
+			),
+		);
+	}
+
+	async listConnectedAccounts(): Promise<IConnectedAccount[]> {
+		const response = await apiGet<{
+			connections?: {
+				handle: string;
+				provider_id?: string | null;
+				state: string;
+				scopes?: string[];
+			}[];
+		}>("oauth/connections", this.backend.auth);
+		return asArray(response?.connections).map((connection) => ({
+			handle: connection.handle,
+			provider_id: connection.provider_id ?? null,
+			state: connection.state,
+			scopes: connection.scopes ?? [],
+		}));
 	}
 }

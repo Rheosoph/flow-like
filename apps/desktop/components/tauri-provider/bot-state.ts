@@ -5,6 +5,7 @@ import type {
 	IBotApp,
 	IBotAvatar,
 	IBotComputerHost,
+	IBotConnector,
 	IBotEncryptionHost,
 	IBotMailAddress,
 	IBotMailAvailability,
@@ -15,6 +16,7 @@ import type {
 	IBotPresence,
 	IBotRestrictions,
 	IBotSecretInfo,
+	IBotSkill,
 	IBotState,
 	IBotTask,
 	IBotToolGrant,
@@ -22,11 +24,16 @@ import type {
 	IBotTurnHost,
 	IBotWebhook,
 	IBotWorkspace,
+	IConnectedAccount,
+	ICreateBotConnectorRequest,
 	ICreateBotRequest,
+	ICreateBotSkillRequest,
 	ICreateBotTaskRequest,
 	IIssuedBotWebhook,
 	ILocalBotHost,
+	IUpdateBotConnectorRequest,
 	IUpdateBotRequest,
+	IUpdateBotSkillRequest,
 	IUpdateBotTaskRequest,
 	IUpsertBotSecretRequest,
 } from "@flow-like/flow-like-ui";
@@ -53,10 +60,12 @@ import {
 	localToolGrants,
 } from "../../lib/local-bots/commands";
 import { BotComputerHost } from "../../lib/local-bots/computer";
+import { localConnectors } from "../../lib/local-bots/connectors";
 import { BotEncryptionHost } from "../../lib/local-bots/encryption";
 import { mergeBots } from "../../lib/local-bots/merge";
 import { LocalBotMover } from "../../lib/local-bots/move";
 import { idsOf, localRegistries } from "../../lib/local-bots/registry";
+import { localSkills } from "../../lib/local-bots/skills";
 import { BotTurnHost } from "../../lib/local-bots/turns";
 import type { TauriBackend } from "../tauri-provider";
 
@@ -76,6 +85,13 @@ function secretPath(botId: string, name: string): string {
 	return `${botPath(botId)}/secrets/${encodeURIComponent(name)}`;
 }
 
+function expectConnector(value: unknown): IBotConnector {
+	if (!isRecord(value) || typeof value.id !== "string") {
+		throw new Error("Unexpected response while saving a connector");
+	}
+	return value as unknown as IBotConnector;
+}
+
 function expectBot(response: unknown, operation: string): IBot {
 	if (!isRecord(response)) {
 		throw new Error(`Unexpected response while trying to ${operation}`);
@@ -92,6 +108,22 @@ function expectIssued(response: unknown): IIssuedBotWebhook {
 		throw new Error("Unexpected response while issuing a webhook");
 	}
 	return response as unknown as IIssuedBotWebhook;
+}
+
+function expectSkill(response: unknown): IBotSkill {
+	if (!isRecord(response) || typeof response.id !== "string") {
+		throw new Error("Unexpected response while saving a skill");
+	}
+	return response as unknown as IBotSkill;
+}
+
+function base64Of(bytes: Uint8Array): string {
+	let binary = "";
+	const chunk = 0x8000;
+	for (let index = 0; index < bytes.length; index += chunk) {
+		binary += String.fromCharCode(...bytes.subarray(index, index + chunk));
+	}
+	return btoa(binary);
 }
 
 function expectTask(response: unknown): IBotTask {
@@ -593,6 +625,132 @@ export class BotState implements IBotState {
 		);
 	}
 
+	async listSkills(botId: string): Promise<IBotSkill[]> {
+		const account = await this.accountFor(botId);
+		if (!account) return this.here(botId, () => localSkills.list(botId));
+		const response = await get<{ skills?: IBotSkill[] }>(
+			account.profile,
+			`${botPath(account.id)}/skills`,
+			account.auth,
+		);
+		return asArray(response?.skills);
+	}
+
+	async createSkill(
+		botId: string,
+		request: ICreateBotSkillRequest,
+	): Promise<IBotSkill> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () => localSkills.create(botId, request));
+		}
+		return expectSkill(
+			await post<IBotSkill>(
+				account.profile,
+				`${botPath(account.id)}/skills`,
+				request,
+				account.auth,
+			),
+		);
+	}
+
+	async updateSkill(
+		botId: string,
+		skillId: string,
+		request: IUpdateBotSkillRequest,
+	): Promise<IBotSkill> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () =>
+				localSkills.update(botId, skillId, request),
+			);
+		}
+		return expectSkill(
+			await patch<IBotSkill>(
+				account.profile,
+				`${botPath(account.id)}/skills/${encodeURIComponent(skillId)}`,
+				request,
+				account.auth,
+			),
+		);
+	}
+
+	private async skillStatus(
+		botId: string,
+		skillId: string,
+		status: "active" | "disabled",
+	): Promise<IBotSkill> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () =>
+				localSkills.setStatus(botId, skillId, status),
+			);
+		}
+		const action = status === "active" ? "approve" : "disable";
+		return expectSkill(
+			await post<IBotSkill>(
+				account.profile,
+				`${botPath(account.id)}/skills/${encodeURIComponent(skillId)}/${action}`,
+				undefined,
+				account.auth,
+			),
+		);
+	}
+
+	approveSkill(botId: string, skillId: string): Promise<IBotSkill> {
+		return this.skillStatus(botId, skillId, "active");
+	}
+
+	disableSkill(botId: string, skillId: string): Promise<IBotSkill> {
+		return this.skillStatus(botId, skillId, "disabled");
+	}
+
+	async deleteSkill(botId: string, skillId: string): Promise<void> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () => localSkills.delete(botId, skillId));
+		}
+		await del<void>(
+			account.profile,
+			`${botPath(account.id)}/skills/${encodeURIComponent(skillId)}`,
+			undefined,
+			account.auth,
+		);
+	}
+
+	async installSkillPackage(
+		botId: string,
+		packageId: string,
+		version?: string,
+	): Promise<IBotSkill[]> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () =>
+				localSkills.installPackage(botId, packageId, version),
+			);
+		}
+		const response = await post<{ skills?: IBotSkill[] }>(
+			account.profile,
+			`${botPath(account.id)}/skills/package`,
+			{ package_id: packageId, version },
+			account.auth,
+		);
+		return asArray(response?.skills);
+	}
+
+	async importSkill(botId: string, zip: Uint8Array): Promise<IBotSkill> {
+		const account = await this.accountFor(botId);
+		if (!account) return this.here(botId, () => localSkills.import(botId, zip));
+		return expectSkill(
+			await post<IBotSkill>(
+				account.profile,
+				`${botPath(account.id)}/skills/import`,
+				{ zip_base64: base64Of(zip) },
+				account.auth,
+			),
+		);
+	}
+
 	private async mailRoute(botId: string): Promise<IAccountRoute> {
 		const account = await this.accountFor(botId);
 		if (!account) {
@@ -824,5 +982,114 @@ export class BotState implements IBotState {
 			undefined,
 			account.auth,
 		);
+	}
+
+	async listConnectors(botId: string): Promise<IBotConnector[]> {
+		const account = await this.accountFor(botId);
+		if (!account) return this.here(botId, () => localConnectors.list(botId));
+		const response = await get<{ connectors?: IBotConnector[] }>(
+			account.profile,
+			`${botPath(account.id)}/connectors`,
+			account.auth,
+		);
+		return asArray(response?.connectors);
+	}
+
+	async createConnector(
+		botId: string,
+		request: ICreateBotConnectorRequest,
+	): Promise<IBotConnector> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () => localConnectors.create(botId, request));
+		}
+		return expectConnector(
+			await post<IBotConnector>(
+				account.profile,
+				`${botPath(account.id)}/connectors`,
+				request,
+				account.auth,
+			),
+		);
+	}
+
+	async updateConnector(
+		botId: string,
+		connectorId: string,
+		request: IUpdateBotConnectorRequest,
+	): Promise<IBotConnector> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () =>
+				localConnectors.update(botId, connectorId, request),
+			);
+		}
+		return expectConnector(
+			await patch<IBotConnector>(
+				account.profile,
+				`${botPath(account.id)}/connectors/${encodeURIComponent(connectorId)}`,
+				request,
+				account.auth,
+			),
+		);
+	}
+
+	async deleteConnector(botId: string, connectorId: string): Promise<void> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			return this.here(botId, () => localConnectors.delete(botId, connectorId));
+		}
+		await del<void>(
+			account.profile,
+			`${botPath(account.id)}/connectors/${encodeURIComponent(connectorId)}`,
+			undefined,
+			account.auth,
+		);
+	}
+
+	async refreshConnector(
+		botId: string,
+		connectorId: string,
+	): Promise<IBotConnector> {
+		const account = await this.accountFor(botId);
+		if (!account) {
+			const session = accountSession(this.backend);
+			return this.here(botId, () =>
+				localConnectors.refresh(
+					botId,
+					connectorId,
+					session?.profile.id && session.profile.hub
+						? { profileId: session.profile.id, hub: session.profile.hub }
+						: undefined,
+				),
+			);
+		}
+		return expectConnector(
+			await post<IBotConnector>(
+				account.profile,
+				`${botPath(account.id)}/connectors/${encodeURIComponent(connectorId)}/refresh`,
+				undefined,
+				account.auth,
+			),
+		);
+	}
+
+	async listConnectedAccounts(): Promise<IConnectedAccount[]> {
+		const session = accountSession(this.backend);
+		if (!session) return [];
+		const response = await get<{
+			connections?: {
+				handle: string;
+				provider_id?: string | null;
+				state: string;
+				scopes?: string[];
+			}[];
+		}>(session.profile, "oauth/connections", session.auth);
+		return asArray(response?.connections).map((connection) => ({
+			handle: connection.handle,
+			provider_id: connection.provider_id ?? null,
+			state: connection.state,
+			scopes: connection.scopes ?? [],
+		}));
 	}
 }

@@ -402,6 +402,8 @@ export interface IUserLookupBot {
 	/** Built-in bots carry no stored name until renamed; show the localized default. */
 	system: "general" | "flux" | null;
 	appearance: BotAppearance;
+	/** Pinned text-to-speech Bit ID for calls; absent for unpinned or deleted bots. */
+	tts_model?: string | null;
 	/** The bot was deleted; past actions still show it. */
 	deleted: boolean;
 }

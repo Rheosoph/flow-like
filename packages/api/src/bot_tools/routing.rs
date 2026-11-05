@@ -2,7 +2,9 @@ use flow_like::flow::copilot::HostTools;
 use serde_json::Value;
 
 /// Tools the API runs itself: they touch Lance tables and read objects, nothing heavy.
-const IN_PROCESS: [&str; 19] = [
+const IN_PROCESS: [&str; 22] = [
+    "skill_load",
+    "skill_propose",
     "secret_list",
     "secret_request",
     "message_owner",
@@ -22,17 +24,26 @@ const IN_PROCESS: [&str; 19] = [
     "knowledge_drop",
     "data_sources",
     "data_query",
+    "connector_tools",
 ];
 
-/// Tools that write files, parse documents or run code: the executor only.
-const EXECUTOR_ONLY: [&str; 7] = [
+/// Tools that write files, parse documents, run code or call a provider whose answer is untrusted: the executor only.
+const EXECUTOR_ONLY: [&str; 15] = [
+    "skill_call",
+    "skill_run",
     "file_save",
     "file_write",
     "file_summarize",
     "file_extract",
     "pdf_render",
     "excel_inspect",
+    "document_create",
+    "document_fill",
     "code_run",
+    "image_generate",
+    "connector_call",
+    "connector_request",
+    "web_request",
 ];
 
 /// File types the API cannot turn into text; reading or indexing one needs the converters.
@@ -58,7 +69,8 @@ pub(crate) fn route(tool: &str, args: &Value, has_executor: bool) -> Option<Rout
     if !is_bot_tool(tool) {
         return None;
     }
-    let heavy = EXECUTOR_ONLY.contains(&tool) || wants_executor(tool, args);
+    let heavy = EXECUTOR_ONLY.contains(&tool)
+        || (wants_executor(tool, args) && !(tool == "connector_tools" && !has_executor));
     Some(match (heavy, has_executor) {
         (false, _) => Route::InProcess,
         (true, true) => Route::Executor,
@@ -76,6 +88,10 @@ fn wants_executor(tool: &str, args: &Value) -> bool {
         "data_query" => args
             .get("save_as")
             .is_some_and(|save_as| save_as.get("file").is_some()),
+        "connector_tools" => args
+            .get("names")
+            .and_then(Value::as_array)
+            .is_some_and(|names| !names.is_empty()),
         "data_sources" => args.get("operation").and_then(Value::as_str) == Some("attach"),
         _ => false,
     }
@@ -170,6 +186,47 @@ mod tests {
                 Some(Route::Refuse(_))
             ));
         }
+    }
+
+    #[test]
+    fn every_untrusted_tool_is_executor_only_and_never_in_process() {
+        let untrusted = [
+            "document_create",
+            "document_fill",
+            "skill_call",
+            "skill_run",
+            "connector_call",
+            "connector_request",
+            "image_generate",
+        ];
+        for tool in untrusted {
+            assert!(
+                EXECUTOR_ONLY.contains(&tool),
+                "{tool} must be executor-only"
+            );
+            assert!(
+                !IN_PROCESS.contains(&tool),
+                "{tool} must not run in the API"
+            );
+            assert_eq!(
+                route(tool, &json!({}), true),
+                Some(Route::Executor),
+                "{tool}"
+            );
+            assert!(matches!(
+                route(tool, &json!({}), false),
+                Some(Route::Refuse(_))
+            ));
+        }
+        assert!(!IN_PROCESS.contains(&"skill_import") && !EXECUTOR_ONLY.contains(&"skill_import"));
+        assert_eq!(
+            route("connector_tools", &json!({ "names": ["a"] }), true),
+            Some(Route::Executor)
+        );
+        assert_eq!(
+            route("connector_tools", &json!({}), true),
+            Some(Route::InProcess)
+        );
     }
 
     #[test]

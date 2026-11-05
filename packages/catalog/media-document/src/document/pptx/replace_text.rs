@@ -123,39 +123,7 @@ impl NodeLogic for PptxReplaceTextNode {
         let template_bytes = template.get(context, false).await?;
         let mut files = read_zip(&template_bytes)?;
 
-        let slide_keys: Vec<String> = files
-            .keys()
-            .filter(|k| {
-                (k.starts_with("ppt/slides/slide") && k.ends_with(".xml"))
-                    || (k.starts_with("ppt/slideLayouts/") && k.ends_with(".xml"))
-                    || (k.starts_with("ppt/slideMasters/") && k.ends_with(".xml"))
-            })
-            .cloned()
-            .collect();
-
-        for key in slide_keys {
-            let xml_bytes = match files.get(&key) {
-                Some(bytes) => bytes.clone(),
-                None => continue,
-            };
-
-            let updated = if use_markdown {
-                replace_text_in_xml_markdown(
-                    &xml_bytes,
-                    &placeholder,
-                    &replacement,
-                    "a:t",
-                    "a:r",
-                    "a:rPr",
-                    "a:p",
-                    OpenXmlFormat::Pptx,
-                )?
-            } else {
-                replace_text_in_xml(&xml_bytes, &placeholder, &replacement, "a:t", "a:r", "a:p")?
-            };
-
-            files.insert(key, updated);
-        }
+        replace_pptx_text(&mut files, &placeholder, &replacement, use_markdown)?;
 
         let result_bytes = write_zip(&files)?;
         output.put(context, result_bytes, false).await?;
@@ -172,4 +140,47 @@ impl NodeLogic for PptxReplaceTextNode {
             "PPTX text replacement requires the 'execute' feature"
         ))
     }
+}
+
+#[cfg(feature = "execute")]
+pub(crate) fn replace_pptx_text(
+    files: &mut std::collections::HashMap<String, Vec<u8>>,
+    placeholder: &str,
+    replacement: &str,
+    use_markdown: bool,
+) -> flow_like_types::Result<()> {
+    let slide_keys: Vec<String> = files
+        .keys()
+        .filter(|k| {
+            (k.starts_with("ppt/slides/slide") && k.ends_with(".xml"))
+                || (k.starts_with("ppt/slideLayouts/") && k.ends_with(".xml"))
+                || (k.starts_with("ppt/slideMasters/") && k.ends_with(".xml"))
+        })
+        .cloned()
+        .collect();
+
+    for key in slide_keys {
+        let xml_bytes = match files.get(&key) {
+            Some(bytes) => bytes.clone(),
+            None => continue,
+        };
+
+        let updated = if use_markdown {
+            replace_text_in_xml_markdown(
+                &xml_bytes,
+                placeholder,
+                replacement,
+                "a:t",
+                "a:r",
+                "a:rPr",
+                "a:p",
+                OpenXmlFormat::Pptx,
+            )?
+        } else {
+            replace_text_in_xml(&xml_bytes, placeholder, replacement, "a:t", "a:r", "a:p")?
+        };
+
+        files.insert(key, updated);
+    }
+    Ok(())
 }

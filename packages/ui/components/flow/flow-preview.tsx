@@ -40,6 +40,9 @@ interface FlowPreviewProps {
 	colorMode?: ColorMode;
 }
 
+/** ReactFlow's default of 0.5 stops `fitView` short of showing a spread-out board in a small pane. */
+const PREVIEW_MIN_ZOOM = 0.05;
+
 // Preview versions of nodes that don't show toolbars
 const PreviewFlowNode = memo((props: NodeProps<FlowNodeType>) => (
 	<div className="pointer-events-none">
@@ -192,6 +195,7 @@ function FlowPreviewInner({
 			nodes={boardNodes}
 			nodeTypes={nodeTypes}
 			onInit={handleInit}
+			minZoom={PREVIEW_MIN_ZOOM}
 			fitView
 			fitViewOptions={{ padding: 0.3 }}
 			edges={edges}

@@ -293,6 +293,7 @@ pub fn routes() -> Router<AppState> {
         .route("/token/{provider_id}", post(token_exchange))
         .route("/refresh/{provider_id}", post(token_refresh))
         .route("/connection/{provider_id}", post(adopt_connection))
+        .route("/connections", axum::routing::get(list_connections))
         .route("/device/start/{provider_id}", post(device_start))
         .route("/device/poll/{provider_id}", post(device_poll))
         .route("/userinfo/{provider_id}", post(userinfo))
@@ -765,6 +766,60 @@ pub async fn adopt_connection(
     Ok(Json(
         adopt_response(&state, &provider_id, &config, Some(&owner), token).await?,
     ))
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct OAuthConnectionSummary {
+    /// The stable handle a bot connector stores; not a token.
+    pub handle: String,
+    /// The configured provider this grant belongs to, if it still matches one.
+    pub provider_id: Option<String>,
+    /// `ready`, `refreshing`, `failed` or `revoked`.
+    pub state: String,
+    pub scopes: Vec<String>,
+    pub updated_at: String,
+}
+
+#[derive(Serialize, ToSchema)]
+pub struct OAuthConnectionSummaries {
+    pub connections: Vec<OAuthConnectionSummary>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/oauth/connections",
+    tag = "oauth",
+    responses((status = 200, description = "The accounts you connected through this hub: provider, state, scopes and when they last changed. Never a token.", body = OAuthConnectionSummaries), (status = 401, body = ErrorResponse), (status = 503, body = ErrorResponse)),
+    security(("bearer_auth" = []))
+)]
+#[tracing::instrument(name = "GET /oauth/connections", skip(state, user))]
+pub async fn list_connections(
+    State(state): State<AppState>,
+    Extension(user): Extension<AppUser>,
+) -> Result<Json<OAuthConnectionSummaries>, OAuthProxyError> {
+    let owner = require_owner(&user)?;
+    let providers: Vec<(String, String)> = state
+        .oauth_providers
+        .iter()
+        .map(|(id, config)| (id.clone(), config.token_url.clone()))
+        .collect();
+    let listed =
+        connections::Connections::list_owned(&state.db, &state.encryption_key, &owner, &providers)
+            .await?;
+    Ok(Json(OAuthConnectionSummaries {
+        connections: listed
+            .into_iter()
+            .map(|connection| OAuthConnectionSummary {
+                handle: connection.handle,
+                provider_id: connection.provider_id,
+                state: connection.state,
+                scopes: connection.scopes,
+                updated_at: chrono::DateTime::from_timestamp(connection.updated_at, 0)
+                    .map(|time| time.to_rfc3339())
+                    .unwrap_or_default(),
+            })
+            .collect(),
+    }))
 }
 
 fn normalize_refresh_scope(scope: Option<&str>) -> Result<Option<String>, OAuthProxyError> {

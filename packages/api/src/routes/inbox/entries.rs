@@ -323,9 +323,10 @@ pub(super) fn plain_links(kind: InboxEntryKind, envelope: &Value) -> Result<Link
                 ..Links::default()
             })
             .map_err(ApiError::bad_request),
-        InboxEntryKind::Reaction | InboxEntryKind::Delete | InboxEntryKind::Member => {
-            Ok(Links::default())
-        }
+        InboxEntryKind::Reaction
+        | InboxEntryKind::Delete
+        | InboxEntryKind::Member
+        | InboxEntryKind::Room => Ok(Links::default()),
     }
 }
 
@@ -762,6 +763,7 @@ async fn checked_envelopes<C: ConnectionTrait>(
     ApiError,
 > {
     let conversation = member_conversation(txn, conversation_id, sender).await?;
+    super::blocks::ensure_direct_allowed(txn, &conversation, sender).await?;
     let members = active_members(txn, &[conversation_id.to_string()]).await?;
     let encryption = ConversationEncryption::parse(&conversation.encryption)
         .unwrap_or(ConversationEncryption::E2e);

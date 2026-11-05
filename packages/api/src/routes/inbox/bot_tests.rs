@@ -59,6 +59,7 @@ async fn bots_only(db: &DatabaseConnection, id: &str, first: &str, second: &str)
         updated_at: Set(at(0)),
         import_key: Set(None),
         last_seq: Set(None),
+        image: Set(None),
     }
     .insert(db)
     .await

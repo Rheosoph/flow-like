@@ -1,0 +1,4412 @@
+{
+	"bits": [
+		{
+			"ref": "openrouter-assemblyai-assemblyai-tts-1",
+			"id": "or46fbc99aac9b19dcabb02a",
+			"type": "Tts",
+			"authors": ["AssemblyAI"],
+			"repository": "https://openrouter.ai/assemblyai/assemblyai-tts-1",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "assemblyai/assemblyai-tts-1"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 15000000
+				},
+				"default_voice": "aai-audrey"
+			},
+			"meta": {
+				"en": {
+					"name": "TTS 1 · OpenRouter",
+					"description": "Speak replies and narration with the aai-audrey voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the aai-audrey voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the aai-audrey voice.",
+					"website": "https://openrouter.ai/assemblyai/assemblyai-tts-1",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/assemblyai-cb3a8cbc6d9db747.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mistralai-voxtral-mini-tts-3-0",
+			"id": "or0be5d6e7b0d348a3015707",
+			"type": "Tts",
+			"authors": ["Mistral AI"],
+			"repository": "https://openrouter.ai/mistralai/voxtral-mini-tts-3-0",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mistralai/voxtral-mini-tts-3-0"
+				},
+				"default_voice": "en_paul_neutral",
+				"pricing": {
+					"input_micro_usd_per_million_characters": 13000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Voxtral TTS 3 · OpenRouter",
+					"description": "Speak English replies with the en_paul_neutral voice. Hosted through OpenRouter.",
+					"long_description": "Speak English replies with the en_paul_neutral voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak English replies with the en_paul_neutral voice.",
+					"website": "https://openrouter.ai/mistralai/voxtral-mini-tts-3-0",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-fish-audio-drama-3",
+			"id": "ora56dead39c2cd8dca48c3c",
+			"type": "Tts",
+			"authors": ["Fish Audio"],
+			"repository": "https://openrouter.ai/fish-audio/drama-3",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "fish-audio/drama-3"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_bytes": 2000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Drama 3 · OpenRouter",
+					"description": "Speak replies and narration with the provider default voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the provider default voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the provider default voice.",
+					"website": "https://openrouter.ai/fish-audio/drama-3",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/fish-audio-d2663f9c61a158bf.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-elevenlabs-eleven-v4",
+			"id": "or961e4f27bf2cdf0acafba7",
+			"type": "Tts",
+			"authors": ["ElevenLabs"],
+			"repository": "https://openrouter.ai/elevenlabs/eleven-v4",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "elevenlabs/eleven-v4"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 80000000
+				},
+				"default_voice": "george"
+			},
+			"meta": {
+				"en": {
+					"name": "Eleven v4 · OpenRouter",
+					"description": "Speak replies and narration with the george voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the george voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the george voice.",
+					"website": "https://openrouter.ai/elevenlabs/eleven-v4",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/elevenlabs-16f4a8b337061be7.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-elevenlabs-eleven-v4-turbo",
+			"id": "or913b3f4b494919137db407",
+			"type": "Tts",
+			"authors": ["ElevenLabs"],
+			"repository": "https://openrouter.ai/elevenlabs/eleven-v4-turbo",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "elevenlabs/eleven-v4-turbo"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 40000000
+				},
+				"default_voice": "george"
+			},
+			"meta": {
+				"en": {
+					"name": "Eleven v4 Turbo · OpenRouter",
+					"description": "Speak replies and narration with the george voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the george voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the george voice.",
+					"website": "https://openrouter.ai/elevenlabs/eleven-v4-turbo",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/elevenlabs-16f4a8b337061be7.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-elevenlabs-eleven-v3",
+			"id": "or9794eca610a95e1bea284d",
+			"type": "Tts",
+			"authors": ["ElevenLabs"],
+			"repository": "https://openrouter.ai/elevenlabs/eleven-v3",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "elevenlabs/eleven-v3"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 80000000
+				},
+				"default_voice": "george"
+			},
+			"meta": {
+				"en": {
+					"name": "Eleven v3 · OpenRouter",
+					"description": "Speak replies and narration with the george voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the george voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the george voice.",
+					"website": "https://openrouter.ai/elevenlabs/eleven-v3",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/elevenlabs-16f4a8b337061be7.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-elevenlabs-eleven-v3-conversational",
+			"id": "or1cddc44178076b49fb126e",
+			"type": "Tts",
+			"authors": ["ElevenLabs"],
+			"repository": "https://openrouter.ai/elevenlabs/eleven-v3-conversational",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "elevenlabs/eleven-v3-conversational"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 40000000
+				},
+				"default_voice": "george"
+			},
+			"meta": {
+				"en": {
+					"name": "Eleven v3 Conversational · OpenRouter",
+					"description": "Speak replies and narration with the george voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the george voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the george voice.",
+					"website": "https://openrouter.ai/elevenlabs/eleven-v3-conversational",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/elevenlabs-16f4a8b337061be7.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-elevenlabs-eleven-flash-v2-5",
+			"id": "orf328a75d323aab2dac878a",
+			"type": "Tts",
+			"authors": ["ElevenLabs"],
+			"repository": "https://openrouter.ai/elevenlabs/eleven-flash-v2.5",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "elevenlabs/eleven-flash-v2.5"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 40000000
+				},
+				"default_voice": "george"
+			},
+			"meta": {
+				"en": {
+					"name": "Eleven Flash v2.5 · OpenRouter",
+					"description": "Speak replies and narration with the george voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the george voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the george voice.",
+					"website": "https://openrouter.ai/elevenlabs/eleven-flash-v2.5",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/elevenlabs-16f4a8b337061be7.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-elevenlabs-eleven-turbo-v2",
+			"id": "or2277c3587c369d7b633ebf",
+			"type": "Tts",
+			"authors": ["ElevenLabs"],
+			"repository": "https://openrouter.ai/elevenlabs/eleven-turbo-v2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "elevenlabs/eleven-turbo-v2"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 40000000
+				},
+				"default_voice": "george"
+			},
+			"meta": {
+				"en": {
+					"name": "Eleven Turbo v2 · OpenRouter",
+					"description": "Speak replies and narration with the george voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the george voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the george voice.",
+					"website": "https://openrouter.ai/elevenlabs/eleven-turbo-v2",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/elevenlabs-16f4a8b337061be7.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-elevenlabs-eleven-multilingual-v2",
+			"id": "orba4c3b7129651577bcabf1",
+			"type": "Tts",
+			"authors": ["ElevenLabs"],
+			"repository": "https://openrouter.ai/elevenlabs/eleven-multilingual-v2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "elevenlabs/eleven-multilingual-v2"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 80000000
+				},
+				"default_voice": "george"
+			},
+			"meta": {
+				"en": {
+					"name": "Eleven Multilingual v2 · OpenRouter",
+					"description": "Speak replies and narration with the george voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the george voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the george voice.",
+					"website": "https://openrouter.ai/elevenlabs/eleven-multilingual-v2",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/elevenlabs-16f4a8b337061be7.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-elevenlabs-eleven-turbo-v2-5",
+			"id": "or13e612dce1e72048aaba3f",
+			"type": "Tts",
+			"authors": ["ElevenLabs"],
+			"repository": "https://openrouter.ai/elevenlabs/eleven-turbo-v2.5",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "elevenlabs/eleven-turbo-v2.5"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 40000000
+				},
+				"default_voice": "george"
+			},
+			"meta": {
+				"en": {
+					"name": "Eleven Turbo v2.5 · OpenRouter",
+					"description": "Speak replies and narration with the george voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the george voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the george voice.",
+					"website": "https://openrouter.ai/elevenlabs/eleven-turbo-v2.5",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/elevenlabs-16f4a8b337061be7.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-elevenlabs-eleven-flash-v2",
+			"id": "or523b87193ecc4596d05b5b",
+			"type": "Tts",
+			"authors": ["ElevenLabs"],
+			"repository": "https://openrouter.ai/elevenlabs/eleven-flash-v2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "elevenlabs/eleven-flash-v2"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 40000000
+				},
+				"default_voice": "george"
+			},
+			"meta": {
+				"en": {
+					"name": "Eleven Flash v2 · OpenRouter",
+					"description": "Speak replies and narration with the george voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the george voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the george voice.",
+					"website": "https://openrouter.ai/elevenlabs/eleven-flash-v2",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/elevenlabs-16f4a8b337061be7.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-microsoft-mai-voice-2-1-flash",
+			"id": "ord01e5ccee6e9bf390576df",
+			"type": "Tts",
+			"authors": ["Microsoft AI"],
+			"repository": "https://openrouter.ai/microsoft/mai-voice-2.1-flash",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "microsoft/mai-voice-2.1-flash"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 15000000
+				},
+				"default_voice": "en-US-Harper:MAI-Voice-2.1-Flash"
+			},
+			"meta": {
+				"en": {
+					"name": "MAI-Voice-2.1-Flash · OpenRouter",
+					"description": "Speak replies and narration with the en-US-Harper:MAI-Voice-2.1-Flash voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the en-US-Harper:MAI-Voice-2.1-Flash voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the en-US-Harper:MAI-Voice-2.1-Flash voice.",
+					"website": "https://openrouter.ai/microsoft/mai-voice-2.1-flash",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/microsoft.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-microsoft-mai-voice-2-1",
+			"id": "orb03befda9fb6f1f21a9bff",
+			"type": "Tts",
+			"authors": ["Microsoft AI"],
+			"repository": "https://openrouter.ai/microsoft/mai-voice-2.1",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "microsoft/mai-voice-2.1"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 22000000
+				},
+				"default_voice": "en-US-Harper:MAI-Voice-2.1"
+			},
+			"meta": {
+				"en": {
+					"name": "MAI-Voice-2.1 · OpenRouter",
+					"description": "Speak replies and narration with the en-US-Harper:MAI-Voice-2.1 voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the en-US-Harper:MAI-Voice-2.1 voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the en-US-Harper:MAI-Voice-2.1 voice.",
+					"website": "https://openrouter.ai/microsoft/mai-voice-2.1",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/microsoft.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-deepgram-flux-tts",
+			"id": "or0bcf4008a2eb0f4b194502",
+			"type": "Tts",
+			"authors": ["Deepgram"],
+			"repository": "https://openrouter.ai/deepgram/flux-tts",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "deepgram/flux-tts"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 45000000
+				},
+				"default_voice": "flux-alexis-en",
+				"max_input_characters": 2000
+			},
+			"meta": {
+				"en": {
+					"name": "Flux TTS · OpenRouter",
+					"description": "Speak replies and narration with the flux-alexis-en voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the flux-alexis-en voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the flux-alexis-en voice.",
+					"website": "https://openrouter.ai/deepgram/flux-tts",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/deepgram-5d4d8c1b71a683d6.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-fish-audio-s1",
+			"id": "or12da8833ff023052bdd476",
+			"type": "Tts",
+			"authors": ["Fish Audio"],
+			"repository": "https://openrouter.ai/fish-audio/s1",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "fish-audio/s1"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_bytes": 15000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "S1 · OpenRouter",
+					"description": "Speak replies and narration with the provider default voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the provider default voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the provider default voice.",
+					"website": "https://openrouter.ai/fish-audio/s1",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/fish-audio-d2663f9c61a158bf.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-fish-audio-s2-pro",
+			"id": "or74227bdd5b77555f986809",
+			"type": "Tts",
+			"authors": ["Fish Audio"],
+			"repository": "https://openrouter.ai/fish-audio/s2-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "fish-audio/s2-pro"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_bytes": 15000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "S2 Pro · OpenRouter",
+					"description": "Speak replies and narration with the provider default voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the provider default voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the provider default voice.",
+					"website": "https://openrouter.ai/fish-audio/s2-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/fish-audio-d2663f9c61a158bf.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-fish-audio-s2-1-pro-free-free",
+			"id": "or1a6fb450ba8c3d5ac9e652",
+			"type": "Tts",
+			"authors": ["Fish Audio"],
+			"repository": "https://openrouter.ai/fish-audio/s2.1-pro-free:free",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "fish-audio/s2.1-pro-free:free"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_bytes": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "S2.1 Pro Free (free) · OpenRouter",
+					"description": "Speak replies and narration with the provider default voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the provider default voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request. This free variant has provider usage limits and may be unavailable when capacity is exhausted.",
+					"tags": ["hosted", "openrouter", "text-to-speech", "free"],
+					"use_case": "Speak replies and narration with the provider default voice.",
+					"website": "https://openrouter.ai/fish-audio/s2.1-pro-free:free",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/fish-audio-d2663f9c61a158bf.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-fish-audio-s2-1-pro",
+			"id": "or330fb82e5aa410a77f5690",
+			"type": "Tts",
+			"authors": ["Fish Audio"],
+			"repository": "https://openrouter.ai/fish-audio/s2.1-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "fish-audio/s2.1-pro"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_bytes": 15000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "S2.1 Pro · OpenRouter",
+					"description": "Speak replies and narration with the provider default voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the provider default voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the provider default voice.",
+					"website": "https://openrouter.ai/fish-audio/s2.1-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/fish-audio-d2663f9c61a158bf.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-microsoft-mai-voice-2-flash",
+			"id": "or64f43a84af6b3299a73615",
+			"type": "Tts",
+			"authors": ["Microsoft AI"],
+			"repository": "https://openrouter.ai/microsoft/mai-voice-2-flash",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "microsoft/mai-voice-2-flash"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 15000000
+				},
+				"default_voice": "en-US-Harper:MAI-Voice-2"
+			},
+			"meta": {
+				"en": {
+					"name": "MAI-Voice-2-Flash · OpenRouter",
+					"description": "Speak replies and narration with the en-US-Harper:MAI-Voice-2 voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the en-US-Harper:MAI-Voice-2 voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request. The provider plans to retire this model on 2026-12-31.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the en-US-Harper:MAI-Voice-2 voice.",
+					"website": "https://openrouter.ai/microsoft/mai-voice-2-flash",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/microsoft.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-qwen-qwen-audio-3-0-tts-flash",
+			"id": "orcc00b12d95da6b0e3b76d9",
+			"type": "Tts",
+			"authors": ["Qwen"],
+			"repository": "https://openrouter.ai/qwen/qwen-audio-3.0-tts-flash",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "qwen/qwen-audio-3.0-tts-flash"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 15000000
+				},
+				"default_voice": "loongjohn"
+			},
+			"meta": {
+				"en": {
+					"name": "Qwen-Audio-3.0-TTS Flash · OpenRouter",
+					"description": "Speak replies and narration with the loongjohn voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the loongjohn voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the loongjohn voice.",
+					"website": "https://openrouter.ai/qwen/qwen-audio-3.0-tts-flash",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/qwen.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-qwen-qwen-audio-3-0-tts-plus",
+			"id": "or0024b06cd282b54e9ff14d",
+			"type": "Tts",
+			"authors": ["Qwen"],
+			"repository": "https://openrouter.ai/qwen/qwen-audio-3.0-tts-plus",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "qwen/qwen-audio-3.0-tts-plus"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 20000000
+				},
+				"default_voice": "longanlingxin"
+			},
+			"meta": {
+				"en": {
+					"name": "Qwen-Audio-3.0-TTS Plus · OpenRouter",
+					"description": "Speak replies and narration with the longanlingxin voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the longanlingxin voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the longanlingxin voice.",
+					"website": "https://openrouter.ai/qwen/qwen-audio-3.0-tts-plus",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/qwen.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-deepgram-aura-2",
+			"id": "or7c64e07f669db08de3fa34",
+			"type": "Tts",
+			"authors": ["Deepgram"],
+			"repository": "https://openrouter.ai/deepgram/aura-2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "deepgram/aura-2"
+				},
+				"default_voice": "aura-2-thalia-en",
+				"pricing": {
+					"input_micro_usd_per_million_characters": 30000000
+				},
+				"max_input_characters": 2000
+			},
+			"meta": {
+				"en": {
+					"name": "Aura-2 · OpenRouter",
+					"description": "Speak English replies with the aura-2-thalia-en voice. Hosted through OpenRouter.",
+					"long_description": "Speak English replies with the aura-2-thalia-en voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak English replies with the aura-2-thalia-en voice.",
+					"website": "https://openrouter.ai/deepgram/aura-2",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/deepgram-5d4d8c1b71a683d6.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-minimax-speech-2-8-hd",
+			"id": "or9b43c2138a97891db9b410",
+			"type": "Tts",
+			"authors": ["MiniMax"],
+			"repository": "https://openrouter.ai/minimax/speech-2.8-hd",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "minimax/speech-2.8-hd"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 100000000
+				},
+				"default_voice": "English_expressive_narrator"
+			},
+			"meta": {
+				"en": {
+					"name": "Speech 2.8 HD · OpenRouter",
+					"description": "Speak replies and narration with the English_expressive_narrator voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the English_expressive_narrator voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the English_expressive_narrator voice.",
+					"website": "https://openrouter.ai/minimax/speech-2.8-hd",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/minimax.jpg"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-minimax-speech-2-8-turbo",
+			"id": "ora8ba3ea4797a858c8ea0fa",
+			"type": "Tts",
+			"authors": ["MiniMax"],
+			"repository": "https://openrouter.ai/minimax/speech-2.8-turbo",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "minimax/speech-2.8-turbo"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 60000000
+				},
+				"default_voice": "English_expressive_narrator"
+			},
+			"meta": {
+				"en": {
+					"name": "Speech 2.8 Turbo · OpenRouter",
+					"description": "Speak replies and narration with the English_expressive_narrator voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the English_expressive_narrator voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the English_expressive_narrator voice.",
+					"website": "https://openrouter.ai/minimax/speech-2.8-turbo",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/minimax.jpg"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-microsoft-mai-voice-2",
+			"id": "or95f5de65dbca3a07ffc435",
+			"type": "Tts",
+			"authors": ["Microsoft AI"],
+			"repository": "https://openrouter.ai/microsoft/mai-voice-2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "microsoft/mai-voice-2"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 22000000
+				},
+				"default_voice": "en-US-Harper:MAI-Voice-2"
+			},
+			"meta": {
+				"en": {
+					"name": "MAI-Voice-2 · OpenRouter",
+					"description": "Speak replies and narration with the en-US-Harper:MAI-Voice-2 voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the en-US-Harper:MAI-Voice-2 voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request. The provider plans to retire this model on 2026-12-31.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the en-US-Harper:MAI-Voice-2 voice.",
+					"website": "https://openrouter.ai/microsoft/mai-voice-2",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/microsoft.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-x-ai-grok-voice-tts-1-0",
+			"id": "or643fe556ed4e577f66e444",
+			"type": "Tts",
+			"authors": ["xAI"],
+			"repository": "https://openrouter.ai/x-ai/grok-voice-tts-1.0",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "x-ai/grok-voice-tts-1.0"
+				},
+				"default_voice": "eve",
+				"pricing": {
+					"input_micro_usd_per_million_characters": 15000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Grok Voice TTS 1.0 · OpenRouter",
+					"description": "Speak bot replies and narration with the eve voice. Hosted through OpenRouter.",
+					"long_description": "Speak bot replies and narration with the eve voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak bot replies and narration with the eve voice.",
+					"website": "https://openrouter.ai/x-ai/grok-voice-tts-1.0",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/x-ai-99cb4926e9629aa6.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-canopylabs-orpheus-3b-0-1-ft",
+			"id": "or0cddd18c31e276889a2cbd",
+			"type": "Tts",
+			"authors": ["Canopy Labs"],
+			"repository": "https://openrouter.ai/canopylabs/orpheus-3b-0.1-ft",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "canopylabs/orpheus-3b-0.1-ft"
+				},
+				"default_voice": "tara",
+				"pricing": {
+					"input_micro_usd_per_million_characters": 7000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Orpheus 3B · OpenRouter",
+					"description": "Speak conversational replies with the tara voice. Hosted through OpenRouter.",
+					"long_description": "Speak conversational replies with the tara voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak conversational replies with the tara voice.",
+					"website": "https://openrouter.ai/canopylabs/orpheus-3b-0.1-ft",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/canopylabs-3ecd0d280345dce9.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-sesame-csm-1b",
+			"id": "orc05353b9684ca8b5c72640",
+			"type": "Tts",
+			"authors": ["Sesame"],
+			"repository": "https://openrouter.ai/sesame/csm-1b",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "sesame/csm-1b"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 7000000
+				},
+				"default_voice": "conversational_a"
+			},
+			"meta": {
+				"en": {
+					"name": "CSM 1B · OpenRouter",
+					"description": "Speak replies and narration with the conversational_a voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the conversational_a voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the conversational_a voice.",
+					"website": "https://openrouter.ai/sesame/csm-1b",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/sesame-9027bff15b6b4186.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-hexgrad-kokoro-82m",
+			"id": "or6ae53ed8841d36b2f05b89",
+			"type": "Tts",
+			"authors": ["Hexgrad"],
+			"repository": "https://openrouter.ai/hexgrad/kokoro-82m",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "hexgrad/kokoro-82m"
+				},
+				"default_voice": "af_heart",
+				"pricing": {
+					"input_micro_usd_per_million_characters": 620000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Kokoro 82M · OpenRouter",
+					"description": "Read short replies and narration with the af_heart voice. Hosted through OpenRouter.",
+					"long_description": "Read short replies and narration with the af_heart voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Read short replies and narration with the af_heart voice.",
+					"website": "https://openrouter.ai/hexgrad/kokoro-82m",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/hexgrad-7142dd7b9a746c0f.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mistralai-voxtral-mini-tts-2603",
+			"id": "or81e5f39716ab88a6dbe4fa",
+			"type": "Tts",
+			"authors": ["Mistral"],
+			"repository": "https://openrouter.ai/mistralai/voxtral-mini-tts-2603",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mistralai/voxtral-mini-tts-2603"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_characters": 16000000
+				},
+				"default_voice": "en_paul_neutral"
+			},
+			"meta": {
+				"en": {
+					"name": "Voxtral Mini TTS · OpenRouter",
+					"description": "Speak replies and narration with the en_paul_neutral voice. Hosted through OpenRouter.",
+					"long_description": "Speak replies and narration with the en_paul_neutral voice. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. The voice can be overridden per speech request.",
+					"tags": ["hosted", "openrouter", "text-to-speech"],
+					"use_case": "Speak replies and narration with the en_paul_neutral voice.",
+					"website": "https://openrouter.ai/mistralai/voxtral-mini-tts-2603",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/tts",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-moondream-parakeet-ultra",
+			"id": "or04b6880b575ba8d9ff07e6",
+			"type": "Stt",
+			"authors": ["Moondream"],
+			"repository": "https://openrouter.ai/moondream/parakeet-ultra",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "moondream/parakeet-ultra"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 16666700
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Parakeet Ultra · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/moondream/parakeet-ultra",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/moondream-9f4ace366280cfb2.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-nvidia-nemotron-3-5-transcribe",
+			"id": "or3869035d9fba2ce31310a2",
+			"type": "Stt",
+			"authors": ["NVIDIA"],
+			"repository": "https://openrouter.ai/nvidia/nemotron-3.5-transcribe",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "nvidia/nemotron-3.5-transcribe"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 33300000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Nemotron 3.5 Transcribe · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request. The provider limits each clip to 3600 seconds.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/nvidia/nemotron-3.5-transcribe",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mistralai-voxtral-small-transcribe-3-0",
+			"id": "orff755f9b5b697d714574e2",
+			"type": "Stt",
+			"authors": ["Mistral"],
+			"repository": "https://openrouter.ai/mistralai/voxtral-small-transcribe-3-0",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mistralai/voxtral-small-transcribe-3-0"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 66666700
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Voxtral Small Transcribe 3 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/mistralai/voxtral-small-transcribe-3-0",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mistralai-voxtral-mini-transcribe-3-0",
+			"id": "orbbaca0ef65b12bc6b0b8c6",
+			"type": "Stt",
+			"authors": ["Mistral"],
+			"repository": "https://openrouter.ai/mistralai/voxtral-mini-transcribe-3-0",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mistralai/voxtral-mini-transcribe-3-0"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 58333300
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Voxtral Mini Transcribe 3 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/mistralai/voxtral-mini-transcribe-3-0",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-assemblyai-universal-3-6-pro",
+			"id": "or2bed8c941b9cb8aaf6e59d",
+			"type": "Stt",
+			"authors": ["AssemblyAI"],
+			"repository": "https://openrouter.ai/assemblyai/universal-3-6-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "assemblyai/universal-3-6-pro"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 83333300
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Universal-3.6 Pro · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request. The provider limits each clip to 1200 seconds.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/assemblyai/universal-3-6-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/assemblyai-cb3a8cbc6d9db747.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-elevenlabs-scribe-v2",
+			"id": "orfb9a8e0b664610f93482e1",
+			"type": "Stt",
+			"authors": ["ElevenLabs"],
+			"repository": "https://openrouter.ai/elevenlabs/scribe-v2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "elevenlabs/scribe-v2"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 61111112
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Scribe v2 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/elevenlabs/scribe-v2",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/elevenlabs-16f4a8b337061be7.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-elevenlabs-scribe-v2-medical",
+			"id": "orca0de367dddbd800a12a89",
+			"type": "Stt",
+			"authors": ["ElevenLabs"],
+			"repository": "https://openrouter.ai/elevenlabs/scribe-v2-medical",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "elevenlabs/scribe-v2-medical"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 61111112
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Scribe v2 Medical · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/elevenlabs/scribe-v2-medical",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/elevenlabs-16f4a8b337061be7.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-fish-audio-transcribe-1-pro",
+			"id": "or81c4e355d7ac504abf9d0b",
+			"type": "Stt",
+			"authors": ["Fish Audio"],
+			"repository": "https://openrouter.ai/fish-audio/transcribe-1-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "fish-audio/transcribe-1-pro"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 100000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Transcribe 1 Pro · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/fish-audio/transcribe-1-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/fish-audio-d2663f9c61a158bf.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-assemblyai-universal-3-5-pro",
+			"id": "ore48bcc3b7893fe805e0da4",
+			"type": "Stt",
+			"authors": ["AssemblyAI"],
+			"repository": "https://openrouter.ai/assemblyai/universal-3-5-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "assemblyai/universal-3-5-pro"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 83333300
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Universal-3.5 Pro · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request. The provider limits each clip to 1200 seconds.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/assemblyai/universal-3-5-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/assemblyai-cb3a8cbc6d9db747.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-meta-muse-voice-transcribe-1-0",
+			"id": "orb69db20b5e9f533dad920d",
+			"type": "Stt",
+			"authors": ["Meta"],
+			"repository": "https://openrouter.ai/meta/muse-voice-transcribe-1.0",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "meta/muse-voice-transcribe-1.0"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 50000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Muse Voice Transcribe 1.0 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request. This model requires mono 16-bit PCM WAV at 16 or 24 kHz. The provider limits each clip to 600 seconds.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/meta/muse-voice-transcribe-1.0",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/meta.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-microsoft-mai-transcribe-2",
+			"id": "ore5736046ff365c2c064089",
+			"type": "Stt",
+			"authors": ["Microsoft AI"],
+			"repository": "https://openrouter.ai/microsoft/mai-transcribe-2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "microsoft/mai-transcribe-2"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 27777778
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "MAI-Transcribe 2 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/microsoft/mai-transcribe-2",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/microsoft.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-nvidia-nemotron-3-5-asr-streaming-multilingual-0-6b",
+			"id": "or03cce557187fa4ef4534c2",
+			"type": "Stt",
+			"authors": ["NVIDIA"],
+			"repository": "https://openrouter.ai/nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 3330000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Nemotron 3.5 ASR Streaming Multilingual 0.6B · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/nvidia/nemotron-3.5-asr-streaming-multilingual-0.6b",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mistralai-voxtral-small-24b-2507-stt",
+			"id": "orb9502fe1c8ab95a08c9af6",
+			"type": "Stt",
+			"authors": ["Mistral"],
+			"repository": "https://openrouter.ai/mistralai/voxtral-small-24b-2507-stt",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mistralai/voxtral-small-24b-2507-stt"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 50000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Voxtral Small 24B 2507 STT · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/mistralai/voxtral-small-24b-2507-stt",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mistralai-voxtral-mini-3b-2507",
+			"id": "orb86bbe6eb522f5cc60c38f",
+			"type": "Stt",
+			"authors": ["Mistral"],
+			"repository": "https://openrouter.ai/mistralai/voxtral-mini-3b-2507",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mistralai/voxtral-mini-3b-2507"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 16666700
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Voxtral Mini 3B 2507 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/mistralai/voxtral-mini-3b-2507",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-qwen-qwen3-asr-1-7b",
+			"id": "or051f6583ca6197614fc455",
+			"type": "Stt",
+			"authors": ["Qwen"],
+			"repository": "https://openrouter.ai/qwen/qwen3-asr-1.7b",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "qwen/qwen3-asr-1.7b"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 7500000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Qwen3 ASR 1.7B · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/qwen/qwen3-asr-1.7b",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/qwen.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-qwen-qwen3-asr-0-6b",
+			"id": "oree50c55909c2827e225f89",
+			"type": "Stt",
+			"authors": ["Qwen"],
+			"repository": "https://openrouter.ai/qwen/qwen3-asr-0.6b",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "qwen/qwen3-asr-0.6b"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 3330000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Qwen3 ASR 0.6B · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/qwen/qwen3-asr-0.6b",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/qwen.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-openai-gpt-transcribe",
+			"id": "or526b1be82d27375249ae46",
+			"type": "Stt",
+			"authors": ["OpenAI"],
+			"repository": "https://openrouter.ai/openai/gpt-transcribe",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "openai/gpt-transcribe"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 75000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "GPT Transcribe · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/openai/gpt-transcribe",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/openai-12a7b212b9d4173f.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-fish-audio-transcribe-1",
+			"id": "or94ae6193a0cc98fc324b19",
+			"type": "Stt",
+			"authors": ["Fish Audio"],
+			"repository": "https://openrouter.ai/fish-audio/transcribe-1",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "fish-audio/transcribe-1"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 100000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Transcribe 1 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/fish-audio/transcribe-1",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/fish-audio-d2663f9c61a158bf.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-x-ai-grok-stt-1-0",
+			"id": "or3d79103bf6e10a50b3893d",
+			"type": "Stt",
+			"authors": ["SpaceXAI"],
+			"repository": "https://openrouter.ai/x-ai/grok-stt-1.0",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "x-ai/grok-stt-1.0"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 27777778
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Grok STT 1.0 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/x-ai/grok-stt-1.0",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/x-ai-99cb4926e9629aa6.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-deepgram-nova-3",
+			"id": "or194d545eff7839460b9c26",
+			"type": "Stt",
+			"authors": ["Deepgram"],
+			"repository": "https://openrouter.ai/deepgram/nova-3",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "deepgram/nova-3"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 71666667
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Nova-3 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/deepgram/nova-3",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/deepgram-5d4d8c1b71a683d6.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-microsoft-mai-transcribe-1-5",
+			"id": "ora04397c69e60027e9e2922",
+			"type": "Stt",
+			"authors": ["Microsoft AI"],
+			"repository": "https://openrouter.ai/microsoft/mai-transcribe-1.5",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "microsoft/mai-transcribe-1.5"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 100000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "MAI-Transcribe 1.5 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request. The provider plans to retire this model on 2026-12-22.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/microsoft/mai-transcribe-1.5",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/microsoft.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-nvidia-parakeet-tdt-0-6b-v3",
+			"id": "orc63ad74e0926b0240db736",
+			"type": "Stt",
+			"authors": ["NVIDIA"],
+			"repository": "https://openrouter.ai/nvidia/parakeet-tdt-0.6b-v3",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "nvidia/parakeet-tdt-0.6b-v3"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 16666700
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Parakeet TDT 0.6B V3 · OpenRouter",
+					"description": "Turn recorded speech into text for call transcripts and voice input. Hosted through OpenRouter.",
+					"long_description": "Turn recorded speech into text for call transcripts and voice input. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Turn recorded speech into text for call transcripts and voice input.",
+					"website": "https://openrouter.ai/nvidia/parakeet-tdt-0.6b-v3",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mistralai-voxtral-mini-transcribe",
+			"id": "or2a4064c518c227835cde1e",
+			"type": "Stt",
+			"authors": ["Mistral"],
+			"repository": "https://openrouter.ai/mistralai/voxtral-mini-transcribe",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mistralai/voxtral-mini-transcribe"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 50000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Voxtral Mini Transcribe · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/mistralai/voxtral-mini-transcribe",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-google-chirp-3",
+			"id": "or6fe2bc8eabd1b4d15d546f",
+			"type": "Stt",
+			"authors": ["Google"],
+			"repository": "https://openrouter.ai/google/chirp-3",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "google/chirp-3"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 266666667
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Chirp 3 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/google/chirp-3",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/google.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-openai-whisper-large-v3",
+			"id": "oree86f6257ea49f75d3bffc",
+			"type": "Stt",
+			"authors": ["OpenAI"],
+			"repository": "https://openrouter.ai/openai/whisper-large-v3",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "openai/whisper-large-v3"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 7500000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Whisper Large V3 · OpenRouter",
+					"description": "Transcribe recorded speech into text for workflows and conversations. Hosted through OpenRouter.",
+					"long_description": "Transcribe recorded speech into text for workflows and conversations. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe recorded speech into text for workflows and conversations.",
+					"website": "https://openrouter.ai/openai/whisper-large-v3",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/openai-12a7b212b9d4173f.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-openai-whisper-large-v3-turbo",
+			"id": "or6e70bedfc7fb6f604c1a4f",
+			"type": "Stt",
+			"authors": ["OpenAI"],
+			"repository": "https://openrouter.ai/openai/whisper-large-v3-turbo",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "openai/whisper-large-v3-turbo"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 3330000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Whisper Large V3 Turbo · OpenRouter",
+					"description": "Transcribe call utterances, voice notes, and recordings. Hosted through OpenRouter.",
+					"long_description": "Transcribe call utterances, voice notes, and recordings. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe call utterances, voice notes, and recordings.",
+					"website": "https://openrouter.ai/openai/whisper-large-v3-turbo",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/openai-12a7b212b9d4173f.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-openai-whisper-1",
+			"id": "or1aea787fcd4302589fefc1",
+			"type": "Stt",
+			"authors": ["OpenAI"],
+			"repository": "https://openrouter.ai/openai/whisper-1",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "openai/whisper-1"
+				},
+				"pricing": {
+					"input_micro_usd_per_million_seconds": 100000000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Whisper 1 · OpenRouter",
+					"description": "Transcribe spoken audio into text. Hosted through OpenRouter.",
+					"long_description": "Transcribe spoken audio into text. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Call audio uses mono 16-bit PCM WAV at 16 kHz. The gateway accepts up to 25 MB per request.",
+					"tags": ["hosted", "openrouter", "speech-to-text"],
+					"use_case": "Transcribe spoken audio into text.",
+					"website": "https://openrouter.ai/openai/whisper-1",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/stt",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/openai-12a7b212b9d4173f.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-sourceful-riverflow-v2-6-pro",
+			"id": "or2f647dfcb52073ee6145a3",
+			"type": "ImageGeneration",
+			"authors": ["Sourceful"],
+			"repository": "https://openrouter.ai/sourceful/riverflow-v2.6-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "sourceful/riverflow-v2.6-pro"
+				},
+				"pricing": {
+					"request_micro_usd": 170000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Riverflow V2.6 Pro · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/sourceful/riverflow-v2.6-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/sourceful-67d3ea31f2657eb4.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-qwen-qwen-image-2-1-turbo",
+			"id": "ord92abce6c8be7762d98042",
+			"type": "ImageGeneration",
+			"authors": ["Qwen"],
+			"repository": "https://openrouter.ai/qwen/qwen-image-2.1-turbo",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "qwen/qwen-image-2.1-turbo"
+				},
+				"pricing": {
+					"request_micro_usd": 18400
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Qwen Image 2.1 Turbo · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/qwen/qwen-image-2.1-turbo",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/qwen.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-qwen-qwen-image-2-1-pro",
+			"id": "orcbd75cce388ee049cd285b",
+			"type": "ImageGeneration",
+			"authors": ["Qwen"],
+			"repository": "https://openrouter.ai/qwen/qwen-image-2.1-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "qwen/qwen-image-2.1-pro"
+				},
+				"pricing": {
+					"request_micro_usd": 46000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Qwen Image 2.1 Pro · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/qwen/qwen-image-2.1-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/qwen.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-black-forest-labs-flux-3-image-klein",
+			"id": "orca4d1a6dec7a2e70f9e563",
+			"type": "ImageGeneration",
+			"authors": ["Black Forest Labs"],
+			"repository": "https://openrouter.ai/black-forest-labs/flux-3-image-klein",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "black-forest-labs/flux-3-image-klein"
+				},
+				"pricing": {
+					"request_micro_usd": 36000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "FLUX 3 Image Klein · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/black-forest-labs/flux-3-image-klein",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/black-forest-labs-257fa4a2d7da320b.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-bytedance-seed-seedream-5-0-flash",
+			"id": "ord4e10969d1bc2182ccbdde",
+			"type": "ImageGeneration",
+			"authors": ["ByteDance Seed"],
+			"repository": "https://openrouter.ai/bytedance-seed/seedream-5-0-flash",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "bytedance-seed/seedream-5-0-flash"
+				},
+				"pricing": {
+					"request_micro_usd": 18000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Seedream 5.0 Flash · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/bytedance-seed/seedream-5-0-flash",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bytedance.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-black-forest-labs-flux-3-image",
+			"id": "ord72b8343cb9e9c99bb1262",
+			"type": "ImageGeneration",
+			"authors": ["Black Forest Labs"],
+			"repository": "https://openrouter.ai/black-forest-labs/flux-3-image",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "black-forest-labs/flux-3-image"
+				},
+				"pricing": {
+					"request_micro_usd": 607000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "FLUX 3 Image · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/black-forest-labs/flux-3-image",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/black-forest-labs-257fa4a2d7da320b.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-recraft-recraft-v4-1-flash",
+			"id": "or7acc96751c7531502d87ce",
+			"type": "ImageGeneration",
+			"authors": ["Recraft"],
+			"repository": "https://openrouter.ai/recraft/recraft-v4.1-flash",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "recraft/recraft-v4.1-flash"
+				},
+				"pricing": {
+					"request_micro_usd": 7000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Recraft V4.1 Flash · OpenRouter",
+					"description": "Generate images from text prompts for drafts and visual exploration. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts for drafts and visual exploration. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Use the aspect ratio option to choose the layout.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts for drafts and visual exploration.",
+					"website": "https://openrouter.ai/recraft/recraft-v4.1-flash",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/recraft-f7f035232ad344df.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-bytedance-seed-seedream-5-0-lite",
+			"id": "ore61036ffce373e5a5655ee",
+			"type": "ImageGeneration",
+			"authors": ["ByteDance Seed"],
+			"repository": "https://openrouter.ai/bytedance-seed/seedream-5-0-lite",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "bytedance-seed/seedream-5-0-lite"
+				},
+				"pricing": {
+					"request_micro_usd": 35000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Seedream 5.0 Lite · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/bytedance-seed/seedream-5-0-lite",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bytedance.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-bytedance-seed-seedream-5-0-pro",
+			"id": "ora07952123a9cecfac66c7a",
+			"type": "ImageGeneration",
+			"authors": ["ByteDance Seed"],
+			"repository": "https://openrouter.ai/bytedance-seed/seedream-5-0-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "bytedance-seed/seedream-5-0-pro"
+				},
+				"pricing": {
+					"request_micro_usd": 90000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Seedream 5.0 Pro · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/bytedance-seed/seedream-5-0-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bytedance.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-x-ai-grok-imagine-image-2-0",
+			"id": "orf4cfd3075019c7fe266000",
+			"type": "ImageGeneration",
+			"authors": ["xAI"],
+			"repository": "https://openrouter.ai/x-ai/grok-imagine-image-2.0",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "x-ai/grok-imagine-image-2.0"
+				},
+				"pricing": {
+					"request_micro_usd": 80000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Grok Imagine Image 2.0 · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/x-ai/grok-imagine-image-2.0",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/x-ai-99cb4926e9629aa6.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-qwen-qwen-image-3-pro",
+			"id": "orc0bb3a5c36ea00b2754952",
+			"type": "ImageGeneration",
+			"authors": ["Qwen"],
+			"repository": "https://openrouter.ai/qwen/qwen-image-3-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "qwen/qwen-image-3-pro"
+				},
+				"pricing": {
+					"request_micro_usd": 75000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Qwen Image 3 Pro · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/qwen/qwen-image-3-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/qwen.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-qwen-qwen-image-3",
+			"id": "or2481947cf775e697ade8d0",
+			"type": "ImageGeneration",
+			"authors": ["Qwen"],
+			"repository": "https://openrouter.ai/qwen/qwen-image-3",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "qwen/qwen-image-3"
+				},
+				"pricing": {
+					"request_micro_usd": 30000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Qwen Image 3 · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/qwen/qwen-image-3",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/qwen.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-krea-krea-2-large",
+			"id": "or5c3d6a816a985a7871acf4",
+			"type": "ImageGeneration",
+			"authors": ["Krea"],
+			"repository": "https://openrouter.ai/krea/krea-2-large",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "krea/krea-2-large"
+				},
+				"pricing": {
+					"request_micro_usd": 70000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Krea 2 Large · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/krea/krea-2-large",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/krea-177ed30c6a193c9a.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-krea-krea-2-medium",
+			"id": "ord433c9e349d04a792b2d0f",
+			"type": "ImageGeneration",
+			"authors": ["Krea"],
+			"repository": "https://openrouter.ai/krea/krea-2-medium",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "krea/krea-2-medium"
+				},
+				"pricing": {
+					"request_micro_usd": 40000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Krea 2 Medium · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/krea/krea-2-medium",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/krea-177ed30c6a193c9a.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-krea-krea-2-medium-turbo",
+			"id": "or18d56b103ce19122194c2a",
+			"type": "ImageGeneration",
+			"authors": ["Krea"],
+			"repository": "https://openrouter.ai/krea/krea-2-medium-turbo",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "krea/krea-2-medium-turbo"
+				},
+				"pricing": {
+					"request_micro_usd": 20000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Krea 2 Medium Turbo · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/krea/krea-2-medium-turbo",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/krea-177ed30c6a193c9a.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-sourceful-riverflow-v2-5-pro",
+			"id": "orec317da2a43d21c0e97f68",
+			"type": "ImageGeneration",
+			"authors": ["Sourceful"],
+			"repository": "https://openrouter.ai/sourceful/riverflow-v2.5-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "sourceful/riverflow-v2.5-pro"
+				},
+				"pricing": {
+					"request_micro_usd": 170000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Riverflow V2.5 Pro · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/sourceful/riverflow-v2.5-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/sourceful-67d3ea31f2657eb4.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-sourceful-riverflow-v2-5-fast",
+			"id": "orc08df32b94bf2d68b9d515",
+			"type": "ImageGeneration",
+			"authors": ["Sourceful"],
+			"repository": "https://openrouter.ai/sourceful/riverflow-v2.5-fast",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "sourceful/riverflow-v2.5-fast"
+				},
+				"pricing": {
+					"request_micro_usd": 21000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Riverflow V2.5 Fast · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/sourceful/riverflow-v2.5-fast",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/sourceful-67d3ea31f2657eb4.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-recraft-recraft-v4-1-utility-pro",
+			"id": "or55033582a4ee9437b9d98a",
+			"type": "ImageGeneration",
+			"authors": ["Recraft"],
+			"repository": "https://openrouter.ai/recraft/recraft-v4.1-utility-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "recraft/recraft-v4.1-utility-pro"
+				},
+				"pricing": {
+					"request_micro_usd": 210000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Recraft V4.1 Utility Pro · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/recraft/recraft-v4.1-utility-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/recraft-f7f035232ad344df.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-recraft-recraft-v4-1-utility",
+			"id": "or006774d8b29ba0a02fffb2",
+			"type": "ImageGeneration",
+			"authors": ["Recraft"],
+			"repository": "https://openrouter.ai/recraft/recraft-v4.1-utility",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "recraft/recraft-v4.1-utility"
+				},
+				"pricing": {
+					"request_micro_usd": 35000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Recraft V4.1 Utility · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/recraft/recraft-v4.1-utility",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/recraft-f7f035232ad344df.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-recraft-recraft-v4-1-pro",
+			"id": "orf4d3ac44edffc574e5cb70",
+			"type": "ImageGeneration",
+			"authors": ["Recraft"],
+			"repository": "https://openrouter.ai/recraft/recraft-v4.1-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "recraft/recraft-v4.1-pro"
+				},
+				"pricing": {
+					"request_micro_usd": 210000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Recraft V4.1 Pro · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/recraft/recraft-v4.1-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/recraft-f7f035232ad344df.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-recraft-recraft-v4-1",
+			"id": "orb533e8a03eab636d53eddb",
+			"type": "ImageGeneration",
+			"authors": ["Recraft"],
+			"repository": "https://openrouter.ai/recraft/recraft-v4.1",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "recraft/recraft-v4.1"
+				},
+				"pricing": {
+					"request_micro_usd": 35000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Recraft V4.1 · OpenRouter",
+					"description": "Generate illustrations and other images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate illustrations and other images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Use the aspect ratio option to choose the layout.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate illustrations and other images from text prompts.",
+					"website": "https://openrouter.ai/recraft/recraft-v4.1",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/recraft-f7f035232ad344df.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-recraft-recraft-v4-pro",
+			"id": "or21c3c2bbeb3a3a20d37738",
+			"type": "ImageGeneration",
+			"authors": ["Recraft"],
+			"repository": "https://openrouter.ai/recraft/recraft-v4-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "recraft/recraft-v4-pro"
+				},
+				"pricing": {
+					"request_micro_usd": 250000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Recraft V4 Pro · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/recraft/recraft-v4-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/recraft-f7f035232ad344df.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-recraft-recraft-v4",
+			"id": "or339aaa080500951530a423",
+			"type": "ImageGeneration",
+			"authors": ["Recraft"],
+			"repository": "https://openrouter.ai/recraft/recraft-v4",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "recraft/recraft-v4"
+				},
+				"pricing": {
+					"request_micro_usd": 40000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Recraft V4 · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/recraft/recraft-v4",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/recraft-f7f035232ad344df.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-recraft-recraft-v3",
+			"id": "or58289c22c3acc421c3236c",
+			"type": "ImageGeneration",
+			"authors": ["Recraft"],
+			"repository": "https://openrouter.ai/recraft/recraft-v3",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "recraft/recraft-v3"
+				},
+				"pricing": {
+					"request_micro_usd": 40000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Recraft V3 · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/recraft/recraft-v3",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/recraft-f7f035232ad344df.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-sourceful-riverflow-v2-pro",
+			"id": "ord5018b05b146b967b91978",
+			"type": "ImageGeneration",
+			"authors": ["Sourceful"],
+			"repository": "https://openrouter.ai/sourceful/riverflow-v2-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "sourceful/riverflow-v2-pro"
+				},
+				"pricing": {
+					"request_micro_usd": 330000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Riverflow V2 Pro · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/sourceful/riverflow-v2-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/sourceful-67d3ea31f2657eb4.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-sourceful-riverflow-v2-fast",
+			"id": "or05423a4645ff6e261f3555",
+			"type": "ImageGeneration",
+			"authors": ["Sourceful"],
+			"repository": "https://openrouter.ai/sourceful/riverflow-v2-fast",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "sourceful/riverflow-v2-fast"
+				},
+				"pricing": {
+					"request_micro_usd": 40000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Riverflow V2 Fast · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/sourceful/riverflow-v2-fast",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/sourceful-67d3ea31f2657eb4.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-black-forest-labs-flux-2-klein-4b",
+			"id": "orabd2cfe9e66375067633e7",
+			"type": "ImageGeneration",
+			"authors": ["Black Forest Labs"],
+			"repository": "https://openrouter.ai/black-forest-labs/flux.2-klein-4b",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "black-forest-labs/flux.2-klein-4b"
+				},
+				"pricing": {
+					"request_micro_usd": 56000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "FLUX.2 Klein 4B · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/black-forest-labs/flux.2-klein-4b",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/black-forest-labs-257fa4a2d7da320b.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-bytedance-seed-seedream-4-5",
+			"id": "or9f8a18f58c7c90f5c1410c",
+			"type": "ImageGeneration",
+			"authors": ["ByteDance"],
+			"repository": "https://openrouter.ai/bytedance-seed/seedream-4.5",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "bytedance-seed/seedream-4.5"
+				},
+				"pricing": {
+					"request_micro_usd": 40000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Seedream 4.5 · OpenRouter",
+					"description": "Generate images from text prompts in square, portrait, or landscape layouts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts in square, portrait, or landscape layouts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Use the aspect ratio option to choose the layout.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts in square, portrait, or landscape layouts.",
+					"website": "https://openrouter.ai/bytedance-seed/seedream-4.5",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bytedance.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-black-forest-labs-flux-2-max",
+			"id": "or62df423bf2386fbbffa0b0",
+			"type": "ImageGeneration",
+			"authors": ["Black Forest Labs"],
+			"repository": "https://openrouter.ai/black-forest-labs/flux.2-max",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "black-forest-labs/flux.2-max"
+				},
+				"pricing": {
+					"request_micro_usd": 280000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "FLUX.2 Max · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/black-forest-labs/flux.2-max",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/black-forest-labs-257fa4a2d7da320b.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-black-forest-labs-flux-2-flex",
+			"id": "orf836c7a15c9f1da271cc39",
+			"type": "ImageGeneration",
+			"authors": ["Black Forest Labs"],
+			"repository": "https://openrouter.ai/black-forest-labs/flux.2-flex",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "black-forest-labs/flux.2-flex"
+				},
+				"pricing": {
+					"request_micro_usd": 240000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "FLUX.2 Flex · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/black-forest-labs/flux.2-flex",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/black-forest-labs-257fa4a2d7da320b.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-black-forest-labs-flux-2-pro",
+			"id": "or040598c229c7aa7bb611c0",
+			"type": "ImageGeneration",
+			"authors": ["Black Forest Labs"],
+			"repository": "https://openrouter.ai/black-forest-labs/flux.2-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "black-forest-labs/flux.2-pro"
+				},
+				"pricing": {
+					"request_micro_usd": 120000
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "FLUX.2 Pro · OpenRouter",
+					"description": "Generate images from text prompts. Hosted through OpenRouter.",
+					"long_description": "Generate images from text prompts. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Generates one image per request. Available aspect ratios, sizes, quality levels, and formats depend on the model. Image editing with reference images is not available through this Bit.",
+					"tags": ["hosted", "openrouter", "image-generation"],
+					"use_case": "Generate images from text prompts.",
+					"website": "https://openrouter.ai/black-forest-labs/flux.2-pro",
+					"docs_url": "https://openrouter.ai/docs/guides/overview/multimodal/image-generation",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/black-forest-labs-257fa4a2d7da320b.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-cohere-embed-5-fast",
+			"id": "or23093aa88c32f6a454a6f8",
+			"type": "Embedding",
+			"authors": ["Cohere"],
+			"repository": "https://openrouter.ai/cohere/embed-5-fast",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "cohere/embed-5-fast"
+				},
+				"input_length": 128000,
+				"vector_length": 2048,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "cohere/embed-5-fast",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 80000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Embed 5 Fast · OpenRouter",
+					"description": "Embed text in 2048 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 2048 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 2048 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/cohere/embed-5-fast",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/cohere-2e602f510ccfbe57.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-cohere-embed-5-pro",
+			"id": "or8acf8852e7953d54480a46",
+			"type": "Embedding",
+			"authors": ["Cohere"],
+			"repository": "https://openrouter.ai/cohere/embed-5-pro",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "cohere/embed-5-pro"
+				},
+				"input_length": 128000,
+				"vector_length": 2048,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "cohere/embed-5-pro",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 120000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Embed 5 Pro · OpenRouter",
+					"description": "Embed text in 2048 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 2048 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 2048 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/cohere/embed-5-pro",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/cohere-2e602f510ccfbe57.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-amazon-titan-embed-image-v1",
+			"id": "orba69307f6ec6343e45183d",
+			"type": "Embedding",
+			"authors": ["Amazon"],
+			"repository": "https://openrouter.ai/amazon/titan-embed-image-v1",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "amazon/titan-embed-image-v1"
+				},
+				"input_length": 128,
+				"vector_length": 1024,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "amazon/titan-embed-image-v1",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 800000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Titan Multimodal Embeddings G1 · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/amazon/titan-embed-image-v1",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/amazon-0a11bc5a0dcda1a8.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-amazon-titan-embed-text-v1",
+			"id": "orf8c8865823bb0b0c4eeac5",
+			"type": "Embedding",
+			"authors": ["Amazon"],
+			"repository": "https://openrouter.ai/amazon/titan-embed-text-v1",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "amazon/titan-embed-text-v1"
+				},
+				"input_length": 8192,
+				"vector_length": 1536,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "amazon/titan-embed-text-v1",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 100000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Titan Embeddings G1 - Text · OpenRouter",
+					"description": "Embed text in 1536 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1536 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1536 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/amazon/titan-embed-text-v1",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/amazon-0a11bc5a0dcda1a8.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-amazon-titan-embed-text-v2",
+			"id": "orb328371ab60658205bcd3d",
+			"type": "Embedding",
+			"authors": ["Amazon"],
+			"repository": "https://openrouter.ai/amazon/titan-embed-text-v2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "amazon/titan-embed-text-v2"
+				},
+				"input_length": 8192,
+				"vector_length": 1024,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "amazon/titan-embed-text-v2",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 20000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Titan Text Embeddings V2 · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/amazon/titan-embed-text-v2",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/amazon-0a11bc5a0dcda1a8.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-liquid-lfm-2-5-embedding-350m-free",
+			"id": "ora74bc4566508062969718d",
+			"type": "Embedding",
+			"authors": ["LiquidAI"],
+			"repository": "https://openrouter.ai/liquid/lfm-2.5-embedding-350m:free",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "liquid/lfm-2.5-embedding-350m:free"
+				},
+				"input_length": 512,
+				"vector_length": 1024,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "query: ",
+					"paragraph": "document: "
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "liquid/lfm-2.5-embedding-350m:free",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 0,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "LFM2.5-Embedding-350M (free) · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input. This free variant has provider usage limits and may be unavailable when capacity is exhausted. The provider may retain successful requests and embeddings and use them to train Liquid models.",
+					"tags": ["hosted", "openrouter", "embeddings", "free"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/liquid/lfm-2.5-embedding-350m:free",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/liquid/47560632f45a20a45c6fcc6d7a8bafb6cb0ee17c2df576baa49f30430aca26d9.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mongodb-voyage-code-4",
+			"id": "or47163903166e26bc233012",
+			"type": "Embedding",
+			"authors": ["VoyageAI by MongoDB"],
+			"repository": "https://openrouter.ai/mongodb/voyage-code-4",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mongodb/voyage-code-4"
+				},
+				"input_length": 32000,
+				"vector_length": 1024,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "mongodb/voyage-code-4",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 120000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "voyage-code-4 · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/mongodb/voyage-code-4",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mongodb-11c5db3d3067d60b.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mongodb-voyage-multimodal-3-5",
+			"id": "orb8e311f960b18142b84273",
+			"type": "Embedding",
+			"authors": ["VoyageAI by MongoDB"],
+			"repository": "https://openrouter.ai/mongodb/voyage-multimodal-3.5",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mongodb/voyage-multimodal-3.5"
+				},
+				"input_length": 32000,
+				"vector_length": 1024,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "mongodb/voyage-multimodal-3.5",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 120000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "voyage-multimodal-3.5 · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/mongodb/voyage-multimodal-3.5",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mongodb-11c5db3d3067d60b.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mongodb-voyage-4-lite",
+			"id": "or78498962ea8e5ec94fd789",
+			"type": "Embedding",
+			"authors": ["VoyageAI by MongoDB"],
+			"repository": "https://openrouter.ai/mongodb/voyage-4-lite",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mongodb/voyage-4-lite"
+				},
+				"input_length": 32000,
+				"vector_length": 1024,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "mongodb/voyage-4-lite",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 20000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "voyage-4-lite · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/mongodb/voyage-4-lite",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mongodb-11c5db3d3067d60b.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mongodb-voyage-4",
+			"id": "ora91d189620c861df917031",
+			"type": "Embedding",
+			"authors": ["VoyageAI by MongoDB"],
+			"repository": "https://openrouter.ai/mongodb/voyage-4",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mongodb/voyage-4"
+				},
+				"input_length": 32000,
+				"vector_length": 1024,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "mongodb/voyage-4",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 60000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "voyage-4 · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/mongodb/voyage-4",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mongodb-11c5db3d3067d60b.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mongodb-voyage-4-large",
+			"id": "ora6ce095140d7541d895271",
+			"type": "Embedding",
+			"authors": ["VoyageAI by MongoDB"],
+			"repository": "https://openrouter.ai/mongodb/voyage-4-large",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mongodb/voyage-4-large"
+				},
+				"input_length": 32000,
+				"vector_length": 1024,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "mongodb/voyage-4-large",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 120000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "voyage-4-large · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/mongodb/voyage-4-large",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mongodb-11c5db3d3067d60b.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-nvidia-nemotron-3-embed-1b-free",
+			"id": "orb01857baeebd6d70ba8934",
+			"type": "Embedding",
+			"authors": ["NVIDIA"],
+			"repository": "https://openrouter.ai/nvidia/nemotron-3-embed-1b:free",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "nvidia/nemotron-3-embed-1b:free"
+				},
+				"input_length": 4096,
+				"vector_length": 2048,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "nvidia/nemotron-3-embed-1b:free",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 0,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Nemotron 3 Embed 1B (free) · OpenRouter",
+					"description": "Embed text in 2048 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 2048 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input. This free variant has provider usage limits and may be unavailable when capacity is exhausted.",
+					"tags": ["hosted", "openrouter", "embeddings", "free"],
+					"use_case": "Embed text in 2048 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/nvidia/nemotron-3-embed-1b:free",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-google-gemini-embedding-2",
+			"id": "or77de59f84fb31cac929e66",
+			"type": "Embedding",
+			"authors": ["Google"],
+			"repository": "https://openrouter.ai/google/gemini-embedding-2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "google/gemini-embedding-2"
+				},
+				"input_length": 8192,
+				"vector_length": 3072,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "google/gemini-embedding-2",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 13200000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Gemini Embedding 2 · OpenRouter",
+					"description": "Embed text in 3072 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 3072 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This model also accepts image, audio, video, and PDF inputs through the hosted embedding API.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 3072 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/google/gemini-embedding-2",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/google.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-google-gemini-embedding-2-preview",
+			"id": "or450c954dc3bfc90c814525",
+			"type": "Embedding",
+			"authors": ["Google"],
+			"repository": "https://openrouter.ai/google/gemini-embedding-2-preview",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "google/gemini-embedding-2-preview"
+				},
+				"input_length": 8192,
+				"vector_length": 3072,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "google/gemini-embedding-2-preview",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 200000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Gemini Embedding 2 Preview · OpenRouter",
+					"description": "Embed text in 3072 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 3072 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 3072 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/google/gemini-embedding-2-preview",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/google.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-perplexity-pplx-embed-v1-4b",
+			"id": "or070054c3195f2b6803c9cb",
+			"type": "Embedding",
+			"authors": ["Perplexity"],
+			"repository": "https://openrouter.ai/perplexity/pplx-embed-v1-4b",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "perplexity/pplx-embed-v1-4b"
+				},
+				"input_length": 32000,
+				"vector_length": 2560,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "perplexity/pplx-embed-v1-4b",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 30000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Embed V1 4B · OpenRouter",
+					"description": "Embed text in 2560 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 2560 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 2560 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/perplexity/pplx-embed-v1-4b",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/perplexity/7eebf880b8ebc7782519d807b01bc6964e69352b1aea4920c403085a0785811d.png"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-perplexity-pplx-embed-v1-0-6b",
+			"id": "orb2521edebdfbe71c2738d2",
+			"type": "Embedding",
+			"authors": ["Perplexity"],
+			"repository": "https://openrouter.ai/perplexity/pplx-embed-v1-0.6b",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "perplexity/pplx-embed-v1-0.6b"
+				},
+				"input_length": 32000,
+				"vector_length": 1024,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "perplexity/pplx-embed-v1-0.6b",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 4000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Embed V1 0.6B · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/perplexity/pplx-embed-v1-0.6b",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/perplexity/7eebf880b8ebc7782519d807b01bc6964e69352b1aea4920c403085a0785811d.png"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-nvidia-llama-nemotron-embed-vl-1b-v2-free",
+			"id": "or068d4e4e8234e87a942257",
+			"type": "Embedding",
+			"authors": ["NVIDIA"],
+			"repository": "https://openrouter.ai/nvidia/llama-nemotron-embed-vl-1b-v2:free",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "nvidia/llama-nemotron-embed-vl-1b-v2:free"
+				},
+				"input_length": 4096,
+				"vector_length": 2048,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "nvidia/llama-nemotron-embed-vl-1b-v2:free",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 0,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Llama Nemotron Embed VL 1B V2 (free) · OpenRouter",
+					"description": "Embed text in 2048 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 2048 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input. This free variant has provider usage limits and may be unavailable when capacity is exhausted.",
+					"tags": ["hosted", "openrouter", "embeddings", "free"],
+					"use_case": "Embed text in 2048 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/nvidia/llama-nemotron-embed-vl-1b-v2:free",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/bits/avatars/openrouter/nvidia/24c21375cca347d2f3e86b9bd27d7fdf4774ca7bd5d59482251723cb6dea82b0.png"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-thenlper-gte-base",
+			"id": "orf09f1cf367adcc1f579ae2",
+			"type": "Embedding",
+			"authors": ["Thenlper"],
+			"repository": "https://openrouter.ai/thenlper/gte-base",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "thenlper/gte-base"
+				},
+				"input_length": 512,
+				"vector_length": 768,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "thenlper/gte-base",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 5000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "GTE-Base · OpenRouter",
+					"description": "Embed text in 768 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 768 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 768 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/thenlper/gte-base",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/thenlper-36ee42be80aac9a6.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-thenlper-gte-large",
+			"id": "or629544e39e8283227e556a",
+			"type": "Embedding",
+			"authors": ["Thenlper"],
+			"repository": "https://openrouter.ai/thenlper/gte-large",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "thenlper/gte-large"
+				},
+				"input_length": 512,
+				"vector_length": 1024,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "thenlper/gte-large",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 10000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "GTE-Large · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/thenlper/gte-large",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/thenlper-36ee42be80aac9a6.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-intfloat-e5-large-v2",
+			"id": "or6371952256ca8db9132886",
+			"type": "Embedding",
+			"authors": ["Intfloat"],
+			"repository": "https://openrouter.ai/intfloat/e5-large-v2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "intfloat/e5-large-v2"
+				},
+				"input_length": 512,
+				"vector_length": 1024,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "query: ",
+					"paragraph": "passage: "
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "intfloat/e5-large-v2",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 10000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "E5-Large-v2 · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/intfloat/e5-large-v2",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/intfloat-9c1877b19effee5c.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-intfloat-e5-base-v2",
+			"id": "orfa135982a5feee27147ecc",
+			"type": "Embedding",
+			"authors": ["Intfloat"],
+			"repository": "https://openrouter.ai/intfloat/e5-base-v2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "intfloat/e5-base-v2"
+				},
+				"input_length": 512,
+				"vector_length": 768,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "query: ",
+					"paragraph": "passage: "
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "intfloat/e5-base-v2",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 5000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "E5-Base-v2 · OpenRouter",
+					"description": "Embed text in 768 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 768 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 768 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/intfloat/e5-base-v2",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/intfloat-9c1877b19effee5c.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-intfloat-multilingual-e5-large",
+			"id": "or58ec11c3530201e6aed258",
+			"type": "Embedding",
+			"authors": ["Intfloat"],
+			"repository": "https://openrouter.ai/intfloat/multilingual-e5-large",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "intfloat/multilingual-e5-large"
+				},
+				"input_length": 512,
+				"vector_length": 1024,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "query: ",
+					"paragraph": "passage: "
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "intfloat/multilingual-e5-large",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 10000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Multilingual-E5-Large · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/intfloat/multilingual-e5-large",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/intfloat-9c1877b19effee5c.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-sentence-transformers-paraphrase-minilm-l6-v2",
+			"id": "or7840348b3531c695e5ad96",
+			"type": "Embedding",
+			"authors": ["Sentence Transformers"],
+			"repository": "https://openrouter.ai/sentence-transformers/paraphrase-minilm-l6-v2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "sentence-transformers/paraphrase-minilm-l6-v2"
+				},
+				"input_length": 512,
+				"vector_length": 384,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "sentence-transformers/paraphrase-minilm-l6-v2",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 5000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "paraphrase-MiniLM-L6-v2 · OpenRouter",
+					"description": "Embed text in 384 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 384 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 384 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/sentence-transformers/paraphrase-minilm-l6-v2",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/sentence-transformers-9307c531486373f2.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-sentence-transformers-all-minilm-l12-v2",
+			"id": "orf3427e56f9bbd86003d019",
+			"type": "Embedding",
+			"authors": ["Sentence Transformers"],
+			"repository": "https://openrouter.ai/sentence-transformers/all-minilm-l12-v2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "sentence-transformers/all-minilm-l12-v2"
+				},
+				"input_length": 512,
+				"vector_length": 384,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "sentence-transformers/all-minilm-l12-v2",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 5000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "all-MiniLM-L12-v2 · OpenRouter",
+					"description": "Embed text in 384 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 384 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 384 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/sentence-transformers/all-minilm-l12-v2",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/sentence-transformers-9307c531486373f2.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-baai-bge-base-en-v1-5",
+			"id": "or2ffb13a563da528e824c8c",
+			"type": "Embedding",
+			"authors": ["BAAI"],
+			"repository": "https://openrouter.ai/baai/bge-base-en-v1.5",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "baai/bge-base-en-v1.5"
+				},
+				"input_length": 512,
+				"vector_length": 768,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "Represent this sentence for searching relevant passages: ",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "baai/bge-base-en-v1.5",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 5000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "bge-base-en-v1.5 · OpenRouter",
+					"description": "Embed text in 768 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 768 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 768 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/baai/bge-base-en-v1.5",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/baai-412bf1443c312011.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-sentence-transformers-multi-qa-mpnet-base-dot-v1",
+			"id": "or6d5bac3b0366ed93684cd9",
+			"type": "Embedding",
+			"authors": ["Sentence Transformers"],
+			"repository": "https://openrouter.ai/sentence-transformers/multi-qa-mpnet-base-dot-v1",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "sentence-transformers/multi-qa-mpnet-base-dot-v1"
+				},
+				"input_length": 512,
+				"vector_length": 768,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "sentence-transformers/multi-qa-mpnet-base-dot-v1",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 5000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "multi-qa-mpnet-base-dot-v1 · OpenRouter",
+					"description": "Embed text in 768 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 768 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 768 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/sentence-transformers/multi-qa-mpnet-base-dot-v1",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/sentence-transformers-9307c531486373f2.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-baai-bge-large-en-v1-5",
+			"id": "or90eb4026c65490420b12a6",
+			"type": "Embedding",
+			"authors": ["BAAI"],
+			"repository": "https://openrouter.ai/baai/bge-large-en-v1.5",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "baai/bge-large-en-v1.5"
+				},
+				"input_length": 512,
+				"vector_length": 1024,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "Represent this sentence for searching relevant passages: ",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "baai/bge-large-en-v1.5",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 10000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "bge-large-en-v1.5 · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/baai/bge-large-en-v1.5",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/baai-412bf1443c312011.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-baai-bge-m3",
+			"id": "ora8dc4e8ccd0744e102ca37",
+			"type": "Embedding",
+			"authors": ["BAAI"],
+			"repository": "https://openrouter.ai/baai/bge-m3",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "baai/bge-m3"
+				},
+				"input_length": 8192,
+				"vector_length": 1024,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "baai/bge-m3",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 10000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "bge-m3 · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/baai/bge-m3",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/baai-412bf1443c312011.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-sentence-transformers-all-mpnet-base-v2",
+			"id": "or4b7a72dea168aad5d6fa0e",
+			"type": "Embedding",
+			"authors": ["Sentence Transformers"],
+			"repository": "https://openrouter.ai/sentence-transformers/all-mpnet-base-v2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "sentence-transformers/all-mpnet-base-v2"
+				},
+				"input_length": 512,
+				"vector_length": 768,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "sentence-transformers/all-mpnet-base-v2",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 5000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "all-mpnet-base-v2 · OpenRouter",
+					"description": "Embed text in 768 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 768 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 768 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/sentence-transformers/all-mpnet-base-v2",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/sentence-transformers-9307c531486373f2.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-sentence-transformers-all-minilm-l6-v2",
+			"id": "ora471d00b047318f2a30378",
+			"type": "Embedding",
+			"authors": ["Sentence Transformers"],
+			"repository": "https://openrouter.ai/sentence-transformers/all-minilm-l6-v2",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "sentence-transformers/all-minilm-l6-v2"
+				},
+				"input_length": 512,
+				"vector_length": 384,
+				"languages": ["en"],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "sentence-transformers/all-minilm-l6-v2",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 5000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "all-MiniLM-L6-v2 · OpenRouter",
+					"description": "Embed text in 384 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 384 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 384 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/sentence-transformers/all-minilm-l6-v2",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/sentence-transformers-9307c531486373f2.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mistralai-mistral-embed-2312",
+			"id": "or71f5022889c695e617a156",
+			"type": "Embedding",
+			"authors": ["Mistral"],
+			"repository": "https://openrouter.ai/mistralai/mistral-embed-2312",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mistralai/mistral-embed-2312"
+				},
+				"input_length": 8192,
+				"vector_length": 1024,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "mistralai/mistral-embed-2312",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 110000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Mistral Embed 2312 · OpenRouter",
+					"description": "Embed text in 1024 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1024 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1024 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/mistralai/mistral-embed-2312",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-google-gemini-embedding-001",
+			"id": "or2e362599ad76d92323b77f",
+			"type": "Embedding",
+			"authors": ["Google"],
+			"repository": "https://openrouter.ai/google/gemini-embedding-001",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "google/gemini-embedding-001"
+				},
+				"input_length": 2048,
+				"vector_length": 3072,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "google/gemini-embedding-001",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 150000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Gemini Embedding 001 · OpenRouter",
+					"description": "Embed text in 3072 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 3072 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 3072 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/google/gemini-embedding-001",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/google.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-openai-text-embedding-ada-002",
+			"id": "or31f4da5c2a46f987206a13",
+			"type": "Embedding",
+			"authors": ["OpenAI"],
+			"repository": "https://openrouter.ai/openai/text-embedding-ada-002",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "openai/text-embedding-ada-002"
+				},
+				"input_length": 8191,
+				"vector_length": 1536,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "openai/text-embedding-ada-002",
+					"supports_dimensions": false
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 100000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Text Embedding Ada 002 · OpenRouter",
+					"description": "Embed text in 1536 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1536 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1536 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/openai/text-embedding-ada-002",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/openai-12a7b212b9d4173f.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-mistralai-codestral-embed-2505",
+			"id": "or6a6f844fbcbb76d4fb0068",
+			"type": "Embedding",
+			"authors": ["Mistral"],
+			"repository": "https://openrouter.ai/mistralai/codestral-embed-2505",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "mistralai/codestral-embed-2505"
+				},
+				"input_length": 8192,
+				"vector_length": 1536,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "mistralai/codestral-embed-2505",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 165000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Codestral Embed 2505 · OpenRouter",
+					"description": "Embed text in 1536 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1536 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1536 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/mistralai/codestral-embed-2505",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/mistralai-610851956e4447dd.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-openai-text-embedding-3-large",
+			"id": "or29560f4a4de52cc07ddc58",
+			"type": "Embedding",
+			"authors": ["OpenAI"],
+			"repository": "https://openrouter.ai/openai/text-embedding-3-large",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "openai/text-embedding-3-large"
+				},
+				"input_length": 8191,
+				"vector_length": 3072,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "openai/text-embedding-3-large",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 130000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Text Embedding 3 Large · OpenRouter",
+					"description": "Embed text in 3072 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 3072 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 3072 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/openai/text-embedding-3-large",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/openai-12a7b212b9d4173f.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-openai-text-embedding-3-small",
+			"id": "or74e2749096ba69256dfe00",
+			"type": "Embedding",
+			"authors": ["OpenAI"],
+			"repository": "https://openrouter.ai/openai/text-embedding-3-small",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "openai/text-embedding-3-small"
+				},
+				"input_length": 8191,
+				"vector_length": 1536,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "openai/text-embedding-3-small",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 20000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Text Embedding 3 Small · OpenRouter",
+					"description": "Embed text in 1536 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 1536 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 1536 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/openai/text-embedding-3-small",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/bit-icons/openai-12a7b212b9d4173f.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-qwen-qwen3-embedding-8b",
+			"id": "oree970fc7a3e34f6621089a",
+			"type": "Embedding",
+			"authors": ["Qwen"],
+			"repository": "https://openrouter.ai/qwen/qwen3-embedding-8b",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "qwen/qwen3-embedding-8b"
+				},
+				"input_length": 32768,
+				"vector_length": 4096,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "qwen/qwen3-embedding-8b",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 40000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Qwen3 Embedding 8B · OpenRouter",
+					"description": "Embed text in 4096 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 4096 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 4096 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/qwen/qwen3-embedding-8b",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/qwen.webp"
+				}
+			}
+		},
+		{
+			"ref": "openrouter-qwen-qwen3-embedding-4b",
+			"id": "oreaac159ea48c90cf938872",
+			"type": "Embedding",
+			"authors": ["Qwen"],
+			"repository": "https://openrouter.ai/qwen/qwen3-embedding-4b",
+			"size": 0,
+			"dependencies": [],
+			"parameters": {
+				"provider": {
+					"provider_name": "hosted:openrouter",
+					"model_id": "qwen/qwen3-embedding-4b"
+				},
+				"input_length": 32768,
+				"vector_length": 2560,
+				"languages": [],
+				"pooling": "None",
+				"prefix": {
+					"query": "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: ",
+					"paragraph": ""
+				},
+				"remote": {
+					"implementation": "OpenRouter",
+					"model_id": "qwen/qwen3-embedding-4b",
+					"supports_dimensions": true
+				},
+				"pricing": {
+					"input_micro_usd_per_million_tokens": 20000,
+					"output_micro_usd_per_million_tokens": 0,
+					"request_micro_usd": 0
+				}
+			},
+			"meta": {
+				"en": {
+					"name": "Qwen3 Embedding 4B · OpenRouter",
+					"description": "Embed text in 2560 dimensions for semantic search and retrieval. Hosted through OpenRouter.",
+					"long_description": "Embed text in 2560 dimensions for semantic search and retrieval. This hosted Bit uses OpenRouter through the Flow-Like server and does not download model files. Text queries and documents use the model's retrieval settings. This Bit accepts text input.",
+					"tags": ["hosted", "openrouter", "embeddings"],
+					"use_case": "Embed text in 2560 dimensions for semantic search and retrieval.",
+					"website": "https://openrouter.ai/qwen/qwen3-embedding-4b",
+					"docs_url": "https://openrouter.ai/docs/api-reference/embeddings",
+					"icon": "https://cdn.flow-like.com/media/qwen.webp"
+				}
+			}
+		}
+	]
+}

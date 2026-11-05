@@ -63,6 +63,7 @@ pub(crate) enum HostedWork {
     },
     Embedding(crate::routes::embeddings::embed::HostedEmbeddingJob),
     Image(crate::routes::images::HostedImageJob),
+    Audio(crate::routes::audio::HostedAudioJob),
     GlobalAssistant {
         payload: serde_json::Value,
         sub: String,
@@ -86,7 +87,18 @@ pub(crate) enum HostedWork {
 }
 
 fn initial_request_started(work: &HostedWork) -> bool {
-    !matches!(work, HostedWork::Chat { .. } | HostedWork::Image(_))
+    !matches!(
+        work,
+        HostedWork::Chat { .. } | HostedWork::Image(_) | HostedWork::Audio(_)
+    )
+}
+
+fn response_limit(work: &HostedWork) -> usize {
+    if matches!(work, HostedWork::Audio(_)) {
+        flow_like::flow_like_model_provider::audio::MAX_AUDIO_BYTES
+    } else {
+        MAX_RESPONSE_BYTES
+    }
 }
 
 fn remaining_request_ms(job: &HostedAiJob) -> Result<u64, ApiError> {
@@ -335,7 +347,7 @@ pub(crate) async fn recover_queued(state: &AppState) -> Result<u64, ApiError> {
     let started = Instant::now();
     let now = Utc::now().timestamp_millis();
     let rows=state.db.query_all_raw(Statement::from_sql_and_values(DatabaseBackend::Postgres,
-        "SELECT id FROM \"QuotaOperation\" WHERE status='reserved' AND kind IN ('llm','embedding','image_generation','assistant') AND \"updatedAt\"<$1 AND deadline>$2 ORDER BY \"updatedAt\" LIMIT 20",
+        "SELECT id FROM \"QuotaOperation\" WHERE status='reserved' AND kind IN ('llm','embedding','image_generation','audio_transcription','audio_speech','assistant') AND \"updatedAt\"<$1 AND deadline>$2 ORDER BY \"updatedAt\" LIMIT 20",
         [(now-30_000).into(),now.into()])).await?;
     let mut dispatched = 0;
     for row in rows {
@@ -606,7 +618,7 @@ pub(crate) async fn work(
             .await?;
     }
     let started = Instant::now();
-    // Chat and image preparation can fail while resolving credentials, before any
+    // Model preparation can fail while resolving credentials, before any
     // inference request. Finalize those failures without retaining provider spend.
     let mut provider_request_started = initial_request_started(&job.request);
     let outcome = execute(&state, &job, &mut provider_request_started).await;
@@ -766,6 +778,16 @@ async fn execute(
             .await?
             .into_response()
         }
+        HostedWork::Audio(audio) => {
+            crate::routes::audio::execute_hosted_audio(
+                state,
+                audio.clone(),
+                job.operation_id.clone(),
+                remaining,
+                provider_request_started,
+            )
+            .await?
+        }
         HostedWork::GlobalAssistant {
             payload,
             sub,
@@ -847,7 +869,7 @@ async fn execute(
                 let Some(chunk) = chunk else { break; };
                 let chunk = chunk.map_err(|error| ApiError::internal(error.to_string()))?;
                 total = total.saturating_add(chunk.len());
-                if total > MAX_RESPONSE_BYTES {
+                if total > response_limit(&job.request) {
                     return Err(ApiError::bad_request("Hosted AI response exceeded the size limit"));
                 }
                 buffer.extend_from_slice(&chunk);
@@ -873,6 +895,34 @@ async fn execute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_jobs_round_trip_and_keep_audio_response_capacity() {
+        for payload in [
+            serde_json::json!({"Speech": {"bit_id":"tts", "text":"hello"}}),
+            serde_json::json!({"Transcription": {"bit_id":"stt", "audio_base64":"UklGRg==", "mime":"audio/wav"}}),
+        ] {
+            let audio = serde_json::from_value(serde_json::json!({
+                "payload": payload,
+                "provider": {"provider_name":"hosted:openrouter", "model_id":"openai/audio"},
+            }))
+            .unwrap();
+            let job = HostedAiJob {
+                operation_id: "expired-audio".into(),
+                request: HostedWork::Audio(audio),
+                deadline: Utc::now() - chrono::Duration::seconds(1),
+            };
+            let restored: HostedAiJob =
+                serde_json::from_slice(&serde_json::to_vec(&job).unwrap()).unwrap();
+            assert!(!initial_request_started(&restored.request));
+            assert!(remaining_request_ms(&restored).is_err());
+            assert_eq!(
+                response_limit(&restored.request),
+                flow_like::flow_like_model_provider::audio::MAX_AUDIO_BYTES
+            );
+            assert!(response_limit(&restored.request) > MAX_RESPONSE_BYTES);
+        }
+    }
 
     #[test]
     fn expired_image_jobs_have_no_provider_spend_to_retain() {

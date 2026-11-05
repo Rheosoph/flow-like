@@ -612,6 +612,18 @@ pub async fn local_inbox_rename(
 }
 
 #[tauri::command]
+pub async fn local_inbox_set_image(
+    state: State<'_, LocalBots>,
+    conversation_id: String,
+    image: Option<String>,
+) -> Result<Conversation, CommandError> {
+    with_store(state, move |store| {
+        store.set_conversation_image(&conversation_id, image)
+    })
+    .await
+}
+
+#[tauri::command]
 pub async fn local_inbox_add_members(
     state: State<'_, LocalBots>,
     conversation_id: String,

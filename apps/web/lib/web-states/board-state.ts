@@ -66,6 +66,10 @@ import {
 	type ExecutionTask,
 	getExecutionMetadata,
 } from "@flow-like/flow-like-ui/lib/execution/types";
+import {
+	assertBoardSpecialistResponse,
+	compactCopilotBoardReference,
+} from "@flow-like/flow-like-ui/lib/flowpilot/board-chat-contract";
 import type { FlowScriptApplyOrigin } from "@flow-like/flow-like-ui/lib/flowscript-apply-failure";
 import {
 	applyFlowScriptFromResponse,
@@ -131,6 +135,20 @@ function copilotRunChannelOf(data: string): IChannelHandle {
 		throw new Error("Malformed Copilot run frame: channel is missing.");
 	}
 	return channel;
+}
+
+function copilotResponseOf(
+	value: unknown,
+	scope: CopilotScope,
+): UnifiedCopilotResponse {
+	if (scope === "Board") {
+		assertBoardSpecialistResponse(value);
+	} else if (!isRecord(value) || typeof value.message !== "string") {
+		throw new Error(
+			"Malformed final Copilot response: expected a response object with a message.",
+		);
+	}
+	return value as UnifiedCopilotResponse;
 }
 
 interface CopilotRequestControl {
@@ -1261,7 +1279,19 @@ export class WebBoardState implements IBoardState {
 			actionContext?.app_id ??
 			runContext?.app_id;
 		const contextBoardId =
-			toolContext?.boardId ?? board?.id ?? runContext?.board_id;
+			scope === "Board" || scope === "Both"
+				? (toolContext?.boardId ?? board?.id ?? runContext?.board_id)?.trim()
+				: undefined;
+		if (scope === "Board" && !contextBoardId) {
+			throw new Error(
+				"The board specialist requires a board id before it can run.",
+			);
+		}
+		if (contextBoardId && board?.id && board.id !== contextBoardId) {
+			throw new Error(
+				"The board snapshot does not match the requested specialist target.",
+			);
+		}
 		if (contextAppId && contextBoardId) {
 			this.appIdByBoardId.set(contextBoardId, contextAppId);
 		}
@@ -1286,9 +1316,10 @@ export class WebBoardState implements IBoardState {
 
 		const wantsStream = Boolean(onToken);
 		const abortController = new AbortController();
-		const requestControl: CopilotRequestControl | undefined = requestId
-			? { abortController, cancelRequested: false }
-			: undefined;
+		const requestControl: CopilotRequestControl = {
+			abortController,
+			cancelRequested: false,
+		};
 		if (requestId && requestControl) {
 			const previous = this.copilotRequestControls.get(requestId);
 			if (previous) {
@@ -1305,7 +1336,12 @@ export class WebBoardState implements IBoardState {
 				body: JSON.stringify({
 					scope,
 					profile_id: profileId,
-					board,
+					// Both API versions reload the saved board. Keep the legacy envelope until
+					// every server accepts board_id, without uploading the potentially large graph.
+					board_id: contextBoardId,
+					board: contextBoardId
+						? compactCopilotBoardReference(contextBoardId)
+						: undefined,
 					selected_node_ids: selectedNodeIds,
 					current_surface: currentSurface,
 					current_canvas_settings: currentCanvasSettings,
@@ -1346,7 +1382,27 @@ export class WebBoardState implements IBoardState {
 				const decoder = new TextDecoder();
 				let buffer = "";
 				let result: UnifiedCopilotResponse | undefined;
+				let finalReceived = false;
 				let streamError: Error | undefined;
+				let rejectStreamFailure!: (error: Error) => void;
+				const streamFailure = new Promise<never>((_resolve, reject) => {
+					rejectStreamFailure = reject;
+				});
+				// A tool delivery can fail while no SSE frames arrive. Wake the reader immediately.
+				void streamFailure.catch(() => undefined);
+				const failStream = (error: unknown) => {
+					streamError ??=
+						error instanceof Error ? error : new Error(String(error));
+					rejectStreamFailure(streamError);
+				};
+				const onAbort = () =>
+					failStream(
+						new DOMException("Copilot run was cancelled", "AbortError"),
+					);
+				abortController.signal.addEventListener("abort", onAbort, {
+					once: true,
+				});
+				if (abortController.signal.aborted) onAbort();
 				// A nested Data Studio / Scout specialist runs server-side but owns no tools of its
 				// own: they execute here, exactly like the orchestrator's, and their results go back
 				// on the channel each request carries.
@@ -1354,7 +1410,7 @@ export class WebBoardState implements IBoardState {
 				const seenToolRequests = new Set<string>();
 
 				const handleEvent = (rawEvent: string) => {
-					if (!rawEvent.trim()) return;
+					if (finalReceived || streamError || !rawEvent.trim()) return;
 
 					let eventName = "message";
 					const dataLines: string[] = [];
@@ -1369,18 +1425,20 @@ export class WebBoardState implements IBoardState {
 					}
 
 					const data = dataLines.join("\n");
-					if (!data) return;
+					if (!data) {
+						if (eventName === "final")
+							failStream(new Error("Empty final Copilot response"));
+						return;
+					}
 
 					if (eventName === "run") {
-						if (!requestControl) return;
 						try {
 							requestControl.runChannel = copilotRunChannelOf(data);
 							if (requestControl.cancelRequested) {
 								this.finishCopilotCancellation(requestControl);
 							}
 						} catch (error) {
-							streamError =
-								error instanceof Error ? error : new Error(String(error));
+							failStream(error);
 						}
 						return;
 					}
@@ -1407,8 +1465,7 @@ export class WebBoardState implements IBoardState {
 						}).catch((error) => {
 							// The specialist is blocked on this request; failing the stream beats
 							// leaving it to time out with no explanation.
-							streamError ??=
-								error instanceof Error ? error : new Error(String(error));
+							failStream(error);
 						});
 						toolDispatches.add(dispatch);
 						void dispatch.finally(() => toolDispatches.delete(dispatch));
@@ -1416,10 +1473,15 @@ export class WebBoardState implements IBoardState {
 					}
 
 					if (eventName === "final") {
+						finalReceived = true;
 						try {
-							result = JSON.parse(data) as UnifiedCopilotResponse;
-						} catch {
-							streamError = new Error("Failed to parse final Copilot response");
+							result = copilotResponseOf(JSON.parse(data), scope);
+						} catch (error) {
+							failStream(
+								error instanceof SyntaxError
+									? new Error("Failed to parse final Copilot response")
+									: error,
+							);
 						}
 						return;
 					}
@@ -1432,13 +1494,13 @@ export class WebBoardState implements IBoardState {
 						} catch {
 							message = data;
 						}
-						streamError = new Error(message);
+						failStream(new Error(message));
 					}
 				};
 
 				const consumeBufferedEvents = () => {
 					let separatorIndex = buffer.search(/\r?\n\r?\n/);
-					while (separatorIndex !== -1) {
+					while (separatorIndex !== -1 && !finalReceived) {
 						const rawEvent = buffer.slice(0, separatorIndex);
 						const separatorLength =
 							buffer.slice(separatorIndex, separatorIndex + 4) === "\r\n\r\n"
@@ -1451,29 +1513,48 @@ export class WebBoardState implements IBoardState {
 					}
 				};
 
-				while (true) {
-					const { done, value } = await reader.read();
-					if (done) break;
+				try {
+					while (!finalReceived) {
+						const { done, value } = await Promise.race([
+							reader.read(),
+							streamFailure,
+						]);
+						if (done) break;
+						buffer += decoder.decode(value, { stream: true });
+						consumeBufferedEvents();
+					}
 
-					buffer += decoder.decode(value, { stream: true });
-					consumeBufferedEvents();
+					if (!finalReceived) {
+						buffer += decoder.decode();
+						if (buffer.trim()) handleEvent(buffer);
+					}
+					if (streamError) throw streamError;
+					if (!result)
+						throw new Error("Copilot stream ended without a final event");
+					// Finish pending result deliveries, but let failures and cancellation wake the wait.
+					if (toolDispatches.size > 0) {
+						await Promise.race([
+							Promise.all([...toolDispatches]),
+							streamFailure,
+						]);
+					}
+					if (streamError) throw streamError;
+					return result;
+				} catch (error) {
+					if (!finalReceived)
+						void this.beginCopilotCancellation(requestControl);
+					throw error;
+				} finally {
+					abortController.signal.removeEventListener("abort", onAbort);
+					void reader.cancel().catch(() => undefined);
+					reader.releaseLock();
 				}
-
-				buffer += decoder.decode();
-				if (buffer.trim()) handleEvent(buffer);
-				// A delivery failure for a tool still in flight when the stream ended belongs to
-				// this run, so wait for the dispatches before deciding the run succeeded.
-				if (toolDispatches.size > 0) {
-					await Promise.allSettled([...toolDispatches]);
-				}
-				if (streamError) throw streamError;
-				if (!result)
-					throw new Error("Copilot stream ended without a final event");
-
-				return result;
 			}
 
-			return response.json();
+			const result = await response.json();
+			if (requestControl.cancelRequested)
+				throw new DOMException("Copilot run was cancelled", "AbortError");
+			return copilotResponseOf(result, scope);
 		} finally {
 			if (requestControl?.cancelRequested && !requestControl.cancelDelivery) {
 				this.settleCopilotCancellation(requestControl);

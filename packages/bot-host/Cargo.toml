@@ -1,0 +1,23 @@
+[package]
+name = "flow-like-bot-host"
+version = "0.1.0"
+edition = "2024"
+description = "The generic host of account bots: turn claiming, leases, approvals, transcripts and memory over a TurnHub"
+
+[dependencies]
+async-trait.workspace = true
+chrono.workspace = true
+flow-like = { workspace = true, features = ["flow-runtime"] }
+flow-like-bot-memory.workspace = true
+flow-like-bot-tools.workspace = true
+flow-like-device-crypto.workspace = true
+flow-like-local-bots.workspace = true
+flow-like-types.workspace = true
+iana-time-zone.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["sync", "time", "rt"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }

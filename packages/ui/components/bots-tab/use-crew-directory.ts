@@ -21,7 +21,10 @@ export interface CrewPrincipal {
 	isBot: boolean;
 	/** Set for bots: whose bot it is. */
 	ownerId?: string;
+	/** The pinned voice Bit, shared for call speech. */
+	ttsModel?: string | null;
 	isPending: boolean;
+	isResolved: boolean;
 }
 
 export type CrewDirectory = (principalId: string) => CrewPrincipal;
@@ -93,7 +96,9 @@ export function useCrewDirectory(
 					isMe,
 					isBot: true,
 					ownerId: bot.owner_id,
+					ttsModel: bot.tts_model,
 					isPending: false,
+					isResolved: true,
 				};
 			}
 			if (principalId === LOCAL_OWNER_ID) {
@@ -103,6 +108,7 @@ export function useCrewDirectory(
 					isMe: true,
 					isBot: false,
 					isPending: false,
+					isResolved: true,
 				};
 			}
 			const local = resolveLocal?.(principalId);
@@ -114,7 +120,9 @@ export function useCrewDirectory(
 				isMe,
 				isBot: Boolean(user?.bot) || local === null,
 				ownerId: user?.bot?.owner_id,
+				ttsModel: user?.bot?.tts_model,
 				isPending: local === null || (lookup?.pending ?? false),
+				isResolved: Boolean(user),
 			};
 		},
 		[botLabels, botsById, byId, lookupName, me, resolveLocal, unknown, you],

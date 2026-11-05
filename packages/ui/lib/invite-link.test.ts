@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { getInviteDeepLink, getInviteLink } from "./invite-link";
+import {
+	getInviteDeepLink,
+	getInviteLink,
+	getRoomInviteLink,
+} from "./invite-link";
 
 const originalApi = process.env.NEXT_PUBLIC_API_URL;
 const originalRuntime = process.env.NEXT_PUBLIC_FLOW_LIKE_RUNTIME_CONFIG;
@@ -111,5 +115,29 @@ describe("shared invitation links", () => {
 				"The invitation API URL must be an HTTP(S) base URL",
 			);
 		}
+	});
+});
+
+describe("room invite links", () => {
+	test("point at the public join page with the token as room", () => {
+		expect(getRoomInviteLink("abc")).toBe(
+			"https://api.flow-like.com/join?room=abc",
+		);
+	});
+
+	test("keep the deployment prefix and encode the token", () => {
+		process.env.NEXT_PUBLIC_API_URL =
+			"https://api.example.test/service/api/v1/";
+		const url = new URL(getRoomInviteLink("a+b &/?#é"));
+		expect(url.pathname).toBe("/service/join");
+		expect(url.searchParams.get("room")).toBe("a+b &/?#é");
+		expect([...url.searchParams.keys()]).toEqual(["room"]);
+	});
+
+	test("share the base URL validation", () => {
+		process.env.NEXT_PUBLIC_API_URL = "https://user:secret@api.example.test";
+		expect(() => getRoomInviteLink("abc")).toThrow(
+			"The invitation API URL must be an HTTP(S) base URL",
+		);
 	});
 });

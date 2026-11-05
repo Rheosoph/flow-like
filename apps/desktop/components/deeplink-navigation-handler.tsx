@@ -15,6 +15,7 @@ interface DeeplinkStorePayload {
 interface DeeplinkJoinPayload {
 	appId: string | null;
 	token: string | null;
+	room?: string | null;
 	replayed?: boolean;
 }
 
@@ -87,7 +88,15 @@ export function DeeplinkNavigationHandler({
 		const joinUnlisten = listen<DeeplinkJoinPayload>(
 			"deeplink/join",
 			(event) => {
-				const { appId, token, replayed } = event.payload;
+				const { appId, token, room, replayed } = event.payload;
+				if (room && !appId) {
+					navigate(
+						`join-room:${room}`,
+						`/join?room=${encodeURIComponent(room)}`,
+						replayed,
+					);
+					return;
+				}
 				if (appId && token) {
 					navigate(
 						`join:${appId}:${token}`,

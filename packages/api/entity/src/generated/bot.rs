@@ -65,6 +65,8 @@ pub struct Model {
     pub image_model: Option<String>,
     #[sea_orm(column_name = "visionModel", column_type = "Text", nullable)]
     pub vision_model: Option<String>,
+    #[sea_orm(column_name = "subtaskModel", column_type = "Text", nullable)]
+    pub subtask_model: Option<String>,
     #[sea_orm(has_many)]
     pub bot_host_heartbeats: HasMany<super::bot_host_heartbeat::Entity>,
     #[sea_orm(has_many)]
@@ -74,11 +76,15 @@ pub struct Model {
     #[sea_orm(has_many)]
     pub bot_secrets: HasMany<super::bot_secret::Entity>,
     #[sea_orm(has_many)]
+    pub bot_skills: HasMany<super::bot_skill::Entity>,
+    #[sea_orm(has_many)]
     pub bot_tasks: HasMany<super::bot_task::Entity>,
     #[sea_orm(has_many)]
     pub bot_tool_grants: HasMany<super::bot_tool_grant::Entity>,
     #[sea_orm(has_many)]
     pub bot_turns: HasMany<super::bot_turn::Entity>,
+    #[sea_orm(has_many)]
+    pub bot_connectors: HasMany<super::bot_connector::Entity>,
     #[sea_orm(has_many)]
     pub bot_webhooks: HasMany<super::bot_webhook::Entity>,
     #[sea_orm(has_many)]

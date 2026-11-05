@@ -28,7 +28,7 @@ const DELEGATED: &str = r#""PlacementResourceGrant" g WHERE g."deviceId"=d.id AN
 /// Spending the caller pays for on device `d` and can still revoke.
 const SPONSORED: &str = r#""PlacementBillingGrant" b JOIN "PlacementResourceGrant" g ON g.id=b."grantId" WHERE g."deviceId"=d.id AND b."payerId"=$1 AND b.status='active' AND b."expiresAt">$2"#;
 
-const COLUMNS: &str = r#"d.id,d."ownerId",d.name,d.status,d."authEpoch",d.identity,d."registeredAt",d."lastSeenAt",d."revokedAt",d."displayName""#;
+const COLUMNS: &str = r#"d.id,d."ownerId",d.name,d.status,d."authEpoch",d.identity,d."registeredAt",d."lastSeenAt",d."revokedAt",d."displayName",d."botHostSeenAt""#;
 const RULES_EXPIRY: &str = r#"(SELECT p."expiresAt" FROM "DeviceManagementPolicy" p WHERE p."deviceId"=d.id AND p.version=(SELECT MAX(q.version) FROM "DeviceManagementPolicy" q WHERE q."deviceId"=d.id)) AS "rulesExpireAt""#;
 const GRANT_EXPIRY: &str = r#"(SELECT MAX(r."expiresAt") FROM "DeviceManagementRecipient" r WHERE r."deviceId"=d.id AND r."userId"=$1 AND r."expiresAt">$2 AND r.version=(SELECT MAX(p.version) FROM "DeviceManagementPolicy" p WHERE p."deviceId"=d.id)) AS "grantExpiresAt""#;
 /// A rejection stops being reported once the device has checked in again.
@@ -161,6 +161,9 @@ pub(crate) struct DeviceView {
     pub status: DeviceRegistrationStatus,
     pub registered_at: i64,
     pub last_seen_at: Option<i64>,
+    /// When the device's bot host last polled the hub, unix milliseconds; unset when it never did.
+    #[serde(default)]
+    pub bot_host_seen_at: Option<i64>,
     pub auth_epoch: u64,
     /// Unset for devices revoked before the hub recorded the time.
     pub revoked_at: Option<i64>,
@@ -264,6 +267,7 @@ fn view(row: &QueryResult, relationship: DeviceRelationship) -> Result<DeviceVie
         status: status.status,
         registered_at: status.registered_at,
         last_seen_at: status.last_seen_at,
+        bot_host_seen_at: row.try_get("", "botHostSeenAt")?,
         auth_epoch: status.auth_epoch,
         revoked_at: row.try_get("", "revokedAt")?,
         relationship,
@@ -548,6 +552,7 @@ mod tests {
             status: DeviceRegistrationStatus::Active,
             registered_at: 1_727_000_000,
             last_seen_at: None,
+            bot_host_seen_at: None,
             auth_epoch: 1,
             revoked_at: None,
             relationship: DeviceRelationship::Owner,

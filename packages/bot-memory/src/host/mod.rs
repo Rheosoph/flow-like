@@ -6,6 +6,7 @@ pub mod admin;
 pub mod entries;
 pub mod models;
 pub mod publish;
+pub(crate) mod recall;
 pub mod session;
 pub mod toolbox;
 

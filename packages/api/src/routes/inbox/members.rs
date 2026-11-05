@@ -5,12 +5,12 @@ use super::{
     delivery::people_to_wake,
     insert_copies, lock_conversation, member_conversation,
     model::{AddMembersRequest, Conversation},
-    now_millis, stored,
+    now_millis,
     view::visible_conversation,
     wake,
 };
 use crate::{
-    entity::{bot, conversation, conversation_member, inbox_entry, membership},
+    entity::{bot, conversation, conversation_member, inbox_entry},
     error::ApiError,
     middleware::jwt::AppUser,
     routes::bots::{lock_bot, owned_bot},
@@ -30,11 +30,11 @@ use flow_like_types::{
     },
 };
 use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait, FromQueryResult,
-    QueryFilter, QuerySelect, QueryTrait,
-    sea_query::{Expr, OnConflict, SelectStatement, UnionType},
+    ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTrait, QueryFilter,
+    QuerySelect,
+    sea_query::{Expr, OnConflict},
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 /// A user sub or a bot id with its kind.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,7 +57,7 @@ pub(super) fn not_allowed(principal_id: &str) -> ApiError {
         StatusCode::FORBIDDEN,
         INBOX_MEMBER_NOT_ALLOWED,
         format!(
-            "You can't add '{principal_id}': add your own bots or people who share an app with you"
+            "You can't add '{principal_id}': it is neither a person on this hub nor a live bot"
         ),
     )
 }
@@ -69,78 +69,6 @@ pub(super) fn requested_members(caller: &str, ids: Vec<String>) -> Vec<String> {
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty() && id != caller && seen.insert(id.clone()))
         .collect()
-}
-
-#[derive(Debug, FromQueryResult)]
-struct PrincipalRow {
-    principal_id: String,
-    principal_kind: String,
-}
-
-/// The principals `adder` may add, in the order asked: their own bots that are not deleted and
-/// people who share at least one app with them, found with one statement for the whole list.
-/// The first id that is neither fails the request with [`INBOX_MEMBER_NOT_ALLOWED`].
-pub(super) async fn allowed_principals<C: ConnectionTrait>(
-    db: &C,
-    adder: &str,
-    candidates: &[String],
-) -> Result<Vec<Principal>, ApiError> {
-    if candidates.is_empty() {
-        return Ok(Vec::new());
-    }
-    let statement = allowed_statement(adder, candidates);
-    let found: HashMap<String, PrincipalKind> =
-        PrincipalRow::find_by_statement(db.get_database_backend().build(&statement))
-            .all(db)
-            .await?
-            .into_iter()
-            .filter_map(|row| Some((row.principal_id, PrincipalKind::parse(&row.principal_kind)?)))
-            .collect();
-    candidates
-        .iter()
-        .map(|id| {
-            found
-                .get(id)
-                .map(|kind| Principal {
-                    id: id.clone(),
-                    kind: *kind,
-                })
-                .ok_or_else(|| not_allowed(id))
-        })
-        .collect()
-}
-
-/// The adder's live bots among `candidates`, united with the candidates who share at least one
-/// app with the adder.
-fn allowed_statement(adder: &str, candidates: &[String]) -> SelectStatement {
-    let mut statement = bot::Entity::find()
-        .select_only()
-        .column_as(bot::Column::Id, "principal_id")
-        .column_as(
-            Expr::val(stored(PrincipalKind::Bot.as_str())),
-            "principal_kind",
-        )
-        .filter(bot::Column::Id.is_in(candidates.iter().cloned()))
-        .filter(bot::Column::OwnerId.eq(adder))
-        .filter(bot::Column::DeletedAt.is_null())
-        .into_query();
-    let adder_apps = membership::Entity::find()
-        .select_only()
-        .column(membership::Column::AppId)
-        .filter(membership::Column::UserId.eq(adder))
-        .into_query();
-    let people = membership::Entity::find()
-        .select_only()
-        .column_as(membership::Column::UserId, "principal_id")
-        .column_as(
-            Expr::val(stored(PrincipalKind::User.as_str())),
-            "principal_kind",
-        )
-        .filter(membership::Column::UserId.is_in(candidates.iter().cloned()))
-        .filter(membership::Column::AppId.in_subquery(adder_apps))
-        .into_query();
-    statement.union(UnionType::Distinct, people);
-    statement
 }
 
 /// Locks the bots among `principals` in id order and re-reads each under its lock, so a bot
@@ -300,7 +228,7 @@ pub(super) fn ensure_room(
 
 /// Inserts the new members; someone who left before gets their row back, keeping the read
 /// marker.
-async fn upsert_members<C: ConnectionTrait>(
+pub(super) async fn upsert_members<C: ConnectionTrait>(
     txn: &C,
     conversation_id: &str,
     joining: &[Principal],
@@ -481,7 +409,7 @@ pub(super) async fn end_memberships<C: ConnectionTrait>(
     responses(
         (status = 200, description = "The group with its members and pending invitations. Your own bots join at once and everyone gets a join entry; people and other people's bots are invited and join when they (or the bot's owner) accept.", body = Conversation),
         (status = 401, description = "Not signed in"),
-        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: you can add your own bots and invite people who share an app with you and their bots; the message names the first id refused"),
+        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: an id is neither a person on this hub nor a live bot; the message names the first id refused"),
         (status = 404, description = "You are not in this conversation"),
         (status = 409, description = "INBOX_MEMBER_LIMIT: a conversation has at most 50 members; INBOX_DIRECT_FIXED: a direct conversation's members don't change")
     ),
@@ -519,7 +447,7 @@ pub async fn add_members(
     )
     .await?;
     Ok(Json(
-        visible_conversation(&state.db, &Reader::own(&sub), &conversation_id).await?,
+        visible_conversation(&state, &Reader::own(&sub), &conversation_id).await?,
     ))
 }
 

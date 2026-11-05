@@ -78,6 +78,7 @@ fn bots_serialize_like_the_api_plus_local() {
             "preset_id",
             "profile_id",
             "stt_model",
+            "subtask_model",
             "system",
             "tts_model",
             "updated_at",
@@ -669,6 +670,7 @@ fn flowpilot_stays_with_the_bots_that_hold_it() {
         tts_model: None,
         image_model: None,
         vision_model: None,
+        subtask_model: None,
         classification: Default::default(),
         capabilities: vec![BotCapability::Flowpilot],
         profile_id: None,
@@ -1039,6 +1041,7 @@ fn the_model_pins_are_kept_cleared_checked_and_stored() {
             "tts_model": "bit-tts",
             "image_model": "bit-image",
             "vision_model": "bit-vision",
+            "subtask_model": "bit-small",
         })))
         .unwrap();
     assert_eq!(bot.stt_model.as_deref(), Some("bit-stt"));
@@ -1046,6 +1049,7 @@ fn the_model_pins_are_kept_cleared_checked_and_stored() {
     assert_eq!(wire["tts_model"], "bit-tts");
     assert_eq!(wire["image_model"], "bit-image");
     assert_eq!(wire["vision_model"], "bit-vision");
+    assert_eq!(wire["subtask_model"], "bit-small");
 
     let kept = f
         .store
@@ -1053,6 +1057,7 @@ fn the_model_pins_are_kept_cleared_checked_and_stored() {
         .unwrap();
     assert_eq!(kept.stt_model.as_deref(), Some("bit-stt"));
     assert_eq!(kept.vision_model.as_deref(), Some("bit-vision"));
+    assert_eq!(kept.subtask_model.as_deref(), Some("bit-small"));
 
     let changed = f
         .store
@@ -1076,7 +1081,13 @@ fn the_model_pins_are_kept_cleared_checked_and_stored() {
         (Some("bit-stt"), Some("bit-tts-2"), None, Some("bit-vision"))
     );
 
-    for field in ["stt_model", "tts_model", "image_model", "vision_model"] {
+    for field in [
+        "stt_model",
+        "tts_model",
+        "image_model",
+        "vision_model",
+        "subtask_model",
+    ] {
         let long = f
             .store
             .update_bot(&bot.id, patch(json!({ field: "m".repeat(257) })));
@@ -1087,6 +1098,11 @@ fn the_model_pins_are_kept_cleared_checked_and_stored() {
         Some("bit-vision"),
         "the copy takes the current pins"
     );
+    let cleared = f
+        .store
+        .update_bot(&bot.id, patch(json!({ "subtask_model": null })))
+        .unwrap();
+    assert_eq!(cleared.subtask_model, None);
 }
 
 #[test]

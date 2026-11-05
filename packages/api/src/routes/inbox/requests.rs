@@ -6,7 +6,7 @@
 //! goes to its owner, who accepts and sets limits as for a room.
 
 use super::{
-    INBOX_MEMBER_NOT_ALLOWED, INBOX_REQUEST_LIMIT, MEMBER_ACTIVE, MEMBER_BLOCKED, MEMBER_DECLINED,
+    INBOX_MEMBER_NOT_ALLOWED, INBOX_REQUEST_LIMIT, MEMBER_BLOCKED, MEMBER_DECLINED,
     MEMBER_PENDING,
     delivery::{
         Addressed, BotDelivery, BotRecipient, bot_recipients, deliver_to_bots, live_bots,
@@ -110,14 +110,20 @@ pub(super) async fn is_direct<C: ConnectionTrait>(
         .is_some_and(|row| ConversationKind::parse(&row.kind) == Some(ConversationKind::Direct)))
 }
 
-/// Writing to someone whose request you hold answers it: your pending, declined or blocked
-/// membership becomes active and you see what they sent. Returns the people to wake.
+/// Writing to someone whose request you hold answers it: your pending or declined membership
+/// becomes active and you see what they sent. Blocks must be removed first.
 pub(super) async fn answer_by_writing<C: ConnectionTrait>(
     txn: &C,
     conversation_id: &str,
     caller: &str,
     now: DateTime<FixedOffset>,
 ) -> Result<Vec<String>, ApiError> {
+    if let Some(conversation) = conversation::Entity::find_by_id(conversation_id)
+        .one(txn)
+        .await?
+    {
+        super::blocks::ensure_direct_allowed(txn, &conversation, caller).await?;
+    }
     let held =
         conversation_member::Entity::find_by_id((conversation_id.to_string(), caller.to_string()))
             .filter(conversation_member::Column::LeftAt.is_null())
@@ -372,6 +378,9 @@ pub(crate) async fn block_in<C: ConnectionTrait>(
             "Only a message request can be blocked; decline a room invitation instead",
         ));
     }
+    if let Some(inviter) = &member.invited_by {
+        super::blocks::block_in(txn, actor, inviter, super::now_millis()).await?;
+    }
     set_status(txn, conversation_id, principal_id, MEMBER_BLOCKED).await?;
     if let Some(inviter) = member.invited_by {
         conversation_member::Entity::update_many()
@@ -386,26 +395,6 @@ pub(crate) async fn block_in<C: ConnectionTrait>(
             .await?;
     }
     Ok(Vec::new())
-}
-
-/// The invitees among `principals` who blocked `inviter`.
-pub(super) async fn blocked_by<C: ConnectionTrait>(
-    db: &C,
-    inviter: &str,
-    principals: &[String],
-) -> Result<HashSet<String>, DbErr> {
-    if principals.is_empty() {
-        return Ok(HashSet::new());
-    }
-    Ok(conversation_member::Entity::find()
-        .filter(conversation_member::Column::Status.eq(MEMBER_BLOCKED))
-        .filter(conversation_member::Column::InvitedBy.eq(inviter))
-        .filter(conversation_member::Column::PrincipalId.is_in(principals.iter().cloned()))
-        .all(db)
-        .await?
-        .into_iter()
-        .map(|member| member.principal_id)
-        .collect())
 }
 
 #[utoipa::path(

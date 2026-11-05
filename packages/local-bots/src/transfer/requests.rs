@@ -44,6 +44,7 @@ pub(crate) struct ImportBotRequest<'a> {
     tts_model: Option<&'a str>,
     image_model: Option<&'a str>,
     vision_model: Option<&'a str>,
+    subtask_model: Option<&'a str>,
     classification: &'a DataSensitivity,
     capabilities: &'a [BotCapability],
     profile_id: Option<&'a str>,
@@ -69,6 +70,7 @@ impl<'a> ImportBotRequest<'a> {
             tts_model: bot.tts_model.as_deref(),
             image_model: bot.image_model.as_deref(),
             vision_model: bot.vision_model.as_deref(),
+            subtask_model: bot.subtask_model.as_deref(),
             classification: &bot.classification,
             capabilities: &bot.capabilities,
             profile_id: bot.profile_id.as_deref(),
@@ -94,6 +96,7 @@ pub(crate) struct BotSettingsRequest<'a> {
     tts_model: Option<&'a str>,
     image_model: Option<&'a str>,
     vision_model: Option<&'a str>,
+    subtask_model: Option<&'a str>,
     classification: &'a DataSensitivity,
     capabilities: &'a [BotCapability],
     profile_id: Option<&'a str>,
@@ -114,6 +117,7 @@ impl<'a> BotSettingsRequest<'a> {
             tts_model: bot.tts_model.as_deref(),
             image_model: bot.image_model.as_deref(),
             vision_model: bot.vision_model.as_deref(),
+            subtask_model: bot.subtask_model.as_deref(),
             classification: &bot.classification,
             capabilities: &bot.capabilities,
             profile_id: bot.profile_id.as_deref(),
@@ -211,13 +215,13 @@ pub(crate) fn split_conversations<'a>(
     ConversationSplit { movable, waiting }
 }
 
-/// Join and leave events are the server's to write, an activity points into a local exchange
-/// that stays behind, and an edit of a deleted message lost the
+/// Join, leave and room events are the server's to write, an activity points into a local
+/// exchange that stays behind, and an edit of a deleted message lost the
 /// message it edited, which the account's deletion scrubs from the edits it imports anyway.
 fn is_imported(entry: &InboxEntry) -> bool {
     !matches!(
         entry.kind,
-        InboxEntryKind::Member | InboxEntryKind::Activity
+        InboxEntryKind::Member | InboxEntryKind::Activity | InboxEntryKind::Room
     ) && !(entry.kind == InboxEntryKind::Edit && is_tombstone(&entry.envelope))
 }
 

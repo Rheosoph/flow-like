@@ -502,6 +502,8 @@ fn replace_across_text_elements(
     replacement: &str,
     text_element: &str,
 ) -> Result<String> {
+    let replacement = quick_xml::escape::escape(replacement);
+    let replacement = replacement.as_ref();
     let open_tag_prefix = format!("<{}", text_element);
     let close_tag = format!("</{}>", text_element);
 

@@ -37,6 +37,7 @@ const directory = (id: string) => ({
 	isMe: false,
 	isBot: id === "momo" || id === "scout",
 	isPending: false,
+	isResolved: Boolean(names[id]),
 });
 
 const said = (el: HTMLElement | null | undefined) =>

@@ -26,6 +26,55 @@ pub(crate) enum OpenTarget {
     Service(ServiceTarget),
     #[cfg(feature = "runtime")]
     ModelGateway(GatewayTarget),
+    #[cfg(all(
+        feature = "playground",
+        any(target_os = "macos", windows, target_os = "linux")
+    ))]
+    BotPlayground(PlaygroundTarget),
+}
+
+/// The live view of one bot on this device; only the device owner may open it.
+#[cfg(all(
+    feature = "playground",
+    any(target_os = "macos", windows, target_os = "linux")
+))]
+#[derive(Clone)]
+pub(crate) struct PlaygroundTarget {
+    pub host: crate::playground::MachineHost,
+    pub bot_id: String,
+}
+
+fn require_playground_owner(authority: &Authority) -> Result<()> {
+    authority.require_owner("Only the device owner can watch or take over a bot's screen")
+}
+
+#[cfg(all(
+    feature = "playground",
+    any(target_os = "macos", windows, target_os = "linux")
+))]
+fn playground(authority: &Authority, bot_id: &str) -> Result<OpenTarget> {
+    require_playground_owner(authority)?;
+    let host = crate::playground::shared_machine_host().ok_or_else(|| {
+        refusal(
+            RejectionCode::Unsupported,
+            "This device does not run bots yet, so there is no screen to watch",
+        )
+    })?;
+    Ok(OpenTarget::BotPlayground(PlaygroundTarget {
+        host,
+        bot_id: bot_id.to_owned(),
+    }))
+}
+
+#[cfg(not(all(
+    feature = "playground",
+    any(target_os = "macos", windows, target_os = "linux")
+)))]
+fn playground(_: &Authority, _: &str) -> Result<OpenTarget> {
+    Err(refusal(
+        RejectionCode::Unsupported,
+        "This device agent was built without the bot playground",
+    ))
 }
 
 /// Requests of a model gateway stream reach the agent's loopback gateway as the principal
@@ -325,6 +374,33 @@ mod tests {
     use crate::state::{DesiredState, ObservedState};
 
     #[test]
+    fn a_bot_screen_is_for_the_device_owner_only() {
+        let key = SigningKey::generate().public_key();
+        let owner = Authority {
+            principal: "user:owner".into(),
+            key: key.clone(),
+            grant: None,
+        };
+        require_playground_owner(&owner).expect("the owner watches the bot");
+        let grantee = Authority {
+            principal: "friend:grant".into(),
+            key: key.clone(),
+            grant: Some(ManagementGrant {
+                grant_id: "grant".into(),
+                user_id: "friend".into(),
+                controller_key: key,
+                scope: ManagementScope::Device,
+                capabilities: vec![ManagementCapability::Status, ManagementCapability::ModelUse],
+                expires_at: i64::MAX,
+                group_id: None,
+                group_version: None,
+            }),
+        };
+        let refused = require_playground_owner(&grantee).expect_err("a grantee watched the bot");
+        assert_eq!(rejection_code(&refused), RejectionCode::Unauthorized);
+    }
+
+    #[test]
     fn service_tunnel_grants_bind_capability_placement_and_live_configuration() -> Result<()> {
         let directory = tempfile::tempdir()?;
         let owner = SigningKey::generate();
@@ -494,6 +570,11 @@ mod tests {
             OpenTarget::Service(opened) => assert_eq!(opened, target),
             #[cfg(feature = "runtime")]
             OpenTarget::ModelGateway(_) => panic!("a service open leads to its service"),
+            #[cfg(all(
+                feature = "playground",
+                any(target_os = "macos", windows, target_os = "linux")
+            ))]
+            OpenTarget::BotPlayground(_) => panic!("a service open leads to its service"),
         }
         assert!(
             connect("status-only")?
@@ -962,7 +1043,15 @@ impl TunnelAuthority {
                 authority.require(ManagementCapability::ModelUse, None, None)?;
                 gateway(&authority)
             }
+            flow_like_device_protocol::TunnelTarget::BotPlayground { ref bot_id } => {
+                playground(&self.authority()?, bot_id)
+            }
         }
+    }
+
+    /// The grant behind a live view is still the owner.
+    pub(crate) fn check_playground(&self) -> Result<()> {
+        require_playground_owner(&self.authority()?)
     }
 
     /// The grant still holds Use models and is the principal the stream sends as.

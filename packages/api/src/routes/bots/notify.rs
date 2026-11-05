@@ -65,7 +65,7 @@ pub async fn message_owner(
     Path(bot_id): Path<String>,
     Json(request): Json<MessageOwnerRequest>,
 ) -> Result<Json<MessageOwnerResponse>, ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
     if !bot
         .capabilities

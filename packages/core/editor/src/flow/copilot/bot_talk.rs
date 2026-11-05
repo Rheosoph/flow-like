@@ -483,7 +483,7 @@ impl BotTalk {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn raise_taint(&self, level: DataSensitivity) {
+    pub(super) fn raise_taint(&self, level: DataSensitivity) {
         let mut taint = self
             .taint
             .lock()
@@ -1210,6 +1210,14 @@ impl PlatformToolBridge for BotTalkBridge {
 
     async fn drain_steering(&self) -> Vec<String> {
         self.inner.drain_steering().await
+    }
+
+    fn watches_room(&self) -> bool {
+        self.inner.watches_room()
+    }
+
+    async fn drain_room_updates(&self) -> Vec<String> {
+        self.inner.drain_room_updates().await
     }
 
     async fn is_cancelled(&self) -> bool {

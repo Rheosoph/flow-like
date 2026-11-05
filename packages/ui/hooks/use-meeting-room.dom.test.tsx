@@ -18,14 +18,14 @@ import type {
 	MeetingClient,
 	MeetingRealtimeAccess,
 } from "../lib/meetings/types";
-import type { ConversationRoom } from "./use-conversation-room";
+import type { ConversationRoom, RoomProvider } from "./use-conversation-room";
 
 const realtime = { ...(await import("../lib/realtime/webrtc")) };
 const created: {
 	room: string;
 	dispose: ReturnType<typeof mock>;
 	awareness: object;
-	provider: object;
+	provider: RoomProvider;
 }[] = [];
 const roots: Root[] = [];
 let latest: ConversationRoom | undefined;

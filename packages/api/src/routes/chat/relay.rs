@@ -515,6 +515,20 @@ pub(crate) async fn current_instance_model_tier(
 }
 
 fn instance_model_tier(bit: &Bit, request_path: &str) -> Result<String, ApiError> {
+    let audio_type = match request_path {
+        "/instances/audio/transcriptions" => Some(BitTypes::Stt),
+        "/instances/audio/speech" => Some(BitTypes::Tts),
+        _ => None,
+    };
+    if let Some(expected) = audio_type {
+        if bit.bit_type != expected {
+            return Err(ApiError::forbidden(
+                "The approved audio model does not support this endpoint",
+            ));
+        }
+        let (provider, _) = crate::routes::audio::catalog_provider(bit)?;
+        return Ok(required_model_tier(&provider).to_owned());
+    }
     if request_path == "/instances/images/generations" {
         let provider = crate::routes::images::catalog_provider(bit)?;
         return Ok(required_model_tier(&provider).to_owned());
@@ -1830,6 +1844,46 @@ mod tests {
             &HostedProvider::TypeSafe,
             ModelApiSurface::ChatCompletions
         ));
+    }
+
+    #[test]
+    fn instance_audio_requires_the_matching_bit_and_current_hosted_tier() {
+        for (bit_type, path, other) in [
+            (
+                BitTypes::Stt,
+                "/instances/audio/transcriptions",
+                "/instances/audio/speech",
+            ),
+            (
+                BitTypes::Tts,
+                "/instances/audio/speech",
+                "/instances/audio/transcriptions",
+            ),
+        ] {
+            let mut bit = Bit {
+                id: "hosted-audio".into(),
+                bit_type,
+                parameters: serde_json::json!({"provider": {
+                    "provider_name": "hosted:openrouter", "model_id": "openai/audio",
+                    "params": {"tier": "FREE"},
+                }}),
+                ..Default::default()
+            };
+            assert_eq!(instance_model_tier(&bit, path).unwrap(), "FREE");
+            for denied in [
+                other,
+                "/instances/chat/completions",
+                "/instances/images/generations",
+                "/audio/speech",
+                "/instances/audio/speech?model=other",
+            ] {
+                assert!(instance_model_tier(&bit, denied).is_err(), "{denied}");
+            }
+            bit.parameters["provider"]["params"]["tier"] = serde_json::json!("PREMIUM");
+            assert_eq!(instance_model_tier(&bit, path).unwrap(), "PREMIUM");
+            bit.parameters["provider"]["provider_name"] = serde_json::json!("custom:openrouter");
+            assert!(instance_model_tier(&bit, path).is_err());
+        }
     }
 
     #[test]

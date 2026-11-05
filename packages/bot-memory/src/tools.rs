@@ -11,7 +11,8 @@ use serde_json::{Value, json};
 
 use crate::engine::MemoryEngine;
 use crate::facts::{
-    Evidence, Fact, FactKind, RejectReason, UpdateAction, integrate_facts, normalize_subject,
+    Evidence, Fact, FactKind, RejectReason, UpdateAction, attribute_statement, integrate_facts,
+    normalize_subject, statement_subject,
 };
 use crate::model::{FactSource, HistoryItem, Role, Seq, SeqSpan};
 use crate::pointer::{PartRef, Pointer};
@@ -481,18 +482,18 @@ pub async fn memory_search(
         subject: None,
         time_range: range,
     };
-    let mut facts = stores
-        .facts
-        .search(&FactQuery {
-            text: args.query.clone(),
-            filter,
-            time_hint: hint,
-            limit: limit + 1,
-            offset: skip,
-            now,
-            recency: Recency::default(),
-        })
-        .await?;
+    let query = FactQuery {
+        text: args.query.clone(),
+        filter,
+        time_hint: hint,
+        limit: limit + 1,
+        offset: skip,
+        now,
+        recency: Recency::default(),
+    };
+    let mut facts = stores.facts.search(&query).await?;
+    let owner_memory =
+        crate::host::recall::owner_memory(stores, &query, false, tz, MAX_TOKENS / 2).await?;
     let segments = if skip == 0 {
         stores
             .segments
@@ -501,16 +502,23 @@ pub async fn memory_search(
     } else {
         Vec::new()
     };
-    if facts.is_empty() && segments.is_empty() {
+    if facts.is_empty() && segments.is_empty() && owner_memory.text.is_empty() {
         return Ok(ToolOutput::complete(format!(
             "No memories match \"{}\".",
             one_line(&args.query)
         )));
     }
-    let more = facts.len() > limit;
+    let more = facts.len() > limit || owner_memory.more;
     facts.truncate(limit);
     let next = more.then(|| (skip + limit).to_string());
     let mut text = render_memory(&facts, &segments, tz);
+    if !owner_memory.text.is_empty() {
+        text = format!(
+            "{}\n\n{}",
+            truncate_to_tokens(&text, MAX_TOKENS / 2),
+            owner_memory.text
+        );
+    }
     if let Some(cursor) = &next {
         text.push_str(&format!("\n(more facts: cursor {cursor})"));
     }
@@ -639,6 +647,9 @@ impl WriteGate {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MemorySaveArgs {
     pub text: String,
+    /// The message that states the fact, in this conversation. Defaults to the trigger.
+    #[serde(default)]
+    pub evidence_seq: Option<Seq>,
     #[serde(default)]
     pub kind: Option<String>,
     #[serde(default)]
@@ -672,18 +683,29 @@ pub async fn memory_save(
     gate: WriteGate,
     now: DateTime<Utc>,
 ) -> Result<WriteOutcome<(Fact, UpdateAction)>> {
+    if args.evidence_seq.is_some_and(|seq| seq != evidence.seq) {
+        return Ok(WriteOutcome::Rejected {
+            reason: RejectReason::NoEvidence,
+        });
+    }
     let tz = engine.timezone();
     let Some(text) = sanitize_fact_text(&args.text) else {
         return Ok(WriteOutcome::Rejected {
             reason: RejectReason::Unsafe,
         });
     };
-    let kind = args
+    let mut kind = args
         .kind
         .as_deref()
         .and_then(FactKind::parse)
         .unwrap_or(FactKind::Knowledge);
     let source = evidence.role.trust();
+    let participant = (evidence.role == Role::External)
+        .then_some(evidence.speaker.as_ref())
+        .flatten();
+    if participant.is_some() && kind.is_personal() {
+        kind = FactKind::Knowledge;
+    }
     if kind.is_personal() && source != FactSource::UserStated {
         return Ok(WriteOutcome::Rejected {
             reason: RejectReason::UntrustedPersonal,
@@ -692,11 +714,19 @@ pub async fn memory_save(
     if !gate.allows() {
         return Ok(WriteOutcome::NeedsConfirmation { preview: text });
     }
+    let subject = normalize_subject(args.subject.as_deref().unwrap_or("user"));
+    let (text, subject) = match participant {
+        Some(speaker) => (
+            attribute_statement(&text, speaker),
+            statement_subject(&subject, speaker),
+        ),
+        None => (text, subject),
+    };
     let mut fact = Fact {
         id: Fact::new_id(),
         text,
         kind,
-        subject: normalize_subject(args.subject.as_deref().unwrap_or("user")),
+        subject,
         valid_from: args
             .valid_from
             .as_deref()
@@ -714,6 +744,7 @@ pub async fn memory_save(
             quote: truncate_chars(&one_line(&evidence.text), crate::facts::MAX_QUOTE_CHARS),
             at: evidence.created_at,
             partial: false,
+            speaker: evidence.speaker.clone(),
         }],
         segment_id: None,
         source,
@@ -889,10 +920,11 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "memory_save",
-            description: "Remember a fact the user asked you to keep. Write it as a full sentence that starts with its subject.",
+            description: "Remember a fact as a full sentence that starts with its subject. When saving an earlier statement, set evidence_seq to the message that actually stated it so its author and trust are preserved. Omit evidence_seq only when the current message states the fact.",
             parameters: object(
                 json!({
                     "text": { "type": "string" },
+                    "evidence_seq": { "type": "integer", "minimum": 1, "description": "Position of the message that states the fact in this conversation; cannot be later than the current message." },
                     "kind": { "type": "string", "enum": ["profile", "preference", "event", "decision", "knowledge"] },
                     "subject": { "type": "string" },
                     "valid_from": { "type": "string" },

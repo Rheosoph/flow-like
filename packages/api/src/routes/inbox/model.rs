@@ -112,6 +112,11 @@ pub struct Conversation {
     #[schema(example = "group")]
     pub kind: String,
     pub title: Option<String>,
+    /// A link to a group's picture, valid for a day; null when it has none.
+    pub image_url: Option<String>,
+    /// The stored picture's content hash, which `image_url` is signed for.
+    #[serde(skip)]
+    pub image: Option<String>,
     /// `plain`, or `e2e` where every member receives an envelope sealed to their key.
     #[schema(example = "plain")]
     pub encryption: String,
@@ -147,7 +152,7 @@ pub struct CreateConversationRequest {
     pub kind: ConversationKind,
     /// Groups only; at most 120 characters.
     pub title: Option<String>,
-    /// Everyone except you: your own bots and people who share an app with you. A direct
+    /// Everyone except you: your own bots, anyone on the hub and other people's bots. A direct
     /// conversation takes exactly one; a group at most 49.
     pub members: Vec<String>,
     /// `plain` (default) or `e2e`.
@@ -162,8 +167,14 @@ pub struct RenameConversationRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
+pub struct SetConversationImageRequest {
+    /// A PNG, JPEG, GIF or WebP data URL of at most 512 KiB, stored as a PNG of at most 256 px.
+    pub image: String,
+}
+
+#[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct AddMembersRequest {
-    /// Your own bots and people who share an app with you. Current members are skipped.
+    /// Your own bots, anyone on the hub and other people's bots. Current members are skipped.
     pub members: Vec<String>,
 }
 

@@ -32,11 +32,14 @@ pub mod public_web;
 mod search;
 pub mod session;
 pub mod stream;
+mod subtasks;
+mod tool_arguments;
 pub mod tool_grants;
 #[cfg(test)]
 mod tool_schema_tests;
 pub mod tool_spec;
 mod tools;
+mod turn_label;
 mod typed_ir_parse;
 mod types;
 mod validation;
@@ -53,9 +56,10 @@ pub use behavioral_state::*;
 pub use benchmark_cases::workflow_benchmark_cases;
 pub use bot_run::{
     BotRunContext, BotToolHost, BotToolset, EffectivePermissions, FLUX_BOT_ID, FLUX_BOT_NAME,
-    GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, ReactionNote, SILENT_REPLY, TurnRequester, bot_persona_section,
-    bot_platform_context, bot_system_prompt, find_bot_tool_spec, resolve_bot_model,
-    resolve_host_completion_model, run_bot_chat, run_bot_chat_with_talk, runnable_completion_model,
+    GENERAL_BOT_DESCRIPTION, GENERAL_BOT_ID, GENERAL_BOT_NAME, ReactionNote, SILENT_REPLY,
+    TurnRequester, bot_persona_section, bot_platform_context, bot_system_prompt,
+    find_bot_tool_spec, resolve_bot_model, resolve_host_completion_model, run_bot_chat,
+    run_bot_chat_with_talk, runnable_completion_model,
 };
 pub use capability_tools::{HostTools, bot_tool_spec, linked_tool_names, tool_outcome_output};
 pub use context::{
@@ -138,6 +142,7 @@ pub use tools::{
     render_flowscript_candidate_regression, render_flowscript_modular_partial_result,
     run_declaration_queries, tool_definition_parts,
 };
+pub use turn_label::TurnCompute;
 pub use typed_ir_parse::parse_typed_ir_arguments;
 pub use types::{
     AgentType, BoardCommand, ChatImage, ChatMessage, ChatRole, Connection, CopilotResponse, Edge,
@@ -399,9 +404,137 @@ struct CopilotToolSurface {
     read_only: bool,
 }
 
+/// Enforce advertised names for every tool and capability schemas for host tools. Local board
+/// tools retain their typed parsers and runtime validation, including accepted compatibility forms.
+struct CopilotToolAccess {
+    validators: HashMap<String, Option<jsonschema::Validator>>,
+}
+
+impl CopilotToolAccess {
+    fn from_definitions(definitions: Vec<rig::completion::ToolDefinition>) -> Result<Self> {
+        let validators = definitions
+            .into_iter()
+            .map(|definition| {
+                let validator = if matches!(
+                    definition.name.as_str(),
+                    "database_tool"
+                        | "storage_tool"
+                        | "ui_inspect"
+                        | "search_workspace"
+                        | "read_symbol"
+                        | "query_execution_logs"
+                        | "execute_event"
+                        | "execute_node"
+                        | "run_board_tests"
+                ) {
+                    Some(
+                        jsonschema::validator_for(&definition.parameters).map_err(|error| {
+                            flow_like_types::anyhow!(
+                                "Invalid schema for board tool {}: {error}",
+                                definition.name
+                            )
+                        })?,
+                    )
+                } else {
+                    None
+                };
+                Ok((definition.name, validator))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
+        Ok(Self { validators })
+    }
+
+    fn denial(&self, name: &str, arguments: &serde_json::Value) -> Option<String> {
+        self.prepare_arguments(name, arguments.clone()).err()
+    }
+
+    fn prepare_arguments(
+        &self,
+        name: &str,
+        mut arguments: serde_json::Value,
+    ) -> std::result::Result<serde_json::Value, String> {
+        let Some(validator) = self.validators.get(name) else {
+            return Err(json!({
+                "status": "error",
+                "code": "board_tool_not_advertised",
+                "retryable": false,
+                "tool": name,
+                "message": "This tool is unavailable in the current board mode and was not executed.",
+            }).to_string());
+        };
+        let Some(validator) = validator else {
+            return Ok(arguments);
+        };
+        let invalid_arguments = |message: String| {
+            json!({
+                "status": "error",
+                "code": "board_tool_arguments_invalid",
+                "retryable": true,
+                "tool": name,
+                "message": message,
+            })
+            .to_string()
+        };
+        tool_arguments::canonicalize(name, &mut arguments).map_err(&invalid_arguments)?;
+        validator.validate(&arguments).map_err(|error| {
+            invalid_arguments(format!(
+                "Tool arguments do not match the advertised schema: {error}"
+            ))
+        })?;
+        Ok(arguments)
+    }
+}
+
 impl CopilotToolSurface {
     fn for_mode(read_only: bool) -> Self {
         Self { read_only }
+    }
+
+    fn bridge_tools(
+        self,
+        bridge: &Arc<dyn platform::PlatformToolBridge>,
+    ) -> Vec<Box<dyn rig::tool::ToolDyn>> {
+        let mut tools: Vec<Box<dyn rig::tool::ToolDyn>> = vec![
+            Box::new(DatabaseContextTool {
+                bridge: bridge.clone(),
+            }),
+            Box::new(StorageContextTool {
+                bridge: bridge.clone(),
+            }),
+            Box::new(UiInspectContextTool {
+                bridge: bridge.clone(),
+            }),
+            Box::new(SearchWorkspaceTool {
+                bridge: bridge.clone(),
+            }),
+            Box::new(ReadSymbolTool {
+                bridge: bridge.clone(),
+            }),
+            Box::new(QueryExecutionLogsTool {
+                bridge: bridge.clone(),
+            }),
+        ];
+        if !self.read_only {
+            tools.extend([
+                Box::new(ExecuteEventTool {
+                    bridge: bridge.clone(),
+                }) as Box<dyn rig::tool::ToolDyn>,
+                Box::new(ExecuteNodeTool {
+                    bridge: bridge.clone(),
+                }),
+                Box::new(RunBoardTestsTool {
+                    bridge: bridge.clone(),
+                }),
+            ]);
+        }
+        tools.retain(|tool| bridge.supports_tool(&tool.name()));
+        tools
+    }
+
+    fn blocks_live_runtime(self, tool_name: &str) -> bool {
+        // Explain mode reads persisted logs without starting a run or waiting for an edit.
+        workflow_authoring_defers_runtime_tool(tool_name)
+            && !(self.read_only && tool_name == "query_execution_logs")
     }
 
     fn exposes(self, tool_name: &str) -> bool {
@@ -718,6 +851,23 @@ impl Copilot {
             "[Copilot::chat] Starting chat with run_context: {:?}",
             run_context
         );
+        if let Some(run) = &run_context {
+            if run.board_id != board.id {
+                return Err(flow_like_types::anyhow!(
+                    "Selected run belongs to a different board. Select a run from this board."
+                ));
+            }
+            if self
+                .usage_context
+                .as_ref()
+                .and_then(|context| context.app_id.as_deref())
+                .is_some_and(|app_id| app_id != run.app_id)
+            {
+                return Err(flow_like_types::anyhow!(
+                    "Selected run belongs to a different app. Select a run from this app."
+                ));
+            }
+        }
         if let Some(sink) = self.workflow_session_snapshot_sink.as_ref()
             && let Ok(mut sink) = sink.lock()
         {
@@ -759,14 +909,12 @@ impl Copilot {
             .clone()
             .or_else(|| self.raw_user_prompt.clone())
             .unwrap_or_else(|| user_prompt.clone());
-        let acceptance_binding =
-            Some(flow_ir_drafts.bind_request_acceptance_contract(&board.id, &acceptance_prompt));
-        let _acceptance_binding_guard = PendingRequestAcceptanceBinding::new(
-            flow_ir_drafts.clone(),
-            acceptance_binding
-                .clone()
-                .expect("FlowScript source tools always have a host request binding"),
-        );
+        let acceptance_binding = (!self.read_only).then(|| {
+            flow_ir_drafts.bind_request_acceptance_contract(&board.id, &acceptance_prompt)
+        });
+        let _acceptance_binding_guard = acceptance_binding
+            .clone()
+            .map(|binding| PendingRequestAcceptanceBinding::new(flow_ir_drafts.clone(), binding));
 
         // A response can be transferred by the host and still be lost before the client receives
         // its Apply/Dismiss token. Re-deliver the exact retained batch for the same immutable
@@ -907,12 +1055,19 @@ impl Copilot {
 
         // Build a compact system prompt
         let tool_surface = CopilotToolSurface::for_mode(self.read_only);
+        let selected_run_logs_available = run_context.is_some()
+            && self
+                .runtime_bridge
+                .as_ref()
+                .map_or(cfg!(feature = "flow-runtime"), |bridge| {
+                    bridge.supports_tool("query_execution_logs")
+                });
         let mut system_prompt = Self::build_system_prompt(
             &context_json,
             &flowscript,
             node_count,
             !self.templates.is_empty(),
-            run_context.is_some(),
+            selected_run_logs_available,
             self.read_only,
         );
         if self.read_only {
@@ -1080,41 +1235,11 @@ impl Copilot {
         }
 
         if let Some(bridge) = &self.runtime_bridge {
-            agent_builder = agent_builder
-                .tool(DatabaseContextTool {
-                    bridge: bridge.clone(),
-                })
-                .tool(StorageContextTool {
-                    bridge: bridge.clone(),
-                })
-                .tool(UiInspectContextTool {
-                    bridge: bridge.clone(),
-                })
-                .tool(SearchWorkspaceTool {
-                    bridge: bridge.clone(),
-                })
-                .tool(ReadSymbolTool {
-                    bridge: bridge.clone(),
-                });
-            if !self.read_only {
-                agent_builder = agent_builder
-                    .tool(ExecuteEventTool {
-                        bridge: bridge.clone(),
-                    })
-                    .tool(ExecuteNodeTool {
-                        bridge: bridge.clone(),
-                    })
-                    .tool(QueryExecutionLogsTool {
-                        bridge: bridge.clone(),
-                    })
-                    .tool(RunBoardTestsTool {
-                        bridge: bridge.clone(),
-                    });
-            }
+            agent_builder = agent_builder.tools(tool_surface.bridge_tools(bridge));
         }
 
-        // Add logs query tool if run context is provided
-        if run_context.is_some() {
+        // A selected run needs a host log reader or the local runtime fallback.
+        if selected_run_logs_available {
             flowpilot_debug_log!(
                 "[Copilot::chat] Adding QueryLogsTool with run_context: {:?}",
                 run_context
@@ -1122,14 +1247,18 @@ impl Copilot {
             agent_builder = agent_builder.tool(QueryLogsTool {
                 state: self.state.clone(),
                 run_context: run_context.clone(),
+                runtime_bridge: self.runtime_bridge.clone(),
             });
         } else {
             flowpilot_debug_log!(
-                "[Copilot::chat] No run_context provided, QueryLogsTool NOT added"
+                "[Copilot::chat] Selected-run log access unavailable, QueryLogsTool NOT added"
             );
         }
 
         let agent = agent_builder.build();
+        let tool_access = CopilotToolAccess::from_definitions(
+            agent.tool_server_handle.get_tool_defs(None).await?,
+        )?;
 
         let prompt = user_prompt.clone();
 
@@ -1467,7 +1596,15 @@ impl Copilot {
                 .iter()
                 .filter_map(|content| {
                     if let AssistantContent::ToolCall(tool_call) = content {
-                        Some(tool_call.clone())
+                        let mut tool_call = tool_call.clone();
+                        if let Ok(arguments) = tool_access.prepare_arguments(
+                            &tool_call.function.name,
+                            tool_call.function.arguments.clone(),
+                        ) {
+                            tool_call.function.arguments = arguments;
+                        }
+                        // Invalid calls retain their original arguments for the preflight error.
+                        Some(tool_call)
                     } else {
                         None
                     }
@@ -1478,8 +1615,9 @@ impl Copilot {
 
             if tool_calls_found {
                 current_history.push(current_prompt.clone());
-                if active_workflow_mutation_path
-                    .is_none_or(|path| path == WorkflowMutationPath::TypedIr)
+                if !self.read_only
+                    && active_workflow_mutation_path
+                        .is_none_or(|path| path == WorkflowMutationPath::TypedIr)
                     && tool_calls.iter().any(|tool_call| {
                         workflow_mutation_path(&tool_call.function.name)
                             == Some(WorkflowMutationPath::TypedIr)
@@ -1502,8 +1640,9 @@ impl Copilot {
                 // the 12-round default, which must cover planning, get_declarations, write, every
                 // check/patch repair round and the commit — so large documents ran out of rounds
                 // and the loop terminated with an empty message.
-                if active_workflow_mutation_path
-                    .is_none_or(|path| path == WorkflowMutationPath::FlowScript)
+                if !self.read_only
+                    && active_workflow_mutation_path
+                        .is_none_or(|path| path == WorkflowMutationPath::FlowScript)
                     && tool_calls.iter().any(|tool_call| {
                         workflow_mutation_path(&tool_call.function.name)
                             == Some(WorkflowMutationPath::FlowScript)
@@ -1519,7 +1658,14 @@ impl Copilot {
                 let shared_preflight_results = tool_calls
                     .iter()
                     .map(|tool_call| {
-                        if workflow_authoring_defers_runtime_tool(&tool_call.function.name) {
+                        if let Some(denied) = tool_access
+                            .denial(&tool_call.function.name, &tool_call.function.arguments)
+                        {
+                            SharedWorkflowToolPreflight {
+                                short_circuit: Some(denied),
+                                lease: None,
+                            }
+                        } else if tool_surface.blocks_live_runtime(&tool_call.function.name) {
                             SharedWorkflowToolPreflight {
                                 short_circuit: Some(
                                     workflow_runtime_verification_deferred_payload().to_string(),
@@ -1584,7 +1730,11 @@ impl Copilot {
                         let path_conflict = active_workflow_mutation_path
                             .zip(requested_path)
                             .is_some_and(|(active, requested)| active != requested);
-                        if active_workflow_mutation_path.is_none() {
+                        if active_workflow_mutation_path.is_none()
+                            && shared_preflight_results
+                                .get(tool_index)
+                                .is_some_and(|result| result.short_circuit.is_none())
+                        {
                             active_workflow_mutation_path = requested_path;
                         }
                         let mut tool_dispatched = false;
@@ -1601,7 +1751,7 @@ impl Copilot {
                                 "message": "A workflow mutation representation is already active for this run. Continue that typed IR, FlowScript, or direct-command path instead of mixing atomic mutation surfaces."
                             })
                             .to_string()
-                        } else if workflow_authoring_defers_runtime_tool(&name) {
+                        } else if tool_surface.blocks_live_runtime(&name) {
                             workflow_runtime_verification_deferred_payload().to_string()
                         } else if let Some(denied) = typed_ir_request_access_preflight(
                             &flow_ir_drafts,
@@ -1632,6 +1782,7 @@ impl Copilot {
                             tool_dispatched = true;
                             let output = self
                                 .execute_tool(
+                                    &tool_access,
                                     &name,
                                     arguments,
                                     run_context.as_ref(),
@@ -1687,6 +1838,7 @@ impl Copilot {
                             let request_acceptance_binding = acceptance_binding.clone();
                             let flow_ir_draft_mutation_hook =
                                 self.flow_ir_draft_mutation_hook.clone();
+                            let tool_access = &tool_access;
                             let short_circuit = shared_preflight_results
                                 .get(tool_index)
                                 .and_then(|result| result.short_circuit.clone());
@@ -1696,6 +1848,7 @@ impl Copilot {
                                     None => {
                                         let output = self
                                             .execute_tool(
+                                                tool_access,
                                                 &name,
                                                 arguments,
                                                 ctx.as_ref(),
@@ -2290,6 +2443,7 @@ impl Copilot {
     #[allow(clippy::too_many_arguments)]
     async fn execute_tool(
         &self,
+        tool_access: &CopilotToolAccess,
         name: &str,
         arguments: serde_json::Value,
         run_context: Option<&RunContext>,
@@ -2298,6 +2452,10 @@ impl Copilot {
         flow_ir_drafts: &Arc<ir_tools::FlowIrDraftStore>,
         acceptance_binding: Option<&ir_tools::FlowIrAcceptanceBinding>,
     ) -> String {
+        let arguments = match tool_access.prepare_arguments(name, arguments) {
+            Ok(arguments) => arguments,
+            Err(denied) => return denied,
+        };
         match name {
             "think" => {
                 if let Ok(args) = serde_json::from_value::<ThinkingArgs>(arguments) {
@@ -2656,77 +2814,31 @@ impl Copilot {
                 execute_runtime_bridge_tool(self.runtime_bridge.as_ref(), name, arguments).await
             }
             "query_logs" => {
-                #[cfg(feature = "flow-runtime")]
-                {
-                    if let Some(ctx) = run_context {
-                        let args = serde_json::from_value::<QueryLogsArgs>(arguments).unwrap_or(
-                            QueryLogsArgs {
-                                filter: None,
-                                limit: None,
-                            },
-                        );
-
-                        let limit = args.limit.unwrap_or(50).min(100);
-                        let filter = args.filter.unwrap_or_default();
-
-                        let log_meta = crate::flow::execution::LogMeta {
-                            app_id: ctx.app_id.clone(),
-                            run_id: ctx.run_id.clone(),
-                            board_id: ctx.board_id.clone(),
-                            start: 0,
-                            end: 0,
-                            log_level: 0,
-                            version: String::new(),
-                            nodes: None,
-                            logs: None,
-                            node_id: String::new(),
-                            event_version: None,
-                            event_id: String::new(),
-                            payload: vec![],
-                            error_message: None,
-                            is_remote: false,
-                        };
-
-                        match self
-                            .state
-                            .query_run(&log_meta, &filter, Some(limit), Some(0))
-                            .await
-                        {
-                            Ok(logs) => {
-                                if logs.is_empty() {
-                                    if filter.is_empty() {
-                                        "No logs found for this run.".to_string()
-                                    } else {
-                                        "No logs matching your filter criteria.".to_string()
-                                    }
-                                } else {
-                                    let formatted: Vec<serde_json::Value> = logs.iter().map(|log| {
-                                        json!({
-                                            "level": match log.log_level {
-                                                crate::flow::execution::LogLevel::Debug => "Debug",
-                                                crate::flow::execution::LogLevel::Info => "Info",
-                                                crate::flow::execution::LogLevel::Warn => "Warn",
-                                                crate::flow::execution::LogLevel::Error => "Error",
-                                                crate::flow::execution::LogLevel::Fatal => "Fatal",
-                                            },
-                                            "message": log.message,
-                                            "node_id": log.node_id,
-                                        })
-                                    }).collect();
-                                    serde_json::to_string_pretty(&formatted).unwrap_or_default()
-                                }
-                            }
-                            Err(e) => format!("Failed to query logs: {}", e),
-                        }
-                    } else {
-                        "No run context available. Please select a run first.".to_string()
+                let args = match serde_json::from_value::<QueryLogsArgs>(arguments) {
+                    Ok(args) => args,
+                    Err(error) => {
+                        return json!({
+                            "status": "error",
+                            "code": "board_tool_arguments_invalid",
+                            "message": format!("Invalid selected-run log query: {error}"),
+                        })
+                        .to_string();
                     }
-                }
-                #[cfg(not(feature = "flow-runtime"))]
-                {
-                    let _ = run_context; // Suppress unused variable warning
-                    "Log querying is not available in this build.".to_string()
-                }
+                };
+                let tool = QueryLogsTool {
+                    state: self.state.clone(),
+                    run_context: run_context.cloned(),
+                    runtime_bridge: self.runtime_bridge.clone(),
+                };
+                rig::tool::Tool::call(&tool, args)
+                    .await
+                    .unwrap_or_else(|error| {
+                        json!({
+                            "status": "error",
+                            "message": error.0,
+                        })
+                        .to_string()
+                    })
             }
             _ => {
                 flowpilot_debug_log!("[Copilot] Unknown tool requested: {}", name);
@@ -3155,6 +3267,14 @@ async fn execute_runtime_bridge_tool(
         })
         .to_string();
     };
+    if !bridge.supports_tool(name) {
+        return json!({
+            "status": "error",
+            "code": "board_tool_not_advertised",
+            "message": "The active host does not support this runtime tool.",
+        })
+        .to_string();
+    }
     bridge.call(name, arguments).await
 }
 
@@ -3182,6 +3302,14 @@ async fn execute_workflow_context_bridge_tool(
         })
         .to_string();
     };
+    if !bridge.supports_tool(name) {
+        return json!({
+            "status": "error",
+            "code": "board_tool_not_advertised",
+            "message": "The active host does not support this board context tool.",
+        })
+        .to_string();
+    }
     bridge.call(name, arguments).await
 }
 
@@ -4183,16 +4311,515 @@ mod runtime_bridge_tests {
     #[derive(Default)]
     struct RecordingRuntimeBridge {
         calls: Mutex<Vec<(String, serde_json::Value)>>,
+        supported_tools: Option<&'static [&'static str]>,
     }
 
     #[async_trait::async_trait]
     impl platform::PlatformToolBridge for RecordingRuntimeBridge {
+        fn supports_tool(&self, tool_name: &str) -> bool {
+            self.supported_tools
+                .is_none_or(|names| names.contains(&tool_name))
+        }
+
         async fn call(&self, tool_name: &str, arguments: serde_json::Value) -> String {
             self.calls
                 .lock()
                 .unwrap()
                 .push((tool_name.to_string(), arguments));
             json!({ "status": "ok", "run_id": "run" }).to_string()
+        }
+    }
+
+    struct UnusedCatalog;
+
+    #[async_trait::async_trait]
+    impl CatalogProvider for UnusedCatalog {
+        async fn search(&self, _: &str) -> Vec<NodeMetadata> {
+            panic!("unexpected catalog read")
+        }
+        async fn search_by_pin_type(&self, _: &str, _: bool) -> Vec<NodeMetadata> {
+            panic!("unexpected catalog read")
+        }
+        async fn filter_by_category(&self, _: &str) -> Vec<NodeMetadata> {
+            panic!("unexpected catalog read")
+        }
+        async fn get_node_metadata(&self, _: &str) -> Option<NodeMetadata> {
+            panic!("unexpected catalog read")
+        }
+        async fn get_all_nodes(&self) -> Vec<String> {
+            panic!("unexpected catalog read")
+        }
+    }
+
+    async fn guarded_test_copilot(bridge: Arc<dyn platform::PlatformToolBridge>) -> Copilot {
+        Copilot::new(
+            Arc::new(FlowLikeState::new(
+                crate::state::FlowLikeConfig::new(),
+                crate::utils::http::HTTPClient::new_without_refetch(),
+            )),
+            Arc::new(UnusedCatalog),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+        .with_read_only(true)
+        .with_runtime_bridge(bridge)
+    }
+
+    #[test]
+    fn runtime_schema_validation_preserves_only_known_argument_aliases() {
+        let access = CopilotToolAccess::from_definitions(
+            tool_spec::runtime_execution_tool_specs()
+                .iter()
+                .map(tool_spec::PlatformToolSpec::to_tool_definition)
+                .collect(),
+        )
+        .unwrap();
+        for (name, legacy, canonical) in [
+            (
+                "execute_event",
+                json!({"appId": "app", "eventId": "event", "streamState": true}),
+                json!({"app_id": "app", "event_id": "event", "stream_state": true}),
+            ),
+            (
+                "execute_node",
+                json!({"appId": "app", "boardId": "board", "nodeId": "node", "streamState": false}),
+                json!({"app_id": "app", "board_id": "board", "node_id": "node", "stream_state": false}),
+            ),
+            (
+                "run_board_tests",
+                json!({"appId": "app", "boardId": "board", "maxTests": 2}),
+                json!({"app_id": "app", "board_id": "board", "max_tests": 2}),
+            ),
+        ] {
+            assert_eq!(access.prepare_arguments(name, legacy).unwrap(), canonical);
+        }
+        assert!(
+            access
+                .prepare_arguments("execute_node", json!({"boardId": "board", "nodeId": 2}))
+                .is_err()
+        );
+        assert!(
+            access
+                .prepare_arguments(
+                    "execute_node",
+                    json!({"boardId": "board", "nodeId": "node", "node_id": "other"})
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn local_tool_compatibility_remains_owned_by_typed_parsers() {
+        let access = CopilotToolAccess::from_definitions(vec![
+            rig::completion::ToolDefinition {
+                name: "write_flowscript".into(),
+                description: String::new(),
+                parameters: serde_json::to_value(schemars::schema_for!(
+                    ir_tools::WriteFlowScriptArgs
+                ))
+                .unwrap(),
+            },
+            rig::completion::ToolDefinition {
+                name: "upsert_flow_ir_module".into(),
+                description: String::new(),
+                parameters: serde_json::to_value(schemars::schema_for!(
+                    ir_tools::UpsertFlowIrModuleArgs
+                ))
+                .unwrap(),
+            },
+        ])
+        .unwrap();
+        let source = access
+            .prepare_arguments(
+                "write_flowscript",
+                json!({
+                    "draft_id": "draft", "script": "function sample() {}"
+                }),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::from_value::<ir_tools::WriteFlowScriptArgs>(source)
+                .unwrap()
+                .source,
+            "function sample() {}"
+        );
+        let module = access.prepare_arguments("upsert_flow_ir_module", json!({
+            "draft_id": "draft", "expected_revision": 1,
+            "module": {"kind": "function", "name": "sample", "params": [{"name": "flag", "type": "bool"}],
+                "steps": [{"kind": "if", "id": "condition", "condition": {"kind": "param", "name": "flag"},
+                    "then": [{"kind": "call", "id": "child", "function": "child"}]}]}
+        })).unwrap();
+        assert!(serde_json::from_value::<ir_tools::UpsertFlowIrModuleArgs>(module).is_ok());
+        let invalid = access
+            .prepare_arguments(
+                "write_flowscript",
+                json!({
+                    "draft_id": "draft", "script": "a", "source": "b"
+                }),
+            )
+            .unwrap();
+        assert!(serde_json::from_value::<ir_tools::WriteFlowScriptArgs>(invalid).is_err());
+        assert!(
+            access
+                .prepare_arguments("commit_flowscript", json!({}))
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_log_dispatch_normalizes_aliases_and_rejects_conflicts_before_host_access() {
+        let concrete = Arc::new(RecordingRuntimeBridge::default());
+        let bridge: Arc<dyn platform::PlatformToolBridge> = concrete.clone();
+        let copilot = guarded_test_copilot(bridge.clone()).await;
+        let access = CopilotToolAccess::from_definitions(vec![
+            QueryExecutionLogsTool { bridge }
+                .definition(String::new())
+                .await,
+        ])
+        .unwrap();
+        let board = empty_test_board();
+        let context = prepare_context(&board, &[]).unwrap();
+        let store = Arc::new(ir_tools::FlowIrDraftStore::new());
+        let output = copilot
+            .execute_tool(
+                &access,
+                "query_execution_logs",
+                json!({
+                    "appId": "app", "boardId": board.id, "runId": "run", "query": "log_level >= 3",
+                    "runMetadata": {"boardId": "payload-stays-intact"}, "limit": 5
+                }),
+                None,
+                &context,
+                &board,
+                &store,
+                None,
+            )
+            .await;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&output).unwrap()["status"],
+            "ok"
+        );
+        assert_eq!(
+            concrete.calls.lock().unwrap()[0].1,
+            json!({
+                "app_id": "app", "board_id": board.id, "run_id": "run", "filter": "log_level >= 3",
+                "run_metadata": {"boardId": "payload-stays-intact"}, "limit": 5
+            })
+        );
+        let output = copilot
+            .execute_tool(
+                &access,
+                "query_execution_logs",
+                json!({
+                    "boardId": board.id, "board_id": "other", "runId": "run"
+                }),
+                None,
+                &context,
+                &board,
+                &store,
+                None,
+            )
+            .await;
+        let error: serde_json::Value = serde_json::from_str(&output).unwrap();
+        assert_eq!(error["code"], "board_tool_arguments_invalid");
+        assert!(
+            error["message"]
+                .as_str()
+                .unwrap()
+                .contains("Conflicting arguments")
+        );
+        assert_eq!(concrete.calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn manual_dispatch_rejects_unadvertised_mutations_and_invalid_read_operations() {
+        let concrete = Arc::new(RecordingRuntimeBridge::default());
+        let bridge: Arc<dyn platform::PlatformToolBridge> = concrete.clone();
+        let copilot = guarded_test_copilot(bridge.clone()).await;
+        let mut definitions = Vec::new();
+        for tool in CopilotToolSurface::for_mode(true).bridge_tools(&bridge) {
+            definitions.push(tool.definition(String::new()).await);
+        }
+        let access = CopilotToolAccess::from_definitions(definitions).unwrap();
+        let board = empty_test_board();
+        let context = prepare_context(&board, &[]).unwrap();
+        let store = Arc::new(ir_tools::FlowIrDraftStore::new());
+        let binding = store.bind_request_acceptance_contract(&board.id, "Inspect the board");
+        for name in [
+            "write_flowscript",
+            "patch_flowscript",
+            "check_flowscript",
+            "test_flowscript",
+            "commit_flowscript",
+            "edit_flowscript",
+            "emit_commands",
+            "begin_flow_ir_draft",
+            "update_flow_ir_draft",
+            "upsert_flow_ir_module",
+            "commit_flow_ir_draft",
+            "execute_event",
+            "execute_node",
+            "run_board_tests",
+            "invented_tool",
+        ] {
+            let output = copilot
+                .execute_tool(
+                    &access,
+                    name,
+                    json!({}),
+                    None,
+                    &context,
+                    &board,
+                    &store,
+                    Some(&binding),
+                )
+                .await;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&output).unwrap()["code"],
+                "board_tool_not_advertised",
+                "{name}"
+            );
+            assert!(Copilot::parse_commands(&output).is_empty());
+        }
+        for (name, arguments) in [
+            (
+                "database_tool",
+                json!({"operation": "insert", "table_name": "records"}),
+            ),
+            (
+                "storage_tool",
+                json!({"operation": "delete_file", "path": "record.txt"}),
+            ),
+            (
+                "query_execution_logs",
+                json!({"board_id": "board", "run_id": "run", "limit": "all"}),
+            ),
+            ("query_execution_logs", json!({"board_id": "board"})),
+        ] {
+            let output = copilot
+                .execute_tool(
+                    &access,
+                    name,
+                    arguments,
+                    None,
+                    &context,
+                    &board,
+                    &store,
+                    Some(&binding),
+                )
+                .await;
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&output).unwrap()["code"],
+                "board_tool_arguments_invalid",
+                "{name}"
+            );
+        }
+        assert!(concrete.calls.lock().unwrap().is_empty());
+        assert!(!store.has_editable_draft_for_board(&board.id));
+        assert!(store.latest_pending_commit_token(&board.id).is_none());
+        let output = copilot
+            .execute_tool(
+                &access,
+                "database_tool",
+                json!({"operation": "list_tables"}),
+                None,
+                &context,
+                &board,
+                &store,
+                None,
+            )
+            .await;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&output).unwrap()["status"],
+            "ok"
+        );
+        assert_eq!(concrete.calls.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn selected_run_logs_use_the_same_authorized_host_in_both_dispatch_paths() {
+        use rig::tool::Tool;
+
+        let concrete = Arc::new(RecordingRuntimeBridge::default());
+        let bridge: Arc<dyn platform::PlatformToolBridge> = concrete.clone();
+        let copilot = guarded_test_copilot(bridge.clone()).await;
+        let board = empty_test_board();
+        let run = RunContext {
+            app_id: "app".into(),
+            board_id: board.id.clone(),
+            run_id: "selected-run".into(),
+        };
+        let tool = QueryLogsTool {
+            state: copilot.state.clone(),
+            run_context: Some(run.clone()),
+            runtime_bridge: Some(bridge),
+        };
+        let access =
+            CopilotToolAccess::from_definitions(vec![tool.definition(String::new()).await])
+                .unwrap();
+        let args = json!({"filter": "log_level >= 3", "limit": 10});
+        let typed = tool
+            .call(serde_json::from_value(args.clone()).unwrap())
+            .await
+            .unwrap();
+        let manual = copilot
+            .execute_tool(
+                &access,
+                "query_logs",
+                args,
+                Some(&run),
+                &prepare_context(&board, &[]).unwrap(),
+                &board,
+                &copilot.flow_ir_drafts,
+                None,
+            )
+            .await;
+        assert_eq!(manual, typed);
+        let calls = concrete.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0], calls[1]);
+        assert_eq!(
+            calls[0],
+            (
+                "query_execution_logs".into(),
+                json!({
+                    "app_id": "app", "board_id": board.id, "run_id": "selected-run",
+                    "filter": "log_level >= 3", "limit": 10, "offset": 0,
+                })
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn selected_run_logs_never_fall_back_when_the_host_refuses_log_access() {
+        use rig::tool::Tool;
+
+        let concrete = Arc::new(RecordingRuntimeBridge {
+            supported_tools: Some(&[]),
+            ..Default::default()
+        });
+        let copilot = guarded_test_copilot(concrete.clone()).await;
+        let tool = QueryLogsTool {
+            state: copilot.state.clone(),
+            run_context: Some(RunContext {
+                app_id: "app".into(),
+                board_id: "board".into(),
+                run_id: "run".into(),
+            }),
+            runtime_bridge: Some(concrete.clone()),
+        };
+        let error = tool
+            .call(QueryLogsArgs {
+                filter: None,
+                limit: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(error.0.contains("does not support"));
+        assert!(concrete.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn mismatched_selected_run_is_rejected_before_catalog_or_model_access() {
+        let bridge = Arc::new(RecordingRuntimeBridge::default());
+        let mut copilot = guarded_test_copilot(bridge).await;
+        copilot.usage_context = Some(ModelUsageContext {
+            app_id: Some("app".into()),
+            run_id: None,
+            api_base_url: None,
+        });
+        let board = empty_test_board();
+        for (app_id, board_id, expected) in [
+            ("app", "another-board", "different board"),
+            ("another-app", board.id.as_str(), "different app"),
+        ] {
+            let error = copilot
+                .chat(
+                    &board,
+                    &[],
+                    "Explain the failed run".into(),
+                    None,
+                    vec![],
+                    None,
+                    None,
+                    Some(RunContext {
+                        app_id: app_id.into(),
+                        board_id: board_id.into(),
+                        run_id: "run".into(),
+                    }),
+                    None::<fn(String)>,
+                )
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains(expected));
+        }
+    }
+
+    #[tokio::test]
+    async fn read_only_board_runtime_exposes_and_dispatches_logs_without_execution() {
+        let concrete = Arc::new(RecordingRuntimeBridge::default());
+        let bridge: Arc<dyn platform::PlatformToolBridge> = concrete.clone();
+        let surface = CopilotToolSurface::for_mode(true);
+        let tools = surface.bridge_tools(&bridge);
+        assert_eq!(
+            tools.iter().map(|tool| tool.name()).collect::<Vec<_>>(),
+            [
+                "database_tool",
+                "storage_tool",
+                "ui_inspect",
+                "search_workspace",
+                "read_symbol",
+                "query_execution_logs",
+            ],
+        );
+        let logs = tools
+            .iter()
+            .find(|tool| tool.name() == "query_execution_logs")
+            .unwrap();
+        let definition = logs.definition(String::new()).await;
+        assert_eq!(definition.name, "query_execution_logs");
+        assert!(!surface.blocks_live_runtime(&definition.name));
+
+        let arguments = json!({
+            "board_id": "inspected-board",
+            "run_id": "failed-run",
+            "filter": "log_level >= 3",
+        });
+        let result = logs.call(arguments.to_string()).await.unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&result).unwrap()["status"],
+            "ok"
+        );
+        assert_eq!(
+            concrete.calls.lock().unwrap().as_slice(),
+            &[("query_execution_logs".to_string(), arguments)],
+        );
+        for tool_name in ["execute_event", "execute_node", "run_board_tests"] {
+            assert!(surface.blocks_live_runtime(tool_name));
+        }
+        assert!(CopilotToolSurface::for_mode(false).blocks_live_runtime("query_execution_logs"));
+    }
+
+    #[test]
+    fn board_bridge_only_registers_tools_supported_by_the_host() {
+        for supported in [
+            &["query_execution_logs"][..],
+            &["query_execution_logs", "search_workspace"][..],
+            &[][..],
+        ] {
+            let bridge: Arc<dyn platform::PlatformToolBridge> = Arc::new(RecordingRuntimeBridge {
+                supported_tools: Some(supported),
+                ..Default::default()
+            });
+            for read_only in [true, false] {
+                let tools = CopilotToolSurface::for_mode(read_only).bridge_tools(&bridge);
+                let mut names = tools.iter().map(|tool| tool.name()).collect::<Vec<_>>();
+                names.sort();
+                assert_eq!(names, supported);
+            }
         }
     }
 

@@ -1,3 +1,4 @@
+import type { IJoinedConversation } from "../state/backend-state/inbox-state";
 import { ApiResponseError } from "./api-error";
 
 export const JOIN_MAX_RETRIES = 6;
@@ -68,4 +69,26 @@ export async function attemptJoinWithRetry(
 		}
 	}
 	return { ok: false, kind: "retry-exhausted" };
+}
+
+export type RoomJoinFailureKind = "invalid" | "used-up" | "full" | "retry";
+
+export function roomJoinFailureKind(
+	result: JoinAttemptResult,
+): RoomJoinFailureKind {
+	const code = (result.error as ApiResponseError | undefined)?.code;
+	if (code === "INBOX_MEMBER_LIMIT") return "full";
+	if (code === "INBOX_LINK_USED_UP") return "used-up";
+	return result.kind === "retry-exhausted" ? "retry" : "invalid";
+}
+
+export async function attemptRoomJoin(
+	join: () => Promise<IJoinedConversation>,
+	onAttempt?: (attempt: number) => void,
+): Promise<{ result: JoinAttemptResult; joined?: IJoinedConversation }> {
+	let joined: IJoinedConversation | undefined;
+	const result = await attemptJoinWithRetry(async () => {
+		joined = await join();
+	}, onAttempt);
+	return { result, joined };
 }

@@ -16,7 +16,10 @@ use serde_json::{Value, json};
 use super::memory_tools::MemoryHandle;
 use super::platform::PLATFORM_TOOL_IMAGE_URLS_FIELD;
 
-use super::tool_spec::{PlatformToolSpec, ToolApprovalSpec, ToolApprovalTiming, bot_args_approval};
+use super::tool_spec::{
+    PlatformToolSpec, ToolApprovalSpec, ToolApprovalTiming, bot_args_approval,
+    bot_connector_approval,
+};
 
 const TOOL_TIMEOUT_SECS: u64 = 180;
 
@@ -65,7 +68,46 @@ fn secret_ask_message(args: &Value) -> String {
     )
 }
 
+fn skill_call_ask_message(args: &Value) -> String {
+    let field = |key: &str| {
+        args.get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .trim()
+    };
+    format!(
+        "The bot wants to run the tool {} of the skill {} with arguments {}.",
+        field("tool"),
+        field("skill"),
+        args.get("arguments")
+            .map(Value::to_string)
+            .unwrap_or_default()
+    )
+}
+
+fn connector_ask_message(tool: &str, args: &Value) -> String {
+    let field = |key: &str| args.get(key).and_then(Value::as_str).unwrap_or("?");
+    let label = field(tools::services::LABEL_FIELD);
+    if tool == tools::services::CONNECTOR_CALL {
+        return format!(
+            "The bot wants to call the tool '{}' on your connected service '{label}'.",
+            field("tool")
+        );
+    }
+    let path = field("path").split('?').next().unwrap_or("?");
+    format!(
+        "The bot wants to send a {} request to '{label}': {path}",
+        field("method").to_ascii_uppercase()
+    )
+}
+
 fn ask_message(tool: &str, args: &Value) -> String {
+    if tools::services::POLICY_TOOLS.contains(&tool) {
+        return connector_ask_message(tool, args);
+    }
+    if tool == tools::skills::SKILL_RUN {
+        return skill_call_ask_message(args);
+    }
     if tool == "shell_run" {
         return shell_ask_message(args);
     }
@@ -77,6 +119,9 @@ fn ask_message(tool: &str, args: &Value) -> String {
     }
     if tool == tools::people::MESSAGE_PERSON {
         return person_ask_message(args);
+    }
+    if tool == tools::web::WEB_REQUEST {
+        return tools::web::ask_summary(args);
     }
     let target = ["index", "path", "name", "url"]
         .iter()
@@ -141,6 +186,8 @@ registered_tools!(
     "file_extract",
     "pdf_render",
     "excel_inspect",
+    "document_create",
+    "document_fill",
     "data_sources",
     "data_query",
     "code_run",
@@ -159,11 +206,22 @@ registered_tools!(
     "computer_screenshot",
     "computer_act",
     "computer_wait",
+    "computer_windows",
+    "computer_window",
+    "computer_launch",
     "email_send",
     "email_reply",
     "image_generate",
     "secret_list",
     "secret_request",
+    "skill_load",
+    "skill_propose",
+    "skill_call",
+    "skill_run",
+    "connector_tools",
+    "connector_call",
+    "connector_request",
+    "web_request",
 );
 
 /// Offered beside a tool that takes secrets by name rather than through a capability of their own.
@@ -189,6 +247,9 @@ const LOCAL_MACHINE_TOOLS: &[&str] = &[
     "computer_screenshot",
     "computer_act",
     "computer_wait",
+    "computer_windows",
+    "computer_window",
+    "computer_launch",
 ];
 
 pub const TOOL_IMAGES_FIELD: &str = PLATFORM_TOOL_IMAGE_URLS_FIELD;
@@ -255,6 +316,9 @@ pub fn bot_tool_spec(name: &str) -> Option<PlatformToolSpec> {
                 message,
                 timing: ToolApprovalTiming::BeforeExecution,
             },
+            _ if tools::services::POLICY_TOOLS.contains(&name) => {
+                bot_connector_approval(ask_fn(name))
+            }
             _ if !spec.approval_args.is_empty() => bot_args_approval(),
             _ => ToolApprovalSpec::None,
         },
@@ -307,6 +371,12 @@ impl HostTools {
                 .into_iter()
                 .filter(|name| LOCAL_MACHINE_TOOLS.contains(name)),
         );
+        self
+    }
+
+    /// Stops running `name`: a host that links a tool but cannot run it here leaves it out.
+    pub fn without(mut self, name: &str) -> Self {
+        self.names.remove(name);
         self
     }
 
@@ -416,9 +486,14 @@ mod tests {
                         | "browser_open"
                         | "computer_screenshot"
                         | "computer_act"
+                        | "computer_window"
+                        | "computer_launch"
                         | "email_send"
+                        | "email_reply"
                         | "message_person"
                         | "secret_request"
+                        | "skill_run"
+                        | "web_request"
                 ) || outside,
                 "{name}"
             );
@@ -440,13 +515,36 @@ mod tests {
                 "{name}"
             );
         }
-        for name in ["computer_screenshot", "computer_act", "computer_wait"] {
+        for name in [
+            "computer_screenshot",
+            "computer_act",
+            "computer_wait",
+            "computer_windows",
+            "computer_window",
+            "computer_launch",
+        ] {
             assert_eq!(
                 tool_capability(name),
                 Some(BotCapability::ComputerUse),
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn web_requests_ask_with_the_site_and_need_their_own_capability() {
+        assert_eq!(
+            tool_capability("web_request"),
+            Some(BotCapability::WebRequests)
+        );
+        let spec = bot_tool_spec("web_request").expect("web_request");
+        let ToolApprovalSpec::Mutating { message, .. } = spec.approval else {
+            panic!("web_request must ask");
+        };
+        assert_eq!(
+            message(&json!({ "url": "https://www.cisa.gov/feeds/kev.xml?x=1" })),
+            "The bot wants to send a GET request to www.cisa.gov/feeds/kev.xml."
+        );
     }
 
     #[test]

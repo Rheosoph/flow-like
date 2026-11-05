@@ -14,6 +14,7 @@ openapi = ["dep:utoipa", "flow-like-runtime?/openapi"]
 anyhow = { version = "1", optional = true }
 base64.workspace = true
 bitflags.workspace = true
+flow-like-types-contracts = { workspace = true, features = ["bot"] }
 flow-like-runtime = { workspace = true, features = ["flow-metadata"], optional = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true

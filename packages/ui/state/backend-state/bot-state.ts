@@ -4,6 +4,7 @@ import type { IDataSensitivity } from "../../lib/data-classification";
 /** Wire ids, in the order the settings list them. New bots start with `memory`; the rest stays off until switched on. */
 export const BOT_CAPABILITIES = [
 	"internet",
+	"web_requests",
 	"profile_apps",
 	"selected_apps",
 	"code_execution",
@@ -102,6 +103,8 @@ export interface IBot {
 	tts_model?: string | null;
 	image_model?: string | null;
 	vision_model?: string | null;
+	/** Bit id of the model its sub-tasks run on; unset uses the bot's own. */
+	subtask_model?: string | null;
 	classification: IDataSensitivity;
 	capabilities: BotCapability[];
 	/** The profile whose apps `profile_apps` covers. */
@@ -127,6 +130,8 @@ export interface ICreateBotRequest {
 	tts_model?: string | null;
 	image_model?: string | null;
 	vision_model?: string | null;
+	/** Bit id of the model its sub-tasks run on; unset uses the bot's own. */
+	subtask_model?: string | null;
 	classification?: IDataSensitivity;
 	capabilities?: BotCapability[];
 	profile_id?: string | null;
@@ -146,6 +151,8 @@ export interface IUpdateBotRequest {
 	tts_model?: string | null;
 	image_model?: string | null;
 	vision_model?: string | null;
+	/** Bit id of the model its sub-tasks run on; unset uses the bot's own. */
+	subtask_model?: string | null;
 	classification?: IDataSensitivity;
 	capabilities?: BotCapability[];
 	profile_id?: string | null;
@@ -422,13 +429,47 @@ export interface IBotComputerView {
 	/** A `data:` URL of the picture. */
 	image: string | null;
 	age_ms: number | null;
+	/** The owner has paused the bot's computer calls. */
+	taken_over?: boolean;
+	/** The owner can drive the picture with mouse and keyboard (device bots with a screen). */
+	can_control?: boolean;
+	/** Pixels of `image`; input positions are in these. */
+	width?: number | null;
+	height?: number | null;
+	/** A refusal since the last read, such as input the device could not apply. */
+	notice?: string | null;
 }
 
-/** Desktop only: the browser and screen of the bots that run here. */
+/** One mouse or keyboard event for a taken-over screen; positions are pixels of the picture. */
+export type IBotInputEvent =
+	| { type: "pointer_move"; x: number; y: number }
+	| {
+			type: "pointer_down" | "pointer_up";
+			x: number;
+			y: number;
+			button: "left" | "middle" | "right";
+	  }
+	| { type: "scroll"; x: number; y: number; dx: number; dy: number }
+	| { type: "key"; chord: string }
+	| { type: "text"; text: string };
+
+/**
+ * Desktop only: the browser and screen of the bots that run here, and of device bots over the
+ * encrypted device tunnel (pass the bot's `device_id`). A local bot's owner uses their own mouse
+ * and keyboard while taken over; only device bots take `input`.
+ */
 export interface IBotComputerHost {
-	view(botId: string): Promise<IBotComputerView>;
+	view(botId: string, deviceId?: string | null): Promise<IBotComputerView>;
 	/** Closes the bot's browser and stops the mouse and keyboard action in flight. */
-	stop(botId: string): Promise<void>;
+	stop(botId: string, deviceId?: string | null): Promise<void>;
+	/** Pauses the bot's computer calls; they fail with `taken_over` until `handBack`. */
+	takeOver(botId: string, deviceId?: string | null): Promise<void>;
+	handBack(botId: string, deviceId?: string | null): Promise<void>;
+	input(
+		botId: string,
+		event: IBotInputEvent,
+		deviceId?: string | null,
+	): Promise<void>;
 }
 
 /** A bot's own hidden app: its files and databases (and, with the memory phase, its memory). */
@@ -440,6 +481,72 @@ export interface IBotWorkspace {
 export interface IBotAvatar {
 	/** Null until a picture of the current look was uploaded. */
 	url: string | null;
+}
+
+export type BotConnectorKind = "mcp" | "oauth";
+export type BotConnectorPolicy = "read" | "ask" | "never";
+export type BotConnectorAuth =
+	| { type: "none" }
+	| { type: "secret"; name: string }
+	| { type: "oauth"; provider_id: string };
+
+/** One tool of an MCP server as the last refresh saw it. */
+export interface IBotConnectorTool {
+	name: string;
+	description: string;
+	read_only_hint?: boolean | null;
+	destructive_hint?: boolean | null;
+	schema_hash: string;
+}
+
+/** An MCP server or OAuth account attached to a bot. No response carries a sign-in. */
+export interface IBotConnector {
+	id: string;
+	bot_id: string;
+	kind: BotConnectorKind;
+	label: string;
+	provider_id?: string | null;
+	url?: string | null;
+	auth: BotConnectorAuth;
+	has_grant: boolean;
+	scopes: string[];
+	default_policy: BotConnectorPolicy;
+	/** Tool name (`read` / `write` for an account) to policy. */
+	tool_policies: Record<string, BotConnectorPolicy>;
+	tools_snapshot: IBotConnectorTool[];
+	/** Each tool's `schema_hash` when the owner last set or confirmed its policy. */
+	confirmed_hashes?: Record<string, string>;
+	updated_at: string;
+}
+
+export interface ICreateBotConnectorRequest {
+	kind: BotConnectorKind;
+	label: string;
+	url?: string;
+	auth?: BotConnectorAuth;
+	/** The stored sign-in handle of an account (`fl_oauth_…`), never a token. */
+	grant?: string;
+	scopes?: string[];
+	default_policy?: BotConnectorPolicy;
+}
+
+export interface IUpdateBotConnectorRequest {
+	label?: string;
+	default_policy?: BotConnectorPolicy;
+	tool_policies?: Record<string, BotConnectorPolicy>;
+	grant?: string;
+	scopes?: string[];
+	/** Tools whose changed schema the owner has looked at and accepts. */
+	confirm_tools?: string[];
+}
+
+/** An account the person connected, as the picker lists it. */
+export interface IConnectedAccount {
+	/** Stored on the connector as `grant`; empty where the device keeps the sign-in itself. */
+	handle: string;
+	provider_id: string | null;
+	scopes: string[];
+	state: string;
 }
 
 /** A bot webhook's metadata; its stored path does not contain the secret. */
@@ -481,7 +588,7 @@ export interface IBotMailAvailability {
 	reason?: string | null;
 }
 
-/** One mail thread of a bot: a conversation of the bot with its owner, marked as mail. */
+/** One mail thread of a bot; its mails live in the owner's chat with the bot. */
 export interface IBotMailThread {
 	id: string;
 	subject: string;
@@ -489,6 +596,7 @@ export interface IBotMailThread {
 	last_message_at: string;
 	last_snippet?: string | null;
 	message_count: number;
+	/** Received mails newer than the owner's read marker of the chat holding them. */
 	unread: number;
 	created_at: string;
 }
@@ -572,6 +680,38 @@ export interface IUpdateBotTaskRequest {
 	enabled?: boolean;
 }
 
+export type BotSkillStatus = "active" | "pending" | "disabled";
+
+/** Guidance the owner installed on a bot. Only an active skill reaches the bot. */
+export interface IBotSkill {
+	id: string;
+	bot_id: string;
+	/** Lowercase letters, digits and single hyphens. */
+	name: string;
+	description: string;
+	/** Markdown instructions. */
+	body: string;
+	/** `owner`, `import`, `bot_proposed` or `package:<id>@<version>`. */
+	source: string;
+	status: BotSkillStatus;
+	/** Package node names the skill's instructions call. */
+	tools: string[];
+	updated_at?: string;
+}
+
+export interface ICreateBotSkillRequest {
+	name: string;
+	description: string;
+	body: string;
+	tools?: string[];
+}
+
+export interface IUpdateBotSkillRequest {
+	description?: string;
+	body?: string;
+	tools?: string[];
+}
+
 export interface IBotState {
 	/** Recent turns across this person's hosts, for mobile status surfaces. */
 	getMobileStatus?(): Promise<IBotTurn[]>;
@@ -617,6 +757,49 @@ export interface IBotState {
 		request: IUpdateBotTaskRequest,
 	): Promise<IBotTask>;
 	deleteTask?(botId: string, taskId: string): Promise<void>;
+	/** Skills of a bot with the skills capability, by name; absent where skills are not kept. */
+	listSkills?(botId: string): Promise<IBotSkill[]>;
+	/** A skill the person wrote: active at once. */
+	createSkill?(
+		botId: string,
+		request: ICreateBotSkillRequest,
+	): Promise<IBotSkill>;
+	updateSkill?(
+		botId: string,
+		skillId: string,
+		request: IUpdateBotSkillRequest,
+	): Promise<IBotSkill>;
+	/** Pending or disabled to active: the bot sees it from its next turn. */
+	approveSkill?(botId: string, skillId: string): Promise<IBotSkill>;
+	disableSkill?(botId: string, skillId: string): Promise<IBotSkill>;
+	deleteSkill?(botId: string, skillId: string): Promise<void>;
+	/**
+	 * Pins a registry package to the bot's workspace and saves the skills it ships as pending.
+	 * Refused (409) when the package needs capabilities the bot does not have.
+	 */
+	installSkillPackage?(
+		botId: string,
+		packageId: string,
+		version?: string,
+	): Promise<IBotSkill[]>;
+	/** A zipped skill folder (SKILL.md plus references); the skill starts pending. */
+	importSkill?(botId: string, zip: Uint8Array): Promise<IBotSkill>;
+	/** MCP servers and accounts attached to the bot. */
+	listConnectors?(botId: string): Promise<IBotConnector[]>;
+	createConnector?(
+		botId: string,
+		request: ICreateBotConnectorRequest,
+	): Promise<IBotConnector>;
+	updateConnector?(
+		botId: string,
+		connectorId: string,
+		request: IUpdateBotConnectorRequest,
+	): Promise<IBotConnector>;
+	deleteConnector?(botId: string, connectorId: string): Promise<void>;
+	/** Asks the MCP server for its tools and keeps the list with the connector. */
+	refreshConnector?(botId: string, connectorId: string): Promise<IBotConnector>;
+	/** The accounts the person connected, to attach to a bot. */
+	listConnectedAccounts?(): Promise<IConnectedAccount[]>;
 	/** The bot's own mail address; absent where bots have no mail domain. */
 	getMailAddress?(botId: string): Promise<IBotMailAddress>;
 	checkMailAddress?(

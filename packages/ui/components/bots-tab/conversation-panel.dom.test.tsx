@@ -10,6 +10,7 @@ import {
 } from "bun:test";
 import { act, createElement } from "react";
 import type {
+	IBlockedPrincipal,
 	IConversation,
 	IInboxEntriesQuery,
 	IInboxEntry,
@@ -114,6 +115,7 @@ const newestFirst = [
 
 const users: Record<string, IUserLookup> = {
 	me: { id: "me", name: "Felix Schultz", created_at: "" },
+	"the-g": { id: "the-g", name: "The G", created_at: "" },
 	anna: { id: "anna", name: "Anna Weber", created_at: "" },
 	bot_scout: {
 		id: "bot_scout",
@@ -187,6 +189,22 @@ const backend = {
 	eventState: { alwaysRemote: () => false },
 	boardState: {},
 	inboxState: {
+		blocks: [] as IBlockedPrincipal[],
+		listBlocks: async () => backend.inboxState.blocks,
+		blockPrincipal: async (principalId: string) => {
+			backend.inboxState.blocks = [
+				{
+					principal_id: principalId,
+					kind: users[principalId]?.bot ? "bot" : "user",
+					created_at: "",
+				},
+			];
+		},
+		unblockPrincipal: async (principalId: string) => {
+			backend.inboxState.blocks = backend.inboxState.blocks.filter(
+				(block) => block.principal_id !== principalId,
+			);
+		},
 		getConversation: async (id: string) => roomOf(id).conversation,
 		listEntries: async (id: string, query: IInboxEntriesQuery = {}) => {
 			const fake = roomOf(id);
@@ -236,6 +254,21 @@ const backend = {
 		markRead: async (id: string, upTo?: string) => {
 			roomOf(id).marked.push(upTo);
 			return { last_read_at: new Date().toISOString() };
+		},
+		renamed: [] as { conversationId: string; title: string }[],
+		renameConversation: async (conversationId: string, title: string) => {
+			backend.inboxState.renamed.push({ conversationId, title });
+			const fake = roomOf(conversationId);
+			fake.conversation = { ...fake.conversation, title: title || null };
+			return fake.conversation;
+		},
+		setConversationImage: async (
+			conversationId: string,
+			image: string | null,
+		) => {
+			const fake = roomOf(conversationId);
+			fake.conversation = { ...fake.conversation, image_url: image };
+			return fake.conversation;
 		},
 	},
 	userState: {
@@ -302,13 +335,13 @@ interface Panel {
 	unmount: () => Promise<void>;
 }
 
-async function mountPanel(conversationId: string): Promise<Panel> {
+async function mountPanel(conversationId: string, me = "me"): Promise<Panel> {
 	const host = window.document.createElement("div") as unknown as HTMLElement;
 	window.document.body.appendChild(host as never);
 	const panelRoot = createRoot(host);
 	const panel = createElement(ConversationPanel, {
 		conversationId,
-		me: "me",
+		me,
 		bots: [],
 		onClose: () => {},
 	});
@@ -739,6 +772,83 @@ describe("message bodies", () => {
 		await panel.unmount();
 	});
 
+	test("bot replies without mention metadata highlight the addressed reader's full name", async () => {
+		room(
+			"mn-self",
+			[
+				entry(
+					"message",
+					"bot_scout",
+					{
+						text: "@The G: Felix findet die Abfrage alle 5 Minuten zu häufig. (**@Anna Weber**), welche Option soll ich umsetzen? @nobody",
+					},
+					0,
+				),
+			],
+			{
+				members: [
+					...conversation.members,
+					{
+						principal_id: "the-g",
+						kind: "user",
+						added_by: "me",
+						joined_at: "",
+					},
+				],
+			},
+		);
+		const panel = await mountPanel("mn-self", "the-g");
+		const self = panel.host.querySelector('[data-mention-subject="the-g"]');
+		expect(self?.querySelector("button")?.textContent).toBe("@The G");
+		expect(self?.getAttribute("data-mention-self")).toBe("true");
+		expect(self?.className).toContain("text-foreground");
+		expect(self?.className).toContain("ring-2");
+		expect(self?.querySelector("button")?.getAttribute("aria-label")).toBe(
+			"@The G (You)",
+		);
+		expect(panel.host.querySelectorAll("[data-mention-subject]")).toHaveLength(
+			2,
+		);
+		expect(
+			panel.host
+				.querySelector('[data-mention-subject="anna"]')
+				?.hasAttribute("data-mention-self"),
+		).toBe(false);
+		expect(panel.text()).toContain("@nobody");
+		await panel.unmount();
+
+		const otherReader = await mountPanel("mn-self", "anna");
+		expect(
+			otherReader.host.querySelector("[data-mention-self] button")?.textContent,
+		).toBe("@Anna Weber");
+		await otherReader.unmount();
+	});
+
+	test("member names in code and external links stay literal", async () => {
+		room("mn-literal", [
+			entry(
+				"message",
+				"bot_scout",
+				{
+					text: "`@Felix Schultz` and [@Anna Weber](https://example.com)\n\n```text\n@Scout\n```",
+				},
+				0,
+			),
+		]);
+		const panel = await mountPanel("mn-literal");
+		expect(panel.host.querySelectorAll("[data-mention-subject]")).toHaveLength(
+			0,
+		);
+		expect(panel.host.querySelector("code")?.textContent).toBe(
+			"@Felix Schultz",
+		);
+		expect(
+			panel.host.querySelector('a[data-slate-url="https://example.com"]')
+				?.textContent,
+		).toBe("@Anna Weber");
+		await panel.unmount();
+	});
+
 	test("replying sends reply_to and the answer quotes the question", async () => {
 		const fake = room("rp", [
 			entry("message", "bot_scout", { text: "The question" }, 0, "q1"),
@@ -1076,5 +1186,196 @@ describe("history", () => {
 		expect(panel.text()).not.toContain("No messages yet");
 		expect(panel.text()).not.toContain("Ancient news");
 		await panel.unmount();
+	});
+});
+
+describe("room settings", () => {
+	async function setInput(input: Element | null, text: string) {
+		const setValue = Object.getOwnPropertyDescriptor(
+			window.HTMLInputElement.prototype,
+			"value",
+		)?.set;
+		await act(async () => {
+			setValue?.call(input, text);
+			input?.dispatchEvent(
+				new window.Event("input", { bubbles: true }) as never,
+			);
+		});
+	}
+
+	test("renaming a group from its menu saves the name and shows it in the header", async () => {
+		room("renamable", newestFirst);
+		const panel = await mountPanel("renamable");
+		await chooseMenuItem(
+			button(panel, "Conversation options"),
+			"Edit name and picture",
+		);
+		const dialog = window.document.querySelector("[role='dialog']");
+		expect(dialog?.textContent).toContain("Edit room");
+		await setInput(
+			dialog?.querySelector("input:not([type='file'])") ?? null,
+			"  Launch crew ",
+		);
+		const form = dialog?.querySelector("form") as unknown as HTMLFormElement;
+		await act(async () => {
+			form.dispatchEvent(
+				new window.Event("submit", {
+					bubbles: true,
+					cancelable: true,
+				}) as never,
+			);
+		});
+		await settle(50);
+		expect(backend.inboxState.renamed).toContainEqual({
+			conversationId: "renamable",
+			title: "Launch crew",
+		});
+		expect(window.document.querySelector("[role='dialog']")).toBeNull();
+		expect(panel.text()).toContain("Launch crew");
+		await panel.unmount();
+	});
+
+	test("a group's picture replaces the member stack in the header", async () => {
+		room("pictured", newestFirst, {
+			image_url: "https://files.test/room.png",
+		});
+		const panel = await mountPanel("pictured");
+		const picture = panel.host.querySelector(
+			"img[src='https://files.test/room.png']",
+		);
+		expect(picture).not.toBeNull();
+		await panel.unmount();
+	});
+
+	test("renames and picture changes show as pills in the history", async () => {
+		room("changed", [
+			entry(
+				"room",
+				"me",
+				{ change: "image", removed: true, by: "me" },
+				21,
+				"r2",
+			),
+			entry(
+				"room",
+				"anna",
+				{ change: "title", title: "Launch crew", by: "anna" },
+				20,
+				"r1",
+			),
+			...newestFirst,
+		]);
+		const panel = await mountPanel("changed");
+		const pills = [
+			...panel.host.querySelectorAll("[data-slot='room-change']"),
+		].map((pill) => pill.textContent);
+		expect(pills).toEqual([
+			"Anna Weber renamed the room to “Launch crew”",
+			"You removed the room's picture",
+		]);
+		await panel.unmount();
+	});
+});
+
+describe("blocking in an existing conversation", () => {
+	async function confirm(label: string) {
+		const dialog = window.document.querySelector("[role='alertdialog']");
+		const action = [...(dialog?.querySelectorAll("button") ?? [])].find(
+			(button) => button.textContent === label,
+		);
+		await click(action as unknown as Element);
+		await settle(50);
+	}
+
+	test("blocking disables retry of a failed send while still allowing discard", async () => {
+		backend.inboxState.blocks = [];
+		await act(async () => client.setQueryData(["inbox", "blocks"], []));
+		const fake = room("block-retry", [], {
+			kind: "direct",
+			members: conversation.members.filter((member) => member.kind === "user"),
+		});
+		fake.beforeSend = async () => {
+			throw new Error("offline");
+		};
+		const panel = await mountPanel("block-retry");
+		await typeAndSubmit(panel, "Unsent message");
+		expect((button(panel, "Retry") as HTMLButtonElement).disabled).toBe(false);
+		await chooseMenuItem(button(panel, "Conversation options"), "Block user");
+		await confirm("Block");
+		expect((button(panel, "Retry") as HTMLButtonElement).disabled).toBe(true);
+		await click(button(panel, "Discard"));
+		expect(button(panel, "Retry")).toBeUndefined();
+		expect(fake.sent).toHaveLength(1);
+		await panel.unmount();
+	});
+
+	test("blocks a person from the menu, keeps history readable, and enables writing after unblock", async () => {
+		backend.inboxState.blocks = [];
+		client.setQueryData(["inbox", "blocks"], []);
+		room(
+			"block-person",
+			[entry("message", "anna", { text: "Existing history" }, 0)],
+			{
+				kind: "direct",
+				members: conversation.members.filter(
+					(member) => member.kind === "user",
+				),
+			},
+		);
+		const panel = await mountPanel("block-person");
+		await chooseMenuItem(button(panel, "Conversation options"), "Block user");
+		await confirm("Block");
+		expect(backend.inboxState.blocks[0]?.principal_id).toBe("anna");
+		expect(panel.text()).toContain("Existing history");
+		const composer = panel.host.querySelector(
+			"textarea",
+		) as HTMLTextAreaElement;
+		expect(
+			(panel.host.querySelector('button[type="submit"]') as HTMLButtonElement)
+				.disabled,
+		).toBe(true);
+		expect(composer.placeholder).toContain("This conversation is blocked");
+		await chooseMenuItem(button(panel, "Conversation options"), "Unblock");
+		await confirm("Unblock");
+		expect(backend.inboxState.blocks).toEqual([]);
+		await setText(panel.host.querySelector("textarea"), "Allowed again");
+		expect(
+			(panel.host.querySelector('button[type="submit"]') as HTMLButtonElement)
+				.disabled,
+		).toBe(false);
+		await panel.unmount();
+	});
+
+	test("a person's block disables their bot chat while shared rooms remain writable", async () => {
+		backend.inboxState.blocks = [
+			{ principal_id: "anna", kind: "user", created_at: "" },
+		];
+		await act(async () =>
+			client.setQueryData(["inbox", "blocks"], backend.inboxState.blocks),
+		);
+		room(
+			"blocked-bot",
+			[entry("message", "bot_scout", { text: "Bot history" }, 0)],
+			{
+				kind: "direct",
+				members: conversation.members.filter(
+					(member) => member.principal_id !== "anna",
+				),
+			},
+		);
+		const panel = await mountPanel("blocked-bot");
+		expect(
+			(panel.host.querySelector("textarea") as HTMLTextAreaElement).placeholder,
+		).toContain("This conversation is blocked");
+		await typeAndSubmit(panel, "Must not send");
+		expect(roomOf("blocked-bot").sent).toEqual([]);
+		expect(panel.text()).toContain("Bot history");
+		expect(
+			(c1Panel.host.querySelector("textarea") as HTMLTextAreaElement)
+				.placeholder,
+		).not.toContain("This conversation is blocked");
+		await panel.unmount();
+		backend.inboxState.blocks = [];
+		await act(async () => client.setQueryData(["inbox", "blocks"], []));
 	});
 });

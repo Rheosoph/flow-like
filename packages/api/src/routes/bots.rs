@@ -14,6 +14,7 @@ pub mod apps;
 pub mod ask;
 pub mod avatar;
 pub mod clone;
+pub mod connectors;
 pub mod crud;
 pub mod fire;
 pub mod import;
@@ -30,6 +31,7 @@ pub(crate) mod runtime;
 pub mod runtime_token;
 mod secret_cipher;
 pub mod secrets;
+pub mod skills;
 pub mod talk;
 pub mod tasks;
 pub mod tool_grants;
@@ -46,6 +48,10 @@ mod permissions_tests;
 mod presence_tests;
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod connectors_tests;
+#[cfg(test)]
+mod skills_tests;
 #[cfg(test)]
 mod webhooks_tests;
 #[cfg(test)]
@@ -134,12 +140,48 @@ pub fn routes() -> Router<AppState> {
             get(talk::turn_ask_result),
         )
         .route(
+            "/{bot_id}/skills",
+            get(skills::list_bot_skills).post(skills::create_bot_skill),
+        )
+        .route(
+            "/{bot_id}/skills/import",
+            post(skills::import_bot_skill)
+                .layer(DefaultBodyLimit::max(skills::IMPORT_BODY_LIMIT)),
+        )
+        .route("/{bot_id}/skills/propose", post(skills::propose_bot_skill))
+        .route("/{bot_id}/skills/package", post(skills::install_bot_skill_package))
+        .route(
+            "/{bot_id}/skills/{skill_id}",
+            axum::routing::patch(skills::update_bot_skill).delete(skills::delete_bot_skill),
+        )
+        .route(
+            "/{bot_id}/skills/{skill_id}/approve",
+            post(skills::approve_bot_skill),
+        )
+        .route(
+            "/{bot_id}/skills/{skill_id}/disable",
+            post(skills::disable_bot_skill),
+        )
+        .route(
             "/{bot_id}/webhooks",
             get(webhooks::list_bot_webhooks).post(webhooks::create_bot_webhook),
         )
         .route(
             "/{bot_id}/webhooks/{hook_id}",
             axum::routing::patch(webhooks::update_bot_webhook).delete(webhooks::delete_bot_webhook),
+        )
+        .route(
+            "/{bot_id}/connectors",
+            get(connectors::list_bot_connectors).post(connectors::create_bot_connector),
+        )
+        .route(
+            "/{bot_id}/connectors/{connector_id}",
+            axum::routing::patch(connectors::update_bot_connector)
+                .delete(connectors::delete_bot_connector),
+        )
+        .route(
+            "/{bot_id}/connectors/{connector_id}/refresh",
+            post(connectors::refresh_bot_connector),
         )
         .route(
             "/{bot_id}/webhooks/{hook_id}/rotate",

@@ -47,6 +47,8 @@ const RESPONSES_PATH: &str = "/instances/responses";
 const SYSTEMONE_PATH: &str = "/instances/systemone";
 const EMBEDDINGS_PATH: &str = "/instances/embeddings/embed";
 const IMAGES_PATH: &str = "/instances/images/generations";
+const TRANSCRIPTIONS_PATH: &str = "/instances/audio/transcriptions";
+const SPEECH_PATH: &str = "/instances/audio/speech";
 
 /// Spend on one spending approval, in total and by the instances that caused it.
 #[derive(Debug, Serialize, PartialEq, Eq, utoipa::ToSchema)]
@@ -158,6 +160,8 @@ fn validate_usage(
             SYSTEMONE_PATH,
             EMBEDDINGS_PATH,
             IMAGES_PATH,
+            TRANSCRIPTIONS_PATH,
+            SPEECH_PATH,
         ]
         .contains(&usage.request_path.as_str())
     {

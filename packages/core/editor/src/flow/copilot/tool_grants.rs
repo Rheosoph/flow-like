@@ -17,6 +17,7 @@
 //! | `email_send` | one `email:<domain>` per recipient domain |
 //! | `message_person` | `person:<id>` |
 //! | `data_sources` attach | `connection:<kind>:<host>:<port>:<database>` |
+//! | `web_request` | `web:<site>:read` or `web:<site>:write`, plus `web:<site>:secret:<NAME>` per secret sent |
 //! | `http_request`, `forecast_tool`, `flowpilot_board_review`, `app_build`, `apply_home_layout` | none: asked every time |
 //! | every other tool that asks | `*` |
 //!
@@ -165,13 +166,23 @@ pub fn grant_scopes(tool: &str, args: &Value, context_app: Option<&str>) -> Opti
             })
         }
         "data_sources" => one(connection_scope(args)),
+        "connector_call" | "connector_request" => {
+            one(flow_like_bot_tools::services::grant_scope(tool, args))
+        }
         "browser_open" => one(clean(arg(args, "url", "url"))
             .and_then(|url| tools::browser::site_of(&url))
             .map(|site| format!("browser:{site}"))),
-        "computer_screenshot" | "computer_act" => Some(vec!["computer:session".to_string()]),
+        "computer_screenshot" | "computer_act" | "computer_window" => {
+            Some(vec!["computer:session".to_string()])
+        }
+        "computer_launch" => one(clean(arg(args, "program", "program"))
+            .and_then(|program| flow_like_bot_tools::computer::launch_scope(&program))
+            .map(|name| format!("computer:launch:{name}"))),
         "email_send" => flow_like_bot_tools::email::grant_scopes(args),
         "message_person" => flow_like_bot_tools::people::grant_scopes(args),
         "shell_run" => one(flow_like_bot_tools::shell::grant_scope(args).and_then(|s| clean(&s))),
+        "web_request" => flow_like_bot_tools::web::grant_scopes(args)
+            .and_then(|scopes| scopes.iter().map(|scope| clean(scope)).collect()),
         _ => Some(vec![SCOPE_ALL.to_string()]),
     }
 }
@@ -448,6 +459,14 @@ mod tests {
         );
     }
 
+    #[test]
+    fn one_standing_grant_lets_the_bot_answer_every_mail() {
+        assert_eq!(
+            grant_scopes("email_reply", &json!({"thread": "t1", "body": "x"}), None),
+            Some(vec![SCOPE_ALL.to_string()])
+        );
+    }
+
     use super::*;
     use serde_json::json;
     use std::sync::Mutex;
@@ -563,12 +582,21 @@ mod tests {
             None
         );
         assert_eq!(grant_scopes("browser_open", &json!({}), None), None);
-        for tool in ["computer_act", "computer_screenshot"] {
+        for tool in ["computer_act", "computer_screenshot", "computer_window"] {
             assert_eq!(
                 grant_scopes(tool, &json!({"action": "click"}), None),
                 Some(vec!["computer:session".into()])
             );
         }
+        assert_eq!(
+            grant_scopes(
+                "computer_launch",
+                &json!({"program": "/usr/bin/Firefox", "args": ["--private"]}),
+                None
+            ),
+            Some(vec!["computer:launch:firefox".into()])
+        );
+        assert_eq!(grant_scopes("computer_launch", &json!({}), None), None);
     }
 
     #[test]
@@ -685,6 +713,50 @@ mod tests {
         assert_eq!(
             check_call(&store, "code_run", &both, None).await.unwrap(),
             GrantCheck::Granted
+        );
+    }
+
+    #[tokio::test]
+    async fn a_web_grant_covers_one_site_its_kind_of_call_and_the_secrets_approved_there() {
+        let store = Memory::default();
+        let feed = json!({"url": "https://www.cisa.gov/feeds/kev.xml"});
+        record_answer(&store, "web_request", &feed, None, ApprovalDecision::Always)
+            .await
+            .unwrap();
+        let check = |args: Value| {
+            let store = &store;
+            async move { check_call(store, "web_request", &args, None).await.unwrap() }
+        };
+        assert_eq!(
+            check(json!({"url": "https://www.cisa.gov/other.json?page=2"})).await,
+            GrantCheck::Granted
+        );
+        for asks in [
+            json!({"url": "https://www.cisa.gov/x", "method": "POST", "json": {}}),
+            json!({"url": "https://www.cisa.gov/x", "headers": {"Key": "{{secret:CISA}}"}}),
+            json!({"url": "https://evil.example/kev.xml"}),
+            json!({"url": "https://www.cisa.gov:8443/kev.xml"}),
+        ] {
+            assert_eq!(check(asks.clone()).await, GrantCheck::Missing, "{asks}");
+        }
+
+        let keyed = json!({"url": "https://api.github.com/user", "headers": {"Authorization": "Bearer {{secret:GH}}"}});
+        record_answer(
+            &store,
+            "web_request",
+            &keyed,
+            None,
+            ApprovalDecision::Always,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            check(json!({"url": "https://api.github.com/repos", "headers": {"Authorization": "Bearer {{secret:GH}}"}})).await,
+            GrantCheck::Granted
+        );
+        assert_eq!(
+            check(json!({"url": "https://www.cisa.gov/kev.xml", "headers": {"Authorization": "Bearer {{secret:GH}}"}})).await,
+            GrantCheck::Missing
         );
     }
 

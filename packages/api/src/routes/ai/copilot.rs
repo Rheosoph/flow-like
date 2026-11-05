@@ -15,7 +15,7 @@ use axum::{
 use base64::{Engine, engine::general_purpose::STANDARD};
 use flow_like::a2ui::SurfaceComponent;
 use flow_like::copilot::{
-    ChatImage, CopilotScope, RunContext, UIActionContext, UnifiedChatMessage,
+    ChatImage, CopilotScope, RunContext, UIActionContext, UnifiedChatMessage, UnifiedCopilot,
     UnifiedCopilotResponse, flowpilot_thinking,
 };
 use flow_like::flow::ast::apply_board_commands_to_board;
@@ -37,6 +37,8 @@ use serde::Deserialize;
 use std::{convert::Infallible, sync::Arc, time::Duration};
 
 use super::global_chat::{GlobalChatFrame, ServerPlatformBridge};
+
+mod logs;
 
 pub fn routes() -> Router<AppState> {
     chat_routes(post(copilot_chat))
@@ -80,13 +82,17 @@ pub struct CopilotChatRequest {
     #[serde(default, alias = "profileId")]
     pub profile_id: Option<String>,
 
-    /// App owning `board`. Required whenever board context is supplied so the server can authorize
-    /// and canonically reload it before retaining a compiled FlowScript review. Also the app that
-    /// hosted-model usage is attributed to; the caller must have execution permission for it.
+    /// App owning `board_id` or legacy `board`. Required when board context is supplied so the
+    /// server can authorize and reload it before retaining a compiled FlowScript review. Hosted
+    /// model usage is attributed to this app; the caller must have execution permission for it.
     #[serde(default)]
     pub app_id: Option<String>,
 
-    /// Board context (optional for Frontend scope)
+    /// Persisted board to load after authorizing its app. The browser need not upload the graph.
+    #[serde(default)]
+    pub board_id: Option<String>,
+
+    /// Legacy board context. Only its id is used; the graph is reloaded from the owning app.
     #[serde(default)]
     pub board: Option<Board>,
     #[serde(default)]
@@ -152,7 +158,7 @@ pub struct CopilotChatRequest {
     #[serde(default)]
     pub overlay_id: Option<String>,
 
-    /// Restrict a Data Studio run to producing one tool-free read-only query proposal.
+    /// Inspect a board without authoring changes, or restrict Data Studio to a query proposal.
     #[serde(default)]
     pub read_only: bool,
 
@@ -162,7 +168,7 @@ pub struct CopilotChatRequest {
 }
 
 const MAX_PROMPT_CHARS: usize = 20_000;
-const ONTOLOGY_QUERY_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const COPILOT_CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(250);
 // The embedded ontology planner carries a bounded schema in `user_prompt`. Its frontend schema
 // budget is 60,000 serialized characters, so this route needs enough headroom for the question,
 // language preference, and repair context around that schema. This larger limit applies only to
@@ -180,6 +186,7 @@ const MAX_COPILOT_BODY_BYTES: usize = MAX_TOTAL_IMAGES * MAX_IMAGE_BASE64_CHARS 
 const MAX_SELECTED_IDS: usize = 200;
 const MAX_SELECTED_ID_CHARS: usize = 256;
 const MAX_CONVERSATION_ID_CHARS: usize = 256;
+const MAX_BOARD_ID_CHARS: usize = 512;
 const ALLOWED_IMAGE_MEDIA_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
 
 fn user_prompt_char_limit(scope: &CopilotScope, read_only: bool) -> usize {
@@ -199,7 +206,42 @@ async fn wait_for_channel_cancellation(channel: Arc<dyn Channel>, poll_interval:
     }
 }
 
+async fn run_until_channel_cancelled<T>(
+    channel: Arc<dyn Channel>,
+    run: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, String> {
+    if channel.is_cancelled().await {
+        return Err("Run cancelled".to_string());
+    }
+    flow_like_types::tokio::select! {
+        biased;
+        _ = wait_for_channel_cancellation(channel, COPILOT_CANCEL_POLL_INTERVAL) => {
+            Err("Run cancelled".to_string())
+        }
+        result = run => result,
+    }
+}
+
 fn validate_copilot_payload(payload: &CopilotChatRequest) -> Result<(), ApiError> {
+    let board_target = requested_copilot_board(payload)?;
+    resolve_copilot_app_id(
+        payload.app_id.as_deref(),
+        payload
+            .run_context
+            .as_ref()
+            .map(|context| context.app_id.as_str()),
+        payload
+            .action_context
+            .as_ref()
+            .map(|context| context.app_id.as_str()),
+    )?;
+    if let Some(context) = &payload.run_context {
+        validate_context_board(&context.app_id, Some(&context.board_id), board_target)?;
+        logs::validate_run_id(&context.run_id)?;
+    }
+    if let Some(context) = &payload.action_context {
+        validate_context_board(&context.app_id, context.board_id.as_deref(), board_target)?;
+    }
     if payload.profile_id.as_deref().is_some_and(|id| {
         id.is_empty() || id.trim() != id || id.chars().count() > MAX_CONVERSATION_ID_CHARS
     }) {
@@ -292,6 +334,85 @@ fn validate_copilot_payload(payload: &CopilotChatRequest) -> Result<(), ApiError
         validate_images(images, "request")?;
     }
 
+    Ok(())
+}
+
+fn validate_context_board(
+    app_id: &str,
+    board_id: Option<&str>,
+    board_target: Option<(&str, &str)>,
+) -> Result<(), ApiError> {
+    if app_id.is_empty() || app_id.trim() != app_id || app_id.chars().count() > MAX_BOARD_ID_CHARS {
+        return Err(ApiError::bad_request(
+            "Copilot context requires an exact app id.",
+        ));
+    }
+    if let Some(board_id) = board_id {
+        if board_id.is_empty()
+            || board_id.trim() != board_id
+            || board_id.chars().count() > MAX_BOARD_ID_CHARS
+        {
+            return Err(ApiError::bad_request(
+                "Copilot context requires an exact board id.",
+            ));
+        }
+        if board_target.is_some_and(|(_, expected)| expected != board_id) {
+            return Err(ApiError::bad_request(
+                "The selected run or action belongs to a different board. Reopen it on the requested board.",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn requested_copilot_board(payload: &CopilotChatRequest) -> Result<Option<(&str, &str)>, ApiError> {
+    let explicit = payload.board_id.as_deref();
+    let legacy = payload.board.as_ref().map(|board| board.id.as_str());
+    for id in [explicit, legacy].into_iter().flatten() {
+        if id.is_empty() || id.trim() != id || id.chars().count() > MAX_BOARD_ID_CHARS {
+            return Err(ApiError::bad_request(
+                "Board id must be a nonempty identifier of at most 512 characters.",
+            ));
+        }
+    }
+    if let (Some(explicit), Some(legacy)) = (explicit, legacy)
+        && explicit != legacy
+    {
+        return Err(ApiError::bad_request(
+            "Conflicting board IDs in copilot request context",
+        ));
+    }
+    let Some(board_id) = explicit.or(legacy) else {
+        if matches!(payload.scope, CopilotScope::Board) {
+            return Err(ApiError::bad_request(
+                "Board scope requires board_id or legacy board context. Reopen the board and retry.",
+            ));
+        }
+        return Ok(None);
+    };
+    let app_id = payload
+        .app_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| {
+            ApiError::bad_request("app_id is required when board context is supplied")
+        })?;
+    Ok(Some((app_id, board_id)))
+}
+
+/// Workers reload the authorized board. Keep a bounded legacy identity envelope for older workers.
+fn compact_copilot_board_payload(
+    raw_payload: &mut serde_json::Value,
+    app_id: &str,
+    board_id: &str,
+) -> Result<(), ApiError> {
+    if let Some(fields) = raw_payload.as_object_mut() {
+        let reference = Board::new_detached(Some(board_id.to_owned()), Default::default());
+        fields.insert("board".into(), serde_json::to_value(reference)?);
+        fields.insert("app_id".into(), serde_json::json!(app_id));
+        fields.insert("board_id".into(), serde_json::json!(board_id));
+    }
     Ok(())
 }
 
@@ -591,6 +712,23 @@ fn request_identity_prompt_for(
     }
 }
 
+fn configure_copilot_request(
+    copilot: UnifiedCopilot,
+    payload: &CopilotChatRequest,
+) -> UnifiedCopilot {
+    copilot
+        .with_read_only(payload.read_only)
+        .with_request_identity_prompt(Some(request_identity_prompt_for(
+            payload.conversation_id.as_deref(),
+            payload.source_user_prompt.as_deref(),
+            payload.raw_user_prompt.as_deref(),
+            &payload.user_prompt,
+        )))
+        .with_thinking(Some(flowpilot_thinking(
+            payload.reasoning_effort.as_deref(),
+        )))
+}
+
 async fn build_unified_copilot(
     state: &AppState,
     scope: CopilotScope,
@@ -701,32 +839,23 @@ pub(crate) async fn run_copilot(
     let mut sub = user.sub()?;
     validate_copilot_payload(&payload)?;
 
-    // A renderer-supplied board is useful for identifying the requested context, but it is not an
-    // authority or concurrency boundary. Authorize its owning app, then replace it with the
-    // canonical persisted board so the retained commit token fingerprints the same source that the
-    // review Apply endpoint will later reload.
-    let retained_app_id =
-        if let Some(board_id) = payload.board.as_ref().map(|board| board.id.clone()) {
-            let app_id = payload
-                .app_id
-                .as_deref()
-                .map(str::trim)
-                .filter(|app_id| !app_id.is_empty())
-                .map(str::to_string)
-                .ok_or_else(|| {
-                    ApiError::bad_request("app_id is required when board context is supplied")
-                })?;
-            let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
-            sub = permission.sub()?;
-            payload.board = Some(
-                state
-                    .master_board(&sub, &app_id, &board_id, &state, None)
-                    .await?,
-            );
-            Some(app_id)
-        } else {
-            None
-        };
+    // The browser identifies the board; its persisted graph remains the authority. Authorize its
+    // app before loading the same source that the retained review Apply endpoint later reloads.
+    let board_target = requested_copilot_board(&payload)?
+        .map(|(app_id, board_id)| (app_id.to_owned(), board_id.to_owned()));
+    let retained_app_id = if let Some((app_id, board_id)) = board_target {
+        let permission = ensure_permission!(user, &app_id, &state, RolePermissions::ReadBoards);
+        sub = permission.sub()?;
+        payload.board = Some(
+            state
+                .master_board(&sub, &app_id, &board_id, &state, None)
+                .await?,
+        );
+        compact_copilot_board_payload(&mut raw_payload, &app_id, &board_id)?;
+        Some(app_id)
+    } else {
+        None
+    };
 
     tracing::info!(
         "[copilot_chat] User {} requested scope {:?}",
@@ -885,13 +1014,7 @@ pub(crate) async fn run_copilot(
                 .get_with(key, || Arc::new(FlowIrDraftStore::new()))
         })
     });
-    let request_identity_prompt = request_identity_prompt_for(
-        payload.conversation_id.as_deref(),
-        payload.source_user_prompt.as_deref(),
-        payload.raw_user_prompt.as_deref(),
-        &payload.user_prompt,
-    );
-    let copilot = build_unified_copilot(
+    let copilot = match build_unified_copilot(
         &state,
         payload.scope,
         profile,
@@ -899,11 +1022,31 @@ pub(crate) async fn run_copilot(
         flow_ir_draft_store.clone(),
         retained_app_id.as_deref().or(attribution_app_id.as_deref()),
     )
-    .await?
-    .with_request_identity_prompt(Some(request_identity_prompt))
-    .with_thinking(Some(flowpilot_thinking(
-        payload.reasoning_effort.as_deref(),
-    )));
+    .await
+    {
+        Ok(copilot) => copilot,
+        Err(error) => {
+            super::global_chat::settle_assistant_usage(
+                &state,
+                &usage,
+                usage_started.elapsed().as_millis() as i64,
+                false,
+            )
+            .await?;
+            return Err(error);
+        }
+    };
+    let mut copilot = configure_copilot_request(copilot, &payload);
+    if matches!(payload.scope, CopilotScope::Board | CopilotScope::Both)
+        && let (Some(app_id), Some(board)) = (retained_app_id.as_ref(), payload.board.as_ref())
+    {
+        copilot = copilot.with_runtime_bridge(Arc::new(logs::ServerBoardLogsBridge::new(
+            state.clone(),
+            user.clone(),
+            app_id.to_owned(),
+            board.id.clone(),
+        )));
+    }
 
     if !payload.stream {
         let remaining = (usage.deadline - chrono::Utc::now())
@@ -933,40 +1076,48 @@ pub(crate) async fn run_copilot(
         .and_then(|result| {
             result.map_err(|error| ApiError::internal(format!("Copilot failed: {error}")))
         });
-        let response = match response {
-            Ok(response) => response,
-            Err(error) => {
-                super::global_chat::settle_assistant_usage(
-                    &state,
-                    &usage,
-                    usage_started.elapsed().as_millis() as i64,
-                    false,
-                )
-                .await?;
-                return Err(error);
-            }
-        };
-
         // A review token is not observable until its exact batch is durable on the canonical
         // board. Apply/Dismiss may therefore land on any API replica.
-        persist_response_flow_ir_claim(
-            &state,
-            &sub,
-            retained_app_id.as_deref(),
-            flow_ir_draft_store.as_ref(),
-            &response,
-        )
-        .await?;
+        let response = match response {
+            Ok(response) => persist_response_flow_ir_claim(
+                &state,
+                &sub,
+                retained_app_id.as_deref(),
+                flow_ir_draft_store.as_ref(),
+                &response,
+            )
+            .await
+            .map(|()| response),
+            Err(error) => Err(error),
+        };
 
         super::global_chat::settle_assistant_usage(
             &state,
             &usage,
             usage_started.elapsed().as_millis() as i64,
-            true,
+            response.is_ok(),
         )
         .await?;
+        let response = response?;
         return Ok(<axum::Json<_> as axum::response::IntoResponse>::into_response(Json(response)));
     }
+
+    // The channel outlives the browser's subscription when a hosted worker owns the stream.
+    // Only an explicit Stop cancels generation; dropping the HTTP reader does not cancel a worker.
+    let run_id = super::global_chat::next_run_id();
+    let channel = match super::global_chat::build_chat_channel(&state, &run_id, &sub).await {
+        Ok(channel) => channel,
+        Err(error) => {
+            super::global_chat::settle_assistant_usage(
+                &state,
+                &usage,
+                usage_started.elapsed().as_millis() as i64,
+                false,
+            )
+            .await?;
+            return Err(error);
+        }
+    };
 
     // Streaming: send tokens via SSE and finish with a `final` event containing JSON response.
     let (tx, mut rx) = flow_like_types::tokio::sync::mpsc::unbounded_channel::<String>();
@@ -982,6 +1133,7 @@ pub(crate) async fn run_copilot(
     let delivery_sub = sub.clone();
     let delivery_app_id = retained_app_id.clone();
     let delivery_store = flow_ir_draft_store.clone();
+    let channel_for_task = channel.clone();
     let board_format = flow_like::flow::board::format::supported_version();
     flow_like_types::tokio::spawn(flow_like::flow::board::format::with_supported_version(
         board_format,
@@ -989,29 +1141,45 @@ pub(crate) async fn run_copilot(
             let remaining = (usage.deadline - chrono::Utc::now())
                 .num_milliseconds()
                 .max(1) as u64;
-            let result = flow_like_types::tokio::time::timeout(
-                Duration::from_millis(remaining),
-                copilot.chat_with_raw_user_prompt(
-                    payload.scope,
-                    payload.board.as_ref(),
-                    &payload.selected_node_ids,
-                    payload.current_surface.as_ref(),
-                    payload.current_canvas_settings.as_ref(),
-                    &payload.selected_component_ids,
-                    payload.user_prompt,
-                    payload.raw_user_prompt,
-                    payload.request_images,
-                    payload.history,
-                    payload.model_id,
-                    token,
-                    context,
-                    on_token,
-                ),
-            )
-            .await
-            .map_err(|_| "Cloud assistant runtime allowance reached".to_owned())
-            .and_then(|result| result.map_err(|error| error.to_string()));
+            let result = run_until_channel_cancelled(channel_for_task.clone(), async {
+                flow_like_types::tokio::time::timeout(
+                    Duration::from_millis(remaining),
+                    copilot.chat_with_raw_user_prompt(
+                        payload.scope,
+                        payload.board.as_ref(),
+                        &payload.selected_node_ids,
+                        payload.current_surface.as_ref(),
+                        payload.current_canvas_settings.as_ref(),
+                        &payload.selected_component_ids,
+                        payload.user_prompt,
+                        payload.raw_user_prompt,
+                        payload.request_images,
+                        payload.history,
+                        payload.model_id,
+                        token,
+                        context,
+                        on_token,
+                    ),
+                )
+                .await
+                .map_err(|_| "Cloud assistant runtime allowance reached".to_owned())
+                .and_then(|result| result.map_err(|error| error.to_string()))
+            })
+            .await;
             let result = match result {
+                Ok(response) if channel_for_task.is_cancelled().await => {
+                    if let (Some(store), Some(token)) =
+                        (delivery_store.as_ref(), response.flow_ir_commit.as_ref())
+                    {
+                        store.release_commit_if_matches(
+                            &token.draft_id,
+                            token.revision,
+                            &token.base_fingerprint,
+                            &token.claim_id,
+                        );
+                    }
+                    Err("Run cancelled".to_string())
+                }
                 Ok(response) => persist_response_flow_ir_claim(
                     &delivery_state,
                     &delivery_sub,
@@ -1035,12 +1203,18 @@ pub(crate) async fn run_copilot(
             {
                 tracing::error!(%error, "Copilot usage remains pending");
             }
+            channel_for_task.close().await;
             let _ = done_tx.send(result);
             // If the receiver is already dropped, ignore.
         },
     ));
 
     let stream = async_stream::stream! {
+        yield Ok::<Event, Infallible>(
+            Event::default()
+                .event("run")
+                .data(serde_json::json!({ "runId": run_id, "channel": channel.handle() }).to_string()),
+        );
         let mut token_stream_open = true;
         loop {
             flow_like_types::tokio::select! {
@@ -1203,7 +1377,7 @@ async fn specialist_chat(
                         ) => result,
                         _ = wait_for_channel_cancellation(
                             cancellation_channel,
-                            ONTOLOGY_QUERY_CANCEL_POLL_INTERVAL,
+                            COPILOT_CANCEL_POLL_INTERVAL,
                         ) => Err(flow_like_types::anyhow!("Run cancelled")),
                     }
                 } else {
@@ -1328,7 +1502,8 @@ mod tests {
     use super::wait_for_channel_cancellation;
     use super::{
         CopilotChatRequest, MAX_COPILOT_BODY_BYTES, MAX_IMAGE_BYTES, MAX_REQUEST_IMAGES,
-        MAX_TOTAL_IMAGES, chat_routes, ensure_requested_profile, validate_copilot_payload,
+        MAX_TOTAL_IMAGES, chat_routes, compact_copilot_board_payload, ensure_requested_profile,
+        requested_copilot_board, validate_copilot_payload,
     };
     use crate::middleware::jwt::AppUser;
     use axum::{
@@ -1375,6 +1550,324 @@ mod tests {
             request.extensions_mut().insert(user);
         }
         request
+    }
+
+    fn legacy_board(id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id, "name": "Scan", "description": "Existing client graph",
+            "nodes": {}, "variables": {}, "comments": {}, "layers": {}, "refs": {},
+            "viewport": [0, 0, 1], "version": [0, 0, 0], "stage": "Dev",
+            "log_level": "Debug", "execution_mode": "Hybrid", "page_ids": [], "hash": null,
+            "created_at": {"secs_since_epoch": 0, "nanos_since_epoch": 0},
+            "updated_at": {"secs_since_epoch": 0, "nanos_since_epoch": 0},
+        })
+    }
+
+    #[tokio::test]
+    async fn copilot_accepts_board_identity_without_uploading_a_graph() {
+        let body = serde_json::json!({
+            "scope": "Board", "app_id": "app-a", "board_id": "board-a",
+            "user_prompt": "Explain the scan", "read_only": true, "stream": true,
+        });
+        let payload: CopilotChatRequest = serde_json::from_value(body.clone()).unwrap();
+        assert!(payload.board.is_none());
+        assert_eq!(
+            requested_copilot_board(&payload).unwrap(),
+            Some(("app-a", "board-a"))
+        );
+        let response = chat_routes(post(validate_chat_body))
+            .oneshot(chat_request(body.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn compact_browser_board_reference_is_compatible_with_legacy_board_requests() {
+        let reference: serde_json::Value = serde_json::from_str(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../ui/lib/flowpilot/fixtures/copilot-board-reference.json"
+        )))
+        .unwrap();
+
+        for include_explicit_id in [false, true] {
+            let mut body = serde_json::json!({
+                "scope": "Board", "app_id": "app-compatibility", "board": reference,
+                "user_prompt": "Build a workflow", "stream": true,
+            });
+            if include_explicit_id {
+                body["board_id"] = serde_json::json!("board-compatibility");
+            }
+            let payload: CopilotChatRequest = serde_json::from_value(body.clone()).unwrap();
+            let board = payload.board.as_ref().unwrap();
+            assert_eq!(board.id, "board-compatibility");
+            assert!(board.nodes.is_empty());
+            assert_eq!(
+                requested_copilot_board(&payload).unwrap(),
+                Some(("app-compatibility", "board-compatibility"))
+            );
+            let response = chat_routes(post(validate_chat_body))
+                .oneshot(chat_request(body.to_string()))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NO_CONTENT);
+        }
+    }
+
+    #[tokio::test]
+    async fn board_requests_without_identity_fail_before_a_specialist_can_run() {
+        for read_only in [false, true] {
+            for stream in [false, true] {
+                let body = serde_json::json!({
+                    "scope": "Board", "app_id": "app-a", "board": null,
+                    "user_prompt": "Build a workflow", "read_only": read_only, "stream": stream,
+                });
+                let payload: CopilotChatRequest = serde_json::from_value(body.clone()).unwrap();
+                let error = validate_copilot_payload(&payload).unwrap_err();
+                assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+                assert!(
+                    error
+                        .public_message()
+                        .unwrap()
+                        .contains("Board scope requires board_id")
+                );
+                let response = chat_routes(post(validate_chat_body))
+                    .oneshot(chat_request(body.to_string()))
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+            }
+        }
+        for scope in ["Frontend", "Home", "DataStudio", "Scout", "Research"] {
+            let payload: CopilotChatRequest = serde_json::from_value(serde_json::json!({
+                "scope": scope, "user_prompt": "Help with this surface",
+            }))
+            .unwrap();
+            validate_copilot_payload(&payload).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn board_requests_reject_foreign_run_and_action_context_before_loading_the_board() {
+        for (field, context) in [
+            (
+                "run_context",
+                serde_json::json!({
+                    "app_id": "app-a", "board_id": "board-b", "run_id": "run-a"
+                }),
+            ),
+            (
+                "action_context",
+                serde_json::json!({
+                    "app_id": "app-a", "board_id": "board-b"
+                }),
+            ),
+            (
+                "run_context",
+                serde_json::json!({
+                    "app_id": "app-b", "board_id": "board-a", "run_id": "run-a"
+                }),
+            ),
+            (
+                "action_context",
+                serde_json::json!({
+                    "app_id": "app-b", "board_id": "board-a"
+                }),
+            ),
+        ] {
+            let mut body = serde_json::json!({
+                "scope": "Board", "app_id": "app-a", "board_id": "board-a",
+                "user_prompt": "Explain this board's failure", "read_only": true,
+            });
+            body[field] = context;
+            let response = chat_routes(post(validate_chat_body))
+                .oneshot(chat_request(body.to_string()))
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{body}");
+        }
+        let body = serde_json::json!({
+            "scope": "Board", "app_id": "app-a", "board_id": "board-a",
+            "user_prompt": "Explain this board's failure", "read_only": true,
+            "run_context": { "app_id": "app-a", "board_id": "board-a", "run_id": "run-a" },
+            "action_context": { "app_id": "app-a", "board_id": "board-a" },
+        });
+        let response = chat_routes(post(validate_chat_body))
+            .oneshot(chat_request(body.to_string()))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+
+    #[test]
+    fn selected_run_context_requires_usable_storage_identifiers() {
+        for (field, invalid) in [
+            ("app_id", ""),
+            ("app_id", " app-a "),
+            ("board_id", ""),
+            ("board_id", " board-a "),
+            ("run_id", ""),
+            ("run_id", "run-a "),
+            ("run_id", "folder/run-a"),
+        ] {
+            let mut body = serde_json::json!({
+                "scope": "Board", "app_id": "app-a", "board_id": "board-a",
+                "user_prompt": "Explain this board's failure", "read_only": true,
+                "run_context": { "app_id": "app-a", "board_id": "board-a", "run_id": "run-a" },
+            });
+            body["run_context"][field] = serde_json::json!(invalid);
+            let payload: CopilotChatRequest = serde_json::from_value(body).unwrap();
+            assert_eq!(
+                validate_copilot_payload(&payload).unwrap_err().status(),
+                StatusCode::BAD_REQUEST,
+                "accepted {field}={invalid:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn board_explain_enforces_read_only_before_selecting_an_authoring_model() {
+        use flow_like::{copilot::UnifiedCopilot, state::FlowLikeConfig, utils::http::HTTPClient};
+
+        for stream in [false, true] {
+            let payload: CopilotChatRequest = serde_json::from_value(serde_json::json!({
+                "scope": "Board", "app_id": "app-a", "board": legacy_board("board-a"),
+                "user_prompt": "Explain the failed run", "read_only": true, "stream": stream,
+            }))
+            .unwrap();
+            let state = Arc::new(super::FlowLikeState::new(
+                FlowLikeConfig::new(),
+                HTTPClient::new_without_refetch(),
+            ));
+            // An unavailable catalog must fail inspection, never fall back to frontend authoring.
+            let copilot = UnifiedCopilot::new(state, None, None, None, None)
+                .await
+                .unwrap();
+            let copilot = super::configure_copilot_request(copilot, &payload);
+            let error = copilot
+                .chat_with_raw_user_prompt(
+                    payload.scope,
+                    payload.board.as_ref(),
+                    &[],
+                    None,
+                    None,
+                    &[],
+                    payload.user_prompt.clone(),
+                    None,
+                    None,
+                    vec![],
+                    None,
+                    None,
+                    None,
+                    None::<fn(String)>,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Read-only copilot mode requires board context; frontend authoring is disabled."
+            );
+        }
+    }
+
+    #[test]
+    fn copilot_keeps_legacy_board_clients_and_rejects_ambiguous_targets() {
+        for explicit in [None, Some("board-a"), Some("board-b")] {
+            let payload: CopilotChatRequest = serde_json::from_value(serde_json::json!({
+                "scope": "Board", "app_id": "app-a", "board": legacy_board("board-a"),
+                "board_id": explicit, "user_prompt": "Explain the scan",
+            }))
+            .unwrap();
+            if explicit == Some("board-b") {
+                assert!(validate_copilot_payload(&payload).is_err());
+            } else {
+                assert!(validate_copilot_payload(&payload).is_ok());
+                assert_eq!(
+                    requested_copilot_board(&payload).unwrap(),
+                    Some(("app-a", "board-a"))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn copilot_rejects_invalid_board_ids_and_board_context_without_an_app() {
+        for id in ["", " board-a", "board-a ", " ", &"a".repeat(513)] {
+            for legacy in [false, true] {
+                let mut body = serde_json::json!({
+                    "scope": "Board", "app_id": "app-a", "user_prompt": "Explain the scan",
+                });
+                if legacy {
+                    body["board"] = legacy_board(id);
+                } else {
+                    body["board_id"] = serde_json::json!(id);
+                }
+                let payload: CopilotChatRequest = serde_json::from_value(body).unwrap();
+                assert!(
+                    validate_copilot_payload(&payload).is_err(),
+                    "accepted {id:?}"
+                );
+            }
+        }
+        for app_id in [None, Some(""), Some(" ")] {
+            let payload: CopilotChatRequest = serde_json::from_value(serde_json::json!({
+                "scope": "Board", "app_id": app_id, "board_id": "board-a",
+                "user_prompt": "Explain the scan",
+            }))
+            .unwrap();
+            assert!(validate_copilot_payload(&payload).is_err());
+        }
+    }
+
+    #[test]
+    fn copilot_worker_receives_board_identity_and_preserves_specialist_context() {
+        let mut board = legacy_board("board-a");
+        board["description"] = serde_json::json!("x".repeat(2 * 1024 * 1024));
+        let mut body = serde_json::json!({
+            "scope": "Board", "app_id": " app-a ", "board": board,
+            "user_prompt": "Explain the scan", "selected_node_ids": ["entry-a"],
+            "conversation_id": "conversation-a", "source_user_prompt": "Why did the scan stop?",
+            "read_only": true, "stream": true,
+        });
+        let original: CopilotChatRequest = serde_json::from_value(body.clone()).unwrap();
+        validate_copilot_payload(&original).unwrap();
+        let (app_id, board_id) = requested_copilot_board(&original).unwrap().unwrap();
+        compact_copilot_board_payload(&mut body, app_id, board_id).unwrap();
+        assert!(body.get("board").is_some());
+        assert!(serde_json::to_vec(&body).unwrap().len() < 1024);
+        // Older workers ignore board_id and require a deserializable Board carrying the identity.
+        body.as_object_mut().unwrap().remove("board_id");
+        let worker: CopilotChatRequest = serde_json::from_value(body).unwrap();
+        validate_copilot_payload(&worker).unwrap();
+        let reference = worker.board.as_ref().unwrap();
+        assert!(reference.nodes.is_empty());
+        assert!(reference.description.len() < 100);
+        assert_eq!(
+            requested_copilot_board(&worker).unwrap(),
+            Some(("app-a", "board-a"))
+        );
+        assert_eq!(worker.selected_node_ids, original.selected_node_ids);
+        assert_eq!(worker.conversation_id, original.conversation_id);
+        assert_eq!(worker.source_user_prompt, original.source_user_prompt);
+        assert_eq!(worker.user_prompt, original.user_prompt);
+        assert!(worker.read_only && worker.stream);
+    }
+
+    #[test]
+    fn identity_only_board_requests_are_forwarded_to_legacy_workers() {
+        let mut body = serde_json::json!({
+            "scope": "Board", "app_id": "app-a", "board_id": "board-a",
+            "user_prompt": "Build the worker",
+        });
+        compact_copilot_board_payload(&mut body, "app-a", "board-a").unwrap();
+        assert!(serde_json::to_vec(&body).unwrap().len() < 1024);
+        body.as_object_mut().unwrap().remove("board_id");
+        let worker: CopilotChatRequest = serde_json::from_value(body).unwrap();
+        validate_copilot_payload(&worker).unwrap();
+        assert_eq!(
+            requested_copilot_board(&worker).unwrap(),
+            Some(("app-a", "board-a"))
+        );
     }
 
     #[tokio::test]
@@ -1603,6 +2096,80 @@ mod tests {
             .await
             .expect("cancellation watcher should finish")
             .expect("cancellation watcher task should not panic");
+        channel.close().await;
+    }
+
+    #[tokio::test]
+    async fn copilot_stop_drops_a_pending_model_call() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+
+        let channel_id = format!("board-cancel-{}", flow_like_types::create_id());
+        let channel = InProcessChannel::register(&channel_id, Duration::from_secs(30)).await;
+        let run_channel: Arc<dyn Channel> = channel.clone();
+        let started = Arc::new(tokio::sync::Notify::new());
+        let started_in_run = started.clone();
+        let dropped = Arc::new(AtomicBool::new(false));
+        let guard = Dropped(dropped.clone());
+        let task = tokio::spawn(super::run_until_channel_cancelled(
+            run_channel,
+            async move {
+                let _guard = guard;
+                started_in_run.notify_one();
+                std::future::pending::<Result<(), String>>().await
+            },
+        ));
+        started.notified().await;
+        assert_eq!(
+            channel
+                .push(ChannelPush {
+                    channel_id,
+                    request_id: None,
+                    kind: ChannelPushKind::Cancel,
+                    value: serde_json::Value::Null,
+                })
+                .await,
+            InProcessPushResult::Delivered
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .expect("Stop must interrupt a model waiting for a response")
+                .unwrap(),
+            Err("Run cancelled".to_string())
+        );
+        assert!(dropped.load(Ordering::SeqCst));
+        channel.close().await;
+    }
+
+    #[tokio::test]
+    async fn already_cancelled_copilot_does_not_start_a_model_call() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let channel_id = format!("board-pre-cancel-{}", flow_like_types::create_id());
+        let channel = InProcessChannel::register(&channel_id, Duration::from_secs(30)).await;
+        channel
+            .push(ChannelPush {
+                channel_id,
+                request_id: None,
+                kind: ChannelPushKind::Cancel,
+                value: serde_json::Value::Null,
+            })
+            .await;
+        let started = AtomicBool::new(false);
+        let result = super::run_until_channel_cancelled(channel.clone(), async {
+            started.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await;
+        assert_eq!(result, Err("Run cancelled".to_string()));
+        assert!(!started.load(Ordering::SeqCst));
         channel.close().await;
     }
 

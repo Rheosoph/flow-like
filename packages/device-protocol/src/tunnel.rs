@@ -35,7 +35,7 @@ pub struct TunnelOpen {
 
 impl TunnelOpen {
     pub fn validate(&self) -> Result<()> {
-        match self.target {
+        match &self.target {
             TunnelTarget::Service => {
                 validate_management_id(&self.placement_id)?;
                 validate_management_id(&self.service_id)
@@ -48,23 +48,36 @@ impl TunnelOpen {
             TunnelTarget::ModelGateway => Err(ProtocolError::Invalid(
                 "model gateway tunnel names a placement or service",
             )),
+            TunnelTarget::BotPlayground { bot_id }
+                if self.placement_id.is_empty() && self.service_id.is_empty() =>
+            {
+                validate_management_id(bot_id)
+            }
+            TunnelTarget::BotPlayground { .. } => Err(ProtocolError::Invalid(
+                "bot playground tunnel names a placement or service",
+            )),
         }
     }
 }
 
 /// `ModelGateway` reaches the device's model gateway, never a placement listener. Agents
-/// without the `model_host` flag cannot decode it and close the tunnel.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// without the `model_host` flag cannot decode it and close the tunnel. `BotPlayground`
+/// carries the live view of one bot's screen (`crate::playground`); agents without the
+/// `bot_playground` flag cannot decode it either.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TunnelTarget {
     #[default]
     Service,
     ModelGateway,
+    BotPlayground {
+        bot_id: String,
+    },
 }
 
 impl TunnelTarget {
     fn is_service(&self) -> bool {
-        *self == Self::Service
+        matches!(self, Self::Service)
     }
 }
 

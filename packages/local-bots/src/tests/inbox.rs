@@ -97,6 +97,7 @@ fn conversations_serialize_like_the_api_plus_local() {
             "created_by",
             "encryption",
             "id",
+            "image_url",
             "kind",
             "last_activity_at",
             "last_entry",
@@ -252,6 +253,98 @@ fn a_group_writes_a_join_event_per_bot_and_adding_skips_members() {
         code(f.store.rename_conversation("missing", None)),
         codes::NOT_FOUND
     );
+}
+
+fn picture(width: u32, height: u32) -> String {
+    use flow_like_types::base64::{Engine, engine::general_purpose::STANDARD};
+    let mut jpeg = std::io::Cursor::new(Vec::new());
+    flow_like_types::images::image::DynamicImage::new_rgb8(width, height)
+        .write_to(&mut jpeg, flow_like_types::images::image::ImageFormat::Jpeg)
+        .unwrap();
+    format!(
+        "data:image/jpeg;base64,{}",
+        STANDARD.encode(jpeg.into_inner())
+    )
+}
+
+#[test]
+fn a_group_keeps_its_picture_as_a_small_png() {
+    let f = fixture();
+    let a = f.bot("A");
+    let group = f.group(&[&a]);
+    assert_eq!(group.image_url, None);
+
+    f.changes.take();
+    let pictured = f
+        .store
+        .set_conversation_image(&group.id, Some(picture(600, 300)))
+        .unwrap();
+    let stored = pictured.image_url.clone().unwrap();
+    assert!(stored.starts_with("data:image/png;base64,"));
+    let png = flow_like_types::images::image::load_from_memory(
+        &flow_like_types::base64::Engine::decode(
+            &flow_like_types::base64::engine::general_purpose::STANDARD,
+            stored.trim_start_matches("data:image/png;base64,"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!((png.width(), png.height()), (256, 128));
+    assert_eq!(f.visible(&group.id).image_url, Some(stored.clone()));
+    assert!(!f.changes.take().is_empty());
+
+    let same = f
+        .store
+        .set_conversation_image(&group.id, Some(picture(600, 300)))
+        .unwrap();
+    assert_eq!(same.image_url, Some(stored));
+    assert!(
+        f.changes.take().is_empty(),
+        "the same picture changes nothing"
+    );
+
+    assert_eq!(
+        code(
+            f.store
+                .set_conversation_image(&group.id, Some("data:text/html;base64,PGI+".into()))
+        ),
+        codes::INVALID
+    );
+    let direct = f.direct(&a);
+    assert_eq!(
+        code(
+            f.store
+                .set_conversation_image(&direct.id, Some(picture(8, 8)))
+        ),
+        codes::INBOX_DIRECT_FIXED
+    );
+
+    let cleared = f.store.set_conversation_image(&group.id, None).unwrap();
+    assert_eq!(cleared.image_url, None);
+    f.store
+        .rename_conversation(&group.id, Some("Crew".into()))
+        .unwrap();
+
+    let mut changes: Vec<Value> = f
+        .all_entries(&group.id)
+        .into_iter()
+        .filter(|entry| entry.kind == InboxEntryKind::Room)
+        .map(|entry| {
+            assert!(entry.message_id.starts_with("room:"));
+            entry.envelope["body"].clone()
+        })
+        .collect();
+    changes.reverse();
+    assert_eq!(
+        changes,
+        [
+            json!({ "change": "image", "by": "local" }),
+            json!({ "change": "image", "removed": true, "by": "local" }),
+            json!({ "change": "title", "title": "Crew", "by": "local" }),
+        ],
+        "one line per change, none for the unchanged picture"
+    );
+    assert_eq!(f.visible(&group.id).unread_count, 0);
 }
 
 #[test]
@@ -996,7 +1089,14 @@ fn the_bundle_holds_the_bot_its_apps_secrets_and_shared_conversations() {
     let wire = serde_json::to_value(&bundle).unwrap();
     assert_eq!(
         sorted_keys(&wire),
-        ["app_ids", "bot", "conversations", "secrets"]
+        [
+            "app_ids",
+            "bot",
+            "connectors",
+            "conversations",
+            "secrets",
+            "skills"
+        ]
     );
     assert_eq!(
         wire["secrets"],

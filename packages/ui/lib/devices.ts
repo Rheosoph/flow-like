@@ -48,6 +48,7 @@ const rowSchema = z.object({
 	access_expires_at: lenient(timestamp.nullable()),
 	access_rules_expire_at: lenient(timestamp.nullable()),
 	revoked_at: lenient(timestamp.nullable()),
+	bot_host_seen_at: lenient(timestamp.nullable()),
 	cloud_approvals: lenient(
 		z
 			.object({

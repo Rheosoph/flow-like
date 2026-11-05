@@ -65,7 +65,7 @@ fn cannot_invite(principal_id: &str) -> ApiError {
         StatusCode::FORBIDDEN,
         INBOX_MEMBER_NOT_ALLOWED,
         format!(
-            "You can't invite '{principal_id}': add your own bots, or invite people who share an app with you and their bots"
+            "You can't invite '{principal_id}': it is neither a person on this hub nor a live bot"
         ),
     )
 }
@@ -90,25 +90,17 @@ fn co_members(caller: &str) -> SelectStatement {
         .into_query()
 }
 
-async fn sharing_people<C: ConnectionTrait>(
+async fn known_people<C: ConnectionTrait>(
     db: &C,
-    caller: &str,
     ids: &[String],
 ) -> Result<HashSet<String>, DbErr> {
     if ids.is_empty() {
         return Ok(HashSet::new());
     }
-    let mine = membership::Entity::find()
+    Ok(user::Entity::find()
         .select_only()
-        .column(membership::Column::AppId)
-        .filter(membership::Column::UserId.eq(caller))
-        .into_query();
-    Ok(membership::Entity::find()
-        .select_only()
-        .column(membership::Column::UserId)
-        .distinct()
-        .filter(membership::Column::UserId.is_in(ids.iter().cloned()))
-        .filter(membership::Column::AppId.in_subquery(mine))
+        .column(user::Column::Id)
+        .filter(user::Column::Id.is_in(ids.iter().cloned()))
         .into_tuple::<String>()
         .all(db)
         .await?
@@ -117,8 +109,9 @@ async fn sharing_people<C: ConnectionTrait>(
 }
 
 /// The server's rule for who `caller` may bring into a room, in the order asked: their own live
-/// bots at once; people who share an app with them, and the live bots of such people, by
-/// invitation. The first id outside the rule fails with [`INBOX_MEMBER_NOT_ALLOWED`].
+/// bots at once; any other person on the hub, and other people's live bots, by invitation, which
+/// the person (or the bot's owner) accepts or declines. The first id that is neither a known
+/// person nor a live bot fails with [`INBOX_MEMBER_NOT_ALLOWED`].
 pub(crate) async fn classify<C: ConnectionTrait>(
     db: &C,
     caller: &str,
@@ -138,13 +131,12 @@ pub(crate) async fn classify<C: ConnectionTrait>(
         .await?
         .into_iter()
         .collect();
-    let mut people: Vec<String> = candidates
+    let people: Vec<String> = candidates
         .iter()
         .filter(|id| !bots.contains_key(*id))
         .cloned()
         .collect();
-    people.extend(bots.values().filter(|owner| *owner != caller).cloned());
-    let sharing = sharing_people(db, caller, &people).await?;
+    let known = known_people(db, &people).await?;
     candidates
         .iter()
         .map(|id| match bots.get(id) {
@@ -154,13 +146,13 @@ pub(crate) async fn classify<C: ConnectionTrait>(
                 InviteMode::AddNow,
                 Some(owner),
             )),
-            Some(owner) if sharing.contains(owner) => Ok(invitee(
+            Some(owner) => Ok(invitee(
                 id,
                 PrincipalKind::Bot,
                 InviteMode::Invite,
                 Some(owner),
             )),
-            None if sharing.contains(id) => {
+            None if known.contains(id) => {
                 Ok(invitee(id, PrincipalKind::User, InviteMode::Invite, None))
             }
             _ => Err(cannot_invite(id)),
@@ -324,7 +316,7 @@ pub(crate) async fn invite_in<C: ConnectionTrait>(
         .iter()
         .map(|invitee| invitee.principal.id.clone())
         .collect();
-    let blocked = super::requests::blocked_by(txn, inviter, &asked_ids).await?;
+    let blocked = super::blocks::blocked_between(txn, inviter, &asked_ids, true).await?;
     let asked: Vec<&Invitee> = asked
         .into_iter()
         .filter(|invitee| {
@@ -431,6 +423,9 @@ pub(crate) async fn accept_in<C: ConnectionTrait>(
 ) -> Result<Vec<String>, ApiError> {
     let member = pending_member(txn, conversation_id, principal_id).await?;
     ensure_may_answer(txn, &member, actor).await?;
+    if let Some(inviter) = &member.invited_by {
+        super::blocks::ensure_allowed(txn, principal_id, inviter).await?;
+    }
     let is_bot = PrincipalKind::parse(&member.principal_kind) == Some(PrincipalKind::Bot);
     if !is_bot && limits.is_some() {
         return Err(ApiError::bad_request(
@@ -626,13 +621,40 @@ pub(crate) async fn invitations_for<C: ConnectionTrait>(
         .collect();
     let mut mine: Vec<String> = bots.keys().cloned().collect();
     mine.push(me.to_string());
-    let rows = conversation_member::Entity::find()
+    let pages = conversation_member::Entity::find()
         .filter(conversation_member::Column::Status.eq(MEMBER_PENDING))
         .filter(conversation_member::Column::PrincipalId.is_in(mine))
         .order_by_desc(conversation_member::Column::InvitedAt)
-        .limit(200)
-        .all(db)
-        .await?;
+        .order_by_asc(conversation_member::Column::ConversationId)
+        .order_by_asc(conversation_member::Column::PrincipalId)
+        .paginate(db, 200);
+    let mut rows = Vec::new();
+    let mut page = 0;
+    // Hidden invitations must not consume the visible list's limit.
+    loop {
+        let batch = pages.fetch_page(page).await?;
+        let last_page = batch.len() < 200;
+        let pairs: Vec<_> = batch
+            .iter()
+            .filter_map(|row| Some((row.principal_id.clone(), row.invited_by.clone()?)))
+            .collect();
+        let blocked = super::blocks::blocked_pairs(db, &pairs, false).await?;
+        let remaining = 200 - rows.len();
+        rows.extend(
+            batch
+                .into_iter()
+                .filter(|row| {
+                    !row.invited_by.as_ref().is_some_and(|inviter| {
+                        blocked.contains(&(row.principal_id.clone(), inviter.clone()))
+                    })
+                })
+                .take(remaining),
+        );
+        if rows.len() == 200 || last_page {
+            break;
+        }
+        page += 1;
+    }
     let described: HashMap<String, (Option<String>, String)> = if rows.is_empty() {
         HashMap::new()
     } else {
@@ -742,7 +764,9 @@ async fn bot_page<C: ConnectionTrait>(
         .await
 }
 
-/// Exactly the principals [`classify`] accepts for `caller`, filtered by `q`.
+/// Who `caller` likely brings into a room, filtered by `q`: their own bots, the people they share
+/// an app with and those people's bots. [`classify`] accepts every entry, and anyone else on the
+/// hub too, whom clients find through the user directory.
 pub(crate) async fn invitable<C: ConnectionTrait>(
     db: &C,
     caller: &str,
@@ -805,6 +829,12 @@ pub(crate) async fn invitable<C: ConnectionTrait>(
                 .map(|row| bot_entry(row, InviteMode::Invite)),
         )
         .collect();
+    let ids: Vec<String> = entries
+        .iter()
+        .map(|entry| entry.principal_id.clone())
+        .collect();
+    let blocked = super::blocks::blocked_between(db, caller, &ids, false).await?;
+    entries.retain(|entry| !blocked.contains(&entry.principal_id));
     if let Some(conversation_id) = conversation_id {
         let states = member_states(db, conversation_id, &entries).await?;
         for entry in &mut entries {
@@ -950,7 +980,7 @@ pub(crate) async fn notify_invited(
 
 #[derive(Debug, Clone, Deserialize, ToSchema)]
 pub struct InviteRequest {
-    /// People who share an app with you, their bots, and your own bots.
+    /// Anyone on the hub, other people's bots, and your own bots.
     pub principal_ids: Vec<String>,
     /// Room limits for your own bots, applied as they join. The owner of someone else's bot
     /// sets its limits when accepting.
@@ -1046,7 +1076,7 @@ pub(crate) async fn invite_and_notify(
         (status = 200, description = "Your own bots joined at once; people and other people's bots now hold a pending invitation and join when they (or the bot's owner) accept. Nothing is delivered to an invitee until then.", body = InviteResponse),
         (status = 400, description = "Room limits are only set up front on your own bots, or malformed"),
         (status = 401, description = "Not signed in"),
-        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: you can invite people who share an app with you and their bots; the message names the first id refused"),
+        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: an id is neither a person on this hub nor a live bot; the message names the first id refused"),
         (status = 404, description = "You are not in this conversation"),
         (status = 409, description = "INBOX_MEMBER_LIMIT: at most 50 members; INBOX_INVITE_LIMIT: at most 50 pending invitations; INBOX_DIRECT_FIXED: a direct conversation's members don't change")
     ),
@@ -1074,7 +1104,7 @@ pub async fn invite(
             .into_iter()
             .map(|invitee| invitee.principal.id)
             .collect(),
-        conversation: visible_conversation(&state.db, &Reader::own(&sub), &conversation_id).await?,
+        conversation: visible_conversation(&state, &Reader::own(&sub), &conversation_id).await?,
     }))
 }
 
@@ -1292,7 +1322,7 @@ pub async fn set_limits(
     tag = "Inbox",
     params(InvitableQuery),
     responses(
-        (status = 200, description = "Exactly the people and bots you may bring into a room, at most 50 of each: your own bots join at once (`add_now`), people who share an app with you and their bots by invitation (`invite`).", body = InvitableList),
+        (status = 200, description = "Suggestions for who to bring into a room, at most 50 of each: your own bots join at once (`add_now`), people who share an app with you and their bots by invitation (`invite`). Anyone else on the hub can be invited too; find them through the user search.", body = InvitableList),
         (status = 401, description = "Not signed in"),
         (status = 403, description = "Only people use the picker, not API keys or running flows")
     ),

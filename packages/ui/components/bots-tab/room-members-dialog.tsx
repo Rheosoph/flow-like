@@ -1,13 +1,20 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { SlidersHorizontalIcon, UsersIcon, XIcon } from "lucide-react";
+import {
+	LogOutIcon,
+	SlidersHorizontalIcon,
+	UserMinusIcon,
+	UsersIcon,
+	XIcon,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import { useBots } from "../../hooks/use-bots";
 import {
 	useCancelInvitation,
 	useInviteToConversation,
+	useRemoveConversationMember,
 	useSetMemberLimits,
 } from "../../hooks/use-inbox";
 import { apiErrorMessage } from "../../lib/api-error";
@@ -17,6 +24,15 @@ import type {
 } from "../../state/backend-state/inbox-state";
 import { IdentityAvatar } from "../identity/identity-avatar";
 import { IdentityHoverCard } from "../identity/identity-hover-card";
+import {
+	AlertDialog,
+	AlertDialogCancel,
+	AlertDialogContent,
+	AlertDialogDescription,
+	AlertDialogFooter,
+	AlertDialogHeader,
+	AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import {
 	Dialog,
@@ -26,11 +42,14 @@ import {
 	DialogTitle,
 } from "../ui/dialog";
 import { isSelfPrincipal } from "./crew-model";
+import { LeaveRoomDialog } from "./leave-room-dialog";
+import { PrincipalBlockButton } from "./principal-block-action";
 import {
 	type PickedPrincipal,
 	type PickerSource,
 	PrincipalPicker,
 } from "./principal-picker";
+import { RoomInviteLinks } from "./room-invite-links";
 import { RoomLimitsDialog } from "./room-limits-dialog";
 import type { CrewDirectory } from "./use-crew-directory";
 
@@ -67,14 +86,23 @@ function MembersList({
 	conversation,
 	directory,
 	ownBotIds,
+	me,
 	onEditLimits,
+	onRemove,
 }: Readonly<{
 	conversation: IConversation;
 	directory: CrewDirectory;
 	ownBotIds: ReadonlySet<string>;
+	me?: string | null;
 	onEditLimits: (member: IConversationMember) => void;
+	onRemove: (member: IConversationMember) => void;
 }>) {
 	const { t } = useTranslation("bots");
+	const isMember = conversation.members.some(
+		(member) =>
+			member.kind === "user" && isSelfPrincipal(member.principal_id, me),
+	);
+	const creator = isMember && isSelfPrincipal(conversation.created_by, me);
 	return (
 		<ul
 			aria-label={t("roomMembers.members", "Members")}
@@ -98,9 +126,130 @@ function MembersList({
 							{t("roomMembers.limits", "Room limits")}
 						</Button>
 					)}
+					{me &&
+						!isSelfPrincipal(member.principal_id, me) &&
+						!(
+							member.kind === "bot" &&
+							(ownBotIds.has(member.principal_id) ||
+								isSelfPrincipal(directory(member.principal_id).ownerId, me))
+						) && (
+							<PrincipalBlockButton
+								principal={{
+									id: member.principal_id,
+									name: directory(member.principal_id).name,
+									kind: member.kind,
+									ownerId: directory(member.principal_id).ownerId,
+								}}
+							/>
+						)}
+					{conversation.kind === "group" &&
+						isMember &&
+						!isSelfPrincipal(member.principal_id, me) &&
+						(creator ||
+							(member.kind === "bot" &&
+								ownBotIds.has(member.principal_id))) && (
+							<Button
+								type="button"
+								variant="ghost"
+								size="icon"
+								aria-label={t(
+									"roomMembers.removeNamed",
+									"Remove {{name}} from room",
+									{
+										name: directory(member.principal_id).name,
+									},
+								)}
+								onClick={() => onRemove(member)}
+							>
+								<UserMinusIcon aria-hidden />
+							</Button>
+						)}
 				</PersonRow>
 			))}
 		</ul>
+	);
+}
+
+function RemoveMemberDialog({
+	conversationId,
+	member,
+	name,
+	onClose,
+}: Readonly<{
+	conversationId: string;
+	member: IConversationMember;
+	name: string;
+	onClose: () => void;
+}>) {
+	const { t } = useTranslation("bots");
+	const remove = useRemoveConversationMember();
+	const [error, setError] = useState<string | null>(null);
+	const confirm = async () => {
+		setError(null);
+		try {
+			await remove.mutateAsync({
+				conversationId,
+				principalId: member.principal_id,
+			});
+			onClose();
+		} catch (cause) {
+			setError(
+				apiErrorMessage(
+					cause,
+					t(
+						"roomMembers.removeFailed",
+						"Couldn't remove this member. Try again.",
+					),
+				),
+			);
+		}
+	};
+	return (
+		<AlertDialog
+			open
+			onOpenChange={(open) => {
+				if (!open && !remove.isPending) onClose();
+			}}
+		>
+			<AlertDialogContent>
+				<AlertDialogHeader>
+					<AlertDialogTitle>
+						{t("roomMembers.removeTitle", "Remove {{name}} from this room?", {
+							name,
+						})}
+					</AlertDialogTitle>
+					<AlertDialogDescription>
+						{member.kind === "user"
+							? t(
+									"roomMembers.removePersonDescription",
+									"This person and their bots in the room will leave and stop receiving its messages.",
+								)
+							: t(
+									"roomMembers.removeBotDescription",
+									"This bot will leave the room and stop receiving its messages.",
+								)}
+					</AlertDialogDescription>
+				</AlertDialogHeader>
+				{error && (
+					<p role="alert" className="text-sm text-destructive">
+						{error}
+					</p>
+				)}
+				<AlertDialogFooter>
+					<AlertDialogCancel disabled={remove.isPending}>
+						{t("crew.cancel", "Cancel")}
+					</AlertDialogCancel>
+					<Button
+						type="button"
+						variant="destructive"
+						disabled={remove.isPending}
+						onClick={() => void confirm()}
+					>
+						{t("roomMembers.remove", "Remove from room")}
+					</Button>
+				</AlertDialogFooter>
+			</AlertDialogContent>
+		</AlertDialog>
 	);
 }
 
@@ -232,7 +381,13 @@ function InviteSection({
 				source={source}
 				selected={selected}
 				multiple
-				serverRule={{ conversationId: conversation.id }}
+				serverRule={{
+					conversationId: conversation.id,
+					memberIds: conversation.members.map((member) => member.principal_id),
+					invitedIds: (conversation.pending ?? []).map(
+						(member) => member.principal_id,
+					),
+				}}
 				onPick={toggle}
 			/>
 			<Button
@@ -256,6 +411,7 @@ export function RoomMembersDialog({
 	directory,
 	source,
 	me,
+	onLeave,
 }: Readonly<{
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -263,11 +419,18 @@ export function RoomMembersDialog({
 	directory: CrewDirectory;
 	source: PickerSource;
 	me?: string | null;
+	onLeave?: () => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const bots = useBots();
 	const setLimits = useSetMemberLimits();
 	const [editing, setEditing] = useState<IConversationMember | null>(null);
+	const [removing, setRemoving] = useState<IConversationMember | null>(null);
+	const [leaving, setLeaving] = useState(false);
+	const self = conversation.members.find(
+		(member) =>
+			member.kind === "user" && isSelfPrincipal(member.principal_id, me),
+	);
 	const ownBotIds = useMemo(
 		() => new Set((bots.data ?? []).map((bot) => bot.id)),
 		[bots.data],
@@ -292,7 +455,9 @@ export function RoomMembersDialog({
 						conversation={conversation}
 						directory={directory}
 						ownBotIds={ownBotIds}
+						me={me}
 						onEditLimits={setEditing}
+						onRemove={setRemoving}
 					/>
 					<PendingList
 						conversation={conversation}
@@ -302,8 +467,42 @@ export function RoomMembersDialog({
 					{open && (
 						<InviteSection conversation={conversation} source={source} />
 					)}
+					{open && conversation.kind === "group" && (
+						<RoomInviteLinks conversation={conversation} me={me} />
+					)}
+					{conversation.kind === "group" && self && (
+						<Button
+							type="button"
+							variant="outline"
+							className="text-destructive hover:text-destructive"
+							onClick={() => setLeaving(true)}
+						>
+							<LogOutIcon aria-hidden />
+							{t("crew.leaveRoom.action", "Leave room")}
+						</Button>
+					)}
 				</DialogContent>
 			</Dialog>
+			{self && leaving && (
+				<LeaveRoomDialog
+					open
+					onOpenChange={setLeaving}
+					conversationId={conversation.id}
+					principalId={self.principal_id}
+					onLeave={() => {
+						onOpenChange(false);
+						onLeave?.();
+					}}
+				/>
+			)}
+			{removing && (
+				<RemoveMemberDialog
+					conversationId={conversation.id}
+					member={removing}
+					name={directory(removing.principal_id).name}
+					onClose={() => setRemoving(null)}
+				/>
+			)}
 			{editing && (
 				<RoomLimitsDialog
 					open

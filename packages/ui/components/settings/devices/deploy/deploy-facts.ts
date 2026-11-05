@@ -43,6 +43,7 @@ import type {
 	InspectionPlus,
 	PlacementEvent,
 	Presence,
+	PublishedPort,
 	Relationship,
 	ServiceView,
 } from "../../../../lib/device-management/model/types";
@@ -89,6 +90,7 @@ export interface DeployDevice {
 	agent?: string;
 	isolation?: HostIsolationMode;
 	features?: InspectionPlus["features"];
+	published?: PublishedPort;
 	canManageCertificates: boolean;
 	/** Every service on the device; null while no plane can say. */
 	services: ServiceView[] | null;
@@ -238,6 +240,7 @@ function deployDevice(
 	const isolation = inspection?.hostIsolation ?? undefined;
 	// The live read's flags, else the ones of the status the services come from; none = unknown.
 	const features = inspection?.features ?? view.features;
+	const published = inspection?.host?.published;
 	return {
 		id: row.device_id,
 		name,
@@ -252,6 +255,7 @@ function deployDevice(
 		...(agent ? { agent } : {}),
 		...(isolation ? { isolation } : {}),
 		...(features ? { features } : {}),
+		...(published ? { published } : {}),
 		canManageCertificates:
 			inspection?.certificate_management === 1 &&
 			inspection.can_manage_certificates === true,
@@ -325,6 +329,7 @@ export function planDevice(
 			})) ?? null,
 		...(extras.check ? { refusals: extras.check.refusals } : {}),
 		...(ports.length ? { portsInUse: ports } : {}),
+		...(device.published ? { published: device.published } : {}),
 		...(device.isolation ? { isolation: device.isolation } : {}),
 		...(device.features ? { features: device.features } : {}),
 	};

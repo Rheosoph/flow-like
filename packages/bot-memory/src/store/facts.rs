@@ -275,8 +275,17 @@ impl FactStore {
         embedder: Arc<dyn Embedder>,
         write_options: Option<WriteOptions>,
     ) -> Self {
+        Self::open_named(connection, embedder, write_options, Self::TABLE.to_string()).await
+    }
+
+    pub(crate) async fn open_named(
+        connection: Connection,
+        embedder: Arc<dyn Embedder>,
+        write_options: Option<WriteOptions>,
+        name: String,
+    ) -> Self {
         Self {
-            table: Table::open(connection, Self::TABLE, Some("text"), write_options).await,
+            table: Table::open(connection, name, Some("text"), write_options).await,
             embedder,
         }
     }

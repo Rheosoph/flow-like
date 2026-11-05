@@ -46,7 +46,7 @@ use flow_like::{
         bot_talk::{AnsweredRound, BotPresence, BotTalk},
         find_bot_tool_spec,
         memory::{AssistantMemory, MemoryScope},
-        platform::PlatformToolBridge,
+        platform::{PlatformToolBridge, RoomUpdatesBridge},
         run_bot_chat_with_talk,
         tool_grants::{GrantStore, clear_tokens, resume_note},
         tool_spec::{MEMORY_STORE_TOOL, ToolEffect},
@@ -81,7 +81,7 @@ use std::{
 };
 
 /// The longest a server turn runs, whatever the plan allows.
-const MAX_TURN_RUNTIME_MS: i64 = 600_000;
+pub(crate) const MAX_TURN_RUNTIME_MS: i64 = 600_000;
 /// A reply fits one envelope: markdown beyond this is cut.
 const MAX_REPLY_CHARS: usize = 48_000;
 const DEFAULT_INTERVAL_SECS: u64 = 5;
@@ -140,7 +140,12 @@ pub(crate) struct Failure {
 }
 
 impl Failure {
-    fn new(code: &'static str, text: impl Into<String>, retryable: bool, post: bool) -> Self {
+    pub(crate) fn new(
+        code: &'static str,
+        text: impl Into<String>,
+        retryable: bool,
+        post: bool,
+    ) -> Self {
         Self {
             code,
             text: text.into(),
@@ -161,7 +166,7 @@ impl Failure {
         Self::new(code, text, false, false)
     }
 
-    fn from_api(error: &ApiError) -> Self {
+    pub(crate) fn from_api(error: &ApiError) -> Self {
         let reason = error.public_message().unwrap_or("unexpected error");
         match error.status() {
             StatusCode::PAYMENT_REQUIRED | StatusCode::TOO_MANY_REQUESTS => Self::new(
@@ -438,7 +443,7 @@ pub(crate) fn executor_token(
         .ok()
 }
 
-async fn load_profile(
+pub(crate) async fn load_profile(
     state: &AppState,
     owner_id: &str,
     profile_id: Option<&str>,
@@ -464,7 +469,7 @@ async fn load_profile(
 }
 
 /// The funding of a turn from what its model and memory run on, as a chat turn computes it.
-fn funding_class(model_hosted: bool, memory_hosted: Option<bool>) -> &'static str {
+pub(crate) fn funding_class(model_hosted: bool, memory_hosted: Option<bool>) -> &'static str {
     if model_hosted && memory_hosted != Some(false) {
         "hosted"
     } else if model_hosted || memory_hosted == Some(true) {
@@ -566,6 +571,7 @@ async fn attempt(
     .await?
         == Some(InboxEntryKind::Reaction);
     let mut reactions = Vec::new();
+    let mut room_cursor = turn.trigger_message_id.clone();
     let mut transcript = if reacting {
         let answered: Vec<String> = std::iter::once(turn.trigger_message_id.clone())
             .chain(batched.iter().cloned())
@@ -580,6 +586,9 @@ async fn attempt(
         )
         .await?;
         reactions = found.reactions;
+        if let Some(newest) = found.newest_message_id {
+            room_cursor = newest;
+        }
         found.transcript
     } else {
         history::transcript(
@@ -611,6 +620,18 @@ async fn attempt(
         });
     }
     let asked_by = super::talk::asked_by(&state.db, turn).await?;
+    let room_updates = if kind == ConversationKind::Group && answered_round.is_none() {
+        super::room_updates::ServerRoomUpdates::after(
+            &state.db,
+            &turn.bot_id,
+            &turn.conversation_id,
+            &room_cursor,
+            owner,
+        )
+        .await?
+    } else {
+        None
+    };
     let ancestors: Vec<String> = asked_by.iter().map(|member| member.id.clone()).collect();
     let asker = (!asked_by.is_empty()).then_some(asked_by);
     let addressed = transcript.addressed || asker.is_some();
@@ -730,7 +751,11 @@ async fn attempt(
         bot.context.host_tools =
             memory_turn.host_tools(std::mem::take(&mut bot.context.host_tools));
     }
-    let memory = match memory_model.as_deref().filter(|_| memory_turn.is_none()) {
+    let room_memory = kind == ConversationKind::Group;
+    let memory = match memory_model
+        .as_deref()
+        .filter(|_| memory_turn.is_none() || room_memory)
+    {
         Some(id) => {
             open_memory(
                 &flow_like_state,
@@ -804,6 +829,10 @@ async fn attempt(
         mutating: mutating.clone(),
         bot_tools: bot_tools.clone(),
     });
+    let bridge: Arc<dyn PlatformToolBridge> = match room_updates {
+        Some(updates) => Arc::new(RoomUpdatesBridge::new(bridge, updates)),
+        None => bridge,
+    };
     let talk_host = Arc::new(super::talk::ServerTalkHost::for_turn(
         state.clone(),
         super::talk::HeldTurn {
@@ -822,6 +851,7 @@ async fn attempt(
         None => BotTalk::for_run(talk_host.clone(), &bot.context, BotLocation::Server),
     };
     let talk = Arc::new(talk.with_answered(answered_round.as_ref()));
+    let sub_task_compute = bot.context.compute.clone();
     let chat = run_bot_chat_with_talk(
         flow_like_state,
         Some(profile),
@@ -848,7 +878,8 @@ async fn attempt(
     {
         mutating.store(true, Ordering::SeqCst);
     }
-    let elapsed = started.elapsed().as_millis().min(i64::MAX as u128) as i64;
+    let elapsed = started.elapsed().as_millis().min(i64::MAX as u128) as i64
+        + sub_task_compute.extra_millis();
     let answered = matches!(&outcome, Ok(Ok(_)));
     if let Err(error) = settle_assistant_usage(state, &usage, elapsed, answered).await {
         tracing::error!(%error, operation_id = %usage.operation_id, "Bot turn usage settlement remains pending");
@@ -894,7 +925,7 @@ async fn attempt(
 /// The embedding model a remembering bot's memories were stored with, when the bot names none of
 /// its own: its chats embed with the chat's model, and a turn no chat started must reuse that
 /// model to recall them. `None` when nothing is stored yet or the profile can't run the model.
-async fn stored_memory_model(
+pub(crate) async fn stored_memory_model(
     flow_like_state: &Arc<flow_like::state::FlowLikeState>,
     profile: &Arc<Profile>,
     bot: &crate::routes::bots::runtime::ChatBot,
@@ -944,6 +975,18 @@ async fn open_memory(
         }),
     )
     .await
+    .map(|memory| {
+        if bot
+            .context
+            .requester
+            .as_ref()
+            .is_some_and(|requester| requester.audience == TurnAudience::Room)
+        {
+            memory.read_only()
+        } else {
+            memory
+        }
+    })
     .map(Arc::new)
     .map_err(|error| tracing::warn!(%error, "Bot turn: memory init failed"))
     .ok()
@@ -1030,7 +1073,7 @@ pub(crate) async fn commit_reply_in<C: ConnectionTrait>(
 
 /// [`commit_reply`], then the recipients are woken and the bots the reply wakes get their turns
 /// started.
-async fn post_reply(
+pub(crate) async fn post_reply(
     state: &AppState,
     turn: &bot_turn::Model,
     host_id: &str,
@@ -1086,7 +1129,7 @@ async fn post_reply_in_origin(
 
 /// Ends the turn after an attempt: the answer is posted, a transient failure is queued again
 /// with a backoff, any other failure is posted (or only recorded).
-async fn finish(
+pub(crate) async fn finish(
     state: &AppState,
     turn: &bot_turn::Model,
     host_id: &str,
@@ -1199,7 +1242,7 @@ async fn record_failure(
 }
 
 /// Wakes the worker when a backed-off turn becomes due.
-fn kick_later(at: DateTime<FixedOffset>) {
+pub(crate) fn kick_later(at: DateTime<FixedOffset>) {
     let wait = (at - now_millis()).to_std().unwrap_or_default();
     tokio::spawn(async move {
         tokio::time::sleep(wait + Duration::from_millis(250)).await;

@@ -259,6 +259,11 @@ const DEVICE_FACTS = {
 	host: z.object({
 		booted_at: count.nullable(),
 		agent_started_at: count,
+		/** The port the setup package's Docker Compose file forwards, and where Docker publishes it. */
+		published: z
+			.object({ host: text(64), port: z.number().int().min(1).max(65535) })
+			.optional()
+			.catch(undefined),
 	}),
 	tasks: z.array(task).max(64),
 	host_operation: hostOperationSchema.nullable(),
@@ -364,7 +369,9 @@ const SNAPSHOT_DEVICE_FACTS = {
 	host: DEVICE_FACTS.host,
 	tasks: DEVICE_FACTS.tasks,
 	host_operation: DEVICE_FACTS.host_operation,
-	features: z.record(z.string(), z.unknown()).transform((flags) => agentFeatures(flags)),
+	features: z
+		.record(z.string(), z.unknown())
+		.transform((flags) => agentFeatures(flags)),
 };
 
 /**

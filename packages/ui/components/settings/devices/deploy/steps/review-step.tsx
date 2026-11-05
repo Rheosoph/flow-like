@@ -370,6 +370,12 @@ const EXCEPTION_COPY: Record<
 			"Port {{to}}: {{from}} is in use there",
 			{ to: p.to, from: p.from },
 		),
+	port_unpublished: (c, p) =>
+		c.t(
+			"devices:deployShip.exception.portUnpublished",
+			"Port {{port}}: Docker forwards only {{published}}",
+			{ port: p.port, published: p.published },
+		),
 	no_certificate: (c) =>
 		c.t("devices:deployShip.exception.unencrypted", "Serves unencrypted"),
 	runs_as_agent: (c) =>

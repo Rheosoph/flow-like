@@ -1,6 +1,7 @@
-//! The owner's view of a bot's mail: its threads and the mails in each. Threads are group
-//! conversations marked by a `BotMailThread` row; reading marks go through the inbox's own
-//! read endpoint on the thread's conversation id.
+//! The owner's view of a bot's mail: its threads and the mails in each. A thread's mails are
+//! found through its `BotMailMessage` rows, wherever they were written (the owner's direct
+//! conversation with the bot, or the thread's own group). A mail counts as read once the owner
+//! read the conversation that holds it.
 
 use super::owned_bot;
 use crate::{
@@ -17,16 +18,17 @@ use chrono::{DateTime, FixedOffset};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use utoipa::{IntoParams, ToSchema};
 
 const PAGE: u64 = 50;
 const MAX_MAILS: u64 = 200;
+const UNREAD_SCAN: u64 = 500;
 
 /// One mail thread of a bot.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub struct MailThread {
-    /// The id of the thread's inbox conversation.
+    /// The thread's id.
     pub id: String,
     pub subject: String,
     /// Lowercase correspondent addresses.
@@ -97,6 +99,69 @@ fn view(row: bot_mail_thread::Model, unread: u64) -> MailThread {
     }
 }
 
+/// The owner's copies of these entries, oldest first.
+async fn owner_entries(
+    state: &AppState,
+    owner: &str,
+    message_ids: Vec<String>,
+) -> Result<Vec<inbox_entry::Model>, ApiError> {
+    if message_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(owner))
+        .filter(inbox_entry::Column::MessageId.is_in(message_ids))
+        .order_by_asc(inbox_entry::Column::CreatedAt)
+        .order_by_asc(inbox_entry::Column::Id)
+        .all(&state.db)
+        .await?)
+}
+
+/// The owner's copies of one thread's mails, oldest first.
+async fn thread_entries(
+    state: &AppState,
+    owner: &str,
+    bot_id: &str,
+    thread_id: &str,
+) -> Result<Vec<inbox_entry::Model>, ApiError> {
+    let mail_ids: Vec<String> = bot_mail_message::Entity::find()
+        .select_only()
+        .column(bot_mail_message::Column::EntryMessageId)
+        .filter(bot_mail_message::Column::ThreadId.eq(thread_id))
+        .filter(bot_mail_message::Column::BotId.eq(bot_id))
+        .order_by_asc(bot_mail_message::Column::CreatedAt)
+        .limit(MAX_MAILS)
+        .into_tuple()
+        .all(&state.db)
+        .await?;
+    owner_entries(state, owner, mail_ids).await
+}
+
+/// When the owner last read each of the conversations that hold these entries.
+async fn read_markers(
+    state: &AppState,
+    owner: &str,
+    entries: &[inbox_entry::Model],
+) -> Result<HashMap<String, Option<DateTime<FixedOffset>>>, ApiError> {
+    let holding: HashSet<String> = entries
+        .iter()
+        .map(|entry| entry.conversation_id.clone())
+        .collect();
+    if holding.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(conversation_member::Entity::find()
+        .filter(conversation_member::Column::PrincipalId.eq(owner))
+        .filter(conversation_member::Column::ConversationId.is_in(holding))
+        .all(&state.db)
+        .await?
+        .into_iter()
+        .map(|member| (member.conversation_id, member.last_read_at))
+        .collect())
+}
+
+/// Received mails per thread that are newer than the owner's read marker of the conversation
+/// holding them; only the newest [`UNREAD_SCAN`] received mails of the page are counted.
 async fn unread_counts(
     state: &AppState,
     owner: &str,
@@ -105,24 +170,38 @@ async fn unread_counts(
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let read: HashMap<String, Option<DateTime<FixedOffset>>> = conversation_member::Entity::find()
-        .filter(conversation_member::Column::PrincipalId.eq(owner))
-        .filter(conversation_member::Column::ConversationId.is_in(ids.iter().cloned()))
-        .all(&state.db)
-        .await?
-        .into_iter()
-        .map(|member| (member.conversation_id, member.last_read_at))
-        .collect();
-    let received = bot_mail_message::Entity::find()
+    let received: Vec<(String, String)> = bot_mail_message::Entity::find()
+        .select_only()
+        .column(bot_mail_message::Column::ThreadId)
+        .column(bot_mail_message::Column::EntryMessageId)
         .filter(bot_mail_message::Column::ThreadId.is_in(ids.iter().cloned()))
         .filter(bot_mail_message::Column::Direction.eq("IN"))
+        .order_by_desc(bot_mail_message::Column::CreatedAt)
+        .limit(UNREAD_SCAN)
+        .into_tuple()
         .all(&state.db)
         .await?;
+    let entries = owner_entries(
+        state,
+        owner,
+        received.iter().map(|(_, entry)| entry.clone()).collect(),
+    )
+    .await?;
+    let read = read_markers(state, owner, &entries).await?;
+    let unread: HashSet<&str> = entries
+        .iter()
+        .filter(|entry| {
+            read.get(&entry.conversation_id)
+                .copied()
+                .flatten()
+                .is_none_or(|seen| entry.created_at > seen)
+        })
+        .map(|entry| entry.message_id.as_str())
+        .collect();
     let mut counts: HashMap<String, u64> = HashMap::new();
-    for mail in received {
-        let seen = read.get(&mail.thread_id).copied().flatten();
-        if seen.is_none_or(|seen| mail.created_at > seen) {
-            *counts.entry(mail.thread_id).or_default() += 1;
+    for (thread, entry) in &received {
+        if unread.contains(entry.as_str()) {
+            *counts.entry(thread.clone()).or_default() += 1;
         }
     }
     Ok(counts)
@@ -254,15 +333,7 @@ pub async fn get_mail_thread(
         .one(&state.db)
         .await?
         .ok_or_else(|| ApiError::not_found("Mail thread not found"))?;
-    let entries = inbox_entry::Entity::find()
-        .filter(inbox_entry::Column::InboxId.eq(sub.as_str()))
-        .filter(inbox_entry::Column::ConversationId.eq(thread_id.as_str()))
-        .filter(inbox_entry::Column::Kind.is_in(["TRIGGER", "MESSAGE"]))
-        .order_by_asc(inbox_entry::Column::CreatedAt)
-        .order_by_asc(inbox_entry::Column::Id)
-        .limit(MAX_MAILS)
-        .all(&state.db)
-        .await?;
+    let entries = thread_entries(&state, &sub, &bot.id, &row.id).await?;
     let counts = unread_counts(&state, &sub, std::slice::from_ref(&row.id)).await?;
     let unread = counts.get(&row.id).copied().unwrap_or(0);
     Ok(Json(MailThreadView {
@@ -373,7 +444,7 @@ pub async fn send_bot_mail(
     Path(bot_id): Path<String>,
     Json(request): Json<BotSendMail>,
 ) -> Result<Json<BotSentMail>, ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
     let mail = flow_like_bot_tools::email::OutgoingMail {
         to: request.to,
@@ -411,7 +482,7 @@ pub async fn reply_bot_mail(
     Path(bot_id): Path<String>,
     Json(request): Json<BotReplyMail>,
 ) -> Result<Json<BotSentMail>, ApiError> {
-    let sub = user.sub()?;
+    let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
     let bot = owned_bot(&state.db, &sub, &bot_id).await?;
     let mail = flow_like_bot_tools::email::ReplyMail {
         thread: request.thread,

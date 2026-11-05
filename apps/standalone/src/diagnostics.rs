@@ -62,6 +62,7 @@ pub const LIVE_TELEMETRY_PUBLISHER: &str = "live_telemetry_publisher";
 pub const CERTIFICATE_INVENTORY_PUBLISHER: &str = "certificate_inventory_publisher";
 pub const CERTIFICATE_RENEWAL: &str = "certificate_renewal";
 pub const MODEL_HOST: &str = "model_host";
+pub const BOT_HOST: &str = "bot_host";
 
 const MAX_ERROR_TEXT: usize = 1024;
 const MAX_EVENTS: usize = 64;
@@ -972,10 +973,14 @@ impl Diagnostics {
     }
 
     pub(crate) fn host_json(&self) -> Value {
-        json!({
+        let mut host = json!({
             "booted_at": credible_boot_time(sysinfo::System::boot_time()),
             "agent_started_at": self.agent_started_at(),
-        })
+        });
+        if let Some(published) = crate::host::published_port() {
+            host["published"] = json!(published);
+        }
+        host
     }
 
     /// Logs a background task as soon as it fails or stops before agent shutdown, and
@@ -2701,7 +2706,8 @@ mod tests {
     #[test]
     fn features_and_identity_summary_match_the_shared_fingerprint_vector() -> Result<()> {
         use crate::event_kind::{
-            API_EVENTS, DISCORD_BOTS, ON_DEMAND_EVENTS, SCHEDULED_ONCE, TELEGRAM_BOTS,
+            API_EVENTS, BOT_HOST, BOT_PLAYGROUND, DISCORD_BOTS, ON_DEMAND_EVENTS, SCHEDULED_ONCE,
+            TELEGRAM_BOTS,
         };
         let mut expected = json!({"placement_diagnostics":1,"task_health":1,"placement_events":1,"offline_summary":1,"host_operation":1,"network_interfaces":1,"rollout_history":1,"operations":1,"metrics_history":1,"offline_lookup":1,"reader_bindings":1,"acme_failure_detail":1,"archive_status":1,"artifact_capacity":1,"scheduled_events":1});
         let hosts_models = cfg!(feature = "runtime");
@@ -2715,6 +2721,8 @@ mod tests {
             ("execution_logs", cfg!(feature = "runtime")),
             ("telegram_bots", TELEGRAM_BOTS),
             ("discord_bots", DISCORD_BOTS),
+            ("bot_playground", BOT_PLAYGROUND),
+            ("bot_host", BOT_HOST),
             ("model_store", hosts_models),
             ("model_host", hosts_models),
             ("model_runtime_llamacpp", hosts_models),

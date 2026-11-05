@@ -88,6 +88,29 @@ pub(crate) async fn acting_owner<C: ConnectionTrait>(
     }
 }
 
+/// [`acting_owner`] for a route that names its bot in the path: a bot token must be that bot's.
+pub(crate) async fn acting_owner_for<C: ConnectionTrait>(
+    db: &C,
+    user: &AppUser,
+    bot_id: &str,
+) -> Result<String, ApiError> {
+    let names = Names {
+        as_bot: Some(bot_id),
+        ..Names::default()
+    };
+    acting_owner(db, user, &names).await
+}
+
+/// Routes that reach the owner's contacts are closed to a bot token minted for a room turn.
+pub(crate) fn ensure_owner_conversation(user: &AppUser) -> Result<(), ApiError> {
+    match user {
+        AppUser::Bot(bot) if bot.conv_id.is_some() => Err(ApiError::forbidden(
+            "A bot reaches its owner's contacts only in the owner's own conversation",
+        )),
+        _ => Ok(()),
+    }
+}
+
 /// The bot a write names: the token's own bot, or `as` for a person.
 pub(crate) fn bot_named<'a>(user: &'a AppUser, as_bot: Option<&'a str>) -> Option<&'a str> {
     match user {

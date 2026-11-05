@@ -142,6 +142,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         (name = "sink", description = "Event sink management"),
         (name = "chat", description = "LLM chat completions and responses"),
         (name = "audio", description = "Hosted speech-to-text and text-to-speech"),
+        (name = "images", description = "Hosted image generation"),
         (name = "database", description = "Database operations"),
         (name = "graph", description = "Graph overlay and visualization operations"),
         (name = "data", description = "Data file access"),
@@ -207,6 +208,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::oauth::token_exchange,
         crate::routes::oauth::token_refresh,
         crate::routes::oauth::adopt_connection,
+        crate::routes::oauth::list_connections,
         // User routes
         crate::routes::user::info::user_info,
         crate::routes::user::upsert_info::upsert_info,
@@ -234,12 +236,26 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::bots::secrets::upsert_bot_secret,
         crate::routes::bots::secrets::delete_bot_secret,
         crate::routes::bots::secrets::read_turn_secret,
+        crate::routes::bots::connectors::list_bot_connectors,
+        crate::routes::bots::connectors::create_bot_connector,
+        crate::routes::bots::connectors::update_bot_connector,
+        crate::routes::bots::connectors::delete_bot_connector,
+        crate::routes::bots::connectors::refresh_bot_connector,
         crate::routes::bots::webhooks::list_bot_webhooks,
         crate::routes::bots::webhooks::create_bot_webhook,
         crate::routes::bots::webhooks::update_bot_webhook,
         crate::routes::bots::webhooks::rotate_bot_webhook,
         crate::routes::bots::webhooks::delete_bot_webhook,
         crate::routes::bots::webhooks::call_bot_webhook,
+        crate::routes::bots::skills::list_bot_skills,
+        crate::routes::bots::skills::create_bot_skill,
+        crate::routes::bots::skills::update_bot_skill,
+        crate::routes::bots::skills::delete_bot_skill,
+        crate::routes::bots::skills::approve_bot_skill,
+        crate::routes::bots::skills::disable_bot_skill,
+        crate::routes::bots::skills::import_bot_skill,
+        crate::routes::bots::skills::propose_bot_skill,
+        crate::routes::bots::skills::install_bot_skill_package,
         crate::routes::bots::tasks::list_bot_tasks,
         crate::routes::bots::tasks::create_bot_task,
         crate::routes::bots::tasks::update_bot_task,
@@ -288,6 +304,8 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::inbox::conversations::create_conversation,
         crate::routes::inbox::conversations::get_conversation,
         crate::routes::inbox::conversations::rename_conversation,
+        crate::routes::inbox::image::set_conversation_image,
+        crate::routes::inbox::image::remove_conversation_image,
         crate::routes::inbox::members::add_members,
         crate::routes::inbox::members::remove_member,
         crate::routes::inbox::invitations::invite,
@@ -296,6 +314,9 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::inbox::invitations::decline_invitation,
         crate::routes::inbox::invitations::cancel_invitation,
         crate::routes::inbox::requests::block_invitation,
+        crate::routes::inbox::blocks::list_blocks,
+        crate::routes::inbox::blocks::block_principal,
+        crate::routes::inbox::blocks::unblock_principal,
         crate::routes::inbox::person_push::set_mute,
         crate::routes::inbox::pins::set_pin,
         crate::routes::inbox::pins::list_pins,
@@ -306,6 +327,10 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::inbox::stars::unstar_message,
         crate::routes::inbox::invitations::set_limits,
         crate::routes::inbox::invitations::list_invitable,
+        crate::routes::inbox::links::create_link,
+        crate::routes::inbox::links::list_links,
+        crate::routes::inbox::links::revoke_link,
+        crate::routes::inbox::links::join_link,
         crate::routes::inbox::entries::list_entries,
         crate::routes::inbox::entries::send_entry,
         crate::routes::inbox::entries::mark_read,
@@ -803,6 +828,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::chat::systemone::invoke_systemone,
         crate::routes::audio::transcribe_audio,
         crate::routes::audio::synthesize_speech,
+        crate::routes::images::generate_image,
         crate::routes::chat::usage::get_llm_usage,
         // Store routes
         crate::routes::store::get_store_db,
@@ -1020,6 +1046,8 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::oauth::TokenExchangeRequest,
         crate::routes::oauth::TokenRefreshRequest,
         crate::routes::oauth::AdoptConnectionRequest,
+        crate::routes::oauth::OAuthConnectionSummaries,
+        crate::routes::oauth::OAuthConnectionSummary,
         crate::routes::oauth::TokenResponse,
         crate::routes::oauth::ErrorResponse,
         // Database schemas
@@ -1411,11 +1439,19 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::bots::apps::BotAppList,
         crate::routes::bots::secrets::BotSecretEncryption,
         crate::routes::bots::secrets::BotSecretInfo,
+        crate::routes::bots::connectors::BotConnectorSchema,
+        crate::routes::bots::connectors::BotConnectorListSchema,
         crate::routes::bots::webhooks::BotWebhookInfo,
         crate::routes::bots::webhooks::BotWebhookList,
         crate::routes::bots::webhooks::IssuedBotWebhook,
         crate::routes::bots::webhooks::CreateBotWebhookRequest,
         crate::routes::bots::webhooks::UpdateBotWebhookRequest,
+        crate::routes::bots::skills::BotSkillInfo,
+        crate::routes::bots::skills::BotSkillList,
+        crate::routes::bots::skills::CreateBotSkillRequest,
+        crate::routes::bots::skills::UpdateBotSkillRequest,
+        crate::routes::bots::skills::ImportBotSkillRequest,
+        crate::routes::bots::skills::InstallBotSkillPackageRequest,
         crate::routes::bots::tasks::BotTaskInfo,
         crate::routes::bots::tasks::BotTaskList,
         crate::routes::bots::tasks::CreateBotTaskRequest,
@@ -1480,6 +1516,7 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::inbox::model::ConversationMember,
         crate::routes::inbox::model::CreateConversationRequest,
         crate::routes::inbox::model::RenameConversationRequest,
+        crate::routes::inbox::model::SetConversationImageRequest,
         crate::routes::inbox::model::AddMembersRequest,
         crate::routes::inbox::model::PendingMember,
         crate::routes::inbox::invitations::Invitation,
@@ -1493,6 +1530,11 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::inbox::invitations::InvitableEntry,
         crate::routes::inbox::invitations::InvitableList,
         crate::routes::inbox::invitations::InviteMode,
+        crate::routes::inbox::links::CreateConversationLinkRequest,
+        crate::routes::inbox::links::JoinConversationLinkRequest,
+        crate::routes::inbox::links::ConversationLink,
+        crate::routes::inbox::links::ConversationLinkList,
+        crate::routes::inbox::links::JoinedConversation,
         crate::routes::inbox::person_push::SetMuteRequest,
         crate::routes::inbox::person_push::MuteState,
         crate::routes::inbox::pins::SetPinRequest,
@@ -1502,6 +1544,8 @@ fn device_docs() -> [utoipa::openapi::OpenApi; 4] {
         crate::routes::inbox::stars::StarredMessage,
         crate::routes::inbox::stars::StarredMessageList,
         crate::routes::inbox::requests::HeldMessage,
+        crate::routes::inbox::blocks::InboxBlock,
+        crate::routes::inbox::blocks::InboxBlockList,
         crate::routes::inbox::model::InboxEntry,
         crate::routes::inbox::model::InboxEntriesPage,
         crate::routes::inbox::model::SendEntryRequest,
@@ -1826,6 +1870,21 @@ mod tests {
             spec.pointer("/components/schemas/WidgetGrantResponse/properties/runtime")
                 .is_some()
         );
+    }
+
+    #[test]
+    fn hosted_media_paths_are_documented() {
+        let spec: Value = serde_json::to_value(ApiDoc::openapi()).expect("spec serializes");
+        for (path, tag) in [
+            ("/audio/transcriptions", "audio"),
+            ("/audio/speech", "audio"),
+            ("/images/generations", "images"),
+        ] {
+            let operation = &spec["paths"][path]["post"];
+            assert_eq!(operation["tags"][0], tag, "missing media route {path}");
+            assert!(operation["requestBody"]["content"]["application/json"].is_object());
+            assert!(operation["responses"]["200"].is_object());
+        }
     }
 
     #[test]

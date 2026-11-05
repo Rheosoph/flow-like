@@ -1,7 +1,6 @@
 //! The server host's memory wiring: the bot's copy of its conversation as the engine's history,
 //! summaries written to the inbox as the bot, and the rule for which turns remember.
-//! Only the direct conversation between a bot and its owner has a memory; group chats and bot to
-//! bot conversations keep answering from their last entries.
+//! Groups keep separate history and recall the bot's owner-taught memory read-only.
 
 use crate::bot_tools::ApiAccess;
 use crate::state::AppState;
@@ -71,6 +70,33 @@ pub(crate) async fn is_owner_direct<C: ConnectionTrait>(
         .map(|member| member.principal_id)
         .collect();
     Ok(members == HashSet::from([owner_id.to_string(), bot_id.to_string()]))
+}
+
+/// `Some(true)` selects isolated group stores; `Some(false)` keeps the owner's existing stores.
+pub(crate) async fn memory_room<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    owner_id: &str,
+    bot_id: &str,
+) -> Result<Option<bool>, DbErr> {
+    let Some(conversation) = conversation::Entity::find_by_id(conversation_id)
+        .one(db)
+        .await?
+    else {
+        return Ok(None);
+    };
+    if ConversationKind::parse(&conversation.kind) == Some(ConversationKind::Group) {
+        let member = conversation_member::Entity::find()
+            .filter(conversation_member::Column::ConversationId.eq(conversation_id))
+            .filter(conversation_member::Column::PrincipalId.eq(bot_id))
+            .filter(crate::routes::inbox::active_member())
+            .one(db)
+            .await?;
+        return Ok(member.map(|_| true));
+    }
+    Ok(is_owner_direct(db, conversation_id, owner_id, bot_id)
+        .await?
+        .then_some(false))
 }
 
 impl ServerEntries {
@@ -336,22 +362,23 @@ pub(crate) async fn open_turn(
     if !bot.remembers() || bot.memory_model(None).is_none() || bot.workspace_app_id.is_none() {
         return None;
     }
-    let direct = is_owner_direct(&state.db, &turn.conversation_id, &turn.owner_id, &turn.bot_id)
+    let room = memory_room(&state.db, &turn.conversation_id, &turn.owner_id, &turn.bot_id)
         .await
         .unwrap_or_else(|error| {
             tracing::warn!(%error, turn_id = %turn.id, "Bot turn: memory skipped, conversation unreadable");
-            false
-        });
-    if !direct {
-        return None;
-    }
+            None
+        })?;
     let entries = ServerEntries {
         db: state.db.clone(),
         bot_id: turn.bot_id.clone(),
         conversation_id: turn.conversation_id.clone(),
     };
     let trigger_seq = entries.seq_of(&turn.trigger_message_id).await?;
-    let reader: Arc<dyn HistoryReader> = Arc::new(InboxReader::new(entries, turn.bot_id.clone()));
+    let reader: Arc<dyn HistoryReader> = Arc::new(if room {
+        InboxReader::for_room(entries, turn.bot_id.clone(), turn.owner_id.clone())
+    } else {
+        InboxReader::new(entries, turn.bot_id.clone())
+    });
     let sink = Arc::new(ServerSegments {
         db: state.db.clone(),
         dialect: state.db_dialect,
@@ -362,7 +389,8 @@ pub(crate) async fn open_turn(
     let source = MemoryTurnSource {
         reader,
         sink,
-        key: turn.conversation_id.clone(),
+        key: format!("account/{}", turn.conversation_id),
+        room,
         trigger_seq,
         timezone: Tz::UTC,
         state_block: String::new(),

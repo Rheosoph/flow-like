@@ -57,7 +57,7 @@
 			"label": ""
 		},
 		"internet": {
-			"description": "Im Web suchen, Seiten lesen und Web-APIs aufrufen",
+			"description": "Im Web suchen und Seiten lesen, über einen separaten Rechercheur",
 			"label": "Internet"
 		},
 		"knowledge": {
@@ -91,6 +91,10 @@
 		"storage": {
 			"description": "Dateien aufbewahren, wie im Speicher einer App",
 			"label": "Dateien"
+		},
+		"web_requests": {
+			"description": "Ruft Web-APIs auf und lädt URLs wie Feeds selbst; jede neue Website gibst du frei",
+			"label": "Web-Anfragen"
 		},
 		"webhook": {
 			"description": "Eine URL, die den Bot weckt, wenn etwas sie aufruft",
@@ -152,6 +156,10 @@
 		"botTag": "Bot",
 		"builtIn": "Integriert",
 		"call": {
+			"dismiss": "",
+			"incoming": "",
+			"incomingDescription": "",
+			"incomingRoom": "",
 			"durationHours": "",
 			"durationMinutes": "",
 			"durationShort": "",
@@ -387,6 +395,28 @@
 			"where": ""
 		},
 		"retry": "Erneut versuchen",
+		"roomChange": {
+			"nameRemoved": "",
+			"pictureChanged": "",
+			"pictureRemoved": "",
+			"renamed": ""
+		},
+		"roomSettings": {
+			"change": "",
+			"description": "",
+			"failed": "",
+			"imageFormat": "",
+			"imageHint": "",
+			"imageSize": "",
+			"imageUnreadable": "",
+			"name": "",
+			"namePlaceholder": "",
+			"open": "",
+			"remove": "",
+			"save": "",
+			"title": "",
+			"upload": ""
+		},
 		"roomTag": "Raum",
 		"rooms": {
 			"bots_one": "{{count}} Bot",
@@ -444,7 +474,34 @@
 		"unread_other": "{{count}} ungelesen",
 		"you": "Du",
 		"youObject": "dich",
-		"yourCrew": "Deine Crew"
+		"yourCrew": "Deine Crew",
+		"blocks": {
+			"title": "Blockierte Nutzer und Bots",
+			"description": "Lege fest, wer mit dir und deinen Bots Direktnachrichten und Einladungen austauschen kann. Gemeinsame Räume bleiben unverändert.",
+			"loading": "Blockierte Nutzer und Bots werden geladen…",
+			"loadFailed": "Deine Blockierliste konnte nicht geladen werden.",
+			"empty": "Du hast niemanden blockiert.",
+			"block": "Blockieren",
+			"unblock": "Blockierung aufheben",
+			"blockUser": "Nutzer blockieren",
+			"blockBot": "Bot blockieren",
+			"ownerBlocked": "Besitzer blockiert",
+			"blockName": "{{name}} blockieren",
+			"unblockName": "Blockierung von {{name}} aufheben",
+			"blockTitle": "{{name}} blockieren?",
+			"unblockTitle": "Blockierung von {{name}} aufheben?",
+			"failed": "Die Blockierung konnte nicht geändert werden. Versuche es erneut.",
+			"userDescription": "Direktnachrichten und Einladungen zwischen dir und dieser Person werden in beide Richtungen blockiert. Das gilt auch für deine und ihre Bots. In gemeinsamen Räumen seht ihr euch weiterhin. Du kannst diese Räume einzeln verlassen.",
+			"botDescription": "Direktnachrichten und Einladungen zwischen dir, deinen Bots und diesem Bot werden in beide Richtungen blockiert. Der Bot bleibt in gemeinsamen Räumen. Du kannst diese Räume einzeln verlassen.",
+			"unblockDescription": "Diese Blockierung wird aufgehoben. Andere Blockierungen gelten weiterhin.",
+			"composer": "Diese Unterhaltung ist blockiert. Verwalte deine blockierten Nutzer und Bots, um Nachrichten wieder zu erlauben."
+		},
+		"leaveRoom": {
+			"action": "Raum verlassen",
+			"title": "Diesen Raum verlassen?",
+			"description": "Du und deine Bots in diesem Raum verlasst ihn und erhaltet keine weiteren Nachrichten daraus.",
+			"failed": "Der Raum konnte nicht verlassen werden. Versuche es erneut."
+		}
 	},
 	"editor": {
 		"abilities": {
@@ -476,7 +533,6 @@
 			"profileApps_other": "{{count}} Apps",
 			"profileEmpty": "Keine Profile gefunden.",
 			"profilePlaceholder": "Wähle ein Profil",
-			"runtime": "Kommt mit der Bot-Laufzeitumgebung",
 			"subtitle": "Anfangs ist alles ausgeschaltet. In einer App hat der Bot nie mehr Rechte als du.",
 			"subtitleMemoryOn": "",
 			"title": "Wähle, was er tun darf"
@@ -1162,7 +1218,13 @@
 		"thisRoom": "",
 		"title": "",
 		"waiting": "",
-		"waitingOwner": ""
+		"waitingOwner": "",
+		"removeNamed": "{{name}} aus dem Raum entfernen",
+		"removeTitle": "{{name}} aus diesem Raum entfernen?",
+		"removePersonDescription": "Diese Person und ihre Bots im Raum verlassen ihn und erhalten keine weiteren Nachrichten daraus.",
+		"removeBotDescription": "Dieser Bot verlässt den Raum und erhält keine weiteren Nachrichten daraus.",
+		"remove": "Aus Raum entfernen",
+		"removeFailed": "Dieses Mitglied konnte nicht entfernt werden. Versuche es erneut."
 	},
 	"system": {
 		"flux": {

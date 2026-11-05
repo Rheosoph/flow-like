@@ -6,10 +6,10 @@
 // archiving the full desktop dependency graph into those artifacts on every
 // host build.
 mod deeplink;
-#[cfg(desktop)]
 mod bot_host;
 #[cfg(feature = "code-sandbox")]
 mod code_sandbox;
+#[cfg(desktop)]
 mod device_models;
 mod device_tunnels;
 #[cfg(desktop)]
@@ -637,6 +637,8 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         .on_page_load(|webview, payload| {
             if payload.event() == tauri::webview::PageLoadEvent::Started {
+                #[cfg(target_os = "ios")]
+                tracing::info!(webview = webview.label(), "iOS frontend navigation started");
                 execution_credentials::revoke_webview(webview.label());
                 device_tunnels::close_webview(webview.label());
                 realtime::close_webview(webview.label());
@@ -651,6 +653,24 @@ pub fn run() {
                 }
             }
         });
+
+    #[cfg(target_os = "ios")]
+    {
+        builder = builder.on_web_content_process_terminate(|webview| {
+            tracing::warn!(
+                webview = webview.label(),
+                "iOS web content process terminated; reloading frontend"
+            );
+            // Installing this hook replaces Tauri's automatic recovery.
+            if let Err(error) = webview.reload() {
+                tracing::error!(
+                    webview = webview.label(),
+                    %error,
+                    "Failed to reload iOS frontend after web content process termination"
+                );
+            }
+        });
+    }
 
     // Tauri requires this plugin to be registered first so a secondary process exits before any
     // other plugin or application setup hook runs.
@@ -1302,6 +1322,7 @@ pub fn run() {
             functions::bit::get_bit,
             functions::bit::is_bit_installed,
             functions::speech::speech_transcribe,
+            functions::speech::speech_synthesize,
             functions::bit::get_bit_size,
             functions::bit::get_pack_from_bit,
             functions::bit::search_bits,
@@ -1500,6 +1521,7 @@ pub fn run() {
             functions::local_bots::local_inbox_conversation,
             functions::local_bots::local_inbox_create,
             functions::local_bots::local_inbox_rename,
+            functions::local_bots::local_inbox_set_image,
             functions::local_bots::local_inbox_add_members,
             functions::local_bots::local_inbox_remove_member,
             functions::local_bots::local_inbox_entries,
@@ -1526,12 +1548,24 @@ pub fn run() {
             bot_host::commands::bot_host_cancel_turn,
             bot_host::grant_commands::local_bot_tool_grants,
             bot_host::grant_commands::local_bot_put_tool_grant,
+            bot_host::connector_commands::local_bot_connectors,
+            bot_host::connector_commands::local_bot_create_connector,
+            bot_host::connector_commands::local_bot_update_connector,
+            bot_host::connector_commands::local_bot_delete_connector,
+            bot_host::connector_commands::local_bot_refresh_connector,
             bot_host::grant_commands::local_bot_delete_tool_grant,
             bot_host::grant_commands::local_bot_answer_approval,
             bot_host::task_commands::local_bot_tasks,
             bot_host::task_commands::local_bot_create_task,
             bot_host::task_commands::local_bot_update_task,
             bot_host::task_commands::local_bot_delete_task,
+            bot_host::skill_commands::local_bot_skills,
+            bot_host::skill_commands::local_bot_create_skill,
+            bot_host::skill_commands::local_bot_update_skill,
+            bot_host::skill_commands::local_bot_set_skill_status,
+            bot_host::skill_commands::local_bot_delete_skill,
+            bot_host::skill_commands::local_bot_import_skill,
+            bot_host::skill_commands::local_bot_install_skill_package,
             functions::ai::bot_tools::view::bot_computer_view,
             functions::ai::bot_tools::view::bot_computer_stop,
             functions::developer::developer_list_projects,
@@ -1574,6 +1608,7 @@ pub fn run() {
             native_auth::begin_login,
             native_auth::native_auth_logout,
             native_auth::oauth::native_oauth_sync,
+            native_auth::oauth::native_oauth_list,
             native_auth::recovery::native_auth_recover_background_work,
             offline_writes::commands::offline_writes_overview,
             offline_writes::commands::offline_writes_set_table,

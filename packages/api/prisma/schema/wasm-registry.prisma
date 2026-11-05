@@ -90,6 +90,8 @@ model WasmPackageVersion {
   nodes   Json @default("[]")
   /// PackageWidgetEntry[] from the manifest, persisted like nodes
   widgets Json @default("[]")
+  /// PackageSkillEntry[] from the manifest (instructions embedded), reviewed with the version
+  skills  Json?
 
   releaseNotes       String?
   minFlowLikeVersion String?

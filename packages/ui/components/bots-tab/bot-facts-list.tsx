@@ -44,17 +44,28 @@ function FactRow({
 					>
 						{fact.kind}
 					</Badge>
-					{fact.evidence.map((evidence) => (
-						<button
-							key={`${evidence.message_id}-${evidence.seq}`}
-							type="button"
-							onClick={() => onJump(evidence.seq)}
-							title={evidence.quote}
-							className="rounded px-1 text-[11px] text-primary underline-offset-2 hover:underline focus-visible:underline"
-						>
-							#{evidence.seq}
-						</button>
-					))}
+					{fact.evidence.map((evidence) =>
+						fact.conversation_scope ? (
+							<span
+								key={`${evidence.message_id}-${evidence.seq}`}
+								title={evidence.quote}
+								className="px-1 text-[11px] text-muted-foreground"
+							>
+								{t("crew.invitations.groupChat", "a group chat")} · #
+								{evidence.seq}
+							</span>
+						) : (
+							<button
+								key={`${evidence.message_id}-${evidence.seq}`}
+								type="button"
+								onClick={() => onJump(evidence.seq)}
+								title={evidence.quote}
+								className="rounded px-1 text-[11px] text-primary underline-offset-2 hover:underline focus-visible:underline"
+							>
+								#{evidence.seq}
+							</button>
+						),
+					)}
 				</div>
 				{fact.evidence[0]?.quote && (
 					<blockquote className="mt-1.5 border-l-2 pl-2 text-xs text-muted-foreground italic">

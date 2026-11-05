@@ -344,8 +344,18 @@ pub trait ToolEnv: Send + Sync {
         None
     }
 
+    /// The bot's skills; `None` where the host keeps none.
+    fn skills(&self) -> Option<Arc<dyn crate::skills::SkillHost>> {
+        None
+    }
+
     /// The bot's mail service; `None` where the host has none (local bots, other lanes' hosts).
     fn mail(&self) -> Option<Arc<dyn MailBackend>> {
+        None
+    }
+
+    /// The bot's attached MCP servers and OAuth accounts; `None` where the host reaches none.
+    fn connectors(&self) -> Option<Arc<dyn crate::services::ConnectorSource>> {
         None
     }
 
@@ -353,6 +363,15 @@ pub trait ToolEnv: Send + Sync {
     /// token limits.
     fn allow_expensive_documents(&self) -> bool {
         false
+    }
+
+    /// The bot's image model for `image_generate`: its `image_model`, else the host's default
+    /// image-capable Bit.
+    async fn images(
+        &self,
+    ) -> std::result::Result<Arc<dyn crate::image::ImageBackend>, crate::image::ImageUnavailable>
+    {
+        Err(crate::image::ImageUnavailable::NotOnThisHost)
     }
 
     async fn secret(&self, name: &str) -> Result<Option<String>>;

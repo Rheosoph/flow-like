@@ -18,6 +18,7 @@ import {
 	type BotModelPin,
 	botDraftFromBot,
 	botDraftFromPreset,
+	botDraftOnDevice,
 	buildUpdateBotRequest,
 	createEmptyBotDraft,
 	getBotDraftProblems,
@@ -87,7 +88,10 @@ export interface BotEditor {
 }
 
 /** The free-text description, the presets it matches and what was applied from them. */
-function useDescribe(setDraft: DraftSetter) {
+function useDescribe(
+	setDraft: DraftSetter,
+	startOn: (draft: BotDraft) => BotDraft,
+) {
 	const presetTexts = useBotPresetTexts();
 	const [text, setText] = useState("");
 	const [choice, setChoice] = useState<string | null>(null);
@@ -97,12 +101,14 @@ function useDescribe(setDraft: DraftSetter) {
 	const draftFor = useCallback(
 		(preset: BotPreset) => {
 			const texts = presetTexts(preset);
-			return botDraftFromPreset(preset, {
-				...texts,
-				description: text.trim() || texts.description,
-			});
+			return startOn(
+				botDraftFromPreset(preset, {
+					...texts,
+					description: text.trim() || texts.description,
+				}),
+			);
 		},
-		[presetTexts, text],
+		[presetTexts, text, startOn],
 	);
 
 	const pick = useCallback(
@@ -115,10 +121,10 @@ function useDescribe(setDraft: DraftSetter) {
 	);
 
 	const scratch = useCallback(() => {
-		setDraft({ ...createEmptyBotDraft(), description: text.trim() });
+		setDraft(startOn({ ...createEmptyBotDraft(), description: text.trim() }));
 		setChoice(BOT_SCRATCH_CHOICE);
 		setDescriptionTouched(false);
-	}, [setDraft, text]);
+	}, [setDraft, text, startOn]);
 
 	/** Leaving Describe takes the best match unless something was picked; newer text still becomes the description. */
 	const settle = useCallback(() => {
@@ -197,10 +203,15 @@ const placeAnywhere = (draft: BotDraft) => draft;
 export function useBotEditor(
 	mode: BotEditorMode,
 	bot: IBot | null,
-	options: { localOnly?: boolean } = {},
+	options: { localOnly?: boolean; initialDeviceId?: string } = {},
 ): BotEditor {
 	const localOnly = options.localOnly === true;
 	const place = localOnly ? keepOnThisComputer : placeAnywhere;
+	const initialDeviceId = options.initialDeviceId;
+	const startOn = useCallback(
+		(draft: BotDraft) => botDraftOnDevice(draft, initialDeviceId),
+		[initialDeviceId],
+	);
 	const [original] = useState(bot);
 	const system = original?.system ?? null;
 	const flowPilot = original ? hasFlowPilot(original) : false;
@@ -211,7 +222,9 @@ export function useBotEditor(
 	);
 	const [step, setStep] = useState<BotEditorStep>(steps[0]);
 	const [draft, storeDraft] = useState<BotDraft>(() =>
-		place(original ? botDraftFromBot(original) : createEmptyBotDraft()),
+		place(
+			original ? botDraftFromBot(original) : startOn(createEmptyBotDraft()),
+		),
 	);
 	const setDraft = useCallback<DraftSetter>(
 		(next) =>
@@ -232,7 +245,7 @@ export function useBotEditor(
 		pick,
 		scratch,
 		...describe
-	} = useDescribe(setDraft);
+	} = useDescribe(setDraft, startOn);
 
 	const problems = useMemo(
 		() =>
@@ -296,7 +309,7 @@ export function useBotEditor(
 			updateRequest,
 			draft,
 			untouched,
-			place(createEmptyBotDraft()),
+			place(startOn(createEmptyBotDraft())),
 		),
 		goTo,
 		setDescribeText: describe.setText,

@@ -10,6 +10,7 @@ export interface BotFactEvidence {
 	message_id: string;
 	quote: string;
 	at: string;
+	speaker?: { id: string; name?: string | null } | null;
 }
 
 export interface BotFact {
@@ -24,6 +25,8 @@ export interface BotFact {
 	valid_to: string | null;
 	superseded_by: string | null;
 	evidence: BotFactEvidence[];
+	/** Room positions cannot be opened in the owner's direct chat. */
+	conversation_scope?: string | null;
 }
 
 export interface BotFactsOwner {

@@ -7,16 +7,16 @@
 use super::{
     gate::ApprovalGate,
     memory::{self, JobMemory},
+    room_updates::LocalRoomUpdates,
     rule::{self, Waiting},
     store::{HostStore, StoreGrants},
     transcript::{self, Unreadable},
 };
-use async_trait::async_trait;
 use chrono::{Duration as Age, Utc};
 use flow_like::{
-    copilot::UnifiedChatMessage,
     flow::copilot::{
         memory_open::follow_up,
+        platform::RoomUpdates,
         tool_grants::{GrantStore, clear_tokens, resume_note},
     },
 };
@@ -27,8 +27,6 @@ use flow_like_types::{
     bot_turn::{TurnStatus, failure_message_id, reply_message_id, turn_id},
     inbox::{ConversationKind, InboxEntryKind, PrincipalKind, plain_envelope},
 };
-use serde::Serialize;
-use serde_json::json;
 use std::{
     collections::{BTreeSet, HashMap, HashSet, VecDeque},
     sync::{Arc, Mutex, MutexGuard, PoisonError},
@@ -36,19 +34,7 @@ use std::{
 };
 use tokio::sync::{Semaphore, mpsc, watch};
 
-pub const CODE_TIMEOUT: &str = "BOT_TURN_TIMEOUT";
-pub const CODE_MODEL: &str = "BOT_TURN_MODEL_ERROR";
-pub const CODE_UNREADABLE: &str = "BOT_TURN_UNREADABLE";
-pub const CODE_NOT_WAITING: &str = "BOT_TURN_NOT_WAITING";
-pub const CODE_STORE_CHANGED: &str = "BOT_TURN_STORE_CHANGED";
-pub const CODE_SESSION_CHANGED: &str = "BOT_TURN_SESSION_CHANGED";
-pub const CODE_CANCELLED: &str = "BOT_TURN_CANCELLED";
-pub const CODE_REPLY_REFUSED: &str = "BOT_TURN_REPLY_REFUSED";
-pub const CODE_SETUP: &str = "BOT_TURN_SETUP";
-
-pub(super) const MAX_REPLY_CHARS: usize = 48_000;
-pub(super) const MAX_FAILURE_DETAIL_CHARS: usize = 500;
-pub(super) const FINISHED_KEPT: usize = 50;
+pub use flow_like_bot_host::host::*;
 
 #[derive(Debug, Clone)]
 pub struct HostConfig {
@@ -65,75 +51,6 @@ impl Default for HostConfig {
             max_age: Age::hours(24),
         }
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct TurnJob {
-    pub run_id: String,
-    pub bot_id: String,
-    pub conversation_id: String,
-    pub profile_id: Option<String>,
-    pub prompt: String,
-    pub history: Vec<UnifiedChatMessage>,
-    /// The conversation's memory when this turn remembers.
-    pub memory: Option<JobMemory>,
-    /// Where a call that asks the owner runs under a grant or parks the turn.
-    pub gate: Arc<ApprovalGate>,
-    pub requester: Option<flow_like::flow::copilot::TurnRequester>,
-    /// The bot's own token for the hub during this turn (account turns); the owner's session
-    /// is not used for what the bot does.
-    pub hub_token: Option<HubToken>,
-    /// The question whose late answer woke the turn; its follow-ups go on counting from there.
-    pub answered_round: Option<flow_like::flow::copilot::bot_talk::AnsweredRound>,
-}
-
-/// A bot runtime token that never prints.
-#[derive(Clone)]
-pub struct HubToken(pub String);
-
-impl std::fmt::Debug for HubToken {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("HubToken(..)")
-    }
-}
-
-#[derive(Debug)]
-pub enum RunError {
-    Failed { code: String, message: String },
-    SessionChanged,
-}
-
-#[async_trait]
-pub trait TurnRunner: Send + Sync + 'static {
-    async fn run(&self, job: TurnJob) -> Result<String, RunError>;
-    fn cancel(&self, run_id: &str);
-}
-
-pub trait TurnEvents: Send + Sync + 'static {
-    fn turn(&self, info: &TurnInfo);
-
-    /// A reply the person did not ask for was posted; show it as a notification.
-    fn alert(&self, _alert: &super::notify::Alert) {}
-}
-
-/// A turn as `bot-host://turn` and `bot_host_turns` show it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct TurnInfo {
-    /// Also the run id: a window attaches to the run's tokens with `global_chat_resume`.
-    pub id: String,
-    pub bot_id: String,
-    pub conversation_id: String,
-    pub trigger_message_id: String,
-    pub status: TurnStatus,
-    pub hops: u32,
-    pub requester_id: String,
-    pub audience: flow_like_types::bot_turn::TurnAudience,
-    pub batched: u32,
-    pub queued_at: String,
-    pub started_at: Option<String>,
-    pub finished_at: Option<String>,
-    pub error_code: Option<String>,
-    pub reply_message_id: Option<String>,
 }
 
 type Key = (String, String);
@@ -253,14 +170,6 @@ impl End {
 
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-pub(super) fn now() -> String {
-    Utc::now().to_rfc3339()
-}
-
-pub(super) fn clipped(text: &str, max: usize) -> String {
-    text.chars().take(max).collect()
 }
 
 async fn cancelled(cancel: &mut watch::Receiver<Option<Cancel>>) -> Cancel {
@@ -638,18 +547,26 @@ impl Inner {
         if reacting && transcript.prompt.is_empty() {
             return End::silent();
         }
-        let requester = (reacting || !transcript.addressed).then(|| {
-            flow_like::flow::copilot::TurnRequester {
-                requester_id: LOCAL_OWNER_ID.to_owned(),
-                requester_name: None,
-                owner_id: LOCAL_OWNER_ID.to_owned(),
-                owner_name: None,
-                audience: waiting.audience,
-                room: None,
-                addressed: transcript.addressed,
-                reactions,
-            }
-        });
+        let requester = (conversation.kind == ConversationKind::Group
+            || reacting
+            || !transcript.addressed)
+            .then(|| {
+                let requester_id = oldest_first
+                    .iter()
+                    .find(|entry| entry.message_id == waiting.message_id)
+                    .map_or(LOCAL_OWNER_ID, |entry| entry.sender_id.as_str())
+                    .to_owned();
+                flow_like::flow::copilot::TurnRequester {
+                    requester_name: names.get(&requester_id).cloned(),
+                    requester_id,
+                    owner_id: LOCAL_OWNER_ID.to_owned(),
+                    owner_name: names.get(LOCAL_OWNER_ID).cloned(),
+                    audience: waiting.audience,
+                    room: conversation.title.clone(),
+                    addressed: transcript.addressed,
+                    reactions,
+                }
+            });
         let grants: Arc<dyn GrantStore> = Arc::new(StoreGrants {
             store: self.store.clone(),
             bot_id: bot_id.clone(),
@@ -666,6 +583,25 @@ impl Inner {
         };
         let (runner, stop_id) = (self.runner.clone(), run_id.clone());
         let gate = ApprovalGate::new(grants.clone(), &run_id, move || runner.cancel(&stop_id));
+        let room_updates = (conversation.kind == ConversationKind::Group)
+            .then(|| {
+                let through = if reacting {
+                    oldest_first.last()
+                } else {
+                    oldest_first
+                        .iter()
+                        .find(|entry| entry.message_id == waiting.message_id)
+                };
+                through.map(|trigger| {
+                    Arc::new(LocalRoomUpdates::new(
+                        self.store.clone(),
+                        bot_id,
+                        trigger,
+                        names,
+                    )) as Arc<dyn RoomUpdates>
+                })
+            })
+            .flatten();
         let job = TurnJob {
             run_id: run_id.clone(),
             bot_id: bot_id.clone(),
@@ -674,10 +610,12 @@ impl Inner {
             prompt,
             history: transcript.history,
             memory: memory.clone(),
+            room_updates,
             gate: gate.clone(),
             requester: requester.clone(),
             hub_token: None,
             answered_round: None,
+            claim: None,
         };
         let outcome = tokio::select! {
             biased;
@@ -729,7 +667,7 @@ impl Inner {
                 )
                 .await
             }
-            Ok(Err(RunError::Failed { code, message })) => {
+            Ok(Err(RunError::Failed { code, message } | RunError::Retry { code, message })) => {
                 let text = format!(
                     "I couldn't answer this: {}",
                     clipped(&message, MAX_FAILURE_DETAIL_CHARS)
@@ -935,23 +873,6 @@ fn retarget(live: &mut Live, bot_id: &str, waiting: &Waiting) {
     live.info.requester_id.clone_from(&waiting.requester_id);
     live.info.audience = waiting.audience;
     live.trigger_seq = waiting.seq;
-}
-
-pub(super) fn reply_body(
-    reply_to: &str,
-    hops: u32,
-    text: &str,
-    error_code: Option<&str>,
-) -> serde_json::Value {
-    let mut body = json!({
-        "text": text,
-        "reply_to": reply_to,
-        "hops": hops.saturating_add(1),
-    });
-    if let Some(code) = error_code {
-        body["error"] = json!({ "code": code });
-    }
-    body
 }
 
 fn reply_request(

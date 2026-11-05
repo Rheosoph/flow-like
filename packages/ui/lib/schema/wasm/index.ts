@@ -171,6 +171,16 @@ export interface PackageWidgetEntry {
 	network?: unknown;
 }
 
+/** A skill a package ships for bots; the instructions are what a reviewer approves. */
+export interface PackageSkillEntry {
+	name: string;
+	description: string;
+	instructionsFile?: string | null;
+	instructions?: string | null;
+	/** Names of the package nodes the instructions call. */
+	tools: string[];
+}
+
 export interface PackageManifest {
 	manifestVersion: number;
 	id: string;
@@ -190,6 +200,8 @@ export interface PackageManifest {
 	wasmHash?: string;
 	/** Micro-frontend widgets shipped by this package (manifest v2) */
 	widgets?: PackageWidgetEntry[];
+	/** Skills for bots (manifest v3) */
+	skills?: PackageSkillEntry[];
 	/** Widget bundle (`.flwb`) path relative to the manifest */
 	widgetBundlePath?: string;
 	/** SHA-256 hash of the widget bundle */
@@ -394,6 +406,8 @@ export interface PackageDetails {
 	downloadCount: number;
 	wasmSize: number;
 	nodes: PackageNodeEntry[];
+	/** Skills this version ships, instructions included. */
+	skills?: PackageSkillEntry[];
 	permissions: PackagePermissions;
 	price: number;
 	primaryCategory?: WasmPackageCategory;

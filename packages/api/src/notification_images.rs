@@ -1,18 +1,12 @@
 use std::time::Duration;
 
 use flow_like_storage::{Path, files::store::FlowLikeStore, object_store::ObjectStoreExt};
-use flow_like_types::{
-    Result,
-    base64::{Engine, engine::general_purpose::STANDARD},
-    images::notification_thumbnail,
-};
+use flow_like_types::Result;
 use futures_util::TryStreamExt;
 
 use crate::state::AppState;
 
 const IMAGE_REFERENCE_PREFIX: &str = "notification-image:";
-// A 256px RGBA PNG fits comfortably below this bound, including base64 overhead.
-const MAX_INLINE_ICON_LENGTH: usize = 512 * 1024;
 const IMAGE_URL_LIFETIME: Duration = Duration::from_secs(24 * 60 * 60);
 
 pub struct PreparedNotificationIcon {
@@ -44,25 +38,7 @@ fn bot_avatar_path(owner_id: &str, bot_id: &str, look: &str) -> Path {
     bot_avatar_directory(owner_id, bot_id).join(format!("{look}.png"))
 }
 
-/// Re-encodes an image data URL as a PNG of at most 256 px; refuses anything else.
-pub fn decode_inline_icon(icon: &str) -> Result<Vec<u8>> {
-    if icon.len() > MAX_INLINE_ICON_LENGTH {
-        flow_like_types::bail!("Notification icon exceeds the 512 KiB upload limit");
-    }
-    let (header, encoded) = icon
-        .split_once(',')
-        .ok_or_else(|| flow_like_types::anyhow!("Invalid notification image data URL"))?;
-    if !matches!(
-        header,
-        "data:image/png;base64"
-            | "data:image/jpeg;base64"
-            | "data:image/gif;base64"
-            | "data:image/webp;base64"
-    ) {
-        flow_like_types::bail!("Notification icon must contain a PNG, JPEG, GIF or WebP image");
-    }
-    notification_thumbnail(&STANDARD.decode(encoded)?)
-}
+pub use flow_like_types::images::inline_image_thumbnail as decode_inline_icon;
 
 async fn store_inline_icon(store: &FlowLikeStore, user_id: &str, icon: String) -> Result<String> {
     let png =
@@ -230,7 +206,11 @@ pub async fn refresh_notification_icons(
 mod tests {
     use super::*;
     use flow_like_storage::object_store::memory::InMemory;
-    use flow_like_types::tokio;
+    use flow_like_types::{
+        base64::{Engine, engine::general_purpose::STANDARD},
+        images::MAX_INLINE_IMAGE_LENGTH,
+        tokio,
+    };
     use std::{io::Cursor, sync::Arc};
 
     fn inline_icon() -> String {
@@ -296,7 +276,7 @@ mod tests {
         assert!(
             decode_inline_icon(&format!(
                 "data:image/png;base64,{}",
-                "A".repeat(MAX_INLINE_ICON_LENGTH)
+                "A".repeat(MAX_INLINE_IMAGE_LENGTH)
             ))
             .is_err()
         );

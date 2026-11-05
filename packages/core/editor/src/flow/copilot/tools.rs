@@ -2007,6 +2007,7 @@ impl Tool for RunBoardTestsTool {
 pub struct QueryLogsTool {
     pub state: Arc<FlowLikeState>,
     pub run_context: Option<RunContext>,
+    pub runtime_bridge: Option<Arc<dyn PlatformToolBridge>>,
 }
 
 impl Tool for QueryLogsTool {
@@ -2063,8 +2064,29 @@ RETURNS: Logs with level, message, node_id (use node_id with get_node_details)"#
             run_context.board_id
         );
 
-        let limit = args.limit.unwrap_or(50).min(100);
+        let limit = args.limit.unwrap_or(50).clamp(1, 100);
         let filter = args.filter.clone().unwrap_or_default();
+
+        if let Some(bridge) = &self.runtime_bridge {
+            if !bridge.supports_tool("query_execution_logs") {
+                return Err(QueryLogsToolError(
+                    "The active host does not support execution log reads.".to_string(),
+                ));
+            }
+            return Ok(bridge
+                .call(
+                    "query_execution_logs",
+                    json!({
+                        "app_id": run_context.app_id,
+                        "board_id": run_context.board_id,
+                        "run_id": run_context.run_id,
+                        "filter": filter,
+                        "limit": limit,
+                        "offset": 0,
+                    }),
+                )
+                .await);
+        }
 
         flowpilot_debug_log!("[QueryLogsTool] Using limit={}, filter='{}'", limit, filter);
 
@@ -2137,7 +2159,7 @@ RETURNS: Logs with level, message, node_id (use node_id with get_node_details)"#
             );
             flowpilot_debug_log!(
                 "[QueryLogsTool] First 500 chars: {}",
-                &result[..result.len().min(500)]
+                result.chars().take(500).collect::<String>()
             );
             Ok(result)
         }
@@ -2268,7 +2290,7 @@ third-party ones."#
                         "minItems": 1,
                         "maxItems": MAX_DECLARATION_QUERIES,
                         "uniqueItems": true,
-                        "description": "REQUIRED. One bounded initial batch of the highest-leverage concrete catalog calls needed to establish the end-to-end workflow shape; do not enumerate every utility operation. After any usable response, call plan_board_scope exactly once unless the host already accepted a plan, then write its active segment immediately and defer omitted/unmatched searches until compiler diagnostics. The result reports matched_queries, unmatched_queries, complete, and omitted_queries explicitly. Good entries: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
+                        "description": "One bounded initial batch of the highest-leverage concrete catalog calls needed to establish the end-to-end workflow shape; do not enumerate every utility operation. After any usable response, call plan_board_scope exactly once unless the host already accepted a plan, then write its active segment immediately and defer omitted/unmatched searches until compiler diagnostics. The result reports matched_queries, unmatched_queries, complete, and omitted_queries explicitly. Good entries: 'gmail imap fetch mail', 'smtp send email', 'open local database batch insert', 'datafusion sql register lance', 'hybrid vector search build index'."
                     },
                     "query": {
                         "type": "string",
@@ -2276,7 +2298,6 @@ third-party ones."#
                         "maxLength": MAX_DECLARATION_QUERY_BYTES
                     }
                 },
-                "required": ["queries"],
                 "additionalProperties": false
             }),
         }
@@ -4983,6 +5004,37 @@ detached {
             "case/whitespace-equivalent declaration searches must run only once"
         );
         assert!(queries.iter().any(|query| query.contains("tenth")));
+    }
+
+    #[tokio::test]
+    async fn declaration_schema_accepts_single_search_fallback_and_keeps_bounds() {
+        let concrete = Arc::new(BatchDispatchProvider::default());
+        let tool = GetDeclarationsTool {
+            provider: concrete.clone(),
+        };
+        let definition = tool.definition(String::new()).await;
+        let validator = jsonschema::validator_for(&definition.parameters).unwrap();
+        for args in [
+            json!({"query": "smtp send"}),
+            json!({"queries": ["smtp send"]}),
+            json!({}),
+        ] {
+            assert!(validator.is_valid(&args), "{args}");
+        }
+        for args in [
+            json!({"query": 1}),
+            json!({"query": "smtp", "invented": true}),
+            json!({"query": "x".repeat(MAX_DECLARATION_QUERY_BYTES + 1)}),
+            json!({"queries": vec!["smtp"; MAX_DECLARATION_QUERIES + 1]}),
+        ] {
+            assert!(!validator.is_valid(&args), "{args}");
+        }
+        let output = tool
+            .call(serde_json::from_value(json!({"query": "smtp send"})).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(concrete.batch_calls.load(Ordering::SeqCst), 1);
+        assert!(output.contains("\"processed_count\":1"));
     }
 
     #[tokio::test]

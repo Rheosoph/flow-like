@@ -1,6 +1,8 @@
 use super::{
-    INBOX_DIRECT_FIXED, INBOX_MEMBER_LIMIT, MEMBER_ACTIVE, Reader, allocate_seqs,
+    Event, INBOX_DIRECT_FIXED, INBOX_MEMBER_LIMIT, MEMBER_ACTIVE, Reader, active_members,
+    allocate_seqs,
     delivery::people_to_wake,
+    image::sign_images,
     insert_copies,
     invitations::{self, InviteMode, Invitee},
     lock_conversation, member_conversation,
@@ -11,7 +13,7 @@ use super::{
     },
     now_millis, reader, requests, stored,
     view::{conversations_for, visible_conversation},
-    wake,
+    wake, wake_members,
 };
 use crate::{
     entity::{conversation, conversation_member},
@@ -28,14 +30,14 @@ use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
     create_id,
     inbox::{
-        ConversationEncryption, ConversationKind, MAX_CONVERSATION_MEMBERS, PrincipalKind,
-        direct_pair_key,
+        ConversationEncryption, ConversationKind, InboxEntryKind, MAX_CONVERSATION_MEMBERS,
+        PrincipalKind, RoomEventBody, direct_pair_key,
     },
 };
 use sea_orm::{
     ActiveModelTrait,
     ActiveValue::Set,
-    ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter,
+    ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter,
     sea_query::{Expr, OnConflict},
 };
 
@@ -126,6 +128,7 @@ pub(super) fn conversation_row(
         updated_at: Set(now),
         import_key: Set(None),
         last_seq: Set(Some(0)),
+        image: Set(None),
     }
 }
 
@@ -173,6 +176,7 @@ pub(crate) async fn start_direct_as<C: ConnectionTrait>(
     request: bool,
     now: DateTime<FixedOffset>,
 ) -> Result<String, ApiError> {
+    super::blocks::ensure_allowed(db, creator, &other.id).await?;
     let key = direct_pair_key(creator, &other.id);
     let plan = NewConversation {
         kind: ConversationKind::Direct,
@@ -357,9 +361,9 @@ pub async fn list_conversations(
 ) -> Result<Json<ConversationList>, ApiError> {
     let sub = user.sub()?;
     let reader = reader(&state.db, &sub, query.as_bot.as_deref()).await?;
-    Ok(Json(ConversationList {
-        conversations: conversations_for(&state.db, &reader, None).await?,
-    }))
+    let mut conversations = conversations_for(&state.db, &reader, None).await?;
+    sign_images(&state, &mut conversations).await;
+    Ok(Json(ConversationList { conversations }))
 }
 
 #[utoipa::path(
@@ -385,10 +389,15 @@ pub async fn get_conversation(
     Path(conversation_id): Path<String>,
     Query(query): Query<ReaderQuery>,
 ) -> Result<Json<Conversation>, ApiError> {
-    let sub = user.sub()?;
-    let reader = reader(&state.db, &sub, query.as_bot.as_deref()).await?;
+    let reader = super::acting_reader(
+        &state.db,
+        &user,
+        query.as_bot.as_deref(),
+        &conversation_id,
+    )
+    .await?;
     Ok(Json(
-        visible_conversation(&state.db, &reader, &conversation_id).await?,
+        visible_conversation(&state, &reader, &conversation_id).await?,
     ))
 }
 
@@ -495,7 +504,7 @@ async fn open_group(
         (status = 200, description = "The new conversation. A direct conversation you already have with this member is returned instead of a new one, whatever encryption you asked for.", body = Conversation),
         (status = 400, description = "A direct conversation needs exactly one other member and no title, a group at least one; or the title is too long"),
         (status = 401, description = "Not signed in"),
-        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: you can add your own bots and invite people who share an app with you and their bots; the message names the first id refused"),
+        (status = 403, description = "INBOX_MEMBER_NOT_ALLOWED: an id is neither a person on this hub nor a live bot; the message names the first id refused"),
         (status = 409, description = "INBOX_MEMBER_LIMIT: a conversation has at most 50 members")
     ),
     security(("bearer_auth" = []))
@@ -513,7 +522,7 @@ pub async fn create_conversation(
         ConversationKind::Group => open_group(&state, &sub, &plan).await?,
     };
     Ok(Json(
-        visible_conversation(&state.db, &Reader::own(&sub), &id).await?,
+        visible_conversation(&state, &Reader::own(&sub), &id).await?,
     ))
 }
 
@@ -545,27 +554,90 @@ pub async fn rename_conversation(
 ) -> Result<Json<Conversation>, ApiError> {
     let sub = user.sub()?;
     let title = normalize_title(body.title)?;
-    let current = member_conversation(&state.db, &conversation_id, &sub).await?;
+    let renamed = state
+        .transaction(|txn| {
+            let (id, sub, title) = (conversation_id.clone(), sub.clone(), title.clone());
+            Box::pin(async move { rename_in(txn, &id, &sub, title, now_millis()).await })
+        })
+        .await?;
+    if renamed {
+        wake_members(&state, &conversation_id).await;
+    }
+    Ok(Json(
+        visible_conversation(&state, &Reader::own(&sub), &conversation_id).await?,
+    ))
+}
+
+/// Renames the group and records it in every member's history; false when the name is unchanged.
+pub(super) async fn rename_in(
+    txn: &DatabaseTransaction,
+    conversation_id: &str,
+    by: &str,
+    title: Option<String>,
+    now: DateTime<FixedOffset>,
+) -> Result<bool, ApiError> {
+    lock_conversation(txn, conversation_id).await?;
+    let current = member_group(txn, conversation_id, by).await?;
+    if current.title == title {
+        return Ok(false);
+    }
+    conversation::Entity::update_many()
+        .col_expr(conversation::Column::Title, Expr::value(title.clone()))
+        .col_expr(conversation::Column::UpdatedAt, Expr::value(now))
+        .filter(conversation::Column::Id.eq(conversation_id))
+        .exec(txn)
+        .await?;
+    record_room_change(txn, conversation_id, &RoomEventBody::title(title, by), now).await?;
+    Ok(true)
+}
+
+/// Writes a `room` entry into the inbox of every active member at the group's next position.
+/// The caller holds the conversation's lock.
+pub(super) async fn record_room_change<C: ConnectionTrait>(
+    txn: &C,
+    conversation_id: &str,
+    change: &RoomEventBody,
+    now: DateTime<FixedOffset>,
+) -> Result<(), ApiError> {
+    let members = active_members(txn, &[conversation_id.to_string()]).await?;
+    let seq = allocate_seqs(txn, conversation_id, 1).await?;
+    let message_id = format!("room:{}", create_id());
+    let event = Event {
+        conversation_id,
+        message_id: &message_id,
+        sender_id: &change.by,
+        kind: InboxEntryKind::Room,
+        created_at: now,
+        seq,
+    };
+    let envelope = change.envelope();
+    insert_copies(
+        txn,
+        members
+            .iter()
+            .map(|member| event.copy_for(&member.principal_id, envelope.clone()))
+            .collect(),
+    )
+    .await
+}
+
+/// The group `principal_id` is an active member of; a direct conversation is fixed.
+pub(super) async fn member_group<C: ConnectionTrait>(
+    db: &C,
+    conversation_id: &str,
+    principal_id: &str,
+) -> Result<conversation::Model, ApiError> {
+    let current = member_conversation(db, conversation_id, principal_id).await?;
     if ConversationKind::parse(&current.kind) != Some(ConversationKind::Group) {
         return Err(direct_fixed());
     }
-    if current.title != title {
-        conversation::Entity::update_many()
-            .col_expr(conversation::Column::Title, Expr::value(title))
-            .col_expr(conversation::Column::UpdatedAt, Expr::value(now_millis()))
-            .filter(conversation::Column::Id.eq(&conversation_id))
-            .exec(&state.db)
-            .await?;
-    }
-    Ok(Json(
-        visible_conversation(&state.db, &Reader::own(&sub), &conversation_id).await?,
-    ))
+    Ok(current)
 }
 
 pub(super) fn direct_fixed() -> ApiError {
     ApiError::coded(
         StatusCode::CONFLICT,
         INBOX_DIRECT_FIXED,
-        "A direct conversation can't be renamed and its members don't change; start a group instead",
+        "A direct conversation has no title or picture and its members don't change; start a group instead",
     )
 }

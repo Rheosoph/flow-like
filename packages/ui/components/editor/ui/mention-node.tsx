@@ -19,9 +19,11 @@ import { cn } from "../../../lib/utils";
 import { useMounted } from "../hooks/use-mounted";
 import { useMentionItems } from "../mention-items-context";
 import {
+	SELF_SUBJECT_MENTION_CLASS,
 	SUBJECT_MENTION_CLASS,
 	SubjectMentionLabel,
 	mentionedSubject,
+	useIsSelfMention,
 } from "./mention-node-static";
 
 import {
@@ -45,6 +47,7 @@ export function MentionElement(
 	const mounted = useMounted();
 	const readOnly = useReadOnly();
 	const subject = mentionedSubject(element.key);
+	const isSelf = useIsSelfMention(subject);
 	const label = `${props.prefix ?? ""}${element.value}`;
 
 	if (subject) {
@@ -53,6 +56,7 @@ export function MentionElement(
 				{...props}
 				className={cn(
 					SUBJECT_MENTION_CLASS,
+					isSelf && SELF_SUBJECT_MENTION_CLASS,
 					selected && focused && "ring-2 ring-ring",
 				)}
 				attributes={{
@@ -60,6 +64,7 @@ export function MentionElement(
 					contentEditable: false,
 					"data-slate-value": element.value,
 					"data-mention-subject": subject,
+					"data-mention-self": isSelf || undefined,
 				}}
 			>
 				<SubjectMentionLabel subject={subject} label={label} />

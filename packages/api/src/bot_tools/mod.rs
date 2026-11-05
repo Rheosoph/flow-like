@@ -4,14 +4,17 @@
 //! `todo/bots-capabilities/lanes/HOST-SERVER-TOOLS.md`.
 
 mod access;
+pub(crate) mod connectors;
 mod directory;
 mod email;
 mod executor;
 mod host;
+mod images;
 mod routing;
 mod schedule;
 mod scope;
 mod secrets;
+pub(crate) mod skills;
 
 #[cfg(test)]
 mod tests;
@@ -116,6 +119,11 @@ pub(crate) async fn turn_host(
             executor: executor_for(state),
             grants,
             secrets: std::sync::Arc::new(secrets::ServerSecrets::new(state, &bot.bot_id)),
+            connectors: Some(std::sync::Arc::new(connectors::ApiConnectors::new(
+                state,
+                owner,
+                &bot.bot_id,
+            ))),
         })
         .with_notifier(notifier)
         .with_people(std::sync::Arc::new(crate::bot_people::ServerPeople::new(
@@ -124,6 +132,20 @@ pub(crate) async fn turn_host(
             owner,
         )))
         .with_scheduler(scheduler)
-        .with_mail(std::sync::Arc::new(email::ApiMail::new(state, &bot.bot_id))),
+        .with_skills(std::sync::Arc::new(skills::ApiSkills::new(
+            state,
+            owner,
+            &bot.bot_id,
+        )))
+        .with_skill_jobs(std::sync::Arc::new(skills::ApiSkillJobs {
+            skills: skills::ApiSkills::new(state, owner, &bot.bot_id),
+            state: state.clone(),
+            workspace: workspace.clone(),
+        }))
+        .with_images(std::sync::Arc::new(images::ImageBits::new(
+            std::sync::Arc::new(profile.clone()),
+            flow_like_state.clone(),
+            bot.image_model.clone(),
+        )))
     ))
 }

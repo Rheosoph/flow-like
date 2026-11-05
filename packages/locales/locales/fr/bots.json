@@ -92,6 +92,10 @@
 			"description": "",
 			"label": ""
 		},
+		"web_requests": {
+			"description": "",
+			"label": ""
+		},
 		"webhook": {
 			"description": "",
 			"label": ""
@@ -152,6 +156,10 @@
 		"botTag": "",
 		"builtIn": "",
 		"call": {
+			"dismiss": "",
+			"incoming": "",
+			"incomingDescription": "",
+			"incomingRoom": "",
 			"durationHours": "",
 			"durationMinutes": "",
 			"durationShort": "",
@@ -391,6 +399,28 @@
 			"where": ""
 		},
 		"retry": "",
+		"roomChange": {
+			"nameRemoved": "",
+			"pictureChanged": "",
+			"pictureRemoved": "",
+			"renamed": ""
+		},
+		"roomSettings": {
+			"change": "",
+			"description": "",
+			"failed": "",
+			"imageFormat": "",
+			"imageHint": "",
+			"imageSize": "",
+			"imageUnreadable": "",
+			"name": "",
+			"namePlaceholder": "",
+			"open": "",
+			"remove": "",
+			"save": "",
+			"title": "",
+			"upload": ""
+		},
 		"roomTag": "",
 		"rooms": {
 			"bots_many": "",
@@ -454,7 +484,34 @@
 		"unread_other": "",
 		"you": "",
 		"youObject": "",
-		"yourCrew": ""
+		"yourCrew": "",
+		"blocks": {
+			"title": "Utilisateurs et bots bloqués",
+			"description": "Gérez qui peut échanger des messages directs et des invitations avec vous et vos bots. Les salons partagés restent inchangés.",
+			"loading": "Chargement des utilisateurs et bots bloqués…",
+			"loadFailed": "Impossible de charger votre liste de blocage.",
+			"empty": "Vous n’avez bloqué personne.",
+			"block": "Bloquer",
+			"unblock": "Débloquer",
+			"blockUser": "Bloquer l’utilisateur",
+			"blockBot": "Bloquer le bot",
+			"ownerBlocked": "Propriétaire bloqué",
+			"blockName": "Bloquer {{name}}",
+			"unblockName": "Débloquer {{name}}",
+			"blockTitle": "Bloquer {{name}} ?",
+			"unblockTitle": "Débloquer {{name}} ?",
+			"failed": "Impossible de modifier le blocage. Réessayez.",
+			"userDescription": "Les messages directs et les invitations entre vous et cette personne seront bloqués dans les deux sens, y compris pour vos bots et les siens. Vous continuerez à vous voir dans les salons partagés. Vous pouvez quitter ces salons séparément.",
+			"botDescription": "Les messages directs et les invitations entre vous, vos bots et ce bot seront bloqués dans les deux sens. Ce bot restera dans les salons partagés. Vous pouvez quitter ces salons séparément.",
+			"unblockDescription": "Ce blocage sera levé. Les autres blocages resteront en vigueur.",
+			"composer": "Cette conversation est bloquée. Gérez vos utilisateurs et bots bloqués pour autoriser à nouveau les messages."
+		},
+		"leaveRoom": {
+			"action": "Quitter le salon",
+			"title": "Quitter ce salon ?",
+			"description": "Vous et vos bots présents dans ce salon le quitterez et ne recevrez plus ses messages.",
+			"failed": "Impossible de quitter le salon. Réessayez."
+		}
 	},
 	"editor": {
 		"abilities": {
@@ -488,7 +545,6 @@
 			"profileApps_other": "",
 			"profileEmpty": "",
 			"profilePlaceholder": "",
-			"runtime": "",
 			"subtitle": "",
 			"subtitleMemoryOn": "",
 			"title": ""
@@ -1190,7 +1246,13 @@
 		"thisRoom": "",
 		"title": "",
 		"waiting": "",
-		"waitingOwner": ""
+		"waitingOwner": "",
+		"removeNamed": "Retirer {{name}} du salon",
+		"removeTitle": "Retirer {{name}} de ce salon ?",
+		"removePersonDescription": "Cette personne et ses bots présents dans le salon le quitteront et ne recevront plus ses messages.",
+		"removeBotDescription": "Ce bot quittera le salon et ne recevra plus ses messages.",
+		"remove": "Retirer du salon",
+		"removeFailed": "Impossible de retirer ce membre. Réessayez."
 	},
 	"system": {
 		"flux": {

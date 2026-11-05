@@ -1549,6 +1549,47 @@ model AuditWorkerLease {
   updatedAt DateTime  @default(now()) @db.Timestamptz(3)
 }
 
+// ---- bot_mail.prisma
+/// A bot's mail thread: one inbox conversation owned by the bot with its owner as member. `id`
+/// is that conversation's id. The owner's Mail tab lists these rows.
+model BotMailThread {
+  id            String           @id
+  botId         String
+  bot           Bot              @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId       String
+  subject       String
+  /// JSON array of correspondent addresses, lowercase, at most 50.
+  participants  String
+  lastMessageAt DateTime         @db.Timestamptz(3)
+  lastSnippet   String?
+  messageCount  Int              @default(0)
+  createdAt     DateTime         @default(now()) @db.Timestamptz(3)
+  messages      BotMailMessage[]
+
+  @@index([botId, lastMessageAt])
+  @@index([ownerId])
+}
+
+/// One mail of a thread by its RFC 5322 `Message-ID`, which later mails reach through
+/// `In-Reply-To` and `References`. A repeated delivery of the same `Message-ID` is dropped.
+model BotMailMessage {
+  id             String        @id
+  threadId       String
+  thread         BotMailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  botId          String
+  bot            Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
+  /// Without angle brackets, lowercase.
+  messageId      String
+  /// IN | OUT
+  direction      String
+  /// The `message_id` of the inbox entry that records the mail.
+  entryMessageId String
+  createdAt      DateTime      @default(now()) @db.Timestamptz(3)
+
+  @@unique([botId, messageId])
+  @@index([threadId])
+}
+
 // ---- bot.prisma
 /// A person's bot. `id` (`bot_` + cuid) is the bot's sub: records of what the bot did
 /// store it. A bot acts for its owner and never holds more than the owner's current role
@@ -1590,6 +1631,8 @@ model Bot {
   ttsModel        String?
   imageModel      String?
   visionModel     String?
+  /// Bit id of the model the bot's sub-tasks run on; null uses the bot's own.
+  subtaskModel    String?
   permissionsFrom BotPermission[]       @relation("BotPermissionFrom")
   permissionsTo   BotPermission[]       @relation("BotPermissionTo")
   hostHeartbeats  BotHostHeartbeat[]
@@ -1598,7 +1641,9 @@ model Bot {
   mailThreads     BotMailThread[]
   mailMessages    BotMailMessage[]
   webhooks        BotWebhook[]
+  connectors      BotConnector[]
   tasks           BotTask[]
+  skills          BotSkill[]
   segments        ConversationSegment[]
 
   @@unique([ownerId, systemKey])
@@ -1609,11 +1654,11 @@ model Bot {
 /// An app a bot may use under `selected_apps`, attached by the owner without the app
 /// approving. The bot's rights there are the owner's current role.
 model BotApp {
-  botId   String
-  bot     Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
-  appId   String
-  app     App      @relation(fields: [appId], references: [id], onDelete: Cascade)
-  addedAt DateTime @default(now()) @db.Timestamptz(3)
+  botId          String
+  bot            Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  appId          String
+  app            App      @relation(fields: [appId], references: [id], onDelete: Cascade)
+  addedAt        DateTime @default(now()) @db.Timestamptz(3)
   /// The most the bot may hold in this app, as `RolePermissions` bits; null keeps the owner's
   /// full role minus the bits a bot never holds.
   permissionMask BigInt?
@@ -1640,6 +1685,38 @@ model BotSecret {
   lastUsedAt  DateTime? @db.Timestamptz(3)
 
   @@id([botId, name])
+}
+
+/// A service the owner attached to a bot: an MCP server (`kind` MCP, `url`) or an OAuth account
+/// (`kind` OAUTH, `providerId`). `grantEncrypted` is the sealed OAuth handle (like
+/// `EventSink.oauthTokensEncrypted`); no response or prompt carries it. `authKind` NONE | SECRET |
+/// OAUTH with `authRef` the secret name or provider id.
+model BotConnector {
+  id              String   @id
+  botId           String
+  bot             Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  /// MCP | OAUTH
+  kind            String
+  label           String
+  providerId      String?
+  url             String?
+  /// NONE | SECRET | OAUTH
+  authKind        String   @default("NONE")
+  authRef         String?
+  grantEncrypted  String?
+  scopes          Json     @default("[]")
+  /// read | ask | never
+  defaultPolicy   String   @default("ask")
+  /// Tool name (or `read` / `write` for OAUTH) to policy.
+  toolPolicies    Json     @default("{}")
+  /// `[{name, description, read_only_hint, destructive_hint, schema_hash}]` from the last refresh.
+  toolsSnapshot   Json     @default("[]")
+  /// Tool name to the `schema_hash` it had when the owner set or confirmed its policy.
+  confirmedHashes Json     @default("{}")
+  createdAt       DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt       DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([botId])
 }
 
 /// A standing grant: bot `fromBotId` may ask bot `toBotId` without asking the owner again.
@@ -1680,51 +1757,30 @@ model BotToolGrant {
   @@unique([botId, tool, scope])
 }
 
-/// A public URL that wakes a bot: `POST /bots/hooks/{id}` with the secret (or an HMAC signature
-/// keyed by its hash) writes a `trigger` entry with `instruction` and the payload into the bot's
-/// conversation with its owner. The secret is shown once; only its hash is stored.
-model BotWebhook {
-  id           String    @id
-  botId        String
-  bot          Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
-  name         String
-  /// blake3 of the secret, lowercase hex.
-  secretHash   String
-  /// What the bot should do with a call.
-  instruction  String    @default("")
-  enabled      Boolean   @default(true)
-  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
-  lastCalledAt DateTime? @db.Timestamptz(3)
-
-  @@index([botId])
-}
-
-/// A task a bot runs for its owner at a time: once (`runAt`) or on a cron schedule in a time
-/// zone. A maintenance sweep claims due tasks with a compare-and-set on `nextRunAt` and writes a
-/// `trigger` entry (source `schedule`) into the bot's conversation with its owner.
-model BotTask {
-  id          String    @id
+/// A skill the owner installed on a bot: guidance the bot loads before a task it describes.
+/// `source` is `owner`, `import`, `bot_proposed` or `package:<id>@<version>`. Only an ACTIVE skill
+/// reaches the bot's prompt or tools; a proposed, imported or package skill starts PENDING until the
+/// owner approves it. References live in the bot's workspace under `bot/skills/<name>/`.
+model BotSkill {
+  id          String   @id
   botId       String
-  bot         Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
-  ownerId     String
-  /// ONCE | CRON
-  kind        String
-  runAt       DateTime? @db.Timestamptz(3)
-  cron        String?
-  timezone    String?
-  /// What the bot should do when the task fires.
-  instruction String
-  title       String
-  nextRunAt   DateTime? @db.Timestamptz(3)
-  lastRunAt   DateTime? @db.Timestamptz(3)
-  enabled     Boolean   @default(true)
-  /// BOT | OWNER
-  createdBy   String
-  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
-  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+  bot         Bot      @relation(fields: [botId], references: [id], onDelete: Cascade)
+  /// agentskills name: lowercase letters, digits, single hyphens; at most 64 characters.
+  name        String
+  /// One line, at most 1,024 characters.
+  description String
+  /// Markdown instructions, at most 32 KiB.
+  body        String
+  source      String
+  /// ACTIVE | PENDING | DISABLED
+  status      String   @default("PENDING")
+  /// Package node names the skill's tools call.
+  tools       Json     @default("[]")
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
 
-  @@index([botId])
-  @@index([enabled, nextRunAt])
+  @@unique([botId, name])
+  @@index([botId, status])
 }
 
 /// A host that runs the bot and said so recently. Presence reads the newest `lastSeenAt`.
@@ -1775,6 +1831,53 @@ model BotTurn {
   @@index([status, leaseUntil])
   @@index([ownerId, status])
   @@index([botId, requesterId, createdAt])
+}
+
+/// A public URL that wakes a bot: `POST /bots/hooks/{id}` with the secret (or an HMAC signature
+/// keyed by its hash) writes a `trigger` entry with `instruction` and the payload into the bot's
+/// conversation with its owner. The secret is shown once; only its hash is stored.
+model BotWebhook {
+  id           String    @id
+  botId        String
+  bot          Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  name         String
+  /// blake3 of the secret, lowercase hex.
+  secretHash   String
+  /// What the bot should do with a call.
+  instruction  String    @default("")
+  enabled      Boolean   @default(true)
+  createdAt    DateTime  @default(now()) @db.Timestamptz(3)
+  lastCalledAt DateTime? @db.Timestamptz(3)
+
+  @@index([botId])
+}
+
+/// A task a bot runs for its owner at a time: once (`runAt`) or on a cron schedule in a time
+/// zone. A maintenance sweep claims due tasks with a compare-and-set on `nextRunAt` and writes a
+/// `trigger` entry (source `schedule`) into the bot's conversation with its owner.
+model BotTask {
+  id          String    @id
+  botId       String
+  bot         Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  ownerId     String
+  /// ONCE | CRON
+  kind        String
+  runAt       DateTime? @db.Timestamptz(3)
+  cron        String?
+  timezone    String?
+  /// What the bot should do when the task fires.
+  instruction String
+  title       String
+  nextRunAt   DateTime? @db.Timestamptz(3)
+  lastRunAt   DateTime? @db.Timestamptz(3)
+  enabled     Boolean   @default(true)
+  /// BOT | OWNER
+  createdBy   String
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@index([botId])
+  @@index([enabled, nextRunAt])
 }
 
 // ---- capacity.prisma
@@ -2086,6 +2189,8 @@ model ManagedDevice {
   lastSeenAt   BigInt?
   revokedAt    BigInt?
   displayName  String?
+  /// When the device's bot host last polled the hub (unix ms); written at most once a minute.
+  botHostSeenAt BigInt?
 
   @@index([ownerId, status])
 }
@@ -2692,23 +2797,25 @@ model MailAutomationQuota {
 /// principals, deduplicated by `directKey`; GROUP has a title and at most 50 active members,
 /// so one fan-out stays far below DSQL's 3,000-row transaction cap.
 model Conversation {
-  id             String                @id
+  id             String                   @id
   /// DIRECT | GROUP
   kind           String
   title          String?
   /// PLAIN | E2E
-  encryption     String                @default("PLAIN")
+  encryption     String                   @default("PLAIN")
   /// Order-independent key of the two principals of a DIRECT conversation.
-  directKey      String?               @unique
+  directKey      String?                  @unique
   createdBy      String
-  lastActivityAt DateTime              @db.Timestamptz(3)
+  lastActivityAt DateTime                 @db.Timestamptz(3)
   members        ConversationMember[]
-  createdAt      DateTime              @default(now()) @db.Timestamptz(3)
-  updatedAt      DateTime              @updatedAt @db.Timestamptz(3)
+  createdAt      DateTime                 @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime                 @updatedAt @db.Timestamptz(3)
   /// The id a moved conversation had on the device: an import key per creator (NULLs distinct).
   importKey      String?
   /// The newest `InboxEntry.seq` handed out, allocated under the conversation's lock; null is 0.
   lastSeq        BigInt?
+  /// A group's picture: the blake3 hex of the PNG at `conversations/<id>/image/<image>.png`.
+  image          String?
   segments       ConversationSegment[]
   files          ConversationFile[]
   botTurns       BotTurn[]
@@ -2716,8 +2823,45 @@ model Conversation {
   pinnedMessages PinnedMessage[]
   stars          StarredMessage[]
   meetings       Meeting[]
+  inviteLinks    ConversationInviteLink[]
 
   @@unique([createdBy, importKey])
+}
+
+/// A person's inbox block. User blocks also cover that user's bots. The owner's bots inherit
+/// these blocks; shared group membership is unchanged.
+model InboxBlock {
+  /// The person who set the block; no foreign key, like ConversationMember.principalId.
+  ownerId       String
+  /// A user sub or bot id.
+  principalId   String
+  /// USER | BOT
+  principalKind String
+  createdAt     DateTime @default(now()) @db.Timestamptz(3)
+
+  @@id([ownerId, principalId])
+  @@index([principalId])
+}
+
+/// A shareable link anyone signed in uses to join a plain group at once. It works while its
+/// creator is an active member, until it expires or reaches `maxUses`; at most 20 per group.
+model ConversationInviteLink {
+  id             String       @id
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  token          String       @unique
+  name           String?
+  /// The member who made it, a user sub; no foreign key.
+  createdBy      String
+  /// -1 is unlimited.
+  maxUses        BigInt       @default(-1)
+  countJoined    BigInt       @default(0)
+  expiresAt      DateTime?    @db.Timestamptz(3)
+  createdAt      DateTime     @default(now()) @db.Timestamptz(3)
+  updatedAt      DateTime     @updatedAt @db.Timestamptz(3)
+
+  @@index([conversationId, createdAt])
+  @@index([createdBy])
 }
 
 /// A conversation a person pinned to the top of their list. A member who leaves keeps the row;
@@ -5360,9 +5504,11 @@ model WasmPackageVersion {
   /// Widget bundle size in bytes
   widgetBundleSize BigInt?
 
-  nodes   Json @default("[]")
+  nodes   Json  @default("[]")
   /// PackageWidgetEntry[] from the manifest, persisted like nodes
-  widgets Json @default("[]")
+  widgets Json  @default("[]")
+  /// PackageSkillEntry[] from the manifest (instructions embedded), reviewed with the version
+  skills  Json?
 
   releaseNotes       String?
   minFlowLikeVersion String?
@@ -5541,44 +5687,4 @@ model WasmPackagePurchase {
   @@index([packageId, completedAt])
   @@index([stripeSessionId])
   @@index([paymentOrderId])
-}
-
-/// A bot's mail thread: one inbox conversation owned by the bot with its owner as member. `id`
-/// is that conversation's id. The owner's Mail tab lists these rows.
-model BotMailThread {
-  id            String           @id
-  botId         String
-  bot           Bot              @relation(fields: [botId], references: [id], onDelete: Cascade)
-  ownerId       String
-  subject       String
-  /// JSON array of correspondent addresses, lowercase, at most 50.
-  participants  String
-  lastMessageAt DateTime         @db.Timestamptz(3)
-  lastSnippet   String?
-  messageCount  Int              @default(0)
-  createdAt     DateTime         @default(now()) @db.Timestamptz(3)
-  messages      BotMailMessage[]
-
-  @@index([botId, lastMessageAt])
-  @@index([ownerId])
-}
-
-/// One mail of a thread by its RFC 5322 `Message-ID`, which later mails reach through
-/// `In-Reply-To` and `References`. A repeated delivery of the same `Message-ID` is dropped.
-model BotMailMessage {
-  id             String        @id
-  threadId       String
-  thread         BotMailThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
-  botId          String
-  bot            Bot           @relation(fields: [botId], references: [id], onDelete: Cascade)
-  /// Without angle brackets, lowercase.
-  messageId      String
-  /// IN | OUT
-  direction      String
-  /// The `message_id` of the inbox entry that records the mail.
-  entryMessageId String
-  createdAt      DateTime      @default(now()) @db.Timestamptz(3)
-
-  @@unique([botId, messageId])
-  @@index([threadId])
 }

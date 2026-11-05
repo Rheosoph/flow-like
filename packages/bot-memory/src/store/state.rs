@@ -109,8 +109,16 @@ impl StateStore {
     pub const TABLE: &'static str = "state";
 
     pub(crate) async fn open(connection: Connection, write_options: Option<WriteOptions>) -> Self {
+        Self::open_named(connection, write_options, Self::TABLE.to_string()).await
+    }
+
+    pub(crate) async fn open_named(
+        connection: Connection,
+        write_options: Option<WriteOptions>,
+        name: String,
+    ) -> Self {
         Self {
-            table: Table::open(connection, Self::TABLE, None, write_options).await,
+            table: Table::open(connection, name, None, write_options).await,
         }
     }
 

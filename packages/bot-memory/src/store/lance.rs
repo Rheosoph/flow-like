@@ -71,7 +71,7 @@ fn without_vector(row: &mut Value, has_column: bool) {
 
 pub(crate) struct Table {
     connection: Connection,
-    name: &'static str,
+    name: String,
     write_options: Option<WriteOptions>,
     store: RwLock<LanceDBVectorStore>,
     fts_column: Option<&'static str>,
@@ -82,7 +82,7 @@ pub(crate) struct Table {
 impl Table {
     async fn connect(
         connection: &Connection,
-        name: &'static str,
+        name: &str,
         write_options: Option<&WriteOptions>,
     ) -> LanceDBVectorStore {
         let mut store =
@@ -95,11 +95,12 @@ impl Table {
 
     pub(crate) async fn open(
         connection: Connection,
-        name: &'static str,
+        name: impl Into<String>,
         fts_column: Option<&'static str>,
         write_options: Option<WriteOptions>,
     ) -> Self {
-        let store = Self::connect(&connection, name, write_options.as_ref()).await;
+        let name = name.into();
+        let store = Self::connect(&connection, &name, write_options.as_ref()).await;
         Self {
             connection,
             name,
@@ -122,7 +123,7 @@ impl Table {
             return Ok(true);
         }
         let reopened =
-            Self::connect(&self.connection, self.name, self.write_options.as_ref()).await;
+            Self::connect(&self.connection, &self.name, self.write_options.as_ref()).await;
         if !reopened.table_exists().await? {
             return Ok(false);
         }
@@ -164,7 +165,7 @@ impl Table {
             .mode = WriteMode::Create;
         match self
             .connection
-            .create_table(self.name, rows)
+            .create_table(&self.name, rows)
             .write_options(options)
             .execute()
             .await

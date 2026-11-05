@@ -14,7 +14,8 @@ export type InboxEntryKind =
 	| "trigger"
 	| "activity"
 	| "call"
-	| "transcript";
+	| "transcript"
+	| "room";
 
 /** At most this many members, so one fan-out stays far below the database's transaction cap. */
 export const MAX_CONVERSATION_MEMBERS = 50;
@@ -187,6 +188,8 @@ export interface IConversation {
 	id: string;
 	kind: ConversationKind;
 	title: string | null;
+	/** A group's picture: a signed link, or a data URL for a conversation on this device. */
+	image_url?: string | null;
 	encryption: ConversationEncryption;
 	created_by: string;
 	created_at: string;
@@ -262,7 +265,7 @@ export interface ICreateConversationRequest {
 export interface ISendInboxEntryRequest {
 	/** Chosen by the sender; sending the same id again returns the first result. */
 	message_id: string;
-	kind: Exclude<InboxEntryKind, "member" | "trigger" | "activity">;
+	kind: Exclude<InboxEntryKind, "member" | "trigger" | "activity" | "room">;
 	/** Plain conversations. */
 	envelope?: IInboxPlainEnvelope;
 	/** End-to-end encrypted conversations: one sealed envelope per active member. */
@@ -354,6 +357,13 @@ export interface IRegisterInboxKeyRequest {
 	public_key: string;
 }
 
+/** A person or bot blocked by the signed-in account. */
+export interface IBlockedPrincipal {
+	principal_id: string;
+	kind: InboxPrincipalKind;
+	created_at: string;
+}
+
 /** An invitation to a room for you or for one of your bots. */
 export interface IInvitation {
 	/** `{conversation_id}:{principal_id}`. */
@@ -406,6 +416,34 @@ export interface IInviteResponse {
 	conversation: IConversation;
 }
 
+export interface IConversationLink {
+	id: string;
+	conversation_id: string;
+	token: string;
+	name: string | null;
+	/** User sub of the member who made it. */
+	created_by: string;
+	/** -1 is unlimited. */
+	max_uses: number;
+	count_joined: number;
+	expires_at: string | null;
+	created_at: string;
+}
+
+export interface ICreateConversationLinkRequest {
+	name?: string | null;
+	/** Omit or 0 or less for unlimited. */
+	max_uses?: number | null;
+	/** Omit or 0 or less to never expire. */
+	expires_in_hours?: number | null;
+}
+
+export interface IJoinedConversation {
+	conversation: IConversation;
+	/** False when you were already a member. */
+	joined: boolean;
+}
+
 export type ConversationTurnStatus = "queued" | "running" | "waiting";
 
 /** A bot turn on an account conversation that has not finished. */
@@ -430,6 +468,11 @@ export interface IInboxState {
 		conversationId: string,
 		title: string,
 	): Promise<IConversation>;
+	/** Sets a group's picture from an image data URL of at most 512 KiB; `null` removes it. */
+	setConversationImage(
+		conversationId: string,
+		image: string | null,
+	): Promise<IConversation>;
 	addMembers(conversationId: string, members: string[]): Promise<IConversation>;
 	removeMember(conversationId: string, principalId: string): Promise<void>;
 	listEntries(
@@ -438,6 +481,10 @@ export interface IInboxState {
 	): Promise<IInboxEntriesPage>;
 	/** Pending invitations for you and your bots, newest first. */
 	listInvitations(): Promise<IInvitation[]>;
+	listBlocks(): Promise<IBlockedPrincipal[]>;
+	/** Prevents direct contact and invitations; blocking a person also covers their bots. */
+	blockPrincipal(principalId: string): Promise<void>;
+	unblockPrincipal(principalId: string): Promise<void>;
 	/** Exactly who the server lets you bring into a room. */
 	listInvitable(query?: {
 		q?: string;
@@ -477,6 +524,15 @@ export interface IInboxState {
 	unstarMessage(conversationId: string, messageId: string): Promise<void>;
 	listStars(query?: IStarredMessagesQuery): Promise<IStarredMessagesPage>;
 	cancelInvitation(conversationId: string, principalId: string): Promise<void>;
+	createConversationLink(
+		conversationId: string,
+		request: ICreateConversationLinkRequest,
+	): Promise<IConversationLink>;
+	/** Newest first. */
+	listConversationLinks(conversationId: string): Promise<IConversationLink[]>;
+	revokeConversationLink(conversationId: string, linkId: string): Promise<void>;
+	/** Joining a room you are already in answers `joined: false`. */
+	joinConversationLink(token: string): Promise<IJoinedConversation>;
 	setMemberLimits(
 		conversationId: string,
 		botId: string,

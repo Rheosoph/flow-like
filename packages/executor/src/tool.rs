@@ -18,9 +18,13 @@ use flow_like::flow_like_model_provider::provider::ModelProviderConfiguration;
 use flow_like::models::llm::ModelUsageContext;
 use flow_like::state::{FlowLikeConfig, FlowLikeState};
 use flow_like::utils::http::HTTPClient;
+use flow_like::profile::Profile;
+use flow_like_bot_tools::image::{
+    hosted_access, CatalogImages, ImageBackend, ImageBudget, ImageUnavailable,
+};
 use flow_like_bot_tools::{run, MemorySessions};
 use flow_like_bot_tools_host::{
-    job_hash, outcome_output, AppAccess, HostEnv, JobModels, StateModels, ToolJob, ToolJobEnvelope,
+    job_hash, outcome_output, AppAccess, HostEnv, ImageSource, JobModels, StateModels, ToolJob, ToolJobEnvelope,
     ToolReply,
 };
 use flow_like_storage::files::store::FlowLikeStore;
@@ -184,7 +188,7 @@ fn models(
     token: &str,
     state: Arc<FlowLikeState>,
 ) -> StateModels {
-    let JobModels { chat, embedding } = job.models.clone();
+    let JobModels { chat, embedding, .. } = job.models.clone();
     StateModels {
         state,
         chat: bit_of(&chat),
@@ -195,6 +199,57 @@ fn models(
             run_id: Some(job.turn_id.clone()),
             api_base_url: flow_like::hub::hub_origin(&claims.callback_url, true),
         },
+    }
+}
+
+/// The image model of an `image_generate` job: the Bit the API opened for this job, called from
+/// here through the server's guarded client.
+struct JobImages {
+    bit: serde_json::Value,
+    left: u32,
+    state: Arc<FlowLikeState>,
+    token: String,
+    usage: ModelUsageContext,
+}
+
+fn job_images(
+    job: &ToolJob,
+    claims: &ExecutorClaims,
+    token: &str,
+    state: &Arc<FlowLikeState>,
+) -> Option<JobImages> {
+    let image = job.models.image.as_ref()?;
+    Some(JobImages {
+        bit: image.bit.clone(),
+        left: image.left,
+        state: state.clone(),
+        token: token.to_string(),
+        usage: ModelUsageContext {
+            app_id: Some(job.workspace.clone()),
+            run_id: Some(job.turn_id.clone()),
+            api_base_url: flow_like::hub::hub_origin(&claims.callback_url, true),
+        },
+    })
+}
+
+#[async_trait]
+impl ImageSource for JobImages {
+    async fn images(
+        &self,
+    ) -> Result<Arc<dyn ImageBackend>, ImageUnavailable> {
+        let bit: Bit = serde_json::from_value(self.bit.clone())
+            .map_err(|_| ImageUnavailable::Unusable("the job's image model is malformed".into()))?;
+        let hosted = hosted_access(&self.state, Some(self.token.clone()), Some(&self.usage));
+        let images = CatalogImages::resolve(
+            bit,
+            &Profile::default(),
+            &self.state,
+            ExecutionEnvironment::Server,
+            Some(hosted),
+            Arc::new(ImageBudget::new(self.left)),
+        )
+        .await?;
+        Ok(Arc::new(images))
     }
 }
 
@@ -215,11 +270,43 @@ pub(crate) async fn run_job(
             .map_err(|error| forbidden(error.to_string()))?,
     )
     .await?;
+    let images = job_images(&job, claims, &envelope.executor_jwt, &state);
+    let skills = job.skill_call.clone().map(|skill_call| {
+        let workspace_store = match access.credential(&job.workspace) {
+            Ok(credentials) => Some(credentials.clone()),
+            Err(_) => None,
+        };
+        (skill_call, workspace_store, state.clone())
+    });
     let models = Arc::new(models(&job, claims, &envelope.executor_jwt, state));
-    let env = HostEnv::new(&job.workspace, &job.scope, access, models)
+    let mut env = HostEnv::new(&job.workspace, &job.scope, access, models)
         .with_sessions(Arc::new(MemorySessions::default()))
         .with_expensive_documents(job.allow_expensive_documents)
-        .with_secrets(Arc::new(job.secrets.clone()));
+        .with_secrets(Arc::new(job.secrets.clone()))
+        .with_connectors(flow_like_bot_tools_host::connector_source(&job.connectors));
+    if let Some(images) = images {
+        env = env.with_images(Arc::new(images));
+    }
+    if let Some((skill_call, credentials, state)) = skills {
+        let store = match credentials {
+            Some(credentials) => credentials.to_store_type(StoreType::Content).await.ok(),
+            None => None,
+        };
+        env = env.with_skills(Arc::new(crate::skill_host::ExecutorSkills::new(
+            skill_call,
+            state,
+            envelope.executor_jwt.clone(),
+            job.workspace.clone(),
+            store,
+            job.turn_id.clone(),
+            job.owner.clone(),
+            ModelUsageContext {
+                app_id: Some(job.workspace.clone()),
+                run_id: Some(job.turn_id.clone()),
+                api_base_url: flow_like::hub::hub_origin(&claims.callback_url, true),
+            },
+        )));
+    }
     let started = Instant::now();
     let outcome = tokio::time::timeout(deadline(claims), run(&job.tool, job.args.clone(), &env))
         .await
@@ -276,6 +363,8 @@ mod tests {
             models: JobModels::default(),
             allow_expensive_documents: false,
             secrets: Default::default(),
+            connectors: Vec::new(),
+            skill_call: None,
         }
     }
 

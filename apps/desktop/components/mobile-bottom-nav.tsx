@@ -2,10 +2,10 @@
 
 import { cn, useSidebar } from "@flow-like/flow-like-ui";
 import { BOTS_ROUTE } from "@flow-like/flow-like-ui/components/bots-tab/dock-selection";
+import { BotsNavAvatar } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-avatar";
 import { BotsNavBadge } from "@flow-like/flow-like-ui/components/global-chat/bots-nav-badge";
 import { useTranslation } from "@flow-like/locales";
 import {
-	BotIcon,
 	CompassIcon,
 	HomeIcon,
 	LayoutGridIcon,
@@ -91,13 +91,12 @@ export function MobileBottomNav() {
 				>
 					<span
 						className={cn(
-							"relative -mt-1 grid size-9 place-items-center rounded-full text-white shadow-md shadow-primary/30",
-							"bg-linear-to-br from-primary via-primary to-purple-600",
+							"relative -mt-1 grid size-9 place-items-center rounded-full bg-primary/10",
 							botsActive &&
 								"ring-2 ring-primary/40 ring-offset-1 ring-offset-background",
 						)}
 					>
-						<BotIcon className="size-5" strokeWidth={2.2} aria-hidden />
+						<BotsNavAvatar size={36} />
 						<BotsNavBadge className="absolute -right-1 -top-1" />
 					</span>
 					<span

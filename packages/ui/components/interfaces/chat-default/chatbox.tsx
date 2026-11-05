@@ -333,10 +333,6 @@ export const ChatBox = forwardRef<ChatBoxRef, ChatBoxProps>(
 			setAttachedFiles([]);
 			setRecordedAudio(null);
 			setRecordedDuration(0);
-			// Dismiss the iOS keyboard and revert any zoom
-			try {
-				chatboxRef.current?.blur();
-			} catch {}
 
 			try {
 				await onSendMessage(message, files, activeTools, audio);

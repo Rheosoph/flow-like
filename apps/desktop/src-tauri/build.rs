@@ -1,10 +1,11 @@
 use std::{fs, path::PathBuf};
 
+mod frontend_payload;
 mod ios_frontend;
 
 fn stage_ios_frontend() -> Result<(), Box<dyn std::error::Error>> {
     let out = PathBuf::from(std::env::var_os("OUT_DIR").ok_or("OUT_DIR is missing")?);
-    let manifest = out.join("frontend-wasm-manifest.json");
+    let manifest = out.join("frontend-bundle-manifest.json");
     fs::write(&manifest, "[]")?;
     if tauri_build::is_dev() {
         return Ok(());
@@ -41,20 +42,20 @@ fn stage_ios_frontend() -> Result<(), Box<dyn std::error::Error>> {
     let project = std::env::var_os("TAURI_IOS_PROJECT_PATH")
         .map(PathBuf::from)
         .unwrap_or_else(|| package.join("gen/apple"));
-    let resources = project.join("assets/frontend-wasm");
+    let resources = project.join("assets").join(frontend_payload::RESOURCE_DIR);
 
     // Xcode copies this existing folder resource after its Rust build phase.
     // Staging here also covers Archive launched directly from Xcode, where
     // Tauri's CLI does not refresh bundle.resources.
     let staged = ios_frontend::stage(&source, &embedded, &resources)?;
     println!("cargo:rerun-if-changed={}", resources.display());
-    fs::write(manifest, serde_json::to_vec(&staged.wasm_paths)?)?;
+    fs::write(manifest, serde_json::to_vec(&staged.bundled_paths)?)?;
     overrides["build"]["frontendDist"] = serde_json::to_value(&embedded)?;
     println!("cargo:rustc-env=TAURI_CONFIG={overrides}");
     println!(
-        "cargo:warning=iOS bundles {} WASM payloads ({} bytes) outside the executable",
-        staged.wasm_paths.len(),
-        staged.wasm_bytes
+        "cargo:warning=iOS bundles {} frontend payloads ({} bytes) outside the executable",
+        staged.bundled_paths.len(),
+        staged.bundled_bytes
     );
     Ok(())
 }

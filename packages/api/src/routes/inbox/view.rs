@@ -5,12 +5,14 @@
 use super::{
     MEMBER_BLOCKED, MEMBER_DECLINED, MEMBER_PENDING, Reader, active_members,
     conversation_not_found,
+    image::sign_images,
     model::{Conversation, ConversationMember, InboxEntry, PendingMember},
     requests, stored,
 };
 use crate::{
     entity::{bot, conversation_member, inbox_entry},
     error::ApiError,
+    state::AppState,
 };
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::inbox::InboxEntryKind;
@@ -28,6 +30,7 @@ struct ConversationRow {
     id: String,
     kind: String,
     title: Option<String>,
+    image: Option<String>,
     encryption: String,
     created_by: String,
     created_at: DateTime<FixedOffset>,
@@ -57,7 +60,8 @@ fn conversations_statement(
         filter.push_str(&format!(r#" AND c."id" = ${}"#, values.len()));
     }
     let sql = format!(
-        r#"SELECT p."id" AS id, p."kind" AS kind, p."title" AS title, p."encryption" AS encryption,
+        r#"SELECT p."id" AS id, p."kind" AS kind, p."title" AS title, p."image" AS image,
+       p."encryption" AS encryption,
        p."createdBy" AS created_by, p."createdAt" AS created_at,
        p."lastActivityAt" AS last_activity_at, p."pinnedAt" AS pinned_at,
        (SELECT COUNT(*) FROM "InboxEntry" e
@@ -68,7 +72,7 @@ fn conversations_statement(
          WHERE e."inboxId" = $1 AND e."conversationId" = p."id" AND e."kind" = $2
          ORDER BY e."createdAt" DESC, e."id" DESC LIMIT 1) AS last_entry_id
 FROM (
-    SELECT c."id", c."kind", c."title", c."encryption", c."createdBy", c."createdAt",
+    SELECT c."id", c."kind", c."title", c."image", c."encryption", c."createdBy", c."createdAt",
            c."lastActivityAt", m."lastReadAt", pc."pinnedAt"
     FROM "ConversationMember" m
     JOIN "Conversation" c ON c."id" = m."conversationId"
@@ -127,6 +131,8 @@ pub(super) async fn conversations_for<C: ConnectionTrait>(
             encryption: row.encryption.to_ascii_lowercase(),
             id: row.id,
             title: row.title,
+            image_url: None,
+            image: row.image,
             created_by: row.created_by,
             created_at: row.created_at,
             last_activity_at: row.last_activity_at,
@@ -263,13 +269,16 @@ pub(super) async fn conversation_for<C: ConnectionTrait>(
         .next())
 }
 
-/// [`conversation_for`], with a conversation the reader is not in reading as missing.
-pub(super) async fn visible_conversation<C: ConnectionTrait>(
-    db: &C,
+/// [`conversation_for`] with its picture's link, a conversation the reader is not in reading as
+/// missing.
+pub(super) async fn visible_conversation(
+    state: &AppState,
     reader: &Reader,
     conversation_id: &str,
 ) -> Result<Conversation, ApiError> {
-    conversation_for(db, reader, conversation_id)
+    let mut conversation = conversation_for(&state.db, reader, conversation_id)
         .await?
-        .ok_or_else(|| conversation_not_found(conversation_id))
+        .ok_or_else(|| conversation_not_found(conversation_id))?;
+    sign_images(state, std::slice::from_mut(&mut conversation)).await;
+    Ok(conversation)
 }

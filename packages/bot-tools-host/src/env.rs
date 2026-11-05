@@ -36,6 +36,15 @@ pub trait SecretSource: Send + Sync {
     async fn list(&self) -> Result<Vec<SecretInfo>>;
 }
 
+/// Where a host gets the bot's image model for `image_generate`; one per turn, so the turn's
+/// image allowance holds across calls.
+#[async_trait]
+pub trait ImageSource: Send + Sync {
+    async fn images(
+        &self,
+    ) -> std::result::Result<Arc<dyn flow_like_bot_tools::image::ImageBackend>, flow_like_bot_tools::image::ImageUnavailable>;
+}
+
 #[derive(Debug, Clone)]
 struct Rights {
     files: bool,
@@ -72,8 +81,11 @@ pub struct HostEnv {
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
+    skills: Option<Arc<dyn flow_like_bot_tools::SkillHost>>,
     mail: Option<Arc<dyn flow_like_bot_tools::email::MailBackend>>,
     secrets: Option<Arc<dyn SecretSource>>,
+    images: Option<Arc<dyn ImageSource>>,
+    connectors: Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>>,
 }
 
 fn conversation_of_app(app_id: &str) -> Option<&str> {
@@ -108,9 +120,26 @@ impl HostEnv {
             notifier: None,
             people: None,
             scheduler: None,
+            skills: None,
             mail: None,
             secrets: None,
+            images: None,
+            connectors: None,
         }
+    }
+
+    pub fn with_connectors(
+        mut self,
+        connectors: Arc<dyn flow_like_bot_tools::services::ConnectorSource>,
+    ) -> Self {
+        self.connectors = Some(connectors);
+        self
+    }
+
+    /// Without a source this host generates no images.
+    pub fn with_images(mut self, images: Arc<dyn ImageSource>) -> Self {
+        self.images = Some(images);
+        self
     }
 
     /// Without a source the bot has no secrets here.
@@ -148,6 +177,11 @@ impl HostEnv {
 
     pub fn with_scheduler(mut self, scheduler: Arc<dyn flow_like_bot_tools::Scheduler>) -> Self {
         self.scheduler = Some(scheduler);
+        self
+    }
+
+    pub fn with_skills(mut self, skills: Arc<dyn flow_like_bot_tools::SkillHost>) -> Self {
+        self.skills = Some(skills);
         self
     }
 
@@ -222,8 +256,16 @@ impl ToolEnv for HostEnv {
         self.mail.clone()
     }
 
+    fn connectors(&self) -> Option<Arc<dyn flow_like_bot_tools::services::ConnectorSource>> {
+        self.connectors.clone()
+    }
+
     fn scheduler(&self) -> Option<Arc<dyn flow_like_bot_tools::Scheduler>> {
         self.scheduler.clone()
+    }
+
+    fn skills(&self) -> Option<Arc<dyn flow_like_bot_tools::SkillHost>> {
+        self.skills.clone()
     }
 
     fn notifier(&self) -> Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>> {
@@ -339,6 +381,16 @@ impl ToolEnv for HostEnv {
 
     async fn embedder(&self) -> Result<Option<Arc<dyn KnowledgeEmbedder>>> {
         self.models.embedder().await
+    }
+
+    async fn images(
+        &self,
+    ) -> std::result::Result<Arc<dyn flow_like_bot_tools::image::ImageBackend>, flow_like_bot_tools::image::ImageUnavailable>
+    {
+        match &self.images {
+            Some(source) => source.images().await,
+            None => Err(flow_like_bot_tools::image::ImageUnavailable::NotOnThisHost),
+        }
     }
 
     async fn secret(&self, name: &str) -> Result<Option<String>> {

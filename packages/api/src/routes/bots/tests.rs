@@ -384,6 +384,7 @@ fn stored_rows_read_back_as_the_settings_that_wrote_them() {
         tts_model: None,
         image_model: None,
         vision_model: None,
+        subtask_model: None,
     };
     assert_eq!(model.location, "DESKTOP");
     assert_eq!(*model.capabilities, ["computer_use", "webhook"]);
@@ -607,6 +608,7 @@ async fn a_duplicate_copies_the_settings_and_the_apps_the_owner_still_uses() {
         tts_model: Some("tts-a".into()),
         image_model: Some("image-a".into()),
         vision_model: Some("vision-a".into()),
+        subtask_model: Some("small-a".into()),
         classification: DataSensitivity {
             classification: Some(DataClassification::Confidential),
             pii: true,

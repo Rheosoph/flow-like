@@ -3,12 +3,14 @@ import { type Value, createSlateEditor } from "platejs";
 import { PlateStatic } from "platejs/static";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { inlineMentions } from "../bots-tab/mentions";
 import {
 	CODE_MARKUP_FIXTURES,
 	MARKDOWN_FIXTURES,
 	STORED_FIXTURES,
 } from "../editor/__fixtures__/plate-corpus";
 import { BaseEditorKit } from "../editor/editor-base-kit";
+import { mentionedSubject } from "../editor/ui/mention-node-static";
 import { LazyPlateStatic, indexEditorPaths } from "./lazy-plate-static";
 import {
 	EMPTY_STREAMING_STATE,
@@ -52,6 +54,44 @@ const types = (nodes: readonly Node[]): string[] =>
 		...(node.type ? [node.type] : []),
 		...types(node.children ?? []),
 	]);
+
+describe("mention identity decoding", () => {
+	for (const subject of ["person%2Fteam", "person%", "person/team"]) {
+		test(`keeps ${subject} intact in settled and streaming markdown`, () => {
+			const markdown = `[@The G](mention://${encodeURIComponent(subject)})`;
+			const values = [
+				parse(markdown),
+				parseStreamingMarkdown(worker, markdown, EMPTY_STREAMING_STATE).blocks,
+			];
+			for (const value of values) {
+				const mention = value[0]?.children?.find(
+					(node) => node.type === "mention",
+				);
+				expect(mentionedSubject((mention as { key?: unknown })?.key)).toBe(
+					subject,
+				);
+			}
+		});
+	}
+
+	for (const name of ["A[B]*C* ~~D~~", "A {b}", "$$Ada$$"]) {
+		test(`keeps the literal display name ${name} and encoded IDs`, () => {
+			const target = { id: "person)team(%", name };
+			const markdown = inlineMentions("Please decide", [target]);
+			const values = [
+				parse(markdown),
+				parseStreamingMarkdown(worker, markdown, EMPTY_STREAMING_STATE).blocks,
+			];
+			for (const value of values) {
+				const mention = value[0]?.children?.find(
+					(node) => node.type === "mention",
+				) as { key?: unknown; value?: unknown } | undefined;
+				expect(mentionedSubject(mention?.key)).toBe(target.id);
+				expect(mention?.value).toBe(`@${target.name}`);
+			}
+		});
+	}
+});
 
 describe("markdown code keeps its markup verbatim", () => {
 	for (const { title, markdown, verbatim } of CODE_MARKUP_FIXTURES) {

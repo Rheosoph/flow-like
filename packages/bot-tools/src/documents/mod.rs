@@ -1,3 +1,4 @@
+mod author;
 mod backend;
 #[cfg(feature = "documents")]
 mod catalog;
@@ -19,15 +20,22 @@ use crate::outcome::{ToolImage, ToolOutput};
 use crate::spec::{Approval, ToolSpec, schema_of};
 use crate::tables::{SaveMode, save_rows, validate_table_name};
 
+pub use author::{
+    DocumentCreateArgs, DocumentFillArgs, document_create, document_fill, export_stem,
+    unique_export_path,
+};
 pub use backend::{
-    DocumentBackend, ExcelOperation, ExcelRequest, Extracted, ModelTokens, RenderedPng, StyleQuery,
-    Summary, SummaryRequest,
+    BuiltDocument, ChartKind, DeckChart, DeckSlide, DocumentBackend, ExcelOperation, ExcelRequest,
+    Extracted, FillRows, FilledDocument, MarkdownDocument, ModelTokens, RenderedPng, SheetCell,
+    SheetData, SlideLayoutKind, StyleQuery, Summary, SummaryRequest, TemplateFill,
 };
 
 pub const FILE_SUMMARIZE: &str = "file_summarize";
 pub const FILE_EXTRACT: &str = "file_extract";
 pub const PDF_RENDER: &str = "pdf_render";
 pub const EXCEL_INSPECT: &str = "excel_inspect";
+pub const DOCUMENT_CREATE: &str = "document_create";
+pub const DOCUMENT_FILL: &str = "document_fill";
 
 const CAPABILITY: &str = "documents";
 const TOKENS_PER_PDF_PAGE: u64 = 1500;
@@ -124,6 +132,22 @@ pub fn specs() -> Vec<ToolSpec> {
             "Render PDF pages to images. The first few pages are shown to you; every render is saved in the workspace and returned as a handle.",
             schema_of::<PdfRenderArgs>(),
         ),
+        ToolSpec {
+            mutating: true,
+            ..spec(
+                DOCUMENT_CREATE,
+                "Create a NEW Word (docx), PDF, PowerPoint (pptx) or Excel (xlsx) file in the workspace (bot/exports/), never overwriting. pdf/docx take markdown (headings, lists, tables, code, images from workspace paths); pptx takes slides (title, bullets, image, table, chart, notes); xlsx takes sheets of rows where a string starting with '=' is a formula. Returns the file handle; a PDF also shows you page 1.",
+                schema_of::<DocumentCreateArgs>(),
+            )
+        },
+        ToolSpec {
+            mutating: true,
+            ..spec(
+                DOCUMENT_FILL,
+                "Fill a template into a NEW file in bot/exports/: replace {{placeholders}} in a Word or PowerPoint file (text, images, table rows) or fill the fields of a PDF form. Say which names did not match.",
+                schema_of::<DocumentFillArgs>(),
+            )
+        },
     ]
 }
 

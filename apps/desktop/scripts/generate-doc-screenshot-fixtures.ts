@@ -149,7 +149,7 @@ const profile = {
 	name: "Documentation",
 	description: "A deterministic workspace for current product documentation.",
 	icon: "/app-logo.webp",
-	thumbnail: "/swimlanes/studio.jpg",
+	thumbnail: "/swimlanes/studio.webp",
 	interests: ["automation", "documentation", "AI"],
 	tags: ["docs", "examples"],
 	hub: "api.flow-like.com",
@@ -240,7 +240,7 @@ const metadata = {
 	tags: ["support", "automation", "AI"],
 	use_case: "Customer support",
 	icon: "/app-logo.webp",
-	thumbnail: "/swimlanes/studio.jpg",
+	thumbnail: "/swimlanes/studio.webp",
 	preview_media: [],
 	age_rating: null,
 	website: "https://flow-like.com",
@@ -1695,7 +1695,7 @@ const baseResponses: Record<string, unknown> = {
 			updatedAt: timestamp,
 			pages: pageList,
 			nodeTypes: Object.values(board.nodes as JsonRecord).map(
-				(node: any) => node.name,
+				(node) => (node as JsonRecord).name,
 			),
 			entryNodes: [quickActionNode, chatNode].map((node) => ({
 				nodeId: node.id,

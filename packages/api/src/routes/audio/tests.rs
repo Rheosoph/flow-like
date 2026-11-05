@@ -27,6 +27,177 @@ fn every_hosted_speech_provider_is_accepted_for_both_bit_types() {
 }
 
 #[test]
+fn catalog_defaults_reach_upstream_and_durable_jobs_without_overriding_requests() {
+    let mut bit = audio_bit(BitTypes::Tts, "hosted:openrouter");
+    bit.parameters["default_voice"] = json!("af_heart");
+    let (provider, implementation) = catalog_provider(&bit).unwrap();
+    for explicit in [None, Some("af_bella")] {
+        let mut payload = AudioPayload::Speech(HostedSpeechRequest {
+            bit_id: bit.id.clone(),
+            text: "Hello".into(),
+            voice: explicit.map(str::to_owned),
+            format: Some("wav".into()),
+        });
+        payload.apply_catalog_defaults(&bit).unwrap();
+        let job = HostedAudioJob {
+            payload,
+            provider: provider.clone(),
+            pricing: AudioPricing::Legacy,
+        };
+        let wire = serde_json::to_value(&job).unwrap();
+        let restored: HostedAudioJob = serde_json::from_value(wire).unwrap();
+        let AudioPayload::Speech(request) = restored.payload else {
+            panic!("speech job");
+        };
+        let upstream = flow_like::flow_like_model_provider::audio::speech_request(
+            implementation,
+            "hexgrad/kokoro-82m",
+            &request,
+        )
+        .unwrap();
+        let flow_like::flow_like_model_provider::audio::UpstreamBody::Json(body) = upstream.body
+        else {
+            panic!("JSON request");
+        };
+        assert_eq!(body["voice"], explicit.unwrap_or("af_heart"));
+    }
+
+    let mut bit = audio_bit(BitTypes::Stt, "hosted:openrouter");
+    bit.parameters["default_language"] = json!("pt-BR");
+    for explicit in [None, Some("en")] {
+        let mut payload = AudioPayload::Transcription(HostedTranscriptionRequest {
+            bit_id: bit.id.clone(),
+            audio_base64: "AQ==".into(),
+            mime: "audio/wav".into(),
+            language: explicit.map(str::to_owned),
+        });
+        payload.apply_catalog_defaults(&bit).unwrap();
+        let AudioPayload::Transcription(request) = payload else {
+            panic!("transcription job");
+        };
+        assert_eq!(
+            request.language.as_deref(),
+            Some(explicit.unwrap_or("pt-BR"))
+        );
+    }
+}
+
+#[test]
+fn catalog_defaults_follow_the_speech_request_contracts() {
+    for (field, values) in [
+        (
+            "default_voice",
+            vec![
+                json!(""),
+                json!("with space"),
+                json!("x".repeat(65)),
+                json!(7),
+            ],
+        ),
+        (
+            "default_language",
+            vec![
+                json!(""),
+                json!("e"),
+                json!("en_US"),
+                json!("x".repeat(17)),
+                json!([]),
+            ],
+        ),
+        (
+            "max_input_characters",
+            vec![json!(0), json!(-1), json!(4097), json!(2.5), json!("2000")],
+        ),
+    ] {
+        for value in values {
+            let mut bit = audio_bit(BitTypes::Tts, "hosted:openrouter");
+            bit.parameters[field] = value;
+            assert!(
+                catalog_provider(&bit).is_err(),
+                "{field}: {}",
+                bit.parameters[field]
+            );
+        }
+    }
+    let bit = audio_bit(BitTypes::Tts, "hosted:openrouter");
+    assert!(catalog_provider(&bit).is_ok());
+}
+
+#[test]
+fn catalog_character_limits_reject_long_input_without_truncating_unicode() {
+    let mut bit = audio_bit(BitTypes::Tts, "hosted:openrouter");
+    bit.parameters["max_input_characters"] = json!(2);
+    assert!(catalog_provider(&bit).is_ok());
+    let mut payload = AudioPayload::Speech(HostedSpeechRequest {
+        bit_id: bit.id.clone(),
+        text: "é🙂".into(),
+        voice: Some("thalia".into()),
+        format: None,
+    });
+    payload.apply_catalog_defaults(&bit).unwrap();
+    bit.parameters["max_input_characters"] = json!(1);
+    assert!(payload.apply_catalog_defaults(&bit).is_err());
+    assert!(
+        payload
+            .validate_character_limit(catalog_defaults(&bit).unwrap().max_input_characters)
+            .is_err()
+    );
+    let AudioPayload::Speech(request) = payload else {
+        panic!("speech request");
+    };
+    assert_eq!(request.text, "é🙂");
+    assert_eq!(request.voice.as_deref(), Some("thalia"));
+    bit.bit_type = BitTypes::Stt;
+    assert!(catalog_provider(&bit).is_err());
+}
+
+#[test]
+fn durable_audio_jobs_freeze_prices_and_old_jobs_retain_legacy_tariffs() {
+    let mut bit = audio_bit(BitTypes::Tts, "hosted:openrouter");
+    bit.parameters["pricing"] = json!({"input_micro_usd_per_million_bytes": 15_000_000});
+    let (provider, _) = catalog_provider(&bit).unwrap();
+    let job = HostedAudioJob {
+        payload: AudioPayload::Speech(HostedSpeechRequest {
+            bit_id: bit.id.clone(),
+            text: "é🙂".into(),
+            voice: None,
+            format: None,
+        }),
+        provider,
+        pricing: AudioPricing::from_bit(&bit).unwrap(),
+    };
+    assert_eq!(job.payload.reserved_cost(job.pricing).unwrap(), 90);
+    let mut saved = serde_json::to_value(job).unwrap();
+    bit.parameters["pricing"] = json!({"input_micro_usd_per_million_characters": 100_000_000});
+    let restored: HostedAudioJob = serde_json::from_value(saved.clone()).unwrap();
+    assert_eq!(
+        restored.payload.reserved_cost(restored.pricing).unwrap(),
+        90
+    );
+    assert_eq!(
+        restored
+            .payload
+            .reserved_cost(AudioPricing::from_bit(&bit).unwrap())
+            .unwrap(),
+        200
+    );
+
+    saved.as_object_mut().unwrap().remove("pricing");
+    let legacy: HostedAudioJob = serde_json::from_value(saved).unwrap();
+    assert_eq!(legacy.pricing, AudioPricing::Legacy);
+    assert_eq!(legacy.payload.reserved_cost(legacy.pricing).unwrap(), 60);
+}
+
+#[test]
+fn audio_catalog_validation_rejects_tariffs_for_a_different_modality() {
+    let mut bit = audio_bit(BitTypes::Tts, "hosted:openrouter");
+    bit.parameters["pricing"] = json!({"input_micro_usd_per_million_seconds": 15_000_000});
+    assert!(catalog_provider(&bit).is_err());
+    bit.bit_type = BitTypes::Stt;
+    assert!(catalog_provider(&bit).is_ok());
+}
+
+#[test]
 fn catalog_rejects_client_chosen_providers_credentials_and_local_files() {
     let bit = audio_bit(BitTypes::Stt, "hosted:groq");
     for provider in [
@@ -158,7 +329,7 @@ fn built_in_rates_are_valid_and_reserve_the_estimated_cost() {
         (AudioKind::Transcription, 600),
         (AudioKind::Speech, 122_880),
     ] {
-        let rate = metering::rate(kind, reserved).unwrap();
+        let rate = metering::rate(kind, reserved, AudioPricing::Legacy, "official-audio").unwrap();
         assert_eq!(rate.request_micro_usd, reserved);
         assert!(rate.version.starts_with("audio-"));
     }
@@ -173,4 +344,25 @@ fn built_in_rates_are_valid_and_reserve_the_estimated_cost() {
 fn request_bodies_are_bounded() {
     assert!(MAX_TRANSCRIPTION_BODY_BYTES > MAX_AUDIO_BYTES * 4 / 3);
     assert!(MAX_SPEECH_BODY_BYTES >= 4096 * 4);
+}
+
+#[tokio::test]
+async fn accepted_audio_finishes_after_the_http_waiter_is_cancelled() {
+    let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let (settled_tx, settled_rx) = tokio::sync::oneshot::channel();
+    let waiter = tokio::spawn(complete_independently(async move {
+        started_tx.send(()).unwrap();
+        release_rx.await.unwrap();
+        settled_tx.send(()).unwrap();
+        Ok(())
+    }));
+    started_rx.await.unwrap();
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    release_tx.send(()).unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(1), settled_rx)
+        .await
+        .unwrap()
+        .unwrap();
 }

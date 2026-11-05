@@ -28,7 +28,9 @@ use google_cloud_auth::credentials::{self as google_credentials, CacheableResour
 use http::{Extensions, header::AUTHORIZATION};
 use schemars::JsonSchema;
 
+mod capped;
 mod hosted;
+pub mod service;
 pub mod stablediffusion;
 pub use stablediffusion::{
     BuildStableDiffusionImageNode, MakeStableDiffusionImageOptionsNode, StableDiffusionImageOptions,
@@ -680,13 +682,20 @@ async fn output_path_for_asset(
 
 async fn read_error_response(response: reqwest::Response) -> flow_like_types::Result<Value> {
     let status = response.status();
-    let body = response.text().await.unwrap_or_default();
+    let body = capped::read_capped(response, capped::MAX_RESPONSE_BYTES).await?;
     if !status.is_success() {
-        bail!("Image provider request failed with status {status}: {body}");
+        bail!(
+            "Image provider request failed with status {status}: {}",
+            capped::error_text(&body)
+        );
     }
 
-    let parsed = from_str::<Value>(&body)
-        .map_err(|err| anyhow!("Image provider returned invalid JSON: {err}; body: {body}"))?;
+    let parsed = flow_like_types::json::from_slice::<Value>(&body).map_err(|err| {
+        anyhow!(
+            "Image provider returned invalid JSON: {err}; body: {}",
+            capped::error_text(&body)
+        )
+    })?;
     Ok(parsed)
 }
 
@@ -700,11 +709,7 @@ async fn download_url(client: &GuardedHttpClient, url: &str) -> flow_like_types:
     if !status.is_success() {
         bail!("Image provider download failed with status {status}");
     }
-    Ok(response
-        .bytes()
-        .await
-        .map_err(reqwest::Error::without_url)?
-        .to_vec())
+    capped::read_capped(response, capped::MAX_IMAGE_BYTES).await
 }
 
 async fn download_generated_url(
@@ -730,11 +735,7 @@ async fn download_generated_url(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(reqwest::Error::without_url)?
-        .to_vec();
+    let bytes = capped::read_capped(response, capped::MAX_IMAGE_BYTES).await?;
 
     Ok(GeneratedImage {
         bytes,
@@ -1450,9 +1451,9 @@ async fn generate_huggingface(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let body = response.bytes().await?.to_vec();
+    let body = capped::read_capped(response, capped::MAX_IMAGE_BYTES).await?;
     if !status.is_success() {
-        let body = String::from_utf8_lossy(&body);
+        let body = capped::error_text(&body);
         bail!("Hugging Face image generation failed with status {status}: {body}");
     }
 
@@ -1682,9 +1683,9 @@ async fn generate_mistral(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        let bytes = response.bytes().await?.to_vec();
+        let bytes = capped::read_capped(response, capped::MAX_IMAGE_BYTES).await?;
         if !status.is_success() {
-            let body = String::from_utf8_lossy(&bytes);
+            let body = capped::error_text(&bytes);
             bail!("Mistral image file download failed with status {status}: {body}");
         }
         images.push(GeneratedImage {
@@ -2605,20 +2606,15 @@ impl NodeLogic for GenerateImageNode {
         )
         .await?;
         crate::ensure_vertex_credentials_explicit(context, &provider)?;
-        let generated =
-            if flow_like_model_provider::provider::is_hosted_provider_name(&provider.provider_name)
-            {
-                hosted::generate(context, &bit, &provider, &request, &typed_provider_options)
-                    .await?
-            } else {
-                generate_with_provider(
-                    context.execution_environment(),
-                    &provider,
-                    &request,
-                    &typed_provider_options,
-                )
-                .await?
-            };
+        let generated = service::dispatch(
+            context.execution_environment(),
+            &bit,
+            &provider,
+            &request,
+            &typed_provider_options,
+            Some(&hosted::access_from(context)),
+        )
+        .await?;
         let total = generated.len();
         if total == 0 {
             bail!("Image provider returned no generated images");

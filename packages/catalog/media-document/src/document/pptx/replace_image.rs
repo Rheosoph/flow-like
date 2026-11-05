@@ -137,30 +137,7 @@ impl NodeLogic for PptxReplaceImageNode {
         let image_bytes = image_path.get(context, false).await?;
         let mut files = read_zip(&template_bytes)?;
 
-        let slide_keys: Vec<String> = files
-            .keys()
-            .filter(|k| k.starts_with("ppt/slides/slide") && k.ends_with(".xml"))
-            .cloned()
-            .collect();
-
-        for key in &slide_keys {
-            let rels_key = key
-                .replace("ppt/slides/", "ppt/slides/_rels/")
-                .replace(".xml", ".xml.rels");
-
-            if !files.contains_key(&rels_key) {
-                continue;
-            }
-
-            replace_image_in_archive(
-                &mut files,
-                key,
-                &rels_key,
-                &identifier,
-                &image_bytes,
-                &scale_mode,
-            )?;
-        }
+        replace_pptx_image(&mut files, &identifier, &image_bytes, &scale_mode)?;
 
         let result_bytes = write_zip(&files)?;
         output.put(context, result_bytes, false).await?;
@@ -177,4 +154,33 @@ impl NodeLogic for PptxReplaceImageNode {
             "PPTX image replacement requires the 'execute' feature"
         ))
     }
+}
+
+#[cfg(feature = "execute")]
+pub(crate) fn replace_pptx_image(
+    files: &mut std::collections::HashMap<String, Vec<u8>>,
+    identifier: &str,
+    image_bytes: &[u8],
+    scale_mode: &ImageScaleMode,
+) -> flow_like_types::Result<bool> {
+    let slide_keys: Vec<String> = files
+        .keys()
+        .filter(|k| k.starts_with("ppt/slides/slide") && k.ends_with(".xml"))
+        .cloned()
+        .collect();
+
+    let mut replaced = false;
+    for key in &slide_keys {
+        let rels_key = key
+            .replace("ppt/slides/", "ppt/slides/_rels/")
+            .replace(".xml", ".xml.rels");
+
+        if !files.contains_key(&rels_key) {
+            continue;
+        }
+
+        replaced |=
+            replace_image_in_archive(files, key, &rels_key, identifier, image_bytes, scale_mode)?;
+    }
+    Ok(replaced)
 }

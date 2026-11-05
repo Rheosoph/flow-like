@@ -1183,6 +1183,57 @@ impl DeviceSession {
         Ok(response.status().is_success())
     }
 
+    pub(crate) fn api_base_url(&self) -> &str {
+        &self.manifest.api_base_url
+    }
+
+    pub(crate) fn device_id(&self) -> &str {
+        &self.manifest.device_id
+    }
+
+    pub(crate) fn http_client(&self) -> &Client {
+        &self.client
+    }
+
+    /// One DPoP-authorized call to `path` below the API base; answers the status and the body
+    /// (at most `max_bytes`) of any response so a caller can map hub errors itself.
+    pub(crate) async fn api_call(
+        &self,
+        method: Method,
+        path: &str,
+        body: Option<&serde_json::Value>,
+        max_bytes: usize,
+    ) -> Result<(u16, Vec<u8>)> {
+        let endpoint = endpoint_url(&self.manifest.api_base_url, path)?;
+        let (authorization, proof) = self.authorization(&method, &endpoint).await?;
+        let mut authorization = reqwest::header::HeaderValue::from_str(&authorization)?;
+        authorization.set_sensitive(true);
+        let mut proof = reqwest::header::HeaderValue::from_str(&proof)?;
+        proof.set_sensitive(true);
+        let mut request = self
+            .client
+            .request(method, endpoint)
+            .header("authorization", authorization)
+            .header("dpop", proof);
+        if let Some(body) = body {
+            request = request.json(body);
+        }
+        let mut response = request.send().await?;
+        let status = response.status();
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+            *self.lease.lock().await = None;
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            ensure!(
+                bytes.len() + chunk.len() <= max_bytes,
+                "Device API response to {path} exceeds {max_bytes} bytes"
+            );
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok((status.as_u16(), bytes))
+    }
+
     async fn authorization(
         &self,
         method: &Method,
