@@ -10,7 +10,6 @@ const state = (
 	overrides: Partial<Parameters<typeof sealedResearchRefusal>[1]> = {},
 ) => ({
 	appInventoryReturned: false,
-	sealedResearchUsed: false,
 	...overrides,
 });
 const code = (...args: Parameters<typeof sealedResearchRefusal>) =>
@@ -62,16 +61,13 @@ describe("sealedResearchRefusal", () => {
 		expect(code(RUN, state({ appInventoryReturned: true }))).toBeUndefined();
 	});
 
-	test("the researcher is one-shot per run", () => {
-		expect(
-			code(
-				RUN,
-				state({ appInventoryReturned: true, sealedResearchUsed: true }),
-			),
-		).toBe("sealed_research_already_used");
+	test("allows the bot to refine research in the same discovered run", () => {
+		const discovered = state({ appInventoryReturned: true });
+		expect(code(RUN, discovered)).toBeUndefined();
+		expect(code(RUN, discovered)).toBeUndefined();
 	});
 
-	test("a run with no id is refused so the one-shot cap stays enforceable", () => {
+	test("a run with no id is refused so its research budget stays enforceable", () => {
 		expect(code(undefined, state())).toBe("sealed_research_unavailable");
 		expect(code("  ", state())).toBe("sealed_research_unavailable");
 	});
@@ -89,7 +85,6 @@ describe("httpRequestRefusal", () => {
 	test("has no one-shot limit after discovery, including after research", () => {
 		const discovered = state({
 			appInventoryReturned: true,
-			sealedResearchUsed: true,
 		});
 		expect(httpRequestRefusal(RUN, discovered)).toBeUndefined();
 		expect(httpRequestRefusal(RUN, discovered)).toBeUndefined();

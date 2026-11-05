@@ -3,6 +3,7 @@
 use super::frontend_tool_bridge::FrontendToolApproval;
 use super::frontend_tool_bridge::{FrontendToolContext, FrontendToolRequest, FrontendToolResponse};
 use dashmap::DashMap;
+use flow_like::flow::copilot::public_web::WebResearchSession;
 use flow_like_types::channel::{Channel as _, ChannelTicket, InProcessChannel};
 use serde_json::Value;
 use std::{
@@ -130,7 +131,7 @@ struct NativeRun {
     identity: NativeRunIdentity,
     generation: String,
     inventory_returned: bool,
-    research_used: bool,
+    research_session: Arc<WebResearchSession>,
     created_app: Option<String>,
     auto_approve: Arc<AtomicBool>,
     auto_mode_ready: Arc<AtomicBool>,
@@ -343,7 +344,7 @@ pub async fn claim_run(
                 identity,
                 generation: generation.clone(),
                 inventory_returned: false,
-                research_used: false,
+                research_session: Arc::new(WebResearchSession::default()),
                 created_app: None,
             });
         }
@@ -456,6 +457,18 @@ pub fn run_identity(context: Option<&FrontendToolContext>) -> Option<NativeRunId
     run_id(context).and_then(|id| RUNS.get(id).map(|run| run.identity.clone()))
 }
 
+/// Keep one research budget and citation ledger alive across delegated calls in this turn.
+/// The parent raw-web session closes after private reads; this public-only session stays separate.
+pub(crate) fn research_session(
+    context: Option<&FrontendToolContext>,
+    source_user_prompt: &str,
+) -> Option<Arc<WebResearchSession>> {
+    let session =
+        run_id(context).and_then(|id| RUNS.get(id).map(|run| run.research_session.clone()))?;
+    session.authorize_user_text(source_user_prompt);
+    Some(session)
+}
+
 pub(crate) fn created_app(context: Option<&FrontendToolContext>) -> Option<String> {
     run_id(context).and_then(|id| RUNS.get(id).and_then(|run| run.created_app.clone()))
 }
@@ -478,7 +491,7 @@ pub(crate) fn claim_child_run(
         identity: parent.identity.clone(),
         generation: generation.clone(),
         inventory_returned: parent.inventory_returned,
-        research_used: true,
+        research_session: parent.research_session.clone(),
         created_app: parent.created_app.clone(),
         auto_approve: parent.auto_approve.clone(),
         auto_mode_ready: parent.auto_mode_ready.clone(),
@@ -550,7 +563,7 @@ async fn execute_inner(
     request_id: &str,
 ) -> Result<Value, String> {
     if matches!(tool, "http_request" | "research_agent") {
-        let Some(mut run) = run_id(context).and_then(|id| RUNS.get_mut(id)) else {
+        let Some(run) = run_id(context).and_then(|id| RUNS.get(id)) else {
             return Ok(
                 serde_json::json!({"status":"error","code":"sealed_research_unavailable","message":"This run has no retained routing identity. Start a new turn."}),
             );
@@ -559,14 +572,6 @@ async fn execute_inner(
             return Ok(
                 serde_json::json!({"status":"error","code":"local_app_discovery_required","retryable":true,"message":"Call list_apps and wait for its result first. Use an existing app if a configured interface handles the request; otherwise use web research or a direct API request. A partial inventory counts as discovery, but a failed listing does not."}),
             );
-        }
-        if tool == "research_agent" {
-            if run.research_used {
-                return Ok(
-                    serde_json::json!({"status":"error","code":"sealed_research_already_used","message":"The sealed public researcher is one-shot for this run; synthesize its findings and disclose remaining gaps."}),
-                );
-            }
-            run.research_used = true;
         }
     }
     if tool == "http_request" {
@@ -779,7 +784,7 @@ mod tests {
                 },
                 generation: generation.clone(),
                 inventory_returned: false,
-                research_used: false,
+                research_session: Arc::new(WebResearchSession::default()),
                 created_app: None,
                 auto_approve: Arc::new(AtomicBool::new(true)),
                 auto_mode_ready: Arc::new(AtomicBool::new(true)),
@@ -879,6 +884,67 @@ mod tests {
     }
 
     #[test]
+    fn research_followups_share_the_native_turn_budget_and_citations() {
+        let id = flow_like_types::create_id();
+        let generation = flow_like_types::create_id();
+        RUNS.insert(
+            id.clone(),
+            NativeRun {
+                stream: None,
+                options: NativeRunOptions::default(),
+                identity: NativeRunIdentity {
+                    profile_id: "p".into(),
+                    hub: "hub".into(),
+                    subject: None,
+                    auth: None,
+                },
+                generation: generation.clone(),
+                inventory_returned: true,
+                research_session: Arc::new(WebResearchSession::default()),
+                created_app: None,
+                auto_approve: Arc::new(AtomicBool::new(false)),
+                auto_mode_ready: Arc::new(AtomicBool::new(true)),
+                auto_mode_owner: None,
+            },
+        );
+        let _parent = NativeRunClaim {
+            id: id.clone(),
+            generation,
+        };
+        let context = FrontendToolContext {
+            run_id: Some(id),
+            source_user_prompt: Some("warum besser als quadrate zb".into()),
+            ..Default::default()
+        };
+        let source = context.source_user_prompt.as_deref().unwrap();
+        let first_id = flow_like_types::create_id();
+        let first_child = claim_child_run(&context, &first_id, Vec::new()).unwrap();
+        let first_context = FrontendToolContext {
+            run_id: Some(first_id),
+            ..context.clone()
+        };
+        let first = research_session(Some(&first_context), source).unwrap();
+        assert!(first.reserve_search_call());
+        first.adopt_opened_urls(&["https://h3geo.org/docs/".into()]);
+        drop(first_child);
+        drop(first);
+
+        let followup_id = flow_like_types::create_id();
+        let _followup = claim_child_run(&context, &followup_id, Vec::new()).unwrap();
+        let followup_context = FrontendToolContext {
+            run_id: Some(followup_id),
+            ..context.clone()
+        };
+        let followup = research_session(Some(&followup_context), source).unwrap();
+        assert_eq!(followup.spend_summary()["search_calls_used"], 1);
+        assert_eq!(followup.opened_urls(), vec!["https://h3geo.org/docs/"]);
+        assert!(followup.public_web_phase_error("internet_search").is_none());
+        while followup.reserve_search_call() {}
+        let parent = research_session(Some(&context), source).unwrap();
+        assert!(!parent.reserve_search_call());
+    }
+
+    #[test]
     fn obsolete_claim_cannot_remove_a_replacement_run() {
         let id = flow_like_types::create_id();
         RUNS.insert(
@@ -894,7 +960,7 @@ mod tests {
                 },
                 generation: "new".into(),
                 inventory_returned: false,
-                research_used: false,
+                research_session: Arc::new(WebResearchSession::default()),
                 created_app: None,
                 auto_approve: Arc::new(AtomicBool::new(false)),
                 auto_mode_ready: Arc::new(AtomicBool::new(true)),

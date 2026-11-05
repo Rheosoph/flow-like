@@ -135,7 +135,7 @@ pub(super) fn flowpilot_mcp_server_instructions<'a>(
     if has_global {
         return if names.contains(RESEARCH_AGENT_TOOL) {
             orchestrator_instructions!(
-                "Use the sealed no-argument research_agent only after list_apps returns and no suitable app/interface or usable local research answer remains."
+                "Use research_agent with a self-contained public question and relevant public context only after list_apps returns and no suitable app/interface or usable local research answer remains. Resolve follow-up references before delegating, and refine the question if findings leave a gap. Never forward private records, credentials, or full history."
             )
         } else {
             orchestrator_instructions!(

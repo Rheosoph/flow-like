@@ -81,7 +81,7 @@ test("a pending skill waits for approval and approving sends the action", async 
 		);
 		await act(async () => {
 			approve?.dispatchEvent(
-				new window.MouseEvent("click", { bubbles: true }) as unknown as Event,
+				new window.MouseEvent("click", { bubbles: true }) as never,
 			);
 		});
 		expect(actions).toEqual([

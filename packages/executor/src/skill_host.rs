@@ -1,8 +1,8 @@
-//! `skill_call` / `skill_run` on the executor: the package a bot's skill ships, loaded like a
-//! board run loads it, with the workspace as its storage and the bot's turn as its run.
+//! Skill tools on the executor: approved instructions and package tools, with the workspace
+//! as storage and the bot's turn as the run. The API persists validated proposals.
 //! The package gets no OAuth tokens; its network is limited to the manifest's allowed hosts.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use flow_like::models::llm::ModelUsageContext;
@@ -10,13 +10,15 @@ use flow_like::state::FlowLikeState;
 use flow_like_bot_tools::{SkillHost, SkillToolSpec};
 use flow_like_bot_tools_host::SkillCallJob;
 use flow_like_storage::files::store::FlowLikeStore;
-use flow_like_types::bot_skill::{BotSkill, CreateBotSkill};
+use flow_like_types::bot_skill::{BotSkill, CreateBotSkill, SkillSource, SkillStatus};
 use flow_like_types::{Result, anyhow, tokio::sync::OnceCell};
 use flow_like_wasm::{HeadlessRun, WasmCapabilities, WasmNodeLogic};
 use serde_json::Value;
 
 pub(crate) struct ExecutorSkills {
-    job: SkillCallJob,
+    job: Option<SkillCallJob>,
+    bot_id: String,
+    proposal: Mutex<Option<CreateBotSkill>>,
     nodes: OnceCell<Vec<WasmNodeLogic>>,
     state: Arc<FlowLikeState>,
     token: String,
@@ -30,7 +32,8 @@ pub(crate) struct ExecutorSkills {
 impl ExecutorSkills {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
-        job: SkillCallJob,
+        job: Option<SkillCallJob>,
+        bot_id: String,
         state: Arc<FlowLikeState>,
         token: String,
         workspace: String,
@@ -41,6 +44,8 @@ impl ExecutorSkills {
     ) -> Self {
         Self {
             job,
+            bot_id,
+            proposal: Mutex::new(None),
             nodes: OnceCell::new(),
             state,
             token,
@@ -55,11 +60,26 @@ impl ExecutorSkills {
     async fn nodes(&self) -> Result<&Vec<WasmNodeLogic>> {
         self.nodes
             .get_or_try_init(|| async {
-                crate::wasm_loader::load_skill_nodes(&self.job.package_id, &self.job.package)
+                let job = self
+                    .job
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("This job has no skill"))?;
+                let package = job
+                    .package
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("This skill ships no package tools"))?;
+                crate::wasm_loader::load_skill_nodes(&job.package_id, package)
                     .await
                     .map_err(|error| anyhow!("{error}"))
             })
             .await
+    }
+
+    pub(crate) fn take_proposal(&self) -> Option<CreateBotSkill> {
+        self.proposal
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
     }
 }
 
@@ -78,14 +98,34 @@ pub(crate) fn gated(capabilities: WasmCapabilities) -> (bool, bool) {
 #[async_trait]
 impl SkillHost for ExecutorSkills {
     async fn get(&self, name: &str) -> Result<Option<BotSkill>> {
-        Ok((self.job.skill.name == name).then(|| self.job.skill.clone()))
+        Ok(self
+            .job
+            .as_ref()
+            .filter(|job| job.skill.name == name)
+            .map(|job| job.skill.clone()))
     }
 
-    async fn propose(&self, _request: CreateBotSkill) -> Result<BotSkill> {
-        Err(anyhow!("A skill is proposed in the API, not on the executor"))
+    async fn propose(&self, request: CreateBotSkill) -> Result<BotSkill> {
+        // The tool validated the text. The API commits this proposal before releasing its
+        // success output, so storage limits and ownership are checked against current state.
+        *self.proposal.lock().unwrap_or_else(|error| error.into_inner()) = Some(request.clone());
+        Ok(BotSkill {
+            id: String::new(),
+            bot_id: self.bot_id.clone(),
+            name: request.name,
+            description: request.description,
+            body: request.body,
+            source: SkillSource::BotProposed,
+            status: SkillStatus::Pending,
+            tools: Vec::new(),
+            updated_at: String::new(),
+        })
     }
 
     async fn tool_specs(&self, skill: &BotSkill) -> Result<Vec<SkillToolSpec>> {
+        if skill.source.package_id().is_none() {
+            return Ok(Vec::new());
+        }
         let mut specs = Vec::new();
         for node in self.nodes().await? {
             let entry = node.tool_entry().await.map_err(|error| anyhow!("{error}"))?;

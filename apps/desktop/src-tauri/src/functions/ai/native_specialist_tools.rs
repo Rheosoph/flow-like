@@ -161,16 +161,11 @@ async fn execute_inner(
                     false,
                 ),
                 "project_scout" => (CopilotScope::Scout, scout_instruction(args)?, true),
-                // The model may have read private workspace content. Public research receives
-                // only the original user request, never model-authored arguments or app context.
+                // The caller resolves conversational references into a public research brief.
+                // Full history, attachments and app context stay outside the research scope.
                 "research_agent" => (
                     CopilotScope::Research,
-                    context
-                        .and_then(|c| c.source_user_prompt.clone())
-                        .filter(|s| !s.trim().is_empty())
-                        .ok_or(
-                            "The immutable user request is unavailable for sealed public research.",
-                        )?,
+                    flow_like::flow::copilot::tool_spec::research_agent_prompt(args)?,
                     true,
                 ),
                 "flowpilot_home" => (
@@ -341,10 +336,15 @@ async fn run_specialist_with_selection(
         None
     };
     let app_id = context.app_id.clone();
-    let raw = context
-        .source_user_prompt
-        .clone()
-        .unwrap_or_else(|| instruction.clone());
+    let raw = if scope == CopilotScope::Research {
+        // Model framing follows the complete brief; source_user_prompt remains host identity.
+        instruction.clone()
+    } else {
+        context
+            .source_user_prompt
+            .clone()
+            .unwrap_or_else(|| instruction.clone())
+    };
     let tool_name = match scope {
         CopilotScope::Board => "flowpilot_board",
         CopilotScope::Frontend => "flowpilot_widget",

@@ -156,6 +156,15 @@ catalog-modifier-local-ml
 catalog-modifier-data
 executor-default
 executor-server
+executor-tools-server
+executor-tools-server-local-ml
+executor-tools-executor
+executor-tools-executor-local-ml
+executor-tools-local-runtime
+executor-tools-local-runtime-ml
+executor-tools-server-execute
+executor-tools-all-server-execute
+api-bot-tools
 backend-executor-k8s
 backend-executor-aws
 backend-executor-azure
@@ -293,6 +302,15 @@ if [ "${#BOUNDARIES[@]}" -eq 0 ]; then
         catalog-modifier-data
         executor-default
         executor-server
+        executor-tools-server
+        executor-tools-server-local-ml
+        executor-tools-executor
+        executor-tools-executor-local-ml
+        executor-tools-local-runtime
+        executor-tools-local-runtime-ml
+        executor-tools-server-execute
+        executor-tools-all-server-execute
+        api-bot-tools
         backend-executor-k8s
         backend-executor-aws
         backend-executor-azure
@@ -821,6 +839,24 @@ configure_boundary() {
             FEATURE_PACKAGE="flow-like-catalog"
             REQUIRED_FEATURES=(remote-metadata package-std package-data package-web runtime-catalog forecasting local-only-metadata)
             FORBIDDEN_FEATURES=(portable-metadata package-onnx local-ml ml-inference)
+            ;;
+        executor-tools-server|executor-tools-server-local-ml|executor-tools-executor|executor-tools-executor-local-ml|executor-tools-local-runtime|executor-tools-local-runtime-ml|executor-tools-server-execute|executor-tools-all-server-execute)
+            # Check each executor bundle independently: catalog feature inheritance
+            # cannot enable the executor's /tool handler or code sandbox.
+            DEPENDENCY_ONLY=1
+            CHECK_ARGS=(--package flow-like-executor --no-default-features --features "${boundary#executor-tools-}")
+            REQUIRED=(flow-like-bot-tools flow-like-bot-tools-host flow-like-catalog-code-interpreter)
+            FEATURE_PACKAGE="flow-like-executor"
+            REQUIRED_FEATURES=(code-sandbox bot-tools bot-tools-heavy)
+            ;;
+        api-bot-tools)
+            # API products dispatch executable skills and code to an executor.
+            DEPENDENCY_ONLY=1
+            CHECK_ARGS=(--package aws-api --package azure-api --package gcp-api --package k8s-api --package local-api --package docker-compose-api)
+            FORBIDDEN=(flow-like-executor flow-like-wasm)
+            REQUIRED=(flow-like-bot-tools flow-like-wasm-schema)
+            FEATURE_PACKAGE="flow-like-bot-tools"
+            FORBIDDEN_FEATURES=(code)
             ;;
         backend-executor-k8s|backend-executor-aws|backend-executor-azure|backend-executor-gcp)
             # Real executor products must use runtime directly. Checking only

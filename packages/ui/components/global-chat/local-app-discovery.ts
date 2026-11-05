@@ -31,12 +31,10 @@ export interface SealedResearchRefusal {
 /** The run-scoped facts the gate decides on. */
 export interface SealedResearchRoutingState {
 	appInventoryReturned: boolean;
-	sealedResearchUsed: boolean;
 }
 
 const FRESH_RUN: SealedResearchRoutingState = {
 	appInventoryReturned: false,
-	sealedResearchUsed: false,
 };
 
 function localAppDiscoveryRefusal(
@@ -61,8 +59,8 @@ export function httpRequestRefusal(
 }
 
 /**
- * Match the core sealed-research gate: a returned app inventory must precede research, and
- * each run can start one sealed researcher. A missing run id cannot establish either condition.
+ * A returned app inventory must precede research. The run id keeps follow-up calls attached
+ * to the same research budget and source ledger.
  */
 export function sealedResearchRefusal(
 	runId: string | undefined,
@@ -72,16 +70,8 @@ export function sealedResearchRefusal(
 		return {
 			code: "sealed_research_unavailable",
 			message:
-				"This run has no id, so the one-shot public researcher cannot be tracked. Retry in a new turn.",
+				"This run has no id, so its research budget cannot be tracked. Retry in a new turn.",
 		};
 	const current = state ?? FRESH_RUN;
-	const discoveryRefusal = localAppDiscoveryRefusal(current);
-	if (discoveryRefusal) return discoveryRefusal;
-	if (current.sealedResearchUsed)
-		return {
-			code: "sealed_research_already_used",
-			message:
-				"The sealed public researcher is one-shot for this run; synthesize its findings and disclose remaining gaps.",
-		};
-	return undefined;
+	return localAppDiscoveryRefusal(current);
 }

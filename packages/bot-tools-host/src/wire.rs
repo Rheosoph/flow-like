@@ -21,6 +21,9 @@ pub struct ToolJobEnvelope {
 pub struct ToolReply {
     pub output: String,
     pub cpu_ms: u64,
+    /// A proposal validated by the executor. The API commits it before returning the output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_proposal: Option<flow_like_types::bot_skill::CreateBotSkill>,
 }
 
 /// The digest an executor token binds to one job.
@@ -126,8 +129,7 @@ pub struct ToolJob {
     /// job only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub connectors: Vec<JobConnector>,
-    /// The package skill a `skill_call` / `skill_run` job runs: the skill as the API read it
-    /// (active, owned by the bot) and the package the workspace pins for it.
+    /// The active skill owned by the bot, plus its pinned package when it ships tools.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_call: Option<SkillCallJob>,
 }
@@ -135,8 +137,10 @@ pub struct ToolJob {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SkillCallJob {
     pub skill: flow_like_types::bot_skill::BotSkill,
+    #[serde(default)]
     pub package_id: String,
-    pub package: flow_like_types::dispatch::WasmPackageRef,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<flow_like_types::dispatch::WasmPackageRef>,
 }
 
 /// One attached connector and its `Authorization` value inside a signed job; never printed.

@@ -1213,7 +1213,8 @@ describe("room settings", () => {
 		const dialog = window.document.querySelector("[role='dialog']");
 		expect(dialog?.textContent).toContain("Edit room");
 		await setInput(
-			dialog?.querySelector("input:not([type='file'])") ?? null,
+			(dialog?.querySelector("input:not([type='file'])") ??
+				null) as unknown as Element | null,
 			"  Launch crew ",
 		);
 		const form = dialog?.querySelector("form") as unknown as HTMLFormElement;

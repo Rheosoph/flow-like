@@ -271,30 +271,22 @@ pub(crate) async fn run_job(
     )
     .await?;
     let images = job_images(&job, claims, &envelope.executor_jwt, &state);
-    let skills = job.skill_call.clone().map(|skill_call| {
+    let skills = if matches!(
+        job.tool.as_str(),
+        "skill_load" | "skill_propose" | "skill_call" | "skill_run"
+    ) {
         let workspace_store = match access.credential(&job.workspace) {
             Ok(credentials) => Some(credentials.clone()),
             Err(_) => None,
         };
-        (skill_call, workspace_store, state.clone())
-    });
-    let models = Arc::new(models(&job, claims, &envelope.executor_jwt, state));
-    let mut env = HostEnv::new(&job.workspace, &job.scope, access, models)
-        .with_sessions(Arc::new(MemorySessions::default()))
-        .with_expensive_documents(job.allow_expensive_documents)
-        .with_secrets(Arc::new(job.secrets.clone()))
-        .with_connectors(flow_like_bot_tools_host::connector_source(&job.connectors));
-    if let Some(images) = images {
-        env = env.with_images(Arc::new(images));
-    }
-    if let Some((skill_call, credentials, state)) = skills {
-        let store = match credentials {
+        let store = match workspace_store {
             Some(credentials) => credentials.to_store_type(StoreType::Content).await.ok(),
             None => None,
         };
-        env = env.with_skills(Arc::new(crate::skill_host::ExecutorSkills::new(
-            skill_call,
-            state,
+        Some(Arc::new(crate::skill_host::ExecutorSkills::new(
+            job.skill_call.clone(),
+            job.bot_id.clone(),
+            state.clone(),
             envelope.executor_jwt.clone(),
             job.workspace.clone(),
             store,
@@ -305,7 +297,21 @@ pub(crate) async fn run_job(
                 run_id: Some(job.turn_id.clone()),
                 api_base_url: flow_like::hub::hub_origin(&claims.callback_url, true),
             },
-        )));
+        )))
+    } else {
+        None
+    };
+    let models = Arc::new(models(&job, claims, &envelope.executor_jwt, state));
+    let mut env = HostEnv::new(&job.workspace, &job.scope, access, models)
+        .with_sessions(Arc::new(MemorySessions::default()))
+        .with_expensive_documents(job.allow_expensive_documents)
+        .with_secrets(Arc::new(job.secrets.clone()))
+        .with_connectors(flow_like_bot_tools_host::connector_source(&job.connectors));
+    if let Some(images) = images {
+        env = env.with_images(Arc::new(images));
+    }
+    if let Some(skills) = &skills {
+        env = env.with_skills(skills.clone());
     }
     let started = Instant::now();
     let outcome = tokio::time::timeout(deadline(claims), run(&job.tool, job.args.clone(), &env))
@@ -319,6 +325,11 @@ pub(crate) async fn run_job(
     Ok(ToolReply {
         output: outcome_output(&outcome),
         cpu_ms: started.elapsed().as_millis().min(u64::MAX as u128) as u64,
+        skill_proposal: if outcome.is_ok() {
+            skills.as_ref().and_then(|skills| skills.take_proposal())
+        } else {
+            None
+        },
     })
 }
 

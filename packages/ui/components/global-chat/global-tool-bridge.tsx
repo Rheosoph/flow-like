@@ -257,6 +257,7 @@ import {
 	sealedResearchRefusal,
 } from "./local-app-discovery";
 import { readFlowScriptSource } from "./read-flowscript-source";
+import { researchAgentPrompt } from "./research-brief";
 import {
 	scoutForkPreview,
 	scoutGetAppDetail,
@@ -515,9 +516,8 @@ function sourceUserPrompt(request: FrontendToolRequest): string | undefined {
 }
 
 /**
- * Public research must be bound to the prompt captured by the owning host request. Unlike other
- * delegated specialists, it may never infer a source from mutable global chat state: concurrent
- * runs or later user turns could otherwise change the outbound research brief.
+ * Keep the original request for research budget identity and user-supplied URL provenance.
+ * Mutable global chat state may already belong to another turn.
  */
 function sealedSourceUserPrompt(
 	request: FrontendToolRequest,
@@ -702,7 +702,6 @@ export interface RunScope {
 
 interface SolveRoutingState {
 	appInventoryReturned: boolean;
-	sealedResearchUsed: boolean;
 }
 
 // Host-owned state requires an app inventory before research or HTTP fallback. A partial listing
@@ -4493,10 +4492,7 @@ export function GlobalToolBridge() {
 					}
 				}
 				case "research_agent": {
-					// This boundary is deliberately sealed. The root model may have seen local app
-					// metadata (and may have recalled memory), so accepting a model-authored question or
-					// context here would let it encode private text into an outbound query. Bind the
-					// researcher only to the immutable top-level user request carried by the host.
+					// The bot supplies a public research brief that resolves conversational references.
 					// The inventory gate separately ensures existing apps are considered first.
 					const routingState = scope.runId
 						? solveRoutingStateByRun.get(scope.runId)
@@ -4510,20 +4506,23 @@ export function GlobalToolBridge() {
 							status: "error",
 							code: "sealed_research_source_missing",
 							message:
-								"The immutable top-level user request is unavailable; sealed public research was not started.",
+								"The owning user request is unavailable; public research was not started.",
 						};
-					setSolveRoutingState(scope.runId, {
-						appInventoryReturned: routingState?.appInventoryReturned ?? false,
-						sealedResearchUsed: true,
-					});
-					const instruction = owningUserPrompt;
+					let instruction: string;
+					try {
+						instruction = researchAgentPrompt(args);
+					} catch (error) {
+						return {
+							status: "error",
+							code: "invalid_research_brief",
+							retryable: true,
+							message: error instanceof Error ? error.message : String(error),
+						};
+					}
 
 					const turnSelection = scope.turnSelection();
 					const owningConversationId = conversationScopeId(request);
-					const rawSpecialistPrompt = composeDelegatedRawUserPrompt(
-						owningUserPrompt,
-						instruction,
-					);
+					const rawSpecialistPrompt = instruction;
 					const modelId = flowPilotModelIdForProvider(
 						normalizeAIProvider(turnSelection.provider),
 						turnSelection.selectedModelId,
@@ -4579,7 +4578,7 @@ export function GlobalToolBridge() {
 								provider: normalizeAIProvider(turnSelection.provider),
 								model_id: modelId,
 								reasoning_effort: turnSelection.reasoningEffort || undefined,
-								sealed_to_source_request: true,
+								instruction,
 							},
 							summary: "Delegated web research started.",
 						}),
@@ -4612,9 +4611,8 @@ export function GlobalToolBridge() {
 									request.context?.profileId ?? request.context?.profile_id,
 								parentRequestId: request.requestId,
 								conversationId: owningConversationId,
-								// Use a sealed child authorization view. It is fresh even when a local
-								// research app already ran, but remains bound to the immutable source
-								// request and cannot receive that app's result.
+								// Follow-up briefs share a public research budget and source ledger.
+								// The original request retains user-supplied URL provenance.
 								runId: scope.runId
 									? `${scope.runId}:sealed-research`
 									: undefined,
@@ -4630,7 +4628,6 @@ export function GlobalToolBridge() {
 							toolName: "research_agent",
 							result: {
 								status: "ok",
-								sealed_to_source_request: true,
 								findings: response.message,
 							},
 							summary: "Delegated web research finished.",
@@ -8551,7 +8548,6 @@ Completion contract: build complete helper logic first and add the Event entry l
 					appInventoryReturned:
 						(previousRoutingState?.appInventoryReturned ?? false) ||
 						isReturnedAppInventory(inventory),
-					sealedResearchUsed: previousRoutingState?.sealedResearchUsed ?? false,
 				});
 			}
 			boardRecoveryScopeByRequestRef.current.delete(request.requestId);

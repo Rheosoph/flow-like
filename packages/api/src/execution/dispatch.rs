@@ -433,6 +433,10 @@ pub enum DispatchError {
     Configuration(String),
     #[error("Network error: {0}")]
     Network(String),
+    #[error("Tool executor returned HTTP {status}: {message}")]
+    ToolHttp { status: u16, message: String },
+    #[error("The tool executor did not finish before its deadline")]
+    ToolTimeout,
     #[error("Lambda error: {0}")]
     Lambda(String),
     /// The invoke API or the executor answered 4xx before streaming (throttled,
