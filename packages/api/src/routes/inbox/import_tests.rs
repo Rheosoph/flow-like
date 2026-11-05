@@ -46,11 +46,11 @@ const INBOX_TABLES: [&str; 5] = [
         "principalKind" TEXT NOT NULL, "addedBy" TEXT, "joinedAt" TEXT NOT NULL,
         "leftAt" TEXT, "lastReadAt" TEXT,
         "status" TEXT NOT NULL DEFAULT 'ACTIVE', "limits" TEXT, "invitedBy" TEXT, "invitedAt" TEXT,
-        "acceptedAt" TEXT, PRIMARY KEY ("conversationId", "principalId"))"#,
+        "acceptedAt" TEXT, "hiddenAt" TEXT, "clearedAt" TEXT, "clearedLegacyAt" TEXT, "clearedSeq" INTEGER, PRIMARY KEY ("conversationId", "principalId"))"#,
     r#"CREATE TABLE public."InboxEntry" (
         "id" TEXT PRIMARY KEY, "inboxId" TEXT NOT NULL, "conversationId" TEXT NOT NULL,
         "messageId" TEXT NOT NULL, "senderId" TEXT NOT NULL, "kind" TEXT NOT NULL,
-        "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER, UNIQUE ("inboxId", "messageId"),
+        "envelope" TEXT NOT NULL, "createdAt" TEXT NOT NULL, "seq" INTEGER, "cleared" BOOLEAN, UNIQUE ("inboxId", "messageId"),
         UNIQUE ("inboxId", "conversationId", "seq"))"#,
     r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE)"#,
     r#"CREATE TABLE public."BotTurn" (
@@ -1175,4 +1175,78 @@ fn one_call_writes_and_rewrites_within_its_budget() {
         INBOX_IMPORT_TOO_LARGE,
     );
     assert!(check_writes(&fresh[2..], &earlier, 2).is_ok());
+}
+
+#[tokio::test]
+async fn importing_cleared_history_preserves_bot_copies_and_existing_account_history() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", false).await;
+    let first = import(
+        &db,
+        "user-a",
+        &direct(vec![message("account-message", "user-a", 30)]),
+    )
+    .await
+    .unwrap();
+    inbox_entry::Entity::update_many()
+        .col_expr(inbox_entry::Column::Seq, Expr::value(None::<i64>))
+        .filter(inbox_entry::Column::MessageId.eq("account-message"))
+        .exec(&db).await.unwrap();
+    let mut old = message("cleared-local", "user-a", 10);
+    old["source_seq"] = json!(1);
+    let mut new = message("kept-local", "bot_1", 20);
+    new["source_seq"] = json!(2);
+    let mut request = request(LOCAL, "direct", &["user-a", "bot_1"], vec![old, new]);
+    request.deletion = Some(super::import::ImportedDeletion {
+        cleared_through_seq: 1,
+        cleared_at: at(15),
+        hidden: true,
+    });
+    let plan = plan("user-a", request);
+    import(&db, "user-a", &plan).await.unwrap();
+    let retry = import(&db, "user-a", &plan).await.unwrap();
+    assert_eq!((retry.imported, retry.skipped), (0, 2));
+    assert!(!retry.history_cleared);
+    let detail = conversations_for(&db, &Reader::own("user-a"), Some(&first.conversation_id)).await.unwrap();
+    assert_eq!(detail[0].history_cleared_at, Some(now()));
+
+    let bounds = super::entries::PageBounds {
+        before: None,
+        after: None,
+        limit: 100,
+    };
+    let owner = super::entries::entries_page(&db, "user-a", &first.conversation_id, &bounds)
+        .await
+        .unwrap();
+    let ids: BTreeSet<_> = owner
+        .entries
+        .iter()
+        .map(|entry| entry.message_id.as_str())
+        .collect();
+    assert_eq!(ids, BTreeSet::from(["account-message", "kept-local"]));
+    let bot = super::entries::entries_page(&db, "bot_1", &first.conversation_id, &bounds)
+        .await
+        .unwrap();
+    assert_eq!(bot.entries.len(), 3);
+    assert_eq!(
+        conversations_for(&db, &Reader::own("user-a"), None)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn delayed_import_does_not_restore_history_cleared_on_the_account() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", false).await;
+    let first = import(&db, "user-a", &direct(vec![message("first", "user-a", 10)])).await.unwrap();
+    super::deletion::delete_in(&db, &first.conversation_id, "user-a", at(30)).await.unwrap();
+    import(&db, "user-a", &direct(vec![message("late-old", "user-a", 20), message("newer", "user-a", 40)])).await.unwrap();
+    let bounds = super::entries::PageBounds { before: None, after: None, limit: 100 };
+    let owner = super::entries::entries_page(&db, "user-a", &first.conversation_id, &bounds).await.unwrap();
+    assert_eq!(owner.entries.iter().map(|entry| entry.message_id.as_str()).collect::<Vec<_>>(), ["newer"]);
+    let bot = super::entries::entries_page(&db, "bot_1", &first.conversation_id, &bounds).await.unwrap();
+    assert_eq!(bot.entries.len(), 3);
 }

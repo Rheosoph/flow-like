@@ -1,9 +1,11 @@
 import { afterAll, expect, mock, test } from "bun:test";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Window } from "happy-dom";
 import type { HTMLAttributes } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { QuotaDetail } from "../../lib/quota";
 import type { ITierInfo } from "../../state/backend-state/user-state";
+import type { UpgradeDialogTrigger } from "../../state/upgrade-dialog-state";
 import type { UpgradeDialogBodyProps } from "./upgrade-dialog";
 
 // bun keeps a module mock for every later file in the process, so each mocked module is
@@ -23,7 +25,10 @@ const actual = {
 	backendState: { ...(await import("../../state/backend-state")) },
 	tierCard: { ...(await import("./tier-card")) },
 	dialog: { ...(await import("../ui/dialog")) },
+	upgradeStore: { ...(await import("../../state/upgrade-dialog-state")) },
 };
+let globalTrigger: UpgradeDialogTrigger | undefined;
+let pricingEnabled: boolean | undefined;
 if (documentDescriptor)
 	Object.defineProperty(globalThis, "document", documentDescriptor);
 else Reflect.deleteProperty(globalThis, "document");
@@ -34,7 +39,10 @@ mock.module("@flow-like/locales", () => ({
 }));
 mock.module("react-oidc-context", () => ({
 	...actual.oidc,
-	useAuth: () => ({}),
+	useAuth: () => ({
+		isAuthenticated: true,
+		user: { profile: { sub: "self" } },
+	}),
 }));
 mock.module("../../hooks/use-features", () => ({
 	...actual.features,
@@ -42,15 +50,41 @@ mock.module("../../hooks/use-features", () => ({
 }));
 mock.module("../../hooks/use-hub", () => ({
 	...actual.hub,
-	useHub: () => ({}),
+	useHub: () => ({
+		hub: {
+			features: { premium: true },
+			conversion: { enabled: false },
+			contact: { email: "admin@example.com" },
+		},
+	}),
 }));
 mock.module("../../hooks/use-invoke", () => ({
 	...actual.invoke,
-	useInvoke: () => ({}),
+	useInvoke: (
+		fn: (...args: unknown[]) => unknown,
+		_context: unknown,
+		_args: unknown[],
+		enabled: boolean,
+	) => {
+		if (fn.name === "getPricing") pricingEnabled = enabled;
+		return {};
+	},
 }));
 mock.module("../../state/backend-state", () => ({
 	...actual.backendState,
-	useBackend: () => ({}),
+	useBackend: () => ({
+		userState: { async getPricing() {}, async getQuotaUsage() {} },
+	}),
+}));
+mock.module("../../state/upgrade-dialog-state", () => ({
+	...actual.upgradeStore,
+	useUpgradeDialogStore: (selector: (state: unknown) => unknown) =>
+		selector({
+			isOpen: true,
+			trigger: globalTrigger,
+			close() {},
+			setEnabled() {},
+		}),
 }));
 mock.module("./tier-card", () => ({
 	...actual.tierCard,
@@ -67,8 +101,12 @@ mock.module("./tier-card", () => ({
 }));
 mock.module("../ui/dialog", () => ({
 	...actual.dialog,
-	Dialog: () => null,
-	DialogContent: () => null,
+	Dialog: ({ children }: HTMLAttributes<HTMLDivElement>) => (
+		<div>{children}</div>
+	),
+	DialogContent: ({ children }: HTMLAttributes<HTMLDivElement>) => (
+		<div>{children}</div>
+	),
 	DialogTitle: (props: HTMLAttributes<HTMLHeadingElement>) => <h2 {...props} />,
 	DialogDescription: (props: HTMLAttributes<HTMLParagraphElement>) => (
 		<p {...props} />
@@ -84,6 +122,7 @@ afterAll(() => {
 	mock.module("../../state/backend-state", () => actual.backendState);
 	mock.module("./tier-card", () => actual.tierCard);
 	mock.module("../ui/dialog", () => actual.dialog);
+	mock.module("../../state/upgrade-dialog-state", () => actual.upgradeStore);
 });
 
 test("shared model access directs users to the owner without zero-limit counters or checkout", async () => {
@@ -230,4 +269,105 @@ test("unavailable capacity and pricing errors do not show a checkout recommendat
 	expect(error).not.toContain("data-tier=");
 	expect(error).toContain("Try again");
 	expect(error).toContain("More ways to keep building");
+});
+
+test("scoped monthly budgets show usage and administrator contact without paid plans", async () => {
+	const { UpgradeDialogBody } = await import("./upgrade-dialog");
+	for (const scope of ["app", "bot", "bot_group"]) {
+		for (const mode of ["consumer", "enterprise"] as const) {
+			const markup = renderToStaticMarkup(
+				<UpgradeDialogBody
+					{...props}
+					mode={mode}
+					contact={{
+						name: "Enterprise support",
+						email: "admin@example.com",
+						url: "https://example.com/admin-help",
+					}}
+					quota={{
+						...props.quota,
+						scope,
+						payerId: "another-owner",
+						plan: "enterprise_policy",
+						reserved: 250_000,
+						requested: 10_000,
+						actions: ["contact_admin"],
+					}}
+				/>,
+			);
+			expect(markup).toContain("monthly budget");
+			expect(markup).toContain("Reserved");
+			expect(markup).toContain("Monthly limit");
+			expect(markup).toContain("This request");
+			expect(markup).toContain("Resets");
+			expect(markup).toContain("UTC");
+			expect(markup).toContain("mailto:admin@example.com");
+			expect(markup).toContain("https://example.com/admin-help");
+			expect(markup).toContain("Copy budget details");
+			expect(markup).not.toContain("data-tier=");
+			expect(markup).not.toContain("recommended-upgrade");
+			expect(markup).not.toContain("billing owner");
+			expect(markup).not.toContain("enterprise_policy");
+			expect(markup).not.toContain("More ways to keep building");
+		}
+	}
+});
+
+test("a monthly budget prompt needs no pricing response or configured contact", async () => {
+	const { UpgradeDialogBody } = await import("./upgrade-dialog");
+	const markup = renderToStaticMarkup(
+		<UpgradeDialogBody
+			{...props}
+			contact={{}}
+			pricingStatus="error"
+			quota={{ ...props.quota, scope: "bot" }}
+		/>,
+	);
+	expect(markup).toContain("Contact your enterprise administrator");
+	expect(markup).toContain("Copy budget details");
+	expect(markup).not.toContain("Couldn't load upgrade options");
+	expect(markup).not.toContain("data-tier=");
+});
+
+test("the global dialog gives scoped budgets precedence over another payer and skips pricing", async () => {
+	const { GlobalUpgradeDialog } = await import("./upgrade-dialog");
+	const client = new QueryClient();
+	try {
+		for (const scope of ["app", "bot", "bot_group"]) {
+			globalTrigger = {
+				reason: "ai-budget",
+				quota: {
+					...props.quota,
+					payerId: "another-owner",
+					scope,
+					plan: "enterprise_policy",
+				},
+			};
+			const markup = renderToStaticMarkup(
+				<QueryClientProvider client={client}>
+					<GlobalUpgradeDialog />
+				</QueryClientProvider>,
+			);
+			expect(markup).toContain("monthly budget");
+			expect(markup).toContain("mailto:admin@example.com");
+			expect(markup).not.toContain("billing owner");
+			expect(markup).not.toContain("data-tier=");
+			expect(pricingEnabled).toBe(false);
+		}
+		globalTrigger = {
+			reason: "ai-budget",
+			quota: { ...props.quota, payerId: "another-owner", scope: "account" },
+		};
+		const account = renderToStaticMarkup(
+			<QueryClientProvider client={client}>
+				<GlobalUpgradeDialog />
+			</QueryClientProvider>,
+		);
+		expect(account).toContain("billing owner");
+		expect(account).not.toContain("Copy budget details");
+		expect(pricingEnabled).toBe(true);
+	} finally {
+		globalTrigger = undefined;
+		client.clear();
+	}
 });

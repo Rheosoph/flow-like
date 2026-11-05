@@ -69,6 +69,7 @@ import {
 } from "../../ui/select";
 import { Skeleton } from "../../ui/skeleton";
 import { UserProfileLink } from "../../ui/user-profile-link";
+import { EnterpriseUsageBudgets } from "./enterprise-usage-budgets";
 
 const PERIODS: IUsageLimitPeriod[] = ["weekly", "monthly", "yearly"];
 
@@ -1950,6 +1951,8 @@ export function UsageOverviewSection({
 					</SelectContent>
 				</Select>
 			</div>
+
+			<EnterpriseUsageBudgets profile={profile} accountId={accountId} />
 
 			<div className="grid gap-4 xl:grid-cols-[2fr_1fr]">
 				<ActivityTrendChart

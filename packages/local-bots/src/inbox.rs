@@ -5,6 +5,7 @@
 
 mod approvals;
 mod body;
+mod deletion;
 mod files;
 mod pins;
 mod positions;
@@ -245,28 +246,37 @@ fn group_members(db: &Connection, conversation_id: &str) -> Result<Vec<MemberRow
 
 /// The conversation as the person sees it, if they are an active member.
 fn view(db: &Connection, conversation_id: &str) -> Result<Option<Conversation>> {
-    let Some(reader) = membership(db, conversation_id, LOCAL_OWNER_ID)? else {
+    view_as(db, conversation_id, LOCAL_OWNER_ID)
+}
+
+fn view_as(
+    db: &Connection,
+    conversation_id: &str,
+    principal_id: &str,
+) -> Result<Option<Conversation>> {
+    let Some(reader) = membership(db, conversation_id, principal_id)? else {
         return Ok(None);
     };
     let row = conversation_row(db, conversation_id)?;
+    let source = deletion::entry_source(principal_id);
     let unread_count: i64 = db
-        .prepare_cached(
-            "SELECT COUNT(*) FROM entries
+        .prepare_cached(&format!(
+            "SELECT COUNT(*) FROM {source}
              WHERE conversation_id = ?1 AND kind = ?2 AND sender_id <> ?3
-               AND (?4 IS NULL OR created_at > ?4)",
-        )?
+               AND (?4 IS NULL OR created_at > ?4)"
+        ))?
         .query_row(
             params![
                 conversation_id,
                 InboxEntryKind::Message.as_str(),
-                LOCAL_OWNER_ID,
+                principal_id,
                 reader.last_read_at
             ],
             |row| row.get(0),
         )?;
     let last_entry = db
         .prepare_cached(&format!(
-            "SELECT {ENTRY_COLUMNS} FROM entries WHERE conversation_id = ?1 AND kind = ?2
+            "SELECT {ENTRY_COLUMNS} FROM {source} WHERE conversation_id = ?1 AND kind = ?2
              ORDER BY created_at DESC, id DESC LIMIT 1"
         ))?
         .query_row(
@@ -290,6 +300,11 @@ fn view(db: &Connection, conversation_id: &str) -> Result<Option<Conversation>> 
         unread_count: u64::try_from(unread_count).unwrap_or(0),
         last_entry,
         pinned_at: pins::conversation_pinned_at(db, conversation_id)?.map(timestamp),
+        history_cleared_at: if principal_id == LOCAL_OWNER_ID {
+            deletion::exported(db, conversation_id)?.map(|d| d.cleared_at)
+        } else {
+            None
+        },
         local: true,
     }))
 }
@@ -423,6 +438,9 @@ fn insert_event(
         at,
         seq
     ])?;
+    if kind == InboxEntryKind::Message {
+        deletion::restore(db, conversation_id)?;
+    }
     if kind.wakes_bot() {
         db.prepare_cached(
             "UPDATE conversations SET last_activity_at = ?2
@@ -716,7 +734,13 @@ fn send_in(
     outgoing: &Outgoing,
 ) -> Result<InboxEntry> {
     if let Some(existing) = entry_by_message_id(tx, &outgoing.message_id)? {
-        return repeated(existing, conversation_id, sender_id);
+        let mut existing = repeated(existing, conversation_id, sender_id)?;
+        if sender_id == LOCAL_OWNER_ID
+            && !deletion::message_visible(tx, conversation_id, &existing.message_id)?
+        {
+            existing.envelope = flow_like_types::inbox::tombstone_envelope();
+        }
+        return Ok(existing);
     }
     member_conversation(tx, conversation_id, sender_id)?;
     if outgoing.kind.targets_message() {
@@ -902,9 +926,11 @@ pub(crate) fn page_bounds(query: &EntriesQuery) -> Result<PageBounds> {
 fn entries_page(
     db: &Connection,
     conversation_id: &str,
+    principal_id: &str,
     bounds: &PageBounds,
 ) -> Result<InboxEntriesPage> {
-    let mut sql = format!("SELECT {ENTRY_COLUMNS} FROM entries WHERE conversation_id = ?1");
+    let source = deletion::entry_source(principal_id);
+    let mut sql = format!("SELECT {ENTRY_COLUMNS} FROM {source} WHERE conversation_id = ?1");
     if bounds.before.is_some() {
         sql.push_str(" AND (created_at, id) < (?2, ?3)");
     }
@@ -950,7 +976,7 @@ fn entries_page(
 /// When the cursor's entry of this conversation was written.
 fn entry_time(db: &Connection, conversation_id: &str, cursor: &EntryCursor) -> Result<i64> {
     db.query_row(
-        "SELECT created_at FROM entries WHERE id = ?1 AND conversation_id = ?2",
+        "SELECT created_at FROM owner_entries WHERE id = ?1 AND conversation_id = ?2",
         params![cursor.entry_id, conversation_id],
         |row| row.get(0),
     )
@@ -1030,8 +1056,34 @@ pub(crate) fn bot_conversations(
                 conversation: visible(db, conversation_id)?,
                 entries,
                 segments: segments::authored_segments(db, conversation_id, bot_id)?,
+                deletion: deletion::exported(db, conversation_id)?,
             })
         })
+        .collect()
+}
+
+fn conversations_for(
+    db: &Connection,
+    principal_id: &str,
+    include_hidden: bool,
+) -> Result<Vec<Conversation>> {
+    let mut statement = db.prepare_cached(
+        "SELECT c.id FROM conversation_members m
+         JOIN conversations c ON c.id = m.conversation_id
+         LEFT JOIN pinned_conversations p ON p.conversation_id = c.id
+         WHERE m.principal_id = ?1 AND m.left_at IS NULL AND m.status = 'ACTIVE'
+           AND (?3 OR ?1 <> 'local' OR c.owner_hidden = 0)
+         ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, c.last_activity_at DESC, c.id DESC
+         LIMIT ?2",
+    )?;
+    let ids: Vec<String> = statement
+        .query_map(
+            params![principal_id, MAX_LISTED_CONVERSATIONS, include_hidden],
+            |row| row.get(0),
+        )?
+        .collect::<rusqlite::Result<_>>()?;
+    ids.iter()
+        .map(|id| view_as(db, id, principal_id)?.ok_or_else(|| conversation_not_found(id)))
         .collect()
 }
 
@@ -1039,29 +1091,31 @@ impl LocalBotStore {
     /// The person's conversations, pinned first (newest pin first), then newest activity first
     /// (at most 200).
     pub fn conversations(&self) -> Result<Vec<Conversation>> {
-        self.read(|db| {
-            let mut statement = db.prepare_cached(
-                "SELECT c.id FROM conversation_members m
-                 JOIN conversations c ON c.id = m.conversation_id
-                 LEFT JOIN pinned_conversations p ON p.conversation_id = c.id
-                 WHERE m.principal_id = ?1 AND m.left_at IS NULL AND m.status = 'ACTIVE'
-                 ORDER BY p.pinned_at IS NULL, p.pinned_at DESC, c.last_activity_at DESC, c.id DESC
-                 LIMIT ?2",
-            )?;
-            let ids: Vec<String> = statement
-                .query_map(params![LOCAL_OWNER_ID, MAX_LISTED_CONVERSATIONS], |row| {
-                    row.get(0)
-                })?
-                .collect::<rusqlite::Result<_>>()?;
-            ids.iter()
-                .map(|conversation_id| visible(db, conversation_id))
-                .collect()
-        })
+        self.conversations_as(LOCAL_OWNER_ID)
+    }
+
+    /// Lists one member's conversations. Only the owner's list hides owner-deleted chats.
+    pub fn conversations_as(&self, principal_id: &str) -> Result<Vec<Conversation>> {
+        self.read(|db| conversations_for(db, principal_id, false))
+    }
+
+    /// The local runtime's active conversations, including chats hidden only from the owner.
+    pub fn host_conversations(&self) -> Result<Vec<Conversation>> {
+        self.read(|db| conversations_for(db, LOCAL_OWNER_ID, true))
     }
 
     /// The conversation as the person sees it; `None` when there is none they are in.
     pub fn conversation(&self, conversation_id: &str) -> Result<Option<Conversation>> {
-        self.read(|db| view(db, conversation_id))
+        self.conversation_as(conversation_id, LOCAL_OWNER_ID)
+    }
+
+    /// A member's conversation and preview, with the owner's deletion boundary kept private.
+    pub fn conversation_as(
+        &self,
+        conversation_id: &str,
+        principal_id: &str,
+    ) -> Result<Option<Conversation>> {
+        self.read(|db| view_as(db, conversation_id, principal_id))
     }
 
     /// A new conversation of the person and local bots. A direct conversation that exists is
@@ -1070,7 +1124,13 @@ impl LocalBotStore {
         let plan = validate_new_conversation(request)?;
         self.write(|tx, changes| {
             let conversation_id = match plan.kind {
-                ConversationKind::Direct => open_direct(tx, &plan.members[0], changes)?,
+                ConversationKind::Direct => {
+                    let id = open_direct(tx, &plan.members[0], changes)?;
+                    if deletion::restore(tx, &id)? {
+                        changes.conversation(&id);
+                    }
+                    id
+                }
                 ConversationKind::Group => start_group(tx, &plan, changes)?,
             };
             visible(tx, &conversation_id)
@@ -1240,10 +1300,20 @@ impl LocalBotStore {
 
     /// A page of the conversation's events, newest first, paged like the API.
     pub fn entries(&self, conversation_id: &str, query: &EntriesQuery) -> Result<InboxEntriesPage> {
+        self.entries_as(conversation_id, LOCAL_OWNER_ID, query)
+    }
+
+    /// A member's page. Bots retain their history when the owner clears their own copy.
+    pub fn entries_as(
+        &self,
+        conversation_id: &str,
+        principal_id: &str,
+        query: &EntriesQuery,
+    ) -> Result<InboxEntriesPage> {
         let bounds = page_bounds(query)?;
         self.read(|db| {
-            active_membership(db, conversation_id, LOCAL_OWNER_ID)?;
-            entries_page(db, conversation_id, &bounds)
+            active_membership(db, conversation_id, principal_id)?;
+            entries_page(db, conversation_id, principal_id, &bounds)
         })
     }
 
@@ -1360,8 +1430,32 @@ impl LocalBotStore {
     /// stays and the call fails with [`codes::LOCAL_CHANGED`]; `0:0` lies before every event,
     /// for a conversation that moved without any. Forgetting one that is gone changes nothing.
     pub fn forget_conversation(&self, conversation_id: &str, up_to: Option<&str>) -> Result<()> {
+        self.forget_conversation_checked(conversation_id, up_to, None)
+    }
+
+    pub(crate) fn forget_exported_conversation(
+        &self,
+        conversation_id: &str,
+        up_to: Option<&str>,
+        deletion: Option<&crate::OwnerConversationDeletion>,
+    ) -> Result<()> {
+        self.forget_conversation_checked(conversation_id, up_to, Some(deletion))
+    }
+
+    fn forget_conversation_checked(
+        &self,
+        conversation_id: &str,
+        up_to: Option<&str>,
+        expected_deletion: Option<Option<&crate::OwnerConversationDeletion>>,
+    ) -> Result<()> {
         let up_to = position("up_to", up_to)?;
         self.write(|tx, changes| {
+            if let Some(expected) = expected_deletion {
+                let exists: bool = tx.query_row("SELECT EXISTS (SELECT 1 FROM conversations WHERE id = ?1)", [conversation_id], |row| row.get(0))?;
+                if exists && deletion::exported(tx, conversation_id)?.as_ref() != expected {
+                    return Err(Error::local_changed("Conversation deletion changed while moving; copy its latest state first"));
+                }
+            }
             if let Some(cursor) = &up_to
                 && has_event_after(tx, conversation_id, cursor)?
             {

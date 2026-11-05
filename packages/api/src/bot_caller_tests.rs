@@ -91,3 +91,107 @@ fn a_bot_write_names_the_tokens_bot_never_as() {
     assert_eq!(bot_named(&person, Some(" bot_2 ")), Some("bot_2"));
     assert_eq!(bot_named(&person, None), None);
 }
+
+#[tokio::test]
+async fn model_usage_requires_live_bot_and_active_group_membership() {
+    use crate::entity::conversation_member;
+    use sea_orm::{
+        ActiveModelTrait, ActiveValue::Set, ConnectOptions, Database, Schema, sea_query::Table,
+    };
+    let mut options = ConnectOptions::new("sqlite::memory:");
+    options.max_connections(1);
+    let db = Database::connect(options).await.unwrap();
+    db.execute_unprepared("ATTACH DATABASE ':memory:' AS public")
+        .await
+        .unwrap();
+    let schema = Schema::new(db.get_database_backend());
+    for source in [
+        schema.create_table_from_entity(bot::Entity),
+        schema.create_table_from_entity(conversation_member::Entity),
+    ] {
+        let mut table = Table::create();
+        table.table(source.get_table_name().unwrap().clone());
+        for column in source.get_columns() {
+            table.col(column.clone());
+        }
+        db.execute(&table).await.unwrap();
+    }
+    let now = chrono::Utc::now().fixed_offset();
+    bot::ActiveModel {
+        id: Set("bot_1".into()),
+        owner_id: Set("owner".into()),
+        appearance: Set(serde_json::json!({})),
+        model_policy: Set(serde_json::json!({})),
+        pii: Set(false),
+        capabilities: Set(vec![].into()),
+        location: Set("SERVER".into()),
+        created_at: Set(now),
+        updated_at: Set(now),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+    let direct = crate::routes::bots::runtime_token::bot_user_for_direct(&db, "owner", "bot_1")
+        .await
+        .unwrap();
+    assert!(direct.turn_id.starts_with("direct:"));
+    assert_eq!(direct.bot_id, "bot_1");
+    assert!(direct.conv_id.is_none());
+    assert!(
+        crate::routes::bots::runtime_token::bot_user_for_direct(&db, "other", "bot_1")
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        usage_identity(&db, &bot(None)).await.unwrap(),
+        ("owner".into(), None)
+    );
+    assert!(usage_identity(&db, &bot(Some("group"))).await.is_err());
+    conversation_member::ActiveModel {
+        conversation_id: Set("group".into()),
+        principal_id: Set("bot_1".into()),
+        principal_kind: Set("BOT".into()),
+        status: Set("ACTIVE".into()),
+        joined_at: Set(now),
+        ..Default::default()
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+    assert_eq!(
+        usage_identity(&db, &bot(Some("group"))).await.unwrap(),
+        ("owner".into(), Some("group".into()))
+    );
+    conversation_member::Entity::update_many()
+        .col_expr(
+            conversation_member::Column::LeftAt,
+            sea_orm::sea_query::Expr::value(now),
+        )
+        .exec(&db)
+        .await
+        .unwrap();
+    assert!(usage_identity(&db, &bot(Some("group"))).await.is_err());
+    bot::Entity::update_many()
+        .col_expr(bot::Column::DeletedAt, sea_orm::sea_query::Expr::value(now))
+        .exec(&db)
+        .await
+        .unwrap();
+    assert!(usage_identity(&db, &bot(None)).await.is_err());
+}
+
+#[test]
+fn direct_bot_app_tokens_cannot_read_or_write_inbox_conversations() {
+    let bot = BotUser {
+        turn_id: "direct:request".into(),
+        ..bot(None)
+    };
+    for room in ["owner-chat", "group"] {
+        assert_eq!(status(ensure_room(&bot, room)), Some(StatusCode::FORBIDDEN));
+    }
+    assert_eq!(
+        status(ensure_turn(&bot, "bt_1")),
+        Some(StatusCode::FORBIDDEN)
+    );
+    assert_eq!(status(check(&bot, &Names::default())), None);
+}

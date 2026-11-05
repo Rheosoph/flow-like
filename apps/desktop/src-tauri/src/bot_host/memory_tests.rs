@@ -96,6 +96,7 @@ impl Desk {
         PositionEntries::new(StorePages {
             store: self.host.clone(),
             conversation_id: self.conversation.id.clone(),
+            bot_id: self.bot.id.clone(),
         })
     }
 
@@ -195,6 +196,25 @@ fn direct_and_group_conversations_remember() {
     );
     assert!(source_for(&desk.host, &group, "bot_other", Some(&trigger)).is_none());
     assert!(source_for(&desk.host, &desk.conversation, &desk.bot.id, None).is_none());
+}
+
+#[tokio::test]
+async fn deleting_the_owners_chat_keeps_the_hosts_bot_history() {
+    let desk = Desk::new();
+    let first = desk.user("m1", "Remember the plan");
+    desk.bot_says("m2", "I have the plan");
+    desk.store
+        .delete_conversation(&desk.conversation.id)
+        .unwrap();
+
+    assert!(desk.store.conversations().unwrap().is_empty());
+    assert_eq!(desk.host.conversations().await.unwrap().len(), 1);
+    assert_eq!(
+        desk.host.newest(&desk.conversation.id).await.unwrap().len(),
+        2
+    );
+    let remembered = desk.reader().message(first).await.unwrap().unwrap();
+    assert_eq!(remembered.text, "Remember the plan");
 }
 
 #[tokio::test]

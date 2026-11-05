@@ -57,6 +57,7 @@ const EMBED_CHUNK_OVERLAP: usize = 64;
 
 /// What a bot turn gives its tools: the bot, and the model state the run was built on.
 pub(crate) struct BotToolRuntime {
+    pub(crate) account: bool,
     pub(crate) context: Arc<BotRunContext>,
     pub(crate) state: Arc<FlowLikeState>,
     pub(crate) profile: Option<Arc<Profile>>,
@@ -136,9 +137,7 @@ pub(crate) async fn execute(
     let options = super::native_tool_bridge::run_options(context);
     let gate = options.approval_gate.clone();
     let auto_approved = match &gate {
-        Some(gate) => {
-            options.auto_approve || gate.expensive_documents_allowed(tool, args).await
-        }
+        Some(gate) => options.auto_approve || gate.expensive_documents_allowed(tool, args).await,
         None => options.auto_approve,
     };
     let host = Arc::new(LiveHost::new(session, runtime.clone()));
@@ -161,9 +160,7 @@ pub(crate) async fn execute(
         )
         .await,
     )
-    .with_mail(
-        super::bot_tools::mail::mail_for(app, &runtime.context.bot_id, host.clone()).await,
-    )
+    .with_mail(super::bot_tools::mail::mail_for(app, &runtime.context.bot_id, host.clone()).await)
     .with_people(
         super::bot_tools::people::people_for(app, &runtime.context.bot_id, host.clone()).await,
     )
@@ -175,7 +172,11 @@ pub(crate) async fn execute(
         super::bot_tools::connectors::DesktopConnectors::new(
             app,
             host.session.auth.clone(),
-            runtime.context.workspace_app_id.as_deref().unwrap_or_default(),
+            runtime
+                .context
+                .workspace_app_id
+                .as_deref()
+                .unwrap_or_default(),
             &runtime.context.bot_id,
             host.clone(),
             Arc::new(HostSecrets(host.clone())),
@@ -925,14 +926,10 @@ impl ToolHost for LiveHost {
             )
             .await
             .map_err(|error| anyhow!("Conversation file '{path}': {error}"))?;
-        let url = download["url"]
-            .as_str()
-            .ok_or_else(|| anyhow!("The hub sent no download link for conversation file '{path}'"))?;
-        let bytes = reqwest::get(url)
-            .await?
-            .error_for_status()?
-            .bytes()
-            .await?;
+        let url = download["url"].as_str().ok_or_else(|| {
+            anyhow!("The hub sent no download link for conversation file '{path}'")
+        })?;
+        let bytes = reqwest::get(url).await?.error_for_status()?.bytes().await?;
         let size = bytes.len() as u64;
         let end = size.min(max_bytes) as usize;
         Ok(Some(FileData {

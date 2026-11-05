@@ -157,6 +157,7 @@ mod tests {
     #[test]
     fn connected_apps_cannot_use_member_auth_to_bypass_mcp_registration_auth() {
         let connected = AppUser::ConnectedApp(ConnectedAppUser {
+            bot: None,
             sub: Some("user".to_string()),
             origin_app_id: "source".to_string(),
             target_app_id: "target".to_string(),

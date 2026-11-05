@@ -46,7 +46,11 @@ import {
 	type IAccountSession,
 	accountSession,
 } from "../../lib/local-bots/account";
-import { localInbox } from "../../lib/local-bots/commands";
+import {
+	LOCAL_NOT_FOUND,
+	LocalStoreError,
+	localInbox,
+} from "../../lib/local-bots/commands";
 import { mergeConversations } from "../../lib/local-bots/merge";
 import { idsOf, localRegistries } from "../../lib/local-bots/registry";
 import type { TauriBackend } from "../tauri-provider";
@@ -72,10 +76,10 @@ function expectRecord<T>(response: unknown, operation: string): T {
 }
 
 /** A failing local store must not hide the account's conversations. */
-function localConversationsBesideAccount(): Promise<
-	IConversation[] | undefined
-> {
-	return localInbox.conversations().catch((error) => {
+function localConversationsBesideAccount(
+	as?: string,
+): Promise<IConversation[] | undefined> {
+	return localInbox.conversations(as).catch((error) => {
 		console.warn("[LocalBots] Listing account conversations only:", error);
 		return undefined;
 	});
@@ -185,7 +189,7 @@ export class InboxState implements IInboxState {
 	async listConversations(as?: string): Promise<IConversation[]> {
 		const session = accountSession(this.backend);
 		if (!session) {
-			const local = await localInbox.conversations();
+			const local = await localInbox.conversations(as);
 			this.registries.conversations.setLocal(idsOf(local));
 			return readableAs(local, as);
 		}
@@ -197,7 +201,7 @@ export class InboxState implements IInboxState {
 						this.listAccountConversations(session, as),
 					)
 				: [],
-			localConversationsBesideAccount(),
+			as && readsAccount ? [] : localConversationsBesideAccount(as),
 		]);
 		if (local) this.registries.conversations.setLocal(idsOf(local));
 		this.registries.conversations.addRemote(session.sub, idsOf(remote));
@@ -223,12 +227,13 @@ export class InboxState implements IInboxState {
 		const account = await this.accountFor(conversationId);
 		if (!account) {
 			const conversation = await this.here(conversationId, () =>
-				localInbox.conversation(conversationId),
+				localInbox.conversation(conversationId, as),
 			);
 			if (conversation) return conversation;
 			this.registries.conversations.forgetLocal(conversationId);
-			throw new Error(
+			throw new LocalStoreError(
 				`Could not load conversation ${conversationId}: it isn't on this computer`,
+				LOCAL_NOT_FOUND,
 			);
 		}
 		return expectRecord(
@@ -370,6 +375,25 @@ export class InboxState implements IInboxState {
 			`${conversationPath(account.id)}/members/${encodeURIComponent(principalId)}`,
 			undefined,
 			account.auth,
+		);
+	}
+
+	async deleteConversation(conversationId: string): Promise<void> {
+		const account = await this.accountFor(conversationId);
+		if (!account) {
+			return this.here(conversationId, () =>
+				localInbox.deleteConversation(conversationId),
+			);
+		}
+		await del<void>(
+			account.profile,
+			conversationPath(account.id),
+			undefined,
+			account.auth,
+		);
+		this.accountConversations.remove(
+			`${account.sub}:`,
+			(conversation) => conversation.id === account.id,
 		);
 	}
 
@@ -540,7 +564,7 @@ export class InboxState implements IInboxState {
 		const account = await this.accountFor(conversationId);
 		if (!account) {
 			return this.here(conversationId, () =>
-				localInbox.fileUrl(conversationId, handle),
+				localInbox.fileUrl(conversationId, handle, undefined, as),
 			);
 		}
 		return expectRecord(
@@ -584,7 +608,9 @@ export class InboxState implements IInboxState {
 	): Promise<IPinnedMessage[]> {
 		const account = await this.accountFor(conversationId);
 		if (!account) {
-			return this.here(conversationId, () => localInbox.pins(conversationId));
+			return this.here(conversationId, () =>
+				localInbox.pins(conversationId, as),
+			);
 		}
 		const response = expectRecord<{ pins?: IPinnedMessage[] }>(
 			await get<{ pins?: IPinnedMessage[] }>(

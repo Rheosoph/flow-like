@@ -1235,7 +1235,7 @@ pub(crate) async fn reserve_assistant_usage(
     app_id: Option<&str>,
 ) -> Result<AssistantUsage, ApiError> {
     reserve_assistant_usage_with_max_runtime(
-        state, sub, model, provider, funding, app_id, 600_000, true,
+        state, sub, model, provider, funding, app_id, 600_000, true, None,
     )
     .await
 }
@@ -1274,8 +1274,17 @@ pub(crate) async fn reserve_assistant_usage_with_max_runtime(
     app_id: Option<&str>,
     max_runtime_ms: i64,
     use_worker: bool,
+    bot: Option<&crate::middleware::jwt::BotUser>,
 ) -> Result<AssistantUsage, ApiError> {
     use sea_orm::{ConnectionTrait, DatabaseBackend, Statement};
+    if let Some(bot) = bot {
+        let (owner, _) = crate::bot_caller::usage_identity(&state.db, bot).await?;
+        if owner != sub {
+            return Err(ApiError::forbidden(
+                "The bot usage owner does not match this request",
+            ));
+        }
+    }
     let max_runtime_ms = max_runtime_ms.clamp(1, 600_000);
     let payer = crate::quota::resolve_payer(state, Some(sub), app_id).await?;
     let (_, tier) = crate::quota::payer_plan(state, &payer).await?;
@@ -1311,6 +1320,8 @@ pub(crate) async fn reserve_assistant_usage_with_max_runtime(
             payer_id: payer.clone(),
             actor_id: Some(sub.into()),
             app_id: app_id.map(ToOwned::to_owned),
+            bot_id: bot.map(|bot| bot.bot_id.clone()),
+            conversation_id: bot.and_then(|bot| bot.conv_id.clone()),
             model_id: Some(model.into()),
             provider: Some(provider.into()),
             kind: "assistant".into(),
@@ -1424,6 +1435,11 @@ pub(crate) async fn run_global_chat(
         }
         _ => None,
     };
+    if bot.is_some() && payload.interactive.is_some() && interactive_turn.is_none() {
+        return Err(ApiError::not_found(
+            "The bot conversation turn is unavailable",
+        ));
+    }
     // A bot runs on its own model when the server can run it, else on the chat's selection.
     if let Some(bot) = &bot {
         let flow_like_state = master_flow_like_state(&state).await?;
@@ -1497,6 +1513,32 @@ pub(crate) async fn run_global_chat(
     };
     payload.model_id = Some(selected_model.id.clone());
     raw_payload["model_id"] = json!(selected_model.id);
+    let metered_bot = bot.as_ref().map(|bot| crate::middleware::jwt::BotUser {
+        bot_id: bot.context.bot_id.clone(),
+        turn_id: interactive_turn
+            .as_ref()
+            .map(|interactive| interactive.turn.id.clone())
+            .unwrap_or_else(flow_like_types::create_id),
+        conv_id: interactive_turn.as_ref().and_then(|interactive| {
+            (flow_like_types::bot_turn::TurnAudience::parse(&interactive.turn.audience)
+                == Some(flow_like_types::bot_turn::TurnAudience::Room))
+            .then(|| interactive.turn.conversation_id.clone())
+        }),
+    });
+    let model_token = match &metered_bot {
+        Some(bot) => Some(
+            crate::bot_host::worker::executor_token(
+                &sub,
+                &bot.bot_id,
+                bot.conv_id.as_deref(),
+                &bot.turn_id,
+                None,
+                720,
+            )
+            .ok_or_else(|| ApiError::internal("The bot model token could not be signed"))?,
+        ),
+        None => token.clone(),
+    };
     let usage = match reserved {
         Some(usage) if usage.funding_class == funding => usage,
         Some(_) => {
@@ -1505,13 +1547,16 @@ pub(crate) async fn run_global_chat(
             ));
         }
         None => {
-            reserve_assistant_usage(
+            reserve_assistant_usage_with_max_runtime(
                 &state,
                 &sub,
                 &selected_model.id,
                 &provider.provider_name,
                 funding,
                 None,
+                600_000,
+                true,
+                metered_bot.as_ref(),
             )
             .await?
         }
@@ -1539,6 +1584,7 @@ pub(crate) async fn run_global_chat(
             "Assistant operation has already started",
         ));
     }
+    let token = model_token;
     let usage_started = std::time::Instant::now();
     let run_id = next_run_id();
 
@@ -1754,10 +1800,7 @@ pub(crate) async fn run_global_chat(
         if let Err(error) = settle_assistant_usage(
             &usage_state,
             &usage,
-            usage_started
-                .elapsed()
-                .as_millis()
-                .min(i64::MAX as u128) as i64
+            usage_started.elapsed().as_millis().min(i64::MAX as u128) as i64
                 + sub_task_compute.map_or(0, |compute| compute.extra_millis()),
             result.is_ok(),
         )

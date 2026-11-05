@@ -556,6 +556,8 @@ struct InboxFingerprint {
     newest: Option<DateTimeWithTimeZone>,
     last_read: Option<DateTimeWithTimeZone>,
     newest_entry: Option<DateTimeWithTimeZone>,
+    cleared_history_at: Option<DateTimeWithTimeZone>,
+    hidden_conversations: i64,
     last_entry_read: Option<DateTimeWithTimeZone>,
     newest_bot_turn: Option<DateTimeWithTimeZone>,
 }
@@ -673,6 +675,25 @@ fn inbox_fingerprint_query(sub: &str) -> SelectStatement {
                 ))
                 .into_query(),
             Alias::new("last_entry_read"),
+        )
+        .expr_as(
+            conversation_member::Entity::find()
+                .select_only()
+                .column_as(Expr::col(conversation_member::Column::ClearedAt).max(), "n")
+                .filter(conversation_member::Column::PrincipalId.eq(sub))
+                .into_query(),
+            Alias::new("cleared_history_at"),
+        )
+        .expr_as(
+            conversation_member::Entity::find()
+                .select_only()
+                .column_as(
+                    Expr::col(conversation_member::Column::HiddenAt).count(),
+                    "n",
+                )
+                .filter(conversation_member::Column::PrincipalId.eq(sub))
+                .into_query(),
+            Alias::new("hidden_conversations"),
         )
         .expr_as(
             bot_turn::Entity::find()
@@ -1789,7 +1810,7 @@ mod tests {
                 id TEXT PRIMARY KEY, "inboxId" TEXT NOT NULL, "createdAt" TEXT NOT NULL
             )"#,
             r#"CREATE TABLE public."ConversationMember" (
-                "conversationId" TEXT NOT NULL, "principalId" TEXT NOT NULL, "lastReadAt" TEXT
+                "conversationId" TEXT NOT NULL, "principalId" TEXT NOT NULL, "lastReadAt" TEXT, "clearedAt" TEXT, "hiddenAt" TEXT
             )"#,
             r#"CREATE TABLE public."Bot" (
                 id TEXT PRIMARY KEY, "ownerId" TEXT NOT NULL, "deletedAt" TEXT
@@ -1803,7 +1824,7 @@ mod tests {
             r#"INSERT INTO public."InboxEntry" VALUES
                 ('entry-a','user-a','2026-01-01T00:00:00Z'),
                 ('entry-b','user-b','2026-12-01T00:00:00Z')"#,
-            r#"INSERT INTO public."ConversationMember" VALUES
+            r#"INSERT INTO public."ConversationMember" ("conversationId", "principalId", "lastReadAt") VALUES
                 ('conversation-1','user-a',NULL),
                 ('conversation-1','user-b','2026-12-01T00:00:00Z')"#,
             r#"INSERT INTO public."Notification" VALUES
@@ -1895,6 +1916,10 @@ mod tests {
                 invited_by: Set(None),
                 invited_at: Set(None),
                 accepted_at: Set(None),
+                hidden_at: Set(None),
+                cleared_at: Set(None),
+                cleared_legacy_at: Set(None),
+                cleared_seq: Set(None),
             }
             .insert(db)
             .await
@@ -1918,6 +1943,7 @@ mod tests {
                 envelope: Set(json!({"v": 1, "enc": "none", "body": {"text": "x".repeat(pad)}})),
                 created_at: Set(at(n)),
                 seq: Set(Some(n)),
+                cleared: Set(Some(false)),
             }
             .insert(db)
             .await

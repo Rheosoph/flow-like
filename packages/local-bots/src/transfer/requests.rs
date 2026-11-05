@@ -174,6 +174,8 @@ pub(crate) struct ImportEntry<'a> {
     pub kind: InboxEntryKind,
     pub envelope: Cow<'a, Value>,
     pub created_at: DateTime<FixedOffset>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_seq: Option<i64>,
     /// Workspace handles the envelope lost because their app doesn't move; not sent.
     #[serde(skip)]
     pub stripped: usize,
@@ -188,6 +190,8 @@ pub(crate) struct ImportConversationRequest<'a> {
     /// Account ids, the caller first.
     pub members: Vec<String>,
     pub entries: Vec<ImportEntry<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deletion: Option<&'a crate::OwnerConversationDeletion>,
 }
 
 /// The chats that move with the bot now, and those that wait for other bots of this device.
@@ -354,10 +358,11 @@ fn entry_bytes(entry: &ImportEntry<'_>) -> usize {
 /// `ids`, oldest first across batches, each within the entry, row, body and copy caps. A chat
 /// without entries still makes one call, which creates the conversation.
 pub(crate) fn import_conversation_requests<'a>(
-    conversation: &'a Conversation,
+    item: &'a ExportedConversation,
     entries: &[&'a InboxEntry],
     ids: &AccountIds,
 ) -> Vec<ImportConversationRequest<'a>> {
+    let conversation = &item.conversation;
     let caller = ids.of(LOCAL_OWNER_ID);
     let mut members = vec![caller.clone()];
     for member in &conversation.members {
@@ -374,6 +379,7 @@ pub(crate) fn import_conversation_requests<'a>(
         title: conversation.title.as_deref(),
         members: members.clone(),
         entries,
+        deletion: item.deletion.as_ref(),
     };
     let mut requests = Vec::new();
     let mut batch: Vec<ImportEntry<'a>> = Vec::new();
@@ -387,6 +393,7 @@ pub(crate) fn import_conversation_requests<'a>(
             envelope: envelope.0,
             stripped: envelope.1,
             created_at: entry.created_at,
+            source_seq: item.deletion.as_ref().and(entry.seq),
         };
         let size_of_entry = entry_bytes(&entry);
         if !batch.is_empty()

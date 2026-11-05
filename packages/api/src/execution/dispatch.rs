@@ -4283,6 +4283,7 @@ mod tests {
         use crate::middleware::jwt::{ApiKey, AppUser, ConnectedAppUser, OpenIDUser, PATUser};
         let through_connection = |sub: Option<&str>, technical_user_id: Option<&str>| {
             AppUser::ConnectedApp(ConnectedAppUser {
+                bot: None,
                 sub: sub.map(str::to_owned),
                 origin_app_id: "app-0".into(),
                 target_app_id: "app-1".into(),

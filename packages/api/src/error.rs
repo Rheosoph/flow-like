@@ -274,11 +274,22 @@ impl ApiError {
     }
 
     pub fn quota_exceeded(details: QuotaLimitDetails) -> Self {
-        let message = format!(
-            "Your {} plan does not have enough {} available for this action. View usage to review active reservations and your options.",
-            details.plan,
-            details.resource.replace('_', " ")
-        );
+        let message = if matches!(details.scope.as_str(), "app" | "bot" | "bot_group") {
+            let scope = match details.scope.as_str() {
+                "app" => "app",
+                "bot" => "bot",
+                _ => "bot in this group",
+            };
+            format!(
+                "The monthly budget for this {scope} does not have enough capacity for this action. View usage or ask an enterprise administrator to approve a higher limit."
+            )
+        } else {
+            format!(
+                "Your {} plan does not have enough {} available for this action. View usage to review active reservations and your options.",
+                details.plan,
+                details.resource.replace('_', " ")
+            )
+        };
         let mut error = Self::new(
             StatusCode::PAYMENT_REQUIRED,
             "PLAN_LIMIT_EXCEEDED",
@@ -744,6 +755,32 @@ mod tests {
     use flow_like::flow::board::Board;
     use flow_like_storage::object_store::{memory::InMemory, path::Path};
     use std::sync::Arc;
+
+    #[test]
+    fn scoped_budget_errors_identify_the_budget_and_admin_approval() {
+        for scope in ["app", "bot", "bot_group"] {
+            let error = ApiError::quota_exceeded(super::QuotaLimitDetails {
+                resource: "hosted_ai_calls".into(),
+                scope: scope.into(),
+                payer_id: "owner".into(),
+                plan: "enterprise_policy".into(),
+                used: 10,
+                reserved: 0,
+                requested: 1,
+                limit: 10,
+                unit: "operations".into(),
+                period_end: None,
+                actions: vec!["contact_admin".into()],
+                required_model_tier: None,
+            });
+            assert_eq!(error.status(), StatusCode::PAYMENT_REQUIRED);
+            assert_eq!(error.public_code(), "PLAN_LIMIT_EXCEEDED");
+            let message = error.public_message().unwrap();
+            assert!(message.contains("monthly budget"));
+            assert!(message.contains("enterprise administrator"));
+            assert!(!message.contains("enterprise_policy"));
+        }
+    }
 
     #[tokio::test]
     async fn missing_board_is_an_unreported_not_found() {

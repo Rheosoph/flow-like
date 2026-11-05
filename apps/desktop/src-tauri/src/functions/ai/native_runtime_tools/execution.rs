@@ -408,6 +408,12 @@ async fn execute_run(
             session.user_profile.clone(),
             cancellation.clone(),
             stream_state,
+            session
+                .context
+                .as_ref()
+                .and_then(|context| context.bot.as_ref())
+                .filter(|bot| bot.account)
+                .map(|bot| (bot.context.bot_id.clone(), bot.turn_id.clone())),
         );
         // The owned worker finishes cancellation and releases the runtime registry after this
         // tool returns unavailable. Dropping its caller must not skip that cleanup.

@@ -276,6 +276,7 @@ pub(crate) async fn instance_audio(
         app_id: instance.app_id.clone(),
         user_id: instance.delegated_user_id.clone(),
         technical_user_id: None,
+        ..Default::default()
     };
     authorized_audio(state, payload, context, Some(instance)).await
 }
@@ -311,6 +312,8 @@ async fn authorized_audio(
         user_id: Some(&context.user_id),
         technical_user_id: context.technical_user_id.as_deref(),
         app_id: context.app_id.as_deref(),
+        bot_id: context.bot_id.as_deref(),
+        conversation_id: context.conversation_id.as_deref(),
         provider: Some(implementation.label()),
         endpoint: Some(implementation.label()),
         model_id: provider.model_id.as_deref(),

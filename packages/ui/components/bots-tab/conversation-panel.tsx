@@ -787,10 +787,14 @@ export function ConversationPanel({
 	onClose: () => void;
 }>) {
 	const query = useConversation(conversationId);
+	useEffect(() => {
+		if (query.data === null && query.isFetchedAfterMount && !query.isFetching)
+			onClose();
+	}, [query.data, query.isFetchedAfterMount, query.isFetching, onClose]);
 	if (!query.data) {
 		return (
 			<ConversationUnavailable
-				failed={query.isError}
+				failed={query.isError || query.data === null}
 				onRetry={() => void query.refetch()}
 				onClose={onClose}
 			/>
@@ -798,7 +802,7 @@ export function ConversationPanel({
 	}
 	const view = (
 		<ConversationView
-			key={query.data.id}
+			key={`${query.data.id}:${query.data.history_cleared_at ?? ""}`}
 			conversation={query.data}
 			me={me}
 			bots={bots}

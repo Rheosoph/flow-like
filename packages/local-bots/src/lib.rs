@@ -35,8 +35,8 @@ pub use model::{
     ConversationMember, ConversationPinState, ConversationSegment, ConversationSegmentList,
     CreateBotRequest, CreateConversationRequest, EntriesQuery, ExportedConversation,
     ExportedSecret, InboxEntriesPage, InboxEntry, LocalBotBundle, MarkReadResponse, OpenedSecrets,
-    PinnedMessage, PositionQuery, SecretValue, SegmentsQuery, SendEntryRequest, StarredMessage,
-    StarredMessagesPage, UpdateBotRequest, WriteSegmentRequest,
+    OwnerConversationDeletion, PinnedMessage, PositionQuery, SecretValue, SegmentsQuery,
+    SendEntryRequest, StarredMessage, StarredMessagesPage, UpdateBotRequest, WriteSegmentRequest,
 };
 pub use skills::SkillOrigin;
 pub use store::{ChangeNotifier, KeyError, LocalBotStore, SecretKeyProvider};

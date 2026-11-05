@@ -253,3 +253,26 @@ fn a_wait_older_than_seven_days_ends_with_a_notice() {
             .contains("seven days")
     );
 }
+
+#[test]
+fn clearing_a_conversation_hides_its_approval_cards_and_rejects_stale_answers() {
+    let f = fixture();
+    let bot = f.bot("Scout");
+    let direct = f.direct(&bot);
+    let card = card("bt_clear");
+    f.store
+        .park_turn("bt_clear", &bot.id, &direct.id, "m1", &card)
+        .unwrap();
+    f.store.delete_conversation(&direct.id).unwrap();
+    assert!(f.store.approval_card(&card.id).unwrap().is_none());
+    let response = ApprovalResponse {
+        approval_id: card.id,
+        decision: ApprovalDecision::Once,
+    };
+    assert!(
+        f.store
+            .resolve_parked(&bot.id, "bt_clear", &response)
+            .is_err()
+    );
+    assert!(f.store.conversations().unwrap().is_empty());
+}

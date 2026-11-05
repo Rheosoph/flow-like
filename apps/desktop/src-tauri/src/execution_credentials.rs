@@ -485,7 +485,13 @@ impl DesktopAuthorizer {
                     && url.query().is_none()
                     && matches!(
                         path,
-                        "/chat/completions" | "/responses" | "/systemone" | "/embeddings/embed"
+                        "/chat/completions"
+                            | "/responses"
+                            | "/systemone"
+                            | "/embeddings/embed"
+                            | "/audio/speech"
+                            | "/audio/transcriptions"
+                            | "/images/generations"
                     )
             }
             ResourceAudience::ProjectApi => {
@@ -602,7 +608,15 @@ pub(crate) fn request_authorizer(
     })
 }
 
+struct BotModelScope {
+    bot_id: String,
+    turn_id: Option<String>,
+    cached: tokio::sync::Mutex<Option<(String, SystemTime)>>,
+    runtime_cached: tokio::sync::Mutex<Option<(String, SystemTime)>>,
+}
+
 struct NativeAuthorizer {
+    bot: Option<BotModelScope>,
     binding: crate::native_auth::SessionBinding,
     policy: DesktopAuthorizer,
 }
@@ -626,6 +640,92 @@ impl RequestAuthorizer for NativeAuthorizer {
                     AuthorizationError::Denied
                 }
             })?;
+            let bot_connection = request.audience == ResourceAudience::ProjectApi
+                && request.method == "POST"
+                && request.url.contains("/connections/")
+                && request.url.ends_with("/token");
+            if (request.audience == ResourceAudience::HostedModels || bot_connection)
+                && let Some(bot) = &self.bot
+            {
+                let mut cached = if bot_connection {
+                    bot.runtime_cached.lock().await
+                } else {
+                    bot.cached.lock().await
+                };
+                if let Some((token, expiry)) = cached.as_ref()
+                    && expiry.duration_since(SystemTime::now()).unwrap_or_default()
+                        > Duration::from_secs(30)
+                {
+                    if !self.binding.is_current() {
+                        return Err(AuthorizationError::Denied);
+                    }
+                    return RequestAuthorization::new(format!("Bearer {token}"), None, *expiry);
+                }
+                let client = reqwest::Client::builder()
+                    .redirect(reqwest::redirect::Policy::none())
+                    .timeout(Duration::from_secs(30))
+                    .build()
+                    .map_err(|_| AuthorizationError::Unavailable)?;
+                let mut url = reqwest::Url::parse(&self.policy.api_base())
+                    .map_err(|_| AuthorizationError::InvalidRequest)?;
+                url.path_segments_mut()
+                    .map_err(|_| AuthorizationError::InvalidRequest)?
+                    .extend([
+                        "bots",
+                        &bot.bot_id,
+                        if bot_connection {
+                            "runtime-token"
+                        } else {
+                            "model-token"
+                        },
+                    ]);
+                let mut response = client
+                    .post(url)
+                    .bearer_auth(&token)
+                    .json(&serde_json::json!({"turn_id": bot.turn_id, "app_id": (!self.policy.project.is_empty()).then_some(&self.policy.project)}))
+                    .send()
+                    .await
+                    .map_err(|_| AuthorizationError::Unavailable)?;
+                if !response.status().is_success() {
+                    return Err(if response.status().is_client_error() {
+                        AuthorizationError::Denied
+                    } else {
+                        AuthorizationError::Unavailable
+                    });
+                }
+                let mut bytes = Vec::new();
+                while let Some(chunk) = response
+                    .chunk()
+                    .await
+                    .map_err(|_| AuthorizationError::Unavailable)?
+                {
+                    if bytes.len().saturating_add(chunk.len()) > 32 * 1024 {
+                        return Err(AuthorizationError::InvalidResponse);
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
+                let minted: serde_json::Value = serde_json::from_slice(&bytes)
+                    .map_err(|_| AuthorizationError::InvalidResponse)?;
+                let token = minted
+                    .get("token")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or(AuthorizationError::InvalidResponse)?
+                    .to_owned();
+                let expiry = minted
+                    .get("expires_at")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|seconds| {
+                        SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds))
+                    })
+                    .ok_or(AuthorizationError::InvalidResponse)?;
+                if !self.binding.is_current() {
+                    return Err(AuthorizationError::Denied);
+                }
+                let authorization =
+                    RequestAuthorization::new(format!("Bearer {token}"), None, expiry)?;
+                *cached = Some((token, expiry));
+                return Ok(authorization);
+            }
             let payload = token
                 .split('.')
                 .nth(1)
@@ -657,12 +757,44 @@ pub(crate) fn native_request_authorizer(
     project: &str,
 ) -> Arc<dyn RequestAuthorizer> {
     Arc::new(NativeAuthorizer {
+        bot: None,
         policy: DesktopAuthorizer {
             hub: binding.hub.clone(),
             project: project.to_owned(),
             authority: Err(AuthorizationError::Denied),
         },
         binding,
+    })
+}
+
+/// Hosted model calls of an account bot use a renewable token scoped to that bot and turn.
+pub(crate) fn native_bot_model_authorizer(
+    binding: crate::native_auth::SessionBinding,
+    bot_id: String,
+    turn_id: Option<String>,
+) -> Arc<dyn RequestAuthorizer> {
+    native_bot_model_authorizer_for_project(binding, bot_id, turn_id, "")
+}
+
+pub(crate) fn native_bot_model_authorizer_for_project(
+    binding: crate::native_auth::SessionBinding,
+    bot_id: String,
+    turn_id: Option<String>,
+    project: &str,
+) -> Arc<dyn RequestAuthorizer> {
+    Arc::new(NativeAuthorizer {
+        policy: DesktopAuthorizer {
+            hub: binding.hub.clone(),
+            project: project.to_owned(),
+            authority: Err(AuthorizationError::Denied),
+        },
+        binding,
+        bot: Some(BotModelScope {
+            bot_id,
+            turn_id,
+            cached: Default::default(),
+            runtime_cached: Default::default(),
+        }),
     })
 }
 
@@ -1802,5 +1934,57 @@ mod tests {
                     .contains("authorization: pat_automation\r\n")
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod bot_model_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn bot_model_credentials_cannot_authorize_project_or_foreign_endpoints() {
+        let binding = crate::native_auth::SessionBinding::for_test(
+            "profile",
+            "https://hub.example",
+            "https://issuer.example",
+            "owner",
+        );
+        let authorizer =
+            native_bot_model_authorizer(binding, "bot_1".into(), Some("turn_1".into()));
+        for (audience, url) in [
+            (
+                ResourceAudience::HostedModels,
+                "https://other.example/api/v1/chat/completions",
+            ),
+            (
+                ResourceAudience::HostedModels,
+                "https://hub.example/api/v1/bots/bot_1/secrets",
+            ),
+            (
+                ResourceAudience::ProjectApi,
+                "https://hub.example/api/v1/apps/app_1",
+            ),
+        ] {
+            let error = authorizer
+                .authorize(AuthorizationRequest {
+                    audience,
+                    method: "POST",
+                    url,
+                })
+                .await
+                .unwrap_err();
+            assert_eq!(error, AuthorizationError::InvalidRequest);
+        }
+        assert_eq!(
+            authorizer
+                .resource_base_url(ResourceAudience::HostedModels)
+                .as_deref(),
+            Some("https://hub.example/api/v1")
+        );
+        assert!(
+            authorizer
+                .resource_base_url(ResourceAudience::ProjectApi)
+                .is_none()
+        );
     }
 }

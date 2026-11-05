@@ -386,6 +386,7 @@ mod tests {
                 creator_user_id: Some("user-1".into()),
             }),
             AppUser::ConnectedApp(ConnectedAppUser {
+                bot: None,
                 sub: Some("user-1".into()),
                 origin_app_id: "app-0".into(),
                 target_app_id: "app-1".into(),

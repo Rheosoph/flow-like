@@ -26,6 +26,7 @@ import { isTauri } from "../../lib/platform";
 import {
 	formatQuota,
 	formatQuotaDate,
+	isScopedUsageLimit,
 	mergeQuotaCounters,
 	quotaBelongsToAnotherPayer,
 	quotaLabels,
@@ -224,6 +225,155 @@ export interface EnterpriseContact {
 	email?: string;
 	url?: string;
 	message?: string;
+}
+
+export function ScopedUsageLimit({
+	quota,
+	contact,
+	onClose,
+}: Readonly<{
+	quota: QuotaDetail;
+	contact: EnterpriseContact;
+	onClose?: () => void;
+}>) {
+	const { t } = useTranslation("common");
+	const title =
+		quota.scope === "app"
+			? t(
+					"monthlyBudget.appReached",
+					"This app's monthly budget cannot cover this request",
+				)
+			: quota.scope === "bot_group"
+				? t(
+						"monthlyBudget.groupReached",
+						"This bot's monthly budget for this group cannot cover this request",
+					)
+				: t(
+						"monthlyBudget.botReached",
+						"This bot's monthly budget cannot cover this request",
+					);
+	const resource = quotaLabels[quota.resource] ?? quota.resource;
+	const amount = (value: number) =>
+		quota.resource === "hosted_ai_cost_micros"
+			? new Intl.NumberFormat(undefined, {
+					style: "currency",
+					currency: "EUR",
+					maximumFractionDigits: 6,
+				}).format(value / 1_000_000)
+			: quota.resource === "cloud_runtime_ms"
+				? `${(value / 1_000).toLocaleString(undefined, { maximumFractionDigits: 3 })} s`
+				: formatQuota(value, quota.resource);
+	const reset = quota.periodEnd
+		? new Date(quota.periodEnd).toLocaleString(undefined, {
+				timeZone: "UTC",
+				dateStyle: "medium",
+				timeStyle: "short",
+			})
+		: undefined;
+	const counters = [
+		{ label: t("monthlyBudget.used", "Used"), value: quota.used },
+		{ label: t("monthlyBudget.reserved", "Reserved"), value: quota.reserved },
+		{ label: t("monthlyBudget.limit", "Monthly limit"), value: quota.limit },
+		...(quota.requested === undefined
+			? []
+			: [
+					{
+						label: t("monthlyBudget.requested", "This request"),
+						value: quota.requested,
+					},
+				]),
+	];
+	const message = `${title}. ${resource}: ${counters.map(({ label, value }) => `${label}: ${amount(value)}`).join(", ")}.${reset ? ` Resets ${reset} UTC.` : ""}`;
+	return (
+		<div className="space-y-4 p-6">
+			<DialogTitle>{title}</DialogTitle>
+			<DialogDescription>
+				{t(
+					"monthlyBudget.description",
+					"The owner can review the usage budget. An enterprise administrator can approve a higher enterprise ceiling.",
+				)}
+			</DialogDescription>
+			<div className="space-y-3 rounded-lg border p-3">
+				<p className="text-sm font-medium">{resource}</p>
+				<dl className="grid grid-cols-2 gap-3 text-sm">
+					{counters.map(({ label, value }) => (
+						<div key={label}>
+							<dt className="text-xs text-muted-foreground">{label}</dt>
+							<dd className="font-medium tabular-nums">{amount(value)}</dd>
+						</div>
+					))}
+				</dl>
+				{reset && (
+					<p className="text-xs text-muted-foreground">
+						{t("monthlyBudget.reset", "Resets {{date}} UTC", { date: reset })}
+					</p>
+				)}
+			</div>
+			<p className="text-sm text-muted-foreground">
+				{t(
+					"monthlyBudget.contact",
+					"Contact your enterprise administrator if you need a higher ceiling before the monthly reset.",
+				)}
+			</p>
+			<div className="flex flex-wrap gap-2">
+				{contact.email && (
+					<Button asChild>
+						<a
+							href={`mailto:${contact.email}`}
+							target="_blank"
+							rel="noreferrer external"
+						>
+							<Mail className="size-4" aria-hidden />
+							{t(
+								"monthlyBudget.emailAdmin",
+								"Contact enterprise administrator",
+							)}
+						</a>
+					</Button>
+				)}
+				{contact.url && (
+					<Button variant="outline" asChild>
+						<a href={contact.url} target="_blank" rel="noreferrer external">
+							{contact.name ??
+								t(
+									"monthlyBudget.adminContact",
+									"Administrator contact information",
+								)}
+							<ArrowRight className="size-4" aria-hidden />
+						</a>
+					</Button>
+				)}
+				<Button
+					variant="outline"
+					onClick={async () => {
+						try {
+							await navigator.clipboard.writeText(message);
+							toast.success(
+								t(
+									"monthlyBudget.copied",
+									"Budget details copied. Share them with your enterprise administrator.",
+								),
+							);
+						} catch {
+							toast.error(
+								t(
+									"monthlyBudget.copyFailed",
+									"Copy the budget details above and share them with your enterprise administrator.",
+								),
+							);
+						}
+					}}
+				>
+					{t("monthlyBudget.copy", "Copy budget details")}
+				</Button>
+				{onClose && (
+					<Button variant="ghost" onClick={onClose}>
+						{t("close", "Close")}
+					</Button>
+				)}
+			</div>
+		</div>
+	);
 }
 
 export function EnterpriseContent({
@@ -431,6 +581,11 @@ export function UpgradeDialogBody({
 	quota,
 }: Readonly<UpgradeDialogBodyProps>) {
 	const { t } = useTranslation("common");
+	if (isScopedUsageLimit(quota)) {
+		return (
+			<ScopedUsageLimit quota={quota} contact={contact} onClose={onClose} />
+		);
+	}
 	const eligibleTiers = upgradeTiers.filter(
 		([, tier]) =>
 			supportsHostedModel(tier, requiredModelTier) &&
@@ -616,6 +771,7 @@ export function UpgradeDialogBody({
 export function GlobalUpgradeDialog() {
 	const isOpen = useUpgradeDialogStore((state) => state.isOpen);
 	const trigger = useUpgradeDialogStore((state) => state.trigger);
+	const scopedBudget = isScopedUsageLimit(trigger?.quota);
 	const close = useUpgradeDialogStore((state) => state.close);
 	const setEnabled = useUpgradeDialogStore((state) => state.setEnabled);
 
@@ -637,7 +793,7 @@ export function GlobalUpgradeDialog() {
 		backend.userState.getPricing,
 		backend.userState,
 		[],
-		isOpen && isAuthenticated,
+		isOpen && isAuthenticated && !scopedBudget,
 	);
 
 	const quota = useInvoke(
@@ -698,13 +854,13 @@ export function GlobalUpgradeDialog() {
 	// Self-correct when the open raced ahead of config: the operator disabled
 	// the conversion flow, so honor the "plain message" contract instead.
 	useEffect(() => {
-		if (isOpen && configEnabled === false) {
+		if (isOpen && configEnabled === false && !scopedBudget) {
 			close();
 			if (trigger?.message) {
 				toast.error(trigger.message);
 			}
 		}
-	}, [isOpen, configEnabled, close, trigger?.message]);
+	}, [isOpen, configEnabled, close, trigger?.message, scopedBudget]);
 	const premiumEnabled =
 		features.data?.premium ?? hub.hub?.features?.premium ?? false;
 	const mode: "consumer" | "enterprise" =
@@ -744,10 +900,9 @@ export function GlobalUpgradeDialog() {
 			: copy.sub;
 
 	const currentTier = (pricing.data?.current_tier ?? "FREE").toUpperCase();
-	const anotherPayer = quotaBelongsToAnotherPayer(
-		trigger?.quota,
-		auth.user?.profile.sub,
-	);
+	const anotherPayer =
+		!scopedBudget &&
+		quotaBelongsToAnotherPayer(trigger?.quota, auth.user?.profile.sub);
 
 	const requiredModelTier = trigger?.quota?.requiredModelTier;
 	const upgradeTiers = useMemo(() => {
@@ -795,7 +950,7 @@ export function GlobalUpgradeDialog() {
 
 	const handleUpgrade = useCallback(
 		async (tier: string, priceId?: string, interval?: "month" | "year") => {
-			if (anotherPayer) return;
+			if (anotherPayer || scopedBudget) return;
 			setLoadingTier(tier);
 			try {
 				const origin = checkoutReturnOrigin();
@@ -814,11 +969,11 @@ export function GlobalUpgradeDialog() {
 				setLoadingTier(null);
 			}
 		},
-		[backend.userState, checkoutReturnOrigin, anotherPayer],
+		[backend.userState, checkoutReturnOrigin, anotherPayer, scopedBudget],
 	);
 
 	const handleManageBilling = useCallback(async () => {
-		if (anotherPayer) return;
+		if (anotherPayer || scopedBudget) return;
 		try {
 			const billingSession = await backend.userState.getBillingSession();
 			await openExternalUrl(billingSession.url, "the billing portal");
@@ -826,14 +981,14 @@ export function GlobalUpgradeDialog() {
 			console.error("Failed to get billing session:", error);
 			toast.error("Failed to open the billing portal.");
 		}
-	}, [backend.userState, anotherPayer]);
+	}, [backend.userState, anotherPayer, scopedBudget]);
 
 	return (
 		<Dialog open={isOpen} onOpenChange={(open) => !open && close()}>
 			<QuotaWarnings overview={quota.data} />
 			<DialogContent
 				className={
-					mode === "consumer" && !anotherPayer
+					mode === "consumer" && !anotherPayer && !scopedBudget
 						? "gap-0 p-0 sm:max-w-2xl max-h-[90dvh] overflow-y-auto"
 						: "gap-0 p-0 sm:max-w-lg"
 				}

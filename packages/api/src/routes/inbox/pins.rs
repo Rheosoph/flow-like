@@ -22,7 +22,7 @@ use axum::{
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::inbox::is_tombstone;
 use sea_orm::{
-    ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, PaginatorTrait,
+    ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, ExprTrait, PaginatorTrait,
     QueryFilter, QueryOrder, sea_query::OnConflict,
 };
 use serde::{Deserialize, Serialize};
@@ -134,8 +134,19 @@ async fn present<C: ConnectionTrait>(
         .filter(|copy| copy.conversation_id == conversation_id)
         .map(|copy| (copy.message_id.clone(), copy))
         .collect();
+    let cleared: std::collections::HashSet<String> = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(inbox))
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(inbox_entry::Column::MessageId.is_in(ids))
+        .filter(sea_orm::sea_query::Expr::expr(super::deletion::visible_entries()).not())
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|entry| entry.message_id)
+        .collect();
     let pins: Vec<pinned_message::Model> = pins
         .into_iter()
+        .filter(|pin| !cleared.contains(&pin.message_id))
         .filter(|pin| {
             copies
                 .get(&pin.message_id)

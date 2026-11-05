@@ -65,11 +65,20 @@ fn latest_edit(db: &Connection, message: &InboxEntry) -> Result<Option<InboxEntr
 
 fn pinned_message(
     db: &Connection,
+    principal_id: &str,
     message_id: String,
     pinned_by: String,
     pinned_at: i64,
 ) -> Result<PinnedMessage> {
-    let entry = entry_by_message_id(db, &message_id)?;
+    let entry = match entry_by_message_id(db, &message_id)? {
+        Some(entry)
+            if principal_id != LOCAL_OWNER_ID
+                || super::deletion::message_visible(db, &entry.conversation_id, &message_id)? =>
+        {
+            Some(entry)
+        }
+        _ => None,
+    };
     let latest_edit = entry
         .as_ref()
         .map(|entry| latest_edit(db, entry))
@@ -91,7 +100,13 @@ fn pin_row(db: &Connection, conversation_id: &str, message_id: &str) -> Result<P
         params![conversation_id, message_id],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    pinned_message(db, message_id.to_string(), pinned_by, pinned_at)
+    pinned_message(
+        db,
+        LOCAL_OWNER_ID,
+        message_id.to_string(),
+        pinned_by,
+        pinned_at,
+    )
 }
 
 fn starred_message(
@@ -175,20 +190,28 @@ impl LocalBotStore {
 
     /// The conversation's pinned messages, newest pin first.
     pub fn pins(&self, conversation_id: &str) -> Result<Vec<PinnedMessage>> {
+        self.pins_as(conversation_id, LOCAL_OWNER_ID)
+    }
+
+    /// Lists shared pins with the history visible to one active member.
+    pub fn pins_as(&self, conversation_id: &str, principal_id: &str) -> Result<Vec<PinnedMessage>> {
         self.read(|db| {
-            active_membership(db, conversation_id, LOCAL_OWNER_ID)?;
+            active_membership(db, conversation_id, principal_id)?;
+            let source = super::deletion::entry_source(principal_id);
             let rows: Vec<(String, String, i64)> = db
-                .prepare_cached(
+                .prepare_cached(&format!(
                     "SELECT message_id, pinned_by, pinned_at FROM pinned_messages
-                     WHERE conversation_id = ?1 ORDER BY pinned_at DESC, message_id DESC",
-                )?
+                     WHERE conversation_id = ?1
+                       AND message_id IN (SELECT message_id FROM {source} WHERE conversation_id = ?1)
+                     ORDER BY pinned_at DESC, message_id DESC"
+                ))?
                 .query_map([conversation_id], |row| {
                     Ok((row.get(0)?, row.get(1)?, row.get(2)?))
                 })?
                 .collect::<rusqlite::Result<_>>()?;
             rows.into_iter()
                 .map(|(message_id, pinned_by, pinned_at)| {
-                    pinned_message(db, message_id, pinned_by, pinned_at)
+                    pinned_message(db, principal_id, message_id, pinned_by, pinned_at)
                 })
                 .collect()
         })
@@ -199,6 +222,7 @@ impl LocalBotStore {
     pub fn pin_message(&self, conversation_id: &str, message_id: &str) -> Result<PinnedMessage> {
         self.write(|tx, changes| {
             active_membership(tx, conversation_id, LOCAL_OWNER_ID)?;
+            super::deletion::require_message(tx, conversation_id, message_id)?;
             live_message_author(tx, conversation_id, message_id)?;
             let pinned: i64 = tx.query_row(
                 "SELECT COUNT(*) FROM pinned_messages WHERE conversation_id = ?1",
@@ -252,6 +276,7 @@ impl LocalBotStore {
     pub fn star_message(&self, conversation_id: &str, message_id: &str) -> Result<StarredMessage> {
         self.write(|tx, changes| {
             active_membership(tx, conversation_id, LOCAL_OWNER_ID)?;
+            super::deletion::require_message(tx, conversation_id, message_id)?;
             live_message_author(tx, conversation_id, message_id)?;
             let inserted = tx.execute(
                 "INSERT OR IGNORE INTO starred_messages (message_id, conversation_id, starred_at)

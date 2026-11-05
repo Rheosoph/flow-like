@@ -450,6 +450,7 @@ mod tests {
                 .unwrap()
                 .fixed_offset(),
             seq: None,
+            cleared: Some(false),
         }
     }
 

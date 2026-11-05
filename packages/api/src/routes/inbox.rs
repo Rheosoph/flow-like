@@ -33,6 +33,7 @@ pub(crate) mod approvals;
 pub mod blocks;
 pub mod conversations;
 pub mod delivery;
+pub mod deletion;
 pub mod entries;
 pub(crate) mod exchange;
 pub mod files;
@@ -67,6 +68,8 @@ mod bot_tests;
 mod bot_token_tests;
 #[cfg(all(test, feature = "db-chaos"))]
 mod concurrency_tests;
+#[cfg(test)]
+mod deletion_tests;
 #[cfg(test)]
 mod files_tests;
 #[cfg(test)]
@@ -143,7 +146,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route(
             "/conversations/{conversation_id}",
-            get(conversations::get_conversation).patch(conversations::rename_conversation),
+            get(conversations::get_conversation).patch(conversations::rename_conversation).delete(deletion::delete_conversation),
         )
         .route(
             "/conversations/{conversation_id}/image",
@@ -451,6 +454,7 @@ impl Event<'_> {
             envelope,
             created_at: self.created_at,
             seq: Some(self.seq),
+            cleared: Some(false),
         }
     }
 }

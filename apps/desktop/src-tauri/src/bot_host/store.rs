@@ -3,6 +3,7 @@
 
 use crate::functions::local_bots::{LocalBots, on_store};
 use async_trait::async_trait;
+use flow_like::flow::copilot::tool_grants::GrantKey;
 use flow_like_local_bots::{
     Bot, Conversation, ConversationSegmentList, EntriesQuery, InboxEntriesPage, InboxEntry,
     PositionQuery, SegmentsQuery, SendEntryRequest, WriteSegmentRequest,
@@ -11,7 +12,6 @@ use flow_like_types::{
     bot_effective::BotRoomLimits,
     bot_message::{ApprovalRequest, ApprovalResponse},
 };
-use flow_like::flow::copilot::tool_grants::GrantKey;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 
@@ -42,6 +42,7 @@ pub trait HostStore: Send + Sync + 'static {
     async fn positions(
         &self,
         _conversation_id: &str,
+        _bot_id: &str,
         _query: PositionQuery,
     ) -> Result<InboxEntriesPage, String> {
         Err("This store reads no entries by position".into())
@@ -49,6 +50,7 @@ pub trait HostStore: Send + Sync + 'static {
     async fn segments(
         &self,
         _conversation_id: &str,
+        _bot_id: &str,
         _query: SegmentsQuery,
     ) -> Result<ConversationSegmentList, String> {
         Err("This store keeps no segments".into())
@@ -126,7 +128,7 @@ impl AppStore {
 #[async_trait]
 impl HostStore for AppStore {
     async fn conversations(&self) -> Result<Vec<Conversation>, String> {
-        self.with(|store| store.conversations()).await
+        self.with(|store| store.host_conversations()).await
     }
 
     async fn conversation(&self, conversation_id: &str) -> Result<Option<Conversation>, String> {
@@ -137,9 +139,18 @@ impl HostStore for AppStore {
     async fn newest(&self, conversation_id: &str) -> Result<Vec<InboxEntry>, String> {
         let id = conversation_id.to_owned();
         self.with(move |store| {
+            let Some(bot_id) = store.conversation(&id)?.and_then(|conversation| {
+                conversation.members.into_iter().find_map(|member| {
+                    (member.kind == flow_like_types::inbox::PrincipalKind::Bot)
+                        .then_some(member.principal_id)
+                })
+            }) else {
+                return Ok(Vec::new());
+            };
             store
-                .entries(
+                .entries_as(
                     &id,
+                    &bot_id,
                     &EntriesQuery {
                         limit: Some(WINDOW),
                         ..Default::default()
@@ -179,20 +190,23 @@ impl HostStore for AppStore {
     async fn positions(
         &self,
         conversation_id: &str,
+        bot_id: &str,
         query: PositionQuery,
     ) -> Result<InboxEntriesPage, String> {
-        let id = conversation_id.to_owned();
-        self.with(move |store| store.entries_by_position(&id, &query))
+        let (id, bot) = (conversation_id.to_owned(), bot_id.to_owned());
+        self.with(move |store| store.entries_by_position_as(&id, &bot, &query))
             .await
     }
 
     async fn segments(
         &self,
         conversation_id: &str,
+        bot_id: &str,
         query: SegmentsQuery,
     ) -> Result<ConversationSegmentList, String> {
-        let id = conversation_id.to_owned();
-        self.with(move |store| store.segments(&id, &query)).await
+        let (id, bot) = (conversation_id.to_owned(), bot_id.to_owned());
+        self.with(move |store| store.segments_as(&id, &bot, &query))
+            .await
     }
 
     async fn tool_keys(&self, bot_id: &str) -> Result<Vec<(String, String)>, String> {
@@ -224,8 +238,12 @@ impl HostStore for AppStore {
         response: &ApprovalResponse,
     ) -> Result<bool, String> {
         let (bot, turn, response) = (bot_id.to_owned(), turn_id.to_owned(), response.clone());
-        self.with(move |store| store.resolve_parked(&bot, &turn, &response).map(|r| r.is_some()))
-            .await
+        self.with(move |store| {
+            store
+                .resolve_parked(&bot, &turn, &response)
+                .map(|r| r.is_some())
+        })
+        .await
     }
 
     async fn park(

@@ -17,6 +17,10 @@ pub struct Model {
     pub user_id: Option<String>,
     #[sea_orm(column_name = "appId", column_type = "Text", nullable)]
     pub app_id: Option<String>,
+    #[sea_orm(column_name = "botId", column_type = "Text", nullable)]
+    pub bot_id: Option<String>,
+    #[sea_orm(column_name = "conversationId", column_type = "Text", nullable)]
+    pub conversation_id: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]
     pub provider: Option<String>,
     #[sea_orm(column_type = "Text", nullable)]

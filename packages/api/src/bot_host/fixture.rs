@@ -86,6 +86,10 @@ pub(super) async fn conversation(
             invited_by: Set(None),
             invited_at: Set(None),
             accepted_at: Set(None),
+            hidden_at: Set(None),
+            cleared_at: Set(None),
+            cleared_legacy_at: Set(None),
+            cleared_seq: Set(None),
         }
         .insert(db)
         .await
@@ -138,6 +142,7 @@ pub(super) async fn entry(
             envelope: Set(json!({ "v": 1, "enc": "none", "body": body })),
             created_at: Set(at(seq)),
             seq: Set(Some(seq)),
+            cleared: Set(Some(false)),
         }
         .insert(db)
         .await

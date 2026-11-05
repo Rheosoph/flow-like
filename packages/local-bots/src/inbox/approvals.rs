@@ -91,7 +91,7 @@ impl LocalBotStore {
         self.read(|db| {
             let envelope: Option<Json<Value>> = db
                 .query_row(
-                    "SELECT envelope FROM entries WHERE message_id = ?1",
+                    "SELECT envelope FROM owner_entries WHERE message_id = ?1",
                     [approval_id],
                     |row| row.get(0),
                 )
@@ -132,6 +132,7 @@ impl LocalBotStore {
                 return Ok(None);
             };
             let direct = open_direct(tx, bot_id, changes)?;
+            super::deletion::require_message(tx, &direct, &approval_id)?;
             if entry_by_message_id(tx, &message_id)?.is_none() {
                 let at = next_event_time(tx, &direct)?;
                 insert_event(

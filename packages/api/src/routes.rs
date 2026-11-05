@@ -40,6 +40,7 @@ pub mod store;
 pub mod telemetry;
 pub mod tmp;
 pub mod usage;
+pub mod usage_budgets;
 pub mod user;
 pub mod webhook;
 

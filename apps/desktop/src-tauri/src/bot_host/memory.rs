@@ -27,13 +27,14 @@ pub use flow_like_bot_host::memory::*;
 pub struct StorePages {
     pub store: Arc<dyn HostStore>,
     pub conversation_id: String,
+    pub bot_id: String,
 }
 
 #[async_trait]
 impl Pages for StorePages {
     async fn page(&self, query: PositionQuery) -> Result<InboxEntriesPage> {
         self.store
-            .positions(&self.conversation_id, query)
+            .positions(&self.conversation_id, &self.bot_id, query)
             .await
             .map_err(error)
     }
@@ -56,6 +57,7 @@ impl SegmentSink for LocalSegments {
                 .store
                 .segments(
                     &self.conversation_id,
+                    &self.bot_id,
                     SegmentsQuery {
                         author: Some(self.bot_id.clone()),
                         after: after.take(),
@@ -127,6 +129,7 @@ pub fn source_for(
     let entries = PositionEntries::new(StorePages {
         store: store.clone(),
         conversation_id: conversation.id.clone(),
+        bot_id: bot_id.to_owned(),
     });
     let reader: Arc<dyn HistoryReader> = Arc::new(if room {
         InboxReader::for_room(entries, bot_id, LOCAL_OWNER_ID)

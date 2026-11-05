@@ -56,6 +56,9 @@ pub(super) fn check_target(
     envelope: &Value,
 ) -> Result<()> {
     let target = body_target(envelope).unwrap_or_default();
+    if sender_id == crate::LOCAL_OWNER_ID {
+        super::deletion::require_message(db, conversation_id, target)?;
+    }
     let author = live_message_author(db, conversation_id, target)?;
     if kind.requires_own_target() && author != sender_id {
         return Err(Error::new(

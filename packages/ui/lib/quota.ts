@@ -13,6 +13,13 @@ export interface QuotaDetail {
 	requiredModelTier?: string;
 }
 
+/** App, bot and group budgets are managed separately from account subscriptions. */
+export function isScopedUsageLimit(
+	quota: QuotaDetail | undefined,
+): quota is QuotaDetail & { scope: "app" | "bot" | "bot_group" } {
+	return !!quota && ["app", "bot", "bot_group"].includes(quota.scope);
+}
+
 export function quotaBelongsToAnotherPayer(
 	quota: QuotaDetail | undefined,
 	userId?: string,

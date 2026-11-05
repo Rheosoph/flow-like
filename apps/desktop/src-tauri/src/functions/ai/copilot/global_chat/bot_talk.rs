@@ -482,8 +482,9 @@ fn history_before(
     question_message_id: &str,
     callee: &str,
 ) -> flow_like_local_bots::Result<Vec<UnifiedChatMessage>> {
-    let page = store.entries(
+    let page = store.entries_as(
         conversation_id,
+        callee,
         &EntriesQuery {
             limit: Some(HISTORY_ENTRIES),
             ..Default::default()

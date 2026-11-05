@@ -9,7 +9,7 @@
 use super::{
     Reader, acting_reader, active_membership,
     model::ReaderQuery,
-    now_millis, reader_membership,
+    now_millis,
 };
 use crate::{
     capacity,
@@ -322,21 +322,40 @@ async fn hash_object(
     Ok(hex::encode(hasher.finalize()))
 }
 
-/// The file a member may download: ready, not deleted, in a conversation `reader` is an active
-/// member of. The membership check is the access rule; the file id alone grants nothing.
+/// A ready file in a conversation the reader belongs to. Attached files require a visible
+/// message copy, so clearing history also removes that reader's access to its attachments.
 pub(crate) async fn readable_file<C: ConnectionTrait>(
     db: &C,
     conversation_id: &str,
     reader: &Reader,
     file_id: &str,
 ) -> Result<conversation_file::Model, ApiError> {
-    reader_membership(db, conversation_id, reader).await?;
+    let membership = active_membership(db, conversation_id, &reader.inbox).await?;
     let file = conversation_file::Entity::find_by_id(file_id)
         .filter(conversation_file::Column::ConversationId.eq(conversation_id))
         .filter(conversation_file::Column::DeletedAt.is_null())
         .one(db)
         .await?
         .ok_or_else(|| file_not_found(file_id))?;
+    if membership.cleared_at.is_some() || file.message_id.is_some() {
+        let visible = if let Some(message_id) = &file.message_id {
+            crate::entity::inbox_entry::Entity::find()
+                .filter(crate::entity::inbox_entry::Column::InboxId.eq(&reader.inbox))
+                .filter(crate::entity::inbox_entry::Column::ConversationId.eq(conversation_id))
+                .filter(crate::entity::inbox_entry::Column::MessageId.eq(message_id))
+                .filter(super::deletion::visible_entries())
+                .one(db)
+                .await?
+                .is_some()
+        } else {
+            membership
+                .cleared_legacy_at
+                .is_none_or(|cleared| file.created_at > cleared)
+        };
+        if !visible {
+            return Err(file_not_found(file_id));
+        }
+    }
     if file.status != FILE_READY {
         return Err(ApiError::coded(
             StatusCode::CONFLICT,

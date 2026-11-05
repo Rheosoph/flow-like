@@ -449,9 +449,11 @@ describe("inbox signed out", () => {
 
 		expect(mocks.invoke).toHaveBeenCalledWith("local_inbox_conversation", {
 			conversationId: "c-local",
+			principalId: "bot_a",
 		});
 		expect(mocks.invoke).toHaveBeenCalledWith("local_inbox_entries", {
 			conversationId: "c-local",
+			principalId: "bot_a",
 			before: "1:a",
 			limit: 20,
 		});
@@ -472,6 +474,16 @@ describe("inbox signed out", () => {
 		});
 		const listed = await new InboxState(signedOut()).listConversations("bot_b");
 		expect(listed.map((entry) => entry.id)).toEqual(["c-b"]);
+	});
+
+	test("a missing local chat has a code that lets an open view clear stale history", async () => {
+		localStore({ local_inbox_conversation: () => null });
+		await expect(
+			new InboxState(signedOut()).getConversation("c-gone"),
+		).rejects.toMatchObject({
+			name: "LocalStoreError",
+			code: "NOT_FOUND",
+		});
 	});
 
 	test("inbox keys need an account", async () => {
@@ -556,6 +568,82 @@ describe("inbox signed in", () => {
 		const listed = await state.listConversations();
 
 		expect(listed.map((entry) => entry.id)).toEqual(["c-local", "c-remote"]);
+	});
+
+	test("deleting a local conversation stays local even while signed in", async () => {
+		localStore({
+			local_inbox_conversation: () =>
+				conversation("c-local", "2026-11-02T08:00:00Z", ["local", "bot_a"]),
+			local_inbox_delete_conversation: () => null,
+		});
+		await new InboxState(signedIn()).deleteConversation("c-local");
+		expect(mocks.invoke).toHaveBeenCalledWith(
+			"local_inbox_delete_conversation",
+			{
+				conversationId: "c-local",
+			},
+		);
+		expect(mocks.del).not.toHaveBeenCalled();
+	});
+
+	test("deleted account chats stay out of the offline fallback after a stale read", async () => {
+		const backend = signedIn();
+		localStore({ local_inbox_conversations: () => [] });
+		const gone = conversation("c-remote", "2026-11-02T09:00:00Z", [
+			"user-1",
+			"bot_b",
+		]);
+		const kept = conversation("c-kept", "2026-11-02T08:00:00Z", [
+			"user-1",
+			"bot_c",
+		]);
+		mocks.get.mockResolvedValueOnce({ conversations: [gone, kept] });
+		const state = new InboxState(backend);
+		await state.listConversations();
+		let complete!: (value: { conversations: IConversation[] }) => void;
+		mocks.get.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					complete = resolve;
+				}),
+		);
+		const stale = state.listConversations();
+		await state.deleteConversation(gone.id);
+		complete({ conversations: [gone, kept] });
+		expect((await stale).map((entry) => entry.id)).toEqual([kept.id]);
+		mocks.get.mockRejectedValueOnce(
+			Object.assign(new Error("[UPSTREAM_UNAVAILABLE] Try again"), {
+				status: 503,
+			}),
+		);
+		expect((await state.listConversations()).map((entry) => entry.id)).toEqual([
+			kept.id,
+		]);
+		expect(mocks.del).toHaveBeenCalledWith(
+			profile,
+			"inbox/conversations/c-remote",
+			undefined,
+			signedInAuth,
+		);
+	});
+
+	test("deletion follows a moved chat's account id and preserves failures", async () => {
+		const backend = signedIn();
+		localRegistries(backend).conversations.moveToAccount(
+			"user-1",
+			"c-old",
+			"c/new",
+		);
+		const state = new InboxState(backend);
+		mocks.del.mockRejectedValueOnce(new Error("offline"));
+		await expect(state.deleteConversation("c-old")).rejects.toThrow("offline");
+		expect(mocks.del).toHaveBeenCalledWith(
+			profile,
+			"inbox/conversations/c%2Fnew",
+			undefined,
+			signedInAuth,
+		);
+		expect(mocks.invoke).not.toHaveBeenCalled();
 	});
 
 	test("a conversation with only local bots stays local; others go to the account", async () => {

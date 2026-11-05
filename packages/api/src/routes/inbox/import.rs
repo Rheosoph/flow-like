@@ -78,6 +78,16 @@ pub struct ImportConversationEntry {
     pub envelope: Value,
     /// When it was sent, not before 1970; a time in the future counts as now.
     pub created_at: DateTime<FixedOffset>,
+    /// The source position, needed only when the owner's history was cleared on the device.
+    #[serde(default)]
+    pub source_seq: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, ToSchema)]
+pub struct ImportedDeletion {
+    pub cleared_through_seq: i64,
+    pub cleared_at: DateTime<FixedOffset>,
+    pub hidden: bool,
 }
 
 /// A conversation between you and your bots, with its history, moving from a device into your
@@ -101,6 +111,8 @@ pub struct ImportConversationRequest {
     /// envelopes times members.
     #[serde(default)]
     pub entries: Vec<ImportConversationEntry>,
+    #[serde(default)]
+    pub deletion: Option<ImportedDeletion>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -123,6 +135,8 @@ pub(super) struct HistoryEvent {
     pub created_at: DateTime<FixedOffset>,
     /// The workspace apps the body's handles name.
     pub workspace_apps: BTreeSet<String>,
+    pub source_seq: Option<i64>,
+    pub cleared_for_owner: bool,
 }
 
 /// A checked import: the conversation it names, whose `members` are the bots, and its history
@@ -136,6 +150,7 @@ pub(super) struct ImportPlan {
     pub repeated: u64,
     /// Senders that aren't members: they must be bots of the caller that left.
     pub former: BTreeSet<String>,
+    pub deletion: Option<ImportedDeletion>,
 }
 
 impl ImportPlan {
@@ -183,6 +198,7 @@ pub(super) enum Destination {
 pub(super) struct Imported {
     pub conversation_id: String,
     pub created: bool,
+    pub history_cleared: bool,
     pub imported: u64,
     pub skipped: u64,
 }
@@ -259,7 +275,21 @@ pub(super) fn validate_import(
     let mut members = vec![caller];
     members.extend(conversation.members.iter().map(String::as_str));
     check_size(request.entries.len(), members.len())?;
-    let (events, repeated) = history(request.entries, now)?;
+    let (mut events, repeated) = history(request.entries, now)?;
+    if let Some(deletion) = &request.deletion {
+        if deletion.cleared_through_seq < 0 || deletion.cleared_at.timestamp() < 0 {
+            return Err(ApiError::bad_request(
+                "A deletion boundary needs a nonnegative position and a time after 1970",
+            ));
+        }
+        for event in &mut events {
+            event.cleared_for_owner = event
+                .source_seq
+                .map_or(event.created_at <= deletion.cleared_at, |seq| {
+                    seq <= deletion.cleared_through_seq
+                });
+        }
+    }
     check_bytes(&events, members.len())?;
     let former = events
         .iter()
@@ -272,6 +302,7 @@ pub(super) fn validate_import(
         events,
         repeated,
         former,
+        deletion: request.deletion,
     })
 }
 
@@ -397,6 +428,8 @@ fn checked_event(
         kind: entry.kind,
         envelope: entry.envelope,
         workspace_apps: links.workspace_apps,
+        source_seq: entry.source_seq,
+        cleared_for_owner: false,
     })
 }
 
@@ -514,9 +547,58 @@ pub(super) async fn import_in<C: ConnectionTrait>(
     write_history(db, &conversation_id, &members, &fresh, earlier).await?;
     advance_activity(db, &conversation_id, &fresh).await?;
     advance_markers(db, &conversation_id, markers(caller, plan, &fresh)).await?;
+    let mut history_cleared = false;
+    let cleared: Vec<&str> = plan
+        .events
+        .iter()
+        .filter(|event| event.cleared_for_owner)
+        .map(|event| event.message_id.as_str())
+        .collect();
+    if !cleared.is_empty() {
+        let updated = inbox_entry::Entity::update_many()
+            .col_expr(inbox_entry::Column::Cleared, Expr::value(true))
+            .filter(inbox_entry::Column::InboxId.eq(caller))
+            .filter(inbox_entry::Column::ConversationId.eq(&conversation_id))
+            .filter(inbox_entry::Column::MessageId.is_in(cleared))
+            .filter(Expr::cust("\"InboxEntry\".\"cleared\" IS NOT true"))
+            .exec(db)
+            .await?
+            .rows_affected;
+        if updated > 0 || fresh.iter().any(|event| event.cleared_for_owner) {
+            history_cleared = true;
+            let member = conversation_member::Entity::find_by_id((
+                conversation_id.clone(),
+                caller.to_string(),
+            ))
+            .one(db)
+            .await?
+            .ok_or_else(|| super::conversation_not_found(&conversation_id))?;
+            let marker = super::deletion::next_clear_marker(member.cleared_at, now);
+            conversation_member::Entity::update_many()
+                .col_expr(conversation_member::Column::ClearedAt, Expr::value(marker))
+                .filter(conversation_member::Column::ConversationId.eq(&conversation_id))
+                .filter(conversation_member::Column::PrincipalId.eq(caller))
+                .exec(db)
+                .await?;
+        }
+    }
+    if created
+        && plan
+            .deletion
+            .as_ref()
+            .is_some_and(|deletion| deletion.hidden)
+    {
+        conversation_member::Entity::update_many()
+            .col_expr(conversation_member::Column::HiddenAt, Expr::value(now))
+            .filter(conversation_member::Column::ConversationId.eq(&conversation_id))
+            .filter(conversation_member::Column::PrincipalId.eq(caller))
+            .exec(db)
+            .await?;
+    }
     Ok(Imported {
         conversation_id,
         created,
+        history_cleared,
         imported: fresh.len() as u64,
         skipped: plan.repeated + held,
     })
@@ -558,6 +640,23 @@ async fn checked_history<'a, C: ConnectionTrait>(
     check_workspace_files(db, &uses).await?;
     let earlier = earlier_deletions(db, caller, conversation_id, &fresh).await?;
     check_writes(&fresh, &earlier, plan.member_ids(caller).len())?;
+    let rewritten: usize = earlier
+        .iter()
+        .map(|(_, _, edits)| (edits.len() + 1) * plan.member_ids(caller).len())
+        .sum();
+    let held_clears = plan
+        .events
+        .iter()
+        .filter(|event| event.cleared_for_owner)
+        .count()
+        .min(held as usize);
+    if fresh.len() * plan.member_ids(caller).len() + rewritten + held_clears > MAX_IMPORT_WRITES {
+        return Err(ApiError::coded(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            INBOX_IMPORT_TOO_LARGE,
+            "This import and its cleared history exceed the write limit; send fewer entries",
+        ));
+    }
     Ok((fresh, held, earlier))
 }
 
@@ -574,12 +673,26 @@ async fn write_history<C: ConnectionTrait>(
         return Ok(());
     }
     let first_seq = allocate_seqs(db, conversation_id, fresh.len()).await?;
-    let fan_out = fresh
+    let cleared_before = conversation_member::Entity::find_by_id((
+        conversation_id.to_string(),
+        members[0].to_string(),
+    ))
+    .one(db)
+    .await?
+    .and_then(|member| member.cleared_legacy_at);
+    let mut fan_out: Vec<inbox_entry::Model> = fresh
         .iter()
         .zip(written_envelopes(fresh))
         .zip(first_seq..)
         .flat_map(|((event, envelope), seq)| copies(conversation_id, event, envelope, members, seq))
         .collect();
+    if let Some(boundary) = cleared_before {
+        for copy in &mut fan_out {
+            if copy.inbox_id == members[0] && copy.created_at <= boundary {
+                copy.cleared = Some(true);
+            }
+        }
+    }
     insert_copies(db, fan_out).await?;
     for (sender, target, edits) in earlier {
         tombstone(db, conversation_id, sender, target, edits).await?;
@@ -779,7 +892,12 @@ fn copies(
     };
     members
         .iter()
-        .map(|member| shared.copy_for(member, envelope.clone()))
+        .enumerate()
+        .map(|(index, member)| {
+            let mut copy = shared.copy_for(member, envelope.clone());
+            copy.cleared = Some(index == 0 && event.cleared_for_owner);
+            copy
+        })
         .collect()
 }
 
@@ -934,7 +1052,7 @@ pub async fn import_conversation(
             })
         })
         .await?;
-    if imported.created || imported.imported > 0 {
+    if imported.created || imported.imported > 0 || imported.history_cleared {
         wake(&state, [sub.clone()]).await;
         audit!(
             state,

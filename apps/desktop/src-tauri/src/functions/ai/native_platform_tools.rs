@@ -145,6 +145,12 @@ pub(super) async fn execute(
     Ok(result)
 }
 
+fn bot_invocation_path(method: &Method, path: &str) -> bool {
+    *method == Method::POST
+        && path.starts_with("apps/")
+        && (path.ends_with("/invoke") || path.ends_with("/invoke/async"))
+}
+
 /// Captures the profile and account before any asynchronous tool work. Every hub request checks
 /// them again, so a sign-in or profile switch cannot redirect an in-flight tool to another user.
 pub(crate) struct NativePlatformSession {
@@ -338,10 +344,18 @@ impl NativePlatformSession {
     ) -> Result<reqwest::Response, String> {
         self.assert_current_profile().await?;
         let url = api_url(&self.hub, path)?;
+        let bot = self
+            .context
+            .as_ref()
+            .and_then(|context| context.bot.as_ref())
+            .filter(|bot| bot.account && bot_invocation_path(&method, path));
         let mut token = match self.subject.as_deref() {
             Some(_) => Some(self.token().await?),
             None => None,
         };
+        if let Some(bot) = bot {
+            token = Some(self.bot_invocation_token(bot).await?);
+        }
         for attempt in 0..2 {
             self.assert_current_profile().await?;
             let mut request = self.client.request(method.clone(), url.clone());
@@ -371,12 +385,15 @@ impl NativePlatformSession {
                 crate::native_auth::request_login(self.profile.id.clone());
                 return Err("This tool requires an authenticated hub session. Complete sign-in and start a new run.".into());
             }
-            if response.status() == reqwest::StatusCode::UNAUTHORIZED
-                && attempt == 0
-                && let (Some(auth), Some(rejected)) = (self.auth.as_ref(), token.as_deref())
-            {
-                token = Some(auth.access_token(Some(rejected)).await?);
-                continue;
+            if response.status() == reqwest::StatusCode::UNAUTHORIZED && attempt == 0 {
+                if let Some(bot) = bot {
+                    token = Some(self.bot_invocation_token(bot).await?);
+                    continue;
+                }
+                if let (Some(auth), Some(rejected)) = (self.auth.as_ref(), token.as_deref()) {
+                    token = Some(auth.access_token(Some(rejected)).await?);
+                    continue;
+                }
             }
             if !response.status().is_success() {
                 return Err(format!(
@@ -388,6 +405,49 @@ impl NativePlatformSession {
             return Ok(response);
         }
         Err("The hub rejected the refreshed session.".into())
+    }
+
+    async fn bot_invocation_token(
+        &self,
+        bot: &super::native_bot_tools::BotToolRuntime,
+    ) -> Result<String, String> {
+        let owner_token = self.token().await?;
+        let url = api_url(
+            &self.hub,
+            &format!("bots/{}/runtime-token", segment(&bot.context.bot_id)),
+        )?;
+        let mut response = self
+            .client
+            .post(url)
+            .bearer_auth(owner_token)
+            .json(&serde_json::json!({"turn_id": bot.turn_id}))
+            .send()
+            .await
+            .map_err(|_| "The bot runtime token could not be requested.".to_string())?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "The hub refused the bot runtime token (HTTP {}).",
+                response.status().as_u16()
+            ));
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| "The bot runtime token response was interrupted.".to_string())?
+        {
+            if bytes.len().saturating_add(chunk.len()) > 32 * 1024 {
+                return Err("The bot runtime token response is too large.".into());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        self.assert_current_profile().await?;
+        let body: Value = serde_json::from_slice(&bytes)
+            .map_err(|_| "The bot runtime token response is invalid.".to_string())?;
+        body.get("token")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| "The hub returned no bot runtime token.".to_string())
     }
 
     pub(crate) fn client(&self) -> &Client {
@@ -551,6 +611,27 @@ pub(crate) fn err(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bot_execution_auth_is_selected_for_cloud_invocation_paths() {
+        for path in [
+            "apps/app/events/event/invoke",
+            "apps/app/board/board/invoke",
+            "apps/app/events/event/invoke/async",
+            "apps/app/chat/chat/actions/action/invoke",
+        ] {
+            assert!(bot_invocation_path(&Method::POST, path));
+        }
+        assert!(!bot_invocation_path(
+            &Method::GET,
+            "apps/app/events/event/prerun"
+        ));
+        assert!(!bot_invocation_path(
+            &Method::POST,
+            "bots/bot/runtime-token"
+        ));
+        assert!(!bot_invocation_path(&Method::PATCH, "apps/app/board/board"));
+    }
+
     #[test]
     fn hub_paths_cannot_change_origin_or_escape_api() {
         for path in [

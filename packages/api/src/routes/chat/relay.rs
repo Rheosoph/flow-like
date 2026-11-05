@@ -388,6 +388,10 @@ pub(crate) struct UsageRequestContext {
     pub(crate) app_id: Option<String>,
     pub(crate) user_id: String,
     pub(crate) technical_user_id: Option<String>,
+    #[serde(default)]
+    pub(crate) bot_id: Option<String>,
+    #[serde(default)]
+    pub(crate) conversation_id: Option<String>,
 }
 
 fn header_string(headers: &HeaderMap, name: &str) -> Option<String> {
@@ -405,10 +409,50 @@ pub(crate) async fn resolve_usage_context(
     headers: &HeaderMap,
 ) -> Result<UsageRequestContext, ApiError> {
     if let AppUser::Executor(executor) = user {
+        let mut user_id = executor.sub.clone();
+        let (bot_id, conversation_id) = match &executor.bot {
+            Some(bot) => {
+                let (owner, conversation_id) =
+                    crate::bot_caller::usage_identity(&state.db, bot).await?;
+                let chained = executor
+                    .app_chain
+                    .as_ref()
+                    .is_some_and(|chain| !chain.is_empty());
+                if chained {
+                    user.execution_app_permission(&executor.app_id, state, ExecutorUse::Read)
+                        .await?;
+                    user_id = owner;
+                } else if owner != executor.sub {
+                    return Err(ApiError::forbidden(
+                        "Bot usage owner no longer matches this executor",
+                    ));
+                }
+                (Some(bot.bot_id.clone()), conversation_id)
+            }
+            None => (None, None),
+        };
         return Ok(UsageRequestContext {
             app_id: executor.usage_app_id(),
-            user_id: executor.sub.clone(),
+            user_id,
             technical_user_id: executor.technical_user_id.clone(),
+            bot_id,
+            conversation_id,
+        });
+    }
+
+    if let AppUser::Bot(bot) = user {
+        let (owner, conversation_id) = crate::bot_caller::usage_identity(&state.db, bot).await?;
+        let app_id = header_string(headers, APP_ID_HEADER);
+        if let Some(app_id) = app_id.as_deref() {
+            user.execution_app_permission(app_id, state, ExecutorUse::Read)
+                .await?;
+        }
+        return Ok(UsageRequestContext {
+            app_id,
+            user_id: owner,
+            technical_user_id: None,
+            bot_id: Some(bot.bot_id.clone()),
+            conversation_id,
         });
     }
 
@@ -419,6 +463,7 @@ pub(crate) async fn resolve_usage_context(
             app_id: Some(api_key.app_id.clone()),
             user_id: user.effective_user_id()?,
             technical_user_id: Some(api_key.key_id.clone()),
+            ..Default::default()
         });
     }
 
@@ -432,6 +477,7 @@ pub(crate) async fn resolve_usage_context(
         app_id,
         user_id: user.effective_user_id()?,
         technical_user_id: None,
+        ..Default::default()
     })
 }
 
@@ -1368,6 +1414,7 @@ async fn relay_authorized_request(
                 app_id: usage.app_id.clone(),
                 user_id: usage.delegated_user_id.clone(),
                 technical_user_id: None,
+                ..Default::default()
             },
             None,
         ),
@@ -1423,6 +1470,8 @@ async fn relay_authorized_request(
         user_id: Some(&user_sub),
         technical_user_id: usage_context.technical_user_id.as_deref(),
         app_id: usage_context.app_id.as_deref(),
+        bot_id: usage_context.bot_id.as_deref(),
+        conversation_id: usage_context.conversation_id.as_deref(),
         provider: Some(&provider_label),
         endpoint: Some(&url),
         model_id: Some(&upstream_model_id),

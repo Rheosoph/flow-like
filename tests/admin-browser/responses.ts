@@ -1,4 +1,56 @@
+import type { UsageBudgetView } from "../../packages/ui/lib/monthly-usage";
+
 const now = "2026-09-05T10:30:00Z";
+
+function monthlyBotBudget(empty: boolean): UsageBudgetView {
+	const limits = {
+		aiCostMicros: 50_000_000,
+		aiCalls: 10_000,
+		runtimeMs: 3_600_000,
+	};
+	const used = {
+		aiCostMicros: empty ? 0 : 12_500_000,
+		aiCalls: empty ? 0 : 240,
+		runtimeMs: empty ? 0 : 120_000,
+		cloudStarts: 0,
+	};
+	return {
+		scope: "bot",
+		subjectId: "bot-scout",
+		groupId: null,
+		name: "Research scout",
+		ownerLimits: { aiCostMicros: null, aiCalls: 5_000, runtimeMs: null },
+		adminLimits: null,
+		defaultLimits: limits,
+		effectiveLimits: { ...limits, aiCalls: 5_000 },
+		periodStart: "2026-09-01T00:00:00Z",
+		periodEnd: "2026-10-01T00:00:00Z",
+		used,
+		reserved: {
+			aiCostMicros: 250_000,
+			aiCalls: 1,
+			runtimeMs: 0,
+			cloudStarts: 0,
+		},
+		inputTokens: empty ? 0 : 18_240,
+		outputTokens: empty ? 0 : 2_850,
+		embeddingTokens: empty ? 0 : 640,
+		models: empty
+			? []
+			: [
+					{
+						modelId: "research-model",
+						provider: "Hosted",
+						calls: 240,
+						inputTokens: 18_240,
+						outputTokens: 2_850,
+						embeddingTokens: 640,
+						costMicroDollars: 12_000_000,
+					},
+				],
+		groups: [],
+	};
+}
 
 export function responseFor(
 	path: string,
@@ -10,6 +62,37 @@ export function responseFor(
 	const route = url.pathname.slice(1);
 	const count = (value: number) => (empty ? 0 : value);
 	const list = <T>(items: T[]) => (empty ? [] : items);
+	if (route === "admin/usage/defaults") {
+		const limits = monthlyBotBudget(empty).defaultLimits;
+		return method === "PUT" ? body : { apps: limits, bots: limits };
+	}
+	if (route === "admin/usage/bots") {
+		const bot = monthlyBotBudget(empty);
+		return {
+			items: list([
+				{
+					...bot,
+					groups: [
+						{
+							...bot,
+							scope: "bot_group",
+							groupId: "room-launch",
+							name: "Launch research",
+						},
+					],
+				},
+			]),
+			total: count(1),
+		};
+	}
+	if (route.startsWith("admin/usage/apps/") && route.endsWith("/budget")) {
+		return {
+			...monthlyBotBudget(empty),
+			scope: "app",
+			subjectId: route.split("/")[3],
+			name: "Research assistant",
+		};
+	}
 	if (route === "info/features") return { telemetry: true, ai_act: true };
 	if (route === "info/profiles") return [];
 	if (route === "admin/packages/stats")

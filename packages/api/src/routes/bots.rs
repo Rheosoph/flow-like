@@ -59,6 +59,10 @@ mod workspace_tests;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/{bot_id}/usage", get(super::usage_budgets::get_bot))
+        .route("/{bot_id}/usage/limits", put(super::usage_budgets::put_bot))
+        .route("/{bot_id}/usage/rooms/{group_id}", get(super::usage_budgets::get_room))
+        .route("/{bot_id}/usage/rooms/{group_id}/limits", put(super::usage_budgets::put_room))
         .route("/", get(crud::list_bots).post(crud::create_bot))
         .route("/import", post(import::import_bot))
         .route("/import/check", post(import::check_bot_import))
@@ -94,6 +98,7 @@ pub fn routes() -> Router<AppState> {
             "/{bot_id}/avatar",
             get(avatar::get_bot_avatar).put(avatar::put_bot_avatar),
         )
+        .route("/{bot_id}/model-token", post(runtime_token::mint_model_token))
         .route(
             "/{bot_id}/runtime-token",
             post(runtime_token::mint_runtime_token),

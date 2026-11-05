@@ -329,6 +329,7 @@ pub fn shadow_side_effect_refused(action: &str) -> ApiError {
 /// by the person it passed through.
 #[derive(Debug, Clone)]
 pub struct ConnectedAppUser {
+    pub bot: Option<BotUser>,
     /// The subject the calling run passed through end-to-end: the person who started the
     /// call chain, even if they are not a member of the target app, or a placeholder or
     /// pseudonym when no person did (see [`ConnectedAppUser::person`]).
@@ -349,7 +350,7 @@ impl ConnectedAppUser {
     /// through, unless an API key started it. An anonymous visitor's pseudonym and the
     /// placeholders of a run without a user or that no person triggered name nobody.
     pub fn person(&self) -> Option<&str> {
-        if self.technical_user_id.is_some() {
+        if self.bot.is_some() || self.technical_user_id.is_some() {
             return None;
         }
         self.sub
@@ -889,6 +890,7 @@ impl AppUser {
                 && let Some(calling_app_id) = app_chain.last()
             {
                 let connected = ConnectedAppUser {
+                    bot: executor.bot.clone(),
                     sub: Some(executor.sub.clone()),
                     origin_app_id: calling_app_id.clone(),
                     target_app_id: app_id.to_string(),
@@ -1432,11 +1434,12 @@ async fn connected_app_role<C: sea_orm::ConnectionTrait>(
     app_id: &str,
 ) -> Result<role::Model, ApiError> {
     let role = connected_person_role(db, connected_app, app_id).await?;
-    let Some(bot) = connected_app
-        .technical_user_id
-        .as_deref()
-        .and_then(crate::bot_flow::bot_from_technical_id)
-    else {
+    let Some(bot) = connected_app.bot.clone().or_else(|| {
+        connected_app
+            .technical_user_id
+            .as_deref()
+            .and_then(crate::bot_flow::bot_from_technical_id)
+    }) else {
         return Ok(role);
     };
     let grant = crate::bot_permission::bot_grant_in(db, &bot, app_id).await?;
@@ -1500,6 +1503,7 @@ pub(crate) async fn connection_holds_person<C: sea_orm::ConnectionTrait>(
     person: &str,
 ) -> Result<bool, ApiError> {
     let call = ConnectedAppUser {
+        bot: None,
         sub: Some(person.to_owned()),
         origin_app_id: origin_app_id.to_owned(),
         target_app_id: app_id.to_owned(),
@@ -1774,6 +1778,7 @@ async fn authenticate_request(
                     return Ok(request);
                 }
                 CachedAuth::AppConnection {
+                    bot,
                     sub,
                     origin_app_id,
                     target_app_id,
@@ -1792,6 +1797,7 @@ async fn authenticate_request(
                         return Ok(request);
                     }
                     let user = AppUser::ConnectedApp(ConnectedAppUser {
+                        bot,
                         sub,
                         origin_app_id,
                         target_app_id,
@@ -1851,9 +1857,15 @@ async fn authenticate_request(
 
         // Executor failed — try app-connection JWT (app-to-app calls)
         if let Ok(claims) = crate::app_connection_jwt::verify(token) {
+            let bot = claims.bot_id.as_ref().map(|bot_id| BotUser {
+                bot_id: bot_id.clone(),
+                turn_id: claims.run_id.clone().unwrap_or_default(),
+                conv_id: claims.conv_id.clone(),
+            });
             state.auth_cache.insert(
                 cache_key,
                 CachedAuth::AppConnection {
+                    bot: bot.clone(),
                     sub: claims.sub.clone(),
                     origin_app_id: claims.origin_app_id.clone(),
                     target_app_id: claims.target_app_id.clone(),
@@ -1865,6 +1877,7 @@ async fn authenticate_request(
                 },
             );
             let user = AppUser::ConnectedApp(ConnectedAppUser {
+                bot,
                 sub: claims.sub,
                 origin_app_id: claims.origin_app_id,
                 target_app_id: claims.target_app_id,
@@ -2530,6 +2543,7 @@ mod tests {
                 creator_user_id: Some("user-id".into()),
             }),
             AppUser::ConnectedApp(ConnectedAppUser {
+                bot: None,
                 sub: Some("user-id".into()),
                 origin_app_id: "origin-app".into(),
                 target_app_id: "app-id".into(),
@@ -2769,6 +2783,7 @@ mod tests {
 
     fn connected_app(sub: Option<&str>, technical_user_id: Option<&str>) -> ConnectedAppUser {
         ConnectedAppUser {
+            bot: None,
             sub: sub.map(str::to_owned),
             origin_app_id: "app-a".into(),
             target_app_id: "app-b".into(),
@@ -2899,6 +2914,78 @@ mod tests {
                 "{member:?} through {connection:?}"
             );
         }
+    }
+
+    #[flow_like_types::tokio::test]
+    async fn chained_bot_group_limits_intersect_the_connection_role() {
+        use crate::entity::{bot, bot_app, conversation_member};
+        use sea_orm::{
+            ActiveModelTrait, ActiveValue::Set, ConnectionTrait, Schema, sea_query::Table,
+        };
+        let db = connected_apps().await;
+        let schema = Schema::new(db.get_database_backend());
+        for source in [
+            schema.create_table_from_entity(bot::Entity),
+            schema.create_table_from_entity(bot_app::Entity),
+            schema.create_table_from_entity(conversation_member::Entity),
+        ] {
+            let mut table = Table::create();
+            table.table(source.get_table_name().unwrap().clone());
+            for column in source.get_columns() {
+                table.col(column.clone());
+            }
+            db.execute(&table).await.unwrap();
+        }
+        crate::routes::inbox::fixture::insert_bot(&db, "bot_chain", "owner-1", "SERVER").await;
+        let now = chrono::Utc::now().fixed_offset();
+        bot_app::ActiveModel {
+            bot_id: Set("bot_chain".into()),
+            app_id: Set("app-b".into()),
+            added_at: Set(now),
+            scopes: Set(serde_json::json!({})),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        conversation_member::ActiveModel {
+            conversation_id: Set("group".into()),
+            principal_id: Set("bot_chain".into()),
+            principal_kind: Set("BOT".into()),
+            joined_at: Set(now),
+            status: Set("ACTIVE".into()),
+            limits: Set(Some(
+                serde_json::json!({"mask": RolePermissions::ReadFiles.bits()}),
+            )),
+            ..Default::default()
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let mut call = caller_from("app-a", None, Some("bot_chain"));
+        call.bot = Some(BotUser {
+            bot_id: "bot_chain".into(),
+            turn_id: "run".into(),
+            conv_id: Some("group".into()),
+        });
+        let role = connected_app_role(&db, &call, "app-b").await.unwrap();
+        assert_eq!(role.permissions, RolePermissions::ReadFiles.bits());
+        // The bot owner has all permissions, but the connection never grants writing files.
+        conversation_member::Entity::update_many()
+            .col_expr(
+                conversation_member::Column::Limits,
+                Expr::value(serde_json::json!({"mask": RolePermissions::WriteFiles.bits()})),
+            )
+            .exec(&db)
+            .await
+            .unwrap();
+        assert!(connected_app_role(&db, &call, "app-b").await.is_err());
+        conversation_member::Entity::update_many()
+            .col_expr(conversation_member::Column::LeftAt, Expr::value(now))
+            .exec(&db)
+            .await
+            .unwrap();
+        assert!(connected_app_role(&db, &call, "app-b").await.is_err());
     }
 
     async fn connection_tables() -> sea_orm::DatabaseConnection {

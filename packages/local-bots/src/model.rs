@@ -193,6 +193,9 @@ pub struct Conversation {
     pub last_entry: Option<InboxEntry>,
     /// When the person pinned the conversation to the top of their list.
     pub pinned_at: Option<DateTime<FixedOffset>>,
+    /// When this reader cleared their history, so another client can discard cached entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history_cleared_at: Option<DateTime<FixedOffset>>,
     pub local: bool,
 }
 
@@ -414,6 +417,14 @@ pub struct OpenedSecrets {
     pub unreadable: Vec<String>,
 }
 
+/// The owner's history boundary carried when a bot moves into an account.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct OwnerConversationDeletion {
+    pub cleared_through_seq: i64,
+    pub cleared_at: DateTime<FixedOffset>,
+    pub hidden: bool,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ExportedConversation {
     pub conversation: Conversation,
@@ -422,4 +433,6 @@ pub struct ExportedConversation {
     /// Every version of the summaries the exported bot wrote of this conversation, parents
     /// before the segments they merged.
     pub segments: Vec<ConversationSegment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deletion: Option<OwnerConversationDeletion>,
 }

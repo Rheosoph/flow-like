@@ -35,6 +35,7 @@ pub struct Model {
     /// not declared here because the derive keeps one composite key per column and `inboxId` is
     /// in `InboxEntry_inboxId_messageId_key`.
     pub seq: Option<i64>,
+    pub cleared: Option<bool>,
 }
 
 impl ActiveModelBehavior for ActiveModel {}

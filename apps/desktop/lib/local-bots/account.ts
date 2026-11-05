@@ -66,10 +66,24 @@ export async function listAccountBots(
  */
 export class AccountListReads<T> {
 	private readonly last = new Map<string, T[]>();
+	private readonly revisions = new Map<string, number>();
+
+	/** A successful deletion also removes the item from the offline fallback. */
+	remove(key: string, matches: (item: T) => boolean): void {
+		this.last.set(
+			key,
+			(this.last.get(key) ?? []).filter((item) => !matches(item)),
+		);
+		this.revisions.set(key, (this.revisions.get(key) ?? 0) + 1);
+	}
 
 	async read(key: string, load: () => Promise<T[]>): Promise<T[]> {
+		const revision = this.revisions.get(key) ?? 0;
 		try {
 			const items = await load();
+			if ((this.revisions.get(key) ?? 0) !== revision) {
+				return this.last.get(key) ?? [];
+			}
 			this.last.set(key, items);
 			return items;
 		} catch (error) {

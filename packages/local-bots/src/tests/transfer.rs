@@ -43,6 +43,8 @@ struct Account {
     existing_direct: HashMap<String, String>,
     issues: Vec<Value>,
     fail_next_import_of: Option<String>,
+    fail_chat_delete_once: bool,
+    deleted_chats: Vec<String>,
     minted_bots: usize,
     minted_chats: usize,
     log: Vec<String>,
@@ -163,6 +165,18 @@ impl Account {
                 Ok(Some(body))
             }
             (HubMethod::Post, ["inbox", "import"]) => self.import_chat(body),
+            (HubMethod::Delete, ["inbox", "conversations", chat]) => {
+                if std::mem::take(&mut self.fail_chat_delete_once) {
+                    return Err(HubError::failed(
+                        "OFFLINE",
+                        "Deletion did not reach the account",
+                    ));
+                }
+                if !self.deleted_chats.iter().any(|id| id == chat) {
+                    self.deleted_chats.push(chat.to_string());
+                }
+                Ok(None)
+            }
             (HubMethod::Post, ["bots", id, "workspace"]) => {
                 self.bot(id)?;
                 Ok(Some(json!({ "app_id": format!("ws_{id}") })))
@@ -1744,7 +1758,7 @@ fn requests<'a>(
     ids: &AccountIds,
 ) -> Vec<ImportConversationRequest<'a>> {
     let entries: Vec<&crate::InboxEntry> = item.entries.iter().collect();
-    import_conversation_requests(&item.conversation, &entries, ids)
+    import_conversation_requests(item, &entries, ids)
 }
 
 #[test]
@@ -2495,4 +2509,35 @@ fn a_summary_none_of_whose_entries_moved_is_dropped_and_counted() {
     let moved: Vec<&crate::InboxEntry> = item.entries.iter().collect();
     assert_eq!(unmovable_segments(item, &[]), 1);
     assert_eq!(unmovable_segments(item, &moved), 0);
+}
+
+#[tokio::test]
+async fn a_group_deleted_during_move_retries_its_account_deletion_before_finishing() {
+    let w = world();
+    let group = w.f.group(&[&w.ada]);
+    w.f.text(&group.id, &w.ada.id, "group-message");
+    let (store, id) = (w.f.store.clone(), group.id.clone());
+    w.steps.before(MoveStep::ForgetConversations, 1, move || {
+        store.delete_conversation(&id).unwrap();
+    });
+    w.hub.account().fail_chat_delete_once = true;
+    assert!(w.move_bot(&w.ada.id).await.is_err());
+    assert!(
+        w.here(&w.ada.id),
+        "the local bot stays until its group deletion reaches the account"
+    );
+    let account_chat = w.hub.account().chat_keys.get(&group.id).unwrap().clone();
+    assert!(w.hub.account().deleted_chats.is_empty());
+    let pending: i64 =
+        w.f.raw()
+            .query_row(
+                "SELECT COUNT(*) FROM conversation_transfers WHERE conversation_id = ?1",
+                [&group.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+    assert_eq!(pending, 1);
+    w.move_bot(&w.ada.id).await.unwrap();
+    assert!(w.hub.account().deleted_chats.contains(&account_chat));
+    assert!(!w.here(&w.ada.id));
 }

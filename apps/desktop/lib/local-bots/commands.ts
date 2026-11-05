@@ -36,7 +36,7 @@ import { type InvokeArgs, invoke } from "@tauri-apps/api/core";
 /** The store's answer for an id it doesn't hold. */
 export const LOCAL_NOT_FOUND = "NOT_FOUND";
 
-export type LocalEntriesQuery = Omit<IInboxEntriesQuery, "as">;
+export type LocalEntriesQuery = IInboxEntriesQuery;
 
 function isPositionQuery(query: LocalEntriesQuery): boolean {
 	return [
@@ -377,20 +377,24 @@ export const localPermissions = {
 };
 
 export const localInbox = {
-	async conversations(): Promise<IConversation[]> {
+	async conversations(as?: string): Promise<IConversation[]> {
 		const conversations = await run<IConversation[]>(
 			"list the conversations on this computer",
 			"local_inbox_conversations",
+			as ? { principalId: as } : undefined,
 		);
 		return asArray(conversations).map(markLocal);
 	},
 
 	/** Null when the conversation isn't on this computer or you left it. */
-	async conversation(conversationId: string): Promise<IConversation | null> {
+	async conversation(
+		conversationId: string,
+		as?: string,
+	): Promise<IConversation | null> {
 		const conversation = await run<IConversation | null>(
 			`load local conversation ${conversationId}`,
 			"local_inbox_conversation",
-			{ conversationId },
+			{ conversationId, ...(as ? { principalId: as } : {}) },
 		);
 		return isRecord(conversation)
 			? markLocal(conversation as unknown as IConversation)
@@ -410,6 +414,14 @@ export const localInbox = {
 		return expectLocal<IConversation>(
 			await run(operation, "local_inbox_rename", { conversationId, title }),
 			operation,
+		);
+	},
+
+	async deleteConversation(conversationId: string): Promise<void> {
+		await run(
+			`delete local conversation ${conversationId}`,
+			"local_inbox_delete_conversation",
+			{ conversationId },
 		);
 	},
 
@@ -461,6 +473,7 @@ export const localInbox = {
 			"local_inbox_entries",
 			{
 				conversationId,
+				...(query.as ? { principalId: query.as } : {}),
 				before: query.before,
 				after: query.after,
 				limit: query.limit,
@@ -481,6 +494,7 @@ export const localInbox = {
 			"local_inbox_entries_by_position",
 			{
 				conversationId,
+				...(query.as ? { principalId: query.as } : {}),
 				query: {
 					from_seq: query.from_seq,
 					to_seq: query.to_seq,
@@ -514,13 +528,14 @@ export const localInbox = {
 
 	async segments(
 		conversationId: string,
-		query: Omit<IInboxSegmentsQuery, "as"> = {},
+		query: IInboxSegmentsQuery = {},
 	): Promise<IConversationSegmentList> {
 		const list = await run<IConversationSegmentList | null>(
 			`load segments of local conversation ${conversationId}`,
 			"local_inbox_segments",
 			{
 				conversationId,
+				...(query.as ? { principalId: query.as } : {}),
 				query: { level: query.level, after: query.after, limit: query.limit },
 			},
 		);
@@ -579,11 +594,12 @@ export const localInbox = {
 		conversationId: string,
 		handle: { path: string; mime: string },
 		name = handle.path,
+		as?: string,
 	): Promise<IConversationFileDownload> {
 		const bytes = await run<ArrayBuffer>(
 			`read ${name} of local conversation ${conversationId}`,
 			"local_inbox_read_file",
-			{ conversationId, path: handle.path },
+			{ conversationId, path: handle.path, ...(as ? { principalId: as } : {}) },
 		);
 		return {
 			url: URL.createObjectURL(new Blob([bytes], { type: handle.mime })),
@@ -623,11 +639,11 @@ export const localInbox = {
 		return state as unknown as IConversationPinState;
 	},
 
-	async pins(conversationId: string): Promise<IPinnedMessage[]> {
+	async pins(conversationId: string, as?: string): Promise<IPinnedMessage[]> {
 		const pins = await run(
 			`list pinned messages of local conversation ${conversationId}`,
 			"local_inbox_pins",
-			{ conversationId },
+			{ conversationId, ...(as ? { principalId: as } : {}) },
 		);
 		return Array.isArray(pins) ? (pins as IPinnedMessage[]) : [];
 	},
