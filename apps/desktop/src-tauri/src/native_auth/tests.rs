@@ -83,6 +83,183 @@ fn unique_hub() -> String {
     format!("https://{}.test", uuid::Uuid::new_v4())
 }
 
+#[test]
+fn first_install_can_sign_in_before_a_model_profile_exists() {
+    let context = context_for_profile(None, "https://hub.test/").unwrap();
+    assert_eq!(context.profile_id, ONBOARDING_PROFILE_ID);
+    assert_eq!(context.hub, "https://hub.test");
+    assert_eq!(
+        context_for_profile(None, "hub.test").unwrap().hub,
+        "https://hub.test"
+    );
+    let profile = flow_like::profile::Profile {
+        id: "chosen-profile".into(),
+        hub: "chosen.test".into(),
+        secure: true,
+        ..Default::default()
+    };
+    let context = context_for_profile(Some(&profile), "https://hub.test").unwrap();
+    assert_eq!(context.profile_id, "chosen-profile");
+    assert_eq!(context.hub, "https://chosen.test");
+}
+
+#[tokio::test]
+async fn profile_remap_moves_the_grant_and_revokes_both_previous_generations() {
+    let hub = unique_hub();
+    let original = install(&hub, "https://issuer.test/token", now_seconds() + 3600).await;
+    let source_binding = SessionBinding::capture("profile", &hub)
+        .await
+        .unwrap()
+        .unwrap();
+    let target = native_auth_read("server-profile".into(), hub.clone())
+        .await
+        .unwrap();
+    write_session(
+        "server-profile".into(),
+        hub.clone(),
+        target.generation,
+        Configuration {
+            authority: "https://issuer.test".into(),
+            client_id: "client".into(),
+            token_endpoint: "https://issuer.test/token".into(),
+            ..Default::default()
+        },
+        user("bob", now_seconds() + 3600).to_string(),
+    )
+    .await
+    .unwrap();
+    let target_binding = SessionBinding::capture("server-profile", &hub)
+        .await
+        .unwrap()
+        .unwrap();
+
+    move_profile_session("profile", "server-profile", &hub)
+        .await
+        .unwrap();
+    let source = native_auth_read("profile".into(), hub.clone())
+        .await
+        .unwrap();
+    let target = native_auth_read("server-profile".into(), hub.clone())
+        .await
+        .unwrap();
+    assert!(source.user.is_none());
+    assert_ne!(source.generation, original.generation);
+    assert_eq!(
+        serde_json::from_str::<Value>(target.user.as_ref().unwrap()).unwrap()["profile"]["sub"],
+        "alice"
+    );
+    assert!(source_binding.access_token(None).await.is_err());
+    assert!(target_binding.access_token(None).await.is_err());
+    let (key, target_session) = session("server-profile", &hub).await.unwrap();
+    assert_eq!(
+        target_session
+            .lock()
+            .await
+            .load(&key)
+            .await
+            .unwrap()
+            .user
+            .as_ref()
+            .unwrap()["refresh_token"],
+        "refresh-first"
+    );
+}
+
+#[tokio::test]
+async fn onboarding_adoption_is_once_only_and_never_crosses_hubs() {
+    let hub = unique_hub();
+    let snapshot = native_auth_read(ONBOARDING_PROFILE_ID.into(), hub.clone())
+        .await
+        .unwrap();
+    write_session(
+        ONBOARDING_PROFILE_ID.into(),
+        hub.clone(),
+        snapshot.generation,
+        Configuration {
+            authority: "https://issuer.test".into(),
+            client_id: "client".into(),
+            token_endpoint: "https://issuer.test/token".into(),
+            ..Default::default()
+        },
+        user("alice", now_seconds() + 3600).to_string(),
+    )
+    .await
+    .unwrap();
+    let mut profile = flow_like::profile::Profile {
+        id: "adopted".into(),
+        hub: "other.test".into(),
+        secure: true,
+        ..Default::default()
+    };
+    claim_onboarding_session(&profile, &hub).await.unwrap();
+    assert!(
+        native_auth_read(ONBOARDING_PROFILE_ID.into(), hub.clone())
+            .await
+            .unwrap()
+            .user
+            .is_some()
+    );
+    profile.hub = hub.clone();
+    claim_onboarding_session(&profile, &hub).await.unwrap();
+    let adopted = native_auth_read(profile.id.clone(), hub.clone())
+        .await
+        .unwrap();
+    assert!(adopted.user.is_some());
+    assert!(
+        native_auth_read(ONBOARDING_PROFILE_ID.into(), hub.clone())
+            .await
+            .unwrap()
+            .user
+            .is_none()
+    );
+    claim_onboarding_session(&profile, &hub).await.unwrap();
+    let repeated = native_auth_read(profile.id.clone(), hub.clone())
+        .await
+        .unwrap();
+    assert_eq!(repeated.generation, adopted.generation);
+    assert_eq!(repeated.user, adopted.user);
+}
+
+#[tokio::test]
+async fn profile_remap_restores_saved_grants_when_either_commit_fails() {
+    for failing_id in ["profile", "server-profile"] {
+        let hub = unique_hub();
+        let source = install(&hub, "https://issuer.test/token", now_seconds() + 3600).await;
+        let target = native_auth_read("server-profile".into(), hub.clone())
+            .await
+            .unwrap();
+        let target = write_session(
+            "server-profile".into(),
+            hub.clone(),
+            target.generation,
+            Configuration {
+                authority: "https://issuer.test".into(),
+                client_id: "client".into(),
+                token_endpoint: "https://issuer.test/token".into(),
+                ..Default::default()
+            },
+            user("bob", now_seconds() + 3600).to_string(),
+        )
+        .await
+        .unwrap();
+        let (failed_key, _) = session(failing_id, &hub).await.unwrap();
+        store::fail_next_write(&failed_key);
+        assert!(
+            move_profile_session("profile", "server-profile", &hub)
+                .await
+                .is_err()
+        );
+        for (id, expected) in [("profile", source), ("server-profile", target)] {
+            let (key, _) = session(id, &hub).await.unwrap();
+            let mut restarted = Session::default();
+            restarted.load(&key).await.unwrap();
+            let actual = restarted.snapshot().unwrap();
+            assert_eq!(actual.generation, expected.generation);
+            assert_eq!(actual.user, expected.user);
+        }
+    }
+}
+
 async fn stored_user(hub: &str) -> Value {
     let (key, session) = session("profile", hub).await.unwrap();
     let mut session = session.lock().await;

@@ -1603,6 +1603,8 @@ pub fn run() {
             execution_open_auth_session,
             execution_set_auth,
             native_auth::native_auth_read,
+            native_auth::native_auth_context,
+            native_auth::native_auth_complete_onboarding,
             native_auth::native_auth_write,
             native_auth::native_auth_clear,
             native_auth::native_auth_refresh,

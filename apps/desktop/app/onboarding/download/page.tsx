@@ -72,8 +72,12 @@ export default function ProfileCreation() {
 			await invoke("upsert_profile", { profile });
 		}
 
+		await invoke("native_auth_complete_onboarding");
 		await invalidate(backend.userState.getProfile, []);
 		await invalidate(backend.userState.getSettingsProfile, []);
+		await queryClient.invalidateQueries({
+			queryKey: ["getNativeAuthContext"],
+		});
 		await queryClient.invalidateQueries({
 			queryKey: ["get", "profiles"],
 		});

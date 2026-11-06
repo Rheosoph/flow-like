@@ -17,6 +17,7 @@ import {
 	Calendar,
 	ChevronsUpDown,
 	Copy,
+	Expand,
 	FileIcon,
 	Hash,
 	MapPinIcon,
@@ -38,6 +39,10 @@ import {
 	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "../../../ui/dropdown-menu";
+import {
+	CellInspectorDialog,
+	type InspectedResultCell,
+} from "./cell-inspector-dialog";
 import {
 	type ColumnKind,
 	cellToString,
@@ -78,8 +83,10 @@ function sizeForKind(kind: ColumnKind): number {
 }
 
 function copyText(value: string, label: string): void {
-	void navigator.clipboard.writeText(value);
-	toast.success(label);
+	void navigator.clipboard
+		.writeText(value)
+		.then(() => toast.success(label))
+		.catch(() => toast.error("Could not copy to clipboard"));
 }
 
 function HeaderCell({
@@ -201,6 +208,8 @@ export function QueryResultTable({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const [sorting, setSorting] = useState<SortingState>([]);
 	const [inspect, setInspect] = useState<ResultRow | null>(null);
+	const [inspectedCell, setInspectedCell] =
+		useState<InspectedResultCell | null>(null);
 
 	const metaById = useMemo(() => {
 		const map = new Map<string, ColumnMeta>();
@@ -293,7 +302,7 @@ export function QueryResultTable({
 			<div ref={scrollRef} className="h-full overflow-auto">
 				<table
 					aria-rowcount={rowModel.rows.length + 1}
-					className="table-fixed border-separate border-spacing-0 text-sm"
+					className="m-0 table-fixed border-separate border-spacing-0 text-sm"
 					style={{ width: totalWidth, minWidth: "100%" }}
 				>
 					<caption className="sr-only">
@@ -303,7 +312,7 @@ export function QueryResultTable({
 						<tr aria-rowindex={1}>
 							<th
 								scope="col"
-								className="sticky left-0 top-0 z-30 h-9 border-b border-r bg-muted text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
+								className="sticky left-0 top-0 z-30 h-9 border-b border-r border-l-0 border-t-0 bg-muted py-0 text-[10px] font-medium uppercase tracking-wider text-muted-foreground"
 								style={{ width: GUTTER_WIDTH }}
 							>
 								#
@@ -325,7 +334,7 @@ export function QueryResultTable({
 													? "descending"
 													: "none"
 										}
-										className="sticky top-0 z-20 h-9 border-b border-r bg-background p-0 font-normal"
+										className="sticky top-0 z-20 h-9 border-b border-r border-l-0 border-t-0 bg-background p-0 font-normal"
 										style={{ width: header.getSize() }}
 									>
 										<HeaderCell
@@ -352,7 +361,11 @@ export function QueryResultTable({
 					<tbody>
 						{paddingTop > 0 && (
 							<tr aria-hidden>
-								<td colSpan={columnCount} style={{ height: paddingTop }} />
+								<td
+									className="border-0 p-0"
+									colSpan={columnCount}
+									style={{ height: paddingTop }}
+								/>
 							</tr>
 						)}
 						{virtualRows.map((virtualRow) => {
@@ -361,17 +374,18 @@ export function QueryResultTable({
 								<tr
 									key={row.id}
 									aria-rowindex={virtualRow.index + 2}
-									className="group/row transition-colors hover:bg-muted/40"
+									className="group/row even:bg-muted/15 transition-colors hover:bg-muted/40"
 									style={{ height: ROW_HEIGHT }}
 								>
 									<td
-										className="sticky left-0 z-10 border-b border-r bg-muted p-0 group-hover/row:bg-muted"
+										className="sticky left-0 z-10 border-b border-r border-l-0 border-t-0 bg-muted p-0 group-hover/row:bg-muted"
 										style={{ width: GUTTER_WIDTH }}
 									>
 										<button
 											type="button"
 											onClick={() => setInspect(row.original)}
-											className="flex h-full w-full items-center justify-end px-2 font-mono text-[11px] tabular-nums text-muted-foreground transition-colors hover:bg-muted-foreground/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+											className="flex w-full items-center justify-end px-2 font-mono text-[11px] tabular-nums text-muted-foreground transition-colors hover:bg-muted-foreground/15 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+											style={{ height: ROW_HEIGHT - 1 }}
 											aria-label={t("inspectRowVal", "Inspect row {{val}}", {
 												val: virtualRow.index + 1,
 											})}
@@ -385,11 +399,21 @@ export function QueryResultTable({
 											typeName: "",
 										};
 										const value = cell.getValue();
+										const inspectCell = () => {
+											const column = columns.find(
+												(column) => column.name === cell.column.id,
+											);
+											if (column)
+												setInspectedCell({ column, kind: meta.kind, value });
+										};
 										return (
 											<td
 												key={cell.id}
 												className={cn(
-													"group/cell relative overflow-hidden border-b border-r px-3 font-mono text-xs",
+													"group/cell relative overflow-hidden border-b border-r border-l-0 border-t-0 px-3 py-0 font-mono text-xs",
+													meta.kind === "text" &&
+														!/(^id$|_id$|^uuid$|^key$)/i.test(cell.column.id) &&
+														"font-sans text-[13px]",
 													meta.kind === "number" && "text-right",
 													meta.kind === "temporal" && "text-muted-foreground",
 												)}
@@ -397,9 +421,10 @@ export function QueryResultTable({
 											>
 												<div
 													className={cn(
-														"flex items-center",
+														"flex items-center overflow-hidden",
 														meta.kind === "number" && "justify-end",
 													)}
+													style={{ height: ROW_HEIGHT - 1 }}
 												>
 													{presentation?.cell?.(cell.column.id, value) ?? (
 														<ResultCellValue
@@ -408,20 +433,33 @@ export function QueryResultTable({
 															metadata={meta.metadata}
 															name={cell.column.id}
 															appId={appId}
+															onInspect={inspectCell}
 														/>
 													)}
 												</div>
 												{!isNullish(value) && (
-													<button
-														type="button"
-														onClick={() =>
-															copyText(cellToString(value), "Copied cell")
-														}
-														className="absolute right-1 top-1/2 flex h-5 w-5 -translate-y-1/2 items-center justify-center rounded bg-background/80 text-muted-foreground opacity-0 backdrop-blur-sm transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring group-hover/cell:opacity-100"
-														aria-label={t("copyCellValue", "Copy cell value")}
-													>
-														<Copy className="h-3 w-3" />
-													</button>
+													<div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center rounded bg-background/95 opacity-0 transition-opacity focus-within:opacity-100 group-hover/cell:opacity-100">
+														<button
+															type="button"
+															onClick={inspectCell}
+															className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+															aria-label={t("expandName", "Expand {{name}}", {
+																name: cell.column.id,
+															})}
+														>
+															<Expand className="h-3 w-3" />
+														</button>
+														<button
+															type="button"
+															onClick={() =>
+																copyText(cellToString(value), "Copied cell")
+															}
+															className="flex h-6 w-6 items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+															aria-label={t("copyCellValue", "Copy cell value")}
+														>
+															<Copy className="h-3 w-3" />
+														</button>
+													</div>
 												)}
 											</td>
 										);
@@ -431,12 +469,23 @@ export function QueryResultTable({
 						})}
 						{paddingBottom > 0 && (
 							<tr aria-hidden>
-								<td colSpan={columnCount} style={{ height: paddingBottom }} />
+								<td
+									className="border-0 p-0"
+									colSpan={columnCount}
+									style={{ height: paddingBottom }}
+								/>
 							</tr>
 						)}
 					</tbody>
 				</table>
 			</div>
+			<CellInspectorDialog
+				cell={inspectedCell}
+				appId={appId}
+				onOpenChange={(open) => {
+					if (!open) setInspectedCell(null);
+				}}
+			/>
 			<RowInspectorSheet
 				row={inspect}
 				columns={columns}

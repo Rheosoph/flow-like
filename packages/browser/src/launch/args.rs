@@ -4,6 +4,8 @@ use std::path::Path;
 
 use crate::launch::{Executable, Flavor, LaunchOptions};
 
+const DISABLED_FEATURES: &str = "--disable-features=IgnoreDuplicateNavs,Prewarm";
+
 const BASE_SWITCHES: &[&str] = &[
     "--allow-pre-commit-input",
     "--disable-background-networking",
@@ -11,7 +13,7 @@ const BASE_SWITCHES: &[&str] = &[
     "--disable-backgrounding-occluded-windows",
     "--disable-client-side-phishing-detection",
     "--disable-default-apps",
-    "--disable-features=IgnoreDuplicateNavs,Prewarm",
+    DISABLED_FEATURES,
     "--disable-hang-monitor",
     // Chrome for Testing's crash-time stack dumper calls alarm(), which the Linux renderer
     // sandbox forbids, so a renderer crash turns into a second crash instead of an exit.
@@ -35,6 +37,7 @@ const PROXY_RULE_SELECTORS: &[&str] = &["http", "https", "ftp", "socks"];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HostOs {
     Unix,
+    Macos,
     Windows,
 }
 
@@ -42,6 +45,8 @@ impl HostOs {
     fn current() -> Self {
         if cfg!(windows) {
             Self::Windows
+        } else if cfg!(target_os = "macos") {
+            Self::Macos
         } else {
             Self::Unix
         }
@@ -80,7 +85,7 @@ pub(crate) fn uses_lifeline(flavor: Flavor) -> bool {
 }
 
 fn lifeline_for(flavor: Flavor, os: HostOs) -> bool {
-    os == HostOs::Unix && flavor != Flavor::SnapChromium
+    matches!(os, HostOs::Unix | HostOs::Macos) && flavor != Flavor::SnapChromium
 }
 
 fn args_for(
@@ -90,7 +95,19 @@ fn args_for(
     temporary: bool,
     os: HostOs,
 ) -> Vec<OsString> {
-    let mut args: Vec<OsString> = BASE_SWITCHES.iter().map(OsString::from).collect();
+    let mut args: Vec<OsString> = BASE_SWITCHES
+        .iter()
+        .map(|switch| {
+            if os == HostOs::Macos && *switch == DISABLED_FEATURES {
+                // Chrome's startup clone hard-links its installed executable, triggering
+                // macOS App Management. Skip it for automation; a browser updated while
+                // this instance runs may need to be relaunched after signature checks fail.
+                format!("{switch},MacAppCodeSignClone").into()
+            } else {
+                OsString::from(switch)
+            }
+        })
+        .collect();
     let mut user_data_dir = OsString::from("--user-data-dir=");
     user_data_dir.push(profile_dir.as_os_str());
     args.push(user_data_dir);
@@ -334,13 +351,24 @@ mod tests {
             Flavor::SnapChromium,
             Flavor::ChromeForTesting,
         ] {
-            for os in [HostOs::Unix, HostOs::Windows] {
+            for os in [HostOs::Unix, HostOs::Macos, HostOs::Windows] {
                 let args = rendered(&args_for(flavor, &options(), Path::new("/p"), false, os));
-                let features = args
+                let features: Vec<_> = args
                     .iter()
                     .filter(|arg| arg.starts_with("--disable-features"))
-                    .count();
-                assert_eq!(features, 1, "{flavor:?} {os:?}");
+                    .map(String::as_str)
+                    .collect();
+                let expected = if os == HostOs::Macos {
+                    "--disable-features=IgnoreDuplicateNavs,Prewarm,MacAppCodeSignClone"
+                } else {
+                    "--disable-features=IgnoreDuplicateNavs,Prewarm"
+                };
+                assert_eq!(features, [expected], "{flavor:?} {os:?}");
+                assert_eq!(
+                    args.iter().any(|arg| arg == "--remote-debugging-pipe"),
+                    os != HostOs::Windows && flavor != Flavor::SnapChromium,
+                    "{flavor:?} {os:?}"
+                );
                 for forbidden in [
                     "--no-sandbox",
                     "--disable-extensions",

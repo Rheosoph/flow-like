@@ -13,6 +13,7 @@ vi.mock("@tauri-apps/plugin-http", () => ({ fetch: mocks.fetch }));
 import { fetcher, streamFetcher } from "../api";
 import {
 	bindHubAuth,
+	hubAuthOrigin,
 	renewHubAuth,
 	setHubAuthActive,
 	withHubAuth,
@@ -72,6 +73,22 @@ afterEach(async () => {
 });
 
 describe("desktop Hub request authentication", () => {
+	test("keeps the bound token origin while a session is inactive or rebinding is refused", () => {
+		const { auth } = authSession();
+		expect(hubAuthOrigin(auth)).toBe("https://first-hub.test");
+		setHubAuthActive(auth, false);
+		expect(hubAuthOrigin(auth)).toBe("https://first-hub.test");
+		expect(bindHubAuth(auth, "https://second-hub.test")).toBe(false);
+		expect(hubAuthOrigin(auth)).toBe("https://first-hub.test");
+		expect(hubAuthOrigin(undefined)).toBeUndefined();
+		expect(
+			hubAuthOrigin({
+				...auth,
+				events: undefined,
+			} as unknown as AuthContextProps),
+		).toBeUndefined();
+	});
+
 	test("an explicit provider refusal starts one interactive login for concurrent requests", async () => {
 		const { auth, signinSilent, removeUser, signinRedirect } = authSession(
 			user("expired", -1),

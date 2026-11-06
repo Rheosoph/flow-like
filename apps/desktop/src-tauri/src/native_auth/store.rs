@@ -191,7 +191,8 @@ pub(super) async fn write(hub: &str, bytes: Vec<u8>) -> Result<(), String> {
 pub(super) async fn read(hub: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
     let key = format!("native-auth:v1:{}", blake3::hash(hub.as_bytes()).to_hex());
     tokio::task::spawn_blocking(move || crate::android_mobile::secure_read(&key))
-        .await.map_err(|_| "Authentication storage worker failed")?
+        .await
+        .map_err(|_| "Authentication storage worker failed")?
 }
 #[cfg(all(not(test), target_os = "android"))]
 pub(super) async fn write(hub: &str, bytes: Vec<u8>) -> Result<(), String> {
@@ -204,12 +205,20 @@ pub(super) async fn write(hub: &str, bytes: Vec<u8>) -> Result<(), String> {
         // Workers resolve only this native-written binding, never a webview-supplied token.
         crate::android_mobile::secure_write(&binding, key.as_bytes())
     })
-        .await.map_err(|_| "Authentication storage worker failed")?
+    .await
+    .map_err(|_| "Authentication storage worker failed")?
 }
 
 #[cfg(test)]
 static SAVED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>> =
     std::sync::LazyLock::new(std::sync::Mutex::default);
+#[cfg(test)]
+static FAIL_NEXT_WRITE: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+    std::sync::LazyLock::new(std::sync::Mutex::default);
+#[cfg(test)]
+pub(super) fn fail_next_write(key: &str) {
+    FAIL_NEXT_WRITE.lock().unwrap().insert(key.to_owned());
+}
 #[cfg(test)]
 pub(super) async fn read(hub: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
     Ok(SAVED.lock().unwrap().get(hub).cloned().map(Zeroizing::new))
@@ -217,6 +226,9 @@ pub(super) async fn read(hub: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String
 #[cfg(test)]
 pub(super) async fn write(hub: &str, bytes: Vec<u8>) -> Result<(), String> {
     validate_length(&bytes)?;
+    if FAIL_NEXT_WRITE.lock().unwrap().remove(hub) {
+        return Err("Test authentication storage failure".into());
+    }
     SAVED.lock().unwrap().insert(hub.to_owned(), bytes);
     Ok(())
 }

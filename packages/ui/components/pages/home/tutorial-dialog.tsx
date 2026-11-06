@@ -20,12 +20,14 @@ import {
 	X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
 	FRAG,
 	VERT,
 	readTokenRGB,
 	themeIsLight,
 } from "../../global-chat/hero-variants/bubble-shader";
+import { usePortalContainer } from "../../ui/portal-container";
 
 const DOCS_URL = "https://docs.flow-like.com";
 const DISCORD_URL = "https://discord.gg/mdBA9kMjFJ";
@@ -572,6 +574,7 @@ function StageMotif({ stepId }: { stepId: string }) {
 
 export function TutorialDialog() {
 	const { t } = useTranslation("common");
+	const portalContainer = usePortalContainer();
 	const [showTutorial, setShowTutorial] = useState(false);
 	const [step, setStep] = useState(0);
 	const [supportsBackdrop, setSupportsBackdrop] = useState(true);
@@ -667,9 +670,9 @@ export function TutorialDialog() {
 
 	if (!showTutorial) return null;
 
-	return (
+	return createPortal(
 		<div
-			className="fixed inset-0 z-50 flex items-center justify-center p-0 sm:p-6"
+			className="fixed inset-x-0 top-0 z-50 flex h-dvh items-center justify-center pt-safe pb-safe px-safe"
 			// biome-ignore lint/a11y/useSemanticElements: custom-composited overlay; a native <dialog> cannot host the WebGL stage + framer-motion layout
 			role="dialog"
 			aria-modal="true"
@@ -678,7 +681,11 @@ export function TutorialDialog() {
 				"Getting started with Flow-Like",
 			)}
 		>
-			<style>{`@keyframes fl-onb-drift{0%{transform:translate3d(-3%,-2%,0) scale(1.05)}100%{transform:translate3d(4%,3%,0) scale(1.12)}} @keyframes fl-onb-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}} .fl-onb-bob{animation:fl-onb-bob 5s ease-in-out infinite} @media (prefers-reduced-motion: reduce){.fl-onb-bob{animation:none}}`}</style>
+			<style>
+				{
+					"@keyframes fl-onb-drift{0%{transform:translate3d(-3%,-2%,0) scale(1.05)}100%{transform:translate3d(4%,3%,0) scale(1.12)}} @keyframes fl-onb-bob{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}} .fl-onb-bob{animation:fl-onb-bob 5s ease-in-out infinite} @media (prefers-reduced-motion: reduce){.fl-onb-bob{animation:none}}"
+				}
+			</style>
 
 			{/* Scrim */}
 			<button
@@ -690,7 +697,7 @@ export function TutorialDialog() {
 			/>
 
 			{/* Panel */}
-			<div className="relative flex h-full w-full flex-col overflow-hidden border-border bg-card shadow-2xl sm:h-[640px] sm:max-h-[88dvh] sm:w-full sm:max-w-[1000px] sm:grid sm:grid-cols-[minmax(0,0.82fr)_1fr] sm:rounded-2xl sm:border">
+			<div className="relative flex h-full max-h-full w-full min-w-0 flex-col overflow-hidden border-border bg-card shadow-2xl sm:h-[640px] sm:max-h-[calc(100%-3rem)] sm:w-[calc(100%-3rem)] sm:max-w-[1000px] sm:grid sm:grid-cols-[minmax(0,0.82fr)_minmax(0,1fr)] sm:rounded-2xl sm:border">
 				{/* ── LEFT: branded stage (committed warm-dark in both themes) ── */}
 				<aside
 					className="relative flex h-40 shrink-0 items-center justify-center overflow-hidden text-white sm:h-auto"
@@ -741,7 +748,7 @@ export function TutorialDialog() {
 				</aside>
 
 				{/* ── RIGHT: stepper content ── */}
-				<div className="relative flex min-h-0 flex-1 flex-col p-6 sm:p-8">
+				<div className="relative flex min-h-0 min-w-0 flex-1 flex-col p-6 sm:p-8">
 					<button
 						type="button"
 						onClick={finish}
@@ -752,7 +759,10 @@ export function TutorialDialog() {
 					</button>
 
 					{/* Progress track */}
-					<nav className="mb-6 flex items-center pr-10" aria-label="Progress">
+					<nav
+						className="mb-6 flex shrink-0 items-center pr-10"
+						aria-label="Progress"
+					>
 						{STEPS.map((s, i) => (
 							<div
 								key={s.id}
@@ -787,7 +797,7 @@ export function TutorialDialog() {
 					</nav>
 
 					{/* Panes */}
-					<div className="relative min-h-0 flex-1 overflow-y-auto">
+					<div className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain">
 						<AnimatePresence mode="wait">
 							<motion.section
 								key={active.id}
@@ -889,7 +899,7 @@ export function TutorialDialog() {
 					</div>
 
 					{/* Nav */}
-					<div className="mt-5 flex items-center gap-3 border-t border-border/70 pt-4">
+					<div className="mt-5 grid shrink-0 grid-cols-2 items-center gap-2 border-t border-border/70 pt-4 sm:flex sm:flex-wrap sm:gap-3">
 						<Button
 							variant="outline"
 							onClick={prev}
@@ -906,7 +916,7 @@ export function TutorialDialog() {
 						>
 							{t("skipIntro", "Skip intro")}
 						</Button>
-						<Button onClick={next} className="ml-auto rounded-xl">
+						<Button onClick={next} className="col-span-2 rounded-xl sm:ml-auto">
 							{step === total - 1
 								? t("startBuilding", "Start building")
 								: "Next"}
@@ -915,6 +925,7 @@ export function TutorialDialog() {
 					</div>
 				</div>
 			</div>
-		</div>
+		</div>,
+		portalContainer ?? document.body,
 	);
 }

@@ -1,5 +1,5 @@
 ---
-import { FlowPilotBubbleOrb } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-orb";
+import { BotAvatar } from "@flow-like/flow-like-ui/components/bots/bot-avatar";
 import type { Lang, TranslationKey } from "../i18n";
 import { defaultLang, translations } from "../i18n";
 
@@ -27,11 +27,13 @@ const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
       <a href="#platform">{t("v5.hero.cta.platform")} <span aria-hidden="true">↘</span></a>
       <a href="#flowpilot">{t("v5.hero.cta.flowpilot")} <span aria-hidden="true">▶</span></a>
     </div>
+    <button type="button" class="bot-motion-toggle" data-bot-motion-toggle data-pause-label={t("v5.bots.demo.pause")} data-resume-label={t("v5.bots.demo.resume")} aria-pressed="false">{t("v5.bots.demo.pause")}</button>
   </div>
 
   <div class="hero-card">
-    <header><span><i aria-hidden="true"></i> FLOWPILOT / LIVE</span><em aria-hidden="true">•••</em></header>
-    <main><FlowPilotBubbleOrb client:only="react" aria-label="FlowPilot" className="size-9 shrink-0" /><p>{t("v5.hero.card.prompt")}</p></main>
+    <span data-bot-helper="hero" aria-hidden="true"></span>
+    <header><span><i aria-hidden="true"></i> FLUX / FLOWPILOT</span><em aria-hidden="true">•••</em></header>
+    <main><BotAvatar appearance={{ kind: "flux" }} agentState="working" size={48} animated={false} decorative /><p>{t("v5.hero.card.prompt")}</p></main>
     <div class="hero-flow">
       <span><i aria-hidden="true">01</i><b>{t("v5.hero.flow.email")}</b><small>{t("v5.hero.flow.email.sub")}</small></span><em aria-hidden="true">→</em>
       <span><i aria-hidden="true">02</i><b>{t("v5.hero.flow.data")}</b><small>Customer 360</small></span><em aria-hidden="true">→</em>
@@ -71,9 +73,12 @@ const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
   .hero-actions > a { display: flex; align-items: center; justify-content: space-between; min-width: 212px; height: 54px; padding: 0 18px; border: 1px solid var(--border); border-radius: 10px; background: color-mix(in oklab, var(--background) 42%, transparent); color: var(--foreground); backdrop-filter: blur(12px); font-size: 13px; font-weight: 700; text-decoration: none; transition: transform .25s, background .25s, color .25s, box-shadow .25s; }
   .hero-actions > a:first-child { border-color: transparent; background: linear-gradient(100deg, var(--primary), var(--accent)); color: var(--primary-foreground); box-shadow: 0 12px 30px color-mix(in oklab, var(--primary) 24%, transparent); }
   .hero-actions > a:hover { transform: translateY(-3px); background: var(--foreground); color: var(--background); }
+  .bot-motion-toggle { margin-top: 18px; min-height: 32px; padding: 5px 0; border: 0; background: none; color: var(--muted-foreground); font: 10px ui-monospace, SFMono-Regular, Menlo, monospace; cursor: pointer; }
+  .bot-motion-toggle:hover { color: var(--foreground); }
+  .bot-motion-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
 
-  .hero-card { position: absolute; z-index: 3; right: var(--website-content-edge); bottom: 12vh; width: min(390px, 32vw); overflow: hidden; border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent); border-radius: 16px; background: color-mix(in oklab, var(--card) 92%, transparent); color: var(--foreground); backdrop-filter: blur(22px); box-shadow: 0 30px 100px color-mix(in oklab, var(--primary) 22%, transparent); animation: v5-float 7s ease-in-out infinite; }
-  @keyframes v5-float { 0%, 100% { transform: translateY(0) rotate(.15deg); } 50% { transform: translateY(-12px) rotate(-.15deg); } }
+  .hero-card { position: absolute; z-index: 3; right: var(--website-content-edge); bottom: 12vh; width: min(390px, 32vw); overflow: hidden; border: 1px solid color-mix(in oklab, var(--accent) 24%, transparent); border-radius: 16px; background: color-mix(in oklab, var(--card) 92%, transparent); color: var(--foreground); backdrop-filter: blur(22px); box-shadow: 0 30px 100px color-mix(in oklab, var(--primary) 22%, transparent); }
+  .hero-card { overflow: visible; }
   .hero-card > header, .hero-card > footer { height: 46px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--border); font: 9px ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: .11em; }
   .hero-card > header span, .hero-card > footer span { display: flex; align-items: center; gap: 8px; }
   .hero-card > header span i, .hero-card > footer span i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); }
@@ -100,12 +105,12 @@ const tech = ["JS", "PYTHON", "RUST", "JAVA", "C++", "REACT", "NEXT.JS"];
     .hero-tech { right: 5vw; left: 5vw; }
   }
   @media (max-width: 800px) {
-    .v5-hero { min-height: 900px; align-items: flex-start; }
+    .v5-hero { min-height: 100svh; flex-direction: column; align-items: stretch; padding-bottom: 70px; }
     .hero-copy { width: auto; margin: 135px 22px 0; padding-top: 0; }
     .v5-hero h1 { font-size: 58px; }
     .hero-copy > p { width: 100%; font-size: 16px; }
     .hero-actions { width: 230px; flex-direction: column; align-items: stretch; }
-    .hero-card { right: 22px; bottom: 96px; left: 22px; width: auto; animation: none; }
+    .hero-card { position: relative; inset: auto; width: calc(100% - 44px); margin: 130px 22px 0; }
     .hero-tech { display: none; }
     .hero-grid { background-size: 54px 54px; }
   }

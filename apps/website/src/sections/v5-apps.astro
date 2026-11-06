@@ -244,6 +244,7 @@ const boardStyle = `--bh:${unit(boardBottom)};min-width:${Math.round(boardRight)
     </div>
   </div>
 
+  <div class="apps-crew-rail" aria-hidden="true"><span data-bot-helper="apps" data-bot-travel="90" style="--helper-left:24px;--helper-right:auto"></span></div>
   <div class="descent" data-descent>
     <script is:inline>
       (function (track) {
@@ -356,6 +357,8 @@ const boardStyle = `--bh:${unit(boardBottom)};min-width:${Math.round(boardRight)
   .section-head h2 { margin: 0; font-size: clamp(54px, 6.1vw, 96px); line-height: .92; letter-spacing: -.065em; font-weight: 650; }
   .section-head p { align-self: flex-end; width: 380px; margin: 0; color: var(--muted-foreground); font-size: 15px; line-height: 1.55; }
   .unified-head { padding-bottom: 40px; }
+  .section-head { position: relative; }
+  .apps-crew-rail { position: relative; height: 1px; margin: 70px var(--website-content-edge) 0; background: var(--border); }
   .unified-head p { width: 440px; }
   .apps :is(h2, h3, h4):lang(ja) { word-break: auto-phrase; }
   .apps:lang(ja) { line-break: strict; }

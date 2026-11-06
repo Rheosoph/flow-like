@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { User } from "oidc-client-ts";
+import { User, UserManager } from "oidc-client-ts";
 import { act, createElement, useEffect, useState } from "react";
 import { type Root, createRoot } from "react-dom/client";
 import { type AuthContextProps, useAuth } from "react-oidc-context";
@@ -13,7 +13,10 @@ interface ConfigRequest {
 
 const mocks = vi.hoisted(() => ({
 	backend: { userState: {}, teamState: {}, appState: {} },
-	profile: { id: "profile-a", hub: "api.flow-like.com", secure: true },
+	profile: { id: "profile-a", hub: "api.flow-like.com", secure: true } as
+		| { id: string; hub: string; secure: boolean }
+		| undefined,
+	nativeContext: undefined as { profileId: string; hub: string } | undefined,
 	configRequests: [] as ConfigRequest[],
 	invalidate: async () => undefined,
 	openUrl: vi.fn().mockResolvedValue(undefined),
@@ -29,6 +32,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@flow-like/flow-like-ui", () => ({
 	useBackend: () => mocks.backend,
 	useInvoke: () => ({ data: mocks.profile }),
+	useQuery: () => ({ data: mocks.nativeContext }),
 	useInvalidateInvoke: () => mocks.invalidate,
 	useInvalidateInfiniteInvoke: () => mocks.invalidate,
 }));
@@ -129,6 +133,7 @@ beforeEach(() => {
 		globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 	).IS_REACT_ACT_ENVIRONMENT = true;
 	mocks.profile = { id: "profile-a", hub: "api.flow-like.com", secure: true };
+	mocks.nativeContext = undefined;
 	mocks.configRequests = [];
 	mocks.openUrl.mockReset().mockResolvedValue(undefined);
 	mocks.signInLink = undefined;
@@ -189,6 +194,77 @@ describe("DesktopAuthProvider", () => {
 				iat: Math.floor(Date.now() / 1000),
 			},
 		});
+
+	test("enables native sign-in before a fresh install has any model profiles", async () => {
+		mocks.isTauri = true;
+		mocks.profile = undefined;
+		await render();
+		expect(mocks.configRequests).toHaveLength(0);
+		mocks.nativeContext = {
+			profileId: "__flow_like_onboarding__",
+			hub: "https://api.flow-like.com",
+		};
+		await render();
+		await answer(0, browserConfig());
+		expect(probe.auth?.settings.client_id).toBe("client-a");
+		expect(probe.auth?.isLoading).toBe(false);
+		await act(async () => probe.auth?.signinRedirect());
+		expect(mocks.invoke).toHaveBeenCalledWith("begin_login", {
+			profileId: "__flow_like_onboarding__",
+		});
+		expect(probe.auth?.isLoading).toBe(false);
+	});
+
+	test("keeps the onboarding session mounted until profile restoration explicitly completes", async () => {
+		mocks.isTauri = true;
+		mocks.profile = undefined;
+		mocks.nativeContext = {
+			profileId: "__flow_like_onboarding__",
+			hub: "https://onboarding-hub.test",
+		};
+		await render();
+		expect(mocks.configRequests[0].hub).toBe("https://onboarding-hub.test");
+		await answer(0, browserConfig());
+		mocks.nativeUser = storedUser().toStorageString();
+		await act(async () =>
+			mocks.listeners.get("native-auth-changed")?.({
+				payload: mocks.nativeContext,
+			}),
+		);
+		await flush();
+		expect(probe.auth?.isAuthenticated).toBe(true);
+		const mountedDuringRestore = probe.mounts;
+
+		mocks.profile = {
+			id: "restored-profile",
+			hub: "https://onboarding-hub.test",
+			secure: true,
+		};
+		await render();
+		// Background refetches can see the first restored profile before the rest
+		// have been saved. They must not cancel the restore by remounting its page.
+		expect(mocks.configRequests).toHaveLength(1);
+		expect(probe.mounts).toBe(mountedDuringRestore);
+		expect(probe.auth?.isAuthenticated).toBe(true);
+		expect(probe.auth?.user?.access_token).toBe("access-a");
+		expect(mocks.invoke).not.toHaveBeenCalledWith("native_auth_read", {
+			profileId: "restored-profile",
+			hub: "https://onboarding-hub.test",
+		});
+
+		mocks.nativeContext = {
+			profileId: "restored-profile",
+			hub: "https://onboarding-hub.test",
+		};
+		await render();
+		await answer(1, browserConfig());
+		expect(probe.auth?.isAuthenticated).toBe(true);
+		expect(mocks.invoke).toHaveBeenCalledWith("native_auth_read", {
+			profileId: "restored-profile",
+			hub: "https://onboarding-hub.test",
+		});
+		expect(mocks.toastError).not.toHaveBeenCalled();
+	});
 
 	test("reloads a completed native debug callback even when its change event was missed", async () => {
 		mocks.isTauri = true;
@@ -372,7 +448,7 @@ describe("DesktopAuthProvider", () => {
 		await render();
 		await answer(0, browserConfig());
 		expect(probe.auth?.user?.access_token).toBe("access-a");
-		mocks.profile = { ...mocks.profile, hub: "second-hub.test", secure: true };
+		mocks.profile = { id: "profile-a", hub: "second-hub.test", secure: true };
 		await render();
 		expect(probe.auth?.isAuthenticated).toBe(false);
 		expect(probe.auth?.user).toBeNull();
@@ -473,6 +549,9 @@ describe("DesktopAuthProvider", () => {
 		);
 		await act(async () => root.unmount());
 		root = createRoot(container);
+		vi.spyOn(UserManager.prototype, "signinSilent").mockRejectedValue(
+			new Error("network unreachable"),
+		);
 
 		const logError = vi.spyOn(console, "error").mockImplementation(() => {});
 		await render();
@@ -491,7 +570,7 @@ describe("DesktopAuthProvider", () => {
 		await render();
 		await answer(0, oidcConfig("client-a"));
 
-		mocks.profile = { ...mocks.profile, hub: "hub.example.com", secure: true };
+		mocks.profile = { id: "profile-a", hub: "hub.example.com", secure: true };
 		await render();
 		expect(mocks.configRequests[1]?.hub).toBe("hub.example.com");
 		await answer(1, oidcConfig("client-b"));
@@ -503,7 +582,7 @@ describe("DesktopAuthProvider", () => {
 
 	test("ignores a configuration answer for a hub that is no longer current", async () => {
 		await render();
-		mocks.profile = { ...mocks.profile, hub: "hub.example.com", secure: true };
+		mocks.profile = { id: "profile-a", hub: "hub.example.com", secure: true };
 		await render();
 
 		await answer(1, oidcConfig("client-b"));
@@ -518,7 +597,7 @@ describe("DesktopAuthProvider", () => {
 		await render();
 		await answer(0, oidcConfig("shared-client"));
 		const previousAuth = probe.auth;
-		mocks.profile = { ...mocks.profile, hub: "another-hub.test", secure: true };
+		mocks.profile = { id: "profile-a", hub: "another-hub.test", secure: true };
 		await render();
 		await answer(1, oidcConfig("shared-client"));
 		expect(probe.unmounts).toBe(1);

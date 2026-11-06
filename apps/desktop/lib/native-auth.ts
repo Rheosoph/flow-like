@@ -1,7 +1,7 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
-	User,
 	type StateStore,
+	User,
 	type UserManager,
 	type UserManagerSettings,
 } from "oidc-client-ts";
@@ -29,12 +29,30 @@ export class NativeUserStore implements StateStore {
 
 	bind(manager: UserManager): void {
 		this.tokenEndpoint = () => manager.metadataService.getTokenEndpoint();
+		const userKey = `user:${this.settings.authority}:${this.settings.client_id}`;
+		let loadedUser: string | null | undefined;
+		manager.getUser = async (raiseEvent = false) => {
+			const serialized = await this.get(userKey);
+			if (!serialized) {
+				loadedUser = null;
+				return null;
+			}
+			const user = User.fromStorageString(serialized);
+			// OIDC's default read rearms the expiry timer. Renewal also reads the
+			// user, so a failed request near expiry would retry every second.
+			if (raiseEvent || serialized !== loadedUser) {
+				loadedUser = serialized;
+				await manager.events.load(user, raiseEvent);
+			}
+			return user;
+		};
 		manager.signinRedirect = async () => {
 			await invoke<void>("begin_login", { profileId: this.profileId });
 		};
 		manager.signoutRedirect = async () => {
 			await invoke<void>("native_auth_logout", { profileId: this.profileId });
 			this.snapshot = await this.read();
+			loadedUser = null;
 			await manager.events.unload();
 		};
 		manager.signinSilent = async () => {
@@ -53,7 +71,10 @@ export class NativeUserStore implements StateStore {
 				const renewed = snapshot.user
 					? User.fromStorageString(snapshot.user)
 					: null;
-				if (renewed) await manager.events.load(renewed);
+				if (renewed) {
+					loadedUser = snapshot.user;
+					await manager.events.load(renewed);
+				}
 				return renewed;
 			} catch (error) {
 				if (error === "invalid_grant") {
