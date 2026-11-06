@@ -57,6 +57,13 @@ export function bindHubAuth(auth: AuthContextProps, hub: string): boolean {
 	return true;
 }
 
+/** The origin bound to these tokens, including while profile setup is pending. */
+export function hubAuthOrigin(
+	auth: AuthContextProps | null | undefined,
+): string | undefined {
+	return auth ? sessionFor(auth).hub : undefined;
+}
+
 export function authForHub(
 	profile: Partial<IProfile> | null | undefined,
 	auth?: AuthContextProps | null,

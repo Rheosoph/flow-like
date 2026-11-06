@@ -37,16 +37,26 @@ export function RowInspectorSheet({
 	onOpenChange: (open: boolean) => void;
 }>) {
 	const { t } = useTranslation("settings");
+	const copy = async (value: string, message: string) => {
+		try {
+			await navigator.clipboard.writeText(value);
+			toast.success(message);
+		} catch {
+			toast.error(t("copyFailed", "Could not copy to clipboard"));
+		}
+	};
 	const copyRow = () => {
 		if (!row) return;
-		void navigator.clipboard.writeText(JSON.stringify(row, null, 2));
-		toast.success("Copied row as JSON");
+		void copy(
+			JSON.stringify(row, null, 2),
+			t("copiedRowAsJson", "Copied row as JSON"),
+		);
 	};
 
 	return (
 		<Sheet open={row !== null} onOpenChange={onOpenChange}>
-			<SheetContent className="w-full gap-0 p-0 sm:max-w-md">
-				<SheetHeader className="border-b">
+			<SheetContent className="w-full gap-0 p-0 sm:max-w-2xl">
+				<SheetHeader className="shrink-0 border-b pr-12">
 					<SheetTitle>{t("rowDetails", "Row details")}</SheetTitle>
 					<SheetDescription>
 						{t("countColumns", {
@@ -64,7 +74,7 @@ export function RowInspectorSheet({
 						<Braces className="h-3.5 w-3.5" /> {t("copyAsJson", "Copy as JSON")}
 					</Button>
 				</SheetHeader>
-				<ScrollArea className="h-[calc(100%-8rem)]">
+				<ScrollArea className="min-h-0 flex-1">
 					<dl className="divide-y">
 						{row &&
 							columns.map((column) => {
@@ -73,7 +83,7 @@ export function RowInspectorSheet({
 								return (
 									<div
 										key={column.name}
-										className="group grid grid-cols-[1fr_auto] gap-2 px-4 py-2.5"
+										className="group grid grid-cols-[minmax(0,1fr)_auto] gap-2 px-4 py-4"
 									>
 										<div className="min-w-0">
 											<dt className="flex items-center gap-1.5 font-mono text-xs font-medium">
@@ -84,7 +94,7 @@ export function RowInspectorSheet({
 											</dt>
 											<dd
 												className={cn(
-													"mt-0.5 break-words font-mono text-sm",
+													"mt-2 min-w-0 break-words font-mono text-sm",
 													isNullish(value) && "italic text-muted-foreground/50",
 													kind === "number" && "tabular-nums",
 												)}
@@ -111,10 +121,12 @@ export function RowInspectorSheet({
 													name: column.name,
 												})}
 												onClick={() => {
-													void navigator.clipboard.writeText(
+													void copy(
 														cellToString(value),
+														t("copiedName", "Copied {{name}}", {
+															name: column.name,
+														}),
 													);
-													toast.success(`Copied ${column.name}`);
 												}}
 											>
 												<Copy className="h-3.5 w-3.5" />

@@ -14,7 +14,7 @@ export default {
 	"v5.hero.body":
 		"Apps, workflows, données et agents dans une seule plateforme gouvernée. Du premier prompt à tous les processus qui en découlent.",
 	"v5.hero.cta.platform": "Explorer la plateforme",
-	"v5.hero.cta.flowpilot": "Voir FlowPilot à l'œuvre",
+	"v5.hero.cta.flowpilot": "Découvrez votre équipe de bots",
 	"v5.hero.card.prompt":
 		"Prépare la réunion client de demain et gère les relances.",
 	"v5.hero.flow.email": "E-mail",
@@ -258,11 +258,65 @@ export default {
 		"Trois signaux d'expansion, un risque d'adoption et une voie claire vers le renouvellement.",
 	"v5.platform.pilot.openBriefing": "Ouvrir le briefing",
 
-	"v5.flowpilot.title.l1": "Un seul appel.",
-	"v5.flowpilot.title.em": "Toute votre entreprise",
-	"v5.flowpilot.title.l3": "en mouvement.",
+	"v5.flowpilot.title.l1": "Votre prochaine grande idée.",
+	"v5.flowpilot.title.em": "Sa petite équipe est prête.",
 	"v5.flowpilot.body":
-		"FlowPilot ne se contente pas d'accompagner votre travail. Il comprend les outils, les données, les permissions et les processus qui font tourner votre entreprise — le composer ci-dessous est bien réel.",
+		"Confiez les tâches répétitives à une équipe qui a du caractère. Créez des bots pour faire des recherches, exploiter vos données et prendre en charge les routines de votre choix. Vous fixez la mission. Ils se mettent au travail.",
+
+	"v5.bots.eyebrow": "BOTS + FLOWPILOT",
+	"v5.bots.cta": "Créez votre équipe",
+	"v5.bots.demo.label": "ATELIER DES BOTS / EXEMPLES ANIMÉS",
+	"v5.bots.demo.title": "Une petite équipe qui a du pain sur la planche.",
+	"v5.bots.demo.hint": "Choisissez une tâche et regardez l’équipe s’activer.",
+	"v5.bots.demo.pause": "Mettre les bots en pause",
+	"v5.bots.demo.resume": "Animer les bots",
+	"v5.bots.demo.working": "Au travail",
+	"v5.bots.demo.done": "Bien joué !",
+	"v5.bots.demo.result": "CE QUE VOUS POUVEZ CRÉER",
+	"v5.bots.role.scout": "Recherche",
+	"v5.bots.role.byte": "Données",
+	"v5.bots.role.flux": "FlowPilot",
+	"v5.bots.role.post": "E-mail",
+	"v5.bots.role.loop": "Routines",
+	"v5.bots.mission.research.label": "Explorer un sujet",
+	"v5.bots.mission.research.prompt": "Moins d’onglets. Plus de déclics.",
+	"v5.bots.mission.research.result":
+		"Des synthèses sourcées pour éclairer votre prochaine décision.",
+	"v5.bots.mission.research.scout": "Recherche de sources",
+	"v5.bots.mission.research.byte": "Comparaison des chiffres",
+	"v5.bots.mission.research.flux": "Création d’une app de recherche",
+	"v5.bots.mission.research.post": "Rédaction de la synthèse",
+	"v5.bots.mission.research.loop": "Planification d’un récapitulatif",
+	"v5.bots.mission.data.label": "Exploiter des données",
+	"v5.bots.mission.data.prompt":
+		"Faites de tous ces chiffres votre prochaine décision.",
+	"v5.bots.mission.data.result":
+		"Des analyses, des graphiques et des réponses utiles à partir de vos données.",
+	"v5.bots.mission.data.scout": "Recherche de contexte",
+	"v5.bots.mission.data.byte": "Exploration d’un jeu de données",
+	"v5.bots.mission.data.flux": "Connexion d’un tableau de bord",
+	"v5.bots.mission.data.post": "Préparation d’un compte rendu",
+	"v5.bots.mission.data.loop": "Suivi des exécutions d’apps",
+	"v5.bots.mission.build.label": "Créer une app",
+	"v5.bots.mission.build.prompt":
+		"Cette idée que vous remettez toujours à plus tard ? Confiez-la à Flux.",
+	"v5.bots.mission.build.result":
+		"Avec Flux, votre idée prend forme dans une app fonctionnelle et des workflows visuels.",
+	"v5.bots.mission.build.scout": "Étude des besoins",
+	"v5.bots.mission.build.byte": "Vérification des données d’exemple",
+	"v5.bots.mission.build.flux": "Création de votre app",
+	"v5.bots.mission.build.post": "Rédaction des notes de version",
+	"v5.bots.mission.build.loop": "Exécution d’un contrôle planifié",
+	"v5.bots.flux.label": "TOUJOURS FLOWPILOT. UN NOUVEAU VISAGE.",
+	"v5.bots.flux.title": "Voici Flux. Le premier allié de votre idée.",
+	"v5.bots.flux.body":
+		"Flux, c’est FlowPilot dans votre équipe de bots. Décrivez l’app qui vous manque. Flux dispose des outils pour créer son interface, connecter ses workflows et exploiter ses données. Un bug vous bloque ? Confiez-le-lui aussi.",
+	"v5.bots.flux.link": "Découvrir les possibilités de FlowPilot",
+	"v5.bots.own.title": "Votre équipe, vos choix.",
+	"v5.bots.own.body":
+		"Donnez à chaque bot une personnalité et les outils adaptés à sa mission. Choisissez son modèle, sa mémoire et les apps auxquelles il a accès. Faites-le tourner dans le cloud ou sur vos propres appareils.",
+	"v5.bots.own.note":
+		"Les outils disponibles dépendent de la configuration du bot. Les bots de bureau travaillent tant que l’app reste ouverte.",
 
 	"v5.control.eyebrow": "CONTRÔLE",
 	"v5.control.title.l1": "Avancez à la vitesse de l'IA.",

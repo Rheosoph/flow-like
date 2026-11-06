@@ -195,9 +195,11 @@ export function SavedQuerySidebar({
 		>
 			<div className="flex items-center justify-between gap-2 border-b p-3">
 				<div>
-					<h3 className="text-sm font-semibold">{t("queries", "Queries")}</h3>
+					<h3 className="text-sm font-semibold">
+						{t("savedQueries", "Saved queries")}
+					</h3>
 					<p className="text-[11px] text-muted-foreground">
-						{t("savedAmpViews", "Saved & views")}
+						{t("queriesAndViews", "Queries and views")}
 					</p>
 				</div>
 				<Button size="sm" onClick={onNew}>
@@ -249,9 +251,6 @@ export function SavedQuerySidebar({
 								)}
 							</p>
 						</div>
-						<Button variant="outline" size="sm" onClick={onNew}>
-							<Plus className="h-4 w-4" /> {t("newQuery", "New query")}
-						</Button>
 					</div>
 				) : filtered.length === 0 ? (
 					<p className="px-2 py-8 text-center text-xs text-muted-foreground">
@@ -271,7 +270,7 @@ export function SavedQuerySidebar({
 							onDuplicate={onDuplicate}
 						/>
 						<QueryGroup
-							title="Views"
+							title={t("views", "Views")}
 							icon={Layers}
 							items={views}
 							activeId={activeId}

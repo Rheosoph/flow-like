@@ -45,6 +45,9 @@ jobs:
         with:
           python-version: '3.12'
       - run: python .github/scripts/check_rust_toolchain.py
+      - name: Verify Windows dependency alignment
+        run: python .github/scripts/check_windows_alignment.py
+      - run: python -m unittest discover -s .github/scripts/tests -p 'test_windows_alignment.py'
       - run: python -m unittest discover -s .github/scripts/tests -p 'test*compiler*.py'
       - run: python -m unittest discover -s .github/scripts/tests -p 'test*rust_toolchain*.py'
 

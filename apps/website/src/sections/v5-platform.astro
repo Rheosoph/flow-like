@@ -47,6 +47,7 @@ const featuresJson = JSON.stringify(
       </header>
       <h2><span>{t("v5.platform.title.w1")}</span><span>{t("v5.platform.title.w2")}</span><span>{t("v5.platform.title.w3")}</span></h2>
       <nav>
+        <span data-bot-helper="platform" data-bot-travel="110" data-bot-scroll-scope="[data-v5-story]" aria-hidden="true" style="--helper-right:8px"></span>
         {features.map((f, i) => (
           <button class={i === 0 ? "active" : ""} data-nav={i} type="button"><i>{f.no}</i><span>{f.title}</span></button>
         ))}
@@ -108,7 +109,8 @@ const featuresJson = JSON.stringify(
   .story-top > [data-counter] { grid-column: 3; }
   .story-sticky > h2 { position: absolute; top: 100px; left: var(--story-gutter); display: grid; margin: 0; font-size: clamp(45px, 4.4vw, 72px); line-height: .88; letter-spacing: -.065em; }
   .story-sticky > h2 span:nth-child(2) { color: var(--muted-foreground); }
-  .story-sticky > nav { grid-column: 1; grid-row: 2; align-self: end; display: grid; margin-bottom: 18px; border-top: 1px solid var(--border); }
+  .story-sticky > nav { position: relative; grid-column: 1; grid-row: 2; align-self: end; display: grid; margin-bottom: 18px; border-top: 1px solid var(--border); }
+  .story-sticky > nav > [data-bot-helper] { width: 100px; height: 90px; }
   .story-sticky > nav button { height: 43px; display: grid; grid-template-columns: 27px 1fr; gap: 8px; align-items: center; padding: 0 6px; border: 0; border-bottom: 1px solid var(--border); background: transparent; color: var(--muted-foreground); text-align: left; cursor: pointer; transition: color .2s, padding .2s, background .2s; }
   .story-sticky > nav button i { font: 8px var(--mono); font-style: normal; }
   .story-sticky > nav button span { font-size: 11px; }
@@ -136,6 +138,10 @@ const featuresJson = JSON.stringify(
       --story-left: 18%;
       --story-right: 23%;
     }
+  }
+
+  @media (max-height: 779px) {
+    .story-sticky > nav > [data-bot-helper] { display: none; }
   }
 
   /* The sticky story is only useful when its complete stage can remain visible.

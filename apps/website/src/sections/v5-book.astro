@@ -84,19 +84,22 @@ const pdfFileName = `FlowBook-Open-Edition-${edition.year}.pdf`;
 				type="application/pdf"
 				aria-label={t("v5.book.aria")}
 			>
-				<div class="book-cover" lang={edition.language}>
-					<div class="book-cover__top">
-						<span>{edition.publisher}</span>
-						<b>{edition.editionLabel}</b>
-					</div>
-					<div class="book-cover__title">
-						<span>One executable Flow</span>
-						<h3>{edition.title}</h3>
-						<p>{edition.subtitle}</p>
-					</div>
-					<div class="book-cover__foot">
-						<span>PDF edition</span>
-						<b>{chapterLabel}</b>
+				<div class="book-object">
+					<span data-bot-helper="book" aria-hidden="true"></span>
+					<div class="book-cover" lang={edition.language}>
+						<div class="book-cover__top">
+							<span>{edition.publisher}</span>
+							<b>{edition.editionLabel}</b>
+						</div>
+						<div class="book-cover__title">
+							<span>One executable Flow</span>
+							<h3>{edition.title}</h3>
+							<p>{edition.subtitle}</p>
+						</div>
+						<div class="book-cover__foot">
+							<span>PDF edition</span>
+							<b>{chapterLabel}</b>
+						</div>
 					</div>
 				</div>
 				<div class="book-visual__meta">
@@ -318,12 +321,20 @@ const pdfFileName = `FlowBook-Open-Edition-${edition.year}.pdf`;
 	}
 
 	.book-visual {
+		position: relative;
 		width: min(calc(100% - 0.85rem), 31rem);
 		justify-self: center;
 		display: block;
 		perspective: 70rem;
 		text-decoration: none;
 		color: var(--book-ink);
+	}
+
+	.book-object {
+		position: relative;
+		transform: rotateY(-3deg) rotateX(1deg);
+		transform-origin: left center;
+		transition: transform 220ms ease;
 	}
 
 	.book-cover {
@@ -345,9 +356,7 @@ const pdfFileName = `FlowBook-Open-Edition-${edition.year}.pdf`;
 			-0.85rem 0 0 var(--book-orange),
 			0 3rem 6rem rgba(24, 23, 27, 0.25);
 		color: #f6f1ed;
-		transform: rotateY(-3deg) rotateX(1deg);
-		transform-origin: left center;
-		transition: transform 220ms ease, box-shadow 220ms ease;
+		transition: box-shadow 220ms ease;
 	}
 
 	.book-cover::before {
@@ -478,8 +487,11 @@ const pdfFileName = `FlowBook-Open-Edition-${edition.year}.pdf`;
 			color: var(--book-orange-dark);
 		}
 
-		.book-visual:hover .book-cover {
+		.book-visual:hover .book-object {
 			transform: rotateY(-1deg) rotateX(0) translateY(-0.4rem);
+		}
+
+		.book-visual:hover .book-cover {
 			box-shadow:
 				-0.7rem 0 0 #2a2627,
 				-0.85rem 0 0 var(--book-orange),
@@ -493,6 +505,7 @@ const pdfFileName = `FlowBook-Open-Edition-${edition.year}.pdf`;
 
 	@media (prefers-reduced-motion: reduce) {
 		.book-action,
+		.book-object,
 		.book-cover,
 		.book-guidance__links a,
 		.book-visual__meta :global(svg) {

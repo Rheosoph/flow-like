@@ -25,11 +25,14 @@ const items = [
   </div>
   <div>
     <p>{t("v5.control.body")}</p>
+    <div class="control-list">
+      <span data-bot-helper="control" data-bot-travel="60" aria-hidden="true"></span>
     <ul>
       {items.map((key, index) => (
         <li><span>0{index + 1}</span>{t(key)}</li>
       ))}
     </ul>
+    </div>
   </div>
 </section>
 
@@ -68,6 +71,7 @@ const items = [
     line-height: 1.5;
     color: var(--primary-foreground);
   }
+  .control-list { position: relative; margin-top: 120px; }
   .control-section ul {
     margin: 0;
     padding: 0;

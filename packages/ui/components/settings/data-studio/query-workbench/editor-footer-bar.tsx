@@ -1,8 +1,7 @@
 "use client";
 
 import { i18n as i18next, useTranslation } from "@flow-like/locales";
-import { Boxes, Cloud, Database, Timer } from "lucide-react";
-import { cn } from "../../../../lib/utils";
+import { Boxes, Cloud, Database } from "lucide-react";
 import type { QuerySurface } from "../../../../state/backend-state/query-state";
 import {
 	Select,
@@ -27,7 +26,7 @@ const LIMIT_OPTIONS = [
 	{ value: "none", label: "No limit" },
 ];
 
-function formatDuration(ms: number): string {
+export function formatDuration(ms: number): string {
 	if (ms < 1000)
 		return i18next.t("valMs", "{{val}} ms", { val: Math.round(ms) });
 	return `${(ms / 1000).toFixed(2)} s`;
@@ -41,7 +40,6 @@ export function EditorFooterBar({
 	cursor,
 	limit,
 	onLimitChange,
-	lastRun,
 	onParamClick,
 }: Readonly<{
 	surface: QuerySurface | "remote";
@@ -51,7 +49,7 @@ export function EditorFooterBar({
 	cursor?: { line: number; column: number };
 	limit: number | null;
 	onLimitChange: (limit: number | null) => void;
-	lastRun: LastRun | null;
+	lastRun?: LastRun | null;
 	onParamClick?: () => void;
 }>) {
 	const { t } = useTranslation("settings");
@@ -64,14 +62,14 @@ export function EditorFooterBar({
 				? (overlayName ?? "Ontology")
 				: "Native";
 	return (
-		<div className="flex h-7 shrink-0 items-center gap-3 overflow-hidden border-t bg-muted/30 px-3 text-[11px] text-muted-foreground">
-			<span className="flex shrink-0 items-center gap-1">
-				<SurfaceIcon className="h-3 w-3" />
-				{surfaceLabel}
+		<div className="flex h-8 shrink-0 items-center gap-2 overflow-hidden border-t bg-muted/30 px-3 text-[11px] text-muted-foreground">
+			<span className="flex min-w-0 items-center gap-1 truncate">
+				<SurfaceIcon className="h-3 w-3 shrink-0" />
+				<span className="truncate">{surfaceLabel}</span>
 			</span>
 
 			{params.length > 0 && (
-				<span className="flex shrink-0 items-center gap-1">
+				<span className="flex min-w-0 items-center gap-1 overflow-x-auto">
 					{params.map((name) => (
 						<button
 							key={name}
@@ -100,41 +98,29 @@ export function EditorFooterBar({
 					</span>
 				)}
 
-				<Select
-					value={limit === null ? "none" : String(limit)}
-					onValueChange={(value) =>
-						onLimitChange(value === "none" ? null : Number(value))
-					}
-				>
-					<SelectTrigger
-						className="h-6 gap-1 border-none bg-transparent px-1.5 text-[11px] shadow-none hover:bg-muted focus:ring-0"
-						aria-label={t("rowLimit", "Row limit")}
+				<span className="flex items-center gap-1">
+					<span>{t("limit", "Limit")}</span>
+					<Select
+						value={limit === null ? "none" : String(limit)}
+						onValueChange={(value) =>
+							onLimitChange(value === "none" ? null : Number(value))
+						}
 					>
-						<SelectValue />
-					</SelectTrigger>
-					<SelectContent>
-						{LIMIT_OPTIONS.map((option) => (
-							<SelectItem key={option.value} value={option.value}>
-								{option.label}
-							</SelectItem>
-						))}
-					</SelectContent>
-				</Select>
-
-				{lastRun && (
-					<span
-						className={cn(
-							"flex items-center gap-1 tabular-nums",
-							lastRun.ok ? "text-muted-foreground" : "text-destructive",
-						)}
-					>
-						<Timer className="h-3 w-3" />
-						{formatDuration(lastRun.durationMs)}
-						{lastRun.ok && (
-							<span>· {lastRun.rowCount.toLocaleString()} rows</span>
-						)}
-					</span>
-				)}
+						<SelectTrigger
+							className="h-6 gap-1 border-none bg-transparent px-1.5 text-[11px] shadow-none hover:bg-muted focus:ring-1"
+							aria-label={t("rowLimit", "Row limit")}
+						>
+							<SelectValue />
+						</SelectTrigger>
+						<SelectContent>
+							{LIMIT_OPTIONS.map((option) => (
+								<SelectItem key={option.value} value={option.value}>
+									{option.label}
+								</SelectItem>
+							))}
+						</SelectContent>
+					</Select>
+				</span>
 			</span>
 		</div>
 	);

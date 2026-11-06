@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslation } from "@flow-like/locales";
 import {
 	formatAbsoluteDateTime,
 	formatRelativeTime,
@@ -15,6 +16,7 @@ import {
 import { GeometryCell, GeometryDetails } from "../../../ui/geometry-cell";
 import { RelativeTime } from "../../../ui/relative-time";
 import { StorageFileCell } from "../../../ui/storage-file-cell";
+import { TextValueDetail } from "../../../ui/text-value-detail";
 import { UserIdentityCard, UserInlineTag } from "../../../ui/user-identity";
 import {
 	type ColumnKind,
@@ -29,6 +31,7 @@ interface ResultValueProps {
 	name: string;
 	appId?: string;
 	metadata?: Record<string, string>;
+	onInspect?: () => void;
 }
 
 /** One row-height reading of a result value, shared by every compact result surface. */
@@ -38,18 +41,36 @@ export function ResultCellValue({
 	name,
 	appId,
 	metadata,
+	onInspect,
 }: Readonly<ResultValueProps>) {
+	const { t } = useTranslation("settings");
+	const preview = (content: React.ReactNode) =>
+		onInspect ? (
+			<button
+				type="button"
+				onClick={onInspect}
+				aria-label={t("previewName", "Preview {{name}}", { name })}
+				className={cn(
+					"flex h-8 min-w-0 w-full items-center rounded-sm text-left hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+					kind === "number" && "justify-end text-right",
+				)}
+			>
+				{content}
+			</button>
+		) : (
+			content
+		);
 	if (isNullish(value)) {
-		return (
-			<span className="select-none italic text-muted-foreground/50">NULL</span>
+		return preview(
+			<span className="select-none italic text-muted-foreground/50">NULL</span>,
 		);
 	}
 	if (kind === "geometry")
 		return <GeometryCell value={value} metadata={metadata} />;
-	if (kind === "binary") return <BinaryCellPreview value={value} />;
+	if (kind === "binary") return preview(<BinaryCellPreview value={value} />);
 	if (kind === "boolean") {
 		const truthy = value === true || value === "true" || value === 1;
-		return (
+		return preview(
 			<span className="flex items-center gap-1.5">
 				<span
 					className={cn(
@@ -58,14 +79,14 @@ export function ResultCellValue({
 					)}
 				/>
 				{String(value)}
-			</span>
+			</span>,
 		);
 	}
 	if (kind === "number") {
-		return <span className="tabular-nums">{formatNumber(value)}</span>;
+		return preview(<span className="tabular-nums">{formatNumber(value)}</span>);
 	}
 	if (kind === "temporal") {
-		return <RelativeTime value={value} className="min-w-0 truncate" />;
+		return preview(<RelativeTime value={value} className="min-w-0 truncate" />);
 	}
 	// A user column still holds text for rows that name no account, so the tag is
 	// used only where the value is an id the directory could answer for.
@@ -79,7 +100,17 @@ export function ResultCellValue({
 		const file = resolveStorageFile(name, value, appId);
 		if (file && appId) return <StorageFileCell appId={appId} file={file} />;
 	}
-	return <span className="min-w-0 truncate">{cellToString(value)}</span>;
+	return preview(
+		<span className="min-w-0 truncate">
+			{value === "" ? (
+				<span className="italic text-muted-foreground/60">
+					{t("emptyString", "Empty string")}
+				</span>
+			) : (
+				cellToString(value)
+			)}
+		</span>,
+	);
 }
 
 /** A detail view has room for the exact instant, with the relative reading beside it. */
@@ -105,6 +136,8 @@ export function ResultDetailValue({
 	appId,
 	metadata,
 }: Readonly<ResultValueProps>) {
+	if (isNullish(value))
+		return <span className="italic text-muted-foreground">NULL</span>;
 	if (kind === "geometry")
 		return <GeometryDetails value={value} metadata={metadata} />;
 	if (kind === "binary")
@@ -117,6 +150,11 @@ export function ResultDetailValue({
 	const file = appId ? resolveStorageFile(name, value, appId) : null;
 	if (file && appId)
 		return <StorageFileCell appId={appId} file={file} className="-ml-2 mt-1" />;
+
+	if (typeof value === "string" && kind !== "number" && kind !== "boolean")
+		return <TextValueDetail text={value} className="font-sans" />;
+	if (typeof value === "object")
+		return <TextValueDetail text={cellToString(value)} className="font-sans" />;
 
 	return <>{cellToString(value)}</>;
 }
