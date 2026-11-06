@@ -1,0 +1,12 @@
+@import "../../packages/ui/global.css";
+@source "./main.tsx";
+
+html,
+body,
+#root {
+	min-height: 100%;
+	margin: 0;
+}
+body {
+	font-family: var(--font-sans);
+}

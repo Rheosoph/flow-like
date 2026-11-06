@@ -38,7 +38,7 @@
 				<string>flow-like</string>
 			</array>
 			<key>CFBundleURLName</key>
-			<string>flow-like</string>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER).flow-like</string>
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>

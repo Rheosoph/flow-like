@@ -1,16 +1,18 @@
 "use client";
 
-import { Trans, useTranslation } from "@flow-like/locales";
+import { useTranslation } from "@flow-like/locales";
 import {
 	Boxes,
+	Braces,
 	Cloud,
 	Database,
 	Loader2,
 	PanelLeftClose,
 	PanelLeftOpen,
 	Play,
+	Plus,
 	Save,
-	Sparkles,
+	SquareTerminal,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { type ImperativePanelHandle, Panel } from "react-resizable-panels";
@@ -19,7 +21,6 @@ import { useAppPermissions } from "../../../../hooks/use-app-permissions";
 import { useInvoke } from "../../../../hooks/use-invoke";
 import { RolePermissions } from "../../../../lib/permission/role-permission";
 import { asArray } from "../../../../lib/response-shape";
-import { cn } from "../../../../lib/utils";
 import { useBackend } from "../../../../state/backend-state";
 import type {
 	GraphOverlay,
@@ -45,6 +46,13 @@ import {
 	SelectValue,
 } from "../../../ui/select";
 import {
+	Sheet,
+	SheetContent,
+	SheetDescription,
+	SheetHeader,
+	SheetTitle,
+} from "../../../ui/sheet";
+import {
 	type SqlCatalogTable,
 	SqlEditor,
 	extractParams,
@@ -59,10 +67,11 @@ import {
 } from "../data-studio-panels";
 import { EditorFooterBar, type LastRun } from "./editor-footer-bar";
 import { QueryResultView } from "./query-result-view";
+import { QueryTablePicker } from "./query-table-picker";
 import { SaveQueryDialog } from "./save-query-dialog";
 import { SavedQuerySidebar } from "./saved-query-sidebar";
 
-const NARROW_WORKBENCH_PX = 560;
+const NARROW_WORKBENCH_PX = 720;
 const DEFAULT_LIMIT = 1000;
 const READ_DATA = [RolePermissions.ReadFiles, RolePermissions.ReadDatabase];
 const WRITE_DATA = [RolePermissions.WriteFiles, RolePermissions.WriteDatabase];
@@ -153,9 +162,7 @@ export function QueryWorkbench({
 }>) {
 	const { t } = useTranslation("settings");
 	const backend = useBackend();
-	// Running a query reads data; saving, renaming and deleting one writes it.
-	// Nothing in the toolbar distinguished the two, so an analyst who may only
-	// read got a live Save button that answered 403.
+	// Queries read data; saving and deleting them require write access.
 	const permissions = useAppPermissions(appId);
 	const canReadData = permissions.can(...READ_DATA);
 	const canWriteData = permissions.can(...WRITE_DATA);
@@ -175,6 +182,8 @@ export function QueryWorkbench({
 	);
 
 	const [sql, setSql] = useState("SELECT 1");
+	const [draftName, setDraftName] = useState<string | null>(null);
+	const [tablePickerOpen, setTablePickerOpen] = useState(false);
 	const [surface, setSurface] = useState<WorkbenchSurfaceKind>("native");
 	const [overlayId, setOverlayId] = useState<string | undefined>(undefined);
 	const [remoteImportId, setRemoteImportId] = useState<string | undefined>(
@@ -182,6 +191,7 @@ export function QueryWorkbench({
 	);
 	const [paramValues, setParamValues] = useState<Record<string, unknown>>({});
 	const [paramsValid, setParamsValid] = useState(true);
+	const [paramsOpen, setParamsOpen] = useState(false);
 	const [loadedParamSchema, setLoadedParamSchema] = useState<
 		Record<string, unknown> | undefined
 	>(undefined);
@@ -201,7 +211,33 @@ export function QueryWorkbench({
 	const [cursor, setCursor] = useState<{ line: number; column: number }>();
 	const [liveMessage, setLiveMessage] = useState("");
 
-	const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+	const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
+	const [narrow, setNarrow] = useState(false);
+	const [workbenchWidth, setWorkbenchWidth] = useState(1024);
+	const [libraryDrawerOpen, setLibraryDrawerOpen] = useState(false);
+	const workbenchRef = useRef<HTMLDivElement>(null);
+	const editorPanelRef = useRef<ImperativePanelHandle>(null);
+	const [resultsExpanded, setResultsExpanded] = useState(false);
+	const runIdRef = useRef(0);
+	const runningRef = useRef(false);
+	const [resultSignature, setResultSignature] = useState<string | null>(null);
+	const querySignature = JSON.stringify({
+		appId,
+		sql,
+		surface,
+		overlayId: surface === "overlay" ? overlayId : undefined,
+		remoteImportId: surface === "remote" ? remoteImportId : undefined,
+		paramValues,
+		limit,
+		userScoped,
+	});
+	const modified =
+		editing !== null &&
+		(sql !== editing.sql ||
+			surface !== editing.surface ||
+			(surface === "overlay" && overlayId !== editing.overlay_id) ||
+			limit !== (editing.default_limit ?? DEFAULT_LIMIT) ||
+			!jsonValuesEqual(vizConfig, editing.viz_config ?? { view: "table" }));
 	const sidebarPanelRef = useRef<ImperativePanelHandle>(null);
 	const paramFormRef = useRef<HTMLDivElement>(null);
 
@@ -216,8 +252,8 @@ export function QueryWorkbench({
 		[userScoped, userTables, projectTables],
 	);
 	const columnCacheKey = useCallback(
-		(table: string) => `${userScoped ? "user" : "project"}:${table}`,
-		[userScoped],
+		(table: string) => `${appId}:${userScoped ? "user" : "project"}:${table}`,
+		[appId, userScoped],
 	);
 
 	const paramSchema = useMemo(() => {
@@ -232,6 +268,19 @@ export function QueryWorkbench({
 		}
 		return { properties, required: paramNames };
 	}, [paramNames, loadedParamSchema]);
+
+	const paramsComplete = paramNames.every((name) => {
+		const value = paramValues[name];
+		const property = paramSchema.properties[name] as {
+			type?: string | string[];
+		};
+		const allowsNull = Array.isArray(property.type)
+			? property.type.includes("null")
+			: property.type === "null";
+		return (
+			value !== undefined && value !== "" && (value !== null || allowsNull)
+		);
+	});
 
 	// Drop values for parameters no longer present in the SQL.
 	useEffect(() => {
@@ -342,7 +391,17 @@ export function QueryWorkbench({
 	]);
 
 	const runQuery = useCallback(async () => {
-		if (!sql.trim() || !canReadData) return;
+		if (
+			!sql.trim() ||
+			!canReadData ||
+			runningRef.current ||
+			(surface === "overlay" && !overlayId) ||
+			(surface === "remote" && !remoteImportId) ||
+			(paramNames.length > 0 && (!paramsValid || !paramsComplete))
+		)
+			return;
+		const runId = ++runIdRef.current;
+		runningRef.current = true;
 		setRunning(true);
 		setRunError(null);
 		setLiveMessage("Running query…");
@@ -369,14 +428,19 @@ export function QueryWorkbench({
 					userScoped,
 				);
 			}
+			if (runId !== runIdRef.current) return;
 			setResult(value);
+			setResultSignature(querySignature);
 			setLastRun({
 				durationMs: performance.now() - startedAt,
 				rowCount: value.row_count,
 				ok: true,
 			});
-			setLiveMessage(`${value.row_count} rows returned`);
+			setLiveMessage(
+				`${value.row_count} ${value.row_count === 1 ? "row" : "rows"} returned`,
+			);
 		} catch (error) {
+			if (runId !== runIdRef.current) return;
 			setRunError(
 				error instanceof Error
 					? error.message
@@ -390,7 +454,10 @@ export function QueryWorkbench({
 			});
 			setLiveMessage("Query failed");
 		} finally {
-			setRunning(false);
+			if (runId === runIdRef.current) {
+				runningRef.current = false;
+				setRunning(false);
+			}
 		}
 	}, [
 		appId,
@@ -401,6 +468,10 @@ export function QueryWorkbench({
 		overlayId,
 		remoteImportId,
 		paramValues,
+		paramNames.length,
+		paramsValid,
+		paramsComplete,
+		querySignature,
 		sql,
 		surface,
 		t,
@@ -408,36 +479,54 @@ export function QueryWorkbench({
 	]);
 
 	const loadSavedQuery = useCallback((query: SavedQuery) => {
+		runIdRef.current++;
+		runningRef.current = false;
+		setRunning(false);
+		setLibraryDrawerOpen(false);
+		editorPanelRef.current?.expand();
 		setEditing(query);
 		setSql(query.sql);
 		setSurface(query.surface);
 		setOverlayId(query.overlay_id);
 		setLoadedParamSchema(query.param_schema);
 		setParamValues({});
+		setParamsValid(true);
+		setParamsOpen(false);
 		setVizConfig(query.viz_config ?? { view: "table" });
 		setLimit(query.default_limit ?? DEFAULT_LIMIT);
 		setResult(null);
 		setRunError(null);
 		setLastRun(null);
+		setLiveMessage("");
 	}, []);
 
 	const startNewQuery = useCallback(() => {
+		setDraftName(null);
+		runIdRef.current++;
+		runningRef.current = false;
+		setRunning(false);
+		setLibraryDrawerOpen(false);
+		editorPanelRef.current?.expand();
 		setEditing(null);
 		setSql("SELECT 1");
 		setLoadedParamSchema(undefined);
 		setParamValues({});
+		setParamsValid(true);
+		setParamsOpen(false);
 		setVizConfig({ view: "table" });
 		setLimit(DEFAULT_LIMIT);
 		setResult(null);
 		setRunError(null);
 		setLastRun(null);
+		setLiveMessage("");
 	}, []);
-	const savedQueryScopeRef = useRef(userScoped);
+	const queryScope = `${appId}:${userScoped}`;
+	const savedQueryScopeRef = useRef(queryScope);
 	useEffect(() => {
-		if (savedQueryScopeRef.current === userScoped) return;
-		savedQueryScopeRef.current = userScoped;
+		if (savedQueryScopeRef.current === queryScope) return;
+		savedQueryScopeRef.current = queryScope;
 		startNewQuery();
-	}, [startNewQuery, userScoped]);
+	}, [startNewQuery, queryScope]);
 	useEffect(() => {
 		if (surface !== "overlay") return;
 		if (overlayId && ontologies.some((overlay) => overlay.id === overlayId)) {
@@ -445,6 +534,16 @@ export function QueryWorkbench({
 		}
 		setOverlayId(ontologies[0]?.id);
 	}, [ontologies, overlayId, surface]);
+
+	useEffect(() => {
+		if (surface !== "remote") return;
+		if (
+			remoteImportId &&
+			remoteImports.some((item) => item.id === remoteImportId)
+		)
+			return;
+		setRemoteImportId(remoteImports[0]?.id);
+	}, [remoteImports, remoteImportId, surface]);
 
 	const deleteSavedQuery = useCallback(
 		async (query: SavedQuery) => {
@@ -578,7 +677,7 @@ export function QueryWorkbench({
 					? t("selectAnOntology", "Select an ontology")
 					: surface === "remote" && !remoteImportId
 						? t("selectARemoteOntology", "Select a remote ontology")
-						: paramNames.length > 0 && !paramsValid
+						: paramNames.length > 0 && (!paramsValid || !paramsComplete)
 							? t("fixParameterValues", "Fix parameter values")
 							: null;
 	const runDisabled = disabledReason !== null;
@@ -602,31 +701,55 @@ export function QueryWorkbench({
 		toast.error(writeDeniedMessage);
 	}, [writeDeniedMessage]);
 
-	const narrowCheckedRef = useRef(false);
-	const collapseSidebarWhenNarrow = useCallback(
-		(root: HTMLDivElement | null) => {
-			if (!root || narrowCheckedRef.current) return;
-			narrowCheckedRef.current = true;
-			if (root.clientWidth >= NARROW_WORKBENCH_PX) return;
-			requestAnimationFrame(() => sidebarPanelRef.current?.collapse());
+	useEffect(() => {
+		const root = workbenchRef.current;
+		if (!root) return;
+		const observer = new ResizeObserver(([entry]) => {
+			const isNarrow = entry.contentRect.width < NARROW_WORKBENCH_PX;
+			setWorkbenchWidth(entry.contentRect.width || 1024);
+			setNarrow(isNarrow);
+			if (isNarrow) sidebarPanelRef.current?.collapse();
+		});
+		observer.observe(root);
+		return () => observer.disconnect();
+	}, []);
+
+	useEffect(
+		() => () => {
+			runIdRef.current++;
 		},
 		[],
 	);
 
 	const toggleSidebar = useCallback(() => {
+		if (narrow) {
+			setLibraryDrawerOpen(true);
+			return;
+		}
 		const panel = sidebarPanelRef.current;
+		if (!panel) return;
+		if (panel.isCollapsed()) panel.expand();
+		else panel.collapse();
+	}, [narrow]);
+
+	const toggleResults = useCallback(() => {
+		const panel = editorPanelRef.current;
 		if (!panel) return;
 		if (panel.isCollapsed()) panel.expand();
 		else panel.collapse();
 	}, []);
 
 	const focusParamForm = useCallback(() => {
+		if (narrow) {
+			setParamsOpen(true);
+			return;
+		}
 		const el = paramFormRef.current?.querySelector<HTMLElement>(
 			"input, select, textarea, button",
 		);
 		el?.focus();
 		el?.scrollIntoView({ block: "nearest" });
-	}, []);
+	}, [narrow]);
 
 	const handleKeyDown = useCallback(
 		(event: React.KeyboardEvent) => {
@@ -658,10 +781,56 @@ export function QueryWorkbench({
 		);
 	}
 
+	const library = (
+		<div className="flex h-full min-h-0 flex-col">
+			{!canWriteData && (
+				<PermissionNotice
+					tone="readOnly"
+					className="m-2 mb-0"
+					title={t("savedQueriesAreReadonly", "Saved queries are read-only")}
+					description={writeDeniedMessage}
+					missing={WRITE_DATA}
+				/>
+			)}
+			<div className="min-h-0 flex-1">
+				<SavedQuerySidebar
+					queries={savedQueries}
+					activeId={editing?.id}
+					loading={savedQueriesQuery.isLoading}
+					onSelect={loadSavedQuery}
+					onNew={startNewQuery}
+					onDelete={canWriteData ? deleteSavedQuery : denyWrite}
+					onDuplicate={
+						canWriteData
+							? async (query) => {
+									await backend.queryState.createSavedQuery(
+										appId,
+										{
+											name: `${query.name} copy`,
+											description: query.description,
+											kind: query.kind,
+											surface: query.surface,
+											overlay_id: query.overlay_id,
+											sql: query.sql,
+											param_schema: query.param_schema,
+											viz_config: query.viz_config,
+											default_limit: query.default_limit,
+										},
+										userScoped,
+									);
+									await savedQueriesQuery.refetch();
+								}
+							: denyWrite
+					}
+				/>
+			</div>
+		</div>
+	);
+
 	return (
 		<div
-			ref={collapseSidebarWhenNarrow}
-			className="flex h-full min-h-0 flex-col overflow-hidden"
+			ref={workbenchRef}
+			className="@container/workbench flex h-full min-h-0 flex-col overflow-hidden rounded-lg border bg-background"
 			onKeyDown={handleKeyDown}
 		>
 			<output className="sr-only" aria-live="polite">
@@ -670,7 +839,7 @@ export function QueryWorkbench({
 
 			<ResizablePanelGroup
 				direction="horizontal"
-				autoSaveId="qw-h"
+				autoSaveId="qw-library-v2"
 				className="min-h-0 flex-1"
 			>
 				<Panel
@@ -679,65 +848,20 @@ export function QueryWorkbench({
 					ref={sidebarPanelRef}
 					collapsible
 					collapsedSize={0}
-					defaultSize={18}
-					minSize={14}
-					maxSize={30}
+					defaultSize={0}
+					minSize={Math.min(35, (220 / workbenchWidth) * 100)}
+					maxSize={35}
 					onCollapse={() => setSidebarCollapsed(true)}
 					onExpand={() => setSidebarCollapsed(false)}
 					className="min-w-0"
 				>
-					{!sidebarCollapsed && (
-						<div className="flex h-full min-h-0 flex-col">
-							{!canWriteData && (
-								<PermissionNotice
-									tone="readOnly"
-									className="m-2 mb-0"
-									title={t(
-										"savedQueriesAreReadonly",
-										"Saved queries are read-only",
-									)}
-									description={writeDeniedMessage}
-									missing={WRITE_DATA}
-								/>
-							)}
-							<div className="min-h-0 flex-1">
-								<SavedQuerySidebar
-									queries={savedQueries}
-									activeId={editing?.id}
-									loading={savedQueriesQuery.isLoading}
-									onSelect={loadSavedQuery}
-									onNew={startNewQuery}
-									onDelete={canWriteData ? deleteSavedQuery : denyWrite}
-									onDuplicate={
-										canWriteData
-											? async (query) => {
-													await backend.queryState.createSavedQuery(
-														appId,
-														{
-															name: `${query.name} copy`,
-															description: query.description,
-															kind: query.kind,
-															surface: query.surface,
-															overlay_id: query.overlay_id,
-															sql: query.sql,
-															param_schema: query.param_schema,
-															viz_config: query.viz_config,
-															default_limit: query.default_limit,
-														},
-														userScoped,
-													);
-													await savedQueriesQuery.refetch();
-												}
-											: denyWrite
-									}
-								/>
-							</div>
-						</div>
-					)}
+					{!sidebarCollapsed && library}
 				</Panel>
 
 				<ResizableHandle
-					withHandle
+					disabled={narrow}
+					withHandle={!sidebarCollapsed}
+					className={sidebarCollapsed ? "w-0" : undefined}
 					aria-label={t(
 						"resizeSavedqueriesSidebar",
 						"Resize saved-queries sidebar",
@@ -746,161 +870,73 @@ export function QueryWorkbench({
 
 				<Panel id="qw-main" order={2} minSize={40} className="min-w-0">
 					<section className="flex h-full min-h-0 min-w-0 flex-col">
-						<div className="flex min-h-12 flex-wrap items-center gap-2 border-b bg-muted/20 px-3 py-1.5">
+						<header className="flex min-h-14 shrink-0 flex-wrap items-center gap-2 border-b px-3 py-2">
 							<Button
 								variant="ghost"
-								size="icon"
-								className="h-8 w-8 shrink-0"
+								size="sm"
+								className="h-8 gap-1.5 px-2 text-muted-foreground"
 								onClick={toggleSidebar}
-								aria-expanded={!sidebarCollapsed}
-								aria-controls="qw-sidebar"
-								aria-label={
-									sidebarCollapsed
-										? t("showSavedQueries", "Show saved queries")
-										: t("hideSavedQueries", "Hide saved queries")
-								}
+								aria-expanded={narrow ? libraryDrawerOpen : !sidebarCollapsed}
+								aria-label={t("toggleSavedQueries", "Toggle saved queries")}
 							>
 								{sidebarCollapsed ? (
 									<PanelLeftOpen className="h-4 w-4" />
 								) : (
 									<PanelLeftClose className="h-4 w-4" />
 								)}
-							</Button>
-
-							<div className="flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
-								<button
-									type="button"
-									aria-pressed={surface === "native"}
-									aria-label={t("queryNativeTables", "Query native tables")}
-									onClick={() => setSurface("native")}
-									className={cn(
-										"flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-										surface === "native"
-											? "bg-background text-foreground shadow-sm"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									<Database className="h-3.5 w-3.5" /> {t("native", "Native")}
-								</button>
-								<button
-									type="button"
-									aria-pressed={surface === "overlay"}
-									aria-label={t("queryOntology", "Query ontology")}
-									disabled={ontologies.length === 0}
-									onClick={() => {
-										setSurface("overlay");
-										if (!overlayId) setOverlayId(ontologies[0]?.id);
-									}}
-									className={cn(
-										"flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-										surface === "overlay"
-											? "bg-background text-foreground shadow-sm"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									<Boxes className="h-3.5 w-3.5" /> {t("ontology", "Ontology")}
-								</button>
-								<button
-									type="button"
-									aria-pressed={surface === "remote"}
-									aria-label={t("queryRemoteOntology", "Query remote ontology")}
-									disabled={remoteImports.length === 0}
-									onClick={() => {
-										setSurface("remote");
-										if (!remoteImportId)
-											setRemoteImportId(remoteImports[0]?.id);
-									}}
-									className={cn(
-										"flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50",
-										surface === "remote"
-											? "bg-background text-foreground shadow-sm"
-											: "text-muted-foreground hover:text-foreground",
-									)}
-								>
-									<Cloud className="h-3.5 w-3.5" /> {t("remote", "Remote")}
-								</button>
-							</div>
-
-							{surface !== "remote" && (
-								<Select
-									value={userScoped ? "user" : "project"}
-									onValueChange={(value) => onScopeChange(value === "user")}
-								>
-									<SelectTrigger
-										className="h-8 w-32"
-										aria-label={t("databaseScope", "Database scope")}
-									>
-										<SelectValue />
-									</SelectTrigger>
-									<SelectContent>
-										<SelectItem value="project">
-											{t("project", "Project")}
-										</SelectItem>
-										<SelectItem value="user">
-											{t("personal", "Personal")}
-										</SelectItem>
-									</SelectContent>
-								</Select>
-							)}
-
-							{surface === "overlay" && (
-								<Select value={overlayId} onValueChange={setOverlayId}>
-									<SelectTrigger className="h-8 w-44" aria-label="Ontology">
-										<SelectValue
-											placeholder={t("selectOntology", "Select ontology")}
-										/>
-									</SelectTrigger>
-									<SelectContent>
-										{ontologies.map((overlay) => (
-											<SelectItem key={overlay.id} value={overlay.id}>
-												{overlay.name}
-											</SelectItem>
-										))}
-									</SelectContent>
-								</Select>
-							)}
-
-							{surface === "remote" && (
-								<>
-									<Select
-										value={remoteImportId}
-										onValueChange={setRemoteImportId}
-									>
-										<SelectTrigger
-											className="h-8 w-52"
-											aria-label={t("remoteOntology", "Remote ontology")}
-										>
-											<SelectValue
-												placeholder={t(
-													"selectRemoteOntology",
-													"Select remote ontology",
-												)}
-											/>
-										</SelectTrigger>
-										<SelectContent>
-											{remoteImports.map((imported) => (
-												<SelectItem key={imported.id} value={imported.id}>
-													{imported.contract.name}
-													{" · "}
-													{resolveSourceName?.(imported.target_app_id) ??
-														imported.target_app_id}
-												</SelectItem>
-											))}
-										</SelectContent>
-									</Select>
-									<Badge variant="outline" className="hidden gap-1 @xl/ds:flex">
-										<Cloud className="h-3 w-3" /> {t("readonly", "Read-only")}
-									</Badge>
-								</>
-							)}
-
-							<div className="ml-auto flex items-center gap-2">
-								{editing && (
-									<Badge variant="secondary" className="gap-1 text-xs">
-										<Sparkles className="h-3 w-3" />
-										<span className="max-w-40 truncate">{editing.name}</span>
-									</Badge>
+								<span className="hidden @lg/workbench:inline">
+									{t("savedQueries", "Saved queries")}
+								</span>
+								<span className="@lg/workbench:hidden">
+									{t("saved", "Saved")}
+								</span>
+								{savedQueries.length > 0 && (
+									<span className="text-[10px] tabular-nums">
+										{savedQueries.length}
+									</span>
 								)}
+							</Button>
+							<div className="order-first w-full min-w-0 @lg/workbench:order-none @lg/workbench:w-auto @lg/workbench:flex-1 @lg/workbench:border-l @lg/workbench:pl-3">
+								<div className="flex min-w-0 items-center gap-2">
+									<SquareTerminal className="hidden h-4 w-4 shrink-0 text-muted-foreground @lg/workbench:block" />
+									<h3
+										className="truncate text-sm font-semibold"
+										title={editing?.name}
+									>
+										{editing?.name ??
+											draftName ??
+											t("untitledQuery", "Untitled query")}
+									</h3>
+									{!editing && (
+										<span className="rounded border bg-muted/40 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+											{t("draft", "Draft")}
+										</span>
+									)}
+									{modified && (
+										<span
+											className="h-1.5 w-1.5 shrink-0 rounded-full bg-amber-500"
+											title={t("unsavedChanges", "Unsaved changes")}
+										>
+											<span className="sr-only">
+												{t("unsavedChanges", "Unsaved changes")}
+											</span>
+										</span>
+									)}
+								</div>
+							</div>
+							<div className="ml-auto flex shrink-0 items-center gap-1.5">
+								<Button
+									variant="ghost"
+									size="sm"
+									className="h-8 gap-1 px-2"
+									onClick={startNewQuery}
+									aria-label={t("newQuery", "New query")}
+								>
+									<Plus className="h-4 w-4" />
+									<span className="hidden @xl/workbench:inline">
+										{t("new", "New")}
+									</span>
+								</Button>
 								<Button
 									variant="outline"
 									size="sm"
@@ -925,12 +961,12 @@ export function QueryWorkbench({
 												) : (
 													<Play className="h-4 w-4" />
 												)}
-												<Trans i18nKey="runKbdClassnameml05HiddenRoundedBorderBorderprimaryforeground30Bgprimaryforeground10Px1Text10pxFontmediumSminlineKbd">
-													Run
-													<kbd className="ml-0.5 hidden rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1 text-[10px] font-medium @xl/ds:inline">
-														⌘↵
-													</kbd>
-												</Trans>
+												{running
+													? t("runningQuery", "Running…")
+													: t("run", "Run")}
+												<kbd className="ml-1 hidden rounded border border-primary-foreground/30 px-1 text-[10px] @2xl/workbench:inline">
+													⌘↵
+												</kbd>
 											</Button>
 										</span>
 									</TooltipTrigger>
@@ -939,33 +975,207 @@ export function QueryWorkbench({
 									</TooltipContent>
 								</Tooltip>
 							</div>
-						</div>
+						</header>
 
 						<ResizablePanelGroup
 							direction="vertical"
-							autoSaveId="qw-v"
+							autoSaveId="qw-layout-v2"
 							className="min-h-0 flex-1"
 						>
-							<Panel id="qw-editor" order={1} defaultSize={45} minSize={20}>
+							<Panel
+								id="qw-editor"
+								order={1}
+								ref={editorPanelRef}
+								collapsible
+								collapsedSize={0}
+								defaultSize={36}
+								minSize={25}
+								onCollapse={() => setResultsExpanded(true)}
+								onExpand={() => setResultsExpanded(false)}
+							>
 								<div className="flex h-full min-h-0 flex-col">
+									<div className="flex shrink-0 flex-wrap items-center gap-2 border-b bg-muted/20 px-3 py-2">
+										<span className="text-[11px] font-medium text-muted-foreground">
+											{t("source", "Source")}
+										</span>
+										<Select
+											value={surface}
+											onValueChange={(value) => {
+												setSurface(value as WorkbenchSurfaceKind);
+												if (value === "overlay" && !overlayId)
+													setOverlayId(ontologies[0]?.id);
+												if (value === "remote" && !remoteImportId)
+													setRemoteImportId(remoteImports[0]?.id);
+											}}
+										>
+											<SelectTrigger
+												className="h-8 w-40 text-xs"
+												aria-label={t("querySource", "Query source")}
+											>
+												<SelectValue />
+											</SelectTrigger>
+											<SelectContent>
+												<SelectItem value="native">
+													<span className="flex items-center gap-2">
+														<Database className="h-3.5 w-3.5" />
+														{t("nativeTables", "Native tables")}
+													</span>
+												</SelectItem>
+												<SelectItem
+													value="overlay"
+													disabled={ontologies.length === 0}
+												>
+													<span className="flex items-center gap-2">
+														<Boxes className="h-3.5 w-3.5" />
+														{t("ontology", "Ontology")}
+													</span>
+												</SelectItem>
+												<SelectItem
+													value="remote"
+													disabled={remoteImports.length === 0}
+												>
+													<span className="flex items-center gap-2">
+														<Cloud className="h-3.5 w-3.5" />
+														{t("remoteOntology", "Remote ontology")}
+													</span>
+												</SelectItem>
+											</SelectContent>
+										</Select>
+										{surface !== "remote" && (
+											<Select
+												value={userScoped ? "user" : "project"}
+												onValueChange={(value) =>
+													onScopeChange(value === "user")
+												}
+											>
+												<SelectTrigger
+													className="h-8 w-24 text-xs"
+													aria-label={t("databaseScope", "Database scope")}
+												>
+													<SelectValue />
+												</SelectTrigger>
+												<SelectContent>
+													<SelectItem value="project">
+														{t("project", "Project")}
+													</SelectItem>
+													<SelectItem value="user">
+														{t("personal", "Personal")}
+													</SelectItem>
+												</SelectContent>
+											</Select>
+										)}
+
+										{surface === "overlay" && (
+											<Select value={overlayId} onValueChange={setOverlayId}>
+												<SelectTrigger
+													className="h-8 w-44"
+													aria-label="Ontology"
+												>
+													<SelectValue
+														placeholder={t("selectOntology", "Select ontology")}
+													/>
+												</SelectTrigger>
+												<SelectContent>
+													{ontologies.map((overlay) => (
+														<SelectItem key={overlay.id} value={overlay.id}>
+															{overlay.name}
+														</SelectItem>
+													))}
+												</SelectContent>
+											</Select>
+										)}
+
+										{surface === "remote" && (
+											<>
+												<Select
+													value={remoteImportId}
+													onValueChange={setRemoteImportId}
+												>
+													<SelectTrigger
+														className="h-8 w-52"
+														aria-label={t("remoteOntology", "Remote ontology")}
+													>
+														<SelectValue
+															placeholder={t(
+																"selectRemoteOntology",
+																"Select remote ontology",
+															)}
+														/>
+													</SelectTrigger>
+													<SelectContent>
+														{remoteImports.map((imported) => (
+															<SelectItem key={imported.id} value={imported.id}>
+																{imported.contract.name}
+																{" · "}
+																{resolveSourceName?.(imported.target_app_id) ??
+																	imported.target_app_id}
+															</SelectItem>
+														))}
+													</SelectContent>
+												</Select>
+												<Badge
+													variant="outline"
+													className="hidden gap-1 @xl/ds:flex"
+												>
+													<Cloud className="h-3 w-3" />{" "}
+													{t("readonly", "Read-only")}
+												</Badge>
+											</>
+										)}
+										{paramNames.length > 0 && narrow && (
+											<Button
+												variant="outline"
+												size="sm"
+												className="h-8 gap-1.5 text-xs"
+												onClick={() => setParamsOpen(true)}
+											>
+												<Braces className="h-3.5 w-3.5" />
+												{t("parameters", "Parameters")} ({paramNames.length})
+												{!paramsComplete && (
+													<span className="h-1.5 w-1.5 rounded-full bg-amber-500" />
+												)}
+											</Button>
+										)}
+										<QueryTablePicker
+											tables={catalog.tables}
+											views={catalog.views}
+											open={tablePickerOpen}
+											onOpenChange={setTablePickerOpen}
+											className="ml-auto"
+											onSelectTable={(name) => {
+												startNewQuery();
+												setDraftName(name);
+												setSql(
+													`SELECT *\nFROM "${name.replaceAll('"', '""')}"`,
+												);
+											}}
+										/>
+									</div>
 									<div className="flex min-h-0 flex-1">
 										<div className="min-h-0 min-w-0 flex-1">
 											<SqlEditor
 												value={sql}
 												onChange={setSql}
 												catalog={catalog}
-												onRun={() => void runQuery()}
+												onRun={() => {
+													if (!runDisabled) void runQuery();
+												}}
 												onCursorChange={setCursor}
 											/>
 										</div>
-										{paramNames.length > 0 && (
+										{paramNames.length > 0 && !narrow && (
 											<div
 												ref={paramFormRef}
-												className="w-72 shrink-0 overflow-y-auto border-l p-3"
+												className="w-64 shrink-0 overflow-y-auto border-l p-3"
 											>
 												<OntologyActionParameterForm
+													key={`${editing?.id ?? "draft"}:${paramNames.join(",")}`}
 													actionId="workbench-query"
 													schema={paramSchema}
+													description={t(
+														"queryParameterFormHint",
+														"Fill in the parameters referenced in your SQL.",
+													)}
 													parameters={paramValues}
 													disabled={running}
 													onChange={setParamValues}
@@ -988,28 +1198,40 @@ export function QueryWorkbench({
 										cursor={cursor}
 										limit={limit}
 										onLimitChange={setLimit}
-										lastRun={lastRun}
 										onParamClick={focusParamForm}
 									/>
 								</div>
 							</Panel>
 
 							<ResizableHandle
-								withHandle
+								withHandle={!resultsExpanded}
 								aria-label={t(
 									"resizeEditorAndResults",
 									"Resize editor and results",
 								)}
 							/>
 
-							<Panel id="qw-results" order={2} minSize={20}>
+							<Panel id="qw-results" order={2} minSize={30}>
 								<QueryResultView
 									appId={appId}
 									result={result}
+									lastRun={lastRun}
+									stale={result !== null && resultSignature !== querySignature}
+									resultsExpanded={resultsExpanded}
+									onToggleResultsExpanded={toggleResults}
+									runDisabled={runDisabled}
 									loading={running}
 									error={runError}
 									vizConfig={vizConfig}
 									onVizConfigChange={setVizConfig}
+									onChooseTable={
+										catalog.tables.length + catalog.views.length > 0
+											? () => {
+													editorPanelRef.current?.expand();
+													setTablePickerOpen(true);
+												}
+											: undefined
+									}
 									onRun={() => void runQuery()}
 								/>
 							</Panel>
@@ -1017,6 +1239,58 @@ export function QueryWorkbench({
 					</section>
 				</Panel>
 			</ResizablePanelGroup>
+
+			<Sheet open={libraryDrawerOpen} onOpenChange={setLibraryDrawerOpen}>
+				<SheetContent
+					side="left"
+					className="w-[min(360px,90vw)] gap-0 p-0 pt-10"
+				>
+					<SheetHeader className="sr-only">
+						<SheetTitle>{t("savedQueries", "Saved queries")}</SheetTitle>
+						<SheetDescription>
+							{t(
+								"chooseSavedQuery",
+								"Choose a saved query or view to open in the editor.",
+							)}
+						</SheetDescription>
+					</SheetHeader>
+					{library}
+				</SheetContent>
+			</Sheet>
+
+			<Sheet
+				open={narrow && paramsOpen && paramNames.length > 0}
+				onOpenChange={setParamsOpen}
+			>
+				<SheetContent className="w-full sm:max-w-md">
+					<SheetHeader>
+						<SheetTitle>{t("queryParameters", "Query parameters")}</SheetTitle>
+						<SheetDescription>
+							{t(
+								"queryParameterHint",
+								"Set the values used by this query before running it.",
+							)}
+						</SheetDescription>
+					</SheetHeader>
+					<div className="min-h-0 flex-1 overflow-auto px-4">
+						<OntologyActionParameterForm
+							actionId="workbench-query-compact"
+							schema={paramSchema}
+							description={t(
+								"queryParameterFormHint",
+								"Fill in the parameters referenced in your SQL.",
+							)}
+							parameters={paramValues}
+							disabled={running}
+							onChange={setParamValues}
+							onValidityChange={setParamsValid}
+						/>
+					</div>
+					<Button className="mx-4 mb-4" onClick={() => setParamsOpen(false)}>
+						{t("done", "Done")}
+					</Button>
+				</SheetContent>
+			</Sheet>
 
 			<SaveQueryDialog
 				open={saveOpen}
