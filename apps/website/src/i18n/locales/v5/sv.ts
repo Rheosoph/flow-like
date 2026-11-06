@@ -14,7 +14,7 @@ export default {
 	"v5.hero.body":
 		"Appar, workflows, data och agenter i en styrd plattform. Från den första prompten till varje process som följer.",
 	"v5.hero.cta.platform": "Utforska plattformen",
-	"v5.hero.cta.flowpilot": "Se FlowPilot i arbete",
+	"v5.hero.cta.flowpilot": "Möt ditt botteam",
 	"v5.hero.card.prompt":
 		"Förbered morgondagens kundmöte och sköt uppföljningarna.",
 	"v5.hero.flow.email": "E-post",
@@ -256,11 +256,64 @@ export default {
 		"Tre expansionssignaler, en adoptionsrisk och en tydlig väg till förnyelse.",
 	"v5.platform.pilot.openBriefing": "Öppna briefing",
 
-	"v5.flowpilot.title.l1": "Ett anrop.",
-	"v5.flowpilot.title.em": "Hela ditt företag",
-	"v5.flowpilot.title.l3": "i rörelse.",
+	"v5.flowpilot.title.l1": "Din nästa stora idé.",
+	"v5.flowpilot.title.em": "Möt ditt lilla team.",
 	"v5.flowpilot.body":
-		"FlowPilot sitter inte vid sidan av ditt arbete. Det förstår verktygen, datan, behörigheterna och processerna som får ditt företag att fungera — kompositören nedan är den äkta varan.",
+		"Låt ett team med personlighet ta hand om småjobben. Skapa botar som gör research, arbetar med dina data och sköter de rutiner du väljer. Du ger dem uppgiften. De sätter igång.",
+	"v5.bots.eyebrow": "BOTAR + FLOWPILOT",
+	"v5.bots.cta": "Sätt ihop ditt team",
+	"v5.bots.demo.label": "BOTVERKSTAD / ILLUSTRERADE EXEMPEL",
+	"v5.bots.demo.title": "Ett litet team med mycket att göra.",
+	"v5.bots.demo.hint": "Välj en uppgift. Se teamet sätta igång.",
+	"v5.bots.demo.pause": "Pausa botarna",
+	"v5.bots.demo.resume": "Animera botarna",
+	"v5.bots.demo.working": "Jobbar på",
+	"v5.bots.demo.done": "Snyggt jobbat!",
+	"v5.bots.demo.result": "DET HÄR KAN DU SKAPA",
+	"v5.bots.role.scout": "Research",
+	"v5.bots.role.byte": "Data",
+	"v5.bots.role.flux": "FlowPilot",
+	"v5.bots.role.post": "E-post",
+	"v5.bots.role.loop": "Rutiner",
+	"v5.bots.mission.research.label": "Undersök ett ämne",
+	"v5.bots.mission.research.prompt": "Färre flikbyten. Fler aha-upplevelser.",
+	"v5.bots.mission.research.result":
+		"Researchunderlag med källor, redo för ditt nästa beslut.",
+	"v5.bots.mission.research.scout": "Letar efter källor",
+	"v5.bots.mission.research.byte": "Jämför siffrorna",
+	"v5.bots.mission.research.flux": "Bygger en researchapp",
+	"v5.bots.mission.research.post": "Skriver en sammanfattning",
+	"v5.bots.mission.research.loop": "Schemalägger en översikt",
+	"v5.bots.mission.data.label": "Arbeta med data",
+	"v5.bots.mission.data.prompt":
+		"Gör alla de där siffrorna till ditt nästa steg.",
+	"v5.bots.mission.data.result":
+		"Analyser, diagram och användbara svar från dina egna data.",
+	"v5.bots.mission.data.scout": "Letar efter bakgrund",
+	"v5.bots.mission.data.byte": "Utforskar en datamängd",
+	"v5.bots.mission.data.flux": "Kopplar ihop en dashboard",
+	"v5.bots.mission.data.post": "Förbereder en uppdatering",
+	"v5.bots.mission.data.loop": "Följer appkörningar",
+	"v5.bots.mission.build.label": "Bygg en app",
+	"v5.bots.mission.build.prompt":
+		"Den där idén du hela tiden skjuter upp? Ge den till Flux.",
+	"v5.bots.mission.build.result":
+		"Med Flux tar din idé form som en fungerande app med visuella arbetsflöden.",
+	"v5.bots.mission.build.scout": "Undersöker kraven",
+	"v5.bots.mission.build.byte": "Kontrollerar exempeldata",
+	"v5.bots.mission.build.flux": "Bygger din app",
+	"v5.bots.mission.build.post": "Skriver versionsinformation",
+	"v5.bots.mission.build.loop": "Kör en schemalagd kontroll",
+	"v5.bots.flux.label": "SAMMA FLOWPILOT. NYTT ANSIKTE.",
+	"v5.bots.flux.title": "Möt Flux. Din idés första lagkamrat.",
+	"v5.bots.flux.body":
+		"Flux är FlowPilot i ditt botteam. Beskriv appen du önskar fanns. Flux använder utvecklingsverktygen för att skapa gränssnittet, koppla ihop arbetsflödena och arbeta med dina data. Har du fastnat med en bugg? Ta med den också.",
+	"v5.bots.flux.link": "Utforska vad FlowPilot kan göra",
+	"v5.bots.own.title": "Ditt team, dina val.",
+	"v5.bots.own.body":
+		"Ge varje bot en personlighet och de verktyg jobbet kräver. Välj modell, minne och åtkomst till appar. Kör den i molnet eller på dina egna enheter.",
+	"v5.bots.own.note":
+		"Vilka verktyg som finns beror på varje bots inställningar. Botar på datorn arbetar så länge appen är öppen.",
 
 	"v5.control.eyebrow": "KONTROLL",
 	"v5.control.title.l1": "Rör dig i AI-hastighet.",

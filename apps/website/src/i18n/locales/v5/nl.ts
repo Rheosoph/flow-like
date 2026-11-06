@@ -14,7 +14,7 @@ export default {
 	"v5.hero.body":
 		"Apps, workflows, data en agents in één bestuurd platform. Van de eerste prompt tot elk proces dat volgt.",
 	"v5.hero.cta.platform": "Ontdek het platform",
-	"v5.hero.cta.flowpilot": "Zie FlowPilot aan het werk",
+	"v5.hero.cta.flowpilot": "Ontmoet je botteam",
 	"v5.hero.card.prompt":
 		"Bereid de klantafspraak van morgen voor en handel de opvolging af.",
 	"v5.hero.flow.email": "E-mail",
@@ -257,11 +257,65 @@ export default {
 		"Drie expansiesignalen, één adoptierisico en een helder pad naar verlenging.",
 	"v5.platform.pilot.openBriefing": "Briefing openen",
 
-	"v5.flowpilot.title.l1": "Eén verzoek.",
-	"v5.flowpilot.title.em": "Je hele bedrijf",
-	"v5.flowpilot.title.l3": "in beweging.",
+	"v5.flowpilot.title.l1": "Je volgende grote idee.",
+	"v5.flowpilot.title.em": "Maak kennis met je kleine team.",
 	"v5.flowpilot.body":
-		"FlowPilot staat niet naast je werk. Het begrijpt de tools, data, rechten en processen die je bedrijf laten draaien — de composer hieronder is het echte werk.",
+		"Geef het routinewerk aan een team met karakter. Maak bots die onderzoek doen, met je data werken en de taken oppakken die jij kiest. Jij geeft de opdracht. Zij gaan aan de slag.",
+	"v5.bots.eyebrow": "BOTS + FLOWPILOT",
+	"v5.bots.cta": "Stel je team samen",
+	"v5.bots.demo.label": "BOTWERKPLAATS / VOORBEELDEN",
+	"v5.bots.demo.title": "Een klein team met veel te doen.",
+	"v5.bots.demo.hint": "Kies een taak. Kijk hoe het team aan de slag gaat.",
+	"v5.bots.demo.pause": "Bots pauzeren",
+	"v5.bots.demo.resume": "Bots animeren",
+	"v5.bots.demo.working": "Aan het werk",
+	"v5.bots.demo.done": "Goed gedaan!",
+	"v5.bots.demo.result": "DIT KUN JE MAKEN",
+	"v5.bots.role.scout": "Onderzoek",
+	"v5.bots.role.byte": "Data",
+	"v5.bots.role.flux": "FlowPilot",
+	"v5.bots.role.post": "E-mail",
+	"v5.bots.role.loop": "Routinewerk",
+	"v5.bots.mission.research.label": "Een onderwerp onderzoeken",
+	"v5.bots.mission.research.prompt":
+		"Minder tabbladen wisselen. Meer goede ideeën.",
+	"v5.bots.mission.research.result":
+		"Onderzoeksrapporten met bronnen, klaar voor je volgende beslissing.",
+	"v5.bots.mission.research.scout": "Bronnen zoeken",
+	"v5.bots.mission.research.byte": "Cijfers vergelijken",
+	"v5.bots.mission.research.flux": "Een onderzoeksapp bouwen",
+	"v5.bots.mission.research.post": "Een samenvatting schrijven",
+	"v5.bots.mission.research.loop": "Een overzicht inplannen",
+	"v5.bots.mission.data.label": "Met data werken",
+	"v5.bots.mission.data.prompt":
+		"Maak van die stapel cijfers je volgende stap.",
+	"v5.bots.mission.data.result":
+		"Analyses, grafieken en bruikbare antwoorden uit je eigen data.",
+	"v5.bots.mission.data.scout": "Achtergrondinformatie zoeken",
+	"v5.bots.mission.data.byte": "Een dataset verkennen",
+	"v5.bots.mission.data.flux": "Een dashboard aansluiten",
+	"v5.bots.mission.data.post": "Een update voorbereiden",
+	"v5.bots.mission.data.loop": "App-uitvoeringen volgen",
+	"v5.bots.mission.build.label": "Een app bouwen",
+	"v5.bots.mission.build.prompt":
+		"Dat idee dat je steeds uitstelt? Geef het aan Flux.",
+	"v5.bots.mission.build.result":
+		"Met Flux krijgt je idee vorm als een werkende app met visuele workflows.",
+	"v5.bots.mission.build.scout": "Vereisten onderzoeken",
+	"v5.bots.mission.build.byte": "Voorbeelddata controleren",
+	"v5.bots.mission.build.flux": "Je app bouwen",
+	"v5.bots.mission.build.post": "Releasenotities schrijven",
+	"v5.bots.mission.build.loop": "Een geplande controle uitvoeren",
+	"v5.bots.flux.label": "DEZELFDE FLOWPILOT. EEN NIEUW GEZICHT.",
+	"v5.bots.flux.title": "Dit is Flux. De eerste teamgenoot van je idee.",
+	"v5.bots.flux.body":
+		"Flux is FlowPilot in je botteam. Beschrijf de app die je graag zou hebben. Flux gebruikt de ontwikkeltools om de interface te maken, workflows te verbinden en met de data te werken. Loop je vast op een bug? Daar kun je ook mee aankloppen.",
+	"v5.bots.flux.link": "Ontdek wat FlowPilot kan",
+	"v5.bots.own.title": "Jouw team, jouw keuzes.",
+	"v5.bots.own.body":
+		"Geef elke bot een persoonlijkheid en de tools die bij zijn werk passen. Kies het model, het geheugen en de toegang tot apps. Laat je bot in de cloud of op je eigen apparaten werken.",
+	"v5.bots.own.note":
+		"De beschikbare tools hangen af van de instellingen per bot. Desktopbots werken zolang de app openstaat.",
 
 	"v5.control.eyebrow": "CONTROLE",
 	"v5.control.title.l1": "Beweeg op AI-snelheid.",

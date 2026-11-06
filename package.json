@@ -45,7 +45,7 @@
 		"examples/*/widgets/*"
 	],
 	"overrides": {
-		"@astrojs/cloudflare": "14.2.1",
+		"@astrojs/cloudflare": "14.3.4",
 		"@babel/core": "7.29.7",
 		"@hono/node-server": "1.19.17",
 		"@humanfs/node": "0.16.8",
@@ -125,7 +125,7 @@
 		"express": "5.2.1",
 		"sharp": "0.35.5",
 		"webpack": "5.106.2",
-		"wrangler": "4.90.0"
+		"wrangler": "4.125.0"
 	},
 	"dependencies": {
 		"@cloudflare/vite-plugin": "1.30.1"

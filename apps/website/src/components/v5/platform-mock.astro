@@ -1,5 +1,5 @@
 ---
-import { FlowPilotBubbleOrb } from "@flow-like/flow-like-ui/components/global-chat/flowpilot-bubble-orb";
+import { BotAvatar } from "@flow-like/flow-like-ui/components/bots/bot-avatar";
 import type { Lang, TranslationKey } from "../../i18n";
 import { defaultLang, translations } from "../../i18n";
 
@@ -137,7 +137,7 @@ const parallaxMask = (name: string) =>
 )}
 {id === "pilot" && (
   <div class="mock pilot">
-    <div class="pilot-command"><FlowPilotBubbleOrb client:only="react" aria-label="FlowPilot" className="size-9 shrink-0" /><p>{t("v5.platform.pilot.prompt")}</p><span>{t("v5.platform.pilot.access")}</span></div>
+    <div class="pilot-command"><BotAvatar appearance={{ kind: "flux" }} size={40} animated={false} decorative /><p>{t("v5.platform.pilot.prompt")}</p><span>{t("v5.platform.pilot.access")}</span></div>
     <div class="execution">{execSteps.map((s) => (<div><i>{s[0]}</i><span><b>{s[1]}</b><small>{s[2]}</small></span><em>{t("v5.platform.pilot.done")} ✓</em></div>))}</div>
     <div class="pilot-result light-screen"><label>{t("v5.platform.pilot.briefingReady")}</label><b>Acme Renewal · €1.2M ARR</b><p>{t("v5.platform.pilot.resultDesc")}</p><button>{t("v5.platform.pilot.openBriefing")} ↗</button></div>
   </div>

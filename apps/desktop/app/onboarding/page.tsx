@@ -8,6 +8,7 @@ import {
 	isHostableLlmModel,
 	isLocalLlmModel,
 	useBackend,
+	useInvalidateInvoke,
 	useQueryClient,
 } from "@flow-like/flow-like-ui";
 import { isRecord } from "@flow-like/flow-like-ui/lib/response-shape";
@@ -18,7 +19,7 @@ import {
 import { humanFileSize } from "@flow-like/flow-like-ui/lib/utils";
 import type { ISettingsProfile } from "@flow-like/flow-like-ui/types";
 import { Trans, useTranslation } from "@flow-like/locales";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
 import {
 	ArrowRight,
@@ -45,6 +46,7 @@ import {
 } from "react";
 import { useAuth } from "react-oidc-context";
 import { useTauriInvoke } from "../../components/useInvoke";
+import { hubAuthOrigin } from "../../lib/hub-auth";
 import {
 	type OnlineProfile,
 	getDefaultApiBase,
@@ -73,9 +75,13 @@ export default function Onboarding() {
 	const auth = useAuth();
 	const router = useRouter();
 	const queryClient = useQueryClient();
+	const invalidate = useInvalidateInvoke();
+	const getProfile = backend.userState.getProfile;
 	const { canHostLlamaCPP, canHostMLX } = backend.capabilities();
 	const isAuthenticated = Boolean(auth?.isAuthenticated);
 	const accessToken = auth?.user?.access_token;
+	const restoreApiBase =
+		hubAuthOrigin(auth) ?? (isTauri() ? undefined : getDefaultApiBase());
 	const [activeProfiles, setActiveProfiles] = useState<string[]>([]);
 	const [introRun, setIntroRun] = useState(0);
 	const [size, setSize] = useState<number | null>(0);
@@ -178,16 +184,14 @@ export default function Onboarding() {
 			setIsPullingProfiles(true);
 			setRestoreFailed(false);
 			try {
-				const response = await tauriFetch(
-					`${getDefaultApiBase()}/api/v1/profile`,
-					{
-						method: "GET",
-						headers: {
-							"Content-Type": "application/json",
-							Authorization: `Bearer ${accessToken}`,
-						},
+				if (!restoreApiBase) throw new Error("The sign-in session has no hub.");
+				const response = await tauriFetch(`${restoreApiBase}/api/v1/profile`, {
+					method: "GET",
+					headers: {
+						"Content-Type": "application/json",
+						Authorization: `Bearer ${accessToken}`,
 					},
-				);
+				});
 				if (cancelled) return;
 				if (!response.ok) throw new Error("Could not restore profiles");
 				const allProfiles = (await response.json()) as OnlineProfile[];
@@ -216,11 +220,21 @@ export default function Onboarding() {
 				if (cancelled) return;
 				if (firstProfileId) {
 					await invoke("set_current_profile", { profileId: firstProfileId });
+					await invoke("native_auth_complete_onboarding");
 					await queryClient.invalidateQueries({
 						queryKey: ["get", "profiles"],
 					});
 					// A deep link may have navigated away while profiles were restoring.
-					if (!cancelled) router.replace("/");
+					if (!cancelled) {
+						router.replace("/");
+						// Refresh auth's profile scope after every restored profile is saved.
+						await Promise.all([
+							invalidate(getProfile, []),
+							queryClient.invalidateQueries({
+								queryKey: ["getNativeAuthContext"],
+							}),
+						]);
+					}
 				} else if (serverProfiles.length > 0) {
 					throw new Error("No profiles could be restored");
 				}
@@ -235,7 +249,16 @@ export default function Onboarding() {
 		return () => {
 			cancelled = true;
 		};
-	}, [isAuthenticated, accessToken, queryClient, router, restoreAttempt]);
+	}, [
+		isAuthenticated,
+		accessToken,
+		restoreApiBase,
+		queryClient,
+		router,
+		restoreAttempt,
+		invalidate,
+		getProfile,
+	]);
 
 	useEffect(() => {
 		let cancelled = false;
