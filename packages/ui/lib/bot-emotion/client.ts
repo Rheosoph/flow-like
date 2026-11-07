@@ -193,14 +193,51 @@ export class BrowserEmotionClient implements EmotionClient {
 	}
 }
 
+const EMOTION_WORKER_URL = new URL("./emotion.worker.ts", import.meta.url);
+const EMOTION_WORKER_NAME = "flow-like-emotion";
+
 let client: BrowserEmotionClient | undefined;
 
 export function getBotEmotionClient(): EmotionClient {
-	client ??= new BrowserEmotionClient(
-		() =>
-			new Worker(new URL("./emotion.worker.ts", import.meta.url), {
-				type: "module",
-			}),
-	);
+	client ??= new BrowserEmotionClient(createEmotionWorkerPort);
 	return client;
+}
+
+/** One model session for every tab. A dedicated worker is the fallback. */
+export function createEmotionWorkerPort(): EmotionWorkerPort {
+	if (typeof SharedWorker !== "undefined" && typeof window !== "undefined") {
+		try {
+			return portFromSharedWorker(
+				new SharedWorker(EMOTION_WORKER_URL, {
+					type: "module",
+					name: EMOTION_WORKER_NAME,
+				}),
+			);
+		} catch {
+			// Some WebViews expose the constructor and still reject module workers.
+		}
+	}
+	return new Worker(EMOTION_WORKER_URL, { type: "module" });
+}
+
+/** Closing the port leaves the shared model running for other tabs. */
+export function portFromSharedWorker(worker: SharedWorker): EmotionWorkerPort {
+	const port = worker.port;
+	port.start();
+	return {
+		postMessage: (message) => port.postMessage(message),
+		terminate: () => port.close(),
+		get onmessage() {
+			return port.onmessage as EmotionWorkerPort["onmessage"];
+		},
+		set onmessage(handler) {
+			port.onmessage = handler;
+		},
+		get onerror() {
+			return worker.onerror as EmotionWorkerPort["onerror"];
+		},
+		set onerror(handler) {
+			worker.onerror = handler;
+		},
+	};
 }
