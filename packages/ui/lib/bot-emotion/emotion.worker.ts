@@ -1,6 +1,7 @@
 import { AutoTokenizer, env } from "@huggingface/transformers";
 import * as ort from "onnxruntime-web/webgpu";
 import { calibrateEmotionScores } from "./calibration";
+import { createEmotionDispatcher } from "./emotion-dispatch";
 import {
 	BOT_EMOTION_MAX_LENGTH,
 	BOT_EMOTION_MODEL,
@@ -33,8 +34,10 @@ if (env.backends.onnx.wasm) {
 }
 ort.env.wasm.numThreads = 1;
 
+let broadcast: (message: EmotionWorkerResponse) => void = () => {};
+
 function send(message: EmotionWorkerResponse) {
-	self.postMessage(message);
+	broadcast(message);
 }
 
 function reportDownload(loaded: number, total: number) {
@@ -152,19 +155,25 @@ function loadScorer() {
 	return scorer;
 }
 
-// The client serializes requests so one session owns inference and its context cache.
-self.onmessage = async (event: MessageEvent<EmotionWorkerRequest>) => {
-	const input = event.data;
-	try {
-		const model = await loadScorer();
-		if (input.warmup) {
-			send({ type: "ready" });
-			return;
-		}
-		const scores = await model.score(input);
-		send({ type: "result", id: input.id, scores });
-	} catch (error) {
-		console.error("Emotion model failed", error);
-		send({ type: "error", id: input.id });
+const dispatcher = createEmotionDispatcher(async (input, reply) => {
+	const model = await loadScorer();
+	if (input.warmup) {
+		reply({ type: "ready" });
+		return;
 	}
-};
+	reply({ type: "result", id: input.id, scores: await model.score(input) });
+});
+broadcast = dispatcher.broadcast;
+
+const scope = self as WorkerGlobalScope;
+if (
+	typeof SharedWorkerGlobalScope !== "undefined" &&
+	scope instanceof SharedWorkerGlobalScope
+) {
+	scope.onconnect = (event) => {
+		const port = event.ports[0];
+		if (port) dispatcher.attach(port);
+	};
+} else {
+	dispatcher.attach(self);
+}

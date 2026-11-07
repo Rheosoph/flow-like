@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BrowserEmotionClient, type EmotionWorkerPort } from "./client";
+import {
+	BrowserEmotionClient,
+	createEmotionWorkerPort,
+	type EmotionWorkerPort,
+	portFromSharedWorker,
+} from "./client";
 import type { EmotionWorkerRequest, EmotionWorkerResponse } from "./protocol";
 import { expressionScores } from "./scoring";
 
@@ -186,5 +191,56 @@ describe("browser emotion queue", () => {
 		vi.advanceTimersByTime(30_000);
 		expect(await stalled).toBeNull();
 		expect(port.terminate).toHaveBeenCalledOnce();
+	});
+});
+
+describe("emotion worker connection", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("closes only the shared port so other tabs keep the model", () => {
+		const messages: unknown[] = [];
+		const close = vi.fn();
+		const port = {
+			start: vi.fn(),
+			close,
+			postMessage: (message: unknown) => messages.push(message),
+			onmessage: null as ((event: MessageEvent) => void) | null,
+		};
+		const worker = { port, onerror: null as ((event: ErrorEvent) => void) | null };
+		const adapter = portFromSharedWorker(worker as unknown as SharedWorker);
+		adapter.postMessage({ id: 1, warmup: true, draft: "", messages: [] });
+		expect(port.start).toHaveBeenCalledOnce();
+		expect(messages).toHaveLength(1);
+		adapter.terminate();
+		expect(close).toHaveBeenCalledOnce();
+	});
+
+	it("falls back to a dedicated worker when the shared worker cannot start", () => {
+		const dedicated = {
+			postMessage() {},
+			terminate() {},
+			onmessage: null,
+			onerror: null,
+		};
+		vi.stubGlobal("window", globalThis);
+		vi.stubGlobal(
+			"SharedWorker",
+			class {
+				constructor() {
+					throw new Error("module shared workers are unavailable");
+				}
+			},
+		);
+		vi.stubGlobal(
+			"Worker",
+			class {
+				constructor() {
+					return dedicated;
+				}
+			},
+		);
+		expect(createEmotionWorkerPort()).toBe(dedicated);
 	});
 });
