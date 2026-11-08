@@ -142,6 +142,31 @@ describe("drafts", () => {
 });
 
 describe("requests", () => {
+	test("decision models survive edits and can be disabled independently", () => {
+		const original = bot({
+			model: { primary: "chat", fallbacks: [], decision: "decision" },
+		});
+		const draft = botDraftFromBot(original);
+		expect(draft.model.decision).toBe("decision");
+		expect(
+			buildCreateBotRequest({ ...draft, name: "Copy" }).model?.decision,
+		).toBe("decision");
+		expect(
+			buildUpdateBotRequest(original, { ...draft, name: "Renamed" }),
+		).toEqual({ name: "Renamed" });
+		expect(
+			buildUpdateBotRequest(original, {
+				...draft,
+				model: { ...draft.model, primary: "other" },
+			}).model?.decision,
+		).toBe("decision");
+		expect(
+			buildUpdateBotRequest(original, {
+				...draft,
+				model: { ...draft.model, decision: null },
+			}).model,
+		).toEqual({ primary: "chat", fallbacks: [] });
+	});
 	test("create sends cleaned values and drops unused ids", () => {
 		const request = buildCreateBotRequest({
 			...createEmptyBotDraft(),

@@ -30,6 +30,13 @@ const mocks = vi.hoisted(() => ({
 	tapUnregister: vi.fn(),
 	onTapped: vi.fn(),
 	startRegistration: vi.fn(),
+	availability: undefined as
+		| import("@flow-like/flow-like-ui/lib/availability").UserAvailability
+		| undefined,
+	localAvailability: undefined as
+		| import("@flow-like/flow-like-ui/lib/availability").UserAvailability
+		| undefined,
+	showToast: true,
 }));
 
 vi.mock("@flow-like/flow-like-ui", () => ({
@@ -46,6 +53,11 @@ vi.mock(
 vi.mock("@flow-like/flow-like-ui/lib/notification-icon", () => ({
 	remoteNotificationIcon: () => undefined,
 }));
+vi.mock("@flow-like/flow-like-ui/hooks/use-user-availability", () => ({
+	useUserAvailability: (options?: { local?: boolean }) => ({
+		data: options?.local ? mocks.localAvailability : mocks.availability,
+	}),
+}));
 vi.mock("@tanstack/react-query", () => ({
 	useQueryClient: () => mocks.queryClient,
 }));
@@ -58,9 +70,10 @@ vi.mock("@tauri-apps/plugin-notification", () => ({
 vi.mock("react-oidc-context", () => ({ useAuth: () => mocks.auth }));
 vi.mock("sonner", () => ({ toast: { info: vi.fn() } }));
 vi.mock("../api", () => ({ fetcher: mocks.fetcher }));
-vi.mock("../notification-presentation", () => ({
+vi.mock("../notification-presentation", async (original) => ({
+	...(await original<typeof import("../notification-presentation")>()),
 	presentLocalNotification: vi.fn(),
-	shouldShowRemotePushToast: () => false,
+	shouldShowRemotePushToast: () => mocks.showToast,
 }));
 vi.mock("../notifications-db", () => ({ addLocalNotification: vi.fn() }));
 vi.mock("../remote-push", () => ({
@@ -92,6 +105,9 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 	mocks.preference = true;
+	mocks.availability = undefined;
+	mocks.localAvailability = undefined;
+	mocks.showToast = false;
 	mocks.auth.isAuthenticated = true;
 	mocks.auth.isLoading = false;
 	mocks.backend.profile.id = "profile";
@@ -210,6 +226,62 @@ function botPush(overrides: Record<string, unknown> = {}) {
 		},
 	};
 }
+
+test("focus keeps received notifications in history while silencing routine banners", async () => {
+	const { toast } = await import("sonner");
+	mocks.availability = {
+		status: "focus",
+		source: "manual",
+		until: Date.now() + 60_000,
+		preferences: { allow_calls: true, allow_mentions: true },
+		calendar_links: [],
+	};
+	mocks.showToast = true;
+	await mount();
+	await registrations[0].options.onNotification?.(botPush());
+	expect(mocks.queryClient.refetchQueries).toHaveBeenCalled();
+	expect(toast.info).not.toHaveBeenCalled();
+	await registrations[0].options.onNotification?.(
+		botPush({ notification_priority: "mention" }),
+	);
+	expect(toast.info).toHaveBeenCalledOnce();
+});
+
+test("expired focus resumes banners without restarting notification registration", async () => {
+	const { toast } = await import("sonner");
+	mocks.availability = {
+		status: "focus",
+		source: "bot",
+		until: Date.now() - 1,
+		preferences: { allow_calls: false, allow_mentions: false },
+		calendar_links: [],
+	};
+	mocks.showToast = true;
+	await mount();
+	await registrations[0].options.onNotification?.(botPush());
+	expect(toast.info).toHaveBeenCalledOnce();
+	expect(registrations).toHaveLength(1);
+});
+
+test("a local bot's device focus silences foreground alerts independently of account status", async () => {
+	const { toast } = await import("sonner");
+	mocks.localAvailability = {
+		status: "focus",
+		source: "bot",
+		until: Date.now() + 60_000,
+		preferences: { allow_calls: true, allow_mentions: true },
+		calendar_links: [],
+	};
+	mocks.showToast = true;
+	await mount();
+	await registrations[0].options.onNotification?.(botPush());
+	expect(toast.info).not.toHaveBeenCalled();
+	expect(mocks.queryClient.refetchQueries).toHaveBeenCalled();
+	mocks.localAvailability = undefined;
+	await act(async () => root.render(createElement(NotificationProvider)));
+	await registrations[0].options.onNotification?.(botPush());
+	expect(toast.info).toHaveBeenCalledOnce();
+});
 
 test("drops bot push bodies and taps from another account or workspace", async () => {
 	await mount();

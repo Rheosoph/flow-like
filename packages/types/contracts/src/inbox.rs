@@ -499,6 +499,9 @@ pub const TRIGGER_PAYLOAD_MAX_BYTES: usize = 32 * 1024;
 /// the bot's conversation with them; the bot answers it like an owner message with 0 hops.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TriggerBody {
+    /// Set by the scheduling host for a task that checks for useful changes.
+    #[serde(default)]
+    pub monitoring: bool,
     pub source: TriggerSource,
     /// The task, webhook, mail or event that fired; with the time it fires it names the entry.
     pub ref_id: String,
@@ -977,6 +980,7 @@ mod tests {
     #[test]
     fn a_trigger_body_round_trips_and_enforces_its_limits() {
         let body = TriggerBody {
+            monitoring: false,
             source: TriggerSource::Schedule,
             ref_id: "task-1".into(),
             title: "Report".into(),

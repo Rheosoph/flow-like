@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useQueries } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import type { ConversationItem } from "../components/bots-tab/fold-entries";
@@ -13,7 +13,8 @@ import {
 	speechBitReference,
 	speechCharacterLimit,
 } from "../lib/realtime/bot-call-speech";
-import { IBitTypes } from "../lib/schema/bit/bit";
+import { asArray } from "../lib/response-shape";
+import { type IBit, IBitTypes } from "../lib/schema/bit/bit";
 import { useBackend } from "../state/backend-state";
 import type {
 	IConversation,
@@ -21,7 +22,29 @@ import type {
 } from "../state/backend-state/inbox-state";
 import type { ConversationCallState } from "./use-conversation-call";
 
-/** The elected call participant supplies the bot's pinned voice to everyone in the call. */
+function voiceOf(bit: IBit, local: boolean, hub?: string): BotSpeechVoice {
+	return {
+		bitId: local && (hub || bit.hub) ? `${hub ?? bit.hub}:${bit.id}` : bit.id,
+		local,
+		voice:
+			typeof bit.parameters?.default_voice === "string"
+				? bit.parameters.default_voice.trim() || undefined
+				: undefined,
+		maxInputCharacters: speechCharacterLimit(
+			bit.parameters?.max_input_characters,
+		),
+	};
+}
+
+function localVoice(bit: IBit): boolean {
+	const provider = bit.parameters?.provider?.provider_name;
+	return (
+		typeof provider === "string" &&
+		provider.trim().toLowerCase() === "local:any-tts"
+	);
+}
+
+/** The elected participant supplies the bot's pinned voice, or their profile's default voice. */
 export function useBotCallSpeech({
 	conversation,
 	entries,
@@ -53,6 +76,31 @@ export function useBotCallSpeech({
 		[conversation.members, directory],
 	);
 	const modelPins = [...new Set(pins.flatMap(({ pin }) => (pin ? [pin] : [])))];
+	const defaultVoice = useQuery({
+		queryKey: ["call-bot-voice-default", desktop],
+		enabled: Boolean(
+			callId &&
+				backend.audioState &&
+				pins.some(({ pin, pending }) => !pin && !pending),
+		),
+		queryFn: async (): Promise<BotSpeechVoice | null> => {
+			const bits = asArray(await backend.bitState.getProfileBits()).filter(
+				(bit) => bit.type === IBitTypes.Tts,
+			);
+			if (desktop) {
+				for (const bit of bits.filter(localVoice)) {
+					if (await backend.bitState.isBitInstalled(bit))
+						return voiceOf(bit, true);
+				}
+			}
+			const hosted = bits.find((bit) =>
+				isHostedAudioProvider(bit.parameters?.provider?.provider_name),
+			);
+			return hosted ? voiceOf(hosted, false) : null;
+		},
+		staleTime: 30_000,
+		retry: false,
+	});
 	const queries = useQueries({
 		queries: modelPins.map((pin) => ({
 			queryKey: ["call-bot-voice", pin, desktop],
@@ -63,30 +111,13 @@ export function useBotCallSpeech({
 				const bit = await backend.bitState.getBit(reference.id, reference.hub);
 				if (bit.type !== IBitTypes.Tts) return null;
 				const provider = bit.parameters?.provider?.provider_name;
-				const voice =
-					typeof bit.parameters?.default_voice === "string"
-						? bit.parameters.default_voice.trim() || undefined
-						: undefined;
-				const maxInputCharacters = speechCharacterLimit(
-					bit.parameters?.max_input_characters,
-				);
-				if (isHostedAudioProvider(provider))
-					return { bitId: bit.id, local: false, voice, maxInputCharacters };
+				if (isHostedAudioProvider(provider)) return voiceOf(bit, false);
 				if (
 					desktop &&
-					typeof provider === "string" &&
-					provider.trim().toLowerCase() === "local:any-tts" &&
+					localVoice(bit) &&
 					(await backend.bitState.isBitInstalled(bit))
 				)
-					return {
-						bitId:
-							reference.hub || bit.hub
-								? `${reference.hub ?? bit.hub}:${bit.id}`
-								: bit.id,
-						local: true,
-						voice,
-						maxInputCharacters,
-					};
+					return voiceOf(bit, true, reference.hub);
 				return null;
 			},
 			staleTime: 30_000,
@@ -97,9 +128,9 @@ export function useBotCallSpeech({
 	for (const { id, pin, pending } of pins) {
 		const index = pin ? modelPins.indexOf(pin) : -1;
 		if (pending) continue;
-		if (!pin || queries[index].isError) voices.set(id, null);
-		else if (queries[index].data !== undefined)
-			voices.set(id, queries[index].data ?? null);
+		const query = pin ? queries[index] : defaultVoice;
+		if (query.isError) voices.set(id, null);
+		else if (query.data !== undefined) voices.set(id, query.data ?? null);
 	}
 	const capable = [...voices]
 		.filter(([, voice]) => voice !== null)

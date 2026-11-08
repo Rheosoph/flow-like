@@ -4,6 +4,91 @@ use chrono::DateTime;
 use flow_like_types::bot::{BotCapability, BotLocation, BotSystemKind};
 
 #[test]
+fn json_model_patches_preserve_omitted_fields_and_clear_only_explicit_nulls() {
+    let f = fixture();
+    let bot = f
+        .store
+        .create_bot(create(json!({
+            "name":"Scout", "description":"Keep this", "appearance":{"kind":"pip"},
+            "model":{"primary":"chat-a", "fallbacks":["chat-b"], "decision":"fast-a"}
+        })))
+        .unwrap();
+    f.changes.take();
+    let updated = f
+        .store
+        .patch_bot(&bot.id, json!({"model":{"decision":"fast-b"}}))
+        .unwrap();
+    assert_eq!(updated.model.primary.as_deref(), Some("chat-a"));
+    assert_eq!(updated.model.fallbacks, ["chat-b"]);
+    assert_eq!(updated.model.decision.as_deref(), Some("fast-b"));
+    assert_eq!(updated.description, bot.description);
+    assert_eq!(f.changes.take(), [Change::Bots(Some(bot.id.clone()))]);
+
+    let cleared = f
+        .store
+        .patch_bot(
+            &bot.id,
+            json!({"model":{"primary":null,"fallbacks":[]},"description":null}),
+        )
+        .unwrap();
+    assert_eq!(cleared.model.primary, None);
+    assert!(cleared.model.fallbacks.is_empty());
+    assert_eq!(cleared.model.decision, updated.model.decision);
+    assert_eq!(cleared.description, None);
+
+    for invalid in [
+        json!({"name":"Changed","model":null}),
+        json!({"model":{"provider":"other"}}),
+        json!({"model":{"fallbacks":[null]}}),
+    ] {
+        assert_eq!(
+            f.store.patch_bot(&bot.id, invalid).unwrap_err().code(),
+            codes::INVALID
+        );
+        assert_eq!(f.store.get_bot(&bot.id).unwrap(), Some(cleared.clone()));
+    }
+}
+
+#[test]
+fn decision_model_persists_through_edits_and_can_be_disabled() {
+    let f = fixture();
+    let bot = f
+        .store
+        .create_bot(create(json!({
+            "name": "Decider", "appearance": { "kind": "pip" },
+            "model": { "decision": " decision-bit " }
+        })))
+        .unwrap();
+    assert_eq!(bot.model.decision.as_deref(), Some("decision-bit"));
+    assert_eq!(
+        f.store.clone_bot(&bot.id).unwrap().model.decision,
+        bot.model.decision
+    );
+    let renamed = f
+        .store
+        .update_bot(&bot.id, patch(json!({ "name": "Renamed" })))
+        .unwrap();
+    assert_eq!(renamed.model.decision, bot.model.decision);
+    assert_eq!(
+        f.store.get_bot(&bot.id).unwrap().unwrap().model.decision,
+        bot.model.decision
+    );
+    let cleared = f
+        .store
+        .update_bot(&bot.id, patch(json!({ "model": { "decision": null } })))
+        .unwrap();
+    assert_eq!(cleared.model.decision, None);
+    assert!(
+        f.store
+            .update_bot(
+                &bot.id,
+                patch(json!({ "model": { "decision": "x".repeat(257) } }))
+            )
+            .is_err()
+    );
+}
+
+#[test]
 fn a_new_bot_is_local_runs_on_the_desktop_and_starts_with_what_it_asks_for() {
     let f = fixture();
     let bot = f

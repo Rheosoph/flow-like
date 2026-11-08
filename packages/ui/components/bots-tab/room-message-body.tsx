@@ -65,6 +65,7 @@ export function roomChatMessage(
 						messageId: target.id,
 						role: target.mine ? IRole.User : IRole.Assistant,
 						text: target.content.text,
+						...(target.userContextDerived ? { userContextDerived: true } : {}),
 					},
 				}
 			: undefined;
@@ -86,6 +87,8 @@ export function roomChatMessage(
 						: ""),
 		},
 		...(error ? { error } : {}),
+		...(message.userContext ? { userContext: message.userContext } : {}),
+		...(message.userContextDerived ? { userContextDerived: true } : {}),
 		...(message.approval
 			? {
 					approval: {

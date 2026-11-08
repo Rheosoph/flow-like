@@ -35,13 +35,14 @@ use flow_like_bot_tools as tools;
 
 use super::tool_spec::spec_arg_str;
 
-const NOT_GRANTABLE: [&str; 6] = [
+const NOT_GRANTABLE: [&str; 7] = [
     "http_request",
     "forecast_tool",
     "flowpilot_board_review",
     "app_build",
     "apply_home_layout",
     SECRET_REQUEST_TOOL,
+    tools::configuration::BOT_UPDATE_CONFIGURATION,
 ];
 
 /// One stored `(tool, scope)` pair.
@@ -290,6 +291,7 @@ pub async fn record_card_answer(
     let scopes: Vec<String> = card
         .scope
         .split(',')
+        .filter(|_| !NOT_GRANTABLE.contains(&card.tool.as_str()))
         .filter(|scope| !scope.is_empty())
         .map(str::to_string)
         .collect();
@@ -349,6 +351,9 @@ pub fn approval_request(
         requester_name: None,
         room: None,
         secret: secret_ask(tool, args),
+        configuration_changes: tools::configuration::requires_approval(tool)
+            .then(|| args.get("changes").cloned())
+            .flatten(),
     }
 }
 
@@ -473,6 +478,51 @@ mod tests {
 
     #[derive(Default)]
     struct Memory(Mutex<Vec<GrantKey>>);
+
+    #[tokio::test]
+    async fn configuration_changes_require_one_approval_for_each_exact_call() {
+        let tool = tools::configuration::BOT_UPDATE_CONFIGURATION;
+        let store = Memory::default();
+        let args =
+            json!({"changes":{"instructions":"a".repeat(8_000),"capabilities":["internet"]}});
+        store.put(tool, SCOPE_ALL).await.unwrap();
+        assert_eq!(
+            check_call(&store, tool, &args, None).await.unwrap(),
+            GrantCheck::Missing
+        );
+        let HeadlessAnswer::Park(mut card) =
+            headless_answer(&store, "turn", tool, &args, None, "Change my settings").await
+        else {
+            panic!("settings must ask");
+        };
+        assert!(card.scope.is_empty());
+        assert_eq!(card.configuration_changes, Some(args["changes"].clone()));
+        // A stored or stale card cannot turn this tool into a standing permission.
+        card.scope = "*".into();
+        record_card_answer(&store, &card, ApprovalDecision::Always)
+            .await
+            .unwrap();
+        let different = json!({"changes":{"capabilities":["command_line"]}});
+        assert_eq!(
+            check_call(&store, tool, &different, None).await.unwrap(),
+            GrantCheck::Missing
+        );
+        assert_eq!(
+            check_call(&store, tool, &args, None).await.unwrap(),
+            GrantCheck::Once
+        );
+        assert_eq!(
+            check_call(&store, tool, &args, None).await.unwrap(),
+            GrantCheck::Missing
+        );
+        record_answer(&store, tool, &args, None, ApprovalDecision::Deny)
+            .await
+            .unwrap();
+        assert!(matches!(
+            headless_answer(&store, "turn", tool, &args, None, "").await,
+            HeadlessAnswer::Refuse(_)
+        ));
+    }
 
     #[async_trait]
     impl GrantStore for Memory {

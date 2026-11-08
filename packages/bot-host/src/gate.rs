@@ -23,8 +23,13 @@ pub fn ask_bot_scope(callee_id: &str) -> String {
 pub struct ApprovalGate {
     grants: Arc<dyn GrantStore>,
     turn_id: String,
-    parked: Mutex<Option<ApprovalRequest>>,
+    parked: Mutex<Option<ParkedCall>>,
     stop: Box<dyn Fn() + Send + Sync>,
+}
+
+struct ParkedCall {
+    card: ApprovalRequest,
+    recovery_call_id: Option<String>,
 }
 
 impl std::fmt::Debug for ApprovalGate {
@@ -66,14 +71,33 @@ impl ApprovalGate {
         self.parked
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .clone()
+            .as_ref()
+            .map(|parked| parked.card.clone())
+    }
+
+    /// The exact runtime call that this gate refused before execution.
+    pub fn unexecuted_call(&self) -> Option<(String, String)> {
+        self.parked
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|parked| {
+                parked
+                    .recovery_call_id
+                    .clone()
+                    .map(|id| (id, parked.card.tool.clone()))
+            })
     }
 
     fn park(&self, tool: &str, card: ApprovalRequest) -> Value {
         self.parked
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .get_or_insert(card);
+            .get_or_insert_with(|| ParkedCall {
+                card,
+                recovery_call_id: flow_like::flow::copilot::run_recovery::current_recovery_call_id(
+                ),
+            });
         (self.stop)();
         result(
             tool,

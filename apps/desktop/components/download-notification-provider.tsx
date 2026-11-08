@@ -5,6 +5,8 @@ import {
 	useDownloadManager,
 } from "@flow-like/flow-like-ui";
 import { useTranslation } from "@flow-like/locales";
+import { useUserAvailability } from "@flow-like/flow-like-ui/hooks/use-user-availability";
+import { shouldPresentUserNotification } from "@flow-like/flow-like-ui/lib/availability-notifications";
 import { useEffect, useRef } from "react";
 import { toast } from "sonner";
 
@@ -31,6 +33,12 @@ async function loadNotificationPlugin(): Promise<NotificationApi | null> {
 export default function DownloadNotificationProvider() {
 	const { t } = useTranslation("common");
 	const onComplete = useDownloadManager((s) => s.onComplete);
+	const availability = useUserAvailability();
+	const localAvailability = useUserAvailability({ local: true });
+	const availabilityRef = useRef(availability.data);
+	availabilityRef.current = availability.data;
+	const localAvailabilityRef = useRef(localAvailability.data);
+	localAvailabilityRef.current = localAvailability.data;
 	const notificationApi = useRef<NotificationApi | null>(null);
 	const permissionGranted = useRef<boolean>(false);
 
@@ -60,6 +68,14 @@ export default function DownloadNotificationProvider() {
 
 	useEffect(() => {
 		const handleDownloadComplete: DownloadCompleteListener = (bit) => {
+			if (
+				!shouldPresentUserNotification(
+					availabilityRef.current,
+					localAvailabilityRef.current,
+					"routine",
+				)
+			)
+				return;
 			const modelName =
 				bit.meta?.en?.name || bit.meta?.en?.short || bit.id || "Model";
 

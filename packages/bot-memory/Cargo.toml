@@ -12,6 +12,7 @@ chrono-tz.workspace = true
 flow-like-model-provider.workspace = true
 flow-like-storage = { workspace = true, features = ["database-runtime"] }
 flow-like-types.workspace = true
+geo = { version = "=0.31.0", default-features = false }
 regex.workspace = true
 serde.workspace = true
 serde_json.workspace = true

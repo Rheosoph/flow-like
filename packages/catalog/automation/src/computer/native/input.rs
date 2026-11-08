@@ -41,6 +41,16 @@ pub fn input_capability_granted() -> bool {
         .and_then(|v| v.clone())
         .is_some_and(|w| w.alive.load(Ordering::Acquire))
 }
+
+/// Reads the native pointer without sending input or requesting a Wayland input grant.
+pub(crate) fn observed_cursor_position() -> Option<(i32, i32)> {
+    if wayland() {
+        return None;
+    }
+    let worker = start().ok()?;
+    run_job(&worker, RELEASE_TIMEOUT, |input| input.location()).ok()
+}
+
 fn start() -> flow_like_types::Result<Arc<Worker>> {
     let _start = START
         .lock()

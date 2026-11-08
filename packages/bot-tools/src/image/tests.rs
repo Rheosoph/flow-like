@@ -123,6 +123,8 @@ async fn images_land_in_the_workspace_and_reach_the_model() {
     assert_ne!(outcome.saved[0].path, outcome.saved[1].path);
     assert_eq!(outcome.result["ai_generated"], true);
     assert_eq!(outcome.result["left_this_turn"], 6);
+    assert_eq!(outcome.result["requested_size"], "1536x1024");
+    assert!(outcome.result.get("size").is_none());
     let job = images.jobs.lock().expect("jobs")[0].clone();
     assert_eq!(job.size, "1536x1024");
     assert_eq!(job.seed, Some(3));

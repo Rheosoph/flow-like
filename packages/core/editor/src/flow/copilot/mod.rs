@@ -12,7 +12,11 @@ pub mod benchmark_cases;
 pub mod bot_run;
 pub mod bot_talk;
 mod capability_tools;
+mod configuration_models;
 mod context;
+pub mod decision;
+pub mod decision_event;
+pub mod decision_model;
 mod declarations;
 pub(crate) use declarations::opened_alias_reaches_other;
 mod draft_test;
@@ -29,8 +33,10 @@ pub mod memory_tools;
 pub mod platform;
 mod provider;
 pub mod public_web;
+pub mod run_recovery;
 mod search;
 pub mod session;
+mod skill_selection;
 pub mod stream;
 mod subtasks;
 mod tool_arguments;
@@ -43,6 +49,7 @@ mod turn_label;
 mod typed_ir_parse;
 mod types;
 mod validation;
+mod work_plan;
 
 pub use assistant::{
     AttachmentManifestEntry, GlobalDataStudioContext, GlobalOpenBoardContext, PlatformContextInput,
@@ -62,6 +69,9 @@ pub use bot_run::{
     run_bot_chat_with_talk, runnable_completion_model,
 };
 pub use capability_tools::{HostTools, bot_tool_spec, linked_tool_names, tool_outcome_output};
+pub use configuration_models::{
+    model_changes_need_catalogue, profile_models, validate_model_changes,
+};
 pub use context::{
     BoardLayoutContext, EdgeContext, GraphContext, LayerCacheContext, LayerContext, NodeContext,
     NodeLayoutContext, PinContext, VariableContext, prepare_context, prepare_layout_context,

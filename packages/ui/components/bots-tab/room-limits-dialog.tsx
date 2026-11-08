@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "@flow-like/locales";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { useBotApps } from "../../hooks/use-bots";
 import { apiErrorMessage } from "../../lib/api-error";
 import type { IBotRoomLimits } from "../../state/backend-state/inbox-state";
@@ -22,6 +22,7 @@ import {
 	limitsFromDraft,
 	toggleApp,
 } from "./room-limits-model";
+import { RoomMemorySettings } from "./room-memory-settings";
 
 const NO_OPTIONS = { tables: [], events: [], boards: [] };
 
@@ -33,6 +34,7 @@ function RoomLimitsForm({
 	error,
 	onCancel,
 	onConfirm,
+	group,
 }: Readonly<{
 	botId: string;
 	initial: IBotRoomLimits | null | undefined;
@@ -41,8 +43,10 @@ function RoomLimitsForm({
 	error: unknown;
 	onCancel: () => void;
 	onConfirm: (limits: IBotRoomLimits | null) => void;
+	group: boolean;
 }>) {
 	const { t } = useTranslation("bots");
+	const controlId = useId();
 	const [draft, setDraft] = useState<RoomLimitsDraft>(() =>
 		draftFromLimits(initial),
 	);
@@ -60,31 +64,46 @@ function RoomLimitsForm({
 				onConfirm(limitsFromDraft(draft, initial));
 			}}
 		>
-			<div className="flex max-h-[50dvh] flex-col gap-4 overflow-y-auto pr-1">
-				<label className="flex items-start gap-2 text-sm">
-					<Checkbox
-						className="mt-0.5"
-						checked={draft.mentionedOnly}
+			<div className="flex min-h-0 max-h-[60dvh] flex-col gap-5 overflow-y-auto pr-1">
+				{group && (
+					<RoomMemorySettings
+						value={draft}
 						disabled={pending}
-						onCheckedChange={(on) =>
-							setDraft((current) => ({
-								...current,
-								mentionedOnly: on === true,
-							}))
+						onChange={(memory) =>
+							setDraft((current) => ({ ...current, ...memory }))
 						}
 					/>
-					<span className="flex flex-col gap-0.5">
-						<span>
-							{t("roomLimits.mentionedOnly", "Answer only when mentioned")}
+				)}
+				{group && (
+					<label
+						htmlFor={`${controlId}-mentioned`}
+						className="flex items-start gap-2 text-sm"
+					>
+						<Checkbox
+							id={`${controlId}-mentioned`}
+							className="mt-0.5"
+							checked={draft.mentionedOnly}
+							disabled={pending}
+							onCheckedChange={(on) =>
+								setDraft((current) => ({
+									...current,
+									mentionedOnly: on === true,
+								}))
+							}
+						/>
+						<span className="flex flex-col gap-0.5">
+							<span>
+								{t("roomLimits.mentionedOnly", "Answer only when mentioned")}
+							</span>
+							<span className="text-xs text-muted-foreground">
+								{t(
+									"roomLimits.mentionedOnlyHint",
+									"Without this, the bot reads along with messages from people in this room and decides itself whether to answer.",
+								)}
+							</span>
 						</span>
-						<span className="text-xs text-muted-foreground">
-							{t(
-								"roomLimits.mentionedOnlyHint",
-								"Without this, the bot reads along with messages from people in this room and decides itself whether to answer.",
-							)}
-						</span>
-					</span>
-				</label>
+					</label>
+				)}
 				<RestrictionsEditor
 					value={draft.restrictions}
 					options={NO_OPTIONS}
@@ -97,11 +116,16 @@ function RoomLimitsForm({
 				{appIds.length > 0 && (
 					<fieldset className="flex flex-col gap-2">
 						<legend className="mb-1 text-xs text-muted-foreground">
-							{t("roomLimits.apps", "Projects it may use in this room")}
+							{t("roomLimits.apps", "Projects it may use here")}
 						</legend>
 						{appIds.map((appId) => (
-							<label key={appId} className="flex items-center gap-2 text-sm">
+							<label
+								key={appId}
+								htmlFor={`${controlId}-${appId}`}
+								className="flex items-center gap-2 text-sm"
+							>
 								<Checkbox
+									id={`${controlId}-${appId}`}
 									checked={draft.apps === null || draft.apps.includes(appId)}
 									disabled={pending}
 									onCheckedChange={(on) =>
@@ -128,7 +152,12 @@ function RoomLimitsForm({
 				</p>
 			)}
 			<DialogFooter>
-				<Button type="button" variant="outline" onClick={onCancel}>
+				<Button
+					type="button"
+					variant="outline"
+					disabled={pending}
+					onClick={onCancel}
+				>
 					{t("crew.cancel", "Cancel")}
 				</Button>
 				<Button type="submit" disabled={pending}>
@@ -154,6 +183,7 @@ export function RoomLimitsDialog({
 	pending = false,
 	error,
 	onConfirm,
+	group = true,
 }: Readonly<{
 	open: boolean;
 	onOpenChange: (open: boolean) => void;
@@ -165,28 +195,40 @@ export function RoomLimitsDialog({
 	pending?: boolean;
 	error?: unknown;
 	onConfirm: (limits: IBotRoomLimits | null) => void;
+	/** Direct message requests have no group memory controls. */
+	group?: boolean;
 }>) {
 	const { t } = useTranslation("bots");
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="flex max-h-[85dvh] flex-col sm:max-w-md">
+			<DialogContent className="flex max-h-[90dvh] flex-col overflow-hidden sm:max-w-lg">
 				<DialogHeader>
 					<DialogTitle>
-						{t("roomLimits.title", "{{bot}} in {{room}}", {
-							bot: botName,
-							room: roomName,
-						})}
+						{t(
+							group ? "roomLimits.title" : "roomLimits.directTitle",
+							group ? "{{bot}} in {{room}}" : "{{bot}} with {{room}}",
+							{
+								bot: botName,
+								room: roomName,
+							},
+						)}
 					</DialogTitle>
 					<DialogDescription>
-						{t(
-							"roomLimits.description",
-							"Everyone in the room can wake this bot. It may do at most this here, and never more than you allow it elsewhere.",
-						)}
+						{group
+							? t(
+									"roomLimits.description",
+									"Set what this bot can remember and use here. Your other bot permissions still apply.",
+								)
+							: t(
+									"roomLimits.directDescription",
+									"Choose what this bot may use when answering this person's messages.",
+								)}
 					</DialogDescription>
 				</DialogHeader>
 				{open && (
 					<RoomLimitsForm
 						botId={botId}
+						group={group}
 						initial={initial}
 						confirmLabel={confirmLabel}
 						pending={pending}

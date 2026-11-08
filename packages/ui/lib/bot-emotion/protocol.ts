@@ -67,6 +67,7 @@ export interface EmotionWorkerRequest extends EmotionInput {
 }
 
 export type EmotionWorkerResponse =
+	| { type: "idle" }
 	| { type: "progress"; progress?: number }
 	| { type: "ready" }
 	| { type: "result"; id: number; scores: ExpressionScores }

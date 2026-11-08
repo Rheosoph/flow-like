@@ -148,7 +148,7 @@ async fn embedder_of(env: &dyn ToolEnv) -> ToolResult<Arc<dyn KnowledgeEmbedder>
     env.embedder().await?.ok_or_else(|| {
         ToolError::new(
             code::NO_EMBEDDER,
-            "This bot has no embedding model for knowledge indexes: choose one in the bot's memory settings, then try again",
+            "This bot has no embedding model for knowledge indexes. If bot_models is available, recommend a compatible embedding model from the owner's profile, then propose embedding_model with bot_update_configuration for explicit approval. Retry on the next turn after approval. The owner can also choose an embedding model in the bot's settings.",
         )
     })
 }

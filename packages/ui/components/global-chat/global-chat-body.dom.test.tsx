@@ -398,6 +398,27 @@ describe("a send goes where it was typed", () => {
 });
 
 describe("a tool prompt's card", () => {
+	test("turning on auto mode leaves a configuration approval pending", async () => {
+		const respond = vi.fn();
+		await act(async () => {
+			useGlobalChatStore.setState({
+				runs: { "run-atlas": liveRun("run-atlas", "bot:bot_atlas") },
+				toolPrompt: {
+					id: "configure-atlas",
+					kind: "approval",
+					runId: "run-atlas",
+					conversationId: "bot:bot_atlas",
+					toolName: "bot_update_configuration",
+					title: "Approve bot settings",
+					respond,
+				},
+			});
+			useGlobalChatStore.getState().setAutoMode(true, "bot:bot_atlas");
+		});
+		await settle();
+		expect(respond).not.toHaveBeenCalled();
+		useGlobalChatStore.getState().setAutoMode(false, "bot:bot_atlas");
+	});
 	/** A prompt from a run of `conversationId`; without one, no run owns it. */
 	async function asks(conversationId?: string) {
 		const runId = conversationId && `run-${conversationId}`;

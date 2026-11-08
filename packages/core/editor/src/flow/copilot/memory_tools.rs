@@ -139,8 +139,12 @@ pub struct MemoryTurnSource {
     pub sink: Arc<dyn SegmentSink>,
     /// Names the bot, the conversation and the stores; a session is kept per key.
     pub key: String,
-    /// Group history has its own positions and stores, and recalls owner memory read-only.
+    /// Group history has its own positions and stores.
     pub room: bool,
+    /// Whether this conversation may recall the bot owner's private memory.
+    pub use_owner_memory: bool,
+    /// Group stores that currently allow this bot to reuse their facts here.
+    pub shared_room_keys: Vec<String>,
     /// The position of the message the turn answers.
     pub trigger_seq: Seq,
     pub timezone: flow_like_bot_memory::host::Tz,

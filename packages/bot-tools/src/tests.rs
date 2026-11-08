@@ -1817,7 +1817,14 @@ mod documents {
     async fn extract_refuses_reserved_or_read_only_tables_before_calling_the_model() {
         let env = FakeEnv::new().await;
         env.put(WORKSPACE, "a.txt", b"alpha", "text/plain");
-        for table in ["kb_notes", "__bot_sources__", "kbmeta", "Bad Name"] {
+        for table in [
+            "kb_notes",
+            "__bot_sources__",
+            "kbmeta",
+            "facts",
+            "history",
+            "Bad Name",
+        ] {
             let outcome = call(
                 &env,
                 "file_extract",
@@ -2022,7 +2029,16 @@ mod data {
         )
         .await;
         assert_eq!(ok(&still).result["rows"][0]["n"], 3);
-        for table in ["kb_notes", "kbmeta", "__bot_sources__"] {
+        for table in [
+            "kb_notes",
+            "kbmeta",
+            "__bot_sources__",
+            "facts",
+            "segments",
+            "history",
+            "state",
+            "memory_room_example_facts",
+        ] {
             let outcome = call(
                 &env,
                 "data_query",
@@ -2047,6 +2063,89 @@ mod data {
         )
         .await;
         assert_eq!(err_code(&read_only), "scope_refused");
+    }
+
+    #[tokio::test]
+    async fn workspace_memory_cannot_be_listed_described_or_queried_as_app_data() {
+        let env = stocked().await;
+        let room_table = format!("memory_room_{}_facts", "a".repeat(64));
+        for table in ["facts", "segments", "history", "state", &room_table] {
+            seed(
+                &env.app_connection(WORKSPACE),
+                table,
+                vec![json!({ "id": 1, "text": "private memory" })],
+            )
+            .await;
+            let described = call(
+                &env,
+                "data_sources",
+                json!({ "operation": "describe", "source": "ws", "table": table, "include_sample": true }),
+            )
+            .await;
+            assert_eq!(err_code(&described), "scope_refused", "{table}");
+            for sql in [
+                format!("SELECT * FROM ws.{table}"),
+                format!("SELECT * FROM \"ws\".\"{table}\""),
+                format!("WITH leaked AS (SELECT * FROM ws.{table}) SELECT * FROM leaked"),
+                format!("SELECT (SELECT text FROM ws.{table} LIMIT 1) AS text"),
+            ] {
+                let found = call(&env, "data_query", json!({ "sql": sql })).await;
+                assert_eq!(err_code(&found), "scope_refused", "{sql}");
+            }
+        }
+        let listed = call(&env, "data_sources", json!({ "operation": "list" })).await;
+        assert_eq!(ok(&listed).result["workspace"]["tables"], json!(["orders"]));
+        let described = call(
+            &env,
+            "data_sources",
+            json!({ "operation": "describe", "source": WORKSPACE }),
+        )
+        .await;
+        assert_eq!(ok(&described).result["tables"], json!(["orders"]));
+        let cte = call(
+            &env,
+            "data_query",
+            json!({ "sql": "WITH facts AS (SELECT id FROM ws.orders) SELECT * FROM facts" }),
+        )
+        .await;
+        assert_eq!(ok(&cte).result["row_count"], 3);
+    }
+
+    #[tokio::test]
+    async fn external_app_tables_named_like_memory_remain_available() {
+        let env = stocked().await;
+        for table in ["facts", "history"] {
+            seed(
+                &env.app_connection(CRM),
+                table,
+                vec![json!({ "id": 1, "text": "business data" })],
+            )
+            .await;
+            let queried = call(
+                &env,
+                "data_query",
+                json!({ "sql": format!("SELECT text FROM crm.{table}") }),
+            )
+            .await;
+            assert_eq!(ok(&queried).result["rows"][0]["text"], "business data");
+            let described = call(
+                &env,
+                "data_sources",
+                json!({ "operation": "describe", "source": "crm", "table": table, "include_sample": true }),
+            )
+            .await;
+            assert_eq!(ok(&described).result["sample"][0]["text"], "business data");
+        }
+        let listed = call(
+            &env,
+            "data_sources",
+            json!({ "operation": "describe", "source": "crm" }),
+        )
+        .await;
+        assert_eq!(
+            ok(&listed).result["tables"],
+            json!(["customers", "facts", "history"])
+        );
     }
 
     #[tokio::test]

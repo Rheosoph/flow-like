@@ -19,7 +19,10 @@ use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelec
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-pub const MAX_BOT_TOKEN_TTL_SECONDS: i64 = 15 * 60;
+/// A turn token must cover the host deadline and the final reply. Direct tokens retain the
+/// shorter `TokenType::Bot` default.
+pub const MAX_BOT_TOKEN_TTL_SECONDS: i64 =
+    flow_like_types::bot_turn::DEFAULT_TURN_DEADLINE_SECS as i64 + 120;
 
 const PRINCIPAL_KIND_BOT: &str = "BOT";
 

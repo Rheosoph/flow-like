@@ -177,6 +177,52 @@ pub(super) async fn entries_page<C: ConnectionTrait>(
     })
 }
 
+/// Exact reads let a recovering host find its original trigger outside the recent window.
+pub(super) async fn entry_page_by_message<C: ConnectionTrait>(
+    db: &C,
+    reader: &str,
+    conversation_id: &str,
+    message_id: &str,
+) -> Result<InboxEntriesPage, DbErr> {
+    let row = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(reader))
+        .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+        .filter(inbox_entry::Column::MessageId.eq(message_id))
+        .filter(super::deletion::visible_entries())
+        .one(db)
+        .await?;
+    Ok(InboxEntriesPage {
+        entries: row.into_iter().map(InboxEntry::from).collect(),
+        next_before: None,
+        next_from_seq: None,
+        next_to_seq: None,
+    })
+}
+
+pub(super) fn exact_message(query: &EntriesQuery) -> Result<Option<&str>, ApiError> {
+    let Some(message) = query.message_id.as_deref() else {
+        return Ok(None);
+    };
+    if !is_valid_message_id(message) {
+        return Err(ApiError::bad_request(
+            "message_id must identify an inbox message",
+        ));
+    }
+    if query.before.is_some()
+        || query.after.is_some()
+        || query.from_seq.is_some()
+        || query.to_seq.is_some()
+        || query.around_seq.is_some()
+        || query.before_count.is_some()
+        || query.after_count.is_some()
+    {
+        return Err(ApiError::bad_request(
+            "message_id cannot be combined with cursors or positions",
+        ));
+    }
+    Ok(Some(message))
+}
+
 /// The first `limit` entries of the reader's copy strictly after `after`, oldest first, and
 /// whether more follow. Without `after`, the newest `limit` entries, oldest first, and no more.
 pub(crate) async fn entries_following<C: ConnectionTrait>(
@@ -572,8 +618,25 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
     outgoing: &Outgoing,
     now: DateTime<FixedOffset>,
 ) -> Result<Sent, ApiError> {
-    let (conversation, members, envelopes) =
+    let (conversation, members, mut envelopes) =
         checked_envelopes(txn, conversation_id, sender, outgoing).await?;
+    let approved_status = super::user_context::validate(
+        txn,
+        &conversation,
+        &members,
+        sender,
+        outgoing,
+        now.timestamp_millis(),
+    )
+    .await?;
+    let derived_request =
+        super::user_context::derived(txn, conversation_id, sender, outgoing, &members).await?;
+    if let Some(request_id) = &derived_request {
+        for (_, envelope) in &mut envelopes {
+            envelope["body"][flow_like_types::bot_user_context::DERIVED_FIELD] =
+                Value::String(request_id.clone());
+        }
+    }
     super::requests::ensure_request_room(txn, &conversation, sender, outgoing.kind).await?;
     check_workspace_files(txn, &[(sender, &outgoing.links.workspace_apps)]).await?;
     let owner_message = match (&outgoing.content, outgoing.kind) {
@@ -599,9 +662,16 @@ pub(super) async fn fan_out<C: ConnectionTrait>(
         seq: allocate_seqs(txn, conversation_id, 1).await?,
     };
     let entry = write_event(txn, &event, envelopes, outgoing).await?;
+    if let Some(approved) = approved_status {
+        crate::routes::user::availability::apply_approved(txn, sender, approved).await?;
+    }
     let principals: Vec<Principal> = members.iter().map(Principal::from).collect();
     let bots = live_bots(txn, &principals).await?;
-    let delivered = deliver(txn, &event, &conversation, &bots, &members, outgoing, hops).await?;
+    let delivered = if derived_request.is_some() {
+        Vec::new()
+    } else {
+        deliver(txn, &event, &conversation, &bots, &members, outgoing, hops).await?
+    };
     Ok(Sent {
         entry,
         wake: woken(&principals, &bots),
@@ -657,16 +727,48 @@ async fn deliver<'e, C: ConnectionTrait>(
     outgoing: &Outgoing,
     hops: u32,
 ) -> Result<Vec<BotRecipient>, ApiError> {
+    if matches!(&outgoing.content, Content::Plain(envelope) if envelope["body"].get(flow_like_types::bot_user_context::REQUEST_FIELD).is_some())
+    {
+        return Ok(Vec::new());
+    }
+    if matches!(
+        event.kind,
+        InboxEntryKind::Message | InboxEntryKind::Transcript
+    ) && bots.iter().any(|bot| bot.id == event.sender_id)
+        && matches!(&outgoing.content, Content::Plain(envelope) if envelope.get("body").is_some_and(flow_like::flow::copilot::decision::is_acknowledgement_body))
+    {
+        return Ok(Vec::new());
+    }
     let conversation_kind =
         ConversationKind::parse(&conversation.kind).unwrap_or(ConversationKind::Group);
-    let reading_along = reading_along(conversation_kind, event.sender_id, bots, members);
-    let delivery = BotDelivery {
+    let mut reading_along = reading_along(conversation_kind, event.sender_id, bots, members);
+    if event.kind == InboxEntryKind::Transcript {
+        reading_along.retain(|id| {
+            bots.iter().any(|bot| {
+                &bot.id == id
+                    && bot
+                        .model_policy
+                        .get("decision")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| !id.trim().is_empty())
+            })
+        });
+    }
+    let mut delivery = BotDelivery {
         conversation_kind,
         sender_id: event.sender_id.to_string(),
         kind: event.kind,
         seq: event.seq,
         recipients: recipients_of(txn, event, bots, &reading_along, outgoing, hops).await?,
     };
+    if let Content::Plain(envelope) = &outgoing.content
+        && let Some(bot_id) =
+            envelope["body"][flow_like_types::bot_user_context::RESPONSE_FIELD]["bot_id"].as_str()
+    {
+        delivery
+            .recipients
+            .retain(|recipient| recipient.bot_id == bot_id);
+    }
     let answers_an_approval = matches!(&outgoing.content, Content::Plain(envelope) if super::approvals::is_approval_response(envelope));
     if answers_an_approval {
         return Ok(Vec::new());
@@ -1001,10 +1103,16 @@ pub async fn list_entries(
     Path(conversation_id): Path<String>,
     Query(query): Query<EntriesQuery>,
 ) -> Result<Json<InboxEntriesPage>, ApiError> {
+    let message_id = exact_message(&query)?;
     let by_position = position_read(&query, page_limit(&query))?;
     let bounds = page_bounds(&query)?;
     let reader = acting_reader(&state.db, &user, query.as_bot.as_deref(), &conversation_id).await?;
     reader_membership(&state.db, &conversation_id, &reader).await?;
+    if let Some(message_id) = message_id {
+        return Ok(Json(
+            entry_page_by_message(&state.db, &reader.inbox, &conversation_id, message_id).await?,
+        ));
+    }
     Ok(Json(
         read_entries(
             &state.db,
@@ -1078,6 +1186,7 @@ pub async fn send_entry(
         _ => None,
     };
     let outgoing = Arc::new(validate_send(body)?);
+    let mut destination = conversation_id.clone();
     let (sender, sent) = match sending {
         SendAs::Person => {
             let sent = send_as_person(&state, &conversation_id, &sub, &outgoing).await;
@@ -1092,7 +1201,8 @@ pub async fn send_entry(
         SendAs::Bot { bot_id, claim } => {
             let bot = desktop_bot(&state.db, &sub, &bot_id).await?;
             let sent = match answer_origin(&state.db, &bot.id, &claim, &outgoing).await? {
-                Some((turn, origin)) if origin != conversation_id => {
+                Some((turn, origin)) => {
+                    destination = origin.clone();
                     super::exchange::reply_in_origin(
                         &state,
                         &turn,
@@ -1108,14 +1218,8 @@ pub async fn send_entry(
         }
     };
     let person_sent = sender == sub;
-    let sent = first_copy_on_race(
-        &state,
-        sent,
-        &conversation_id,
-        &sender,
-        &outgoing.message_id,
-    )
-    .await?;
+    let sent =
+        first_copy_on_race(&state, sent, &destination, &sender, &outgoing.message_id).await?;
     tracing::Span::current().record("bot_deliveries", sent.bots.len());
     let first_send = !sent.wake.is_empty();
     if outgoing.kind == InboxEntryKind::Delete
@@ -1221,6 +1325,8 @@ pub(crate) async fn answer_origin<C: ConnectionTrait>(
     };
     if outgoing.message_id
         != flow_like_types::bot_turn::reply_message_id(bot_id, &turn.trigger_message_id)
+        && outgoing.message_id
+            != flow_like_types::bot_turn::failure_message_id(bot_id, &turn.trigger_message_id)
     {
         return Ok(None);
     }

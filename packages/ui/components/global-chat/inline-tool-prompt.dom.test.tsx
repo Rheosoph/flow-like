@@ -233,6 +233,29 @@ describe('what "Don\'t ask again" covers', () => {
 	});
 });
 
+test("configuration approval shows the complete prompt and model mapping without a remember option", async () => {
+	const instructions = `${"Follow these instructions.\n".repeat(100)}Final instruction.`;
+	await show(
+		approval({
+			toolName: "bot_update_configuration",
+			appId: undefined,
+			rememberable: false,
+			rememberAppId: undefined,
+			configurationChanges: {
+				name: "Atlas",
+				instructions,
+				image_model: "profile:image-1",
+			},
+		}),
+	);
+	expect(
+		host.querySelector("[data-slot='bot-configuration-changes']")?.textContent,
+	).toContain(instructions);
+	expect(host.textContent).toContain("System prompt");
+	expect(host.textContent).toContain("profile:image-1");
+	expect(host.querySelector("#inline-tool-prompt-remember")).toBeNull();
+});
+
 describe("secret prompt", () => {
 	const secretPrompt = (
 		store: (value: string) => Promise<void>,

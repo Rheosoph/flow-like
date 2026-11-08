@@ -650,13 +650,23 @@ impl Element {
     }
 
     pub async fn element_click(&self) -> crate::Result<ActionOutcome> {
+        self.element_click_with_point()
+            .await
+            .map(|(outcome, _)| outcome)
+    }
+
+    /// Clicks after checking for an intercepting element. The optional point is the dispatched
+    /// position in the top viewport, not an observation of the system pointer or the receiving node.
+    pub async fn element_click_with_point(
+        &self,
+    ) -> crate::Result<(ActionOutcome, Option<(f64, f64)>)> {
         let _guard = InputGuard::new(&self.frame.page);
         let outcome = self
             .run(OpSpec::INPUT, |attempt| async move {
                 self.element_click_in(&attempt).await
             })
             .await?;
-        Ok(outcome.or_else(dialog_outcome))
+        Ok(outcome.or_else(|dialog| (dialog_outcome(dialog), None)))
     }
 
     pub async fn hover(&self) -> crate::Result<ActionOutcome> {
@@ -721,13 +731,19 @@ impl Element {
         })
     }
 
-    async fn element_click_in(&self, attempt: &OpAttempt) -> crate::Result<ActionOutcome> {
+    async fn element_click_in(
+        &self,
+        attempt: &OpAttempt,
+    ) -> crate::Result<(ActionOutcome, Option<(f64, f64)>)> {
         let probed = self
             .call_function_in(attempt, World::Util, CLICK_TARGET_PROBE, Vec::new(), true)
             .await?;
         let target = ClickTarget::deserialize(&probed).unwrap_or_default();
         if target.tag == "option" {
-            return self.element_click_option_in(attempt).await;
+            return self
+                .element_click_option_in(attempt)
+                .await
+                .map(|outcome| (outcome, None));
         }
         if target.is_file_input() {
             return Err(BrowserError::InvalidArgument {
@@ -740,7 +756,8 @@ impl Element {
             InputEvent::Mouse(MouseEvent::pressed(point.local, MouseButton::Left, 1, 0)),
             InputEvent::Mouse(MouseEvent::released(point.local, MouseButton::Left, 1, 0)),
         ];
-        dispatch_all(&self.frame.page, attempt, &point.session, &events).await
+        let outcome = dispatch_all(&self.frame.page, attempt, &point.session, &events).await?;
+        Ok((outcome, attempt.is_committed().then_some(point.top)))
     }
 
     async fn hit_checked_point_in(
@@ -1071,8 +1088,8 @@ mod tests {
         });
         let button = element(&harness, "F2", TARGET);
         assert_eq!(
-            button.element_click().await.unwrap(),
-            ActionOutcome::Completed
+            button.element_click_with_point().await.unwrap(),
+            (ActionOutcome::Completed, Some((115.25, 358.0)))
         );
         let local = (64.25, 60.5);
         assert_eq!(
@@ -1250,7 +1267,7 @@ mod tests {
         let harness = scene::page_with_oopif().await;
         harness.control.set_auto_reply(overlay_scene(99));
         let button = element(&harness, "F2", TARGET);
-        let error = button.element_click().await.unwrap_err();
+        let error = button.element_click_with_point().await.unwrap_err();
         assert_eq!(
             error.to_string(),
             "element click intercepted: Element <button> is not clickable at point (115, 358). Other element would receive the click: <div#overlay.cover.dim>"

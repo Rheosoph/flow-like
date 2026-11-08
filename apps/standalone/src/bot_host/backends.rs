@@ -72,6 +72,7 @@ impl Scheduler for HubScheduler {
             "tz": request.tz,
             "instruction": request.instruction,
             "title": request.title,
+            "monitoring": request.monitoring,
         });
         let created = self
             .0
@@ -113,6 +114,27 @@ impl Scheduler for HubScheduler {
 }
 
 pub struct HubPeople(pub BotRoutes);
+
+pub struct HubUserContext(pub BotRoutes);
+
+#[async_trait]
+impl flow_like_bot_tools::user_context::UserContextBackend for HubUserContext {
+    async fn available(&self) -> Result<flow_like_bot_tools::user_context::UserContextAvailability> {
+        let room = self.0.conversation_id.as_ref().ok_or_else(|| anyhow!("User context needs a conversation"))?;
+        let answer = self.0.hub.read(&self.0.path("user-context/available"), vec![("conversation_id".into(), room.clone())])
+            .await.map_err(|error| anyhow!("Could not list context participants: {error}"))?;
+        Ok(serde_json::from_value(answer)?)
+    }
+
+    async fn request(&self, args: flow_like_bot_tools::user_context::UserContextRequestArgs) -> Result<flow_like_bot_tools::user_context::UserContextRequestReceipt> {
+        let room = self.0.conversation_id.as_ref().ok_or_else(|| anyhow!("User context needs a conversation"))?;
+        let mut body = serde_json::to_value(args)?;
+        body["conversation_id"] = json!(room);
+        let answer = self.0.hub.write(&self.0.path("user-context/request"), Vec::new(), body)
+            .await.map_err(|error| anyhow!("Could not request user context: {error}"))?;
+        Ok(serde_json::from_value(answer)?)
+    }
+}
 
 fn contacts_of(value: &Value) -> Vec<Contact> {
     value
@@ -393,6 +415,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn context_requests_keep_the_turn_room_and_wait_for_the_person() {
+        use flow_like_bot_tools::user_context::{UserContextBackend, UserContextRequestArgs};
+        let calls = Calls::answering(vec![
+            Ok(json!({"participants":[{"id":"person","name":"Person"}],"fields":["location"],"device_support":"unknown_until_shared"})),
+            Ok(json!({"request_id":"request","conversation_id":"conv","subject_id":"person","expires_at":12345})),
+        ]);
+        let backend = HubUserContext(routes(&calls));
+        assert_eq!(backend.available().await.unwrap().participants[0].id, "person");
+        let args: UserContextRequestArgs = serde_json::from_value(json!({
+            "subject_id":"person", "fields":["location"], "purpose":"Find a nearby cafe",
+        })).unwrap();
+        assert_eq!(backend.request(args).await.unwrap().request_id, "request");
+        let calls = calls.0.lock().unwrap();
+        assert_eq!(calls[0].1, "bots/bot1/user-context/available");
+        assert_eq!(calls[0].2, json!([["conversation_id","conv"]]));
+        assert_eq!(calls[1].1, "bots/bot1/user-context/request");
+        assert_eq!(calls[1].2["conversation_id"], "conv");
+        assert_eq!(calls[1].2["precision"], "approximate");
+        assert!(calls[1].2.get("values").is_none());
+    }
+
+    #[tokio::test]
     async fn a_notice_goes_to_the_bots_notify_route_with_its_conversation() {
         let calls = Calls::answering(vec![Ok(json!({ "id": "m1", "posted": true }))]);
         let receipt = HubNotifier(routes(&calls))
@@ -410,6 +454,34 @@ mod tests {
         );
         assert_eq!(body["conversation_id"], "conv");
         assert_eq!(body["title"], "T");
+    }
+
+    #[tokio::test]
+    async fn scheduled_monitoring_intent_reaches_the_hub_and_roundtrips() {
+        for monitoring in [false, true] {
+            let calls = Calls::answering(vec![Ok(json!({
+                "id":"task1", "bot_id":"bot1", "kind":"cron", "cron":"0 9 * * *",
+                "instruction":"Check the report", "title":"Report", "enabled":true,
+                "monitoring":monitoring, "created_by":"bot", "created_at":"2026-11-08T12:00:00Z"
+            }))]);
+            let task = HubScheduler(routes(&calls))
+                .create(CreateBotTask {
+                    kind: Some(flow_like_types::bot_task::TaskKind::Cron),
+                    cron: Some("0 9 * * *".into()),
+                    instruction: "Check the report".into(),
+                    monitoring,
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            assert_eq!(task.monitoring, monitoring);
+            let (method, path, body) = calls.0.lock().unwrap()[0].clone();
+            assert_eq!(
+                (method.as_str(), path.as_str()),
+                ("POST", "bots/bot1/tasks")
+            );
+            assert_eq!(body["monitoring"], monitoring);
+        }
     }
 
     #[tokio::test]

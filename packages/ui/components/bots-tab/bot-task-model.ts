@@ -7,6 +7,7 @@ import type {
 export const MAX_BOT_TASKS = 50;
 
 export type TaskDraft = {
+	monitoring?: boolean;
 	kind: "once" | "cron";
 	/** `datetime-local` value: `YYYY-MM-DDTHH:mm` in the viewer's zone. */
 	at: string;
@@ -17,7 +18,15 @@ export type TaskDraft = {
 };
 
 export function emptyTaskDraft(tz = "UTC"): TaskDraft {
-	return { kind: "once", at: "", cron: "", tz, instruction: "", title: "" };
+	return {
+		kind: "once",
+		at: "",
+		cron: "",
+		tz,
+		instruction: "",
+		title: "",
+		monitoring: false,
+	};
 }
 
 export function browserTimeZone(): string {
@@ -38,12 +47,19 @@ export function taskRequest(
 	if (draft.kind === "once") {
 		const at = new Date(draft.at);
 		if (!draft.at || Number.isNaN(at.getTime())) return;
-		return { kind: "once", at: at.toISOString(), instruction, title };
+		return {
+			kind: "once",
+			at: at.toISOString(),
+			instruction,
+			title,
+			...(draft.monitoring ? { monitoring: true } : {}),
+		};
 	}
 	const cron = draft.cron.trim().split(/\s+/).join(" ");
 	if (cron.split(" ").length !== 5) return;
 	return {
 		kind: "cron",
+		...(draft.monitoring ? { monitoring: true } : {}),
 		cron,
 		tz: draft.tz.trim() || "UTC",
 		instruction,

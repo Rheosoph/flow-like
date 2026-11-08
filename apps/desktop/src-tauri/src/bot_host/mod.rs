@@ -17,24 +17,25 @@ mod account;
 mod approvals;
 pub(crate) mod commands;
 pub(crate) mod connector_commands;
-pub(crate) mod grant_commands;
 mod e2e;
 mod e2e_vault;
 pub(crate) mod gate;
+pub(crate) mod grant_commands;
 mod host;
 mod hub;
 pub(crate) mod interactive;
 mod memory;
 mod notify;
 mod owner_notify;
-mod rule;
+mod recovery;
 mod room_updates;
-pub(crate) mod skill_commands;
-pub(crate) mod task_commands;
-mod task_tick;
+mod rule;
 mod runner;
+pub(crate) mod skill_commands;
 mod store;
 pub(crate) mod talk;
+pub(crate) mod task_commands;
+mod task_tick;
 mod transcript;
 
 #[cfg(test)]
@@ -48,8 +49,8 @@ mod tests;
 
 pub use account::AccountHost;
 pub(crate) use gate::ApprovalGate;
-pub(crate) use owner_notify::notifier_for;
 pub use host::BotHost;
+pub(crate) use owner_notify::notifier_for;
 
 use account::AccountConfig;
 use host::{HostConfig, TurnEvents, TurnInfo};

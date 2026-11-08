@@ -118,6 +118,7 @@ fn invitation_notification(
     invitation: &wasm_package_invitation::Model,
 ) -> DispatchNotificationInput {
     DispatchNotificationInput {
+        notification_priority: Default::default(),
         bot_context: None,
         user_id: invitation.invitee_id.clone(),
         app_id: None,

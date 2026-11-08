@@ -7,12 +7,15 @@ mod inbox;
 mod paging;
 mod permissions;
 mod pins;
+mod recovery;
+mod room_decisions;
 mod secrets;
 mod skills;
 mod storage;
 mod tasks;
 mod tool_grants;
 mod transfer;
+mod user_context;
 mod workspace;
 
 use crate::{

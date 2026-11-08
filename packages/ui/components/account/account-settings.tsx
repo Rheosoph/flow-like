@@ -35,6 +35,7 @@ import { Input } from "../ui/input";
 import { Label } from "../ui/label";
 import { Skeleton } from "../ui/skeleton";
 import { Textarea } from "../ui/textarea";
+import { AvailabilitySettings } from "./availability-settings";
 import {
 	accountDraft,
 	accountError,
@@ -305,6 +306,7 @@ export function ProfilePage({ actions = {} }: { actions?: ProfileActions }) {
 			)}
 			<div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_18rem]">
 				<div className="min-w-0 space-y-6">
+					<AvailabilitySettings />
 					<Card className="overflow-hidden">
 						<CardHeader>
 							<CardTitle className="flex items-center gap-2">

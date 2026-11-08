@@ -80,6 +80,7 @@ pub async fn sign_avatar(
 }
 
 pub mod billing;
+pub mod availability;
 pub mod bits;
 pub mod bootstrap;
 pub mod contacts;
@@ -118,6 +119,22 @@ pub fn routes() -> Router<AppState> {
             axum::routing::delete(pat::delete_pat::delete_pat),
         )
         .route("/info", get(user_info).put(upsert_info::upsert_info))
+        .route(
+            "/availability",
+            get(availability::get).put(availability::set).delete(availability::clear),
+        )
+        .route(
+            "/availability/calendars",
+            post(availability::calendars::link),
+        )
+        .route(
+            "/availability/calendars/{id}",
+            delete(availability::calendars::unlink),
+        )
+        .route(
+            "/availability/calendars/refresh",
+            post(availability::calendars::refresh),
+        )
         .route("/billing", get(get_billing_session))
         .route("/pricing", get(get_pricing))
         .route("/usage/quotas", get(quotas::get_quotas))

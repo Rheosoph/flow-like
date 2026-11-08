@@ -4,6 +4,7 @@
 //! `todo/bots-capabilities/lanes/HOST-SERVER-TOOLS.md`.
 
 mod access;
+mod configuration;
 pub(crate) mod connectors;
 mod directory;
 mod email;
@@ -40,7 +41,7 @@ pub(crate) fn executor_for(state: &AppState) -> Option<std::sync::Arc<dyn ToolEx
     DispatcherExecutor::of(state).map(|executor| std::sync::Arc::new(executor) as _)
 }
 
-/// The bot tools of one turn, or `None` when the bot has no workspace or the host offers none.
+/// The bot tools of one turn, including configuration tools before a workspace exists.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn turn_host(
     state: &AppState,
@@ -53,9 +54,10 @@ pub(crate) async fn turn_host(
     token: Option<String>,
     grants: std::sync::Arc<dyn flow_like::flow::copilot::tool_grants::GrantStore>,
     conv_id: Option<&str>,
+    context_conversation: Option<&str>,
     site: Option<flow_like_bot_tools::TurnSite>,
 ) -> Option<std::sync::Arc<BotToolsHost>> {
-    let workspace = bot.workspace_app_id.clone()?;
+    let workspace = bot.workspace_app_id.clone().unwrap_or_default();
     let principal = BotUser {
         bot_id: bot.bot_id.clone(),
         turn_id: turn_id.to_string(),
@@ -100,7 +102,10 @@ pub(crate) async fn turn_host(
             bot: principal.clone(),
             turn_id: turn_id.to_string(),
             workspace: workspace.clone(),
-            host_tools: bot.host_tools.clone(),
+            host_tools: bot.host_tools.clone().with_user_context(
+                bot.has(flow_like_types::bot::BotCapability::UserContext)
+                    && context_conversation.is_some(),
+            ),
             directory: std::sync::Arc::new(directory::ApiDirectory {
                 state: state.clone(),
                 principal: principal.clone(),
@@ -125,12 +130,26 @@ pub(crate) async fn turn_host(
                 &bot.bot_id,
             ))),
         })
+        .with_configuration(std::sync::Arc::new(configuration::ApiConfiguration::new(
+            state,
+            owner,
+            &bot.bot_id,
+            std::sync::Arc::new(profile.clone()),
+            flow_like_state.clone(),
+        )))
         .with_notifier(notifier)
         .with_people(std::sync::Arc::new(crate::bot_people::ServerPeople::new(
             state,
             &bot.bot_id,
             owner,
         )))
+        .with_user_context(std::sync::Arc::new(
+            crate::routes::bots::user_context::ServerUserContext::new(
+                state,
+                &bot.bot_id,
+                context_conversation,
+            ),
+        ))
         .with_scheduler(scheduler)
         .with_skills(std::sync::Arc::new(skills::ApiSkills::new(
             state,

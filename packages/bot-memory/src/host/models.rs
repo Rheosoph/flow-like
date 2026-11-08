@@ -8,6 +8,9 @@ use async_trait::async_trait;
 use flow_like_model_provider::embedding::EmbeddingModelLogic;
 use flow_like_model_provider::history::{History, HistoryMessage, ResponseFormat, Role};
 use flow_like_model_provider::llm::ModelLogic;
+use flow_like_model_provider::systemone::{
+    SystemOneModelLogic, SystemOneRequest, SystemOneResponse,
+};
 use flow_like_types::{Result, anyhow};
 use serde_json::json;
 
@@ -108,6 +111,40 @@ impl MemoryLlm for ModelLlm {
     }
 }
 
+/// Uses the bot's decision model for fact disposition while preserving its completion model
+/// for summaries, extraction and the fallback when a decision cannot be used.
+pub struct DecisionLlm {
+    completion: Arc<dyn MemoryLlm>,
+    decision: Arc<dyn SystemOneModelLogic>,
+}
+
+impl DecisionLlm {
+    pub fn new(completion: Arc<dyn MemoryLlm>, decision: Arc<dyn SystemOneModelLogic>) -> Self {
+        Self {
+            completion,
+            decision,
+        }
+    }
+}
+
+#[async_trait]
+impl MemoryLlm for DecisionLlm {
+    async fn complete(&self, request: LlmRequest) -> Result<String> {
+        self.completion.complete(request).await
+    }
+
+    async fn classify_fact(&self, request: &SystemOneRequest) -> Result<Option<SystemOneResponse>> {
+        let response = flow_like_types::tokio::time::timeout(
+            std::time::Duration::from_secs(15),
+            self.decision.invoke(request),
+        )
+        .await
+        .map_err(|_| anyhow!("The memory decision model timed out"))??;
+        response.validate_for(request)?;
+        Ok(Some(response))
+    }
+}
+
 /// Sends each [`LlmTask`] to its own model, the default for the rest: idle work such as
 /// fact extraction may run on a larger model than summaries.
 pub struct RoutedLlm {
@@ -134,6 +171,14 @@ impl MemoryLlm for RoutedLlm {
     async fn complete(&self, request: LlmRequest) -> Result<String> {
         let llm = self.routes.get(&request.task).unwrap_or(&self.default);
         llm.complete(request).await
+    }
+
+    async fn classify_fact(&self, request: &SystemOneRequest) -> Result<Option<SystemOneResponse>> {
+        self.routes
+            .get(&LlmTask::FactUpdate)
+            .unwrap_or(&self.default)
+            .classify_fact(request)
+            .await
     }
 }
 
@@ -165,6 +210,10 @@ impl SwitchLlm {
 impl MemoryLlm for SwitchLlm {
     async fn complete(&self, request: LlmRequest) -> Result<String> {
         self.current().complete(request).await
+    }
+
+    async fn classify_fact(&self, request: &SystemOneRequest) -> Result<Option<SystemOneResponse>> {
+        self.current().classify_fact(request).await
     }
 }
 

@@ -2,6 +2,7 @@ use std::io::Cursor;
 use std::time::{Duration, Instant};
 
 use flow_like_types::Bytes;
+use flow_like_types::interaction_observation::InteractionObservation;
 use image::{DynamicImage, ImageFormat, imageops::FilterType};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
@@ -22,6 +23,7 @@ pub struct Shot {
     pub png: Vec<u8>,
     pub kind: FrameKind,
     pub caption: String,
+    pub observation: Option<InteractionObservation>,
 }
 
 /// A `Shot` ready to show: a JPEG of at most [`FRAME_MAX_WIDTH`] pixels.
@@ -33,6 +35,7 @@ pub struct Frame {
     pub kind: FrameKind,
     pub caption: String,
     pub at: Instant,
+    pub observation: Option<InteractionObservation>,
 }
 
 impl Frame {
@@ -56,6 +59,7 @@ impl Frame {
             kind: shot.kind,
             caption: shot.caption.clone(),
             at: Instant::now(),
+            observation: shot.observation.clone(),
         })
     }
 
@@ -124,6 +128,7 @@ mod tests {
             png: png(width, height),
             kind,
             caption: "caption".into(),
+            observation: None,
         }
     }
 
@@ -142,6 +147,7 @@ mod tests {
             png: vec![1, 2, 3],
             kind: FrameKind::Browser,
             caption: String::new(),
+            observation: None,
         };
         assert!(Frame::from_shot(&broken).is_none());
     }

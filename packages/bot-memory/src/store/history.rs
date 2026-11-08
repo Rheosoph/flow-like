@@ -219,6 +219,17 @@ impl HistoryIndex {
     }
 
     pub(crate) async fn optimize(&self) -> Result<()> {
+        self.table
+            .ensure_indexes(
+                &[
+                    ("id", "BTREE"),
+                    ("seq", "BTREE"),
+                    ("created_at", "BTREE"),
+                    ("role", "BITMAP"),
+                ],
+                None,
+            )
+            .await?;
         self.table.optimize().await
     }
 
@@ -232,5 +243,9 @@ impl HistoryIndex {
 
     pub(crate) async fn drop_all(&self) -> Result<()> {
         self.table.drop_table().await
+    }
+
+    pub(crate) async fn clear(&self) -> Result<()> {
+        self.table.clear().await
     }
 }

@@ -45,6 +45,24 @@ afterEach(() => {
 });
 
 describe("bot expression transitions", () => {
+	it("waits for a draft before using the model", () => {
+		const client = new FakeClient();
+		const controller = new BotExpressionController(client, () => {});
+		controller.update({
+			draft: "",
+			messages: [{ role: "user", content: "old" }],
+		});
+		vi.advanceTimersByTime(75_000);
+		expect(client.warmup).not.toHaveBeenCalled();
+		expect(client.requests).toHaveLength(0);
+		controller.update({ draft: "hello", messages: [] });
+		vi.advanceTimersByTime(300);
+		expect(client.requests.map((request) => request.input.draft)).toEqual([
+			"hello",
+		]);
+		controller.dispose();
+	});
+
 	it("lets validated wording correct a provisional smile without flashing it again on appended punctuation", async () => {
 		const client = new FakeClient();
 		let state: BotExpressionState | undefined;

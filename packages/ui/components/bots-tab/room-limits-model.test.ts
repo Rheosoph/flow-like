@@ -9,6 +9,12 @@ import {
 	toggleApp,
 } from "./room-limits-model";
 
+const isolated = {
+	use_owner_memory: false,
+	use_shared_memory: false,
+	share_memory: false,
+};
+
 describe("room limits model", () => {
 	test("permission bits are distinct powers of two below the role bits", () => {
 		const bits = Object.values(PERMISSION_BITS);
@@ -28,21 +34,24 @@ describe("room limits model", () => {
 	test("answering only when mentioned is a limit of its own", () => {
 		const draft = draftFromLimits({ mentioned_only: true });
 		expect(draft.mentionedOnly).toBe(true);
-		expect(limitsFromDraft(draft)).toEqual({ mentioned_only: true });
+		expect(limitsFromDraft(draft)).toEqual({
+			...isolated,
+			mentioned_only: true,
+		});
 		expect(
 			limitsFromDraft({ ...NO_ROOM_LIMITS, mentionedOnly: false }),
-		).toBeNull();
+		).toEqual(isolated);
 	});
 
-	test("no draft limit means no limits at all", () => {
-		expect(limitsFromDraft(NO_ROOM_LIMITS)).toBeNull();
+	test("new and existing groups default to isolated memory", () => {
+		expect(limitsFromDraft(NO_ROOM_LIMITS)).toEqual(isolated);
 		expect(draftFromLimits(null)).toEqual(NO_ROOM_LIMITS);
 	});
 
 	test("an empty permission list is a real limit, not no limit", () => {
 		const draft = draftFromLimits({ mask: 0 });
 		expect(draft.restrictions.permissions).toEqual([]);
-		expect(limitsFromDraft(draft)).toEqual({ mask: 0 });
+		expect(limitsFromDraft(draft)).toEqual({ ...isolated, mask: 0 });
 	});
 
 	test("apps and earlier scopes survive an edit", () => {
@@ -52,7 +61,10 @@ describe("room limits model", () => {
 			scopes: { a: { files: { prefixes: ["x"], read_only: true } } },
 		};
 		const draft = draftFromLimits(previous);
-		expect(limitsFromDraft(draft, previous)).toEqual(previous);
+		expect(limitsFromDraft(draft, previous)).toEqual({
+			...isolated,
+			...previous,
+		});
 	});
 
 	test("unticking an app narrows and re-ticking all apps lifts the limit", () => {
@@ -60,5 +72,37 @@ describe("room limits model", () => {
 		const narrowed = toggleApp(NO_ROOM_LIMITS, "a", all, false);
 		expect(narrowed.apps).toEqual(["b"]);
 		expect(toggleApp(narrowed, "a", all, true).apps).toBeNull();
+	});
+});
+
+describe("independent group memory choices", () => {
+	test("all eight combinations round-trip without changing other limits", () => {
+		for (const use_owner_memory of [false, true]) {
+			for (const use_shared_memory of [false, true]) {
+				for (const share_memory of [false, true]) {
+					const policy = {
+						use_owner_memory,
+						use_shared_memory,
+						share_memory,
+						apps: ["sales"],
+					};
+					expect(limitsFromDraft(draftFromLimits(policy), policy)).toEqual(
+						policy,
+					);
+				}
+			}
+		}
+	});
+	test("turning sharing off stores an explicit false while recall stays enabled", () => {
+		const previous = {
+			use_owner_memory: true,
+			use_shared_memory: true,
+			share_memory: true,
+		};
+		const draft = { ...draftFromLimits(previous), shareMemory: false };
+		expect(limitsFromDraft(draft, previous)).toEqual({
+			...previous,
+			share_memory: false,
+		});
 	});
 });

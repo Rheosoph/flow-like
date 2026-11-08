@@ -14,7 +14,7 @@ use flow_like_bot_memory::llm::Embedder;
 use flow_like_bot_memory::model::{FactSource, HistoryItem, Role, Seq, SeqSpan, ToolPart};
 use flow_like_bot_memory::retrieval::{Recency, TimeRange};
 use flow_like_bot_memory::store::{
-    CompactionState, FactFilter, FactQuery, HistoryQuery, MemoryStores, StateConflict,
+    CompactionState, FactFilter, FactQuery, FactSort, HistoryQuery, MemoryStores, StateConflict,
 };
 use flow_like_bot_memory::summary::{
     Claim, NowBlock, SUMMARY_PROMPT_VERSION, Section, SegmentSummary, SummaryBody,
@@ -50,6 +50,8 @@ async fn room(dir: &TempDir, key: &str) -> MemoryStores {
         key,
     )
     .await
+    .with_recall_sources(true, &[])
+    .await
 }
 
 /// An engine over `stores`, for maintenance, which runs under the engine's lease.
@@ -68,6 +70,9 @@ fn fact(id: &str, text: &str, kind: FactKind, subject: &str, seqs: &[Seq], on: i
         text: text.into(),
         kind,
         subject: subject.into(),
+        geojson: None,
+        time: None,
+        expires_at: None,
         valid_from: None,
         valid_to: None,
         recorded_at: day(on),
@@ -101,6 +106,10 @@ fn query(text: &str, filter: FactFilter) -> FactQuery {
         offset: 0,
         now: day(0),
         recency: Recency::default(),
+        sort: FactSort::default(),
+        geojson: None,
+        radius_m: None,
+        area: None,
     }
 }
 
@@ -1110,5 +1119,596 @@ async fn rooms_keep_colliding_positions_separate_and_recall_owner_facts() {
     assert_eq!(
         second.facts.get("f_same_id").await.unwrap().unwrap().text,
         "Beta plan"
+    );
+}
+
+#[tokio::test]
+async fn spatial_queries_filter_before_sorting_and_pagination() {
+    use serde_json::json;
+
+    let dir = tempfile::tempdir().unwrap();
+    let stores = open(&dir, "hash", 64).await;
+    let mut facts = (0..350)
+        .map(|index| {
+            let mut fact = fact(
+                &format!("f_far_{index:04}"),
+                &format!("A cafe serves coffee. Store number {index}."),
+                FactKind::Knowledge,
+                "cafe",
+                &[index + 1],
+                0,
+            );
+            fact.geojson = Some(json!({"type": "Point", "coordinates": [2.0, 2.0]}));
+            fact
+        })
+        .collect::<Vec<_>>();
+    for (id, longitude) in [("f_near_a", 0.0), ("f_near_b", 0.001), ("f_near_c", 0.002)] {
+        let mut nearby = fact(
+            id,
+            "A cafe serves coffee.",
+            FactKind::Knowledge,
+            "cafe",
+            &[500],
+            0,
+        );
+        nearby.geojson = Some(json!({"type": "Point", "coordinates": [longitude, 0.0]}));
+        facts.push(nearby);
+    }
+    facts.push(fact(
+        "f_unknown",
+        "A cafe serves coffee.",
+        FactKind::Knowledge,
+        "cafe",
+        &[501],
+        0,
+    ));
+    stores.facts.insert(&facts).await.unwrap();
+
+    // Radius and chronological ordering must remain complete after ANN indexing.
+    let engine = engine(stores);
+    engine.optimize(day(0)).await.unwrap();
+    let stores = engine.stores();
+
+    let mut search = query("A cafe serves coffee.", FactFilter::default());
+    search.sort = FactSort::Distance;
+    search.geojson = Some(json!({"type": "Point", "coordinates": [0.0, 0.0]}));
+    search.radius_m = Some(300.0);
+    search.limit = 2;
+    assert_eq!(
+        ids(&stores.facts.search(&search).await.unwrap()),
+        ["f_near_a", "f_near_b"]
+    );
+    search.offset = 2;
+    assert_eq!(
+        ids(&stores.facts.search(&search).await.unwrap()),
+        ["f_near_c"]
+    );
+
+    search.text.clear();
+    search.offset = 0;
+    search.limit = 10;
+    search.area = Some(json!({"type": "Polygon", "coordinates": [[
+        [-0.0005, -0.0005], [0.0015, -0.0005], [0.0015, 0.0005],
+        [-0.0005, 0.0005], [-0.0005, -0.0005]
+    ]]}));
+    assert_eq!(
+        ids(&stores.facts.search(&search).await.unwrap()),
+        ["f_near_a", "f_near_b"]
+    );
+    search.radius_m = Some(0.0);
+    assert_eq!(
+        ids(&stores.facts.search(&search).await.unwrap()),
+        ["f_near_a"]
+    );
+}
+
+#[tokio::test]
+async fn reference_time_is_an_instant_and_orders_before_pagination() {
+    let dir = tempfile::tempdir().unwrap();
+    let stores = open(&dir, "hash", 64).await;
+    let mut later = fact(
+        "f_later",
+        "The train arrives.",
+        FactKind::Knowledge,
+        "train",
+        &[1],
+        -5,
+    );
+    later.time = Some(day(3));
+    let mut earlier = fact(
+        "f_earlier",
+        "The train arrives.",
+        FactKind::Knowledge,
+        "train",
+        &[2],
+        2,
+    );
+    earlier.time = Some(day(1));
+    earlier.valid_to = Some(day(10));
+    stores
+        .facts
+        .insert(&[later.clone(), earlier.clone()])
+        .await
+        .unwrap();
+    assert_eq!(stores.facts.get(&later.id).await.unwrap(), Some(later));
+
+    let mut search = query("", FactFilter::default());
+    search.sort = FactSort::TimeAsc;
+    search.limit = 1;
+    assert_eq!(
+        ids(&stores.facts.search(&search).await.unwrap()),
+        ["f_earlier"]
+    );
+    search.offset = 1;
+    assert_eq!(
+        ids(&stores.facts.search(&search).await.unwrap()),
+        ["f_later"]
+    );
+    search.offset = 0;
+    search.sort = FactSort::TimeDesc;
+    assert_eq!(
+        ids(&stores.facts.search(&search).await.unwrap()),
+        ["f_later"]
+    );
+    search.filter.time_range = Some(TimeRange {
+        from: day(2),
+        to: day(4),
+    });
+    search.limit = 10;
+    assert_eq!(
+        ids(&stores.facts.search(&search).await.unwrap()),
+        ["f_later"]
+    );
+    search.filter.time_range = Some(TimeRange {
+        from: day(1),
+        to: day(3),
+    });
+    assert_eq!(
+        ids(&stores.facts.search(&search).await.unwrap()),
+        ["f_earlier"]
+    );
+}
+
+#[tokio::test]
+async fn ttl_excludes_expired_facts_even_when_history_is_requested() {
+    let dir = tempfile::tempdir().unwrap();
+    let stores = open(&dir, "hash", 64).await;
+    let mut temporary = fact(
+        "f_temporary",
+        "The ticket is available.",
+        FactKind::Knowledge,
+        "ticket",
+        &[1],
+        -1,
+    );
+    temporary.expires_at = Some(day(0));
+    let durable = fact(
+        "f_durable",
+        "The ticket office is open.",
+        FactKind::Knowledge,
+        "ticket",
+        &[2],
+        -1,
+    );
+    stores
+        .facts
+        .insert(&[temporary.clone(), durable])
+        .await
+        .unwrap();
+    assert_eq!(
+        stores.facts.get(&temporary.id).await.unwrap(),
+        Some(temporary)
+    );
+    let filter = FactFilter {
+        include_superseded: true,
+        ..Default::default()
+    };
+    let mut search = query("", filter.clone());
+    search.now = day(0) - Duration::milliseconds(1);
+    assert_eq!(stores.facts.search(&search).await.unwrap().len(), 2);
+    search.now = day(0);
+    assert_eq!(
+        ids(&stores.facts.search(&search).await.unwrap()),
+        ["f_durable"]
+    );
+    search.text = "ticket".into();
+    assert_eq!(
+        ids(&stores.facts.search(&search).await.unwrap()),
+        ["f_durable"]
+    );
+
+    let mut old = stores.facts.get("f_temporary").await.unwrap().unwrap();
+    old.expires_at = Some(Utc::now() - Duration::seconds(1));
+    stores.facts.update_metadata(&old).await.unwrap();
+    assert_eq!(stores.facts.count(&filter).await.unwrap(), 1);
+    assert_eq!(stores.facts.all(&filter).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn legacy_fact_tables_gain_nullable_reference_columns_without_losing_rows() {
+    use flow_like_storage::databases::vector::lancedb::{LanceDBVectorStore, connect_lance};
+    use serde_json::json;
+
+    let dir = tempfile::tempdir().unwrap();
+    let stores = open(&dir, "hash", 64).await;
+    let original = fact(
+        "f_legacy",
+        "The user likes tea.",
+        FactKind::Preference,
+        "user",
+        &[1],
+        0,
+    );
+    stores
+        .facts
+        .insert(std::slice::from_ref(&original))
+        .await
+        .unwrap();
+    let connection = connect_lance(dir.path().to_str().unwrap())
+        .execute()
+        .await
+        .unwrap();
+    let raw = LanceDBVectorStore::from_connection(connection, "facts".into()).await;
+    raw.drop_columns(&["geojson", "time", "expires_at"])
+        .await
+        .unwrap();
+    drop(stores);
+
+    let reopened = open(&dir, "hash", 64).await;
+    let another = open(&dir, "hash", 64).await;
+    let filter = FactFilter::default();
+    let (first, second) = tokio::join!(reopened.facts.all(&filter), another.facts.all(&filter));
+    assert_eq!(first.unwrap(), [original.clone()]);
+    assert_eq!(second.unwrap(), [original.clone()]);
+    assert_eq!(
+        ids(&reopened.facts.search(&query("tea", filter)).await.unwrap()),
+        ["f_legacy"]
+    );
+    let mut updated = original;
+    updated.geojson = Some(json!({"type": "Point", "coordinates": [13.4, 52.5]}));
+    updated.time = Some(day(2));
+    updated.expires_at = Some(
+        DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap() + Duration::days(1),
+    );
+    reopened.facts.update_metadata(&updated).await.unwrap();
+    let mut inserted = updated.clone();
+    inserted.id = "f_new_metadata".into();
+    inserted.time = Some(day(3));
+    reopened
+        .facts
+        .insert(std::slice::from_ref(&inserted))
+        .await
+        .unwrap();
+    drop(reopened);
+    let reopened = open(&dir, "hash", 64).await;
+    assert_eq!(
+        reopened.facts.get(&updated.id).await.unwrap(),
+        Some(updated)
+    );
+    assert_eq!(
+        reopened.facts.get(&inserted.id).await.unwrap(),
+        Some(inserted)
+    );
+}
+
+#[tokio::test]
+async fn malformed_structured_queries_fail_even_for_empty_memory() {
+    use serde_json::json;
+
+    let dir = tempfile::tempdir().unwrap();
+    let stores = open(&dir, "hash", 64).await;
+    let mut search = query("", FactFilter::default());
+    search.sort = FactSort::Distance;
+    assert!(stores.facts.search(&search).await.is_err());
+    search.geojson = Some(json!({"type": "Point", "coordinates": [0.0, 91.0]}));
+    assert!(stores.facts.search(&search).await.is_err());
+    search.geojson = Some(json!({"type": "Point", "coordinates": [0.0, 0.0]}));
+    search.radius_m = Some(-1.0);
+    assert!(stores.facts.search(&search).await.is_err());
+    search.radius_m = Some(f64::INFINITY);
+    assert!(stores.facts.search(&search).await.is_err());
+    search.radius_m = None;
+    search.area = search.geojson.clone();
+    assert!(stores.facts.search(&search).await.is_err());
+    search.area = None;
+    search.filter.time_range = Some(TimeRange {
+        from: day(2),
+        to: day(1),
+    });
+    assert!(stores.facts.search(&search).await.is_err());
+}
+
+async fn memory_indexes(dir: &TempDir, table: &str) -> Vec<(String, String)> {
+    use flow_like_storage::databases::vector::lancedb::{LanceDBVectorStore, connect_lance};
+    let connection = connect_lance(dir.path().to_str().unwrap())
+        .execute()
+        .await
+        .unwrap();
+    let store = LanceDBVectorStore::from_connection(connection, table.into()).await;
+    let mut indexes = store
+        .list_indices()
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|index| {
+            (
+                index.columns.join(","),
+                index.index_type.to_ascii_uppercase(),
+            )
+        })
+        .collect::<Vec<_>>();
+    indexes.sort();
+    indexes
+}
+
+#[tokio::test]
+async fn idle_optimization_creates_lookup_indices_and_keeps_small_memories_exact() {
+    let dir = tempfile::tempdir().unwrap();
+    let stores = open(&dir, "hash", 64).await;
+    let stored = fact(
+        "f_indexed",
+        "The user prefers tea.",
+        FactKind::Preference,
+        "user",
+        &[1],
+        0,
+    );
+    stores.facts.insert(&[stored]).await.unwrap();
+    stores
+        .history
+        .index(&[HistoryItem::new(
+            1,
+            "m_1",
+            Role::User,
+            day(0),
+            "The user prefers tea.",
+        )])
+        .await
+        .unwrap();
+    stores
+        .segments
+        .put(&[summary(0, 1, 3, &[("The user prefers tea.", 1)])])
+        .await
+        .unwrap();
+    let engine = engine(stores);
+    engine.optimize(day(0)).await.unwrap();
+
+    let facts = memory_indexes(&dir, "facts").await;
+    for (column, kind) in [
+        ("id", "BTREE"),
+        ("anchor_at", "BTREE"),
+        ("expires_at", "BTREE"),
+        ("kind", "BITMAP"),
+        ("text", "FTS"),
+    ] {
+        assert!(facts.contains(&(column.into(), kind.into())), "{facts:?}");
+    }
+    assert!(!facts.iter().any(|(column, _)| column == "vector"));
+    let history = memory_indexes(&dir, "history").await;
+    for (column, kind) in [
+        ("seq", "BTREE"),
+        ("created_at", "BTREE"),
+        ("role", "BITMAP"),
+        ("text", "FTS"),
+    ] {
+        assert!(
+            history.contains(&(column.into(), kind.into())),
+            "{history:?}"
+        );
+    }
+    let segments = memory_indexes(&dir, "segments").await;
+    for (column, kind) in [
+        ("parent", "BTREE"),
+        ("seq_from", "BTREE"),
+        ("t_from", "BTREE"),
+        ("level", "BITMAP"),
+        ("text", "FTS"),
+    ] {
+        assert!(
+            segments.contains(&(column.into(), kind.into())),
+            "{segments:?}"
+        );
+    }
+    assert!(!segments.iter().any(|(column, _)| column == "vector"));
+    engine.optimize(day(1)).await.unwrap();
+    assert_eq!(memory_indexes(&dir, "facts").await, facts);
+    assert_eq!(memory_indexes(&dir, "history").await, history);
+    assert_eq!(memory_indexes(&dir, "segments").await, segments);
+
+    let appended = fact(
+        "f_appended",
+        "The user likes oolong.",
+        FactKind::Preference,
+        "user",
+        &[5],
+        2,
+    );
+    engine.stores().facts.insert(&[appended]).await.unwrap();
+    engine.optimize(day(2)).await.unwrap();
+    assert_eq!(
+        ids(&engine
+            .stores()
+            .facts
+            .search(&query("oolong", FactFilter::default()))
+            .await
+            .unwrap())[0],
+        "f_appended"
+    );
+}
+
+#[tokio::test]
+async fn vector_index_is_retrained_after_embedding_model_changes() {
+    let dir = tempfile::tempdir().unwrap();
+    let stores = open(&dir, "hash-a", 32).await;
+    let facts = (0..300)
+        .map(|index| {
+            fact(
+                &format!("f_vector_{index:04}"),
+                &format!("The cafe serves recipe number {index}."),
+                FactKind::Knowledge,
+                "cafes",
+                &[index + 1],
+                0,
+            )
+        })
+        .collect::<Vec<_>>();
+    stores.facts.insert(&facts).await.unwrap();
+    let first = engine(stores);
+    first.optimize(day(0)).await.unwrap();
+    assert!(
+        memory_indexes(&dir, "facts")
+            .await
+            .iter()
+            .any(|(column, kind)| column == "vector" && kind == "IVF_FLAT")
+    );
+    drop(first);
+
+    let changed = open(&dir, "hash-b", 32).await;
+    assert!(!changed.facts.vectors_current().await.unwrap());
+    assert_eq!(changed.facts.reembed().await.unwrap(), 300);
+    assert!(
+        !memory_indexes(&dir, "facts")
+            .await
+            .iter()
+            .any(|(column, _)| column == "vector")
+    );
+    let rebuilt = engine(changed);
+    rebuilt.optimize(day(1)).await.unwrap();
+    assert!(
+        memory_indexes(&dir, "facts")
+            .await
+            .iter()
+            .any(|(column, kind)| column == "vector" && kind == "IVF_FLAT")
+    );
+    assert!(rebuilt.stores().facts.vectors_current().await.unwrap());
+    let mut ordered = query("cafe", FactFilter::default());
+    ordered.sort = FactSort::TimeAsc;
+    ordered.limit = 300;
+    assert_eq!(
+        rebuilt.stores().facts.search(&ordered).await.unwrap().len(),
+        300
+    );
+}
+
+#[tokio::test]
+async fn maintenance_does_not_embed_expired_facts_waiting_for_vectors() {
+    let dir = tempfile::tempdir().unwrap();
+    let counting = CountingEmbedder::new("hash", 32);
+    let stores = MemoryStores::open_local(dir.path(), counting.clone())
+        .await
+        .unwrap();
+    let mut expired = fact(
+        "f_expired_unembedded",
+        "This temporary fact has expired.",
+        FactKind::Knowledge,
+        "temporary",
+        &[1],
+        0,
+    );
+    expired.expires_at = Some(day(1));
+    let active = fact(
+        "f_active_unembedded",
+        "This fact remains useful.",
+        FactKind::Knowledge,
+        "durable",
+        &[2],
+        0,
+    );
+    stores
+        .facts
+        .insert_embedded(vec![(expired, None), (active, None)])
+        .await
+        .unwrap();
+    assert_eq!(counting.texts.load(Ordering::SeqCst), 0);
+
+    let engine = engine(stores);
+    engine.optimize(day(1)).await.unwrap();
+    assert_eq!(counting.texts.load(Ordering::SeqCst), 1);
+    assert!(
+        engine
+            .stores()
+            .facts
+            .get("f_expired_unembedded")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        engine
+            .stores()
+            .facts
+            .get("f_active_unembedded")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(engine.stores().facts.vectors_current().await.unwrap());
+}
+
+async fn vector_index_uuid(dir: &TempDir) -> String {
+    use flow_like_storage::databases::vector::lancedb::{LanceDBVectorStore, connect_lance};
+    let connection = connect_lance(dir.path().to_str().unwrap())
+        .execute()
+        .await
+        .unwrap();
+    let store = LanceDBVectorStore::from_connection(connection, "facts".into()).await;
+    store
+        .raw()
+        .await
+        .unwrap()
+        .list_indices()
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|index| index.columns == ["vector"])
+        .unwrap()
+        .index_uuid
+        .unwrap()
+}
+
+#[tokio::test]
+async fn expiry_of_all_old_model_rows_still_rebuilds_their_vector_index() {
+    let dir = tempfile::tempdir().unwrap();
+    let stores = open(&dir, "hash-old", 32).await;
+    let expiring = notes(300)
+        .into_iter()
+        .map(|mut fact| {
+            fact.expires_at = Some(day(1));
+            fact
+        })
+        .collect::<Vec<_>>();
+    stores.facts.insert(&expiring).await.unwrap();
+    let old = engine(stores);
+    old.optimize(day(0)).await.unwrap();
+    let old_index = vector_index_uuid(&dir).await;
+    drop(old);
+
+    let counting = CountingEmbedder::new("hash-current", 32);
+    let current = MemoryStores::open_local(dir.path(), counting.clone())
+        .await
+        .unwrap();
+    let fresh = notes(300)
+        .into_iter()
+        .map(|mut fact| {
+            fact.id = format!("{}_new", fact.id);
+            fact.text.push_str(" This is a fresh note.");
+            fact
+        })
+        .collect::<Vec<_>>();
+    current.facts.insert(&fresh).await.unwrap();
+    assert_eq!(counting.texts.load(Ordering::SeqCst), 300);
+    let current = engine(current);
+    current.optimize(day(1)).await.unwrap();
+    // Every surviving vector was already current; the expired model needs no embedding calls.
+    assert_eq!(counting.texts.load(Ordering::SeqCst), 300);
+    assert_ne!(vector_index_uuid(&dir).await, old_index);
+    assert_eq!(
+        current
+            .stores()
+            .facts
+            .count(&FactFilter::default())
+            .await
+            .unwrap(),
+        300
     );
 }

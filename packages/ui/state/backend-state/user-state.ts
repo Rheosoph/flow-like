@@ -14,6 +14,11 @@ import type {
 	IHomeLayout,
 } from "../../components/home/types";
 import type { IProfile, IProfileApp, IProfileShortcut } from "../../lib";
+import type {
+	AvailabilityUpdate,
+	CalendarLinkRequest,
+	UserAvailability,
+} from "../../lib/availability";
 import { looksLikeAccountId } from "../../lib/user-display";
 import type { ISettingsProfile } from "../../types";
 import type {
@@ -306,6 +311,12 @@ export interface IUserTemplateInfo {
 }
 
 export interface IUserState {
+	getAvailability?(): Promise<UserAvailability>;
+	updateAvailability?(value: AvailabilityUpdate): Promise<UserAvailability>;
+	clearAvailability?(): Promise<UserAvailability>;
+	linkCalendar?(value: CalendarLinkRequest): Promise<UserAvailability>;
+	unlinkCalendar?(id: string): Promise<UserAvailability>;
+	refreshCalendars?(): Promise<UserAvailability>;
 	getHomeDefaults(defaultId?: string): Promise<IHomeDefaults>;
 	saveHomeLayout(
 		layout: IHomeLayout | null,

@@ -32,7 +32,6 @@ export class BotExpressionController {
 	private changedAt = 0;
 	private inferTimer?: ReturnType<typeof setTimeout>;
 	private holdTimer?: ReturnType<typeof setTimeout>;
-	private warmTimer?: ReturnType<typeof setTimeout>;
 	private settleTimer?: ReturnType<typeof setTimeout>;
 	private draftContext: EmotionInput["messages"] = [];
 	private clearedDraft?: { text: string; expression: BotExpression };
@@ -62,9 +61,6 @@ export class BotExpressionController {
 			};
 			this.onChange(this.state);
 		});
-		this.warmTimer = setTimeout(() => {
-			if (!this.disposed) this.client.warmup();
-		}, 750);
 	}
 
 	update(input: EmotionInput) {
@@ -248,7 +244,6 @@ export class BotExpressionController {
 		clearTimeout(this.settleTimer);
 		this.clearedDraft = undefined;
 		this.client.cancel(this.owner);
-		clearTimeout(this.warmTimer);
 		this.unsubscribe();
 	}
 }

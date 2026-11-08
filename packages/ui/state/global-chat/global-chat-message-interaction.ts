@@ -18,6 +18,7 @@ export function globalChatModelInput(
 	return {
 		prompt: joinContentText(historyMessageForModel(message).content),
 		history: history
+			.filter((item) => !item.userContext && !item.userContextDerived)
 			.filter(
 				(item) =>
 					(!item.error && !item.notice) ||

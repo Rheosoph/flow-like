@@ -92,6 +92,10 @@
 			"description": "Dateien aufbewahren, wie im Speicher einer App",
 			"label": "Dateien"
 		},
+		"user_context": {
+			"description": "Eine Person um ihren Standort, ihre Vorlieben oder ihre aktuelle Aktivität bitten, mit ihrer Zustimmung",
+			"label": "Nutzerkontext"
+		},
 		"web_requests": {
 			"description": "Ruft Web-APIs auf und lädt URLs wie Feeds selbst; jede neue Website gibst du frei",
 			"label": "Web-Anfragen"
@@ -103,6 +107,74 @@
 	},
 	"chat": {
 		"defaultModelHint": ""
+	},
+	"context": {
+		"label": "Anfrage zum Nutzerkontext",
+		"you": "dich",
+		"title": "{{bot}} bittet {{person}}, Kontext zu teilen",
+		"fields": {
+			"location": "Standort",
+			"timezone": "Zeitzone und Ortszeit",
+			"locale": "Sprache und Einheiten",
+			"preferences": "Persönliche Vorlieben",
+			"availability": "Verfügbarkeit",
+			"current_context": "Aktuelle Aktivität in Flow-Like",
+			"device": "Gerät und Eingabemöglichkeiten",
+			"free_busy": "Freie und belegte Kalenderzeiten"
+		},
+		"groupAudience": "Wird mit allen in dieser Gruppe geteilt und kann in den Gruppenantworten des Bots verwendet werden.",
+		"directAudience": "Wird in diesem direkten Gespräch geteilt und kann in den Antworten des Bots verwendet werden.",
+		"device": "Quelle: dieses Gerät ({{platform}}). Kontext wird nur erfasst, während diese App geöffnet ist.",
+		"native": "Flow-Like-App",
+		"browser": "Browser",
+		"retention": "Diese Momentaufnahme gilt bis zu fünf Minuten als aktuell und wird für diese Antwort verwendet. Geteilte Nachrichten bleiben in diesem Gespräch.",
+		"unavailable": "Nicht verfügbar: {{fields}}",
+		"declined": "Teilen abgelehnt",
+		"shared": "Kontext für diese Anfrage geteilt",
+		"expired": "Diese Anfrage ist abgelaufen.",
+		"locationSource": "Standortquelle",
+		"precise": "Genauer Gerätestandort",
+		"approximate": "Ungefährer Gerätestandort (mindestens 1,5 km)",
+		"manualLocation": "Stadt oder Ort eingeben",
+		"place": "Stadt oder Ort",
+		"timezone": "Zeitzone",
+		"language": "Sprache",
+		"units": "Einheiten",
+		"unspecified": "Keine Präferenz",
+		"metric": "Metrisch",
+		"imperial": "Imperial",
+		"name": "Bevorzugter Name (optional)",
+		"style": "Antwortstil",
+		"concise": "Kurz",
+		"detailed": "Ausführlich",
+		"availability": "Deine Verfügbarkeit",
+		"available": "Verfügbar",
+		"busy": "Beschäftigt",
+		"away": "Abwesend",
+		"availabilityNote": "Hinweis zur Verfügbarkeit (optional)",
+		"activity": "Aktuelle Aktivität (leer lassen, um die offene Flow-Like-Ansicht zu teilen)",
+		"activityHint": "Nur Kennungen der Ansicht und der Auswahl werden geteilt. Dokumentinhalte sind nicht enthalten.",
+		"sessionHint": "Der Sitzungszugriff gilt bis zu 30 Minuten auf diesem Gerät, für diesen Bot, Zweck, diese Felder und dieses Gespräch. Du kannst ihn hier widerrufen.",
+		"failed": "Dein Kontext konnte nicht geteilt werden. Prüfe die Anfrage und versuche es erneut.",
+		"changed": "Das Gespräch hat sich geändert. Bitte den Bot um eine neue Anfrage.",
+		"decline": "Ablehnen",
+		"once": "Einmal teilen",
+		"sharing": "Wird geteilt…",
+		"session": "Für diese Sitzung erlauben",
+		"revoke": "Sitzungszugriff widerrufen",
+		"statusTitle": "{{bot}} bittet {{person}}, eine Statusänderung zu bestätigen",
+		"statusProposal": "Status für {{minutes}} Minuten auf {{status}} setzen",
+		"localStatus": "Dies ändert den Status dieser App-Sitzung und kann Meldungen im Vordergrund pausieren. Dein geteilter Status und Push-Nachrichten auf anderen Geräten bleiben unverändert.",
+		"publicStatus": "Andere sehen diesen Status in Flow-Like. Er ersetzt deinen manuellen oder kalenderbasierten Status bis zum Ende des Timers.",
+		"focusEffect": "Fokus pausiert gewöhnliche Benachrichtigungen. Deine Ausnahmen für Erwähnungen und Anrufe gelten weiterhin.",
+		"statusEffect": "Dieser Status pausiert keine Benachrichtigungen.",
+		"statusApplied": "Statusänderung angewendet",
+		"availabilitySource": "Quelle der Verfügbarkeit",
+		"accountAvailability": "Mein aktueller Flow-Like-Status",
+		"manualAvailability": "Verfügbarkeit für diese Antwort eingeben",
+		"freeBusyHint": "Teile belegte Zeiträume aus deinen verknüpften Kalendern für bis zu 24 Stunden. Termindetails werden nicht geteilt.",
+		"manageAvailability": "Verfügbarkeit und Kalender verwalten",
+		"applyStatus": "Statusänderung anwenden"
 	},
 	"computer": {
 		"alt": "",
@@ -129,6 +201,21 @@
 			"answeredOnce": "",
 			"askEveryTime": "",
 			"botFallback": "",
+			"configurationChanges": "Vorgeschlagene Änderungen",
+			"clearValue": "Wert löschen",
+			"fields": {
+				"name": "Name",
+				"description": "Beschreibung",
+				"instructions": "Systemanweisungen",
+				"capabilities": "Fähigkeiten",
+				"model": "Chat-Modelle",
+				"embedding_model": "Embedding-Modell",
+				"stt_model": "Spracherkennungsmodell",
+				"tts_model": "Sprachausgabemodell",
+				"image_model": "Bildmodell",
+				"vision_model": "Modell zur Bilderkennung",
+				"subtask_model": "Modell für Teilaufgaben"
+			},
 			"deny": "",
 			"failed": "",
 			"label": "",
@@ -594,7 +681,8 @@
 			"searchModels": "Modelle suchen",
 			"subtitle": "Sag ihm, wie er arbeiten soll, und wähle die Modelle, mit denen er denkt.",
 			"title": "Anweisungen und Modelle",
-			"unknownModel": "Unbekanntes Modell ({{id}})"
+			"unknownModel": "Unbekanntes Modell ({{id}})",
+			"decisionHint": "Entscheidet, wann der Bot antwortet, im Anruf kurz bestätigt oder auf jemanden wartet. Wählt passende Skills, bewertet Hintergrundereignisse und pflegt Erinnerungen."
 		},
 		"delete": {
 			"action": "Löschen",
@@ -1054,7 +1142,10 @@
 			"repeat": "",
 			"resume": "",
 			"title": "",
-			"tz": ""
+			"tz": "",
+			"monitoring": "Nur relevante Änderungen melden",
+			"monitoringHint": "Nutzt nach jeder Prüfung das Entscheidungsmodell des Bots. Für Erinnerungen und regelmäßige Berichte ausgeschaltet lassen.",
+			"monitoringLabel": "Beobachtung"
 		},
 		"waitingForYou": "",
 		"webhooks": {
@@ -1193,10 +1284,40 @@
 		"title": ""
 	},
 	"roomLimits": {
-		"apps": "",
-		"description": "",
-		"failed": "",
-		"title": ""
+		"apps": "Projekte, die der Bot hier nutzen darf",
+		"description": "Lege fest, was sich dieser Bot hier merken und nutzen darf. Deine weiteren Bot-Berechtigungen gelten weiterhin.",
+		"failed": "Die Einstellungen konnten nicht gespeichert werden.",
+		"title": "{{bot}} in {{room}}",
+		"directTitle": "{{bot}} mit {{room}}",
+		"directDescription": "Wähle, was der Bot beim Antworten auf die Nachrichten dieser Person nutzen darf.",
+		"mentionedOnly": "Nur antworten, wenn erwähnt",
+		"mentionedOnlyHint": "Sonst liest der Bot die Nachrichten in dieser Gruppe mit und entscheidet selbst, ob er antwortet.",
+		"memory": {
+			"title": "Wissen und Gedächtnis",
+			"subtitle": "Wähle, welches Wissen hinein- und hinausfließen darf.",
+			"recall": "In dieser Gruppe nutzen",
+			"contribute": "Außerhalb dieser Gruppe nutzen",
+			"owner": "1:1-Gedächtnis nutzen",
+			"ownerHint": "Gespeichertes Wissen aus deinem 1:1 mit diesem Bot abrufen. Es kann in Gruppenantworten erscheinen.",
+			"shared": "Geteiltes Gedächtnis nutzen",
+			"sharedHint": "Wissen abrufen, das andere Gruppen dieses Bots zum Teilen freigegeben haben.",
+			"share": "Zum geteilten Gedächtnis beitragen",
+			"shareHint": "Das gespeicherte Wissen dieser Gruppe in deinem 1:1 und anderen Gruppen dieses Bots mit geteiltem Gedächtnis verfügbar machen. Ausschalten verhindert künftige Abrufe außerhalb dieser Gruppe.",
+			"thisGroup": "Diese Gruppe",
+			"privateSource": "Dein 1:1",
+			"sharedSource": "Geteilte Gruppen",
+			"recallSummary": "Kann abrufen:",
+			"sharingSummary": "Gespeichertes Wissen aus dieser Gruppe ist in deinem 1:1 und Gruppen mit geteiltem Gedächtnis verfügbar.",
+			"localSummary": "Was dieser Bot hier lernt, bleibt in dieser Gruppe."
+		},
+		"setup": {
+			"title": "Deine Bots einrichten",
+			"hint": "Jeder Bot startet nur mit dem Gedächtnis dieser Gruppe. Wähle, welches Wissen er mitbringen oder teilen darf, bevor du ihn hinzufügst.",
+			"named": "Gedächtnis-Einstellungen für {{bot}}",
+			"later": "Du kannst diese Auswahl später in den Bot-Einstellungen der Gruppe ändern.",
+			"back": "Zurück",
+			"continue": "Weiter zur Bot-Einrichtung"
+		}
 	},
 	"roomMembers": {
 		"bot": "",
@@ -1254,5 +1375,45 @@
 			"memory": "Erinnerungen"
 		},
 		"unsupported": "Dateien und Daten von {{name}} sind hier noch nicht verfügbar."
+	},
+	"availability": {
+		"title": "Verfügbarkeit und Fokus",
+		"description": "Wähle den Status, den andere sehen. Fokus pausiert gewöhnliche Benachrichtigungen bis zum Ende des Timers. Beschäftigt dient nur zur Information.",
+		"status": {
+			"available": "Verfügbar",
+			"busy": "Beschäftigt",
+			"focus": "Fokus",
+			"away": "Abwesend"
+		},
+		"until": "Bis {{time}}",
+		"fromCalendar": "Aus deinem Kalender",
+		"statusLabel": "Status",
+		"duration": "Dauer",
+		"minutes": "{{count}} Minuten",
+		"set": "Status setzen",
+		"clear": "Manuellen Status aufheben",
+		"local": "Dieser Status gilt nur in dieser App-Sitzung auf diesem Gerät.",
+		"override": "Ein manueller Status hat bis zu vier Stunden Vorrang vor deinem Kalender. Danach gilt wieder deine Kalenderverfügbarkeit.",
+		"exceptions": "Während Fokus erlauben",
+		"mentions": "Direkte Erwähnungen",
+		"calls": "Eingehende Anrufe",
+		"loadFailed": "Deine Verfügbarkeit konnte nicht geladen werden. Versuche es erneut.",
+		"retry": "Erneut versuchen",
+		"failed": "Die Verfügbarkeit konnte nicht geändert werden. Versuche es erneut.",
+		"oneHour": "1 Stunde",
+		"manage": "Verfügbarkeit und Kalender verwalten",
+		"calendars": "Verknüpfte Kalender",
+		"calendarPrivacy": "Dein Hauptkalender bestimmt, ob du frei oder beschäftigt bist. Andere sehen deinen Status. Bots können um deine belegten Zeiträume bitten. Titel, Teilnehmer und Beschreibungen von Terminen werden nicht geteilt.",
+		"unlinkCalendar": "{{name}} trennen",
+		"unlink": "Trennen",
+		"linkCalendar": "{{name}} verknüpfen",
+		"refreshCalendars": "Kalender aktualisieren",
+		"calendarAccountRequired": "Melde dich an, um einen Kalender mit deinem geteilten Status zu verknüpfen.",
+		"calendarProviderRequired": "Dein Hub benötigt eine konfigurierte Google- oder Microsoft-Anmeldung, um Kalender zu verknüpfen.",
+		"calendarReconnect": "Verbinde dieses Konto erneut über deinen Hub, bevor du seinen Kalender verknüpfst.",
+		"calendarFailed": "Der Kalender konnte nicht aktualisiert werden. Versuche es erneut.",
+		"deviceStatus": "Status auf diesem Gerät",
+		"deviceHelp": "Diese App-Sitzung kann Meldungen im Vordergrund pausieren. Dein geteilter Status und Push-Nachrichten auf anderen Geräten bleiben unverändert.",
+		"clearDevice": "Gerätestatus aufheben"
 	}
 }

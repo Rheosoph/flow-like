@@ -132,6 +132,43 @@ async fn a_reply_to_a_person_message_is_asked_for_and_does_not_notify() {
 }
 
 #[tokio::test]
+async fn responding_to_a_background_event_keeps_its_reply_without_an_owner_push() {
+    for delivery in ["respond", "notify"] {
+        let (db, sink) = setup().await;
+        turn(&db, "t1", "TRIGGER", 0).await;
+        inbox_entry::ActiveModel {
+            id: Set("reply-entry".into()),
+            inbox_id: Set("user-a".into()),
+            conversation_id: Set("c1".into()),
+            message_id: Set("re-1".into()),
+            sender_id: Set("bot_1".into()),
+            kind: Set("MESSAGE".into()),
+            envelope: Set(flow_like_types::inbox::plain_envelope(json!({
+                "text":"The event was processed", "system_one_delivery":delivery,
+            }))),
+            created_at: Set(at(1)),
+            seq: Set(Some(2)),
+            cleared: Set(Some(false)),
+        }
+        .insert(&db)
+        .await
+        .unwrap();
+        let sent = notify_for_reply(&db, &sink, &reply("t1", "re-1", "The event was processed"))
+            .await
+            .unwrap();
+        assert_eq!(sent, delivery == "notify");
+        assert_eq!(sink.count(), usize::from(delivery == "notify"));
+        assert!(
+            inbox_entry::Entity::find_by_id("reply-entry")
+                .one(&db)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_reply_to_a_trigger_notifies_under_the_bot_and_opens_its_chat() {
     let (db, sink) = setup().await;
     turn(&db, "t1", "TRIGGER", 0).await;

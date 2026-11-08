@@ -67,15 +67,27 @@ struct BotView {
 #[async_trait]
 impl TurnHub for BotView {
     async fn list(&self) -> Result<Vec<BotTurn>, HubFailure> {
-        Err(HubFailure::answered(403, None, "a bot token lists no turns"))
+        Err(HubFailure::answered(
+            403,
+            None,
+            "a bot token lists no turns",
+        ))
     }
 
     async fn claim(&self, _turn_id: &str, _host_id: &str) -> Result<BotTurn, HubFailure> {
-        Err(HubFailure::answered(403, None, "a bot token claims no turns"))
+        Err(HubFailure::answered(
+            403,
+            None,
+            "a bot token claims no turns",
+        ))
     }
 
     async fn heartbeat(&self, _turn_id: &str, _host_id: &str) -> Result<BotTurn, HubFailure> {
-        Err(HubFailure::answered(403, None, "a bot token keeps no lease"))
+        Err(HubFailure::answered(
+            403,
+            None,
+            "a bot token keeps no lease",
+        ))
     }
 
     async fn desktop_bots(&self) -> Result<Vec<String>, HubFailure> {
@@ -83,19 +95,34 @@ impl TurnHub for BotView {
     }
 
     async fn report_host(&self, _: &str, _: &[String]) -> Result<Vec<String>, HubFailure> {
-        Err(HubFailure::answered(403, None, "a bot token reports no host"))
+        Err(HubFailure::answered(
+            403,
+            None,
+            "a bot token reports no host",
+        ))
     }
 
     async fn delete_host(&self, _: &str) -> Result<(), HubFailure> {
-        Err(HubFailure::answered(403, None, "a bot token reports no host"))
+        Err(HubFailure::answered(
+            403,
+            None,
+            "a bot token reports no host",
+        ))
     }
 
     async fn cancel_turn(&self, _: &str, _: &str) -> Result<(), HubFailure> {
-        Err(HubFailure::answered(403, None, "a bot token cancels no turns"))
+        Err(HubFailure::answered(
+            403,
+            None,
+            "a bot token cancels no turns",
+        ))
     }
 
     async fn entries(&self, _: &str, _: &str) -> Result<Vec<InboxEntry>, HubFailure> {
-        self.calls.lock().unwrap().push((self.token.clone(), "entries"));
+        self.calls
+            .lock()
+            .unwrap()
+            .push((self.token.clone(), "entries"));
         Ok(self.entries.lock().unwrap().clone())
     }
 
@@ -110,7 +137,10 @@ impl TurnHub for BotView {
         if let Some(failure) = self.send_failures.lock().unwrap().pop_front() {
             return Err(failure);
         }
-        self.calls.lock().unwrap().push((self.token.clone(), "send"));
+        self.calls
+            .lock()
+            .unwrap()
+            .push((self.token.clone(), "send"));
         self.sent.lock().unwrap().push(Sent {
             bot_id: bot_id.to_owned(),
             conversation_id: conversation_id.to_owned(),
@@ -473,7 +503,10 @@ async fn a_turn_whose_bot_token_cannot_be_minted_runs_nothing() {
         turn("bt_a", "botA", "conv", "m1", 1, &[]),
         newest_first(&[(1, "m1", "user", "hello")]),
     );
-    until("the failure", || f.status("botA") == Some(TurnStatus::Failed)).await;
+    until("the failure", || {
+        f.status("botA") == Some(TurnStatus::Failed)
+    })
+    .await;
     assert_eq!(f.runner.started(), 0);
 }
 
@@ -712,7 +745,7 @@ async fn cancelling_a_turn_goes_through_the_hubs_cancel_endpoint() {
     );
     until("the run", || f.runner.started() == 1).await;
 
-    assert!(f.host.cancel("bt_a").await);
+    assert!(f.host.cancel("bt_a").await.unwrap());
     until("the cancellation", || {
         f.status("botA") == Some(TurnStatus::Cancelled)
     })
@@ -722,7 +755,7 @@ async fn cancelling_a_turn_goes_through_the_hubs_cancel_endpoint() {
         [("botA".to_owned(), "bt_a".to_owned())]
     );
     assert!(f.hub.sent.lock().unwrap().is_empty());
-    assert!(!f.host.cancel("bt_a").await);
+    assert!(!f.host.cancel("bt_a").await.unwrap());
 }
 
 fn room_turn(id: &str, trigger: &str) -> BotTurn {
@@ -748,7 +781,10 @@ async fn a_bot_that_reads_along_and_stays_silent_posts_nothing_and_ends_done() {
         room_turn("bt_a", "m1"),
         newest_first(&[(1, "m1", "user", "lunch anyone?")]),
     );
-    until("the silent end", || f.status("botA") == Some(TurnStatus::Done)).await;
+    until("the silent end", || {
+        f.status("botA") == Some(TurnStatus::Done)
+    })
+    .await;
 
     assert!(f.hub.sent.lock().unwrap().is_empty());
     assert_eq!(
@@ -773,7 +809,10 @@ async fn a_mentioned_room_bot_can_explicitly_stay_silent_when_nothing_remains_to
         room_turn("bt_a", "m1"),
         vec![mentioning(1, "m1", "botA, lunch?", &["botA"])],
     );
-    until("the silent end", || f.status("botA") == Some(TurnStatus::Done)).await;
+    until("the silent end", || {
+        f.status("botA") == Some(TurnStatus::Done)
+    })
+    .await;
 
     assert_eq!(f.hub.silenced.lock().unwrap().len(), 1);
     assert!(f.hub.sent.lock().unwrap().is_empty());
@@ -789,6 +828,9 @@ async fn a_failed_read_along_turn_is_not_reported_to_the_room() {
         room_turn("bt_a", "m1"),
         newest_first(&[(1, "m1", "user", "lunch anyone?")]),
     );
-    until("the silent end", || f.status("botA") == Some(TurnStatus::Done)).await;
+    until("the silent end", || {
+        f.status("botA") == Some(TurnStatus::Done)
+    })
+    .await;
     assert!(f.hub.sent.lock().unwrap().is_empty());
 }

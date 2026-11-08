@@ -310,3 +310,130 @@ describe("the web app", () => {
 		await hide();
 	});
 });
+
+const observed = {
+	...device,
+	age_ms: 400,
+	observation: {
+		captured_at_ms: 10_000,
+		width: 1600,
+		height: 1000,
+		pointer: { position: { x: 0.6, y: 0.4 }, source: "observed" },
+		focus: {
+			label: "Editor",
+			bounds: { x: 0.1, y: 0.1, width: 0.8, height: 0.7 },
+		},
+		action: {
+			kind: "click",
+			phase: "completed",
+			at_ms: 9900,
+			target: { x: 0.5, y: 0.3 },
+			target_bounds: { x: 0.4, y: 0.2, width: 0.2, height: 0.2 },
+		},
+		mapping: null,
+	},
+} satisfies IBotComputerView;
+
+describe("computer action observations", () => {
+	test("keeps the clean image and maps distinct observed and intended positions inside the same contain fit", async () => {
+		await show("active", observed);
+		expect(container.querySelector("img")?.getAttribute("src")).toBe(
+			observed.image,
+		);
+		expect(container.querySelector("img")?.className).toContain(
+			"object-contain",
+		);
+		const overlay = container.querySelector("[data-computer-overlay]");
+		expect(overlay?.getAttribute("viewBox")).toBe("0 0 1600 1000");
+		expect(overlay?.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet");
+		expect(overlay?.getAttribute("aria-hidden")).toBe("true");
+		expect(overlay?.getAttribute("class")).toContain("pointer-events-none");
+		const pointer = container.querySelector("[data-pointer-source='observed']");
+		expect(pointer?.getAttribute("cx")).toBe("960");
+		expect(pointer?.getAttribute("cy")).toBe("400");
+		expect(
+			container.querySelector("[data-action-target]")?.getAttribute("cx"),
+		).toBe("800");
+		expect(
+			container.querySelector("[data-focus-bounds]")?.getAttribute("width"),
+		).toBe("1280");
+		expect(container.textContent).toContain("Observed cursor");
+		expect(container.textContent).toContain("Intended target");
+		expect(container.textContent).toContain("Focus: Editor");
+		expect(container.textContent).toContain("Click · Completed");
+		await hide();
+	});
+
+	test("labels a dispatched pointer without claiming it was observed", async () => {
+		await show("active", {
+			...observed,
+			observation: {
+				...observed.observation,
+				pointer: { position: { x: 0.5, y: 0.3 }, source: "dispatched" },
+			},
+		});
+		expect(
+			container.querySelector("[data-pointer-source='dispatched']"),
+		).not.toBeNull();
+		expect(container.textContent).toContain("Last dispatched pointer");
+		expect(container.textContent).not.toContain("Observed cursor");
+		await hide();
+	});
+
+	test("old frames show their age and hide outdated highlights", async () => {
+		await show("active", { ...observed, age_ms: 12_000 });
+		expect(container.querySelector("[data-computer-overlay]")).toBeNull();
+		expect(container.textContent).toContain("Image 12s old");
+		expect(container.textContent).not.toContain("Click · Completed");
+		await hide();
+	});
+
+	test("a newly captured image does not revive an old action", async () => {
+		await show("active", {
+			...observed,
+			observation: { ...observed.observation, captured_at_ms: 30_000 },
+		});
+		expect(container.querySelector("[data-action-target]")).toBeNull();
+		expect(
+			container.querySelector("[data-pointer-source='observed']"),
+		).not.toBeNull();
+		expect(container.textContent).not.toContain("Click · Completed");
+		await hide();
+	});
+
+	test("taking over removes bot targets and dispatched pointer markers", async () => {
+		await showControls(
+			{
+				...observed,
+				taken_over: true,
+				can_control: undefined,
+				observation: {
+					...observed.observation,
+					pointer: { position: { x: 0.5, y: 0.3 }, source: "dispatched" },
+				},
+			},
+			{ onHandBack: () => {} },
+		);
+		expect(container.querySelector("[data-action-target]")).toBeNull();
+		expect(container.querySelector("[data-pointer-source]")).toBeNull();
+		expect(container.textContent).not.toContain("Click · Completed");
+		await hide();
+	});
+
+	test("missing metadata remains readable and unsupported action names never reveal input", async () => {
+		await show("active", active);
+		expect(container.querySelector("img")).not.toBeNull();
+		expect(container.querySelector("[data-computer-overlay]")).toBeNull();
+		await hide();
+		await show("active", {
+			...observed,
+			observation: {
+				...observed.observation,
+				action: { ...observed.observation.action, kind: "password=hidden" },
+			},
+		});
+		expect(container.textContent).toContain("Action · Completed");
+		expect(container.textContent).not.toContain("password=hidden");
+		await hide();
+	});
+});

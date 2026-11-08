@@ -143,6 +143,7 @@ export function useBotCapabilityLabel() {
 			command_line: t("capabilities.command_line.label", "Command line"),
 			encryption: t("capabilities.encryption.label", "End-to-end encryption"),
 			webhook: t("capabilities.webhook.label", "Webhook"),
+			user_context: t("capabilities.user_context.label", "User context"),
 			flowpilot: t("capabilities.flowpilot.label", "FlowPilot"),
 		}),
 		[t],

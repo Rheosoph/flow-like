@@ -46,6 +46,7 @@ async fn setup() -> DatabaseConnection {
 
 fn trigger(id: &str) -> TriggerBody {
     TriggerBody {
+        monitoring: false,
         source: TriggerSource::Email,
         ref_id: id.into(),
         title: "Invoice".into(),

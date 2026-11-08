@@ -87,7 +87,86 @@ pub struct WebResearchSession {
     open_url_budget: Mutex<OpenUrlSessionBudget>,
 }
 
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WebResearchSnapshot {
+    authorized_urls: HashSet<String>,
+    opened_urls: HashSet<String>,
+    non_citable_urls: HashSet<String>,
+    public_web_closed: bool,
+    search_calls: usize,
+    archive_calls: usize,
+    open_url_budget: OpenUrlSessionBudget,
+}
+
 impl WebResearchSession {
+    pub(super) fn snapshot(&self) -> Value {
+        let snapshot = WebResearchSnapshot {
+            authorized_urls: self
+                .authorized_urls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
+            opened_urls: self
+                .opened_urls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
+            non_citable_urls: self
+                .non_citable_urls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
+            public_web_closed: self.public_web_closed.load(Ordering::Acquire),
+            search_calls: self.search_calls.load(Ordering::Relaxed),
+            archive_calls: self.archive_calls.load(Ordering::Relaxed),
+            open_url_budget: self
+                .open_url_budget
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone(),
+        };
+        serde_json::to_value(snapshot).expect("web research state serializes")
+    }
+
+    pub(super) fn restore(value: Value) -> flow_like_types::Result<Self> {
+        let saved: WebResearchSnapshot = serde_json::from_value(value)?;
+        if saved.search_calls > MAX_SEARCH_CALLS_PER_SESSION
+            || saved.archive_calls > MAX_ARCHIVE_CALLS_PER_SESSION
+            || saved.open_url_budget.session_calls > MAX_OPEN_URL_CALLS_PER_SESSION
+            || saved.open_url_budget.session_chars_reserved > MAX_OPEN_URL_CHARS_PER_SESSION
+            || saved.open_url_budget.round_calls > MAX_OPEN_URL_CALLS_PER_ROUND
+            || saved.open_url_budget.round_chars_reserved > MAX_OPEN_URL_CHARS_PER_ROUND
+            || saved.open_url_budget.round_call_limit > MAX_OPEN_URL_CALLS_PER_ROUND
+            || saved.open_url_budget.round_char_limit > MAX_OPEN_URL_CHARS_PER_ROUND
+            || saved.authorized_urls.len() + saved.opened_urls.len() + saved.non_citable_urls.len()
+                > 2_048
+            || saved
+                .authorized_urls
+                .iter()
+                .chain(&saved.opened_urls)
+                .chain(&saved.non_citable_urls)
+                .any(|url| url.len() > 8_192 || parse_public_url(url).is_err())
+            || saved
+                .opened_urls
+                .iter()
+                .any(|url| saved.non_citable_urls.contains(url))
+        {
+            return Err(flow_like_types::anyhow!(
+                "Saved web research state has invalid limits or provenance"
+            ));
+        }
+        Ok(Self {
+            authorized_urls: Mutex::new(saved.authorized_urls),
+            opened_urls: Mutex::new(saved.opened_urls),
+            non_citable_urls: Mutex::new(saved.non_citable_urls),
+            public_web_closed: AtomicBool::new(saved.public_web_closed),
+            search_calls: AtomicUsize::new(saved.search_calls),
+            archive_calls: AtomicUsize::new(saved.archive_calls),
+            open_url_budget: Mutex::new(saved.open_url_budget),
+        })
+    }
+
     pub fn new(user_prompt: &str) -> Self {
         let session = Self::default();
         session.authorize_user_text(user_prompt);
@@ -446,7 +525,8 @@ fn trim_user_url_candidate(mut candidate: &str) -> &str {
 
 /// Conservative model-context and network budget shared by one assistant run. Callers reset the
 /// round counters for each model response while the session counters survive follow-up rounds.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct OpenUrlSessionBudget {
     session_calls: usize,
     session_chars_reserved: usize,

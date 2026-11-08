@@ -5,10 +5,14 @@
 // Tauri retain its required mobile `staticlib`/`cdylib` contract without
 // archiving the full desktop dependency graph into those artifacts on every
 // host build.
-mod deeplink;
+#[cfg(target_os = "android")]
+mod android_bot_runtime;
+#[cfg(target_os = "android")]
+mod android_mobile;
 mod bot_host;
 #[cfg(feature = "code-sandbox")]
 mod code_sandbox;
+mod deeplink;
 #[cfg(desktop)]
 mod device_models;
 mod device_tunnels;
@@ -27,10 +31,6 @@ mod local_page_actions;
 #[cfg(any(test, not(debug_assertions)))]
 mod logging;
 mod native_auth;
-#[cfg(target_os = "android")]
-mod android_mobile;
-#[cfg(target_os = "android")]
-mod android_bot_runtime;
 mod offline_writes;
 mod profile;
 mod realtime;
@@ -1523,6 +1523,7 @@ pub fn run() {
             functions::local_bots::local_inbox_rename,
             functions::local_bots::local_inbox_set_image,
             functions::local_bots::local_inbox_add_members,
+            functions::local_bots::local_inbox_set_member_limits,
             functions::local_bots::local_inbox_remove_member,
             functions::local_bots::local_inbox_delete_conversation,
             functions::local_bots::local_inbox_entries,

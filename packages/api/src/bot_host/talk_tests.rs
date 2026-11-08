@@ -1,15 +1,19 @@
 use super::{
     approvals::GrantRows,
-    fixture::{at, database, insert_bot},
-    ledger::{self, enqueue_in, next_head, recover_in},
+    fixture::{
+        at, conversation as create_conversation, database, entry, insert_bot, message,
+        participant_wait,
+    },
+    ledger::{self, next_head, recover_in},
     talk::{
         ERROR_ASK_ANSWERED, ERROR_ASK_EXPIRED, ERROR_ASK_QUEUED, Question, REPLY_BY_DAYS,
         WAIT_SECS, answer_from, answered_ask, ask_body, ask_result_transcript, asked_by,
-        end_lapsed_in, grant_scope, granted_in, headless_verdict, roster_in, turn_conversation,
+        end_lapsed_in, grant_scope, granted_in, headless_verdict, remote_context, roster_in,
+        turn_conversation, turn_origin_conversation,
     },
 };
 use crate::{
-    entity::{bot_turn, inbox_entry},
+    entity::{bot_decision_wait, bot_turn, inbox_entry},
     routes::{
         bots::fire::{FiredTurn, TurnReply},
         inbox::{
@@ -23,11 +27,12 @@ use crate::{
 };
 use chrono::{DateTime, Duration, FixedOffset};
 use flow_like::flow::copilot::{
-    bot_talk::{BotPresence, CrewMember, HeadlessPermission, PendingAnswer},
+    ChatRole,
+    bot_talk::{BotPresence, CrewMember, HeadlessPermission, MAX_EXCHANGE_ROUNDS, PendingAnswer},
     tool_grants::{GrantStore, record_card_answer},
 };
 use flow_like_types::{
-    bot_turn::{STORED_CANCELLED, STORED_QUEUED, turn_id},
+    bot_turn::{MAX_HOPS, STORED_CANCELLED, STORED_QUEUED, turn_id},
     inbox::{ActivityBody, InboxEntryKind},
     tool_grant::ApprovalDecision,
 };
@@ -320,6 +325,444 @@ async fn a_late_answer_wakes_the_asker_in_the_conversation_it_asked_from() {
 }
 
 #[tokio::test]
+async fn an_ask_result_clears_its_origin_dependency_without_replaying_over_a_new_wait() {
+    let (db, conversation) = pair("SERVER", "DESKTOP").await;
+    for room in ["origin", "other"] {
+        create_conversation(&db, room, "GROUP", "PLAIN", &[OWNER, SCOUT, LEDGER]).await;
+        participant_wait(&db, SCOUT, room, now_millis() - Duration::seconds(1)).await;
+    }
+    ask_round(&db, &conversation, "ask-dependency", 1, 0, 1).await;
+    let reply = answer(&db, &conversation, "ask-dependency", 2).await;
+    assert_eq!(turn(&db, SCOUT, &reply).await.unwrap().hops, 1);
+    assert!(
+        bot_decision_wait::Entity::find_by_id((SCOUT.into(), "origin".into()))
+            .one(&db)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        bot_decision_wait::Entity::find_by_id((SCOUT.into(), "other".into()))
+            .one(&db)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let later = now_millis() + Duration::seconds(1);
+    participant_wait(&db, SCOUT, "origin", later).await;
+    let mut recipient =
+        super::fixture::recipient(SCOUT, OWNER, flow_like_types::bot::BotLocation::Server);
+    recipient.conversation_id = conversation;
+    recipient.trigger_message_id = reply.clone();
+    recipient.replied_to = true;
+    recipient.hops = 2;
+    super::talk::mark_turns(&db, &[&recipient], later + Duration::seconds(1))
+        .await
+        .unwrap();
+    let kept = bot_decision_wait::Entity::find_by_id((SCOUT.into(), "origin".into()))
+        .one(&db)
+        .await
+        .unwrap()
+        .expect("replayed result preserves the newer decision");
+    assert_eq!(kept.created_at, later);
+}
+
+#[tokio::test]
+async fn a_late_answer_keeps_the_original_request_and_the_askers_last_reply() {
+    let (db, exchange) = pair("SERVER", "SERVER").await;
+    create_conversation(&db, "origin", "DIRECT", "PLAIN", &[OWNER, SCOUT]).await;
+    message(
+        &db,
+        "origin",
+        "owner-request",
+        OWNER,
+        1,
+        json!({ "text": "Check the invoice total with Ledger." }),
+        &[SCOUT],
+    )
+    .await;
+    message(
+        &db,
+        "origin",
+        "scout-waiting",
+        SCOUT,
+        2,
+        json!({ "text": "I am waiting for Ledger's answer." }),
+        &[SCOUT],
+    )
+    .await;
+    ask(&db, &exchange, "ask-late-history", 1, WAIT_SECS).await;
+    let reply = answer(&db, &exchange, "ask-late-history", 2).await;
+    let follow_up = turn(&db, SCOUT, &reply).await.unwrap();
+    let mut answered = answered_ask(&db, &follow_up).await.unwrap().unwrap();
+    answered.question = format!(
+        "What is the total? {} Include tax and keep the original currency.",
+        "Check every invoice line. ".repeat(20)
+    );
+    let transcript = ask_result_transcript(&db, &follow_up, &answered)
+        .await
+        .expect("the asker's last reply remains valid continuation history");
+    assert_eq!(transcript.history.len(), 2);
+    assert!(matches!(transcript.history[0].role, ChatRole::User));
+    assert_eq!(
+        transcript.history[0].content,
+        "Check the invoice total with Ledger."
+    );
+    assert!(matches!(transcript.history[1].role, ChatRole::Assistant));
+    assert_eq!(
+        transcript.history[1].content,
+        "I am waiting for Ledger's answer."
+    );
+    assert!(transcript.prompt.contains("What is the total?"));
+    assert!(
+        transcript
+            .prompt
+            .contains("Include tax and keep the original currency.")
+    );
+    assert!(transcript.prompt.contains(" answered:\n42"));
+    assert!(transcript.addressed);
+
+    for seq in 3..43 {
+        entry(
+            &db,
+            "origin",
+            &format!("latest-activity-{seq}"),
+            SCOUT,
+            seq,
+            "ACTIVITY",
+            json!({}),
+            &[SCOUT],
+        )
+        .await;
+    }
+    let after_activity = ask_result_transcript(&db, &follow_up, &answered)
+        .await
+        .expect("trailing activity is not an incoming message to answer");
+    assert_eq!(after_activity.history.len(), 2);
+    assert_eq!(
+        after_activity.history[1].content,
+        transcript.history[1].content
+    );
+    assert_eq!(after_activity.prompt, transcript.prompt);
+}
+
+#[tokio::test]
+async fn continuation_history_pages_past_edits_and_stops_at_the_new_topic() {
+    let (db, _) = pair("SERVER", "SERVER").await;
+    create_conversation(&db, "origin", "DIRECT", "PLAIN", &[OWNER, SCOUT]).await;
+    for (id, sender, seq, kind, body) in [
+        (
+            "old-request",
+            OWNER,
+            1,
+            "MESSAGE",
+            json!({ "text": "Old topic" }),
+        ),
+        ("new-topic", OWNER, 2, "TOPIC", json!({})),
+        (
+            "request",
+            OWNER,
+            3,
+            "MESSAGE",
+            json!({ "text": "Check the total." }),
+        ),
+        (
+            "waiting",
+            SCOUT,
+            4,
+            "MESSAGE",
+            json!({ "text": "Waiting for Ledger." }),
+        ),
+    ] {
+        entry(&db, "origin", id, sender, seq, kind, body, &[SCOUT]).await;
+    }
+    for seq in 5..45 {
+        entry(
+            &db,
+            "origin",
+            &format!("edit-{seq}"),
+            OWNER,
+            seq,
+            "EDIT",
+            json!({ "target": "request", "text": format!("Check invoice {seq}." ) }),
+            &[SCOUT],
+        )
+        .await;
+    }
+    let history = super::history::recent_history(
+        &db,
+        SCOUT,
+        "origin",
+        flow_like_types::inbox::ConversationKind::Direct,
+        OWNER,
+    )
+    .await
+    .unwrap();
+    assert_eq!(history.len(), 2);
+    assert_eq!(history[0].content, "Check invoice 44.");
+    assert!(matches!(history[0].role, ChatRole::User));
+    assert_eq!(history[1].content, "Waiting for Ledger.");
+    assert!(matches!(history[1].role, ChatRole::Assistant));
+}
+
+#[tokio::test]
+async fn a_late_nested_answer_restores_its_ancestors_across_follow_ups() {
+    const PLANNER: &str = "bot_planner";
+    let (db, exchange) = pair("SERVER", "SERVER").await;
+    insert_bot(&db, PLANNER, OWNER, "SERVER").await;
+    let origin = start_exchange(&db, OWNER, PLANNER, SCOUT, None, at(0))
+        .await
+        .unwrap();
+    let chain = vec![PLANNER.to_string(), SCOUT.to_string()];
+
+    for round in 1..=MAX_EXCHANGE_ROUNDS {
+        let ask_id = format!("nested-ask-{round}");
+        let question = Question {
+            text: "What is the total?",
+            callee_id: LEDGER,
+            ask_id: &ask_id,
+            origin_conversation: &origin,
+            hops: 2,
+            chain: &chain,
+            wait_secs: WAIT_SECS,
+            round,
+        };
+        let outgoing = message_outgoing(&ask_id, ask_body(&question, now_millis())).unwrap();
+        post_as_bot_in(&db, &exchange, SCOUT, 2, &outgoing, now_millis())
+            .await
+            .unwrap();
+        let callee_turn = turn(&db, LEDGER, &ask_id).await.unwrap();
+        let incoming = asked_by(&db, &callee_turn).await.unwrap();
+        assert_eq!(
+            incoming
+                .iter()
+                .map(|member| member.id.as_str())
+                .collect::<Vec<_>>(),
+            [PLANNER, SCOUT]
+        );
+
+        let reply = answer(&db, &exchange, &ask_id, 3).await;
+        let resumed = turn(&db, SCOUT, &reply).await.unwrap();
+        assert_eq!(
+            resumed.hops, 1,
+            "a counted answer restores the asker's delivery hops in round {round}"
+        );
+        let ancestors = asked_by(&db, &resumed).await.unwrap();
+        assert_eq!(
+            ancestors
+                .iter()
+                .map(|member| member.id.as_str())
+                .collect::<Vec<_>>(),
+            [PLANNER],
+            "the resumed Scout must still exclude Planner from its crew in round {round}"
+        );
+        assert_eq!(
+            turn_origin_conversation(&db, &resumed).await.unwrap(),
+            origin
+        );
+        let remote = remote_context(&db, OWNER, SCOUT, LEDGER, &resumed.id)
+            .await
+            .unwrap();
+        assert_eq!(remote.ancestors, [PLANNER]);
+        assert_eq!(remote.hops, resumed.hops as u32);
+        assert!(
+            remote_context(&db, OWNER, SCOUT, PLANNER, &resumed.id)
+                .await
+                .is_err(),
+            "a remote follow-up cannot ask its original ancestor"
+        );
+    }
+
+    ask_round(&db, &exchange, "top-level-ask", 1, WAIT_SECS, 1).await;
+    let reply = answer(&db, &exchange, "top-level-ask", 2).await;
+    let resumed = turn(&db, SCOUT, &reply).await.unwrap();
+    assert!(
+        asked_by(&db, &resumed).await.unwrap().is_empty(),
+        "a top-level ask has no ancestors after removing its own sender"
+    );
+    assert!(
+        remote_context(&db, OWNER, SCOUT, LEDGER, &resumed.id)
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn remote_asks_keep_desktop_turn_ancestry_and_refuse_cycles_and_exhausted_hops() {
+    const PLANNER: &str = "bot_planner";
+    const REVIEWER: &str = "bot_reviewer";
+    let (db, exchange) = pair("DESKTOP", "SERVER").await;
+    insert_bot(&db, PLANNER, OWNER, "SERVER").await;
+    insert_bot(&db, REVIEWER, OWNER, "SERVER").await;
+
+    for (id, chain, hops) in [
+        ("remote-one-hop", vec![LEDGER.to_string()], 1),
+        (
+            "remote-three-hops",
+            vec![
+                PLANNER.to_string(),
+                REVIEWER.to_string(),
+                LEDGER.to_string(),
+            ],
+            3,
+        ),
+    ] {
+        let question = Question {
+            text: "Check this for me.",
+            callee_id: SCOUT,
+            ask_id: id,
+            origin_conversation: &exchange,
+            hops,
+            chain: &chain,
+            wait_secs: WAIT_SECS,
+            round: 1,
+        };
+        let outgoing = message_outgoing(id, ask_body(&question, now_millis())).unwrap();
+        post_as_bot_in(&db, &exchange, LEDGER, hops, &outgoing, now_millis())
+            .await
+            .unwrap();
+        let current = turn(&db, SCOUT, id).await.unwrap();
+        assert_eq!(current.host_kind, "DESKTOP");
+
+        assert!(
+            remote_context(&db, OWNER, SCOUT, LEDGER, &current.id)
+                .await
+                .is_err(),
+            "the caller cannot ask a bot already in its chain"
+        );
+        let next = remote_context(&db, OWNER, SCOUT, "bot_independent", &current.id).await;
+        if hops == 1 {
+            let context = next.unwrap();
+            assert_eq!(context.ancestors, [LEDGER]);
+            assert_eq!(context.hops, 1);
+            assert!(
+                remote_context(&db, "another-owner", SCOUT, REVIEWER, &current.id)
+                    .await
+                    .is_err()
+            );
+            assert!(
+                remote_context(&db, OWNER, LEDGER, REVIEWER, &current.id)
+                    .await
+                    .is_err()
+            );
+        } else {
+            assert!(next.is_err(), "the third delegated bot cannot ask further");
+        }
+    }
+
+    let chat = remote_context(&db, OWNER, SCOUT, LEDGER, "interactive-run")
+        .await
+        .unwrap();
+    assert!(chat.ancestors.is_empty());
+    assert_eq!(chat.hops, 0);
+}
+
+#[tokio::test]
+async fn legacy_late_answers_at_the_delivery_cap_report_that_limit_without_sending() {
+    let (db, exchange) = pair("DESKTOP", "SERVER").await;
+    ask_round(&db, &exchange, "legacy-question", 1, WAIT_SECS, 0).await;
+    let reply = answer(&db, &exchange, "legacy-question", MAX_HOPS).await;
+    let resumed = turn(&db, SCOUT, &reply).await.unwrap();
+    assert_eq!(resumed.hops, MAX_HOPS as i32);
+    assert!(asked_by(&db, &resumed).await.unwrap().is_empty());
+
+    let error = remote_context(&db, OWNER, SCOUT, LEDGER, &resumed.id)
+        .await
+        .unwrap_err();
+
+    assert!(
+        error
+            .public_message()
+            .is_some_and(|message| message.contains("bot message hop limit"))
+    );
+}
+
+#[tokio::test]
+async fn a_late_answer_keeps_new_owner_messages_in_chronological_history() {
+    let (db, exchange) = pair("SERVER", "SERVER").await;
+    create_conversation(&db, "origin", "GROUP", "PLAIN", &[OWNER, SCOUT]).await;
+    for (id, sender, seq, text) in [
+        ("request", OWNER, 1, "Check the total."),
+        ("waiting", SCOUT, 2, "I asked Ledger."),
+        ("clarification", OWNER, 3, "Include tax."),
+    ] {
+        message(
+            &db,
+            "origin",
+            id,
+            sender,
+            seq,
+            json!({ "text": text }),
+            &[SCOUT],
+        )
+        .await;
+    }
+    ask(&db, &exchange, "ask-late-clarification", 1, WAIT_SECS).await;
+    let reply = answer(&db, &exchange, "ask-late-clarification", 2).await;
+    let follow_up = turn(&db, SCOUT, &reply).await.unwrap();
+    let answered = answered_ask(&db, &follow_up).await.unwrap().unwrap();
+    let transcript = ask_result_transcript(&db, &follow_up, &answered)
+        .await
+        .unwrap();
+    assert_eq!(transcript.history.len(), 3);
+    assert!(transcript.history[0].content.contains("Check the total."));
+    assert!(matches!(transcript.history[1].role, ChatRole::Assistant));
+    assert_eq!(transcript.history[1].content, "I asked Ledger.");
+    assert!(matches!(transcript.history[2].role, ChatRole::User));
+    assert_eq!(
+        transcript.history[2].content,
+        flow_like_types::bot_turn::room_message(OWNER, true, "Include tax.")
+    );
+    assert!(!transcript.prompt.contains("Include tax."));
+}
+
+#[tokio::test]
+async fn repeated_late_answers_keep_the_original_conversation_for_both_hosts() {
+    for location in ["SERVER", "DESKTOP"] {
+        let (db, exchange) = pair(location, "DESKTOP").await;
+        let chain = vec![SCOUT.to_string()];
+        let mut origin = "origin".to_string();
+        for round in 1..=3 {
+            let ask_id = format!("ask-delayed-{round}");
+            let question = Question {
+                text: "What else should I check?",
+                callee_id: LEDGER,
+                ask_id: &ask_id,
+                origin_conversation: &origin,
+                hops: 2,
+                chain: &chain,
+                wait_secs: WAIT_SECS,
+                round,
+            };
+            let outgoing = message_outgoing(&ask_id, ask_body(&question, now_millis())).unwrap();
+            post_as_bot_in(&db, &exchange, SCOUT, 2, &outgoing, now_millis())
+                .await
+                .unwrap();
+            let reply = answer(&db, &exchange, &ask_id, 3).await;
+            let follow_up = turn(&db, SCOUT, &reply).await.unwrap();
+            assert_eq!(follow_up.conversation_id, exchange);
+            origin = turn_origin_conversation(&db, &follow_up).await.unwrap();
+            assert_eq!(origin, "origin", "{location} round {round}");
+            assert_eq!(
+                turn_conversation(&db, OWNER, SCOUT, &follow_up.id)
+                    .await
+                    .unwrap()
+                    .as_deref(),
+                Some("origin"),
+                "{location} round {round}"
+            );
+            assert!(
+                turn_conversation(&db, OWNER, LEDGER, &follow_up.id)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+}
+
+#[tokio::test]
 async fn a_desktop_hosts_reply_to_a_late_answer_turn_goes_to_the_origin_conversation() {
     use crate::routes::inbox::{
         entries::{Outgoing, answer_origin},
@@ -351,12 +794,11 @@ async fn a_desktop_hosts_reply_to_a_late_answer_turn_goes_to_the_origin_conversa
         SCOUT,
         &follow_up.trigger_message_id,
     ));
-    assert!(
-        answer_origin(&db, SCOUT, &claim, &failure)
-            .await
-            .unwrap()
-            .is_none()
-    );
+    let (_, failure_origin) = answer_origin(&db, SCOUT, &claim, &failure)
+        .await
+        .unwrap()
+        .expect("a late-answer failure is also redirected");
+    assert_eq!(failure_origin, "origin");
 
     let plain = turn(&db, LEDGER, "ask-4").await.unwrap();
     let plain_claim = TurnClaim {
@@ -373,6 +815,111 @@ async fn a_desktop_hosts_reply_to_a_late_answer_turn_goes_to_the_origin_conversa
             .unwrap()
             .is_none()
     );
+}
+
+#[tokio::test]
+async fn an_origin_scoped_token_posts_success_and_failure_for_its_held_exchange_turn() {
+    use crate::routes::inbox::{
+        entries::{answer_origin, validate_send},
+        exchange::reply_in_origin_in,
+        model::TurnClaim,
+    };
+    use flow_like_types::bot_turn::{TurnHostKind, failure_message_id, reply_message_id};
+    use sea_orm::TransactionTrait;
+
+    for failure in [None, Some("BOT_MODEL")] {
+        let (db, exchange) = pair("DESKTOP", "DESKTOP").await;
+        create_conversation(&db, "origin", "GROUP", "PLAIN", &[OWNER, SCOUT]).await;
+        ask(&db, &exchange, "ask-origin-post", 1, WAIT_SECS).await;
+        let answer = answer(&db, &exchange, "ask-origin-post", 2).await;
+        let follow_up = turn(&db, SCOUT, &answer).await.unwrap();
+        let now = now_millis() + Duration::seconds(i64::from(WAIT_SECS) + 30);
+        let held = ledger::claim_in(
+            &db,
+            &ledger::ClaimRequest {
+                turn_id: follow_up.id.clone(),
+                owner_id: Some(OWNER.into()),
+                host_kind: TurnHostKind::Desktop,
+                host_id: "host".into(),
+                now,
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let token =
+            crate::routes::bots::runtime_token::bot_user_for_turn(&db, OWNER, SCOUT, &held.turn.id)
+                .await
+                .unwrap();
+        assert_eq!(token.conv_id.as_deref(), Some("origin"));
+        crate::bot_caller::check(
+            &token,
+            &crate::bot_caller::Names {
+                as_bot: Some(SCOUT),
+                conversation: Some("origin"),
+                turn: Some(&held.turn.id),
+            },
+        )
+        .unwrap();
+        assert!(crate::bot_caller::ensure_room(&token, &exchange).is_err());
+        let message_id = if failure.is_some() {
+            failure_message_id(SCOUT, &held.turn.trigger_message_id)
+        } else {
+            reply_message_id(SCOUT, &held.turn.trigger_message_id)
+        };
+        let outgoing = validate_send(super::worker::reply_request(
+            &held.turn,
+            message_id.clone(),
+            "Ledger says 42",
+            failure,
+        ))
+        .unwrap();
+        assert_eq!(outgoing.links.reply_to.as_deref(), Some(answer.as_str()));
+        let claim = TurnClaim {
+            id: held.turn.id.clone(),
+            host_id: "host".into(),
+        };
+        let (routed, origin) = answer_origin(&db, SCOUT, &claim, &outgoing)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(origin, "origin");
+        let txn = db.begin().await.unwrap();
+        let sent = reply_in_origin_in(&txn, &routed, "host", &origin, &outgoing, now)
+            .await
+            .unwrap();
+        assert_eq!(sent.entry.conversation_id, "origin");
+        assert_eq!(sent.entry.envelope["body"]["text"], "Ledger says 42");
+        assert!(sent.entry.envelope["body"].get("reply_to").is_none());
+        assert_eq!(
+            sent.entry.envelope["body"]["error"]["code"].as_str(),
+            failure
+        );
+        txn.commit().await.unwrap();
+        let retry = db.begin().await.unwrap();
+        let repeated = reply_in_origin_in(&retry, &routed, "host", &origin, &outgoing, now)
+            .await
+            .expect("retry returns the original destination's copy after the turn completed");
+        assert_eq!(repeated.entry.message_id, message_id);
+        assert_eq!(repeated.entry.conversation_id, "origin");
+        assert!(repeated.wake.is_empty());
+        assert!(repeated.bots.is_empty());
+        retry.commit().await.unwrap();
+        let completed = bot_turn::Entity::find_by_id(&held.turn.id)
+            .one(&db)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            completed.status,
+            if failure.is_some() { "FAILED" } else { "DONE" }
+        );
+        assert_eq!(completed.error_code.as_deref(), failure);
+        assert_eq!(
+            completed.reply_message_id.as_deref(),
+            Some(message_id.as_str())
+        );
+    }
 }
 
 #[tokio::test]

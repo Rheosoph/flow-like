@@ -6,6 +6,8 @@ import { PhoneIcon } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useConversationRoom } from "../hooks/use-conversation-room";
+import { useUserAvailability } from "../hooks/use-user-availability";
+import { shouldPresentUserNotification } from "../lib/availability-notifications";
 import { deriveLiveCall } from "../lib/realtime/conversation-call";
 import { watchConversation } from "../lib/realtime/conversation-feed";
 import {
@@ -62,6 +64,8 @@ function IncomingCallSession({
 	userId,
 }: Readonly<IncomingCallProviderProps>) {
 	const backend = useBackend();
+	const availability = useUserAvailability();
+	const localAvailability = useUserAvailability({ local: true });
 	const [now, setNow] = useState(Date.now);
 	const [, setResolutionVersion] = useState(0);
 	const [ignored, setIgnored] = useState<ReadonlySet<string>>(() => new Set());
@@ -108,7 +112,14 @@ function IncomingCallSession({
 	const ignore = useCallback((callId: string) => {
 		setIgnored((current) => new Set([...current, callId]));
 	}, []);
-	return notice ? (
+	return notice &&
+		!availability.isPending &&
+		shouldPresentUserNotification(
+			availability.data,
+			localAvailability.data,
+			"call",
+			now,
+		) ? (
 		<CheckIncomingCall
 			key={notice.callId}
 			notice={notice}

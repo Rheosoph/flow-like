@@ -19,11 +19,71 @@ pub const WINDOW: u64 = 100;
 
 #[async_trait]
 pub trait HostStore: Send + Sync + 'static {
+    async fn previous_monitor_result(
+        &self,
+        _bot: &str,
+        _room: &str,
+        _trigger: &str,
+    ) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+    fn supports_recovery(&self) -> bool {
+        false
+    }
+    async fn run_checkpoint(
+        &self,
+        _bot: &str,
+        _room: &str,
+        _trigger: &str,
+    ) -> Result<Option<flow_like_types::bot_turn::BotRunCheckpoint>, String> {
+        Ok(None)
+    }
+    async fn save_run_checkpoint(
+        &self,
+        _bot: &str,
+        _room: &str,
+        _trigger: &str,
+        _checkpoint: flow_like_types::bot_turn::BotRunCheckpoint,
+    ) -> Result<(), String> {
+        Err("This store cannot recover turns".into())
+    }
+    async fn cancel_run(&self, _bot: &str, _room: &str, _trigger: &str) -> Result<(), String> {
+        Ok(())
+    }
+    async fn run_cancelled(&self, _bot: &str, _trigger: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+    async fn recovery_trigger(
+        &self,
+        _bot: &str,
+        _room: &str,
+    ) -> Result<Option<InboxEntry>, String> {
+        Ok(None)
+    }
     async fn conversations(&self) -> Result<Vec<Conversation>, String>;
     async fn conversation(&self, conversation_id: &str) -> Result<Option<Conversation>, String>;
     /// The newest [`WINDOW`] entries, newest first.
     async fn newest(&self, conversation_id: &str) -> Result<Vec<InboxEntry>, String>;
     async fn bot(&self, bot_id: &str) -> Result<Option<Bot>, String>;
+    async fn room_decision_state(
+        &self,
+        _bot_id: &str,
+        _conversation_id: &str,
+    ) -> Result<flow_like_local_bots::RoomDecisionState, String> {
+        Ok(Default::default())
+    }
+    async fn settle_room_decision(
+        &self,
+        _bot_id: &str,
+        _conversation_id: &str,
+        _trigger: &str,
+        _participant: Option<&str>,
+    ) -> Result<flow_like_local_bots::RoomWaitOutcome, String> {
+        Err("This store cannot persist participation decisions".into())
+    }
+    async fn clear_room_wait(&self, _bot_id: &str, _conversation_id: &str) -> Result<(), String> {
+        Ok(())
+    }
     async fn send(
         &self,
         conversation_id: &str,
@@ -37,6 +97,24 @@ pub trait HostStore: Send + Sync + 'static {
         _bot_id: &str,
     ) -> Result<Option<BotRoomLimits>, String> {
         Ok(None)
+    }
+    async fn shared_memory_rooms(&self, bot_id: &str) -> Result<Vec<String>, String> {
+        let mut shared = Vec::new();
+        for room in self.conversations().await? {
+            if room.kind == flow_like_types::inbox::ConversationKind::Group
+                && room.members.iter().any(|member| {
+                    member.principal_id == bot_id
+                        && member.kind == flow_like_types::inbox::PrincipalKind::Bot
+                })
+                && self
+                    .room_limits(&room.id, bot_id)
+                    .await?
+                    .is_some_and(|limits| limits.share_memory)
+            {
+                shared.push(room.id);
+            }
+        }
+        Ok(shared)
     }
     /// Entries by position, oldest first: what a bot's memory reads its history through.
     async fn positions(
@@ -127,6 +205,60 @@ impl AppStore {
 
 #[async_trait]
 impl HostStore for AppStore {
+    async fn previous_monitor_result(
+        &self,
+        bot: &str,
+        room: &str,
+        trigger: &str,
+    ) -> Result<Option<String>, String> {
+        let (bot, room, trigger) = (bot.to_owned(), room.to_owned(), trigger.to_owned());
+        self.with(move |store| store.previous_monitor_result(&bot, &room, &trigger))
+            .await
+    }
+    fn supports_recovery(&self) -> bool {
+        true
+    }
+    async fn run_checkpoint(
+        &self,
+        bot: &str,
+        room: &str,
+        trigger: &str,
+    ) -> Result<Option<flow_like_types::bot_turn::BotRunCheckpoint>, String> {
+        let (bot, room, trigger) = (bot.to_owned(), room.to_owned(), trigger.to_owned());
+        self.with(move |store| store.run_checkpoint(&bot, &room, &trigger))
+            .await
+    }
+    async fn save_run_checkpoint(
+        &self,
+        bot: &str,
+        room: &str,
+        trigger: &str,
+        checkpoint: flow_like_types::bot_turn::BotRunCheckpoint,
+    ) -> Result<(), String> {
+        let (bot, room, trigger) = (bot.to_owned(), room.to_owned(), trigger.to_owned());
+        self.with(move |store| store.save_run_checkpoint(&bot, &room, &trigger, &checkpoint))
+            .await
+    }
+    async fn cancel_run(&self, bot: &str, room: &str, trigger: &str) -> Result<(), String> {
+        let (bot, room, trigger) = (bot.to_owned(), room.to_owned(), trigger.to_owned());
+        self.with(move |store| store.cancel_run(&bot, &room, &trigger))
+            .await
+    }
+    async fn run_cancelled(&self, bot: &str, trigger: &str) -> Result<bool, String> {
+        let (bot, trigger) = (bot.to_owned(), trigger.to_owned());
+        self.with(move |store| store.run_cancelled(&bot, &trigger))
+            .await
+    }
+    async fn recovery_trigger(&self, bot: &str, room: &str) -> Result<Option<InboxEntry>, String> {
+        let (bot, room) = (bot.to_owned(), room.to_owned());
+        self.with(move |store| {
+            Ok(store
+                .recoverable_run_triggers(&room)?
+                .into_iter()
+                .find_map(|(id, entry)| (id == bot).then_some(entry)))
+        })
+        .await
+    }
     async fn conversations(&self) -> Result<Vec<Conversation>, String> {
         self.with(|store| store.host_conversations()).await
     }
@@ -147,7 +279,7 @@ impl HostStore for AppStore {
             }) else {
                 return Ok(Vec::new());
             };
-            store
+            let mut entries = store
                 .entries_as(
                     &id,
                     &bot_id,
@@ -156,7 +288,17 @@ impl HostStore for AppStore {
                         ..Default::default()
                     },
                 )
-                .map(|page| page.entries)
+                .map(|page| page.entries)?;
+            for (_, trigger) in store.recoverable_run_triggers(&id)? {
+                if !entries
+                    .iter()
+                    .any(|entry| entry.message_id == trigger.message_id)
+                {
+                    entries.push(trigger);
+                }
+            }
+            entries.sort_by(|a, b| b.seq.cmp(&a.seq));
+            Ok(entries)
         })
         .await
     }
@@ -166,6 +308,41 @@ impl HostStore for AppStore {
         self.with(move |store| store.get_bot(&id)).await
     }
 
+    async fn room_decision_state(
+        &self,
+        bot_id: &str,
+        conversation_id: &str,
+    ) -> Result<flow_like_local_bots::RoomDecisionState, String> {
+        let (bot, room) = (bot_id.to_owned(), conversation_id.to_owned());
+        self.with(move |store| store.room_decision_state(&bot, &room))
+            .await
+    }
+
+    async fn settle_room_decision(
+        &self,
+        bot_id: &str,
+        conversation_id: &str,
+        trigger: &str,
+        participant: Option<&str>,
+    ) -> Result<flow_like_local_bots::RoomWaitOutcome, String> {
+        let (bot, room, trigger, participant) = (
+            bot_id.to_owned(),
+            conversation_id.to_owned(),
+            trigger.to_owned(),
+            participant.map(str::to_owned),
+        );
+        self.with(move |store| {
+            store.settle_room_decision(&bot, &room, &trigger, participant.as_deref())
+        })
+        .await
+    }
+
+    async fn clear_room_wait(&self, bot_id: &str, conversation_id: &str) -> Result<(), String> {
+        let (bot, room) = (bot_id.to_owned(), conversation_id.to_owned());
+        self.with(move |store| store.clear_room_wait(&bot, &room))
+            .await
+    }
+
     async fn room_limits(
         &self,
         conversation_id: &str,
@@ -173,6 +350,12 @@ impl HostStore for AppStore {
     ) -> Result<Option<BotRoomLimits>, String> {
         let (conversation, bot) = (conversation_id.to_owned(), bot_id.to_owned());
         self.with(move |store| store.member_limits(&conversation, &bot))
+            .await
+    }
+
+    async fn shared_memory_rooms(&self, bot_id: &str) -> Result<Vec<String>, String> {
+        let bot = bot_id.to_owned();
+        self.with(move |store| store.shared_memory_rooms(&bot))
             .await
     }
 

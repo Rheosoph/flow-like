@@ -58,6 +58,7 @@ fn truncated(value: &str, max: usize) -> String {
 pub(crate) fn trigger_for(task: &bot_task::Model) -> TriggerBody {
     TriggerBody {
         source: TriggerSource::Schedule,
+        monitoring: task.monitoring.unwrap_or(false),
         ref_id: task.id.clone(),
         title: truncated(&task.title, TRIGGER_TITLE_MAX_CHARS),
         text: truncated(&task.instruction, TRIGGER_TEXT_MAX_CHARS),
@@ -88,6 +89,11 @@ async fn claim_in<C: ConnectionTrait>(
         .filter(bot_task::Column::Id.eq(task.id.as_str()))
         .filter(bot_task::Column::Enabled.eq(true))
         .filter(bot_task::Column::NextRunAt.eq(due))
+        .filter(bot_task::Column::UpdatedAt.eq(task.updated_at))
+        .filter(match task.monitoring {
+            Some(monitoring) => bot_task::Column::Monitoring.eq(monitoring),
+            None => bot_task::Column::Monitoring.is_null(),
+        })
         .exec(db)
         .await?;
     Ok(claimed.rows_affected == 1)

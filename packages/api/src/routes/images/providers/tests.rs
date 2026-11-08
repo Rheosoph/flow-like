@@ -4,6 +4,17 @@ fn request() -> HostedImageRequest {
     serde_json::from_value(json!({"model":"catalog-bit","prompt":"a mountain"})).unwrap()
 }
 
+fn capabilities_for(model: &str) -> ImageCapabilities {
+    ImageCapabilities::from_endpoints(&json!({"id": model, "endpoints": [{
+        "provider_tag": "test-provider", "supported_parameters": {
+            "aspect_ratio": {"type":"enum", "values":["1:1", "3:2", "2:3"]},
+            "resolution": {"type":"enum", "values":["1K", "2K"]},
+            "n": {"type":"range", "min":1, "max":1}
+        }
+    }]}))
+    .unwrap()
+}
+
 #[test]
 fn openrouter_wire_locks_model_count_and_streaming() {
     let body = wire_body(Provider::OpenRouter, "google/test-image", &request()).unwrap();
@@ -40,6 +51,13 @@ fn cloudflare_uses_fixed_steps_and_native_dimensions() {
         wire_body(Provider::Cloudflare, FLUX, &payload).unwrap(),
         json!({"prompt":"a mountain","seed":12,"steps":4})
     );
+    payload.size = Some("1024x1024".into());
+    payload.aspect_ratio = Some("1:1".into());
+    assert_eq!(
+        wire_body(Provider::Cloudflare, FLUX, &payload).unwrap(),
+        json!({"prompt":"a mountain","seed":12,"steps":4})
+    );
+    payload.size = None;
     payload.aspect_ratio = Some("16:9".into());
     assert!(wire_body(Provider::Cloudflare, FLUX, &payload).is_err());
     let body = wire_body(Provider::Cloudflare, SDXL, &payload).unwrap();
@@ -220,6 +238,7 @@ async fn openrouter_transport_sends_one_bounded_request_and_normalizes_the_respo
         Connection {
             url: format!("http://{address}/api/v1/images"),
             key: "server-owned-key".into(),
+            capabilities: Some(capabilities_for("google/image")),
         },
         Provider::OpenRouter,
         "google/image",
@@ -251,6 +270,7 @@ async fn invalid_request_headers_do_not_mark_a_provider_request_started() {
         Connection {
             url: "http://127.0.0.1:9/images".into(),
             key: "invalid\nkey".into(),
+            capabilities: Some(capabilities_for("google/image")),
         },
         Provider::OpenRouter,
         "google/image",
@@ -291,6 +311,7 @@ async fn image_credentials_are_never_forwarded_on_redirect() {
         Connection {
             url: format!("http://{address}/images"),
             key: "server-owned-key".into(),
+            capabilities: Some(capabilities_for("google/image")),
         },
         Provider::OpenRouter,
         "google/image",
@@ -301,5 +322,145 @@ async fn image_credentials_are_never_forwarded_on_redirect() {
     .await;
     assert!(result.is_err());
     assert!(started);
+    server.await.unwrap();
+}
+
+#[test]
+fn advertised_capabilities_adapt_pixel_sizes_before_generation() {
+    let connection = Connection {
+        url: "https://openrouter.ai/api/v1/images".into(),
+        key: "private".into(),
+        capabilities: Some(capabilities_for("qwen/qwen-image-3")),
+    };
+    let mut input = request();
+    input.size = Some("1536x1024".into());
+    let body = prepared_body(
+        &connection,
+        Provider::OpenRouter,
+        "qwen/qwen-image-3",
+        &input,
+    )
+    .unwrap();
+    assert_eq!(body["aspect_ratio"], "3:2");
+    assert!(body.get("size").is_none());
+    assert!(matches!(body["resolution"].as_str(), Some("1K" | "2K")));
+    assert_eq!(body["n"], 1);
+    assert_eq!(body["model"], "qwen/qwen-image-3");
+}
+
+#[tokio::test]
+async fn unsupported_options_fail_before_a_generation_is_dispatched() {
+    let mut input = request();
+    input.background = Some("transparent".into());
+    let mut started = false;
+    let error = call(
+        Connection {
+            url: "http://127.0.0.1:9/images".into(),
+            key: "private".into(),
+            capabilities: Some(capabilities_for("qwen/qwen-image-3")),
+        },
+        Provider::OpenRouter,
+        "qwen/qwen-image-3",
+        &input,
+        100,
+        &mut started,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(!started);
+    assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+    assert_eq!(error.public_code(), "IMAGE_OPTIONS_UNSUPPORTED");
+}
+
+#[tokio::test]
+async fn provider_failures_keep_safe_status_and_category_without_retrying() {
+    use tokio::{
+        io::{AsyncReadExt, AsyncWriteExt},
+        net::TcpListener,
+    };
+    for (upstream, expected, code) in [
+        (400, 400, "IMAGE_PROVIDER_INVALID_REQUEST"),
+        (401, 503, "IMAGE_PROVIDER_ACCESS_DENIED"),
+        (402, 503, "IMAGE_PROVIDER_QUOTA_EXCEEDED"),
+        (404, 400, "IMAGE_MODEL_UNAVAILABLE"),
+        (429, 429, "IMAGE_PROVIDER_RATE_LIMITED"),
+        (502, 502, "IMAGE_PROVIDER_FAILED"),
+        (504, 504, "IMAGE_PROVIDER_TIMEOUT"),
+    ] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut received = [0; 4096];
+            socket.read(&mut received).await.unwrap();
+            let body = r#"{"error":{"message":"private prompt and credential"}}"#;
+            socket.write_all(format!(
+                "HTTP/1.1 {upstream} Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
+            ).as_bytes()).await.unwrap();
+            drop(socket);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), listener.accept())
+                    .await
+                    .is_err()
+            );
+        });
+        let mut started = false;
+        let error = call(
+            Connection {
+                url: format!("http://{address}/images"),
+                key: "private".into(),
+                capabilities: Some(capabilities_for("qwen/qwen-image-3")),
+            },
+            Provider::OpenRouter,
+            "qwen/qwen-image-3",
+            &request(),
+            2000,
+            &mut started,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(started);
+        assert_eq!(error.status().as_u16(), expected);
+        assert_eq!(error.public_code(), code);
+        let message = error.public_message().unwrap();
+        assert!(message.contains(&format!("upstream HTTP {upstream}")));
+        assert!(!message.contains("private"));
+        server.await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_provider_timeout_has_a_distinct_error_and_no_request_details() {
+    use tokio::{io::AsyncReadExt, net::TcpListener};
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut buffer = [0; 4096];
+        socket.read(&mut buffer).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    });
+    let mut started = false;
+    let error = call(
+        Connection {
+            url: format!("http://{address}/images?private-token"),
+            key: "private-key".into(),
+            capabilities: Some(capabilities_for("qwen/qwen-image-3")),
+        },
+        Provider::OpenRouter,
+        "qwen/qwen-image-3",
+        &request(),
+        50,
+        &mut started,
+    )
+    .await
+    .err()
+    .unwrap();
+    assert!(started);
+    assert_eq!(error.status(), axum::http::StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(error.public_code(), "IMAGE_PROVIDER_TIMEOUT");
+    assert!(!error.public_message().unwrap().contains("private"));
     server.await.unwrap();
 }

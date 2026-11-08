@@ -660,7 +660,23 @@ impl ServerPlatformBridge {
     }
 
     fn tool_spec(&self, tool_name: &str) -> Option<PlatformToolSpec> {
+        if flow_like_bot_tools::user_context::is_user_context_tool(tool_name)
+            && !self
+                .bot_tools
+                .as_ref()
+                .is_some_and(|host| host.handles(tool_name))
+        {
+            return None;
+        }
         if self.bot {
+            return find_bot_tool_spec(tool_name);
+        }
+        if self.specialist.is_none()
+            && !self.read_only
+            && (flow_like_bot_tools::configuration::is_configuration_tool(tool_name)
+                || flow_like_bot_tools::user_context::is_user_context_tool(tool_name))
+            && self.bot_tools.as_ref().is_some_and(|host| host.handles(tool_name))
+        {
             return find_bot_tool_spec(tool_name);
         }
         server_platform_tool_spec(self.specialist, tool_name, self.read_only)
@@ -684,6 +700,21 @@ fn server_platform_tool_spec(
 #[cfg(test)]
 mod specialist_tool_spec_tests {
     use super::*;
+
+    #[test]
+    fn bot_runtime_extends_only_when_the_host_can_run_it() {
+        assert_eq!(
+            bounded_assistant_runtime_ms(i64::MAX, true, false),
+            1_800_000
+        );
+        assert_eq!(
+            bounded_assistant_runtime_ms(i64::MAX, false, false),
+            600_000
+        );
+        assert_eq!(bounded_assistant_runtime_ms(i64::MAX, true, true), 600_000);
+        assert_eq!(bounded_assistant_runtime_ms(42_000, true, false), 42_000);
+        assert_eq!(bounded_assistant_runtime_ms(0, true, false), 1);
+    }
 
     #[flow_like_types::tokio::test]
     async fn http_request_approval_failures_never_reach_the_engine() {
@@ -1004,7 +1035,8 @@ impl PlatformToolBridge for ServerPlatformBridge {
                 .unwrap_or_else(|_| "{\"status\":\"error\"}".to_string());
         }
 
-        if self.bot
+        if (self.bot || flow_like_bot_tools::configuration::is_configuration_tool(tool_name)
+            || flow_like_bot_tools::user_context::is_user_context_tool(tool_name))
             && let Some(bot_tools) = self
                 .bot_tools
                 .as_ref()
@@ -1240,6 +1272,24 @@ pub(crate) async fn reserve_assistant_usage(
     .await
 }
 
+fn assistant_runtime_limit_ms(is_bot: bool, runs_in_hosted_worker: bool) -> i64 {
+    // Hosted workers run in Lambda. Keep enough time to settle usage and publish the reply
+    // before the platform ends the invocation; device hosts do not use this worker.
+    if is_bot && !runs_in_hosted_worker {
+        crate::bot_host::worker::MAX_TURN_RUNTIME_MS
+    } else {
+        600_000
+    }
+}
+
+fn bounded_assistant_runtime_ms(
+    requested_ms: i64,
+    is_bot: bool,
+    runs_in_hosted_worker: bool,
+) -> i64 {
+    requested_ms.clamp(1, assistant_runtime_limit_ms(is_bot, runs_in_hosted_worker))
+}
+
 pub(crate) fn assistant_rate(
     max_runtime_ms: i64,
     use_worker: bool,
@@ -1285,7 +1335,11 @@ pub(crate) async fn reserve_assistant_usage_with_max_runtime(
             ));
         }
     }
-    let max_runtime_ms = max_runtime_ms.clamp(1, 600_000);
+    let max_runtime_ms = bounded_assistant_runtime_ms(
+        max_runtime_ms,
+        bot.is_some(),
+        use_worker && crate::routes::chat::hosted_worker::enabled(),
+    );
     let payer = crate::quota::resolve_payer(state, Some(sub), app_id).await?;
     let (_, tier) = crate::quota::payer_plan(state, &payer).await?;
     let now = chrono::Utc::now();
@@ -1440,6 +1494,13 @@ pub(crate) async fn run_global_chat(
             "The bot conversation turn is unavailable",
         ));
     }
+    if let (Some(bot), Some(interactive)) = (&mut bot, &interactive_turn) {
+        bot.context.ephemeral_user_context = interactive.ephemeral_user_context(&state).await?;
+    }
+    if let Some(bot) = &mut bot {
+        bot.context.host_tools = std::mem::take(&mut bot.context.host_tools)
+            .with_user_context(interactive_turn.is_some());
+    }
     // A bot runs on its own model when the server can run it, else on the chat's selection.
     if let Some(bot) = &bot {
         let flow_like_state = master_flow_like_state(&state).await?;
@@ -1533,7 +1594,9 @@ pub(crate) async fn run_global_chat(
                 bot.conv_id.as_deref(),
                 &bot.turn_id,
                 None,
-                720,
+                assistant_runtime_limit_ms(true, crate::routes::chat::hosted_worker::enabled())
+                    / 1_000
+                    + 120,
             )
             .ok_or_else(|| ApiError::internal("The bot model token could not be signed"))?,
         ),
@@ -1554,7 +1617,10 @@ pub(crate) async fn run_global_chat(
                 &provider.provider_name,
                 funding,
                 None,
-                600_000,
+                assistant_runtime_limit_ms(
+                    metered_bot.is_some(),
+                    crate::routes::chat::hosted_worker::enabled(),
+                ),
                 true,
                 metered_bot.as_ref(),
             )
@@ -1614,12 +1680,27 @@ pub(crate) async fn run_global_chat(
         _ => None,
     };
 
+    let legacy_memory_policy = match (&bot, &interactive_turn) {
+        (Some(bot), Some(interactive)) => crate::bot_host::memory::memory_policy(
+            &state.db,
+            &interactive.turn.conversation_id,
+            &interactive.turn.owner_id,
+            &bot.context.bot_id,
+        )
+        .await
+        .ok()
+        .flatten()
+        .map(|policy| (policy.use_owner_memory, policy.room))
+        .unwrap_or((false, false)),
+        _ => (true, false),
+    };
+
     // Profile-scoped semantic memory, enabled only when the client selected an embedding model.
     // User-scoped by `sub` so tenants never share a namespace. Failures degrade to no memory.
     let memory = match payload
         .embedding_model_id
         .as_deref()
-        .filter(|_| memory_turn.is_none())
+        .filter(|_| legacy_memory_policy.0 && (memory_turn.is_none() || legacy_memory_policy.1))
     {
         Some(embedding_id) if !embedding_id.trim().is_empty() => {
             match profile
@@ -1646,7 +1727,11 @@ pub(crate) async fn run_global_chat(
                     )
                     .await
                     {
-                        Ok(memory) => Some(Arc::new(memory)),
+                        Ok(memory) => Some(Arc::new(if legacy_memory_policy.1 {
+                            memory.read_only()
+                        } else {
+                            memory
+                        })),
                         Err(error) => {
                             tracing::warn!(%error, "[global_chat] memory init failed");
                             None
@@ -1698,7 +1783,7 @@ pub(crate) async fn run_global_chat(
     let channel = build_chat_channel(&state, &run_id, &sub).await?;
     let (frames_tx, mut frames_rx) = mpsc::unbounded_channel::<GlobalChatFrame>();
     let bridge: Arc<dyn PlatformToolBridge> = Arc::new(match &bot {
-        Some(bot) if bot.context.toolset == BotToolset::Capabilities => {
+        Some(bot) => {
             let bot_tools = crate::bot_tools::turn_host(
                 &state,
                 &sub,
@@ -1710,10 +1795,16 @@ pub(crate) async fn run_global_chat(
                 token.clone(),
                 crate::routes::bots::tool_grants::rows_for_owner(&state, &bot.context.bot_id, &sub),
                 None,
+                interactive_turn.as_ref().map(|turn| turn.turn.conversation_id.as_str()),
                 Some(flow_like_bot_tools::TurnSite::OwnerLive),
             )
             .await;
-            ServerPlatformBridge::bot(channel.clone(), frames_tx.clone()).with_bot_tools(bot_tools)
+            let bridge = if bot.context.toolset == BotToolset::Capabilities {
+                ServerPlatformBridge::bot(channel.clone(), frames_tx.clone())
+            } else {
+                ServerPlatformBridge::orchestrator(channel.clone(), frames_tx.clone())
+            };
+            bridge.with_bot_tools(bot_tools)
         }
         _ => ServerPlatformBridge::orchestrator(channel.clone(), frames_tx.clone()),
     });

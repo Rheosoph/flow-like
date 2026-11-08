@@ -1,7 +1,8 @@
 //! One bot's memory on one host: the engine, its models and the inbox as the source of truth for
 //! segments. A headless turn calls [`MemorySession::prepare`] (Hard compaction, then the prompt
 //! from summaries, state block, verbatim tail and recalled facts) and, once the reply is stored,
-//! [`MemorySession::after_turn`] in the background (Soft compaction, fact mining, deletions).
+//! [`MemorySession::after_turn`] in the background (Soft compaction, fact mining, deletions and
+//! periodic expiry cleanup and index maintenance).
 //! Memory never fails a turn on its own: every step that goes wrong is logged and skipped.
 
 use std::collections::HashSet;
@@ -43,6 +44,10 @@ pub struct SessionOptions {
     pub model: Option<String>,
     /// Groups keep their history and learned statements apart from the owner's direct chat.
     pub room_key: Option<String>,
+    /// Whether this group may recall the owner's private facts.
+    pub use_owner_memory: bool,
+    /// Group sources whose saved facts the host permits this conversation to recall.
+    pub shared_room_keys: Vec<String>,
 }
 
 impl SessionOptions {
@@ -55,6 +60,8 @@ impl SessionOptions {
             mine_after: 6,
             model: None,
             room_key: None,
+            use_owner_memory: false,
+            shared_room_keys: Vec::new(),
         }
     }
 }
@@ -102,6 +109,9 @@ pub struct AfterTurn {
     pub rewrote: bool,
     pub deletions: usize,
     pub published: usize,
+    /// Periodic expiry cleanup, embedding and index maintenance completed.
+    pub optimized: bool,
+    pub expired_facts: usize,
     /// Another engine holds the memory's lease; the rest waits for the next turn.
     pub busy: bool,
 }
@@ -116,7 +126,7 @@ pub struct MemorySession {
 }
 
 fn is_busy(error: &flow_like_types::Error) -> bool {
-    error.is::<MemoryBusy>()
+    error.is::<MemoryBusy>() || error.is::<crate::store::StateConflict>()
 }
 
 impl MemorySession {
@@ -158,7 +168,9 @@ impl MemorySession {
                 MemoryStores::open_room(connection, embedder.clone(), write_options, key).await
             }
             None => MemoryStores::open(connection, embedder.clone(), write_options).await,
-        };
+        }
+        .with_recall_sources(options.use_owner_memory, &options.shared_room_keys)
+        .await;
         Self::new(stores, llm, embedder, sink, options)
     }
 
@@ -342,27 +354,56 @@ impl MemorySession {
                 tracing::warn!("Recalling facts failed: {error:#}");
                 Vec::new()
             });
+        let recall_query = FactQuery {
+            text: trigger.text.clone(),
+            filter: FactFilter::default(),
+            time_hint: None,
+            limit: self.options.budget.facts_count,
+            offset: 0,
+            now: request.now,
+            recency: Recency::default(),
+            sort: Default::default(),
+            geojson: None,
+            radius_m: None,
+            area: None,
+        };
+        let stores = self.engine.stores();
+        let owner_budget = if stores.shared_facts.is_empty() {
+            self.options.budget.about_state
+        } else {
+            self.options.budget.about_state / 2
+        };
+        let shared_budget = self.options.budget.about_state
+            - if stores.owner_facts.is_some() {
+                owner_budget
+            } else {
+                0
+            };
         let owner_memory = super::recall::owner_memory(
-            self.engine.stores(),
-            &FactQuery {
-                text: trigger.text.clone(),
-                filter: FactFilter::default(),
-                time_hint: None,
-                limit: self.options.budget.facts_count,
-                offset: 0,
-                now: request.now,
-                recency: Recency::default(),
-            },
+            stores,
+            &recall_query,
             true,
             self.options.timezone,
-            self.options.budget.about_state,
+            owner_budget,
         )
         .await
         .unwrap_or_else(|error| {
             tracing::warn!("Recalling owner memory failed: {error:#}");
             Default::default()
         });
-        let about_you = [request.about_you, &owner_memory.text]
+        let shared_memory = super::recall::shared_memory(
+            stores,
+            &recall_query,
+            false,
+            self.options.timezone,
+            shared_budget,
+        )
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!("Recalling shared memory failed: {error:#}");
+            Default::default()
+        });
+        let about_you = [request.about_you, &owner_memory.text, &shared_memory.text]
             .into_iter()
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
@@ -429,8 +470,9 @@ impl MemorySession {
     }
 
     /// After the reply is stored: the Soft compaction, fact mining of what the compactions did
-    /// not cover, summaries that wait for a rewrite, deletions, and publishing. Runs under the
-    /// engine's lease; another engine's work (`MemoryBusy`) defers the rest to the next turn.
+    /// not cover, summaries that wait for a rewrite, deletions, publishing and periodic table
+    /// maintenance. Runs under the engine's lease; another engine's work (`MemoryBusy`) defers
+    /// the rest to the next turn. Dormant conversations wait for their next active turn.
     pub async fn after_turn(
         &self,
         reader: &dyn HistoryReader,
@@ -496,6 +538,13 @@ impl MemorySession {
             }
         }
         done.published += self.publish().await;
+        if let Some(Some(expired)) = step!(
+            "Maintaining the memory tables",
+            self.engine.maintain_if_due(request.now).await
+        ) {
+            done.optimized = true;
+            done.expired_facts = expired;
+        }
         done
     }
 }

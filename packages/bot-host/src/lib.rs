@@ -5,12 +5,14 @@
 pub mod account;
 pub mod bridge;
 pub mod e2e;
+pub mod event;
 pub mod gate;
 pub mod host;
 pub mod hub;
 pub mod memory;
-pub mod rule;
+pub mod recovery;
 pub mod room_updates;
+pub mod rule;
 pub mod tasks;
 pub mod transcript;
 

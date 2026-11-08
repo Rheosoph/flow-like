@@ -40,6 +40,9 @@ export function approvalOf(entry: IInboxEntry): IInboxApproval | undefined {
 		requester_id: text(body.requester_id),
 		requester_name: text(body.requester_name),
 		room: text(body.room),
+		...(isRecord(body.configuration_changes)
+			? { configuration_changes: body.configuration_changes }
+			: {}),
 		...secretField(body.secret),
 	};
 }

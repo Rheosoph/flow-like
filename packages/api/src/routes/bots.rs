@@ -13,7 +13,9 @@ use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTr
 pub mod apps;
 pub mod ask;
 pub mod avatar;
+pub(crate) mod checkpoint;
 pub mod clone;
+pub mod configuration;
 pub mod connectors;
 pub mod crud;
 pub mod fire;
@@ -36,6 +38,7 @@ pub mod talk;
 pub mod tasks;
 pub mod tool_grants;
 pub mod turns;
+pub(crate) mod user_context;
 mod validation;
 pub mod webhooks;
 pub mod workspace;
@@ -59,6 +62,8 @@ mod workspace_tests;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/{bot_id}/user-context/available", get(user_context::available))
+        .route("/{bot_id}/user-context/request", post(user_context::request))
         .route("/{bot_id}/usage", get(super::usage_budgets::get_bot))
         .route("/{bot_id}/usage/limits", put(super::usage_budgets::put_bot))
         .route("/{bot_id}/usage/rooms/{group_id}", get(super::usage_budgets::get_room))
@@ -79,8 +84,11 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/turns", get(turns::list_turns))
         .route("/turns/{turn_id}/claim", post(turns::claim_turn))
+        .route("/turns/{turn_id}/checkpoint", get(checkpoint::load).put(checkpoint::save)
+            .layer(DefaultBodyLimit::max(flow_like_types::bot_turn::MAX_CHECKPOINT_BYTES + 4096)))
         .route("/turns/{turn_id}/heartbeat", post(turns::heartbeat_turn))
         .route("/turns/{turn_id}/silent", post(turns::silent_turn))
+        .route("/turns/{turn_id}/wait", post(turns::wait_turn))
         .route("/turns/{turn_id}/hold", post(turns::hold_turn))
         .route("/turns/{turn_id}/park", post(tool_grants::park_turn))
         .route(
@@ -92,6 +100,10 @@ pub fn routes() -> Router<AppState> {
             get(crud::get_bot)
                 .patch(crud::update_bot)
                 .delete(crud::delete_bot),
+        )
+        .route(
+            "/{bot_id}/configuration",
+            axum::routing::patch(configuration::update_configuration),
         )
         .route("/{bot_id}/clone", post(clone::clone_bot))
         .route(

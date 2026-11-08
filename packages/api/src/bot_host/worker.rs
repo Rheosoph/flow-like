@@ -44,6 +44,7 @@ use flow_like::{
     flow::copilot::{
         BotToolHost, HeadlessMemory, PlatformContextInput, bot_platform_context,
         bot_talk::{AnsweredRound, BotPresence, BotTalk},
+        decision_event::{self, EventDecision},
         find_bot_tool_spec,
         memory::{AssistantMemory, MemoryScope},
         platform::{PlatformToolBridge, RoomUpdatesBridge},
@@ -59,10 +60,7 @@ use flow_like_types::{
     Value,
     bot::BotLocation,
     bot_message::ApprovalRequest,
-    bot_turn::{
-        HEARTBEAT_SECS, MAX_ATTEMPTS, TurnAudience, TurnHostKind, failure_message_id,
-        reply_message_id,
-    },
+    bot_turn::{HEARTBEAT_SECS, TurnAudience, TurnHostKind, failure_message_id, reply_message_id},
     inbox::{ConversationEncryption, ConversationKind, InboxEntryKind, plain_envelope},
     tokio::{
         self,
@@ -70,7 +68,7 @@ use flow_like_types::{
         task::JoinHandle,
     },
 };
-use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait};
+use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde_json::json;
 use std::{
     sync::{
@@ -81,7 +79,21 @@ use std::{
 };
 
 /// The longest a server turn runs, whatever the plan allows.
-pub(crate) const MAX_TURN_RUNTIME_MS: i64 = 600_000;
+pub(crate) const MAX_TURN_RUNTIME_MS: i64 =
+    flow_like_types::bot_turn::DEFAULT_TURN_DEADLINE_SECS as i64 * 1_000;
+
+pub(super) fn recovery_runtime_ms(
+    checkpoint: Option<&flow_like_types::bot_turn::BotRunCheckpoint>,
+    now_ms: i64,
+) -> i64 {
+    match checkpoint.map(|saved| saved.deadline_at_ms.saturating_sub(now_ms)) {
+        // The runtime uses the original deadline to prohibit further work. This grace only
+        // allows loading and publishing a saved answer or the deadline handoff.
+        Some(remaining) if remaining <= 0 => 30_000,
+        Some(remaining) => remaining.min(MAX_TURN_RUNTIME_MS),
+        None => MAX_TURN_RUNTIME_MS,
+    }
+}
 /// A reply fits one envelope: markdown beyond this is cut.
 const MAX_REPLY_CHARS: usize = 48_000;
 const DEFAULT_INTERVAL_SECS: u64 = 5;
@@ -277,12 +289,10 @@ impl From<HistoryError> for Failure {
     }
 }
 
-/// Whether a failed attempt runs again: a transient failure, attempts left and no tool with side
-/// effects requested.
-pub(crate) fn retries(failure: &Failure, attempts: i32, mutating_started: bool) -> bool {
-    failure.retryable
-        && !mutating_started
-        && u32::try_from(attempts).unwrap_or(u32::MAX) < MAX_ATTEMPTS
+/// Transient failures before any side effect may request a retry. The ledger enforces its
+/// separate recovery budget; claim generations also count successful approval handoffs.
+pub(crate) fn retries(failure: &Failure, _attempts: i32, mutating_started: bool) -> bool {
+    failure.retryable && !mutating_started
 }
 
 /// Seconds until the next attempt after `attempts` claims.
@@ -514,12 +524,24 @@ pub(crate) fn reply_request(
 /// The reply an answer posts; none when the bot read along and stayed silent.
 pub(crate) fn answer_request(turn: &bot_turn::Model, answer: &Answer) -> Option<SendEntryRequest> {
     (!answer.silent).then(|| {
-        reply_request(
+        let mut request = reply_request(
             turn,
             reply_message_id(&turn.bot_id, &turn.trigger_message_id),
             &clipped(&answer.text),
             None,
-        )
+        );
+        if answer.event_delivery == Some(EventDecision::Respond)
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            envelope["body"][decision_event::REPLY_DELIVERY_FIELD] = json!("respond");
+        }
+        if answer.acknowledgement
+            && let Some(envelope) = request.envelope.as_mut()
+        {
+            envelope["body"][flow_like::flow::copilot::decision::ACKNOWLEDGEMENT_FIELD] =
+                json!(true);
+        }
+        request
     })
 }
 
@@ -529,10 +551,14 @@ type FollowUp = Arc<std::sync::Mutex<Option<HeadlessMemory>>>;
 /// One attempt at a turn: everything up to the model's answer.
 /// A finished turn's answer; `resumed` when the turn slept for an owner's approval.
 pub(crate) struct Answer {
+    pub(crate) acknowledgement: bool,
     pub(crate) text: String,
     pub(crate) resumed: bool,
     /// The bot read along and chose to stay silent: nothing is posted.
     pub(crate) silent: bool,
+    /// A participant wait already completed the held turn in its own transaction.
+    pub(crate) completed: bool,
+    pub(crate) event_delivery: Option<EventDecision>,
 }
 
 async fn attempt(
@@ -545,12 +571,13 @@ async fn attempt(
     batched: &[String],
 ) -> Result<Answer, Failure> {
     let owner = turn.owner_id.as_str();
+    let recovery = Arc::new(super::recovery::ServerRecovery::new(state, turn, host_id));
     let row = bot::Entity::find_by_id(&turn.bot_id)
         .one(&state.db)
         .await?
         .filter(|row| row.deleted_at.is_none())
         .ok_or_else(|| Failure::silent(CODE_BOT_GONE, "The bot was deleted"))?;
-    let conversation = conversation::Entity::find_by_id(&turn.conversation_id)
+    let mut conversation = conversation::Entity::find_by_id(&turn.conversation_id)
         .one(&state.db)
         .await?
         .ok_or_else(|| Failure::silent(CODE_UNREADABLE, "The conversation is gone"))?;
@@ -561,15 +588,55 @@ async fn attempt(
             "The server can't read an end-to-end encrypted conversation",
         ));
     }
-    let kind = ConversationKind::parse(&conversation.kind).unwrap_or(ConversationKind::Group);
-    let reacting = history::entry_kind(
-        &state.db,
-        &turn.bot_id,
-        &turn.conversation_id,
-        &turn.trigger_message_id,
-    )
-    .await?
-        == Some(InboxEntryKind::Reaction);
+    let mut kind = ConversationKind::parse(&conversation.kind).unwrap_or(ConversationKind::Group);
+    let trigger = crate::entity::inbox_entry::Entity::find()
+        .filter(crate::entity::inbox_entry::Column::InboxId.eq(&turn.bot_id))
+        .filter(crate::entity::inbox_entry::Column::ConversationId.eq(&turn.conversation_id))
+        .filter(crate::entity::inbox_entry::Column::MessageId.eq(&turn.trigger_message_id))
+        .one(&state.db)
+        .await?;
+    let trigger_kind = trigger
+        .as_ref()
+        .and_then(|entry| InboxEntryKind::parse(&entry.kind));
+    let ephemeral_user_context = trigger.as_ref().is_some_and(|entry| {
+        entry.envelope.get("body").is_some_and(|body| {
+            flow_like_types::bot_user_context::response_for(body, &entry.sender_id, &turn.bot_id)
+        })
+    });
+    let checkpoint = if ephemeral_user_context {
+        None
+    } else {
+        recovery.read().await?
+    };
+    let saved_delivery = checkpoint
+        .as_ref()
+        .map(decision_event::saved_delivery)
+        .transpose()
+        .map_err(|error| Failure::model(&error))?
+        .flatten();
+    if matches!(
+        trigger_kind,
+        Some(InboxEntryKind::Message | InboxEntryKind::Transcript)
+    ) && let Some(trigger) = trigger.as_ref().filter(|entry| {
+        entry
+            .envelope
+            .get("body")
+            .is_some_and(flow_like::flow::copilot::decision::is_acknowledgement_body)
+    }) && bot::Entity::find_by_id(&trigger.sender_id)
+        .one(&state.db)
+        .await?
+        .is_some()
+    {
+        return Ok(Answer {
+            acknowledgement: false,
+            text: String::new(),
+            resumed: false,
+            silent: true,
+            completed: false,
+            event_delivery: None,
+        });
+    }
+    let reacting = trigger_kind == Some(InboxEntryKind::Reaction);
     let mut reactions = Vec::new();
     let mut room_cursor = turn.trigger_message_id.clone();
     let mut transcript = if reacting {
@@ -601,18 +668,47 @@ async fn attempt(
         )
         .await?
     };
-    if reacting && reactions.is_empty() && transcript.addressed && transcript.prompt.is_empty() {
+    if checkpoint.is_none()
+        && reacting
+        && reactions.is_empty()
+        && transcript.addressed
+        && transcript.prompt.is_empty()
+    {
         unaddressed.store(true, Ordering::SeqCst);
         return Ok(Answer {
+            acknowledgement: false,
             text: String::new(),
             resumed: false,
             silent: true,
+            completed: false,
+            event_delivery: None,
         });
     }
     let mut chat_conversation = turn.conversation_id.clone();
     let mut answered_round = None;
     if let Some(answered) = super::talk::answered_ask(&state.db, turn).await? {
         chat_conversation = answered.origin_conversation.clone();
+        conversation = conversation::Entity::find_by_id(&chat_conversation)
+            .one(&state.db)
+            .await?
+            .ok_or_else(|| Failure::silent(CODE_UNREADABLE, "The original conversation is gone"))?;
+        if ConversationEncryption::parse(&conversation.encryption)
+            == Some(ConversationEncryption::E2e)
+        {
+            return Err(Failure::silent(
+                CODE_ENCRYPTED,
+                "The server can't resume an end-to-end encrypted conversation",
+            ));
+        }
+        kind = ConversationKind::parse(&conversation.kind).unwrap_or(ConversationKind::Group);
+        // The original room's current membership and limits still apply after a delayed reply.
+        crate::routes::bots::runtime_token::bot_user_for_turn(
+            &state.db,
+            owner,
+            &turn.bot_id,
+            &turn.id,
+        )
+        .await?;
         transcript = super::talk::ask_result_transcript(&state.db, turn, &answered).await?;
         answered_round = Some(AnsweredRound {
             callee_id: answered.callee_id,
@@ -637,23 +733,265 @@ async fn attempt(
     let addressed = transcript.addressed || asker.is_some();
     unaddressed.store(!addressed || !reactions.is_empty(), Ordering::SeqCst);
 
+    let requester = turn_requester(
+        &state.db,
+        turn,
+        conversation.title.as_deref(),
+        kind,
+        addressed,
+        reactions,
+    )
+    .await?;
+    if let Some(saved) = &checkpoint {
+        if let Some(text) = flow_like::flow::copilot::run_recovery::finished_reply(saved)
+            .map_err(|error| Failure::model(&error))?
+        {
+            let failed = decision_event::failed_execution(saved);
+            let mut event_delivery = saved_delivery.and_then(|delivery| delivery.choice);
+            if !failed
+                && saved_delivery
+                    .is_some_and(|delivery| delivery.monitoring && delivery.choice.is_none())
+            {
+                event_delivery = Some(EventDecision::Notify);
+                if let Some(event) = super::event_decision::trigger(state, turn).await?
+                    && let Some(bit_id) = row
+                        .model_policy
+                        .get("decision")
+                        .and_then(serde_json::Value::as_str)
+                {
+                    let history: Vec<_> = transcript.history.iter().rev().take(12).rev().map(|message| json!({"role":message.role,"text":flow_like::flow::copilot::decision::excerpt(&message.content, 1_000)})).collect();
+                    let previous = super::event_decision::previous_result(state, turn).await;
+                    let context = json!({"bot_name":row.name,"instructions":row.instructions,"history":history,
+                        "monitor_baseline":super::event_decision::baseline_note(previous.as_deref())});
+                    match super::event_decision::classify(
+                        state,
+                        turn,
+                        bit_id,
+                        &event,
+                        &context,
+                        Some(&text),
+                    )
+                    .await
+                    {
+                        Ok(choice) => {
+                            event_delivery = Some(choice.unwrap_or(EventDecision::Notify))
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, turn_id = %turn.id, "Saved monitoring result could not be classified; delivering it")
+                        }
+                    }
+                }
+                let wrapped = decision_event::EventRecovery::new(
+                    recovery.clone(),
+                    saved_delivery.expect("monitoring delivery exists"),
+                );
+                wrapped
+                    .record(event_delivery)
+                    .await
+                    .map_err(|error| Failure::model(&error))?;
+            }
+            if failed {
+                event_delivery = None;
+            }
+            return Ok(Answer {
+                acknowledgement: false,
+                silent: event_delivery.is_some_and(EventDecision::quiet)
+                    || requester.answer_is_silent(&text),
+                text,
+                resumed: true,
+                completed: false,
+                event_delivery,
+            });
+        }
+    }
+
     let (profile, access) = load_profile(state, owner, row.profile_id.as_deref()).await?;
     let mut bot = chat_bot(state, owner, Some(turn.bot_id.as_str()), &profile)
         .await?
         .ok_or_else(|| Failure::silent(CODE_BOT_GONE, "The bot was deleted"))?;
     bot.context.tool_host = BotToolHost::CoreOnly;
-    bot.context.requester = Some(
-        turn_requester(
-            &state.db,
-            turn,
-            conversation.title.as_deref(),
-            kind,
-            addressed,
-            reactions,
-        )
-        .await?,
-    );
+    bot.context.ephemeral_user_context = ephemeral_user_context;
+    bot.context.recovery = (!ephemeral_user_context).then(|| {
+        (recovery.clone() as Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>)
+            .into()
+    });
+    bot.context.requester = Some(requester);
     let requester = bot.context.requester.clone();
+    let grants = crate::routes::bots::tool_grants::rows_for_owner(state, &turn.bot_id, owner);
+    let seen = grants.list().await.unwrap_or_default();
+    let note = resume_note(grants.as_ref()).await;
+    let resumed = note.is_some() || checkpoint.is_some();
+    let event =
+        if saved_delivery.is_some() || (!resumed && answered_round.is_none() && asker.is_none()) {
+            super::event_decision::trigger(state, turn).await?
+        } else {
+            None
+        };
+    let mut event_context = super::event_decision::context(&bot.context, &transcript);
+    if event.as_ref().is_some_and(decision_event::monitoring)
+        && saved_delivery.is_none_or(|delivery| delivery.choice.is_none())
+    {
+        let previous = super::event_decision::previous_result(state, turn).await;
+        let baseline = super::event_decision::baseline_note(previous.as_deref());
+        event_context["monitor_baseline"] = json!(baseline);
+        transcript.prompt = format!(
+            "{baseline}\n\nCurrent scheduled check:\n{}",
+            transcript.prompt
+        );
+    }
+    let decision_bit = bot.model.decision.clone();
+    let mut event_delivery = saved_delivery.and_then(|delivery| delivery.choice);
+    if let (Some(event), Some(bit_id)) = (&event, decision_bit.as_deref())
+        && decision_event::eligible(event)
+        && saved_delivery.is_none()
+        && !resumed
+    {
+        if let Some(rejection) = access.rejection(Some(bit_id)) {
+            tracing::warn!(%rejection, turn_id = %turn.id, "Bot event decision unavailable; processing normally");
+        } else {
+            match super::event_decision::classify(state, turn, bit_id, event, &event_context, None)
+                .await
+            {
+                Ok(Some(EventDecision::Ignore)) => {
+                    return Ok(Answer {
+                        acknowledgement: false,
+                        text: String::new(),
+                        resumed: false,
+                        silent: true,
+                        completed: false,
+                        event_delivery: Some(EventDecision::Ignore),
+                    });
+                }
+                Ok(choice) => event_delivery = choice,
+                Err(error) => {
+                    tracing::warn!(%error, turn_id = %turn.id, "Bot event decision failed; processing normally")
+                }
+            }
+        }
+        let instruction = if decision_event::monitoring(event) {
+            decision_event::MONITOR_INSTRUCTION
+        } else {
+            event_delivery
+                .map(EventDecision::instruction)
+                .unwrap_or_default()
+        };
+        if !instruction.is_empty() {
+            transcript
+                .prompt
+                .push_str(&format!("\n\nHost delivery instruction: {instruction}"));
+            bot.context.suppress_owner_notifications = true;
+        }
+        // A background event's execution failure must remain visible even in a group.
+        unaddressed.store(false, Ordering::SeqCst);
+    }
+    let delivery_state = saved_delivery.or_else(|| {
+        bot.context
+            .suppress_owner_notifications
+            .then(|| decision_event::EventDelivery {
+                choice: event_delivery,
+                monitoring: event.as_ref().is_some_and(decision_event::monitoring),
+            })
+    });
+    let event_recovery = delivery_state.map(|delivery| {
+        Arc::new(decision_event::EventRecovery::new(
+            recovery.clone(),
+            delivery,
+        ))
+    });
+    if let Some(recovery) = &event_recovery {
+        bot.context.suppress_owner_notifications = true;
+        bot.context.recovery = Some(
+            (recovery.clone() as Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>)
+                .into(),
+        );
+    }
+    if (kind == ConversationKind::Group || trigger_kind == Some(InboxEntryKind::Transcript))
+        && event.is_none()
+        && answered_round.is_none()
+        && asker.is_none()
+        && !resumed
+    {
+        if let Some(bit_id) = bot.model.decision.as_deref() {
+            if let Some(rejection) = access.rejection(Some(bit_id)) {
+                return Err(rejection.into());
+            }
+            use flow_like::flow::copilot::decision::{Decision, TIMEOUT_SECS};
+            let decision = tokio::time::timeout(
+                Duration::from_secs(TIMEOUT_SECS),
+                super::decision::evaluate(
+                    state,
+                    turn,
+                    &bot.context,
+                    bit_id,
+                    &transcript,
+                    addressed,
+                ),
+            )
+            .await;
+            match decision {
+                Ok(Ok(Decision::NoAnswer)) => {
+                    return Ok(Answer {
+                        acknowledgement: false,
+                        text: String::new(),
+                        resumed: false,
+                        silent: true,
+                        completed: false,
+                        event_delivery: None,
+                    });
+                }
+                Ok(Ok(Decision::WaitFor(participant))) => {
+                    // In a direct call, keeping quiet already waits for the only other
+                    // participant. Their next utterance gets its own decision.
+                    if kind == ConversationKind::Direct {
+                        return Ok(Answer {
+                            acknowledgement: false,
+                            text: String::new(),
+                            resumed: false,
+                            silent: true,
+                            completed: false,
+                            event_delivery: None,
+                        });
+                    }
+                    use super::decision_wait::ParkOutcome;
+                    match super::decision_wait::park_wait(state, turn, host_id, &participant)
+                        .await?
+                    {
+                        ParkOutcome::Parked | ParkOutcome::LeaseLost => {
+                            return Ok(Answer {
+                                acknowledgement: false,
+                                text: String::new(),
+                                resumed: false,
+                                silent: true,
+                                completed: true,
+                                event_delivery: None,
+                            });
+                        }
+                        ParkOutcome::Superseded => {
+                            return Ok(Answer {
+                                acknowledgement: false,
+                                text: String::new(),
+                                resumed: false,
+                                silent: true,
+                                completed: false,
+                                event_delivery: None,
+                            });
+                        }
+                        ParkOutcome::AlreadyAnswered | ParkOutcome::Unavailable => {}
+                    }
+                }
+                Ok(Ok(Decision::Acknowledge)) => {
+                    bot.context.acknowledgement = trigger_kind == Some(InboxEntryKind::Transcript);
+                }
+                Ok(Ok(Decision::AnswerNow)) => {}
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, turn_id = %turn.id, "Bot participation decision failed; using normal response handling")
+                }
+                Err(_) => {
+                    tracing::warn!(turn_id = %turn.id, "Bot participation decision timed out; using normal response handling")
+                }
+            }
+        }
+    }
     let flow_like_state = master_flow_like_state(state).await?;
     let model_id = server_bot_model(state, owner, &flow_like_state, &profile, &bot.model).await;
     if let Some(rejection) = access.rejection(model_id.as_deref()) {
@@ -677,9 +1015,10 @@ async fn attempt(
         .try_to_provider()
         .ok_or_else(|| ApiError::bad_request("The bot's model is not a completion provider"))?;
     ensure_metered_or_customer_provider(&provider.provider_name)?;
-    let memory_model = match bot.context.memory_model(None) {
-        Some(id) => Some(id.to_string()),
-        None => stored_memory_model(&flow_like_state, &profile, &bot, owner).await,
+    let memory_model = match (bot.context.remembers(), bot.context.memory_model(None)) {
+        (false, _) => None,
+        (true, Some(id)) => Some(id.to_string()),
+        (true, None) => stored_memory_model(&flow_like_state, &profile, &bot, owner).await,
     };
     let memory_hosted = match memory_model.as_deref() {
         Some(id) => {
@@ -711,12 +1050,12 @@ async fn attempt(
         &provider.provider_name,
         funding,
         None,
-        MAX_TURN_RUNTIME_MS,
+        recovery_runtime_ms(checkpoint.as_ref(), chrono::Utc::now().timestamp_millis()),
         hosted_worker::enabled(),
         Some(&crate::middleware::jwt::BotUser {
             bot_id: turn.bot_id.clone(),
             turn_id: turn.id.clone(),
-            conv_id: room_of(kind, &turn.conversation_id).map(ToOwned::to_owned),
+            conv_id: room_of(kind, &chat_conversation).map(ToOwned::to_owned),
         }),
     )
     .await?;
@@ -729,10 +1068,11 @@ async fn attempt(
         ));
     }
     let started = Instant::now();
+    recovery.set_initial_deadline(usage.deadline.timestamp_millis());
     let remaining = (usage.deadline - chrono::Utc::now())
         .num_milliseconds()
         .max(1);
-    let conv_id = room_of(kind, &turn.conversation_id);
+    let conv_id = room_of(kind, &chat_conversation);
     let token = executor_token(
         owner,
         &turn.bot_id,
@@ -741,25 +1081,37 @@ async fn attempt(
         bot.context.workspace_app_id.as_deref(),
         remaining / 1_000 + 120,
     );
-    let memory_turn = super::memory::open_turn(
-        state,
-        &flow_like_state,
-        &profile,
-        &bot.context,
-        &selected,
-        turn,
-        &token,
-        mutating,
-    )
-    .await;
+    // A delayed result has an explicit prompt and history from its original conversation.
+    // Preparing memory from its exchange trigger would replace that continuation context.
+    let memory_turn = if answered_round.is_some() || bot.context.acknowledgement {
+        None
+    } else {
+        super::memory::open_turn(
+            state,
+            &flow_like_state,
+            &profile,
+            &bot.context,
+            &selected,
+            turn,
+            &token,
+            mutating,
+        )
+        .await
+    };
     if let Some(memory_turn) = &memory_turn {
         bot.context.host_tools =
             memory_turn.host_tools(std::mem::take(&mut bot.context.host_tools));
     }
     let room_memory = kind == ConversationKind::Group;
+    let owner_memory_allowed =
+        super::memory::memory_policy(&state.db, &chat_conversation, owner, &turn.bot_id)
+            .await
+            .ok()
+            .flatten()
+            .is_some_and(|policy| policy.use_owner_memory);
     let memory = match memory_model
         .as_deref()
-        .filter(|_| memory_turn.is_none() || room_memory)
+        .filter(|_| owner_memory_allowed && (memory_turn.is_none() || room_memory))
     {
         Some(id) => {
             open_memory(
@@ -792,10 +1144,6 @@ async fn attempt(
             attachments: &[],
         },
     );
-    let grants = crate::routes::bots::tool_grants::rows_for_owner(state, &turn.bot_id, owner);
-    let seen = grants.list().await.unwrap_or_default();
-    let note = resume_note(grants.as_ref()).await;
-    let resumed = note.is_some();
     let context = match note {
         Some(note) => format!("{context}\n\n{note}"),
         None => context,
@@ -822,8 +1170,9 @@ async fn attempt(
         token.clone(),
         grants.clone(),
         conv_id,
+        Some(&chat_conversation),
         Some(flow_like_bot_tools::TurnSite::Conversation(
-            chat_conversation,
+            chat_conversation.clone(),
         )),
     )
     .await;
@@ -856,6 +1205,7 @@ async fn attempt(
         None => BotTalk::for_run(talk_host.clone(), &bot.context, BotLocation::Server),
     };
     let talk = Arc::new(talk.with_answered(answered_round.as_ref()));
+    let acknowledgement = bot.context.acknowledgement;
     let sub_task_compute = bot.context.compute.clone();
     let chat = run_bot_chat_with_talk(
         flow_like_state,
@@ -889,12 +1239,47 @@ async fn attempt(
     if let Err(error) = settle_assistant_usage(state, &usage, elapsed, answered).await {
         tracing::error!(%error, operation_id = %usage.operation_id, "Bot turn usage settlement remains pending");
     }
-    if let Some(card) = bot_tools
+    if let Some((card, call_id)) = bot_tools
         .as_ref()
-        .and_then(|bot_tools| bot_tools.parked())
-        .or_else(|| talk_host.parked_card())
+        .and_then(|bot_tools| {
+            bot_tools
+                .parked()
+                .map(|card| (card, bot_tools.parked_recovery_call_id()))
+        })
+        .or_else(|| {
+            talk_host
+                .parked_card()
+                .map(|card| (card, talk_host.parked_recovery_call_id()))
+        })
     {
+        if let Some(call_id) = call_id {
+            use flow_like::flow::copilot::run_recovery::{
+                BotRunRecovery, record_unexecuted_approval,
+            };
+            if let Some(saved) = recovery.read().await? {
+                if let Some(updated) = record_unexecuted_approval(&saved, &call_id, &card.tool)
+                    .map_err(|error| Failure::model(&error))?
+                {
+                    recovery
+                        .save(&updated)
+                        .await
+                        .map_err(|error| Failure::model(&error))?;
+                }
+            }
+        }
         return Err(Failure::parked(card));
+    }
+    let failed_execution = if event_recovery.is_some() {
+        recovery
+            .read()
+            .await?
+            .as_ref()
+            .is_some_and(decision_event::failed_execution)
+    } else {
+        false
+    };
+    if failed_execution {
+        event_delivery = None;
     }
     match outcome {
         Err(_) => Err(Failure::timeout()),
@@ -902,26 +1287,79 @@ async fn attempt(
         Ok(Ok(text))
             if requester
                 .as_ref()
-                .is_some_and(|r| r.answer_is_silent(&text)) =>
+                .is_some_and(|r| r.answer_is_silent(&text))
+                || (acknowledgement
+                    && flow_like::flow::copilot::bot_run::is_silent_reply(&text)) =>
         {
             Ok(Answer {
+                acknowledgement: false,
                 text: String::new(),
                 resumed,
                 silent: true,
+                completed: false,
+                event_delivery: None,
             })
         }
-        Ok(Ok(text)) if text.trim().is_empty() => Err(Failure::new(
-            CODE_MODEL,
-            "The language model returned no answer. You can ask again, or have my owner retry this turn.",
-            true,
-            true,
-        )),
+        Ok(Ok(text))
+            if text.trim().is_empty() && !event_delivery.is_some_and(EventDecision::quiet) =>
+        {
+            Err(Failure::new(
+                CODE_MODEL,
+                "The language model returned no answer. You can ask again, or have my owner retry this turn.",
+                true,
+                true,
+            ))
+        }
         Ok(Ok(text)) => {
             clear_tokens(grants.as_ref(), &seen).await;
+            let pending_monitor = event_delivery.is_none()
+                && !failed_execution
+                && (delivery_state.is_some_and(|saved| saved.monitoring)
+                    || event.as_ref().is_some_and(decision_event::monitoring));
+            if pending_monitor {
+                event_delivery = Some(EventDecision::Notify);
+            }
+            if let Some(event) = &event
+                && decision_event::monitoring(event)
+                && pending_monitor
+            {
+                event_delivery = Some(EventDecision::Notify);
+                if let Some(bit_id) = decision_bit.as_deref() {
+                    match super::event_decision::classify(
+                        state,
+                        turn,
+                        bit_id,
+                        event,
+                        &event_context,
+                        Some(&text),
+                    )
+                    .await
+                    {
+                        Ok(choice) => {
+                            event_delivery = Some(choice.unwrap_or(EventDecision::Notify))
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, turn_id = %turn.id, "Bot monitoring decision failed; delivering the result")
+                        }
+                    }
+                }
+            }
+            if let Some(recovery) = &event_recovery
+                && !failed_execution
+                && delivery_state.is_some_and(|saved| saved.choice != event_delivery)
+            {
+                recovery
+                    .record(event_delivery)
+                    .await
+                    .map_err(|error| Failure::model(&error))?;
+            }
             Ok(Answer {
+                acknowledgement,
                 text,
                 resumed,
-                silent: false,
+                silent: event_delivery.is_some_and(EventDecision::quiet),
+                completed: false,
+                event_delivery,
             })
         }
     }
@@ -1086,6 +1524,10 @@ pub(crate) async fn post_reply(
     failure_code: Option<&'static str>,
     resumed: bool,
 ) -> Result<(), ApiError> {
+    if let Some(answered) = super::talk::answered_ask(&state.db, turn).await? {
+        return post_reply_in_origin(state, turn, host_id, &answered.origin_conversation, request)
+            .await;
+    }
     let sent = commit_reply(
         &state.db,
         state.db_dialect,
@@ -1165,6 +1607,9 @@ pub(crate) async fn finish(
     };
     match result {
         Ok(answer) => {
+            if answer.completed {
+                return;
+            }
             let Some(request) = answer_request(turn, &answer) else {
                 match ledger::complete_silent_in(&state.db, &turn.id, host_id, now).await {
                     Ok(true) => {}
@@ -1178,20 +1623,7 @@ pub(crate) async fn finish(
                 }
                 return;
             };
-            let resumed = answer.resumed;
-            let posted = match super::talk::answered_ask(&state.db, turn).await {
-                Ok(Some(answered)) => {
-                    post_reply_in_origin(
-                        state,
-                        turn,
-                        host_id,
-                        &answered.origin_conversation,
-                        request,
-                    )
-                    .await
-                }
-                _ => post_reply(state, turn, host_id, request, None, resumed).await,
-            };
+            let posted = post_reply(state, turn, host_id, request, None, answer.resumed).await;
             if let Err(error) = posted {
                 tracing::warn!(%error, turn_id = %turn.id, "Bot turn: the reply was refused");
                 record_failure(state, turn, host_id, CODE_REPLY_REFUSED, now).await;
@@ -1199,15 +1631,23 @@ pub(crate) async fn finish(
         }
         Err(failure) if retries(&failure, turn.attempts, mutating_started) => {
             let retry_at = now + ChronoDuration::seconds(backoff_secs(turn.attempts));
-            match ledger::release_for_retry_in(
-                &state.db,
-                &turn.id,
-                host_id,
-                retry_at,
-                failure.code,
-                now,
-            )
-            .await
+            match state
+                .transaction(|txn| {
+                    let (turn_id, host_id) = (turn.id.clone(), host_id.to_owned());
+                    Box::pin(async move {
+                        ledger::release_for_retry_in(
+                            txn,
+                            &turn_id,
+                            &host_id,
+                            retry_at,
+                            failure.code,
+                            now,
+                        )
+                        .await
+                        .map_err(ApiError::from)
+                    })
+                })
+                .await
             {
                 Ok(true) => kick_later(retry_at),
                 Ok(false) => {}
@@ -1474,7 +1914,7 @@ mod tests {
     fn a_transient_failure_retries_until_its_attempts_are_used() {
         assert!(retries(&failure(true), 1, false));
         assert!(retries(&failure(true), 2, false));
-        assert!(!retries(&failure(true), 3, false));
+        assert!(retries(&failure(true), 3, false));
         assert!(!retries(&failure(false), 1, false));
     }
 

@@ -25,6 +25,7 @@ import {
 } from "../../state/global-chat/global-chat-store";
 import { restoreGlobalChatConversation } from "../../state/global-chat/global-chat-stream";
 import { BOTS_ROUTE } from "../bots-tab/dock-selection";
+import { BotConfigurationChanges } from "../bots-tab/configuration-changes";
 import { SecretRequestForm } from "../bots-tab/secret-request-form";
 import { BotAvatar } from "../bots/bot-avatar";
 import {
@@ -306,6 +307,7 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 	const hasBody =
 		Boolean(prompt.appId) ||
 		(isApproval && Boolean(prompt.description)) ||
+		(isApproval && Boolean(prompt.configurationChanges)) ||
 		(!isApproval && ask.questions.length > 0);
 
 	return (
@@ -357,6 +359,9 @@ function InlineQuestionPrompt({ prompt }: { prompt: GlobalToolPrompt }) {
 								onDraftsChange={setDrafts}
 								onSubmit={isSingleFreeform ? submit : undefined}
 							/>
+						)}
+						{isApproval && prompt.configurationChanges && (
+							<BotConfigurationChanges changes={prompt.configurationChanges} />
 						)}
 					</RequestCardBody>
 				)}

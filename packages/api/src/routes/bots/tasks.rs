@@ -52,6 +52,7 @@ pub struct BotTaskInfo {
     pub next_run_at: Option<DateTime<FixedOffset>>,
     pub last_run_at: Option<DateTime<FixedOffset>>,
     pub enabled: bool,
+    pub monitoring: bool,
     /// `bot` or `owner`.
     pub created_by: String,
     pub created_at: DateTime<FixedOffset>,
@@ -71,6 +72,7 @@ impl From<bot_task::Model> for BotTaskInfo {
             next_run_at: row.next_run_at,
             last_run_at: row.last_run_at,
             enabled: row.enabled,
+            monitoring: row.monitoring.unwrap_or(false),
             created_by: row.created_by.to_ascii_lowercase(),
             created_at: row.created_at,
         }
@@ -84,6 +86,9 @@ pub struct BotTaskList {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateBotTaskRequest {
+    /// Check for useful changes; routine successful runs may stay quiet.
+    #[serde(default)]
+    pub monitoring: bool,
     /// `once` or `cron`.
     pub kind: String,
     /// RFC 3339 time of a once task, in the future.
@@ -101,6 +106,7 @@ pub struct CreateBotTaskRequest {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateBotTaskRequest {
+    pub monitoring: Option<bool>,
     pub at: Option<String>,
     pub cron: Option<String>,
     pub tz: Option<String>,
@@ -221,6 +227,7 @@ pub(crate) async fn create_in<C: ConnectionTrait>(
         next_run_at: Set(schedule.first_run(utc(now)).map(|at| at.fixed_offset())),
         last_run_at: Set(None),
         enabled: Set(request.enabled.unwrap_or(true)),
+        monitoring: Set(Some(request.monitoring)),
         created_by: Set(created_by.stored()),
         created_at: Set(now),
         updated_at: Set(now),
@@ -287,6 +294,9 @@ pub(crate) async fn update_in<C: ConnectionTrait>(
         let (title, instruction) = contract::check_text(title, instruction).map_err(bad_request)?;
         active.title = Set(title);
         active.instruction = Set(instruction);
+    }
+    if let Some(monitoring) = request.monitoring {
+        active.monitoring = Set(Some(monitoring));
     }
     active.updated_at = Set(now);
     Ok(active.update(db).await?)
@@ -371,6 +381,7 @@ pub async fn create_bot_task(
         instruction: body.instruction,
         title: body.title,
         enabled: None,
+        monitoring: body.monitoring,
     };
     let row = state
         .transaction(|txn| {
@@ -418,6 +429,7 @@ pub async fn update_bot_task(
         instruction: body.instruction,
         title: body.title,
         enabled: body.enabled,
+        monitoring: body.monitoring,
     };
     let row = update_in(
         &state.db,

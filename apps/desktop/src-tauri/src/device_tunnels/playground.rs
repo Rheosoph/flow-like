@@ -17,6 +17,7 @@ use flow_like_device_protocol::{
     TunnelDataOpen,
 };
 use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
+use flow_like_types::interaction_observation::InteractionObservation;
 use serde::Serialize;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -52,6 +53,7 @@ pub(crate) struct DeviceBotView {
     caption: Option<String>,
     image: Option<String>,
     age_ms: Option<u64>,
+    observation: Option<InteractionObservation>,
     taken_over: bool,
     /// The owner can drive this picture: a computer screen on a device that has a display.
     can_control: bool,
@@ -163,6 +165,7 @@ impl Live {
                 caption: None,
                 image: None,
                 age_ms: None,
+                observation: None,
                 taken_over,
                 can_control: false,
                 width: None,
@@ -184,6 +187,7 @@ impl Live {
                 STANDARD.encode(&frame.jpeg)
             )),
             age_ms: Some(age.as_millis() as u64),
+            observation: frame.meta.observation.clone(),
             taken_over,
             can_control: computer
                 && display.is_some_and(|display| display != PlaygroundDisplay::None),
@@ -371,6 +375,7 @@ fn open_of(bot_id: &str) -> TunnelOpen {
         mode: TunnelMode::Tcp,
         target: TunnelTarget::BotPlayground {
             bot_id: bot_id.to_owned(),
+            observations: true,
         },
     }
 }

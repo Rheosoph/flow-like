@@ -21,7 +21,7 @@ use flow_like::{
     state::FlowLikeState,
 };
 use flow_like_types::{
-    bot::{BotCapability, BotModelPolicy, BotSystemKind},
+    bot::{BotCapability, BotLocation, BotModelPolicy, BotSystemKind},
     data_classification::DataSensitivity,
 };
 use reqwest::Method;
@@ -164,6 +164,8 @@ pub(super) struct BotRecord {
     #[serde(default)]
     pub(super) model: BotModelPolicy,
     #[serde(default)]
+    pub(super) location: BotLocation,
+    #[serde(default)]
     pub(super) embedding_model: Option<String>,
     #[serde(default)]
     pub(super) stt_model: Option<String>,
@@ -192,6 +194,7 @@ impl From<flow_like_local_bots::Bot> for BotRecord {
             description: bot.description,
             instructions: bot.instructions,
             model: bot.model,
+            location: BotLocation::Desktop,
             embedding_model: bot.embedding_model,
             stt_model: bot.stt_model,
             tts_model: bot.tts_model,
@@ -381,6 +384,11 @@ pub(super) fn desktop_bot(
         profile_app_ids,
         workspace_app_id: None,
         embedding_model: record.embedding_model,
+        decision_model: record.model.decision.clone(),
+        decision_hosted_only: record.location != BotLocation::Desktop,
+        acknowledgement: false,
+        ephemeral_user_context: false,
+        suppress_owner_notifications: false,
         stt_model: record.stt_model,
         tts_model: record.tts_model,
         image_model: record.image_model,
@@ -389,10 +397,12 @@ pub(super) fn desktop_bot(
         tool_host,
         host_tools: super::super::super::native_bot_tools::host_tools(),
         skills: Vec::new(),
+        skills_ranked: false,
         requester: None,
         permissions: Default::default(),
         connectors: Vec::new(),
         compute: Default::default(),
+        recovery: None,
     };
     DesktopBot {
         context: Arc::new(context),
@@ -403,7 +413,7 @@ pub(super) fn desktop_bot(
 
 /// The bot `bot_id` names: `None` without one (today's FlowPilot run), Flux's row for `flux` (the
 /// signed-in account's, else this device's when signed out; `None` without one), Assistant's
-/// defaults for `general`, a bot on this device, else the signed-in account's bot. Another
+/// row for `general` with defaults when unavailable, a bot on this device, else the account's bot. Another
 /// person's or an unknown id fails. A bot other than Flux comes with its workspace, made on its
 /// first run; where that fails the run goes on without one. `tool_host` is `Chat` with a webview
 /// attached and `Native` without one.
@@ -418,6 +428,19 @@ pub(super) async fn load_bot(
     let bot_id = match bot_request(bot_id) {
         BotRequest::FlowPilot => return Ok(None),
         BotRequest::Flux => return Ok(flux_bot(app, signed_in, tool_host).await),
+        BotRequest::General if signed_in.is_none() => {
+            let Some(store) = app.try_state::<LocalBots>() else {
+                return Ok(Some(DesktopBot::general(tool_host)));
+            };
+            match local_built_in(store, BotSystemKind::General).await {
+                Ok(Some(record)) => record.id,
+                Ok(None) => return Ok(Some(DesktopBot::general(tool_host))),
+                Err(error) => {
+                    tracing::warn!(%error, "Assistant's local row is unavailable; using its defaults");
+                    return Ok(Some(DesktopBot::general(tool_host)));
+                }
+            }
+        }
         BotRequest::General => {
             let Some(identity) = signed_in else {
                 return Ok(Some(DesktopBot::general(tool_host)));
@@ -437,20 +460,20 @@ pub(super) async fn load_bot(
                 None => DesktopBot::general(tool_host).with_account(true),
             }));
         }
-        BotRequest::Bot(bot_id) => bot_id,
+        BotRequest::Bot(bot_id) => bot_id.to_string(),
     };
-    let (record, apps, workspace, account) = match local_bot(app, bot_id).await {
+    let (record, apps, workspace, account) = match local_bot(app, &bot_id).await {
         Ok(Some((record, apps))) => {
             let workspace = device_workspace(app, &record).await;
             (record, apps, workspace, false)
         }
         Ok(None) => {
-            let (record, apps, workspace) = account_bot_with_workspace(signed_in, bot_id).await?;
+            let (record, apps, workspace) = account_bot_with_workspace(signed_in, &bot_id).await?;
             (record, apps, workspace, true)
         }
         Err(error) if signed_in.is_some() => {
             tracing::warn!(%error, bot_id, "Bots on this device are unavailable; trying the account");
-            let (record, apps, workspace) = account_bot_with_workspace(signed_in, bot_id).await?;
+            let (record, apps, workspace) = account_bot_with_workspace(signed_in, &bot_id).await?;
             (record, apps, workspace, true)
         }
         Err(error) => return Err(format!("Bot '{bot_id}' can't be loaded: {error}")),
@@ -1234,6 +1257,41 @@ mod tests {
             defaults.context.capabilities,
             [BotCapability::Internet, BotCapability::Memory]
         );
+    }
+
+    #[test]
+    fn persisted_assistant_settings_keep_configuration_tools_available_without_capabilities() {
+        let assistant = desktop_bot(
+            record(json!({
+                "id": "bot_saved_general",
+                "system": "general",
+                "name": "My Assistant",
+                "description": "Works with my notes",
+                "instructions": "Ask before changing shared notes.",
+                "capabilities": [],
+                "model": { "primary": "my-model", "fallbacks": ["my-fallback"] }
+            })),
+            Vec::new(),
+            BTreeSet::new(),
+            BotToolHost::Chat,
+        );
+        assert_eq!(assistant.context.bot_id, "bot_saved_general");
+        assert_eq!(assistant.context.name, "My Assistant");
+        assert_eq!(
+            assistant.context.description.as_deref(),
+            Some("Works with my notes")
+        );
+        assert_eq!(
+            assistant.context.instructions.as_deref(),
+            Some("Ask before changing shared notes.")
+        );
+        assert_eq!(assistant.model.primary.as_deref(), Some("my-model"));
+        assert_eq!(assistant.model.fallbacks, ["my-fallback"]);
+        assert!(assistant.context.capabilities.is_empty());
+        let tools = assistant.context.tool_specs(false);
+        for name in ["bot_configuration", "bot_models", "bot_update_configuration"] {
+            assert!(tools.iter().any(|tool| tool.name == name), "{name}");
+        }
     }
 
     #[test]

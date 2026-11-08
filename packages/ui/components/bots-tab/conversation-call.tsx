@@ -74,6 +74,10 @@ export function useCallErrorText() {
 					"crew.call.error.failed",
 					"The call didn't start. Try again.",
 				),
+				transcription: t(
+					"crew.call.error.transcription",
+					"Bots couldn't hear that. Check your speech model and try again.",
+				),
 			})[error],
 		[t],
 	);

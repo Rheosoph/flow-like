@@ -1,4 +1,7 @@
 import { useEffect } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { invalidateBotConfiguration } from "../../hooks/use-bots";
+import { plainBody } from "../../components/bots-tab/approval-entry";
 import { watchConversation } from "../../lib/realtime/conversation-feed";
 import type { IInboxEntry } from "../backend-state/inbox-state";
 import { pushedTranscript } from "./bot-history";
@@ -37,6 +40,7 @@ export function followPushedEntries(
  * answer to either) while it shows its newest messages; a jump window stays as it is.
  */
 export function useFollowBotChat(sessionId: string): void {
+	const queryClient = useQueryClient();
 	const botId = conversationBotId(sessionId);
 	const view = useBotHistoryStore((state) =>
 		botId ? state.views[botId] : undefined,
@@ -53,7 +57,20 @@ export function useFollowBotChat(sessionId: string): void {
 				conversationId: target.conversationId,
 				...(cursor ? { after: cursor } : {}),
 			},
-			(entries) => followPushedEntries(botId, sessionId, entries),
+			(entries) => {
+				followPushedEntries(botId, sessionId, entries);
+				// A headless reply can follow a settings change approved from this transcript.
+				if (
+					entries.some(
+						(entry) =>
+							entry.sender_id === botId &&
+							entry.kind === "message" &&
+							!plainBody(entry)?.approval,
+					)
+				) {
+					invalidateBotConfiguration(queryClient, botId);
+				}
+			},
 		);
-	}, [botId, sessionId, following, cursor]);
+	}, [botId, sessionId, following, cursor, queryClient]);
 }

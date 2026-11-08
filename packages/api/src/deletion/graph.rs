@@ -411,6 +411,7 @@ fn build() -> FkGraph {
             Widget,
         ]
     );
+    graph.register::<crate::entity::bot_turn_checkpoint::Entity>();
     for &(name, primary_key, columns) in SQL_TABLES {
         graph.tables.insert(
             name.to_owned(),

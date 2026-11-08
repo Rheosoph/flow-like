@@ -222,6 +222,19 @@ pub(super) async fn review<C: ConnectionTrait>(
         ));
     }
     let settings = settings_or_issues(&request.bot, &mut issues);
+    if let Some((_, settings)) = &settings
+        && let Err(error) = super::crud::verify_decision_model(db, settings).await
+    {
+        if error.status() != StatusCode::BAD_REQUEST {
+            return Err(error);
+        }
+        issues.push(ImportIssue::new(
+            ImportIssuePart::Bot,
+            BOT_INVALID,
+            "Server and managed-device bots require a hosted System One decision model",
+            settings.model.decision.as_deref(),
+        ));
+    }
     issues.extend(reference_issues(db, owner_id, &request.bot).await?);
     let app_ids = requested_apps(&request.app_ids);
     issues.extend(app_issues(db, owner_id, &app_ids).await?);

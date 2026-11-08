@@ -87,3 +87,14 @@ export function shouldShowRemotePushToast(platform: string | null): boolean {
 	// The iOS notification delegate already presents foreground push banners.
 	return platform !== "IOS";
 }
+
+/** Read only the hub's delivery classification, never a caller-supplied link or title. */
+export function remoteNotificationPriority(
+	data?: Record<string, unknown>,
+): "routine" | "mention" | "call" {
+	return data?.notification_priority === "mention"
+		? "mention"
+		: data?.notification_priority === "call"
+			? "call"
+			: "routine";
+}

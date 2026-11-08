@@ -39,7 +39,7 @@ const TABLES: [&str; 8] = [
         UNIQUE ("inboxId", "messageId"), UNIQUE ("inboxId", "conversationId", "seq"))"#,
     r#"CREATE TABLE public."App" ("id" TEXT PRIMARY KEY, "botId" TEXT UNIQUE)"#,
     r#"CREATE TABLE public."User" (
-        "id" TEXT PRIMARY KEY, "name" TEXT, "username" TEXT, "preferredUsername" TEXT)"#,
+        "id" TEXT PRIMARY KEY, "name" TEXT, "username" TEXT, "preferredUsername" TEXT, "additionalInformation" TEXT, "updatedAt" TEXT)"#,
     r#"CREATE TABLE public."BotTurn" (
         "id" TEXT PRIMARY KEY, "botId" TEXT NOT NULL, "ownerId" TEXT NOT NULL,
         "conversationId" TEXT NOT NULL, "triggerMessageId" TEXT NOT NULL,
@@ -72,6 +72,7 @@ pub(crate) async fn database() -> DatabaseConnection {
         schema.create_table_from_entity(bot::Entity),
         schema.create_table_from_entity(membership::Entity),
         schema.create_table_from_entity(mutation_lock::Entity),
+        schema.create_table_from_entity(crate::entity::bot_turn_checkpoint::Entity),
     ] {
         let mut table = Table::create();
         table.table(source.get_table_name().unwrap().clone());
@@ -80,6 +81,9 @@ pub(crate) async fn database() -> DatabaseConnection {
         }
         db.execute(&table).await.unwrap();
     }
+    db.execute(&schema.create_table_from_entity(crate::entity::bot_decision_wait::Entity))
+        .await
+        .unwrap();
     for statement in TABLES
         .iter()
         .chain(&super::marks::TEST_TABLES)

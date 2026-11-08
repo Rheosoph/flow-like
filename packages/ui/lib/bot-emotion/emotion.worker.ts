@@ -174,19 +174,24 @@ function loadScorer() {
 	return scorer;
 }
 
-const dispatcher = createEmotionDispatcher(async (input, reply) => {
-	const model = await loadScorer();
-	if (input.warmup) {
-		reply({ type: "ready" });
-		return;
-	}
-	reply({ type: "result", id: input.id, scores: await model.score(input) });
-});
-broadcast = dispatcher.broadcast;
-
 const scope = self as unknown as EmotionDispatchPort & {
 	onconnect?: ((event: MessageEvent) => void) | null;
 };
+const dispatcher = createEmotionDispatcher(
+	async (input, reply) => {
+		const model = await loadScorer();
+		if (input.warmup) {
+			reply({ type: "ready" });
+			return;
+		}
+		reply({ type: "result", id: input.id, scores: await model.score(input) });
+	},
+	// Closing every port leaves the SharedWorker's WASM heap alive until its
+	// owning tabs close. End the scope once no composer or inference needs it.
+	() => scope.close?.(),
+);
+broadcast = dispatcher.broadcast;
+
 if ("onconnect" in scope) {
 	scope.onconnect = (event) => {
 		const port = event.ports[0];

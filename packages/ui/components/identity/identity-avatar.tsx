@@ -11,6 +11,7 @@ import { botFrameRadius } from "../bots/appearance";
 import { BotAvatar } from "../bots/bot-avatar";
 import { Skeleton } from "../ui/skeleton";
 import { UserAvatar } from "../ui/user-avatar";
+import { AvailabilityBadge } from "../account/availability-badge";
 
 export interface IdentityAvatarProps {
 	/** A user sub or a bot id. */
@@ -89,14 +90,20 @@ export function ResolvedIdentityAvatar({
 }: Readonly<ResolvedIdentityAvatarProps>) {
 	if (!identity.bot) {
 		return (
-			<UserAvatar
-				avatarUrl={identity.avatarUrl}
-				initials={identity.initials}
-				label={identity.label}
-				size={size}
-				className={className}
-				title={title}
-			/>
+			<span className={cn("relative inline-flex shrink-0", className)}>
+				<UserAvatar
+					avatarUrl={identity.avatarUrl}
+					initials={identity.initials}
+					label={identity.label}
+					size={size}
+					title={title}
+				/>
+				<AvailabilityBadge
+					value={identity.user?.availability}
+					dot
+					className="absolute -bottom-0.5 -right-0.5"
+				/>
+			</span>
 		);
 	}
 

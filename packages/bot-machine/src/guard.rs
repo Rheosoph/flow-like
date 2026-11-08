@@ -5,13 +5,14 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use flow_like_bot_tools::browser::{
-    BrowserBackend, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
+    BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
 };
 use flow_like_bot_tools::computer::{
     ComputerAction, ComputerBackend, Screen, WindowBounds, WindowOp, WindowSummary,
 };
 use flow_like_bot_tools::error::{ToolError, code};
 use flow_like_types::Result;
+use flow_like_types::interaction_observation::InteractionObservation;
 
 use crate::desk_lock::DesktopLock;
 use crate::frames::{FrameKind, FrameStore, Shot};
@@ -24,11 +25,18 @@ pub struct BotChannel {
 }
 
 impl BotChannel {
-    pub(crate) fn publish(&self, png: &[u8], kind: FrameKind, caption: &str) {
+    pub(crate) fn publish(
+        &self,
+        png: &[u8],
+        kind: FrameKind,
+        caption: &str,
+        observation: Option<InteractionObservation>,
+    ) {
         self.frames.publish(&Shot {
             png: png.to_vec(),
             kind,
             caption: caption.to_string(),
+            observation,
         });
     }
 }
@@ -48,25 +56,32 @@ impl GuardedBrowser {
     }
 
     fn fresh_look_needed(&self) -> Result<()> {
-        match self.channel.takeover.take_note() {
-            Some(note) => Err(failure(ToolError::new(code::STALE_PAGE, note))),
-            None => Ok(()),
-        }
+        self.channel.takeover.require_fresh(true).map_err(failure)
     }
 }
 
 #[async_trait]
 impl BrowserBackend for GuardedBrowser {
     async fn open(&self, url: &str) -> Result<PageState> {
+        let generation = self.channel.takeover.generation();
         self.guard()?;
-        self.channel.takeover.take_note();
-        self.inner.open(url).await
+        let page = self.inner.open(url).await?;
+        if self.channel.takeover.observed(true, generation) {
+            self.channel.takeover.take_note();
+        }
+        Ok(page)
     }
 
     async fn snapshot(&self, request: SnapshotRequest) -> Result<SnapshotView> {
+        let generation = self.channel.takeover.generation();
         self.guard()?;
-        let note = self.channel.takeover.take_note();
         let mut view = self.inner.snapshot(request).await?;
+        let note = self
+            .channel
+            .takeover
+            .observed(true, generation)
+            .then(|| self.channel.takeover.take_note())
+            .flatten();
         if let Some(note) = note {
             view.text = format!("[{note}]\n{}", view.text);
         }
@@ -80,8 +95,17 @@ impl BrowserBackend for GuardedBrowser {
     }
 
     async fn screenshot(&self) -> Result<Vec<u8>> {
+        Ok(self.capture().await?.png)
+    }
+
+    async fn observation(&self) -> Result<Option<InteractionObservation>> {
         self.guard()?;
-        let png = self.inner.screenshot().await?;
+        self.inner.observation().await
+    }
+
+    async fn capture(&self) -> Result<BrowserScreen> {
+        self.guard()?;
+        let capture = self.inner.capture().await?;
         let caption = self
             .inner
             .current()
@@ -90,8 +114,13 @@ impl BrowserBackend for GuardedBrowser {
             .flatten()
             .map(|page| page.url)
             .unwrap_or_default();
-        self.channel.publish(&png, FrameKind::Browser, &caption);
-        Ok(png)
+        self.channel.publish(
+            &capture.png,
+            FrameKind::Browser,
+            &caption,
+            capture.observation.clone(),
+        );
+        Ok(capture)
     }
 
     async fn current(&self) -> Result<Option<PageState>> {
@@ -124,12 +153,17 @@ impl GuardedComputer {
         if let Some(desk) = &self.desk {
             desk.acquire(&self.bot_id).await.map_err(failure)?;
         }
+        self.channel.takeover.guard().map_err(failure)?;
         Ok(self.channel.takeover.take_note())
     }
 
     fn shown(&self, mut screen: Screen, note: Option<String>) -> Screen {
-        self.channel
-            .publish(&screen.png, FrameKind::Computer, "Screen");
+        self.channel.publish(
+            &screen.png,
+            FrameKind::Computer,
+            "Screen",
+            screen.observation.clone(),
+        );
         screen.note = note.or(screen.note);
         screen
     }
@@ -138,12 +172,24 @@ impl GuardedComputer {
 #[async_trait]
 impl ComputerBackend for GuardedComputer {
     async fn screenshot(&self) -> Result<Screen> {
+        let generation = self.channel.takeover.generation();
         let note = self.enter().await?;
-        Ok(self.shown(self.inner.screenshot().await?, note))
+        let screen = self.inner.screenshot().await?;
+        self.channel.takeover.observed(false, generation);
+        Ok(self.shown(screen, note))
     }
 
     async fn act(&self, action: &ComputerAction) -> Result<String> {
+        self.channel.takeover.guard().map_err(failure)?;
+        self.channel
+            .takeover
+            .require_fresh(false)
+            .map_err(failure)?;
         let note = self.enter().await?;
+        self.channel
+            .takeover
+            .require_fresh(false)
+            .map_err(failure)?;
         let done = self.inner.act(action).await?;
         Ok(match note {
             Some(note) => format!("{done}. {note}"),
@@ -152,8 +198,11 @@ impl ComputerBackend for GuardedComputer {
     }
 
     async fn screenshot_window(&self, window: &str) -> Result<Screen> {
+        let generation = self.channel.takeover.generation();
         let note = self.enter().await?;
-        Ok(self.shown(self.inner.screenshot_window(window).await?, note))
+        let screen = self.inner.screenshot_window(window).await?;
+        self.channel.takeover.observed(false, generation);
+        Ok(self.shown(screen, note))
     }
 
     async fn windows(&self) -> Result<Vec<WindowSummary>> {

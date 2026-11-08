@@ -53,12 +53,13 @@ mock.module("./room-limits-dialog", () => ({
 		open: boolean;
 		botName: string;
 		confirmLabel: string;
+		group: boolean;
 		onConfirm: (limits: unknown) => void;
 	}) =>
 		props.open
 			? createElement(
 					"div",
-					{ role: "dialog" },
+					{ role: "dialog", "data-group": props.group },
 					createElement("span", null, `limits for ${props.botName}`),
 					createElement(
 						"button",
@@ -181,6 +182,23 @@ describe("invitations in Needs you", () => {
 		await act(async () => button("Decline").click());
 		expect(answers.map((a) => a.accept)).toEqual([false]);
 		expect(container.textContent).not.toContain("limits for Scout");
+		await hide();
+	});
+
+	test("a direct bot request reviews permissions without group memory controls", async () => {
+		await show(
+			invitation({
+				principal_id: "bot-9",
+				kind: "bot",
+				bot_name: "Scout",
+				conversation_kind: "direct",
+			}),
+		);
+		await act(async () => button("Review and accept").click());
+		expect(
+			container.querySelector('[role="dialog"]')?.getAttribute("data-group"),
+		).toBe("false");
+		expect(answers).toEqual([]);
 		await hide();
 	});
 });

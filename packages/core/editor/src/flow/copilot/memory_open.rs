@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use flow_like_bot_memory::compaction::CompactionConfig;
 use flow_like_bot_memory::host::{
-    MemorySession, ModelEmbedder, ModelLlm, SessionOptions, TurnRequest,
+    DecisionLlm, MemorySession, ModelEmbedder, ModelLlm, SessionOptions, TurnRequest,
 };
 use flow_like_bot_memory::{Embedder, MemoryLlm, ModelBudget};
 use flow_like_storage::object_store::path::Path;
@@ -150,6 +150,7 @@ pub struct MemoryModels<'a> {
 
 async fn build_models(
     models: &MemoryModels<'_>,
+    bot: &BotRunContext,
     embedding_id: &str,
 ) -> Result<(Arc<dyn MemoryLlm>, Arc<dyn Embedder>)> {
     let usage = ModelUsageContext {
@@ -178,17 +179,34 @@ async fn build_models(
             models.completion,
             models.state.clone(),
             models.token.clone(),
-            Some(usage),
+            Some(usage.clone()),
         )
         .await?;
     let name = model
         .default_model()
         .await
         .unwrap_or_else(|| models.completion.id.clone());
-    Ok((
-        Arc::new(ModelLlm::new(model, name)),
-        Arc::new(ModelEmbedder::new(embedding_id, logic)),
-    ))
+    let completion: Arc<dyn MemoryLlm> = Arc::new(ModelLlm::new(model, name));
+    let llm = match super::decision_model::resolve_decision_model(
+        models.state,
+        models.profile,
+        bot.decision_model.as_deref(),
+        bot.decision_hosted_only,
+        models.token.clone(),
+        Some(usage),
+    )
+    .await
+    {
+        Ok(Some(decision)) => {
+            Arc::new(DecisionLlm::new(completion, decision)) as Arc<dyn MemoryLlm>
+        }
+        Ok(None) => completion,
+        Err(error) => {
+            tracing::warn!(bot_id = %bot.bot_id, "Memory decision model unavailable; using the completion model: {error:#}");
+            completion
+        }
+    };
+    Ok((llm, Arc::new(ModelEmbedder::new(embedding_id, logic))))
 }
 
 /// Opens the bot's memory for this turn and prepares the prompt. `None` when the bot does not
@@ -197,12 +215,16 @@ async fn build_models(
 pub async fn open_headless_memory(
     models: &MemoryModels<'_>,
     bot: &BotRunContext,
-    source: MemoryTurnSource,
+    mut source: MemoryTurnSource,
 ) -> Option<HeadlessMemory> {
     let embedding_id = bot.memory_model(models.chat_embedding)?.to_string();
     let app_id = bot.workspace_app_id.as_deref()?;
-    let key = format!("{}/{}/{embedding_id}", bot.bot_id, source.key);
-    let session = match open_session(models, &key, &embedding_id, app_id, &source).await {
+    source.shared_room_keys.sort();
+    source.shared_room_keys.dedup();
+    let policy =
+        serde_json::to_string(&(source.use_owner_memory, &source.shared_room_keys)).ok()?;
+    let key = format!("{}/{}/{embedding_id}/{policy}", bot.bot_id, source.key);
+    let session = match open_session(models, bot, &key, &embedding_id, app_id, &source).await {
         Ok(session) => session,
         Err(error) => {
             tracing::warn!(bot_id = %bot.bot_id, "Bot memory is unavailable this turn: {error:#}");
@@ -228,12 +250,13 @@ pub async fn open_headless_memory(
 
 async fn open_session(
     models: &MemoryModels<'_>,
+    bot: &BotRunContext,
     key: &str,
     embedding_id: &str,
     app_id: &str,
     source: &MemoryTurnSource,
 ) -> Result<Arc<MemorySession>> {
-    let (llm, embedder) = build_models(models, embedding_id).await?;
+    let (llm, embedder) = build_models(models, bot, embedding_id).await?;
     if let Some(session) = cached(key)
         && session.refresh(llm.clone(), embedder.clone())
     {
@@ -247,6 +270,8 @@ async fn open_session(
     options.config = config;
     options.model = Some(models.completion.id.clone());
     options.room_key = source.room.then(|| source.key.clone());
+    options.use_owner_memory = source.use_owner_memory;
+    options.shared_room_keys = source.shared_room_keys.clone();
     let session = Arc::new(
         MemorySession::open(
             connection,
@@ -311,7 +336,16 @@ pub fn follow_up(bot_id: &str, source: MemoryTurnSource) {
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .iter()
-        .filter(|(key, _)| key.starts_with(&prefix))
+        .filter(|(key, entry)| {
+            key.starts_with(&prefix)
+                && entry.session.options().use_owner_memory == source.use_owner_memory
+                && {
+                    let mut keys = source.shared_room_keys.clone();
+                    keys.sort();
+                    keys.dedup();
+                    entry.session.options().shared_room_keys == keys
+                }
+        })
         .map(|(_, entry)| entry.session.clone())
         .collect();
     for session in sessions {

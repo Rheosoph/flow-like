@@ -220,6 +220,42 @@ async fn returns_the_gateway_option_error_without_dumping_other_response_fields(
     server.await.unwrap();
 }
 
+#[tokio::test]
+async fn html_and_truncated_errors_keep_the_http_status_without_the_response_body() {
+    for (status, body, missing_bytes) in [
+        (
+            "502 Bad Gateway",
+            "<html>private-upstream-host private-token</html>",
+            0,
+        ),
+        (
+            "503 Service Unavailable",
+            r#"{"error":{"message":"private-token""#,
+            100,
+        ),
+    ] {
+        let response = format!(
+            "HTTP/1.1 {status}\r\ncontent-type: text/html\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len() + missing_bytes
+        );
+        let (url, server) = serve_once(response).await;
+        let error = HostedImageClient::new(&url, "private-token")
+            .unwrap()
+            .generate(&request())
+            .await
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains(status), "{message}");
+        assert!(!message.contains("private-token"), "{message}");
+        assert!(!message.contains("private-upstream-host"), "{message}");
+        assert!(!message.contains("<html>"), "{message}");
+        if missing_bytes > 0 {
+            assert!(message.contains("interrupted"), "{message}");
+        }
+        server.await.unwrap();
+    }
+}
+
 #[test]
 fn endpoint_accepts_api_bases_without_embedded_credentials() {
     for base in ["https://api.example", "https://api.example/api/v1/"] {

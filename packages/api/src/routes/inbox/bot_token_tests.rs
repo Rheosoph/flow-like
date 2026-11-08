@@ -28,6 +28,31 @@ fn person(sub: &str) -> AppUser {
     })
 }
 
+#[tokio::test]
+async fn memory_policy_requires_the_bot_owner_or_its_scoped_token() {
+    let db = team().await;
+    for caller in [person("user-a"), token("bot_1", "bt_1", Some("TEAM"))] {
+        let policy = super::memory::policy_for_caller(&db, &caller, "TEAM", Some("bot_1"))
+            .await
+            .unwrap();
+        assert!(policy.room);
+        assert!(!policy.use_owner_memory);
+        assert!(policy.shared_room_keys.is_empty());
+    }
+    for (caller, room, as_bot) in [
+        (person("user-b"), "TEAM", Some("bot_1")),
+        (person("user-a"), "TEAM", None),
+        (token("bot_1", "bt_1", Some("OTHER")), "TEAM", Some("bot_1")),
+        (token("bot_1", "bt_1", Some("TEAM")), "TEAM", Some("bot_2")),
+    ] {
+        assert!(
+            super::memory::policy_for_caller(&db, &caller, room, as_bot)
+                .await
+                .is_err()
+        );
+    }
+}
+
 async fn team() -> DatabaseConnection {
     let db = database().await;
     insert_bot(&db, "bot_1", "user-a", "DESKTOP").await;

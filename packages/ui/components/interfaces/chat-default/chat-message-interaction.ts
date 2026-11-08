@@ -19,6 +19,7 @@ export interface IChatMessageReference {
 	excerpt?: boolean;
 	truncated?: boolean;
 	attachments?: { name?: string; type?: string }[];
+	userContextDerived?: boolean;
 }
 
 export type IChatMessageInteraction =
@@ -75,6 +76,7 @@ export function createMessageReference(
 	return {
 		messageId: message.id,
 		role: message.inner.role,
+		...(message.userContextDerived ? { userContextDerived: true } : {}),
 		text,
 		...(excerpt ? { excerpt: true } : {}),
 		...(text.length < source.length ? { truncated: true } : {}),
@@ -141,6 +143,9 @@ export function historyMessageForModel(
 	message: IMessage,
 	history: IHistoryMessage = message.inner,
 ): IHistoryMessage {
+	if (message.userContext || message.userContextDerived)
+		return { ...history, content: "" };
+	if (message.interaction?.target.userContextDerived) return history;
 	if (!message.interaction || history.role !== IRole.User) return history;
 	const prefix = interactionContext(message.interaction);
 	return {

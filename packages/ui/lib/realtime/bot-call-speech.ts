@@ -193,12 +193,23 @@ export function createBotCallSpeech({
 				.sort((a, b) =>
 					compareInboxCursors(cursors.get(a.id) ?? "", cursors.get(b.id) ?? ""),
 				);
+			const replyTargets = new Map(
+				replies.map((item) => [item.id, item.replyTo]),
+			);
+			// A bot that waited for another bot answers its reply, so follow the chain
+			// back to this call's utterance before deciding whether to play it.
+			const answersCall = (replyTo: string | undefined) => {
+				let target = replyTo;
+				const visited = new Set<string>();
+				while (target && !visited.has(target)) {
+					if (transcripts.has(target)) return true;
+					visited.add(target);
+					target = replyTargets.get(target);
+				}
+				return false;
+			};
 			for (const item of replies) {
-				if (
-					seen.has(item.id) ||
-					!item.replyTo ||
-					!transcripts.has(item.replyTo)
-				)
+				if (seen.has(item.id) || !item.replyTo || !answersCall(item.replyTo))
 					continue;
 				const cursor = cursors.get(item.id);
 				if (

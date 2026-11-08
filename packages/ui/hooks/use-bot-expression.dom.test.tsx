@@ -102,10 +102,10 @@ describe("useBotExpression lifecycle", () => {
 		expect(state().expression).toBe("neutral");
 	});
 
-	it("prewarms after mounting once under StrictMode without classifying empty input", async () => {
+	it("keeps an empty mounted composer idle under StrictMode", async () => {
 		await render();
-		await advance(750);
-		expect(client.warmup).toHaveBeenCalledOnce();
+		await advance(75_000);
+		expect(client.warmup).not.toHaveBeenCalled();
 		expect(client.requests).toHaveLength(0);
 		expect(client.listeners.size).toBe(1);
 	});

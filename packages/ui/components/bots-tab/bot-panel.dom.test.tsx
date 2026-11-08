@@ -285,6 +285,7 @@ const backend = {
 	appState: { getApps: async () => [] },
 	inboxState: { listConversations: async () => [] },
 	userState: {
+		getProfile: async () => null,
 		getInfo: async () => ({ id: "me", name: "Felix Schultz" }),
 		lookupUser: async () => null,
 		lookupUsers: async () => [],

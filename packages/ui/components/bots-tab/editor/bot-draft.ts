@@ -107,7 +107,11 @@ export function normalizeBotModelPolicy(
 		.map((id) => id.trim())
 		.filter((id) => id && id !== primary)
 		.slice(0, BOT_LIMITS.fallbacks);
-	return { primary, fallbacks };
+	return {
+		primary,
+		fallbacks,
+		...(text(model?.decision) ? { decision: text(model?.decision) } : {}),
+	};
 }
 
 export function normalizeBotClassification(

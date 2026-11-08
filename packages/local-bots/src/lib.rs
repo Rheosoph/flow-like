@@ -16,6 +16,8 @@ mod error;
 mod inbox;
 mod model;
 mod permissions;
+mod recovery;
+mod room_decisions;
 mod schema;
 mod skills;
 mod store;
@@ -38,6 +40,7 @@ pub use model::{
     OwnerConversationDeletion, PinnedMessage, PositionQuery, SecretValue, SegmentsQuery,
     SendEntryRequest, StarredMessage, StarredMessagesPage, UpdateBotRequest, WriteSegmentRequest,
 };
+pub use room_decisions::{RoomDecisionState, RoomWaitOutcome};
 pub use skills::SkillOrigin;
 pub use store::{ChangeNotifier, KeyError, LocalBotStore, SecretKeyProvider};
 pub use tool_grants::ParkedTurn;

@@ -69,6 +69,7 @@ pub(super) async fn clone_in<C: ConnectionTrait>(
     let mut settings = BotSettings::from_row(&source);
     settings.name = Some(copy_name(source_name(&source, &settings)));
     validation::check_rules(&settings)?;
+    super::crud::verify_decision_model(db, &settings).await?;
     admit_new_bot(db, owner_id, settings.location).await?;
     let apps = member_apps(db, owner_id, bot_id).await?;
     let app_ids: Vec<String> = apps.iter().map(|(app_id, ..)| app_id.clone()).collect();

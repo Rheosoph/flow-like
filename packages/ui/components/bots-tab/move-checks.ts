@@ -133,11 +133,11 @@ export function moveFixRequest(
 				profile_id: null,
 			};
 		case "automatic_model":
-			return { model: { primary: null, fallbacks: bot.model.fallbacks } };
+			return { model: { ...bot.model, primary: null } };
 		case "drop_fallback":
 			return {
 				model: {
-					primary: bot.model.primary,
+					...bot.model,
 					fallbacks: bot.model.fallbacks.filter((id) => id !== fix.modelId),
 				},
 			};

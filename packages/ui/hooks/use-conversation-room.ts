@@ -2,7 +2,10 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { decodeJwtExpiryMs } from "../lib/realtime/authenticated-websocket";
-import { conversationRealtimeRoom } from "../lib/realtime/conversation-room";
+import {
+	conversationRealtimeRoom,
+	createLocalConversationRoom,
+} from "../lib/realtime/conversation-room";
 import type { IRealtimeAccess } from "../lib/realtime/types";
 import { createRealtimeSession } from "../lib/realtime/webrtc";
 import { useBackend } from "../state/backend-state";
@@ -47,8 +50,8 @@ function iceExpiryMs(access: IRealtimeAccess): number | null {
 }
 
 /**
- * The live peer room of an account conversation, or undefined while there is none (local
- * conversations, a missing hub or no other member). Token and ICE rotation happen inside; a membership
+ * The live peer room of an account conversation, or a device-only room for local bots.
+ * Token and ICE rotation happen inside; a membership
  * change rotates the room key and rebuilds the session, so a returned room stays valid until
  * the hook returns another one.
  */
@@ -89,6 +92,18 @@ export function useConversationRoom(
 			conversation.members.some((member) => member.kind === "bot")) &&
 		people.includes(me) &&
 		hasSignaling;
+	const localEnabled =
+		enabled &&
+		Boolean(conversation.local) &&
+		!!me &&
+		people.length === 1 &&
+		people.includes(me) &&
+		conversation.members.some((member) => member.kind === "bot");
+	// biome-ignore lint/correctness/useExhaustiveDependencies: local call state belongs to this conversation and its current members
+	const localRoom = useMemo(
+		() => (localEnabled && me ? createLocalConversationRoom(me) : undefined),
+		[localEnabled, me, conversation.id, memberKey],
+	);
 
 	const [room, setRoom] = useState<ConversationRoom>();
 	const conversationId = conversation.id;
@@ -227,5 +242,5 @@ export function useConversationRoom(
 		};
 	}, [connect, inbox, conversationId, me, memberKey]);
 
-	return connect ? room : undefined;
+	return localRoom ?? (connect ? room : undefined);
 }

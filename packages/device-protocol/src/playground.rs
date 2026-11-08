@@ -3,6 +3,7 @@
 //! chunking of the tunnel stream. Frames never pass through the hub.
 
 use crate::{ProtocolError, Result};
+use flow_like_types_contracts::interaction::InteractionObservation;
 use serde::{Deserialize, Serialize};
 
 pub const PLAYGROUND_HEADER_LEN: usize = 5;
@@ -118,7 +119,7 @@ pub struct PlaygroundState {
     pub kind: Option<PlaygroundFrameKind>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PlaygroundFrameMeta {
     pub width: u32,
@@ -127,16 +128,18 @@ pub struct PlaygroundFrameMeta {
     pub caption: String,
     /// Age of the picture when the device sent it.
     pub age_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observation: Option<InteractionObservation>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PlaygroundFrame {
     pub meta: PlaygroundFrameMeta,
     pub jpeg: Vec<u8>,
 }
 
 /// Device to viewer.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PlaygroundEvent {
     State(PlaygroundState),
     Frame(PlaygroundFrame),
@@ -316,6 +319,7 @@ mod tests {
                 kind: PlaygroundFrameKind::Computer,
                 caption: "Desktop".into(),
                 age_ms: 12,
+                observation: None,
             },
             jpeg,
         })
@@ -343,6 +347,38 @@ mod tests {
             }
             assert_eq!(decoded, events, "chunk size {chunk}");
         }
+    }
+
+    #[test]
+    fn observations_round_trip_with_the_frame_and_legacy_frames_stay_unchanged() {
+        let PlaygroundEvent::Frame(mut picture) = frame(vec![0xff, 0xd8, 1]) else {
+            unreachable!()
+        };
+        let legacy = serde_json::to_value(&picture.meta).unwrap();
+        assert!(legacy.get("observation").is_none());
+        let decoded: PlaygroundFrameMeta = serde_json::from_value(legacy).unwrap();
+        assert!(decoded.observation.is_none());
+        picture.meta.observation = Some(InteractionObservation {
+            captured_at_ms: 1000,
+            width: 2560,
+            height: 1600,
+            pointer: Some(flow_like_types_contracts::interaction::InteractionPointer {
+                position: flow_like_types_contracts::interaction::InteractionPoint {
+                    x: 0.25,
+                    y: 0.75,
+                },
+                source: flow_like_types_contracts::interaction::PointerSource::Observed,
+            }),
+            focus: None,
+            action: None,
+            mapping: None,
+        });
+        let event = PlaygroundEvent::Frame(picture);
+        let mut decoder = PlaygroundDecoder::default();
+        for chunk in event.encode().unwrap().chunks(3) {
+            decoder.push(chunk);
+        }
+        assert_eq!(decoder.next_event().unwrap(), Some(event));
     }
 
     #[test]
@@ -450,7 +486,10 @@ mod tests {
             placement_id: String::new(),
             service_id: service.into(),
             mode: crate::TunnelMode::Tcp,
-            target: crate::TunnelTarget::BotPlayground { bot_id: bot.into() },
+            target: crate::TunnelTarget::BotPlayground {
+                bot_id: bot.into(),
+                observations: false,
+            },
         };
         assert!(open("bot_1", "").validate().is_ok());
         assert!(open("", "").validate().is_err());

@@ -143,6 +143,51 @@ test("one participant supplies a reply and later election changes never replay i
 	expect(h.spoken).toEqual([]);
 });
 
+test("a bot waiting for another bot speaks its follow-up in the same call", async () => {
+	const h = harness();
+	const first = entry(
+		"peer-answer",
+		2,
+		"message",
+		{
+			text: "The first bot's answer",
+			reply_to: "spoken",
+		},
+		"peer",
+	);
+	const followUp = reply("follow-up", 3, "My follow-up", {
+		reply_to: first.message_id,
+	});
+	const entries = [transcript, first, followUp];
+	const voices = new Map([
+		["bot", voice],
+		["peer", voice],
+	]);
+	h.controller.update(snapshot(entries, voices));
+	await settle();
+	h.controller.update(snapshot(entries, voices));
+	await settle();
+	expect(h.spoken).toEqual(["The first bot's answer", "My follow-up"]);
+	expect(h.played).toEqual(h.spoken);
+	h.controller.dispose();
+});
+
+test("reply chains outside this call and cyclic references never start speech", async () => {
+	const h = harness();
+	h.controller.update(
+		snapshot([
+			transcript,
+			reply("typed-answer", 2, "Typed", { reply_to: "typed" }),
+			reply("typed-follow-up", 3, "Still typed", { reply_to: "typed-answer" }),
+			reply("cycle-a", 4, "Cycle A", { reply_to: "cycle-b" }),
+			reply("cycle-b", 5, "Cycle B", { reply_to: "cycle-a" }),
+		]),
+	);
+	await settle();
+	expect(h.spoken).toEqual([]);
+	h.controller.dispose();
+});
+
 test("voice lookup may finish after a new reply without replaying the join baseline", async () => {
 	const old = reply("old", 2);
 	const h = harness([transcript, old]);

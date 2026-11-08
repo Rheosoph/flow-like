@@ -4,6 +4,7 @@ import type {
 	IBotApp,
 	IBotPermission,
 	IBotRestrictions,
+	IBotRoomLimits,
 	IBotSecretInfo,
 	IBotTask,
 	IBotToolGrant,
@@ -439,14 +440,32 @@ export const localInbox = {
 	async addMembers(
 		conversationId: string,
 		members: string[],
+		botLimits?: Record<string, IBotRoomLimits>,
 	): Promise<IConversation> {
 		const operation = `add members to local conversation ${conversationId}`;
 		return expectLocal<IConversation>(
 			await run(operation, "local_inbox_add_members", {
 				conversationId,
 				members,
+				...(botLimits ? { botLimits } : {}),
 			}),
 			operation,
+		);
+	},
+
+	async setMemberLimits(
+		conversationId: string,
+		botId: string,
+		limits: IBotRoomLimits | null,
+	): Promise<void> {
+		await run(
+			`set the local group settings of ${botId}`,
+			"local_inbox_set_member_limits",
+			{
+				conversationId,
+				botId,
+				limits,
+			},
 		);
 	},
 

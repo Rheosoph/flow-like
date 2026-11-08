@@ -76,6 +76,33 @@ function forgetBotLookups(queryClient: QueryClient, botId: string) {
 	queryClient.invalidateQueries({ queryKey: ["lookupUserBatched", botId] });
 }
 
+/** Refresh settings written by a bot tool outside the settings editor. */
+export function invalidateBotConfiguration(
+	queryClient: QueryClient,
+	botId?: string | null,
+) {
+	void queryClient.invalidateQueries({ queryKey: botKeys.list() });
+	void queryClient.invalidateQueries({
+		queryKey: [...botKeys.all, "on-this-computer"],
+	});
+	const system =
+		!botId || botId === "flux"
+			? "flux"
+			: botId === "general"
+				? "general"
+				: undefined;
+	const ids = new Set([
+		...(botId ? [botId] : []),
+		...(queryClient.getQueryData<IBot[]>(botKeys.list()) ?? [])
+			.filter((bot) => system && bot.system === system)
+			.map((bot) => bot.id),
+	]);
+	for (const id of ids) {
+		void queryClient.invalidateQueries({ queryKey: botKeys.detail(id) });
+		forgetBotLookups(queryClient, id);
+	}
+}
+
 function storeBot(queryClient: QueryClient, bot: IBot) {
 	queryClient.setQueryData(botKeys.detail(bot.id), bot);
 	queryClient.setQueryData<IBot[]>(botKeys.list(), (bots) => {

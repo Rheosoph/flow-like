@@ -222,6 +222,7 @@ pub async fn invite_user(
     if let Err(error) = dispatch_notification(
         &state,
         DispatchNotificationInput {
+            notification_priority: Default::default(),
             bot_context: None,
             user_id: params.sub.clone(),
             app_id: Some(app_id.clone()),

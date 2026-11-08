@@ -332,6 +332,8 @@ export interface GlobalToolPrompt {
 	rememberable?: boolean;
 	/** The app a remembered approval is limited to; unset when it covers the tool in every app. */
 	rememberAppId?: string;
+	/** Complete proposed settings, retained separately from the approval summary. */
+	configurationChanges?: Record<string, unknown>;
 	/** Present only when `kind === "ask"`: drives freeform vs. single/multiple choice rendering. */
 	ask?: GlobalToolAsk;
 	/** Present only when `kind === "secret"`. */

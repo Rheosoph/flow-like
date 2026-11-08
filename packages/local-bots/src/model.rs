@@ -316,6 +316,8 @@ pub struct CreateConversationRequest {
     pub title: Option<String>,
     pub members: Vec<String>,
     pub encryption: Option<ConversationEncryption>,
+    #[serde(default)]
+    pub bot_limits: BTreeMap<String, flow_like_types::bot_effective::BotRoomLimits>,
 }
 
 /// The API's `SendEntryRequest`. Local conversations take one plain `envelope`.

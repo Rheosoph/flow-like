@@ -14,8 +14,8 @@ use crate::error::{ToolError, ToolResult, code};
 use crate::files::{resolve, workspace_of};
 use crate::outcome::ToolOutput;
 use crate::tables::{
-    SOURCES_TABLE, all_json, delete_where, drop_table, replace_with_batches, table_names,
-    upsert_json,
+    SOURCES_TABLE, all_json, delete_where, drop_table, ensure_not_memory_table,
+    replace_with_batches, table_names, upsert_json, workspace_table_names,
 };
 
 const SAMPLE_ROWS: usize = 5;
@@ -128,7 +128,7 @@ async fn list(env: &dyn ToolEnv) -> ToolResult<ToolOutput> {
         })
         .collect();
     Ok(ToolOutput::new(json!({
-        "workspace": { "schema": WORKSPACE_SCHEMA, "tables": table_names(&ws.connection).await? },
+        "workspace": { "schema": WORKSPACE_SCHEMA, "tables": workspace_table_names(&ws.connection).await? },
         "apps": apps,
         "attached": attached,
     })))
@@ -146,11 +146,19 @@ async fn describe(env: &dyn ToolEnv, args: DataSourcesArgs) -> ToolResult<ToolOu
     let session = session_of(env);
     let open = session.open(env, &app_id).await?;
     let Some(table) = args.table.as_deref() else {
+        let tables = if env.scope().is_workspace(&app_id) {
+            workspace_table_names(&open.connection).await?
+        } else {
+            table_names(&open.connection).await?
+        };
         return Ok(ToolOutput::new(json!({
             "schema": schema,
-            "tables": table_names(&open.connection).await?,
+            "tables": tables,
         })));
     };
+    if env.scope().is_workspace(&app_id) {
+        ensure_not_memory_table(table)?;
+    }
     let table = quoted(table)?;
     let schemas = [WorkbenchSchema {
         name: schema.clone(),

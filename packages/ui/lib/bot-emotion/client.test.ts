@@ -45,7 +45,72 @@ afterEach(() => {
 });
 
 describe("browser emotion queue", () => {
-	it("releases the resident model after the last composer closes, with a handoff grace period", () => {
+	it("replays active requests if worker idle shutdown races new inference", async () => {
+		const ports: WorkerPort[] = [];
+		const client = new BrowserEmotionClient(() => {
+			const port = new WorkerPort();
+			ports.push(port);
+			return port;
+		});
+		const request = client.predict({}, { draft: "racing", messages: [] });
+		ports[0].reply({ type: "idle" });
+		expect(ports[0].terminate).toHaveBeenCalledOnce();
+		expect(ports).toHaveLength(2);
+		expect(ports[1].requests.map((input) => input.draft)).toEqual(["racing"]);
+		ports[1].finish(0);
+		expect((await request)?.happy).toBe(0.9);
+	});
+
+	it("does not restart cancelled inference when the shared worker becomes idle", async () => {
+		const port = new WorkerPort();
+		const factory = vi.fn(() => port);
+		const client = new BrowserEmotionClient(factory);
+		const owner = {};
+		const request = client.predict(owner, { draft: "cancelled", messages: [] });
+		client.cancel(owner);
+		port.reply({ type: "idle" });
+		expect(await request).toBeNull();
+		expect(factory).toHaveBeenCalledOnce();
+	});
+
+	it("disconnects on pagehide and immediately reconnects when a restored page predicts", async () => {
+		const page = new EventTarget();
+		const remove = vi.spyOn(page, "removeEventListener");
+		vi.stubGlobal("window", page);
+		try {
+			const ports: WorkerPort[] = [];
+			const client = new BrowserEmotionClient(() => {
+				const port = new WorkerPort();
+				ports.push(port);
+				return port;
+			});
+			const states: string[] = [];
+			client.subscribe((state) => states.push(state.status));
+			const active = client.predict({}, { draft: "active", messages: [] });
+			const pending = client.predict({}, { draft: "queued", messages: [] });
+			page.dispatchEvent(new Event("pagehide"));
+			expect(await active).toBeNull();
+			expect(await pending).toBeNull();
+			expect(ports[0].terminate).toHaveBeenCalledOnce();
+			expect(remove).toHaveBeenCalledOnce();
+			expect(states.at(-1)).toBe("idle");
+			const restored = client.predict({}, { draft: "restored", messages: [] });
+			expect(ports).toHaveLength(2);
+			ports[1].finish(0);
+			expect((await restored)?.happy).toBe(0.9);
+			vi.advanceTimersByTime(60_000);
+			expect(ports[1].terminate).toHaveBeenCalledOnce();
+			expect(remove).toHaveBeenCalledTimes(2);
+			client.warmup();
+			ports[2].onerror?.({} as ErrorEvent);
+			expect(ports[2].terminate).toHaveBeenCalledOnce();
+			expect(remove).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
+
+	it("releases the idle model while composers remain mounted and can warm up again", () => {
 		const ports: WorkerPort[] = [];
 		const client = new BrowserEmotionClient(() => {
 			const port = new WorkerPort();
@@ -58,16 +123,36 @@ describe("browser emotion queue", () => {
 		vi.advanceTimersByTime(59_000);
 		expect(ports[0].terminate).not.toHaveBeenCalled();
 		const unsubscribeNext = client.subscribe(() => {});
-		vi.advanceTimersByTime(60_000);
-		expect(ports[0].terminate).not.toHaveBeenCalled();
-		unsubscribeNext();
-		vi.advanceTimersByTime(60_000);
+		vi.advanceTimersByTime(1_000);
 		expect(ports[0].terminate).toHaveBeenCalledOnce();
+		unsubscribeNext();
 		const states: string[] = [];
 		client.subscribe((state) => states.push(state.status));
 		client.warmup();
 		expect(ports).toHaveLength(2);
 		expect(states).toEqual(["idle", "loading", "ready"]);
+	});
+
+	it("resets the idle deadline only when inference resumes", async () => {
+		const port = new WorkerPort();
+		const client = new BrowserEmotionClient(() => port);
+		const states: string[] = [];
+		client.subscribe((state) => states.push(state.status));
+		const first = client.predict({}, { draft: "first", messages: [] });
+		port.finish(0);
+		await first;
+		vi.advanceTimersByTime(59_000);
+		const next = client.predict({}, { draft: "next", messages: [] });
+		vi.advanceTimersByTime(1_000);
+		expect(port.terminate).not.toHaveBeenCalled();
+		port.finish(1);
+		await next;
+		vi.advanceTimersByTime(59_000);
+		client.cancel({});
+		client.subscribe(() => {})();
+		vi.advanceTimersByTime(1_000);
+		expect(port.terminate).toHaveBeenCalledOnce();
+		expect(states.at(-1)).toBe("idle");
 	});
 
 	it("prewarms once without draft text and classifies only the latest draft after loading", async () => {

@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+flow-like-types-contracts.workspace = true
 serde = { workspace = true, features = ["derive"] }
 # Offline replay digests hash re-parsed frozen requests; parsing must return the exact doubles.
 serde_json = { workspace = true, features = ["float_roundtrip"] }

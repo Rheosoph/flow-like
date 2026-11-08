@@ -5,7 +5,9 @@
 use super::owned_bot;
 use crate::{
     bot_caller,
-    bot_host::talk::{AnsweredAsk, ServerTalkHost, answered_ask, bot_name, crew_member, roster_in},
+    bot_host::talk::{
+        AnsweredAsk, ServerTalkHost, answered_ask, bot_name, crew_member, remote_context, roster_in,
+    },
     entity::bot_turn,
     error::ApiError,
     middleware::jwt::AppUser,
@@ -173,9 +175,9 @@ pub async fn talk_exchange(
     request_body = TalkRequest,
     responses(
         (status = 200, description = "The answer, or why there is none yet", body = TalkAnswer),
-        (status = 400, description = "The question is empty or too long, or the bot asks itself"),
+        (status = 400, description = "The question or bot chain is invalid"),
         (status = 401, description = "Not signed in"),
-        (status = 404, description = "One of the bots isn't yours or was deleted")
+        (status = 404, description = "A named bot or turn does not belong to the caller")
     ),
     security(("bearer_auth" = []))
 )]
@@ -219,7 +221,9 @@ pub async fn talk(
         .find(|member| member.id == callee_row.id)
         .map_or(BotPresence::Unknown, |member| member.presence);
     let callee = crew_member(&callee_row, presence);
-    let host = ServerTalkHost::for_chat(state.clone(), &sub, body.run_id.trim());
+    let context =
+        remote_context(&state.db, &sub, &caller.id, &callee.id, body.run_id.trim()).await?;
+    let host = ServerTalkHost::for_remote(state.clone(), &sub, body.run_id.trim(), context);
     let asked = host
         .ask_for_desktop(&caller, &callee, question, body.round)
         .await

@@ -11,6 +11,11 @@ import type {
 	IHomeDefaults,
 	IHomeLayout,
 } from "@flow-like/flow-like-ui/components/home/types";
+import type {
+	AvailabilityUpdate,
+	CalendarLinkRequest,
+	UserAvailability,
+} from "@flow-like/flow-like-ui/lib/availability";
 import {
 	type MediaUploadResponse,
 	updateAccountWithAvatar,
@@ -716,6 +721,27 @@ export class WebUserState implements IUserState {
 
 	async getInfo(): Promise<IUserInfo> {
 		return this.readShared<IUserInfo>("user/info");
+	}
+	getAvailability(): Promise<UserAvailability> {
+		return apiGet("user/availability", this.backend.auth);
+	}
+	updateAvailability(value: AvailabilityUpdate): Promise<UserAvailability> {
+		return apiPut("user/availability", value, this.backend.auth);
+	}
+	clearAvailability(): Promise<UserAvailability> {
+		return apiDelete("user/availability", this.backend.auth);
+	}
+	linkCalendar(value: CalendarLinkRequest): Promise<UserAvailability> {
+		return apiPost("user/availability/calendars", value, this.backend.auth);
+	}
+	unlinkCalendar(id: string): Promise<UserAvailability> {
+		return apiDelete(
+			`user/availability/calendars/${encodeURIComponent(id)}`,
+			this.backend.auth,
+		);
+	}
+	refreshCalendars(): Promise<UserAvailability> {
+		return apiPost("user/availability/calendars/refresh", {}, this.backend.auth);
 	}
 
 	async createPAT(

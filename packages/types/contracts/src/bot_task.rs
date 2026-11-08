@@ -96,6 +96,9 @@ pub struct BotTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_run_at: Option<String>,
     pub enabled: bool,
+    /// Check for useful changes; routine successful runs may stay quiet.
+    #[serde(default)]
+    pub monitoring: bool,
     pub created_by: TaskCreator,
     pub created_at: String,
 }
@@ -117,6 +120,8 @@ pub struct CreateBotTask {
     pub title: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub monitoring: bool,
 }
 
 /// Changes a task; what is missing stays. Moving the schedule re-arms the task.
@@ -134,6 +139,8 @@ pub struct UpdateBotTask {
     pub title: Option<String>,
     #[serde(default)]
     pub enabled: Option<bool>,
+    #[serde(default)]
+    pub monitoring: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

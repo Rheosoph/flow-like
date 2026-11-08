@@ -3,12 +3,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use flow_like_bot_tools::browser::{
-    BrowserBackend, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
+    BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
 };
 use flow_like_bot_tools::computer::{
     ComputerAction, ComputerBackend, PointerButton, Screen, WindowBounds, WindowOp, WindowSummary,
 };
 use flow_like_bot_tools::error::{ToolError, code};
+use flow_like_types::interaction_observation::{
+    InteractionAction, InteractionObservation, InteractionPhase, InteractionPoint,
+    InteractionPointer, PointerSource,
+};
 use flow_like_types::{Bytes, Result};
 use tokio::io::duplex;
 
@@ -34,6 +38,7 @@ fn png(width: u32, height: u32) -> Vec<u8> {
 struct FakeBrowser {
     opened: Mutex<Vec<String>>,
     steps: Mutex<Vec<BrowserStep>>,
+    observation: Mutex<Option<InteractionObservation>>,
 }
 
 fn page(url: &str) -> PageState {
@@ -63,6 +68,15 @@ impl BrowserBackend for FakeBrowser {
     async fn screenshot(&self) -> Result<Vec<u8>> {
         Ok(png(20, 10))
     }
+    async fn capture(&self) -> Result<BrowserScreen> {
+        Ok(BrowserScreen {
+            png: self.screenshot().await?,
+            observation: self.observation.lock().unwrap().clone(),
+        })
+    }
+    async fn observation(&self) -> Result<Option<InteractionObservation>> {
+        Ok(self.observation.lock().unwrap().clone())
+    }
     async fn current(&self) -> Result<Option<PageState>> {
         Ok(Some(page("https://a.example/")))
     }
@@ -83,12 +97,15 @@ impl BrowserBackend for FakeBrowser {
 #[derive(Default)]
 struct FakeScreen {
     actions: Mutex<Vec<ComputerAction>>,
+    observation: Mutex<Option<InteractionObservation>>,
 }
 
 #[async_trait]
 impl ComputerBackend for FakeScreen {
     async fn screenshot(&self) -> Result<Screen> {
-        Ok(Screen::new(png(64, 40), 64, 40))
+        let mut screen = Screen::new(png(64, 40), 64, 40);
+        screen.observation = self.observation.lock().unwrap().clone();
+        Ok(screen)
     }
     async fn act(&self, action: &ComputerAction) -> Result<String> {
         self.actions.lock().unwrap().push(action.clone());
@@ -224,7 +241,10 @@ async fn after_a_hand_back_the_browser_needs_a_fresh_snapshot_before_it_acts() {
     let error = ToolError::from(browser.act(&step).await.unwrap_err());
     assert_eq!(error.code, code::STALE_PAGE);
     assert!(error.message.contains("fresh"));
-    assert!(browser.act(&step).await.is_ok());
+    assert_eq!(
+        ToolError::from(browser.act(&step).await.unwrap_err()).code,
+        code::STALE_PAGE
+    );
 
     host.take_over("b").unwrap();
     host.hand_back("b").unwrap();
@@ -309,6 +329,7 @@ async fn screenshots_feed_the_frame_stream_and_stop_clears_it() {
         png: png(8, 8),
         kind: FrameKind::Browser,
         caption: "https://x/".into(),
+        observation: None,
     });
     tokio::time::sleep(Duration::from_millis(1600)).await;
     let refreshed = host.refresh_frame("b").await.unwrap();
@@ -367,6 +388,92 @@ fn remote(playground: Arc<FakePlayground>) -> (Arc<RemotePlayground>, Arc<PipeSp
         spawned: AtomicUsize::new(0),
     });
     (RemotePlayground::new(spawner.clone()), spawner)
+}
+
+#[tokio::test]
+async fn interaction_feedback_survives_worker_transport_and_viewer_frames() {
+    let observation = InteractionObservation {
+        captured_at_ms: 100,
+        width: 64,
+        height: 40,
+        pointer: Some(InteractionPointer {
+            position: InteractionPoint { x: 0.7, y: 0.3 },
+            source: PointerSource::Observed,
+        }),
+        focus: None,
+        action: Some(InteractionAction {
+            kind: "click".into(),
+            phase: InteractionPhase::Completed,
+            at_ms: 90,
+            target: Some(InteractionPoint { x: 0.6, y: 0.3 }),
+            target_bounds: None,
+        }),
+        mapping: None,
+    };
+    let playground = Arc::new(FakePlayground::default());
+    *playground.screen.observation.lock().unwrap() = Some(observation.clone());
+    *playground.browser.observation.lock().unwrap() = Some(observation.clone());
+    *playground.shot.lock().unwrap() = Some(Shot {
+        png: png(64, 40),
+        kind: FrameKind::Computer,
+        caption: "Screen".into(),
+        observation: Some(observation.clone()),
+    });
+    let (remote, _) = remote(playground);
+    let remote: Arc<dyn Playground> = Arc::new(remote);
+    assert_eq!(
+        remote.computer().screenshot().await.unwrap().observation,
+        Some(observation.clone())
+    );
+    assert_eq!(
+        remote.browser(None).capture().await.unwrap().observation,
+        Some(observation.clone())
+    );
+    assert_eq!(
+        remote.browser(None).observation().await.unwrap(),
+        Some(observation.clone())
+    );
+    let shot = remote.capture().await.unwrap().unwrap();
+    let frame = Frame::from_shot(&shot).unwrap();
+    assert_eq!(frame.observation, Some(observation));
+}
+
+#[tokio::test]
+async fn handback_requires_each_surface_to_be_observed_even_after_repeated_actions() {
+    let host = local_ish(Arc::default());
+    let machine = host.machine("b", None, true, true);
+    let computer = machine.computer.unwrap();
+    let browser = machine.browser.unwrap();
+    host.take_over("b").unwrap();
+    host.hand_back("b").unwrap();
+    let action = ComputerAction::Key {
+        chord: "Enter".into(),
+    };
+    for _ in 0..2 {
+        assert_eq!(
+            ToolError::from(computer.act(&action).await.unwrap_err()).code,
+            code::STALE_PAGE
+        );
+    }
+    computer.windows().await.unwrap();
+    assert!(computer.act(&action).await.is_err());
+    computer.screenshot().await.unwrap();
+    computer.act(&action).await.unwrap();
+    let step = BrowserStep::Click {
+        reference: "e1".into(),
+    };
+    assert_eq!(
+        ToolError::from(browser.act(&step).await.unwrap_err()).code,
+        code::STALE_PAGE
+    );
+    browser
+        .snapshot(SnapshotRequest {
+            max_chars: 100,
+            interactive_only: false,
+        })
+        .await
+        .unwrap();
+    browser.act(&step).await.unwrap();
 }
 
 #[tokio::test]
@@ -459,6 +566,7 @@ async fn capture_and_input_cross_the_pipe_and_stop_ends_the_worker_connection() 
         png: png(4, 4),
         kind: FrameKind::Computer,
         caption: "Screen".into(),
+        observation: None,
     });
     let (remote, spawner) = remote(playground.clone());
     let remote: Arc<dyn Playground> = Arc::new(remote);

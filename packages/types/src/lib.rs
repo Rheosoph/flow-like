@@ -8,6 +8,8 @@ pub use flow_like_types_contracts::bot_restrictions;
 pub use flow_like_types_contracts::bot_skill;
 pub use flow_like_types_contracts::bot_task;
 pub use flow_like_types_contracts::bot_turn;
+pub use flow_like_types_contracts::bot_user_context;
+pub use flow_like_types_contracts::user_availability;
 pub use flow_like_types_contracts::data_classification;
 pub use flow_like_types_contracts::device_bot;
 pub use flow_like_types_contracts::egress;
@@ -63,6 +65,7 @@ pub mod cache {
 pub mod channel;
 pub mod http_streaming;
 pub mod interaction;
+pub use flow_like_types_contracts::interaction as interaction_observation;
 pub mod intercom;
 pub mod maintenance {
     pub use flow_like_types_contracts::maintenance::*;

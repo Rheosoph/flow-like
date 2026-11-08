@@ -126,7 +126,10 @@ async fn lookup_catalog(db: &sea_orm::DatabaseConnection, id: &str) -> Result<Bi
         (status = 401, description = "Authentication is required"),
         (status = 402, description = "Insufficient quota for the image request"),
         (status = 403, description = "The model is not an official image model or is unavailable on the caller's plan"),
-        (status = 503, description = "The image provider is unavailable or rejected the request")
+        (status = 429, description = "The image provider is rate limited"),
+        (status = 502, description = "The image provider failed or returned an invalid response"),
+        (status = 503, description = "Model capabilities or provider account access are unavailable"),
+        (status = 504, description = "The image provider timed out")
     )
 )]
 #[tracing::instrument(name = "POST /images/generations", skip_all)]
@@ -174,7 +177,8 @@ async fn generate_authorized_image(
         enforce_tier(&payer, &state, &provider).await?;
     }
     // Resolve secrets before reserving credits, then obtain fresh credentials in the worker.
-    providers::connection(&state, implementation, &model_id).await?;
+    let connection = providers::connection(&state, implementation, &model_id).await?;
+    providers::prepared_body(&connection, implementation, &model_id, &payload)?;
     let start = UsageInvocationStart {
         kind: "image_generation",
         user_id: Some(&context.user_id),

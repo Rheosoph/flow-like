@@ -2,6 +2,7 @@
 //! embedder. Tests stub both (see [`crate::testing`]).
 
 use async_trait::async_trait;
+use flow_like_model_provider::systemone::{SystemOneRequest, SystemOneResponse};
 use flow_like_types::{Result, anyhow};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -36,6 +37,14 @@ pub struct LlmRequest {
 )]
 pub trait MemoryLlm: Send + Sync {
     async fn complete(&self, request: LlmRequest) -> Result<String>;
+
+    /// Optional bounded fact curation. Summaries and fact extraction still use `complete`.
+    async fn classify_fact(
+        &self,
+        _request: &SystemOneRequest,
+    ) -> Result<Option<SystemOneResponse>> {
+        Ok(None)
+    }
 }
 
 #[async_trait]

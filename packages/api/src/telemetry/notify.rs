@@ -123,6 +123,7 @@ async fn notify_admins_by_push(
     let description = alert_push_description(&event.message, rule.source.as_deref());
     join_all(recipients.into_iter().map(|user_id| {
         let input = DispatchNotificationInput {
+            notification_priority: Default::default(),
             bot_context: None,
             user_id: user_id.clone(),
             app_id: None,

@@ -868,6 +868,13 @@ impl FrontendToolBridge {
         self
     }
 
+    pub(super) fn bot_context(&self) -> Option<&flow_like::flow::copilot::BotRunContext> {
+        self.context
+            .as_ref()
+            .and_then(|context| context.bot.as_ref())
+            .map(|runtime| runtime.context.as_ref())
+    }
+
     /// The run's channel: steering text and cancel pushes land here as well.
     pub fn channel(&self) -> &Arc<InProcessChannel> {
         &self.channel
@@ -916,6 +923,18 @@ impl FrontendToolBridge {
         cancellation: Option<CancellationToken>,
     ) -> Value {
         apply_tool_context(&tool_name, &mut arguments, self.context.as_ref());
+        if flow_like_bot_tools::configuration::is_configuration_tool(&tool_name) {
+            let Some(bot) = self.bot_context() else {
+                return json!({"status":"error", "tool":tool_name,
+                    "code":"bot_tool_unavailable", "message":"This tool requires a bot turn."});
+            };
+            arguments = match bot.prepare_tool_call(&tool_name, arguments) {
+                Ok(arguments) => arguments,
+                Err(refusal) => return serde_json::from_str(&refusal).unwrap_or_else(|_| {
+                    json!({"status":"error", "tool":tool_name, "message":refusal})
+                }),
+            };
+        }
         if super::native_tool_bridge::supports(&tool_name, &arguments) {
             let approval = match super::native_specialist_tools::approval(&tool_name, &arguments) {
                 Ok(Some(approval)) => approval,
@@ -937,13 +956,19 @@ impl FrontendToolBridge {
                     )
                     .await;
                 let options = super::native_tool_bridge::run_options(self.context.as_ref());
+                let requires_user = flow_like_bot_tools::configuration::requires_approval(&tool_name);
                 let waived = options.auto_approve
+                    && !requires_user
                     && tool_name != flow_like_types::bot_message::SECRET_REQUEST_TOOL;
-                let asks = matches!(approval.kind.as_str(), "mutating" | "execute")
-                    && !waived
-                    && !cached_schema;
+                let asks = requires_user
+                    || (matches!(approval.kind.as_str(), "mutating" | "execute")
+                        && !waived
+                        && !cached_schema);
                 if asks && let Some(gate) = &options.approval_gate {
-                    let context_app = self.context.as_ref().and_then(|context| context.app_id.as_deref());
+                    let context_app = self
+                        .context
+                        .as_ref()
+                        .and_then(|context| context.app_id.as_deref());
                     if let Err(answer) = gate
                         .clear(&tool_name, &arguments, context_app, &approval.description)
                         .await
@@ -1421,6 +1446,10 @@ fn apply_tool_context(
     let Value::Object(arguments) = arguments else {
         return;
     };
+    // These tools are bound to the bot turn, and their strict schemas accept no app scope.
+    if flow_like_bot_tools::configuration::is_configuration_tool(tool_name) {
+        return;
+    }
     // Research accepts only the caller's public brief. Ambient workspace IDs are neither
     // research context nor fields in its strict argument schema.
     if tool_name == "research_agent" {
@@ -2472,6 +2501,24 @@ mod tests {
         let legacy: FrontendToolContext =
             serde_json::from_value(json!({"appId": "legacy"})).unwrap();
         assert!(legacy.profile_id.is_none());
+    }
+
+    #[test]
+    fn configuration_tools_do_not_inherit_ambient_app_or_board_arguments() {
+        let context = FrontendToolContext {
+            app_id: Some("ambient-app".into()),
+            board_id: Some("ambient-board".into()),
+            ..Default::default()
+        };
+        for (name, mut arguments) in [
+            ("bot_configuration", json!({})),
+            ("bot_models", json!({})),
+            ("bot_update_configuration", json!({"changes":{"name":"Atlas"}})),
+        ] {
+            let original = arguments.clone();
+            apply_tool_context(name, &mut arguments, Some(&context));
+            assert_eq!(arguments, original, "{name}");
+        }
     }
 
     #[test]

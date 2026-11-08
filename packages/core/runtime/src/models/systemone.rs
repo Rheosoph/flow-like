@@ -11,7 +11,7 @@ use super::llm::{ModelFactory, ModelUsageContext, local::LocalModel};
 use crate::{bit::Bit, state::FlowLikeState};
 
 /// Providers this runtime can build without a device endpoint.
-pub(crate) fn supports_provider(provider_name: &str) -> bool {
+pub fn supports_provider(provider_name: &str) -> bool {
     matches!(
         provider_name.trim().to_ascii_lowercase().as_str(),
         "local"

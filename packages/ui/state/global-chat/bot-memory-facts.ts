@@ -23,6 +23,9 @@ export interface BotFact {
 	recorded_at: string;
 	valid_from: string | null;
 	valid_to: string | null;
+	geojson?: Record<string, unknown> | null;
+	time?: string | null;
+	expires_at?: string | null;
 	superseded_by: string | null;
 	evidence: BotFactEvidence[];
 	/** Room positions cannot be opened in the owner's direct chat. */

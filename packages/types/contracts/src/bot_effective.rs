@@ -26,6 +26,16 @@ pub struct BotRoomLimits {
     /// The bot answers only when a message names it or replies to it; it doesn't read along.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub mentioned_only: bool,
+    /// Allows this group to recall facts from the bot owner's private chat.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_owner_memory: bool,
+    /// Allows this group to recall knowledge shared by the bot's other groups.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub use_shared_memory: bool,
+    /// Makes this group's saved knowledge available in the owner's private chat and groups
+    /// that allow shared memory. Disabling this removes the group from future shared recall.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub share_memory: bool,
 }
 
 impl BotRoomLimits {
@@ -405,5 +415,22 @@ mod tests {
             serde_json::to_string(&limits).unwrap(),
             r#"{"mentioned_only":true}"#
         );
+    }
+
+    #[test]
+    fn memory_switches_are_independent_and_default_to_group_only() {
+        for bits in 0..8 {
+            let limits = BotRoomLimits {
+                use_owner_memory: bits & 1 != 0,
+                use_shared_memory: bits & 2 != 0,
+                share_memory: bits & 4 != 0,
+                ..Default::default()
+            };
+            let encoded = serde_json::to_value(&limits).unwrap();
+            let decoded: BotRoomLimits = serde_json::from_value(encoded).unwrap();
+            assert_eq!(decoded, limits);
+        }
+        let legacy: BotRoomLimits = serde_json::from_str(r#"{"mentioned_only":true}"#).unwrap();
+        assert!(!legacy.use_owner_memory && !legacy.use_shared_memory && !legacy.share_memory);
     }
 }

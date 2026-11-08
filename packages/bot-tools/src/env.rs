@@ -339,6 +339,16 @@ pub trait ToolEnv: Send + Sync {
         None
     }
 
+    /// Requests context through the current conversation. The person supplying it consents.
+    fn user_context(&self) -> Option<Arc<dyn crate::user_context::UserContextBackend>> {
+        None
+    }
+
+    /// Reads and updates this bot's own settings after host-enforced owner approval.
+    fn configuration(&self) -> Option<Arc<dyn crate::configuration::ConfigurationBackend>> {
+        None
+    }
+
     /// The bot's scheduled tasks; `None` where the host keeps none.
     fn scheduler(&self) -> Option<Arc<dyn crate::schedule::Scheduler>> {
         None

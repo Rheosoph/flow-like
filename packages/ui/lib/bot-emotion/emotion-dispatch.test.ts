@@ -23,6 +23,118 @@ function port() {
 }
 
 describe("emotion dispatcher", () => {
+	it("closes only after the last connection leaves and cancels closure on reconnect", async () => {
+		vi.useFakeTimers();
+		try {
+			const onIdle = vi.fn();
+			const dispatcher = createEmotionDispatcher(async () => {}, onIdle);
+			const first = port();
+			const second = port();
+			dispatcher.attach(first);
+			dispatcher.attach(second);
+			first.onmessage?.(event({ type: "disconnect" }));
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(onIdle).not.toHaveBeenCalled();
+			second.onmessage?.(event({ type: "disconnect" }));
+			await vi.advanceTimersByTimeAsync(500);
+			const returning = port();
+			dispatcher.attach(returning);
+			await vi.advanceTimersByTimeAsync(2_000);
+			expect(onIdle).not.toHaveBeenCalled();
+			returning.onmessage?.(event({ type: "disconnect" }));
+			await vi.advanceTimersByTimeAsync(1_000);
+			expect(onIdle).toHaveBeenCalledOnce();
+		} finally {
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
+	});
+
+	it("closes abandoned active work after the last explicit disconnect", async () => {
+		vi.useFakeTimers();
+		try {
+			let finish!: () => void;
+			const pending = new Promise<void>((resolve) => {
+				finish = resolve;
+			});
+			const handle = vi.fn(async () => pending);
+			const onIdle = vi.fn();
+			const dispatcher = createEmotionDispatcher(handle, onIdle);
+			const active = port();
+			dispatcher.attach(active);
+			active.onmessage?.(event({ id: 1, draft: "first", messages: [] }));
+			active.onmessage?.(event({ id: 2, draft: "queued", messages: [] }));
+			await vi.advanceTimersByTimeAsync(0);
+			expect(handle).toHaveBeenCalledOnce();
+			active.onmessage?.(event({ type: "disconnect" }));
+			await vi.advanceTimersByTimeAsync(999);
+			expect(onIdle).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(onIdle).toHaveBeenCalledOnce();
+			finish();
+			await vi.advanceTimersByTimeAsync(0);
+			expect(handle).toHaveBeenCalledOnce();
+		} finally {
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
+	});
+
+	it("closes after inactivity even when a closed tab never disconnects", async () => {
+		vi.useFakeTimers();
+		try {
+			const onIdle = vi.fn();
+			const dispatcher = createEmotionDispatcher(
+				async (_input, reply) => reply({ type: "ready" }),
+				onIdle,
+			);
+			const orphan = port();
+			const alive = port();
+			dispatcher.attach(orphan);
+			dispatcher.attach(alive);
+			alive.onmessage?.(
+				event({ id: 0, warmup: true, draft: "", messages: [] }),
+			);
+			await vi.advanceTimersByTimeAsync(61_999);
+			expect(onIdle).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(1);
+			expect(onIdle).toHaveBeenCalledOnce();
+			expect(alive.messages.at(-1)).toEqual({ type: "idle" });
+			expect(orphan.close).toHaveBeenCalledOnce();
+			expect(alive.close).toHaveBeenCalledOnce();
+		} finally {
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
+	});
+
+	it("allows active loading past the idle limit but closes a stalled orphan at its deadline", async () => {
+		vi.useFakeTimers();
+		try {
+			const onIdle = vi.fn();
+			const dispatcher = createEmotionDispatcher(
+				async () => new Promise<void>(() => {}),
+				onIdle,
+			);
+			const orphan = port();
+			dispatcher.attach(orphan);
+			orphan.onmessage?.(
+				event({ id: 0, warmup: true, draft: "", messages: [] }),
+			);
+			await vi.advanceTimersByTimeAsync(62_000);
+			expect(onIdle).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(10 * 60_000 - 62_000);
+			expect(onIdle).toHaveBeenCalledOnce();
+			expect(orphan.messages).toEqual([
+				{ type: "error", id: 0 },
+				{ type: "idle" },
+			]);
+		} finally {
+			vi.clearAllTimers();
+			vi.useRealTimers();
+		}
+	});
+
 	it("keeps colliding request ids on the tab that sent them", async () => {
 		const first = port();
 		const second = port();

@@ -30,14 +30,31 @@ pub fn bit_provider(bit: &Bit) -> flow_like_types::Result<ModelProvider> {
 
 fn aspect_ratio_of(size: &str) -> Option<String> {
     let (width, height) = parse_size(Some(size))?;
-    Some(
-        match width.cmp(&height) {
-            std::cmp::Ordering::Equal => "1:1",
-            std::cmp::Ordering::Greater => "4:3",
-            std::cmp::Ordering::Less => "3:4",
-        }
-        .to_string(),
-    )
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let (mut divisor, mut remainder) = (width, height);
+    while remainder != 0 {
+        (divisor, remainder) = (remainder, divisor % remainder);
+    }
+    Some(format!("{}:{}", width / divisor, height / divisor))
+}
+
+fn imagen_ratio_of(size: &str) -> Option<String> {
+    let (width, height) = parse_size(Some(size))?;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let target = f64::from(width) / f64::from(height);
+    // Imagen's predict API accepts these ratios instead of pixel dimensions.
+    [(1_u32, 1_u32), (4, 3), (3, 4), (16, 9), (9, 16)]
+        .into_iter()
+        .filter(|(w, h)| w.cmp(h) == width.cmp(&height))
+        .min_by(|(aw, ah), (bw, bh)| {
+            let distance = |w, h| ((f64::from(w) / f64::from(h)) / target).ln().abs();
+            distance(*aw, *ah).total_cmp(&distance(*bw, *bh))
+        })
+        .map(|(width, height)| format!("{width}:{height}"))
 }
 
 fn stable_diffusion_options(
@@ -65,14 +82,26 @@ fn stable_diffusion_options(
     ImageGenerationProviderOptions::StableDiffusion(sd)
 }
 
-fn service_request(request: &ImageRequest) -> ImageGenerationRequest {
+fn service_request(provider: &ModelProvider, request: &ImageRequest) -> ImageGenerationRequest {
+    let mut size = request.size.clone();
+    let mut aspect_ratio = size.as_deref().and_then(aspect_ratio_of);
+    match provider.provider_name.as_str() {
+        // OpenRouter resolves the requested dimensions against the model's advertised sizes.
+        PROVIDER_OPENROUTER | "hosted:openrouter" | PROVIDER_OPENAI => aspect_ratio = None,
+        PROVIDER_GEMINI | PROVIDER_VERTEX => {
+            aspect_ratio = size.as_deref().and_then(imagen_ratio_of);
+            size = None;
+        }
+        PROVIDER_XAI => size = None,
+        _ => {}
+    }
     ImageGenerationRequest {
         prompt: request.prompt.clone(),
         system_prompt: None,
         negative_prompt: request.negative_prompt.clone().and_then(optional_clean),
         count: request.count.clamp(1, MAX_IMAGES_PER_REQUEST),
-        aspect_ratio: request.size.as_deref().and_then(aspect_ratio_of),
-        size: request.size.clone(),
+        aspect_ratio,
+        size,
         quality: None,
         output_format: "png".to_string(),
         seed: request.seed,
@@ -99,7 +128,7 @@ pub async fn generate(
         stablediffusion::with_model_defaults(provider, ImageGenerationProviderOptions::default())?,
         request,
     );
-    let service = service_request(request);
+    let service = service_request(provider, request);
     let generated = dispatch(environment, bit, provider, &service, &options, hosted).await?;
     if generated.is_empty() {
         bail!("The image provider returned no images");
@@ -161,25 +190,96 @@ mod tests {
 
     #[test]
     fn a_request_maps_size_to_the_provider_fields() {
-        let request = service_request(&ImageRequest {
-            prompt: "a fox".into(),
-            negative_prompt: Some("  ".into()),
-            count: 9,
-            size: Some("1536x1024".into()),
-            seed: Some(7),
-        });
+        let provider = provider(PROVIDER_TOGETHER);
+        let request = service_request(
+            &provider,
+            &ImageRequest {
+                prompt: "a fox".into(),
+                negative_prompt: Some("  ".into()),
+                count: 9,
+                size: Some("1536x1024".into()),
+                seed: Some(7),
+            },
+        );
         assert_eq!(request.count, MAX_IMAGES_PER_REQUEST);
         assert_eq!(request.size.as_deref(), Some("1536x1024"));
-        assert_eq!(request.aspect_ratio.as_deref(), Some("4:3"));
+        assert_eq!(request.aspect_ratio.as_deref(), Some("3:2"));
         assert_eq!(request.negative_prompt, None);
         assert_eq!(request.seed, Some(7));
-        let portrait = service_request(&ImageRequest {
-            prompt: "a fox".into(),
-            size: Some("1024x1536".into()),
-            ..Default::default()
-        });
-        assert_eq!(portrait.aspect_ratio.as_deref(), Some("3:4"));
+        let portrait = service_request(
+            &provider,
+            &ImageRequest {
+                prompt: "a fox".into(),
+                size: Some("1024x1536".into()),
+                ..Default::default()
+            },
+        );
+        assert_eq!(portrait.aspect_ratio.as_deref(), Some("2:3"));
         assert_eq!(portrait.count, 1);
+    }
+
+    #[test]
+    fn generic_dimensions_follow_the_provider_request_contract() {
+        let input = ImageRequest {
+            prompt: "a landscape".into(),
+            size: Some("1536x1024".into()),
+            count: 1,
+            ..Default::default()
+        };
+        for name in [PROVIDER_OPENAI, PROVIDER_OPENROUTER, "hosted:openrouter"] {
+            let request = service_request(&provider(name), &input);
+            assert_eq!(request.size.as_deref(), Some("1536x1024"), "{name}");
+            assert_eq!(request.aspect_ratio, None, "{name}");
+        }
+        for name in [PROVIDER_GEMINI, PROVIDER_VERTEX] {
+            let request = service_request(&provider(name), &input);
+            assert_eq!(request.size, None, "{name}");
+            assert_eq!(request.aspect_ratio.as_deref(), Some("4:3"), "{name}");
+        }
+        let xai = service_request(&provider(PROVIDER_XAI), &input);
+        assert_eq!(xai.size, None);
+        assert_eq!(xai.aspect_ratio.as_deref(), Some("3:2"));
+        let options = ImageGenerationProviderOptions::OpenRouter(OpenRouterImageOptions {
+            aspect_ratio: ImageAspectRatio::Landscape16x9,
+            size: ImageSize::Landscape1536x1024,
+        });
+        let normalized = options.normalized();
+        assert_eq!(normalized.aspect_ratio.as_deref(), Some("16:9"));
+        assert_eq!(normalized.size.as_deref(), Some("1536x1024"));
+    }
+
+    #[test]
+    fn generic_imagen_shapes_choose_an_accepted_ratio_with_the_same_orientation() {
+        for (size, ratio) in [
+            ("1024x1024", "1:1"),
+            ("1536x1024", "4:3"),
+            ("1024x1536", "3:4"),
+            ("1920x1080", "16:9"),
+            ("1080x1920", "9:16"),
+            ("2048x1024", "16:9"),
+            ("1024x2048", "9:16"),
+        ] {
+            assert_eq!(imagen_ratio_of(size).as_deref(), Some(ratio), "{size}");
+        }
+    }
+
+    #[test]
+    fn inferred_ratios_match_the_actual_dimensions() {
+        for (size, ratio) in [
+            ("1024x1024", "1:1"),
+            ("1536x1024", "3:2"),
+            ("1024x1536", "2:3"),
+            ("1024x768", "4:3"),
+            ("768x1024", "3:4"),
+            ("1920x1080", "16:9"),
+            ("1080x1920", "9:16"),
+            ("1173x640", "1173:640"),
+        ] {
+            assert_eq!(aspect_ratio_of(size).as_deref(), Some(ratio), "{size}");
+        }
+        for size in ["0x0", "0x1024", "1024x0", "1024", "auto"] {
+            assert_eq!(aspect_ratio_of(size), None, "{size}");
+        }
     }
 
     #[test]

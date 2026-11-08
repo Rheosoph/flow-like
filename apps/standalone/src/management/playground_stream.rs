@@ -7,6 +7,7 @@ use flow_like_device_protocol::{
     PlaygroundControl, PlaygroundDecoder, PlaygroundDisplay, PlaygroundEvent, PlaygroundFrame,
     PlaygroundFrameKind, PlaygroundFrameMeta, PlaygroundInput, PlaygroundState,
 };
+use flow_like_types_contracts::interaction::InteractionObservation;
 use std::{
     future::Future,
     time::{Duration, Instant},
@@ -36,7 +37,7 @@ impl Default for Pace {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct LiveFrame {
     pub jpeg: Vec<u8>,
     pub width: u32,
@@ -44,6 +45,7 @@ pub(crate) struct LiveFrame {
     pub kind: PlaygroundFrameKind,
     pub caption: String,
     pub taken: Instant,
+    pub observation: Option<InteractionObservation>,
 }
 
 /// What the stream needs from the agent's machine host.
@@ -84,6 +86,7 @@ mod machine {
             },
             caption: frame.caption,
             taken: frame.at,
+            observation: frame.observation,
         }
     }
 
@@ -143,7 +146,8 @@ struct Session<P: Playground> {
     bot_id: String,
     took_over: bool,
     sent_state: Option<PlaygroundState>,
-    sent_frame: Option<(Vec<u8>, String)>,
+    sent_frame: Option<(Vec<u8>, String, Option<InteractionObservation>)>,
+    observations: bool,
 }
 
 impl<P: Playground> Drop for Session<P> {
@@ -227,7 +231,12 @@ impl<P: Playground> Session<P> {
             self.sent_frame = None;
             return Ok(());
         };
-        let key = (frame.jpeg.clone(), frame.caption.clone());
+        let observation = self.observations.then_some(frame.observation).flatten();
+        let key = (
+            frame.jpeg.clone(),
+            frame.caption.clone(),
+            observation.clone(),
+        );
         if self.sent_frame.as_ref() == Some(&key) {
             return Ok(());
         }
@@ -242,6 +251,7 @@ impl<P: Playground> Session<P> {
                     kind: frame.kind,
                     caption: frame.caption,
                     age_ms,
+                    observation,
                 },
                 jpeg: frame.jpeg,
             }),
@@ -314,7 +324,13 @@ async fn read_controls<R: AsyncRead + Unpin>(
 
 /// Serves one viewer until it disconnects, sends something malformed, or the stream is cancelled.
 /// A viewer that leaves while in control hands the bot back.
-pub(crate) async fn serve<P, IO>(io: IO, host: P, bot_id: String, pace: Pace) -> Result<()>
+pub(crate) async fn serve<P, IO>(
+    io: IO,
+    host: P,
+    bot_id: String,
+    observations: bool,
+    pace: Pace,
+) -> Result<()>
 where
     P: Playground,
     IO: AsyncRead + AsyncWrite + Unpin + Send + 'static,
@@ -328,6 +344,7 @@ where
         took_over: false,
         sent_state: None,
         sent_frame: None,
+        observations,
     };
     let result = run(&mut session, &mut write, &mut controls, pace).await;
     reader.abort();

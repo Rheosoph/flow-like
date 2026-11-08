@@ -3,8 +3,8 @@
 
 use super::owned_bot;
 use crate::{
-    bot_permission::{SignedBotToken, sign_bot_token},
-    entity::bot_turn,
+    bot_permission::{MAX_BOT_TOKEN_TTL_SECONDS, SignedBotToken, sign_bot_token},
+    entity::{bot_turn, conversation},
     error::ApiError,
     middleware::jwt::{AppUser, BotUser},
     state::AppState,
@@ -13,7 +13,7 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like_types::bot_turn::TurnAudience;
+use flow_like_types::{bot_turn::TurnAudience, inbox::ConversationKind};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -33,7 +33,8 @@ pub struct BotRuntimeToken {
 }
 
 /// The identity a token for `turn_id` carries: the turn must be the bot's and the caller's.
-/// A room turn pins the room so its invitation limits apply.
+/// A room turn pins the room so its invitation limits apply. Late answers retain the original
+/// conversation's scope rather than the exchange that delivered the answer.
 pub(crate) async fn bot_user_for_turn<C: ConnectionTrait>(
     db: &C,
     owner_id: &str,
@@ -47,11 +48,35 @@ pub(crate) async fn bot_user_for_turn<C: ConnectionTrait>(
         .one(db)
         .await?
         .ok_or_else(|| ApiError::not_found(format!("Turn '{turn_id}' not found")))?;
-    let in_room = TurnAudience::parse(&turn.audience) == Some(TurnAudience::Room);
+    let origin = crate::bot_host::talk::turn_origin_conversation(db, &turn).await?;
+    let conv_id = if origin == turn.conversation_id {
+        (TurnAudience::parse(&turn.audience) == Some(TurnAudience::Room))
+            .then_some(turn.conversation_id)
+    } else {
+        let kind = conversation::Entity::find_by_id(&origin)
+            .one(db)
+            .await?
+            .and_then(|row| ConversationKind::parse(&row.kind))
+            .ok_or_else(|| ApiError::forbidden("The original conversation is unavailable"))?;
+        match kind {
+            ConversationKind::Group => {
+                crate::bot_permission::room_limits(db, bot_id, &origin).await?;
+                Some(origin)
+            }
+            ConversationKind::Direct => {
+                if !crate::bot_host::memory::is_owner_direct(db, &origin, owner_id, bot_id).await? {
+                    return Err(ApiError::forbidden(
+                        "The original conversation is not the bot's active conversation with its owner",
+                    ));
+                }
+                None
+            }
+        }
+    };
     Ok(BotUser {
         bot_id: bot_id.to_string(),
         turn_id: turn.id,
-        conv_id: in_room.then_some(turn.conversation_id),
+        conv_id,
     })
 }
 
@@ -77,7 +102,8 @@ pub async fn mint_runtime_token(
 ) -> Result<Json<BotRuntimeToken>, ApiError> {
     let owner_id = user.sub()?;
     let bot = bot_user_for_request(&state, &owner_id, bot_id, body.turn_id.as_deref()).await?;
-    let SignedBotToken { token, expires_at } = sign_bot_token(&bot, None)
+    let ttl = body.turn_id.as_ref().map(|_| MAX_BOT_TOKEN_TTL_SECONDS);
+    let SignedBotToken { token, expires_at } = sign_bot_token(&bot, ttl)
         .map_err(|error| ApiError::internal_error(flow_like_types::anyhow!(error)))?;
     Ok(Json(BotRuntimeToken { token, expires_at }))
 }

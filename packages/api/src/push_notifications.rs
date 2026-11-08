@@ -58,6 +58,7 @@ fn google_token_cache() -> &'static RwLock<Option<CachedAccessToken>> {
 
 #[derive(Clone, Debug)]
 pub struct DispatchNotificationInput {
+    pub notification_priority: flow_like_types::user_availability::NotificationPriority,
     pub bot_context: Option<flow_like_types::bot_notify::BotNotificationContext>,
     pub user_id: String,
     pub app_id: Option<String>,
@@ -76,6 +77,7 @@ pub struct DispatchNotificationInput {
 #[serde(rename_all = "snake_case")]
 pub enum PushDispatchStatus {
     Disabled,
+    Suppressed,
     NoTargets,
     Accepted,
     Partial,
@@ -640,6 +642,13 @@ async fn push_to_user(
     input: &DispatchNotificationInput,
     retry_failed_only: bool,
 ) -> flow_like_types::Result<PushDispatchStatus> {
+    let availability = crate::routes::user::availability::load(&state.db, &input.user_id).await?;
+    if !availability.allows_notification(
+        input.notification_priority,
+        chrono::Utc::now().timestamp_millis(),
+    ) {
+        return Ok(PushDispatchStatus::Suppressed);
+    }
     let config = &state.platform_config.push_notifications;
     if !config.enabled {
         return Ok(PushDispatchStatus::Disabled);
@@ -1431,6 +1440,15 @@ fn notification_string_data(
 ) -> HashMap<String, String> {
     let mut data = HashMap::new();
     data.insert("notification_id".to_string(), notification_id.to_string());
+    data.insert(
+        "notification_priority".to_string(),
+        match input.notification_priority {
+            flow_like_types::user_availability::NotificationPriority::Routine => "routine",
+            flow_like_types::user_availability::NotificationPriority::Mention => "mention",
+            flow_like_types::user_availability::NotificationPriority::Call => "call",
+        }
+        .to_string(),
+    );
     if let Some(context) = &input.bot_context {
         data.insert("user_id".to_string(), input.user_id.clone());
         if let Some(scope) = target
@@ -2243,6 +2261,7 @@ mod tests {
 
     fn notification_input() -> DispatchNotificationInput {
         DispatchNotificationInput {
+            notification_priority: Default::default(),
             bot_context: None,
             user_id: "user-id".to_string(),
             app_id: Some("app-id".to_string()),
@@ -2288,6 +2307,7 @@ mod tests {
         assert!(android["message"].get("notification").is_none());
         assert_eq!(android["message"]["android"]["priority"], "HIGH");
         let data = &android["message"]["data"];
+        assert_eq!(data["notification_priority"], "routine");
         assert_eq!(data["user_id"], input.user_id);
         assert_eq!(data["native_scope"], "profile-a");
         assert_eq!(data["approval_id"], "approval_1");

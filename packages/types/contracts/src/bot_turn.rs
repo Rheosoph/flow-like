@@ -14,9 +14,50 @@ pub const MAX_RUNNING_PER_OWNER: usize = 3;
 pub const LEASE_SECS: i64 = 60;
 /// Seconds between a host's heartbeats.
 pub const HEARTBEAT_SECS: u64 = 15;
+/// Default wall-clock budget for one bot turn. Hosts may set a shorter deadline.
+pub const DEFAULT_TURN_DEADLINE_SECS: u64 = 1_800;
+/// Maximum serialized execution checkpoint, including its envelope.
+pub const MAX_CHECKPOINT_BYTES: usize = 1024 * 1024;
+
+/// Durable execution state for one turn. The runtime owns the versioned `state` format;
+/// storage binds this record to a turn and fences writes against its current claim.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct BotRunCheckpoint {
+    /// Starts at one and increases by one for every successful save.
+    pub revision: u64,
+    pub started_at_ms: i64,
+    /// Original execution deadline. Reclaiming a turn cannot extend it.
+    pub deadline_at_ms: i64,
+    pub state: serde_json::Value,
+}
+
+impl BotRunCheckpoint {
+    /// Validate storage bounds without interpreting the runtime's private state format.
+    /// Expired records remain readable so a host can publish a saved answer or handoff.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.revision == 0 || self.revision > i64::MAX as u64 {
+            return Err("Checkpoint revision is out of range");
+        }
+        if self.started_at_ms < 0
+            || self.deadline_at_ms <= self.started_at_ms
+            || self.deadline_at_ms - self.started_at_ms > DEFAULT_TURN_DEADLINE_SECS as i64 * 1000
+        {
+            return Err("Checkpoint execution deadline is out of range");
+        }
+        if !self.state.is_object() {
+            return Err("Checkpoint state must be an object");
+        }
+        let bytes = serde_json::to_vec(self).map_err(|_| "Checkpoint could not be serialized")?;
+        if bytes.len() > MAX_CHECKPOINT_BYTES {
+            return Err("Checkpoint exceeds the storage limit");
+        }
+        Ok(())
+    }
+}
 /// A turn queued this long without a host is failed.
 pub const QUEUED_EXPIRY_SECS: i64 = 3_600;
-/// Claims a turn may take, takeovers of an expired lease included.
+/// Failed attempts before automatic recovery stops. Approval handoffs do not spend this budget.
 pub const MAX_ATTEMPTS: u32 = 3;
 /// How long a host leaves a message from an interactive chat to the chat that sent it, and how
 /// long the chat's hold on the turn lasts between refreshes.
@@ -219,7 +260,7 @@ pub struct BotTurn {
     pub trigger_message_id: String,
     pub host_kind: TurnHostKind,
     pub status: TurnStatus,
-    /// Claims so far, takeovers of an expired lease included.
+    /// Monotonic claim generation; includes approval handoffs and expired-lease takeovers.
     pub attempts: u32,
     /// The host holding the lease.
     pub host_id: Option<String>,
@@ -290,6 +331,53 @@ pub fn rate_limit_message_id(bot_id: &str, trigger_message_id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checkpoint_bounds_preserve_expired_results_without_renewing_budgets() {
+        let checkpoint = BotRunCheckpoint {
+            revision: 1,
+            started_at_ms: 1,
+            deadline_at_ms: 1 + DEFAULT_TURN_DEADLINE_SECS as i64 * 1000,
+            state: serde_json::json!({"version": 1, "phase": "finished"}),
+        };
+        assert_eq!(checkpoint.validate(), Ok(()));
+        for invalid in [
+            BotRunCheckpoint {
+                revision: 0,
+                ..checkpoint.clone()
+            },
+            BotRunCheckpoint {
+                revision: u64::MAX,
+                ..checkpoint.clone()
+            },
+            BotRunCheckpoint {
+                started_at_ms: -1,
+                ..checkpoint.clone()
+            },
+            BotRunCheckpoint {
+                deadline_at_ms: 1,
+                ..checkpoint.clone()
+            },
+            BotRunCheckpoint {
+                deadline_at_ms: i64::MAX,
+                ..checkpoint.clone()
+            },
+            BotRunCheckpoint {
+                state: serde_json::json!([]),
+                ..checkpoint.clone()
+            },
+        ] {
+            assert!(invalid.validate().is_err());
+        }
+        let oversized = BotRunCheckpoint {
+            state: serde_json::json!({"text": "x".repeat(MAX_CHECKPOINT_BYTES)}),
+            ..checkpoint
+        };
+        assert_eq!(
+            oversized.validate(),
+            Err("Checkpoint exceeds the storage limit")
+        );
+    }
     use crate::inbox::is_valid_message_id;
 
     #[test]

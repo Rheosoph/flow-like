@@ -1,0 +1,1 @@
+ALTER TABLE "BotTask" ADD COLUMN "monitoring" BOOLEAN DEFAULT false;

@@ -47,6 +47,7 @@ pub(crate) fn to_task(row: crate::entity::bot_task::Model) -> BotTask {
         next_run_at: row.next_run_at.map(|at| at.to_rfc3339()),
         last_run_at: row.last_run_at.map(|at| at.to_rfc3339()),
         enabled: row.enabled,
+        monitoring: row.monitoring.unwrap_or(false),
         created_at: row.created_at.to_rfc3339(),
     }
 }

@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
   <key>NSLocationUsageDescription</key>
-  <string>Flow Like uses your location when you request it in a workflow or map.</string>
+  <string>Flow Like uses your location when you request it in a workflow or map, or choose to share it with a bot.</string>
   <key>NSLocationWhenInUseUsageDescription</key>
-  <string>Flow Like uses your location when you request it in a workflow or map.</string>
+  <string>Flow Like uses your location when you request it in a workflow or map, or choose to share it with a bot.</string>
   <key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
   <string>Flow Like monitors the regions you enable so location Events can run when you arrive or leave, including while the app is closed.</string>
     <key>NSSupportsLiveActivities</key>

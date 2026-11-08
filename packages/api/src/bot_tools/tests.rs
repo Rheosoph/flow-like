@@ -247,6 +247,168 @@ fn parse(output: &str) -> Value {
     serde_json::from_str(output).expect("tool output is JSON")
 }
 
+#[derive(Default)]
+struct Configuration {
+    updates: Mutex<Vec<Value>>,
+}
+
+#[async_trait]
+impl flow_like_bot_tools::configuration::ConfigurationBackend for Configuration {
+    async fn inspect(&self) -> flow_like_types::Result<Value> {
+        Ok(json!({"id": BOT, "name": "Assistant", "capabilities": []}))
+    }
+
+    async fn models(&self) -> flow_like_types::Result<Value> {
+        Ok(json!({"models": [{"id": "profile-chat", "roles": ["primary"]}]}))
+    }
+
+    async fn update(&self, changes: Value) -> flow_like_types::Result<Value> {
+        self.updates.lock().unwrap().push(changes.clone());
+        Ok(changes)
+    }
+}
+
+struct NoConfigurationApps;
+
+#[async_trait]
+impl AppDirectory for NoConfigurationApps {
+    async fn scope(&self) -> Result<JobScope, String> {
+        Err("This bot has no app scope".into())
+    }
+
+    async fn credential(&self, _app_id: &str) -> Result<Value, String> {
+        Err("Configuration must not request app credentials".into())
+    }
+}
+
+async fn configuration_host(
+    grants: Arc<MemoryGrants>,
+) -> (Arc<BotToolsHost>, Arc<Configuration>) {
+    let configuration = Arc::new(Configuration::default());
+    let host = BotToolsHost::new(TurnDeps {
+        owner: OWNER.into(),
+        bot: bot_user(),
+        turn_id: TURN.into(),
+        workspace: String::new(),
+        host_tools: routing::host_tools(false, &[]),
+        directory: Arc::new(NoConfigurationApps),
+        access: Arc::new(Access::new(&[]).await),
+        models: TurnModels {
+            source: Arc::new(NoModels),
+            chat: None,
+            embedding: None,
+        },
+        executor: None,
+        grants,
+        secrets: Arc::new(JobSecrets(Default::default())),
+        connectors: None,
+    })
+    .with_configuration(configuration.clone());
+    (Arc::new(host), configuration)
+}
+
+#[flow_like_types::tokio::test]
+async fn configuration_discovery_needs_no_workspace_apps_or_executor() {
+    let (host, configuration) = configuration_host(Arc::new(MemoryGrants::default())).await;
+    for tool in ["bot_configuration", "bot_models"] {
+        let output = parse(&host.run_unattended(&AtomicBool::new(false), tool, json!({})).await);
+        assert_eq!(output["status"], "ok", "{output}");
+        assert!(host.parked().is_none());
+    }
+    assert!(configuration.updates.lock().unwrap().is_empty());
+}
+
+struct ContextWithoutApps;
+
+#[async_trait]
+impl flow_like_bot_tools::user_context::UserContextBackend for ContextWithoutApps {
+    async fn available(&self) -> flow_like_types::Result<flow_like_bot_tools::user_context::UserContextAvailability> {
+        Ok(flow_like_bot_tools::user_context::UserContextAvailability {
+            participants: vec![flow_like_bot_tools::user_context::UserContextParticipant {
+                id: OWNER.into(), name: "Owner".into(),
+            }],
+            fields: flow_like_types::bot_user_context::UserContextField::ALL.to_vec(),
+            device_support: "unknown_until_shared".into(),
+        })
+    }
+
+    async fn request(&self, args: flow_like_bot_tools::user_context::UserContextRequestArgs) -> flow_like_types::Result<flow_like_bot_tools::user_context::UserContextRequestReceipt> {
+        Ok(flow_like_bot_tools::user_context::UserContextRequestReceipt {
+            request_id: "context-request".into(), conversation_id: "room".into(),
+            subject_id: args.subject_id, expires_at: 100_000,
+        })
+    }
+}
+
+#[flow_like_types::tokio::test]
+async fn context_exchange_needs_no_workspace_app_scope_or_owner_approval() {
+    let host = BotToolsHost::new(TurnDeps {
+        owner: OWNER.into(), bot: bot_user(), turn_id: TURN.into(), workspace: String::new(),
+        host_tools: routing::host_tools(false, &[]),
+        directory: Arc::new(NoConfigurationApps),
+        access: Arc::new(Access::new(&[]).await),
+        models: TurnModels { source: Arc::new(NoModels), chat: None, embedding: None },
+        executor: None,
+        grants: Arc::new(MemoryGrants::default()),
+        secrets: Arc::new(JobSecrets(Default::default())),
+        connectors: None,
+    }).with_user_context(Arc::new(ContextWithoutApps));
+    let mutating = AtomicBool::new(false);
+    let available = parse(&host.run_unattended(&mutating, "user_context_available", json!({})).await);
+    assert_eq!(available["status"], "ok", "{available}");
+    assert_eq!(available["participants"][0]["id"], OWNER);
+    let requested = parse(&host.run_unattended(&mutating, "user_context_request", json!({
+        "subject_id": OWNER, "fields": ["timezone"], "purpose": "Find a meeting time",
+    })).await);
+    assert_eq!(requested["status"], "pending", "{requested}");
+    assert!(requested.get("values").is_none());
+    let proposed = parse(&host.run_unattended(&mutating, "user_context_set_status", json!({
+        "subject_id": OWNER, "status": "focus", "purpose": "Time to write", "duration_minutes": 60,
+    })).await);
+    assert_eq!(proposed["status"], "pending", "{proposed}");
+    assert!(host.parked().is_none());
+
+    let channel = InProcessChannel::register("user-context-without-apps", Duration::from_secs(30)).await;
+    let (frames, mut received) = mpsc::unbounded_channel();
+    let plain = ServerPlatformBridge::orchestrator(channel.clone(), frames.clone());
+    let refused = parse(&plain.call("user_context_available", json!({})).await);
+    assert_eq!(refused["code"], "platform_tool_not_advertised");
+    let bot_without_host = ServerPlatformBridge::bot(channel.clone(), frames.clone());
+    let refused = parse(&bot_without_host.call("user_context_available", json!({})).await);
+    assert_eq!(refused["code"], "platform_tool_not_advertised");
+    let enabled = ServerPlatformBridge::orchestrator(channel, frames)
+        .with_bot_tools(Some(Arc::new(host)));
+    let listed = parse(&enabled.call("user_context_available", json!({})).await);
+    assert_eq!(listed["participants"][0]["id"], OWNER);
+    assert!(received.try_recv().is_err(), "Context runs on the host without a browser tool request");
+}
+
+#[flow_like_types::tokio::test]
+async fn configuration_changes_ignore_standing_grants_and_consume_exact_approval_once() {
+    let tool = "bot_update_configuration";
+    let args = json!({"changes": {"name": "Research assistant", "capabilities": ["internet"]}});
+    let grants = Arc::new(MemoryGrants::default());
+    grants.put(tool, "*").await.unwrap();
+    let (host, configuration) = configuration_host(grants.clone()).await;
+    let mutating = AtomicBool::new(false);
+    let waiting = parse(&host.run_unattended(&mutating, tool, args.clone()).await);
+    assert_eq!(waiting["code"], "bot_tool_waiting_for_approval");
+    assert!(host.parked().unwrap().scope.is_empty());
+    assert!(configuration.updates.lock().unwrap().is_empty());
+    assert!(!mutating.load(Ordering::SeqCst));
+
+    let hash = flow_like_types::tool_grant::args_hash(tool, &args);
+    grants.put(tool, &format!("once:{hash}")).await.unwrap();
+    let (resumed, configuration) = configuration_host(grants).await;
+    let applied = parse(&resumed.run_unattended(&mutating, tool, args.clone()).await);
+    assert_eq!(applied["status"], "ok", "{applied}");
+    assert!(mutating.load(Ordering::SeqCst));
+    assert_eq!(*configuration.updates.lock().unwrap(), vec![args["changes"].clone()]);
+    let repeated = parse(&resumed.run_unattended(&mutating, tool, args).await);
+    assert_eq!(repeated["code"], "bot_tool_waiting_for_approval");
+    assert_eq!(configuration.updates.lock().unwrap().len(), 1);
+}
+
 #[flow_like_types::tokio::test]
 async fn light_tools_run_in_the_api_and_never_reach_the_executor() {
     let executor = Arc::new(FakeExecutor::default());
@@ -816,6 +978,88 @@ async fn an_approval_gated_bot_tool_asks_the_browser_for_consent_only() {
     let ran = parse(&call.await.unwrap());
     assert_eq!(ran["tool"], "knowledge_drop");
     assert_ne!(ran["status"], "denied");
+    channel.close().await;
+}
+
+#[flow_like_types::tokio::test]
+async fn every_configuration_change_requires_fresh_browser_approval() {
+    let tool = "bot_update_configuration";
+    let args = json!({"changes": {"instructions": "Ask before sending a message."}});
+    let grants = Arc::new(MemoryGrants::default());
+    grants.put(tool, "*").await.unwrap();
+    let (host, configuration) = configuration_host(grants.clone()).await;
+    let (bridge, channel, mut received) = bridge(host).await;
+    for approved in [true, false, true] {
+        let count_before = configuration.updates.lock().unwrap().len();
+        let call = {
+            let (bridge, args) = (bridge.clone(), args.clone());
+            flow_like_types::tokio::spawn(async move { bridge.call(tool, args).await })
+        };
+        let request = frame(received.recv().await.unwrap());
+        assert_eq!(request["toolName"], tool);
+        assert_eq!(request["approvalOnly"], true);
+        assert_eq!(request["arguments"], args);
+        assert_eq!(configuration.updates.lock().unwrap().len(), count_before);
+        let response = if approved {
+            json!({"requestId": request["requestId"], "approved": true,
+                "result": {"status": "ok", "native_approved": true, "native_remember": true}})
+        } else {
+            json!({"requestId": request["requestId"], "approved": false,
+                "error": "User denied the request."})
+        };
+        reply(&channel, &request, response).await;
+        let output = parse(&call.await.unwrap());
+        assert_eq!(output["status"], if approved { "ok" } else { "denied" });
+        assert_eq!(configuration.updates.lock().unwrap().len(), count_before + usize::from(approved));
+    }
+    assert_eq!(grants.list().await.unwrap(), vec![GrantKey::new(tool, "*")]);
+    channel.close().await;
+}
+
+#[flow_like_types::tokio::test]
+async fn flux_runs_configuration_on_the_server_and_keeps_its_authoring_bridge() {
+    let (host, configuration) = configuration_host(Arc::new(MemoryGrants::default())).await;
+    let channel = InProcessChannel::register(
+        flow_like_types::channel::new_request_id(),
+        Duration::from_secs(30),
+    )
+    .await;
+    let (frames, mut received) = mpsc::unbounded_channel();
+    let bridge = Arc::new(
+        ServerPlatformBridge::orchestrator(channel.clone(), frames).with_bot_tools(Some(host)),
+    );
+    for tool in ["bot_configuration", "bot_models"] {
+        assert_eq!(parse(&bridge.call(tool, json!({})).await)["status"], "ok");
+        assert!(received.try_recv().is_err());
+    }
+    let call = {
+        let bridge = bridge.clone();
+        flow_like_types::tokio::spawn(async move {
+            bridge.call("bot_update_configuration", json!({"changes": {"name": "Flow helper"}})).await
+        })
+    };
+    let request = frame(received.recv().await.unwrap());
+    assert_eq!(request["approvalOnly"], true);
+    reply(&channel, &request, json!({
+        "requestId": request["requestId"], "approved": true,
+        "result": {"status": "ok", "native_approved": true},
+    })).await;
+    assert_eq!(parse(&call.await.unwrap())["status"], "ok");
+    assert_eq!(configuration.updates.lock().unwrap().len(), 1);
+
+    let authoring = {
+        let bridge = bridge.clone();
+        flow_like_types::tokio::spawn(async move {
+            bridge.call("list_apps", json!({})).await
+        })
+    };
+    let request = frame(received.recv().await.unwrap());
+    assert_eq!(request["toolName"], "list_apps");
+    assert!(request.get("approvalOnly").is_none());
+    reply(&channel, &request, json!({
+        "requestId": request["requestId"], "approved": true, "result": {"apps": []},
+    })).await;
+    assert_eq!(parse(&authoring.await.unwrap())["status"], "ok");
     channel.close().await;
 }
 
