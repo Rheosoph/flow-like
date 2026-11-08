@@ -1,17 +1,22 @@
-import {
-	AutoModelForSequenceClassification,
-	AutoTokenizer,
-	env,
-} from "@huggingface/transformers";
+import { AutoTokenizer, env } from "@huggingface/transformers";
+import * as ort from "onnxruntime-web/webgpu";
 import { calibrateEmotionScores } from "./calibration";
 import {
+	type EmotionDispatchPort,
+	createEmotionDispatcher,
+} from "./emotion-dispatch";
+import {
+	BOT_EMOTION_MAX_LENGTH,
 	BOT_EMOTION_MODEL,
 	BOT_EMOTION_REVISION,
-	type EmotionScores,
-	type EmotionWorkerRequest,
 	type EmotionWorkerResponse,
+	scoresFromOutput,
 } from "./protocol";
 import { EmotionScorer } from "./scoring";
+
+const MODEL_URL = `https://huggingface.co/${BOT_EMOTION_MODEL}/resolve/${BOT_EMOTION_REVISION}/onnx/model_quantized.onnx`;
+const MODEL_CACHE = "flow-like-emotion";
+const CONTENT_TOKENS = BOT_EMOTION_MAX_LENGTH - 2;
 
 // All text stays in this worker. Only the pinned model and runtime assets are fetched.
 env.allowLocalModels = false;
@@ -26,11 +31,98 @@ if (env.backends.onnx.wasm) {
 	) {
 		// Use the bundled factory and same-origin WASM instead of the CDN defaults.
 		env.backends.onnx.wasm.wasmPaths = undefined;
+		ort.env.wasm.wasmPaths = undefined;
 	}
 }
+ort.env.wasm.numThreads = 1;
+
+let broadcast: (message: EmotionWorkerResponse) => void = () => {};
 
 function send(message: EmotionWorkerResponse) {
-	self.postMessage(message);
+	broadcast(message);
+}
+
+function reportDownload(loaded: number, total: number) {
+	if (total <= 0) return;
+	send({ type: "progress", progress: Math.min(1, loaded / total) });
+}
+
+async function loadModelBytes(): Promise<ArrayBuffer> {
+	let cache: Cache | undefined;
+	try {
+		cache =
+			typeof caches === "undefined"
+				? undefined
+				: await caches.open(MODEL_CACHE);
+		const cached = await cache?.match(MODEL_URL);
+		if (cached) {
+			const bytes = await cached.arrayBuffer();
+			reportDownload(1, 1);
+			return bytes;
+		}
+	} catch {
+		// Storage can be unavailable in a WebView or after its quota is exhausted.
+	}
+	const response = await fetch(MODEL_URL);
+	if (!response.ok || !response.body) {
+		throw new Error(`Emotion model download failed (${response.status})`);
+	}
+	const total = Number(response.headers.get("content-length")) || 0;
+	const reader = response.body.getReader();
+	const chunks: Uint8Array[] = [];
+	let received = 0;
+	while (true) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		if (!value) continue;
+		chunks.push(value);
+		received += value.byteLength;
+		reportDownload(received, total);
+	}
+	const bytes = new Uint8Array(received);
+	let offset = 0;
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset);
+		offset += chunk.byteLength;
+	}
+	if (cache) {
+		try {
+			await cache.put(
+				MODEL_URL,
+				new Response(bytes.slice().buffer, {
+					headers: { "content-type": "application/octet-stream" },
+				}),
+			);
+		} catch {
+			// Inference can use the downloaded bytes even when they cannot be cached.
+		}
+	}
+	reportDownload(1, 1);
+	return bytes.buffer;
+}
+
+function tokenIds(encoded: unknown): number[] {
+	if (Array.isArray(encoded)) return encoded.map((id) => Number(id));
+	if (encoded && typeof encoded === "object" && "data" in encoded) {
+		return Array.from(
+			(encoded as { data: ArrayLike<number | bigint> }).data,
+			(id) => Number(id),
+		);
+	}
+	throw new Error("Emotion tokenizer returned no token ids");
+}
+
+type Encoded = {
+	input_ids: { data: ArrayLike<number | bigint>; dims: readonly number[] };
+	attention_mask: { data: ArrayLike<number | bigint>; dims: readonly number[] };
+};
+
+function int64Tensor(source: Encoded["input_ids"]) {
+	const data = new BigInt64Array(source.data.length);
+	for (let index = 0; index < source.data.length; index++) {
+		data[index] = BigInt(source.data[index] ?? 0);
+	}
+	return new ort.Tensor("int64", data, [...source.dims]);
 }
 
 let scorer: Promise<EmotionScorer> | undefined;
@@ -38,77 +130,68 @@ let scorer: Promise<EmotionScorer> | undefined;
 function loadScorer() {
 	scorer ??= (async () => {
 		send({ type: "progress" });
-		let reportedPercent = -1;
-		const [tokenizer, model] = await Promise.all([
+		const [tokenizer, modelBytes] = await Promise.all([
 			AutoTokenizer.from_pretrained(BOT_EMOTION_MODEL, {
 				revision: BOT_EMOTION_REVISION,
 			}),
-			AutoModelForSequenceClassification.from_pretrained(BOT_EMOTION_MODEL, {
-				revision: BOT_EMOTION_REVISION,
-				dtype: "q8",
-				device: "wasm",
-				progress_callback: (event) => {
-					if (event.status === "progress" && event.file.endsWith(".onnx")) {
-						const percent = Math.floor(
-							Math.min(100, Math.max(0, event.progress)),
-						);
-						if (!Number.isFinite(percent) || percent === reportedPercent)
-							return;
-						reportedPercent = percent;
-						send({
-							type: "progress",
-							progress: percent / 100,
-						});
-					}
-				},
-			}),
+			loadModelBytes(),
 		]);
+		const session = await ort.InferenceSession.create(modelBytes, {
+			executionProviders: ["wasm"],
+		});
+		const outputName = session.outputNames[0];
+		if (!outputName) throw new Error("Emotion model has no output");
 		return new EmotionScorer(async (text) => {
-			// Preserve the newest words when token-heavy scripts exceed the character cap.
-			const tokens = tokenizer.encode(text, {
-				add_special_tokens: false,
-			});
+			const encodedIds = tokenIds(
+				tokenizer.encode(text, { add_special_tokens: false }),
+			);
 			const recentText =
-				tokens.length > 254
-					? tokenizer.decode(tokens.slice(-254), {
+				encodedIds.length > CONTENT_TOKENS
+					? tokenizer.decode(encodedIds.slice(-CONTENT_TOKENS), {
 							skip_special_tokens: true,
 						})
 					: text;
 			const inputs = tokenizer(recentText, {
 				padding: true,
 				truncation: true,
-				max_length: 256,
+				max_length: BOT_EMOTION_MAX_LENGTH,
+			}) as Encoded;
+			const result = await session.run({
+				input_ids: int64Tensor(inputs.input_ids),
+				attention_mask: int64Tensor(inputs.attention_mask),
 			});
-			const output = await model(inputs);
-			const probabilities = output.logits.sigmoid().data;
-			const config = model.config;
-			const labels = "id2label" in config ? config.id2label : undefined;
-			if (!labels || typeof labels !== "object")
-				throw new Error("Emotion labels missing");
-			const scores: EmotionScores = {};
-			for (let index = 0; index < probabilities.length; index++) {
-				const label = (labels as Record<string, unknown>)[index];
-				if (typeof label === "string")
-					scores[label.toLowerCase()] = Number(probabilities[index]);
-			}
-			return calibrateEmotionScores(scores);
+			const output = result[outputName];
+			if (!output) throw new Error("Emotion model returned no scores");
+			return calibrateEmotionScores(
+				scoresFromOutput(output.data as ArrayLike<number>),
+			);
 		});
-	})();
+	})().catch((error) => {
+		// A shared worker can outlive the tab that encountered a temporary failure.
+		scorer = undefined;
+		throw error;
+	});
 	return scorer;
 }
 
-// The client serializes requests so one session owns inference and its context cache.
-self.onmessage = async (event: MessageEvent<EmotionWorkerRequest>) => {
-	const input = event.data;
-	try {
-		const model = await loadScorer();
-		if (input.warmup) {
-			send({ type: "ready" });
-			return;
-		}
-		const scores = await model.score(input);
-		send({ type: "result", id: input.id, scores });
-	} catch {
-		send({ type: "error", id: input.id });
+const dispatcher = createEmotionDispatcher(async (input, reply) => {
+	const model = await loadScorer();
+	if (input.warmup) {
+		reply({ type: "ready" });
+		return;
 	}
+	reply({ type: "result", id: input.id, scores: await model.score(input) });
+});
+broadcast = dispatcher.broadcast;
+
+const scope = self as unknown as EmotionDispatchPort & {
+	onconnect?: ((event: MessageEvent) => void) | null;
 };
+if ("onconnect" in scope) {
+	scope.onconnect = (event) => {
+		const port = event.ports[0];
+		if (port) dispatcher.attach(port);
+	};
+} else {
+	dispatcher.attach(scope);
+}

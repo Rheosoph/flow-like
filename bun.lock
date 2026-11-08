@@ -710,6 +710,7 @@
         "minisearch": "^7.1.1",
         "next": "16.4.3",
         "next-themes": "^0.4.6",
+        "onnxruntime-web": "1.31.0-dev.20260914-8d85527a0",
         "pdf-lib": "^1.17.1",
         "platejs": "53.3.11",
         "plotly.js-dist-min": "^3.3.1",

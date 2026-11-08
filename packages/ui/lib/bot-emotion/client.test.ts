@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { BrowserEmotionClient, type EmotionWorkerPort } from "./client";
+import {
+	BrowserEmotionClient,
+	type EmotionWorkerPort,
+	createEmotionWorkerPort,
+	portFromSharedWorker,
+} from "./client";
 import type { EmotionWorkerRequest, EmotionWorkerResponse } from "./protocol";
 import { expressionScores } from "./scoring";
 
@@ -186,5 +191,117 @@ describe("browser emotion queue", () => {
 		vi.advanceTimersByTime(30_000);
 		expect(await stalled).toBeNull();
 		expect(port.terminate).toHaveBeenCalledOnce();
+	});
+});
+
+describe("emotion worker connection", () => {
+	afterEach(() => {
+		vi.unstubAllGlobals();
+	});
+
+	it("closes only the shared port so other tabs keep the model", () => {
+		const messages: unknown[] = [];
+		const close = vi.fn();
+		const port = {
+			start: vi.fn(),
+			close,
+			postMessage: (message: unknown) => messages.push(message),
+			onmessage: null as ((event: MessageEvent) => void) | null,
+		};
+		const worker = {
+			port,
+			onerror: null as ((event: ErrorEvent) => void) | null,
+		};
+		const adapter = portFromSharedWorker(worker as unknown as SharedWorker);
+		adapter.postMessage({ id: 1, warmup: true, draft: "", messages: [] });
+		expect(port.start).toHaveBeenCalledOnce();
+		expect(messages).toHaveLength(1);
+		adapter.terminate();
+		expect(close).toHaveBeenCalledOnce();
+		expect(messages.at(-1)).toEqual({ type: "disconnect" });
+	});
+
+	it("replays warmup in a dedicated worker after an asynchronous shared startup failure", async () => {
+		const port = {
+			start: vi.fn(),
+			close: vi.fn(),
+			postMessage: vi.fn(),
+			onmessage: null,
+		};
+		const shared = {
+			port,
+			onerror: null as ((event: ErrorEvent) => void) | null,
+		};
+		const dedicated = new WorkerPort();
+		const factory = vi.fn(() => dedicated);
+		const connection = portFromSharedWorker(
+			shared as unknown as SharedWorker,
+			factory,
+		);
+		const client = new BrowserEmotionClient(() => connection);
+		const states: string[] = [];
+		client.subscribe((state) => states.push(state.status));
+		const result = client.predict({}, { draft: "hello", messages: [] });
+		expect(port.postMessage).toHaveBeenCalledWith({
+			id: 0,
+			warmup: true,
+			draft: "",
+			messages: [],
+		});
+		shared.onerror?.({} as ErrorEvent);
+		expect(factory).toHaveBeenCalledOnce();
+		expect(port.close).toHaveBeenCalledOnce();
+		expect(dedicated.warmups).toBe(1);
+		expect(dedicated.requests.map((request) => request.draft)).toEqual([
+			"hello",
+		]);
+		dedicated.finish(0);
+		expect((await result)?.happy).toBe(0.9);
+		expect(states).toEqual(["idle", "loading", "ready"]);
+		connection.terminate();
+		expect(dedicated.terminate).toHaveBeenCalledOnce();
+	});
+
+	it("reports shared runtime errors after readiness without starting another model", () => {
+		const port = {
+			start: vi.fn(),
+			close: vi.fn(),
+			postMessage: vi.fn(),
+			onmessage: null as
+				| ((event: MessageEvent<EmotionWorkerResponse>) => void)
+				| null,
+		};
+		const shared = {
+			port,
+			onerror: null as ((event: ErrorEvent) => void) | null,
+		};
+		const factory = vi.fn(() => new WorkerPort());
+		const connection = portFromSharedWorker(
+			shared as unknown as SharedWorker,
+			factory,
+		);
+		const onerror = vi.fn();
+		connection.onerror = onerror;
+		port.onmessage?.({
+			data: { type: "ready" },
+		} as MessageEvent<EmotionWorkerResponse>);
+		shared.onerror?.({} as ErrorEvent);
+		expect(onerror).toHaveBeenCalledOnce();
+		expect(factory).not.toHaveBeenCalled();
+	});
+
+	it("falls back to a dedicated worker when the shared worker cannot start", () => {
+		class DedicatedWorker extends WorkerPort {}
+		vi.stubGlobal("window", globalThis);
+		vi.stubGlobal(
+			"SharedWorker",
+			class {
+				constructor() {
+					throw new Error("module shared workers are unavailable");
+				}
+			},
+		);
+		vi.stubGlobal("Worker", DedicatedWorker);
+		expect(createEmotionWorkerPort()).toBeInstanceOf(DedicatedWorker);
 	});
 });

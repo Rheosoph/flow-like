@@ -196,11 +196,106 @@ export class BrowserEmotionClient implements EmotionClient {
 let client: BrowserEmotionClient | undefined;
 
 export function getBotEmotionClient(): EmotionClient {
-	client ??= new BrowserEmotionClient(
-		() =>
-			new Worker(new URL("./emotion.worker.ts", import.meta.url), {
-				type: "module",
-			}),
-	);
+	client ??= new BrowserEmotionClient(createEmotionWorkerPort);
 	return client;
+}
+
+/** One model session for every tab. A dedicated worker is the fallback. */
+export function createEmotionWorkerPort(): EmotionWorkerPort {
+	if (typeof SharedWorker !== "undefined" && typeof window !== "undefined") {
+		try {
+			return portFromSharedWorker(
+				// The default name lets each deployed script URL share its own session.
+				new SharedWorker(new URL("./emotion.worker.ts", import.meta.url), {
+					type: "module",
+				}),
+				createDedicatedEmotionWorker,
+			);
+		} catch {
+			// Some WebViews expose the constructor and still reject module workers.
+		}
+	}
+	return createDedicatedEmotionWorker();
+}
+
+function createDedicatedEmotionWorker(): EmotionWorkerPort {
+	return new Worker(new URL("./emotion.worker.ts", import.meta.url), {
+		type: "module",
+	});
+}
+
+/** Closing the port leaves the shared model running for other tabs. */
+export function portFromSharedWorker(
+	worker: SharedWorker,
+	createFallback?: () => EmotionWorkerPort,
+): EmotionWorkerPort {
+	const port = worker.port;
+	let fallback: EmotionWorkerPort | undefined;
+	let ready = false;
+	let terminated = false;
+	const pending: EmotionWorkerRequest[] = [];
+
+	function closeSharedPort() {
+		worker.onerror = null;
+		port.onmessage = null;
+		try {
+			port.postMessage({ type: "disconnect" });
+		} catch {
+			// A failed connection may already have detached its port.
+		} finally {
+			port.close();
+		}
+	}
+
+	const adapter: EmotionWorkerPort = {
+		onmessage: null,
+		onerror: null,
+		postMessage(message) {
+			if (terminated) return;
+			if (fallback) {
+				fallback.postMessage(message);
+				return;
+			}
+			if (!ready) pending.push(message);
+			port.postMessage(message);
+		},
+		terminate() {
+			if (terminated) return;
+			terminated = true;
+			pending.length = 0;
+			if (fallback) fallback.terminate();
+			else closeSharedPort();
+		},
+	};
+	port.onmessage = (event: MessageEvent<EmotionWorkerResponse>) => {
+		if (terminated || fallback) return;
+		if (event.data.type === "ready") {
+			ready = true;
+			pending.length = 0;
+		}
+		adapter.onmessage?.(event);
+	};
+	worker.onerror = (event: ErrorEvent) => {
+		if (terminated) return;
+		if (!createFallback || ready || fallback) {
+			adapter.onerror?.(event);
+			return;
+		}
+		// Module loading failures are reported after the constructor returns.
+		try {
+			closeSharedPort();
+			fallback = createFallback();
+			fallback.onmessage = (message) => {
+				if (!terminated) adapter.onmessage?.(message);
+			};
+			fallback.onerror = (error) => {
+				if (!terminated) adapter.onerror?.(error);
+			};
+			for (const request of pending.splice(0)) fallback.postMessage(request);
+		} catch {
+			adapter.onerror?.(event);
+		}
+	};
+	port.start();
+	return adapter;
 }
