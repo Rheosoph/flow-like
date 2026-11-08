@@ -5,7 +5,7 @@
 
 use super::{
     conversations::start_exchange,
-    entries::{Outgoing, Sent, fan_out, repeat_of, validate_send},
+    entries::{Content, Outgoing, Sent, fan_out, repeat_of, validate_send},
     lock_conversation,
     model::SendEntryRequest,
     now_millis, wake,
@@ -120,52 +120,142 @@ pub(crate) async fn reply_in_origin(
     outgoing: Outgoing,
 ) -> Result<Sent, ApiError> {
     let outgoing = std::sync::Arc::new(outgoing);
-    let claim = super::model::TurnClaim {
-        id: turn.id.clone(),
-        host_id: host_id.to_string(),
-    };
     let sent = state
         .transaction(|txn| {
-            let (turn, claim, origin, outgoing) = (
+            let (turn, host_id, origin, outgoing) = (
                 turn.clone(),
-                claim.clone(),
+                host_id.to_string(),
                 origin_conversation.to_string(),
                 outgoing.clone(),
             );
             Box::pin(async move {
-                let mut locks = [turn.conversation_id.as_str(), origin.as_str()];
+                let mut locks = vec![turn.conversation_id.as_str(), origin.as_str()];
                 locks.sort_unstable();
+                locks.dedup();
                 for conversation_id in locks {
                     lock_conversation(txn, conversation_id).await?;
                 }
-                let now = now_millis();
-                if let Some(sent) =
-                    repeat_of(txn, &origin, &turn.bot_id, &outgoing.message_id).await?
-                {
-                    return Ok(sent);
-                }
-                let hops = super::turns::complete_turn_in(
-                    txn,
-                    &claim,
-                    &turn.bot_id,
-                    &turn.conversation_id,
-                    &outgoing.message_id,
-                    now,
-                )
-                .await?;
-                fan_out(
-                    txn,
-                    &origin,
-                    &turn.bot_id,
-                    hops.saturating_add(1),
-                    &outgoing,
-                    now,
-                )
-                .await
+                reply_in_origin_in(txn, &turn, &host_id, &origin, &outgoing, now_millis()).await
             })
         })
         .await?;
     wake(state, sent.wake.clone()).await;
     crate::bot_host::dispatch(state, &sent.bots).await;
     Ok(sent)
+}
+
+/// Completes the held exchange turn while writing its reply in the original conversation.
+/// The caller holds both conversation locks. SQLite tests call this inside a transaction.
+pub(crate) async fn reply_in_origin_in(
+    txn: &DatabaseTransaction,
+    turn: &crate::entity::bot_turn::Model,
+    host_id: &str,
+    origin: &str,
+    outgoing: &Outgoing,
+    now: DateTime<FixedOffset>,
+) -> Result<Sent, ApiError> {
+    if outgoing.kind != InboxEntryKind::Message {
+        return Err(ApiError::bad_request(
+            "A bot answers its turn with a message",
+        ));
+    }
+    let outgoing = reply_for_origin(&turn.conversation_id, origin, outgoing)?;
+    if let Some(sent) = repeat_of(txn, origin, &turn.bot_id, &outgoing.message_id).await? {
+        return Ok(sent);
+    }
+    let claim = super::model::TurnClaim {
+        id: turn.id.clone(),
+        host_id: host_id.to_string(),
+    };
+    let hops = super::turns::complete_turn_in(
+        txn,
+        &claim,
+        &turn.bot_id,
+        &turn.conversation_id,
+        &outgoing.message_id,
+        now,
+    )
+    .await?;
+    let sent = fan_out(
+        txn,
+        origin,
+        &turn.bot_id,
+        hops.saturating_add(1),
+        &outgoing,
+        now,
+    )
+    .await?;
+    if outgoing.message_id
+        == flow_like_types::bot_turn::failure_message_id(&turn.bot_id, &turn.trigger_message_id)
+        && let Content::Plain(envelope) = &outgoing.content
+        && let Some(body) = envelope.get("body")
+        && let Ok(message) = flow_like_types::bot_message::MessageBody::parse(body)
+        && let Some(error) = message.error
+    {
+        crate::bot_host::ledger::mark_failed_after_reply_in(
+            txn,
+            &turn.id,
+            &outgoing.message_id,
+            &error.code,
+            now,
+        )
+        .await?;
+    }
+    Ok(sent)
+}
+
+fn reply_for_origin(
+    exchange: &str,
+    origin: &str,
+    outgoing: &Outgoing,
+) -> Result<Outgoing, ApiError> {
+    if origin == exchange {
+        return Ok(outgoing.clone());
+    }
+    let Content::Plain(mut envelope) = outgoing.content.clone() else {
+        return Ok(outgoing.clone());
+    };
+    // The exchange's reply target is absent from the destination conversation.
+    if let Some(body) = envelope.get_mut("body").and_then(Value::as_object_mut) {
+        body.remove("reply_to");
+    }
+    validate_send(SendEntryRequest {
+        message_id: outgoing.message_id.clone(),
+        kind: outgoing.kind,
+        envelope: Some(envelope),
+        envelopes: None,
+        turn: None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn moving_a_reply_clears_its_target_and_preserves_attachments_and_errors() {
+        let mut body = json!({
+            "text": "The report is attached.",
+            "reply_to": "exchange-answer",
+            "error": { "code": "BOT_MODEL" },
+            "parts": [{
+                "kind": "attachment", "id": "a1", "name": "report.pdf",
+                "handle": {
+                    "app_id": "workspace", "path": "report.pdf", "bytes": 12,
+                    "sha256": "a".repeat(64), "mime": "application/pdf"
+                }
+            }]
+        });
+        let outgoing = message_outgoing("reply", body.clone()).unwrap();
+        let moved = reply_for_origin("exchange", "origin", &outgoing).unwrap();
+        body.as_object_mut().unwrap().remove("reply_to");
+        assert_eq!(moved.content, Content::Plain(plain_envelope(body)));
+        assert_eq!(moved.links.reply_to, None);
+        assert_eq!(moved.links.workspace_apps, outgoing.links.workspace_apps);
+        assert_eq!(
+            reply_for_origin("exchange", "exchange", &outgoing).unwrap(),
+            outgoing
+        );
+    }
 }

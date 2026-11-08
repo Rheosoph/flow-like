@@ -40,6 +40,9 @@ pub struct UserLookupResponse {
     name: Option<String>,
     avatar_url: Option<String>,
     additional_information: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    availability: Option<flow_like_types::user_availability::PublicAvailability>,
     description: Option<String>,
     created_at: Option<chrono::DateTime<chrono::FixedOffset>>,
     /// An exact identifier match, even when lookup settings hide that identifier.
@@ -88,6 +91,7 @@ impl UserLookupResponse {
             name: row.name,
             avatar_url: None,
             additional_information: None,
+            availability: None,
             description: lookup.description.then_some(row.description).flatten(),
             created_at: lookup.created_at.then_some(row.created_at),
             exact_match: None,
@@ -123,6 +127,10 @@ impl UserLookupResponse {
     /// The directory entry of `user`: only the fields `lookup` shares, never
     /// account, billing or permission data. `avatar_url` is the signed avatar.
     pub fn project(user: user::Model, lookup: &Lookup, avatar_url: Option<String>) -> Self {
+        let availability = flow_like_types::user_availability::AvailabilityState::read(
+            user.additional_information.as_ref(),
+        )
+        .current(chrono::Utc::now().timestamp_millis());
         // Rows provisioned before display names were derived — and every row
         // `ensure_user_exists` creates — carry no name, and with `lookup.email` off
         // there is then nothing left to render but the raw id. `derive_display_name`
@@ -151,8 +159,11 @@ impl UserLookupResponse {
             avatar_url: lookup.avatar.then_some(avatar_url).flatten(),
             additional_information: lookup
                 .additional_information
-                .then_some(user.additional_information)
+                .then_some(flow_like_types::user_availability::public_information(
+                    user.additional_information,
+                ))
                 .flatten(),
+            availability: Some(availability),
             description: lookup.description.then_some(user.description).flatten(),
             created_at: lookup.created_at.then_some(user.created_at),
             exact_match: None,
@@ -796,6 +807,7 @@ mod tests {
             "name",
             "avatar_url",
             "additional_information",
+            "availability",
             "description",
             "created_at",
         ];
@@ -831,6 +843,27 @@ mod tests {
             ..everything
         });
         assert_eq!(no_avatar["avatar_url"], Value::Null);
+    }
+
+    #[test]
+    fn availability_is_public_but_calendar_handles_and_preferences_stay_private() {
+        let mut row = account_row();
+        let until = chrono::Utc::now().timestamp_millis() + 60_000;
+        row.additional_information = Some(serde_json::json!({"team":"ops","_flow_like_availability":{
+            "status_override":{"status":"focus","source":"manual","until":until},
+            "calendar_links":[{"id":"link","provider_id":"google","label":"Work","connection_handle":"fl_oauth_private"}],
+            "preferences":{"allow_mentions":false,"allow_calls":true}
+        }}));
+        let response = UserLookupResponse::project(
+            row,
+            &Lookup { additional_information: true, ..Lookup::default() },
+            None,
+        );
+        let value = serde_json::to_value(response).unwrap();
+        assert_eq!(value["availability"], serde_json::json!({"status":"focus","source":"manual","until":until}));
+        assert_eq!(value["additional_information"], serde_json::json!({"team":"ops"}));
+        assert!(!value.to_string().contains("fl_oauth_private"));
+        assert!(!value.to_string().contains("allow_mentions"));
     }
 
     fn bot_row() -> bot::Model {

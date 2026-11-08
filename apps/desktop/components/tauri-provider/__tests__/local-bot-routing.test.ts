@@ -89,6 +89,65 @@ beforeEach(() => {
 
 afterEach(() => vi.restoreAllMocks());
 
+describe("local group memory settings", () => {
+	const limits = {
+		use_owner_memory: true,
+		use_shared_memory: false,
+		share_memory: true,
+	};
+
+	test("group creation and adding a bot carry its choices in the same command", async () => {
+		const group = conversation(
+			"memory-local",
+			"2026-11-08T08:00:00Z",
+			["local", "bot_a", "bot_b"],
+			true,
+		);
+		localStore({
+			local_inbox_create: () => group,
+			local_inbox_conversation: () => group,
+			local_inbox_add_members: () => group,
+		});
+		const state = new InboxState(signedOut());
+		const request = {
+			kind: "group" as const,
+			members: ["bot_a", "bot_b"],
+			bot_limits: { bot_a: limits },
+		};
+		await state.createConversation(request);
+		expect(mocks.invoke).toHaveBeenCalledWith("local_inbox_create", {
+			request,
+		});
+		const result = await state.invite(group.id, {
+			principal_ids: ["bot_c"],
+			bot_limits: { bot_c: limits },
+		});
+		expect(mocks.invoke).toHaveBeenCalledWith("local_inbox_add_members", {
+			conversationId: group.id,
+			members: ["bot_c"],
+			botLimits: { bot_c: limits },
+		});
+		expect(result).toEqual({
+			added: ["bot_c"],
+			invited: [],
+			conversation: group,
+		});
+		expect(mocks.post).not.toHaveBeenCalled();
+	});
+
+	test("changing local group settings keeps the choices on the device", async () => {
+		localStore({ local_inbox_set_member_limits: () => limits });
+		const state = new InboxState(signedOut());
+		await state.setMemberLimits("memory-local", "bot_a", limits);
+		expect(mocks.invoke).toHaveBeenCalledWith("local_inbox_set_member_limits", {
+			conversationId: "memory-local",
+			botId: "bot_a",
+			limits,
+		});
+		expect(mocks.patch).not.toHaveBeenCalled();
+	});
+});
+
 describe("bots signed out", () => {
 	test("every call goes to the bots on this computer", async () => {
 		const local = bot("bot_local", true);

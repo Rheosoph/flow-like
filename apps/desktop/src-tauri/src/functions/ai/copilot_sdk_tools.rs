@@ -1021,7 +1021,7 @@ pub fn create_global_assistant_tools(
     // research session with the parent handlers so sequential frontend delegations cannot reset it.
     let web_research_session = web_research_session_for_turn(user_prompt, run_id);
     let research_session = delegated_research_session_for_turn(user_prompt, run_id);
-    global_assistant_tool_specs(memory.is_some())
+    global_assistant_specs_for_bot(memory.is_some(), bridge.bot_context())
         .iter()
         .map(|spec| {
             let (tool, handler) = sdk_tool_from_spec(
@@ -1038,6 +1038,21 @@ pub fn create_global_assistant_tools(
             (tool, handler)
         })
         .collect()
+}
+
+fn global_assistant_specs_for_bot(
+    memory_enabled: bool,
+    bot: Option<&flow_like::flow::copilot::BotRunContext>,
+) -> Vec<PlatformToolSpec> {
+    let mut specs = global_assistant_tool_specs(memory_enabled);
+    if let Some(bot) = bot {
+        specs.extend(
+            bot.tool_specs(memory_enabled).into_iter().filter(|spec| {
+                flow_like_bot_tools::configuration::is_configuration_tool(spec.name)
+            }),
+        );
+    }
+    specs
 }
 
 /// Live web-research sessions, keyed per turn.
@@ -4450,6 +4465,44 @@ mod tests {
         variable::{Variable, VariableType},
     };
     use flow_like::flow_like_storage::Path;
+
+    #[test]
+    fn external_global_agents_offer_configuration_only_for_an_owner_bot_turn() {
+        use flow_like::flow::copilot::{BotRunContext, BotToolset, HostTools, TurnRequester};
+        use flow_like_types::bot_turn::TurnAudience;
+        let names = |bot: Option<&BotRunContext>| {
+            global_assistant_specs_for_bot(false, bot)
+                .into_iter()
+                .filter(|spec| flow_like_bot_tools::configuration::is_configuration_tool(spec.name))
+                .map(|spec| spec.name)
+                .collect::<Vec<_>>()
+        };
+        assert!(names(None).is_empty());
+        let mut bot = BotRunContext {
+            toolset: BotToolset::FlowPilot,
+            host_tools: HostTools::linked(),
+            ..Default::default()
+        };
+        assert_eq!(
+            names(Some(&bot)),
+            vec![
+                "bot_configuration",
+                "bot_models",
+                "bot_update_configuration"
+            ]
+        );
+        bot.requester = Some(TurnRequester {
+            requester_id: "member".into(),
+            requester_name: None,
+            owner_id: "owner".into(),
+            owner_name: None,
+            audience: TurnAudience::Room,
+            room: None,
+            addressed: true,
+            reactions: Vec::new(),
+        });
+        assert!(names(Some(&bot)).is_empty());
+    }
 
     #[test]
     fn specialist_direct_surfaces_exclude_global_public_web_research() {

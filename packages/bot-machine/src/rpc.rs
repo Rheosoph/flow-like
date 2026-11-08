@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use flow_like_bot_tools::browser::{
-    BrowserBackend, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
+    BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, SnapshotRequest, SnapshotView,
 };
 use flow_like_bot_tools::computer::{
     ComputerAction, ComputerBackend, Screen, WindowBounds, WindowOp, WindowSummary,
@@ -88,7 +88,8 @@ struct InjectParams {
 }
 
 fn screen_json(screen: Screen) -> Value {
-    json!({ "png": encode(&screen.png), "width": screen.width, "height": screen.height })
+    json!({ "png": encode(&screen.png), "width": screen.width, "height": screen.height,
+        "note": screen.note, "observation": screen.observation })
 }
 
 fn page_json(page: PageState) -> Value {
@@ -120,7 +121,12 @@ async fn dispatch(playground: &dyn Playground, method: &str, value: Value) -> Re
         }
         "browser.screenshot" => {
             let p: ConvParams = params(method, value)?;
-            json!({ "png": encode(&browser(p.conv).screenshot().await?) })
+            let capture = browser(p.conv).capture().await?;
+            json!({ "png": encode(&capture.png), "observation": capture.observation })
+        }
+        "browser.observation" => {
+            let p: ConvParams = params(method, value)?;
+            json!(browser(p.conv).observation().await?)
         }
         "browser.current" => {
             let p: ConvParams = params(method, value)?;
@@ -174,7 +180,8 @@ async fn dispatch(playground: &dyn Playground, method: &str, value: Value) -> Re
         }
         "capture" => match playground.capture().await? {
             Some(shot) => {
-                json!({ "png": encode(&shot.png), "kind": shot.kind, "caption": shot.caption })
+                json!({ "png": encode(&shot.png), "kind": shot.kind, "caption": shot.caption,
+                    "observation": shot.observation })
             }
             None => Value::Null,
         },
@@ -443,11 +450,14 @@ fn field<T: DeserializeOwned>(value: Value, name: &str) -> Result<T> {
 
 fn screen_of(value: Value) -> Result<Screen> {
     let png: String = field(value.clone(), "png")?;
-    Ok(Screen::new(
+    let mut screen = Screen::new(
         decode(&png)?,
         field(value.clone(), "width")?,
-        field(value, "height")?,
-    ))
+        field(value.clone(), "height")?,
+    );
+    screen.note = field(value.clone(), "note")?;
+    screen.observation = field(value, "observation")?;
+    Ok(screen)
 }
 
 fn page_of(value: Value) -> Result<PageState> {
@@ -483,7 +493,8 @@ impl Playground for Arc<RemotePlayground> {
         Ok(Some(Shot {
             png: decode(&png)?,
             kind,
-            caption: field(value, "caption")?,
+            caption: field(value.clone(), "caption")?,
+            observation: field(value, "observation")?,
         }))
     }
 
@@ -547,8 +558,22 @@ impl BrowserBackend for RemoteBrowser {
     }
 
     async fn screenshot(&self) -> Result<Vec<u8>> {
+        Ok(self.capture().await?.png)
+    }
+
+    async fn capture(&self) -> Result<BrowserScreen> {
         let value = self.call("browser.screenshot", json!({})).await?;
-        decode(&field::<String>(value, "png")?)
+        Ok(BrowserScreen {
+            png: decode(&field::<String>(value.clone(), "png")?)?,
+            observation: field(value, "observation")?,
+        })
+    }
+
+    async fn observation(
+        &self,
+    ) -> Result<Option<flow_like_types::interaction_observation::InteractionObservation>> {
+        let value = self.call("browser.observation", json!({})).await?;
+        serde_json::from_value(value).map_err(|e| anyhow!("Bad browser observation: {e}"))
     }
 
     async fn current(&self) -> Result<Option<PageState>> {

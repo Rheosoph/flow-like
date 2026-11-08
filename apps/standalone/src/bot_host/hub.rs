@@ -4,7 +4,8 @@
 
 use async_trait::async_trait;
 use flow_like_bot_host::hub::{
-    CODE_SIGNED_OUT, Claimed, ENTRIES, HubFailure, TurnHub, TurnSession, answer, decode, entries_of,
+    CODE_SIGNED_OUT, Claimed, ENTRIES, HubFailure, TurnHub, TurnSession, WaitOutcome, answer,
+    decode, entries_of,
 };
 use flow_like_local_bots::InboxEntry;
 use flow_like_types::{
@@ -65,6 +66,7 @@ impl DeviceApi for crate::enrollment::DeviceSession {
 
 /// The credentials of one claimed turn; heartbeats replace them before they expire.
 pub struct TurnCreds {
+    delivery_only: bool,
     bot: Mutex<DeviceToken>,
     executor: Mutex<Option<DeviceToken>>,
     usage: Option<DeviceUsageGrant>,
@@ -79,9 +81,16 @@ fn locked<T>(cell: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 impl TurnCreds {
     pub fn new(grant: &DeviceTurnGrant) -> Self {
         Self {
+            delivery_only: grant.delivery_only,
             bot: Mutex::new(grant.bot_token.clone()),
-            executor: Mutex::new(grant.executor_token.clone()),
-            usage: grant.usage.clone(),
+            executor: Mutex::new(
+                (!grant.delivery_only)
+                    .then(|| grant.executor_token.clone())
+                    .flatten(),
+            ),
+            usage: (!grant.delivery_only)
+                .then(|| grant.usage.clone())
+                .flatten(),
             started: Instant::now(),
             deadline: grant.deadline,
         }
@@ -107,7 +116,9 @@ impl TurnCreds {
         if let Some(token) = &beat.bot_token {
             *locked(&self.bot) = token.clone();
         }
-        if let Some(token) = &beat.executor_token {
+        if let Some(token) = &beat.executor_token
+            && !self.delivery_only
+        {
             *locked(&self.executor) = Some(token.clone());
         }
     }
@@ -324,6 +335,77 @@ fn failure_code_of(message: &Value) -> Option<String> {
 
 #[async_trait]
 impl TurnHub for DeviceTurnHub {
+    fn supports_recovery(&self) -> bool {
+        true
+    }
+
+    async fn checkpoint_load(
+        &self,
+        _bot_id: &str,
+        turn_id: &str,
+        host_id: &str,
+        attempt: u32,
+    ) -> Result<Option<flow_like_types::bot_turn::BotRunCheckpoint>, HubFailure> {
+        let query = {
+            let mut query = url::form_urlencoded::Serializer::new(String::new());
+            query
+                .append_pair("host_id", host_id)
+                .append_pair("attempt", &attempt.to_string());
+            query.finish()
+        };
+        let value = self
+            .device_call(
+                Method::GET,
+                &format!("turns/{turn_id}/checkpoint?{query}"),
+                None,
+            )
+            .await?;
+        decode(value.get("checkpoint").cloned().unwrap_or(Value::Null))
+    }
+
+    async fn previous_monitor_result(
+        &self,
+        _bot_id: &str,
+        turn_id: &str,
+        host_id: &str,
+        attempt: u32,
+    ) -> Result<Option<String>, HubFailure> {
+        let query = {
+            let mut query = url::form_urlencoded::Serializer::new(String::new());
+            query
+                .append_pair("host_id", host_id)
+                .append_pair("attempt", &attempt.to_string())
+                .append_pair("monitor_baseline", "true");
+            query.finish()
+        };
+        let value = self
+            .device_call(
+                Method::GET,
+                &format!("turns/{turn_id}/checkpoint?{query}"),
+                None,
+            )
+            .await?;
+        let result: Option<String> =
+            decode(value.get("monitor_result").cloned().unwrap_or(Value::Null))?;
+        Ok(result.map(|text| text.chars().take(4_000).collect()))
+    }
+
+    async fn checkpoint_save(
+        &self,
+        _bot_id: &str,
+        turn_id: &str,
+        host_id: &str,
+        attempt: u32,
+        checkpoint: &flow_like_types::bot_turn::BotRunCheckpoint,
+    ) -> Result<(), HubFailure> {
+        self.device_call(
+            Method::PUT,
+            &format!("turns/{turn_id}/checkpoint"),
+            Some(json!({"host_id": host_id, "attempt": attempt, "checkpoint": checkpoint})),
+        )
+        .await
+        .map(|_| ())
+    }
     async fn list(&self) -> Result<Vec<BotTurn>, HubFailure> {
         let polled: DevicePollResponse = self
             .device_post("poll", json!({ "host_id": self.shared.host_id }))
@@ -408,6 +490,29 @@ impl TurnHub for DeviceTurnHub {
             .await?;
         self.end_turn(turn_id);
         Ok(())
+    }
+
+    async fn wait_for(
+        &self,
+        turn_id: &str,
+        host_id: &str,
+        participant_id: &str,
+    ) -> Result<WaitOutcome, HubFailure> {
+        let result: Value = self
+            .device_post(
+                &format!("turns/{turn_id}/wait"),
+                json!({
+                    "host_id": host_id,
+                    "participant_id": participant_id,
+                    "usage": self.usage_of(turn_id),
+                }),
+            )
+            .await?;
+        let outcome: WaitOutcome = decode(result.get("status").cloned().unwrap_or(Value::Null))?;
+        if outcome == WaitOutcome::Parked {
+            self.end_turn(turn_id);
+        }
+        Ok(outcome)
     }
 
     async fn park(
@@ -687,6 +792,30 @@ mod tests {
         DeviceTurnHub::new(api.clone(), "device:dev1".into())
     }
 
+    #[test]
+    fn delivery_credentials_cannot_acquire_execution_tokens_or_usage() {
+        let mut value = grant("bt_delivery");
+        value["delivery_only"] = json!(true);
+        let grant: DeviceTurnGrant = serde_json::from_value(value).unwrap();
+        let creds = TurnCreds::new(&grant);
+        assert!(creds.executor_token().is_none());
+        assert!(creds.executor_expires_at().is_none());
+        assert!(creds.usage_report().is_none());
+        creds.refresh(&DeviceHeartbeatResponse {
+            turn: grant.turn.clone(),
+            bot_token: Some(DeviceToken {
+                token: "refreshed-bot".into(),
+                expires_at: 200,
+            }),
+            executor_token: Some(DeviceToken {
+                token: "unexpected-executor".into(),
+                expires_at: 200,
+            }),
+        });
+        assert_eq!(creds.bot_token(), "refreshed-bot");
+        assert!(creds.executor_token().is_none());
+    }
+
     #[tokio::test]
     async fn a_poll_lists_turns_and_sets_the_next_poll_within_bounds() {
         let api = FakeApi::answering([(
@@ -844,6 +973,34 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn participant_wait_uses_device_auth_and_releases_usage_only_when_parked() {
+        for (status, expected) in [
+            ("parked", WaitOutcome::Parked),
+            ("already_answered", WaitOutcome::AlreadyAnswered),
+            ("unavailable", WaitOutcome::Unavailable),
+            ("superseded", WaitOutcome::Superseded),
+        ] {
+            let api =
+                FakeApi::answering([(200, grant("bt_1")), (200, json!({ "status": status }))]);
+            let hub = hub(&api);
+            hub.claim_turn("bt_1", "device:dev1").await.unwrap();
+            assert_eq!(
+                hub.wait_for("bt_1", "device:dev1", "peer").await.unwrap(),
+                expected
+            );
+            let (_, path, body) = api.requests().remove(1);
+            assert_eq!(path, "/devices/dev1/bots/turns/bt_1/wait");
+            let body = body.unwrap();
+            assert_eq!(body["participant_id"], "peer");
+            assert_eq!(body["usage"]["operation_id"], "op-1");
+            assert_eq!(
+                hub.usage_of("bt_1").is_none(),
+                expected == WaitOutcome::Parked
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn heartbeats_report_the_token_expiries() {
         let api =
             FakeApi::answering([(200, grant("bt_1")), (200, json!({ "turn": turn("bt_1") }))]);
@@ -853,6 +1010,63 @@ mod tests {
         let body = api.requests().remove(1).2.unwrap();
         assert_eq!(body["bot_token_expires_at"], 100);
         assert_eq!(body["executor_token_expires_at"], 100);
+    }
+
+    #[tokio::test]
+    async fn recovery_uses_device_identity_and_includes_the_claim_fence() {
+        let checkpoint = flow_like_types::bot_turn::BotRunCheckpoint {
+            revision: 1,
+            started_at_ms: 1000,
+            deadline_at_ms: 31_000,
+            state: json!({"phase":"ready"}),
+        };
+        let api = FakeApi::answering([
+            (200, json!({"checkpoint": checkpoint})),
+            (200, json!({"ok":true})),
+        ]);
+        let hub = hub(&api);
+        assert_eq!(
+            hub.checkpoint_load("bot", "bt_1", "device:dev1", 2)
+                .await
+                .unwrap(),
+            Some(checkpoint.clone())
+        );
+        hub.checkpoint_save("bot", "bt_1", "device:dev1", 2, &checkpoint)
+            .await
+            .unwrap();
+        let requests = api.requests();
+        assert_eq!(requests[0].0, Method::GET);
+        assert_eq!(
+            requests[0].1,
+            "/devices/dev1/bots/turns/bt_1/checkpoint?host_id=device%3Adev1&attempt=2"
+        );
+        assert_eq!(requests[1].0, Method::PUT);
+        assert_eq!(requests[1].1, "/devices/dev1/bots/turns/bt_1/checkpoint");
+        assert_eq!(
+            requests[1].2.as_ref().unwrap(),
+            &json!({"host_id":"device:dev1","attempt":2,"checkpoint":checkpoint})
+        );
+    }
+
+    #[tokio::test]
+    async fn monitor_baselines_use_the_current_device_claim_and_cap_the_result() {
+        let api = FakeApi::answering([(
+            200,
+            json!({"checkpoint":null,"monitor_result":"🙂".repeat(5_000)}),
+        )]);
+        let result = hub(&api)
+            .previous_monitor_result("bot", "bt_1", "device:dev1", 2)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.chars().count(), 4_000);
+        let requests = api.requests();
+        assert_eq!(requests[0].0, Method::GET);
+        assert_eq!(
+            requests[0].1,
+            "/devices/dev1/bots/turns/bt_1/checkpoint?host_id=device%3Adev1&attempt=2&monitor_baseline=true"
+        );
+        assert!(requests[0].2.is_none());
     }
 
     #[tokio::test]

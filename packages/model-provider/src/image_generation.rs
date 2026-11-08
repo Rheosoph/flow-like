@@ -1,8 +1,10 @@
 //! Text-to-image requests through the hosted model gateway.
 
+pub mod openrouter;
+
 use std::{sync::Arc, time::Duration};
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like_types_contracts::authorization::{
     AuthorizationAttribution, RequestAuthorizer, ResourceAudience,
@@ -241,7 +243,11 @@ impl HostedImageClient {
             8192
         };
         let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| anyhow!("Hosted image response was interrupted (HTTP {status})"))?
+        {
             ensure!(
                 bytes.len().saturating_add(chunk.len()) <= limit,
                 "Hosted image response exceeds the size limit (HTTP {status})"

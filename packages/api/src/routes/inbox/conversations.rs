@@ -4,7 +4,7 @@ use super::{
     delivery::people_to_wake,
     image::sign_images,
     insert_copies,
-    invitations::{self, InviteMode, Invitee},
+    invitations::{self, InviteMode, InviteOutcome, Invitee},
     lock_conversation, member_conversation,
     members::{Principal, join_copies, lock_live_bots, requested_members},
     model::{
@@ -28,6 +28,7 @@ use axum::{
 };
 use chrono::{DateTime, FixedOffset};
 use flow_like_types::{
+    bot_effective::BotRoomLimits,
     create_id,
     inbox::{
         ConversationEncryption, ConversationKind, InboxEntryKind, MAX_CONVERSATION_MEMBERS,
@@ -40,6 +41,7 @@ use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseTransaction, EntityTrait, QueryFilter,
     sea_query::{Expr, OnConflict},
 };
+use std::collections::BTreeMap;
 
 pub(super) const TITLE_MAX_CHARS: usize = 120;
 
@@ -70,6 +72,11 @@ pub(super) fn validate_new_conversation(
     creator: &str,
     request: CreateConversationRequest,
 ) -> Result<NewConversation, ApiError> {
+    if request.kind == ConversationKind::Direct && !request.bot_limits.is_empty() {
+        return Err(ApiError::bad_request(
+            "Group memory settings apply only to group conversations",
+        ));
+    }
     let members = requested_members(creator, request.members);
     let title = normalize_title(request.title)?;
     match request.kind {
@@ -393,13 +400,8 @@ pub async fn get_conversation(
     Path(conversation_id): Path<String>,
     Query(query): Query<ReaderQuery>,
 ) -> Result<Json<Conversation>, ApiError> {
-    let reader = super::acting_reader(
-        &state.db,
-        &user,
-        query.as_bot.as_deref(),
-        &conversation_id,
-    )
-    .await?;
+    let reader =
+        super::acting_reader(&state.db, &user, query.as_bot.as_deref(), &conversation_id).await?;
     Ok(Json(
         visible_conversation(&state, &reader, &conversation_id).await?,
     ))
@@ -465,10 +467,28 @@ async fn open_direct(
     Ok(id)
 }
 
+/// Creates the group and applies its initial invitations and limits in one transaction.
+/// The caller locks its own bots before calling this helper.
+pub(super) async fn create_group_in<C: ConnectionTrait>(
+    txn: &C,
+    id: &str,
+    sub: &str,
+    plan: &NewConversation,
+    invitees: &[Invitee],
+    limits: &BTreeMap<String, BotRoomLimits>,
+    now: DateTime<FixedOffset>,
+) -> Result<InviteOutcome, ApiError> {
+    let wake = start_group(txn, id, sub, plan, &[], now).await?;
+    let mut outcome = invitations::invite_in(txn, id, sub, invitees, limits, now).await?;
+    outcome.wake.extend(wake);
+    Ok(outcome)
+}
+
 async fn open_group(
     state: &AppState,
     sub: &str,
     plan: &NewConversation,
+    limits: BTreeMap<String, BotRoomLimits>,
 ) -> Result<String, ApiError> {
     let invitees = invitations::classify(&state.db, sub, &plan.members).await?;
     let others: Vec<Principal> = invitees
@@ -476,34 +496,25 @@ async fn open_group(
         .filter(|invitee| invitee.mode == InviteMode::AddNow)
         .map(|invitee| invitee.principal.clone())
         .collect();
-    let asked: Vec<Invitee> = invitees
-        .into_iter()
-        .filter(|invitee| invitee.mode == InviteMode::Invite)
-        .collect();
     let id = create_id();
     let outcome = state
         .transaction(|txn| {
-            let (id, sub, plan, others, asked) = (
+            let (id, sub, plan, others, invitees, limits) = (
                 id.clone(),
                 sub.to_string(),
                 plan.clone(),
                 others.clone(),
-                asked.clone(),
+                invitees.clone(),
+                limits.clone(),
             );
             Box::pin(async move {
                 lock_live_bots(txn, &sub, &others).await?;
-                let now = now_millis();
-                let mut wake = start_group(txn, &id, &sub, &plan, &others, now).await?;
-                let invited =
-                    invitations::invite_in(txn, &id, &sub, &asked, &Default::default(), now)
-                        .await?;
-                wake.extend(invited.wake.iter().cloned());
-                Ok::<_, ApiError>((wake, invited.invited))
+                create_group_in(txn, &id, &sub, &plan, &invitees, &limits, now_millis()).await
             })
         })
         .await?;
-    wake(state, outcome.0).await;
-    invitations::notify_invited(state, sub, &id, &outcome.1).await;
+    wake(state, outcome.wake).await;
+    invitations::notify_invited(state, sub, &id, &outcome.invited).await;
     Ok(id)
 }
 
@@ -528,10 +539,11 @@ pub async fn create_conversation(
     Json(body): Json<CreateConversationRequest>,
 ) -> Result<Json<Conversation>, ApiError> {
     let sub = user.sub()?;
+    let limits = body.bot_limits.clone();
     let plan = validate_new_conversation(&sub, body)?;
     let id = match plan.kind {
         ConversationKind::Direct => open_direct(&state, &sub, &plan).await?,
-        ConversationKind::Group => open_group(&state, &sub, &plan).await?,
+        ConversationKind::Group => open_group(&state, &sub, &plan, limits).await?,
     };
     Ok(Json(
         visible_conversation(&state, &Reader::own(&sub), &id).await?,

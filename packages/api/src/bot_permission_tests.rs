@@ -1,6 +1,6 @@
 use super::*;
 use crate::{
-    entity::{bot_turn, membership},
+    entity::{bot_turn, conversation, inbox_entry, membership},
     routes::bots::runtime_token::bot_user_for_turn,
     routes::inbox::fixture::{at, delete_bot, insert_bot},
 };
@@ -31,6 +31,8 @@ async fn database() -> DatabaseConnection {
         schema.create_table_from_entity(membership::Entity),
         schema.create_table_from_entity(bot_app::Entity),
         schema.create_table_from_entity(bot_turn::Entity),
+        schema.create_table_from_entity(conversation::Entity),
+        schema.create_table_from_entity(inbox_entry::Entity),
     ] {
         let mut table = Table::create();
         table.table(source.get_table_name().unwrap().clone());
@@ -308,6 +310,156 @@ async fn the_runtime_token_binds_the_owners_own_turn_and_pins_a_room() {
             "{caller} {turn_id}"
         );
     }
+}
+
+async fn late_answer_turn(db: &DatabaseConnection, id: &str, origin: &str) {
+    turn(db, id, OWNER, "ROOM").await;
+    let question_id = format!("question-{id}");
+    for (message_id, sender, seq, body) in [
+        (
+            question_id.clone(),
+            BOT,
+            1,
+            serde_json::json!({
+                "text": "What is the total?",
+                "ask": {
+                    "id": question_id,
+                    "origin_conversation": origin,
+                    "hops": 1,
+                    "reply_by": "2026-11-15T00:00:00Z",
+                    "round": 1
+                }
+            }),
+        ),
+        (
+            format!("m-{id}"),
+            "bot_b",
+            2,
+            serde_json::json!({ "text": "42", "reply_to": question_id }),
+        ),
+    ] {
+        inbox_entry::ActiveModel {
+            id: Set(message_id.clone()),
+            inbox_id: Set(BOT.into()),
+            conversation_id: Set(ROOM.into()),
+            message_id: Set(message_id),
+            sender_id: Set(sender.into()),
+            kind: Set("MESSAGE".into()),
+            envelope: Set(flow_like_types::inbox::plain_envelope(body)),
+            seq: Set(Some(seq)),
+            created_at: Set(at(seq)),
+            cleared: Set(Some(false)),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+}
+
+async fn token_origin(db: &DatabaseConnection, id: &str, kind: &str, other: &str) {
+    conversation::ActiveModel {
+        id: Set(id.into()),
+        kind: Set(kind.into()),
+        encryption: Set("PLAIN".into()),
+        created_by: Set(OWNER.into()),
+        created_at: Set(at(0)),
+        updated_at: Set(at(0)),
+        last_activity_at: Set(at(0)),
+        ..Default::default()
+    }
+    .insert(db)
+    .await
+    .unwrap();
+    for (principal, kind) in [(BOT, "BOT"), (other, "USER")] {
+        conversation_member::ActiveModel {
+            conversation_id: Set(id.into()),
+            principal_id: Set(principal.into()),
+            principal_kind: Set(kind.into()),
+            status: Set("ACTIVE".into()),
+            joined_at: Set(at(0)),
+            ..Default::default()
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn a_late_answer_runtime_token_returns_to_the_owner_direct_scope() {
+    let db = world(edit_bits(), None).await;
+    token_origin(&db, "owner-direct", "DIRECT", OWNER).await;
+    late_answer_turn(&db, "late-direct", "owner-direct").await;
+    let bot = bot_user_for_turn(&db, OWNER, BOT, "late-direct")
+        .await
+        .unwrap();
+    assert_eq!(bot.turn_id, "late-direct");
+    assert_eq!(bot.conv_id, None);
+}
+
+#[tokio::test]
+async fn a_late_answer_runtime_token_keeps_the_original_rooms_limits() {
+    let db = world(edit_bits(), None).await;
+    token_origin(&db, "original-room", "GROUP", OWNER).await;
+    let read = RolePermissions::ReadFiles.bits();
+    conversation_member::Entity::update_many()
+        .col_expr(
+            conversation_member::Column::Limits,
+            sea_orm::sea_query::Expr::value(serde_json::json!({ "mask": read })),
+        )
+        .filter(conversation_member::Column::ConversationId.eq("original-room"))
+        .filter(conversation_member::Column::PrincipalId.eq(BOT))
+        .exec(&db)
+        .await
+        .unwrap();
+    late_answer_turn(&db, "late-room", "original-room").await;
+    let bot = bot_user_for_turn(&db, OWNER, BOT, "late-room")
+        .await
+        .unwrap();
+    assert_eq!(bot.conv_id.as_deref(), Some("original-room"));
+    assert_eq!(bits(&db, &bot).await.unwrap(), read);
+
+    conversation_member::Entity::update_many()
+        .col_expr(
+            conversation_member::Column::LeftAt,
+            sea_orm::sea_query::Expr::value(at(1)),
+        )
+        .filter(conversation_member::Column::ConversationId.eq("original-room"))
+        .filter(conversation_member::Column::PrincipalId.eq(BOT))
+        .exec(&db)
+        .await
+        .unwrap();
+    assert_eq!(
+        bot_user_for_turn(&db, OWNER, BOT, "late-room")
+            .await
+            .unwrap_err()
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+}
+
+#[tokio::test]
+async fn a_late_answer_runtime_token_never_widens_an_unverified_origin() {
+    let db = world(edit_bits(), None).await;
+    token_origin(&db, "foreign-direct", "DIRECT", "someone-else").await;
+    token_origin(&db, "unknown-kind", "UNKNOWN", OWNER).await;
+    for origin in ["missing-origin", "foreign-direct", "unknown-kind"] {
+        let id = format!("late-{origin}");
+        late_answer_turn(&db, &id, origin).await;
+        assert_eq!(
+            bot_user_for_turn(&db, OWNER, BOT, &id)
+                .await
+                .unwrap_err()
+                .status(),
+            StatusCode::FORBIDDEN,
+            "{origin}"
+        );
+    }
+    turn(&db, "missing-ask-metadata", OWNER, "ROOM").await;
+    let bot = bot_user_for_turn(&db, OWNER, BOT, "missing-ask-metadata")
+        .await
+        .unwrap();
+    assert_eq!(bot.conv_id.as_deref(), Some(ROOM));
 }
 
 #[test]

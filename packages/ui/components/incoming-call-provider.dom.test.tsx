@@ -21,6 +21,9 @@ const mocks = vi.hoisted(() => ({
 	states: new Map<number, unknown>(),
 	listeners: new Set<() => void>(),
 	roomAvailable: true,
+	availability: undefined as
+		| import("../lib/availability").UserAvailability
+		| undefined,
 	feed: undefined as undefined | ((entries: readonly IInboxEntry[]) => void),
 }));
 vi.mock("@flow-like/locales", () => ({
@@ -30,6 +33,9 @@ vi.mock("@flow-like/locales", () => ({
 	}),
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
+vi.mock("../hooks/use-user-availability", () => ({
+	useUserAvailability: () => ({ data: mocks.availability, isPending: false }),
+}));
 vi.mock("../state/backend-state", () => {
 	const backend = {
 		userState: { listNotifications: mocks.listNotifications },
@@ -129,6 +135,7 @@ beforeEach(() => {
 	mocks.states.clear();
 	mocks.listeners.clear();
 	mocks.roomAvailable = true;
+	mocks.availability = undefined;
 	mocks.states.set(2, {
 		sub: "anna",
 		call: { id: "call_1", joined: true, peer: "anna_peer" },
@@ -183,6 +190,22 @@ function button(label: string) {
 }
 
 describe("incoming calls across the app", () => {
+	test("focus call preference silences prompts while keeping unread call notifications", async () => {
+		mocks.availability = {
+			status: "focus",
+			source: "manual",
+			until: Date.now() + 60_000,
+			preferences: { allow_calls: false, allow_mentions: true },
+			calendar_links: [],
+		};
+		await render();
+		expect(document.querySelector('[role="alertdialog"]')).toBeNull();
+		expect(notice.read).toBe(false);
+		expect(mocks.requestJoin).not.toHaveBeenCalled();
+		mocks.availability.preferences.allow_calls = true;
+		await render();
+		expect(document.querySelector('[role="alertdialog"]')).not.toBeNull();
+	});
 	test("shows the live caller and waits for Join before requesting media or navigating", async () => {
 		await render();
 		expect(

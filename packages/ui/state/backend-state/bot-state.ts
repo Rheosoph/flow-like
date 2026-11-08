@@ -27,6 +27,7 @@ export const BOT_CAPABILITIES = [
 	"command_line",
 	"encryption",
 	"webhook",
+	"user_context",
 	"flowpilot",
 ] as const;
 export type BotCapability = (typeof BOT_CAPABILITIES)[number];
@@ -82,6 +83,8 @@ export const SYSTEM_BOT_CAPABILITIES: Readonly<
 export interface IBotModelPolicy {
 	primary: string | null;
 	fallbacks: string[];
+	/** System One Bit for response decisions; absent or null disables it. */
+	decision?: string | null;
 }
 
 export interface IBot {
@@ -420,6 +423,37 @@ export interface IBotEncryptionHost {
 	rotate(botId: string): Promise<IBotEncryptionStatus>;
 }
 
+/** Positions are fractions of the associated image, before or after resizing. */
+export interface IBotInteractionPoint {
+	x: number;
+	y: number;
+}
+
+export interface IBotInteractionRect extends IBotInteractionPoint {
+	width: number;
+	height: number;
+}
+
+export interface IBotInteractionObservation {
+	captured_at_ms: number;
+	width: number;
+	height: number;
+	pointer: {
+		position: IBotInteractionPoint;
+		source: "observed" | "dispatched";
+	} | null;
+	focus: { label: string; bounds: IBotInteractionRect | null } | null;
+	action: {
+		/** Action name only; never typed text or key values. */
+		kind: string;
+		phase: "running" | "completed" | "failed";
+		at_ms: number;
+		target: IBotInteractionPoint | null;
+		target_bounds: IBotInteractionRect | null;
+	} | null;
+	mapping: { x: number; y: number; width: number; height: number } | null;
+}
+
 /** What the bot panel's Computer tab shows: the latest picture of the bot's browser or screen. */
 export interface IBotComputerView {
 	state: "asleep" | "active";
@@ -429,6 +463,7 @@ export interface IBotComputerView {
 	/** A `data:` URL of the picture. */
 	image: string | null;
 	age_ms: number | null;
+	observation?: IBotInteractionObservation | null;
 	/** The owner has paused the bot's computer calls. */
 	taken_over?: boolean;
 	/** The owner can drive the picture with mouse and keyboard (device bots with a screen). */
@@ -643,6 +678,7 @@ export interface IBotMailThreadView {
 
 /** A task a bot runs for its owner at a time: once or on a cron schedule in a time zone. */
 export interface IBotTask {
+	monitoring?: boolean;
 	id: string;
 	bot_id: string;
 	kind: "once" | "cron";
@@ -662,6 +698,7 @@ export interface IBotTask {
 }
 
 export interface ICreateBotTaskRequest {
+	monitoring?: boolean;
 	kind: "once" | "cron";
 	at?: string;
 	cron?: string;
@@ -671,6 +708,7 @@ export interface ICreateBotTaskRequest {
 }
 
 export interface IUpdateBotTaskRequest {
+	monitoring?: boolean;
 	at?: string;
 	cron?: string;
 	tz?: string;

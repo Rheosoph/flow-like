@@ -182,6 +182,10 @@ impl ToolEnv for DeviceToolEnv {
         self.inner.notifier()
     }
 
+    fn user_context(&self) -> Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>> {
+        self.inner.user_context()
+    }
+
     fn people(&self) -> Option<Arc<dyn flow_like_bot_tools::PeopleBackend>> {
         self.inner.people()
     }

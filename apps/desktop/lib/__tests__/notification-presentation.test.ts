@@ -3,6 +3,7 @@ import {
 	notificationImageSource,
 	presentLocalNotification,
 	remoteNotificationImage,
+	remoteNotificationPriority,
 	shouldShowRemotePushToast,
 } from "../notification-presentation";
 
@@ -13,6 +14,24 @@ const content = {
 };
 
 describe("notification presentation", () => {
+	it("honors only the server priority field for focus exceptions", () => {
+		expect(
+			remoteNotificationPriority({
+				link: "/bots?call=urgent",
+				source_node_id: "mention",
+				priority: "call",
+			}),
+		).toBe("routine");
+		expect(
+			remoteNotificationPriority({ notification_priority: "urgent" }),
+		).toBe("routine");
+		expect(
+			remoteNotificationPriority({ notification_priority: "mention" }),
+		).toBe("mention");
+		expect(remoteNotificationPriority({ notification_priority: "call" })).toBe(
+			"call",
+		);
+	});
 	it("waits for a native file before attaching an iOS notification image", async () => {
 		const send = vi.fn().mockResolvedValue(undefined);
 		let finish: (path: string) => void = () => {};

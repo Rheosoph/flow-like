@@ -92,6 +92,45 @@ async fn a_screenshot_is_an_image_with_its_size() {
     );
 }
 
+#[test]
+fn feedback_keeps_clean_pixels_and_explains_the_annotation_in_model_json() {
+    use flow_like_types::image::{DynamicImage, ImageFormat, RgbaImage};
+    use flow_like_types::interaction_observation::{
+        InteractionObservation, InteractionPoint, InteractionPointer, PointerSource,
+    };
+    let mut png = Vec::new();
+    DynamicImage::ImageRgba8(RgbaImage::new(80, 40))
+        .write_to(&mut std::io::Cursor::new(&mut png), ImageFormat::Png)
+        .unwrap();
+    let mut screen = Screen::new(png.clone(), 80, 40);
+    screen.observation = Some(InteractionObservation {
+        captured_at_ms: 10,
+        width: 80,
+        height: 40,
+        pointer: Some(InteractionPointer {
+            position: InteractionPoint { x: 0.5, y: 0.5 },
+            source: PointerSource::Observed,
+        }),
+        focus: None,
+        action: None,
+        mapping: None,
+    });
+    let output = screen_output(screen, "Screen", json!({"screen":{"width":80,"height":40}}));
+    assert_eq!(output.images.len(), 2);
+    assert_eq!(&output.images[0].data[..], png);
+    assert_ne!(output.images[0].data, output.images[1].data);
+    assert_eq!(
+        output.result["observation"]["pointer"]["source"],
+        "observed"
+    );
+    assert!(
+        output.result["feedback_legend"]
+            .as_str()
+            .unwrap()
+            .contains("do not prove")
+    );
+}
+
 #[tokio::test]
 async fn an_action_runs_and_shows_the_screen_after() {
     let (screen, env) = setup().await;
@@ -319,7 +358,10 @@ async fn a_backend_that_cannot_manage_windows_says_so() {
     let mut env = CapEnv::new().await;
     env.computer = Some(Arc::new(Plain));
     let outcome = call(&env, "computer_windows", json!({})).await;
-    assert_eq!(outcome.error.unwrap().code, crate::error::code::NOT_SUPPORTED);
+    assert_eq!(
+        outcome.error.unwrap().code,
+        crate::error::code::NOT_SUPPORTED
+    );
 }
 
 #[test]

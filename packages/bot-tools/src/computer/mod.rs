@@ -185,15 +185,23 @@ fn backend_of(env: &dyn ToolEnv) -> ToolResult<std::sync::Arc<dyn ComputerBacken
 }
 
 fn screen_output(screen: Screen, label: &str, mut result: serde_json::Value) -> ToolOutput {
+    if let (Some(observation), Some(fields)) = (&screen.observation, result.as_object_mut()) {
+        fields.insert("observation".into(), json!(observation));
+    }
     if let (Some(note), Some(fields)) = (&screen.note, result.as_object_mut()) {
         fields.insert("note".into(), json!(note));
     }
     let mut output = ToolOutput::new(result);
+    let mut annotated = ToolOutput::new(json!({}));
+    if crate::interaction_image::append(&mut annotated, &screen.png, screen.observation.as_ref()) {
+        output.result["feedback_legend"] = json!(crate::interaction_image::LEGEND);
+    }
     output.images.push(ToolImage {
         label: label.to_string(),
         mime: "image/png".into(),
         data: Bytes::from(screen.png),
     });
+    output.images.extend(annotated.images);
     output
 }
 
@@ -257,8 +265,12 @@ fn window_bounds(args: &ComputerWindowArgs) -> ToolResult<WindowBounds> {
         WindowOp::Resize if bounds.width.is_none() && bounds.height.is_none() => Err(
             ToolError::invalid("Resizing a window needs 'width' and/or 'height', pixels"),
         ),
-        WindowOp::Resize if bounds.width.is_some_and(|w| w <= 0) || bounds.height.is_some_and(|h| h <= 0) => {
-            Err(ToolError::invalid("A window's width and height are positive"))
+        WindowOp::Resize
+            if bounds.width.is_some_and(|w| w <= 0) || bounds.height.is_some_and(|h| h <= 0) =>
+        {
+            Err(ToolError::invalid(
+                "A window's width and height are positive",
+            ))
         }
         _ => Ok(bounds),
     }

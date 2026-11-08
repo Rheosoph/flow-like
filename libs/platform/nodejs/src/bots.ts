@@ -17,6 +17,7 @@ export type BotCapability =
 	| "data_studio"
 	| "command_line"
 	| "encryption"
+	| "user_context"
 	| "webhook";
 
 /** Where the bot's host runs. A `server` bot can't hold `computer_use`, `browser_use` or `command_line`. */
@@ -36,6 +37,8 @@ export interface BotModelPolicy {
 	primary: string | null;
 	/** Bit ids hosts try in order where the primary is unavailable; at most 3. */
 	fallbacks: string[];
+	/** System One Bit for response decisions; absent or null disables it. */
+	decision?: string | null;
 }
 
 export interface BotClassification {

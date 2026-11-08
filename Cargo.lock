@@ -10802,6 +10802,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "zeroize",
 ]
 
 [[package]]
@@ -10833,6 +10834,7 @@ dependencies = [
  "flow-like-model-provider",
  "flow-like-storage",
  "flow-like-types",
+ "geo 0.31.0",
  "regex",
  "serde",
  "serde_json",
@@ -12089,6 +12091,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
+ "flow-like-types-contracts",
  "rand_core 0.6.4",
  "serde",
  "serde_json",

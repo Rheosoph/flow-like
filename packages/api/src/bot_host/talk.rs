@@ -35,14 +35,15 @@ use chrono::{DateTime, Duration as ChronoDuration, FixedOffset};
 use flow_like::flow::copilot::{
     FLUX_BOT_NAME, GENERAL_BOT_NAME,
     bot_talk::{
-        BotPresence, BotTalkHost, CrewMember, HeadlessPermission, NestedBotTurn, PendingAnswer,
+        BotPresence, BotTalkHost, CrewMember, HeadlessPermission, MAX_ASK_HOPS, NestedBotTurn,
+        PendingAnswer,
     },
     tool_grants::{GrantCheck, GrantStore, approval_request, check_call},
 };
 use flow_like_types::{
     bot::{BotLocation, BotSystemKind},
     bot_message::{ApprovalRequest, MessageBody},
-    bot_turn::{STORED_QUEUED, turn_id},
+    bot_turn::{MAX_HOPS, STORED_QUEUED, turn_id},
     data_classification::{DataClassification, DataSensitivity},
     inbox::{ActivityBody, ConversationKind, TOMBSTONE_FIELD},
     tokio,
@@ -75,8 +76,8 @@ pub(crate) fn grant_scope(callee_id: &str) -> String {
     format!("bot:{callee_id}")
 }
 
-/// The conversation a desktop-hosted turn of `bot_id` (its `run_id` is the turn id) runs in; a
-/// chat run has no turn and returns `None`.
+/// The conversation a desktop-hosted turn of `bot_id` (its `run_id` is the turn id) continues;
+/// a late answer continues its original conversation. A chat run has no turn and returns `None`.
 pub(crate) async fn turn_conversation<C: ConnectionTrait>(
     db: &C,
     owner_id: &str,
@@ -86,12 +87,73 @@ pub(crate) async fn turn_conversation<C: ConnectionTrait>(
     if run_id.is_empty() {
         return Ok(None);
     }
-    Ok(bot_turn::Entity::find_by_id(run_id)
+    let Some(turn) = bot_turn::Entity::find_by_id(run_id)
         .filter(bot_turn::Column::OwnerId.eq(owner_id))
         .filter(bot_turn::Column::BotId.eq(bot_id))
         .one(db)
         .await?
-        .map(|turn| turn.conversation_id))
+    else {
+        return Ok(None);
+    };
+    turn_origin_conversation(db, &turn).await.map(Some)
+}
+
+/// Where a turn's further questions should return, including a turn woken by a late answer.
+pub(crate) async fn turn_origin_conversation<C: ConnectionTrait>(
+    db: &C,
+    turn: &bot_turn::Model,
+) -> Result<String, ApiError> {
+    Ok(answered_ask(db, turn).await?.map_or_else(
+        || turn.conversation_id.clone(),
+        |answered| answered.origin_conversation,
+    ))
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct RemoteTalkContext {
+    pub ancestors: Vec<String>,
+    pub hops: u32,
+}
+
+/// A remote host's ask keeps the ancestry and hop count of its inbox turn. An unknown run id
+/// is an interactive chat; an existing turn must belong to the caller and its owner.
+pub(crate) async fn remote_context<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    caller_id: &str,
+    callee_id: &str,
+    run_id: &str,
+) -> Result<RemoteTalkContext, ApiError> {
+    let Some(turn) = bot_turn::Entity::find_by_id(run_id).one(db).await? else {
+        return Ok(RemoteTalkContext::default());
+    };
+    if turn.owner_id != owner_id || turn.bot_id != caller_id {
+        return Err(ApiError::not_found(
+            "The asking turn does not belong to this bot",
+        ));
+    }
+    let ancestors: Vec<String> = asked_by(db, &turn)
+        .await?
+        .into_iter()
+        .map(|member| member.id)
+        .collect();
+    if ancestors.iter().any(|ancestor| ancestor == callee_id) {
+        return Err(ApiError::bad_request(
+            "This bot is already in the question's chain; asking it would create a cycle",
+        ));
+    }
+    if ancestors.len() >= MAX_ASK_HOPS {
+        return Err(ApiError::bad_request(format!(
+            "A question may pass at most {MAX_ASK_HOPS} bots; answer from the available information"
+        )));
+    }
+    let hops = u32::try_from(turn.hops).unwrap_or_default();
+    if hops >= MAX_HOPS {
+        return Err(ApiError::bad_request(format!(
+            "This run reached the bot message hop limit ({MAX_HOPS}); no further bot question was sent"
+        )));
+    }
+    Ok(RemoteTalkContext { ancestors, hops })
 }
 
 fn clip(text: &str, max_chars: usize) -> String {
@@ -310,7 +372,8 @@ pub struct ServerTalkHost {
     run_id: String,
     held: Option<HeldTurn>,
     ancestors: Vec<String>,
-    parked: Mutex<Option<ApprovalRequest>>,
+    trigger_hops: u32,
+    parked: Mutex<Option<(ApprovalRequest, Option<String>)>>,
     asked: Mutex<Asked>,
 }
 
@@ -319,6 +382,18 @@ impl ServerTalkHost {
     /// the conversation of the desktop-hosted turn `run_id` names.
     pub fn for_chat(state: AppState, owner_id: &str, run_id: &str) -> Self {
         Self::new(state, owner_id, run_id, None, Vec::new())
+    }
+
+    /// An ask made by another host carries the validated turn context without claiming its lease.
+    pub(crate) fn for_remote(
+        state: AppState,
+        owner_id: &str,
+        run_id: &str,
+        context: RemoteTalkContext,
+    ) -> Self {
+        let mut host = Self::new(state, owner_id, run_id, None, context.ancestors);
+        host.trigger_hops = context.hops;
+        host
     }
 
     /// A headless turn the host holds. `ancestors` are the bots waiting on the ask that started
@@ -336,12 +411,16 @@ impl ServerTalkHost {
         held: Option<HeldTurn>,
         ancestors: Vec<String>,
     ) -> Self {
+        let trigger_hops = held
+            .as_ref()
+            .map_or(0, |held| u32::try_from(held.turn.hops).unwrap_or_default());
         Self {
             state,
             owner_id: owner_id.to_string(),
             run_id: run_id.to_string(),
             held,
             ancestors,
+            trigger_hops,
             parked: Mutex::default(),
             asked: Mutex::default(),
         }
@@ -353,7 +432,12 @@ impl ServerTalkHost {
         self.parked
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .clone()
+            .as_ref().map(|(card, _)| card.clone())
+    }
+
+    pub(crate) fn parked_recovery_call_id(&self) -> Option<String> {
+        self.parked.lock().unwrap_or_else(|p| p.into_inner())
+            .as_ref().and_then(|(_, call_id)| call_id.clone())
     }
 
     fn remember<T>(&self, change: impl FnOnce(&mut Asked) -> T) -> T {
@@ -366,7 +450,9 @@ impl ServerTalkHost {
         exchange_id: &str,
     ) -> flow_like_types::Result<String> {
         if let Some(held) = &self.held {
-            return Ok(held.turn.conversation_id.clone());
+            return turn_origin_conversation(&self.state.db, &held.turn)
+                .await
+                .map_err(|error| flow_like_types::anyhow!("{error}"));
         }
         if let Some(origin) =
             turn_conversation(&self.state.db, &self.owner_id, &caller.id, &self.run_id)
@@ -383,10 +469,7 @@ impl ServerTalkHost {
     }
 
     fn hops(&self) -> u32 {
-        self.held
-            .as_ref()
-            .map_or(0, |held| u32::try_from(held.turn.hops).unwrap_or(0))
-            .saturating_add(1)
+        self.trigger_hops.saturating_add(1)
     }
 
     async fn wait_for_answer(
@@ -493,7 +576,8 @@ impl BotTalkHost for ServerTalkHost {
         let (verdict, card) =
             headless_verdict(&store, &held.turn.id, caller, callee, question).await;
         if let Some(card) = card {
-            *self.parked.lock().unwrap_or_else(|p| p.into_inner()) = Some(card);
+            self.parked.lock().unwrap_or_else(|p| p.into_inner())
+                .get_or_insert_with(|| (card, flow_like::flow::copilot::run_recovery::current_recovery_call_id()));
         }
         verdict
     }
@@ -695,8 +779,12 @@ pub(crate) async fn mark_turns<C: ConnectionTrait>(
     recipients: &[&BotRecipient],
     now: DateTime<FixedOffset>,
 ) -> Result<(), ApiError> {
-    for recipient in recipients.iter().filter(|recipient| recipient.hops > 0) {
-        let Some((_, body)) = body_of(db, &recipient.bot_id, &recipient.trigger_message_id).await?
+    for recipient in recipients
+        .iter()
+        .filter(|recipient| recipient.hops > 0 || recipient.replied_to)
+    {
+        let Some((trigger, body)) =
+            body_of(db, &recipient.bot_id, &recipient.trigger_message_id).await?
         else {
             continue;
         };
@@ -708,18 +796,34 @@ pub(crate) async fn mark_turns<C: ConnectionTrait>(
                 .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
                 .exec(db)
                 .await?;
-        } else if recipient.replied_to
-            && let Some(hold) = answer_hold(db, recipient, &body)
+        } else if recipient.replied_to {
+            let queued = bot_turn::Entity::find_by_id(&id)
+                .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
+                .one(db)
+                .await?;
+            if let Some(turn) = queued
+                && let Some(answered) = answered_ask(db, &turn).await?
+            {
+                super::decision_wait::clear_before_in(
+                    db,
+                    &recipient.bot_id,
+                    &answered.origin_conversation,
+                    trigger.created_at,
+                )
+                .await?;
+            }
+            if let Some(hold) = answer_hold(db, recipient, &body)
                 .await?
                 .filter(|at| *at > now)
-        {
-            bot_turn::Entity::update_many()
-                .col_expr(bot_turn::Column::LeaseUntil, Expr::value(hold))
-                .filter(bot_turn::Column::Id.eq(id))
-                .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
-                .filter(bot_turn::Column::LeaseUntil.is_null())
-                .exec(db)
-                .await?;
+            {
+                bot_turn::Entity::update_many()
+                    .col_expr(bot_turn::Column::LeaseUntil, Expr::value(hold))
+                    .filter(bot_turn::Column::Id.eq(id))
+                    .filter(bot_turn::Column::Status.eq(STORED_QUEUED))
+                    .filter(bot_turn::Column::LeaseUntil.is_null())
+                    .exec(db)
+                    .await?;
+            }
         }
     }
     Ok(())
@@ -795,42 +899,27 @@ pub(crate) async fn ask_result_transcript<C: ConnectionTrait>(
     let callee = bot_name(db, &answered.callee_id)
         .await
         .map_err(HistoryError::Db)?;
-    let newest = inbox_entry::Entity::find()
-        .filter(inbox_entry::Column::InboxId.eq(turn.bot_id.as_str()))
-        .filter(inbox_entry::Column::ConversationId.eq(answered.origin_conversation.as_str()))
-        .order_by_desc(inbox_entry::Column::Seq)
+    let kind = conversation::Entity::find_by_id(&answered.origin_conversation)
         .one(db)
         .await
-        .map_err(|error| HistoryError::Db(error.into()))?;
-    let (history, last) = match newest {
-        Some(entry) => {
-            let kind = conversation::Entity::find_by_id(&answered.origin_conversation)
-                .one(db)
-                .await
-                .map_err(|error| HistoryError::Db(error.into()))?
-                .and_then(|row| ConversationKind::parse(&row.kind))
-                .unwrap_or(ConversationKind::Group);
-            let earlier = history::transcript(
-                db,
-                &turn.bot_id,
-                &answered.origin_conversation,
-                &entry.message_id,
-                kind,
-                &turn.owner_id,
-            )
-            .await?;
-            (earlier.history, Some(earlier.prompt))
-        }
-        None => (Vec::new(), None),
-    };
-    let latest = last.filter(|text| !text.trim().is_empty());
+        .map_err(|error| HistoryError::Db(error.into()))?
+        .and_then(|row| ConversationKind::parse(&row.kind))
+        .unwrap_or(ConversationKind::Group);
+    let history = history::recent_history(
+        db,
+        &turn.bot_id,
+        &answered.origin_conversation,
+        kind,
+        &turn.owner_id,
+    )
+    .await?;
     Ok(Transcript {
         prompt: flow_like_types::bot_message::ask_result_prompt(
             &callee,
-            &clip(&answered.question, QUESTION_PREVIEW_CHARS),
+            &answered.question,
             &answered.answer,
             answered.failed,
-            latest.as_deref(),
+            None,
         ),
         history,
         addressed: true,
@@ -929,8 +1018,8 @@ pub(crate) async fn expire_asks(
     Ok(lapsed.len() as u64)
 }
 
-/// The bots waiting on the question that started `turn`, the first asker first; empty when the
-/// turn answers anything else.
+/// The bots behind the question that started `turn`, the first asker first. A late answer
+/// restores the chain from this bot's own question, excluding this bot from its ancestors.
 pub(crate) async fn asked_by<C: ConnectionTrait>(
     db: &C,
     turn: &bot_turn::Model,
@@ -938,15 +1027,34 @@ pub(crate) async fn asked_by<C: ConnectionTrait>(
     let Some((_, body)) = body_of(db, &turn.bot_id, &turn.trigger_message_id).await? else {
         return Ok(Vec::new());
     };
-    let Some(ask) = body.ask else {
-        return Ok(Vec::new());
+    let chain = match body.ask {
+        Some(ask) => ask.chain,
+        None => {
+            let Some(reply_to) = body.reply_to.as_deref() else {
+                return Ok(Vec::new());
+            };
+            let Some((question_entry, question)) = body_of(db, &turn.bot_id, reply_to).await?
+            else {
+                return Ok(Vec::new());
+            };
+            let Some(mut ask) = question.ask.filter(|_| {
+                question_entry.sender_id == turn.bot_id
+                    && question_entry.conversation_id == turn.conversation_id
+            }) else {
+                return Ok(Vec::new());
+            };
+            if ask.chain.last() != Some(&turn.bot_id) {
+                return Ok(Vec::new());
+            }
+            ask.chain.pop();
+            ask.chain
+        }
     };
     let rows = bot::Entity::find()
-        .filter(bot::Column::Id.is_in(ask.chain.clone()))
+        .filter(bot::Column::Id.is_in(chain.clone()))
         .all(db)
         .await?;
-    Ok(ask
-        .chain
+    Ok(chain
         .iter()
         .filter_map(|id| rows.iter().find(|row| &row.id == id))
         .map(|row| crew_member(row, BotPresence::Unknown))

@@ -368,6 +368,11 @@ fn model_policy(policy: BotModelPolicy) -> Result<BotModelPolicy, ApiError> {
         )));
     }
     Ok(BotModelPolicy {
+        decision: policy
+            .decision
+            .filter(|id| !id.trim().is_empty())
+            .map(|id| model_id("decision", &id))
+            .transpose()?,
         primary: policy
             .primary
             .filter(|primary| !primary.trim().is_empty())

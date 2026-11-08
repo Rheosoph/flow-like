@@ -92,6 +92,7 @@ const RUNS = {
 
 let root: Root;
 let host: HTMLDivElement;
+let client: QueryClient;
 let requestCount = 0;
 
 /** A call that runs an app event, which the host performs once this client consents. */
@@ -155,11 +156,12 @@ beforeEach(async () => {
 		),
 		toolPrompt: null,
 		autoMode: false,
+		botAutoMode: {},
 	});
 	host = document.createElement("div");
 	document.body.append(host);
 	root = createRoot(host);
-	const client = new QueryClient();
+	client = new QueryClient();
 	await act(async () =>
 		root.render(
 			<QueryClientProvider client={client}>
@@ -177,6 +179,88 @@ afterEach(async () => {
 });
 
 describe("standing approvals belong to the run that asks", () => {
+	test("a successful configuration tool refreshes the bot once after execution", async () => {
+		const invalidate = vi.spyOn(client, "invalidateQueries");
+		const update = async (status: "progress" | "failed" | "done") => {
+			await act(async () =>
+				useGlobalChatStore.setState((state) => ({
+					runs: {
+						...state.runs,
+						[RUNS.scout.runId]: {
+							...RUNS.scout,
+							message: {
+								id: "configuration-message",
+								plan_steps: [
+									{
+										id: "configuration-call",
+										toolName: "bot_update_configuration",
+										title: "Update settings",
+										status,
+									},
+								],
+							} as never,
+						},
+					},
+				})),
+			);
+		};
+		await update("progress");
+		expect(invalidate).not.toHaveBeenCalled();
+		await update("failed");
+		expect(invalidate).not.toHaveBeenCalled();
+		await update("done");
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["bots", "list"] });
+		expect(invalidate).toHaveBeenCalledWith({
+			queryKey: ["bots", "detail", "bot_scout"],
+		});
+		expect(invalidate).toHaveBeenCalledWith({
+			queryKey: ["lookupUserBatched", "bot_scout"],
+		});
+		const count = invalidate.mock.calls.length;
+		await update("done");
+		expect(invalidate).toHaveBeenCalledTimes(count);
+	});
+	test("configuration changes require a fresh answer despite auto mode or standing grants", async () => {
+		const putToolGrant = vi.fn();
+		useBackendStore.getState().setBackend({
+			userState: { getProfile: async () => ({ id: "profile-1" }) },
+			boardState: {},
+			botState: {
+				listToolGrants: async () => [
+					{ tool: "bot_update_configuration", scope: "*" },
+				],
+				putToolGrant,
+			},
+		} as never);
+		useGlobalChatStore.getState().setAutoMode(true, "bot:bot_scout");
+		const changes = {
+			name: "Atlas",
+			instructions: "Keep the full prompt.\n".repeat(100),
+		};
+		const request = (): FrontendToolRequest => ({
+			...appEventCall(RUNS.scout.runId),
+			toolName: "bot_update_configuration",
+			arguments: { changes },
+			approval: {
+				kind: "mutating",
+				title: "Approve bot settings",
+				sessionKey: "shared",
+			},
+		});
+		const first = await ask(request());
+		expect(first.answered()).toBeUndefined();
+		expect(first.prompt).toMatchObject({
+			rememberable: false,
+			configurationChanges: changes,
+		});
+		expect((await first.answer(true, true))?.approved).toBe(true);
+		expect(putToolGrant).not.toHaveBeenCalled();
+
+		const second = await ask(request());
+		expect(second.answered()).toBeUndefined();
+		expect(second.prompt?.rememberable).toBe(false);
+		expect((await second.answer(false))?.approved).toBe(false);
+	});
 	test("Don't ask again for Flux holds for every Flux chat but no bot", async () => {
 		const first = await ask(appEventCall(RUNS.flux.runId));
 		expect(first.prompt).not.toBeNull();

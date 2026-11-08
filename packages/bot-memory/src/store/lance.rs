@@ -9,12 +9,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::{DateTime, Utc};
 use flow_like_storage::arrow_array::RecordBatch;
 use flow_like_storage::arrow_schema::{DataType, Field, Schema};
+use flow_like_storage::arrow_utils::record_batch_to_value;
 use flow_like_storage::databases::vector::VectorStore;
 use flow_like_storage::databases::vector::lancedb::LanceDBVectorStore;
 use flow_like_storage::lance::dataset::WriteMode;
 use flow_like_storage::lancedb;
 use flow_like_storage::lancedb::Connection;
+use flow_like_storage::lancedb::query::{ExecutableQuery, QueryBase, Select};
 use flow_like_storage::lancedb::table::WriteOptions;
+use flow_like_types::futures::StreamExt;
 use flow_like_types::tokio::sync::{Mutex, MutexGuard, RwLock};
 use flow_like_types::{Result, bail};
 use serde::Serialize;
@@ -25,6 +28,22 @@ use crate::llm::{Embedder, embed_checked};
 
 /// Texts embedded per call while re-embedding.
 const REEMBED_BATCH: usize = 64;
+/// Small memories are cheaper to scan and do not need a trained vector index.
+const VECTOR_INDEX_MIN_ROWS: usize = 256;
+
+struct PreparedEmbedding {
+    id: String,
+    text: String,
+    vector: Vec<f32>,
+}
+
+/// Vectors computed without holding a table write lock or the memory lease.
+pub(crate) struct PreparedEmbeddings {
+    model: String,
+    dimension: Option<usize>,
+    rows: Vec<PreparedEmbedding>,
+    replace_vector_index: bool,
+}
 
 /// A SQL string literal.
 pub(crate) fn quote(value: &str) -> String {
@@ -153,6 +172,28 @@ impl Table {
         Ok(())
     }
 
+    /// Adds optional metadata to tables written by an older version. A concurrent host may
+    /// add the same column first; only accept that race after checking the resulting schema.
+    pub(crate) async fn ensure_nullable_columns(&self, fields: &[(&str, &str)]) -> Result<()> {
+        if !self.exists().await? {
+            return Ok(());
+        }
+        let _writes = self.write_lock().await;
+        let store = self.store.read().await;
+        for (name, data_type) in fields {
+            if store.schema().await?.field_with_name(name).is_ok() {
+                continue;
+            }
+            if let Err(error) = store.add_typed_column(name, data_type, None).await {
+                store.raw().await?.checkout_latest().await?;
+                if store.schema().await?.field_with_name(name).is_err() {
+                    return Err(error);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Creates the table with its first rows in one commit; another creator winning is fine.
     pub(crate) async fn create_with(&self, rows: RecordBatch) -> Result<()> {
         if self.exists().await? {
@@ -258,6 +299,77 @@ impl Table {
         Ok(())
     }
 
+    /// Idle maintenance creates indexes once; optimization below adds subsequent rows to them.
+    /// A vector index is trained only after all existing vectors use the current model.
+    pub(crate) async fn ensure_indexes(
+        &self,
+        scalar: &[(&str, &str)],
+        vector_model: Option<&str>,
+    ) -> Result<()> {
+        if !self.exists().await? {
+            return Ok(());
+        }
+        let _writes = self.write_lock().await;
+        self.ensure_fts().await?;
+        let store = self.store.read().await;
+        let schema = store.schema().await?;
+        let indexes = store.list_indices().await?;
+        for (column, kind) in scalar {
+            if schema.field_with_name(column).is_err() {
+                bail!(
+                    "Memory table '{}' is missing index column '{column}'",
+                    self.name
+                );
+            }
+            if kind.eq_ignore_ascii_case("RTREE")
+                && store.count(Some(format!("{column} IS NOT NULL"))).await? == 0
+            {
+                continue;
+            }
+            if !indexes.iter().any(|index| {
+                index.columns == [*column] && index.index_type.eq_ignore_ascii_case(kind)
+            }) {
+                store.index(column, Some(kind)).await?;
+            }
+        }
+        let Some(model) = vector_model else {
+            return Ok(());
+        };
+        if schema.field_with_name("vector").is_err()
+            || indexes.iter().any(|index| index.columns == ["vector"])
+            || store
+                .count(Some(format!(
+                    "embedding_model != '' AND embedding_model != {}",
+                    quote(model)
+                )))
+                .await?
+                > 0
+        {
+            return Ok(());
+        }
+        let vectors = store
+            .count(Some(format!(
+                "embedding_model = {} AND vector IS NOT NULL",
+                quote(model)
+            )))
+            .await?;
+        if vectors >= VECTOR_INDEX_MIN_ROWS {
+            store.index("vector", Some("IVF_FLAT")).await?;
+        }
+        Ok(())
+    }
+
+    /// Centroids from another embedding model do not describe the replacement vector space.
+    async fn drop_vector_indexes(&self) -> Result<()> {
+        let store = self.store.read().await;
+        for index in store.list_indices().await? {
+            if index.columns == ["vector"] {
+                store.drop_index(&index.name).await?;
+            }
+        }
+        Ok(())
+    }
+
     pub(crate) async fn update(&self, filter: &str, values: HashMap<String, Value>) -> Result<()> {
         self.store.read().await.update(filter, values).await
     }
@@ -267,6 +379,13 @@ impl Table {
             return Ok(());
         }
         self.store.read().await.delete(filter).await
+    }
+
+    /// Keeps the table identity for other open handles while removing its rows and history.
+    pub(crate) async fn clear(&self) -> Result<()> {
+        let _writes = self.write_lock().await;
+        self.delete("true").await?;
+        self.prune().await
     }
 
     /// The vector column's size; `None` while the table has none.
@@ -336,6 +455,10 @@ impl Table {
     /// changed meanwhile waits for the next run. The rows themselves are never removed.
     pub(crate) async fn reembed(&self, embedder: &dyn Embedder, columns: &[&str]) -> Result<usize> {
         let model = embedder.model_id();
+        if self.stale_vectors(model).await? > 0 {
+            let _writes = self.write_lock().await;
+            self.drop_vector_indexes().await?;
+        }
         let waiting: Vec<Value> = self
             .all_rows(&format!("embedding_model != {}", quote(model)), columns)
             .await?;
@@ -374,6 +497,113 @@ impl Table {
             }
             written += rows.len();
             self.upsert_values(rows).await?;
+        }
+        Ok(written)
+    }
+
+    /// Computes replacement vectors without changing rows or holding their write lock.
+    pub(crate) async fn prepare_reembed(
+        &self,
+        embedder: &dyn Embedder,
+    ) -> Result<PreparedEmbeddings> {
+        self.prepare_reembed_filtered(embedder, "true").await
+    }
+
+    /// Excludes rows no longer eligible for embedding before any text leaves the store.
+    pub(crate) async fn prepare_reembed_filtered(
+        &self,
+        embedder: &dyn Embedder,
+        filter: &str,
+    ) -> Result<PreparedEmbeddings> {
+        self.refresh().await?;
+        let model = embedder.model_id().to_owned();
+        // Capture this before expiry cleanup removes the last old-model row. Its index can
+        // still hold old centroids even when every surviving row uses the current model.
+        let replace_vector_index = self.stale_vectors(&model).await? > 0;
+        let waiting: Vec<Value> = self
+            .all_rows(
+                &format!("({filter}) AND embedding_model != {}", quote(&model)),
+                &["id", "text"],
+            )
+            .await?;
+        let mut prepared = PreparedEmbeddings {
+            model,
+            dimension: None,
+            rows: Vec::with_capacity(waiting.len()),
+            replace_vector_index,
+        };
+        for batch in waiting.chunks(REEMBED_BATCH) {
+            let texts: Vec<String> = batch
+                .iter()
+                .map(|row| row["text"].as_str().unwrap_or_default().to_owned())
+                .collect();
+            let vectors = embed_checked(embedder, &texts).await?;
+            let dimension = vectors.first().map_or(0, Vec::len);
+            if let Some(first) = prepared.dimension
+                && first != dimension
+            {
+                bail!(
+                    "Embedder '{}' returned vectors of {first} values, then of {dimension}",
+                    prepared.model
+                );
+            }
+            prepared.dimension = Some(dimension);
+            for ((row, text), vector) in batch.iter().zip(texts).zip(vectors) {
+                if let Some(id) = row["id"].as_str() {
+                    prepared.rows.push(PreparedEmbedding {
+                        id: id.to_owned(),
+                        text,
+                        vector,
+                    });
+                }
+            }
+        }
+        Ok(prepared)
+    }
+
+    /// Applies prepared vectors to unchanged text, preserving current metadata and deletions.
+    /// Hosts validate the memory revision and hold its lease before calling this method.
+    pub(crate) async fn apply_reembed(
+        &self,
+        prepared: PreparedEmbeddings,
+        columns: &[&str],
+    ) -> Result<usize> {
+        if prepared.dimension.is_none() && !prepared.replace_vector_index {
+            return Ok(0);
+        }
+        let _writes = self.write_lock().await;
+        self.refresh().await?;
+        if prepared.replace_vector_index || self.stale_vectors(&prepared.model).await? > 0 {
+            self.drop_vector_indexes().await?;
+        }
+        let Some(dimension) = prepared.dimension else {
+            return Ok(0);
+        };
+        let mut written = 0;
+        for batch in prepared.rows.chunks(REEMBED_BATCH) {
+            let ids = batch.iter().map(|row| row.id.as_str());
+            let fresh: Vec<Value> = self.all_rows(&in_list("id", ids), columns).await?;
+            let mut rows = Vec::new();
+            for row in batch {
+                let Some(mut current) = fresh
+                    .iter()
+                    .find(|current| current["id"].as_str() == Some(row.id.as_str()))
+                    .cloned()
+                else {
+                    continue;
+                };
+                if current["text"].as_str() != Some(row.text.as_str()) {
+                    continue;
+                }
+                current["vector"] = json!(row.vector);
+                current["embedding_model"] = json!(prepared.model);
+                rows.push(current);
+            }
+            if !rows.is_empty() {
+                self.ensure_vector_column(dimension).await?;
+                written += rows.len();
+                self.upsert_values(rows).await?;
+            }
         }
         Ok(written)
     }
@@ -439,6 +669,34 @@ impl Table {
             .await
             .vector_search(vector, filter, Some(owned(columns)), limit, 0)
             .await
+    }
+
+    /// Structured location/time queries need every matching vector before their own ordering.
+    /// An ANN index may skip a partition even when the requested limit covers the whole table.
+    async fn nearest_exact(
+        &self,
+        vector: &[f32],
+        filter: &str,
+        columns: &[&str],
+        limit: usize,
+    ) -> Result<Vec<Value>> {
+        let store = self.store.read().await;
+        let table = store.raw().await?;
+        let mut batches = table
+            .query()
+            .nearest_to(vector.to_vec())?
+            .distance_type(lancedb::DistanceType::Cosine)
+            .bypass_vector_index()
+            .only_if(filter)
+            .select(Select::Columns(owned(columns)))
+            .limit(limit)
+            .execute()
+            .await?;
+        let mut rows = Vec::new();
+        while let Some(batch) = batches.next().await {
+            rows.extend(record_batch_to_value(&batch?)?);
+        }
+        Ok(rows)
     }
 
     /// BM25 matches of the full-text column, best first. A missing index or a query the
@@ -544,6 +802,7 @@ pub(crate) struct Probe<'a> {
     pub model: &'a str,
     pub columns: &'a [&'a str],
     pub pool: usize,
+    pub exact: bool,
 }
 
 impl Table {
@@ -577,9 +836,13 @@ impl Table {
         let mut lists = Vec::new();
         if let Some(vector) = probe.vector {
             let embedded = format!("({filter}) AND embedding_model = {}", quote(probe.model));
-            let hits = self
-                .nearest(vector, Some(&embedded), probe.columns, probe.pool)
-                .await?;
+            let hits = if probe.exact {
+                self.nearest_exact(vector, &embedded, probe.columns, probe.pool)
+                    .await?
+            } else {
+                self.nearest(vector, Some(&embedded), probe.columns, probe.pool)
+                    .await?
+            };
             lists.push(ranked_ids(hits, rows));
         }
         let hits = self
@@ -605,5 +868,73 @@ pub(crate) async fn embed_or_wait(
             );
             vec![None; texts.len()]
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testing::HashEmbedder;
+
+    #[tokio::test]
+    async fn prepared_embeddings_preserve_new_metadata_and_skip_changed_or_deleted_rows() {
+        let directory = tempfile::tempdir().unwrap();
+        let connection = flow_like_storage::databases::vector::lancedb::connect_lance(
+            directory.path().to_str().unwrap(),
+        )
+        .execute()
+        .await
+        .unwrap();
+        let table = Table::open(connection, "prepared", None, None).await;
+        let columns = ["id", "text", "metadata", "embedding_model"];
+        let schema = Schema::new(
+            columns
+                .iter()
+                .map(|name| text_field(name, false))
+                .collect::<Vec<_>>(),
+        );
+        table
+            .upsert_vectored(
+                schema,
+                &[
+                    json!({"id": "kept", "text": "Keep this fact", "metadata": "old", "embedding_model": ""}),
+                    json!({"id": "edited", "text": "An old fact", "metadata": "old", "embedding_model": ""}),
+                    json!({"id": "deleted", "text": "Forget this fact", "metadata": "old", "embedding_model": ""}),
+                ],
+            )
+            .await
+            .unwrap();
+        let prepared = table
+            .prepare_reembed(&HashEmbedder::new("hash", 16))
+            .await
+            .unwrap();
+        assert_eq!(table.unembedded("hash").await.unwrap(), 3);
+        assert_eq!(table.vector_dimension().await.unwrap(), None);
+
+        table
+            .update(
+                "id = 'kept'",
+                HashMap::from([("metadata".to_owned(), json!("new"))]),
+            )
+            .await
+            .unwrap();
+        table
+            .update(
+                "id = 'edited'",
+                HashMap::from([("text".to_owned(), json!("A corrected fact"))]),
+            )
+            .await
+            .unwrap();
+        table.delete("id = 'deleted'").await.unwrap();
+
+        assert_eq!(table.apply_reembed(prepared, &columns).await.unwrap(), 1);
+        let rows: Vec<Value> = table.all_rows("true", &columns).await.unwrap();
+        assert_eq!(rows.len(), 2);
+        let kept = rows.iter().find(|row| row["id"] == "kept").unwrap();
+        assert_eq!(kept["metadata"], "new");
+        assert_eq!(kept["embedding_model"], "hash");
+        let edited = rows.iter().find(|row| row["id"] == "edited").unwrap();
+        assert_eq!(edited["text"], "A corrected fact");
+        assert_eq!(edited["embedding_model"], "");
     }
 }

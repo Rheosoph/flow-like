@@ -1,7 +1,40 @@
 import type { BotExpression } from "../../components/bots/types";
 
-export const BOT_EMOTION_MODEL = "Horizon-Labs/multilingual-emotions-small";
-export const BOT_EMOTION_REVISION = "ac26dadbdafc26276e01093790104679bf33aec5";
+export const BOT_EMOTION_MODEL = "Zeolit/lettuce-thymos-26m-v1";
+export const BOT_EMOTION_REVISION = "57219928da2daf26201012d0aafcc3d58dea74d0";
+/** Training length of the pinned ONNX graph, including the special tokens. */
+export const BOT_EMOTION_MAX_LENGTH = 96;
+/** The graph returns these 28 GoEmotions labels, in this order. */
+export const BOT_EMOTION_LABELS = [
+	"admiration",
+	"amusement",
+	"anger",
+	"annoyance",
+	"approval",
+	"caring",
+	"confusion",
+	"curiosity",
+	"desire",
+	"disappointment",
+	"disapproval",
+	"disgust",
+	"embarrassment",
+	"excitement",
+	"fear",
+	"gratitude",
+	"grief",
+	"joy",
+	"love",
+	"nervousness",
+	"optimism",
+	"pride",
+	"realization",
+	"relief",
+	"remorse",
+	"sadness",
+	"surprise",
+	"neutral",
+] as const;
 export const MAX_DRAFT_CHARS = 768;
 export const MAX_CONTEXT_CHARS = 384;
 export const MAX_CONTEXT_MESSAGES = 4;
@@ -34,10 +67,24 @@ export interface EmotionWorkerRequest extends EmotionInput {
 }
 
 export type EmotionWorkerResponse =
+	| { type: "idle" }
 	| { type: "progress"; progress?: number }
 	| { type: "ready" }
 	| { type: "result"; id: number; scores: ExpressionScores }
 	| { type: "error"; id: number };
+
+/** Read the first row of sigmoid probabilities from the emotion graph. */
+export function scoresFromOutput(values: ArrayLike<number>): EmotionScores {
+	const width = BOT_EMOTION_LABELS.length;
+	if (values.length < width || values.length % width !== 0) {
+		throw new Error(`Emotion model returned ${values.length} scores`);
+	}
+	const scores: EmotionScores = {};
+	for (let index = 0; index < width; index++) {
+		scores[BOT_EMOTION_LABELS[index]] = Number(values[index]);
+	}
+	return scores;
+}
 
 export function boundEmotionInput(input: EmotionInput): EmotionInput {
 	return {

@@ -293,6 +293,15 @@ export async function executeDeviceCommand(
 	);
 }
 
+/** Called by the participant's context card after its sharing consent, retaining OS permission. */
+export async function readLocationForUserContext(
+	args: Record<string, unknown>,
+	context: DeviceContext,
+) {
+	const { requestCurrentLocation } = await import("./location");
+	return requestCurrentLocation(args, context, nativeAdapter, async () => {});
+}
+
 interface DeviceRequest {
 	requestId: string;
 	appId: string;

@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use flow_like_types::Result;
+use flow_like_types::interaction_observation::InteractionObservation;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -13,6 +14,7 @@ pub struct Screen {
     pub height: u32,
     /// What the host wants the model to know with this picture (the owner used the computer).
     pub note: Option<String>,
+    pub observation: Option<InteractionObservation>,
 }
 
 impl Screen {
@@ -22,6 +24,7 @@ impl Screen {
             width,
             height,
             note: None,
+            observation: None,
         }
     }
 }

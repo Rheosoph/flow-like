@@ -32,6 +32,27 @@ class Tap extends AudioWorkletProcessor {
 registerProcessor("call-listener-tap", Tap);
 `;
 
+const workletModules = new WeakMap<AudioContext, Promise<void>>();
+
+async function loadTap(context: AudioContext): Promise<void> {
+	let pending = workletModules.get(context);
+	if (!pending) {
+		const url = URL.createObjectURL(
+			new Blob([WORKLET_SOURCE], { type: "text/javascript" }),
+		);
+		pending = context.audioWorklet
+			.addModule(url)
+			.finally(() => URL.revokeObjectURL(url));
+		workletModules.set(context, pending);
+	}
+	try {
+		await pending;
+	} catch (cause) {
+		if (workletModules.get(context) === pending) workletModules.delete(context);
+		throw cause;
+	}
+}
+
 async function attachTap(
 	context: AudioContext,
 	source: MediaStreamAudioSourceNode,
@@ -41,11 +62,8 @@ async function attachTap(
 	sink.gain.value = 0;
 	sink.connect(context.destination);
 	if (context.audioWorklet) {
-		const url = URL.createObjectURL(
-			new Blob([WORKLET_SOURCE], { type: "text/javascript" }),
-		);
 		try {
-			await context.audioWorklet.addModule(url);
+			await loadTap(context);
 			const node = new AudioWorkletNode(context, "call-listener-tap");
 			node.port.onmessage = (event: MessageEvent<Float32Array>) =>
 				onBlock(event.data);
@@ -58,45 +76,66 @@ async function attachTap(
 			};
 		} catch (cause) {
 			console.warn("AudioWorklet unavailable, using a script processor", cause);
-		} finally {
-			URL.revokeObjectURL(url);
 		}
 	}
-	const node = context.createScriptProcessor(BLOCK_SAMPLES, 1, 1);
-	node.onaudioprocess = (event) =>
-		onBlock(new Float32Array(event.inputBuffer.getChannelData(0)));
-	source.connect(node);
-	node.connect(sink);
-	return () => {
-		node.onaudioprocess = null;
-		node.disconnect();
+	try {
+		const node = context.createScriptProcessor(BLOCK_SAMPLES, 1, 1);
+		node.onaudioprocess = (event) =>
+			onBlock(new Float32Array(event.inputBuffer.getChannelData(0)));
+		source.connect(node);
+		node.connect(sink);
+		return () => {
+			node.onaudioprocess = null;
+			node.disconnect();
+			sink.disconnect();
+		};
+	} catch (cause) {
 		sink.disconnect();
-	};
+		throw cause;
+	}
 }
 
 /** Listens to a microphone stream and reports each spoken utterance as 16 kHz mono PCM. */
 export async function startCallListener(
 	stream: MediaStream,
 	onUtterance: (utterance: Utterance) => void,
+	options: { context?: AudioContext; paused?: boolean } = {},
 ): Promise<CallListener> {
-	const context = new AudioContext();
-	await context.resume().catch(() => {});
-	const source = context.createMediaStreamSource(stream);
+	// Reuse the context unlocked by the call gesture, including on mobile browsers.
+	const context = options.context ?? new AudioContext();
+	const ownsContext = options.context === undefined;
+	let source: MediaStreamAudioSourceNode | undefined;
+	let detach: (() => void) | undefined;
 	const segmenter = createUtteranceSegmenter({
 		sampleRate: LISTEN_SAMPLE_RATE,
 	});
-	let paused = false;
+	let paused = options.paused ?? false;
 	let stopped = false;
 
-	const detach = await attachTap(context, source, (block) => {
-		if (stopped) return;
-		if (paused) return;
-		for (const utterance of segmenter.push(
-			resample(block, context.sampleRate, LISTEN_SAMPLE_RATE),
-		)) {
-			onUtterance(utterance);
-		}
-	});
+	const release = () => {
+		detach?.();
+		try {
+			source?.disconnect();
+		} catch {}
+		if (ownsContext) void context.close().catch(() => {});
+	};
+	try {
+		if (context.state !== "running") await context.resume();
+		if (context.state !== "running")
+			throw new Error("Call microphone capture is unavailable");
+		source = context.createMediaStreamSource(stream);
+		detach = await attachTap(context, source, (block) => {
+			if (stopped || paused) return;
+			for (const utterance of segmenter.push(
+				resample(block, context.sampleRate, LISTEN_SAMPLE_RATE),
+			)) {
+				onUtterance(utterance);
+			}
+		});
+	} catch (cause) {
+		release();
+		throw cause;
+	}
 
 	return {
 		setPaused(next) {
@@ -109,11 +148,7 @@ export async function startCallListener(
 			stopped = true;
 			const last = segmenter.flush();
 			if (last) onUtterance(last);
-			detach();
-			try {
-				source.disconnect();
-			} catch {}
-			void context.close().catch(() => {});
+			release();
 		},
 	};
 }

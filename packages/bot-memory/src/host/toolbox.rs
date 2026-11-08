@@ -59,6 +59,7 @@ fn reason(reason: RejectReason) -> &'static str {
             "That text holds only links, images or instructions, which are not kept as memories."
         }
         RejectReason::NoEvidence => "There is no message to point to for that memory.",
+        RejectReason::InvalidMetadata => "The location, time or TTL is invalid; nothing was saved.",
         RejectReason::UntrustedPersonal => {
             "Only what the user said themselves can be saved as a profile fact or preference."
         }
@@ -233,6 +234,10 @@ impl MemoryToolbox {
                 reply(json!({
                     "status": "ok",
                     "text": format!("Remembered ({}): {} [{}]", action_label(&action), fact.text, fact.id),
+                    "id": fact.id,
+                    "geojson": fact.geojson,
+                    "time": fact.time,
+                    "expires_at": fact.expires_at,
                 }))
             }
             WriteOutcome::NeedsConfirmation { preview } => reply(json!({

@@ -148,9 +148,23 @@ function messageOf(
 	if (item.type === "trigger" || item.type === "bot_ask") {
 		return noticeOf(item, botId, sessionId);
 	}
+	if (item.type === "transcript") {
+		return {
+			id: item.id,
+			appId: GLOBAL_CHAT_APP_ID,
+			sessionId,
+			inner: { role: IRole.User, content: item.text },
+			files: [],
+			tools: [],
+			actions: [],
+			timestamp: item.time,
+		};
+	}
 	if (item.type !== "message" || item.content.kind !== "text") return null;
 	const { approval } = item;
 	return {
+		...(item.userContext ? { userContext: item.userContext } : {}),
+		...(item.userContextDerived ? { userContextDerived: true } : {}),
 		...(approval
 			? {
 					approval: {
@@ -162,6 +176,7 @@ function messageOf(
 						scopes: approval.scopes,
 						requesterName: approval.requesterName,
 						room: approval.room,
+						configurationChanges: approval.configurationChanges,
 						...(approval.secret ? { secret: approval.secret } : {}),
 						answer: approval.answer,
 					},
@@ -172,7 +187,7 @@ function messageOf(
 		sessionId,
 		inner: {
 			role: item.senderId === botId ? IRole.Assistant : IRole.User,
-			content: approval ? "" : item.content.text,
+			content: approval || item.userContext ? "" : item.content.text,
 		},
 		files: [],
 		tools: [],
@@ -185,6 +200,7 @@ const SHOWN_KINDS: ReadonlySet<string> = new Set([
 	"message",
 	"trigger",
 	"activity",
+	"transcript",
 ]);
 
 /** The chat's messages and notes from inbox entries (any order, repeats allowed), oldest first. */

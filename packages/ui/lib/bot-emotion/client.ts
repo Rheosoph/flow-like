@@ -19,6 +19,7 @@ interface Request {
 	owner: object;
 	input: EmotionInput;
 	resolve: (scores: ExpressionScores | null) => void;
+	cancelled?: boolean;
 }
 
 export interface EmotionClient {
@@ -31,6 +32,7 @@ export interface EmotionClient {
 const RETRY_AFTER_MS = 60_000;
 const LOAD_TIMEOUT_MS = 10 * 60_000;
 const INFERENCE_TIMEOUT_MS = 30_000;
+const IDLE_RELEASE_MS = 60_000;
 
 export class BrowserEmotionClient implements EmotionClient {
 	private worker?: EmotionWorkerPort;
@@ -43,12 +45,11 @@ export class BrowserEmotionClient implements EmotionClient {
 	private retryAt = 0;
 	private watchdog?: ReturnType<typeof setTimeout>;
 	private releaseTimer?: ReturnType<typeof setTimeout>;
+	private unbindPageHide?: () => void;
 
 	constructor(private createWorker: () => EmotionWorkerPort) {}
 
 	subscribe(listener: (state: EmotionLoadState) => void) {
-		clearTimeout(this.releaseTimer);
-		this.releaseTimer = undefined;
 		this.listeners.add(listener);
 		listener(this.state);
 		return () => {
@@ -59,7 +60,6 @@ export class BrowserEmotionClient implements EmotionClient {
 
 	private scheduleRelease() {
 		if (
-			this.listeners.size ||
 			this.pending.size ||
 			this.active ||
 			!this.worker ||
@@ -68,13 +68,25 @@ export class BrowserEmotionClient implements EmotionClient {
 			return;
 		this.releaseTimer = setTimeout(() => {
 			this.releaseTimer = undefined;
-			if (this.listeners.size || this.pending.size || this.active) return;
-			clearTimeout(this.watchdog);
-			this.worker?.terminate();
-			this.worker = undefined;
-			this.warming = false;
+			if (this.pending.size || this.active) return;
+			this.releaseWorker();
 			this.publish({ status: "idle" });
-		}, 60_000);
+		}, IDLE_RELEASE_MS);
+	}
+
+	private releaseWorker() {
+		clearTimeout(this.watchdog);
+		clearTimeout(this.releaseTimer);
+		this.releaseTimer = undefined;
+		this.unbindPageHide?.();
+		this.unbindPageHide = undefined;
+		this.worker?.terminate();
+		this.worker = undefined;
+		this.warming = false;
+		this.active?.resolve(null);
+		this.active = undefined;
+		for (const request of this.pending.values()) request.resolve(null);
+		this.pending.clear();
 	}
 
 	private publish(state: EmotionLoadState) {
@@ -88,9 +100,34 @@ export class BrowserEmotionClient implements EmotionClient {
 			const worker = this.createWorker();
 			this.worker = worker;
 			this.warming = true;
+			if (typeof window !== "undefined") {
+				const page = window;
+				const onPageHide = () => {
+					if (this.worker !== worker) return;
+					this.releaseWorker();
+					this.publish({ status: "idle" });
+				};
+				page.addEventListener("pagehide", onPageHide);
+				this.unbindPageHide = () =>
+					page.removeEventListener("pagehide", onPageHide);
+			}
 			worker.onmessage = (event) => {
 				if (this.worker !== worker) return;
 				const message = event.data;
+				if (message.type === "idle") {
+					const retry = new Map<object, Request>();
+					if (this.active && !this.active.cancelled)
+						retry.set(this.active.owner, this.active);
+					for (const request of this.pending.values())
+						retry.set(request.owner, request);
+					this.active = undefined;
+					this.pending.clear();
+					this.releaseWorker();
+					this.pending = retry;
+					this.publish({ status: "idle" });
+					this.drain();
+					return;
+				}
 				if (message.type === "progress") {
 					this.publish({ status: "loading", progress: message.progress });
 					return;
@@ -101,6 +138,7 @@ export class BrowserEmotionClient implements EmotionClient {
 					this.warming = false;
 					this.publish({ status: "ready" });
 					this.drain();
+					this.scheduleRelease();
 					return;
 				}
 				if (
@@ -137,6 +175,8 @@ export class BrowserEmotionClient implements EmotionClient {
 		const bounded = boundEmotionInput(input);
 		if (!bounded.draft || Date.now() < this.retryAt)
 			return Promise.resolve(null);
+		clearTimeout(this.releaseTimer);
+		this.releaseTimer = undefined;
 		return new Promise((resolve) => {
 			this.pending.set(owner, {
 				id: ++this.sequence,
@@ -154,6 +194,7 @@ export class BrowserEmotionClient implements EmotionClient {
 		if (this.active?.owner === owner) {
 			this.active.resolve(null);
 			this.active.resolve = () => {};
+			this.active.cancelled = true;
 		}
 		this.scheduleRelease();
 	}
@@ -178,16 +219,7 @@ export class BrowserEmotionClient implements EmotionClient {
 	}
 
 	private fail() {
-		clearTimeout(this.watchdog);
-		clearTimeout(this.releaseTimer);
-		this.releaseTimer = undefined;
-		this.worker?.terminate();
-		this.worker = undefined;
-		this.warming = false;
-		this.active?.resolve(null);
-		this.active = undefined;
-		for (const request of this.pending.values()) request.resolve(null);
-		this.pending.clear();
+		this.releaseWorker();
 		this.retryAt = Date.now() + RETRY_AFTER_MS;
 		this.publish({ status: "unavailable" });
 	}
@@ -196,11 +228,106 @@ export class BrowserEmotionClient implements EmotionClient {
 let client: BrowserEmotionClient | undefined;
 
 export function getBotEmotionClient(): EmotionClient {
-	client ??= new BrowserEmotionClient(
-		() =>
-			new Worker(new URL("./emotion.worker.ts", import.meta.url), {
-				type: "module",
-			}),
-	);
+	client ??= new BrowserEmotionClient(createEmotionWorkerPort);
 	return client;
+}
+
+/** One model session for every tab. A dedicated worker is the fallback. */
+export function createEmotionWorkerPort(): EmotionWorkerPort {
+	if (typeof SharedWorker !== "undefined" && typeof window !== "undefined") {
+		try {
+			return portFromSharedWorker(
+				// The default name lets each deployed script URL share its own session.
+				new SharedWorker(new URL("./emotion.worker.ts", import.meta.url), {
+					type: "module",
+				}),
+				createDedicatedEmotionWorker,
+			);
+		} catch {
+			// Some WebViews expose the constructor and still reject module workers.
+		}
+	}
+	return createDedicatedEmotionWorker();
+}
+
+function createDedicatedEmotionWorker(): EmotionWorkerPort {
+	return new Worker(new URL("./emotion.worker.ts", import.meta.url), {
+		type: "module",
+	});
+}
+
+/** Closing the port leaves the shared model running for other tabs. */
+export function portFromSharedWorker(
+	worker: SharedWorker,
+	createFallback?: () => EmotionWorkerPort,
+): EmotionWorkerPort {
+	const port = worker.port;
+	let fallback: EmotionWorkerPort | undefined;
+	let ready = false;
+	let terminated = false;
+	const pending: EmotionWorkerRequest[] = [];
+
+	function closeSharedPort() {
+		worker.onerror = null;
+		port.onmessage = null;
+		try {
+			port.postMessage({ type: "disconnect" });
+		} catch {
+			// A failed connection may already have detached its port.
+		} finally {
+			port.close();
+		}
+	}
+
+	const adapter: EmotionWorkerPort = {
+		onmessage: null,
+		onerror: null,
+		postMessage(message) {
+			if (terminated) return;
+			if (fallback) {
+				fallback.postMessage(message);
+				return;
+			}
+			if (!ready) pending.push(message);
+			port.postMessage(message);
+		},
+		terminate() {
+			if (terminated) return;
+			terminated = true;
+			pending.length = 0;
+			if (fallback) fallback.terminate();
+			else closeSharedPort();
+		},
+	};
+	port.onmessage = (event: MessageEvent<EmotionWorkerResponse>) => {
+		if (terminated || fallback) return;
+		if (event.data.type === "ready") {
+			ready = true;
+			pending.length = 0;
+		}
+		adapter.onmessage?.(event);
+	};
+	worker.onerror = (event: ErrorEvent) => {
+		if (terminated) return;
+		if (!createFallback || ready || fallback) {
+			adapter.onerror?.(event);
+			return;
+		}
+		// Module loading failures are reported after the constructor returns.
+		try {
+			closeSharedPort();
+			fallback = createFallback();
+			fallback.onmessage = (message) => {
+				if (!terminated) adapter.onmessage?.(message);
+			};
+			fallback.onerror = (error) => {
+				if (!terminated) adapter.onerror?.(error);
+			};
+			for (const request of pending.splice(0)) fallback.postMessage(request);
+		} catch {
+			adapter.onerror?.(event);
+		}
+	};
+	port.start();
+	return adapter;
 }

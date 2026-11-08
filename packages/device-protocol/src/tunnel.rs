@@ -48,7 +48,7 @@ impl TunnelOpen {
             TunnelTarget::ModelGateway => Err(ProtocolError::Invalid(
                 "model gateway tunnel names a placement or service",
             )),
-            TunnelTarget::BotPlayground { bot_id }
+            TunnelTarget::BotPlayground { bot_id, .. }
                 if self.placement_id.is_empty() && self.service_id.is_empty() =>
             {
                 validate_management_id(bot_id)
@@ -72,6 +72,9 @@ pub enum TunnelTarget {
     ModelGateway,
     BotPlayground {
         bot_id: String,
+        /// Include interaction observations in frames only when the viewer opts in.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        observations: bool,
     },
 }
 
@@ -740,6 +743,45 @@ mod tests {
         let legacy: TunnelOpen =
             serde_json::from_str(r#"{"placement_id":"placement","service_id":"hosting"}"#).unwrap();
         assert_eq!(legacy.target, TunnelTarget::Service);
+    }
+
+    #[test]
+    fn playground_observations_are_opt_in_and_old_agents_ignore_the_request() {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum LegacyTarget {
+            BotPlayground { bot_id: String },
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct LegacyOpen {
+            target: LegacyTarget,
+        }
+
+        let old_wire = serde_json::json!({"target":{"bot_playground":{"bot_id":"bot_1"}}});
+        let old: TunnelOpen = serde_json::from_value(old_wire.clone()).unwrap();
+        assert!(matches!(
+            old.target,
+            TunnelTarget::BotPlayground {
+                observations: false,
+                ..
+            }
+        ));
+        assert_eq!(serde_json::to_value(old).unwrap(), old_wire);
+        let new_wire =
+            serde_json::json!({"target":{"bot_playground":{"bot_id":"bot_1","observations":true}}});
+        let new: TunnelOpen = serde_json::from_value(new_wire.clone()).unwrap();
+        new.validate().unwrap();
+        assert!(matches!(
+            new.target,
+            TunnelTarget::BotPlayground {
+                observations: true,
+                ..
+            }
+        ));
+        let legacy: LegacyOpen = serde_json::from_value(new_wire).unwrap();
+        let LegacyTarget::BotPlayground { bot_id } = legacy.target;
+        assert_eq!(bot_id, "bot_1");
     }
 
     #[test]

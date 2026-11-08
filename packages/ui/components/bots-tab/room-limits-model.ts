@@ -46,12 +46,18 @@ export interface RoomLimitsDraft {
 	/** `null` keeps every app the bot has. */
 	apps: string[] | null;
 	mentionedOnly: boolean;
+	useOwnerMemory: boolean;
+	useSharedMemory: boolean;
+	shareMemory: boolean;
 }
 
 export const NO_ROOM_LIMITS: RoomLimitsDraft = {
 	restrictions: { permissions: null, scopes: EMPTY_SCOPES },
 	apps: null,
 	mentionedOnly: false,
+	useOwnerMemory: false,
+	useSharedMemory: false,
+	shareMemory: false,
 };
 
 export function draftFromLimits(
@@ -67,15 +73,22 @@ export function draftFromLimits(
 		},
 		apps: limits?.apps ?? null,
 		mentionedOnly: limits?.mentioned_only === true,
+		useOwnerMemory: limits?.use_owner_memory === true,
+		useSharedMemory: limits?.use_shared_memory === true,
+		shareMemory: limits?.share_memory === true,
 	};
 }
 
-/** `null` when the draft adds no limit; scopes of the earlier limits are kept. */
+/** Memory choices are explicit; scopes of the earlier limits are kept. */
 export function limitsFromDraft(
 	draft: RoomLimitsDraft,
 	previous?: IBotRoomLimits | null,
 ): IBotRoomLimits | null {
-	const limits: IBotRoomLimits = {};
+	const limits: IBotRoomLimits = {
+		use_owner_memory: draft.useOwnerMemory,
+		use_shared_memory: draft.useSharedMemory,
+		share_memory: draft.shareMemory,
+	};
 	if (draft.restrictions.permissions !== null) {
 		limits.mask = maskFromPermissions(draft.restrictions.permissions);
 	}

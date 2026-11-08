@@ -229,6 +229,7 @@ mod tests {
             next_run_at: next.map(|at| at.fixed_offset()),
             last_run_at: None,
             enabled: true,
+            monitoring: Some(false),
             created_by: "BOT".into(),
             created_at: now,
             updated_at: now,

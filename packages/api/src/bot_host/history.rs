@@ -117,7 +117,9 @@ fn lines_of(window: &[inbox_entry::Model]) -> Vec<Line> {
         let Some(kind) = InboxEntryKind::parse(&entry.kind) else {
             continue;
         };
-        if is_tombstone(&entry.envelope) {
+        if is_tombstone(&entry.envelope)
+            || flow_like_types::bot_user_context::is_ephemeral_body(&entry.envelope["body"])
+        {
             continue;
         }
         let Some(body) = plain_body(&entry.envelope) else {
@@ -186,27 +188,50 @@ pub(crate) async fn sender_names<C: ConnectionTrait>(
     ids: &[&str],
 ) -> Result<HashMap<String, String>, DbErr> {
     let mut names = HashMap::new();
+    if ids.is_empty() {
+        return Ok(names);
+    }
     let people = user::Entity::find()
+        .select_only()
+        .columns([
+            user::Column::Id,
+            user::Column::Name,
+            user::Column::PreferredUsername,
+            user::Column::Username,
+        ])
         .filter(user::Column::Id.is_in(ids.iter().copied()))
+        .into_tuple::<(String, Option<String>, Option<String>, Option<String>)>()
         .all(db)
         .await?;
-    for person in people {
-        if let Some(name) = person
-            .name
-            .or(person.preferred_username)
-            .or(person.username)
+    for (id, name, preferred_username, username) in people {
+        if let Some(name) = name
+            .or(preferred_username)
+            .or(username)
             .filter(|name| !name.trim().is_empty())
         {
-            names.insert(person.id, name);
+            names.insert(id, name);
         }
     }
     let bots = bot::Entity::find()
+        .select_only()
+        .columns([bot::Column::Id, bot::Column::Name, bot::Column::SystemKey])
         .filter(bot::Column::Id.is_in(ids.iter().copied()))
+        .into_tuple::<(String, Option<String>, Option<String>)>()
         .all(db)
         .await?;
-    for bot in bots {
-        if let Some(name) = bot.name.filter(|name| !name.trim().is_empty()) {
-            names.insert(bot.id, name);
+    for (id, name, system) in bots {
+        let name = name.filter(|name| !name.trim().is_empty()).or_else(|| {
+            use flow_like_types::bot::BotSystemKind;
+            system
+                .as_deref()
+                .and_then(BotSystemKind::parse)
+                .map(|kind| match kind {
+                    BotSystemKind::General => "Assistant".to_owned(),
+                    BotSystemKind::Flux => "Flux".to_owned(),
+                })
+        });
+        if let Some(name) = name {
+            names.insert(id, name);
         }
     }
     Ok(names)
@@ -247,11 +272,28 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
         .await?;
     window.reverse();
     let lines = lines_of(&window);
-    let answered = match lines.last() {
-        Some(line) if line.message_id == trigger_message_id && line.sender_id != bot_id => {
-            line.clone()
+    let context_prompt = flow_like_types::bot_user_context::response_prompt(
+        &trigger.envelope["body"],
+        bot_id,
+        &trigger.sender_id,
+        chrono::Utc::now().timestamp_millis(),
+    );
+    let answered = if let Some(prompt) = context_prompt.as_ref() {
+        Line {
+            message_id: trigger.message_id.clone(),
+            sender_id: trigger.sender_id.clone(),
+            text: prompt.clone(),
+            mentions: vec![bot_id.to_owned()],
+            reply_to: None,
+            from_trigger: false,
         }
-        _ => return Err(HistoryError::TriggerUnreadable),
+    } else {
+        match lines.last() {
+            Some(line) if line.message_id == trigger_message_id && line.sender_id != bot_id => {
+                line.clone()
+            }
+            _ => return Err(HistoryError::TriggerUnreadable),
+        }
     };
     let names = if kind == ConversationKind::Group {
         let ids: Vec<&str> = lines.iter().map(|line| line.sender_id.as_str()).collect();
@@ -278,12 +320,91 @@ pub(crate) async fn transcript<C: ConnectionTrait>(
             images: None,
         })
         .collect();
-    history.pop();
+    if context_prompt.is_none() {
+        history.pop();
+    }
     Ok(Transcript {
         prompt: clipped(&spoken(&answered), MAX_PROMPT_CHARS),
         history,
-        addressed: kind != ConversationKind::Group || addressed_to(&lines, bot_id),
+        addressed: context_prompt.is_some()
+            || kind != ConversationKind::Group
+            || addressed_to(&lines, bot_id),
     })
+}
+
+/// Recent context for a continuation whose trigger lives in another conversation. Activity does
+/// not displace spoken lines. Edits and topic markers still apply within the bounded scan.
+pub(crate) async fn recent_history<C: ConnectionTrait>(
+    db: &C,
+    bot_id: &str,
+    conversation_id: &str,
+    kind: ConversationKind,
+    owner_id: &str,
+) -> Result<Vec<ChatMessage>, HistoryError> {
+    const MAX_HISTORY_PAGES: u64 = 32;
+    let mut window = Vec::new();
+    let mut lines = Vec::new();
+    for page in 0..MAX_HISTORY_PAGES {
+        let batch = inbox_entry::Entity::find()
+            .filter(inbox_entry::Column::InboxId.eq(bot_id))
+            .filter(inbox_entry::Column::ConversationId.eq(conversation_id))
+            .filter(inbox_entry::Column::Kind.is_in([
+                "MESSAGE",
+                "TRIGGER",
+                "TRANSCRIPT",
+                "EDIT",
+                "TOPIC",
+            ]))
+            .order_by_desc(inbox_entry::Column::Seq)
+            .order_by_desc(inbox_entry::Column::CreatedAt)
+            .order_by_desc(inbox_entry::Column::Id)
+            .offset(page * HISTORY_ENTRIES)
+            .limit(HISTORY_ENTRIES)
+            .all(db)
+            .await?;
+        let exhausted = batch.len() < HISTORY_ENTRIES as usize;
+        let topic = batch.iter().any(|entry| {
+            InboxEntryKind::parse(&entry.kind) == Some(InboxEntryKind::Topic)
+                && !is_tombstone(&entry.envelope)
+                && plain_body(&entry.envelope).is_some()
+        });
+        window.extend(batch);
+        window.reverse();
+        lines = lines_of(&window);
+        window.reverse();
+        if lines.len() >= HISTORY_ENTRIES as usize || exhausted || topic {
+            break;
+        }
+    }
+    let skipped = lines.len().saturating_sub(HISTORY_ENTRIES as usize);
+    lines.drain(..skipped);
+    let names = if kind == ConversationKind::Group {
+        let ids: Vec<&str> = lines.iter().map(|line| line.sender_id.as_str()).collect();
+        sender_names(db, &ids).await?
+    } else {
+        HashMap::new()
+    };
+    Ok(lines
+        .iter()
+        .map(|line| {
+            let own = line.sender_id == bot_id;
+            let text = if own || kind != ConversationKind::Group {
+                line.text.clone()
+            } else {
+                let name = names.get(&line.sender_id).unwrap_or(&line.sender_id);
+                room_message(name, line.sender_id == owner_id, &line.text)
+            };
+            ChatMessage {
+                role: if own {
+                    ChatRole::Assistant
+                } else {
+                    ChatRole::User
+                },
+                content: clipped(&text, MAX_HISTORY_MESSAGE_CHARS),
+                images: None,
+            }
+        })
+        .collect())
 }
 
 /// What a turn woken by reactions reads: the conversation's recent messages, and the reactions in

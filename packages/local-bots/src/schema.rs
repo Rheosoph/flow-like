@@ -312,6 +312,27 @@ pub(crate) const MIGRATIONS: &[&str] = &[
                        OR (target.seq IS NULL AND target.created_at > c.owner_cleared_at))
             ))
         );",
+    // Group participation decisions survive host restarts without adding chat messages.
+    "CREATE TABLE room_decisions (
+        bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+        conversation_id TEXT NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+        handled_through INTEGER NOT NULL,
+        participant_id TEXT,
+        expires_at INTEGER,
+        PRIMARY KEY (bot_id, conversation_id)
+    ) STRICT;",
+    "CREATE TABLE bot_run_checkpoints (
+        turn_id TEXT PRIMARY KEY NOT NULL,
+        bot_id TEXT NOT NULL REFERENCES bots (id) ON DELETE CASCADE,
+        conversation_id TEXT NOT NULL REFERENCES conversations (id) ON DELETE CASCADE,
+        trigger_message_id TEXT NOT NULL REFERENCES entries (message_id) ON DELETE CASCADE,
+        revision INTEGER NOT NULL DEFAULT 0,
+        checkpoint TEXT,
+        cancelled INTEGER NOT NULL DEFAULT 0,
+        updated_at INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX bot_run_checkpoints_room ON bot_run_checkpoints (bot_id, conversation_id);",
+    "ALTER TABLE tasks ADD COLUMN monitoring INTEGER NOT NULL DEFAULT 0;",
 ];
 
 pub(crate) fn open(path: &Path) -> Result<Connection> {

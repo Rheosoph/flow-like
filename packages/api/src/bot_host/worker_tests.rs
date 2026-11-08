@@ -645,17 +645,41 @@ fn only_a_spoken_answer_posts_a_reply() {
         updated_at: now_millis(),
     };
     let silent = Answer {
+        acknowledgement: false,
         text: String::new(),
         resumed: false,
         silent: true,
+        completed: false,
+        event_delivery: None,
     };
     assert!(answer_request(&turn, &silent).is_none());
-    let spoken = Answer {
+    let mut spoken = Answer {
+        acknowledgement: false,
         text: "hello".into(),
         resumed: false,
         silent: false,
+        completed: false,
+        event_delivery: None,
     };
     assert!(answer_request(&turn, &spoken).is_some());
+    spoken.acknowledgement = true;
+    assert_eq!(
+        answer_request(&turn, &spoken).unwrap().envelope.unwrap()["body"]["system_one_acknowledgement"],
+        true
+    );
+    spoken.acknowledgement = false;
+    spoken.event_delivery = Some(flow_like::flow::copilot::decision_event::EventDecision::Respond);
+    let request = answer_request(&turn, &spoken).unwrap();
+    assert_eq!(
+        request.envelope.unwrap()["body"]["system_one_delivery"],
+        "respond"
+    );
+    spoken.event_delivery = Some(flow_like::flow::copilot::decision_event::EventDecision::Notify);
+    assert!(
+        answer_request(&turn, &spoken).unwrap().envelope.unwrap()["body"]
+            .get("system_one_delivery")
+            .is_none()
+    );
 }
 
 #[tokio::test]

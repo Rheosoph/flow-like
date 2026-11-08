@@ -243,6 +243,7 @@ impl Stream {
                             view,
                             target.host,
                             target.bot_id,
+                            target.observations,
                             Default::default(),
                         ) => result,
                     }

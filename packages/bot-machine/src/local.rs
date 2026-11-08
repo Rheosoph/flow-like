@@ -9,7 +9,8 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use flow_like_bot_tools::browser::{
-    BrowserBackend, BrowserStep, Download, PageState, ScrollTo, SnapshotRequest, SnapshotView,
+    BrowserBackend, BrowserScreen, BrowserStep, Download, PageState, ScrollTo, SnapshotRequest,
+    SnapshotView,
 };
 use flow_like_bot_tools::computer::{
     ComputerAction, ComputerBackend, PointerButton, Screen, ScrollDirection, WindowBounds,
@@ -20,6 +21,7 @@ use flow_like_catalog_automation::bot_driver::{
     BotScrollDirection, BotStep, BotWindowOp,
 };
 use flow_like_catalog_automation::computer::window::WindowInfo;
+use flow_like_types::interaction_observation::InteractionObservation;
 use flow_like_types::{Bytes, Result, anyhow};
 
 use crate::frames::{FrameKind, Shot};
@@ -62,10 +64,13 @@ impl LocalPlayground {
     }
 
     fn running_browsers(&self) -> Vec<Arc<LocalBrowser>> {
-        self.browsers
+        let mut browsers: Vec<_> = self
+            .browsers
             .iter()
             .map(|entry| entry.value().clone())
-            .collect()
+            .collect();
+        browsers.sort_by_key(|browser| std::cmp::Reverse(browser.last_activity()));
+        browsers
     }
 
     async fn browser_shot(&self) -> Option<Shot> {
@@ -73,7 +78,7 @@ impl LocalPlayground {
             let Some(running) = browser.running().await else {
                 continue;
             };
-            let Ok(png) = running.screenshot().await else {
+            let Ok((png, observation)) = running.screenshot_with_observation().await else {
                 continue;
             };
             let caption = running
@@ -85,6 +90,7 @@ impl LocalPlayground {
                 png,
                 kind: FrameKind::Browser,
                 caption,
+                observation: Some(observation),
             });
         }
         None
@@ -96,6 +102,7 @@ impl LocalPlayground {
             png: screen.png,
             kind: FrameKind::Computer,
             caption: "Screen".into(),
+            observation: screen.observation,
         })
     }
 }
@@ -118,6 +125,18 @@ impl Playground for LocalPlayground {
     async fn capture(&self) -> Result<Option<Shot>> {
         let screen_visible = !self.headless && self.computer_used.load(Ordering::Acquire);
         if screen_visible && !self.running_browsers().is_empty() {
+            return Ok(self.screen_shot().await);
+        }
+        let computer_activity = *self
+            .computer
+            .last_used
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if computer_activity.is_some_and(|at| {
+            self.running_browsers()
+                .iter()
+                .all(|browser| at > browser.last_activity())
+        }) {
             return Ok(self.screen_shot().await);
         }
         if let Some(shot) = self.browser_shot().await {
@@ -229,10 +248,11 @@ impl LocalBrowser {
     }
 
     fn idle_for(&self) -> Duration {
-        self.last_used
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .elapsed()
+        self.last_activity().elapsed()
+    }
+
+    fn last_activity(&self) -> Instant {
+        *self.last_used.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     async fn running(&self) -> Option<Arc<BotBrowser>> {
@@ -342,6 +362,18 @@ impl BrowserBackend for LocalBrowser {
         self.needed().await?.screenshot().await
     }
 
+    async fn capture(&self) -> Result<BrowserScreen> {
+        let (png, observation) = self.needed().await?.screenshot_with_observation().await?;
+        Ok(BrowserScreen {
+            png,
+            observation: Some(observation),
+        })
+    }
+
+    async fn observation(&self) -> Result<Option<InteractionObservation>> {
+        Ok(Some(self.needed().await?.observation().await?))
+    }
+
     async fn current(&self) -> Result<Option<PageState>> {
         self.touch();
         match self.running().await {
@@ -380,6 +412,13 @@ impl BrowserBackend for LocalBrowser {
 #[derive(Default)]
 pub struct LocalComputer {
     inner: BotComputer,
+    last_used: Mutex<Option<Instant>>,
+}
+
+impl LocalComputer {
+    fn touch(&self) {
+        *self.last_used.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+    }
 }
 
 fn direction(direction: ScrollDirection) -> BotScrollDirection {
@@ -417,16 +456,20 @@ fn summary(window: WindowInfo) -> WindowSummary {
 }
 
 fn screen(shot: flow_like_catalog_automation::bot_driver::BotScreen) -> Screen {
-    Screen::new(shot.png, shot.width, shot.height)
+    let mut screen = Screen::new(shot.png, shot.width, shot.height);
+    screen.observation = shot.observation;
+    screen
 }
 
 #[async_trait]
 impl ComputerBackend for LocalComputer {
     async fn screenshot(&self) -> Result<Screen> {
+        self.touch();
         Ok(screen(self.inner.screenshot().await?))
     }
 
     async fn act(&self, action: &ComputerAction) -> Result<String> {
+        self.touch();
         let done = match action {
             ComputerAction::Click {
                 x,
@@ -448,10 +491,12 @@ impl ComputerBackend for LocalComputer {
     }
 
     async fn screenshot_window(&self, window: &str) -> Result<Screen> {
+        self.touch();
         Ok(screen(self.inner.screenshot_window(window).await?))
     }
 
     async fn windows(&self) -> Result<Vec<WindowSummary>> {
+        self.touch();
         Ok(self
             .inner
             .windows()
@@ -462,6 +507,7 @@ impl ComputerBackend for LocalComputer {
     }
 
     async fn window(&self, window: &str, op: WindowOp, bounds: WindowBounds) -> Result<String> {
+        self.touch();
         self.inner
             .window_action(
                 window,
@@ -475,6 +521,7 @@ impl ComputerBackend for LocalComputer {
     }
 
     async fn launch(&self, program: &str, args: &[String]) -> Result<String> {
+        self.touch();
         self.inner.launch(program, args).await
     }
 }

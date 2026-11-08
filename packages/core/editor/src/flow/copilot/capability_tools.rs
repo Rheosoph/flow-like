@@ -102,6 +102,16 @@ fn connector_ask_message(tool: &str, args: &Value) -> String {
 }
 
 fn ask_message(tool: &str, args: &Value) -> String {
+    if tools::configuration::requires_approval(tool) {
+        let fields = args
+            .get("changes")
+            .and_then(Value::as_object)
+            .map(|fields| fields.keys().cloned().collect::<Vec<_>>().join(", "))
+            .unwrap_or_default();
+        return format!(
+            "The bot wants to change its {fields}. Review the proposed values. Approved changes take effect on the next turn."
+        );
+    }
     if tools::services::POLICY_TOOLS.contains(&tool) {
         return connector_ask_message(tool, args);
     }
@@ -173,6 +183,9 @@ macro_rules! registered_tools {
 }
 
 registered_tools!(
+    "bot_configuration",
+    "bot_models",
+    "bot_update_configuration",
     "file_list",
     "file_read",
     "file_save",
@@ -194,6 +207,9 @@ registered_tools!(
     "message_owner",
     "list_people",
     "message_person",
+    "user_context_available",
+    "user_context_request",
+    "user_context_set_status",
     "schedule_task",
     "list_tasks",
     "cancel_task",
@@ -420,6 +436,17 @@ impl HostTools {
         self
     }
 
+    /// A host only advertises context requests when it can reach this conversation's people.
+    pub fn with_user_context(mut self, available: bool) -> Self {
+        if !available {
+            self.names
+                .remove(tools::user_context::USER_CONTEXT_AVAILABLE);
+            self.names.remove(tools::user_context::USER_CONTEXT_REQUEST);
+            self.names.remove(tools::user_context::USER_CONTEXT_SET_STATUS);
+        }
+        self
+    }
+
     pub fn code_languages(&self) -> &[String] {
         &self.code_languages
     }
@@ -450,7 +477,9 @@ mod tests {
                 spec.name
             );
             assert!(
-                required_capability(&spec).is_some() || is_secret_tool(spec.name),
+                required_capability(&spec).is_some()
+                    || is_secret_tool(spec.name)
+                    || tools::configuration::is_configuration_tool(spec.name),
                 "{} has no capability",
                 spec.name
             );
@@ -482,6 +511,7 @@ mod tests {
                 matches!(
                     name,
                     "knowledge_drop"
+                        | "bot_update_configuration"
                         | "shell_run"
                         | "browser_open"
                         | "computer_screenshot"

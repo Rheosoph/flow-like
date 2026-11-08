@@ -909,6 +909,33 @@ describe("BotEditorDialog secrets", () => {
 });
 
 describe("BotEditorDialog chat settings", () => {
+	test("a decision model can be disabled without changing the chat model", async () => {
+		const view = await renderDialog({
+			existing: bot({
+				model: {
+					primary: "chat_model",
+					fallbacks: [],
+					decision: "decision_model",
+				},
+			}),
+		});
+		await view.settle();
+		await view.click("Brain");
+		await view.settle();
+		expect(view.body.textContent).toContain(
+			"Server and managed-device bots use hosted decision models.",
+		);
+		await view.click("Unknown model (decision_model)");
+		await view.click("Disabled");
+		await view.click("Save changes");
+		await view.settle();
+		expect(view.calls.updated).toEqual([
+			{
+				botId: "bot_1",
+				request: { model: { primary: "chat_model", fallbacks: [] } },
+			},
+		]);
+	});
 	test("keeps the bot model and memory management together in Brain", async () => {
 		const view = await renderDialog({
 			existing: bot({ model: { primary: "chat_model", fallbacks: [] } }),

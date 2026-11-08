@@ -167,8 +167,8 @@ async fn session(desk: &Desk, budget: ModelBudget) -> Arc<MemorySession> {
     session
 }
 
-#[test]
-fn direct_and_group_conversations_remember() {
+#[tokio::test]
+async fn direct_and_group_conversations_remember() {
     let desk = Desk::new();
     let group = desk
         .store
@@ -183,19 +183,122 @@ fn direct_and_group_conversations_remember() {
     assert!(!is_owner_direct(&group, &desk.bot.id));
     assert!(!is_owner_direct(&desk.conversation, "bot_other"));
     let trigger = desk.send(LOCAL_OWNER_ID, "t", "message", json!({ "text": "hi" }));
-    assert!(source_for(&desk.host, &desk.conversation, &desk.bot.id, Some(&trigger)).is_some());
+    assert!(
+        source_for(&desk.host, &desk.conversation, &desk.bot.id, Some(&trigger))
+            .await
+            .is_some()
+    );
     assert!(
         source_for(&desk.host, &group, &desk.bot.id, Some(&trigger))
+            .await
             .unwrap()
             .room
     );
     assert!(
         !source_for(&desk.host, &desk.conversation, &desk.bot.id, Some(&trigger))
+            .await
             .unwrap()
             .room
     );
-    assert!(source_for(&desk.host, &group, "bot_other", Some(&trigger)).is_none());
-    assert!(source_for(&desk.host, &desk.conversation, &desk.bot.id, None).is_none());
+    assert!(
+        source_for(&desk.host, &group, "bot_other", Some(&trigger))
+            .await
+            .is_none()
+    );
+    assert!(
+        source_for(&desk.host, &desk.conversation, &desk.bot.id, None)
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn group_memory_access_follows_settings_and_membership_changes() {
+    use flow_like_types::bot_effective::BotRoomLimits;
+    let desk = Desk::new();
+    let make_group = |title: &str| {
+        desk.store
+            .create_conversation(
+                serde_json::from_value(
+                    json!({"kind": "group", "title": title, "members": [&desk.bot.id]}),
+                )
+                .unwrap(),
+            )
+            .unwrap()
+    };
+    let source = make_group("Project knowledge");
+    let destination = make_group("Team");
+    let trigger = desk.send(LOCAL_OWNER_ID, "t", "message", json!({"text": "hi"}));
+    desk.store
+        .set_member_limits(
+            &source.id,
+            &desk.bot.id,
+            Some(BotRoomLimits {
+                share_memory: true,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    let direct = source_for(&desk.host, &desk.conversation, &desk.bot.id, Some(&trigger))
+        .await
+        .unwrap();
+    assert!(direct.use_owner_memory);
+    assert_eq!(direct.shared_room_keys, [source.id.clone()]);
+    let group = source_for(&desk.host, &destination, &desk.bot.id, Some(&trigger))
+        .await
+        .unwrap();
+    assert!(!group.use_owner_memory && group.shared_room_keys.is_empty());
+    desk.store
+        .set_member_limits(
+            &destination.id,
+            &desk.bot.id,
+            Some(BotRoomLimits {
+                use_shared_memory: true,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    let group = source_for(&desk.host, &destination, &desk.bot.id, Some(&trigger))
+        .await
+        .unwrap();
+    assert!(!group.use_owner_memory);
+    assert_eq!(group.shared_room_keys, [source.id.clone()]);
+    desk.store
+        .set_member_limits(
+            &destination.id,
+            &desk.bot.id,
+            Some(BotRoomLimits {
+                use_owner_memory: true,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    let group = source_for(&desk.host, &destination, &desk.bot.id, Some(&trigger))
+        .await
+        .unwrap();
+    assert!(group.use_owner_memory && group.shared_room_keys.is_empty());
+    desk.store
+        .set_member_limits(&source.id, &desk.bot.id, None)
+        .unwrap();
+    let direct = source_for(&desk.host, &desk.conversation, &desk.bot.id, Some(&trigger))
+        .await
+        .unwrap();
+    assert!(direct.shared_room_keys.is_empty());
+    desk.store
+        .set_member_limits(
+            &source.id,
+            &desk.bot.id,
+            Some(BotRoomLimits {
+                share_memory: true,
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    desk.store.remove_member(&source.id, &desk.bot.id).unwrap();
+    let direct = source_for(&desk.host, &desk.conversation, &desk.bot.id, Some(&trigger))
+        .await
+        .unwrap();
+    assert!(direct.shared_room_keys.is_empty());
 }
 
 #[tokio::test]

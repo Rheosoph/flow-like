@@ -27,6 +27,9 @@ fn fact(id: &str, text: &str, seq: Seq) -> Fact {
         valid_to: None,
         recorded_at: now(),
         expired_at: None,
+        geojson: None,
+        time: None,
+        expires_at: None,
         evidence: vec![Evidence {
             speaker: None,
             seq,
@@ -160,10 +163,17 @@ async fn administration_finds_room_facts_and_resets_every_room() {
     assert_eq!(admin.forget("f_room_a").await.unwrap().id, "f_room_a");
     assert_eq!(admin.list(false).await.unwrap().len(), 2);
 
+    let mut retained = connection.table_names().execute().await.unwrap();
+    assert!(retained.contains(&unrelated));
+    retained.push("state".to_string());
+    retained.sort();
+    retained.dedup();
     admin.reset().await.unwrap();
-    assert!(admin.list(false).await.unwrap().is_empty());
-    assert_eq!(
-        connection.table_names().execute().await.unwrap(),
-        [unrelated]
-    );
+    assert!(admin.list(true).await.unwrap().is_empty());
+    let mut remaining = connection.table_names().execute().await.unwrap();
+    remaining.sort();
+    assert_eq!(remaining, retained);
+    let state = stores(&dir).await.state.load().await.unwrap();
+    assert!(state.revision > 0);
+    assert!(state.lease.is_none());
 }

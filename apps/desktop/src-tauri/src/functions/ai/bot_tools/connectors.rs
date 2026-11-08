@@ -190,7 +190,10 @@ pub(crate) async fn credential_for(
         ConnectorAuth::None => Ok(Credential::none()),
         ConnectorAuth::Secret { name } => {
             let value = secrets.secret(name).await?.ok_or_else(|| {
-                anyhow!("The bot has no secret named '{name}' for '{}'", connector.label)
+                anyhow!(
+                    "The bot has no secret named '{name}' for '{}'",
+                    connector.label
+                )
             })?;
             Ok(Credential::from_secret(&value))
         }

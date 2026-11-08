@@ -6,6 +6,7 @@
 pub mod browser;
 pub mod code;
 pub mod computer;
+pub mod configuration;
 pub mod convert;
 #[cfg(feature = "data")]
 pub mod data;
@@ -19,6 +20,7 @@ pub mod env;
 pub mod error;
 pub mod files;
 pub mod image;
+mod interaction_image;
 pub mod knowledge;
 pub mod layout;
 pub mod notify;
@@ -32,6 +34,7 @@ pub mod shell;
 pub mod skills;
 pub mod spec;
 pub mod tables;
+pub mod user_context;
 pub mod web;
 
 #[cfg(test)]
@@ -65,6 +68,7 @@ pub use secrets::SecretInfo;
 pub use shell::{LocalShell, ShellBackend, ShellRequest, ShellResponse};
 pub use skills::{SkillHost, SkillToolSpec};
 pub use spec::{Approval, ToolSpec, spec, specs};
+pub use user_context::UserContextBackend;
 
 fn parse_args<T: DeserializeOwned>(tool: &str, args: Value) -> ToolResult<T> {
     let args = if args.is_null() {
@@ -84,6 +88,13 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         ));
     }
     match tool {
+        configuration::BOT_CONFIGURATION => {
+            configuration::inspect(env, parse_args(tool, args)?).await
+        }
+        configuration::BOT_MODELS => configuration::models(env, parse_args(tool, args)?).await,
+        configuration::BOT_UPDATE_CONFIGURATION => {
+            configuration::update(env, parse_args(tool, args)?).await
+        }
         files::FILE_LIST => files::file_list(env, parse_args(tool, args)?).await,
         files::FILE_READ => files::file_read(env, parse_args(tool, args)?).await,
         files::FILE_SAVE => files::file_save(env, parse_args(tool, args)?).await,
@@ -104,6 +115,15 @@ async fn dispatch(tool: &str, args: Value, env: &dyn ToolEnv) -> ToolResult<Tool
         notify::MESSAGE_OWNER => notify::message_owner(env, parse_args(tool, args)?).await,
         people::LIST_PEOPLE => people::list_people(env, parse_args(tool, args)?).await,
         people::MESSAGE_PERSON => people::message_person(env, parse_args(tool, args)?).await,
+        user_context::USER_CONTEXT_AVAILABLE => {
+            user_context::user_context_available(env, parse_args(tool, args)?).await
+        }
+        user_context::USER_CONTEXT_REQUEST => {
+            user_context::user_context_request(env, parse_args(tool, args)?).await
+        }
+        user_context::USER_CONTEXT_SET_STATUS => {
+            user_context::user_context_set_status(env, parse_args(tool, args)?).await
+        }
         browser::BROWSER_OPEN => browser::browser_open(env, parse_args(tool, args)?).await,
         browser::BROWSER_SNAPSHOT => browser::browser_snapshot(env, parse_args(tool, args)?).await,
         browser::BROWSER_ACT => browser::browser_act(env, parse_args(tool, args)?).await,

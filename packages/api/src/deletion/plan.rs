@@ -1243,6 +1243,7 @@ mod tests {
         let owner = Predicate::Root {
             column: "ownerId".into(),
         };
+        assert_before(&plan, "BotTurnCheckpoint", "BotTurn");
         for (table, expected) in [
             (
                 "BotPermission",
@@ -1310,6 +1311,7 @@ mod tests {
             "BotHostHeartbeat",
             "BotToolGrant",
             "BotTurn",
+            "BotTurnCheckpoint",
             "ConversationSegment",
         ] {
             assert!(

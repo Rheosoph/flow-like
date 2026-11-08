@@ -116,6 +116,31 @@ function fakeInbox(count: number) {
 }
 
 describe("the chat from the bot's inbox history", () => {
+	test("spoken questions and bot answers share the direct chat history", () => {
+		const spoken = entry(1, "user_1", "What is on my calendar?", {
+			kind: "transcript",
+			envelope: {
+				v: 1,
+				enc: "none",
+				body: {
+					call: "call-1",
+					text: "What is on my calendar?",
+					offset_ms: 100,
+					mentions: [BOT],
+				},
+			},
+		});
+		const answer = entry(2, BOT, "Your next meeting is at noon.");
+		const result = transcriptOf([answer, spoken], BOT, "bot:bot_ada");
+		expect(result.messages.map((message) => message.inner)).toEqual([
+			{ role: IRole.User, content: "What is on my calendar?" },
+			{ role: IRole.Assistant, content: "Your next meeting is at noon." },
+		]);
+		expect(result.seqs).toEqual({ m1: 1, m2: 2 });
+		expect(
+			pushedTranscript([spoken], BOT, "bot:bot_ada", []).messages[0]?.id,
+		).toBe("m1");
+	});
 	test("reads the newest page by position and maps senders to roles", async () => {
 		const { inbox, queries } = fakeInbox(120);
 		const page = await loadLatest(inbox, target, "bot:bot_ada", 50);

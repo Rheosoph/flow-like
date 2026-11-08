@@ -84,6 +84,46 @@ export interface IInboxMessageBody {
 	interactive?: { client_run_id: string };
 	approval?: IInboxApproval;
 	approval_response?: IInboxApprovalResponse;
+	user_context_request?: IUserContextRequest;
+	user_context_response?: IUserContextResponse;
+}
+
+export type UserContextField =
+	| "location"
+	| "timezone"
+	| "locale"
+	| "preferences"
+	| "availability"
+	| "free_busy"
+	| "current_context"
+	| "device";
+
+export interface IUserContextRequest {
+	status_change?: { status: import("../../lib/availability").AvailabilityStatus; duration_minutes: number };
+	id: string;
+	bot_id: string;
+	subject_id: string;
+	conversation_id: string;
+	purpose: string;
+	fields: UserContextField[];
+	precision: "approximate" | "precise";
+	audience: "direct" | "group";
+	audience_member_ids: string[];
+	created_at: number;
+	expires_at: number;
+}
+
+export interface IUserContextResponse {
+	request_id: string;
+	bot_id: string;
+	subject_id: string;
+	conversation_id: string;
+	decision: "once" | "session" | "deny";
+	captured_at: number;
+	expires_at: number;
+	source: { session_id: string; platform: string };
+	values: Partial<Record<UserContextField, Record<string, unknown>>>;
+	unavailable: Partial<Record<UserContextField, string>>;
 }
 
 /** The card a bot posts when a turn needs its owner to allow a call; `scope` is comma-joined, empty when the call is never remembered. */
@@ -99,6 +139,7 @@ export interface IInboxApproval {
 	room?: string;
 	/** Set on a `secret_request` card: the owner types the value instead of allowing a call. */
 	secret?: IInboxApprovalSecret;
+	configuration_changes?: Record<string, unknown>;
 }
 
 export interface IInboxApprovalSecret {
@@ -141,6 +182,8 @@ export interface IInboxMemberBody {
 export interface IConversationMember {
 	/** A user sub or a bot id. */
 	principal_id: string;
+	/** The participant's public display name, when available. */
+	name?: string;
 	kind: InboxPrincipalKind;
 	added_by: string | null;
 	joined_at: string;
@@ -148,7 +191,7 @@ export interface IConversationMember {
 	limits?: IBotRoomLimits | null;
 }
 
-/** What a bot may do in one room, on top of its own restrictions; each field only narrows. */
+/** What a bot may do and remember in one room, within its owner's permissions. */
 export interface IBotRoomLimits {
 	/** Most permissions (role bits) the bot holds in the room; omitted adds no limit. */
 	mask?: number | null;
@@ -158,6 +201,12 @@ export interface IBotRoomLimits {
 	scopes?: Record<string, IBotScopes>;
 	/** The bot answers only when a message names it or replies to it; it doesn't read along. */
 	mentioned_only?: boolean;
+	/** Recall the owner's private-chat memory in this group. Defaults to false. */
+	use_owner_memory?: boolean;
+	/** Recall knowledge shared by this bot's other groups. Defaults to false. */
+	use_shared_memory?: boolean;
+	/** Make this group's saved knowledge available outside it. Defaults to false. */
+	share_memory?: boolean;
 }
 
 /** Someone invited to a group who has not joined yet. */
@@ -262,6 +311,8 @@ export interface ICreateConversationRequest {
 	/** Everyone except the caller. A direct conversation takes exactly one. */
 	members: string[];
 	encryption?: ConversationEncryption;
+	/** Settings for your own bots when creating a group. */
+	bot_limits?: Record<string, IBotRoomLimits>;
 }
 
 export interface ISendInboxEntryRequest {

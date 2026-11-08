@@ -5,6 +5,7 @@ export const SCOPE_DOCUMENTS_EXPENSIVE = "documents.expensive";
 const MAX_SCOPE_CHARS = 200;
 
 const NOT_GRANTABLE: ReadonlySet<string> = new Set([
+	"bot_update_configuration",
 	"http_request",
 	"forecast_tool",
 	"flowpilot_board_review",

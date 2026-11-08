@@ -95,7 +95,9 @@ fn spoken_of(entry: &InboxEntry) -> Option<TranscriptBody> {
 fn lines_of(entries: &[InboxEntry]) -> Vec<Line> {
     let mut lines: Vec<Line> = Vec::new();
     for entry in entries {
-        if is_tombstone(&entry.envelope) {
+        if is_tombstone(&entry.envelope)
+            || flow_like_types::bot_user_context::is_ephemeral_body(&entry.envelope["body"])
+        {
             continue;
         }
         match entry.kind {
@@ -157,6 +159,25 @@ pub fn transcript(
         .ok_or(Unreadable::Missing)?;
     let start = (upto + 1).saturating_sub(HISTORY_ENTRIES);
     let lines = lines_of(&entries[start..=upto]);
+    if let Some(prompt) = flow_like_types::bot_user_context::response_prompt(
+        &entries[upto].envelope["body"],
+        bot_id,
+        &entries[upto].sender_id,
+        chrono::Utc::now().timestamp_millis(),
+    ) {
+        return Ok(Transcript {
+            prompt,
+            history: render_history(
+                bot_id,
+                kind,
+                &entries[start..upto],
+                names,
+                owner_id,
+                HISTORY_ENTRIES,
+            ),
+            addressed: true,
+        });
+    }
     let answered = match lines.last() {
         Some(line) if line.message_id == trigger_message_id && line.sender_id != bot_id => line,
         _ => return Err(Unreadable::Deleted),
@@ -187,6 +208,57 @@ pub fn transcript(
         history,
         addressed,
     })
+}
+
+/// The conversation a delayed answer continues, including the bot's latest reply. Entries are
+/// oldest first; edits, deletions and topic boundaries follow the normal turn's history rules.
+pub(crate) fn continuation_history(
+    bot_id: &str,
+    kind: ConversationKind,
+    entries: &[InboxEntry],
+    names: &HashMap<String, String>,
+    owner_id: &str,
+) -> Vec<UnifiedChatMessage> {
+    render_history(bot_id, kind, entries, names, owner_id, HISTORY_ENTRIES)
+}
+
+/// The latest `limit` spoken lines from `entries`, oldest first. Topic boundaries, edits and
+/// tombstones are applied before the limit, so activity entries do not displace messages.
+pub fn render_history(
+    bot_id: &str,
+    kind: ConversationKind,
+    entries: &[InboxEntry],
+    names: &HashMap<String, String>,
+    owner_id: &str,
+    limit: usize,
+) -> Vec<UnifiedChatMessage> {
+    let lines = lines_of(entries);
+    let start = lines.len().saturating_sub(limit);
+    lines
+        .into_iter()
+        .skip(start)
+        .map(|line| {
+            let own = line.sender_id == bot_id;
+            let content = if own || kind != ConversationKind::Group {
+                line.text
+            } else {
+                room_message(
+                    names.get(&line.sender_id).unwrap_or(&line.sender_id),
+                    line.sender_id == owner_id,
+                    &line.text,
+                )
+            };
+            UnifiedChatMessage {
+                role: if own {
+                    ChatRole::Assistant
+                } else {
+                    ChatRole::User
+                },
+                content: clipped(&content, MAX_HISTORY_MESSAGE_CHARS),
+                images: None,
+            }
+        })
+        .collect()
 }
 
 const EXCERPT_CHARS: usize = 120;
@@ -301,5 +373,215 @@ pub fn reaction_turn(
             addressed,
         },
         reactions,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flow_like_types::inbox::{plain_envelope, tombstone_envelope};
+    use serde_json::{Value, json};
+
+    fn entry(id: &str, sender: &str, kind: InboxEntryKind, body: Value) -> InboxEntry {
+        InboxEntry {
+            id: id.to_string(),
+            message_id: id.to_string(),
+            conversation_id: "conversation".to_string(),
+            sender_id: sender.to_string(),
+            kind,
+            envelope: plain_envelope(body),
+            created_at: chrono::DateTime::parse_from_rfc3339("2026-11-08T12:00:00Z").unwrap(),
+            seq: None,
+            cursor: String::new(),
+        }
+    }
+
+    #[test]
+    fn continuation_limits_spoken_lines_after_ignoring_trailing_activity() {
+        let mut entries: Vec<_> = (0..40)
+            .map(|index| {
+                entry(
+                    &format!("message-{index}"),
+                    if index % 2 == 0 { "owner" } else { "bot" },
+                    InboxEntryKind::Message,
+                    json!({ "text": format!("Message {index}") }),
+                )
+            })
+            .collect();
+        entries.extend((0..40).map(|index| {
+            entry(
+                &format!("activity-{index}"),
+                "bot",
+                InboxEntryKind::Activity,
+                json!({}),
+            )
+        }));
+
+        let history = continuation_history(
+            "bot",
+            ConversationKind::Direct,
+            &entries,
+            &HashMap::new(),
+            "owner",
+        );
+
+        assert_eq!(history.len(), 32);
+        for (message, index) in history.iter().zip(8..40) {
+            assert_eq!(message.content, format!("Message {index}"));
+            assert_eq!(matches!(message.role, ChatRole::Assistant), index % 2 == 1);
+        }
+    }
+
+    #[test]
+    fn user_context_values_and_derived_answers_never_enter_later_history() {
+        let entries = vec![
+            entry(
+                "normal",
+                "local",
+                InboxEntryKind::Message,
+                json!({"text":"Find nearby places"}),
+            ),
+            entry(
+                "request",
+                "bot",
+                InboxEntryKind::Message,
+                json!({"text":"Location request", "user_context_request":{"id":"request"}}),
+            ),
+            entry(
+                "answer",
+                "local",
+                InboxEntryKind::Message,
+                json!({"text":"Sensitive place", "user_context_response":{"request_id":"request"}}),
+            ),
+            entry(
+                "reply",
+                "bot",
+                InboxEntryKind::Message,
+                json!({"text":"Sensitive nearby answer", "user_context_derived":"request"}),
+            ),
+        ];
+        let history = render_history(
+            "bot",
+            ConversationKind::Direct,
+            &entries,
+            &HashMap::new(),
+            "local",
+            32,
+        );
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].content, "Find nearby places");
+    }
+
+    #[test]
+    fn user_context_wake_rule_targets_only_the_requesting_bot() {
+        let card = entry(
+            "request",
+            "bot",
+            InboxEntryKind::Message,
+            json!({"text":"Share context", "user_context_request":{"id":"request"}, "mentions":["other-bot"]}),
+        );
+        assert!(
+            crate::rule::waiting(
+                ConversationKind::Group,
+                "other-bot",
+                &[card.clone()],
+                card.created_at,
+                false
+            )
+            .is_none()
+        );
+        let answer = entry(
+            "answer",
+            "local",
+            InboxEntryKind::Message,
+            json!({"text":"Shared context", "user_context_response":{"bot_id":"bot"}, "mentions":["bot"]}),
+        );
+        assert!(
+            crate::rule::waiting(
+                ConversationKind::Group,
+                "bot",
+                &[answer.clone()],
+                answer.created_at,
+                false
+            )
+            .is_some()
+        );
+        assert!(
+            crate::rule::waiting(
+                ConversationKind::Group,
+                "other-bot",
+                &[answer.clone()],
+                answer.created_at,
+                false
+            )
+            .is_none()
+        );
+        let reply = entry(
+            "reply",
+            "bot",
+            InboxEntryKind::Message,
+            json!({"text":"Context answer", "user_context_derived":"request", "mentions":["other-bot"]}),
+        );
+        assert!(
+            crate::rule::waiting(
+                ConversationKind::Group,
+                "other-bot",
+                &[reply.clone()],
+                reply.created_at,
+                false
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn rendered_history_applies_topics_edits_and_tombstones_before_its_limit() {
+        let mut deleted = entry(
+            "deleted",
+            "guest",
+            InboxEntryKind::Message,
+            json!({ "text": "Removed text" }),
+        );
+        deleted.envelope = tombstone_envelope();
+        let entries = vec![
+            entry(
+                "old",
+                "owner",
+                InboxEntryKind::Message,
+                json!({ "text": "Old topic" }),
+            ),
+            entry("topic", "owner", InboxEntryKind::Topic, json!({})),
+            entry(
+                "question",
+                "guest",
+                InboxEntryKind::Message,
+                json!({ "text": "Old question" }),
+            ),
+            entry(
+                "answer",
+                "bot",
+                InboxEntryKind::Message,
+                json!({ "text": "I am checking." }),
+            ),
+            entry(
+                "edit",
+                "guest",
+                InboxEntryKind::Edit,
+                json!({ "target": "question", "text": "Corrected question" }),
+            ),
+            deleted,
+        ];
+        let names = HashMap::from([("guest".to_string(), "Guest".to_string())]);
+
+        let history = render_history("bot", ConversationKind::Group, &entries, &names, "owner", 8);
+
+        assert_eq!(history.len(), 2);
+        assert_eq!(
+            history[0].content,
+            room_message("Guest", false, "Corrected question")
+        );
+        assert!(matches!(history[0].role, ChatRole::User));
+        assert_eq!(history[1].content, "I am checking.");
+        assert!(matches!(history[1].role, ChatRole::Assistant));
     }
 }

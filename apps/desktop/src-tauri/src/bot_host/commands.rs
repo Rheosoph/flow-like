@@ -1,4 +1,8 @@
-use super::{AccountHost, BotHost, e2e::{E2eHost, E2eStatus}, host::TurnInfo};
+use super::{
+    AccountHost, BotHost,
+    e2e::{E2eHost, E2eStatus},
+    host::TurnInfo,
+};
 use tauri::State;
 
 /// Running and queued turns of local bots and of the account's bots that run here, then the
@@ -18,7 +22,11 @@ pub async fn bot_host_cancel_turn(
     account: State<'_, AccountHost>,
     turn_id: String,
 ) -> Result<bool, String> {
-    Ok(host.cancel(&turn_id) || account.cancel(&turn_id).await)
+    Ok(host.cancel(&turn_id).await?
+        || account
+            .cancel(&turn_id)
+            .await
+            .map_err(|error| error.to_string())?)
 }
 
 /// The encryption state of an account bot on this desktop: key id, fingerprint, whether the

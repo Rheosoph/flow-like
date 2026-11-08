@@ -76,8 +76,11 @@ import {
 	type ApprovalOwner,
 	StandingApprovals,
 	grantStoreOf,
+	requiresFreshToolApproval,
 	resolveFrontendToolApprovalScope,
 } from "../../lib/frontend-tool-approval-scope";
+import { isRecord } from "../../lib/response-shape";
+import { invalidateBotConfiguration } from "../../hooks/use-bots";
 import {
 	inspectLiveAppPage,
 	interactWithAppPage,
@@ -1453,6 +1456,11 @@ function promptForDialog(
 		destructive: dialog.override?.destructive ?? false,
 		rememberable,
 		rememberAppId: rememberable ? approvalScope.appId : undefined,
+		configurationChanges:
+			requiresFreshToolApproval(request.toolName) &&
+			isRecord(request.arguments.changes)
+				? request.arguments.changes
+				: undefined,
 		toolName: request.toolName,
 		title:
 			dialog.override?.title ||
@@ -8230,15 +8238,16 @@ Completion contract: build complete helper logic first and add the Event entry l
 				const asking = askingChat(request);
 				const owner = approvalOwner(asking);
 				const needsApproval =
-					!selectAutoMode(
+					requiresFreshToolApproval(request.toolName) ||
+					(!selectAutoMode(
 						useGlobalChatStore.getState(),
 						asking.conversationId,
 					) &&
-					(approval?.kind === "mutating" || approval?.kind === "execute") &&
-					!shouldSkipUnavailableCreateTableApproval(
-						request.toolName,
-						request.arguments,
-					);
+						(approval?.kind === "mutating" || approval?.kind === "execute") &&
+						!shouldSkipUnavailableCreateTableApproval(
+							request.toolName,
+							request.arguments,
+						));
 
 				let remembered = false;
 				const contextAppId = request.context?.appId || request.context?.app_id;
@@ -8660,6 +8669,28 @@ Completion contract: build complete helper logic first and add the Event entry l
 			disposed = true;
 			stop?.();
 		};
+	}, [queryClient]);
+
+	useEffect(() => {
+		const refreshed = new Set<string>();
+		return useGlobalChatStore.subscribe((state) => {
+			for (const run of Object.values(state.runs)) {
+				for (const step of run.message?.plan_steps ?? []) {
+					if (
+						step.toolName !== "bot_update_configuration" ||
+						step.status !== "done"
+					)
+						continue;
+					const key = `${run.runId}:${step.id}`;
+					if (refreshed.has(key)) continue;
+					refreshed.add(key);
+					invalidateBotConfiguration(
+						queryClient,
+						conversationBotId(run.conversationId),
+					);
+				}
+			}
+		});
 	}, [queryClient]);
 
 	useEffect(() => {

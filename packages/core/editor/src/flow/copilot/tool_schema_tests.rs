@@ -548,6 +548,10 @@ fn sorted_difference<'a>(left: &BTreeSet<&'a str>, right: &BTreeSet<&'a str>) ->
 #[tokio::test]
 async fn every_advertised_tool_schema_is_portable() {
     let mut sets = surface_definitions();
+    sets.push((
+        "long_running_bot".to_string(),
+        vec![super::work_plan::update_work_plan_tool_spec().to_tool_definition()],
+    ));
     sets.extend(
         spec_builder_definitions()
             .into_iter()

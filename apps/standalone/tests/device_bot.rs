@@ -67,6 +67,16 @@ impl BrowserBackend for NoBrowser {
 
 struct FakeBrowserMachines;
 
+#[test]
+fn configuration_tools_are_not_offered_without_a_device_configuration_backend() {
+    for room_turn in [false, true] {
+        let tools = bot_host::runner::host_tools(&MachineBackends::default(), room_turn);
+        for tool in ["bot_configuration", "bot_models", "bot_update_configuration"] {
+            assert!(!tools.runs(tool), "{tool}");
+        }
+    }
+}
+
 impl Machines for FakeBrowserMachines {
     fn machine(&self, _: &str, _: Option<&str>, _: bool, _: bool) -> MachineBackends {
         MachineBackends {

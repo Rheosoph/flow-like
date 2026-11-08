@@ -1,7 +1,7 @@
 use super::{
     INBOX_INVITE_LIMIT, INBOX_INVITE_NOT_ALLOWED, INBOX_MEMBER_NOT_ALLOWED, MEMBER_ACTIVE,
     MEMBER_DECLINED, MEMBER_PENDING, Reader,
-    conversations::{NewConversation, start_group},
+    conversations::{NewConversation, create_group_in, start_group},
     entries::send_in,
     fixture::{assert_code, at, copies, database, delete_bot, insert_bot, says, text, user},
     invitations::{
@@ -12,7 +12,9 @@ use super::{
 };
 use crate::{
     bot_permission::room_limits,
-    entity::{conversation_member, membership},
+    db::{DbDialect, RetryPolicy, retry_transaction},
+    entity::{conversation, conversation_member, inbox_entry, membership},
+    error::ApiError,
 };
 use axum::http::StatusCode;
 use flow_like_types::{
@@ -90,6 +92,138 @@ async fn invite(db: &DatabaseConnection, who: &[&str]) -> super::invitations::In
     invite_in(db, "room", "user-a", &invitees, &NO_LIMITS, at(10))
         .await
         .unwrap()
+}
+
+async fn create_group(
+    db: &DatabaseConnection,
+    id: &str,
+    limits: BTreeMap<String, BotRoomLimits>,
+) -> Result<super::invitations::InviteOutcome, ApiError> {
+    let plan = NewConversation {
+        kind: ConversationKind::Group,
+        title: Some("Memory setup".into()),
+        members: vec!["bot_a".into(), "bot_b".into(), "user-b".into()],
+        encryption: ConversationEncryption::Plain,
+    };
+    let invitees = classify(db, "user-a", &plan.members).await?;
+    retry_transaction(
+        db,
+        DbDialect::default(),
+        None,
+        &RetryPolicy::default(),
+        |txn| {
+            let (id, plan, invitees, limits) = (
+                id.to_string(),
+                plan.clone(),
+                invitees.clone(),
+                limits.clone(),
+            );
+            Box::pin(async move {
+                create_group_in(txn, &id, "user-a", &plan, &invitees, &limits, at(10)).await
+            })
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn group_creation_commits_initial_memory_limits_with_memberships() {
+    let db = world().await;
+    let limits = BotRoomLimits {
+        mask: Some(1),
+        use_owner_memory: true,
+        use_shared_memory: true,
+        share_memory: true,
+        ..Default::default()
+    };
+    let outcome = create_group(
+        &db,
+        "new-room",
+        BTreeMap::from([("bot_a".into(), limits.clone())]),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome.added, ["bot_a"]);
+    assert_eq!(outcome.invited.len(), 2);
+    assert_eq!(room_limits(&db, "bot_a", "new-room").await.unwrap(), limits);
+    assert!(
+        conversation::Entity::find_by_id("new-room")
+            .one(&db)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    for principal in ["bot_b", "user-b"] {
+        let member = conversation_member::Entity::find_by_id((
+            "new-room".to_string(),
+            principal.to_string(),
+        ))
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(member.status, MEMBER_PENDING);
+        assert!(member.limits.is_none());
+    }
+}
+
+#[tokio::test]
+async fn group_creation_rolls_back_when_initial_memory_limits_are_refused() {
+    let db = world().await;
+    for (bot_id, limits, reason) in [
+        (
+            "bot_b",
+            BotRoomLimits {
+                share_memory: true,
+                ..Default::default()
+            },
+            "only be set up front on your own bots",
+        ),
+        (
+            "bot_a",
+            BotRoomLimits {
+                mask: Some(-1),
+                use_owner_memory: true,
+                ..Default::default()
+            },
+            "can't be negative",
+        ),
+    ] {
+        let error = create_group(
+            &db,
+            "rejected-room",
+            BTreeMap::from([(bot_id.into(), limits)]),
+        )
+        .await
+        .err()
+        .expect("invalid initial limits must reject group creation");
+        assert_eq!(error.status(), StatusCode::BAD_REQUEST);
+        assert!(says(&error, reason));
+        assert!(
+            conversation::Entity::find_by_id("rejected-room")
+                .one(&db)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            conversation_member::Entity::find()
+                .filter(conversation_member::Column::ConversationId.eq("rejected-room"))
+                .all(&db)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            inbox_entry::Entity::find()
+                .filter(inbox_entry::Column::ConversationId.eq("rejected-room"))
+                .all(&db)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
 }
 
 async fn status_of(db: &DatabaseConnection, principal: &str) -> Option<String> {
@@ -301,6 +435,9 @@ async fn another_persons_bot_joins_only_when_its_owner_accepts_with_limits() {
     let limits = BotRoomLimits {
         mask: Some(1),
         apps: Some(vec!["app-1".into()]),
+        use_owner_memory: true,
+        use_shared_memory: true,
+        share_memory: true,
         ..Default::default()
     };
     accept_in(&db, "room", "bot_b", "user-b", Some(&limits), at(20))
@@ -352,6 +489,7 @@ async fn limits_are_edited_by_the_bots_owner_and_apply_next_call() {
 
     let narrow = BotRoomLimits {
         mask: Some(0),
+        use_shared_memory: true,
         ..Default::default()
     };
     let refused = set_limits_in(&db, "room", "bot_b", "user-a", Some(&narrow))
@@ -399,6 +537,8 @@ async fn a_persons_invitation_takes_no_limits_and_own_bots_join_at_once() {
     invite(&db, &["user-b"]).await;
     let limits = BotRoomLimits {
         mask: Some(1),
+        use_owner_memory: true,
+        share_memory: true,
         ..Default::default()
     };
     let error = accept_in(&db, "room", "user-b", "user-b", Some(&limits), at(20))

@@ -9,6 +9,7 @@ import {
 	domWindow as window,
 } from "../components/bots-tab/testing/dom-harness";
 import type { CrewDirectory } from "../components/bots-tab/use-crew-directory";
+import { type IBit, IBitTypes } from "../lib/schema/bit/bit";
 import { useBackendStore } from "../state/backend-state";
 import type {
 	IConversation,
@@ -63,11 +64,17 @@ async function fixture(
 	provider = "hosted:openrouter",
 	defaultVoice?: string,
 	maxInputCharacters?: unknown,
+	options: {
+		pin?: string | null;
+		profileBits?: IBit[] | Promise<IBit[]>;
+		installed?: boolean;
+	} = {},
 ) {
 	const requests: unknown[] = [];
 	const played: string[] = [];
 	let capabilities: readonly string[] = [];
 	let lookups = 0;
+	let profileLookups = 0;
 	let stops = 0;
 	useBackendStore.getState().setBackend({
 		capabilities: () => ({ canExecuteLocally: desktop }),
@@ -85,7 +92,11 @@ async function fixture(
 					},
 				};
 			},
-			isBitInstalled: async () => true,
+			isBitInstalled: async () => options.installed ?? true,
+			getProfileBits: async () => {
+				profileLookups++;
+				return options.profileBits ?? [];
+			},
 		},
 		audioState: {
 			speak: async (request: { text: string }) => {
@@ -120,7 +131,10 @@ async function fixture(
 			entries,
 			items: foldInboxEntries(entries),
 			historyReady: true,
-			directory,
+			directory: (id) => ({
+				...directory(id),
+				ttsModel: options.pin === undefined ? "voice" : options.pin,
+			}),
 			call: {
 				...controls,
 				joined,
@@ -148,6 +162,9 @@ async function fixture(
 		},
 		get lookups() {
 			return lookups;
+		},
+		get profileLookups() {
+			return profileLookups;
 		},
 		get stops() {
 			return stops;
@@ -184,6 +201,7 @@ test("joined calls synthesize only new replies with the pinned hosted voice and 
 		expect(f.lookups).toBe(0);
 		await f.join();
 		expect(f.capabilities).toEqual(["bot"]);
+		expect(f.profileLookups).toBe(0);
 		expect(f.requests).toEqual([]);
 		await f.add("answer", 3);
 		await waitForVoice();
@@ -246,6 +264,117 @@ test("catalog speech limits split long call replies without dropping text", asyn
 		]);
 		expect(f.played.join("")).toBe(text);
 		expect(f.requests).toHaveLength(3);
+	} finally {
+		await f.dispose();
+	}
+});
+
+function profileVoice(id: string, provider: string): IBit {
+	return {
+		id,
+		hub: "hub",
+		type: IBitTypes.Tts,
+		parameters: {
+			provider: { provider_name: provider },
+			default_voice: "profile-voice",
+		},
+	} as IBit;
+}
+
+test("unpinned bots use an installed profile voice on desktop or a hosted voice elsewhere", async () => {
+	for (const desktop of [false, true]) {
+		const f = await fixture(desktop, undefined, undefined, undefined, {
+			pin: null,
+			profileBits: [
+				profileVoice("local-voice", "local:any-tts"),
+				profileVoice("hosted-voice", "hosted:openrouter"),
+			],
+		});
+		try {
+			expect(f.profileLookups).toBe(0);
+			await f.join();
+			expect(f.capabilities).toEqual(["bot"]);
+			expect(f.lookups).toBe(0);
+			await f.add("answer", 3);
+			await waitForVoice();
+			expect(f.requests).toEqual([
+				{
+					bit_id: desktop ? "hub:local-voice" : "hosted-voice",
+					text: "answer",
+					local: desktop,
+					voice: "profile-voice",
+					format: "wav",
+				},
+			]);
+			expect(f.played).toEqual(["answer"]);
+		} finally {
+			await f.dispose();
+		}
+	}
+});
+
+test("uninstalled local defaults fall back to hosted speech and absent voices leave text alone", async () => {
+	for (const hosted of [false, true]) {
+		const f = await fixture(true, undefined, undefined, undefined, {
+			pin: null,
+			installed: false,
+			profileBits: [
+				profileVoice("local-voice", "local:any-tts"),
+				...(hosted ? [profileVoice("hosted-voice", "hosted:openrouter")] : []),
+			],
+		});
+		try {
+			await f.join();
+			expect(f.capabilities).toEqual(hosted ? ["bot"] : []);
+			await f.add("answer", 3);
+			await waitForVoice();
+			expect(f.played).toEqual(hosted ? ["answer"] : []);
+			if (hosted)
+				expect(f.requests[0]).toMatchObject({
+					bit_id: "hosted-voice",
+					local: false,
+				});
+		} finally {
+			await f.dispose();
+		}
+	}
+});
+
+test("an explicit unavailable voice stays pinned even when the profile has another voice", async () => {
+	const f = await fixture(false, "local:any-tts", undefined, undefined, {
+		profileBits: [profileVoice("hosted-voice", "hosted:openrouter")],
+	});
+	try {
+		await f.join();
+		await f.add("answer", 3);
+		await waitForVoice();
+		expect(f.capabilities).toEqual([]);
+		expect(f.profileLookups).toBe(0);
+		expect(f.requests).toEqual([]);
+	} finally {
+		await f.dispose();
+	}
+});
+
+test("a default voice resolving after a reply speaks that reply without replaying old history", async () => {
+	let resolve!: (bits: IBit[]) => void;
+	const profileBits = new Promise<IBit[]>((done) => {
+		resolve = done;
+	});
+	const f = await fixture(false, undefined, undefined, undefined, {
+		pin: null,
+		profileBits,
+	});
+	try {
+		await f.join();
+		await f.add("answer", 3);
+		expect(f.requests).toEqual([]);
+		await act(async () => {
+			resolve([profileVoice("hosted-voice", "hosted:openrouter")]);
+		});
+		await settle();
+		await waitForVoice();
+		expect(f.played).toEqual(["answer"]);
 	} finally {
 		await f.dispose();
 	}

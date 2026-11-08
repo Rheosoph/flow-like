@@ -3,11 +3,13 @@ use super::{
         BOT_APPROVAL_UNKNOWN, BOT_TURN_NOT_WAITING, Expired, GrantRows, answer_in, cancel_in,
         expire_in, grant_in, list_grants, park_in, revoke_in,
     },
-    fixture::{assert_code, at, conversation, database, delivery, insert_bot, recipient},
+    fixture::{
+        assert_code, at, conversation, database, delivery, insert_bot, participant_wait, recipient,
+    },
     ledger::{self, BOT_TURN_LEASE_LOST, ClaimRequest, claim_in, enqueue_in, recover_in},
 };
 use crate::{
-    entity::{bot_tool_grant, bot_turn, inbox_entry},
+    entity::{bot_decision_wait, bot_tool_grant, bot_turn, inbox_entry},
     routes::inbox::now_millis,
 };
 use axum::http::StatusCode;
@@ -148,6 +150,58 @@ async fn resolve(
 
 fn rows(db: &DatabaseConnection) -> GrantRows<Arc<DatabaseConnection>> {
     GrantRows::new(Arc::new(db.clone()), BOT, OWNER)
+}
+
+#[tokio::test]
+async fn approval_resume_clears_only_the_origin_rooms_older_dependency() {
+    for newer in [false, true] {
+        let (db, mut turn) = running().await;
+        conversation(&db, "origin", "GROUP", "PLAIN", &[OWNER, BOT]).await;
+        conversation(&db, "other", "GROUP", "PLAIN", &[OWNER, BOT]).await;
+        bot_turn::Entity::update_many()
+            .col_expr(bot_turn::Column::ConversationId, Expr::value("origin"))
+            .filter(bot_turn::Column::Id.eq(&turn.id))
+            .exec(&db)
+            .await
+            .unwrap();
+        turn.conversation_id = "origin".into();
+        let card = card(&turn);
+        let now = now_millis();
+        park_in(&db, &turn, HOST, &card, "c1", now).await.unwrap();
+        let cutoff = now + Duration::seconds(2);
+        participant_wait(
+            &db,
+            BOT,
+            "origin",
+            cutoff + Duration::seconds(if newer { 1 } else { -1 }),
+        )
+        .await;
+        participant_wait(&db, BOT, "other", now).await;
+        let (resumed, _) = answer_in(
+            &db,
+            OWNER,
+            BOT,
+            &turn.id,
+            &answer(&card, ApprovalDecision::Once),
+            "c1",
+            cutoff,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resumed.status, STORED_QUEUED);
+        let origin = bot_decision_wait::Entity::find_by_id((BOT.into(), "origin".into()))
+            .one(&db)
+            .await
+            .unwrap();
+        assert_eq!(origin.is_some(), newer);
+        assert!(
+            bot_decision_wait::Entity::find_by_id((BOT.into(), "other".into()))
+                .one(&db)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
 }
 
 #[tokio::test]

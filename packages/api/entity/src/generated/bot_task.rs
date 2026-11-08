@@ -30,6 +30,8 @@ pub struct Model {
     #[sea_orm(column_name = "lastRunAt", nullable)]
     pub last_run_at: Option<DateTimeWithTimeZone>,
     pub enabled: bool,
+    #[sea_orm(nullable, default_value = false)]
+    pub monitoring: Option<bool>,
     #[sea_orm(column_name = "createdBy", column_type = "Text")]
     pub created_by: String,
     #[sea_orm(column_name = "createdAt")]

@@ -127,6 +127,15 @@ accepts a negative prompt and dimensions from 256 to 2048 pixels. OpenRouter
 uses its [dedicated Image API](https://openrouter.ai/docs/guides/overview/multimodal/image-generation/)
 with an image model ID. Optional controls depend on the selected model.
 
+Flow-Like checks OpenRouter's endpoint capabilities before reserving credits.
+The server caches these records for five minutes. Requested pixel dimensions
+become a supported resolution tier and aspect ratio when the endpoint lacks
+pixel-size controls, so the resulting dimensions can differ from the request.
+Resolution tiers are limited to 2K. Explicit options such as quality, output
+format, and transparency must be supported by the same endpoint; unsupported
+requirements fail before generation. Models that require reference images or
+only produce vector output cannot serve this text-to-image interface.
+
 Each request accepts a prompt of up to 2,048 characters and returns one PNG,
 JPEG, or WebP image of at most 8 MiB. Reference images, image editing, multiple
 outputs, and arbitrary provider request parameters are outside this hosted
@@ -137,7 +146,9 @@ configured per-image provider tariff. For OpenRouter, configure the highest
 cost across the model's permitted settings and routed providers; the final
 charge uses its reported cost. Missing cost information or an interrupted
 provider response leaves usage reserved for reconciliation. Check usage before
-retrying a failed call. See [server configuration](/self-hosting/docker-compose/configuration/#hosted-image-providers)
+retrying a failed call. Error responses distinguish invalid options, provider
+access problems, rate limits, timeouts, and failed generation. Flow-Like does
+not automatically replay a failed generation request. See [server configuration](/self-hosting/docker-compose/configuration/#hosted-image-providers)
 for credentials and pricing fields.
 
 ## Local models

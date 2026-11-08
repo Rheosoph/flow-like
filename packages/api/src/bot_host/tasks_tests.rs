@@ -5,7 +5,10 @@ use super::{
 use crate::{
     entity::{bot, bot_task, bot_turn, inbox_entry},
     routes::{
-        bots::tasks::{create_in, delete_in, list_in, update_in},
+        bots::tasks::{
+            BotTaskInfo, CreateBotTaskRequest, UpdateBotTaskRequest, create_in, delete_in, list_in,
+            update_in,
+        },
         inbox::triggers::{trigger_conversation, write_trigger_in},
     },
 };
@@ -64,6 +67,7 @@ fn request(kind: TaskKind) -> CreateBotTask {
         instruction: "Check the report".into(),
         title: Some("Report".into()),
         enabled: None,
+        monitoring: false,
     }
 }
 
@@ -130,6 +134,7 @@ async fn a_trigger_lands_in_the_bots_copy_and_queues_a_turn_with_no_hops() {
     assert_eq!(entries[0].envelope["body"]["source"], "schedule");
     assert_eq!(entries[0].envelope["body"]["ref_id"], task.id);
     assert_eq!(entries[0].envelope["body"]["title"], "Report");
+    assert_eq!(entries[0].envelope["body"]["monitoring"], false);
     let message_id = fire_message_id(&task.id, task.next_run_at.unwrap().with_timezone(&Utc));
     let turn = bot_turn::Entity::find_by_id(turn_id(BOT, &message_id))
         .one(&db)
@@ -141,6 +146,151 @@ async fn a_trigger_lands_in_the_bots_copy_and_queues_a_turn_with_no_hops() {
 }
 
 #[tokio::test]
+async fn monitoring_opt_in_roundtrips_and_fires_as_trusted_schedule_metadata() {
+    let db = database().await;
+    let task = create_in(
+        &db,
+        OWNER,
+        BOT,
+        CreateBotTask {
+            monitoring: true,
+            ..request(TaskKind::Cron)
+        },
+        TaskCreator::Owner,
+        now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(task.monitoring, Some(true));
+    assert!(BotTaskInfo::from(list_in(&db, OWNER, BOT).await.unwrap().remove(0)).monitoring);
+    let renamed = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            title: Some("Watch for changes".into()),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(renamed.monitoring, Some(true));
+    assert!(BotTaskInfo::from(reload(&db, &task.id).await).monitoring);
+    assert!(matches!(
+        fire(&db, &renamed, renamed.next_run_at.unwrap()).await,
+        Fired::Sent(..)
+    ));
+    let entries = triggers(&db).await;
+    assert_eq!(entries[0].sender_id, OWNER);
+    let body = TriggerBody::parse(&entries[0].envelope["body"]).unwrap();
+    assert!(body.monitoring);
+    assert_eq!(body.source, TriggerSource::Schedule);
+    assert_eq!(body.ref_id, task.id);
+
+    let regular = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            monitoring: Some(false),
+            ..Default::default()
+        },
+        now(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(regular.monitoring, Some(false));
+    assert!(!BotTaskInfo::from(reload(&db, &task.id).await).monitoring);
+    assert!(matches!(
+        fire(&db, &regular, regular.next_run_at.unwrap()).await,
+        Fired::Sent(..)
+    ));
+    assert!(
+        triggers(&db)
+            .await
+            .iter()
+            .any(|entry| entry.envelope["body"]["monitoring"] == false)
+    );
+}
+
+#[tokio::test]
+async fn legacy_null_monitoring_is_a_regular_reminder_and_new_rows_default_false() {
+    let db = database().await;
+    let task = make_due(&db, TaskKind::Once, at(-60)).await;
+    assert_eq!(task.monitoring, Some(false));
+    let mut defaulted: bot_task::ActiveModel = task.clone().into();
+    defaulted.id = Set("task-default-monitoring".into());
+    defaulted.monitoring = sea_orm::ActiveValue::NotSet;
+    assert_eq!(defaulted.insert(&db).await.unwrap().monitoring, Some(false));
+    let legacy = bot_task::ActiveModel {
+        id: Set(task.id),
+        monitoring: Set(None),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    assert_eq!(reload(&db, &legacy.id).await.monitoring, None);
+    assert!(!BotTaskInfo::from(legacy.clone()).monitoring);
+    assert!(matches!(fire(&db, &legacy, now()).await, Fired::Sent(..)));
+    assert_eq!(triggers(&db).await[0].envelope["body"]["monitoring"], false);
+}
+
+#[tokio::test]
+async fn a_monitoring_edit_invalidates_an_already_selected_due_task() {
+    let db = database().await;
+    let task = make_due(&db, TaskKind::Once, at(-60)).await;
+    let stale = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            monitoring: Some(true),
+            ..Default::default()
+        },
+        task.updated_at,
+    )
+    .await
+    .unwrap();
+    let current = update_in(
+        &db,
+        OWNER,
+        BOT,
+        &task.id,
+        UpdateBotTask {
+            monitoring: Some(false),
+            ..Default::default()
+        },
+        task.updated_at,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(fire(&db, &stale, now()).await, Fired::Lost));
+    assert!(triggers(&db).await.is_empty());
+    assert!(matches!(fire(&db, &current, now()).await, Fired::Sent(..)));
+    assert_eq!(triggers(&db).await[0].envelope["body"]["monitoring"], false);
+}
+
+#[test]
+fn legacy_api_requests_do_not_opt_into_monitoring() {
+    let request: CreateBotTaskRequest = serde_json::from_value(serde_json::json!({
+        "kind":"once", "at":"2027-01-01T00:00:00Z", "instruction":"Remind me to call"
+    }))
+    .unwrap();
+    assert!(!request.monitoring);
+    let update: UpdateBotTaskRequest =
+        serde_json::from_value(serde_json::json!({"title":"Rename"})).unwrap();
+    assert_eq!(update.monitoring, None);
+    let update: UpdateBotTaskRequest =
+        serde_json::from_value(serde_json::json!({"monitoring":false})).unwrap();
+    assert_eq!(update.monitoring, Some(false));
+}
+
+#[tokio::test]
 async fn a_trigger_in_a_direct_conversation_wakes_the_bot() {
     let db = database().await;
     let conversation = trigger_conversation(&db, OWNER, BOT, now())
@@ -148,6 +298,7 @@ async fn a_trigger_in_a_direct_conversation_wakes_the_bot() {
         .unwrap()
         .unwrap();
     let body = |bot_id: Option<&str>| TriggerBody {
+        monitoring: false,
         source: TriggerSource::Webhook,
         ref_id: "hook".into(),
         title: "Hook".into(),
@@ -406,6 +557,7 @@ fn a_trigger_is_not_sendable_by_clients() {
         kind: InboxEntryKind::Trigger,
         envelope: Some(
             TriggerBody {
+                monitoring: true,
                 source: TriggerSource::Schedule,
                 ref_id: "t".into(),
                 title: "t".into(),

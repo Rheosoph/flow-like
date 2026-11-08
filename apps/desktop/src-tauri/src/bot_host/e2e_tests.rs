@@ -1,8 +1,6 @@
 use super::{
     account::{AccountConfig, AccountHost},
-    e2e::{
-        CODE_E2E_MEMBER_KEY, CODE_E2E_UNAVAILABLE, CODE_E2E_UNREADABLE, E2eHost, is_sealed,
-    },
+    e2e::{CODE_E2E_MEMBER_KEY, CODE_E2E_UNAVAILABLE, CODE_E2E_UNREADABLE, E2eHost, is_sealed},
     host::TurnEvents,
     hub::{HubFailure, TurnHub},
     tests::{FakeRunner, Recorded, settle, until},
@@ -36,7 +34,13 @@ struct MemVault(Mutex<HashMap<String, Vec<u8>>>);
 
 impl InboxKeyVault for MemVault {
     fn load(&self, owner: &str) -> Result<Option<Zeroizing<Vec<u8>>>, String> {
-        Ok(self.0.lock().unwrap().get(owner).cloned().map(Zeroizing::new))
+        Ok(self
+            .0
+            .lock()
+            .unwrap()
+            .get(owner)
+            .cloned()
+            .map(Zeroizing::new))
     }
 
     fn store(&self, owner: &str, secret: &[u8]) -> Result<(), String> {
@@ -304,7 +308,10 @@ impl Fixture {
             || self.alice_key.clone(),
             |key_id| {
                 let put = self.hub.puts.lock().unwrap();
-                let found = put.iter().find(|put| put["key_id"] == key_id.as_str()).unwrap();
+                let found = put
+                    .iter()
+                    .find(|put| put["key_id"] == key_id.as_str())
+                    .unwrap();
                 PublicInboxKey {
                     key_id,
                     algorithm: found["algorithm"].as_str().unwrap().into(),
@@ -341,9 +348,10 @@ impl Fixture {
         self.hub.turns.lock().unwrap().push(turn("bt_1"));
         tokio::spawn(self.host.clone().run());
         until("the turn ends", || {
-            self.host.turns().iter().any(|t| {
-                matches!(t.status, TurnStatus::Done | TurnStatus::Failed)
-            })
+            self.host
+                .turns()
+                .iter()
+                .any(|t| matches!(t.status, TurnStatus::Done | TurnStatus::Failed))
         })
         .await;
         settle().await;
@@ -379,7 +387,11 @@ async fn the_bot_opens_the_sealed_message_and_seals_its_reply_to_every_member() 
     };
     assert_eq!(open(&f.alice, ALICE)["text"], "answer to: hello secret");
     assert_eq!(open(&f.bob, BOB)["text"], "answer to: hello secret");
-    assert!(f.alice.open(ALICE, &scope(message_id, BOT), &envelopes[BOB]).is_err());
+    assert!(
+        f.alice
+            .open(ALICE, &scope(message_id, BOT), &envelopes[BOB])
+            .is_err()
+    );
     assert_eq!(f.alice_key.algorithm, f.bob_key.algorithm);
 }
 
@@ -398,9 +410,17 @@ async fn the_server_never_receives_plaintext_or_memory_of_an_encrypted_turn() {
     );
     assert!(!everything.contains("4711"), "{everything}");
     assert!(!everything.contains("answer to"), "{everything}");
-    assert!(f.hub.writes.lock().unwrap().is_empty(), "no summaries written");
     assert!(
-        f.hub.reads.lock().unwrap().iter().all(|p| !p.contains("segments")),
+        f.hub.writes.lock().unwrap().is_empty(),
+        "no summaries written"
+    );
+    assert!(
+        f.hub
+            .reads
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|p| !p.contains("segments")),
         "no hub memory read"
     );
     assert!(f.runner.jobs.lock().unwrap()[0].memory.is_none());

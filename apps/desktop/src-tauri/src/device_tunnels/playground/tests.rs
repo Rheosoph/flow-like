@@ -43,6 +43,7 @@ fn frame(kind: PlaygroundFrameKind, age_ms: u64) -> PlaygroundFrame {
             kind,
             caption: "Desktop".into(),
             age_ms,
+            observation: None,
         },
         jpeg: vec![0xff, 0xd8, 0xff],
     }
@@ -301,4 +302,39 @@ fn the_inspection_names_the_playground_flag() {
     assert_eq!(inspected_flag(&without), Ok(Some(false)));
     assert_eq!(inspected_flag(&denied), Ok(None));
     assert!(inspected_flag(&broken).unwrap_err().contains("boom"));
+}
+
+#[test]
+fn observations_travel_with_their_image_and_are_cleared_for_an_asleep_view() {
+    let (live, _controls) = Live::new();
+    let mut picture = frame(PlaygroundFrameKind::Computer, 40);
+    let observation = InteractionObservation {
+        captured_at_ms: 1000,
+        width: 2560,
+        height: 1600,
+        pointer: None,
+        focus: None,
+        action: None,
+        mapping: None,
+    };
+    picture.meta.observation = Some(observation.clone());
+    live.apply(PlaygroundEvent::Frame(picture));
+    assert_eq!(live.view().observation, Some(observation));
+    live.apply(PlaygroundEvent::State(state(
+        false,
+        true,
+        PlaygroundDisplay::Session,
+    )));
+    assert!(live.view().observation.is_none());
+}
+
+#[test]
+fn the_desktop_requests_observations_when_opening_a_view() {
+    assert!(matches!(
+        open_of("bot_1").target,
+        TunnelTarget::BotPlayground {
+            observations: true,
+            ..
+        }
+    ));
 }

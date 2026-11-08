@@ -11,6 +11,11 @@ import type {
 	IHomeDefaults,
 	IHomeLayout,
 } from "@flow-like/flow-like-ui/components/home/types";
+import type {
+	AvailabilityUpdate,
+	CalendarLinkRequest,
+	UserAvailability,
+} from "@flow-like/flow-like-ui/lib/availability";
 import { parseDateValue } from "@flow-like/flow-like-ui/lib/date";
 import { normalizePersonalAccessTokens } from "@flow-like/flow-like-ui/lib/personal-access-token";
 import {
@@ -784,6 +789,41 @@ export class UserState implements IUserState {
 			throw new Error("Unexpected response from user/info");
 		}
 		return result;
+	}
+	private availabilityRequest(
+		path: string,
+		method: string,
+		value?: unknown,
+	): Promise<UserAvailability> {
+		if (!this.backend.profile || !this.hasRemoteAccessToken())
+			throw new Error("Sign in to manage availability.");
+		return fetcher(
+			this.backend.profile,
+			path,
+			{ method, ...(value === undefined ? {} : { body: JSON.stringify(value) }) },
+			this.backend.auth,
+		);
+	}
+	getAvailability(): Promise<UserAvailability> {
+		return this.availabilityRequest("user/availability", "GET");
+	}
+	updateAvailability(value: AvailabilityUpdate): Promise<UserAvailability> {
+		return this.availabilityRequest("user/availability", "PUT", value);
+	}
+	clearAvailability(): Promise<UserAvailability> {
+		return this.availabilityRequest("user/availability", "DELETE");
+	}
+	linkCalendar(value: CalendarLinkRequest): Promise<UserAvailability> {
+		return this.availabilityRequest("user/availability/calendars", "POST", value);
+	}
+	unlinkCalendar(id: string): Promise<UserAvailability> {
+		return this.availabilityRequest(
+			`user/availability/calendars/${encodeURIComponent(id)}`,
+			"DELETE",
+		);
+	}
+	refreshCalendars(): Promise<UserAvailability> {
+		return this.availabilityRequest("user/availability/calendars/refresh", "POST", {});
 	}
 
 	async updateProfileApp(

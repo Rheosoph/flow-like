@@ -41,7 +41,9 @@ use sea_orm::{
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
 
-const INBOX_TABLES: [&str; 5] = [
+const INBOX_TABLES: [&str; 6] = [
+    r#"CREATE TABLE public."User" (
+        "id" TEXT PRIMARY KEY, "name" TEXT, "username" TEXT, "preferredUsername" TEXT)"#,
     r#"CREATE TABLE public."Conversation" (
         "id" TEXT PRIMARY KEY, "kind" TEXT NOT NULL, "title" TEXT, "encryption" TEXT NOT NULL,
         "directKey" TEXT UNIQUE, "createdBy" TEXT NOT NULL, "lastActivityAt" TEXT NOT NULL,
@@ -311,6 +313,7 @@ fn create(
         title: title.map(str::to_string),
         members: members.iter().map(|id| id.to_string()).collect(),
         encryption: None,
+        bot_limits: Default::default(),
     }
 }
 
@@ -336,6 +339,19 @@ fn new_conversations_name_their_members_once_and_follow_the_kind_rules() {
         let error = validate_new_conversation("me", create(kind, &members, title)).unwrap_err();
         assert_eq!(error.status(), StatusCode::BAD_REQUEST, "{members:?}");
     }
+}
+
+#[test]
+fn group_setup_settings_cannot_be_applied_to_a_direct_chat() {
+    let mut request = create(ConversationKind::Direct, &["bot_1"], None);
+    request.bot_limits.insert(
+        "bot_1".into(),
+        flow_like_types::bot_effective::BotRoomLimits {
+            share_memory: true,
+            ..Default::default()
+        },
+    );
+    assert!(validate_new_conversation("me", request).is_err());
 }
 
 #[test]
@@ -395,6 +411,166 @@ async fn a_direct_conversation_is_one_per_pair_in_either_order() {
     assert_eq!(
         members,
         [("bot_1", "bot", Some("user-a")), ("user-a", "user", None)]
+    );
+}
+
+#[tokio::test]
+async fn a_room_roster_includes_public_names_for_active_people_and_bots() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", false).await;
+    db.execute_unprepared(r#"UPDATE public."Bot" SET "name" = 'Researcher' WHERE "id" = 'bot_1'"#)
+        .await
+        .unwrap();
+    db.execute_unprepared(
+        r#"INSERT INTO public."User" ("id", "name", "preferredUsername") VALUES
+        ('user-a', 'Alex', NULL), ('user-b', NULL, 'Bea'), ('outsider', 'Outside', NULL)"#,
+    )
+    .await
+    .unwrap();
+    team(&db).await;
+    let listed = conversations_for(&db, &as_bot_1(), Some("team"))
+        .await
+        .unwrap();
+    let roster: BTreeMap<_, _> = listed[0]
+        .members
+        .iter()
+        .map(|member| (member.principal_id.as_str(), member.name.as_deref()))
+        .collect();
+    assert_eq!(
+        roster,
+        BTreeMap::from([
+            ("bot_1", Some("Researcher")),
+            ("user-a", Some("Alex")),
+            ("user-b", Some("Bea")),
+        ])
+    );
+    for (system, expected) in [("flux", "Flux"), ("general", "Assistant")] {
+        db.execute_unprepared(&format!(r#"UPDATE public."Bot" SET "name" = NULL, "systemKey" = '{system}' WHERE "id" = 'bot_1'"#)).await.unwrap();
+        let listed = conversations_for(&db, &as_bot_1(), Some("team"))
+            .await
+            .unwrap();
+        assert_eq!(
+            listed[0]
+                .members
+                .iter()
+                .find(|member| member.principal_id == "bot_1")
+                .unwrap()
+                .name
+                .as_deref(),
+            Some(expected)
+        );
+    }
+    end_memberships(&db, &["team".to_owned()], &["user-b".to_owned()], at(10))
+        .await
+        .unwrap();
+    let listed = conversations_for(&db, &as_bot_1(), Some("team"))
+        .await
+        .unwrap();
+    assert!(
+        !listed[0]
+            .members
+            .iter()
+            .any(|member| member.principal_id == "user-b")
+    );
+}
+
+#[tokio::test]
+async fn bot_acknowledgement_ingress_keeps_waits_but_marked_human_input_still_queues() {
+    use crate::entity::{bot_decision_wait, bot_turn};
+
+    let db = super::fixture::database().await;
+    for id in ["bot_1", "bot_2"] {
+        insert_bot(&db, id, "user-a", false).await;
+    }
+    group(
+        &db,
+        "team",
+        ConversationEncryption::Plain,
+        &[
+            user("user-b"),
+            bot_principal("bot_1"),
+            bot_principal("bot_2"),
+        ],
+    )
+    .await;
+    bot::ActiveModel {
+        id: Set("bot_1".into()),
+        model_policy: Set(json!({ "decision": "decision-bit" })),
+        ..Default::default()
+    }
+    .update(&db)
+    .await
+    .unwrap();
+    bot_decision_wait::ActiveModel {
+        bot_id: Set("bot_1".into()),
+        conversation_id: Set("team".into()),
+        participant_id: Set("bot_2".into()),
+        trigger_message_id: Set("pending-question".into()),
+        after_seq: Set(0),
+        created_at: Set(at(1)),
+        expires_at: Set(at(100)),
+    }
+    .insert(&db)
+    .await
+    .unwrap();
+
+    let marked = |message_id: &str| {
+        validate_send(send_request(
+            message_id,
+            InboxEntryKind::Message,
+            plain(json!({
+                "text": "Understood.",
+                "mentions": ["bot_1"],
+                "system_one_acknowledgement": true
+            })),
+            None,
+        ))
+        .unwrap()
+    };
+    let acknowledgement = send_in(&db, "team", "bot_2", &marked("bot_ack"), at(10))
+        .await
+        .unwrap();
+    assert!(acknowledgement.bots.is_empty());
+    assert_eq!(bot_turn::Entity::find().count(&db).await.unwrap(), 0);
+    let wait_key = ("bot_1".to_owned(), "team".to_owned());
+    assert!(
+        bot_decision_wait::Entity::find_by_id(wait_key.clone())
+            .one(&db)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        copies(&db, "bot_ack")
+            .await
+            .iter()
+            .all(|entry| entry.envelope["body"]["system_one_acknowledgement"] == true)
+    );
+
+    let human = send_in(&db, "team", "user-b", &marked("human_ack"), at(11))
+        .await
+        .unwrap();
+    assert!(
+        human
+            .bots
+            .iter()
+            .any(|recipient| recipient.bot_id == "bot_1")
+    );
+    assert_eq!(
+        bot_turn::Entity::find()
+            .filter(bot_turn::Column::BotId.eq("bot_1"))
+            .filter(bot_turn::Column::TriggerMessageId.eq("human_ack"))
+            .count(&db)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        bot_decision_wait::Entity::find_by_id(wait_key)
+            .one(&db)
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 
@@ -774,6 +950,90 @@ async fn page(
 
 fn ids(names: &[&str]) -> Vec<String> {
     names.iter().map(|name| name.to_string()).collect()
+}
+
+#[tokio::test]
+async fn recovery_message_lookup_is_scoped_and_honors_cleared_history() {
+    let db = database().await;
+    five_messages(&db).await;
+    let latest = page(&db, None, None, 2).await.0;
+    assert!(!latest.contains(&"m_1".to_owned()));
+    let read = super::entries::entry_page_by_message(&db, "user-a", "team", "m_1")
+        .await
+        .unwrap();
+    assert_eq!(read.entries.len(), 1);
+    assert_eq!(read.entries[0].message_id, "m_1");
+    assert!(read.next_before.is_none());
+    for (reader, room) in [("user-z", "team"), ("user-a", "another-room")] {
+        assert!(
+            super::entries::entry_page_by_message(&db, reader, room, "m_1")
+                .await
+                .unwrap()
+                .entries
+                .is_empty()
+        );
+    }
+    inbox_entry::Entity::update_many()
+        .col_expr(
+            inbox_entry::Column::Cleared,
+            sea_orm::sea_query::Expr::value(true),
+        )
+        .filter(inbox_entry::Column::InboxId.eq("user-a"))
+        .filter(inbox_entry::Column::MessageId.eq("m_1"))
+        .exec(&db)
+        .await
+        .unwrap();
+    assert!(
+        super::entries::entry_page_by_message(&db, "user-a", "team", "m_1")
+            .await
+            .unwrap()
+            .entries
+            .is_empty()
+    );
+    assert_eq!(
+        super::entries::entry_page_by_message(&db, "user-b", "team", "m_1")
+            .await
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn recovery_message_lookup_rejects_ambiguous_selectors() {
+    let query = EntriesQuery {
+        message_id: Some("original".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        super::entries::exact_message(&query).unwrap(),
+        Some("original")
+    );
+    for invalid in [
+        EntriesQuery {
+            message_id: Some("bad/id".into()),
+            ..query.clone()
+        },
+        EntriesQuery {
+            before: Some("cursor".into()),
+            ..query.clone()
+        },
+        EntriesQuery {
+            after: Some("cursor".into()),
+            ..query.clone()
+        },
+        EntriesQuery {
+            from_seq: Some(1),
+            ..query.clone()
+        },
+        EntriesQuery {
+            around_seq: Some(1),
+            ..query.clone()
+        },
+    ] {
+        assert!(super::entries::exact_message(&invalid).is_err());
+    }
 }
 
 #[tokio::test]

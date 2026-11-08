@@ -1,33 +1,45 @@
 //! The engine a host drives per bot: plan each turn, compact (summaries, facts, merges, the Now
 //! block), recall facts for the prompt, mine idle history and follow deletions. Compactions,
-//! idle work and deletions run one at a time: within an engine behind a lock, across engines on
-//! one store behind a lease in the saved state.
+//! model and embedding work prepares private drafts. Only revision-validated storage commits
+//! run under the shared lease, so a slow model does not block explicit saves or forgets.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+mod commit;
+mod draft;
+mod maintenance;
+mod reset;
+
+pub(crate) use commit::CommitOutcome;
+
+use draft::SegmentDraft;
+
+use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::Arc;
+use std::time::Duration as WaitDuration;
 
 use chrono::{DateTime, Duration, Utc};
 use chrono_tz::Tz;
-use flow_like_types::tokio::sync::{Mutex, MutexGuard};
+use flow_like_types::tokio::sync::Mutex;
+use flow_like_types::tokio::time::{Instant, sleep};
 use flow_like_types::{Result, create_id};
 
 use crate::compaction::{
     CompactionConfig, CompactionPlan, PlannerInput, TurnPhase, TurnPlan, plan_turn,
 };
 use crate::facts::{
-    Evidence, ExtractionInput, Fact, Rejection, UpdateReport, evidence_trust, extract_facts,
-    integrate_facts,
+    ExtractionInput, Fact, Rejection, UpdateReport, apply_prepared_facts, extract_facts,
+    prepare_facts,
 };
 use crate::llm::MemoryLlm;
-use crate::model::{FactSource, HistoryItem, Role, Seq, SeqSpan};
+use crate::model::{HistoryItem, Seq, SeqSpan};
 use crate::prompt::ModelBudget;
 use crate::retrieval::{Recency, is_temporal_question, parse_time_range};
 use crate::store::{CompactionState, FactFilter, FactQuery, Lease, MemoryStores, StateConflict};
 use crate::summary::{
-    NowInput, SegmentSummary, SpanSummaryInput, consolidate, merge_summaries, plan_merge,
-    summarize_span, write_now_block,
+    NowInput, SegmentSummary, SpanSummaryInput, merge_summaries, plan_merge, summarize_span,
+    write_now_block,
 };
-use crate::tools::{HistoryReader, forget_facts};
+use crate::tools::HistoryReader;
 
 /// What [`MemoryEngine::compact`] needs besides the plan.
 pub struct CompactionInput<'a> {
@@ -98,21 +110,16 @@ impl std::fmt::Display for MemoryBusy {
 
 impl std::error::Error for MemoryBusy {}
 
+#[derive(Clone)]
 pub struct MemoryEngine {
-    stores: MemoryStores,
+    stores: Arc<MemoryStores>,
     llm: Arc<dyn MemoryLlm>,
     config: CompactionConfig,
     timezone: Tz,
     /// Names this engine in the state's lease.
     id: String,
-    /// One compaction, idle run, deletion, tool write or maintenance run at a time.
-    work: Mutex<()>,
-}
-
-/// The engine's turn and the store's lease, held by a tool write or maintenance run.
-pub(crate) struct Leased<'a> {
-    _work: MutexGuard<'a, ()>,
-    claimed: CompactionState,
+    /// Serializes storage commits within this engine. Preparation never holds it.
+    work: Arc<Mutex<()>>,
 }
 
 const MAX_MERGES_PER_COMPACTION: usize = 4;
@@ -121,18 +128,22 @@ const LEASE_MINUTES: i64 = 10;
 /// The most messages one idle run mines; the next run continues after them.
 const IDLE_BATCH: usize = 200;
 const CLAIM_ATTEMPTS: usize = 3;
+const WRITE_LEASE_WAIT: WaitDuration = WaitDuration::from_secs(30);
+const WRITE_LEASE_POLL: WaitDuration = WaitDuration::from_millis(250);
+const MAINTENANCE_HOURS: i64 = 6;
+const MAINTENANCE_HEARTBEAT: WaitDuration = WaitDuration::from_secs(120);
 
 /// What mining produced, with the spans whose extraction failed.
 #[derive(Default)]
 struct Mined {
-    report: UpdateReport,
+    candidates: Vec<Fact>,
     rejected: Vec<Rejection>,
     unmined: Vec<SeqSpan>,
 }
 
 impl Mined {
     fn absorb(&mut self, other: Mined) {
-        self.report.absorb(other.report);
+        self.candidates.extend(other.candidates);
         self.rejected.extend(other.rejected);
         self.unmined.extend(other.unmined);
     }
@@ -146,12 +157,12 @@ impl MemoryEngine {
         timezone: Tz,
     ) -> Self {
         Self {
-            stores,
+            stores: Arc::new(stores),
             llm,
             config,
             timezone,
             id: format!("engine_{}", create_id()),
-            work: Mutex::new(()),
+            work: Arc::new(Mutex::new(())),
         }
     }
 
@@ -167,36 +178,40 @@ impl MemoryEngine {
         self.timezone
     }
 
-    pub(crate) fn llm(&self) -> &dyn MemoryLlm {
-        self.llm.as_ref()
-    }
-
-    /// Takes the engine's turn (waiting for its other work) and the store's lease (refused with
-    /// [`MemoryBusy`] while another engine holds it), as a compaction does.
-    pub(crate) async fn lease(&self, now: DateTime<Utc>) -> Result<Leased<'_>> {
-        let work = self.work.lock().await;
-        let claimed = self.begin(now).await?;
-        Ok(Leased {
-            _work: work,
-            claimed,
-        })
-    }
-
-    /// Gives the lease back after work that left the state as it was; the work's result stands.
-    pub(crate) async fn release<T>(&self, leased: Leased<'_>, result: Result<T>) -> Result<T> {
-        if let Err(error) = self.finish(leased.claimed).await {
-            tracing::warn!("Giving the memory lease back failed; it runs out by itself: {error:#}");
-        }
-        result
-    }
-
-    /// Idle maintenance under the lease: embeds facts and summaries that have no vector from the
-    /// current embedder yet, folds new rows into the indexes and drops versions past Lance's
-    /// retention. Refused with [`MemoryBusy`] while another engine works on the memory.
+    /// Runs expiry cleanup, embedding and index maintenance, resetting the six-hour cadence.
     pub async fn optimize(&self, now: DateTime<Utc>) -> Result<()> {
-        let leased = self.lease(now).await?;
-        let result = self.stores.optimize().await;
-        self.release(leased, result).await
+        self.maintain(now, false).await.map(|_| ())
+    }
+
+    /// Returns the number of expired facts deleted, or `None` when maintenance is not due.
+    pub async fn maintain_if_due(&self, now: DateTime<Utc>) -> Result<Option<usize>> {
+        self.maintain(now, true).await
+    }
+
+    async fn maintain(&self, now: DateTime<Utc>, only_if_due: bool) -> Result<Option<usize>> {
+        let started = Instant::now();
+        let state = self.background_snapshot(now).await?;
+        if only_if_due
+            && state.last_maintenance_at.is_some_and(|last| {
+                now.signed_duration_since(last) < Duration::hours(MAINTENANCE_HOURS)
+            })
+        {
+            return Ok(None);
+        }
+        let revision = state.revision;
+        let prepared = self.stores.prepare_optimization(now).await;
+        let commit_now = now + Duration::from_std(started.elapsed())?;
+        let (expired, _) = self
+            .commit(revision, commit_now, move |stores, mut state| async move {
+                let expired = stores.facts.purge_expired(now).await?;
+                stores.apply_optimization(prepared).await?;
+                state.last_maintenance_at = Some(now);
+                state.updated_at = Some(now);
+                Ok((expired, state))
+            })
+            .await?
+            .applied(revision)?;
+        Ok(Some(expired))
     }
 
     /// The items the prompt shows: everything after the last compaction plus the retained ones.
@@ -277,22 +292,15 @@ impl MemoryEngine {
                 ..state
             })
             .await?;
-        self.stores.refresh().await?;
-        Ok(claimed)
-    }
-
-    /// Loads and claims the state, once more when another writer saved in between.
-    async fn begin(&self, now: DateTime<Utc>) -> Result<CompactionState> {
-        let mut attempt = 1;
-        loop {
-            let state = self.stores.state.load().await?;
-            match self.claim(state, now).await {
-                Err(error) if error.is::<StateConflict>() && attempt < CLAIM_ATTEMPTS => {
-                    attempt += 1;
-                }
-                claimed => return claimed,
+        if let Err(error) = self.stores.refresh().await {
+            if let Err(release_error) = self.finish(claimed.clone()).await {
+                tracing::warn!(
+                    "Releasing memory after a refresh failure failed: {release_error:#}"
+                );
             }
+            return Err(error);
         }
+        Ok(claimed)
     }
 
     /// Saves the work and gives the lease back.
@@ -304,16 +312,6 @@ impl MemoryEngine {
                 ..state
             })
             .await
-    }
-
-    /// After a failure the lease goes back and the state stays as it was claimed.
-    async fn settle<T>(&self, claimed: &CompactionState, result: Result<T>) -> Result<T> {
-        if result.is_err()
-            && let Err(error) = self.finish(claimed.clone()).await
-        {
-            tracing::warn!("Giving the memory lease back failed; it runs out by itself: {error:#}");
-        }
-        result
     }
 
     async fn mine(
@@ -341,58 +339,48 @@ impl MemoryEngine {
             },
         )
         .await?;
-        let report = integrate_facts(
-            &self.stores.facts,
-            self.llm.as_ref(),
-            outcome.facts,
-            self.timezone,
-            now,
-        )
-        .await?;
         Ok(Mined {
-            report,
+            candidates: outcome.facts,
             rejected: outcome.rejected,
             unmined: outcome.unmined,
         })
     }
 
-    /// Runs a planned compaction: a level-0 summary per segment, facts from every span not mined
-    /// yet, merges one level up while summaries exceed their share, a new Now block, then the
-    /// new state. A plan made before the state last changed comes back `stale`, without effect.
-    /// Safe to retry after a failure: summaries already written are reused and equal facts
-    /// merge.
+    /// Builds a private draft, then commits it only if no other memory mutation intervened.
+    /// Stale drafts have no storage effects; the host can plan again from the returned state.
     pub async fn compact(&self, input: CompactionInput<'_>) -> Result<CompactionOutcome> {
-        let _work = self.work.lock().await;
-        let current = self.stores.state.load().await?;
+        let started = Instant::now();
+        let current = self.background_snapshot(input.now).await?;
         if current.revision != input.plan.base_revision {
             return Ok(CompactionOutcome::stale(current));
         }
-        let claimed = match self.claim(current, input.now).await {
-            Err(error) if error.is::<StateConflict>() => {
-                return Ok(CompactionOutcome::stale(self.stores.state.load().await?));
-            }
-            claimed => claimed?,
-        };
-        let result = self.compact_claimed(&input, claimed.clone()).await;
-        self.settle(&claimed, result).await
+        self.prepare_compaction(&input, current, started).await
     }
 
-    async fn compact_claimed(
+    async fn prepare_compaction(
         &self,
         input: &CompactionInput<'_>,
         mut state: CompactionState,
+        started: Instant,
     ) -> Result<CompactionOutcome> {
         let tz = self.timezone;
         let window = input.history_window;
         let mut live: Vec<&HistoryItem> = input.items.iter().filter(|item| !item.deleted).collect();
         live.sort_by_key(|item| item.seq);
-        self.drop_leftovers(state.compacted_through, &input.plan.segments)
-            .await?;
-        let mut previous = self
-            .stores
-            .segments
+        let revision = state.revision;
+        let mut draft = match self
+            .check_preparation(revision, SegmentDraft::load(&self.stores.segments))
+            .await
+        {
+            Ok(draft) => draft,
+            Err(error) if error.is::<StateConflict>() => {
+                return Ok(CompactionOutcome::stale(self.stores.state.load().await?));
+            }
+            Err(error) => return Err(error),
+        };
+        draft.drop_leftovers(state.compacted_through, &input.plan.segments);
+        let mut previous = draft
             .active()
-            .await?
             .into_iter()
             .rfind(|summary| summary.span.to < input.plan.evict.from);
         let mut segments = Vec::new();
@@ -407,11 +395,7 @@ impl MemoryEngine {
                 );
                 continue;
             }
-            let existing = self
-                .stores
-                .segments
-                .get(&SegmentSummary::id_for(0, *span))
-                .await?;
+            let existing = draft.get(&SegmentSummary::id_for(0, *span)).cloned();
             let summary = match existing {
                 Some(written) => written,
                 None => {
@@ -429,10 +413,7 @@ impl MemoryEngine {
                         },
                     )
                     .await?;
-                    self.stores
-                        .segments
-                        .put(std::slice::from_ref(&summary))
-                        .await?;
+                    draft.put(summary.clone());
                     summary
                 }
             };
@@ -482,10 +463,8 @@ impl MemoryEngine {
             .filter(|item| input.plan.evict.contains(item.seq))
             .map(|item| (*item).clone())
             .collect();
-        self.stores.history.index(&evicted).await?;
-
         let merged = self
-            .merge_until_small(window, input.model.clone(), input.now)
+            .merge_until_small(&mut draft, window, input.model.clone(), input.now)
             .await?;
 
         let tail: Vec<HistoryItem> = live
@@ -493,7 +472,7 @@ impl MemoryEngine {
             .filter(|item| item.seq >= input.plan.tail_from)
             .map(|item| (*item).clone())
             .collect();
-        let latest = self.stores.segments.active().await?.into_iter().last();
+        let latest = draft.active().into_iter().last();
         let now_block = write_now_block(
             self.llm.as_ref(),
             &NowInput {
@@ -524,50 +503,56 @@ impl MemoryEngine {
         state.unmined.extend(mined.unmined);
         state.compactions += 1;
         state.updated_at = Some(input.now);
-        let state = self.finish(state).await?;
-        Ok(CompactionOutcome {
-            segments,
-            merged,
-            facts: mined.report,
-            rejected: mined.rejected,
-            stale: false,
-            state,
-        })
-    }
-
-    /// Removes what an earlier run that failed or was cut off left behind: active summaries
-    /// reaching past `compacted_through` that this plan does not reuse. A merged one frees its
-    /// children first, which are checked in turn. Safe because no other run is in flight.
-    async fn drop_leftovers(&self, through: Option<Seq>, reuse: &[SeqSpan]) -> Result<()> {
-        loop {
-            let leftovers: Vec<SegmentSummary> = self
-                .stores
-                .segments
-                .active()
-                .await?
-                .into_iter()
-                .filter(|summary| {
-                    through.is_none_or(|through| summary.span.to > through)
-                        && !(summary.level == 0 && reuse.contains(&summary.span))
+        let facts = match self
+            .check_preparation(
+                revision,
+                prepare_facts(
+                    &self.stores.facts,
+                    self.llm.as_ref(),
+                    mined.candidates,
+                    tz,
+                    input.now,
+                    false,
+                ),
+            )
+            .await
+        {
+            Ok(facts) => facts,
+            Err(error) if error.is::<StateConflict>() => {
+                return Ok(CompactionOutcome::stale(self.stores.state.load().await?));
+            }
+            Err(error) => return Err(error),
+        };
+        let changes = draft.prepare(&self.stores.segments).await?;
+        let now = input.now;
+        let commit_now = now + Duration::from_std(started.elapsed())?;
+        match self
+            .commit(revision, commit_now, move |stores, _| async move {
+                changes.apply(&stores.segments).await?;
+                let report = apply_prepared_facts(&stores.facts, facts, now).await?;
+                stores.history.index(&evicted).await?;
+                Ok(((segments, merged, report, mined.rejected), state))
+            })
+            .await?
+        {
+            CommitOutcome::Applied((segments, merged, facts, rejected), state) => {
+                Ok(CompactionOutcome {
+                    segments,
+                    merged,
+                    facts,
+                    rejected,
+                    state,
+                    stale: false,
                 })
-                .collect();
-            if leftovers.is_empty() {
-                return Ok(());
             }
-            for summary in &leftovers {
-                self.stores
-                    .segments
-                    .set_parent(&summary.children, None)
-                    .await?;
-            }
-            let ids: Vec<String> = leftovers.into_iter().map(|summary| summary.id).collect();
-            self.stores.segments.delete(&ids).await?;
+            CommitOutcome::Stale(state) => Ok(CompactionOutcome::stale(state)),
         }
     }
 
     /// Merges active summaries one level up ([`plan_merge`]) while they exceed their share of H.
     async fn merge_until_small(
         &self,
+        draft: &mut SegmentDraft,
         window: u32,
         model: Option<String>,
         now: DateTime<Utc>,
@@ -575,7 +560,7 @@ impl MemoryEngine {
         let budget = self.merge_budget(window);
         let mut merged = Vec::new();
         for _ in 0..MAX_MERGES_PER_COMPACTION {
-            let active = self.stores.segments.active().await?;
+            let active = draft.active();
             let Some(ids) = plan_merge(&active, window, &self.config) else {
                 break;
             };
@@ -592,14 +577,8 @@ impl MemoryEngine {
                 now,
             )
             .await?;
-            self.stores
-                .segments
-                .put(std::slice::from_ref(&summary))
-                .await?;
-            self.stores
-                .segments
-                .set_parent(&ids, Some(&summary.id))
-                .await?;
+            draft.put(summary.clone());
+            draft.set_parent(&ids, Some(&summary.id));
             merged.push(summary);
         }
         Ok(merged)
@@ -620,21 +599,9 @@ impl MemoryEngine {
         latest: Seq,
         now: DateTime<Utc>,
     ) -> Result<(UpdateReport, Vec<Rejection>)> {
-        let _work = self.work.lock().await;
-        let claimed = self.begin(now).await?;
-        let result = self
-            .mine_claimed(reader, latest, now, claimed.clone())
-            .await;
-        self.settle(&claimed, result).await
-    }
-
-    async fn mine_claimed(
-        &self,
-        reader: &dyn HistoryReader,
-        latest: Seq,
-        now: DateTime<Utc>,
-        mut state: CompactionState,
-    ) -> Result<(UpdateReport, Vec<Rejection>)> {
+        let started = Instant::now();
+        let mut state = self.background_snapshot(now).await?;
+        let revision = state.revision;
         let summary = state.now.as_ref().map(|block| block.text.clone());
         let mut mined = Mined::default();
         for span in std::mem::take(&mut state.unmined) {
@@ -667,8 +634,28 @@ impl MemoryEngine {
         }
         state.unmined = mined.unmined;
         state.updated_at = Some(now);
-        self.finish(state).await?;
-        Ok((mined.report, mined.rejected))
+        let facts = self
+            .check_preparation(
+                revision,
+                prepare_facts(
+                    &self.stores.facts,
+                    self.llm.as_ref(),
+                    mined.candidates,
+                    self.timezone,
+                    now,
+                    false,
+                ),
+            )
+            .await?;
+        let commit_now = now + Duration::from_std(started.elapsed())?;
+        let ((report, rejected), _) = self
+            .commit(revision, commit_now, move |stores, _| async move {
+                let report = apply_prepared_facts(&stores.facts, facts, now).await?;
+                Ok(((report, mined.rejected), state))
+            })
+            .await?
+            .applied(revision)?;
+        Ok((report, rejected))
     }
 
     /// The facts to inject before the user's message: hybrid search, events weighted by
@@ -694,6 +681,10 @@ impl MemoryEngine {
                 offset: 0,
                 now,
                 recency: Recency::default(),
+                sort: Default::default(),
+                geojson: None,
+                radius_m: None,
+                area: None,
             })
             .await?;
         Ok(found.into_iter().map(|scored| scored.fact).collect())
@@ -716,396 +707,58 @@ impl MemoryEngine {
         self.follow_deletions(seqs, None, reader, history_window, now)
             .await
     }
-
-    /// [`MemoryEngine::on_messages_deleted`] that also records the position the deletions were
-    /// read up to (`state.deletions_through`), so the next sweep starts after it.
-    pub async fn follow_deletions(
-        &self,
-        seqs: &[Seq],
-        through: Option<Seq>,
-        reader: &dyn HistoryReader,
-        history_window: u32,
-        now: DateTime<Utc>,
-    ) -> Result<DeletionReport> {
-        let _work = self.work.lock().await;
-        let claimed = self.begin(now).await?;
-        let result = self
-            .follow_deletion(seqs, through, reader, history_window, now, claimed.clone())
-            .await;
-        let report = self.settle(&claimed, result).await?;
-        if let Err(error) = self.stores.prune().await {
-            tracing::warn!(
-                "Pruning old memory versions after a deletion failed; optimize drops them later: {error:#}"
-            );
-        }
-        Ok(report)
-    }
-
-    async fn follow_deletion(
-        &self,
-        seqs: &[Seq],
-        through: Option<Seq>,
-        reader: &dyn HistoryReader,
-        window: u32,
-        now: DateTime<Utc>,
-        mut state: CompactionState,
-    ) -> Result<DeletionReport> {
-        let deleted: BTreeSet<Seq> = seqs.iter().copied().collect();
-        let mut report = DeletionReport::default();
-        for seq in self.drop_evidence(&deleted, reader, &mut report).await? {
-            state.unmined.push(SeqSpan::new(seq, seq));
-        }
-        self.stores.history.remove(seqs).await?;
-        for summary in self.summaries_covering(&deleted).await? {
-            if summary.level == 0 {
-                self.rewrite_level_zero(&summary, &deleted, reader, window, now, &mut report)
-                    .await?;
-            } else {
-                self.remerge(&summary, window, now, &mut report).await?;
-            }
-        }
-        for id in &report.segments_scrubbed {
-            if !state.pending_rewrites.contains(id) {
-                state.pending_rewrites.push(id.clone());
-            }
-        }
-        state.retained.retain(|seq| !deleted.contains(seq));
-        state.now = state.now.map(|block| block.without_seqs(seqs));
-        state.deletions_through = state.deletions_through.max(through);
-        state.updated_at = Some(now);
-        self.finish(state).await?;
-        Ok(report)
-    }
-
-    /// Removes the deleted positions from every fact's evidence and recomputes its trust from
-    /// what remains. Returns the positions whose facts must be mined again.
-    async fn drop_evidence(
-        &self,
-        deleted: &BTreeSet<Seq>,
-        reader: &dyn HistoryReader,
-        report: &mut DeletionReport,
-    ) -> Result<Vec<Seq>> {
-        let seqs: Vec<Seq> = deleted.iter().copied().collect();
-        let mut roles: HashMap<Seq, Option<Role>> = HashMap::new();
-        let mut gone = Vec::new();
-        let mut remine = BTreeSet::new();
-        for fact in self.stores.facts.with_evidence(&seqs).await? {
-            let mut remaining = fact.clone();
-            remaining
-                .evidence
-                .retain(|evidence| !deleted.contains(&evidence.seq));
-            let trust = self
-                .remaining_trust(&remaining.evidence, reader, &mut roles)
-                .await?;
-            let unsupported = remaining.evidence.iter().all(|evidence| evidence.partial)
-                || (fact.kind.is_personal() && trust != Some(FactSource::UserStated));
-            if unsupported {
-                remine.extend(remaining.evidence_seqs());
-                report.facts_deleted.push(fact.id.clone());
-                gone.push(fact);
-            } else {
-                if let Some(trust) = trust {
-                    remaining.source = remaining.source.min(trust);
-                }
-                self.stores.facts.update_metadata(&remaining).await?;
-                report.facts_updated.push(remaining.id);
-            }
-        }
-        forget_facts(&self.stores, &gone, true).await?;
-        Ok(remine.into_iter().collect())
-    }
-
-    /// The most trust any of `evidence` still carries, by the roles in the history.
-    async fn remaining_trust(
-        &self,
-        evidence: &[Evidence],
-        reader: &dyn HistoryReader,
-        roles: &mut HashMap<Seq, Option<Role>>,
-    ) -> Result<Option<FactSource>> {
-        let mut best = None;
-        for evidence in evidence {
-            let role = match roles.get(&evidence.seq) {
-                Some(role) => *role,
-                None => {
-                    let role = reader
-                        .message(evidence.seq)
-                        .await?
-                        .filter(|item| !item.deleted)
-                        .map(|item| item.role);
-                    roles.insert(evidence.seq, role);
-                    role
-                }
-            };
-            if let Some(role) = role {
-                best = best.max(Some(evidence_trust(role, evidence.part)));
-            }
-        }
-        Ok(best)
-    }
-
-    /// Every summary whose range holds a deleted position, lowest level first, so merges are
-    /// redone from children that were already rewritten.
-    async fn summaries_covering(&self, deleted: &BTreeSet<Seq>) -> Result<Vec<SegmentSummary>> {
-        let mut covering: Vec<SegmentSummary> = Vec::new();
-        for seq in deleted {
-            for summary in self.stores.segments.covering(*seq).await? {
-                if !covering.iter().any(|known| known.id == summary.id) {
-                    covering.push(summary);
-                }
-            }
-        }
-        covering.sort_by_key(|summary| summary.level);
-        Ok(covering)
-    }
-
-    /// A level-0 summary written again from the remaining history; `None` when every message in
-    /// its range is gone.
-    async fn summarize_again(
-        &self,
-        summary: &SegmentSummary,
-        reader: &dyn HistoryReader,
-        window: u32,
-        now: DateTime<Utc>,
-    ) -> Result<Option<SegmentSummary>> {
-        let items = reader.range(summary.span, usize::MAX).await?;
-        if items.iter().all(|item| item.deleted) {
-            return Ok(None);
-        }
-        let mut rewritten = summarize_span(
-            self.llm.as_ref(),
-            &SpanSummaryInput {
-                items: &items,
-                span: summary.span,
-                previous: None,
-                timezone: self.timezone,
-                budget_tokens: self.config.segment_summary_budget(window),
-                chunk_tokens: self.config.chunk_tokens,
-                model: summary.model.clone(),
-                now,
-            },
-        )
-        .await?;
-        rewritten.version = summary.version + 1;
-        rewritten.parent = summary.parent.clone();
-        Ok(Some(rewritten))
-    }
-
-    async fn rewrite_level_zero(
-        &self,
-        summary: &SegmentSummary,
-        deleted: &BTreeSet<Seq>,
-        reader: &dyn HistoryReader,
-        window: u32,
-        now: DateTime<Utc>,
-        report: &mut DeletionReport,
-    ) -> Result<()> {
-        match self.summarize_again(summary, reader, window, now).await {
-            Ok(Some(rewritten)) if rewritten.missing.is_empty() => {
-                self.stores
-                    .segments
-                    .put(std::slice::from_ref(&rewritten))
-                    .await?;
-                report.segments_rewritten.push(rewritten.id);
-            }
-            Ok(None) => {
-                self.stores
-                    .segments
-                    .delete(std::slice::from_ref(&summary.id))
-                    .await?;
-                report.segments_deleted.push(summary.id.clone());
-            }
-            outcome => {
-                if let Err(error) = outcome {
-                    tracing::warn!(
-                        "Writing summary {} again after a deletion failed; it is cleaned now and rewritten later: {error:#}",
-                        summary.id
-                    );
-                }
-                self.stores
-                    .segments
-                    .put(std::slice::from_ref(&summary.scrubbed(deleted)))
-                    .await?;
-                report.segments_scrubbed.push(summary.id.clone());
-            }
-        }
-        Ok(())
-    }
-
-    /// The summary with its missing ranges asked again from the history; what fails again stays
-    /// missing.
-    async fn fill_missing(
-        &self,
-        summary: &SegmentSummary,
-        reader: &dyn HistoryReader,
-        window: u32,
-        now: DateTime<Utc>,
-    ) -> Result<SegmentSummary> {
-        let budget = self.config.segment_summary_budget(window);
-        let mut filled = SegmentSummary {
-            missing: Vec::new(),
-            version: summary.version + 1,
-            ..summary.clone()
-        };
-        for span in &summary.missing {
-            let items = reader.range(*span, usize::MAX).await?;
-            if items.iter().all(|item| item.deleted) {
-                continue;
-            }
-            let piece = summarize_span(
-                self.llm.as_ref(),
-                &SpanSummaryInput {
-                    items: &items,
-                    span: *span,
-                    previous: None,
-                    timezone: self.timezone,
-                    budget_tokens: budget,
-                    chunk_tokens: self.config.chunk_tokens,
-                    model: summary.model.clone(),
-                    now,
-                },
-            )
-            .await?;
-            filled.body.absorb(piece.body);
-            filled.missing.extend(piece.missing);
-            filled.user_seqs.extend(piece.user_seqs);
-        }
-        filled.body = consolidate(filled.body);
-        filled.user_seqs.sort_unstable();
-        filled.user_seqs.dedup();
-        filled.trim_to(budget);
-        Ok(filled)
-    }
-
-    async fn remerge(
-        &self,
-        summary: &SegmentSummary,
-        window: u32,
-        now: DateTime<Utc>,
-        report: &mut DeletionReport,
-    ) -> Result<()> {
-        let children = self.stores.segments.children(&summary.id).await?;
-        if children.is_empty() {
-            self.stores
-                .segments
-                .delete(std::slice::from_ref(&summary.id))
-                .await?;
-            report.segments_deleted.push(summary.id.clone());
-            return Ok(());
-        }
-        let mut rewritten = merge_summaries(
-            self.llm.as_ref(),
-            &children,
-            self.timezone,
-            self.merge_budget(window),
-            summary.model.clone(),
-            now,
-        )
-        .await?;
-        rewritten.id = summary.id.clone();
-        rewritten.version = summary.version + 1;
-        rewritten.parent = summary.parent.clone();
-        self.stores
-            .segments
-            .put(std::slice::from_ref(&rewritten))
-            .await?;
-        report.segments_rewritten.push(rewritten.id);
-        Ok(())
-    }
-
-    /// Idle work for the summaries in `state.pending_rewrites`: ranges a summary misses (the
-    /// model gave no usable answer) are asked again; a summary cleaned after a deletion without
-    /// a model is written again from the history. Summaries above a completed one are merged
-    /// again. What fails stays queued for the next run.
-    pub async fn rewrite_pending(
-        &self,
-        reader: &dyn HistoryReader,
-        history_window: u32,
-        now: DateTime<Utc>,
-    ) -> Result<DeletionReport> {
-        let _work = self.work.lock().await;
-        let claimed = self.begin(now).await?;
-        let result = self
-            .rewrite_claimed(reader, history_window, now, claimed.clone())
-            .await;
-        self.settle(&claimed, result).await
-    }
-
-    async fn rewrite_claimed(
-        &self,
-        reader: &dyn HistoryReader,
-        window: u32,
-        now: DateTime<Utc>,
-        mut state: CompactionState,
-    ) -> Result<DeletionReport> {
-        let mut report = DeletionReport::default();
-        let mut waiting = Vec::new();
-        for id in std::mem::take(&mut state.pending_rewrites) {
-            let Some(summary) = self.stores.segments.get(&id).await? else {
-                continue;
-            };
-            let filling = !summary.missing.is_empty();
-            let outcome = if filling {
-                self.fill_missing(&summary, reader, window, now)
-                    .await
-                    .map(Some)
-            } else {
-                self.summarize_again(&summary, reader, window, now).await
-            };
-            match outcome {
-                Ok(Some(partial)) if !partial.missing.is_empty() => {
-                    if filling {
-                        self.stores
-                            .segments
-                            .put(std::slice::from_ref(&partial))
-                            .await?;
-                    }
-                    waiting.push(id);
-                }
-                Ok(Some(rewritten)) => {
-                    self.stores
-                        .segments
-                        .put(std::slice::from_ref(&rewritten))
-                        .await?;
-                    report.segments_rewritten.push(id);
-                    let mut above = summary.parent.clone();
-                    while let Some(parent) = above {
-                        let Some(parent) = self.stores.segments.get(&parent).await? else {
-                            break;
-                        };
-                        self.remerge(&parent, window, now, &mut report).await?;
-                        above = parent.parent;
-                    }
-                }
-                Ok(None) => {
-                    self.stores
-                        .segments
-                        .delete(std::slice::from_ref(&id))
-                        .await?;
-                    report.segments_deleted.push(id);
-                }
-                Err(error) => {
-                    tracing::warn!("Writing summary {id} again failed; it stays queued: {error:#}");
-                    waiting.push(id);
-                }
-            }
-        }
-        state.pending_rewrites = waiting;
-        state.updated_at = Some(now);
-        self.finish(state).await?;
-        Ok(report)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::store::MemoryStores;
+    use crate::testing::{HashEmbedder, StubLlm};
     use crate::tools::{
         HistoryReadArgs, MemoryForgetArgs, MemorySaveArgs, MemorySearchArgs, WriteGate,
         history_read, memory_forget, memory_save, memory_search,
     };
 
     fn send<T: Send>(_: &T) {}
+
+    #[tokio::test]
+    async fn explicit_write_wait_is_bounded_and_does_not_steal_a_live_lease() {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = MemoryStores::open_local(dir.path(), Arc::new(HashEmbedder::new("hash", 16)))
+            .await
+            .unwrap();
+        let now = Utc::now();
+        let held = stores
+            .state
+            .save(&CompactionState {
+                lease: Some(Lease {
+                    holder: "background-engine".into(),
+                    until: now + Duration::minutes(10),
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let engine = MemoryEngine::new(
+            stores,
+            Arc::new(StubLlm::new()),
+            CompactionConfig::default(),
+            Tz::UTC,
+        );
+        let wait = WaitDuration::from_millis(50);
+        let started = Instant::now();
+        let result = flow_like_types::tokio::time::timeout(
+            WaitDuration::from_secs(5),
+            engine.commit_with_wait(held.revision, now, wait, |_, state| async move {
+                Ok(((), state))
+            }),
+        )
+        .await
+        .expect("lease acquisition must stop waiting");
+        assert!(result.is_err_and(|error| error.is::<MemoryBusy>()));
+        assert!(started.elapsed() >= wait);
+        assert_eq!(engine.stores().state.load().await.unwrap(), held);
+    }
 
     /// Hosts spawn compactions and run turns on multi-threaded runtimes: every future the
     /// engine and the tools return must be `Send`. This only has to compile.
@@ -1120,6 +773,10 @@ mod tests {
         now: DateTime<Utc>,
     ) {
         let save = MemorySaveArgs {
+            geojson: None,
+            time: None,
+            ttl_seconds: None,
+
             text: "text".into(),
             evidence_seq: None,
             kind: None,
@@ -1151,6 +808,12 @@ mod tests {
         send(&engine.rewrite_pending(reader, 1_000, now));
         send(&engine.live_items(reader, &CompactionState::default(), 10));
         let search = MemorySearchArgs {
+            timeframe: None,
+            sort: Default::default(),
+            geojson: None,
+            radius_m: None,
+            area: None,
+
             query: "query".into(),
             kind: None,
             time_range: None,

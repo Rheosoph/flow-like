@@ -1157,6 +1157,65 @@ fn room_limits_live_on_a_bots_membership_and_pending_members_do_not_count() {
     assert!(f.store.member_limits(&group.id, &ranger.id).is_err());
 }
 
+#[test]
+fn bot_memory_setup_is_saved_atomically_when_creating_or_joining_a_group() {
+    use flow_like_types::bot_effective::BotRoomLimits;
+    let f = fixture();
+    let (scout, ranger) = (f.bot("Scout"), f.bot("Ranger"));
+    let limits = BotRoomLimits {
+        use_owner_memory: true,
+        use_shared_memory: true,
+        share_memory: true,
+        ..Default::default()
+    };
+    let group = f
+        .store
+        .create_conversation(conversation(json!({
+            "kind": "group", "members": [&scout.id],
+            "bot_limits": { (scout.id.clone()): limits.clone() }
+        })))
+        .unwrap();
+    assert_eq!(
+        f.store.member_limits(&group.id, &scout.id).unwrap(),
+        Some(limits.clone())
+    );
+    assert_eq!(
+        f.store.shared_memory_rooms(&scout.id).unwrap(),
+        [group.id.clone()]
+    );
+    f.store
+        .add_members_with_limits(
+            &group.id,
+            vec![ranger.id.clone()],
+            std::collections::BTreeMap::from([(ranger.id.clone(), limits.clone())]),
+        )
+        .unwrap();
+    assert_eq!(
+        f.store.member_limits(&group.id, &ranger.id).unwrap(),
+        Some(limits)
+    );
+    f.store
+        .set_member_limits(&group.id, &scout.id, None)
+        .unwrap();
+    assert!(f.store.shared_memory_rooms(&scout.id).unwrap().is_empty());
+    f.store.remove_member(&group.id, &ranger.id).unwrap();
+    assert!(f.store.shared_memory_rooms(&ranger.id).unwrap().is_empty());
+}
+
+#[test]
+fn bot_setup_cannot_target_unrequested_members_or_private_chats() {
+    let f = fixture();
+    let (scout, ranger) = (f.bot("Scout"), f.bot("Ranger"));
+    let before = f.store.conversations().unwrap().len();
+    for body in [
+        json!({"kind": "group", "members": [&scout.id], "bot_limits": { (ranger.id.clone()): {"share_memory": true} }}),
+        json!({"kind": "direct", "members": [&scout.id], "bot_limits": { (scout.id.clone()): {"share_memory": true} }}),
+    ] {
+        assert!(f.store.create_conversation(conversation(body)).is_err());
+    }
+    assert_eq!(f.store.conversations().unwrap().len(), before);
+}
+
 fn owner_message(message_id: &str, text: &str) -> SendEntryRequest {
     entry_request(json!({
         "message_id": message_id,

@@ -2,13 +2,11 @@
 //! `functions::ai::bot_tools::connectors`; these edit the settings and refresh an MCP server's
 //! tool list in this process.
 
-use crate::functions::local_bots::{LocalBots, on_store};
-use flow_like_bot_tools::{Environment, services};
-use flow_like_types::bot_connector::{
-    BotConnector, CreateBotConnector, UpdateBotConnector,
-};
 use crate::functions::ai::bot_tools::connectors::{LocalSecrets, credential_for};
+use crate::functions::local_bots::{LocalBots, on_store};
 use crate::native_auth::{SessionBinding, oauth::provider_hosts};
+use flow_like_bot_tools::{Environment, services};
+use flow_like_types::bot_connector::{BotConnector, CreateBotConnector, UpdateBotConnector};
 use tauri::{AppHandle, State};
 
 fn failed(error: impl ToString) -> String {
@@ -98,9 +96,7 @@ pub async fn local_bot_refresh_connector(
         None => None,
     };
     let hosts: Option<&'static _> = hosts.map(|hosts| &*Box::leak(Box::new(hosts)));
-    let workspace = bot
-        .and_then(|bot| bot.workspace_app_id)
-        .unwrap_or_default();
+    let workspace = bot.and_then(|bot| bot.workspace_app_id).unwrap_or_default();
     let secrets = LocalSecrets {
         app: app.clone(),
         bot_id: bot_id.clone(),

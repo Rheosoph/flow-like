@@ -68,9 +68,11 @@ pub(crate) struct BotToolsHost {
     scope: OnceCell<JobScope>,
     sessions: Arc<MemorySessions>,
     executor_jobs: AtomicUsize,
-    parked: Mutex<Option<ApprovalRequest>>,
+    parked: Mutex<Option<(ApprovalRequest, Option<String>)>>,
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
+    user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
+    configuration: Option<Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>>,
     scheduler: Option<Arc<dyn flow_like_bot_tools::Scheduler>>,
     skills: Option<Arc<dyn flow_like_bot_tools::SkillHost>>,
     skill_jobs: Option<Arc<dyn super::skills::SkillJobs>>,
@@ -136,12 +138,30 @@ impl BotToolsHost {
             parked: Mutex::new(None),
             notifier: None,
             people: None,
+            user_context: None,
+            configuration: None,
             scheduler: None,
             skills: None,
             skill_jobs: None,
             mail: None,
             images: None,
         }
+    }
+
+    pub(crate) fn with_user_context(
+        mut self,
+        context: Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>,
+    ) -> Self {
+        self.user_context = Some(context);
+        self
+    }
+
+    pub(crate) fn with_configuration(
+        mut self,
+        configuration: Arc<dyn flow_like_bot_tools::configuration::ConfigurationBackend>,
+    ) -> Self {
+        self.configuration = Some(configuration);
+        self
     }
 
     pub(crate) fn with_images(mut self, images: Arc<super::images::ImageBits>) -> Self {
@@ -267,14 +287,19 @@ impl BotToolsHost {
         self.parked
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone()
+            .as_ref().map(|(card, _)| card.clone())
+    }
+
+    pub(crate) fn parked_recovery_call_id(&self) -> Option<String> {
+        self.parked.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref().and_then(|(_, call_id)| call_id.clone())
     }
 
     fn park(&self, tool: &str, card: ApprovalRequest) -> String {
         self.parked
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get_or_insert(card);
+            .get_or_insert_with(|| (card, flow_like::flow::copilot::run_recovery::current_recovery_call_id()));
         json!({
             "status": "waiting",
             "tool": tool,
@@ -350,9 +375,22 @@ impl BotToolsHost {
     }
 
     async fn run_in_process(&self, tool: &str, args: Value, expensive_documents: bool) -> String {
-        let scope = match self.scope().await {
-            Ok(scope) => scope,
-            Err(message) => return refusal(tool, "bot_scope_unavailable", &message),
+        // Configuration and participant context do not read apps or need a workspace.
+        let empty_scope = JobScope {
+            storage: false,
+            data_connections: false,
+            classification: flow_like_types::data_classification::DataClassification::Internal,
+            apps: Vec::new(),
+        };
+        let scope = if flow_like_bot_tools::configuration::is_configuration_tool(tool)
+            || flow_like_bot_tools::user_context::is_user_context_tool(tool)
+        {
+            &empty_scope
+        } else {
+            match self.scope().await {
+                Ok(scope) => scope,
+                Err(message) => return refusal(tool, "bot_scope_unavailable", &message),
+            }
         };
         let mut env = HostEnv::new(
             &self.deps.workspace,
@@ -369,6 +407,12 @@ impl BotToolsHost {
         }
         if let Some(notifier) = &self.notifier {
             env = env.with_notifier(notifier.clone());
+        }
+        if let Some(context) = &self.user_context {
+            env = env.with_user_context(context.clone());
+        }
+        if let Some(configuration) = &self.configuration {
+            env = env.with_configuration(configuration.clone());
         }
         if let Some(people) = &self.people {
             env = env.with_people(people.clone());

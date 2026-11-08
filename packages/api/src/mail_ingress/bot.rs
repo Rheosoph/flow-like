@@ -465,6 +465,7 @@ pub(super) async fn ingest_for_bot(
                     "text_file": stored.text_file,
                 });
                 let body = TriggerBody {
+                    monitoring: false,
                     source: TriggerSource::Email,
                     ref_id: own_id.clone(),
                     title: clip(&subject, 200),

@@ -8,8 +8,8 @@ use flow_like_types::{
     bot_notify::reply_is_proactive,
     bot_turn::{MAX_HOPS, TurnAudience},
     inbox::{
-        ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, ReactionEvent, TriggerBody,
-        is_tombstone, net_reactions,
+        ConversationKind, InboxEntryKind, PLAIN_ENCRYPTION, ReactionEvent, TranscriptBody,
+        TriggerBody, is_tombstone, net_reactions,
     },
 };
 use std::collections::HashSet;
@@ -75,15 +75,34 @@ fn is_approval_entry(message: &Message) -> bool {
         .is_some_and(|body| body.approval.is_some() || body.approval_response.is_some())
 }
 
+fn bot_acknowledgement(message: &Message) -> bool {
+    // These wake rules serve the local store, which permits only its owner and validated bots.
+    // Account turns check the hub's member kind before applying the same exclusion.
+    matches!(
+        message.entry.kind,
+        InboxEntryKind::Message | InboxEntryKind::Transcript
+    ) && message.entry.sender_id != flow_like_local_bots::LOCAL_OWNER_ID
+        && message
+            .entry
+            .envelope
+            .get("body")
+            .is_some_and(flow_like::flow::copilot::decision::is_acknowledgement_body)
+}
+
 fn messages(entries: &[InboxEntry]) -> Vec<Message<'_>> {
     entries
         .iter()
-        .filter(|entry| entry.kind.wakes_bot())
+        .filter(|entry| entry.kind.wakes_bot() || entry.kind == InboxEntryKind::Transcript)
         .map(|entry| Message {
             entry,
             body: parse_body(entry),
         })
         .filter(|message| !is_approval_entry(message))
+        .filter(|message| {
+            message.entry.envelope["body"]
+                .get(flow_like_types::bot_user_context::REQUEST_FIELD)
+                .is_none()
+        })
         .collect()
 }
 
@@ -116,7 +135,7 @@ pub fn is_plain(entry: &InboxEntry) -> bool {
         == Some(PLAIN_ENCRYPTION)
 }
 
-/// The entry as a message: a trigger reads as a message of its owner with the trigger's text.
+/// Triggers and spoken lines carry their rendered text and mentions into the host's turn rules.
 pub fn parse_body(entry: &InboxEntry) -> Option<MessageBody> {
     let body = entry.envelope.get("body").filter(|_| is_plain(entry))?;
     if entry.kind == InboxEntryKind::Trigger {
@@ -124,6 +143,14 @@ pub fn parse_body(entry: &InboxEntry) -> Option<MessageBody> {
         return Some(MessageBody {
             text: trigger.render(),
             mentions: trigger.bot_id.into_iter().collect(),
+            ..MessageBody::default()
+        });
+    }
+    if entry.kind == InboxEntryKind::Transcript {
+        let spoken = TranscriptBody::parse(body).ok()?;
+        return Some(MessageBody {
+            text: spoken.render(),
+            mentions: spoken.mentions,
             ..MessageBody::default()
         });
     }
@@ -235,6 +262,8 @@ pub fn waiting_held(
             let sender = message.entry.sender_id.as_str();
             let bot_sender = sender != flow_like_local_bots::LOCAL_OWNER_ID;
             sender != bot_id
+                && context_recipient(message, bot_id)
+                && !bot_acknowledgement(message)
                 && !message.deleted()
                 && message.body.is_some()
                 && message.entry.created_at >= not_before
@@ -271,6 +300,75 @@ pub fn waiting_held(
             }
         })
         .or_else(|| reacted_to(kind, bot_id, entries, not_before))
+}
+
+/// A named participant releases a persisted dependency even when their reply does not mention
+/// the waiting bot. The ordinary replay, hop, approval and interactive-chat guards still apply.
+pub fn waiting_participant(
+    kind: ConversationKind,
+    bot_id: &str,
+    participant_id: &str,
+    after_seq: i64,
+    entries: &[InboxEntry],
+    not_before: DateTime<FixedOffset>,
+    hold: Option<Hold>,
+) -> Option<Waiting> {
+    let parked = parked_turns(entries, bot_id);
+    let messages = messages(entries);
+    let unanswered = answered_upto(&messages, bot_id);
+    let message = messages[..unanswered].iter().find(|message| {
+        message.entry.sender_id == participant_id
+            && context_recipient(message, bot_id)
+            && !bot_acknowledgement(message)
+            && participant_id != bot_id
+            && matches!(
+                message.entry.kind,
+                InboxEntryKind::Message | InboxEntryKind::Transcript
+            )
+            && message.entry.seq.is_some_and(|seq| seq > after_seq)
+            && !message.deleted()
+            && message.body.is_some()
+            && message.entry.created_at >= not_before
+            && !hold.is_some_and(|hold| hold.keeps(message))
+            && hops_of(
+                message,
+                participant_id != flow_like_local_bots::LOCAL_OWNER_ID,
+            ) <= MAX_HOPS
+    })?;
+    if parked.contains(&flow_like_types::bot_turn::turn_id(
+        bot_id,
+        &message.entry.message_id,
+    )) {
+        return None;
+    }
+    let hops = hops_of(
+        message,
+        participant_id != flow_like_local_bots::LOCAL_OWNER_ID,
+    );
+    Some(Waiting {
+        message_id: message.entry.message_id.clone(),
+        seq: message.entry.seq,
+        hops,
+        proactive: reply_is_proactive(message.entry.kind, hops),
+        requester_id: participant_id.to_owned(),
+        audience: TurnAudience::of(kind),
+        addressed: addressed(kind, bot_id, message, &messages),
+    })
+}
+
+fn context_recipient(message: &Message, bot_id: &str) -> bool {
+    if message.entry.envelope["body"]
+        .get(flow_like_types::bot_user_context::DERIVED_FIELD)
+        .is_some()
+    {
+        return false;
+    }
+    match message.entry.envelope["body"].get(flow_like_types::bot_user_context::RESPONSE_FIELD) {
+        Some(response) => {
+            response.get("bot_id").and_then(serde_json::Value::as_str) == Some(bot_id)
+        }
+        None => true,
+    }
 }
 
 /// The newest reaction of a person still in place on a message `bot_id` sent after its last one.

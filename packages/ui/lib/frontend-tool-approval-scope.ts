@@ -17,6 +17,11 @@ export interface FrontendToolApprovalScope {
 	appId?: string;
 }
 
+/** Changes to a bot's own settings require a new user decision for every call. */
+export function requiresFreshToolApproval(toolName: string): boolean {
+	return toolName === "bot_update_configuration";
+}
+
 function nonEmptyString(value: unknown): string | undefined {
 	if (typeof value !== "string") return undefined;
 	return value.trim() ? value : undefined;
@@ -187,6 +192,12 @@ export function resolveFrontendToolApprovalScope({
 	approvalSessionKey,
 	contextAppId,
 }: FrontendToolApprovalScopeInput): FrontendToolApprovalScope {
+	if (requiresFreshToolApproval(toolName)) {
+		return {
+			sessionKey: `${toolName}:request:${scopePart(requestId)}`,
+			rememberable: false,
+		};
+	}
 	if (toolName === "http_request") {
 		return {
 			sessionKey: `http_request:request:${scopePart(requestId)}`,

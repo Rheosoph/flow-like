@@ -34,6 +34,24 @@ import type {
 } from "../../../components/home/types";
 
 export class EmptyUserState implements IUserState {
+	getAvailability(): Promise<import("../../../lib/availability").UserAvailability> {
+		return Promise.reject(new Error("Sign in to manage account availability."));
+	}
+	updateAvailability(): Promise<import("../../../lib/availability").UserAvailability> {
+		return this.getAvailability();
+	}
+	clearAvailability(): Promise<import("../../../lib/availability").UserAvailability> {
+		return this.getAvailability();
+	}
+	linkCalendar(): Promise<import("../../../lib/availability").UserAvailability> {
+		return this.getAvailability();
+	}
+	unlinkCalendar(): Promise<import("../../../lib/availability").UserAvailability> {
+		return this.getAvailability();
+	}
+	refreshCalendars(): Promise<import("../../../lib/availability").UserAvailability> {
+		return this.getAvailability();
+	}
 	getHomeDefaults(defaultId?: string): Promise<IHomeDefaults> {
 		return Promise.resolve({ main: null, profile: null });
 	}

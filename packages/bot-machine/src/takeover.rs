@@ -7,6 +7,9 @@ use flow_like_bot_tools::error::{ToolError, code};
 struct State {
     since: Option<Instant>,
     note: Option<String>,
+    computer_stale: bool,
+    browser_stale: bool,
+    generation: u64,
 }
 
 /// Whether the owner is using a bot's computer, and the note the bot gets afterwards.
@@ -31,8 +34,11 @@ impl Takeover {
 
     pub(crate) fn take_at(&self, now: Instant) {
         let mut state = self.state();
+        state.generation = state.generation.wrapping_add(1);
         state.since.get_or_insert(now);
         state.note = None;
+        state.computer_stale = true;
+        state.browser_stale = true;
     }
 
     pub fn hand_back(&self) {
@@ -69,11 +75,60 @@ impl Takeover {
     pub fn has_note(&self) -> bool {
         self.state().note.is_some()
     }
+
+    pub fn require_fresh(&self, browser: bool) -> Result<(), ToolError> {
+        let state = self.state();
+        if if browser {
+            state.browser_stale
+        } else {
+            state.computer_stale
+        } {
+            return Err(ToolError::new(
+                code::STALE_PAGE,
+                if browser {
+                    "The owner used the browser; take a fresh browser_snapshot before acting"
+                } else {
+                    "The owner used the computer; take a fresh computer_screenshot before acting"
+                },
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.state().generation
+    }
+
+    pub fn observed(&self, browser: bool, generation: u64) -> bool {
+        let mut state = self.state();
+        if state.generation != generation || state.since.is_some() {
+            return false;
+        }
+        if browser {
+            state.browser_stale = false;
+        } else {
+            state.computer_stale = false;
+        }
+        true
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_capture_started_before_takeover_cannot_clear_handback_freshness() {
+        let takeover = Takeover::default();
+        let before = takeover.generation();
+        takeover.take();
+        takeover.hand_back();
+        assert!(!takeover.observed(false, before));
+        assert!(takeover.require_fresh(false).is_err());
+        assert!(takeover.observed(false, takeover.generation()));
+        assert!(takeover.require_fresh(false).is_ok());
+        assert!(takeover.require_fresh(true).is_err());
+    }
 
     #[test]
     fn a_bot_call_is_refused_while_taken_over_and_gets_the_note_once_after() {

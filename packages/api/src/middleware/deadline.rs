@@ -163,6 +163,11 @@ const RULES: &[Rule] = &[
     rule(M::POST, "/api/v1/bots/{bot_id}/ask", Data),
     rule(
         M::POST,
+        "/api/v1/devices/{id}/bots/turns/{turn_id}/wait",
+        Write,
+    ),
+    rule(
+        M::POST,
         "/api/v1/devices/{id}/bots/turns/{turn_id}/claim",
         Data,
     ),
@@ -1094,6 +1099,12 @@ mod tests {
             None,
         ),
         ("POST", "/api/v1/devices/{id}/bots/poll", Write, None),
+        (
+            "POST",
+            "/api/v1/devices/{id}/bots/turns/{turn_id}/wait",
+            Write,
+            None,
+        ),
         (
             "POST",
             "/api/v1/devices/{id}/bots/turns/{turn_id}/reply",

@@ -49,7 +49,11 @@ impl SkillHost for LocalSkills {
     async fn propose(&self, request: CreateBotSkill) -> Result<BotSkill> {
         let bot_id = self.bot_id.clone();
         self.on_store(move |store| {
-            store.create_skill(&bot_id, request, flow_like_local_bots::SkillOrigin::proposed_by_bot())
+            store.create_skill(
+                &bot_id,
+                request,
+                flow_like_local_bots::SkillOrigin::proposed_by_bot(),
+            )
         })
         .await
     }
@@ -77,7 +81,10 @@ impl SkillHost for AccountSkills {
             .request(Method::GET, &self.base(), None)
             .await
             .map_err(|error| anyhow!(error))?;
-        let skills = listed.get("skills").cloned().unwrap_or(Value::Array(Vec::new()));
+        let skills = listed
+            .get("skills")
+            .cloned()
+            .unwrap_or(Value::Array(Vec::new()));
         let skills: Vec<Value> = serde_json::from_value(skills)
             .map_err(|error| anyhow!("The hub sent unusable skills: {error}"))?;
         let Some(found) = skills.into_iter().find(|skill| skill["name"] == name) else {
@@ -111,10 +118,17 @@ impl SkillHost for AccountSkills {
         });
         let created = self
             .api
-            .request(Method::POST, &format!("{}/propose", self.base()), Some(&body))
+            .request(
+                Method::POST,
+                &format!("{}/propose", self.base()),
+                Some(&body),
+            )
             .await
             .map_err(|error| anyhow!(error))?;
-        let name = created["name"].as_str().unwrap_or(&request.name).to_string();
+        let name = created["name"]
+            .as_str()
+            .unwrap_or(&request.name)
+            .to_string();
         self.get(&name)
             .await?
             .ok_or_else(|| anyhow!("The hub saved the skill but did not list it"))
@@ -147,9 +161,12 @@ impl PackageSkills {
             .ok_or_else(|| anyhow!("Skill '{}' ships no package tools", skill.name))?;
         let client = crate::state::TauriRegistryState::get_client(&self.runner.app).await?;
         let engine = crate::state::TauriWasmEngineState::construct(&self.runner.app)?;
-        let nodes = client.load_nodes(package_id, engine).await.map_err(|error| {
-            anyhow!("The package '{package_id}' is not installed on this device: {error}")
-        })?;
+        let nodes = client
+            .load_nodes(package_id, engine)
+            .await
+            .map_err(|error| {
+                anyhow!("The package '{package_id}' is not installed on this device: {error}")
+            })?;
         Ok(nodes)
     }
 }
@@ -164,13 +181,19 @@ impl SkillHost for PackageSkills {
         self.base.propose(request).await
     }
 
-    async fn tool_specs(&self, skill: &BotSkill) -> Result<Vec<flow_like_bot_tools::SkillToolSpec>> {
+    async fn tool_specs(
+        &self,
+        skill: &BotSkill,
+    ) -> Result<Vec<flow_like_bot_tools::SkillToolSpec>> {
         if skill.source.package_id().is_none() {
             return Ok(Vec::new());
         }
         let mut specs = Vec::new();
         for node in self.nodes(skill).await? {
-            let entry = node.tool_entry().await.map_err(|error| anyhow!("{error}"))?;
+            let entry = node
+                .tool_entry()
+                .await
+                .map_err(|error| anyhow!("{error}"))?;
             if !skill.tools.contains(&entry.name) {
                 continue;
             }
@@ -194,7 +217,10 @@ impl SkillHost for PackageSkills {
             .clone()
             .ok_or_else(|| anyhow!("The bot has no workspace for the tool to use"))?;
         for node in self.nodes(skill).await? {
-            let entry = node.tool_entry().await.map_err(|error| anyhow!("{error}"))?;
+            let entry = node
+                .tool_entry()
+                .await
+                .map_err(|error| anyhow!("{error}"))?;
             if entry.name != tool || !skill.tools.iter().any(|known| known == tool) {
                 continue;
             }

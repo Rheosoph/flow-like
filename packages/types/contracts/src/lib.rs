@@ -4,6 +4,7 @@ use std::any::Any;
 
 pub mod authorization;
 pub mod egress;
+pub mod interaction;
 
 #[cfg(feature = "storage-paths")]
 pub mod storage;
@@ -30,6 +31,10 @@ pub mod bot_notify;
 pub mod bot_task;
 #[cfg(feature = "inbox")]
 pub mod bot_turn;
+#[cfg(feature = "inbox")]
+pub mod bot_user_context;
+#[cfg(feature = "inbox")]
+pub mod user_availability;
 #[cfg(feature = "device-bot")]
 pub mod device_bot;
 #[cfg(feature = "inbox")]

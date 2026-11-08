@@ -81,7 +81,7 @@ class FakeBufferSource {
 
 let initialContextState: AudioContextState;
 const contexts: FakeAudioContext[] = [];
-class FakeAudioContext {
+class FakeAudioContext extends EventTarget {
 	state = initialContextState;
 	destination = node();
 	output = media("mixed-audio");
@@ -107,6 +107,7 @@ class FakeAudioContext {
 		return source;
 	});
 	constructor() {
+		super();
 		contexts.push(this);
 	}
 }
@@ -317,6 +318,7 @@ async function listen() {
 	expect(mocks.startCallListener).toHaveBeenCalledWith(
 		microphone.stream,
 		expect.any(Function),
+		{ context: contexts[0], paused: false },
 	);
 	expect(latest.listening).toBe(true);
 }
@@ -341,8 +343,118 @@ function localCall(presence: ReturnType<typeof awareness>) {
 	).call;
 }
 
+describe("call transcription delivery", () => {
+	const utterance = {
+		samples: new Float32Array(16_000).fill(0.1),
+		offsetMs: 0,
+		durationMs: 1000,
+	};
+
+	test("a spoken utterance posts the transcript and its addressed bot", async () => {
+		mocks.transcribe.mockResolvedValue({ text: "  Bot, check the plan.  " });
+		await joined();
+		await listen();
+		await act(async () => {
+			mocks.startCallListener.mock.calls[0][1](utterance);
+		});
+		expect(mocks.transcribe).toHaveBeenCalledWith({
+			bit_id: "stt-model",
+			audio_base64: expect.any(String),
+			mime: "audio/wav",
+			local: false,
+		});
+		expect(mocks.sendEntry).toHaveBeenCalledWith({
+			conversationId: "conversation",
+			request: {
+				message_id: "message-id",
+				kind: "transcript",
+				envelope: {
+					v: 1,
+					enc: "none",
+					body: {
+						call: "call-one",
+						text: "Bot, check the plan.",
+						offset_ms: 0,
+						duration_ms: 1000,
+						mentions: ["bot"],
+					},
+				},
+			},
+		});
+	});
+
+	test("switching listening off and back on discards the old transcription and callback", async () => {
+		let finish!: (value: { text: string }) => void;
+		mocks.transcribe.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		mocks.transcribe.mockResolvedValue({ text: "new utterance" });
+		await joined();
+		await listen();
+		const previousCapture = mocks.startCallListener.mock.calls[0][1];
+		await act(async () => previousCapture(utterance));
+		await act(async () => {
+			latest.setListening(false);
+			latest.setListening(true);
+			previousCapture(utterance);
+			finish({ text: "discard this old audio" });
+		});
+		expect(mocks.sendEntry).not.toHaveBeenCalled();
+		expect(mocks.transcribe).toHaveBeenCalledOnce();
+		await act(async () => {
+			mocks.startCallListener.mock.calls[1][1](utterance);
+		});
+		expect(mocks.sendEntry).toHaveBeenCalledOnce();
+		expect(mocks.sendEntry.mock.calls[0][0].request.envelope.body.text).toBe(
+			"new utterance",
+		);
+	});
+
+	test("a stale capture startup cannot replace the current listener", async () => {
+		const oldListener = { setPaused: vi.fn(), stop: vi.fn() };
+		let finish!: (value: typeof oldListener) => void;
+		mocks.startCallListener.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		await joined();
+		await listen();
+		await act(async () => {
+			latest.setListening(false);
+			latest.setListening(true);
+			finish(oldListener);
+		});
+		expect(oldListener.stop).toHaveBeenCalledOnce();
+		expect(listener.stop).not.toHaveBeenCalled();
+		await act(async () => latest.toggleMute());
+		expect(listener.setPaused).toHaveBeenLastCalledWith(true);
+		expect(latest.listening).toBe(true);
+	});
+
+	test("capture and transcription failures become visible call errors", async () => {
+		mocks.startCallListener.mockRejectedValueOnce(new Error("capture failed"));
+		await joined();
+		await act(async () => latest.setListening(true));
+		expect(latest.listening).toBe(false);
+		expect(latest.error).toBe("transcription");
+		await listen();
+		expect(latest.error).toBeNull();
+		mocks.transcribe.mockRejectedValueOnce(new Error("model unavailable"));
+		await act(async () => {
+			mocks.startCallListener.mock.calls[1][1](utterance);
+		});
+		expect(latest.error).toBe("transcription");
+		expect(mocks.sendEntry).not.toHaveBeenCalled();
+	});
+});
+
 describe("conversation call bot audio", () => {
-	test("a suspended AudioContext preserves the ordinary microphone stream", async () => {
+	test("a suspended AudioContext preserves the microphone and enables bot voice after resuming", async () => {
 		initialContextState = "suspended";
 		getUserMedia.mockImplementation(async () => {
 			expect(contexts).toHaveLength(1);
@@ -352,9 +464,22 @@ describe("conversation call bot audio", () => {
 		await joined();
 		expect(latest.joined).toBe(true);
 		expect(mocks.setLocalStreams).toHaveBeenLastCalledWith([microphone.stream]);
-		expect(contexts[0].createMediaStreamDestination).not.toHaveBeenCalled();
+		expect(contexts[0].createMediaStreamDestination).toHaveBeenCalledOnce();
 		await act(async () => latest.setBotVoiceCapabilities(["bot"]));
-		expect(latest.canSpeakForBot("bot")).toBe(false);
+		expect(latest.canSpeakForBot("bot")).toBe(true);
+		await act(async () => {
+			contexts[0].state = "running";
+			contexts[0].dispatchEvent(new Event("statechange"));
+		});
+		expect(mocks.setLocalStreams).toHaveBeenLastCalledWith([
+			contexts[0].output.stream,
+		]);
+		const { playback, source } = await play();
+		expect(source.start).toHaveBeenCalledOnce();
+		await act(async () => {
+			source.onended?.();
+			await playback;
+		});
 		await act(async () => latest.leave());
 		expect(contexts[0].close).toHaveBeenCalledOnce();
 		expect(microphone.track.stop).toHaveBeenCalledOnce();

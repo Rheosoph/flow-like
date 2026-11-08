@@ -35,6 +35,7 @@ pub(crate) const BACKGROUND_INTERACTION_UNAVAILABLE: &str = "background_interact
 
 #[derive(Clone, Default)]
 pub struct NativeRunOptions {
+    pub recovery: Option<Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>>,
     /// A native background host can select a profile without changing the active window.
     /// Foreground commands leave this unset and capture the active profile once.
     pub profile_id: Option<String>,
@@ -59,6 +60,9 @@ pub struct NativeRunOptions {
     pub bot_memory: Option<flow_like::flow::copilot::MemoryTurnSource>,
     /// Shared or unreadable interactive conversation metadata forbids legacy memory writes.
     pub legacy_memory_read_only: bool,
+    /// An interactive inbox run's explicit owner-memory permission. Missing metadata denies
+    /// access; other native runs derive it from the memory source and requester.
+    pub legacy_memory_allowed: Option<bool>,
     /// New room activity for the top-level turn to consider before it answers.
     pub room_updates: Option<Arc<dyn flow_like::flow::copilot::platform::RoomUpdates>>,
     /// A headless bot turn's approval gate: a call that asks the owner runs under a standing
@@ -66,6 +70,12 @@ pub struct NativeRunOptions {
     pub approval_gate: Option<Arc<crate::bot_host::ApprovalGate>>,
     /// Whose message woke a headless bot turn and who reads the answer.
     pub requester: Option<flow_like::flow::copilot::TurnRequester>,
+    /// A brief call listening cue, rendered without tools.
+    pub acknowledgement: bool,
+    /// Set from the authenticated inbox trigger, never from model arguments.
+    pub ephemeral_user_context: bool,
+    /// The host owns event delivery, including owner notifications.
+    pub suppress_owner_notifications: bool,
     /// The question whose late answer woke a headless bot turn: the turn's follow-ups to that
     /// callee go on counting from its round.
     pub answered_round: Option<flow_like::flow::copilot::bot_talk::AnsweredRound>,

@@ -180,6 +180,7 @@ async function mount(
 		},
 		inboxState: { listConversations },
 		userState: {
+			getProfile: async () => null,
 			getInfo: async () => ({ id: "me", name: "Felix Schultz" }),
 			lookupUser: async () => null,
 			lookupUsers: async () => [],

@@ -41,7 +41,12 @@ import type { ConversationRoom, RoomAwareness } from "./use-conversation-room";
 import { newInboxMessageId, useSendInboxEntry } from "./use-inbox";
 import { useIncomingCallJoin } from "./use-incoming-call-join";
 
-export type CallError = "denied" | "unavailable" | "full" | "failed";
+export type CallError =
+	| "denied"
+	| "unavailable"
+	| "full"
+	| "failed"
+	| "transcription";
 
 export interface CallParticipantView {
 	sub: string;
@@ -150,6 +155,7 @@ interface Session {
 	peer: string;
 	stream: MediaStream;
 	context: AudioContext | null;
+	contextChanged: (() => void) | null;
 	localMeter: Meter | null;
 	outputs: Map<string, Output>;
 	poll: ReturnType<typeof setInterval> | null;
@@ -162,6 +168,7 @@ interface Session {
 	speakingBot: string | null;
 	speechOutput: ReturnType<typeof createCallSpeechOutput> | null;
 	listener: CallListener | null;
+	listeningGeneration: number;
 	transcripts: ReturnType<typeof createSerialQueue<SpokenUtterance>> | null;
 	video: ReturnType<typeof createVideoCapture> | null;
 }
@@ -228,6 +235,7 @@ function stopOutput(output: Output) {
 }
 
 function stopListening(session: Session) {
+	session.listeningGeneration++;
 	session.listening = false;
 	session.transcripts?.close();
 	session.transcripts = null;
@@ -236,6 +244,8 @@ function stopListening(session: Session) {
 }
 
 function releaseSession(session: Session) {
+	if (session.contextChanged)
+		session.context?.removeEventListener("statechange", session.contextChanged);
 	if (session.botEchoTimer !== null) clearTimeout(session.botEchoTimer);
 	session.speechOutput?.dispose();
 	stopListening(session);
@@ -282,7 +292,9 @@ function publish(session: Session) {
 
 function localStreams(session: Session): MediaStream[] {
 	return [
-		session.speechOutput?.stream ?? session.stream,
+		session.context?.state === "running"
+			? (session.speechOutput?.stream ?? session.stream)
+			: session.stream,
 		session.video?.state.camera,
 		session.video?.state.screen,
 	].filter((stream): stream is MediaStream => Boolean(stream));
@@ -597,6 +609,7 @@ export function useConversationCall(
 				peer,
 				stream,
 				context,
+				contextChanged: null,
 				localMeter: makeMeter(context, stream, me),
 				outputs: new Map(),
 				poll: null,
@@ -609,13 +622,11 @@ export function useConversationCall(
 				speakingBot: null,
 				speechOutput: null,
 				listener: null,
+				listeningGeneration: 0,
 				transcripts: null,
 				video: null,
 			};
-			if (
-				context?.state === "running" &&
-				optionsRef.current?.persistCallEvents !== false
-			) {
+			if (context && optionsRef.current?.persistCallEvents !== false) {
 				try {
 					session.speechOutput = createCallSpeechOutput(
 						context,
@@ -655,6 +666,11 @@ export function useConversationCall(
 				setSpeaking((current) => (sameSet(current, next) ? current : next));
 			}, SPEAKING_POLL_MS);
 			sessionRef.current = session;
+			session.contextChanged = () => {
+				if (sessionRef.current === session)
+					engineRef.current?.setLocalStreams(localStreams(session));
+			};
+			context?.addEventListener("statechange", session.contextChanged);
 			publish(session);
 			engineRef.current?.setLocalStreams(localStreams(session));
 			setJoined(true);
@@ -768,11 +784,16 @@ export function useConversationCall(
 	}, []);
 
 	const transcribe = useCallback(
-		async (session: Session, utterance: SpokenUtterance) => {
+		async (
+			session: Session,
+			utterance: SpokenUtterance,
+			generation: number,
+		) => {
 			const { listen: options, audio: audioState } = listenRef.current;
 			if (
 				!options?.stt ||
 				!audioState ||
+				session.listeningGeneration !== generation ||
 				optionsRef.current?.persistCallEvents === false
 			)
 				return;
@@ -784,7 +805,13 @@ export function useConversationCall(
 				local: options.stt.route === "local",
 			});
 			const text = result.text.trim();
-			if (!text || sessionRef.current !== session || !session.listening) return;
+			if (
+				!text ||
+				sessionRef.current !== session ||
+				!session.listening ||
+				session.listeningGeneration !== generation
+			)
+				return;
 			const origin =
 				startTimesRef.current.get(session.callId) ?? session.joinedAt;
 			await sendEntry({
@@ -825,18 +852,38 @@ export function useConversationCall(
 			)
 				return;
 			session.listening = true;
-			session.transcripts = createSerialQueue<SpokenUtterance>((utterance) =>
-				transcribe(session, utterance),
-			);
-			publish(session);
-			startCallListener(session.stream, (utterance) =>
-				session.transcripts?.push({
-					...utterance,
-					spokenAt: Date.now() - END_SILENCE_MS - utterance.durationMs,
+			const generation = ++session.listeningGeneration;
+			const transcripts = createSerialQueue<SpokenUtterance>((utterance) =>
+				transcribe(session, utterance, generation).catch((cause) => {
+					if (
+						sessionRef.current === session &&
+						session.listeningGeneration === generation
+					)
+						setError("transcription");
+					throw cause;
 				}),
+			);
+			session.transcripts = transcripts;
+			setError(null);
+			publish(session);
+			startCallListener(
+				session.stream,
+				(utterance) =>
+					transcripts.push({
+						...utterance,
+						spokenAt: Date.now() - END_SILENCE_MS - utterance.durationMs,
+					}),
+				{
+					context: session.context ?? undefined,
+					paused: session.muted || session.botSpeaking,
+				},
 			)
 				.then((listener) => {
-					if (sessionRef.current !== session || !session.listening) {
+					if (
+						sessionRef.current !== session ||
+						!session.listening ||
+						session.listeningGeneration !== generation
+					) {
 						listener.stop();
 						return;
 					}
@@ -845,7 +892,14 @@ export function useConversationCall(
 				})
 				.catch((cause) => {
 					console.warn("Listening to the microphone failed", cause);
+					if (
+						sessionRef.current !== session ||
+						session.listeningGeneration !== generation
+					)
+						return;
 					stopListening(session);
+					const failure = errorOf(cause);
+					setError(failure === "failed" ? "transcription" : failure);
 					publish(session);
 				});
 		},

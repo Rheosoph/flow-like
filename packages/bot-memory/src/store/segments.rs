@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::lance::{
-    Probe, Table, embed_or_wait, from_millis, in_list, int_field, millis, quote, search_pool,
-    text_field,
+    PreparedEmbeddings, Probe, Table, embed_or_wait, from_millis, in_list, int_field, millis,
+    quote, search_pool, text_field,
 };
 use crate::llm::Embedder;
 use crate::model::{Seq, SeqSpan};
@@ -132,6 +132,10 @@ pub struct SegmentStore {
     embedder: Arc<dyn Embedder>,
 }
 
+pub(crate) struct PreparedSegments {
+    rows: Vec<SegmentRow>,
+}
+
 impl SegmentStore {
     pub const TABLE: &'static str = "segments";
 
@@ -158,8 +162,17 @@ impl SegmentStore {
     /// Writes summaries (replacing by id): a retried compaction overwrites its own segments.
     /// When the embedder fails they are stored without vectors.
     pub async fn put(&self, summaries: &[SegmentSummary]) -> Result<()> {
+        let prepared = self.prepare_put(summaries).await?;
+        self.put_prepared(prepared).await
+    }
+
+    /// Prepares summary rows and vectors before the engine claims the memory lease.
+    pub(crate) async fn prepare_put(
+        &self,
+        summaries: &[SegmentSummary],
+    ) -> Result<PreparedSegments> {
         if summaries.is_empty() {
-            return Ok(());
+            return Ok(PreparedSegments { rows: Vec::new() });
         }
         let texts: Vec<String> = summaries
             .iter()
@@ -172,8 +185,13 @@ impl SegmentStore {
             .zip(vectors)
             .map(|(summary, vector)| SegmentRow::new(summary, &model, vector))
             .collect::<Result<Vec<_>>>()?;
+        Ok(PreparedSegments { rows })
+    }
+
+    /// Commits prepared summary rows without calling a model.
+    pub(crate) async fn put_prepared(&self, prepared: PreparedSegments) -> Result<()> {
         let _writes = self.table.write_lock().await;
-        self.table.upsert_vectored(schema(), &rows).await
+        self.table.upsert_vectored(schema(), &prepared.rows).await
     }
 
     async fn read(&self, filter: &str) -> Result<Vec<SegmentSummary>> {
@@ -279,6 +297,7 @@ impl SegmentStore {
             model: self.embedder.model_id(),
             columns: &COLUMNS,
             pool: search_pool(limit),
+            exact: false,
         };
         let mut rows: HashMap<String, Value> = HashMap::new();
         let mut lists = self.table.rankings(&probe, &filter, &mut rows).await?;
@@ -304,7 +323,30 @@ impl SegmentStore {
         self.table.reembed(self.embedder.as_ref(), &COLUMNS).await
     }
 
+    pub(crate) async fn prepare_reembed(&self) -> Result<PreparedEmbeddings> {
+        self.table.prepare_reembed(self.embedder.as_ref()).await
+    }
+
+    pub(crate) async fn apply_reembed(&self, prepared: PreparedEmbeddings) -> Result<usize> {
+        self.table.apply_reembed(prepared, &COLUMNS).await
+    }
+
     pub(crate) async fn optimize(&self) -> Result<()> {
+        self.table
+            .ensure_indexes(
+                &[
+                    ("id", "BTREE"),
+                    ("parent", "BTREE"),
+                    ("seq_from", "BTREE"),
+                    ("seq_to", "BTREE"),
+                    ("t_from", "BTREE"),
+                    ("t_to", "BTREE"),
+                    ("level", "BITMAP"),
+                    ("embedding_model", "BITMAP"),
+                ],
+                Some(self.embedder.model_id()),
+            )
+            .await?;
         self.table.optimize().await
     }
 
@@ -318,5 +360,9 @@ impl SegmentStore {
 
     pub(crate) async fn drop_all(&self) -> Result<()> {
         self.table.drop_table().await
+    }
+
+    pub(crate) async fn clear(&self) -> Result<()> {
+        self.table.clear().await
     }
 }

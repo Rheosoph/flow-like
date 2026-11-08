@@ -1,3 +1,4 @@
+use flow_like_bot_memory::store::is_memory_table;
 use flow_like_storage::arrow_array::RecordBatch;
 use flow_like_storage::arrow_schema::Schema;
 use flow_like_storage::databases::vector::VectorStore;
@@ -24,7 +25,7 @@ pub fn is_internal(name: &str) -> bool {
 
 pub fn validate_table_name(name: &str) -> ToolResult<String> {
     let name = name.trim().to_lowercase();
-    if is_internal(&name) {
+    if is_internal(&name) || is_memory_table(&name) {
         return Err(ToolError::refused(format!(
             "'{name}' is reserved for the bot's own indexes and registries; pick another table name"
         )));
@@ -41,6 +42,23 @@ pub fn validate_table_name(name: &str) -> ToolResult<String> {
         )));
     }
     Ok(name)
+}
+
+pub fn ensure_not_memory_table(name: &str) -> ToolResult<()> {
+    if is_memory_table(name) {
+        return Err(ToolError::refused(
+            "This table belongs to the bot's memory. Use its memory tools, which respect this conversation's sharing settings.",
+        ));
+    }
+    Ok(())
+}
+
+pub async fn workspace_table_names(connection: &Connection) -> Result<Vec<String>> {
+    Ok(table_names(connection)
+        .await?
+        .into_iter()
+        .filter(|name| !is_memory_table(name))
+        .collect())
 }
 
 async fn store(connection: &Connection, table: &str) -> LanceDBVectorStore {

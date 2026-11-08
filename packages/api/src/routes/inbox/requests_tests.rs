@@ -746,3 +746,62 @@ async fn calls_are_refused_in_end_to_end_encrypted_conversations() {
     }
     assert!(copies(&db, "call_1").await.is_empty());
 }
+
+#[tokio::test]
+async fn transcript_listening_requires_a_decision_model_and_respects_room_limits() {
+    let db = world().await;
+    launch_room(&db).await;
+    let line = |id: &str, mentions: Vec<&str>| {
+        outgoing(
+            id,
+            InboxEntryKind::Transcript,
+            json!({"call":"call_1", "text":"What is the plan?", "offset_ms":0, "duration_ms":900, "mentions":mentions}),
+        )
+    };
+    send_in(&db, "room", "user-a", &line("legacy", vec![]), at(2))
+        .await
+        .unwrap();
+    assert_eq!(turns(&db).await, 0);
+    db.execute_unprepared(r#"UPDATE public."Bot" SET "modelPolicy" = '{"decision":"decision-bit"}' WHERE "id" = 'bot_a'"#)
+        .await.unwrap();
+    let listening = send_in(&db, "room", "user-a", &line("listening", vec![]), at(3))
+        .await
+        .unwrap();
+    assert!(listening.bots[0].read_along);
+    assert_eq!(turns(&db).await, 1);
+    set_limits_in(
+        &db,
+        "room",
+        "bot_a",
+        "user-a",
+        Some(&BotRoomLimits {
+            mentioned_only: true,
+            ..Default::default()
+        }),
+    )
+    .await
+    .unwrap();
+    let limited = send_in(&db, "room", "user-a", &line("limited", vec![]), at(4))
+        .await
+        .unwrap();
+    assert!(!limited.bots[0].read_along);
+    assert_eq!(
+        turns(&db).await,
+        1,
+        "room mention-only restriction still applies"
+    );
+    send_in(
+        &db,
+        "room",
+        "user-a",
+        &line("mentioned", vec!["bot_a"]),
+        at(5),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        turns(&db).await,
+        2,
+        "an explicit mention still wakes the bot"
+    );
+}

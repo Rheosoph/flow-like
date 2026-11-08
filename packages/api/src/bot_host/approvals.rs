@@ -389,6 +389,7 @@ async fn notify_owner(state: &AppState, turn: &bot_turn::Model, card: &ApprovalR
         state,
         &format!("botapproval_{}", card.id),
         DispatchNotificationInput {
+            notification_priority: Default::default(),
             bot_context: Some(flow_like_types::bot_notify::BotNotificationContext {
                 bot_id: turn.bot_id.clone(),
                 review_only: card.secret.is_some(),
@@ -434,7 +435,13 @@ async fn answer_transaction(
     let conversation = open_conversation(txn, owner_id, bot_id, &turn.conversation_id, now)
         .await?
         .ok_or_else(|| unknown_approval(turn_id, &answer.approval_id))?;
-    lock(txn, &conversation).await?;
+    let origin = super::talk::turn_origin_conversation(txn, &turn).await?;
+    let mut rooms = vec![conversation.as_str(), origin.as_str()];
+    rooms.sort_unstable();
+    rooms.dedup();
+    for room in rooms {
+        lock(txn, room).await?;
+    }
     answer_in(txn, owner_id, bot_id, turn_id, answer, &conversation, now).await
 }
 
@@ -520,6 +527,8 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
             format!("Turn '{turn_id}' stopped waiting"),
         ));
     }
+    let origin = super::talk::turn_origin_conversation(txn, &turn).await?;
+    super::decision_wait::clear_before_in(txn, bot_id, &origin, now).await?;
     let turn = ledger::find(txn, turn_id, Some(owner_id))
         .await?
         .ok_or_else(|| ApiError::not_found(format!("Turn '{turn_id}' not found")))?;

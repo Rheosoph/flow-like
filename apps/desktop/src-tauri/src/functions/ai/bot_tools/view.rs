@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
+use flow_like_types::interaction_observation::InteractionObservation;
 use serde::Serialize;
 
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
@@ -53,6 +54,9 @@ pub struct ComputerView {
     /// A `data:` URL of the latest picture.
     image: Option<String>,
     age_ms: Option<u64>,
+    observation: Option<InteractionObservation>,
+    width: Option<u32>,
+    height: Option<u32>,
     taken_over: bool,
 }
 
@@ -64,6 +68,9 @@ impl ComputerView {
             caption: None,
             image: None,
             age_ms: None,
+            observation: None,
+            width: None,
+            height: None,
             taken_over,
         }
     }
@@ -84,6 +91,9 @@ impl ComputerView {
             caption: Some(caption),
             image: Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(jpeg))),
             age_ms: Some(age.as_millis() as u64),
+            observation: None,
+            width: None,
+            height: None,
             taken_over,
         }
     }
@@ -98,7 +108,19 @@ fn view_of(frame: Option<Frame>, taken_over: bool) -> ComputerView {
         FrameKind::Browser => ViewKind::Browser,
         FrameKind::Computer => ViewKind::Computer,
     };
-    ComputerView::active(kind, frame.caption.clone(), &frame.jpeg, frame.at.elapsed(), taken_over)
+    let mut view = ComputerView::active(
+        kind,
+        frame.caption.clone(),
+        &frame.jpeg,
+        frame.at.elapsed(),
+        taken_over,
+    );
+    if view.state == ViewState::Active {
+        view.observation = frame.observation;
+        view.width = Some(frame.width);
+        view.height = Some(frame.height);
+    }
+    view
 }
 
 /// The latest picture of the bot's browser or screen, or "asleep" when it has done nothing for
@@ -159,6 +181,41 @@ mod tests {
         assert!(view.image.is_none());
     }
 
+    #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+    #[test]
+    fn frame_dimensions_and_observations_stay_with_the_picture() {
+        let observation = InteractionObservation {
+            captured_at_ms: 1000,
+            width: 2560,
+            height: 1600,
+            pointer: None,
+            focus: None,
+            action: None,
+            mapping: None,
+        };
+        let frame = Frame {
+            jpeg: flow_like_types::Bytes::from_static(&[0xff, 0xd8]),
+            width: 1280,
+            height: 800,
+            kind: FrameKind::Computer,
+            caption: "Screen".into(),
+            at: std::time::Instant::now(),
+            observation: Some(observation.clone()),
+        };
+        let active = view_of(Some(frame.clone()), false);
+        assert_eq!((active.width, active.height), (Some(1280), Some(800)));
+        assert_eq!(active.observation, Some(observation));
+        let old = view_of(
+            Some(Frame {
+                at: std::time::Instant::now() - ACTIVE_FOR - Duration::from_secs(1),
+                ..frame
+            }),
+            false,
+        );
+        assert!(old.observation.is_none());
+        assert!(old.width.is_none() && old.image.is_none());
+    }
+
     #[test]
     fn a_fresh_frame_is_active_and_an_old_one_asleep() {
         let active = ComputerView::active(
@@ -170,7 +227,13 @@ mod tests {
         );
         assert_eq!(active.state, ViewState::Active);
         assert_eq!(active.kind, Some(ViewKind::Browser));
-        assert!(active.image.as_deref().unwrap().starts_with("data:image/jpeg;base64,"));
+        assert!(
+            active
+                .image
+                .as_deref()
+                .unwrap()
+                .starts_with("data:image/jpeg;base64,")
+        );
         let old = ComputerView::active(
             ViewKind::Computer,
             String::new(),

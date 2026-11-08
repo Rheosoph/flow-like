@@ -91,6 +91,7 @@ import {
 	selectToolPromptHere,
 	useGlobalChatStore,
 } from "../../state/global-chat/global-chat-store";
+import { requiresFreshToolApproval } from "../../lib/frontend-tool-approval-scope";
 import {
 	cancelGlobalChatRun,
 	clearGlobalChatQueueDrain,
@@ -402,7 +403,12 @@ export function GlobalChatBody({
 	// before the flip, only when it is the asking run's owner's; queued ones drain as each is
 	// answered. `ask` prompts are never auto-answered — auto mode waives permission, not questions.
 	useEffect(() => {
-		if (!promptAutoMode || toolPrompt?.kind !== "approval") return;
+		if (
+			!promptAutoMode ||
+			toolPrompt?.kind !== "approval" ||
+			requiresFreshToolApproval(toolPrompt.toolName)
+		)
+			return;
 		toolPrompt.respond({ approved: true, remember: false });
 	}, [promptAutoMode, toolPrompt]);
 	// Live board surface (open canvas) the assistant can see and edit — shown as a context chip.

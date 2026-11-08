@@ -383,6 +383,7 @@ export interface IInvite {
 
 export interface IUserLookup {
 	id: string;
+	availability?: import("../../lib/availability").PublicAvailability;
 	/** Search matched an exact ID, email or handle, including undisclosed fields. */
 	exact_match?: boolean;
 	email?: string;

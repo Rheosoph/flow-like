@@ -216,6 +216,7 @@ function InvitationNeed({
 					botId={invitation.principal_id}
 					botName={botName}
 					roomName={isRequest ? inviter : room}
+					group={!isRequest}
 					confirmLabel={
 						isRequest
 							? t("crew.requests.acceptBot", "Accept and allow")

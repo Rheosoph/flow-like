@@ -270,6 +270,7 @@ pub(super) fn validate_import(
             title: request.title,
             members: request.members,
             encryption: None,
+            bot_limits: Default::default(),
         },
     )?;
     let mut members = vec![caller];
@@ -366,6 +367,9 @@ fn checked_body(
     kind: InboxEntryKind,
     envelope: &Value,
 ) -> Result<super::entries::Links, ApiError> {
+    if envelope.get("body").is_some_and(flow_like_types::bot_user_context::is_ephemeral_body) {
+        return Err(ApiError::bad_request("Live user context requests and snapshots cannot be imported"));
+    }
     match check_envelope(envelope) {
         Ok(EnvelopeKind::Plain) => {}
         Ok(EnvelopeKind::Sealed) => {

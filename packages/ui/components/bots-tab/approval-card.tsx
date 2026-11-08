@@ -20,6 +20,7 @@ import type { BotAppearance } from "../bots/types";
 import type { IMessageApproval } from "../interfaces/chat-default/chat-db";
 import {
 	RequestCard,
+	RequestCardBody,
 	RequestCardFooter,
 	RequestCardHeader,
 	RequestMark,
@@ -31,6 +32,7 @@ import type { ApprovalDecision } from "./approval-entry";
 import type { ConversationApproval } from "./fold-entries";
 import { useGrantLabel } from "./grant-labels";
 import { SecretRequestForm } from "./secret-request-form";
+import { BotConfigurationChanges } from "./configuration-changes";
 
 /** The summary as the end of "{{name}} wants to …"; core phrases them as "The bot wants to …". */
 function lowerFirst(summary: string): string {
@@ -96,7 +98,8 @@ export function ApprovalCard({
 	const upsertSecret = useUpsertBotSecret();
 	const [sent, setSent] = useState<ApprovalDecision>();
 	const decision = approval.answer ?? sent;
-	const rememberable = approval.scopes.length > 0;
+	const rememberable =
+		approval.tool !== "bot_update_configuration" && approval.scopes.length > 0;
 	const tone = decisionTone(decision);
 	const disabled = readOnly || isPending;
 
@@ -205,6 +208,11 @@ export function ApprovalCard({
 					</>
 				}
 			/>
+			{approval.configurationChanges && (
+				<RequestCardBody className="px-3.5 py-2.5">
+					<BotConfigurationChanges changes={approval.configurationChanges} />
+				</RequestCardBody>
+			)}
 			{!decision && secret && (
 				<SecretRequestForm
 					secret={secret}

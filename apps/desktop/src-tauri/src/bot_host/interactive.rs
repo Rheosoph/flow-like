@@ -20,9 +20,9 @@ fn runs() -> MutexGuard<'static, Option<HashMap<Key, usize>>> {
 }
 
 pub fn is_live(bot_id: &str, conversation_id: &str) -> bool {
-    runs().as_ref().is_some_and(|runs| {
-        runs.contains_key(&(bot_id.to_owned(), conversation_id.to_owned()))
-    })
+    runs()
+        .as_ref()
+        .is_some_and(|runs| runs.contains_key(&(bot_id.to_owned(), conversation_id.to_owned())))
 }
 
 pub fn hold_now(bot_id: &str, conversation_id: &str) -> Hold {
@@ -42,7 +42,10 @@ pub struct RunGuard {
 
 pub fn begin(app: Option<&AppHandle>, bot_id: &str, conversation_id: &str) -> RunGuard {
     let key = (bot_id.to_owned(), conversation_id.to_owned());
-    *runs().get_or_insert_with(HashMap::new).entry(key.clone()).or_insert(0) += 1;
+    *runs()
+        .get_or_insert_with(HashMap::new)
+        .entry(key.clone())
+        .or_insert(0) += 1;
     RunGuard {
         key,
         app: app.cloned(),
@@ -67,7 +70,8 @@ impl Drop for RunGuard {
         tauri::async_runtime::spawn(async move {
             poke(&app, &conversation_id);
             tokio::time::sleep(
-                std::time::Duration::from_secs(INTERACTIVE_GRACE_SECS.unsigned_abs()) + std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(INTERACTIVE_GRACE_SECS.unsigned_abs())
+                    + std::time::Duration::from_secs(1),
             )
             .await;
             poke(&app, &conversation_id);
@@ -118,6 +122,7 @@ pub struct InteractiveRun {
     bot_id: String,
     args: InteractiveArgs,
     home: Home,
+    encryption: Option<Arc<super::e2e::E2eHost>>,
 }
 
 impl InteractiveRun {
@@ -127,7 +132,11 @@ impl InteractiveRun {
         bot_id: &str,
         args: InteractiveArgs,
     ) -> Option<Self> {
-        let local = store.conversation(&args.conversation_id).await.ok()?.is_some();
+        let local = store
+            .conversation(&args.conversation_id)
+            .await
+            .ok()?
+            .is_some();
         let home = if local {
             Home::Local(store)
         } else {
@@ -137,6 +146,7 @@ impl InteractiveRun {
             bot_id: bot_id.to_owned(),
             args,
             home,
+            encryption: None,
         })
     }
 
@@ -144,27 +154,51 @@ impl InteractiveRun {
         &self.args.conversation_id
     }
 
-    /// A missing trigger position must not give a shared room writable owner memory.
-    pub async fn owner_direct(&self) -> bool {
-        match &self.home {
-            Home::Local(store) => store
-                .conversation(&self.args.conversation_id)
-                .await
-                .ok()
-                .flatten()
-                .is_some_and(|conversation| {
-                    super::memory::is_owner_direct(&conversation, &self.bot_id)
-                }),
+    /// Read the stored trigger rather than accepting a memory policy from the window.
+    pub async fn ephemeral_user_context(&self) -> Result<bool, String> {
+        let entries = match &self.home {
+            Home::Local(store) => store.newest(&self.args.conversation_id).await?,
             Home::Account(hub) => hub
-                .read(
-                    &format!("inbox/conversations/{}", self.args.conversation_id),
-                    Vec::new(),
-                )
+                .entries_for_turn(&self.bot_id, &self.args.conversation_id, &self.args.trigger_message_id)
                 .await
-                .ok()
-                .is_some_and(|conversation| {
-                    super::memory::hub_owner_direct(&conversation, &self.bot_id)
-                }),
+                .map_err(|error| error.to_string())?,
+        };
+        Ok(trigger_of(entries, &self.args.trigger_message_id).is_some_and(|entry| {
+            entry.envelope.get("body").is_some_and(|body| {
+                flow_like_types::bot_user_context::response_for(body, &entry.sender_id, &self.bot_id)
+            })
+        }))
+    }
+
+    /// Whether legacy owner memory is available, and whether it must be read-only. This is
+    /// checked independently of the trigger position, which may not have arrived yet.
+    pub async fn legacy_memory_access(&self) -> Option<bool> {
+        match &self.home {
+            Home::Local(store) => {
+                let conversation = store
+                    .conversation(&self.args.conversation_id)
+                    .await
+                    .ok()??;
+                if super::memory::is_owner_direct(&conversation, &self.bot_id) {
+                    return Some(false);
+                }
+                if conversation.kind != flow_like_types::inbox::ConversationKind::Group {
+                    return None;
+                }
+                store
+                    .room_limits(&conversation.id, &self.bot_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .filter(|limits| limits.use_owner_memory)
+                    .map(|_| true)
+            }
+            Home::Account(hub) => {
+                super::memory::hub_memory_access(hub, &self.bot_id, &self.args.conversation_id)
+                    .await
+                    .filter(|access| access.use_owner_memory)
+                    .map(|access| access.room)
+            }
         }
     }
 
@@ -174,6 +208,116 @@ impl InteractiveRun {
 
     fn turn_id(&self) -> String {
         turn_id(&self.bot_id, &self.args.trigger_message_id)
+    }
+
+    /// Bind foreground work to the same checkpoint a background host will read after restart.
+    pub async fn recovery(
+        &mut self,
+        encryption: Option<Arc<super::e2e::E2eHost>>,
+    ) -> Result<Option<Arc<dyn flow_like::flow::copilot::run_recovery::BotRunRecovery>>, String>
+    {
+        let deadline = Utc::now().timestamp_millis()
+            + flow_like_types::bot_turn::DEFAULT_TURN_DEADLINE_SECS as i64 * 1000;
+        match &self.home {
+            Home::Local(store) if store.supports_recovery() => {
+                Ok(Some(Arc::new(super::recovery::LocalRecovery::new(
+                    store.clone(),
+                    &self.bot_id,
+                    &self.args.conversation_id,
+                    &self.args.trigger_message_id,
+                    deadline,
+                ))))
+            }
+            Home::Account(hub) if hub.supports_recovery() => {
+                let held = hub
+                    .write(
+                        &format!("bots/turns/{}/hold", self.turn_id()),
+                        Vec::new(),
+                        json!({}),
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if held.get("held").and_then(Value::as_bool) != Some(true) {
+                    return Err("This bot turn is already being answered or has finished".into());
+                }
+                let value = hub
+                    .read(
+                        &format!(
+                            "inbox/conversations/{}/turns/{}",
+                            self.args.conversation_id,
+                            self.turn_id()
+                        ),
+                        Vec::new(),
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let turn: flow_like_types::bot_turn::BotTurn = serde_json::from_value(value)
+                    .map_err(|_| "The bot turn could not be read".to_string())?;
+                if turn.bot_id != self.bot_id
+                    || turn.conversation_id != self.args.conversation_id
+                    || turn.trigger_message_id != self.args.trigger_message_id
+                    || turn.status != flow_like_types::bot_turn::TurnStatus::Queued
+                    || turn.attempts != 0
+                    || turn
+                        .host_id
+                        .as_deref()
+                        .is_some_and(|host| host != self.host_id())
+                {
+                    return Err("This bot turn is already being answered or has finished".into());
+                }
+                let entries = hub
+                    .entries_for_turn(
+                        &self.bot_id,
+                        &self.args.conversation_id,
+                        &self.args.trigger_message_id,
+                    )
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let trigger = entries
+                    .iter()
+                    .find(|entry| entry.message_id == self.args.trigger_message_id)
+                    .ok_or_else(|| {
+                        "The message this bot turn answers could not be read".to_string()
+                    })?;
+                let mut recovery = flow_like_bot_host::recovery::HubRecovery::new(
+                    hub.clone(),
+                    &turn,
+                    &self.host_id(),
+                    deadline,
+                );
+                if flow_like_bot_host::e2e::is_sealed(trigger) {
+                    let encryption = encryption
+                        .ok_or_else(|| "This bot's encryption keys are unavailable".to_string())?;
+                    encryption
+                        .open_entries(&self.bot_id, &self.args.trigger_message_id, entries)
+                        .await
+                        .map_err(|error| error.message)?;
+                    recovery = recovery
+                        .with_encryption(encryption.clone(), self.args.conversation_id.clone());
+                    self.encryption = Some(encryption);
+                }
+                Ok(Some(Arc::new(recovery)))
+            }
+            _ => Ok(None),
+        }
+    }
+
+    async fn cancel(&self) -> Result<(), String> {
+        match &self.home {
+            Home::Local(store) => {
+                store
+                    .cancel_run(
+                        &self.bot_id,
+                        &self.args.conversation_id,
+                        &self.args.trigger_message_id,
+                    )
+                    .await
+            }
+            Home::Account(hub) => hub
+                .cancel_turn(&self.bot_id, &self.turn_id())
+                .await
+                .map_err(|error| error.to_string()),
+        }
     }
 
     pub async fn memory(&self) -> Option<MemoryTurnSource> {
@@ -187,11 +331,15 @@ impl InteractiveRun {
                     store.newest(&self.args.conversation_id).await.ok()?,
                     &self.args.trigger_message_id,
                 );
-                source_for(store, &conversation, &self.bot_id, trigger.as_ref())
+                source_for(store, &conversation, &self.bot_id, trigger.as_ref()).await
             }
             Home::Account(hub) => {
                 let entries = hub
-                    .entries(&self.bot_id, &self.args.conversation_id)
+                    .entries_for_turn(
+                        &self.bot_id,
+                        &self.args.conversation_id,
+                        &self.args.trigger_message_id,
+                    )
                     .await
                     .ok()?;
                 let seq = trigger_of(entries, &self.args.trigger_message_id)?.seq;
@@ -213,14 +361,13 @@ impl InteractiveRun {
         let Home::Account(hub) = &self.home else {
             return None;
         };
-        let (hub, path) = (
-            hub.clone(),
-            format!("bots/turns/{}/hold", self.turn_id()),
-        );
+        let (hub, path) = (hub.clone(), format!("bots/turns/{}/hold", self.turn_id()));
         Some(tokio::spawn(async move {
             loop {
                 match hub.write(&path, Vec::new(), json!({})).await {
-                    Ok(value) if value.get("held").and_then(Value::as_bool) == Some(false) => return,
+                    Ok(value) if value.get("held").and_then(Value::as_bool) == Some(false) => {
+                        return;
+                    }
                     Ok(_) => {}
                     Err(failure) => tracing::warn!(%failure, "Interactive chat: hold failed"),
                 }
@@ -259,11 +406,20 @@ impl InteractiveRun {
                     .map(|_| true)
             }
             Home::Account(hub) => {
-                let message = json!({
+                let mut message = json!({
                     "message_id": message_id,
                     "kind": "message",
-                    "envelope": plain_envelope(body),
                 });
+                if let Some(encryption) = &self.encryption {
+                    message["envelopes"] = json!(
+                        encryption
+                            .seal(&self.bot_id, &self.args.conversation_id, &message_id, &body)
+                            .await
+                            .map_err(|error| error.message)?
+                    );
+                } else {
+                    message["envelope"] = plain_envelope(body);
+                }
                 match hub
                     .send(
                         &self.bot_id,
@@ -315,6 +471,15 @@ pub(crate) struct Finish {
 }
 
 impl Finish {
+    pub(crate) async fn cancel(self) -> Result<(), String> {
+        if let Some(hold) = &self.hold {
+            hold.abort();
+        }
+        let result = self.run.cancel().await;
+        drop(self.guard);
+        result
+    }
+
     pub(crate) async fn end(self, text: &str, error_code: Option<&str>) {
         if let Some(hold) = &self.hold {
             hold.abort();

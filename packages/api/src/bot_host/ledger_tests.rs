@@ -10,7 +10,7 @@ use super::{
     },
 };
 use crate::{
-    entity::{bot, bot_turn},
+    entity::{bot, bot_turn, bot_turn_checkpoint},
     routes::{
         bots::presence::{ONLINE_WINDOW_SECS, report_in},
         inbox::{delivery::BotRecipient, fixture::insert_flux},
@@ -281,7 +281,7 @@ async fn only_messages_wake_bots() {
 }
 
 #[tokio::test]
-async fn a_transcript_wakes_only_the_bots_it_mentions() {
+async fn a_transcript_wakes_mentioned_bots_and_configured_listeners() {
     let db = database().await;
     for kind in [ConversationKind::Direct, ConversationKind::Group] {
         let mut named = recipient("bot_1", "user-a", SERVER);
@@ -291,7 +291,12 @@ async fn a_transcript_wakes_only_the_bots_it_mentions() {
         let mut event = delivery(kind, vec![named.clone(), other.clone()]);
         event.kind = InboxEntryKind::Transcript;
         assert!(queues_turn(&event, &named), "{kind:?}");
-        assert!(!queues_turn(&event, &other), "{kind:?}");
+        assert!(queues_turn(&event, &other), "{kind:?}");
+        other.read_along = false;
+        assert!(
+            !queues_turn(&event, &other),
+            "an ordinary bot still needs a mention"
+        );
     }
     let mut event = delivery(
         ConversationKind::Group,
@@ -667,9 +672,9 @@ async fn recovery_requeues_lost_hosts_fails_the_spent_and_the_stale() {
     for bot in ["bot_1", "bot_2"] {
         claim_in(&db, &lost(bot)).await.unwrap().unwrap();
     }
-    bot_turn::Entity::update_many()
-        .col_expr(bot_turn::Column::Attempts, Expr::value(MAX_ATTEMPTS as i32))
-        .filter(bot_turn::Column::Id.eq(turn_id("bot_2", "m1")))
+    bot_turn_checkpoint::Entity::update_many()
+        .col_expr(bot_turn_checkpoint::Column::RecoveryAttempts, Expr::value(MAX_ATTEMPTS as i32 - 1))
+        .filter(bot_turn_checkpoint::Column::TurnId.eq(turn_id("bot_2", "m1")))
         .exec(&db)
         .await
         .unwrap();
@@ -708,6 +713,56 @@ async fn recovery_requeues_lost_hosts_fails_the_spent_and_the_stale() {
     assert_eq!(stale.error_code.as_deref(), Some(ERROR_QUEUE_EXPIRED));
     assert_eq!(row(&db, "bot_4", "m1").await.status, STORED_QUEUED);
     assert_eq!(recover_in(&db, now).await.unwrap().requeued, 0);
+}
+
+#[tokio::test]
+async fn recovered_work_keeps_its_trigger_and_does_not_fold_newer_messages() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    queue(&db, "bot_1", "user-a", SERVER, "c1", "original", at(1)).await;
+    claim(&db, "bot_1", "original", "old", at(2)).await.unwrap();
+    queue(&db, "bot_1", "user-a", SERVER, "c1", "newer", at(3)).await;
+    assert_eq!(recover_in(&db, at(63)).await.unwrap().requeued, 1);
+    let heads = queued_heads(&db, Some("user-a"), TurnHostKind::Server, at(64), 10).await.unwrap();
+    assert_eq!(heads.len(), 1);
+    assert_eq!(heads[0].0.trigger_message_id, "original");
+    assert!(heads[0].1.is_empty());
+    let resumed = claim(&db, "bot_1", "newer", "new", at(64)).await.unwrap();
+    assert_eq!(resumed.turn.trigger_message_id, "original");
+    assert_eq!(resumed.turn.attempts, 2);
+    assert!(resumed.batched.is_empty());
+    assert_eq!(row(&db, "bot_1", "newer").await.status, STORED_QUEUED);
+}
+
+#[tokio::test]
+async fn stale_recovery_snapshot_cannot_fail_a_renewed_or_reclaimed_lease() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    queue(&db, "bot_1", "user-a", SERVER, "c1", "m1", at(1)).await;
+    claim(&db, "bot_1", "m1", "first", at(2)).await.unwrap();
+    let stale = row(&db, "bot_1", "m1").await;
+    heartbeat_in(&db, &stale.id, Some("user-a"), "first", at(60)).await.unwrap();
+    assert_eq!(super::ledger::end_all(&db, std::slice::from_ref(&stale), &[STORED_RUNNING],
+        STORED_FAILED, ERROR_HOST_LOST, at(63)).await.unwrap(), 0);
+    claim(&db, "bot_1", "m1", "second", at(121)).await.unwrap();
+    assert_eq!(super::ledger::end_all(&db, std::slice::from_ref(&stale), &[STORED_RUNNING],
+        STORED_FAILED, ERROR_HOST_LOST, at(122)).await.unwrap(), 0);
+    assert_eq!(row(&db, "bot_1", "m1").await.host_id.as_deref(), Some("second"));
+}
+
+#[tokio::test]
+async fn exhausted_queued_claim_cannot_restart_the_attempt_budget() {
+    let db = database().await;
+    insert_bot(&db, "bot_1", "user-a", "SERVER").await;
+    queue(&db, "bot_1", "user-a", SERVER, "c1", "m1", at(1)).await;
+    let id = turn_id("bot_1", "m1");
+    super::recovery::ensure_metadata(&db, &row(&db, "bot_1", "m1").await).await.unwrap();
+    bot_turn_checkpoint::Entity::update_many()
+        .col_expr(bot_turn_checkpoint::Column::RecoveryAttempts, Expr::value(MAX_ATTEMPTS as i32))
+        .filter(bot_turn_checkpoint::Column::TurnId.eq(&id)).exec(&db).await.unwrap();
+    assert!(!take_in(&db, &id, "host", at(2)).await.unwrap());
+    assert_eq!(claim(&db, "bot_1", "m1", "host", at(2)).await.unwrap_err(), Refusal::NotQueued(TurnStatus::Failed));
+    assert_eq!(row(&db, "bot_1", "m1").await.error_code.as_deref(), Some(ERROR_HOST_LOST));
 }
 
 #[tokio::test]
@@ -764,7 +819,7 @@ async fn an_owner_retries_only_their_own_failed_turn_of_that_bot() {
         .unwrap();
     assert_eq!(
         (queued.status.as_str(), queued.attempts, queued.updated_at),
-        (STORED_QUEUED, 0, at(22))
+        (STORED_QUEUED, 1, at(22))
     );
     assert!(queued.reply_message_id.is_none() && queued.error_code.is_none());
     assert!(claim(&db, "bot_1", "m1", "h2", at(23)).await.is_ok());

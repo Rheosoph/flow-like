@@ -22,6 +22,27 @@ function task(patch: Partial<IBotTask>): IBotTask {
 }
 
 describe("taskRequest", () => {
+	test("monitoring is explicit and reminders keep their normal delivery", () => {
+		const draft = {
+			...emptyTaskDraft(),
+			at: "2026-11-04T09:30",
+			instruction: "Check the report",
+		};
+		expect(taskRequest(draft)?.monitoring).toBeUndefined();
+		expect(taskRequest({ ...draft, monitoring: true })?.monitoring).toBe(true);
+		expect(
+			taskRequest({
+				...draft,
+				kind: "cron",
+				cron: "0 9 * * *",
+				monitoring: true,
+			})?.monitoring,
+		).toBe(true);
+		expect(
+			taskRequest({ ...draft, monitoring: false })?.monitoring,
+		).toBeUndefined();
+	});
+
 	test("a once task needs an instruction and a time, sent as an instant", () => {
 		const draft = {
 			...emptyTaskDraft(),

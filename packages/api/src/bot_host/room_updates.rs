@@ -152,6 +152,9 @@ fn render_update(
         return None;
     }
     let body = plain_body(&entry.envelope)?;
+    if flow_like_types::bot_user_context::is_ephemeral_body(body) {
+        return None;
+    }
     let text = match InboxEntryKind::parse(&entry.kind)? {
         InboxEntryKind::Message | InboxEntryKind::Edit => {
             let parsed: MessageBody = serde_json::from_value(body.clone()).ok()?;
@@ -318,6 +321,27 @@ mod tests {
         )
         .await;
         assert_eq!(source.drain().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn temporary_context_waits_for_its_own_turn() {
+        let db = room().await;
+        let source = ServerRoomUpdates::after(&db, "bot_1", "room", "trigger", "user-a")
+            .await
+            .unwrap()
+            .unwrap();
+        for (index, body) in [
+            json!({"text": "request", "user_context_request": {}}),
+            json!({"text": "temporary values", "user_context_response": {}}),
+            json!({"text": "derived location", "user_context_derived": true}),
+        ].into_iter().enumerate() {
+            message(&db, "room", &format!("context-{index}"), "user-a", index as i64 + 2, body, &["bot_1"]).await;
+        }
+        assert!(source.drain().await.is_empty());
+        message(&db, "room", "ordinary", "user-a", 5, json!({"text": "ordinary follow-up"}), &["bot_1"]).await;
+        let updates = source.drain().await;
+        assert_eq!(updates.len(), 1);
+        assert!(updates[0].contains("ordinary follow-up"));
     }
 
     #[tokio::test]

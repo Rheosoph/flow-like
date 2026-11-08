@@ -965,7 +965,7 @@ impl LanceDBVectorStore {
         Ok(tables)
     }
 
-    /// Compact fragments, rebuild indices, and prune unprotected history.
+    /// Rewrite fragments containing deleted rows, rebuild indices, and prune unprotected history.
     /// Tagged versions and branch dependencies remain available.
     pub async fn prune_history(&self) -> Result<()> {
         self.run_optimize_actions(prune_history_actions(), false)
@@ -2030,11 +2030,16 @@ fn optimize_actions(keep_versions: bool) -> Vec<lancedb::table::OptimizeAction> 
     actions
 }
 
-/// Compact, rebuild indices, and prune unprotected history before an archive export.
+/// Materialize every deletion, rebuild indices, and prune unprotected history.
 fn prune_history_actions() -> Vec<lancedb::table::OptimizeAction> {
     vec![
         lancedb::table::OptimizeAction::Compact {
-            options: CompactionOptions::default(),
+            options: CompactionOptions {
+                // Explicit pruning rewrites even a fragment with one deleted row. Routine
+                // optimization keeps Lance's threshold to avoid that rewrite cost.
+                materialize_deletions_threshold: 0.0,
+                ..CompactionOptions::default()
+            },
             remap_options: None,
         },
         lancedb::table::OptimizeAction::Index(OptimizeOptions::new()),
@@ -2776,6 +2781,22 @@ mod tests {
             }
             _ => panic!("cleanup must prune only after compaction and index maintenance"),
         }
+
+        for action in [&retain_actions[0], &cleanup_actions[0]] {
+            let lancedb::table::OptimizeAction::Compact { options, .. } = action else {
+                panic!("routine optimization must start with compaction");
+            };
+            assert_eq!(
+                options.materialize_deletions_threshold,
+                CompactionOptions::default().materialize_deletions_threshold
+            );
+        }
+        let prune_actions = prune_history_actions();
+        let lancedb::table::OptimizeAction::Compact { options, .. } = &prune_actions[0] else {
+            panic!("explicit pruning must start with compaction");
+        };
+        assert!(options.materialize_deletions);
+        assert_eq!(options.materialize_deletions_threshold, 0.0);
     }
 
     /// Deterministic values that are independent across vector components.

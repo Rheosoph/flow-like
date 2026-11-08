@@ -44,6 +44,10 @@ use super::public_web::{
     WebResearchSession, normalize_public_discovery_url, parse_public_url, public_url_spans,
     run_archive_lookup_for_session, run_open_url_for_session, source_id_for_url,
 };
+use super::run_recovery::{
+    BotRunRecovery, PendingCall, RecoveryPhase, RecoverySession, RunSnapshot, SavedAnswer,
+    image_fingerprints,
+};
 use super::stream::{
     FlowScriptToolCallPreviewTracker, detailed_tool_end_frame, detailed_tool_start_frame,
     plan_step_frame, safe_tool_activity_result_preview, tool_result_stream_status,
@@ -59,10 +63,16 @@ use super::tool_spec::{
     research_agent_prompt, resolve_tool_effect, scout_specialist_tool_specs, spec_arg_str,
 };
 use super::types::{ChatImage, ChatMessage, ChatRole, PlanStepStatus};
+use super::work_plan::{
+    UPDATE_WORK_PLAN_TOOL, WORK_PLAN_PROMPT, WorkPlanState, update_work_plan_tool_spec,
+};
 use crate::bit::{Bit, BitModelPreference, BitTypes, LLMParameters};
 use crate::models::device::Interaction;
 use crate::profile::Profile;
 use crate::state::FlowLikeState;
+
+#[path = "platform_context.rs"]
+mod context;
 
 /// Private frontend-tool result field used to carry bounded vision attachments alongside JSON.
 /// Host adapters remove it before exposing the textual result to the model or diagnostics.
@@ -96,6 +106,19 @@ pub struct PlatformToolImageUrl {
 /// One finished tool call ready to be sent back to the model:
 /// `(tool_call_id, tool_name, output, images)`.
 type PlatformToolResult = (String, String, String, Vec<PlatformToolImageUrl>);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(super) enum WorkStopReason {
+    Budget,
+    Blocked,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Bot work stopped before completion: {reason:?}")]
+pub(super) struct IncompleteWork {
+    pub reason: WorkStopReason,
+    pub output: String,
+}
 
 /// Remove and validate private image attachments from a frontend tool result.
 pub fn take_platform_tool_image_urls(value: &mut Value) -> Vec<PlatformToolImageUrl> {
@@ -757,6 +780,8 @@ pub struct PlatformCopilot {
     thinking: Option<HistoryThinking>,
     tool_specs: Option<Vec<PlatformToolSpec>>,
     tool_rounds: Option<usize>,
+    long_running: bool,
+    recovery: Option<Arc<dyn BotRunRecovery>>,
 }
 
 impl PlatformCopilot {
@@ -767,6 +792,8 @@ impl PlatformCopilot {
             thinking: None,
             tool_specs: None,
             tool_rounds: None,
+            long_running: false,
+            recovery: None,
         }
     }
 
@@ -786,6 +813,17 @@ impl PlatformCopilot {
     /// Tool rounds before the synthesis turn, instead of the surface's own budget.
     pub fn with_tool_rounds(mut self, tool_rounds: usize) -> Self {
         self.tool_rounds = Some(tool_rounds);
+        self
+    }
+
+    /// Keep a working plan and compact older evidence during extended bot turns.
+    pub fn with_long_running(mut self) -> Self {
+        self.long_running = true;
+        self
+    }
+
+    pub fn with_recovery(mut self, recovery: Arc<dyn BotRunRecovery>) -> Self {
+        self.recovery = Some(recovery);
         self
     }
 
@@ -871,6 +909,24 @@ impl PlatformCopilot {
     where
         F: Fn(String) + Send + Sync + 'static,
     {
+        if let Some(recovery) = &self.recovery
+            && let Some(answer) =
+                RecoverySession::terminal_before_model(recovery.clone(), &user_prompt).await?
+        {
+            if let Some(callback) = &on_token {
+                callback(answer.output.clone());
+            }
+            if surface == PlatformSurface::Subtask
+                && let Some(reason) = answer.stop_reason
+            {
+                return Err(IncompleteWork {
+                    reason,
+                    output: answer.output,
+                }
+                .into());
+            }
+            return Ok(answer.output);
+        }
         let (model_name, completion_client, thinking) = self.resolve_model(model_id, token).await?;
         self.chat_with_client(
             surface,
@@ -892,8 +948,107 @@ impl PlatformCopilot {
     async fn chat_with_client<F>(
         &self,
         surface: PlatformSurface,
-        mut system_prompt: String,
+        system_prompt: String,
         user_prompt: String,
+        current_images: Option<Vec<ChatImage>>,
+        history: Vec<ChatMessage>,
+        model_name: String,
+        completion_client: &(dyn CompletionClientDyn + Send + Sync),
+        thinking: Option<Value>,
+        bridge: Arc<dyn PlatformToolBridge>,
+        memory: Option<Arc<AssistantMemory>>,
+        on_token: Option<F>,
+    ) -> Result<String>
+    where
+        F: Fn(String) + Send + Sync + 'static,
+    {
+        let deadline = if let Some(store) = &self.recovery {
+            match store.load().await? {
+                Some(saved) => {
+                    saved
+                        .validate()
+                        .map_err(|error| flow_like_types::anyhow!(error))?;
+                    Some(
+                        store
+                            .deadline_at_ms()
+                            .map_or(saved.deadline_at_ms, |deadline| {
+                                deadline.min(saved.deadline_at_ms)
+                            }),
+                    )
+                }
+                None => store.deadline_at_ms().or_else(|| {
+                    Some(
+                        chrono::Utc::now().timestamp_millis()
+                            + flow_like_types::bot_turn::DEFAULT_TURN_DEADLINE_SECS as i64 * 1_000,
+                    )
+                }),
+            }
+        } else {
+            None
+        };
+        let original_request = user_prompt.clone();
+        let callback = on_token.map(Arc::new);
+        let sink = callback
+            .clone()
+            .map(|callback| move |frame: String| callback(frame));
+        let work = self.chat_with_client_inner(
+            surface,
+            system_prompt,
+            user_prompt,
+            current_images,
+            history,
+            model_name,
+            completion_client,
+            thinking,
+            bridge,
+            memory,
+            sink,
+        );
+        let Some(deadline) = deadline else {
+            return work.await;
+        };
+        let remaining = Duration::from_millis(
+            deadline
+                .saturating_sub(chrono::Utc::now().timestamp_millis())
+                .max(0) as u64,
+        );
+        match tokio::time::timeout(remaining, work).await {
+            Ok(result) => result,
+            Err(_) => {
+                let store = self
+                    .recovery
+                    .as_ref()
+                    .expect("a durable run supplied the deadline");
+                if let Some(answer) =
+                    RecoverySession::terminal_before_model(store.clone(), &original_request).await?
+                {
+                    if let Some(callback) = callback {
+                        callback(answer.output.clone());
+                    }
+                    if surface == PlatformSurface::Subtask
+                        && let Some(reason) = answer.stop_reason
+                    {
+                        return Err(IncompleteWork {
+                            reason,
+                            output: answer.output,
+                        }
+                        .into());
+                    }
+                    return Ok(answer.output);
+                }
+                Err(flow_like_types::anyhow!(
+                    "The original bot execution deadline expired"
+                ))
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn chat_with_client_inner<F>(
+        &self,
+        surface: PlatformSurface,
+        mut system_prompt: String,
+        mut user_prompt: String,
         current_images: Option<Vec<ChatImage>>,
         history: Vec<ChatMessage>,
         model_name: String,
@@ -911,13 +1066,24 @@ impl PlatformCopilot {
             system_prompt.push_str(&memory.prompt_sections(&user_prompt).await);
         }
 
-        let max_tool_rounds = self
+        let mut max_tool_rounds = self
             .tool_rounds
             .unwrap_or_else(|| surface.max_tool_rounds());
-        let tool_specs = self
+        let long_running = self.long_running && max_tool_rounds > 0;
+        let mut tool_specs = self
             .tool_specs
             .clone()
             .unwrap_or_else(|| surface.tool_specs(memory.is_some()));
+        if long_running {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(WORK_PLAN_PROMPT);
+            if !tool_specs
+                .iter()
+                .any(|spec| spec.name == UPDATE_WORK_PLAN_TOOL)
+            {
+                tool_specs.push(update_work_plan_tool_spec());
+            }
+        }
         let advertised_tool_names: HashSet<String> = tool_specs
             .iter()
             .map(|spec| spec.name.to_string())
@@ -945,6 +1111,11 @@ impl PlatformCopilot {
                 }));
             }
         }
+        let reference_images: Vec<UserContent> = prompt_contents
+            .iter()
+            .filter(|content| matches!(content, UserContent::Image(_)))
+            .cloned()
+            .collect();
         let prompt_message = rig::message::Message::User {
             content: OneOrMany::many(prompt_contents).unwrap_or_else(|_| {
                 OneOrMany::one(UserContent::Text(rig::message::Text {
@@ -998,20 +1169,177 @@ impl PlatformCopilot {
         // agent's own model usage alongside any stats reported by apps it called.
         let mut session_stats = LLMUsageStats::default();
         let mut current_prompt = prompt_message;
-        let web_research_session = Arc::new(WebResearchSession::new(&user_prompt));
+        let mut web_research_session = Arc::new(WebResearchSession::new(&user_prompt));
         // Research calls share spend and source provenance while the root's own web phase can
         // close after private tools. Only the caller's explicit public brief reaches the child.
-        let delegated_research_session = WebResearchSession::new(&user_prompt);
+        let mut delegated_research_session = Arc::new(WebResearchSession::new(&user_prompt));
         // A run without an app inventory has no local apps to check before research.
         let mut local_app_discovery_returned = !advertised_tool_names.contains("list_apps");
         let watches_room = bridge.watches_room();
         let mut room_refreshes_remaining = MAX_ROOM_REFRESHES;
         let mut iteration = 0;
+        let mut model_calls_reserved = 0;
+        let mut work_plan = WorkPlanState::default();
+        let mut user_steering = Vec::new();
+        let mut empty_continuations = 0usize;
+        let mut progress_seen = HashSet::new();
+        let mut stop_reason = None;
+        let mut model_failed = false;
+        let mut recoveries = 0;
+        let mut original_tool_rounds = max_tool_rounds;
+        let mut recovery = None;
+        let mut recovery_deadline = None;
+        let mut recovery_notice = None;
+        if let Some(store) = &self.recovery {
+            if !long_running {
+                return Err(flow_like_types::anyhow!(
+                    "Durable recovery requires a long-running bot turn"
+                ));
+            }
+            if let Some(answer) =
+                RecoverySession::terminal_before_model(store.clone(), &user_prompt).await?
+            {
+                if let Some(callback) = &on_token {
+                    callback(answer.output.clone());
+                }
+                if surface == PlatformSurface::Subtask
+                    && let Some(reason) = answer.stop_reason
+                {
+                    return Err(IncompleteWork {
+                        reason,
+                        output: answer.output,
+                    }
+                    .into());
+                }
+                return Ok(answer.output);
+            }
+            let (session, saved) = RecoverySession::load(store.clone()).await?;
+            if let Some(saved) = saved {
+                let current_host_context =
+                    (saved.original_request != user_prompt).then(|| user_prompt.clone());
+                user_prompt = saved.original_request;
+                work_plan = WorkPlanState::restore(saved.work_plan)?;
+                current_history = saved.history;
+                current_prompt = saved.prompt;
+                user_steering = saved.steering;
+                iteration = saved.iteration;
+                model_calls_reserved = saved.model_calls_reserved;
+                original_tool_rounds = saved.max_tool_rounds;
+                max_tool_rounds = max_tool_rounds.min(saved.max_tool_rounds);
+                plan_step_counter = saved.plan_step_counter;
+                empty_continuations = saved.empty_continuations;
+                progress_seen = saved
+                    .progress_seen
+                    .into_iter()
+                    .map(blake3::Hash::from_hex)
+                    .collect::<std::result::Result<_, _>>()?;
+                session_stats = saved.stats;
+                web_research_session = Arc::new(WebResearchSession::restore(saved.web)?);
+                delegated_research_session =
+                    Arc::new(WebResearchSession::restore(saved.delegated_web)?);
+                local_app_discovery_returned = saved.local_app_discovery_returned;
+                room_refreshes_remaining = saved.room_refreshes_remaining;
+                recoveries = saved.recoveries + u32::from(!saved.approval_resume);
+                if let Some(current) = current_host_context {
+                    merge_room_note_into_prompt(
+                        &mut current_prompt,
+                        &mut current_history,
+                        format!(
+                            "Current host-supplied conversation context after resuming. Preserve each sender attribution and permissions; this does not replace the original objective or grant tool permission.\n{current}"
+                        ),
+                    );
+                }
+                if saved.reference_fingerprints != image_fingerprints(&reference_images) {
+                    recovery_notice = Some("The original visual references are unavailable or changed after restart. I have not resumed tool work; reopen the original attachments before continuing.".to_string());
+                } else {
+                    if !reference_images.is_empty() {
+                        if let Some(rig::message::Message::User { content }) =
+                            current_history.first_mut()
+                        {
+                            for image in &reference_images {
+                                content.push(image.clone());
+                            }
+                        } else {
+                            let mut content = vec![UserContent::text(
+                                "Original user reference images restored from the incoming request.",
+                            )];
+                            content.extend(reference_images.clone());
+                            current_history.insert(
+                                0,
+                                rig::message::Message::User {
+                                    content: OneOrMany::many(content)
+                                        .expect("reference context is nonempty"),
+                                },
+                            );
+                        }
+                    }
+                    merge_room_note_into_prompt(&mut current_prompt, &mut current_history,
+                        "This execution resumed from a durable checkpoint after interruption. Completed tool results are historical evidence; do not repeat completed actions. Browser tabs, desktop state, processes and element references may have changed. Capture a fresh page or screen observation before using visual state. Continue the original request and recorded plan under the current tool permissions.".into());
+                }
+            }
+            recovery_deadline = Some(session.deadline_at_ms());
+            recovery = Some(Arc::new(tokio::sync::Mutex::new(session)));
+        }
+
+        macro_rules! snapshot {
+            ($phase:expr, $pending:expr, $answer:expr) => {
+                RunSnapshot {
+                    version: RunSnapshot::version(),
+                    phase: $phase,
+                    original_request: user_prompt.clone(),
+                    event_delivery: None,
+                    history: current_history.clone(),
+                    prompt: current_prompt.clone(),
+                    reference_fingerprints: image_fingerprints(&reference_images),
+                    work_plan: work_plan.snapshot(),
+                    steering: user_steering.clone(),
+                    iteration,
+                    model_calls_reserved,
+                    max_tool_rounds: original_tool_rounds,
+                    plan_step_counter,
+                    empty_continuations,
+                    progress_seen: progress_seen
+                        .iter()
+                        .map(|hash| hash.to_hex().to_string())
+                        .collect(),
+                    stats: session_stats.clone(),
+                    web: web_research_session.snapshot(),
+                    delegated_web: delegated_research_session.snapshot(),
+                    local_app_discovery_returned,
+                    room_refreshes_remaining,
+                    recoveries,
+                    approval_resume: false,
+                    pending_calls: $pending,
+                    answer: $answer,
+                }
+            };
+        }
 
         // Tool rounds and answer generation have separate budgets. The last iteration deliberately
         // advertises no tools, guaranteeing that a search/open chain cannot consume the final turn
         // and leave the user without a synthesis.
-        while iteration <= max_tool_rounds {
+        'run: while iteration <= max_tool_rounds {
+            if let Some(notice) = recovery_notice.take() {
+                full_response = notice;
+                if let Some(callback) = &on_token {
+                    callback(full_response.clone());
+                }
+                stop_reason.get_or_insert(WorkStopReason::Blocked);
+                answer_closed = true;
+                break;
+            }
+            if recovery_deadline
+                .is_some_and(|deadline| chrono::Utc::now().timestamp_millis() >= deadline)
+            {
+                let notice = "The original execution deadline has passed. I stopped before starting another model or tool action.";
+                full_response = notice.into();
+                if let Some(callback) = &on_token {
+                    callback(notice.into());
+                }
+                stop_reason = Some(WorkStopReason::Budget);
+                answer_closed = true;
+                break;
+            }
             // A stopped run must stop spending immediately. The outer `select!` only fires between
             // awaits it owns, so with a long tool round in flight it can be minutes late.
             if bridge.is_cancelled().await {
@@ -1019,26 +1347,148 @@ impl PlatformCopilot {
             }
             // Round boundaries are the one place a user turn can be added without breaking the
             // assistant → tool-result ordering providers require.
-            merge_steering_into_prompt(&mut current_prompt, &bridge.drain_steering().await);
+            let steering = bridge.drain_steering().await;
+            if long_running && !steering.is_empty() {
+                user_steering.extend(steering.iter().cloned());
+                merge_room_note_into_prompt(
+                    &mut current_prompt,
+                    &mut current_history,
+                    format!(
+                        "The user sent these updates while you worked. Apply them to the original request:\n{}",
+                        serde_json::to_string(&steering).expect("steering strings serialize"),
+                    ),
+                );
+            } else {
+                merge_steering_into_prompt(&mut current_prompt, &steering);
+            }
             if watches_room && let Some(note) = room_update_note(&bridge.drain_room_updates().await)
             {
                 merge_room_note_into_prompt(&mut current_prompt, &mut current_history, note);
             }
-            let tools_enabled = iteration < max_tool_rounds;
+            if long_running {
+                context::prune_images(&mut current_history, &current_prompt, &reference_images);
+                if let Some(prefix_len) = context::compact_prefix_len(&current_history) {
+                    if let Some(callback) = &on_token {
+                        callback(plan_step_frame(
+                            format!("checkpoint_{iteration}"),
+                            "Preserving progress for the next steps".into(),
+                            PlanStepStatus::InProgress,
+                            "think",
+                        ));
+                    }
+                    let plan = work_plan.context();
+                    let summary = context::summarize(
+                        completion_client,
+                        &model_name,
+                        &current_history[..prefix_len],
+                        plan.as_deref(),
+                        &bridge,
+                        &mut session_stats,
+                    )
+                    .await;
+                    if bridge.is_cancelled().await {
+                        return Err(flow_like_types::anyhow!("Run cancelled"));
+                    }
+                    if let Some(callback) = &on_token {
+                        callback(plan_step_frame(
+                            format!("checkpoint_{iteration}"),
+                            if summary.is_ok() {
+                                "Progress preserved"
+                            } else {
+                                "Could not preserve progress"
+                            }
+                            .into(),
+                            if summary.is_ok() {
+                                PlanStepStatus::Completed
+                            } else {
+                                PlanStepStatus::Failed
+                            },
+                            "think",
+                        ));
+                    }
+                    match summary {
+                        Ok(summary) => {
+                            current_history.drain(..prefix_len);
+                            current_history.insert(
+                                0,
+                                context::checkpoint_message(
+                                    &user_prompt,
+                                    &user_steering,
+                                    &summary,
+                                    &reference_images,
+                                ),
+                            );
+                        }
+                        Err(error) => {
+                            tracing::warn!("Long-running bot checkpoint failed: {error:#}");
+                            let notice = "\n\nI stopped because I could not preserve the working context for the next steps. The task is unfinished; actions already completed have not been repeated.";
+                            full_response.push_str(notice);
+                            if let Some(callback) = &on_token {
+                                callback(notice.into());
+                            }
+                            answer_closed = true;
+                            stop_reason = Some(WorkStopReason::Blocked);
+                            break;
+                        }
+                    }
+                }
+            }
+            let room_drafts_replaced = MAX_ROOM_REFRESHES - room_refreshes_remaining;
+            if recovery.is_some()
+                && model_calls_reserved.saturating_sub(room_drafts_replaced) >= max_tool_rounds + 1
+            {
+                stop_reason = Some(WorkStopReason::Budget);
+                full_response = "The original model-step budget is exhausted. I have not started another model request.".into();
+                if let Some(callback) = &on_token {
+                    callback(full_response.clone());
+                }
+                answer_closed = true;
+                break;
+            }
+            if recovery.is_some() {
+                model_calls_reserved += 1;
+            }
+            if let Some(recovery) = &recovery {
+                recovery
+                    .lock()
+                    .await
+                    .save(snapshot!(RecoveryPhase::Ready, Vec::new(), None))
+                    .await?;
+            }
+            let tools_enabled = iteration < max_tool_rounds
+                && (recovery.is_none()
+                    || model_calls_reserved.saturating_sub(room_drafts_replaced)
+                        <= max_tool_rounds);
             let tools_for_round = if tools_enabled {
                 tool_definitions.clone()
             } else {
                 Vec::new()
             };
-            let request = agent
-                .completion(current_prompt.clone(), current_history.clone())
-                .await
-                .map_err(|e| flow_like_types::anyhow!("Completion error: {}", e))?
-                .tools(tools_for_round);
-            let mut stream = request
-                .stream()
-                .await
-                .map_err(|e| flow_like_types::anyhow!("Stream error: {}", e))?;
+            let mut request_prompt = current_prompt.clone();
+            let mut request_history = current_history.clone();
+            if long_running && let Some(plan) = work_plan.context() {
+                merge_room_note_into_prompt(&mut request_prompt, &mut request_history, plan);
+            }
+            let recover_model_failure = long_running && work_plan.revision() > 0;
+            let request =
+                context::cancellable(&bridge, agent.completion(request_prompt, request_history))
+                    .await?;
+            let Some(request) =
+                context::model_result(request, recover_model_failure, &bridge, "Completion error")
+                    .await?
+            else {
+                model_failed = true;
+                break;
+            };
+            let request = request.tools(tools_for_round);
+            let stream = context::cancellable(&bridge, request.stream()).await?;
+            let Some(mut stream) =
+                context::model_result(stream, recover_model_failure, &bridge, "Stream error")
+                    .await?
+            else {
+                model_failed = true;
+                break;
+            };
 
             let mut response_contents: Vec<AssistantContent> = Vec::new();
             let mut iteration_text = String::new();
@@ -1046,9 +1496,30 @@ impl PlatformCopilot {
             let mut reasoning_step_id: Option<String> = None;
             let mut flowscript_preview = FlowScriptToolCallPreviewTracker::default();
 
-            while let Some(item) = stream.next().await {
-                let content =
-                    item.map_err(|e| flow_like_types::anyhow!("Stream chunk error: {}", e))?;
+            // Keep one watcher for the whole stream. Some bridges query a server, so creating
+            // a watcher per token would turn streaming into one cancellation request per chunk.
+            let cancellation = context::cancelled(&bridge);
+            tokio::pin!(cancellation);
+            loop {
+                let item = tokio::select! {
+                    biased;
+                    _ = &mut cancellation => return Err(flow_like_types::anyhow!("Run cancelled")),
+                    item = stream.next() => item,
+                };
+                let Some(item) = item else {
+                    break;
+                };
+                let Some(content) = context::model_result(
+                    item,
+                    recover_model_failure,
+                    &bridge,
+                    "Stream chunk error",
+                )
+                .await?
+                else {
+                    model_failed = true;
+                    break 'run;
+                };
                 match content {
                     StreamedAssistantContent::Text(text) => {
                         iteration_text.push_str(&text.text);
@@ -1205,7 +1676,15 @@ impl PlatformCopilot {
             // Interactive runs retain their streamed narration. Room replies contain the final
             // answer, since later activity can make earlier tool narration obsolete.
             if !watches_room || tool_calls.is_empty() || !tools_enabled {
-                full_response.push_str(&iteration_text);
+                if long_running || surface == PlatformSurface::Subtask {
+                    // Progress already streams separately. Only the final synthesis belongs in
+                    // the bounded saved reply, so earlier narration cannot crowd out the answer.
+                    if tool_calls.is_empty() || !tools_enabled {
+                        full_response = iteration_text.clone();
+                    }
+                } else {
+                    full_response.push_str(&iteration_text);
+                }
                 if watches_room
                     && !iteration_text.is_empty()
                     && let Some(callback) = &on_token
@@ -1217,6 +1696,34 @@ impl PlatformCopilot {
             let round_produced_text = !iteration_text.trim().is_empty();
 
             if tool_calls.is_empty() {
+                if long_running && tools_enabled && work_plan.has_pending_work() {
+                    if empty_continuations < 3 {
+                        empty_continuations += 1;
+                        current_history.push(current_prompt.clone());
+                        current_history.push(rig::message::Message::Assistant {
+                            id: None,
+                            content: OneOrMany::one(AssistantContent::Text(rig::message::Text {
+                                text: iteration_text,
+                                additional_params: None,
+                            })),
+                        });
+                        current_prompt = rig::message::Message::User {
+                            content: OneOrMany::one(UserContent::text(
+                                "Your work plan still has unfinished work. Continue the next actionable step using the available tools. Keep the original request and user updates in scope. If you need information or permission, use the appropriate tool; if you cannot proceed, record the concrete blocker with update_work_plan. Complete the plan only after checking the result. Do not repeat an action already completed.",
+                            )),
+                        };
+                        iteration += 1;
+                        continue;
+                    }
+                    let notice = "\n\nI stopped after several replies without progress. The work plan is still unfinished.";
+                    full_response.push_str(notice);
+                    if let Some(callback) = &on_token {
+                        callback(notice.into());
+                    }
+                    answer_closed = true;
+                    stop_reason = Some(WorkStopReason::Blocked);
+                    break;
+                }
                 answer_closed |= round_produced_text;
                 break;
             }
@@ -1240,6 +1747,29 @@ impl PlatformCopilot {
 
             // Publish starts before any preparation that may itself run a long isolated
             // researcher, so the user never sees an unexplained silent stall.
+            if let Some(recovery) = &recovery {
+                if recovery_deadline
+                    .is_some_and(|deadline| chrono::Utc::now().timestamp_millis() >= deadline)
+                {
+                    recovery_notice = Some("The original execution deadline passed before the proposed tools started. No calls from this batch were executed.".into());
+                    stop_reason = Some(WorkStopReason::Budget);
+                    continue;
+                }
+                let pending = tool_calls
+                    .iter()
+                    .map(|call| PendingCall {
+                        id: call.id.clone(),
+                        name: call.function.name.clone(),
+                        arguments: call.function.arguments.clone(),
+                        output: None,
+                    })
+                    .collect();
+                recovery
+                    .lock()
+                    .await
+                    .save(snapshot!(RecoveryPhase::ToolsInFlight, pending, None))
+                    .await?;
+            }
             let mut frame_ids: Vec<String> = Vec::new();
             for tool_call in &tool_calls {
                 plan_step_counter += 1;
@@ -1259,6 +1789,7 @@ impl PlatformCopilot {
                 frame_ids.push(frame_id);
             }
 
+            let plan_revision = work_plan.revision();
             let mut prepared_arguments = Vec::with_capacity(tool_calls.len());
             for (tool_index, tool_call) in tool_calls.iter().enumerate() {
                 let tool_name = tool_call.function.name.as_str();
@@ -1287,6 +1818,14 @@ impl PlatformCopilot {
                     continue;
                 }
                 let prepared = match tool_name {
+                    UPDATE_WORK_PLAN_TOOL if long_running => {
+                        let revision = work_plan.revision();
+                        let result = work_plan.apply(tool_call.function.arguments.clone());
+                        if work_plan.revision() != revision && let Some(callback) = &on_token {
+                            for frame in work_plan.progress_frames() { callback(frame); }
+                        }
+                        Err(result)
+                    }
                     RESEARCH_AGENT_TOOL => {
                         let brief = research_agent_prompt(&tool_call.function.arguments);
                         let output = if let Some(refusal) = local_app_discovery_gate_error(
@@ -1313,7 +1852,7 @@ impl PlatformCopilot {
                                 }),
                             };
                             progress.lifecycle("started", "progress");
-                            let outcome = tokio::time::timeout(
+                            let outcome = context::cancellable(&bridge, tokio::time::timeout(
                                 Duration::from_secs(timeout_secs),
                                 run_sealed_research_agent(
                                     completion_client,
@@ -1323,8 +1862,8 @@ impl PlatformCopilot {
                                     &delegated_research_session,
                                     &progress,
                                 ),
-                            )
-                            .await;
+                            ))
+                            .await?;
                             progress.lifecycle(
                                 "finished",
                                 if matches!(&outcome, Ok(Ok(_))) {
@@ -1434,6 +1973,11 @@ impl PlatformCopilot {
                     let bridge = bridge.clone();
                     let memory = memory.clone();
                     let web_research_session = web_research_session.clone();
+                    let delegated_research_session = delegated_research_session.clone();
+                    let recovery = recovery.clone();
+                    let saved_plan = work_plan.snapshot();
+                    let saved_stats = session_stats.clone();
+                    let result_count = tool_calls.len();
                     let calls: Vec<_> = lane
                         .into_iter()
                         .map(|index| {
@@ -1477,40 +2021,78 @@ impl PlatformCopilot {
                             round_has_related_widget_create_call,
                         ) in calls
                         {
-                            if let Some(output) = same_round_page_dependency_guard_result(
+                            let guarded = same_round_page_dependency_guard_result(
                                 &name,
                                 &raw_arguments,
                                 round_has_related_editing_board_call,
                                 round_has_related_widget_create_call,
-                            ) {
-                                lane_results.push((index, (id, name, output, Vec::new())));
-                                continue;
-                            }
-                            if let Some(output) = same_round_workflow_event_guard_result(
-                                &name,
-                                &raw_arguments,
-                                round_has_related_editing_board_call,
-                            ) {
-                                lane_results.push((index, (id, name, output, Vec::new())));
-                                continue;
-                            }
-                            let output = match prepared {
-                                Ok(arguments) => {
-                                    execute_platform_tool(
-                                        &name,
-                                        arguments,
-                                        &bridge,
-                                        memory.as_ref(),
-                                        &web_research_session,
-                                    )
-                                    .await
+                            )
+                            .or_else(|| {
+                                same_round_workflow_event_guard_result(
+                                    &name,
+                                    &raw_arguments,
+                                    round_has_related_editing_board_call,
+                                )
+                            });
+                            let output = if let Some(output) = guarded {
+                                output
+                            } else {
+                                match prepared {
+                                    Ok(arguments) => {
+                                        super::run_recovery::scope_call(
+                                            id.clone(),
+                                            execute_platform_tool(
+                                                &name,
+                                                arguments,
+                                                &bridge,
+                                                memory.as_ref(),
+                                                &web_research_session,
+                                            ),
+                                        )
+                                        .await
+                                    }
+                                    Err(output) => output,
                                 }
-                                Err(output) => output,
                             };
                             let (output, images) = split_platform_tool_output(output);
+                            if platform_tool_enters_private_context(&name) {
+                                web_research_session.close_public_web_phase();
+                            }
+                            if let Some(recovery) = &recovery {
+                                recovery
+                                    .lock()
+                                    .await
+                                    .record_result(
+                                        &id,
+                                        &name,
+                                        context::bounded_tool_output(&output, result_count),
+                                        saved_plan.clone(),
+                                        web_research_session.snapshot(),
+                                        delegated_research_session.snapshot(),
+                                        saved_stats.clone(),
+                                    )
+                                    .await?;
+                            }
+                            let waiting =
+                                serde_json::from_str::<Value>(&output)
+                                    .ok()
+                                    .is_some_and(|result| {
+                                        matches!(
+                                            result.get("code").and_then(Value::as_str),
+                                            Some(
+                                                "bot_tool_waiting_for_approval"
+                                                    | "bot_talk_waiting_for_owner"
+                                            )
+                                        )
+                                    });
+                            if waiting {
+                                return Err(flow_like_types::anyhow!(
+                                    "Run waiting for owner approval"
+                                ));
+                            }
                             lane_results.push((index, (id, name, output, images)));
                         }
-                        lane_results
+                        Ok::<_, flow_like_types::Error>(lane_results)
                     }
                 })
                 .collect();
@@ -1520,12 +2102,25 @@ impl PlatformCopilot {
             // happened to finish in.
             let mut ordered: Vec<Option<PlatformToolResult>> =
                 (0..tool_calls.len()).map(|_| None).collect();
-            for lane_results in futures::future::join_all(lane_futures).await {
+            for lane_results in
+                context::cancellable(&bridge, futures::future::try_join_all(lane_futures)).await??
+            {
                 for (index, result) in lane_results {
                     ordered[index] = Some(result);
                 }
             }
             let tool_results: Vec<PlatformToolResult> = ordered.into_iter().flatten().collect();
+            if long_running {
+                let progress = tool_results.iter().any(|(_, name, output, _)| {
+                    name != UPDATE_WORK_PLAN_TOOL
+                        && tool_result_stream_status(output) == "done"
+                        && progress_seen
+                            .insert(blake3::hash(format!("{name}\n{output}").as_bytes()))
+                });
+                if progress || work_plan.revision() != plan_revision {
+                    empty_continuations = 0;
+                }
+            }
 
             // All calls in one model-authored batch may complete. Private tools close the root's
             // raw web phase. Further delegated research receives only an explicit public brief.
@@ -1574,7 +2169,11 @@ impl PlatformCopilot {
                 tool_result_contents.push(UserContent::ToolResult(RigToolResult {
                     id: tool_id.clone(),
                     call_id: None,
-                    content: OneOrMany::one(ToolResultContent::text(tool_output.clone())),
+                    content: OneOrMany::one(ToolResultContent::text(if long_running {
+                        context::bounded_tool_output(tool_output, tool_results.len())
+                    } else {
+                        tool_output.clone()
+                    })),
                 }));
                 tool_images.extend(images);
             }
@@ -1586,7 +2185,10 @@ impl PlatformCopilot {
             };
             let tool_result_message = rig::message::Message::User { content: combined };
 
-            let synthesis_next = iteration + 1 == max_tool_rounds;
+            let synthesis_next = iteration + 1 == max_tool_rounds
+                || (recovery.is_some()
+                    && model_calls_reserved.saturating_sub(room_drafts_replaced)
+                        == max_tool_rounds);
             let web_research_round = tool_calls.iter().any(|tool_call| {
                 matches!(
                     tool_call.function.name.as_str(),
@@ -1656,6 +2258,50 @@ impl PlatformCopilot {
                 };
             }
             iteration += 1;
+            if let Some(recovery) = &recovery {
+                recovery
+                    .lock()
+                    .await
+                    .save(snapshot!(RecoveryPhase::Ready, Vec::new(), None))
+                    .await?;
+            }
+        }
+
+        if model_failed {
+            let notice = "The model could not complete the next step, so this task is unfinished. Work already performed has not been repeated. The last recorded progress below can be used to continue.";
+            full_response = notice.into();
+            if let Some(callback) = &on_token {
+                callback(format!("\n\n{notice}"));
+            }
+            answer_closed = true;
+            stop_reason = Some(WorkStopReason::Blocked);
+        }
+        if long_running {
+            if work_plan.is_blocked() {
+                stop_reason = Some(WorkStopReason::Blocked);
+            } else if stop_reason.is_none()
+                && iteration >= max_tool_rounds
+                && !work_plan.is_completed()
+            {
+                stop_reason = Some(WorkStopReason::Budget);
+                let notice = "\n\nThe run reached its step limit. The requested outcome has not been confirmed complete; any remaining work needs a continuation.";
+                full_response.push_str(notice);
+                if let Some(callback) = &on_token {
+                    callback(notice.into());
+                }
+                answer_closed = true;
+            }
+        }
+        if stop_reason.is_some()
+            && surface != PlatformSurface::Subtask
+            && let Some(handoff) = work_plan.handoff()
+        {
+            let handoff = format!("\n\n{handoff}");
+            full_response.push_str(&handoff);
+            if let Some(callback) = &on_token {
+                callback(handoff);
+            }
+            answer_closed = true;
         }
 
         // Ending without a closing answer needs saying even when mid-run narration left
@@ -1682,6 +2328,33 @@ impl PlatformCopilot {
             }
         }
 
+        if let Some(recovery) = &recovery {
+            recovery
+                .lock()
+                .await
+                .save(snapshot!(
+                    RecoveryPhase::Finished,
+                    Vec::new(),
+                    Some(SavedAnswer {
+                        output: full_response.clone(),
+                        stop_reason,
+                    })
+                ))
+                .await?;
+        }
+        if surface == PlatformSurface::Subtask
+            && let Some(reason) = stop_reason
+        {
+            if let Some(plan) = work_plan.context() {
+                full_response.push_str("\n\n");
+                full_response.push_str(&plan);
+            }
+            return Err(IncompleteWork {
+                reason,
+                output: full_response,
+            }
+            .into());
+        }
         Ok(full_response)
     }
 }
@@ -2016,7 +2689,11 @@ fn is_public_web_tool(name: &str) -> bool {
 /// Root-context tools whose results can contain private/user-controlled data. The root has no raw
 /// web tools; app inventory is for routing and must stay out of its public research briefs.
 fn platform_tool_enters_private_context(name: &str) -> bool {
-    !is_public_web_tool(name) && !matches!(name, "list_apps" | RESEARCH_AGENT_TOOL)
+    !is_public_web_tool(name)
+        && !matches!(
+            name,
+            "list_apps" | RESEARCH_AGENT_TOOL | UPDATE_WORK_PLAN_TOOL
+        )
 }
 
 /// Existing apps are checked before either public research or direct API requests. The model
@@ -2603,6 +3280,10 @@ mod room_tests;
 #[cfg(test)]
 #[path = "platform_research_tests.rs"]
 mod research_tests;
+
+#[cfg(test)]
+#[path = "platform_long_run_tests.rs"]
+mod long_run_tests;
 
 #[cfg(test)]
 mod tests {

@@ -29,7 +29,7 @@ pub use resolve::resolve_bit;
 
 pub const IMAGE_GENERATE: &str = "image_generate";
 
-pub const NO_IMAGE_MODEL_MESSAGE: &str = "This bot has no image model. Ask the owner to pick one in the bot's Brain settings (Image model).";
+pub const NO_IMAGE_MODEL_MESSAGE: &str = "This bot has no image model. If bot_models is available, list compatible models from the owner's profile, then propose an image_model mapping with bot_update_configuration for explicit approval. The mapping applies on the next turn. The owner can also choose Image model in the bot's Brain settings.";
 /// Images one bot may generate in any 24 hours, counted from the files in its `bot/images/`.
 pub const MAX_IMAGES_PER_DAY: usize = 50;
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
@@ -314,7 +314,7 @@ pub async fn image_generate(env: &dyn ToolEnv, args: ImageGenerateArgs) -> ToolR
     output.result = json!({
         "images": files,
         "model": model.name,
-        "size": job.size,
+        "requested_size": job.size,
         "ai_generated": true,
         "left_this_turn": budget.left(),
     });

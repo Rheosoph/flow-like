@@ -1,5 +1,12 @@
 use async_trait::async_trait;
+use flow_like_types::interaction_observation::InteractionObservation;
 use flow_like_types::{Bytes, Result};
+
+#[derive(Debug, Clone)]
+pub struct BrowserScreen {
+    pub png: Vec<u8>,
+    pub observation: Option<InteractionObservation>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageState {
@@ -70,6 +77,18 @@ pub trait BrowserBackend: Send + Sync {
 
     /// A PNG of the visible page.
     async fn screenshot(&self) -> Result<Vec<u8>>;
+
+    /// Captures the image and its action feedback together when the backend supports it.
+    async fn capture(&self) -> Result<BrowserScreen> {
+        Ok(BrowserScreen {
+            png: self.screenshot().await?,
+            observation: None,
+        })
+    }
+
+    async fn observation(&self) -> Result<Option<InteractionObservation>> {
+        Ok(None)
+    }
 
     /// The page the session is on; `None` before the first `open`.
     async fn current(&self) -> Result<Option<PageState>>;

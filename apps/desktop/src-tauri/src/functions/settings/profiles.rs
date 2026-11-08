@@ -438,7 +438,9 @@ pub async fn upsert_profile(
     // a client-provided profile copy must never wipe them.
     let mut profile = profile;
     if profile.hub_profile.id == crate::native_auth::ONBOARDING_PROFILE_ID {
-        return Err(TauriFunctionError::new("This profile ID is reserved for sign-in."));
+        return Err(TauriFunctionError::new(
+            "This profile ID is reserved for sign-in.",
+        ));
     }
     if let Some(icon) = profile
         .hub_profile

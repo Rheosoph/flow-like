@@ -11,7 +11,8 @@ use super::{
 };
 use crate::{
     devices::bots::{
-        checked_card, checked_reply, device_bot_infos, next_poll_ms, poll_in, release_in, silent_in,
+        checked_card, checked_reply, device_bot_infos, next_poll_ms, poll_in, release_in,
+        silent_in, wait_in,
     },
     entity::bot_turn,
     routes::{
@@ -555,6 +556,142 @@ fn turn_id_of(bot: &str) -> String {
 }
 
 #[tokio::test]
+async fn a_completed_checkpoint_gets_only_delivery_credentials_without_model_or_quota_storage() {
+    use crate::{
+        bot_host::recovery,
+        devices::bots_grant,
+        entity::{bot, conversation},
+    };
+    use flow_like_types::bot_turn::BotRunCheckpoint;
+    use sea_orm::{ColumnTrait, QueryFilter, sea_query::Expr};
+    crate::backend_jwt::init_for_tests();
+    let db = fleet().await;
+    let turn = claimed(&db, "bot_a").await;
+    bot::Entity::update_many()
+        .col_expr(bot::Column::ProfileId, Expr::value("missing-profile"))
+        .filter(bot::Column::Id.eq("bot_a"))
+        .exec(&db)
+        .await
+        .unwrap();
+    let row = bot::Entity::find_by_id("bot_a")
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let room = conversation::Entity::find_by_id(&turn.conversation_id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let claimed = ledger::Claimed {
+        turn: turn.clone(),
+        batched: Vec::new(),
+    };
+    assert!(
+        bots_grant::completed_delivery_in(&db, &claimed, HOST, &row, &room)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let now = now_millis().timestamp_millis();
+    let checkpoint = BotRunCheckpoint {
+        revision: 1,
+        started_at_ms: now - 120_000,
+        deadline_at_ms: now - 60_000,
+        state: json!({
+            "version": 1, "phase": "finished", "original_request": "Finish the task",
+            "history": [], "prompt": {"role":"user","content":[{"type":"text","text":"Finished execution."}]},
+            "reference_fingerprints": [], "work_plan": {"revision":0,"plan":null}, "steering": [],
+            "iteration":1, "model_calls_reserved":1, "max_tool_rounds":128, "plan_step_counter":0,
+            "empty_continuations":0, "progress_seen": [],
+            "stats": flow_like::flow_like_model_provider::response::LLMUsageStats::default(),
+            "web": {}, "delegated_web": {}, "local_app_discovery_returned":false,
+            "room_refreshes_remaining":0, "recoveries":0, "approval_resume":false,
+            "pending_calls": [], "answer":{"output":"Saved final answer","stop_reason":null}
+        }),
+    };
+    let claim = recovery::Claim {
+        turn_id: turn.id.clone(),
+        owner_id: OWNER.into(),
+        host_id: HOST.into(),
+        attempt: turn.attempts as u32,
+    };
+    recovery::save_in(&db, &claim, &checkpoint, now_millis())
+        .await
+        .unwrap();
+    // This fixture has no profile, model or quota tables. Delivery uses only current inbox access.
+    let grant = bots_grant::completed_delivery_in(&db, &claimed, HOST, &row, &room)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(grant.delivery_only);
+    assert!(grant.usage.is_none() && grant.executor_token.is_none());
+    assert!(grant.models.model_id.is_empty() && grant.models.completion.is_null());
+    assert!(
+        grant.bot.capabilities.is_empty()
+            && grant.bot.selected_app_ids.is_empty()
+            && grant.bot.workspace_app_id.is_none()
+            && grant.bot.skills.is_empty()
+    );
+    assert_eq!(grant.deadline, grant.bot_token.expires_at);
+    let claims = crate::bot_permission::verify_bot_token(&grant.bot_token.token).unwrap();
+    assert_eq!(
+        (claims.bot_id.as_str(), claims.turn_id.as_str()),
+        ("bot_a", turn.id.as_str())
+    );
+    assert_eq!(claims.exp - claims.iat, bots_grant::DELIVERY_TTL_SECS);
+    let (refreshed_bot, executor) = crate::devices::bots::refreshed(
+        &db,
+        &turn,
+        &flow_like_types::device_bot::DeviceHeartbeatRequest {
+            host_id: HOST.into(),
+            bot_token_expires_at: Some(0),
+            executor_token_expires_at: Some(0),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        executor.is_none(),
+        "A delivery heartbeat cannot request executor privileges"
+    );
+    let refreshed_claims =
+        crate::bot_permission::verify_bot_token(&refreshed_bot.unwrap().token).unwrap();
+    assert_eq!(
+        refreshed_claims.exp - refreshed_claims.iat,
+        bots_grant::DELIVERY_TTL_SECS
+    );
+    assert_eq!(
+        recovery::load_in(&db, &claim, now_millis())
+            .await
+            .unwrap()
+            .unwrap()
+            .deadline_at_ms,
+        checkpoint.deadline_at_ms
+    );
+    assert!(
+        bots_grant::completed_delivery_in(&db, &claimed, "stale-host", &row, &room)
+            .await
+            .is_err()
+    );
+    let mut stale = claimed.clone();
+    stale.turn.attempts -= 1;
+    assert!(
+        bots_grant::completed_delivery_in(&db, &stale, HOST, &row, &room)
+            .await
+            .is_err()
+    );
+    ledger::cancel_in(&db, &turn.id, ledger::ERROR_OWNER_CANCELLED, now_millis())
+        .await
+        .unwrap();
+    assert!(
+        bots_grant::completed_delivery_in(&db, &claimed, HOST, &row, &room)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn the_bot_host_is_stamped_at_most_once_a_minute() {
     use crate::devices::bots::record_bot_host_seen;
     let db = database().await;
@@ -606,7 +743,8 @@ async fn a_claim_that_cannot_become_a_grant_ends_like_a_server_turn_would() {
     );
     assert!(quota.text.contains("allowance used up"));
     let transient = claim_failure(&ApiError::internal("db"));
-    assert!(retries(&transient, 1, false) && !retries(&transient, 3, false));
+    // Claim generations include approval handoffs. The ledger limits failure recovery separately.
+    assert!(retries(&transient, 1, false) && retries(&transient, 13, false));
 
     let db = fleet().await;
     let turn = claimed(&db, "bot_a").await;
@@ -632,4 +770,61 @@ async fn a_claim_that_cannot_become_a_grant_ends_like_a_server_turn_would() {
         .await
         .unwrap();
     assert!(relisted.is_empty());
+}
+
+#[tokio::test]
+async fn participant_waits_need_the_bound_device_and_a_live_lease() {
+    let db = fleet().await;
+    claimed(&db, "bot_a").await;
+    let id = turn_id("bot_a", "m1");
+    let wrong_device = wait_in(
+        &db,
+        OWNER,
+        &device_of("bot_b"),
+        &id,
+        HOST,
+        OWNER,
+        now_millis(),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(wrong_device.status(), StatusCode::NOT_FOUND);
+    let wrong_host = wait_in(
+        &db,
+        OWNER,
+        &device_of("bot_a"),
+        &id,
+        "device:other",
+        OWNER,
+        now_millis(),
+    )
+    .await
+    .unwrap_err();
+    assert_code(&wrong_host, StatusCode::CONFLICT, BOT_TURN_LEASE_LOST);
+    db.execute_unprepared(
+        r#"UPDATE public."Conversation" SET "kind" = 'GROUP' WHERE "id" = 'c_a'"#,
+    )
+    .await
+    .unwrap();
+    db.execute_unprepared(r#"UPDATE public."Bot" SET "modelPolicy" = '{"decision":"decision-bit"}' WHERE "id" = 'bot_a'"#)
+        .await.unwrap();
+    let parked = wait_in(
+        &db,
+        OWNER,
+        &device_of("bot_a"),
+        &id,
+        HOST,
+        OWNER,
+        now_millis(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(parked.status, "parked");
+    let ended = bot_turn::Entity::find_by_id(&id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ended.status, STORED_DONE);
+    assert!(ended.lease_until.is_none());
 }

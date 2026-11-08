@@ -24,6 +24,11 @@ import {
 	mapToFrame,
 	wheelToInput,
 } from "./computer-input";
+import {
+	ComputerObservationStatus,
+	ObservedComputerImage,
+	useComputerFrameAge,
+} from "./computer-observation";
 
 const ACTIVE_POLL_MS = 2000;
 const ASLEEP_POLL_MS = 5000;
@@ -174,6 +179,7 @@ export function ComputerStage({
 	onInput?: (event: IBotInputEvent) => void;
 }>) {
 	const { t } = useTranslation("bots");
+	const age = useComputerFrameAge(view);
 	if (state === "active" && view?.image) {
 		const takenOver = Boolean(view.taken_over);
 		const canTakeOver = Boolean(onTakeOver) && view.can_control !== false;
@@ -245,6 +251,7 @@ export function ComputerStage({
 								)}
 					</p>
 				)}
+				<ComputerObservationStatus view={view} age={age} />
 				{view.notice && (
 					<output className="text-xs text-destructive">{view.notice}</output>
 				)}
@@ -259,11 +266,7 @@ export function ComputerStage({
 							onHandBack={onHandBack}
 						/>
 					) : (
-						<img
-							src={view.image}
-							alt={alt}
-							className="max-h-full max-w-full object-contain"
-						/>
+						<ObservedComputerImage view={view} alt={alt} age={age} />
 					)}
 				</div>
 			</div>

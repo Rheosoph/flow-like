@@ -71,6 +71,7 @@ import { listenInCurrentWindow } from "../../lib/flowpilot/window-scoped-listen"
 import { WorkspaceSearchSession } from "../../lib/flowpilot/workspace-search";
 import {
 	type FrontendToolApprovalScope,
+	requiresFreshToolApproval,
 	resolveFrontendToolApprovalScope,
 } from "../../lib/frontend-tool-approval-scope";
 import type { IChannelHandle } from "../../lib/schema/channel";
@@ -1243,15 +1244,16 @@ function FlowPilotImpl({
 			// in-flight request. `remember: false` keeps auto-approvals out of the session
 			// allowlist, so turning auto mode off restores prompting.
 			if (
-				autoModeRef.current ||
-				approval?.kind === "none" ||
-				shouldSkipUnavailableCreateTableApproval(
-					request.toolName,
-					request.arguments,
-					activeAppId,
-				) ||
-				(approvalScope.rememberable &&
-					approvedFrontendToolKeysRef.current.has(approvalScope.sessionKey))
+				!requiresFreshToolApproval(request.toolName) &&
+				(autoModeRef.current ||
+					approval?.kind === "none" ||
+					shouldSkipUnavailableCreateTableApproval(
+						request.toolName,
+						request.arguments,
+						activeAppId,
+					) ||
+					(approvalScope.rememberable &&
+						approvedFrontendToolKeysRef.current.has(approvalScope.sessionKey)))
 			) {
 				return Promise.resolve({ approved: true, remember: false });
 			}
@@ -1583,7 +1585,10 @@ function FlowPilotImpl({
 	// queued; their promises were captured before the flip and would otherwise block until the
 	// backend deadline. `ask_user` dialogs stay up — auto mode never answers questions.
 	const flushPendingToolApprovals = useCallback(() => {
-		if (frontendToolDialogRef.current?.type === "approval") {
+		if (
+			frontendToolDialogRef.current?.type === "approval" &&
+			!requiresFreshToolApproval(frontendToolDialogRef.current.request.toolName)
+		) {
 			const resolver = frontendToolDialogResolverRef.current;
 			frontendToolDialogResolverRef.current = null;
 			frontendToolDialogRef.current = null;
@@ -1593,7 +1598,10 @@ function FlowPilotImpl({
 
 		const retained: FrontendToolQueuedDialog[] = [];
 		for (const queued of frontendToolDialogQueueRef.current) {
-			if (queued.dialog.type !== "approval") {
+			if (
+				queued.dialog.type !== "approval" ||
+				requiresFreshToolApproval(queued.dialog.request.toolName)
+			) {
 				retained.push(queued);
 				continue;
 			}

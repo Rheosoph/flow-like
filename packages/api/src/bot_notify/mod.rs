@@ -98,6 +98,7 @@ fn input_for(
     node: String,
 ) -> DispatchNotificationInput {
     DispatchNotificationInput {
+        notification_priority: Default::default(),
         bot_context: Some(flow_like_types::bot_notify::BotNotificationContext {
             bot_id: bot.id.clone(),
             ..Default::default()
@@ -160,6 +161,21 @@ pub(crate) async fn notify_for_reply<C: ConnectionTrait>(
         return Ok(false);
     };
     if turn.bot_id != reply.bot_id {
+        return Ok(false);
+    }
+    let posted = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::MessageId.eq(reply.message_id))
+        .filter(inbox_entry::Column::SenderId.eq(reply.bot_id))
+        .filter(inbox_entry::Column::ConversationId.eq(&turn.conversation_id))
+        .one(db)
+        .await?;
+    if posted.is_some_and(|entry| {
+        entry.envelope["body"][flow_like::flow::copilot::decision_event::REPLY_DELIVERY_FIELD]
+            .as_str()
+            == Some("respond")
+            && entry.envelope["body"].get("error").is_none()
+            && entry.envelope["body"].get("approval").is_none()
+    }) {
         return Ok(false);
     }
     let Some((kind, task_id)) = trigger_kind(db, &turn).await? else {
