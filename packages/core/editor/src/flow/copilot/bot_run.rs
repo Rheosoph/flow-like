@@ -32,6 +32,7 @@ use super::assistant::{
     WebResearchCapability, attachment_lines, build_platform_context,
     global_assistant_system_prompt_for,
 };
+use super::bot_notes::{self, NotesBridge, NotesHandle, notes_tool_specs};
 use super::bot_talk::{BotTalk, BotTalkBridge, ask_bot_tool_spec};
 use super::capability_tools::{
     HostTools, bot_tool_spec, is_secret_tool, linked_tool_names, tool_capability, uses_secrets,
@@ -202,6 +203,20 @@ pub fn is_silent_reply(text: &str) -> bool {
 }
 
 impl TurnRequester {
+    /// A bot asking another bot: never the callee's owner, so owner-only tools and memory stay off.
+    pub fn nested_bot(caller_id: impl Into<String>, caller_name: impl Into<String>) -> Self {
+        Self {
+            requester_id: caller_id.into(),
+            requester_name: Some(caller_name.into()),
+            owner_id: String::new(),
+            owner_name: None,
+            audience: TurnAudience::Owner,
+            room: None,
+            addressed: true,
+            reactions: Vec::new(),
+        }
+    }
+
     /// Whether nobody asked for an answer: the bot read along or only got a reaction.
     pub fn may_stay_silent(&self) -> bool {
         !self.addressed || !self.reactions.is_empty()
@@ -1956,6 +1971,26 @@ async fn prepare_bot_turn(
     }
 }
 
+/// Adds the bot's notes to a turn: their section, the label of what it shows, and the tools.
+async fn attach_notes(
+    turn: &mut BotTurn,
+    notes: &NotesHandle,
+    bot_id: &str,
+    label: Arc<TurnLabel>,
+) {
+    let (section, seen) = bot_notes::section(notes, bot_id).await;
+    label.raise(seen);
+    turn.system_prompt.push_str("\n\n");
+    turn.system_prompt.push_str(&section);
+    turn.tool_specs.extend(notes_tool_specs());
+    turn.bridge = Arc::new(NotesBridge::new(
+        notes.clone(),
+        bot_id.to_string(),
+        label,
+        turn.bridge.clone(),
+    ));
+}
+
 /// Rank the approved skill index with the current turn's credentials. Hosts that build their
 /// own agent prompt can call this before reading [`bot_system_prompt`].
 pub async fn rank_turn_skills(
@@ -2192,6 +2227,7 @@ where
         return Err(flow_like_types::anyhow!(error));
     }
     let on_token = on_token.map(|sink| Arc::new(sink) as Arc<dyn Fn(String) + Send + Sync>);
+    let label = TurnLabel::new(&bot, talk.clone());
     let subtasks = SubtaskEnv::new(
         Arc::new(ModelSubtaskRunner::new(
             state.clone(),
@@ -2202,11 +2238,19 @@ where
             token.clone(),
         )),
         on_token.clone(),
-        TurnLabel::new(&bot, talk.clone()),
+        label.clone(),
         bot.compute.clone(),
+    )
+    .with_deadline_at_ms(
+        bot.recovery
+            .as_ref()
+            .and_then(|recovery| recovery.as_store().deadline_at_ms()),
     );
     let turn_bot = bot.clone();
     let mut turn = prepare_bot_turn(bot, &context, memory.is_some(), bridge, talk.as_ref()).await;
+    if let Some(notes) = turn_bot.host_tools.notes() {
+        attach_notes(&mut turn, notes, &turn_bot.bot_id, label).await;
+    }
     if memory.as_ref().is_some_and(|memory| memory.is_read_only()) {
         turn.tool_specs
             .retain(|spec| spec.name != MEMORY_STORE_TOOL);
@@ -2460,6 +2504,15 @@ mod tests {
             }),
             ..bot(&[BotCapability::Internet, BotCapability::SelectedApps])
         }
+    }
+
+    #[test]
+    fn a_nested_bot_asker_is_never_the_owner() {
+        let mut context = requested_by("owner", TurnAudience::Owner);
+        context.capabilities.push(BotCapability::Memory);
+        context.requester = Some(TurnRequester::nested_bot("bot-a", "Ada"));
+        assert!(!context.owner_asked());
+        assert!(turn_memory(&context, Some(())).is_none());
     }
 
     #[test]

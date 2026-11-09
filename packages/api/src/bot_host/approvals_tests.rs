@@ -640,3 +640,39 @@ async fn an_expired_notification_cannot_approve_before_the_sweeper_runs() {
     let unchanged = ledger::find(&db, &turn.id, None).await.unwrap().unwrap();
     assert_eq!(unchanged.status, STORED_WAITING);
 }
+
+#[tokio::test]
+async fn an_approval_answered_after_the_deadline_rebases_it_without_touching_the_state() {
+    use crate::entity::bot_turn_checkpoint;
+    let (db, turn, card) = parked().await;
+    let state = json!({"version":1,"phase":"tools_in_flight"});
+    let started = (now_millis() - Duration::hours(3)).timestamp_millis();
+    super::recovery::ensure_metadata(&db, &turn).await.unwrap();
+    bot_turn_checkpoint::Entity::update_many()
+        .col_expr(bot_turn_checkpoint::Column::Revision, Expr::value(4))
+        .col_expr(bot_turn_checkpoint::Column::StartedAtMs, Expr::value(started))
+        .col_expr(
+            bot_turn_checkpoint::Column::DeadlineAtMs,
+            Expr::value(started + 1_800_000),
+        )
+        .col_expr(bot_turn_checkpoint::Column::State, Expr::value(state.clone()))
+        .filter(bot_turn_checkpoint::Column::TurnId.eq(&turn.id))
+        .exec(&db)
+        .await
+        .unwrap();
+    let before = now_millis().timestamp_millis();
+    resolve(&db, &turn, &card, ApprovalDecision::Once)
+        .await
+        .unwrap();
+    let row = bot_turn_checkpoint::Entity::find_by_id(&turn.id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(row.started_at_ms >= before);
+    assert_eq!(
+        row.deadline_at_ms,
+        row.started_at_ms + super::worker::MAX_TURN_RUNTIME_MS
+    );
+    assert_eq!((row.revision, row.state), (4, state));
+}

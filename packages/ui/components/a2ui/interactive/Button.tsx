@@ -32,13 +32,23 @@ const variantMap: Record<
 	destructive: "destructive",
 };
 
-const sizeMap: Record<string, "default" | "sm" | "lg" | "icon"> = {
+type ButtonSize = "default" | "sm" | "lg" | "icon";
+
+const sizeMap: Record<string, ButtonSize> = {
 	xs: "sm",
 	sm: "sm",
 	md: "default",
 	lg: "lg",
 	xl: "lg",
 	icon: "icon",
+};
+
+/** Authored labels can be sentences; they wrap instead of overflowing a narrow surface. */
+const wrappingSizeClass: Record<ButtonSize, string> = {
+	default: "h-auto min-h-9 py-2",
+	sm: "h-auto min-h-8 py-1.5",
+	lg: "h-auto min-h-10 py-2",
+	icon: "",
 };
 
 function useResolved<T>(boundValue: BoundValue | undefined): T | undefined {
@@ -137,7 +147,12 @@ export function A2UIButton({
 			size={size}
 			disabled={disabled || loading}
 			aria-busy={Boolean(loading)}
-			className={cn(loading && "cursor-wait", resolveStyle(style))}
+			className={cn(
+				"max-w-full whitespace-normal",
+				wrappingSizeClass[size],
+				loading && "cursor-wait",
+				resolveStyle(style),
+			)}
 			style={resolveInlineStyle(style)}
 			{...activation}
 		>
@@ -146,7 +161,7 @@ export function A2UIButton({
 			) : iconLeft ? (
 				<LucideIcon name={icon} className="size-4" />
 			) : null}
-			{label}
+			{label && <span className="min-w-0 break-words">{label}</span>}
 			{!loading && iconRight && <LucideIcon name={icon} className="size-4" />}
 		</Button>
 	);

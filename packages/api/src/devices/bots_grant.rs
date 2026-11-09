@@ -23,9 +23,11 @@ use crate::{
             },
         },
         bots::{
+            owned_bot,
             runtime::{ChatBot, chat_bot, hosted_bot_model},
             runtime_token::bot_user_for_turn,
         },
+        inbox::active_membership,
     },
     state::AppState,
 };
@@ -89,6 +91,8 @@ pub(crate) async fn completed_delivery_in<C: ConnectionTrait>(
         return Ok(None);
     }
     let turn = &claimed.turn;
+    owned_bot(db, &turn.owner_id, &turn.bot_id).await?;
+    active_membership(db, &conversation.id, &turn.bot_id).await?;
     let kind = ConversationKind::parse(&conversation.kind).unwrap_or(ConversationKind::Group);
     let bot_token = bot_token(
         db,

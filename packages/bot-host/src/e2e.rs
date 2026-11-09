@@ -343,15 +343,14 @@ impl E2eHost {
             .keyring
             .open(bot_id, &scope, envelope)
             .map_err(|_| unreadable())?;
-        let opened: BotRunCheckpoint =
+        let mut opened: BotRunCheckpoint =
             serde_json::from_slice(&plaintext).map_err(|_| unreadable())?;
         opened.validate().map_err(|_| unreadable())?;
-        if opened.revision != checkpoint.revision
-            || opened.started_at_ms != checkpoint.started_at_ms
-            || opened.deadline_at_ms != checkpoint.deadline_at_ms
-        {
+        if opened.revision != checkpoint.revision {
             return Err(unreadable());
         }
+        opened.started_at_ms = checkpoint.started_at_ms;
+        opened.deadline_at_ms = checkpoint.deadline_at_ms;
         Ok(opened)
     }
 

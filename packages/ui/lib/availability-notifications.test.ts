@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { DEFAULT_AVAILABILITY } from "./availability";
-import { shouldPresentUserNotification } from "./availability-notifications";
+import {
+	shouldPresentUserNotification,
+	waitForAvailabilityToSettle,
+} from "./availability-notifications";
 
 describe("account and device focus notifications", () => {
 	test("either active Focus suppresses routine alerts", () => {
@@ -64,5 +67,24 @@ describe("account and device focus notifications", () => {
 		expect(
 			shouldPresentUserNotification(undefined, focus, "mention", 100),
 		).toBe(false);
+	});
+});
+
+describe("waitForAvailabilityToSettle", () => {
+	test("resolves once loading finishes", async () => {
+		let loading = true;
+		setTimeout(() => {
+			loading = false;
+		}, 30);
+		const started = Date.now();
+		await waitForAvailabilityToSettle(() => loading, 2_000, 5);
+		expect(loading).toBe(false);
+		expect(Date.now() - started).toBeLessThan(1_000);
+	});
+
+	test("gives up at the timeout so a failed load still presents", async () => {
+		const started = Date.now();
+		await waitForAvailabilityToSettle(() => true, 40, 5);
+		expect(Date.now() - started).toBeGreaterThanOrEqual(35);
 	});
 });

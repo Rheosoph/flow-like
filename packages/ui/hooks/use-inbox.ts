@@ -742,6 +742,9 @@ export function useSendInboxEntry() {
 				inboxKeys.entries(entry.conversation_id),
 				(pages) => mergeNewestEntries(pages, [entry]),
 			);
+			queryClient.invalidateQueries({
+				queryKey: inboxKeys.turns(entry.conversation_id),
+			});
 			queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
 		},
 	});
@@ -792,6 +795,9 @@ export function useSendMessageWithFiles() {
 				inboxKeys.entries(entry.conversation_id),
 				(pages) => mergeNewestEntries(pages, [entry]),
 			);
+			queryClient.invalidateQueries({
+				queryKey: inboxKeys.turns(entry.conversation_id),
+			});
 			queryClient.invalidateQueries({ queryKey: inboxKeys.conversations() });
 		},
 	});

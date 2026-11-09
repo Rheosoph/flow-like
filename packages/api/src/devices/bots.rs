@@ -652,9 +652,9 @@ pub(crate) async fn wait_in<C: ConnectionTrait>(
         ("id" = String, Path, description = "Device ID"),
         ("turn_id" = String, Path, description = "The claimed turn")
     ),
-    request_body = Object,
+    request_body = super::openapi_registry::wait_schema::DeviceWaitRequest,
     responses(
-        (status = 200, description = "Status is parked, already_answered, unavailable or superseded", body = Object),
+        (status = 200, description = "Status is parked, already_answered, unavailable or superseded", body = super::openapi_registry::wait_schema::DeviceWaitResponse),
         (status = 401, description = "The device session or request proof is invalid or revoked"),
         (status = 404, description = "No such turn for a bot bound to this device"),
         (status = 409, description = "BOT_TURN_LEASE_LOST: the device no longer holds the turn")

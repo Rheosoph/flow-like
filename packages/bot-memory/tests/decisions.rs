@@ -388,3 +388,46 @@ async fn summaries_and_extraction_use_completion_even_with_a_decision_model() {
     assert_eq!(completion.requests().len(), 2);
     assert!(classifier.requests.lock().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn explicit_save_older_than_the_target_stays_visible_instead_of_superseded() {
+    let dir = tempfile::tempdir().unwrap();
+    let stores = stores(&dir).await;
+    stores
+        .facts
+        .insert(&[fact("f_existing", "The user's city is Berlin.", 30)])
+        .await
+        .unwrap();
+    let llm = Arc::new(StubLlm::new().with(LlmTask::FactUpdate, |_| {
+        Ok("{\"action\":\"supersede\",\"target_id\":\"f_existing\"}".into())
+    }));
+    let engine = MemoryEngine::new(stores, llm, CompactionConfig::default(), Tz::UTC);
+    let mut transcript = Transcript::new(now());
+    let seq = transcript.user("Remember that I lived in Paris.");
+    let evidence = transcript.history.get(seq).unwrap();
+    let result = memory_save(
+        &engine,
+        &MemorySaveArgs {
+            geojson: None,
+            time: None,
+            ttl_seconds: None,
+            text: "The user's city is Paris.".into(),
+            evidence_seq: Some(seq),
+            kind: Some("profile".into()),
+            subject: Some("user".into()),
+            valid_from: Some("2026-11-01T10:00:00Z".into()),
+            valid_to: None,
+        },
+        &evidence,
+        WriteGate::default(),
+        now(),
+    )
+    .await
+    .unwrap();
+    let WriteOutcome::Done((saved, action)) = result else {
+        panic!("save was refused");
+    };
+    assert_eq!(action, UpdateAction::Add);
+    let stored = engine.stores().facts.get(&saved.id).await.unwrap().unwrap();
+    assert_eq!(stored.superseded_by, None);
+}

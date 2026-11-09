@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 	getConversation: vi.fn(),
 	botConversation: vi.fn(),
 	useConversationCall: vi.fn(),
+	useConversationActivity: vi.fn(),
 	useBotCallSpeech: vi.fn(),
 	useSpeechModel: vi.fn(),
 	call: {} as ConversationCallState,
@@ -27,6 +28,9 @@ vi.mock("../../state/global-chat/bot-history", () => ({
 }));
 vi.mock("../../hooks/use-conversation-call", () => ({
 	useConversationCall: mocks.useConversationCall,
+}));
+vi.mock("../../hooks/use-conversation-activity", () => ({
+	useConversationActivity: mocks.useConversationActivity,
 }));
 vi.mock("../../hooks/use-conversation-room", () => ({
 	useConversationRoom: (conversation: IConversation) =>
@@ -53,7 +57,10 @@ vi.mock("../identity/identity-avatar", () => ({
 	IdentityAvatar: () => <span />,
 }));
 vi.mock("@flow-like/locales", () => ({
-	useTranslation: () => ({ t: (_key: string, fallback: string) => fallback }),
+	useTranslation: () => ({
+		t: (_key: string, fallback: string, values?: Record<string, string>) =>
+			fallback.replace(/\{\{(\w+)\}\}/g, (_, key) => values?.[key] ?? key),
+	}),
 }));
 
 import { BotDirectCall } from "./bot-direct-call";
@@ -80,6 +87,12 @@ beforeEach(() => {
 	mocks.botConversation.mockResolvedValue(conversation.id);
 	mocks.getConversation.mockResolvedValue(conversation);
 	mocks.useSpeechModel.mockReturnValue({ bitId: "stt", route: "remote" });
+	mocks.useConversationActivity.mockReturnValue({
+		bots: [],
+		typing: [],
+		notifyTyping: vi.fn(),
+		stopTyping: vi.fn(),
+	});
 	mocks.call = {
 		available: false,
 		live: null,
@@ -96,6 +109,7 @@ beforeEach(() => {
 		}),
 		toggleMute: vi.fn(),
 		listening: false,
+		transcriptDraft: "",
 		canListen: true,
 		botsPresent: true,
 		setListening: vi.fn((on: boolean) => {
@@ -210,6 +224,40 @@ test("joining through the live call bar also enables the bot's listening", async
 	expect(mocks.call.setListening).toHaveBeenCalledExactlyOnceWith(true);
 });
 
+test("a joined direct call shows the bot's queued and running work until leaving", async () => {
+	mocks.call.live = { callId: "call-1", startedAt: null, participants: [] };
+	mocks.useConversationActivity.mockReturnValue({
+		bots: [{ botId: bot.id, status: "queued" }],
+		typing: [],
+	});
+	await render();
+	await render();
+	expect(host.querySelector("[data-fl-conversation-activity]")).toBeNull();
+	expect(mocks.useConversationActivity).not.toHaveBeenCalled();
+
+	mocks.call.joined = true;
+	await render();
+	expect(host.textContent).toContain("Waiting for bot-1");
+	expect(mocks.useConversationActivity).toHaveBeenLastCalledWith(
+		conversation,
+		bot.owner_id,
+		undefined,
+		expect.objectContaining({ awareness: {} }),
+	);
+
+	mocks.useConversationActivity.mockReturnValue({
+		bots: [{ botId: bot.id, status: "running" }],
+		typing: [],
+	});
+	await render();
+	expect(host.textContent).toContain("bot-1 is answering");
+	expect(host.textContent).not.toContain("Waiting for bot-1");
+
+	await act(async () => button("Leave call").click());
+	await render();
+	expect(host.querySelector("[data-fl-conversation-activity]")).toBeNull();
+});
+
 test("a speech model arriving after join starts listening once and respects a later switch off", async () => {
 	mocks.call.canListen = false;
 	await render();
@@ -254,4 +302,18 @@ test("a failed conversation lookup can be retried from the call control", async 
 	await render();
 	expect(mocks.getConversation).toHaveBeenCalledTimes(2);
 	expect(button("Start a call").disabled).toBe(false);
+});
+
+test("a failed call start does not leave a stale request to listen", async () => {
+	mocks.call.start = vi.fn(async () => {
+		mocks.call.error = "failed";
+	});
+	await render();
+	await render();
+	await act(async () => button("Start a call").click());
+	await render();
+	mocks.call.error = null;
+	mocks.call.joined = true;
+	await render();
+	expect(mocks.call.setListening).not.toHaveBeenCalled();
 });

@@ -9,10 +9,10 @@ import {
 import { cn } from "../../lib/utils";
 
 const COLORS = {
-	available: "bg-emerald-500",
-	busy: "bg-amber-500",
-	focus: "bg-violet-500",
-	away: "bg-slate-400",
+	available: "bg-good-solid",
+	busy: "bg-warning-solid",
+	focus: "bg-info-solid",
+	away: "bg-muted-foreground",
 };
 export function AvailabilityBadge({
 	value,

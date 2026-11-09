@@ -231,3 +231,24 @@ fn a_topic_arriving_during_classification_supersedes_the_old_decision() {
         Some(bee.id.as_str())
     );
 }
+
+#[test]
+fn an_older_decision_does_not_overwrite_a_newer_one() {
+    let f = fixture();
+    let (ada, bee) = (f.bot("Ada"), f.bot("Bee"));
+    let room = f.group(&[&ada, &bee]);
+    let older = f.text(&room.id, "local", "first");
+    let newer = f.text(&room.id, "local", "second");
+    f.store
+        .settle_room_decision(&ada.id, &room.id, &newer.message_id, None)
+        .unwrap();
+    assert_eq!(
+        f.store
+            .settle_room_decision(&ada.id, &room.id, &older.message_id, Some(&bee.id))
+            .unwrap(),
+        RoomWaitOutcome::Superseded,
+    );
+    let state = f.store.room_decision_state(&ada.id, &room.id).unwrap();
+    assert_eq!(state.handled_through, newer.seq.unwrap());
+    assert_eq!(state.participant_id, None);
+}

@@ -7,11 +7,11 @@ import {
 	useUserIdentity,
 } from "../../hooks/use-user-lookup";
 import { cn } from "../../lib/utils";
+import { AvailabilityBadge } from "../account/availability-badge";
 import { botFrameRadius } from "../bots/appearance";
 import { BotAvatar } from "../bots/bot-avatar";
 import { Skeleton } from "../ui/skeleton";
 import { UserAvatar } from "../ui/user-avatar";
-import { AvailabilityBadge } from "../account/availability-badge";
 
 export interface IdentityAvatarProps {
 	/** A user sub or a bot id. */
@@ -90,7 +90,9 @@ export function ResolvedIdentityAvatar({
 }: Readonly<ResolvedIdentityAvatarProps>) {
 	if (!identity.bot) {
 		return (
-			<span className={cn("relative inline-flex shrink-0", className)}>
+			<span
+				className={cn("relative inline-flex shrink-0 rounded-full", className)}
+			>
 				<UserAvatar
 					avatarUrl={identity.avatarUrl}
 					initials={identity.initials}

@@ -182,6 +182,14 @@ fn lines_of(window: &[inbox_entry::Model]) -> Vec<Line> {
     lines
 }
 
+/// The name every member of a conversation may see: the sanitized display name, else the
+/// humanized email local part, never a username.
+pub(crate) fn public_person_name(name: Option<&str>, email: Option<&str>) -> Option<String> {
+    use crate::routes::user::identity::{humanize_email_local_part, sanitize_display_name};
+    name.and_then(sanitize_display_name)
+        .or_else(|| email.and_then(humanize_email_local_part))
+}
+
 /// Display names of people and bots, so the model can tell people apart.
 pub(crate) async fn sender_names<C: ConnectionTrait>(
     db: &C,
@@ -196,19 +204,14 @@ pub(crate) async fn sender_names<C: ConnectionTrait>(
         .columns([
             user::Column::Id,
             user::Column::Name,
-            user::Column::PreferredUsername,
-            user::Column::Username,
+            user::Column::Email,
         ])
         .filter(user::Column::Id.is_in(ids.iter().copied()))
-        .into_tuple::<(String, Option<String>, Option<String>, Option<String>)>()
+        .into_tuple::<(String, Option<String>, Option<String>)>()
         .all(db)
         .await?;
-    for (id, name, preferred_username, username) in people {
-        if let Some(name) = name
-            .or(preferred_username)
-            .or(username)
-            .filter(|name| !name.trim().is_empty())
-        {
+    for (id, name, email) in people {
+        if let Some(name) = public_person_name(name.as_deref(), email.as_deref()) {
             names.insert(id, name);
         }
     }
@@ -573,6 +576,19 @@ mod tests {
             seq: None,
             cleared: Some(false),
         }
+    }
+
+    #[test]
+    fn public_names_never_fall_back_to_usernames() {
+        assert_eq!(
+            public_person_name(Some("  Ada   Lovelace "), Some("x@example.com")).as_deref(),
+            Some("Ada Lovelace")
+        );
+        assert_eq!(
+            public_person_name(None, Some("grace.hopper@example.com")).as_deref(),
+            Some("Grace Hopper")
+        );
+        assert_eq!(public_person_name(Some("  "), None), None);
     }
 
     #[test]

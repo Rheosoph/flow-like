@@ -3,16 +3,19 @@ import { createI18n } from "@flow-like/locales";
 import { Window } from "happy-dom";
 import { act } from "react";
 import { ApiResponseError } from "../../../lib/api-error";
+import { IAppVisibility } from "../../../lib/schema/app/app";
 import type { IBackendState } from "../../../state/backend-state";
 import type {
 	IBot,
 	IBotApp,
+	IBotRestrictions,
 	IBotSecretInfo,
 	IBotState,
 	ICreateBotRequest,
 	IUpdateBotRequest,
 	IUpsertBotSecretRequest,
 } from "../../../state/backend-state/bot-state";
+import { presetRestrictions } from "../bot-restrictions-model";
 import { deviceRow } from "../testing/mount-with-backend";
 
 let cleanup: (() => Promise<void>) | undefined;
@@ -66,6 +69,13 @@ interface AppChange {
 	reject: (error: Error) => void;
 }
 
+interface RestrictionChange {
+	appId: string;
+	restrictions: IBotRestrictions;
+	resolve: () => void;
+	reject: (error: Error) => void;
+}
+
 interface Calls {
 	created: ICreateBotRequest[];
 	updated: { botId: string; request: IUpdateBotRequest }[];
@@ -75,13 +85,15 @@ interface Calls {
 	duplicated: IBot[];
 	openChanges: boolean[];
 	appChanges: AppChange[];
+	restrictionChanges: RestrictionChange[];
 	secrets: { name: string; request: IUpsertBotSecretRequest }[];
 	workspaces: string[];
 }
 
 interface Fixture {
 	existing?: IBot;
-	apps?: { id: string; name: string }[];
+	initialApps?: IBotApp[];
+	apps?: { id: string; name: string; visibility?: IAppVisibility }[];
 	secrets?: IBotSecretInfo[];
 	/** The host keeps bots on this device (the desktop). */
 	localHost?: boolean;
@@ -109,20 +121,26 @@ function fakeBackend(
 	{
 		existing,
 		apps = [],
+		initialApps = [],
 		secrets = [],
 		localHost = false,
 		clone,
 		refuseWith,
 	}: Fixture,
 ): IBackendState {
-	const attached = new Set<string>();
+	const attached = new Map(initialApps.map((app) => [app.app_id, app]));
 	const changeApp = (appId: string, attach: boolean) =>
 		new Promise<void>((resolve, reject) => {
 			calls.appChanges.push({
 				appId,
 				attached: attach,
 				resolve: () => {
-					if (attach) attached.add(appId);
+					if (attach)
+						attached.set(appId, {
+							app_id: appId,
+							added_at: STAMP,
+							owner_role: "owner",
+						});
 					else attached.delete(appId);
 					resolve();
 				},
@@ -162,14 +180,21 @@ function fakeBackend(
 		}),
 		attachBotApp: (_, appId) => changeApp(appId, true),
 		detachBotApp: (_, appId) => changeApp(appId, false),
-		listBotApps: async () =>
-			[...attached].map(
-				(app_id): IBotApp => ({
-					app_id,
-					added_at: STAMP,
-					owner_role: "owner",
-				}),
-			),
+		listBotApps: async () => [...attached.values()],
+		setBotAppRestrictions: (_, appId, restrictions) =>
+			new Promise((resolve, reject) => {
+				calls.restrictionChanges.push({
+					appId,
+					restrictions,
+					resolve: () => {
+						const app = attached.get(appId);
+						if (!app) throw new Error("The app must be attached first");
+						attached.set(appId, { ...app, restrictions });
+						resolve(restrictions);
+					},
+					reject,
+				});
+			}),
 		listBotSecrets: async () => secrets,
 		upsertBotSecret: async (_, name, request) => {
 			calls.secrets.push({ name, request });
@@ -192,7 +217,7 @@ function fakeBackend(
 		appState: {
 			getApps: async () =>
 				apps.map((app) => [
-					{ id: app.id, visibility: "Private" },
+					{ id: app.id, visibility: app.visibility ?? IAppVisibility.Private },
 					{ name: app.name },
 				]),
 		},
@@ -280,6 +305,7 @@ function noCalls() {
 		duplicated: [],
 		openChanges: [],
 		appChanges: [],
+		restrictionChanges: [],
 		secrets: [],
 		workspaces: [],
 	};
@@ -349,7 +375,7 @@ async function renderDialog(fixture: Fixture = {}) {
 	const toastError = spyOn(toast, "error").mockImplementation(() => "");
 	const toastSuccess = spyOn(toast, "success").mockImplementation(() => "");
 	const signedIn = useAuthStatusStore.getState().signedIn;
-	if (fixture.signedOut) useAuthStatusStore.getState().setSignedIn(false);
+	useAuthStatusStore.getState().setSignedIn(!fixture.signedOut);
 	const calls = noCalls();
 	const client = new QueryClient({
 		defaultOptions: { queries: { retry: false } },
@@ -667,59 +693,339 @@ describe("BotEditorDialog when the plan's bots on the server are used up", () =>
 	});
 });
 
+describe("BotEditorDialog app availability", () => {
+	const apps = [
+		{ id: "app_atlas", name: "Atlas", visibility: IAppVisibility.Offline },
+		{ id: "app_beacon", name: "Beacon", visibility: IAppVisibility.Offline },
+		{ id: "app_cedar", name: "Cedar", visibility: IAppVisibility.Offline },
+		{ id: "app_delta", name: "Delta" },
+		{ id: "app_echo", name: "Echo", visibility: IAppVisibility.Public },
+	];
+
+	test("the picker includes online apps arriving after the cached list", async () => {
+		const online = Array.from({ length: 123 }, (_, index) => ({
+			id: `cloud_${index}`,
+			name: `Cloud project ${index}`,
+		}));
+		const view = await renderDialog({
+			existing: bot({ capabilities: ["selected_apps"] }),
+			apps: online.slice(0, 2),
+		});
+		await view.settle();
+		await view.click("Abilities");
+		await view.settle();
+		expect(view.body.querySelectorAll("[role='checkbox']")).toHaveLength(2);
+		await act(async () => {
+			view.client.setQueryData(
+				["getApps"],
+				online.map((app) => [
+					{ id: app.id, visibility: IAppVisibility.Private },
+					{ name: app.name },
+				]),
+			);
+		});
+		await view.settle();
+		expect(view.body.querySelectorAll("[role='checkbox']")).toHaveLength(123);
+		await view.type(view.field("input[type='search']"), "Cloud project 122");
+		expect(view.appBox("Cloud project 122")).toBeDefined();
+	});
+
+	test("a new local bot lists every library app and attaches an offline app", async () => {
+		const view = await renderDialog({
+			apps,
+			localHost: true,
+			signedOut: true,
+		});
+		await view.click("Secretary");
+		await view.click("Abilities");
+		await view.settle();
+		for (const app of apps) expect(view.ticked(app.name)).toBe(false);
+		await view.press(view.appBox("Atlas"));
+		expect(view.ticked("Atlas")).toBe(true);
+		await view.click("Data & safety");
+		await view.click("Create bot");
+		await view.settle();
+		expect(view.calls.created[0]).toMatchObject({ location: "desktop" });
+		expect(
+			view.calls.appChanges.map(({ appId, attached }) => [appId, attached]),
+		).toEqual([["app_atlas", true]]);
+		await act(async () => view.calls.appChanges[0].resolve());
+		await view.settle();
+		expect(view.calls.saved.map((saved) => saved.id)).toEqual(["bot_new"]);
+		expect(view.toastErrors()).toEqual([]);
+	});
+
+	test("a local bot still lists and attaches offline apps after signing in", async () => {
+		const view = await renderDialog({
+			existing: bot({
+				location: "desktop",
+				local: true,
+				capabilities: ["selected_apps"],
+			}),
+			apps,
+			localHost: true,
+			signedOut: false,
+		});
+		await view.settle();
+		await view.click("Abilities");
+		await view.settle();
+		for (const app of apps) expect(view.ticked(app.name)).toBe(false);
+		await view.press(view.appBox("Beacon"));
+		expect(view.ticked("Beacon")).toBe(true);
+		expect(view.calls.appChanges).toEqual([]);
+		await view.click("Save changes");
+		await view.settle();
+		expect(
+			view.calls.appChanges.map(({ appId, attached }) => [appId, attached]),
+		).toEqual([["app_beacon", true]]);
+		await act(async () => view.calls.appChanges[0].resolve());
+		await view.settle();
+		expect(view.calls.openChanges).toEqual([false]);
+		expect(view.toastErrors()).toEqual([]);
+	});
+
+	test("a new account bot on the desktop only offers online apps", async () => {
+		const view = await renderDialog({
+			apps,
+			localHost: true,
+			signedOut: false,
+		});
+		await view.click("Secretary");
+		await view.click("Runs on");
+		const desktop = view.body.querySelector<HTMLButtonElement>(
+			"[role='radio'][value='desktop']",
+		);
+		if (!desktop) throw new Error("No desktop host option");
+		await view.press(desktop);
+		await view.click("Abilities");
+		await view.settle();
+		for (const app of apps.filter(
+			(app) => app.visibility === IAppVisibility.Offline,
+		))
+			expect(view.body.textContent).not.toContain(app.name);
+		expect(view.ticked("Delta")).toBe(false);
+		expect(view.ticked("Echo")).toBe(false);
+	});
+
+	test.each(["server", "desktop", "device"] as const)(
+		"an account bot on %s only offers online apps",
+		async (location) => {
+			const view = await renderDialog({
+				existing: bot({
+					location,
+					device_id: location === "device" ? "dev_a" : null,
+					capabilities: ["selected_apps"],
+				}),
+				apps,
+				localHost: true,
+				signedOut: false,
+			});
+			await view.settle();
+			await view.click("Abilities");
+			await view.settle();
+			for (const app of apps.filter(
+				(app) => app.visibility === IAppVisibility.Offline,
+			))
+				expect(view.body.textContent).not.toContain(app.name);
+			expect(view.ticked("Delta")).toBe(false);
+			expect(view.ticked("Echo")).toBe(false);
+		},
+	);
+});
+
 describe("BotEditorDialog apps of an existing bot", () => {
 	const apps = [
 		{ id: "app_atlas", name: "Atlas" },
 		{ id: "app_beacon", name: "Beacon" },
 	];
+	const atlas: IBotApp = {
+		app_id: "app_atlas",
+		added_at: STAMP,
+		owner_role: "owner",
+	};
 
-	test("quick ticks settle one by one, and a refused tick is taken back", async () => {
-		const existing = bot({ capabilities: ["selected_apps"] });
-		const view = await renderDialog({ existing, apps });
-		const { click, press, settle, appBox, ticked, calls } = view;
-		await settle();
-		await click("Abilities");
-		await settle();
-		await press(appBox("Atlas"));
-		await press(appBox("Beacon"));
-		expect(
-			calls.appChanges.map(({ appId, attached }) => [appId, attached]),
-		).toEqual([
-			["app_atlas", true],
-			["app_beacon", true],
-		]);
-		expect(ticked("Atlas")).toBe(true);
-		expect(ticked("Beacon")).toBe(true);
+	async function openApps(initialApps: IBotApp[] = []) {
+		const view = await renderDialog({
+			existing: bot({ capabilities: ["selected_apps"] }),
+			apps,
+			initialApps,
+		});
+		await view.settle();
+		await view.click("Abilities");
+		await view.settle();
+		return view;
+	}
 
-		const [atlas, beacon] = calls.appChanges;
-		await act(async () => atlas.reject(new Error("Not a member")));
-		await act(async () => beacon.resolve());
-		await settle();
-		expect(ticked("Atlas")).toBe(false);
-		expect(ticked("Beacon")).toBe(true);
-		expect(view.toastErrors()).toEqual(["The app couldn't be updated."]);
+	async function chooseRole(
+		view: Awaited<ReturnType<typeof renderDialog>>,
+		label: string,
+	) {
+		const trigger = view.field(
+			"button[role='combobox'][aria-label='What the bot may do here']",
+		);
+		await act(async () => {
+			trigger.dispatchEvent(
+				new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }),
+			);
+		});
+		await view.settle();
+		const option = [
+			...view.body.querySelectorAll<HTMLElement>("[role='option']"),
+		].find((entry) => entry.textContent === label);
+		if (!option) throw new Error(`No role option "${label}"`);
+		await view.press(option);
+		await view.settle();
+	}
+
+	test("app picks enable Save, survive navigation and stay pending until saved", async () => {
+		const view = await openApps();
+		expect(view.button("Save changes").disabled).toBe(true);
+		await view.press(view.appBox("Atlas"));
+		expect(view.ticked("Atlas")).toBe(true);
+		expect(view.button("Save changes").disabled).toBe(false);
+		expect(view.calls.appChanges).toEqual([]);
+
+		await view.click("Brain");
+		await view.click("Abilities");
+		await view.settle();
+		expect(view.ticked("Atlas")).toBe(true);
+		expect(view.button("Save changes").disabled).toBe(false);
+		await view.click("Save changes");
+		await view.settle();
+		expect(view.calls.appChanges).toHaveLength(1);
+		expect(view.calls.appChanges[0]).toMatchObject({
+			appId: "app_atlas",
+			attached: true,
+		});
+		expect(view.button("Saving").disabled).toBe(true);
+		expect(view.calls.openChanges).toEqual([]);
+		await act(async () => view.calls.appChanges[0].resolve());
+		await view.settle();
+		expect(view.calls.updated).toEqual([]);
+		expect(view.calls.saved.map((saved) => saved.id)).toEqual(["bot_1"]);
+		expect(view.calls.openChanges).toEqual([false]);
 	});
 
-	test("an older change of the same app doesn't undo a newer tick", async () => {
-		const existing = bot({ capabilities: ["selected_apps"] });
-		const view = await renderDialog({ existing, apps });
-		const { click, press, settle, appBox, ticked, calls } = view;
-		await settle();
-		await click("Abilities");
-		await settle();
-		await press(appBox("Atlas"));
-		await press(appBox("Atlas"));
-		const [attach, detach] = calls.appChanges;
-		expect([attach.attached, detach.attached]).toEqual([true, false]);
+	test("reverting app picks disables Save without writing", async () => {
+		const view = await openApps([atlas]);
+		await view.press(view.appBox("Atlas"));
+		expect(view.button("Save changes").disabled).toBe(false);
+		await view.press(view.appBox("Atlas"));
+		expect(view.button("Save changes").disabled).toBe(true);
+		await view.press(view.appBox("Beacon"));
+		expect(view.button("Save changes").disabled).toBe(false);
+		await view.press(view.appBox("Beacon"));
+		expect(view.button("Save changes").disabled).toBe(true);
+		expect(view.calls.appChanges).toEqual([]);
+	});
 
-		await act(async () => attach.resolve());
-		await settle();
-		expect(ticked("Atlas")).toBe(false);
+	test("a role change enables Save and reverting it clears the draft", async () => {
+		const view = await openApps([atlas]);
+		expect(view.button("Save changes").disabled).toBe(true);
+		await chooseRole(view, "Read only");
+		expect(view.button("Save changes").disabled).toBe(false);
+		expect(view.calls.restrictionChanges).toEqual([]);
+		await chooseRole(view, "Full (your role)");
+		expect(view.button("Save changes").disabled).toBe(true);
+		await chooseRole(view, "Read + call events");
+		await view.click("Brain");
+		await view.click("Abilities");
+		await view.settle();
+		expect(view.body.textContent).toContain("Read + call events");
+		await view.click("Save changes");
+		await view.settle();
+		expect(view.calls.appChanges).toEqual([]);
+		expect(view.calls.restrictionChanges).toHaveLength(1);
+		expect(view.calls.restrictionChanges[0]).toMatchObject({
+			appId: "app_atlas",
+			restrictions: presetRestrictions("read_and_call_events"),
+		});
+		await act(async () => view.calls.restrictionChanges[0].resolve());
+		await view.settle();
+		expect(view.calls.updated).toEqual([]);
+		expect(view.calls.openChanges).toEqual([false]);
+	});
 
-		await act(async () => detach.resolve());
-		await settle();
-		expect(ticked("Atlas")).toBe(false);
-		expect(view.toastErrors()).toEqual([]);
+	test("discarding app and role changes sends no requests", async () => {
+		const view = await openApps([atlas]);
+		await chooseRole(view, "Read only");
+		await view.press(view.appBox("Beacon"));
+		await view.click("Close");
+		expect(view.calls.openChanges).toEqual([]);
+		await view.click("Discard");
+		expect(view.calls.appChanges).toEqual([]);
+		expect(view.calls.restrictionChanges).toEqual([]);
+		expect(view.calls.updated).toEqual([]);
+		expect(view.calls.openChanges).toEqual([false]);
+	});
+
+	test("removing an app waits for Save", async () => {
+		const view = await openApps([atlas]);
+		await view.press(view.appBox("Atlas"));
+		expect(view.calls.appChanges).toEqual([]);
+		await view.click("Save changes");
+		await view.settle();
+		expect(view.calls.appChanges[0]).toMatchObject({
+			appId: "app_atlas",
+			attached: false,
+		});
+		await act(async () => view.calls.appChanges[0].resolve());
+		await view.settle();
+		expect(view.calls.openChanges).toEqual([false]);
+	});
+
+	test("a refused app save keeps the selection and allows retry", async () => {
+		const view = await openApps();
+		await view.press(view.appBox("Atlas"));
+		await view.click("Save changes");
+		await view.settle();
+		await act(async () =>
+			view.calls.appChanges[0].reject(new Error("Not a member")),
+		);
+		await view.settle();
+		expect(view.ticked("Atlas")).toBe(true);
+		expect(view.calls.openChanges).toEqual([]);
+		expect(view.body.querySelector("[role='alert']")).not.toBeNull();
+		expect(view.button("Save changes").disabled).toBe(false);
+		await view.click("Save changes");
+		await view.settle();
+		expect(view.calls.appChanges).toHaveLength(2);
+		await act(async () => view.calls.appChanges[1].resolve());
+		await view.settle();
+		expect(view.calls.openChanges).toEqual([false]);
+	});
+
+	test("attaches before saving its role and retries only the failed role", async () => {
+		const view = await openApps();
+		await view.press(view.appBox("Atlas"));
+		await chooseRole(view, "Read only");
+		expect(view.calls.appChanges).toEqual([]);
+		expect(view.calls.restrictionChanges).toEqual([]);
+		await view.click("Save changes");
+		await view.settle();
+		expect(view.calls.appChanges).toHaveLength(1);
+		expect(view.calls.restrictionChanges).toEqual([]);
+		await act(async () => view.calls.appChanges[0].resolve());
+		await view.settle();
+		expect(view.calls.restrictionChanges).toHaveLength(1);
+		await act(async () =>
+			view.calls.restrictionChanges[0].reject(new Error("Try again")),
+		);
+		await view.settle();
+		expect(view.ticked("Atlas")).toBe(true);
+		expect(view.body.textContent).toContain("Read only");
+		expect(view.calls.openChanges).toEqual([]);
+		expect(view.button("Save changes").disabled).toBe(false);
+		await view.click("Save changes");
+		await view.settle();
+		expect(view.calls.appChanges).toHaveLength(1);
+		expect(view.calls.restrictionChanges).toHaveLength(2);
+		expect(view.calls.restrictionChanges[1].restrictions).toEqual(
+			presetRestrictions("read_only"),
+		);
+		await act(async () => view.calls.restrictionChanges[1].resolve());
+		await view.settle();
+		expect(view.calls.openChanges).toEqual([false]);
 	});
 });
 
@@ -1117,7 +1423,9 @@ describe("BotEditorDialog model pins", () => {
 		).toBe("Speech to text: Let the host choose");
 
 		await view.press(pinField(view.body, "Speech to text"));
-		const listed = view.body.querySelector("fieldset")?.textContent;
+		const listed = view.body.querySelector(
+			"fieldset[aria-labelledby]",
+		)?.textContent;
 		expect(listed).toContain("Whisper Small");
 		expect(listed).not.toContain("Kokoro");
 		expect(listed).not.toContain("Sight model");

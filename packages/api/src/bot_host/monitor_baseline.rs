@@ -10,6 +10,43 @@ use flow_like_types::{
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect};
 
+pub(crate) async fn is_monitoring<C: ConnectionTrait>(
+    db: &C,
+    turn: &bot_turn::Model,
+) -> Result<bool, sea_orm::DbErr> {
+    let trigger = inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::InboxId.eq(&turn.bot_id))
+        .filter(inbox_entry::Column::ConversationId.eq(&turn.conversation_id))
+        .filter(inbox_entry::Column::MessageId.eq(&turn.trigger_message_id))
+        .filter(inbox_entry::Column::Kind.eq("TRIGGER"))
+        .one(db)
+        .await?;
+    Ok(trigger
+        .and_then(|row| TriggerBody::parse(&row.envelope["body"]).ok())
+        .is_some_and(|body| body.source == TriggerSource::Schedule && body.monitoring))
+}
+
+/// A run that stopped early, or whose tool calls ended in an error, says nothing reliable about
+/// the monitored state and must not replace the last good baseline.
+fn reported_failure(saved: &BotRunCheckpoint) -> bool {
+    flow_like::flow::copilot::decision_event::failed_execution(saved)
+        || saved.state["pending_calls"]
+            .as_array()
+            .is_some_and(|calls| calls.iter().any(call_failed))
+}
+
+fn call_failed(call: &serde_json::Value) -> bool {
+    let Some(output) = call["output"].as_str() else {
+        return false;
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(output) else {
+        return false;
+    };
+    matches!(parsed["status"].as_str(), Some("error" | "failed"))
+        || parsed["errors"].as_array().is_some_and(|errors| !errors.is_empty())
+        || parsed["error"].as_str().is_some_and(|error| !error.is_empty())
+}
+
 /// Encrypted triggers cannot prove their schedule identity here, and encrypted checkpoints
 /// stay encrypted. Both cases leave the monitor without a prior observation.
 pub(crate) async fn previous_result_for_turn<C: ConnectionTrait>(
@@ -88,12 +125,11 @@ pub(crate) async fn previous_result_for_turn<C: ConnectionTrait>(
         if saved.state.get("sealed_checkpoint").is_some() {
             return Ok(None);
         }
-        if !saved.state["answer"]["stop_reason"].is_null() {
+        if reported_failure(&saved) {
             continue;
         }
         if let Ok(Some(result)) = flow_like::flow::copilot::run_recovery::finished_reply(&saved)
             && !result.trim().is_empty()
-            && !flow_like::flow::copilot::decision_event::failed_execution(&saved)
         {
             return Ok(Some(result.chars().take(4_000).collect()));
         }
@@ -269,5 +305,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(previous_result_for_turn(&db, &current).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn a_run_with_a_failed_tool_call_keeps_the_previous_good_baseline() {
+        let db = setup().await;
+        let good = trigger(&db, "good", "task-a", "Check report", 1).await;
+        complete(&db, &good, finished("All quiet")).await;
+        let failed = trigger(&db, "failed", "task-a", "Check report", 2).await;
+        let mut saved = finished("Report unreachable");
+        saved.state["pending_calls"] = json!([{
+            "id":"call-1", "name":"fetch", "arguments":{},
+            "output":"{\"status\":\"error\",\"code\":\"bot_tool_unavailable_headless\"}"
+        }]);
+        complete(&db, &failed, saved).await;
+        let current = trigger(&db, "current", "task-a", "Check report", 3).await;
+        assert_eq!(
+            previous_result_for_turn(&db, &current).await.unwrap(),
+            Some("All quiet".to_string())
+        );
     }
 }

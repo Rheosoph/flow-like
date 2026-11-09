@@ -145,6 +145,9 @@ export function ConversationChat({
 					reactorName: (id) => (directory(id).isMe ? you : directory(id).name),
 					replyTarget: message.replyTo ? known.get(message.replyTo) : undefined,
 					files: attachments.get(message.id),
+					storageBotId: directory(message.senderId).isBot
+						? message.senderId
+						: undefined,
 					notice: message.content.kind === "sealed" ? sealed : unsupported,
 					mentions: message.mentions.map((id) => ({
 						id,

@@ -9,8 +9,11 @@ import type {
 } from "@flow-like/flow-like-ui";
 import { NotificationIcon } from "@flow-like/flow-like-ui/components/notifications/notification-icon";
 import { useUserAvailability } from "@flow-like/flow-like-ui/hooks/use-user-availability";
-import { shouldPresentUserNotification } from "@flow-like/flow-like-ui/lib/availability-notifications";
 import { getApiOrigin } from "@flow-like/flow-like-ui/lib/api-url";
+import {
+	shouldPresentUserNotification,
+	waitForAvailabilityToSettle,
+} from "@flow-like/flow-like-ui/lib/availability-notifications";
 import { isScriptNavigationUrl } from "@flow-like/flow-like-ui/lib/navigation-url";
 import { remoteNotificationIcon } from "@flow-like/flow-like-ui/lib/notification-icon";
 import { useQueryClient } from "@tanstack/react-query";
@@ -210,6 +213,13 @@ export default function NotificationProvider({
 	availabilityRef.current = availability.data;
 	const localAvailabilityRef = useRef(localAvailability.data);
 	localAvailabilityRef.current = localAvailability.data;
+	const availabilityLoadingRef = useRef(false);
+	availabilityLoadingRef.current =
+		availability.isLoading || localAvailability.isLoading;
+	const settleAvailability = useCallback(
+		() => waitForAvailabilityToSettle(() => availabilityLoadingRef.current),
+		[],
+	);
 	const tauriBackend = backend as TauriBackend | undefined;
 	const authContext = tauriBackend?.auth ?? auth;
 	const currentUser = authContext.user;
@@ -714,6 +724,7 @@ export default function NotificationProvider({
 							| "WORKFLOW"
 							| "SYSTEM") ?? "SYSTEM",
 				});
+				await settleAvailability();
 				if (
 					!abort.signal.aborted &&
 					matchesBotPushIdentity(notification, pushIdentity.current) &&
@@ -805,6 +816,7 @@ export default function NotificationProvider({
 					sourceNodeId: notification.source_node_id,
 				});
 
+				await settleAvailability();
 				if (
 					!shouldPresentUserNotification(
 						availabilityRef.current,
@@ -874,7 +886,7 @@ export default function NotificationProvider({
 				}
 			})();
 		};
-	}, [userId, appId, storeNotification]);
+	}, [userId, appId, storeNotification, settleAvailability]);
 
 	return null;
 }

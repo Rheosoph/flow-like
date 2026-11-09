@@ -18,8 +18,8 @@ use axum::{
     extract::{Path, Query, State},
 };
 use sea_orm::{
-    ColumnTrait, Condition, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
-    QueryTrait, sea_query::Expr,
+    ColumnTrait, Condition, ConnectionTrait, EntityTrait, Order, QueryFilter, QueryOrder,
+    QuerySelect, QueryTrait, sea_query::Expr,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -404,6 +404,16 @@ async fn mobile_turns<C: ConnectionTrait>(
                 .add(bot_turn::Column::Status.is_in(["QUEUED", "RUNNING", "WAITING"]))
                 .add(bot_turn::Column::UpdatedAt.gte(now - chrono::Duration::hours(24))),
         )
+        // A completed turn must not displace active work from the bounded mobile snapshot.
+        .order_by::<Expr>(
+            Expr::case(
+                bot_turn::Column::Status.is_in(["QUEUED", "RUNNING", "WAITING"]),
+                0,
+            )
+            .finally(1)
+            .into(),
+            Order::Asc,
+        )
         .order_by_desc(bot_turn::Column::UpdatedAt)
         .order_by_desc(bot_turn::Column::Id)
         .limit(50)
@@ -415,9 +425,43 @@ async fn mobile_turns<C: ConnectionTrait>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+
+    async fn insert_turn(
+        db: &sea_orm::DatabaseConnection,
+        id: &str,
+        bot_id: &str,
+        owner: &str,
+        status: &str,
+        time: chrono::DateTime<chrono::FixedOffset>,
+    ) {
+        bot_turn::ActiveModel {
+            id: Set(id.into()),
+            bot_id: Set(bot_id.into()),
+            owner_id: Set(owner.into()),
+            conversation_id: Set("room".into()),
+            trigger_message_id: Set(id.into()),
+            host_kind: Set("SERVER".into()),
+            status: Set(status.into()),
+            attempts: Set(1),
+            host_id: Set(None),
+            lease_until: Set(None),
+            operation_id: Set(None),
+            reply_message_id: Set(None),
+            error_code: Set(None),
+            hops: Set(0),
+            requester_id: Set(None),
+            audience: Set("OWNER".into()),
+            created_at: Set(time),
+            updated_at: Set(time),
+        }
+        .insert(db)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
     async fn mobile_status_excludes_foreign_deleted_and_old_completed_turns() {
-        use sea_orm::{ActiveModelTrait, ActiveValue::Set};
         let db = crate::routes::inbox::fixture::database().await;
         for (id, owner) in [
             ("mine", "owner"),
@@ -441,35 +485,55 @@ mod tests {
             } else {
                 now
             };
-            bot_turn::ActiveModel {
-                id: Set(id.into()),
-                bot_id: Set(bot.into()),
-                owner_id: Set(owner.into()),
-                conversation_id: Set("room".into()),
-                trigger_message_id: Set(id.into()),
-                host_kind: Set("SERVER".into()),
-                status: Set(state.into()),
-                attempts: Set(1),
-                host_id: Set(None),
-                lease_until: Set(None),
-                operation_id: Set(None),
-                reply_message_id: Set(None),
-                error_code: Set(None),
-                hops: Set(0),
-                requester_id: Set(None),
-                audience: Set("OWNER".into()),
-                created_at: Set(time),
-                updated_at: Set(time),
-            }
-            .insert(&db)
-            .await
-            .unwrap();
+            insert_turn(&db, id, bot, owner, state, time).await;
         }
         let rows = mobile_turns(&db, "owner", now).await.unwrap();
         assert_eq!(
             rows.into_iter().map(|row| row.id).collect::<Vec<_>>(),
             ["current", "old-active"]
         );
+    }
+
+    #[tokio::test]
+    async fn mobile_status_keeps_active_turns_ahead_of_newer_completions() {
+        let db = crate::routes::inbox::fixture::database().await;
+        crate::routes::inbox::fixture::insert_bot(&db, "mine", "owner", "SERVER").await;
+        let now = chrono::Utc::now().fixed_offset();
+        let active = ["running", "waiting", "queued"];
+        for (offset, id) in active.iter().enumerate() {
+            insert_turn(
+                &db,
+                id,
+                "mine",
+                "owner",
+                &id.to_ascii_uppercase(),
+                now - chrono::Duration::days(2) - chrono::Duration::seconds(offset as i64),
+            )
+            .await;
+        }
+        for offset in 0..55 {
+            insert_turn(
+                &db,
+                &format!("done-{offset}"),
+                "mine",
+                "owner",
+                "DONE",
+                now - chrono::Duration::seconds(offset),
+            )
+            .await;
+        }
+
+        let rows = mobile_turns(&db, "owner", now).await.unwrap();
+        assert_eq!(rows.len(), 50);
+        assert_eq!(
+            rows[..3]
+                .iter()
+                .map(|row| row.id.as_str())
+                .collect::<Vec<_>>(),
+            active,
+        );
+        assert_eq!(rows[3].id, "done-0");
+        assert_eq!(rows.last().unwrap().id, "done-46");
     }
 
     #[tokio::test]

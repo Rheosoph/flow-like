@@ -131,6 +131,19 @@ async function click(element: HTMLElement) {
 	await settle();
 }
 
+async function searchMemories(value: string) {
+	const input = host.querySelector<HTMLInputElement>("input[type='search']");
+	if (!input) throw new Error("Memory search is missing");
+	await act(async () => {
+		Object.getOwnPropertyDescriptor(
+			HTMLInputElement.prototype,
+			"value",
+		)?.set?.call(input, value);
+		input.dispatchEvent(new Event("input", { bubbles: true }));
+	});
+	await settle();
+}
+
 beforeEach(() => {
 	for (const mock of Object.values(mocks)) {
 		if (typeof mock === "function" && "mockReset" in mock) mock.mockReset();
@@ -191,7 +204,19 @@ describe("the Memory tab's facts", () => {
 
 	test("room evidence does not jump into an unrelated owner chat", async () => {
 		mocks.listFacts.mockResolvedValue([
-			{ ...facts[0], conversation_scope: "room-scope" },
+			{
+				...facts[0],
+				conversation_scope: "room-scope",
+				evidence: [
+					...facts[0].evidence,
+					{
+						seq: 24,
+						message_id: "room-m24",
+						quote: "Green tea for me again, please",
+						at: "2026-10-20T13:00:00Z",
+					},
+				],
+			},
 			facts[1],
 		]);
 		const onJump = vi.fn();
@@ -199,10 +224,12 @@ describe("the Memory tab's facts", () => {
 			<BotFactsList botId="bot_ada" appId="app_1" name="Ada" onJump={onJump} />,
 		);
 
+		await click(host.querySelector("summary") as HTMLElement);
 		expect(host.textContent).toContain("a group chat · #12");
+		expect(host.textContent).toContain("a group chat · #24");
 		expect(
 			[...host.querySelectorAll("button")].some((item) =>
-				item.textContent?.includes("#12"),
+				/#(?:12|24)/.test(item.textContent ?? ""),
 			),
 		).toBe(false);
 		await click(button("#40"));
@@ -227,6 +254,130 @@ describe("the Memory tab's facts", () => {
 		);
 		expect(host.textContent).toContain("Prefers green tea");
 		expect(mocks.toast.error).toHaveBeenCalledWith("busy");
+	});
+
+	test("searches source quotes and speaker names without case or surrounding whitespace", async () => {
+		mocks.listFacts.mockResolvedValue([
+			facts[0],
+			{
+				...facts[1],
+				evidence: [
+					{
+						...facts[1].evidence[0],
+						speaker: { id: "person_mara", name: "Mara Petersen" },
+					},
+				],
+			},
+		]);
+		await render(
+			<BotFactsList
+				botId="bot_ada"
+				appId="app_1"
+				name="Ada"
+				onJump={vi.fn()}
+			/>,
+		);
+
+		await searchMemories("  ONLY DRINK  ");
+		expect(host.textContent).toContain("Prefers green tea");
+		expect(host.textContent).not.toContain("Lives in Hamburg");
+		expect(host.textContent).toContain("1 of 2 memories");
+
+		await searchMemories("mara petersen");
+		expect(host.textContent).toContain("Lives in Hamburg");
+		expect(host.textContent).not.toContain("Prefers green tea");
+		await click(button("Clear search"));
+		expect(host.querySelectorAll("li")).toHaveLength(2);
+	});
+
+	test("combines category and search, and resets both after no matches", async () => {
+		mocks.listFacts.mockResolvedValue(facts);
+		await render(
+			<BotFactsList
+				botId="bot_ada"
+				appId="app_1"
+				name="Ada"
+				onJump={vi.fn()}
+			/>,
+		);
+
+		await searchMemories("green");
+		await click(button("Preference"));
+		expect(host.textContent).toContain("Prefers green tea");
+		expect(host.textContent).not.toContain("Lives in Hamburg");
+		expect(button("Preference").getAttribute("aria-pressed")).toBe("true");
+
+		await click(button("Profile"));
+		expect(host.querySelectorAll("li")).toHaveLength(0);
+		expect(host.textContent).toContain("No matching memories");
+		expect(host.textContent).toContain("0 of 2 memories");
+		await click(button("Reset filters"));
+		expect(
+			host.querySelector<HTMLInputElement>("input[type='search']")?.value,
+		).toBe("");
+		expect(button("All").getAttribute("aria-pressed")).toBe("true");
+		expect(host.querySelectorAll("li")).toHaveLength(2);
+		expect(host.textContent).not.toContain("No matching memories");
+	});
+
+	test("deleting the last memory in a category returns to the remaining memories", async () => {
+		mocks.listFacts.mockResolvedValue(facts);
+		mocks.forgetFact.mockResolvedValue(undefined);
+		await render(
+			<BotFactsList
+				botId="bot_ada"
+				appId="app_1"
+				name="Ada"
+				onJump={vi.fn()}
+			/>,
+		);
+
+		await click(button("Preference"));
+		expect(host.textContent).not.toContain("Lives in Hamburg");
+		await click(button("Forget this fact"));
+
+		expect(mocks.forgetFact).toHaveBeenCalledWith(
+			expect.objectContaining({ botId: "bot_ada" }),
+			"f_tea",
+		);
+		expect(host.textContent).toContain("Lives in Hamburg");
+		expect(host.textContent).not.toContain("Prefers green tea");
+		expect(button("All").getAttribute("aria-pressed")).toBe("true");
+		expect(host.querySelectorAll("li")).toHaveLength(1);
+	});
+
+	test("expands memory details with all sources and opens an additional source message", async () => {
+		mocks.listFacts.mockResolvedValue([
+			{
+				...facts[0],
+				evidence: [
+					...facts[0].evidence,
+					{
+						seq: 18,
+						message_id: "m18",
+						quote: "Jasmine green tea is my favorite",
+						at: "2026-10-21T12:00:00Z",
+						speaker: { id: "person_mara", name: "Mara" },
+					},
+				],
+			},
+		]);
+		const onJump = vi.fn();
+		await render(
+			<BotFactsList botId="bot_ada" appId="app_1" name="Ada" onJump={onJump} />,
+		);
+
+		const details = host.querySelector("details");
+		expect(details?.open).toBe(false);
+		await click(host.querySelector("summary") as HTMLElement);
+		expect(details?.open).toBe(true);
+		expect(details?.textContent).toContain("2 sources");
+		expect(details?.textContent).toContain("Said by a person");
+		expect(details?.textContent).toContain("90%");
+		expect(details?.textContent).toContain("Jasmine green tea is my favorite");
+		expect(details?.textContent).toContain("Mara");
+		await click(button("Open message #18"));
+		expect(onJump).toHaveBeenCalledExactlyOnceWith(18);
 	});
 
 	test("shows the empty state", async () => {

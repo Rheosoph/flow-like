@@ -13,8 +13,8 @@ import { Button } from "../../../ui/button";
 import { Label } from "../../../ui/label";
 import { Textarea } from "../../../ui/textarea";
 import { BotNotice, BotStepPanel } from "../bot-editor-parts";
-import { BotModelPicker } from "./model-picker";
 import { BotDecisionModelField } from "./decision-model-field";
+import { BotModelPicker } from "./model-picker";
 import { type BotModelOption, useBotModelOptions } from "./use-bot-models";
 
 function moveItem<T>(items: readonly T[], from: number, to: number): T[] {

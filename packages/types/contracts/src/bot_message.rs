@@ -76,6 +76,10 @@ pub struct MessageBody {
     /// that chat holds the turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interactive: Option<InteractiveMark>,
+    /// The bot note this reply was written with: its title and status show on the message, its
+    /// body only to the bot's owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<crate::bot_notes::NoteRef>,
 }
 
 /// Names the interactive chat run that answers a message.
@@ -464,6 +468,10 @@ impl MessageBody {
                 &mark.client_run_id,
                 MAX_NAME_CHARS,
             )?;
+        }
+        if let Some(note) = &self.note {
+            note.check()
+                .map_err(|error| BodyError(format!("body.note: {error}")))?;
         }
         Ok(())
     }

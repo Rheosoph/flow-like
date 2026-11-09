@@ -229,6 +229,7 @@ impl TurnRunner for NativeRunner {
             profile_id: Some(profile_id.clone()),
             expected_identity: Some(identity.clone()),
             conversation_id: Some(job.conversation_id.clone()),
+            inbox_conversation_id: Some(job.conversation_id.clone()),
             bot_memory: job.memory.map(|memory| memory.0),
             room_updates: job.room_updates.clone(),
             approval_gate: Some(job.gate.clone()),

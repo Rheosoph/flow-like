@@ -4,7 +4,8 @@ use super::{
     ledger::{self, ClaimRequest, enqueue_in},
     worker::{
         Answer, CODE_TIMEOUT, Failure, answer_request, commit_reply_in, executor_token,
-        memory_written, refuse_tool, reply_request, retries, room_of,
+        holds_lease_or_retry, memory_written, refuse_tool, reply_request, retries, room_of,
+        run_while_notifying, usable_decision_model,
     },
 };
 use crate::{
@@ -29,6 +30,51 @@ use sea_orm::{
 };
 use serde_json::json;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+#[tokio::test(start_paused = true)]
+async fn an_unavailable_status_provider_does_not_delay_completed_work() {
+    struct Cancelled<'a>(&'a AtomicBool);
+    impl Drop for Cancelled<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let cancelled = AtomicBool::new(false);
+    let (started, received) = tokio::sync::oneshot::channel();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        run_while_notifying(
+            async {
+                received.await.unwrap();
+                "finished"
+            },
+            async {
+                let _cancelled = Cancelled(&cancelled);
+                started.send(()).unwrap();
+                std::future::pending().await
+            },
+        ),
+    )
+    .await
+    .expect("work must finish even while status delivery is pending");
+    assert_eq!(result, "finished");
+    assert!(cancelled.load(Ordering::SeqCst));
+}
+
+#[tokio::test]
+async fn status_delivery_finishing_first_keeps_the_work_running() {
+    let (sent, received) = tokio::sync::oneshot::channel();
+    let result = run_while_notifying(
+        async {
+            received.await.unwrap();
+            tokio::task::yield_now().await;
+            "finished"
+        },
+        async { sent.send(()).unwrap() },
+    )
+    .await;
+    assert_eq!(result, "finished");
+}
 
 async fn lone_message_history(db: &DatabaseConnection) {
     insert_bot(db, "bot_1", "user-a", "SERVER").await;
@@ -940,4 +986,52 @@ async fn several_reactions_in_a_row_make_one_turn_that_names_each() {
         .map(|note| note.emoji.as_str())
         .collect();
     assert_eq!(emojis, ["👎", "❓"]);
+}
+
+#[test]
+fn an_unavailable_decision_model_is_skipped_not_failed() {
+    use crate::routes::ai::global_chat::ProfileModelAccess;
+    let none = ProfileModelAccess::default();
+    assert_eq!(usable_decision_model(&none, Some("bit"), "t1"), None);
+    assert_eq!(usable_decision_model(&none, None, "t1"), None);
+    let covered = ProfileModelAccess {
+        profile_models: 1,
+        allowed_models: 1,
+    };
+    assert_eq!(usable_decision_model(&covered, Some("bit"), "t1"), Some("bit"));
+}
+
+#[tokio::test]
+async fn a_lease_check_error_fails_closed_after_retrying_and_a_held_lease_passes() {
+    let db = database().await;
+    lone_message_history(&db).await;
+    db.execute_unprepared(r#"UPDATE public."Conversation" SET "lastSeq" = 3"#)
+        .await
+        .unwrap();
+    let delivery = super::fixture::delivery(
+        ConversationKind::Direct,
+        vec![BotRecipient {
+            bot_id: "bot_1".into(),
+            owner_id: "user-a".into(),
+            location: BotLocation::Server,
+            device_id: None,
+            hands_off: false,
+            mentioned: false,
+            replied_to: false,
+            read_along: false,
+            reacted: false,
+            conversation_id: "c1".into(),
+            trigger_message_id: "m3".into(),
+            hops: 0,
+            interactive: false,
+        }],
+    );
+    enqueue_in(&db, &delivery, now_millis()).await.unwrap();
+    let turn = claim_now(&db, "bot_1", "m3", "h1").await;
+    assert!(holds_lease_or_retry(&db, &turn.id, "h1").await);
+    assert!(!holds_lease_or_retry(&db, &turn.id, "other").await);
+    db.execute_unprepared(r#"DROP TABLE public."BotTurn""#)
+        .await
+        .unwrap();
+    assert!(!holds_lease_or_retry(&db, &turn.id, "h1").await);
 }

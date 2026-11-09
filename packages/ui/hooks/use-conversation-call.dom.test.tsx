@@ -152,6 +152,7 @@ let latest: ConversationCallState;
 let microphone: ReturnType<typeof media>;
 let getUserMedia: ReturnType<typeof vi.fn>;
 let retireScope: () => void;
+let speechModel: { bitId: string; route: "remote" } | null;
 let listener: {
 	setPaused: ReturnType<typeof vi.fn>;
 	stop: ReturnType<typeof vi.fn>;
@@ -163,6 +164,7 @@ beforeEach(() => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	vi.stubGlobal("AudioContext", FakeAudioContext);
 	initialContextState = "running";
+	speechModel = { bitId: "stt-model", route: "remote" };
 	contexts.length = 0;
 	retireScope = registerIncomingCallScope(useBackend(), "hub:me");
 	microphone = media("microphone");
@@ -203,7 +205,7 @@ async function setup() {
 			room,
 			undefined,
 			{
-				stt: { bitId: "stt-model", route: "remote" },
+				stt: speechModel,
 				hasBots: true,
 				mentionsIn: () => ["bot"],
 			},
@@ -318,7 +320,12 @@ async function listen() {
 	expect(mocks.startCallListener).toHaveBeenCalledWith(
 		microphone.stream,
 		expect.any(Function),
-		{ context: contexts[0], paused: false },
+		expect.objectContaining({
+			context: contexts[0],
+			paused: false,
+			onPartial: expect.any(Function),
+			onReset: expect.any(Function),
+		}),
 	);
 	expect(latest.listening).toBe(true);
 }
@@ -381,6 +388,121 @@ describe("call transcription delivery", () => {
 				},
 			},
 		});
+	});
+
+	test("drafts update while speaking and only the final transcript wakes the bot", async () => {
+		mocks.transcribe
+			.mockResolvedValueOnce({ text: "Bot, check" })
+			.mockResolvedValueOnce({ text: "Bot, check the plan" })
+			.mockResolvedValueOnce({ text: "Bot, check the plan." });
+		await joined();
+		await listen();
+		const [, final, capture] = mocks.startCallListener.mock.calls[0];
+		await act(async () => capture.onPartial(utterance));
+		expect(latest.transcriptDraft).toBe("Bot, check");
+		expect(mocks.sendEntry).not.toHaveBeenCalled();
+		await act(async () =>
+			capture.onPartial({ ...utterance, durationMs: 2000 }),
+		);
+		expect(latest.transcriptDraft).toBe("Bot, check the plan");
+		expect(mocks.sendEntry).not.toHaveBeenCalled();
+		await act(async () => final({ ...utterance, durationMs: 2200 }));
+		expect(latest.transcriptDraft).toBe("");
+		expect(mocks.sendEntry).toHaveBeenCalledOnce();
+		expect(
+			mocks.sendEntry.mock.calls[0][0].request.envelope.body,
+		).toMatchObject({
+			text: "Bot, check the plan.",
+			mentions: ["bot"],
+		});
+	});
+
+	test("muting invalidates a pending draft without disabling listening", async () => {
+		let finish!: (value: { text: string }) => void;
+		mocks.transcribe.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = resolve;
+				}),
+		);
+		await joined();
+		await listen();
+		const capture = mocks.startCallListener.mock.calls[0][2];
+		await act(async () => capture.onPartial(utterance));
+		await act(async () => latest.toggleMute());
+		await act(async () => finish({ text: "stale draft" }));
+		expect(latest.transcriptDraft).toBe("");
+		expect(latest.listening).toBe(true);
+		expect(mocks.sendEntry).not.toHaveBeenCalled();
+		mocks.transcribe.mockResolvedValue({ text: "new draft" });
+		await act(async () => latest.toggleMute());
+		await act(async () => capture.onPartial({ ...utterance, offsetMs: 3000 }));
+		expect(latest.transcriptDraft).toBe("new draft");
+	});
+
+	test("turning listening off clears drafts and rejects late preview results", async () => {
+		let finish!: (value: { text: string }) => void;
+		mocks.transcribe
+			.mockResolvedValueOnce({ text: "first draft" })
+			.mockImplementationOnce(
+				() =>
+					new Promise((resolve) => {
+						finish = resolve;
+					}),
+			);
+		await joined();
+		await listen();
+		const capture = mocks.startCallListener.mock.calls[0][2];
+		await act(async () => capture.onPartial(utterance));
+		expect(latest.transcriptDraft).toBe("first draft");
+		await act(async () =>
+			capture.onPartial({ ...utterance, durationMs: 2000 }),
+		);
+		await act(async () => latest.setListening(false));
+		expect(latest.transcriptDraft).toBe("");
+		await act(async () => {
+			latest.setListening(true);
+			capture.onPartial(utterance);
+			finish({ text: "stale draft" });
+		});
+		expect(latest.transcriptDraft).toBe("");
+		expect(mocks.sendEntry).not.toHaveBeenCalled();
+		expect(mocks.transcribe).toHaveBeenCalledTimes(2);
+	});
+
+	test("transcript offsets use capture time instead of the time recognition completes", async () => {
+		mocks.transcribe.mockResolvedValue({ text: "After a pause" });
+		await joined();
+		await listen();
+		const capturedAt = Date.now() + 3000;
+		await act(async () => {
+			vi.advanceTimersByTime(20_000);
+			mocks.startCallListener.mock.calls[0][1]({ ...utterance, capturedAt });
+		});
+		expect(
+			mocks.sendEntry.mock.calls[0][0].request.envelope.body.offset_ms,
+		).toBe(3000);
+	});
+
+	test("speech model changes take effect while listening stays on", async () => {
+		mocks.transcribe.mockResolvedValue({ text: "Draft" });
+		await joined();
+		await listen();
+		const capture = mocks.startCallListener.mock.calls[0][2];
+		await act(async () => capture.onPartial(utterance));
+		speechModel = { bitId: "replacement", route: "remote" };
+		await act(async () => latest.toggleMute());
+		await act(async () => latest.toggleMute());
+		await act(async () => capture.onPartial({ ...utterance, offsetMs: 3000 }));
+		expect(mocks.transcribe).toHaveBeenLastCalledWith(
+			expect.objectContaining({ bit_id: "replacement" }),
+		);
+		speechModel = null;
+		await act(async () => latest.toggleMute());
+		await act(async () => latest.toggleMute());
+		await act(async () => capture.onPartial({ ...utterance, offsetMs: 5000 }));
+		expect(mocks.transcribe).toHaveBeenCalledTimes(2);
+		expect(latest.canListen).toBe(false);
 	});
 
 	test("switching listening off and back on discards the old transcription and callback", async () => {

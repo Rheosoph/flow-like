@@ -285,9 +285,22 @@ describe("ApprovalCard", () => {
 				?.textContent,
 		).toContain(instructions);
 		expect(container.textContent).toContain("Atlas");
-		expect(container.textContent).toContain("internet");
+		expect(container.textContent).toContain("Internet");
+		expect(container.querySelector("header")?.textContent).toContain(
+			"Scout wants to update its settings",
+		);
+		expect(container.querySelector("header")?.textContent).not.toContain(
+			"bot_update_configuration",
+		);
 		expect(button("Always allow")).toBeUndefined();
-		expect(button("Allow once")).toBeDefined();
+		expect(button("Allow once")).toBeUndefined();
+		expect(button("Reject changes")).toBeDefined();
+		await click(button("Approve changes"));
+		expect(answers).toEqual([["bot_a", approval.turnId, approval.id, "once"]]);
+		expect(
+			container.querySelector("[data-slot='approval-answer']")?.textContent,
+		).toBe("Changes approved");
+		expect(button("Approve changes")).toBeUndefined();
 	});
 
 	test("says what the bot wants, with the tool and the scope in plain words", async () => {

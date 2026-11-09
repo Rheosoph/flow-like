@@ -398,7 +398,7 @@ export function InviteManagement({ appId }: Readonly<{ appId: string }>) {
 									</div>
 								</div>
 
-								<DialogFooter className="gap-2 sm:gap-0">
+								<DialogFooter>
 									<Button
 										variant="outline"
 										onClick={() => {

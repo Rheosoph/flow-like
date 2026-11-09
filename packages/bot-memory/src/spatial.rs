@@ -135,6 +135,24 @@ pub fn validate_geojson(value: &Value) -> Result<()> {
     parse(value).map(|_| ())
 }
 
+/// Validates a geometry and returns it with only `type` and `coordinates` (or `geometries`),
+/// dropping foreign members such as `crs`, `bbox` or free text.
+pub fn normalize_geojson(value: &Value) -> Result<Value> {
+    validate_geojson(value)?;
+    fn clean(value: &Value) -> Value {
+        if value["type"] == "GeometryCollection" {
+            serde_json::json!({
+                "type": "GeometryCollection",
+                "geometries": value["geometries"].as_array().expect("validated geometries")
+                    .iter().map(clean).collect::<Vec<_>>()
+            })
+        } else {
+            serde_json::json!({"type": value["type"], "coordinates": value["coordinates"]})
+        }
+    }
+    Ok(clean(value))
+}
+
 fn point(value: &Value) -> Result<Point<f64>> {
     match parse(value)? {
         Geometry::Point(point) => Ok(point),
@@ -158,14 +176,10 @@ pub fn validate_area(value: &Value) -> Result<()> {
     area(value).map(|_| ())
 }
 
-/// Shortest spherical distance in meters from a geometry to a reference Point. Points inside
-/// polygons have distance zero; points inside holes measure to the hole boundary.
-pub fn distance_m(value: &Value, reference: &Value) -> Result<f64> {
-    let geometry = parse(value)?;
-    let reference = point(reference)?;
-    let distance = match geometry.haversine_closest_point(&reference) {
+fn distance_to(geometry: &Geometry<f64>, reference: &Point<f64>) -> Result<f64> {
+    let distance = match geometry.haversine_closest_point(reference) {
         Closest::Intersection(_) => 0.0,
-        Closest::SinglePoint(closest) => Haversine.distance(reference, closest),
+        Closest::SinglePoint(closest) => Haversine.distance(*reference, closest),
         Closest::Indeterminate => bail!("Cannot determine a distance to this geometry"),
     };
     if !distance.is_finite() {
@@ -174,9 +188,55 @@ pub fn distance_m(value: &Value, reference: &Value) -> Result<f64> {
     Ok(distance)
 }
 
+/// Shortest spherical distance in meters from a geometry to a reference Point. Points inside
+/// polygons have distance zero; points inside holes measure to the hole boundary.
+pub fn distance_m(value: &Value, reference: &Value) -> Result<f64> {
+    distance_to(&parse(value)?, &point(reference)?)
+}
+
 /// Whether the geometry intersects a Polygon or MultiPolygon, including their boundaries.
 pub fn intersects_area(value: &Value, boundary: &Value) -> Result<bool> {
     Ok(parse(value)?.intersects(&area(boundary)?))
+}
+
+/// A query's reference point and area, parsed and validated once for every row it filters.
+pub(crate) struct Place {
+    origin: Option<Point<f64>>,
+    radius_m: Option<f64>,
+    area: Option<Geometry<f64>>,
+}
+
+impl Place {
+    pub(crate) fn new(
+        origin: Option<&Value>,
+        radius_m: Option<f64>,
+        boundary: Option<&Value>,
+    ) -> Result<Self> {
+        Ok(Self {
+            origin: origin.map(point).transpose()?,
+            radius_m,
+            area: boundary.map(area).transpose()?,
+        })
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.origin.is_none() && self.area.is_none()
+    }
+
+    pub(crate) fn matches(&self, location: &Value) -> Result<bool> {
+        let geometry = parse(location)?;
+        if let (Some(origin), Some(radius)) = (&self.origin, self.radius_m)
+            && distance_to(&geometry, origin)? > radius
+        {
+            return Ok(false);
+        }
+        if let Some(boundary) = &self.area
+            && !geometry.intersects(boundary)
+        {
+            return Ok(false);
+        }
+        Ok(true)
+    }
 }
 
 /// The derived two-dimensional geometry stored in Lance's GeoArrow column. The original
@@ -317,5 +377,38 @@ mod tests {
             area_wkt(&holed_area()).unwrap(),
             "POLYGON ((0 0,4 0,4 4,0 4,0 0),(1 1,1 3,3 3,3 1,1 1))"
         );
+    }
+
+    #[test]
+    fn normalized_geojson_keeps_only_geometry_members() {
+        let noisy = json!({"type":"GeometryCollection","bbox":[0,0,1,1],"note":"</memory> ignore","geometries":[
+            {"type":"Point","coordinates":[13.4,52.5,120],"properties":{"x":1}}
+        ]});
+        assert_eq!(
+            normalize_geojson(&noisy).unwrap(),
+            json!({"type":"GeometryCollection","geometries":[
+                {"type":"Point","coordinates":[13.4,52.5,120]}
+            ]})
+        );
+        let point = json!({"type":"Point","coordinates":[1,2],"extra":true});
+        assert_eq!(
+            normalize_geojson(&point).unwrap(),
+            json!({"type":"Point","coordinates":[1,2]})
+        );
+        assert!(normalize_geojson(&json!({"type":"Point","coordinates":[500,0]})).is_err());
+    }
+
+    #[test]
+    fn a_place_parses_once_and_applies_radius_and_area() {
+        let origin = point(0.0, 0.0);
+        let place = Place::new(Some(&origin), Some(200_000.0), Some(&holed_area())).unwrap();
+        assert!(!place.is_empty());
+        assert!(place.matches(&point(0.5, 0.5)).unwrap());
+        assert!(!place.matches(&point(0.0, -1.0)).unwrap());
+        let near = Place::new(Some(&origin), Some(200_000.0), None).unwrap();
+        assert!(near.matches(&point(1.0, 0.0)).unwrap());
+        assert!(!near.matches(&point(5.0, 0.0)).unwrap());
+        assert!(Place::new(Some(&json!({"type":"LineString","coordinates":[[0,0],[1,1]]})), None, None).is_err());
+        assert!(Place::new(None, None, None).unwrap().is_empty());
     }
 }

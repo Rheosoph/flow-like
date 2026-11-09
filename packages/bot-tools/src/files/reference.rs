@@ -166,6 +166,35 @@ pub fn handle_for(app_id: &str, path: &str, bytes: &[u8], mime: &str) -> Workspa
     }
 }
 
+/// A durable Markdown destination. The chat resolves it through the app's file permissions.
+pub fn markdown_url(handle: &WorkspaceHandle) -> Option<String> {
+    if handle.is_conversation_file() {
+        return None;
+    }
+    fn encode_segment(segment: &str) -> String {
+        let mut encoded = String::new();
+        for byte in segment.bytes() {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                encoded.push(char::from(byte));
+            } else {
+                use std::fmt::Write;
+                write!(&mut encoded, "%{byte:02X}").expect("write to string");
+            }
+        }
+        encoded
+    }
+    let path = handle
+        .path
+        .split('/')
+        .map(|segment| encode_segment(&flow_like_storage::decode_path_segment(segment)))
+        .collect::<Vec<_>>()
+        .join("/");
+    Some(format!(
+        "storage://apps/{}/app/{path}",
+        encode_segment(&handle.app_id)
+    ))
+}
+
 #[derive(Debug, Clone)]
 pub struct ResolvedFile {
     pub app_id: String,

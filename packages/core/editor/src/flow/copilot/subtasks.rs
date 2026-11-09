@@ -294,9 +294,23 @@ impl SubtaskEnv {
         }
     }
 
+    /// Caps the budget at the time left until the host's turn deadline.
+    pub fn with_deadline_at_ms(mut self, deadline_at_ms: Option<i64>) -> Self {
+        if let Some(deadline) = deadline_at_ms {
+            self.turn_budget = self
+                .turn_budget
+                .min(time_until(deadline, chrono::Utc::now().timestamp_millis()));
+        }
+        self
+    }
+
     fn remaining(&self) -> Duration {
         self.turn_budget.saturating_sub(self.started.elapsed())
     }
+}
+
+fn time_until(deadline_at_ms: i64, now_ms: i64) -> Duration {
+    Duration::from_millis(deadline_at_ms.saturating_sub(now_ms).max(0) as u64)
 }
 
 /// Wraps `inner` in the turn's label check and, for a bot offered the tool, answers
@@ -320,7 +334,7 @@ pub(super) fn attach(
         bot: bot.clone(),
         inner,
         env,
-        interactive: tokio::sync::Mutex::new(()),
+        interactive: Arc::new(tokio::sync::Mutex::new(())),
     })
 }
 
@@ -329,7 +343,48 @@ struct SubtaskBridge {
     inner: Arc<dyn PlatformToolBridge>,
     env: SubtaskEnv,
     // Hold the surface for a worker's entire observe/act sequence, across spawn batches.
-    interactive: tokio::sync::Mutex<()>,
+    interactive: Arc<tokio::sync::Mutex<()>>,
+}
+
+fn is_interactive_tool(tool_name: &str) -> bool {
+    tool_name.starts_with("browser_") || tool_name.starts_with("computer_")
+}
+
+/// Takes the shared browser/computer lock on a worker's first interactive call and keeps it
+/// until the worker's run ends.
+struct LazySurface {
+    lock: Arc<tokio::sync::Mutex<()>>,
+    held: tokio::sync::Mutex<Option<tokio::sync::OwnedMutexGuard<()>>>,
+    inner: Arc<dyn PlatformToolBridge>,
+}
+
+#[async_trait]
+impl PlatformToolBridge for LazySurface {
+    async fn call(&self, tool_name: &str, arguments: Value) -> String {
+        if is_interactive_tool(tool_name) {
+            let mut held = self.held.lock().await;
+            if held.is_none() {
+                *held = Some(self.lock.clone().lock_owned().await);
+            }
+        }
+        self.inner.call(tool_name, arguments).await
+    }
+
+    async fn drain_steering(&self) -> Vec<String> {
+        self.inner.drain_steering().await
+    }
+
+    fn watches_room(&self) -> bool {
+        self.inner.watches_room()
+    }
+
+    async fn drain_room_updates(&self) -> Vec<String> {
+        self.inner.drain_room_updates().await
+    }
+
+    async fn is_cancelled(&self) -> bool {
+        self.inner.is_cancelled().await
+    }
 }
 
 #[async_trait]
@@ -338,7 +393,7 @@ impl PlatformToolBridge for SubtaskBridge {
         if tool_name == SPAWN_SUBTASKS_TOOL {
             return self.spawn(arguments).await;
         }
-        let _surface = if tool_name.starts_with("browser_") || tool_name.starts_with("computer_") {
+        let _surface = if is_interactive_tool(tool_name) {
             match self
                 .limited(self.env.remaining(), self.interactive.lock())
                 .await
@@ -940,29 +995,16 @@ impl SubtaskBridge {
         } else if remaining < self.env.min_child_time {
             budget_exhausted()
         } else {
-            let capabilities = child_capabilities(&self.bot, task.tools.as_deref());
-            let interactive = capabilities.granted.iter().any(|capability| {
-                matches!(
-                    capability,
-                    BotCapability::BrowserUse | BotCapability::ComputerUse
-                )
-            });
             let ready = self
                 .limited(remaining, async {
-                    let surface = if interactive {
-                        Some(self.interactive.lock().await)
-                    } else {
-                        None
-                    };
-                    let slot = parallelism
+                    parallelism
                         .acquire()
                         .await
-                        .expect("the batch semaphore stays open");
-                    (surface, slot)
+                        .expect("the batch semaphore stays open")
                 })
                 .await;
             match ready {
-                Limited::Finished((_surface, _slot)) => {
+                Limited::Finished(_slot) => {
                     let remaining = self.env.remaining();
                     if self.inner.is_cancelled().await {
                         Outcome::failed("The turn was cancelled before this task started.")
@@ -1081,7 +1123,11 @@ impl SubtaskBridge {
             inner: Arc::new(BotToolBridge {
                 bot: child.clone(),
                 inner: Arc::new(ApprovalGate {
-                    inner: self.inner.clone(),
+                    inner: Arc::new(LazySurface {
+                        lock: self.interactive.clone(),
+                        held: tokio::sync::Mutex::new(None),
+                        inner: self.inner.clone(),
+                    }),
                     meter: meter.clone(),
                 }),
             }),
@@ -1313,6 +1359,7 @@ mod tests {
         Sequence(Arc<Mutex<Vec<String>>>),
         Incomplete(WorkStopReason, String),
         Wait(Arc<tokio::sync::Notify>),
+        Surface(Box<Behavior>),
     }
 
     #[derive(Debug, Clone)]
@@ -1373,7 +1420,12 @@ mod tests {
             let _running = Running(&self.running);
             self.peak.fetch_max(now, Ordering::SeqCst);
             self.started.notify_one();
-            let result = match (self.behavior)(&child.user_prompt) {
+            let mut behavior = (self.behavior)(&child.user_prompt);
+            while let Behavior::Surface(next) = behavior {
+                child.bridge.call("browser_snapshot", json!({})).await;
+                behavior = *next;
+            }
+            let result = match behavior {
                 Behavior::Reply(text) => Ok(text),
                 Behavior::Fail => Err(flow_like_types::anyhow!("model unavailable")),
                 Behavior::Sleep(duration) => {
@@ -1406,6 +1458,7 @@ mod tests {
                     release.notified().await;
                     Ok("finished".into())
                 }
+                Behavior::Surface(_) => unreachable!("surface wrappers are unwrapped above"),
             };
             result
         }
@@ -1734,7 +1787,9 @@ mod tests {
 
     #[tokio::test]
     async fn browser_and_computer_workers_share_one_surface_across_batches() {
-        let runner = FakeRunner::new(|_| Behavior::Sleep(Duration::from_millis(60)));
+        let runner = FakeRunner::new(|_| {
+            Behavior::Surface(Box::new(Behavior::Sleep(Duration::from_millis(60))))
+        });
         let rig = rig_with(
             interactive_bot(),
             runner.clone(),
@@ -1759,7 +1814,14 @@ mod tests {
 
     #[tokio::test]
     async fn waiting_surface_workers_leave_capacity_for_research() {
-        let runner = FakeRunner::new(|_| Behavior::Sleep(Duration::from_millis(60)));
+        let runner = FakeRunner::new(|prompt| {
+            let sleep = Behavior::Sleep(Duration::from_millis(60));
+            if prompt.contains("research") {
+                sleep
+            } else {
+                Behavior::Surface(Box::new(sleep))
+            }
+        });
         let rig = rig_with(
             interactive_bot(),
             runner.clone(),
@@ -1785,14 +1847,20 @@ mod tests {
                 .all(|task| task["status"] == "done")
         );
         assert_eq!(runner.peak.load(Ordering::SeqCst), 2);
-        assert!(locked(&runner.seen)[1].user_prompt.contains("research"));
+        assert!(
+            locked(&runner.seen)
+                .iter()
+                .any(|seen| seen.user_prompt.contains("research"))
+        );
     }
 
     #[tokio::test]
     async fn parent_surface_calls_wait_for_the_workers_observe_act_sequence() {
         let release = Arc::new(tokio::sync::Notify::new());
         let worker_release = release.clone();
-        let runner = FakeRunner::new(move |_| Behavior::Wait(worker_release.clone()));
+        let runner = FakeRunner::new(move |_| {
+            Behavior::Surface(Box::new(Behavior::Wait(worker_release.clone())))
+        });
         let rig = rig_with(
             interactive_bot(),
             runner.clone(),
@@ -1802,6 +1870,7 @@ mod tests {
         );
         let parent_call = async {
             runner.started.notified().await;
+            tokio::time::sleep(Duration::from_millis(50)).await;
             let call = rig.bridge.call("computer_windows", json!({}));
             tokio::pin!(call);
             assert!(futures::poll!(&mut call).is_pending());
@@ -1825,8 +1894,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancellation_drops_the_surface_owner_and_does_not_start_queued_workers() {
-        let runner = FakeRunner::new(|_| Behavior::UntilCancelled);
+    async fn cancellation_drops_the_surface_owner_and_its_waiting_workers() {
+        let runner =
+            FakeRunner::new(|_| Behavior::Surface(Box::new(Behavior::UntilCancelled)));
         let rig = rig_with(
             interactive_bot(),
             runner.clone(),
@@ -1860,13 +1930,13 @@ mod tests {
                 .iter()
                 .all(|task| task["status"] == "failed")
         );
-        assert_eq!(locked(&runner.seen).len(), 1);
         assert_eq!(runner.running.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
     async fn queued_surface_workers_use_the_remaining_turn_budget() {
-        let runner = FakeRunner::new(|_| Behavior::Sleep(Duration::from_secs(10)));
+        let runner =
+            FakeRunner::new(|_| Behavior::Surface(Box::new(Behavior::Sleep(Duration::from_secs(10)))));
         let rig = rig_with(
             interactive_bot(),
             runner.clone(),
@@ -1876,14 +1946,52 @@ mod tests {
         );
         let result = spawn(&rig, tasks(2)).await;
         assert_eq!(result["results"][0]["status"], "timeout");
-        assert_eq!(result["results"][1]["status"], "budget");
-        assert_eq!(locked(&runner.seen).len(), 1);
+        assert_eq!(result["results"][1]["status"], "timeout");
         assert_eq!(runner.running.load(Ordering::SeqCst), 0);
         assert_eq!(
             spawn(&rig, tasks(1)).await["results"][0]["status"],
             "budget"
         );
-        assert_eq!(locked(&runner.seen).len(), 1);
+        assert_eq!(locked(&runner.seen).len(), 2);
+    }
+
+    #[tokio::test]
+    async fn workers_without_interactive_calls_run_in_parallel_despite_interactive_tools() {
+        let runner = FakeRunner::new(|_| Behavior::Sleep(Duration::from_millis(80)));
+        let rig = rig_with(
+            interactive_bot(),
+            runner.clone(),
+            ParentBridge::new(),
+            TURN_TIME_BUDGET,
+            CHILD_TIME_LIMIT,
+        );
+        spawn(&rig, tasks(3)).await;
+        assert_eq!(runner.peak.load(Ordering::SeqCst), 3);
+    }
+
+    #[test]
+    fn the_subtask_budget_is_capped_by_the_host_deadline() {
+        assert_eq!(time_until(180_000, 0), Duration::from_secs(180));
+        assert_eq!(time_until(10, 50), Duration::ZERO);
+        let runner = FakeRunner::replying("x");
+        let env = rig_env(runner, Some(chrono::Utc::now().timestamp_millis() + 180_000));
+        assert!(env.turn_budget <= Duration::from_secs(180));
+        assert!(env.turn_budget > Duration::from_secs(170));
+        let past = rig_env(
+            FakeRunner::replying("x"),
+            Some(chrono::Utc::now().timestamp_millis() - 1),
+        );
+        assert_eq!(past.turn_budget, Duration::ZERO);
+    }
+
+    fn rig_env(runner: Arc<FakeRunner>, deadline: Option<i64>) -> SubtaskEnv {
+        SubtaskEnv::new(
+            runner,
+            None,
+            TurnLabel::new(&parent_bot(), None),
+            parent_bot().compute.clone(),
+        )
+        .with_deadline_at_ms(deadline)
     }
 
     #[tokio::test]

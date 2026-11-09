@@ -148,13 +148,17 @@ impl LocalBotStore {
                     ).optional()?.flatten();
                 }
             }
-            db.execute(
+            let written = db.execute(
                 "INSERT INTO room_decisions (bot_id, conversation_id, handled_through, participant_id, expires_at)
                  VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT(bot_id, conversation_id) DO UPDATE SET
-                 handled_through = MAX(handled_through, excluded.handled_through),
-                 participant_id = excluded.participant_id, expires_at = excluded.expires_at",
+                 handled_through = excluded.handled_through,
+                 participant_id = excluded.participant_id, expires_at = excluded.expires_at
+                 WHERE room_decisions.handled_through <= excluded.handled_through",
                 params![bot, conversation, seq, participant, participant.map(|_| now_micros() + WAIT_MICROS)],
             )?;
+            if written == 0 {
+                return Ok(RoomWaitOutcome::Superseded);
+            }
             Ok(RoomWaitOutcome::Parked)
         })
     }

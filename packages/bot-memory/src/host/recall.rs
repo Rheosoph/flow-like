@@ -9,7 +9,7 @@ use flow_like_types::Result;
 use crate::facts::{Fact, FactKind};
 use crate::model::FactSource;
 use crate::store::{FactFilter, FactQuery, MemoryStores};
-use crate::text::{estimate_tokens, format_day, one_line, truncate_chars, truncate_to_tokens};
+use crate::text::{escape_angles, estimate_tokens, format_day, one_line, truncate_chars, truncate_to_tokens};
 use crate::tools::ToolOutput;
 
 #[derive(Default)]
@@ -118,8 +118,8 @@ pub(crate) async fn structured_memory(
         let line = if scope == "local" {
             format!(
                 "{}{}",
-                truncate_chars(&hit.fact.line(tz), 700),
-                truncate_chars(&hit.fact.context_suffix(), 400)
+                escape_angles(&truncate_chars(&hit.fact.line(tz), 700)),
+                escape_angles(&truncate_chars(&hit.fact.context_suffix(), 400))
             )
         } else {
             imported_line(scope, &hit.fact, tz)

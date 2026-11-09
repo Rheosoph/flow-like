@@ -296,6 +296,8 @@
 	"nodes2": "ノード",
 	"noDescriptionFound": "説明が見つかりません。",
 	"nodesLength": "ノード（{{length}}）",
+	"skillTools": "",
+	"skillsLength": "",
 	"nodeStorage": "ノードストレージ",
 	"noExternalLinksProvided": "外部リンクは登録されていません",
 	"noLinksAvailable": "利用可能なリンクがありません",

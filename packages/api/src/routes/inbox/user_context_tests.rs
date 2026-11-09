@@ -268,3 +268,20 @@ async fn user_context_deleted_response_refuses_derived_answer() {
     );
     assert!(send_in(&db, "room", "bot", &reply, at(4)).await.is_err());
 }
+
+#[tokio::test]
+async fn user_context_unearned_derived_marker_is_rejected() {
+    let (db, request) = setup().await;
+    let plain = outgoing(
+        "plain1",
+        InboxEntryKind::Message,
+        json!({"text":"Hello",DERIVED_FIELD:request.id}),
+    );
+    assert!(send_in(&db, "room", "bot", &plain, at(1)).await.is_err());
+    let unrelated = outgoing(
+        "plain2",
+        InboxEntryKind::Message,
+        json!({"text":"Hello","reply_to":"missing",DERIVED_FIELD:request.id}),
+    );
+    assert!(send_in(&db, "room", "bot", &unrelated, at(2)).await.is_err());
+}

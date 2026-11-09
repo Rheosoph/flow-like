@@ -23,6 +23,7 @@ import {
 import type { BotDraft } from "../bot-draft";
 import { useBotCapabilityCopy } from "../bot-editor-copy";
 import { BotSectionHeading, BotStepPanel, BotTag } from "../bot-editor-parts";
+import type { BotAppDraft } from "../use-bot-app-draft";
 import {
 	AttachedAppPicker,
 	BotProfilePicker,
@@ -79,6 +80,8 @@ export function FlowPilotAbilityStep() {
 export function AbilitiesStep({
 	draft,
 	botId,
+	localOnly = false,
+	appAccess,
 	pendingAppIds,
 	onPendingAppIdsChange,
 	onToggle,
@@ -86,8 +89,11 @@ export function AbilitiesStep({
 	onEmbeddingModelChange,
 }: Readonly<{
 	draft: BotDraft;
-	/** Set in edit mode: app picks are saved at once. */
+	/** Set in edit mode: app access changes stay in the editor draft until Save. */
 	botId: string | null;
+	/** Stored on this computer, so it can attach offline apps. */
+	localOnly?: boolean;
+	appAccess: BotAppDraft;
 	pendingAppIds: readonly string[];
 	onPendingAppIdsChange: (ids: string[]) => void;
 	onToggle: (capability: BotCapability, enabled: boolean) => void;
@@ -138,9 +144,14 @@ export function AbilitiesStep({
 			</p>
 		),
 		selected_apps: botId ? (
-			<AttachedAppPicker botId={botId} />
+			<AttachedAppPicker
+				botId={botId}
+				localOnly={localOnly}
+				appAccess={appAccess}
+			/>
 		) : (
 			<PendingAppPicker
+				localOnly={localOnly}
 				selected={pendingAppIds}
 				onChange={onPendingAppIdsChange}
 			/>

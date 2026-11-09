@@ -125,7 +125,7 @@ export function ObservedComputerImage({
 						<rect
 							data-focus-bounds
 							{...rectangle(focusBounds)}
-							stroke="#38bdf8"
+							className="stroke-info-solid"
 							strokeWidth="2"
 							vectorEffect="non-scaling-stroke"
 						/>
@@ -134,7 +134,7 @@ export function ObservedComputerImage({
 						<rect
 							data-target-bounds
 							{...rectangle(targetBounds)}
-							stroke="#f59e0b"
+							className="stroke-warning-solid"
 							strokeWidth="2"
 							strokeDasharray="5 4"
 							vectorEffect="non-scaling-stroke"
@@ -146,7 +146,7 @@ export function ObservedComputerImage({
 							cx={target.x * width}
 							cy={target.y * height}
 							r={radius * 1.6}
-							stroke="#f59e0b"
+							className="stroke-warning-solid"
 							strokeWidth="2"
 							strokeDasharray="4 3"
 							vectorEffect="non-scaling-stroke"
@@ -158,9 +158,12 @@ export function ObservedComputerImage({
 							cx={pointer.position.x * width}
 							cy={pointer.position.y * height}
 							r={radius}
-							fill={pointer.source === "observed" ? "#38bdf8" : "none"}
+							className={
+								pointer.source === "observed"
+									? "fill-info-solid stroke-background"
+									: "fill-none stroke-warning-solid"
+							}
 							fillOpacity="0.35"
-							stroke={pointer.source === "observed" ? "#fff" : "#f59e0b"}
 							strokeWidth="2"
 							strokeDasharray={
 								pointer.source === "dispatched" ? "3 3" : undefined
@@ -174,31 +177,62 @@ export function ObservedComputerImage({
 	);
 }
 
-const ACTION_LABELS: Record<string, string> = {
-	click: "Click",
-	double_click: "Double click",
-	right_click: "Right click",
-	move: "Move pointer",
-	mouse_move: "Move pointer",
-	hover: "Hover",
-	drag: "Drag",
-	scroll: "Scroll",
-	type: "Type",
-	text: "Type",
-	key: "Press key",
-	press: "Press key",
-	chord: "Press keys",
-	select: "Select",
-	focus: "Focus window",
-	navigate: "Navigate",
-	open: "Open page",
-	resize: "Resize window",
-	move_window: "Move window",
-	minimize: "Minimize window",
-	maximize: "Maximize window",
-	close: "Close",
-	launch: "Launch app",
-};
+type Translate = ReturnType<typeof useTranslation>["t"];
+
+function actionLabel(t: Translate, kind: string): string {
+	switch (kind) {
+		case "click":
+			return String(t("computer.action.click", "Click"));
+		case "double_click":
+			return String(t("computer.action.double_click", "Double click"));
+		case "right_click":
+			return String(t("computer.action.right_click", "Right click"));
+		case "move":
+			return String(t("computer.action.move", "Move pointer"));
+		case "mouse_move":
+			return String(t("computer.action.mouse_move", "Move pointer"));
+		case "hover":
+			return String(t("computer.action.hover", "Hover"));
+		case "drag":
+			return String(t("computer.action.drag", "Drag"));
+		case "scroll":
+			return String(t("computer.action.scroll", "Scroll"));
+		case "type":
+			return String(t("computer.action.type", "Type"));
+		case "text":
+			return String(t("computer.action.text", "Type"));
+		case "key":
+			return String(t("computer.action.key", "Press key"));
+		case "press":
+			return String(t("computer.action.press", "Press key"));
+		case "chord":
+			return String(t("computer.action.chord", "Press keys"));
+		case "select":
+			return String(t("computer.action.select", "Select"));
+		case "focus":
+			return String(t("computer.action.focus", "Focus window"));
+		case "navigate":
+			return String(t("computer.action.navigate", "Navigate"));
+		case "open":
+			return String(t("computer.action.open", "Open page"));
+		case "resize":
+			return String(t("computer.action.resize", "Resize window"));
+		case "move_window":
+			return String(t("computer.action.move_window", "Move window"));
+		case "minimize":
+			return String(t("computer.action.minimize", "Minimize window"));
+		case "maximize":
+			return String(t("computer.action.maximize", "Maximize window"));
+		case "close":
+			return String(t("computer.action.close", "Close"));
+		case "launch":
+			return String(t("computer.action.launch", "Launch app"));
+		case "other":
+			return String(t("computer.action.other", "Action"));
+		default:
+			return String(t("computer.action.other", "Action"));
+	}
+}
 
 export function ComputerObservationStatus({
 	view,
@@ -237,14 +271,7 @@ export function ComputerObservationStatus({
 			)}
 			{action && (
 				<output>
-					{String(
-						t(
-							`computer.action.${Object.hasOwn(ACTION_LABELS, action.kind) ? action.kind : "other"}`,
-							Object.hasOwn(ACTION_LABELS, action.kind)
-								? ACTION_LABELS[action.kind]
-								: "Action",
-						),
-					)}
+					{actionLabel(t, action.kind)}
 					{" · "}
 					{action.phase === "running"
 						? t("computer.actionRunning", "In progress")

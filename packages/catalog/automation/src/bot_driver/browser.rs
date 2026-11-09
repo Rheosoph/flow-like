@@ -288,9 +288,16 @@ impl BotBrowser {
     }
 
     async fn goto_inner(&self, url: &str) -> flow_like_types::Result<(String, String)> {
-        let target = self.policy.check(url).await?;
+        let target = self.policy.check_blocking_metadata(url).await?;
         let ctx = self.context().await?;
         ctx.page.goto(target.as_str()).await?;
+        let landed = ctx.page.url().await?;
+        if let Err(error) = self.policy.check_blocking_metadata(&landed).await {
+            let _ = ctx.page.goto("about:blank").await;
+            return Err(flow_like_types::anyhow!(
+                "Navigation to '{url}' ended on a blocked page and was left: {error}"
+            ));
+        }
         self.location().await
     }
 
@@ -865,6 +872,21 @@ mod tests {
             assert!(policy.check(url).await.is_err(), "{url}");
         }
         assert!(policy.check("https://example.com/").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn metadata_addresses_are_blocked_but_local_development_is_not() {
+        let policy = NavigationPolicy::plan_default();
+        for url in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://[fe80::1]/",
+            "http://metadata.google.internal/",
+        ] {
+            assert!(policy.check_blocking_metadata(url).await.is_err(), "{url}");
+        }
+        for url in ["http://localhost:3000/", "http://192.168.1.20/"] {
+            assert!(policy.check_blocking_metadata(url).await.is_ok(), "{url}");
+        }
     }
 
     #[test]

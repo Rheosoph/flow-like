@@ -828,3 +828,79 @@ async fn participant_waits_need_the_bound_device_and_a_live_lease() {
     assert_eq!(ended.status, STORED_DONE);
     assert!(ended.lease_until.is_none());
 }
+
+#[tokio::test]
+async fn a_delivery_token_needs_a_live_bot_that_is_still_in_the_conversation() {
+    use crate::{
+        bot_host::recovery,
+        devices::bots_grant,
+        entity::{bot, conversation},
+    };
+    use flow_like_types::bot_turn::BotRunCheckpoint;
+    crate::backend_jwt::init_for_tests();
+    let db = fleet().await;
+    let turn = claimed(&db, "bot_a").await;
+    let row = bot::Entity::find_by_id("bot_a")
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let room = conversation::Entity::find_by_id(&turn.conversation_id)
+        .one(&db)
+        .await
+        .unwrap()
+        .unwrap();
+    let claimed = ledger::Claimed {
+        turn: turn.clone(),
+        batched: Vec::new(),
+    };
+    let now = now_millis().timestamp_millis();
+    let checkpoint = BotRunCheckpoint {
+        revision: 1,
+        started_at_ms: now - 120_000,
+        deadline_at_ms: now - 60_000,
+        state: json!({
+            "version": 1, "phase": "finished", "original_request": "Finish the task",
+            "history": [], "prompt": {"role":"user","content":[{"type":"text","text":"Finished execution."}]},
+            "reference_fingerprints": [], "work_plan": {"revision":0,"plan":null}, "steering": [],
+            "iteration":1, "model_calls_reserved":1, "max_tool_rounds":128, "plan_step_counter":0,
+            "empty_continuations":0, "progress_seen": [],
+            "stats": flow_like::flow_like_model_provider::response::LLMUsageStats::default(),
+            "web": {}, "delegated_web": {}, "local_app_discovery_returned":false,
+            "room_refreshes_remaining":0, "recoveries":0, "approval_resume":false,
+            "pending_calls": [], "answer":{"output":"Saved final answer","stop_reason":null}
+        }),
+    };
+    let claim = recovery::Claim {
+        turn_id: turn.id.clone(),
+        owner_id: OWNER.into(),
+        host_id: HOST.into(),
+        attempt: turn.attempts as u32,
+    };
+    recovery::save_in(&db, &claim, &checkpoint, now_millis())
+        .await
+        .unwrap();
+    assert!(
+        bots_grant::completed_delivery_in(&db, &claimed, HOST, &row, &room)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    db.execute_unprepared(
+        r#"UPDATE public."ConversationMember" SET "status" = 'LEFT', "leftAt" = '2023-01-01T00:00:00+00:00' WHERE "conversationId" = 'c_a' AND "principalId" = 'bot_a'"#,
+    )
+    .await
+    .unwrap();
+    assert!(
+        bots_grant::completed_delivery_in(&db, &claimed, HOST, &row, &room)
+            .await
+            .is_err(),
+        "a bot that left the conversation gets no delivery token"
+    );
+    delete_bot(&db, "bot_a").await;
+    assert!(
+        bots_grant::completed_delivery_in(&db, &claimed, HOST, &row, &room)
+            .await
+            .is_err()
+    );
+}

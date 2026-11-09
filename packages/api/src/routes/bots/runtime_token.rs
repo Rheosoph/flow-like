@@ -13,7 +13,10 @@ use axum::{
     Extension, Json,
     extract::{Path, State},
 };
-use flow_like_types::{bot_turn::TurnAudience, inbox::ConversationKind};
+use flow_like_types::{
+    bot_turn::{TurnAudience, TurnStatus},
+    inbox::ConversationKind,
+};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -80,6 +83,28 @@ pub(crate) async fn bot_user_for_turn<C: ConnectionTrait>(
     })
 }
 
+/// Tokens that outlive a request are only for turns a host still works on.
+pub(crate) async fn ensure_live_turn<C: ConnectionTrait>(
+    db: &C,
+    owner_id: &str,
+    bot_id: &str,
+    turn_id: &str,
+) -> Result<(), ApiError> {
+    let turn = bot_turn::Entity::find_by_id(turn_id)
+        .filter(bot_turn::Column::BotId.eq(bot_id))
+        .filter(bot_turn::Column::OwnerId.eq(owner_id))
+        .one(db)
+        .await?
+        .ok_or_else(|| ApiError::not_found(format!("Turn '{turn_id}' not found")))?;
+    match TurnStatus::parse(&turn.status) {
+        Some(TurnStatus::Queued | TurnStatus::Running | TurnStatus::Waiting) => Ok(()),
+        _ => Err(ApiError::conflict(format!(
+            "Turn '{turn_id}' is {}; a token is only issued for a turn that is queued, running or waiting",
+            turn.status.to_ascii_lowercase()
+        ))),
+    }
+}
+
 #[utoipa::path(
     post,
     path = "/bots/{bot_id}/runtime-token",
@@ -89,7 +114,8 @@ pub(crate) async fn bot_user_for_turn<C: ConnectionTrait>(
     responses(
         (status = 200, description = "A short-lived token that acts as the bot for this turn.", body = BotRuntimeToken),
         (status = 401, description = "Not signed in"),
-        (status = 404, description = "You have no such bot or turn")
+        (status = 404, description = "You have no such bot or turn"),
+        (status = 409, description = "The turn is already done, failed or cancelled")
     ),
     security(("bearer_auth" = []))
 )]
@@ -169,7 +195,11 @@ async fn bot_user_for_request(
         _ => bot_id,
     };
     let bot = match turn_id {
-        Some(turn_id) => bot_user_for_turn(&state.db, owner_id, &bot_id, turn_id.trim()).await?,
+        Some(turn_id) => {
+            let turn_id = turn_id.trim();
+            ensure_live_turn(&state.db, owner_id, &bot_id, turn_id).await?;
+            bot_user_for_turn(&state.db, owner_id, &bot_id, turn_id).await?
+        }
         None => bot_user_for_direct(&state.db, owner_id, &bot_id).await?,
     };
     crate::bot_caller::usage_identity(&state.db, &bot).await?;
@@ -188,4 +218,47 @@ pub(crate) async fn bot_user_for_direct<C: ConnectionTrait>(
         turn_id: format!("direct:{}", flow_like_types::create_id()),
         conv_id: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::routes::inbox::fixture;
+    use sea_orm::{ActiveModelTrait, Set};
+
+    #[tokio::test]
+    async fn tokens_are_only_issued_for_live_turns() {
+        let db = fixture::database().await;
+        fixture::insert_bot(&db, "bot_a", "user-a", "DESKTOP").await;
+        let lease = fixture::at(60);
+        fixture::running_turn(&db, "t-run", "bot_a", "room", "host", lease).await;
+        assert!(
+            ensure_live_turn(&db, "user-a", "bot_a", "t-run")
+                .await
+                .is_ok()
+        );
+        for (stored, expected) in [
+            ("QUEUED", true),
+            ("WAITING", true),
+            ("DONE", false),
+            ("FAILED", false),
+            ("CANCELLED", false),
+        ] {
+            let mut turn: bot_turn::ActiveModel = fixture::turn(&db, "t-run").await.into();
+            turn.status = Set(stored.into());
+            turn.update(&db).await.unwrap();
+            assert_eq!(
+                ensure_live_turn(&db, "user-a", "bot_a", "t-run")
+                    .await
+                    .is_ok(),
+                expected,
+                "{stored}"
+            );
+        }
+        assert!(
+            ensure_live_turn(&db, "user-b", "bot_a", "t-run")
+                .await
+                .is_err()
+        );
+    }
 }

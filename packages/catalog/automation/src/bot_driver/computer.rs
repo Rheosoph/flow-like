@@ -178,6 +178,21 @@ fn focused(windows: &[WindowInfo]) -> Option<&WindowInfo> {
         .find(|window| window.is_focused && !window.is_minimized)
 }
 
+const FOCUS_LABEL_CHARS: usize = 160;
+
+fn focus_of(frame: &ScreenFrame, window: &WindowInfo) -> Option<InteractionFocus> {
+    let bounds = window_bounds(frame, window)?;
+    let label = match &window.app_name {
+        Some(app) if !window.title.is_empty() => format!("{app}: {}", window.title),
+        Some(app) => app.clone(),
+        None => window.title.clone(),
+    };
+    Some(InteractionFocus {
+        label: label.chars().take(FOCUS_LABEL_CHARS).collect(),
+        bounds: Some(bounds),
+    })
+}
+
 fn normalized_point(frame: &ScreenFrame, point: (i32, i32)) -> Option<InteractionPoint> {
     frame.validate().ok()?;
     frame
@@ -218,14 +233,9 @@ fn observation(
                 position,
                 source: PointerSource::Observed,
             }),
-        focus: windows.and_then(focused).map(|window| InteractionFocus {
-            label: match &window.app_name {
-                Some(app) if !window.title.is_empty() => format!("{app}: {}", window.title),
-                Some(app) => app.clone(),
-                None => window.title.clone(),
-            },
-            bounds: window_bounds(frame, window),
-        }),
+        focus: windows
+            .and_then(focused)
+            .and_then(|window| focus_of(frame, window)),
         action: action.map(|action| InteractionAction {
             kind: action.kind.into(),
             phase: action.phase,
@@ -644,6 +654,24 @@ mod tests {
             assert!(observed.pointer.is_none());
             assert!(observed.action.unwrap().target.is_some());
         }
+    }
+
+    #[test]
+    fn focus_label_is_capped_and_omitted_outside_the_captured_surface() {
+        let mut long = window();
+        long.title = "é".repeat(400);
+        let focus = observation(&frame(), Some(&[long.clone()]), None, None)
+            .focus
+            .unwrap();
+        assert_eq!(focus.label.chars().count(), 160);
+
+        long.x = 100_000;
+        long.y = 100_000;
+        assert!(
+            observation(&frame(), Some(&[long]), None, None)
+                .focus
+                .is_none()
+        );
     }
 
     #[test]

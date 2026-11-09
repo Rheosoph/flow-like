@@ -65,6 +65,13 @@ pub trait HostStore: Send + Sync + 'static {
     /// The newest [`WINDOW`] entries, newest first.
     async fn newest(&self, conversation_id: &str) -> Result<Vec<InboxEntry>, String>;
     async fn bot(&self, bot_id: &str) -> Result<Option<Bot>, String>;
+    async fn task(
+        &self,
+        _bot_id: &str,
+        _task_id: &str,
+    ) -> Result<Option<flow_like_types::bot_task::BotTask>, String> {
+        Ok(None)
+    }
     async fn room_decision_state(
         &self,
         _bot_id: &str,
@@ -306,6 +313,16 @@ impl HostStore for AppStore {
     async fn bot(&self, bot_id: &str) -> Result<Option<Bot>, String> {
         let id = bot_id.to_owned();
         self.with(move |store| store.get_bot(&id)).await
+    }
+
+    async fn task(
+        &self,
+        bot_id: &str,
+        task_id: &str,
+    ) -> Result<Option<flow_like_types::bot_task::BotTask>, String> {
+        let (bot, task) = (bot_id.to_owned(), task_id.to_owned());
+        self.with(move |store| Ok(store.tasks(&bot)?.into_iter().find(|row| row.id == task)))
+            .await
     }
 
     async fn room_decision_state(

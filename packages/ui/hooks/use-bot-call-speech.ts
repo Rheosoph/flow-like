@@ -144,6 +144,8 @@ export function useBotCallSpeech({
 		call,
 	});
 	latest.current = { entries, items, voices, call };
+	const translate = useRef(t);
+	translate.current = t;
 	const scheduler = useRef<ReturnType<typeof createBotCallSpeech> | null>(null);
 
 	useEffect(() => {
@@ -180,7 +182,7 @@ export function useBotCallSpeech({
 				if (reported) return;
 				reported = true;
 				toast.error(
-					t(
+					translate.current(
 						"crew.call.voiceFailed",
 						"The bot's voice could not play. Its reply is still in the conversation.",
 					),
@@ -192,7 +194,7 @@ export function useBotCallSpeech({
 			controller.dispose();
 			if (scheduler.current === controller) scheduler.current = null;
 		};
-	}, [conversation.id, callId, historyReady, backend.audioState, t]);
+	}, [conversation.id, callId, historyReady, backend.audioState]);
 
 	useEffect(() => {
 		scheduler.current?.update({ entries, items, voices });

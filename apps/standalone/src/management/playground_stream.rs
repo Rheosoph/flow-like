@@ -4,8 +4,8 @@
 
 use anyhow::{Context, Result};
 use flow_like_device_protocol::{
-    PlaygroundControl, PlaygroundDecoder, PlaygroundDisplay, PlaygroundEvent, PlaygroundFrame,
-    PlaygroundFrameKind, PlaygroundFrameMeta, PlaygroundInput, PlaygroundState,
+    PLAYGROUND_MAX_JSON, PlaygroundControl, PlaygroundDecoder, PlaygroundDisplay, PlaygroundEvent,
+    PlaygroundFrame, PlaygroundFrameKind, PlaygroundFrameMeta, PlaygroundInput, PlaygroundState,
 };
 use flow_like_types_contracts::interaction::InteractionObservation;
 use std::{
@@ -150,6 +150,21 @@ struct Session<P: Playground> {
     observations: bool,
 }
 
+const MAX_CAPTION_CHARS: usize = 512;
+
+/// A picture is worth more than its overlay: an oversized observation is dropped, not the stream.
+fn fit_meta(meta: &mut PlaygroundFrameMeta) {
+    let oversized = |meta: &PlaygroundFrameMeta| {
+        serde_json::to_vec(meta).map_or(true, |bytes| bytes.len() > PLAYGROUND_MAX_JSON)
+    };
+    if oversized(meta) {
+        meta.observation = None;
+    }
+    if oversized(meta) {
+        meta.caption = meta.caption.chars().take(MAX_CAPTION_CHARS).collect();
+    }
+}
+
 impl<P: Playground> Drop for Session<P> {
     fn drop(&mut self) {
         if self.took_over {
@@ -242,17 +257,19 @@ impl<P: Playground> Session<P> {
         }
         self.sent_frame = Some(key);
         let age_ms = frame.taken.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        let mut meta = PlaygroundFrameMeta {
+            width: frame.width,
+            height: frame.height,
+            kind: frame.kind,
+            caption: frame.caption,
+            age_ms,
+            observation,
+        };
+        fit_meta(&mut meta);
         self.send(
             write,
             PlaygroundEvent::Frame(PlaygroundFrame {
-                meta: PlaygroundFrameMeta {
-                    width: frame.width,
-                    height: frame.height,
-                    kind: frame.kind,
-                    caption: frame.caption,
-                    age_ms,
-                    observation,
-                },
+                meta,
                 jpeg: frame.jpeg,
             }),
         )

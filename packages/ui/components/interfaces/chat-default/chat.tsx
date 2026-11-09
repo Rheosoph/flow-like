@@ -203,6 +203,8 @@ export interface IChatProps {
 	config?: Partial<IEventPayloadChat>;
 	sessionId?: string;
 	isStreamActive?: boolean;
+	/** Status shown until the assistant produces text or a tool step. */
+	loadingText?: string;
 	activeInteractions?: IInteractionRequest[];
 	onRespondToInteraction?: (interactionId: string, value: unknown) => void;
 	/** Rendered pinned between the message feed and the input — e.g. tool approval prompts. */
@@ -260,6 +262,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 			config = {},
 			sessionId,
 			isStreamActive = false,
+			loadingText,
 			activeInteractions,
 			onRespondToInteraction,
 			inlinePrompt,
@@ -974,6 +977,7 @@ const ChatInner = forwardRef<IChatRef, IChatProps>(
 												!liveMessage.stream_root_id ||
 												liveMessage.id === currentMessages.at(-1)?.id
 											}
+											loadingText={loadingText}
 											message={liveMessage}
 											appId={appId}
 											boardId={boardId}

@@ -1,22 +1,24 @@
 "use client";
 
-import { captureTelemetryError } from "@flow-like/flow-like-ui";
+import { captureTelemetryError } from "@flow-like/flow-like-ui/lib/telemetry/errors";
 import { useTranslation } from "@flow-like/locales";
 import { AlertTriangle, ArrowLeft, RotateCcw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { ErrorDetails } from "../components/error-details";
 
-export default function Error({
+export default function PageError({
 	error,
 	reset,
 }: Readonly<{
-	error: Error & { digest?: string };
+	error: unknown;
 	reset: () => void;
 }>) {
 	const { t } = useTranslation("common");
 	const router = useRouter();
 
 	useEffect(() => {
+		console.error("Application page failed:", error);
 		captureTelemetryError(error, { culprit: "app/error-boundary" });
 	}, [error]);
 
@@ -34,6 +36,7 @@ export default function Error({
 					)}
 				</p>
 			</div>
+			<ErrorDetails error={error} />
 			<div className="flex items-center gap-3">
 				<button
 					type="button"

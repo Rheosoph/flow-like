@@ -15,6 +15,7 @@
 
 mod account;
 mod approvals;
+mod authorization;
 pub(crate) mod commands;
 pub(crate) mod connector_commands;
 mod e2e;

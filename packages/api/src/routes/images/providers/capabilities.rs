@@ -17,7 +17,14 @@ const MAX_BYTES: usize = 512 * 1024;
 type Cache = HashMap<String, (Instant, ImageCapabilities)>;
 static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
-pub(super) fn invalidate(model: &str) {
+/// Only a 404 means the model's endpoints are gone; 400 and 422 also answer a rejected prompt.
+pub(super) fn invalidate_for_status(model: &str, status: u16) {
+    if status == 404 {
+        invalidate(model);
+    }
+}
+
+fn invalidate(model: &str) {
     CACHE
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -148,6 +155,34 @@ mod tests {
                     .contains("private-provider-error")
             );
         }
+    }
+
+    #[test]
+    fn only_a_404_evicts_the_cached_capabilities() {
+        let model = "evict/test-model";
+        let capabilities = ImageCapabilities::from_endpoints(&json!({"id": model, "endpoints": [{
+            "provider_tag": "test", "supported_parameters": {
+                "aspect_ratio": {"type":"enum", "values":["1:1"]},
+                "resolution": {"type":"enum", "values":["1K"]}
+            }
+        }]}))
+        .unwrap();
+        let cached = || {
+            CACHE
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains_key(model)
+        };
+        CACHE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(model.to_owned(), (Instant::now(), capabilities));
+        for status in [400, 422, 429, 500] {
+            invalidate_for_status(model, status);
+            assert!(cached(), "{status} must keep the entry");
+        }
+        invalidate_for_status(model, 404);
+        assert!(!cached());
     }
 
     #[tokio::test]

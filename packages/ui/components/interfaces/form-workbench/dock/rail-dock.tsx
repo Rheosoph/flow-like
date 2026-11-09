@@ -135,10 +135,10 @@ function RunRow({
 /**
  * The dock's fill: the rail shows through while the field list fits above it; the card fill once the list
  * scrolls under the head (`data-fw-over`) or the Runs list shows (`data-fw-tab=runs`), read from the rail
- * column (`group/rail`).
+ * column (`data-fw-region=rail`).
  */
 const DOCK_FILL =
-	"bg-transparent group-has-[[data-fw-over]]/rail:bg-card group-has-[[data-fw-tab=runs]]/rail:bg-card";
+	"bg-transparent [[data-fw-region=rail]:has([data-fw-over])_&]:bg-card [[data-fw-region=rail]:has([data-fw-tab=runs])_&]:bg-card";
 
 /**
  * The desktop rail's dock (spec M1, M5): the status line above Run (and Stop for the run on the stage), then the

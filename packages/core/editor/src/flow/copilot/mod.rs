@@ -9,6 +9,7 @@ pub mod assistant;
 pub mod behavioral_evaluation;
 pub mod behavioral_state;
 pub mod benchmark_cases;
+pub mod bot_notes;
 pub mod bot_run;
 pub mod bot_talk;
 mod capability_tools;
@@ -40,6 +41,7 @@ mod skill_selection;
 pub mod stream;
 mod subtasks;
 mod tool_arguments;
+pub mod tool_authorization;
 pub mod tool_grants;
 #[cfg(test)]
 mod tool_schema_tests;
@@ -112,6 +114,7 @@ pub use manifest::{
     ManifestCatalogNode, ManifestCatalogPin, ManifestError, ManifestSource, ManifestSourceStatus,
     default_flowscript_module_templates,
 };
+pub use bot_notes::{NotesHandle, NotesStore, notes_tool_specs};
 pub use memory_tools::{HeadlessMemory, MemoryHandle, MemoryTurnSource, memory_tool_specs};
 pub use provider::{CatalogProvider, node_to_metadata, pin_to_metadata};
 /// Re-export of the rig tool trait so non-rig adapter crates can bound on it (e.g. to derive

@@ -47,7 +47,7 @@ use std::{
     time::Duration,
 };
 use tauri::{
-    AppHandle, State,
+    AppHandle, Manager, State,
     ipc::{Channel, InvokeResponseBody},
 };
 use tokio::sync::watch;
@@ -426,6 +426,7 @@ pub async fn global_chat(
     let mut finish = None;
     let mut bot_memory = None;
     let mut recovery = None;
+    let mut inbox_conversation_id = None;
     let mut ephemeral_user_context = false;
     let mut legacy_memory_read_only = interactive.is_some();
     let mut legacy_memory_allowed = interactive.as_ref().map(|_| false);
@@ -439,6 +440,7 @@ pub async fn global_chat(
     {
         let guard =
             crate::bot_host::interactive::begin(Some(&app_handle), bot, run.conversation_id());
+        inbox_conversation_id = Some(run.conversation_id().to_owned());
         ephemeral_user_context = run.ephemeral_user_context().await?;
         let access = run.legacy_memory_access().await;
         legacy_memory_allowed = Some(access.is_some());
@@ -484,6 +486,7 @@ pub async fn global_chat(
             model_id,
             reasoning_effort,
             conversation_id,
+            inbox_conversation_id,
             auto_approve: auto_approve.unwrap_or(false),
             interaction_mode:
                 crate::functions::ai::native_tool_bridge::NativeInteractionMode::Interactive,
@@ -593,6 +596,7 @@ pub async fn global_chat_native(
     });
     options.attachments = attachments_manifest.clone().unwrap_or_default();
     let conversation_id = options.conversation_id.clone();
+    let has_inbox_conversation = options.inbox_conversation_id.is_some();
     let run_id = Some(run_id.unwrap_or_else(flow_like_types::create_id));
     let _native_run = crate::functions::ai::native_tool_bridge::claim_run(
         &app_handle,
@@ -707,7 +711,7 @@ pub async fn global_chat_native(
     if let Some(bot) = bot.as_mut() {
         let context = std::sync::Arc::make_mut(&mut bot.context);
         context.host_tools = std::mem::take(&mut context.host_tools)
-            .with_user_context(conversation_id.is_some());
+            .with_user_context(has_inbox_conversation);
         std::sync::Arc::make_mut(&mut bot.context).recovery = recovery.map(Into::into);
         std::sync::Arc::make_mut(&mut bot.context).acknowledgement = acknowledgement;
         std::sync::Arc::make_mut(&mut bot.context).ephemeral_user_context = ephemeral_user_context;

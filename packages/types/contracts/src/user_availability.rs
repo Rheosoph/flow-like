@@ -124,6 +124,19 @@ pub struct PublicAvailability {
     pub until: Option<i64>,
 }
 
+impl PublicAvailability {
+    pub fn without_calendar_schedule(self) -> Self {
+        if self.source == AvailabilitySource::Calendar {
+            return Self {
+                status: self.status,
+                source: AvailabilitySource::Default,
+                until: None,
+            };
+        }
+        self
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct UserAvailability {
     #[serde(flatten)]
@@ -328,6 +341,35 @@ mod tests {
         assert_eq!(
             public_information(Some(value)),
             Some(serde_json::json!({"team":"ops"}))
+        );
+    }
+
+    #[test]
+    fn public_projection_hides_calendar_schedule_but_keeps_status() {
+        let state = AvailabilityState {
+            free_busy: Some(FreeBusy::normalized(
+                0,
+                1_000,
+                vec![BusyInterval { start: 0, end: 800 }],
+            )),
+            calendar_valid_until: 900,
+            ..Default::default()
+        };
+        let calendar = state.current(100).without_calendar_schedule();
+        assert_eq!(calendar.status, AvailabilityStatus::Busy);
+        assert_eq!(calendar.source, AvailabilitySource::Default);
+        assert_eq!(calendar.until, None);
+        let manual = AvailabilityState {
+            status_override: Some(AvailabilityOverride {
+                status: AvailabilityStatus::Focus,
+                source: AvailabilitySource::Manual,
+                until: 500,
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            manual.current(100).without_calendar_schedule().until,
+            Some(500)
         );
     }
 

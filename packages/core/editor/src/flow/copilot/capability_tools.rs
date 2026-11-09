@@ -13,6 +13,7 @@ use flow_like_types::base64::{Engine as _, engine::general_purpose::STANDARD};
 use flow_like_types::bot::BotCapability;
 use serde_json::{Value, json};
 
+use super::bot_notes::NotesHandle;
 use super::memory_tools::MemoryHandle;
 use super::platform::PLATFORM_TOOL_IMAGE_URLS_FIELD;
 
@@ -359,6 +360,7 @@ pub struct HostTools {
     names: BTreeSet<&'static str>,
     code_languages: Vec<String>,
     memory: Option<MemoryHandle>,
+    notes: Option<NotesHandle>,
 }
 
 impl HostTools {
@@ -376,6 +378,7 @@ impl HostTools {
                 .collect(),
             code_languages: Vec::new(),
             memory: None,
+            notes: None,
         }
     }
 
@@ -405,6 +408,7 @@ impl HostTools {
                 .collect(),
             code_languages: Vec::new(),
             memory: None,
+            notes: None,
         }
     }
 
@@ -416,6 +420,17 @@ impl HostTools {
 
     pub fn memory(&self) -> Option<&MemoryHandle> {
         self.memory.as_ref()
+    }
+
+    /// Keeps the bot's notes in the conversation the turn answers; every bot gets the notes
+    /// tools and section when a host passes them.
+    pub fn with_notes(mut self, notes: NotesHandle) -> Self {
+        self.notes = Some(notes);
+        self
+    }
+
+    pub fn notes(&self) -> Option<&NotesHandle> {
+        self.notes.as_ref()
     }
 
     /// The languages `code_run` runs on this host (`ToolEnv::code_languages`). None: the host

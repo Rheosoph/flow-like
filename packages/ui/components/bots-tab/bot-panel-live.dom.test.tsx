@@ -270,6 +270,7 @@ const backend = {
 		lookupUser: async () => null,
 		lookupUsers: async () => [],
 		getSettingsProfile: async () => ({ hub_profile: { id: "profile-1" } }),
+		getProfile: async () => null,
 	},
 	storageState: { downloadStorageItems: async () => [] },
 	roleState: {

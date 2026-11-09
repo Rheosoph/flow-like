@@ -167,10 +167,15 @@ pub(crate) async fn execute(
     .with_people(
         super::bot_tools::people::people_for(app, &runtime.context.bot_id, host.clone()).await,
     )
-    .with_user_context(super::bot_tools::user_context::context_for(
-        app, &runtime.context.bot_id,
-        context.and_then(|context| context.conversation_id.as_deref()), host.clone(),
-    ).await)
+    .with_user_context(
+        super::bot_tools::user_context::context_for(
+            app,
+            &runtime.context.bot_id,
+            options.inbox_conversation_id.as_deref(),
+            host.clone(),
+        )
+        .await,
+    )
     .with_images(Arc::new(super::bot_tools::images::DesktopImages::new(
         runtime.clone(),
         context.and_then(|context| context.conversation_id.as_deref()),

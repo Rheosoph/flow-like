@@ -287,6 +287,8 @@ export interface IMessage {
 	appId: string;
 	sessionId: string;
 	inner: IHistoryMessage;
+	/** Bot whose workspace resolves relative file links in this message. */
+	storageBotId?: string;
 	/** Reply or reaction context, kept separately from the user's visible text. */
 	interaction?: IChatMessageInteraction;
 	files: IAttachment[];

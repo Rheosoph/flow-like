@@ -527,6 +527,7 @@ pub(crate) async fn answer_in<C: ConnectionTrait + Send + Sync>(
             format!("Turn '{turn_id}' stopped waiting"),
         ));
     }
+    super::recovery::rebase_deadline_in(txn, &turn.id, now).await?;
     let origin = super::talk::turn_origin_conversation(txn, &turn).await?;
     super::decision_wait::clear_before_in(txn, bot_id, &origin, now).await?;
     let turn = ledger::find(txn, turn_id, Some(owner_id))
@@ -648,6 +649,7 @@ pub(crate) async fn expire_in<C: ConnectionTrait>(
     if ended.rows_affected == 0 {
         return Ok(None);
     }
+    super::recovery::clear_in(txn, &turn.id).await?;
     let Some(conversation) = conversation else {
         return Ok(None);
     };

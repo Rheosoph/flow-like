@@ -260,6 +260,31 @@ async fn after_a_hand_back_the_browser_needs_a_fresh_snapshot_before_it_acts() {
 }
 
 #[tokio::test]
+async fn after_a_hand_back_window_operations_and_launch_need_a_fresh_screenshot() {
+    let host = local_ish(Arc::default());
+    let computer = host.machine("b", None, false, true).computer.unwrap();
+    host.take_over("b").unwrap();
+    host.hand_back("b").unwrap();
+    let stale = |error: flow_like_types::Error| ToolError::from(error).code == code::STALE_PAGE;
+    assert!(stale(
+        computer
+            .window("1", WindowOp::Close, WindowBounds::default())
+            .await
+            .unwrap_err()
+    ));
+    assert!(stale(computer.launch("x", &[]).await.unwrap_err()));
+    assert!(computer.windows().await.is_ok());
+
+    computer.screenshot().await.unwrap();
+    assert!(
+        computer
+            .window("1", WindowOp::Focus, WindowBounds::default())
+            .await
+            .is_ok()
+    );
+}
+
+#[tokio::test]
 async fn input_is_injected_only_while_taken_over_and_only_into_a_computer_frame() {
     let playground = Arc::new(FakePlayground::default());
     let host = local_ish(playground.clone());

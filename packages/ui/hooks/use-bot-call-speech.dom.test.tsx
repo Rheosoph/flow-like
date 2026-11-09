@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, expect, test } from "bun:test";
+import { i18n } from "@flow-like/locales";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { foldInboxEntries } from "../components/bots-tab/fold-entries";
@@ -253,17 +254,17 @@ test("installed local voices are advertised only by a desktop and use a qualifie
 });
 
 test("catalog speech limits split long call replies without dropping text", async () => {
-	const f = await fixture(false, "hosted:openrouter", "aura-2-thalia-en", 2000);
+	const f = await fixture(false, "hosted:openrouter", "aura-2-thalia-en", 100);
 	try {
 		await f.join();
 		const text = "😀".repeat(4100);
 		await f.add("long-answer", 3, text);
 		await waitForVoice();
-		expect(f.played.map((chunk) => Array.from(chunk).length)).toEqual([
-			2000, 2000, 100,
-		]);
+		expect(f.played.map((chunk) => Array.from(chunk).length)).toEqual(
+			Array(41).fill(100),
+		);
 		expect(f.played.join("")).toBe(text);
-		expect(f.requests).toHaveLength(3);
+		expect(f.requests).toHaveLength(41);
 	} finally {
 		await f.dispose();
 	}
@@ -376,6 +377,27 @@ test("a default voice resolving after a reply speaks that reply without replayin
 		await waitForVoice();
 		expect(f.played).toEqual(["answer"]);
 	} finally {
+		await f.dispose();
+	}
+});
+
+test("a language change does not rebuild the speech scheduler", async () => {
+	const f = await fixture(false, "hosted:openrouter", "af_heart");
+	const language = i18n.language;
+	try {
+		await f.join();
+		const stops = f.stops;
+		await act(async () => {
+			await i18n.changeLanguage(language === "de" ? "en" : "de");
+		});
+		await f.add("answer", 3);
+		await waitForVoice();
+		expect(f.stops).toBe(stops);
+		expect(f.played).toEqual(["answer"]);
+	} finally {
+		await act(async () => {
+			await i18n.changeLanguage(language);
+		});
 		await f.dispose();
 	}
 });

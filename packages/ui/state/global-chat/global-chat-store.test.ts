@@ -8,8 +8,10 @@ import {
 } from "bun:test";
 import type { IChatWidget } from "../../components/interfaces/chat-default/chat-db";
 import type { IMessage } from "./global-chat-db";
+import { prepareChatReply } from "./global-chat-preparation";
 import {
 	type GlobalChatTurnSelection,
+	MAX_CONCURRENT_GLOBAL_CHAT_RUNS,
 	beginGlobalChatTurnSelection,
 	getGlobalChatTurnSelection,
 	isGlobalChatAtRunCapacity,
@@ -377,6 +379,35 @@ describe("global chat overlay dismissal", () => {
 		expect(isGlobalChatAtRunCapacity(useGlobalChatStore.getState())).toBe(
 			false,
 		);
+	});
+
+	test("setup reserves slots only in its conversation and releases them when finished", () => {
+		const preparations = Array.from(
+			{ length: MAX_CONCURRENT_GLOBAL_CHAT_RUNS },
+			() => prepareChatReply("conversation-1"),
+		);
+		try {
+			const state = useGlobalChatStore.getState();
+			expect(isGlobalChatAtRunCapacity(state)).toBe(true);
+			expect(isGlobalChatAtRunCapacity(state, "other-conversation")).toBe(
+				false,
+			);
+			expect(
+				isGlobalChatAtRunCapacity(
+					state,
+					"conversation-1",
+					preparations[0].runId,
+				),
+			).toBe(false);
+			preparations[0].finish();
+			expect(isGlobalChatAtRunCapacity(state)).toBe(false);
+			startRun("ready", beginGlobalChatTurnSelection("ready"));
+			expect(isGlobalChatAtRunCapacity(useGlobalChatStore.getState())).toBe(
+				true,
+			);
+		} finally {
+			for (const preparation of preparations) preparation.finish();
+		}
 	});
 
 	test("a finished run only commits into the conversation it belongs to", () => {

@@ -2,7 +2,7 @@
 
 import { useTranslation } from "@flow-like/locales";
 import { type ComponentType, useEffect } from "react";
-import { useBotLabels } from "../../../hooks/use-bots";
+import { useBotApps, useBotLabels } from "../../../hooks/use-bots";
 import { useBackend, useSignedIn } from "../../../state/backend-state";
 import type { IBot } from "../../../state/backend-state/bot-state";
 import { useGlobalChatStore } from "../../../state/global-chat/global-chat-store";
@@ -66,7 +66,12 @@ export function BotEditorSuite({
 	const { t } = useTranslation("bots");
 	const labels = useBotLabels();
 	const localOnly = useLivesOnThisComputer(bot);
-	const editor = useBotEditor(mode, bot, { localOnly, initialDeviceId });
+	const attached = useBotApps(bot?.id);
+	const editor = useBotEditor(mode, bot, {
+		localOnly,
+		initialDeviceId,
+		savedApps: attached.data,
+	});
 	const submit = useBotEditorSubmit(editor, { onSaved, onDuplicated, close });
 	useEffect(() => onDirtyChange(editor.dirty), [editor.dirty, onDirtyChange]);
 	useEffect(() => () => onDirtyChange(false), [onDirtyChange]);
@@ -94,9 +99,12 @@ export function BotEditorSuite({
 					onSelect={editor.goTo}
 				/>
 			</header>
-			<div className="@container min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6 sm:py-6">
+			<fieldset
+				disabled={submit.saving || submit.deleting || submit.duplicating}
+				className="@container min-h-0 min-w-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6 sm:py-6"
+			>
 				<BotEditorStepBody editor={editor} />
-			</div>
+			</fieldset>
 			<BotEditorFooter editor={editor} submit={submit} discard={discard} />
 		</>
 	);
@@ -175,6 +183,8 @@ function AbilitiesView({ editor }: StepViewProps) {
 		<AbilitiesStep
 			draft={editor.draft}
 			botId={editor.original?.id ?? null}
+			localOnly={editor.localOnly}
+			appAccess={editor.appAccess}
 			pendingAppIds={editor.pendingAppIds}
 			onPendingAppIdsChange={editor.setPendingAppIds}
 			onToggle={editor.toggleCapability}

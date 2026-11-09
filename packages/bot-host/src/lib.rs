@@ -3,6 +3,7 @@
 //! a runner.
 
 pub mod account;
+pub mod authorization;
 pub mod bridge;
 pub mod e2e;
 pub mod event;

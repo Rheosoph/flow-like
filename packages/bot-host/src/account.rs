@@ -6,6 +6,7 @@
 //! poll forward.
 
 use crate::{
+    authorization::{HubAuthority, RunnerInference},
     e2e::{self, E2eHost},
     gate::ApprovalGate,
     host::{
@@ -742,6 +743,18 @@ impl Inner {
             claim,
             recovery,
         };
+        gate.set_inference(Some(RunnerInference::new(
+            self.runner.clone(),
+            &job,
+            grants.clone(),
+            Arc::new(HubAuthority::new(
+                owner_hub.clone(),
+                bot_id,
+                &lead.id,
+                &lead.owner_id,
+                self.e2e.get().cloned(),
+            )),
+        )));
         let call_utterance = entries.iter().any(|entry| {
             entry.message_id == lead.trigger_message_id && entry.kind == InboxEntryKind::Transcript
         });

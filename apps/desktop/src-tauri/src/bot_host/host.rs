@@ -253,23 +253,25 @@ impl BotHost {
     /// already being posted. The message stays unanswered until the next one arrives.
     pub async fn cancel(&self, turn_id: &str) -> Result<bool, String> {
         let (bot, room, trigger) = {
-            let mut state = lock(&self.inner.state);
+            let state = lock(&self.inner.state);
             let Some(live) = state.live.values().find(|live| live.info.id == turn_id) else {
                 return Ok(false);
             };
             if live.posting {
                 return Ok(false);
             }
-            live.cancel.send_replace(Some(Cancel::User));
-            let ids = (
+            (
                 live.info.bot_id.clone(),
                 live.info.conversation_id.clone(),
                 live.info.trigger_message_id.clone(),
-            );
-            state.abandoned.insert((ids.0.clone(), ids.2.clone()));
-            ids
+            )
         };
         self.inner.store.cancel_run(&bot, &room, &trigger).await?;
+        let mut state = lock(&self.inner.state);
+        if let Some(live) = state.live.values().find(|live| live.info.id == turn_id) {
+            live.cancel.send_replace(Some(Cancel::User));
+        }
+        state.abandoned.insert((bot, trigger));
         Ok(true)
     }
 }
@@ -379,16 +381,28 @@ impl Inner {
                 .filter(|entry| entry.seq <= trigger.seq)
                 .cloned()
                 .collect();
-            let waiting = rule::waiting_held(
-                conversation.kind,
-                bot_id,
-                &prior,
-                trigger.created_at - Age::seconds(1),
-                Some(super::interactive::hold_now(bot_id, &conversation.id)),
-                false,
-            )?;
-            if waiting.message_id == trigger.message_id {
+            let qualifying = |hold| {
+                rule::waiting_held(
+                    conversation.kind,
+                    bot_id,
+                    &prior,
+                    trigger.created_at - Age::seconds(1),
+                    hold,
+                    false,
+                )
+                .filter(|waiting| waiting.message_id == trigger.message_id)
+            };
+            let held = Some(super::interactive::hold_now(bot_id, &conversation.id));
+            if let Some(waiting) = qualifying(held) {
                 return Some((bot, waiting));
+            }
+            if qualifying(None).is_none()
+                && let Err(error) = self
+                    .store
+                    .cancel_run(bot_id, &conversation.id, &trigger.message_id)
+                    .await
+            {
+                tracing::warn!(%error, bot_id, "Bot host: a stale recovery checkpoint could not be retired");
             }
             return None;
         }
@@ -780,6 +794,20 @@ impl Inner {
             claim: None,
             recovery,
         };
+        if bot.model.decision.is_some() {
+            let authority = Arc::new(super::authorization::LocalAuthority::new(
+                self.store.clone(),
+                bot_id,
+                conversation_id,
+                flow_like_bot_host::event::trigger(&oldest_first, &waiting.message_id),
+            ));
+            gate.set_inference(Some(flow_like_bot_host::authorization::RunnerInference::new(
+                self.runner.clone(),
+                &job,
+                grants.clone(),
+                authority,
+            )));
+        }
         let call_utterance = oldest_first.iter().any(|entry| {
             entry.message_id == waiting.message_id && entry.kind == InboxEntryKind::Transcript
         });

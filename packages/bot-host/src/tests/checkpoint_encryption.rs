@@ -85,14 +85,6 @@ async fn sealed_checkpoint_survives_restart_and_key_rotation_without_plaintext_o
             revision: 8,
             ..sealed.clone()
         },
-        BotRunCheckpoint {
-            started_at_ms: 11,
-            ..sealed.clone()
-        },
-        BotRunCheckpoint {
-            deadline_at_ms: 1001,
-            ..sealed.clone()
-        },
         checkpoint,
     ] {
         assert!(
@@ -102,4 +94,44 @@ async fn sealed_checkpoint_survives_restart_and_key_rotation_without_plaintext_o
                 .is_err()
         );
     }
+}
+
+#[tokio::test]
+async fn rebased_header_opens_with_the_stored_start_and_deadline() {
+    let vault = Arc::new(Vault::default());
+    InboxKeyring::new(vault.clone()).ensure("bot").unwrap();
+    let host = E2eHost::new(Arc::new(DeviceHub::default()), vault, "host".into());
+    let checkpoint = BotRunCheckpoint {
+        revision: 3,
+        started_at_ms: 10,
+        deadline_at_ms: 1000,
+        state: json!({"version": 1, "objective": "wait for approval"}),
+    };
+    let sealed = host
+        .seal_checkpoint("bot", "room", "turn", &checkpoint)
+        .await
+        .unwrap();
+    let rebased = BotRunCheckpoint {
+        started_at_ms: 500,
+        deadline_at_ms: 1500,
+        ..sealed.clone()
+    };
+    let opened = host
+        .open_checkpoint("bot", "room", "turn", &rebased)
+        .await
+        .unwrap();
+    assert_eq!(
+        (opened.started_at_ms, opened.deadline_at_ms, opened.revision),
+        (500, 1500, 3)
+    );
+    assert_eq!(opened.state, checkpoint.state);
+    let moved_revision = BotRunCheckpoint {
+        revision: 4,
+        ..rebased
+    };
+    assert!(
+        host.open_checkpoint("bot", "room", "turn", &moved_revision)
+            .await
+            .is_err()
+    );
 }

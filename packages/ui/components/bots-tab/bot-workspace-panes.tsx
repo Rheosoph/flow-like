@@ -4,8 +4,10 @@ import { useTranslation } from "@flow-like/locales";
 import {
 	ArrowUpRightIcon,
 	BanIcon,
+	ChevronDownIcon,
 	CircleAlertIcon,
 	CloudOffIcon,
+	HistoryIcon,
 	Loader2Icon,
 } from "lucide-react";
 import Link from "next/link";
@@ -273,9 +275,8 @@ function BotFactsPane({
 	const { query } = useBotWorkspace(botId);
 	const appId = query.data?.app_id;
 	return (
-		<div className="flex min-h-0 flex-1 flex-col">
+		<div className="flex min-h-0 min-w-0 flex-1 flex-col">
 			{notice}
-			<BotHistoryPanel botId={botId} name={name} />
 			{appId ? (
 				<BotFactsList
 					botId={botId}
@@ -301,6 +302,21 @@ function BotFactsPane({
 				/>
 			) : (
 				<PaneLoading label={t("crew.dock.loading", "Loading…")} />
+			)}
+			{botHasInboxHistory(botId) && (
+				<details className="group/history max-h-[40%] shrink-0 overflow-y-auto border-t border-border/60 bg-background">
+					<summary className="flex min-h-11 cursor-pointer list-none items-center gap-2 px-4 text-xs text-muted-foreground hover:bg-muted/40 hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
+						<HistoryIcon className="size-3.5" aria-hidden />
+						{t("memory.exploreHistory", "Explore chat history")}
+						<ChevronDownIcon
+							className="ml-auto size-3.5 transition-transform group-open/history:rotate-180 motion-reduce:transition-none"
+							aria-hidden
+						/>
+					</summary>
+					<div className="max-h-48 overflow-y-auto">
+						<BotHistoryPanel botId={botId} name={name} />
+					</div>
+				</details>
 			)}
 		</div>
 	);

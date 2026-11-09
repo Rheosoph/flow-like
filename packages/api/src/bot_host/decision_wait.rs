@@ -59,18 +59,72 @@ async fn continuous_member<C: ConnectionTrait>(
     .is_some())
 }
 
+fn decision_enabled(row: &bot::Model) -> bool {
+    row.deleted_at.is_none()
+        && row
+            .model_policy
+            .get("decision")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|id| !id.trim().is_empty())
+}
+
 async fn enabled<C: ConnectionTrait>(db: &C, bot_id: &str) -> Result<bool, DbErr> {
     Ok(bot::Entity::find_by_id(bot_id)
         .one(db)
         .await?
-        .is_some_and(|row| {
-            row.deleted_at.is_none()
-                && row
-                    .model_policy
-                    .get("decision")
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|id| !id.trim().is_empty())
-        }))
+        .is_some_and(|row| decision_enabled(&row)))
+}
+
+/// Bots with a decision model and the active members' join times, read once for all waits.
+struct WaitFacts {
+    enabled: HashSet<String>,
+    joined: HashMap<String, DateTime<FixedOffset>>,
+}
+
+impl WaitFacts {
+    async fn load<C: ConnectionTrait>(
+        db: &C,
+        room: &str,
+        waits: &[bot_decision_wait::Model],
+    ) -> Result<Self, DbErr> {
+        let bots: HashSet<&String> = waits.iter().map(|wait| &wait.bot_id).collect();
+        let principals: HashSet<&String> = waits
+            .iter()
+            .flat_map(|wait| [&wait.bot_id, &wait.participant_id])
+            .collect();
+        let enabled = bot::Entity::find()
+            .filter(bot::Column::Id.is_in(bots))
+            .all(db)
+            .await?
+            .iter()
+            .filter(|row| decision_enabled(row))
+            .map(|row| row.id.clone())
+            .collect();
+        let joined = conversation_member::Entity::find()
+            .filter(conversation_member::Column::ConversationId.eq(room))
+            .filter(conversation_member::Column::PrincipalId.is_in(principals))
+            .filter(conversation_member::Column::LeftAt.is_null())
+            .filter(conversation_member::Column::Status.eq("ACTIVE"))
+            .all(db)
+            .await?
+            .into_iter()
+            .map(|row| (row.principal_id, row.joined_at))
+            .collect();
+        Ok(Self { enabled, joined })
+    }
+
+    fn continuous(&self, wait: &bot_decision_wait::Model, principal: &str) -> bool {
+        self.joined
+            .get(principal)
+            .is_some_and(|joined| *joined <= wait.created_at)
+    }
+
+    fn live(&self, wait: &bot_decision_wait::Model, now: DateTime<FixedOffset>) -> bool {
+        wait.expires_at > now
+            && self.enabled.contains(&wait.bot_id)
+            && self.continuous(wait, &wait.participant_id)
+            && self.continuous(wait, &wait.bot_id)
+    }
 }
 
 async fn remove<C: ConnectionTrait>(db: &C, wait: &bot_decision_wait::Model) -> Result<(), DbErr> {
@@ -126,6 +180,32 @@ async fn participant_input<C: ConnectionTrait>(
     })
 }
 
+async fn trigger_entries<C: ConnectionTrait>(
+    db: &C,
+    delivery: &BotDelivery,
+    waits: &[bot_decision_wait::Model],
+) -> Result<HashMap<(String, String), inbox_entry::Model>, DbErr> {
+    let recipients: Vec<_> = delivery
+        .recipients
+        .iter()
+        .filter(|recipient| waits.iter().any(|wait| wait.bot_id == recipient.bot_id))
+        .collect();
+    if recipients.is_empty() {
+        return Ok(HashMap::new());
+    }
+    Ok(inbox_entry::Entity::find()
+        .filter(inbox_entry::Column::ConversationId.eq(&recipients[0].conversation_id))
+        .filter(inbox_entry::Column::InboxId.is_in(recipients.iter().map(|r| &r.bot_id)))
+        .filter(
+            inbox_entry::Column::MessageId.is_in(recipients.iter().map(|r| &r.trigger_message_id)),
+        )
+        .all(db)
+        .await?
+        .into_iter()
+        .map(|row| ((row.inbox_id.clone(), row.message_id.clone()), row))
+        .collect())
+}
+
 /// Overrides read-along routing only while a participant wait is active. A direct address
 /// clears it. Matching replies wake just the waiting bot, including unmentioned bot replies.
 pub(crate) async fn routing<C: ConnectionTrait>(
@@ -145,15 +225,16 @@ pub(crate) async fn routing<C: ConnectionTrait>(
         )
         .all(db)
         .await?;
+    if waits.is_empty() {
+        return Ok(result);
+    }
+    let facts = WaitFacts::load(db, room, &waits).await?;
+    let triggers = trigger_entries(db, delivery, &waits).await?;
     for wait in waits {
         let Some(recipient) = delivery.recipients.iter().find(|r| r.bot_id == wait.bot_id) else {
             continue;
         };
-        if wait.expires_at <= now
-            || !enabled(db, &wait.bot_id).await?
-            || !continuous_member(db, &wait, &wait.participant_id).await?
-            || !continuous_member(db, &wait, &wait.bot_id).await?
-        {
+        if !facts.live(&wait, now) {
             remove(db, &wait).await?;
             continue;
         }
@@ -173,13 +254,8 @@ pub(crate) async fn routing<C: ConnectionTrait>(
                 InboxEntryKind::Message | InboxEntryKind::Transcript
             )
         {
-            let entry = inbox_entry::Entity::find()
-                .filter(inbox_entry::Column::InboxId.eq(&wait.bot_id))
-                .filter(inbox_entry::Column::ConversationId.eq(room))
-                .filter(inbox_entry::Column::MessageId.eq(&recipient.trigger_message_id))
-                .one(db)
-                .await?;
-            let input = match entry.as_ref() {
+            let entry = triggers.get(&(wait.bot_id.clone(), recipient.trigger_message_id.clone()));
+            let input = match entry {
                 Some(entry) => participant_input(db, entry).await?,
                 None => false,
             };

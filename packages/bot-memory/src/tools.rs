@@ -754,9 +754,11 @@ pub async fn memory_save(
     gate: WriteGate,
     now: DateTime<Utc>,
 ) -> Result<WriteOutcome<(Fact, UpdateAction)>> {
-    if let Some(geojson) = &args.geojson {
-        crate::spatial::validate_geojson(geojson)?;
-    }
+    let geojson = args
+        .geojson
+        .as_ref()
+        .map(crate::spatial::normalize_geojson)
+        .transpose()?;
     let expires_at = args
         .ttl_seconds
         .map(|seconds| {
@@ -822,7 +824,7 @@ pub async fn memory_save(
             .as_deref()
             .and_then(|value| parse_datetime(value, tz)),
         recorded_at: now,
-        geojson: args.geojson.clone(),
+        geojson,
         time: args.time,
         expires_at,
         expired_at: None,

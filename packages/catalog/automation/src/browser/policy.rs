@@ -48,6 +48,9 @@ const PRIVILEGED_SCHEMES: &[&str] = &[
 const METADATA_HOSTS: &[&str] = &["metadata.google.internal", "metadata.goog", "metadata"];
 
 #[cfg(any(feature = "execute", test))]
+const AWS_IMDS_V6: Ipv6Addr = Ipv6Addr::new(0xfd00, 0x0ec2, 0, 0, 0, 0, 0, 0x0254);
+
+#[cfg(any(feature = "execute", test))]
 type Url = flow_like_types::reqwest::Url;
 
 #[cfg(any(feature = "execute", test))]
@@ -69,6 +72,20 @@ impl NavigationPolicy {
         Url::parse(url.trim()).map_err(|error| {
             flow_like_types::anyhow!("Navigation to '{url}' blocked: not an absolute URL ({error})")
         })
+    }
+
+    /// Link-local and cloud-metadata targets only; localhost and LAN stay reachable.
+    pub(crate) fn check_metadata_static(url: &Url) -> flow_like_types::Result<()> {
+        let Some(host) = policy_host(url) else {
+            return Ok(());
+        };
+        let metadata_ip = host.parse::<IpAddr>().is_ok_and(is_metadata_ip);
+        if metadata_ip || METADATA_HOSTS.contains(&host.as_str()) {
+            return Err(flow_like_types::anyhow!(
+                "Navigation to '{url}' blocked: '{host}' is a link-local or cloud metadata address"
+            ));
+        }
+        Ok(())
     }
 
     /// Scheme, domain list and IP-literal checks without DNS.
@@ -134,6 +151,30 @@ impl NavigationPolicy {
 
 #[cfg(feature = "execute")]
 impl NavigationPolicy {
+    /// `check` plus a metadata-address block that also covers hostnames resolving to one.
+    pub(crate) async fn check_blocking_metadata(&self, url: &str) -> flow_like_types::Result<Url> {
+        let parsed = self.check(url).await?;
+        Self::check_metadata_static(&parsed)?;
+        if let Some(domain) = parsed.domain() {
+            let port = parsed.port_or_known_default().unwrap_or(80);
+            let lookup = flow_like_types::tokio::time::timeout(
+                std::time::Duration::from_secs(5),
+                flow_like_types::tokio::net::lookup_host((domain, port)),
+            )
+            .await;
+            if let Ok(Ok(addresses)) = lookup
+                && let Some(address) = addresses
+                    .map(|address| address.ip())
+                    .find(|ip| is_metadata_ip(*ip))
+            {
+                return Err(flow_like_types::anyhow!(
+                    "Navigation to '{url}' blocked: host '{domain}' resolves to link-local or metadata address {address}"
+                ));
+            }
+        }
+        Ok(parsed)
+    }
+
     /// Full check including DNS resolution when private networks are blocked.
     pub(crate) async fn check(&self, url: &str) -> flow_like_types::Result<Url> {
         let parsed = Self::parse(url)?;
@@ -239,6 +280,18 @@ fn private_v4(ip: Ipv4Addr) -> bool {
         || (a == 100 && (64..=127).contains(&b))
         || (a == 192 && b == 0 && c == 0)
         || (a == 198 && (b == 18 || b == 19))
+}
+
+#[cfg(any(feature = "execute", test))]
+pub(crate) fn is_metadata_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => ip.is_link_local(),
+        IpAddr::V6(ip) => {
+            ip.to_ipv4_mapped().is_some_and(|v4| v4.is_link_local())
+                || ip.segments()[0] & 0xffc0 == 0xfe80
+                || ip == AWS_IMDS_V6
+        }
+    }
 }
 
 #[cfg(any(feature = "execute", test))]
@@ -505,6 +558,30 @@ mod tests {
             assert!(check(&policy, url), "{url} should be allowed");
         }
         assert!(NavigationPolicy::parse("example.com").is_err());
+    }
+
+    #[test]
+    fn metadata_check_blocks_link_local_and_keeps_localhost_and_lan() {
+        let blocked = |url: &str| NavigationPolicy::check_metadata_static(&Url::parse(url).unwrap());
+        for url in [
+            "http://169.254.169.254/latest/meta-data/",
+            "http://169.254.1.1/",
+            "http://[fe80::1]/",
+            "http://[fd00:ec2::254]/",
+            "http://[::ffff:169.254.169.254]/",
+            "http://metadata.google.internal/computeMetadata/v1/",
+        ] {
+            assert!(blocked(url).is_err(), "{url}");
+        }
+        for url in [
+            "http://localhost:3000/",
+            "http://127.0.0.1:8080/",
+            "http://192.168.1.20/",
+            "http://10.0.0.5/",
+            "https://example.com/",
+        ] {
+            assert!(blocked(url).is_ok(), "{url}");
+        }
     }
 
     #[test]

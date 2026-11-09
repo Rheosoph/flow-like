@@ -41,7 +41,11 @@ pub struct NativeRunOptions {
     pub profile_id: Option<String>,
     /// A queued host request must retain the account validated before it starts.
     pub expected_identity: Option<NativeRunIdentity>,
+    /// The chat session scopes drafts and tool caches; it may be a UI-only id.
     pub conversation_id: Option<String>,
+    /// The inbox conversation opened by the interactive run or supplied by its host.
+    /// Conversation services must use this binding, never the UI session id.
+    pub inbox_conversation_id: Option<String>,
     pub attachments: Vec<flow_like::flow::copilot::AttachmentManifestEntry>,
     pub model_id: Option<String>,
     pub reasoning_effort: Option<String>,
@@ -668,6 +672,60 @@ fn mutates_app(tool: &str, args: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inbox_binding_is_owned_by_the_run_and_inherited_by_children() {
+        for inbox in [Some("conv_owner_bot"), None] {
+            let id = flow_like_types::create_id();
+            let generation = flow_like_types::create_id();
+            RUNS.insert(
+                id.clone(),
+                NativeRun {
+                    stream: None,
+                    options: NativeRunOptions {
+                        conversation_id: Some("bot:bot_test".into()),
+                        inbox_conversation_id: inbox.map(str::to_owned),
+                        ..Default::default()
+                    },
+                    identity: NativeRunIdentity {
+                        profile_id: "profile".into(),
+                        hub: "hub".into(),
+                        subject: None,
+                        auth: None,
+                    },
+                    generation: generation.clone(),
+                    inventory_returned: false,
+                    research_session: Arc::new(WebResearchSession::default()),
+                    created_app: None,
+                    auto_approve: Arc::new(AtomicBool::new(false)),
+                    auto_mode_ready: Arc::new(AtomicBool::new(true)),
+                    auto_mode_owner: None,
+                },
+            );
+            let parent = NativeRunClaim {
+                id: id.clone(),
+                generation,
+            };
+            let mut context = FrontendToolContext {
+                run_id: Some(id),
+                conversation_id: Some("another-conversation".into()),
+                ..Default::default()
+            };
+            let options = run_options(Some(&context));
+            assert_eq!(options.conversation_id.as_deref(), Some("bot:bot_test"));
+            assert_eq!(options.inbox_conversation_id.as_deref(), inbox);
+
+            let child_id = flow_like_types::create_id();
+            let child = claim_child_run(&context, &child_id, Vec::new()).unwrap();
+            context.run_id = Some(child_id);
+            let options = run_options(Some(&context));
+            assert_eq!(options.conversation_id.as_deref(), Some("bot:bot_test"));
+            assert_eq!(options.inbox_conversation_id.as_deref(), inbox);
+            drop(child);
+            drop(parent);
+            assert!(run_options(Some(&context)).inbox_conversation_id.is_none());
+        }
+    }
 
     #[test]
     fn background_interactions_require_a_host_callback_even_in_auto_mode() {

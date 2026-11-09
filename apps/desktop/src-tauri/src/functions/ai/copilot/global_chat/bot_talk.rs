@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use flow_like::{
     copilot::{CopilotScope, UnifiedChatMessage},
     flow::copilot::{
-        BotRunContext, FLUX_BOT_NAME, GENERAL_BOT_DESCRIPTION, GENERAL_BOT_NAME,
+        BotRunContext, FLUX_BOT_NAME, GENERAL_BOT_DESCRIPTION, GENERAL_BOT_NAME, TurnRequester,
         bot_talk::{
             AnsweredRound, BotPresence, BotTalk, BotTalkHost, CrewMember, HeadlessPermission,
             NestedBotTurn,
@@ -269,7 +269,12 @@ async fn answer_turn(
     let options = NativeRunOptions {
         profile_id: Some(profile_id.clone()),
         conversation_id: Some(run_id.clone()),
+        inbox_conversation_id: Some(turn.conversation_id.clone()),
         bot_talk: Some(turn.talk),
+        requester: Some(TurnRequester::nested_bot(
+            turn.caller.id.clone(),
+            turn.caller.name.clone(),
+        )),
         ..Default::default()
     };
     let response = with_execution_profile(

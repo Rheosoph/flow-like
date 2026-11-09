@@ -13,6 +13,7 @@ use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseTransaction, DbErr, EntityTr
 pub mod apps;
 pub mod ask;
 pub mod avatar;
+pub(crate) mod authorization;
 pub(crate) mod checkpoint;
 pub mod clone;
 pub mod configuration;
@@ -62,6 +63,7 @@ mod workspace_tests;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/{bot_id}/turns/{turn_id}/authorization-context", get(authorization::context))
         .route("/{bot_id}/user-context/available", get(user_context::available))
         .route("/{bot_id}/user-context/request", post(user_context::request))
         .route("/{bot_id}/usage", get(super::usage_budgets::get_bot))

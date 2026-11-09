@@ -31,6 +31,7 @@ export function roomChatMessage(
 		reactorName?: (id: string) => string;
 		replyTarget?: ConversationMessage;
 		files?: IMessage["files"];
+		storageBotId?: string;
 	} = {},
 ): IMessage {
 	const text =
@@ -73,6 +74,7 @@ export function roomChatMessage(
 		id: message.id,
 		appId: GLOBAL_CHAT_APP_ID,
 		sessionId: conversationId,
+		...(options.storageBotId ? { storageBotId: options.storageBotId } : {}),
 		inner: {
 			role: message.mine ? IRole.User : IRole.Assistant,
 			content: error

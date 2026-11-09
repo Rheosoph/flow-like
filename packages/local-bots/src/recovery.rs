@@ -1,7 +1,7 @@
 //! Scoped execution checkpoints and cancellation fences for local bot turns.
 
 use crate::{Error, InboxEntry, LocalBotStore, Result, store::now_micros};
-use flow_like_types::bot_turn::{BotRunCheckpoint, failure_message_id, reply_message_id, turn_id};
+use flow_like_types::bot_turn::{BotRunCheckpoint, DEFAULT_TURN_DEADLINE_SECS, failure_message_id, reply_message_id, turn_id};
 use flow_like_types::inbox::{InboxEntryKind, TriggerBody, TriggerSource};
 use rusqlite::{Connection, OptionalExtension, params};
 
@@ -22,7 +22,37 @@ fn scope(db: &Connection, bot: &str, room: &str, trigger: &str) -> Result<()> {
     Ok(())
 }
 
+/// Gives a requeued turn a fresh budget. The revision and state stay, because the sealed copy
+/// binds the revision; no other path may change the start or the deadline.
+pub(crate) fn rebase_deadline(db: &Connection, turn: &str, now_ms: i64) -> Result<()> {
+    let row: Option<String> = db
+        .query_row(
+            "SELECT checkpoint FROM bot_run_checkpoints WHERE turn_id = ?1 AND cancelled = 0",
+            [turn],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+    let Some(text) = row else { return Ok(()) };
+    let mut checkpoint: BotRunCheckpoint = serde_json::from_str(&text)?;
+    checkpoint.started_at_ms = now_ms;
+    checkpoint.deadline_at_ms = now_ms + DEFAULT_TURN_DEADLINE_SECS as i64 * 1000;
+    checkpoint.validate().map_err(Error::invalid)?;
+    db.execute(
+        "UPDATE bot_run_checkpoints SET checkpoint = ?2, updated_at = ?3 WHERE turn_id = ?1",
+        params![turn, serde_json::to_string(&checkpoint)?, now_micros()],
+    )?;
+    Ok(())
+}
+
 impl LocalBotStore {
+    pub fn rebase_run_deadline(&self, bot: &str, room: &str, trigger: &str) -> Result<()> {
+        self.write(|db, _| {
+            scope(db, bot, room, trigger)?;
+            rebase_deadline(db, &turn_id(bot, trigger), now_micros() / 1_000)
+        })
+    }
+
     /// Reuse the latest completed observation for this exact monitoring instruction.
     pub fn previous_monitor_result(
         &self,

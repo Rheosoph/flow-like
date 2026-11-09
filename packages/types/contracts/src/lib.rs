@@ -26,6 +26,8 @@ pub mod bot_restrictions;
 #[cfg(feature = "inbox")]
 pub mod bot_message;
 #[cfg(feature = "inbox")]
+pub mod bot_notes;
+#[cfg(feature = "inbox")]
 pub mod bot_notify;
 #[cfg(feature = "bot-task")]
 pub mod bot_task;

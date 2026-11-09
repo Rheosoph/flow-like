@@ -354,3 +354,21 @@ async fn legacy_viewers_receive_no_observation_extension() {
     );
     task.abort();
 }
+
+#[tokio::test]
+async fn an_oversized_observation_is_dropped_and_the_stream_survives() {
+    let host = Fake::default();
+    host.show(b"big overlay");
+    let mut huge = observation(1000);
+    huge.focus = Some(flow_like_types_contracts::interaction::InteractionFocus {
+        label: "x".repeat(PLAYGROUND_MAX_JSON * 2),
+        bounds: None,
+    });
+    host.0.lock().unwrap().frame.as_mut().unwrap().observation = Some(huge);
+    let (mut viewer, task) = attach(host.clone());
+    let frame = viewer.frame().await;
+    assert!(frame.meta.observation.is_none());
+    assert!(!frame.jpeg.is_empty());
+    assert!(!task.is_finished());
+    task.abort();
+}

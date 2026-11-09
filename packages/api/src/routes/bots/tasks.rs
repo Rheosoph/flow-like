@@ -373,6 +373,7 @@ pub async fn create_bot_task(
     Json(body): Json<CreateBotTaskRequest>,
 ) -> Result<(StatusCode, Json<BotTaskInfo>), ApiError> {
     let sub = crate::bot_caller::acting_owner_for(&state.db, &user, &bot_id).await?;
+    let creator = if matches!(user, AppUser::Bot(_)) { TaskCreator::Bot } else { TaskCreator::Owner };
     let request = CreateBotTask {
         kind: Some(kind_of(&body)?),
         at: body.at,
@@ -389,7 +390,7 @@ pub async fn create_bot_task(
             Box::pin(async move {
                 lock_bot(txn, &bot_id).await?;
                 let now = Utc::now().fixed_offset();
-                create_in(txn, &sub, &bot_id, request, TaskCreator::Owner, now).await
+                create_in(txn, &sub, &bot_id, request, creator, now).await
             })
         })
         .await?;

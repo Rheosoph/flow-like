@@ -5,9 +5,10 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use flow_like::bit::Bit;
+use flow_like::flow::copilot::tool_authorization::AuthorizationInference;
 use flow_like::flow::copilot::tool_grants::{
     GrantCheck, GrantStore, HeadlessAnswer, check_call, documents_expensive_granted,
-    expensive_documents_request, headless_answer, record_answer, take_once,
+    expensive_documents_request, headless_answer_with_inference, record_answer, take_once,
 };
 use flow_like::flow::copilot::tool_spec::resolve_tool_approval;
 use flow_like::flow::copilot::{HostTools, find_bot_tool_spec, tool_outcome_output};
@@ -69,6 +70,8 @@ pub(crate) struct BotToolsHost {
     sessions: Arc<MemorySessions>,
     executor_jobs: AtomicUsize,
     parked: Mutex<Option<(ApprovalRequest, Option<String>)>>,
+    inference: Mutex<Option<Arc<dyn AuthorizationInference>>>,
+    approval_check: flow_like_types::tokio::sync::Mutex<()>,
     notifier: Option<Arc<dyn flow_like_bot_tools::OwnerNotifier>>,
     people: Option<Arc<dyn flow_like_bot_tools::PeopleBackend>>,
     user_context: Option<Arc<dyn flow_like_bot_tools::user_context::UserContextBackend>>,
@@ -136,6 +139,8 @@ impl BotToolsHost {
             sessions: Arc::new(MemorySessions::default()),
             executor_jobs: AtomicUsize::new(0),
             parked: Mutex::new(None),
+            inference: Mutex::new(None),
+            approval_check: flow_like_types::tokio::sync::Mutex::new(()),
             notifier: None,
             people: None,
             user_context: None,
@@ -146,6 +151,13 @@ impl BotToolsHost {
             mail: None,
             images: None,
         }
+    }
+
+    pub(crate) fn set_inference(&self, inference: Arc<dyn AuthorizationInference>) {
+        *self
+            .inference
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(inference);
     }
 
     pub(crate) fn with_user_context(
@@ -198,7 +210,10 @@ impl BotToolsHost {
             .skill_jobs
             .as_ref()
             .ok_or_else(|| "This server cannot run package skills".to_string())?;
-        let name = args.get(name_arg).and_then(Value::as_str).unwrap_or_default();
+        let name = args
+            .get(name_arg)
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         jobs.job(name.trim()).await.map(Some)
     }
 
@@ -287,19 +302,28 @@ impl BotToolsHost {
         self.parked
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref().map(|(card, _)| card.clone())
+            .as_ref()
+            .map(|(card, _)| card.clone())
     }
 
     pub(crate) fn parked_recovery_call_id(&self) -> Option<String> {
-        self.parked.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
-            .as_ref().and_then(|(_, call_id)| call_id.clone())
+        self.parked
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_ref()
+            .and_then(|(_, call_id)| call_id.clone())
     }
 
     fn park(&self, tool: &str, card: ApprovalRequest) -> String {
         self.parked
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get_or_insert_with(|| (card, flow_like::flow::copilot::run_recovery::current_recovery_call_id()));
+            .get_or_insert_with(|| {
+                (
+                    card,
+                    flow_like::flow::copilot::run_recovery::current_recovery_call_id(),
+                )
+            });
         json!({
             "status": "waiting",
             "tool": tool,
@@ -329,19 +353,26 @@ impl BotToolsHost {
         tool: &str,
         args: Value,
     ) -> String {
+        let approval_check = self.approval_check.lock().await;
         if self.parked().is_some() {
             return self.park_notice(tool);
         }
         let mut expensive = false;
         match find_bot_tool_spec(tool).map(|spec| resolve_tool_approval(&spec, &args)) {
             Some(approval) if approval.kind != "none" => {
-                match headless_answer(
+                let inference = self
+                    .inference
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .clone();
+                match headless_answer_with_inference(
                     self.deps.grants.as_ref(),
                     &self.deps.turn_id,
                     tool,
                     &args,
                     None,
                     &approval.description,
+                    inference.as_deref(),
                 )
                 .await
                 {
@@ -354,6 +385,7 @@ impl BotToolsHost {
             }
             _ => expensive = self.expensive_documents_allowed(tool, &args).await,
         }
+        drop(approval_check);
         if flow_like_bot_tools::spec(tool).is_some_and(|spec| spec.mutating) {
             mutating.store(true, Ordering::SeqCst);
         }

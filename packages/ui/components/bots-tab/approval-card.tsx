@@ -7,6 +7,7 @@ import {
 	CheckIcon,
 	KeyRoundIcon,
 	ShieldQuestionIcon,
+	SlidersHorizontalIcon,
 } from "lucide-react";
 import { useState } from "react";
 import {
@@ -29,10 +30,10 @@ import {
 } from "../interfaces/chat-default/request-card";
 import { Button } from "../ui/button";
 import type { ApprovalDecision } from "./approval-entry";
+import { BotConfigurationChanges } from "./configuration-changes";
 import type { ConversationApproval } from "./fold-entries";
 import { useGrantLabel } from "./grant-labels";
 import { SecretRequestForm } from "./secret-request-form";
-import { BotConfigurationChanges } from "./configuration-changes";
 
 /** The summary as the end of "{{name}} wants to …"; core phrases them as "The bot wants to …". */
 function lowerFirst(summary: string): string {
@@ -98,8 +99,8 @@ export function ApprovalCard({
 	const upsertSecret = useUpsertBotSecret();
 	const [sent, setSent] = useState<ApprovalDecision>();
 	const decision = approval.answer ?? sent;
-	const rememberable =
-		approval.tool !== "bot_update_configuration" && approval.scopes.length > 0;
+	const isConfiguration = approval.tool === "bot_update_configuration";
+	const rememberable = !isConfiguration && approval.scopes.length > 0;
 	const tone = decisionTone(decision);
 	const disabled = readOnly || isPending;
 
@@ -115,7 +116,10 @@ export function ApprovalCard({
 		);
 
 	const secret = approval.secret;
-	const icon = decisionIcon(decision, !!secret);
+	const icon =
+		!decision && isConfiguration
+			? SlidersHorizontalIcon
+			: decisionIcon(decision, !!secret);
 
 	const saveSecret = async (value: string) => {
 		if (!secret) return;
@@ -159,7 +163,17 @@ export function ApprovalCard({
 				eyebrow={
 					decision ? (
 						<span data-slot="approval-answer">
-							{decisionText(decision, !!secret)}
+							{isConfiguration
+								? decision === "deny"
+									? t(
+											"crew.approval.configuration.rejected",
+											"Changes rejected",
+										)
+									: t(
+											"crew.approval.configuration.approved",
+											"Changes approved",
+										)
+								: decisionText(decision, !!secret)}
 						</span>
 					) : (
 						t("crew.approval.label", "Approval request")
@@ -171,14 +185,28 @@ export function ApprovalCard({
 						? t("crew.approval.secret.title", "{{name}} needs a secret", {
 								name: botName,
 							})
-						: t("crew.approval.title", "{{name}} wants to {{summary}}", {
-								name: botName,
-								summary: lowerFirst(approval.summary || approval.tool),
-							})
+						: isConfiguration
+							? t(
+									"crew.approval.configuration.requestTitle",
+									"{{name}} wants to update its settings",
+									{ name: botName },
+								)
+							: t("crew.approval.title", "{{name}} wants to {{summary}}", {
+									name: botName,
+									summary: lowerFirst(approval.summary || approval.tool),
+								})
 				}
 				description={
 					<>
-						{!secret && (
+						{isConfiguration && !decision && (
+							<p>
+								{t(
+									"crew.approval.configuration.hint",
+									"Only the settings below will change, starting with the next turn.",
+								)}
+							</p>
+						)}
+						{!secret && !isConfiguration && (
 							<p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
 								<code className="rounded-md border border-border/60 bg-muted/60 px-1.5 py-0.5 font-mono text-[11px] text-foreground/80">
 									{approval.tool}
@@ -209,7 +237,7 @@ export function ApprovalCard({
 				}
 			/>
 			{approval.configurationChanges && (
-				<RequestCardBody className="px-3.5 py-2.5">
+				<RequestCardBody className="max-h-[min(32rem,60vh)] overflow-y-auto overscroll-contain px-3.5 py-2.5">
 					<BotConfigurationChanges changes={approval.configurationChanges} />
 				</RequestCardBody>
 			)}
@@ -224,7 +252,11 @@ export function ApprovalCard({
 			)}
 			{!decision && !secret && (
 				<RequestCardFooter
-					className="px-3.5 py-2.5"
+					className={
+						isConfiguration
+							? "px-3.5 py-2.5 [&>div:last-child]:max-w-full [&>div:last-child]:flex-wrap [&>div:last-child]:justify-end"
+							: "px-3.5 py-2.5"
+					}
 					start={
 						isError &&
 						!isPending &&
@@ -247,7 +279,9 @@ export function ApprovalCard({
 						onClick={() => answer("deny")}
 					>
 						<BanIcon aria-hidden />
-						{t("crew.approval.deny", "Deny")}
+						{isConfiguration
+							? t("crew.approval.configuration.reject", "Reject changes")
+							: t("crew.approval.deny", "Deny")}
 					</Button>
 					<Button
 						type="button"
@@ -258,7 +292,9 @@ export function ApprovalCard({
 						onClick={() => answer("once")}
 					>
 						<CheckIcon aria-hidden />
-						{t("crew.approval.once", "Allow once")}
+						{isConfiguration
+							? t("crew.approval.configuration.approve", "Approve changes")
+							: t("crew.approval.once", "Allow once")}
 					</Button>
 					{rememberable && (
 						<Button

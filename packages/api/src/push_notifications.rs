@@ -72,6 +72,21 @@ pub struct DispatchNotificationInput {
     pub source_node_id: Option<String>,
 }
 
+impl DispatchNotificationInput {
+    /// Approval and review cards are addressed to the person, so they pass Focus like mentions.
+    pub(crate) fn focus_priority(&self) -> flow_like_types::user_availability::NotificationPriority {
+        use flow_like_types::user_availability::NotificationPriority;
+        let addressed = self
+            .bot_context
+            .as_ref()
+            .is_some_and(|context| context.review_only || context.approval_id.is_some());
+        match self.notification_priority {
+            NotificationPriority::Routine if addressed => NotificationPriority::Mention,
+            priority => priority,
+        }
+    }
+}
+
 /// Provider acceptance does not confirm that a device displayed the notification.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -644,7 +659,7 @@ async fn push_to_user(
 ) -> flow_like_types::Result<PushDispatchStatus> {
     let availability = crate::routes::user::availability::load(&state.db, &input.user_id).await?;
     if !availability.allows_notification(
-        input.notification_priority,
+        input.focus_priority(),
         chrono::Utc::now().timestamp_millis(),
     ) {
         return Ok(PushDispatchStatus::Suppressed);
@@ -2280,6 +2295,47 @@ mod tests {
         body.get("message")
             .and_then(serde_json::Value::as_object)
             .expect("FCM body contains a message object")
+    }
+
+    #[test]
+    fn approval_and_review_pushes_pass_focus_like_mentions() {
+        use flow_like_types::user_availability::{
+            AvailabilityOverride, AvailabilitySource, AvailabilityState, AvailabilityStatus,
+            NotificationPriority,
+        };
+        let focus = AvailabilityState {
+            status_override: Some(AvailabilityOverride {
+                status: AvailabilityStatus::Focus,
+                source: AvailabilitySource::Manual,
+                until: i64::MAX,
+            }),
+            ..Default::default()
+        };
+        let routine = notification_input();
+        assert!(!focus.allows_notification(routine.focus_priority(), 0));
+        for context in [
+            flow_like_types::bot_notify::BotNotificationContext {
+                bot_id: "bot_1".into(),
+                approval_id: Some("approval_1".into()),
+                ..Default::default()
+            },
+            flow_like_types::bot_notify::BotNotificationContext {
+                bot_id: "bot_1".into(),
+                review_only: true,
+                ..Default::default()
+            },
+        ] {
+            let mut input = notification_input();
+            input.bot_context = Some(context);
+            assert_eq!(input.focus_priority(), NotificationPriority::Mention);
+            assert!(focus.allows_notification(input.focus_priority(), 0));
+        }
+        let mut reply = notification_input();
+        reply.bot_context = Some(flow_like_types::bot_notify::BotNotificationContext {
+            bot_id: "bot_1".into(),
+            ..Default::default()
+        });
+        assert!(!focus.allows_notification(reply.focus_priority(), 0));
     }
 
     #[test]

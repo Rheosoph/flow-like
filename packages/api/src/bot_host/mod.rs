@@ -5,6 +5,7 @@
 //! looking after. Desktop and device hosts claim through `routes/bots/turns.rs`.
 
 pub(crate) mod approvals;
+pub(crate) mod authorization;
 mod cap;
 mod decision;
 pub(crate) mod decision_wait;

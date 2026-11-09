@@ -180,6 +180,9 @@ export function NativeIntegrationProvider() {
 		let drainRequested = false;
 		let baseSnapshot: NativeSnapshot | undefined;
 		const botTurns = new Map<string, IBotTurn>();
+		const botTurnRevisions = new Map<string, number>();
+		let botStatusRevision = 0;
+		let lastBotStatusRead = 0;
 		let botStatusKnown = false;
 		let customWidgets: NativeCustomWidget[] = [];
 		let activeSignature = "";
@@ -202,6 +205,22 @@ export function NativeIntegrationProvider() {
 			}
 		};
 		const current = () => !stopped && currentScope.current === scope;
+		const acceptBotStatus = (turns: readonly IBotTurn[], revision: number) => {
+			if (!current() || revision < lastBotStatusRead) return;
+			lastBotStatusRead = revision;
+			botStatusKnown = true;
+			// A response cannot undo turn events received while its request was in flight.
+			for (const [id, observed] of botTurnRevisions) {
+				if (observed > revision) continue;
+				botTurns.delete(id);
+				botTurnRevisions.delete(id);
+			}
+			for (const turn of turns) {
+				if ((botTurnRevisions.get(turn.id) ?? 0) > revision) continue;
+				botTurns.set(turn.id, turn);
+				botTurnRevisions.set(turn.id, revision);
+			}
+		};
 		const automationKey = (request: NativeActionRequest) =>
 			JSON.stringify([request.scope, request.id]);
 		const stopAutomation = (request: NativeActionRequest) => {
@@ -338,6 +357,7 @@ export function NativeIntegrationProvider() {
 			)
 				return Promise.resolve();
 			lastRefreshAt = Date.now();
+			const statusRevision = ++botStatusRevision;
 			refreshPromise = (async () => {
 				try {
 					let notificationSources: NativeNotificationIconSource[] = [];
@@ -351,6 +371,7 @@ export function NativeIntegrationProvider() {
 							notificationSources = sources;
 						},
 						eventCatalog,
+						(turns) => acceptBotStatus(turns, statusRevision),
 					);
 					if (current()) {
 						baseSnapshot = snapshot;
@@ -745,12 +766,11 @@ export function NativeIntegrationProvider() {
 			)
 				return;
 			statusLoading = true;
+			const revision = ++botStatusRevision;
 			try {
 				const turns = await backend.botState.getMobileStatus();
 				if (!current()) return;
-				botTurns.clear();
-				botStatusKnown = true;
-				for (const turn of turns) botTurns.set(turn.id, turn);
+				acceptBotStatus(turns, revision);
 				await publish();
 			} catch {
 				/* Keep the last observed status until the next successful sync. */
@@ -789,17 +809,22 @@ export function NativeIntegrationProvider() {
 		const turnSubscription = backend.botState?.turns?.subscribe((turn) => {
 			if (!current()) return;
 			botTurns.set(turn.id, turn);
+			botTurnRevisions.set(turn.id, ++botStatusRevision);
 			void publish();
 		});
 		void turnSubscription?.catch((error) =>
 			console.warn("Native bot status:", error),
 		);
+		const initialStatusRevision = ++botStatusRevision;
 		void backend.botState?.turns
 			?.list()
 			.then((turns) => {
-				if (!current()) return;
-				for (const turn of turns)
-					if (!botTurns.has(turn.id)) botTurns.set(turn.id, turn);
+				if (!current() || lastBotStatusRead > initialStatusRevision) return;
+				for (const turn of turns) {
+					if (botTurns.has(turn.id)) continue;
+					botTurns.set(turn.id, turn);
+					botTurnRevisions.set(turn.id, initialStatusRevision);
+				}
 				void publish();
 			})
 			.catch(() => {});

@@ -20,12 +20,33 @@ import { WebAppState } from "./app-state";
 
 const auth = { isAuthenticated: true, user: { access_token: "token" } };
 const listings = [
-	["getApps", "apps"],
+	["getApps", "apps?offset=0&limit=100"],
 	["getMyGroups", "user/groups"],
 ] as const;
 
 describe("web library listings", () => {
 	beforeEach(() => vi.resetAllMocks());
+
+	test("getApps includes online apps after the first hundred", async () => {
+		const apps = Array.from({ length: 203 }, (_, index) => [
+			{ id: `app-${index}`, visibility: "Private" },
+			{ name: `App ${index}` },
+		]);
+		mocks.apiGet.mockImplementation(async (path: string) => {
+			const params = new URL(path, "https://hub.example").searchParams;
+			const offset = Number(params.get("offset") ?? 0);
+			const limit = Number(params.get("limit") ?? 100);
+			return apps.slice(offset, offset + limit);
+		});
+		const state = new WebAppState({ auth } as never);
+
+		await expect(state.getApps()).resolves.toEqual(apps);
+		expect(mocks.apiGet.mock.calls).toEqual([
+			["apps?offset=0&limit=100", auth],
+			["apps?offset=100&limit=100", auth],
+			["apps?offset=200&limit=100", auth],
+		]);
+	});
 
 	test.each(listings)(
 		"%s preserves request failures for retry",

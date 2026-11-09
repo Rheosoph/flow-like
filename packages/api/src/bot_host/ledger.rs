@@ -1033,6 +1033,9 @@ pub(crate) async fn complete_silent_in<C: ConnectionTrait>(
         .filter(bot_turn::Column::LeaseUntil.gt(now))
         .exec(db)
         .await?;
+    if done.rows_affected > 0 {
+        super::recovery::clear_finished_in(db, turn_id).await?;
+    }
     Ok(done.rows_affected > 0)
 }
 
@@ -1121,6 +1124,9 @@ pub(crate) async fn cancel_owned_in<C: ConnectionTrait>(
         .one(db)
         .await?
         .ok_or_else(|| Refusal::NotFound.into_api(turn_id))?;
+    if cancelled.rows_affected > 0 {
+        super::recovery::clear_in(db, turn_id).await?;
+    }
     if cancelled.rows_affected == 0 {
         return Err(ApiError::coded(
             StatusCode::CONFLICT,
@@ -1153,6 +1159,9 @@ async fn end_unfinished_in<C: ConnectionTrait>(
         .filter(bot_turn::Column::Status.is_in([STORED_QUEUED, STORED_RUNNING, STORED_WAITING]))
         .exec(db)
         .await?;
+    if status == STORED_CANCELLED {
+        super::recovery::clear_in(db, turn_id).await?;
+    }
     Ok(())
 }
 
@@ -1265,7 +1274,10 @@ pub(crate) async fn retry_in<C: ConnectionTrait>(
     }
     bot_turn_checkpoint::Entity::update_many()
         .col_expr(bot_turn_checkpoint::Column::RecoveryAttempts, Expr::value(0))
-        .filter(bot_turn_checkpoint::Column::TurnId.eq(turn_id)).exec(db).await?;
+        .filter(bot_turn_checkpoint::Column::TurnId.eq(turn_id))
+        .exec(db)
+        .await?;
+    super::recovery::rebase_deadline_in(db, turn_id, now).await?;
     Ok(find(db, turn_id, Some(owner_id)).await?)
 }
 

@@ -267,7 +267,7 @@ try {
 	);
 	assert.equal(
 		await page.$$eval('[aria-label^="Choose "]', (elements) => elements.length),
-		129,
+		131,
 	);
 	await page.screenshot({ path: resolve(output, "packs.png"), fullPage: true });
 	await page.click('[aria-label="Choose Mochi"]');

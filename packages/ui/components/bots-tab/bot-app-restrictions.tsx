@@ -10,6 +10,7 @@ import { useBackend } from "../../state/backend-state";
 import type {
 	BotPermission,
 	BotRestrictionPreset,
+	IBotApp,
 	IBotRestrictions,
 } from "../../state/backend-state/bot-state";
 import { Button } from "../ui/button";
@@ -482,15 +483,17 @@ function useScopeOptions(appId: string, enabled: boolean): ScopeOptions {
 	);
 }
 
-/** One attached app's restrictions, saved on every change. */
+/** Uses the editor's draft callback when present; otherwise saves each change. */
 export function BotAppRestrictions({
 	botId,
 	appId,
 	restrictions,
+	onChange,
 }: Readonly<{
 	botId: string;
 	appId: string;
 	restrictions?: IBotRestrictions;
+	onChange?: (appId: string, restrictions: IBotRestrictions) => void;
 }>) {
 	const { t } = useTranslation("bots");
 	const options = useScopeOptions(appId, true);
@@ -518,7 +521,7 @@ export function BotAppRestrictions({
 			value={value}
 			options={options}
 			disabled={isPending}
-			onChange={save}
+			onChange={onChange ? (next) => onChange(appId, next) : save}
 		/>
 	);
 }
@@ -539,11 +542,22 @@ export function useAppNames(): Map<string, string> {
 }
 
 /** Per attached project: what the bot may do there. */
-export function BotAppAccess({ botId }: Readonly<{ botId: string }>) {
+export function BotAppAccess({
+	botId,
+	apps: draftApps,
+	onRestrictionsChange,
+}: Readonly<{
+	botId: string;
+	apps?: readonly IBotApp[];
+	onRestrictionsChange?: (
+		appId: string,
+		restrictions: IBotRestrictions,
+	) => void;
+}>) {
 	const { t } = useTranslation("bots");
 	const attached = useBotApps(botId);
 	const names = useAppNames();
-	const apps = attached.data ?? [];
+	const apps = draftApps ?? attached.data ?? [];
 	if (apps.length === 0) return null;
 	return (
 		<section className="flex flex-col gap-2">
@@ -564,6 +578,7 @@ export function BotAppAccess({ botId }: Readonly<{ botId: string }>) {
 							botId={botId}
 							appId={app.app_id}
 							restrictions={app.restrictions}
+							onChange={onRestrictionsChange}
 						/>
 					</li>
 				))}

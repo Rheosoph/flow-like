@@ -43,6 +43,7 @@ import {
 	rememberMovedConversation,
 } from "./global-chat-bots";
 import type { IMessage } from "./global-chat-db";
+import { preparingChatReplies } from "./global-chat-preparation";
 
 /**
  * A checkpoint persisted mid-run carries a debug report frozen at `outcome: "running"`. When a
@@ -1670,9 +1671,13 @@ export function selectGlobalChatQueue(
 export function isGlobalChatAtRunCapacity(
 	state: GlobalChatState,
 	conversationId?: string,
+	preparingRunId?: string,
 ): boolean {
 	return (
-		selectGlobalChatRuns(state, conversationId).length >=
+		selectGlobalChatRuns(state, conversationId).length +
+			preparingChatReplies(conversationId ?? state.activeConversationId).filter(
+				(reply) => reply.runId !== preparingRunId,
+			).length >=
 		MAX_CONCURRENT_GLOBAL_CHAT_RUNS
 	);
 }
